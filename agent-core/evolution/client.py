@@ -12,6 +12,7 @@ from .contracts import (
     MAX_CONTROL_BYTES,
     ContractError,
     canonical_json,
+    is_conversation_id,
     parse_control_request,
     parse_control_result,
     parse_json_bytes,
@@ -68,7 +69,9 @@ def _checked_binding_request(value: object) -> dict[str, str]:
         raise ContractError("invalid_request", "trusted host binding request fields are invalid")
     if value.get("type") != "host.bind":
         raise ContractError("invalid_request", "trusted host binding request type is invalid")
-    for key in ("conversation_id", "scope_id", "confirmation_id"):
+    if not is_conversation_id(value.get("conversation_id")):
+        raise ContractError("invalid_request", "conversation_id must be a canonical UUID or native conversation id")
+    for key in ("scope_id", "confirmation_id"):
         if not isinstance(value.get(key), str) or not _UUID_RE.fullmatch(value[key]):
             raise ContractError("invalid_request", f"{key} must be a canonical UUID")
     expiry = value.get("expires_at")
@@ -131,7 +134,9 @@ def _checked_host_authorization_request(value: object) -> dict[str, Any]:
     fields = {"type", "conversation_id", "evolution_id", "kind", "constraints", "confirmation_id", "expires_at"}
     if type(value) is not dict or set(value) != fields or value.get("type") != "host.authorize":
         raise ContractError("invalid_request", "trusted Host authorization fields are invalid")
-    for key in ("conversation_id", "evolution_id", "confirmation_id"):
+    if not is_conversation_id(value.get("conversation_id")):
+        raise ContractError("invalid_request", "conversation_id must be a canonical UUID or native conversation id")
+    for key in ("evolution_id", "confirmation_id"):
         if not isinstance(value.get(key), str) or not _UUID_RE.fullmatch(value[key]):
             raise ContractError("invalid_request", f"{key} must be a canonical UUID")
     expiry = value.get("expires_at")
@@ -209,7 +214,9 @@ def _checked_host_resolve_stop_request(value: object) -> dict[str, str]:
     fields = {"type", "conversation_id", "evolution_id", "instance_id"}
     if type(value) is not dict or set(value) != fields or value.get("type") != "host.resolve-stop":
         raise ContractError("invalid_request", "trusted stop-grant recovery fields are invalid")
-    for key in ("conversation_id", "evolution_id", "instance_id"):
+    if not is_conversation_id(value.get("conversation_id")):
+        raise ContractError("invalid_request", "conversation_id must be a canonical UUID or native conversation id")
+    for key in ("evolution_id", "instance_id"):
         if not isinstance(value.get(key), str) or not _UUID_RE.fullmatch(value[key]):
             raise ContractError("invalid_request", f"{key} must be a canonical UUID")
     return {key: value[key] for key in fields}
@@ -250,7 +257,9 @@ def _checked_t9_late_ready_request(value: object) -> dict[str, Any]:
     fields = {"type", "conversation_id", "evolution_id", "candidate_id", "instance_id", "instance_sequence"}
     if type(value) is not dict or set(value) != fields or value.get("type") != "host.t9-late-ready":
         raise ContractError("invalid_request", "T9 late-ready request fields are invalid")
-    for key in ("conversation_id", "evolution_id", "instance_id"):
+    if not is_conversation_id(value.get("conversation_id")):
+        raise ContractError("invalid_request", "conversation_id must be a canonical UUID or native conversation id")
+    for key in ("evolution_id", "instance_id"):
         if not isinstance(value.get(key), str) or not _UUID_RE.fullmatch(value[key]):
             raise ContractError("invalid_request", f"{key} must be a canonical UUID")
     if not isinstance(value.get("candidate_id"), str) or not _HASH_RE.fullmatch(value["candidate_id"]):
@@ -401,7 +410,9 @@ class EvolutionClient:
         return response
 
     def authorization_for_instance(self, evolution_id: str, conversation_id: str, instance_id: str) -> str:
-        if not all(isinstance(value, str) and _UUID_RE.fullmatch(value) for value in (evolution_id, conversation_id, instance_id)):
+        if not (isinstance(evolution_id, str) and _UUID_RE.fullmatch(evolution_id)
+                and is_conversation_id(conversation_id)
+                and isinstance(instance_id, str) and _UUID_RE.fullmatch(instance_id)):
             raise ContractError("invalid_request", "instance authorization identity is invalid")
         try:
             return self._instance_authorizations[(evolution_id, conversation_id, instance_id)]

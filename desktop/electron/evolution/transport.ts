@@ -3,6 +3,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { ContractError, canonicalJson, contentHash, parseControlRequest, parseControlResult, type ControlRequest, type ControlResult } from "./contracts";
 import { encodeFrame, FrameDecoder } from "./codec";
 import { verifyControlRelease, type ControlRelease } from "./control-release";
+import { isEvolutionConversationId } from "./conversation-id";
 import type { EvolutionSupervisor } from "./supervisor";
 
 export type ProtocolOffer={supported_major:number;supported_minor:number[]};
@@ -35,7 +36,8 @@ export function parseTrustedHostBindingRequest(value:unknown,allowedScopeIds?:un
   if(value===null||typeof value!=="object"||Array.isArray(value))fail("invalid_request","trusted host binding request must be an object");
   const item=value as Record<string,unknown>;const fields=["type","conversation_id","scope_id","confirmation_id","expires_at"];
   if(Object.keys(item).length!==fields.length||fields.some(key=>!Object.hasOwn(item,key))||item.type!=="host.bind")fail("invalid_request","trusted host binding request fields are invalid");
-  for(const key of ["conversation_id","scope_id","confirmation_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",`${key} must be a canonical UUID`);
+  if(!isEvolutionConversationId(item.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+  for(const key of ["scope_id","confirmation_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",`${key} must be a canonical UUID`);
   if(typeof item.expires_at!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(item.expires_at)||!Number.isFinite(Date.parse(item.expires_at)))fail("invalid_request","expires_at must be an ISO timestamp with zone");
   if(allowedScopeIds!==undefined){
     if(!Array.isArray(allowedScopeIds)||allowedScopeIds.length<1||allowedScopeIds.length>256||allowedScopeIds.some(id=>typeof id!=="string"||!UUID.test(id))||new Set(allowedScopeIds).size!==allowedScopeIds.length)fail("invalid_request","trusted host scope allowlist is malformed");
@@ -47,7 +49,8 @@ export function parseTrustedHostAuthorizationRequest(value:unknown,allowedScopeI
   if(value===null||typeof value!=="object"||Array.isArray(value))fail("invalid_request","trusted Host authorization must be an object");
   const item=value as Record<string,unknown>;const fields=["type","conversation_id","evolution_id","kind","constraints","confirmation_id","expires_at"];
   if(Object.keys(item).length!==fields.length||fields.some(key=>!Object.hasOwn(item,key))||item.type!=="host.authorize")fail("invalid_request","trusted Host authorization fields are invalid");
-  for(const key of ["conversation_id","evolution_id","confirmation_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");
+  if(!isEvolutionConversationId(item.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+  for(const key of ["evolution_id","confirmation_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");
   if(!["source.patch","candidate.build","candidate.launch"].includes(String(item.kind)))fail("unsupported_capability","trusted Host authorization kind is unsupported");
   const constraints=item.constraints;if(constraints===null||typeof constraints!=="object"||Array.isArray(constraints)||Object.getPrototypeOf(constraints)!==Object.prototype&&Object.getPrototypeOf(constraints)!==null)fail("invalid_request","trusted Host grant constraints must be a plain object");
   const checked=constraints as Record<string,unknown>;const exact=(keys:string[])=>{if(Object.keys(checked).length!==keys.length||keys.some(key=>!Object.hasOwn(checked,key)))fail("invalid_request","trusted Host grant constraint fields are invalid");};
@@ -65,13 +68,14 @@ export function parseT9LateReadyRequest(value:unknown):T9LateReadyRequest{
   if(value===null||typeof value!=="object"||Array.isArray(value))fail("invalid_request","T9 late-ready request must be an object");
   const item=value as Record<string,unknown>;const fields=["type","conversation_id","evolution_id","candidate_id","instance_id","instance_sequence"];
   if(Object.keys(item).length!==fields.length||fields.some(key=>!Object.hasOwn(item,key))||item.type!=="host.t9-late-ready")fail("invalid_request","T9 late-ready fields are invalid");
-  for(const key of ["conversation_id","evolution_id","instance_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");
+  if(!isEvolutionConversationId(item.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+  for(const key of ["evolution_id","instance_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");
   if(typeof item.candidate_id!=="string"||!HASH.test(item.candidate_id)||!Number.isSafeInteger(item.instance_sequence)||Number(item.instance_sequence)<1)fail("invalid_request","T9 late-ready candidate/sequence is invalid");
   if(Buffer.byteLength(canonicalJson(value),"utf8")>65_536)fail("budget_exceeded","T9 late-ready event exceeds its frame bound");
   return{type:"host.t9-late-ready",conversation_id:item.conversation_id as string,evolution_id:item.evolution_id as string,candidate_id:item.candidate_id as string,instance_id:item.instance_id as string,instance_sequence:Number(item.instance_sequence)};
 }
 export function parseTrustedHostResolveStopRequest(value:unknown):TrustedHostResolveStopRequest{
-  if(value===null||typeof value!=="object"||Array.isArray(value))fail("invalid_request","trusted stop grant recovery must be an object");const item=value as Record<string,unknown>;const fields=["type","conversation_id","evolution_id","instance_id"];if(Object.keys(item).length!==fields.length||fields.some(key=>!Object.hasOwn(item,key))||item.type!=="host.resolve-stop")fail("invalid_request","trusted stop grant recovery fields are invalid");for(const key of ["conversation_id","evolution_id","instance_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");if(Buffer.byteLength(canonicalJson(value),"utf8")>65_536)fail("budget_exceeded","trusted stop grant recovery exceeds its frame budget");return{type:"host.resolve-stop",conversation_id:item.conversation_id as string,evolution_id:item.evolution_id as string,instance_id:item.instance_id as string};
+  if(value===null||typeof value!=="object"||Array.isArray(value))fail("invalid_request","trusted stop grant recovery must be an object");const item=value as Record<string,unknown>;const fields=["type","conversation_id","evolution_id","instance_id"];if(Object.keys(item).length!==fields.length||fields.some(key=>!Object.hasOwn(item,key))||item.type!=="host.resolve-stop")fail("invalid_request","trusted stop grant recovery fields are invalid");if(!isEvolutionConversationId(item.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");for(const key of ["evolution_id","instance_id"] as const)if(typeof item[key]!=="string"||!UUID.test(item[key]))fail("invalid_request",key+" must be a canonical UUID");if(Buffer.byteLength(canonicalJson(value),"utf8")>65_536)fail("budget_exceeded","trusted stop grant recovery exceeds its frame budget");return{type:"host.resolve-stop",conversation_id:item.conversation_id as string,evolution_id:item.evolution_id as string,instance_id:item.instance_id as string};
 }
 export async function dispatchTrustedHostMessage(value:unknown,bootstrap:Pick<HostBootstrap,"host_instance_id"|"allowed_scope_ids">,supervisor:Pick<EvolutionSupervisor,"bindFromTrustedHost"|"authorizeFromTrustedHost"|"resolveStopAuthorizationFromTrustedHost"|"deps"|"acceptRuntimeEvent"|"project">):Promise<TrustedHostBindingResult|TrustedHostAuthorizationResult|TrustedHostResolveStopResult|T9LateReadyResult|null>{
   if(value===null||typeof value!=="object"||Array.isArray(value))return null;

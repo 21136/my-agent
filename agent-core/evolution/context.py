@@ -5,6 +5,8 @@ import re
 import uuid
 from typing import Any
 
+from .contracts import is_conversation_id
+
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
@@ -32,8 +34,8 @@ def attach_evolution(session: Any, evolution_id: str, *, client: Any, host_run_i
     if not isinstance(evolution_id, str) or not _UUID.fullmatch(evolution_id):
         raise EvolutionContextError("evolution_id must be a canonical UUID")
     conversation_id = getattr(session, "conversation_id", "")
-    if not isinstance(conversation_id, str) or not _UUID.fullmatch(conversation_id):
-        raise EvolutionContextError("current session has no canonical conversation id")
+    if not is_conversation_id(conversation_id):
+        raise EvolutionContextError("current session has no valid conversation id")
     host_run_id = normalize_host_run_id(host_run_id)
     if not host_run_id:
         raise EvolutionContextError("current host run identity is unavailable")

@@ -7,6 +7,7 @@ import { BindingStore, type HostBinding } from "./binding";
 import { GrantStore } from "./authorization";
 import { createT4RecoveryCandidateDescriptor, type BuildReceipt, type CandidateRunner, type InstanceReceipt, type SnapshotDescriptorFactory } from "./runner";
 import { T4_RECOVERY_OWNED_PATHS } from "./test-profile";
+import { isEvolutionConversationId } from "./conversation-id";
 
 export interface WorkspaceClient {
   inspect(scope:WorkspaceScope,query:Record<string,unknown>,operationId:string):Promise<Record<string,unknown>>;
@@ -89,7 +90,8 @@ export class EvolutionSupervisor {
 
   async bindFromTrustedHost(input:TrustedHostBindingInput):Promise<TrustedHostBindingResult>{
     if(input===null||typeof input!=="object"||Object.keys(input).length!==6||!["conversation_id","scope_id","host_instance_id","allowed_scope_ids","confirmation_id","expires_at"].every(key=>Object.hasOwn(input,key)))fail("invalid_request","trusted host binding fields are invalid");
-    for(const key of ["conversation_id","scope_id","host_instance_id","confirmation_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",`${key} must be a canonical UUID`);
+    if(!isEvolutionConversationId(input.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+    for(const key of ["scope_id","host_instance_id","confirmation_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",`${key} must be a canonical UUID`);
     if(!Array.isArray(input.allowed_scope_ids)||input.allowed_scope_ids.length<1||input.allowed_scope_ids.length>256||input.allowed_scope_ids.some(id=>typeof id!=="string"||!UUID.test(id))||new Set(input.allowed_scope_ids).size!==input.allowed_scope_ids.length)fail("invalid_request","trusted host scope allowlist is malformed");
     if(!input.allowed_scope_ids.includes(input.scope_id))fail("permission_denied","workspace scope is not allowed by the authenticated Host bootstrap");
     if(typeof input.expires_at!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(input.expires_at)||!Number.isFinite(Date.parse(input.expires_at))||Date.parse(input.expires_at)<=Date.now())fail("permission_denied","scope confirmation is expired or malformed");
@@ -128,7 +130,8 @@ export class EvolutionSupervisor {
   async authorizeFromTrustedHost(input:TrustedHostAuthorizationInput):Promise<TrustedHostAuthorizationResult>{
     const fields=["conversation_id","evolution_id","kind","constraints","confirmation_id","expires_at","host_instance_id","allowed_scope_ids"];
     if(input===null||typeof input!=="object"||Object.keys(input).length!==fields.length||fields.some(key=>!Object.hasOwn(input,key)))fail("invalid_request","trusted Host authorization fields are invalid");
-    for(const key of ["conversation_id","evolution_id","confirmation_id","host_instance_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",key+" must be a canonical UUID");
+    if(!isEvolutionConversationId(input.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+    for(const key of ["evolution_id","confirmation_id","host_instance_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",key+" must be a canonical UUID");
     if(!Array.isArray(input.allowed_scope_ids)||input.allowed_scope_ids.length<1||input.allowed_scope_ids.length>256||input.allowed_scope_ids.some(id=>typeof id!=="string"||!UUID.test(id))||new Set(input.allowed_scope_ids).size!==input.allowed_scope_ids.length)fail("invalid_request","trusted Host scope allowlist is malformed");
     const binding=this.deps.bindings.require(input.evolution_id,input.conversation_id);
     if(binding.status!=="bound"||binding.host_instance_id!==input.host_instance_id||!input.allowed_scope_ids.includes(binding.scope_id))fail("permission_denied","trusted Host does not own this active binding");
@@ -283,7 +286,8 @@ export class EvolutionSupervisor {
   resolveStopAuthorizationFromTrustedHost(input:{conversation_id:string;evolution_id:string;instance_id:string;host_instance_id:string;allowed_scope_ids:string[]}):{evolution_id:string;instance_id:string;authorization_id:string}{
     const fields=["conversation_id","evolution_id","instance_id","host_instance_id","allowed_scope_ids"];
     if(input===null||typeof input!=="object"||Object.keys(input).length!==fields.length||fields.some(key=>!Object.hasOwn(input,key)))fail("invalid_request","trusted stop authorization fields are invalid");
-    for(const key of ["conversation_id","evolution_id","instance_id","host_instance_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",key+" must be a canonical UUID");
+    if(!isEvolutionConversationId(input.conversation_id))fail("invalid_request","conversation_id must be a canonical UUID or native conversation id");
+    for(const key of ["evolution_id","instance_id","host_instance_id"] as const)if(!UUID.test(input[key]))fail("invalid_request",key+" must be a canonical UUID");
     if(!Array.isArray(input.allowed_scope_ids)||input.allowed_scope_ids.length<1||input.allowed_scope_ids.length>256||input.allowed_scope_ids.some(id=>typeof id!=="string"||!UUID.test(id))||new Set(input.allowed_scope_ids).size!==input.allowed_scope_ids.length)fail("invalid_request","trusted Host scope allowlist is malformed");
     const binding=this.deps.bindings.require(input.evolution_id,input.conversation_id);
     if(binding.host_instance_id!==input.host_instance_id||!input.allowed_scope_ids.includes(binding.scope_id))fail("permission_denied","trusted Host does not own this binding");

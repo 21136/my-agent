@@ -47,6 +47,24 @@ def bounded_text(value: Any, limit: int) -> bool:
     return type(value) is str and len(value.encode("utf-8")) <= limit
 
 
+@dataclass(frozen=True, slots=True)
+class ManagedActivationContext:
+    """Identity established by the validated fenced controller path."""
+    origin: str
+    operation_id: str
+    nonce: str
+    runtime_digest: str
+    host_nonce: str
+    profile_intent_digest: str
+    namespace_root: str
+    namespace_digest: str
+    installation_id: str
+    data_store_id: str
+    release_id: str
+    binding_digest: str
+    access: str
+
+
 class ManagedApplicationAuditGuard(ManagedReadonlyAuditGuard):
     """Permit store IO only while the closed controller calls its fenced API."""
     def __init__(self, read_roots, store: ManagedStore):
@@ -100,12 +118,27 @@ class ManagedApplicationAuditGuard(ManagedReadonlyAuditGuard):
 class ManagedApplication:
     @classmethod
     def open(cls, store: ManagedStore, *, operation_id: str, nonce: str, runtime_digest: str,
-             control_token: str, acceptance_scope: str = "isolated_native_host", audit_guard=None):
+             control_token: str, activation_context: ManagedActivationContext | None = None,
+             acceptance_scope: str = "isolated_native_host", audit_guard=None):
         if (not valid_uuid(operation_id) or not valid_uuid(nonce) or not valid_hash(runtime_digest)
                 or not valid_hash(control_token) or acceptance_scope not in {"isolated_native_host", "engineering_source_child"}):
             raise ManagedStoreError("managed application launch identity rejected")
+        if type(activation_context) is not ManagedActivationContext:
+            raise ManagedStoreError("managed application activation context is required")
+        context_identity = (activation_context.operation_id, activation_context.nonce, activation_context.runtime_digest,
+                            activation_context.namespace_root, activation_context.installation_id, activation_context.data_store_id,
+                            activation_context.release_id, activation_context.binding_digest)
+        expected_identity = (operation_id, nonce, runtime_digest, str(store.root), store.installation_id, store.data_store_id,
+                             store.release_id, store.binding_digest)
+        if (context_identity != expected_identity or not valid_uuid(activation_context.host_nonce)
+                or not valid_hash(activation_context.profile_intent_digest) or not valid_hash(activation_context.namespace_digest)
+                or activation_context.namespace_digest != store.binding["namespace"]["digest"]
+                or activation_context.access != "fenced_application"
+                or activation_context.origin not in {"validated_fenced_profile_intent_v1", "synthetic_fixture_only_v1"}):
+            raise ManagedStoreError("managed application activation context binding rejected")
         self = cls()
         self.store, self.nonce, self.runtime_digest = store, nonce, runtime_digest
+        self.activation_context = activation_context
         self._token, self.acceptance_scope, self.guard = control_token, acceptance_scope, audit_guard
         self.lease, self.closed, self.failed = None, False, False
         self._mutex = threading.RLock()
@@ -114,12 +147,29 @@ class ManagedApplication:
                 before = store.inspect()
                 if before["state"] == "maintenance_required" or before.get("activeLease"):
                     raise MaintenanceRequired("managed application requires maintenance")
+                if before["initialized"]:
+                    preflight = store.application_snapshot()
+                    self._load(preflight)
+                    if not self.records or self.state != "clean_shutdown":
+                        raise MaintenanceRequired("managed application has no completed clean shutdown")
+                    last = self.records[-1]
+                    matching = [receipt for receipt in self.releases if receipt["generation"] == last["generation"]
+                                and receipt["revision"] == last["revision"]]
+                    if (preflight["generation"] != last["generation"] or len(matching) != 1):
+                        raise MaintenanceRequired("application cold generation or release receipt mismatch")
+                    if acceptance_scope == "isolated_native_host" and (self.synthetic_lifecycle or self.unproven_lifecycle):
+                        raise MaintenanceRequired("unproven legacy lifecycle cannot be promoted to production")
+                if ((activation_context.origin == "validated_fenced_profile_intent_v1" and acceptance_scope != "isolated_native_host")
+                        or (activation_context.origin == "synthetic_fixture_only_v1" and acceptance_scope != "engineering_source_child")):
+                    raise ManagedStoreError("managed application activation origin does not match its acceptance scope")
                 self.lease = store.acquire(operation_id)
                 if not before["initialized"]:
                     if self.lease.generation != 1:
                         raise MaintenanceRequired("application initialization skipped an owner generation")
                     store.initialize(self.lease, str(uuid.uuid4()))
                 self._load(store.application_snapshot(self.lease))
+                if acceptance_scope == "isolated_native_host" and (self.synthetic_lifecycle or self.unproven_lifecycle):
+                    raise MaintenanceRequired("unproven legacy lifecycle cannot be promoted to production")
                 if before["initialized"] and (not self.records or self.state != "clean_shutdown"):
                     raise MaintenanceRequired("managed application has no completed clean shutdown")
                 if self.records:
@@ -130,7 +180,16 @@ class ManagedApplication:
                                 and receipt["revision"] == last["revision"]]
                     if len(matching) != 1:
                         raise MaintenanceRequired("clean shutdown release receipt mismatch")
-                self._write("observing", operation_id, {"previous_shutdown_digest": self.latest_shutdown})
+                self._write("active_observing", operation_id, {
+                    "activation_operation_id": activation_context.operation_id,
+                    "active_release_id": activation_context.release_id,
+                    "previous_shutdown_digest": self.latest_shutdown,
+                    "access": activation_context.access,
+                    "origin": activation_context.origin,
+                    "host_nonce": activation_context.host_nonce,
+                    "profile_intent_digest": activation_context.profile_intent_digest,
+                    "namespace_digest": activation_context.namespace_digest,
+                })
             return self
         except BaseException:
             self.abandon()
@@ -142,6 +201,8 @@ class ManagedApplication:
     def _load(self, snapshot):
         self.records, self.sessions, self.operations = [], {}, {}
         self.state, self.latest_shutdown, self.previous_shutdown = None, None, None
+        self.active_release_id, self.activation_origin = None, None
+        self.synthetic_lifecycle, self.unproven_lifecycle = False, False
         self.last_known_good, self.smoke, self.previous_smoke = None, False, False
         self.revision, self.releases = snapshot["revision"], snapshot["releases"]
         previous_digest, generation, run_nonce = None, 0, None
@@ -167,10 +228,39 @@ class ManagedApplication:
             kind, payload = record["kind"], record["payload"]
             if type(payload) is not dict:
                 raise MaintenanceRequired("application event payload rejected")
-            if kind == "observing":
-                if (self.state not in {None, "clean_shutdown"} or payload != {"previous_shutdown_digest": self.latest_shutdown}
+            if kind in {"observing", "active_observing"}:
+                expected_payload = {"previous_shutdown_digest": self.latest_shutdown}
+                if kind == "active_observing":
+                    expected_payload = {
+                        **expected_payload,
+                        "activation_operation_id": record["request_operation_id"],
+                        "active_release_id": self.store.release_id,
+                        "access": "fenced_application",
+                    }
+                    if (not valid_uuid(payload.get("activation_operation_id"))
+                            or payload["activation_operation_id"] != record["request_operation_id"]
+                            or type(payload.get("origin")) is not str
+                            or payload["origin"] not in {"validated_fenced_profile_intent_v1", "synthetic_fixture_only_v1"}
+                            or not valid_uuid(payload.get("host_nonce"))
+                            or not valid_hash(payload.get("profile_intent_digest"))
+                            or payload.get("namespace_digest") != self.store.binding["namespace"]["digest"]):
+                        raise MaintenanceRequired("managed application activation evidence rejected")
+                    expected_payload.update({
+                        "origin": payload["origin"], "host_nonce": payload["host_nonce"],
+                        "profile_intent_digest": payload["profile_intent_digest"],
+                        "namespace_digest": payload["namespace_digest"],
+                    })
+                if (self.state not in {None, "clean_shutdown"} or payload != expected_payload
                         or record["generation"] != generation + 1 or record["run_nonce"] == run_nonce):
                     raise MaintenanceRequired("application lifecycle observing transition rejected")
+                if kind == "active_observing":
+                    if payload != expected_payload:
+                        raise MaintenanceRequired("managed application active pointer rejected")
+                    self.active_release_id, self.activation_origin = payload["active_release_id"], payload["origin"]
+                    if payload["origin"] == "synthetic_fixture_only_v1":
+                        self.synthetic_lifecycle = True
+                else:
+                    self.unproven_lifecycle = True
                 self.previous_shutdown, self.previous_smoke = self.latest_shutdown, self.smoke
                 generation, run_nonce, self.smoke = record["generation"], record["run_nonce"], False
                 self.state = "observing"
@@ -199,6 +289,8 @@ class ManagedApplication:
                         raise MaintenanceRequired("application LKG acceptance rejected")
                     self.last_known_good = {"release_id": self.store.release_id, "binding_digest": self.store.binding_digest,
                                            "generation": generation, "scope": payload["scope"], "acceptance_digest": digest(record)}
+                    if payload["scope"] == "engineering_source_child":
+                        self.synthetic_lifecycle = True
                 elif kind == "clean_shutdown":
                     if payload != {"smoke": self.smoke}:
                         raise MaintenanceRequired("application clean shutdown evidence rejected")
@@ -245,8 +337,21 @@ class ManagedApplication:
     def _metadata(self):
         return {"installation_id": self.store.installation_id, "data_store_id": self.store.data_store_id,
                 "release_id": self.store.release_id, "binding_digest": self.store.binding_digest, "runtime_digest": self.runtime_digest,
+                "active_release_id": self.active_release_id, "activation_origin": self.activation_origin,
+                "history_provenance": self._history_provenance(),
+                "production_activation": (self.activation_origin == "validated_fenced_profile_intent_v1"
+                                          and not self.synthetic_lifecycle and not self.unproven_lifecycle),
                 "nonce": self.nonce, "generation": self.lease.generation if self.lease else self._last_generation,
                 "revision": self.revision, "lifecycle": self.state, "last_known_good": self.last_known_good}
+
+    def _history_provenance(self):
+        if self.unproven_lifecycle:
+            return "unproven_legacy"
+        if self.activation_origin == "synthetic_fixture_only_v1" or self.synthetic_lifecycle:
+            return "synthetic_fixture_only"
+        if self.activation_origin == "validated_fenced_profile_intent_v1":
+            return "validated_fenced_profile_intent"
+        return "none"
 
     def _mutate(self, kind, operation_id, payload):
         previous = self.operations.get(operation_id)
@@ -362,10 +467,12 @@ class ManagedHostReadonlyContext(ManagedReadonlyContext):
                 or frame["nonce"] != self.nonce or not valid_uuid(frame["operation_id"])
                 or type(frame["control_token"]) is not str or not hmac.compare_digest(frame["control_token"], self._control_token)):
             raise ManagedStoreError("managed Host readonly control rejected")
+        state = self.revalidate()
+        readonly_state = {key: state[key] for key in ("data_store_id", "generation", "revision", "lifecycle", "last_known_good")}
         return {"type": "managed.host-readonly.stopped", "clean": True, "nonce": self.nonce,
                 "host_nonce": self.host_nonce, "profile_intent_digest": self.profile_intent_digest,
                 "installation_id": self.installation_id, "release_id": self.release_id,
-                "binding_digest": self.binding_digest, "runtime_digest": self.runtime_digest, **self.revalidate()}
+                "binding_digest": self.binding_digest, "runtime_digest": self.runtime_digest, **readonly_state}
 
     def revalidate(self):
         import managed_host_entry as entry
@@ -385,7 +492,9 @@ class ManagedHostReadonlyContext(ManagedReadonlyContext):
 def inspect_application(store, runtime_digest):
     snapshot = store.application_snapshot()
     if not snapshot["initialized"]:
-        return {"revision": 0, "lifecycle": "empty_uninitialized", "last_known_good": None, "generation": 0}
+        return {"revision": 0, "lifecycle": "empty_uninitialized", "active_release_id": None,
+                "activation_origin": None, "history_provenance": "none", "production_activation": False,
+                "last_known_good": None, "generation": 0}
     app = ManagedApplication()
     app.store, app.runtime_digest = store, runtime_digest
     app._load(snapshot)
@@ -396,4 +505,9 @@ def inspect_application(store, runtime_digest):
         raise MaintenanceRequired("application readonly inspection found an unrepresented owner generation")
     if len([item for item in app.releases if item["generation"] == last["generation"] and item["revision"] == last["revision"]]) != 1:
         raise MaintenanceRequired("managed application clean release is missing")
-    return {"revision": app.revision, "lifecycle": "clean_shutdown", "last_known_good": app.last_known_good, "generation": last["generation"]}
+    return {"revision": app.revision, "lifecycle": "clean_shutdown", "active_release_id": app.active_release_id,
+            "activation_origin": app.activation_origin, "history_provenance": app._history_provenance(),
+            "production_activation": (app.activation_origin == "validated_fenced_profile_intent_v1"
+                                      and not app.synthetic_lifecycle and not app.unproven_lifecycle),
+            "last_known_good": app.last_known_good,
+            "generation": last["generation"]}

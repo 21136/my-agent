@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ContractError } from "./contracts";
 import { JournalStore, type StateMutation } from "./journal";
+import { isEvolutionConversationId } from "./conversation-id";
 
 export type HostBinding = {
   evolution_id: string;
@@ -16,7 +17,8 @@ function parseBinding(value: unknown): HostBinding {
   if (value === null || typeof value !== "object" || Array.isArray(value)) fail("recovery_required", "journal contains a malformed binding projection");
   const item = value as Record<string, unknown>;
   if (!["evolution_id", "conversation_id", "scope_id", "host_instance_id", "state_revision", "status"].every((key) => Object.hasOwn(item, key)) || Object.keys(item).length !== 6) fail("recovery_required", "journal binding has unexpected fields");
-  for (const key of ["evolution_id", "conversation_id", "scope_id", "host_instance_id"] as const) if (typeof item[key] !== "string" || !UUID.test(item[key])) fail("recovery_required", `journal binding has invalid ${key}`);
+  if (!isEvolutionConversationId(item.conversation_id)) fail("recovery_required", "journal binding has invalid conversation_id");
+  for (const key of ["evolution_id", "scope_id", "host_instance_id"] as const) if (typeof item[key] !== "string" || !UUID.test(item[key])) fail("recovery_required", `journal binding has invalid ${key}`);
   if (!Number.isSafeInteger(item.state_revision) || (item.state_revision as number) < 0 || item.status !== "bound" && item.status !== "frozen") fail("recovery_required", "journal binding state is invalid");
   return structuredClone(item) as unknown as HostBinding;
 }
@@ -41,7 +43,8 @@ export class BindingStore {
   }
 
   bind(input: { conversation_id: string; scope_id: string; host_instance_id: string }): HostBinding {
-    for (const [name, value] of Object.entries(input)) if (typeof value !== "string" || !UUID.test(value)) fail("invalid_request", `${name} must be a canonical UUID`);
+    if (!isEvolutionConversationId(input.conversation_id)) fail("invalid_request", "conversation_id must be a canonical UUID or native conversation id");
+    for (const [name, value] of [["scope_id", input.scope_id], ["host_instance_id", input.host_instance_id]] as const) if (typeof value !== "string" || !UUID.test(value)) fail("invalid_request", `${name} must be a canonical UUID`);
     this.refresh();
     if ([...this.active.values()].some((binding) => binding.scope_id === input.scope_id)) fail("permission_denied", "sandbox already has a writer lease");
     if ([...this.active.values()].some((binding) => binding.conversation_id === input.conversation_id)) fail("permission_denied", "conversation already owns an evolution binding");
@@ -53,7 +56,7 @@ export class BindingStore {
   }
 
   findForConversation(conversationId: string): HostBinding | null {
-    if (typeof conversationId !== "string" || !UUID.test(conversationId)) fail("invalid_request", "conversation_id must be a canonical UUID");
+    if (!isEvolutionConversationId(conversationId)) fail("invalid_request", "conversation_id must be a canonical UUID or native conversation id");
     this.refresh();
     const matches = [...this.active.values()].filter((binding) => binding.conversation_id === conversationId);
     if (matches.length > 1) fail("recovery_required", "conversation owns multiple active evolution bindings");

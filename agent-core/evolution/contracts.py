@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date
 from typing import Any, Final, Literal, TypeAlias
 
 MAX_CONTROL_BYTES: Final = 65_536
@@ -21,6 +22,7 @@ Action: TypeAlias = Literal[
 ]
 Hash: TypeAlias = str
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+_LEGACY_CONVERSATION_ID_RE = re.compile(r"^([0-9]{4})([0-9]{2})([0-9]{2})-([0-9a-f]{8})$")
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ACTIONS = frozenset((
     "inspect", "patch", "snapshot", "build", "launch", "stop", "run_case",
@@ -65,6 +67,31 @@ def _check_uuid(value: Any, field: str) -> str:
     text = _check_string(value, field, 36)
     if not _UUID_RE.fullmatch(text):
         _invalid("expected canonical lowercase UUID", field)
+    return text
+
+
+def is_conversation_id(value: Any) -> bool:
+    """Accept canonical UUIDs and the exact date-prefixed ID emitted by session.py."""
+    if not isinstance(value, str):
+        return False
+    if len(value) == 36 and _UUID_RE.fullmatch(value):
+        return True
+    if len(value) != 17:
+        return False
+    match = _LEGACY_CONVERSATION_ID_RE.fullmatch(value)
+    if not match:
+        return False
+    try:
+        date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return False
+    return True
+
+
+def _check_conversation_id(value: Any, field: str) -> str:
+    text = _check_string(value, field, 36)
+    if not is_conversation_id(text):
+        _invalid("expected canonical UUID or native conversation id", field)
     return text
 
 
@@ -250,8 +277,9 @@ def parse_control_request(value: Any) -> dict[str, Any]:
     request = _exact_object(value, keys, keys, "request")
     if request["protocol"] != "evolution/1.0":
         raise ContractError("protocol_incompatible", "unsupported protocol version", "protocol")
-    for field in ("operation_id", "evolution_id", "conversation_id", "host_run_id", "authorization_id"):
+    for field in ("operation_id", "evolution_id", "host_run_id", "authorization_id"):
         _check_uuid(request[field], field)
+    _check_conversation_id(request["conversation_id"], "conversation_id")
     revision = request["expected_state_revision"]
     if type(revision) is not int or revision < 0 or revision > 9_007_199_254_740_991:
         _invalid("invalid state revision", "expected_state_revision")

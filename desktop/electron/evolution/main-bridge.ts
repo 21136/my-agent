@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import { ContractError } from "./contracts";
 import { T4_RECOVERY_PROFILE } from "./test-profile";
+import { isEvolutionConversationId } from "./conversation-id";
 
 export type EvolutionIpcEvent = { senderId: number; isMainFrame: boolean; origin: string };
 export interface EvolutionIpcAdapter {
@@ -14,10 +15,10 @@ export type EvolutionHostRequest =
   | { type: "evolution.stop"; conversation_id: string };
 type ActionChannel = "evolution:getState" | "evolution:begin" | "evolution:stop";
 type HostMessage = EvolutionHostRequest;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ACTION_CHANNELS: ActionChannel[] = ["evolution:getState", "evolution:begin", "evolution:stop"];
 const SESSION_CHANNEL = "evolution:session";
 const CHANNELS = [...ACTION_CHANNELS, SESSION_CHANNEL];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function deny(message: string): never { throw new ContractError("permission_denied", message); }
 function trustedEvent(event: EvolutionIpcEvent, mainWindow: { id: number }, origin: string): void {
   if (event.senderId !== mainWindow.id || event.isMainFrame !== true || event.origin !== origin) deny("evolution IPC is restricted to the trusted main frame");
@@ -39,7 +40,7 @@ export function bindEvolutionIpc(input: {
     trustedEvent(event, input.mainWindow, input.trustedOrigin);
     noRendererOptions(payload);
     const conversationId = input.getConversationId();
-    if (typeof conversationId !== "string" || !UUID.test(conversationId)) deny("there is no current authenticated conversation");
+    if (!isEvolutionConversationId(conversationId)) deny("there is no current authenticated conversation");
     const type = channel === "evolution:begin" ? "evolution.begin" : channel === "evolution:stop" ? "evolution.stop" : "evolution.inspect";
     return await input.callHost({ type, conversation_id: conversationId });
   };
@@ -47,7 +48,7 @@ export function bindEvolutionIpc(input: {
   input.ipc.handle(SESSION_CHANNEL, async (event, payload) => {
     trustedEvent(event, input.mainWindow, input.trustedOrigin);
     if (!input.setConversationId) deny("active conversation tracking is unavailable");
-    if (payload !== null && (typeof payload !== "string" || !UUID.test(payload))) deny("active conversation id is invalid");
+    if (payload !== null && !isEvolutionConversationId(payload)) deny("active conversation id is invalid");
     input.setConversationId(payload as string | null);
     return true;
   });

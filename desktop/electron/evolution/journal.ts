@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { ContractError, canonicalJson, contentHash, parseControlRequest, parseControlResult, type ControlRequest, type ControlResult } from "./contracts";
 import type { HostBinding } from "./binding";
+import { isEvolutionConversationId } from "./conversation-id";
 
 const MAX_JOURNAL_BYTES = 256 * 1024 * 1024;
 const MAX_JOURNAL_LINE_BYTES = 1024 * 1024;
@@ -29,7 +30,8 @@ function validateBinding(value: unknown): HostBinding {
   const v = object(value, "binding");
   const expected = ["evolution_id", "conversation_id", "scope_id", "host_instance_id", "state_revision", "status"];
   if (Object.keys(v).length !== expected.length || expected.some((k) => !Object.hasOwn(v, k))) fail("invalid_request", "invalid binding fields");
-  for (const key of ["evolution_id", "conversation_id", "scope_id", "host_instance_id"] as const) {
+  if (!isEvolutionConversationId(v.conversation_id)) fail("invalid_request", "invalid binding conversation_id");
+  for (const key of ["evolution_id", "scope_id", "host_instance_id"] as const) {
     if (typeof v[key] !== "string" || !UUID.test(v[key])) fail("invalid_request", `invalid binding ${key}`);
   }
   if (!Number.isSafeInteger(v.state_revision) || (v.state_revision as number) < 0) fail("invalid_request", "invalid binding state_revision");

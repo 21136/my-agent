@@ -249,6 +249,27 @@ def validate_host_profile_intent(namespace, binding, runtime_digest, host_nonce,
     return value
 
 
+def _build_controller_activation_context(frame, namespace, marker, binding, *, origin="validated_fenced_profile_intent_v1"):
+    if origin not in {"validated_fenced_profile_intent_v1", "synthetic_fixture_only_v1"}:
+        raise ValueError("managed activation context origin rejected")
+    frame = parse_managed_application_bootstrap(_canonical(frame) + b"\n")
+    if (str(namespace) != frame["namespace_root"] or binding["bindingDigest"] != frame["binding_digest"]
+            or binding["namespace"]["digest"] != hashlib.sha256(_canonical(marker)).hexdigest()):
+        raise ValueError("managed activation identity is not the validated namespace binding")
+    profile_intent = validate_host_profile_intent(namespace, binding, frame["runtime_digest"], frame["host_nonce"],
+                                                  frame["profile_intent_digest"], "fenced_application")
+    from managed_application import ManagedActivationContext
+    return ManagedActivationContext(
+        origin=origin,
+        operation_id=frame["operation_id"], nonce=frame["nonce"], runtime_digest=frame["runtime_digest"],
+        host_nonce=frame["host_nonce"], profile_intent_digest=profile_intent["intentDigest"],
+        namespace_root=str(namespace), namespace_digest=hashlib.sha256(_canonical(marker)).hexdigest(),
+        installation_id=binding["installationId"], data_store_id=binding["data"]["storeId"],
+        release_id=binding["release"]["releaseId"], binding_digest=binding["bindingDigest"],
+        access=profile_intent["access"],
+    )
+
+
 def _validate_runtime_chain_stdlib(registration: dict[str, Any], intent: dict[str, Any], receipt: dict[str, Any], binding: dict[str, Any]) -> None:
     if set(registration) != {"format", "mode", "installationId", "releaseId", "bindingDigest", "runtimes", "readyForLaunch", "runtimeDigest"}:
         raise ValueError("runtime registration schema rejected")
@@ -605,12 +626,13 @@ def run_operational_server(frame, host, port, *, application_mode):
         context = replace(context, host_nonce=frame["host_nonce"], profile_intent_digest=frame["profile_intent_digest"], _control_token=frame["control_token"])
         roots = context.registered_read_roots(_runtime_audit_roots(runtime_context))
         if application_mode:
+            activation_context = _build_controller_activation_context(frame, namespace, marker, binding)
             store = ManagedStore(str(namespace), installation_id=binding["installationId"], data_store_id=binding["data"]["storeId"],
                                  release_id=binding["release"]["releaseId"], binding_digest=binding["bindingDigest"])
             guard = ManagedApplicationAuditGuard(roots, store)
             guard.install()
             app = ManagedApplication.open(store, operation_id=frame["operation_id"], nonce=frame["nonce"], runtime_digest=frame["runtime_digest"],
-                                           control_token=frame["control_token"], audit_guard=guard)
+                                           control_token=frame["control_token"], activation_context=activation_context, audit_guard=guard)
             server = importlib.import_module("server")
             return __import__("asyncio").run(server.run_server(host, port, managed_application=app, managed_control_stream=sys.stdin.buffer))
         context.revalidate()

@@ -1,9 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { EvolutionHostRequest } from "./evolution/main-bridge";
+import { isEvolutionConversationId } from "./evolution/conversation-id";
 
 type SessionControlAction = "suspend" | "resume";
 type EvolutionRequestResult = { status: "queued" | "disabled"; message?: string };
-const EVOLUTION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 function isEvolutionHostRequest(value: unknown): value is EvolutionHostRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const request = value as Record<string, unknown>;
@@ -11,8 +11,7 @@ function isEvolutionHostRequest(value: unknown): value is EvolutionHostRequest {
     && Object.hasOwn(request, "type")
     && Object.hasOwn(request, "conversation_id")
     && (request.type === "evolution.begin" || request.type === "evolution.inspect" || request.type === "evolution.stop")
-    && typeof request.conversation_id === "string"
-    && EVOLUTION_UUID.test(request.conversation_id);
+    && isEvolutionConversationId(request.conversation_id);
 }
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {

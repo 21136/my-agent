@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isEvolutionConversationId } from "./conversation-id";
 
 export type Id = string;
 export type Hash = `sha256:${string}`;
@@ -401,7 +402,8 @@ export function parseControlRequest(value:unknown):ControlRequest{
   assertJsonValue(value);bounded(value,"control request");const r=record(value,"request");
   const keys=["protocol","operation_id","evolution_id","conversation_id","host_run_id","expected_state_revision","authorization_id","action","payload"];
   exactKeys(r,keys,keys,"request");if(r.protocol!=="evolution/1.0")throw new ContractError("protocol_incompatible","unsupported protocol version","protocol");
-  for(const k of ["operation_id","evolution_id","conversation_id","host_run_id","authorization_id"] as const)validUuid(r[k],k);
+  for(const k of ["operation_id","evolution_id","host_run_id","authorization_id"] as const)validUuid(r[k],k);
+  if(!isEvolutionConversationId(r.conversation_id))invalid("expected canonical UUID or native conversation id","conversation_id");
   if(typeof r.expected_state_revision!=="number"||!Number.isSafeInteger(r.expected_state_revision)||r.expected_state_revision<0)invalid("invalid state revision","expected_state_revision");
   if(typeof r.action!=="string"||!ACTIONS.has(r.action as Action))invalid("unknown action","action");
   const a=r.action as Action;
