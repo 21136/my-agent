@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -23,6 +24,7 @@ from llm_models import (
     DEFAULT_FLASH_ID,
     DEFAULT_PRO_ID,
     ModelEntry,
+    ModelRegistry,
     get_registry,
     is_tokeness_gateway,
 )
@@ -123,6 +125,30 @@ class LLMApiError(LLMError):
     """Provider returned an HTTP error response."""
 
     def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class LLMConfirmedBatchError(LLMError):
+    """Batch stopped; attempted calls may have reached the provider."""
+    def __init__(self, *, attempted: int, remaining: int):
+        self.attempted = attempted
+        self.remaining = remaining
+        super().__init__("confirmed batch stopped; attempted requests may have been sent")
+
+
+class LLMOutboundConfirmationError(LLMError):
+    """A confirmed outbound request was not explicitly approved."""
+
+
+class LLMOutboundConfigurationChangedError(LLMError):
+    """The frozen outbound request, registry profile, or credentials could not be matched."""
+
+
+class LLMOutboundRequestError(LLMError):
+    """A single confirmed HTTP request failed and must not be retried automatically."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
 
@@ -252,6 +278,59 @@ def vendor_supports_system_prompt_cache(vendor: str) -> bool:
 def as_cached_system_message(prompt: str) -> dict[str, Any]:
     """Build an OpenAI-compatible system message."""
     return {"role": "system", "content": prompt}
+
+
+# Reserved top-level message namespace: untrusted input, never provider content.
+HOST_INTERNAL_METADATA_KEY = "_host_internal"
+
+
+def _provider_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove only per-message host metadata without changing content or tools."""
+    return [{key: value for key, value in message.items() if key != HOST_INTERNAL_METADATA_KEY}
+            if isinstance(message, dict) else message for message in messages]
+
+
+def _clone_json_value(value: Any) -> Any:
+    """Copy a plain JSON value so caller mutation cannot change a confirmed body."""
+    if value is None or type(value) in {str, bool, int}:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number")
+        return value
+    if type(value) is list:
+        return [_clone_json_value(item) for item in value]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise ValueError("JSON object keys must be strings")
+        return {key: _clone_json_value(item) for key, item in value.items()}
+    raise ValueError("value is not a plain JSON type")
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8", errors="strict")
+
+
+def _confirmed_endpoint(entry: ModelEntry) -> tuple[str, httpx.URL]:
+    raw = entry.chat_completions_url()
+    if type(raw) is not str or not raw or any(ord(char) < 33 for char in raw):
+        raise ValueError("endpoint is invalid")
+    url = httpx.URL(raw)
+    if (url.scheme != "https" or not url.host or url.username or url.password
+            or url.query or url.fragment or str(url) != raw):
+        raise ValueError("endpoint is not a canonical HTTPS URL")
+    return raw, url
+
+
+def _confirmed_label(value: Any) -> bool:
+    if type(value) is not str or not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
+    try:
+        return len(value.encode("utf-8", errors="strict")) <= 256
+    except UnicodeError:
+        return False
 
 
 def build_chat_messages(
@@ -425,7 +504,7 @@ class LLMClient:
         streaming = stream is not None
         payload: dict[str, Any] = {
             "model": resolved_model,
-            "messages": messages,
+            "messages": _provider_messages(messages),
             "temperature": temperature,
             "stream": streaming,
         }
@@ -479,6 +558,473 @@ class LLMClient:
         except httpx.HTTPError as exc:
             self._raise_if_cancelled()
             raise LLMNetworkError(str(exc)) from exc
+
+    def chat_confirmed_json(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        session_id: str,
+        expected_preview_json: str,
+        confirm_fn: Callable[[str, bool], str],
+    ) -> LLMResponse:
+        """Send one non-streaming, no-tools JSON request bound to an exact confirmation.
+
+        ``expected_preview_json`` is the host's already prepared preview. It must
+        byte-for-byte match the canonical preview assembled here before the
+        confirmation callback runs. The callback is called exactly once as
+        ``confirm_fn(preview, False)``; only the exact string ``"y"`` approves.
+        The request body is frozen before confirmation, the effective registry
+        entry and credential are rechecked afterwards, and the same body bytes
+        are sent once without environment proxies, redirects, retry, or fallback.
+        """
+        self._raise_if_cancelled()
+        if (type(model_id) is not str or not model_id or model_id != model_id.strip()
+                or not _confirmed_label(model_id) or type(session_id) is not str
+                or not _confirmed_label(session_id) or type(messages) is not list
+                or type(expected_preview_json) is not str or not callable(confirm_fn)):
+            raise LLMOutboundConfigurationChangedError("confirmed request inputs are invalid")
+
+        try:
+            frozen_messages = _clone_json_value(_provider_messages(messages))
+            if type(frozen_messages) is not list or any(type(item) is not dict for item in frozen_messages):
+                raise ValueError("messages must be a list of JSON objects")
+            initial_registry = ModelRegistry.load(self.paths)
+            initial_entry = initial_registry.resolve(model_id)
+            if (type(initial_entry) is not ModelEntry or initial_entry.id != model_id
+                    or not _confirmed_label(initial_entry.id)
+                    or not _confirmed_label(initial_entry.vendor)
+                    or not _confirmed_label(initial_entry.provider_model)):
+                raise ValueError("model profile is unavailable or non-canonical")
+            endpoint_text, endpoint_url = _confirmed_endpoint(initial_entry)
+            provider_payload = {
+                "model": initial_entry.provider_model,
+                "messages": frozen_messages,
+                "temperature": 0.0,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+            }
+            body = _canonical_json_bytes(provider_payload)
+            preview = json.dumps({
+                "model_id": initial_entry.id,
+                "vendor": initial_entry.vendor,
+                "endpoint": endpoint_text,
+                "session_id": session_id,
+                "provider_payload": provider_payload,
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            if preview != expected_preview_json:
+                raise ValueError("prepared preview does not match the frozen request")
+            first_api_key = initial_entry.resolve_api_key(self.paths)
+        except LLMMissingApiKeyError:
+            raise
+        except Exception:
+            raise LLMOutboundConfigurationChangedError(
+                "confirmed request configuration or exact preview is invalid"
+            ) from None
+        if type(first_api_key) is not str or not first_api_key:
+            raise LLMMissingApiKeyError(f"API key not set for model {initial_entry.id}")
+
+        try:
+            choice = confirm_fn(preview, False)
+        except Exception:
+            raise LLMOutboundConfirmationError("confirmed request was not approved") from None
+        if type(choice) is not str or choice != "y":
+            raise LLMOutboundConfirmationError("confirmed request was not approved")
+        self._raise_if_cancelled()
+
+        try:
+            current_registry = ModelRegistry.load(self.paths)
+            current_entry = current_registry.resolve(model_id)
+            if (type(current_entry) is not ModelEntry or current_entry != initial_entry
+                    or current_entry.id != model_id):
+                raise ValueError("model registry changed")
+            current_endpoint, current_url = _confirmed_endpoint(current_entry)
+            if current_endpoint != endpoint_text or current_url != endpoint_url:
+                raise ValueError("endpoint changed")
+            current_payload = {
+                "model": current_entry.provider_model,
+                "messages": frozen_messages,
+                "temperature": 0.0,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+            }
+            if _canonical_json_bytes(current_payload) != body:
+                raise ValueError("provider payload changed")
+            current_api_key = current_entry.resolve_api_key(self.paths)
+            if (type(current_api_key) is not str or not current_api_key
+                    or current_api_key != first_api_key):
+                raise ValueError("credential changed")
+        except Exception:
+            raise LLMOutboundConfigurationChangedError(
+                "confirmed request configuration changed; no request was sent"
+            ) from None
+        self._raise_if_cancelled()
+
+        headers = {
+            "Authorization": f"Bearer {current_api_key}",
+            "Content-Type": "application/json",
+        }
+        client: httpx.Client | None = None
+        response: httpx.Response | None = None
+        try:
+            # This path deliberately bypasses make_httpx_client's opt-in proxy-env behavior.
+            client = httpx.Client(
+                timeout=self.config.timeout_sec,
+                trust_env=False,
+                follow_redirects=False,
+            )
+            with self._active_response_lock:
+                self._active_client = client
+            with client:
+                # Best effort only: cancellation can still race this check and
+                # the call to post; callers must treat a granted permit as sent.
+                self._raise_if_cancelled()
+                response = client.post(
+                    endpoint_text,
+                    headers=headers,
+                    content=body,
+                    follow_redirects=False,
+                )
+                with self._active_response_lock:
+                    self._active_response = response
+                self._raise_if_cancelled()
+                if 300 <= response.status_code < 400:
+                    raise LLMOutboundRequestError(
+                        "confirmed endpoint returned a redirect; it was not followed",
+                        status_code=response.status_code,
+                    )
+                if response.status_code >= 400:
+                    raise LLMOutboundRequestError(
+                        "confirmed provider request failed; it was not retried",
+                        status_code=response.status_code,
+                    )
+                try:
+                    data = response.json()
+                    if type(data) is not dict:
+                        raise ValueError("provider response is not a JSON object")
+                    return _parse_completion(data, fallback_model=initial_entry.id)
+                except LLMApiError:
+                    raise LLMOutboundRequestError(
+                        "confirmed provider returned an invalid completion; it was not retried",
+                        status_code=response.status_code,
+                    ) from None
+                except Exception:
+                    raise LLMOutboundRequestError(
+                        "confirmed provider returned an invalid response; it was not retried",
+                        status_code=response.status_code,
+                    ) from None
+        except (LLMOutboundRequestError, LLMCancelledError):
+            raise
+        except httpx.TimeoutException:
+            raise LLMOutboundRequestError("confirmed request timed out; it was not retried") from None
+        except httpx.HTTPError:
+            raise LLMOutboundRequestError("confirmed request transport failed; it was not retried") from None
+        except Exception:
+            raise LLMOutboundRequestError("confirmed request failed; it was not retried") from None
+        finally:
+            with self._active_response_lock:
+                if response is not None and self._active_response is response:
+                    self._active_response = None
+                if client is not None and self._active_client is client:
+                    self._active_client = None
+
+    def chat_confirmed_json_batch(
+        self, messages_batches: list[list[dict[str, Any]]], *, model_id: str,
+        session_id: str, expected_preview_json: str,
+        confirm_fn: Callable[[str, bool], str], before_each: Callable[[], bool],
+        response_validator: Callable[[int, LLMResponse], bool],
+    ) -> tuple[LLMResponse, ...]:
+        """Confirm the complete frozen batch once, then send each body at most once.
+
+        before_each is a trusted host check (no arguments, exactly True to proceed),
+        called after approval and again immediately before each POST. It must check
+        the bound session and ledger; this client cannot authenticate those facts.
+        response_validator(index, response) must return exactly True before the next
+        batch; it is responsible for validating response identity and content.
+        Failures expose only attempt counts, not partial results or request content.
+        An attempted request may have reached the provider even on failure.
+        """
+        attempted = 0
+        total = len(messages_batches) if type(messages_batches) is list else 0
+        try:
+            self._raise_if_cancelled()
+            if (type(messages_batches) is not list or not 1 <= total <= 32
+                    or type(model_id) is not str or model_id != model_id.strip()
+                    or not _confirmed_label(model_id) or type(session_id) is not str
+                    or not _confirmed_label(session_id) or type(expected_preview_json) is not str
+                    or len(expected_preview_json.encode('utf-8')) > 2 * 1024 * 1024
+                    or not callable(confirm_fn) or not callable(before_each)
+                    or not callable(response_validator)):
+                raise ValueError('invalid inputs')
+            frozen = _clone_json_value(messages_batches)
+            if any(type(batch) is not list or any(type(m) is not dict for m in batch) for batch in frozen):
+                raise ValueError('invalid messages')
+            frozen = [_provider_messages(batch) for batch in frozen]
+            initial = ModelRegistry.load(self.paths).resolve(model_id)
+            if (type(initial) is not ModelEntry or initial.id != model_id
+                    or not _confirmed_label(initial.id) or not _confirmed_label(initial.vendor)
+                    or not _confirmed_label(initial.provider_model)):
+                raise ValueError('invalid profile')
+            endpoint, url = _confirmed_endpoint(initial)
+            payloads = [{"model": initial.provider_model, "messages": batch,
+                         "temperature": 0.0, "stream": False,
+                         "response_format": {"type": "json_object"}} for batch in frozen]
+            bodies = tuple(_canonical_json_bytes(payload) for payload in payloads)
+            preview = _canonical_json_bytes({"model_id": initial.id, "vendor": initial.vendor,
+                "endpoint": endpoint, "session_id": session_id, "provider_payloads": payloads}).decode('utf-8')
+            if preview != expected_preview_json or len(preview.encode('utf-8')) > 2 * 1024 * 1024:
+                raise ValueError('preview mismatch')
+            key = initial.resolve_api_key(self.paths)
+            if type(key) is not str or not key:
+                raise ValueError('missing credential')
+            choice = confirm_fn(preview, False)
+            if type(choice) is not str or choice != 'y':
+                raise ValueError('not approved')
+
+            def check() -> None:
+                self._raise_if_cancelled()
+                current = ModelRegistry.load(self.paths).resolve(model_id)
+                if type(current) is not ModelEntry or current != initial or current.id != model_id:
+                    raise ValueError('profile changed')
+                if _confirmed_endpoint(current) != (endpoint, url) or current.resolve_api_key(self.paths) != key:
+                    raise ValueError('configuration changed')
+                if before_each() is not True:
+                    raise ValueError('host check failed')
+                self._raise_if_cancelled()
+                # A trusted host callback can take time or mutate configuration.
+                current = ModelRegistry.load(self.paths).resolve(model_id)
+                if (type(current) is not ModelEntry or current != initial
+                        or _confirmed_endpoint(current) != (endpoint, url)
+                        or current.resolve_api_key(self.paths) != key):
+                    raise ValueError('configuration changed')
+                self._raise_if_cancelled()
+
+            check()
+            results = []
+            for index, body in enumerate(bodies):
+                check()
+                client = None
+                response = None
+                try:
+                    client = httpx.Client(timeout=self.config.timeout_sec, trust_env=False, follow_redirects=False)
+                    with self._active_response_lock:
+                        self._active_client = client
+                    with client:
+                        self._raise_if_cancelled()
+                        attempted += 1
+                        response = client.post(endpoint, headers={"Authorization": f"Bearer {key}",
+                            "Content-Type": "application/json"}, content=body, follow_redirects=False)
+                        with self._active_response_lock:
+                            self._active_response = response
+                        self._raise_if_cancelled()
+                        if not 200 <= response.status_code < 300:
+                            raise ValueError('provider status')
+                        data = response.json()
+                        if type(data) is not dict:
+                            raise ValueError('invalid response')
+                        parsed = _parse_completion(data, fallback_model=initial.id)
+                        if response_validator(index, parsed) is not True:
+                            raise ValueError("response validation failed")
+                        results.append(parsed)
+                finally:
+                    with self._active_response_lock:
+                        if response is not None and self._active_response is response:
+                            self._active_response = None
+                        if client is not None and self._active_client is client:
+                            self._active_client = None
+            return tuple(results)
+        except Exception:
+            raise LLMConfirmedBatchError(attempted=attempted, remaining=max(0, total - attempted)) from None
+
+    def chat_confirmed_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        session_id: str,
+        scope: dict[str, Any],
+        tools: list[dict[str, Any]],
+        confirm_fn: Callable[[str, bool], str],
+        before_each: Callable[[], bool],
+        on_request_attempt: Callable[[], None] | None = None,
+    ) -> LLMResponse:
+        """Freeze, preview, confirm, and send one tools-enabled request exactly once.
+
+        The preview is generated from the same canonical provider body bytes that
+        are POSTed. `before_each` is a trusted host check run after approval; it
+        must return exactly True and should revalidate the project binding plus
+        the identities/content of every source included in the messages.
+        """
+        self._raise_if_cancelled()
+        if (type(model_id) is not str or model_id != model_id.strip()
+                or not _confirmed_label(model_id) or type(session_id) is not str
+                or not _confirmed_label(session_id) or type(scope) is not dict
+                or type(messages) is not list or type(tools) is not list or not tools
+                or not callable(confirm_fn) or not callable(before_each)
+                or (on_request_attempt is not None and not callable(on_request_attempt))):
+            raise LLMOutboundConfigurationChangedError("confirmed tool request inputs are invalid")
+        try:
+            frozen_messages = _clone_json_value(_provider_messages(messages))
+            frozen_tools = _clone_json_value(tools)
+            frozen_scope = _clone_json_value(scope)
+            if (type(frozen_messages) is not list
+                    or any(type(item) is not dict for item in frozen_messages)
+                    or type(frozen_tools) is not list or not frozen_tools
+                    or any(type(item) is not dict for item in frozen_tools)
+                    or type(frozen_scope) is not dict):
+                raise ValueError("request values must be JSON objects")
+            initial_entry = ModelRegistry.load(self.paths).resolve(model_id)
+            if (type(initial_entry) is not ModelEntry or initial_entry.id != model_id
+                    or not initial_entry.supports_tool_call
+                    or not _confirmed_label(initial_entry.id)
+                    or not _confirmed_label(initial_entry.vendor)
+                    or not _confirmed_label(initial_entry.provider_model)):
+                raise ValueError("tools-capable model profile is unavailable")
+            endpoint_text, endpoint_url = _confirmed_endpoint(initial_entry)
+            provider_payload = {
+                "model": initial_entry.provider_model,
+                "messages": frozen_messages,
+                "temperature": 0.0,
+                "stream": False,
+                "tools": frozen_tools,
+            }
+            body = _canonical_json_bytes(provider_payload)
+            preview = _canonical_json_bytes({
+                "method": "POST",
+                "model_id": initial_entry.id,
+                "vendor": initial_entry.vendor,
+                "endpoint": endpoint_text,
+                "headers": {"Authorization": "[redacted]", "Content-Type": "application/json"},
+                "session_id": session_id,
+                "scope": frozen_scope,
+                "provider_payload": provider_payload,
+            }).decode("utf-8")
+            if len(body) > 2 * 1024 * 1024 or len(preview.encode("utf-8")) > 2 * 1024 * 1024:
+                raise ValueError("confirmed tool request exceeds preview limit")
+            first_api_key = initial_entry.resolve_api_key(self.paths)
+        except LLMMissingApiKeyError:
+            raise
+        except Exception:
+            raise LLMOutboundConfigurationChangedError(
+                "confirmed tool request configuration is invalid"
+            ) from None
+        if type(first_api_key) is not str or not first_api_key:
+            raise LLMMissingApiKeyError(f"API key not set for model {initial_entry.id}")
+
+        try:
+            choice = confirm_fn(preview, False)
+        except Exception:
+            raise LLMOutboundConfirmationError("confirmed tool request was not approved") from None
+        if type(choice) is not str or choice != "y":
+            raise LLMOutboundConfirmationError("confirmed tool request was not approved")
+        self._raise_if_cancelled()
+        try:
+            if before_each() is not True:
+                raise ValueError("host scope check failed")
+            self._raise_if_cancelled()
+            current_entry = ModelRegistry.load(self.paths).resolve(model_id)
+            if (type(current_entry) is not ModelEntry or current_entry != initial_entry
+                    or current_entry.id != model_id or not current_entry.supports_tool_call):
+                raise ValueError("model registry changed")
+            current_endpoint, current_url = _confirmed_endpoint(current_entry)
+            if current_endpoint != endpoint_text or current_url != endpoint_url:
+                raise ValueError("model endpoint changed")
+            current_payload = {
+                "model": current_entry.provider_model,
+                "messages": frozen_messages,
+                "temperature": 0.0,
+                "stream": False,
+                "tools": frozen_tools,
+            }
+            if _canonical_json_bytes(current_payload) != body:
+                raise ValueError("frozen provider payload changed")
+            current_api_key = current_entry.resolve_api_key(self.paths)
+            if (type(current_api_key) is not str or not current_api_key
+                    or current_api_key != first_api_key):
+                raise ValueError("credential changed")
+            self._raise_if_cancelled()
+        except Exception:
+            raise LLMOutboundConfigurationChangedError(
+                "confirmed tool request scope or configuration changed; no request was sent"
+            ) from None
+
+        client: httpx.Client | None = None
+        response: httpx.Response | None = None
+        try:
+            client = httpx.Client(
+                timeout=self.config.timeout_sec,
+                trust_env=False,
+                follow_redirects=False,
+            )
+            with self._active_response_lock:
+                if self._active_client is not None:
+                    raise LLMOutboundConfigurationChangedError("LLM client is already active")
+                self._active_client = client
+            with client:
+                self._raise_if_cancelled()
+                try:
+                    final_scope_check = before_each()
+                except Exception:
+                    final_scope_check = False
+                if final_scope_check is not True:
+                    raise LLMOutboundConfigurationChangedError(
+                        "confirmed tool request scope changed; no request was sent"
+                    )
+                self._raise_if_cancelled()
+                final_entry = ModelRegistry.load(self.paths).resolve(model_id)
+                if (type(final_entry) is not ModelEntry or final_entry != initial_entry
+                        or _confirmed_endpoint(final_entry) != (endpoint_text, endpoint_url)
+                        or final_entry.resolve_api_key(self.paths) != first_api_key):
+                    raise LLMOutboundConfigurationChangedError(
+                        "confirmed tool model configuration changed; no request was sent"
+                    )
+                self._raise_if_cancelled()
+                if on_request_attempt is not None:
+                    on_request_attempt()
+                response = client.post(
+                    endpoint_text,
+                    headers={"Authorization": f"Bearer {current_api_key}",
+                             "Content-Type": "application/json"},
+                    content=body,
+                    follow_redirects=False,
+                )
+                with self._active_response_lock:
+                    self._active_response = response
+                self._raise_if_cancelled()
+                if 300 <= response.status_code < 400:
+                    raise LLMOutboundRequestError(
+                        "confirmed tool endpoint returned a redirect; it was not followed",
+                        status_code=response.status_code,
+                    )
+                if not 200 <= response.status_code < 300:
+                    raise LLMOutboundRequestError(
+                        "confirmed tool request failed; it was not retried",
+                        status_code=response.status_code,
+                    )
+                try:
+                    data = response.json()
+                    if type(data) is not dict:
+                        raise ValueError("invalid response")
+                    return _parse_completion(data, fallback_model=initial_entry.id)
+                except Exception:
+                    raise LLMOutboundRequestError(
+                        "confirmed tool response was invalid; it was not retried",
+                        status_code=response.status_code,
+                    ) from None
+        except (LLMOutboundConfigurationChangedError, LLMOutboundRequestError, LLMCancelledError):
+            raise
+        except httpx.TimeoutException:
+            raise LLMOutboundRequestError("confirmed tool request timed out; it was not retried") from None
+        except httpx.HTTPError:
+            raise LLMOutboundRequestError("confirmed tool transport failed; it was not retried") from None
+        except Exception:
+            raise LLMOutboundRequestError("confirmed tool request failed; it was not retried") from None
+        finally:
+            with self._active_response_lock:
+                if response is not None and self._active_response is response:
+                    self._active_response = None
+                if client is not None and self._active_client is client:
+                    self._active_client = None
 
     def _parse_http_response(
         self,

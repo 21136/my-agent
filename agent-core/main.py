@@ -107,6 +107,19 @@ OutputFn = Callable[[str], None]
 RecordMode = Literal["off", "summary", "full"]
 ReplOutcome = Literal["continue", "stop"]
 
+
+@dataclass(frozen=True)
+class WorkRecordControllerBindings:
+    """Controllers created for exactly the Session and Agent passed to their factory."""
+
+    recall: Any | None = None
+    recording: Any | None = None
+
+
+WorkRecordControllerFactory = Callable[
+    [Session, Agent], WorkRecordControllerBindings | None
+]
+
 _CONVERSATIONS_DIR = "conversations"
 _SUMMARY_MAX_CHARS = 200
 
@@ -188,6 +201,7 @@ class ConversationRepl:
     config: ReplConfig = field(default_factory=ReplConfig)
     assistant_output_fn: OutputFn | None = field(default=None, repr=False)
     stream_handlers: StreamHandlers | None = field(default=None, repr=False)
+    work_record_controller_factory: WorkRecordControllerFactory | None = field(default=None, repr=False)
     _stop: bool = field(default=False, repr=False)
     _checkpoint_gate: CheckpointGate = field(default_factory=CheckpointGate, repr=False)
     last_turn_finish_reason: str | None = field(default=None, repr=False)
@@ -202,6 +216,7 @@ class ConversationRepl:
         output_fn: OutputFn | None = None,
         config: ReplConfig | None = None,
         stream_handlers: StreamHandlers | None = None,
+        work_record_controller_factory: WorkRecordControllerFactory | None = None,
     ) -> ConversationRepl:
         agent_paths = paths or session.paths
         io_in = input_fn or input
@@ -210,19 +225,74 @@ class ConversationRepl:
         repl = cls(
             paths=agent_paths,
             session=session,
-            agent=Agent.create(
+            agent=cls._create_agent(
                 session,
-                confirm_fn=make_confirm_fn(io_out, io_in, checkpoint_gate=gate),
-                stream_handlers=stream_handlers,
+                io_in,
+                io_out,
+                gate,
+                stream_handlers,
+                work_record_controller_factory,
             ),
             input_fn=io_in,
             output_fn=io_out,
             config=config or ReplConfig(),
             stream_handlers=stream_handlers,
+            work_record_controller_factory=work_record_controller_factory,
             _checkpoint_gate=gate,
         )
         repl._wire_turn_events()
         return repl
+
+    @staticmethod
+    def _create_agent(
+        session: Session,
+        input_fn: InputFn,
+        output_fn: OutputFn,
+        checkpoint_gate: CheckpointGate,
+        stream_handlers: StreamHandlers | None,
+        controller_factory: WorkRecordControllerFactory | None,
+    ) -> Agent:
+        agent = Agent.create(
+            session,
+            confirm_fn=make_confirm_fn(output_fn, input_fn, checkpoint_gate=checkpoint_gate),
+            stream_handlers=stream_handlers,
+        )
+        ConversationRepl._bind_work_record_controllers(
+            session, agent, controller_factory
+        )
+        return agent
+
+    @staticmethod
+    def _bind_work_record_controllers(
+        session: Session,
+        agent: Agent,
+        controller_factory: WorkRecordControllerFactory | None,
+    ) -> None:
+        if controller_factory is None:
+            return
+        bindings = controller_factory(session, agent)
+        if bindings is None:
+            return
+        if not isinstance(bindings, WorkRecordControllerBindings):
+            raise TypeError(
+                "work record controller factory must return "
+                "WorkRecordControllerBindings or None"
+            )
+        for controller in (bindings.recall, bindings.recording):
+            if controller is None:
+                continue
+            store = getattr(controller, "_store", None)
+            if (
+                getattr(controller, "_agent", None) is not agent
+                or getattr(store, "_session", None) is not session
+            ):
+                raise ValueError(
+                    "work record controllers must be bound to the current Agent and Session"
+                )
+        agent.work_record_recall_controller = bindings.recall
+        agent.enable_work_record_recall = bindings.recall is not None
+        agent.work_record_recording_controller = bindings.recording
+        agent.enable_work_record_recording = bindings.recording is not None
 
     def run(self) -> int:
         if self.config.show_record_warning:
@@ -803,16 +873,22 @@ class ConversationRepl:
         self._stop = True
 
     def _rebind_agent(self) -> None:
-        self.agent = Agent.create(
+        # Install the fresh, disabled Agent before calling a reusable factory so a
+        # stale factory result can never leave the previous Session's Agent active.
+        self.agent = self._create_agent(
             self.session,
-            confirm_fn=make_confirm_fn(
-                self.output_fn,
-                self.input_fn,
-                checkpoint_gate=self._checkpoint_gate,
-            ),
-            stream_handlers=self.stream_handlers,
+            self.input_fn,
+            self.output_fn,
+            self._checkpoint_gate,
+            self.stream_handlers,
+            None,
         )
-        self._wire_turn_events()
+        try:
+            self._bind_work_record_controllers(
+                self.session, self.agent, self.work_record_controller_factory
+            )
+        finally:
+            self._wire_turn_events()
 
     def _wire_turn_events(self) -> None:
         def on_turn_event(event: dict[str, Any]) -> None:

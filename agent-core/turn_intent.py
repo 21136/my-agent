@@ -256,6 +256,10 @@ _ACTION_REQUEST_VERBS = (
     "fix",
     "debug",
     "implement",
+    "create",
+    "write",
+    "modify",
+    "update",
     "run",
     "test",
     "verify",
@@ -468,6 +472,18 @@ _FEATURE_ASK_RE = re.compile(
     r"(?:加一个|加个|加上|再加|增加|新增)"
 )
 _NO_CHANGE_RE = re.compile(r"(?:不要|别|不用|无需|不需要|先别)\s*(?:动|改|修改|写)")
+_NEGATED_ENGLISH_EXECUTION_RE = re.compile(
+    r"\b(?:do not|don't|never)\s+(?:create|write|modify|update|implement|fix|run|execute|test|verify|patch)\b",
+    re.IGNORECASE,
+)
+
+
+def _negated_english_execution_only(text: str) -> bool:
+    if not _NEGATED_ENGLISH_EXECUTION_RE.search(text or ""):
+        return False
+    folded = (text or "").casefold()
+    return not (_has_explicit_execution_request(text, folded) or has_action_intent(text))
+
 
 
 _CHANGE_VERB_TAIL_RE = re.compile(r"(?:修|改|处理|弄|解决|加)$")
@@ -605,7 +621,12 @@ def _has_explicit_ordinary_plan_only(text: str) -> bool:
 
 def _has_explicit_ordinary_read_only(text: str) -> bool:
     folded = text.casefold()
-    return any(marker.casefold() in folded for marker in _ORDINARY_READ_ONLY_MARKERS)
+    return (
+        any(marker.casefold() in folded for marker in _ORDINARY_READ_ONLY_MARKERS)
+        or (_is_explanation_request(folded)
+         and not (_has_explicit_execution_request(text, folded) or has_action_intent(text)))
+        or _negated_english_execution_only(text)
+    )
 
 
 def _has_explicit_ordinary_execute(text: str, lower: str) -> bool:
@@ -665,7 +686,7 @@ def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
     if intent == "research" and spawn_explore:
         return "先只读探索"
     labels: dict[TurnIntent, str] = {
-        "recall": "根据上文直接回顾，不调工具",
+        "recall": "优先根据当前上下文回顾；如需较早的本会话原文，可调用只读回查工具（外发前会单独确认）",
         "requirements": "需求输入，只读归纳",
         "qa": "直接回答",
         "plan": "整理方案，少动手",
@@ -714,6 +735,9 @@ def classify_turn(user_text: str) -> TurnIntent:
 
     if has_action_intent(text):
         return "execute"
+
+    if _negated_english_execution_only(text):
+        return "qa"
 
     if _is_explanation_request(lower):
         return "qa"
@@ -841,7 +865,7 @@ def _demo() -> None:
 
     assert is_recall_turn("刚刚我们说了什么")
     assert not is_recall_turn("查 evolve/tools 有哪些")
-    assert intent_label("recall") == "根据上文直接回顾，不调工具"
+    assert "本会话原文" in intent_label("recall") and "单独确认" in intent_label("recall")
     print("[PASS] T-905: recall + intent_label")
 
     assert not should_spawn_explore("1+1 等于几")

@@ -61,6 +61,7 @@ _CODING_TOOLS = frozenset(
     {"run_python", "run_command", "run_tests", "run_demo", "patch_file"}
 )
 _WRITE_TOOLS = frozenset({"write_text", "append_text", "copy_move", "move_to_trash"})
+_PROJECT_TEST_TOOLS = frozenset({"structured_test", "run_project_tests"})
 # verification / release：只读验收执行，不算「写业务代码」（Phase 59 · UI-5966）
 _VERIFY_STAGE_EXEC_TOOLS = frozenset(
     {
@@ -1126,6 +1127,8 @@ def _ordinary_action_block_reason(
     tool_name: str,
     arguments: dict[str, object],
     ordinary_work_intent: str,
+    agent_paths: AgentPaths | None = None,
+    runner_discovery_start: Path | None = None,
 ) -> str | None:
     """Apply request-local ordinary policy before legacy stage compatibility."""
     intent = ordinary_work_intent if ordinary_work_intent in {"read_only", "plan_only", "execute"} else "execute"
@@ -1135,13 +1138,39 @@ def _ordinary_action_block_reason(
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
     is_write = evolved_name in _WRITE_TOOLS or evolved_name == "patch_file"
     is_command = evolved_name in _CODING_TOOLS
+    is_project_test = evolved_name in _PROJECT_TEST_TOOLS
     is_side_effect = is_write or is_command or evolved_name in {"write_evolve", "git_clone"}
-    if intent == "read_only" and is_side_effect:
+    if intent == "read_only" and (is_side_effect or is_project_test):
         return "当前请求是只读操作，不能写入文件或执行项目命令"
     if intent == "plan_only" and is_command:
         return "当前请求仅规划，不能修改业务源码或执行实现命令"
 
     inner = arguments.get("arguments")
+    if isinstance(inner, str):
+        try:
+            parsed_inner = json.loads(inner)
+        except json.JSONDecodeError:
+            parsed_inner = None
+        inner = parsed_inner if isinstance(parsed_inner, dict) else None
+    if is_project_test and project_root.strip() and isinstance(inner, dict):
+        working_dir = inner.get("working_dir")
+        if isinstance(working_dir, str) and working_dir.strip():
+            if not _project_test_path_mappings_match(
+                agent_paths,
+                runner_discovery_start,
+                project_root,
+                working_dir,
+            ):
+                return "项目测试执行路径映射与当前项目不一致，已拒绝执行"
+            if not _resolved_path_is_under_project_root(
+                working_dir,
+                project_root,
+                agent_paths=agent_paths,
+            ):
+                return f"项目测试工作目录仅限当前项目目录：{project_root}"
+        elif "working_dir" in inner and working_dir is not None and not isinstance(working_dir, str):
+            return f"项目测试工作目录仅限当前项目目录：{project_root}"
+
     clone_targets_workspace = (
         evolved_name == "git_clone"
         and isinstance(inner, dict)
@@ -1160,6 +1189,48 @@ def _ordinary_action_block_reason(
     return None
 
 
+def _project_test_path_mappings_match(
+    agent_paths: AgentPaths | None,
+    runner_discovery_start: Path | None,
+    project_root: str,
+    working_dir: str,
+) -> bool:
+    """Require identical canonical resolutions from guard and child mappings."""
+    try:
+        guarded_paths = agent_paths or AgentPaths.discover()
+        child_paths = AgentPaths.discover(start=runner_discovery_start)
+        for raw in (project_root, working_dir):
+            guarded_target = guarded_paths.resolve_under_agent(raw, must_exist=True).resolve(strict=True)
+            child_target = child_paths.resolve_under_agent(raw, must_exist=True).resolve(strict=True)
+            if guarded_target != child_target:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _resolved_path_is_under_project_root(
+    path: str,
+    project_root: str,
+    *,
+    agent_paths: AgentPaths | None,
+) -> bool:
+    """Check test cwd containment after strict filesystem resolution.
+
+    Test tools consume agent-root-relative working_dir values. Resolve both
+    values through AgentPaths so traversal and symlink/junction escapes are
+    checked using the same mapping as the runner.
+    """
+    try:
+        paths = agent_paths or AgentPaths.discover()
+        root = paths.resolve_under_agent(project_root, must_exist=True).resolve(strict=True)
+        target = paths.resolve_under_agent(path, must_exist=True).resolve(strict=True)
+        target.relative_to(root)
+        return True
+    except Exception:
+        return False
+
+
 def project_mode_block_reason(
     *,
     active_shell: str,
@@ -1175,6 +1246,7 @@ def project_mode_block_reason(
     skip_stage_walls: bool = False,
     ordinary_work_intent: str = "execute",
     ordinary_task_scope: str | None = None,
+    runner_discovery_start: Path | None = None,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed.
 
@@ -1183,7 +1255,7 @@ def project_mode_block_reason(
     task gates were removed: planning is optional guidance via skills.
     Legacy keyword arguments are accepted and ignored for compatibility.
     """
-    del plan_status, agent_paths, workflow_stage, runaway_enabled, bug_fix_lane
+    del plan_status, workflow_stage, runaway_enabled, bug_fix_lane
     del runaway_v2_write_scope, skip_stage_walls, ordinary_task_scope
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
@@ -1193,6 +1265,8 @@ def project_mode_block_reason(
         tool_name=tool_name,
         arguments=arguments,
         ordinary_work_intent=ordinary_work_intent,
+        agent_paths=agent_paths,
+        runner_discovery_start=runner_discovery_start,
     )
     if ordinary_block:
         return ordinary_block
@@ -1204,6 +1278,7 @@ def project_mode_block_reason(
             return None
         if tool_name == "run_evolved" and (
             evolved_name in _CODING_TOOLS
+            or evolved_name in _PROJECT_TEST_TOOLS
             or evolved_name in _WRITE_TOOLS
             or (
                 evolved_name == "git_clone"

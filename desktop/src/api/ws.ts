@@ -81,7 +81,101 @@ export interface CompanionWorldContextPayload {
   events: Array<{ lane: string; origin: string; title: string; body: string; sourceId?: string }>;
 }
 
+export type WorkCardSourceRef = { kind: string; id: string };
+export type ProjectTestSelfReport = { status: "passed"; source: "user_authorized_project_self_report"; pytest_target: string; exit_code: 0 };
+export type WorkCardResult = { session_id: string; project_id?: string; item_id: string; requirement_id: string; result_id: string; run_id: string; status: string; summary: string; verification_status: string | null; project_test?: ProjectTestSelfReport | null; sources: WorkCardSourceRef[] };
+export type WorkCardRequirement = { session_id: string; project_id?: string; item_id: string; requirement_id: string; text: string; status: string; source_ref: WorkCardSourceRef | null; latest_result: WorkCardResult | null; result_count: number; omitted_result_count: number; current_result_missing: boolean; current_run_id: string | null; latest_result_is_current: boolean | null };
+export type WorkCardItem = { session_id: string; project_id: string | null; kind?: "independent"; item_id: string; title: string; status: string; source_refs: WorkCardSourceRef[]; requirements: WorkCardRequirement[] };
+export type LinkedItemCopySnapshot = {
+  kind: "linked_item_copy"; session_id: string; captured_at: string; copy_id: string; completeness_scope: "item_requirement";
+  project_id: string; source_session_id: string; source_item_digest: string; binding_id: string; item_id: string;
+  item_title: string; item_status_at_capture: string; requirement_id: string; requirement_text: string;
+  requirement_status_at_capture: string; worker_id: string; worker_run_id: string;
+  host_start: { reservation_id: string; parent_run_id: string; turn_epoch: number };
+  host_lifecycle: { sequence: number; status: string; finish_reason: string };
+  operation_result: "unknown"; verification: "not_verified";
+};
+export type LinkedProjectSessionCopyItem = { item_id: string; title: string; status: string; requirements: Array<{ requirement_id: string; text: string; status: string }> };
+export type LinkedProjectSessionWorkerFact = {
+  binding_id: string; item_id: string; requirement_id: string; worker_id: string; worker_run_id: string;
+  host_start: { reservation_id: string; parent_run_id: string; turn_epoch: number };
+  host_lifecycle: { sequence: number; status: string; finish_reason: string };
+  operation_result: "unknown"; verification: "not_verified";
+};
+export type LinkedProjectSessionCopySnapshot = {
+  kind: "linked_project_session_copy"; session_id: string; captured_at: string; copy_id: string; binding_id: string;
+  source: { scope: "authorized_source_session_only"; mapping_claim: "not_asserted"; project_id: string;
+    source_session_id: string; source_revision: number; items: LinkedProjectSessionCopyItem[]; worker_facts: LinkedProjectSessionWorkerFact[] };
+};
+export type WorkCardSnapshot = { session_id: string; project_id: string | null; kind?: "independent" | "project" | "project_scoped"; item_id?: string; captured_at: string; completeness: "complete"; item_count: number; requirement_count: number; result_count: number; omitted_item_count: number; omitted_requirement_count: number; omitted_result_count: number; incomplete_reason: string | null; persisted: boolean; history_complete: boolean; missing_current_result_count: number | null; card?: WorkCardItem; cards?: WorkCardItem[] } | LinkedItemCopySnapshot | LinkedProjectSessionCopySnapshot;
+export type WorkCard = { card_id: string; snapshot: WorkCardSnapshot; saved_at: string; viewed_at: string | null };
+export type WorkCardScope = { session_id: string; kind: "independent" } | { session_id: string; project_id: string }
+  | { session_id: string; kind: "linked_item_copy"; project_id: string; item_id: string }
+  | { session_id: string; kind: "linked_project_session_copy"; project_id: string; mapping_claim: "not_asserted" };
+export type WorkCardIndexItem = { card_id: string; scope:
+  | {kind: "independent"; item_id: string}
+  | {kind: "project"; project_id: string}
+  | {kind: "linked_item_copy"; project_id: string; item_id: string}
+  | {kind: "linked_project_session_copy"; project_id: string; source_session_id: string; mapping_claim: "not_asserted"};
+  saved_at: string; viewed_at: string | null; title: string };
+export type WorkCardErrorStatus = "invalid_request" | "session_unavailable" | "project_unbound" | "session_changed" | "request_conflict" | "ledger_unavailable" | "incomplete" | "rejected" | "save_failed" | "save_uncertain" | "not_found" | "invalid_cursor" | "unavailable";
+export type WorkCardPresentEvent = { type: "work-card.present"; session_id: string; presentation_id: string; card_id: string; card: WorkCard };
+/** Client-to-host idempotent receipt for a merged exact session presentation; distinct from viewed/acknowledged_at. Host binds run_id from the durable Session reference. */
+export type WorkCardReceivedMessage = { type: "work-card.received"; session_id: string; presentation_id: string; card_id: string };
+export type WorkCardReceivedResultEvent = { type: "work-card.received.done"; status: "received" | "already_received" | "invalid_request" | "session_unavailable" | "project_unbound" | "session_changed" | "history_unavailable" | "rejected" | "unavailable"; message: string; session_id: string; presentation_id: string; card_id: string; received_at?: string };
+export type WorkCardReceiptBacklogEvent = { type: "work-card.receipt.backlog"; session_id: string; pending_count: number; deferred_count: number; legacy_untracked_count: number; retry_batch_size: number; batch_limit: number; max_send_attempts: number };
+
+export type WorkCardResultViewStatus = "acknowledged" | "already_acknowledged" | "invalid_request" | "session_unavailable" | "session_changed" | "history_unavailable" | "rejected" | "unavailable";
+export type WorkCardSnapshotViewTimeoutEvent = { type: "work-card.snapshot.view.timeout"; session_id: string; presentation_id: string; card_id: string };
+export type WorkCardSnapshotViewEvent = { type: "work-card.snapshot.view.done"; status: WorkCardResultViewStatus; message: string; session_id: string; presentation_id: string; card_id: string };
+export type LocalAssistantReplyExcerptDetail = { session_id: string; item_id: string; requirement_id: string; result_id: string; label: string; escaped_excerpt_text: string; source_availability: "available" | "unavailable"; result_status: "unknown"; verification_status: "not_verified" };
+export type WorkCardResultViewEvent = { type: "work-card.result.view.done"; status: WorkCardResultViewStatus; message: string; session_id: string; presentation_id: string; card_id: string; result_id: string; requirement_id: string; request_id?: string; local_assistant_reply_excerpt_detail?: LocalAssistantReplyExcerptDetail };
+
+export type OverviewResultState = "no_records" | "visible" | "collapsed" | "cancelled" | "error" | "expired";
+export type OverviewReadStatus = "viewed" | "unread" | "unknown";
+export type WorkRecordsOverviewPageFacts = { kind: "items" | "requirements"; group_kind: "project" | "independent" | "linked_source_snapshot"; group_id: string; item_id: string | null; offset: number; total: number; has_more: boolean; next_cursor: string | null };
+export type WorkRecordsOverviewRequirement = { requirement_id: string; text: string; status: string; status_at_capture?: string; worker_facts?: unknown[] };
+export type WorkRecordsOverviewCurrentResult = { requirement_id: string; result_id: string; status: string; read_status: OverviewReadStatus };
+export type WorkRecordsOverviewItem = { item_id: string; title: string; status: string; status_at_capture?: string; status_counts: Record<string, number>; requirements: WorkRecordsOverviewRequirement[]; current_results: WorkRecordsOverviewCurrentResult[]; requirements_page?: WorkRecordsOverviewPageFacts };
+export type WorkRecordsOverviewSourceSnapshot = { scope: "authorized_source_session_only"; mapping_claim: "not_asserted"; project_id: string; source_session_id: string; source_revision: number; captured_at: string; copy_id: string; intent_state: "pending" | "reference_queued"; card_id: string | null; viewed_at: string | null; superseded_snapshot_count: number; superseded_unviewed_count: number };
+export type WorkRecordsOverviewGroup = { id: string; visibility: "visible" | "collapsed"; status: string; status_counts: Record<string, number>; item_count: number; requirement_count: number; items: WorkRecordsOverviewItem[]; items_page?: WorkRecordsOverviewPageFacts | null } & ({ kind: "project" | "independent" } | { kind: "linked_source_snapshot"; status: "unknown"; source_snapshot: WorkRecordsOverviewSourceSnapshot } & ({ visibility: "visible"; attention_status: "unknown"; attention_reason: "publication_pending" | "captured_requirement_unresolved" | "superseded_snapshot_attention" | "view_evidence_unavailable" | "view_not_confirmed" | "superseded_snapshot_unviewed" | "worker_result_unverified"; visibility_timer_status: "unknown" | "waiting" | "not_viewed" | "unavailable" | "elapsed" } | { visibility: "collapsed"; attention_status: "none"; attention_reason: "elapsed_terminal_capture"; visibility_timer_status: "elapsed" }));
+export type WorkRecordsOverviewUnreadResult = { group: [string, string]; item_id: string; requirement_id: string; result_id: string };
+export type WorkRecordsOverviewResultEvent = {
+  type: "work-records.overview.result"; session_id: string; request_id: string; state: OverviewResultState;
+  reason?: string; groups: WorkRecordsOverviewGroup[]; detail_page?: WorkRecordsOverviewPageFacts | null;
+  unread_important_results: WorkRecordsOverviewUnreadResult[];
+  unread_important_results_total?: number; unread_important_results_truncated?: boolean;
+  unread_status: "known" | "unknown"; visibility_limitations: string[];
+  visibility_counts: { visible_groups: number; visible_items: number; collapsed_groups: number; collapsed_items: number };
+  snapshot_id: string | null;
+  visibility_recheck_after_ms?: number;
+  page: { page_size: number; offset: number; total_groups: number; total_visible_groups: number; total_visible_items: number;
+    total_collapsed_groups: number; total_collapsed_items: number; has_more: boolean; next_cursor: string | null };
+};
+export type WorkCardEvent =
+  | WorkCardReceiptBacklogEvent
+  | WorkCardReceivedResultEvent
+  | WorkCardResultViewEvent
+  | WorkCardSnapshotViewEvent
+  | WorkCardSnapshotViewTimeoutEvent
+  | { type: "work-card.create.done"; status: "saved" | "already_saved"; message: string; request_id: string; card_id: string; card: WorkCard; source_scope: WorkCardScope }
+  | { type: "work-card.get.done"; status: "found"; message: string; card_id: string; card: WorkCard; source_scope: WorkCardScope }
+  | { type: "work-card.seen.done"; status: "acknowledged" | "already_acknowledged"; message: string; card_id: string; viewed_at: string; source_scope: WorkCardScope }
+  | { type: "work-card.list.done"; status: "ok"; message: string; request_id: string; items: WorkCardIndexItem[]; has_more: boolean; next_cursor: string | null; source_scope: { session_id: string } }
+  | { type: "work-card.list.done"; status: WorkCardErrorStatus; message: string; request_id: string }
+  | { type: "work-card.create.done" | "work-card.get.done" | "work-card.seen.done"; status: WorkCardErrorStatus; message: string; request_id?: string; card_id?: string };
+
+export type AutoRecognitionDoneEvent = { type: "work-record.auto-recognition.done"; session_id: string; request_id: string; action: "enable" | "revoke"; status: "ok" | "rejected"; enabled: boolean };
+
+export type ProjectWorkerVerificationPayload = { session_id: string; project_id: string; item_id: string; requirement_id: string; project_name: string; requirement_text: string; pytest_target: string; worker_run_id: string; reservation_id: string };
+
 export type ServerEvent =
+  | AutoRecognitionDoneEvent
+  | { type: "client.connection.closed" }
+  | { type: "user.message.persisted"; session_id: string; request_id: string }
+  | WorkCardPresentEvent
+  | WorkCardEvent
+  | WorkRecordsOverviewResultEvent
   | {
       type: "session.banner";
       session_id: string;
@@ -116,7 +210,10 @@ export type ServerEvent =
       type: "session.history";
       session_id?: string;
       project_id?: string | null;
-      items: Array<{ role: "user" | "assistant"; text: string; inline_images?: string[] }>;
+      items: Array<
+        | { role: "user" | "assistant"; text: string; inline_images?: string[] }
+        | { role: "work_card"; type: "work_card_reference"; presentation_id: string; card_id: string; text: string }
+      >;
       truncated?: boolean;
       total_items?: number;
       omitted_count?: number;
@@ -171,9 +268,10 @@ export type ServerEvent =
   | { type: "assistant.done"; text: string; run_id?: string }
   | { type: "reasoning.delta"; text: string; run_id?: string }
   | { type: "notice"; text: string }
+  | { type: "work-record.post-turn.result"; session_id: string; request_id: string; outcome: "recorded" | "already_recorded" | "not_recorded" | "append_not_allowed" | "uncertain"; message?: string }
   | { type: "error"; message: string }
-  | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean; run_id?: string }
-  | { type: "confirm.done"; request_id: string; choice: string; run_id?: string }
+  | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean; run_id?: string; confirm_kind?: "work_record_post_turn"; confirm_subtype?: "work_record_reply_excerpt" | "work_record_auto_candidate" | "project_worker_requirement_verification"; work_record_candidate?: unknown; project_worker_verification?: unknown; session_id?: string }
+  | { type: "confirm.done"; request_id: string; choice: string; run_id?: string; confirm_kind?: "work_record_post_turn"; confirm_subtype?: "work_record_reply_excerpt" | "work_record_auto_candidate" | "project_worker_requirement_verification"; work_record_candidate?: unknown; project_worker_verification?: unknown; session_id?: string }
   | { type: "activity.update"; text: string; run_id?: string }
   | { type: "tool.start"; tool: string; call_id: string; summary: string; run_id?: string }
   | {
@@ -583,12 +681,273 @@ export function mergeSessionLists(
     .slice(0, 50);
 }
 
+const WORK_CARD_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const WORK_CARD_ID = /^wc-[0-9a-f]{64}$/;
+const WORK_ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+type PendingCard = { session: string; itemId?: string; key: string; resultIdentity?: { presentationId: string; resultId: string; requirementId: string } };
+const cardObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+const nonempty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const timestamp = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value)) && /(?:Z|[+-]\d\d:\d\d)$/.test(value);
+const cardId = (value: unknown): value is string => typeof value === "string" && WORK_CARD_ID.test(value);
+const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+function exactCardKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+function validCardScope(value: unknown, session: string): boolean {
+  if (!cardObject(value) || value.session_id !== session) return false;
+  if (value.kind === "independent" || value.kind === "linked_item_copy") {
+    return exactCardKeys(value, ["session_id", "kind"]);
+  }
+  return nonempty(value.project_id) && value.kind === undefined;
+}
+function validLinkedParentCardScope(
+  value: unknown, session: string, snapshot?: LinkedItemCopySnapshot,
+): boolean {
+  if (!cardObject(value) || value.session_id !== session) return false;
+  if (value.kind === "linked_item_copy") {
+    return exactCardKeys(value, ["session_id", "kind", "project_id", "item_id"])
+      && typeof value.project_id === "string" && WORK_ITEM_ID.test(value.project_id)
+      && typeof value.item_id === "string" && WORK_ITEM_ID.test(value.item_id)
+      && (!snapshot || (snapshot.session_id === session && value.project_id === snapshot.project_id
+        && value.item_id === snapshot.item_id));
+  }
+  // Legacy server responses use the parent Session's project scope, not the linked source project.
+  if (exactCardKeys(value, ["session_id", "project_id"])) {
+    return typeof value.project_id === "string"
+      && (value.project_id === "" || WORK_ITEM_ID.test(value.project_id));
+  }
+  return value.kind === "independent" && exactCardKeys(value, ["session_id", "kind"]);
+}
+function validLinkedProjectSessionCopyScope(
+  value: unknown, session: string, snapshot?: LinkedProjectSessionCopySnapshot,
+): boolean {
+  if (!cardObject(value) || !exactCardKeys(value, ["session_id", "kind", "project_id", "mapping_claim"])
+    || value.session_id !== session || value.kind !== "linked_project_session_copy"
+    || value.mapping_claim !== "not_asserted" || typeof value.project_id !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.project_id)) return false;
+  return !snapshot || (snapshot.session_id === session && value.project_id === snapshot.source.project_id
+    && value.mapping_claim === snapshot.source.mapping_claim);
+}
+
+function validLinkedItemCopySnapshot(value: unknown, session: string): value is LinkedItemCopySnapshot {
+  const keys = ["kind", "session_id", "captured_at", "copy_id", "completeness_scope", "project_id",
+    "source_session_id", "source_item_digest", "binding_id", "item_id", "item_title", "item_status_at_capture",
+    "requirement_id", "requirement_text", "requirement_status_at_capture", "worker_id", "worker_run_id",
+    "host_start", "host_lifecycle", "operation_result", "verification"];
+  const sourceId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  const digest = /^[0-9a-f]{64}$/;
+  const itemStatuses = new Set(["active", "completed", "in_progress", "unknown", "blocked", "stopped"]);
+  const requirementStatuses = new Set(["pending", "completed", "in_progress", "unknown", "blocked", "stopped"]);
+  const hostStatuses = new Set(["model_turn_finished", "blocked", "failed", "cancelled", "limit_reached", "unknown"]);
+  const finishReasons = new Set(["completed", "cancelled", "timeout", "error", "paused", "unknown"]);
+  if (!cardObject(value) || !exactCardKeys(value, keys) || value.kind !== "linked_item_copy"
+    || value.session_id !== session || value.completeness_scope !== "item_requirement"
+    || value.operation_result !== "unknown" || value.verification !== "not_verified"
+    || !timestamp(value.captured_at) || value.captured_at.length > 64
+    || !["project_id", "source_session_id", "binding_id", "item_id", "requirement_id", "worker_id", "worker_run_id"]
+      .every(key => typeof value[key] === "string" && sourceId.test(value[key] as string))
+    || typeof value.copy_id !== "string" || !digest.test(value.copy_id)
+    || typeof value.source_item_digest !== "string" || !digest.test(value.source_item_digest)
+    || typeof value.item_title !== "string" || !value.item_title || new TextEncoder().encode(value.item_title).length > 4096
+    || typeof value.requirement_text !== "string" || !value.requirement_text || new TextEncoder().encode(value.requirement_text).length > 4096
+    || typeof value.item_status_at_capture !== "string" || !itemStatuses.has(value.item_status_at_capture)
+    || typeof value.requirement_status_at_capture !== "string" || !requirementStatuses.has(value.requirement_status_at_capture)
+    || !cardObject(value.host_start) || !exactCardKeys(value.host_start, ["reservation_id", "parent_run_id", "turn_epoch"])
+    || typeof value.host_start.reservation_id !== "string" || !sourceId.test(value.host_start.reservation_id)
+    || typeof value.host_start.parent_run_id !== "string" || !sourceId.test(value.host_start.parent_run_id)
+    || !nonnegative(value.host_start.turn_epoch) || value.host_start.turn_epoch < 1
+    || !cardObject(value.host_lifecycle) || !exactCardKeys(value.host_lifecycle, ["sequence", "status", "finish_reason"])
+    || value.host_lifecycle.sequence !== value.host_start.turn_epoch
+    || typeof value.host_lifecycle.status !== "string" || !hostStatuses.has(value.host_lifecycle.status)
+    || typeof value.host_lifecycle.finish_reason !== "string" || !finishReasons.has(value.host_lifecycle.finish_reason)
+    || (value.host_lifecycle.status === "unknown" && value.host_lifecycle.finish_reason !== "unknown")) return false;
+  return true;
+}
+const validSourceRef = (value: unknown): value is WorkCardSourceRef => cardObject(value) && Object.keys(value).length === 2 && typeof value.kind === "string" && typeof value.id === "string";
+function validLinkedProjectSessionCopySnapshot(value: unknown, session: string): value is LinkedProjectSessionCopySnapshot {
+  const keys = ["kind", "session_id", "captured_at", "copy_id", "binding_id", "source"];
+  const sourceKeys = ["scope", "mapping_claim", "project_id", "source_session_id", "source_revision", "items", "worker_facts"];
+  const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  const digestPattern = /^[0-9a-f]{64}$/;
+  const itemStatuses = new Set(["active", "completed", "in_progress", "unknown", "blocked", "stopped"]);
+  const requirementStatuses = new Set(["pending", "completed", "in_progress", "unknown", "blocked", "stopped"]);
+  const hostStatuses = new Set(["model_turn_finished", "blocked", "failed", "cancelled", "limit_reached", "unknown"]);
+  const finishReasons = new Set(["completed", "cancelled", "timeout", "error", "paused", "unknown"]);
+  if (!cardObject(value) || !exactCardKeys(value, keys) || value.kind !== "linked_project_session_copy"
+    || value.session_id !== session || !timestamp(value.captured_at) || typeof value.copy_id !== "string"
+    || !digestPattern.test(value.copy_id) || typeof value.binding_id !== "string" || !idPattern.test(value.binding_id)
+    || !cardObject(value.source) || !exactCardKeys(value.source, sourceKeys)) return false;
+  const source = value.source;
+  if (source.scope !== "authorized_source_session_only" || source.mapping_claim !== "not_asserted"
+    || typeof source.project_id !== "string" || !idPattern.test(source.project_id)
+    || typeof source.source_session_id !== "string" || !idPattern.test(source.source_session_id)
+    || !nonnegative(source.source_revision) || !Array.isArray(source.items) || source.items.length > 500
+    || !Array.isArray(source.worker_facts) || source.worker_facts.length < 1 || source.worker_facts.length > 20) return false;
+  const items = new Map<string, Set<string>>();
+  let requirementCount = 0;
+  for (const item of source.items) {
+    if (!cardObject(item) || !exactCardKeys(item, ["item_id", "title", "status", "requirements"])
+      || typeof item.item_id !== "string" || !idPattern.test(item.item_id) || items.has(item.item_id)
+      || typeof item.title !== "string" || item.title.length === 0 || new TextEncoder().encode(item.title).length > 4096
+      || typeof item.status !== "string" || !itemStatuses.has(item.status)
+      || !Array.isArray(item.requirements)) return false;
+    const requirementIds = new Set<string>();
+    for (const requirement of item.requirements) {
+      if (!cardObject(requirement) || !exactCardKeys(requirement, ["requirement_id", "text", "status"])
+        || typeof requirement.requirement_id !== "string" || !idPattern.test(requirement.requirement_id)
+        || requirementIds.has(requirement.requirement_id) || typeof requirement.text !== "string"
+        || requirement.text.length === 0 || new TextEncoder().encode(requirement.text).length > 4096
+        || typeof requirement.status !== "string" || !requirementStatuses.has(requirement.status)) return false;
+      requirementIds.add(requirement.requirement_id);
+      requirementCount += 1;
+      if (requirementCount > 5000) return false;
+    }
+    items.set(item.item_id, requirementIds);
+  }
+  const bindings = new Set<string>();
+  let anchorFound = false;
+  for (const fact of source.worker_facts) {
+    if (!cardObject(fact) || !exactCardKeys(fact, ["binding_id", "item_id", "requirement_id", "worker_id", "worker_run_id",
+      "host_start", "host_lifecycle", "operation_result", "verification"])
+      || !["binding_id", "item_id", "requirement_id", "worker_id", "worker_run_id"]
+        .every(key => typeof fact[key] === "string" && idPattern.test(fact[key] as string))
+      || typeof fact.binding_id !== "string" || typeof fact.item_id !== "string"
+      || typeof fact.requirement_id !== "string" || bindings.has(fact.binding_id)
+      || !items.get(fact.item_id)?.has(fact.requirement_id)
+      || fact.operation_result !== "unknown" || fact.verification !== "not_verified") return false;
+    bindings.add(fact.binding_id);
+    if (fact.binding_id === value.binding_id) anchorFound = true;
+    const start = fact.host_start;
+    const lifecycle = fact.host_lifecycle;
+    if (!cardObject(start) || !exactCardKeys(start, ["reservation_id", "parent_run_id", "turn_epoch"])
+      || typeof start.reservation_id !== "string" || !idPattern.test(start.reservation_id)
+      || typeof start.parent_run_id !== "string" || !idPattern.test(start.parent_run_id)
+      || !nonnegative(start.turn_epoch) || start.turn_epoch < 1
+      || !cardObject(lifecycle) || !exactCardKeys(lifecycle, ["sequence", "status", "finish_reason"])
+      || lifecycle.sequence !== start.turn_epoch || typeof lifecycle.status !== "string" || !hostStatuses.has(lifecycle.status)
+      || typeof lifecycle.finish_reason !== "string" || !finishReasons.has(lifecycle.finish_reason)
+      || (lifecycle.status === "unknown" && lifecycle.finish_reason !== "unknown")) return false;
+  }
+  if (!anchorFound) return false;
+  try { return new TextEncoder().encode(JSON.stringify(source)).length <= 65536; }
+  catch { return false; }
+}
+function validProjectScopedRequirement(
+  item: Record<string, any>, requirement: Record<string, unknown>, session: string, projectId: string,
+): boolean {
+  const result = requirement.latest_result;
+  if (item.session_id !== session || item.project_id !== projectId
+    || !Array.isArray(item.source_refs) || !item.source_refs.every(validSourceRef)
+    || item.source_refs.some((source: WorkCardSourceRef) => source.kind !== "project" || source.id !== projectId)
+    || requirement.session_id !== session || requirement.project_id !== projectId
+    || requirement.item_id !== item.item_id || requirement.current_result_missing !== false
+    || !cardObject(requirement.source_ref) || requirement.source_ref.kind !== "project"
+    || requirement.source_ref.id !== projectId || !nonnegative(requirement.result_count)
+    || !nonnegative(requirement.omitted_result_count)) return false;
+  // Queued or running work may hide stale history; it is not a current result.
+  if (result === null && (requirement.status === "pending" || requirement.status === "in_progress")) {
+    return item.status === "unknown" && requirement.omitted_result_count === requirement.result_count
+      && (requirement.current_run_id === null
+        ? requirement.status === "pending" && requirement.latest_result_is_current === null
+        : nonempty(requirement.current_run_id) && requirement.latest_result_is_current === false);
+  }
+  if (!cardObject(result) || result.session_id !== session || result.project_id !== projectId
+    || result.item_id !== item.item_id || result.requirement_id !== requirement.requirement_id
+    || !nonempty(result.result_id) || !nonempty(result.run_id) || typeof result.summary !== "string"
+    || result.verification_status !== "not_verified" || !Array.isArray(result.sources)
+    || !result.sources.every(validSourceRef)) return false;
+
+  const startedUnknown = item.status === "unknown" && requirement.status === "unknown"
+    && nonempty(requirement.current_run_id) && requirement.latest_result_is_current === true
+    && result.status === "unknown" && result.run_id === requirement.current_run_id;
+  const blockedBeforeStart = item.status === "unknown" && requirement.status === "blocked"
+    && requirement.current_run_id === null && requirement.latest_result_is_current === null
+    && result.status === "blocked";
+  return startedUnknown || blockedBeforeStart;
+}
+
+function validWorkCard(value: unknown, session: string, expectedId: string, itemId?: string): value is WorkCard {
+  if (!cardObject(value) || value.card_id !== expectedId || !timestamp(value.saved_at) || !(value.viewed_at === null || timestamp(value.viewed_at)) || !cardObject(value.snapshot)) return false;
+  const s = value.snapshot;
+  if (s.kind === "linked_item_copy") return validLinkedItemCopySnapshot(s, session);
+  if (s.kind === "linked_project_session_copy") return validLinkedProjectSessionCopySnapshot(s, session);
+  if (s.session_id !== session || !timestamp(s.captured_at) || s.completeness !== "complete" || typeof s.persisted !== "boolean" || typeof s.history_complete !== "boolean" || !(s.incomplete_reason === null || typeof s.incomplete_reason === "string") || !(s.missing_current_result_count === null || nonnegative(s.missing_current_result_count))) return false;
+  if (![s.item_count,s.requirement_count,s.result_count,s.omitted_item_count,s.omitted_requirement_count,s.omitted_result_count].every(nonnegative)) return false;
+  const independent = s.kind === "independent";
+  if (itemId !== undefined && (!independent || s.item_id !== itemId)) return false;
+  const cards = independent ? [s.card] : s.cards;
+  if (!Array.isArray(cards) || (independent ? s.project_id !== null || !nonempty(s.item_id) || cards.length !== 1 : !nonempty(s.project_id))) return false;
+  const scopedProjectId = s.kind === "project_scoped" && typeof s.project_id === "string" ? s.project_id : "";
+  if (s.kind === "project_scoped") {
+    const requirements = cards.flatMap(item => cardObject(item) && Array.isArray(item.requirements) ? item.requirements : []);
+    const resultCount = requirements.reduce((sum, row) => sum + (cardObject(row) && nonnegative(row.result_count) ? row.result_count : 0), 0);
+    if (s.omitted_item_count !== 0 || s.omitted_requirement_count !== 0 || s.incomplete_reason !== null
+      || s.missing_current_result_count !== 0 || s.item_count !== cards.length
+      || s.requirement_count !== requirements.length || s.result_count !== resultCount) return false;
+  }
+  return cards.every(item => {
+    if (!cardObject(item) || item.session_id !== session || !nonempty(item.item_id)
+      || typeof item.title !== "string" || !nonempty(item.status) || !Array.isArray(item.source_refs)
+      || !item.source_refs.every(validSourceRef) || !Array.isArray(item.requirements)
+      || (independent && (item.item_id !== s.item_id || item.kind !== "independent" || item.project_id !== null))
+      || (!independent && item.project_id !== s.project_id)) return false;
+    return item.requirements.every((value: unknown) => {
+      if (!cardObject(value) || value.session_id !== session || value.item_id !== item.item_id
+        || !nonempty(value.requirement_id) || typeof value.text !== "string" || !nonempty(value.status)
+        || !nonnegative(value.result_count) || !nonnegative(value.omitted_result_count)
+        || typeof value.current_result_missing !== "boolean"
+        || !(value.current_run_id === null || nonempty(value.current_run_id))
+        || !(value.latest_result_is_current === null || typeof value.latest_result_is_current === "boolean")
+        || !(value.source_ref === null || validSourceRef(value.source_ref))) return false;
+      if (s.kind === "project_scoped" && !validProjectScopedRequirement(item, value, session, scopedProjectId)) return false;
+      const result = value.latest_result;
+      return result === null || (cardObject(result) && result.session_id === session
+        && result.item_id === item.item_id && result.requirement_id === value.requirement_id
+        && (s.kind !== "project_scoped" || result.project_id === s.project_id)
+        && nonempty(result.result_id) && nonempty(result.run_id) && nonempty(result.status)
+        && typeof result.summary === "string"
+        && (result.verification_status === null || typeof result.verification_status === "string")
+        && Array.isArray(result.sources) && result.sources.every(validSourceRef));
+    });
+  });
+}
+function validIndexItem(value: unknown): value is WorkCardIndexItem {
+  if (!cardObject(value) || !cardId(value.card_id) || !timestamp(value.saved_at) || !(value.viewed_at === null || timestamp(value.viewed_at)) || typeof value.title !== "string" || !cardObject(value.scope)) return false;
+  const scope = value.scope;
+  const sourceId = (id: unknown): id is string => typeof id === "string"
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id) && !/[\r\n]/.test(id);
+  if (scope.kind === "independent") return exactCardKeys(scope, ["kind", "item_id"]) && nonempty(scope.item_id);
+  if (scope.kind === "project") return exactCardKeys(scope, ["kind", "project_id"]) && nonempty(scope.project_id);
+  if (scope.kind === "linked_item_copy") return exactCardKeys(scope, ["kind", "project_id", "item_id"])
+    && sourceId(scope.project_id) && sourceId(scope.item_id);
+  if (scope.kind === "linked_project_session_copy") return exactCardKeys(scope, ["kind", "project_id", "source_session_id", "mapping_claim"])
+    && sourceId(scope.project_id) && sourceId(scope.source_session_id) && scope.mapping_claim === "not_asserted";
+  return false;
+}
+
 export class AgentWsClient {
   private ws: WebSocket | null = null;
   private connectionAttempt: { socket: WebSocket; promise: Promise<void>; reject: (error: Error) => void } | null = null;
   private handlers = new Set<EventHandler>();
   private reconnectTimer: number | null = null;
   private currentConversationId = "";
+  private usedAutoRecognitionRequestIds = new Set<string>();
+  private autoRecognitionPending: { sessionId: string; requestId: string; action: "enable" | "revoke" } | null = null;
+  private cardPending = new Map<string, PendingCard>();
+  private cardRetired = new Set<string>();
+  private usedResultViewRequestIds = new Set<string>();
+  private snapshotViewTimers = new Map<string, { timer: number; token: object }>();
+  private snapshotViewAmbiguous = new Set<string>();
+  // Never reuse a list correlation ID, including across reconnects.
+  private usedCardListIds = new Set<string>();
+  private cardProjectId: string | null = null;
+  private workCardPresentationIds = new Map<string, string>();
+  private linkedItemCopyIdentities = new Map<string, { projectId: string; itemId: string }>();
+  private linkedProjectSessionCopyIdentities = new Map<string, { projectId: string; mappingClaim: "not_asserted" }>();
+  private receiptBacklogSignature = "";
+  private overviewPending = new Map<string, string>();
   private destroyed = false;
   private lane: SidecarLane = "stable";
   private legacyLaneQueriesAllowed = false;
@@ -673,6 +1032,11 @@ export class AgentWsClient {
       this.ws = null;
       this.retireSocket(previous, new Error("WebSocket connection superseded"));
     }
+    this.updateEvolutionConversationId(null);
+    this.cardPending.clear();
+    this.cardRetired.clear();
+    this.cardProjectId = null;
+    this.overviewPending.clear();
     const url = `ws://${this.host}:${this.port}`;
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -718,10 +1082,38 @@ export class AgentWsClient {
       try {
         const data = JSON.parse(String(ev.data)) as ServerEvent;
         if (data && typeof data === "object" && "type" in data) {
+          if (data.type === "client.connection.closed") return; // internal notification cannot arrive from server
+          if (data.type === "user.message.persisted" && (
+            Object.keys(data).length !== 3
+            || Object.keys(data).some((key) => key !== "type" && key !== "session_id" && key !== "request_id")
+            || typeof data.session_id !== "string" || !data.session_id
+            || data.session_id !== this.currentConversationId
+            || typeof data.request_id !== "string" || !WORK_CARD_UUID.test(data.request_id)
+          )) return;
           if (data.type === "session.banner") {
-            this.updateEvolutionConversationId(data.session_id);
+            if (data.session_id !== this.currentConversationId) this.autoRecognitionPending = null;
+            const nextProject = typeof data.project_id === "string" ? data.project_id : "";
+            if (this.currentConversationId && (data.session_id !== this.currentConversationId || this.cardProjectId !== nextProject)) this.retireCardRequests();
+            this.updateEvolutionConversationId(data.session_id, this.cardProjectId !== nextProject);
+            this.cardProjectId = nextProject;
             data.execution_lane ??= this.lane;
           }
+          if (data.type === "work-record.auto-recognition.done") {
+            const pending = this.autoRecognitionPending;
+            if (!pending || data.session_id !== this.currentConversationId || data.session_id !== pending.sessionId
+              || data.request_id !== pending.requestId || data.action !== pending.action
+              || (data.status !== "ok" && data.status !== "rejected") || typeof data.enabled !== "boolean"
+              || (data.status === "ok" && data.enabled !== (data.action === "enable"))
+              || Object.keys(data).some(k => !["type", "session_id", "request_id", "action", "status", "enabled"].includes(k))) return;
+            this.autoRecognitionPending = null;
+          }
+          if (data.type === "work-record.post-turn.result" &&
+              (!this.currentConversationId || data.session_id !== this.currentConversationId)) return;
+          if (data.type === "work-records.overview.result") {
+            if (!this.acceptWorkRecordsOverviewResult(data)) return;
+          } else if (data.type === "work-card.present") {
+            if (!this.acceptWorkCardPresent(data)) return;
+          } else if (typeof data.type === "string" && data.type.startsWith("work-card.") && !this.acceptCardEvent(data)) return;
           if (data.type === "session.list") {
             data.sessions = data.sessions.map((session) => ({ ...session, execution_lane: session.execution_lane ?? this.lane }));
           }
@@ -746,6 +1138,10 @@ export class AgentWsClient {
         return;
       }
       this.ws = null;
+      this.cardPending.clear();
+      this.cardRetired.clear();
+      this.cardProjectId = null;
+      this.overviewPending.clear();
       settle(new Error("WebSocket closed before connection opened"));
       if (this.destroyed) return;
       this.updateEvolutionConversationId(null);
@@ -830,14 +1226,516 @@ export class AgentWsClient {
     this.ws.send(JSON.stringify(payload));
   }
 
+  /** Proposed explicit session-scoped consent protocol; no optimistic authorization. */
+  setWorkRecordAutoRecognition(sessionId: string, action: "enable" | "revoke"): string {
+    if (!sessionId || sessionId !== this.currentConversationId || this.autoRecognitionPending
+        || (action !== "enable" && action !== "revoke")) throw new Error("automatic recognition unavailable or request pending");
+    const requestId = crypto.randomUUID();
+    if (!WORK_CARD_UUID.test(requestId) || this.usedAutoRecognitionRequestIds.has(requestId)) throw new Error("invalid or reused request UUID");
+    this.usedAutoRecognitionRequestIds.add(requestId);
+    this.autoRecognitionPending = { sessionId, requestId, action };
+    try { this.send({ type: "work-record.auto-recognition.set", session_id: sessionId, request_id: requestId, action }); }
+    catch (error) { this.autoRecognitionPending = null; throw error; }
+    return requestId;
+  }
+
+  queryWorkRecordsOverview(options: { cursor?: string; pageSize?: number; detailPaging?: boolean } = {}): string {
+    if (!cardObject(options) || Object.keys(options).some(key => key !== "cursor" && key !== "pageSize" && key !== "detailPaging")) throw new Error("invalid work-records overview options");
+    const pageSize = options.pageSize ?? 6;
+    const detailPaging = options.detailPaging ?? true;
+    if (typeof detailPaging !== "boolean") throw new Error("invalid work-records overview detail paging option");
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new Error("invalid work-records overview page size");
+    if (options.cursor !== undefined && (typeof options.cursor !== "string" || !options.cursor || options.cursor.length > 4096)) throw new Error("invalid work-records overview cursor");
+    if (!this.currentConversationId) throw new Error("work-records overview requires a current session banner");
+    const requestId = crypto.randomUUID();
+    if (!WORK_CARD_UUID.test(requestId) || this.overviewPending.has(requestId)) throw new Error("invalid or reused work-records overview request UUID");
+    const sessionId = this.currentConversationId;
+    this.overviewPending.set(requestId, sessionId);
+    try {
+      this.send({ type: "work-records.overview.query", session_id: sessionId, request_id: requestId,
+        ...(options.cursor === undefined ? {} : { cursor: options.cursor }), page_size: pageSize,
+        ...(detailPaging ? { detail_paging: true } : {}) });
+    } catch (error) {
+      this.overviewPending.delete(requestId);
+      throw error;
+    }
+    return requestId;
+  }
+
+  private validOverviewPageFacts(value: unknown, expectedKind: "items" | "requirements", groupKind: string,
+    groupId: string, itemId: string | null): value is WorkRecordsOverviewPageFacts {
+    if (!cardObject(value)) return false;
+    const fields = ["kind", "group_kind", "group_id", "item_id", "offset", "total", "has_more", "next_cursor"];
+    return Object.keys(value).length === fields.length && fields.every(field => field in value)
+      && value.kind === expectedKind && value.group_kind === groupKind && value.group_id === groupId
+      && value.item_id === itemId && nonnegative(value.offset) && nonnegative(value.total)
+      && value.offset <= value.total && typeof value.has_more === "boolean"
+      && (value.next_cursor === null || nonempty(value.next_cursor))
+      && (value.has_more ? nonempty(value.next_cursor) : value.next_cursor === null);
+  }
+
+  private sameOverviewPageFacts(left: unknown, right: WorkRecordsOverviewPageFacts): boolean {
+    if (!cardObject(left) || Object.keys(left).length !== 8) return false;
+    const actual = left as Record<string, unknown>;
+    const expected = right as unknown as Record<string, unknown>;
+    return ["kind", "group_kind", "group_id", "item_id", "offset", "total", "has_more", "next_cursor"]
+      .every(key => actual[key] === expected[key]);
+  }
+
+  private acceptWorkRecordsOverviewResult(event: unknown): event is WorkRecordsOverviewResultEvent {
+    if (!cardObject(event) || event.type !== "work-records.overview.result"
+      || typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id)
+      || typeof event.session_id !== "string" || event.session_id !== this.currentConversationId
+      || this.overviewPending.get(event.request_id) !== event.session_id
+      || !["no_records", "visible", "collapsed", "cancelled", "error", "expired"].includes(String(event.state))
+      || !Array.isArray(event.groups) || !Array.isArray(event.unread_important_results)
+      || !["known", "unknown"].includes(String(event.unread_status))
+      || !Array.isArray(event.visibility_limitations) || !event.visibility_limitations.every(value => typeof value === "string")
+      || !cardObject(event.visibility_counts) || !cardObject(event.page)
+      || !(event.detail_page === undefined || event.detail_page === null || cardObject(event.detail_page))) return false;
+    const counts = event.visibility_counts;
+    const page = event.page;
+    const countFields = ["visible_groups", "visible_items", "collapsed_groups", "collapsed_items"];
+    if (!countFields.every(key => nonnegative(counts[key]))) return false;
+    const pageFields = ["page_size", "offset", "total_groups", "total_visible_groups", "total_visible_items", "total_collapsed_groups", "total_collapsed_items"];
+    if (!pageFields.every(key => nonnegative(page[key]))) return false;
+    const pageSize = page.page_size as number;
+    const offset = page.offset as number;
+    const totalVisibleGroups = page.total_visible_groups as number;
+    if (pageSize < 1 || pageSize > 50 || typeof page.has_more !== "boolean"
+      || !(page.next_cursor === null || typeof page.next_cursor === "string" && page.next_cursor.length > 0)
+      || (page.has_more ? typeof page.next_cursor !== "string" : page.next_cursor !== null)
+      || page.total_groups !== page.total_visible_groups || totalVisibleGroups !== counts.visible_groups
+      || page.total_visible_items !== counts.visible_items || page.total_collapsed_groups !== counts.collapsed_groups
+      || page.total_collapsed_items !== counts.collapsed_items || offset > totalVisibleGroups
+      || event.groups.length > pageSize || offset + event.groups.length > totalVisibleGroups
+      || event.groups.some((group: unknown) => !this.validOverviewGroup(group))) return false;
+    if (event.detail_page !== undefined && event.detail_page !== null) {
+      const detail = event.detail_page as Record<string, unknown>;
+      if (!this.validOverviewPageFacts(detail, detail.kind as "items" | "requirements", String(detail.group_kind),
+        String(detail.group_id), detail.item_id === null ? null : String(detail.item_id))
+        || event.state !== "visible" || event.groups.length !== 1) return false;
+      const group = event.groups[0];
+      if (group.kind !== detail.group_kind || group.id !== detail.group_id || group.visibility !== "visible") return false;
+      if (detail.kind === "items") {
+        if (!this.sameOverviewPageFacts(group.items_page, detail as WorkRecordsOverviewPageFacts)) return false;
+      } else if (group.items_page !== null || group.items.length !== 1
+        || group.items[0].item_id !== detail.item_id
+        || !this.sameOverviewPageFacts(group.items[0].requirements_page, detail as WorkRecordsOverviewPageFacts)) return false;
+    }
+    if (event.snapshot_id !== null && (typeof event.snapshot_id !== "string" || !event.snapshot_id)) return false;
+    if (!event.unread_important_results.every((item: unknown) => cardObject(item) && Array.isArray(item.group)
+      && item.group.length === 2 && item.group.every((part: unknown) => typeof part === "string")
+      && [item.item_id, item.requirement_id, item.result_id].every(nonempty))) return false;
+    const hasUnreadTotal = Object.prototype.hasOwnProperty.call(event, "unread_important_results_total");
+    const hasUnreadTruncated = Object.prototype.hasOwnProperty.call(event, "unread_important_results_truncated");
+    const unreadTotal: unknown = event.unread_important_results_total;
+    const unreadTruncated: unknown = event.unread_important_results_truncated;
+    if (hasUnreadTotal && (!nonnegative(unreadTotal)
+      || !hasUnreadTruncated || typeof unreadTruncated !== "boolean")) return false;
+    if (hasUnreadTruncated && typeof unreadTruncated !== "boolean") return false;
+    if (unreadTruncated === true) {
+      if (event.unread_important_results.length !== 100
+        || (hasUnreadTotal && (typeof unreadTotal !== "number" || unreadTotal <= event.unread_important_results.length))) return false;
+    } else if (hasUnreadTotal && unreadTotal !== event.unread_important_results.length) return false;
+    this.overviewPending.delete(event.request_id);
+    return true;
+  }
+  private validSourceOverview(value: Record<string, unknown>): boolean {
+    const source = value.source_snapshot;
+    const id = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+    const digest = /^[0-9a-f]{64}$/;
+    const bounded = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0 && v.length <= 4096;
+    const unknownCounts = (v: unknown): boolean => cardObject(v) && exactCardKeys(v, ["unknown"]) && v.unknown === 1;
+    const validFact = (v: unknown): boolean => {
+      if (!cardObject(v) || !exactCardKeys(v, ["binding_id", "worker_id", "worker_run_id", "host_start", "host_lifecycle", "operation_result", "verification"])
+        || ![v.binding_id, v.worker_id, v.worker_run_id].every(x => typeof x === "string" && id.test(x))
+        || v.operation_result !== "unknown" || v.verification !== "not_verified"
+        || !cardObject(v.host_start) || !exactCardKeys(v.host_start, ["reservation_id", "parent_run_id", "turn_epoch"])
+        || ![v.host_start.reservation_id, v.host_start.parent_run_id].every(x => typeof x === "string" && id.test(x))
+        || !nonnegative(v.host_start.turn_epoch) || v.host_start.turn_epoch < 1
+        || !cardObject(v.host_lifecycle) || !exactCardKeys(v.host_lifecycle, ["sequence", "status", "finish_reason"])
+        || v.host_lifecycle.sequence !== v.host_start.turn_epoch
+        || typeof v.host_lifecycle.status !== "string" || !["model_turn_finished", "blocked", "failed", "cancelled", "limit_reached", "unknown"].includes(v.host_lifecycle.status)
+        || typeof v.host_lifecycle.finish_reason !== "string" || !["completed", "cancelled", "timeout", "error", "paused", "unknown"].includes(v.host_lifecycle.finish_reason)
+        || (v.host_lifecycle.status === "unknown" && v.host_lifecycle.finish_reason !== "unknown")) return false;
+      return true;
+    };
+    if (typeof value.id !== "string" || !/^linked-source-[0-9a-f]{64}$/.test(value.id)
+      || value.status !== "unknown" || !unknownCounts(value.status_counts) || value.attention_status !== "unknown"
+      || typeof value.visibility_timer_status !== "string" || !["unknown", "waiting", "not_viewed", "unavailable", "elapsed"].includes(value.visibility_timer_status)
+      || typeof value.attention_reason !== "string" || !["publication_pending", "captured_requirement_unresolved", "superseded_snapshot_attention", "view_evidence_unavailable", "superseded_snapshot_unviewed", "view_not_confirmed", "worker_result_unverified"].includes(value.attention_reason)
+      || !cardObject(source) || !exactCardKeys(source, ["scope", "mapping_claim", "project_id", "source_session_id", "source_revision", "captured_at", "copy_id", "intent_state", "card_id", "viewed_at", "superseded_snapshot_count", "superseded_unviewed_count"])
+      || source.scope !== "authorized_source_session_only" || source.mapping_claim !== "not_asserted"
+      || ![source.project_id, source.source_session_id].every(x => typeof x === "string" && id.test(x))
+      || !nonnegative(source.source_revision) || !timestamp(source.captured_at) || source.captured_at.length > 64
+      || typeof source.copy_id !== "string" || !digest.test(source.copy_id)
+      || typeof source.intent_state !== "string" || !["pending", "reference_queued"].includes(source.intent_state)
+      || !(source.card_id === null || cardId(source.card_id)) || !(source.viewed_at === null || timestamp(source.viewed_at))
+      || !nonnegative(source.superseded_snapshot_count) || !nonnegative(source.superseded_unviewed_count)
+      || source.superseded_unviewed_count > source.superseded_snapshot_count || !Array.isArray(value.items)) return false;
+    return value.items.every((item: unknown) => cardObject(item) && bounded(item.status_at_capture)
+      && item.status === "unknown" && unknownCounts(item.status_counts) && Array.isArray(item.current_results) && item.current_results.length === 0
+      && Array.isArray(item.requirements) && item.requirements.every((req: unknown) => cardObject(req) && req.status === "unknown"
+        && bounded(req.status_at_capture) && Array.isArray(req.worker_facts) && req.worker_facts.length <= 20 && req.worker_facts.every(validFact)));
+  }
+  private validOverviewGroup(value: unknown): value is WorkRecordsOverviewGroup {
+    if (!cardObject(value) || (value.kind !== "project" && value.kind !== "independent" && value.kind !== "linked_source_snapshot")
+      || !nonempty(value.id) || value.visibility !== "visible" || !nonempty(value.status)
+      || !cardObject(value.status_counts) || !Array.isArray(value.items)
+      || !nonnegative(value.item_count) || !nonnegative(value.requirement_count)
+      || value.items.length > value.item_count) return false;
+    if (value.kind === "linked_source_snapshot" && !this.validSourceOverview(value)) return false;
+    const hasItemsPage = Object.prototype.hasOwnProperty.call(value, "items_page");
+    const itemsPage = value.items_page as WorkRecordsOverviewPageFacts | null | undefined;
+    if (hasItemsPage && itemsPage === undefined) return false;
+    if (hasItemsPage && itemsPage !== null
+      && (!this.validOverviewPageFacts(itemsPage, "items", value.kind, value.id, null)
+        || itemsPage.total !== value.item_count
+        || itemsPage.offset + value.items.length > value.item_count
+        || itemsPage.has_more !== (itemsPage.offset + value.items.length < value.item_count))) return false;
+    if (hasItemsPage && itemsPage !== null && itemsPage !== undefined && itemsPage.offset === 0
+      && itemsPage.total === value.items.length && itemsPage.has_more) return false;
+    if (hasItemsPage && itemsPage === null && value.items.length !== 1) return false;
+    if (!Object.values(value.status_counts).every(nonnegative)) return false;
+    let requirementCount = 0;
+    for (const item of value.items) {
+      if (!cardObject(item) || !nonempty(item.item_id) || typeof item.title !== "string" || !nonempty(item.status)
+        || !cardObject(item.status_counts) || !Object.values(item.status_counts).every(nonnegative)
+        || !Array.isArray(item.requirements) || !Array.isArray(item.current_results)) return false;
+      requirementCount += item.requirements.length;
+      if (!item.requirements.every((req: unknown) => cardObject(req) && nonempty(req.requirement_id)
+        && typeof req.text === "string" && nonempty(req.status))) return false;
+      if (Object.prototype.hasOwnProperty.call(item, "requirements_page")
+        && (!this.validOverviewPageFacts(item.requirements_page, "requirements", value.kind, value.id, item.item_id)
+          || item.requirements_page.offset + item.requirements.length > item.requirements_page.total
+          || item.requirements_page.has_more !== (item.requirements_page.offset + item.requirements.length < item.requirements_page.total))) return false;
+      if (!item.current_results.every((result: unknown) => cardObject(result) && nonempty(result.requirement_id)
+        && nonempty(result.result_id) && nonempty(result.status)
+        && ["viewed", "unread", "unknown"].includes(String(result.read_status)))) return false;
+    }
+    const completeItemCount = value.items.every(item => !Object.prototype.hasOwnProperty.call(item, "requirements_page")
+      || item.requirements_page?.offset === 0 && item.requirements_page.total === item.requirements.length
+        && !item.requirements_page.has_more);
+    const completeGroup = !hasItemsPage || (itemsPage !== null && itemsPage !== undefined
+      && itemsPage.offset === 0 && value.items.length === value.item_count);
+    return (!completeGroup || !completeItemCount || requirementCount <= value.requirement_count)
+      && (!completeGroup || !completeItemCount || requirementCount === value.requirement_count);
+  }
+  private acceptWorkCardPresent(event: unknown): event is WorkCardPresentEvent {
+    if (!cardObject(event) || event.type !== "work-card.present" || event.session_id !== this.currentConversationId
+      || typeof event.presentation_id !== "string" || !WORK_CARD_UUID.test(event.presentation_id)
+      || !cardId(event.card_id) || !validWorkCard(event.card, this.currentConversationId, event.card_id)) return false;
+    const allowed = new Set(["type", "session_id", "presentation_id", "card_id", "card"]);
+    if (Object.keys(event).some(key => !allowed.has(key))) return false;
+    const priorCardId = this.workCardPresentationIds.get(event.presentation_id);
+    if (priorCardId !== undefined && priorCardId !== event.card_id) return false;
+    this.workCardPresentationIds.set(event.presentation_id, event.card_id);
+    if (event.card.snapshot.kind === "linked_item_copy") {
+      this.linkedItemCopyIdentities.set(event.card_id, {
+        projectId: event.card.snapshot.project_id, itemId: event.card.snapshot.item_id,
+      });
+    } else if (event.card.snapshot.kind === "linked_project_session_copy") {
+      this.linkedProjectSessionCopyIdentities.set(event.card_id, {
+        projectId: event.card.snapshot.source.project_id, mappingClaim: event.card.snapshot.source.mapping_claim,
+      });
+    }
+    return true;
+  }
+
+  private retireCardRequests(): void {
+    for (const [key, value] of this.snapshotViewTimers) { window.clearTimeout(value.timer); this.cardRetired.add(key); }
+    for (const key of this.snapshotViewAmbiguous) this.cardRetired.add(key);
+    this.snapshotViewTimers.clear();
+    this.snapshotViewAmbiguous.clear();
+    for (const key of this.cardPending.keys()) this.cardRetired.add(key);
+    this.cardPending.clear();
+  }
+
+  private sendCard(payload: Record<string, unknown>, key: string, itemId?: string): void {
+    if (!this.currentConversationId) throw new Error("work-card requires a current session banner");
+    if (this.cardPending.has(key) || this.cardRetired.has(key)) throw new Error("work-card request pending or retired; reconnect before reuse");
+    this.cardPending.set(key, { session: this.currentConversationId, key, itemId });
+    try { this.send(payload); } catch (error) { this.cardPending.delete(key); throw error; }
+  }
+
+  /** Caller owns the stable UUID; retries explicitly reuse it. */
+  createWorkCard(requestId: string, itemId?: string): void {
+    if (typeof requestId !== "string" || !WORK_CARD_UUID.test(requestId)) throw new Error("invalid work-card request UUID");
+    if (itemId !== undefined && (typeof itemId !== "string" || !WORK_ITEM_ID.test(itemId))) throw new Error("invalid work-card item identity");
+    this.sendCard({type: "work-card.create", request_id: requestId, ...(itemId === undefined ? {} : {item_id: itemId})}, `create:${requestId}`, itemId);
+  }
+
+  getWorkCard(id: string): void {
+    if (!cardId(id)) throw new Error("invalid work-card identity");
+    this.sendCard({type: "work-card.get", card_id: id}, `get:${id}`);
+  }
+
+  /** Explicit acknowledgement only: retrieval never marks a card seen. */
+  markWorkCardSeen(id: string): void {
+    if (!cardId(id)) throw new Error("invalid work-card identity");
+    this.sendCard({type: "work-card.seen", card_id: id}, `seen:${id}`);
+  }
+
+  /** Send an idempotent receipt only for a presentation accepted on this client.
+   * It is not a local durability or user-view acknowledgement; send failures remain retryable.
+   */
+  acknowledgeWorkCardReceived(identity: { sessionId: string; presentationId: string; cardId: string }): void {
+    if (!cardObject(identity) || Object.keys(identity).length !== 3
+      || Object.keys(identity).some(key => key !== "sessionId" && key !== "presentationId" && key !== "cardId")
+      || identity.sessionId !== this.currentConversationId || !WORK_CARD_UUID.test(identity.presentationId)
+      || !cardId(identity.cardId) || this.workCardPresentationIds.get(identity.presentationId) !== identity.cardId) {
+      throw new Error("invalid, stale, or unaccepted work-card receipt identity");
+    }
+    const message: WorkCardReceivedMessage = { type: "work-card.received", session_id: identity.sessionId, presentation_id: identity.presentationId, card_id: identity.cardId };
+    this.send(message);
+  }
+  /** Explicit snapshot detail expansion, separate from receipt and result viewing. */
+  acknowledgeWorkCardSnapshotView(identity: {sessionId: string; presentationId: string; cardId: string}): void {
+    if (!cardObject(identity) || Object.keys(identity).length !== 3 || identity.sessionId !== this.currentConversationId
+      || !WORK_CARD_UUID.test(identity.presentationId) || !cardId(identity.cardId)
+      || !(this.linkedItemCopyIdentities.has(identity.cardId) || this.linkedProjectSessionCopyIdentities.has(identity.cardId))) throw new Error("invalid or stale snapshot view identity");
+    const key = `snapshot-view:${identity.presentationId}:${identity.cardId}`;
+    if (this.cardPending.has(key) || this.cardRetired.has(key)) return;
+    this.sendCard({type: "work-card.snapshot.view", session_id: identity.sessionId, presentation_id: identity.presentationId, card_id: identity.cardId}, key, identity.cardId);
+    const token = {};
+    const timer = window.setTimeout(() => {
+      if (this.snapshotViewTimers.get(key)?.token !== token || this.currentConversationId !== identity.sessionId) return;
+      this.snapshotViewTimers.delete(key);
+      this.cardPending.delete(key);
+      this.snapshotViewAmbiguous.add(key);
+      const event: WorkCardSnapshotViewTimeoutEvent = {type: "work-card.snapshot.view.timeout", session_id: identity.sessionId, presentation_id: identity.presentationId, card_id: identity.cardId};
+      for (const handler of this.handlers) handler(event);
+    }, 15_000);
+    this.snapshotViewTimers.set(key, {timer, token});
+  }
+  /** Renderer-attested explicit result-detail expansion; this is not delivery or acceptance proof. */
+  acknowledgeWorkCardResultView(identity: {sessionId: string; presentationId: string; cardId: string; resultId: string; requirementId: string; requestId?: string}): void {
+    if (!cardObject(identity) || Object.keys(identity).some(k => !["sessionId", "presentationId", "cardId", "resultId", "requirementId", "requestId"].includes(k))
+      || identity.sessionId !== this.currentConversationId || !WORK_CARD_UUID.test(identity.presentationId)
+      || !cardId(identity.cardId) || typeof identity.resultId !== "string" || !identity.resultId || identity.resultId.length > 256
+      || typeof identity.requirementId !== "string" || !identity.requirementId || identity.requirementId.length > 256
+      || (identity.requestId !== undefined && (!WORK_CARD_UUID.test(identity.requestId) || this.usedResultViewRequestIds.has(identity.requestId)))) {
+      throw new Error("invalid or stale work-card result identity");
+    }
+    const key = identity.requestId ? `result-view-id:${identity.requestId}` : `result-view:${identity.presentationId}:${identity.resultId}:${identity.requirementId}`;
+    this.sendCard({type: "work-card.result.view", session_id: identity.sessionId,
+      presentation_id: identity.presentationId, card_id: identity.cardId,
+      result_id: identity.resultId, requirement_id: identity.requirementId,
+      ...(identity.requestId ? {request_id: identity.requestId} : {})}, key, identity.cardId);
+    const pending = this.cardPending.get(key);
+    if (pending && identity.requestId) {
+      pending.resultIdentity = {presentationId: identity.presentationId, resultId: identity.resultId, requirementId: identity.requirementId};
+      this.usedResultViewRequestIds.add(identity.requestId);
+    }
+  }
+
+  /** Drop a closed detail's pending response; request IDs are never reused. */
+  cancelWorkCardResultView(requestId: string): void {
+    if (typeof requestId === "string" && WORK_CARD_UUID.test(requestId)) this.cardPending.delete(`result-view-id:${requestId}`);
+  }
+
+  listWorkCards(options: {limit?: number; beforeCardId?: string} = {}): string {
+    if (!cardObject(options) || Object.keys(options).some(key => key !== "limit" && key !== "beforeCardId")) throw new Error("invalid work-card list options");
+    if (options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 20)) throw new Error("invalid work-card list limit");
+    if (options.beforeCardId !== undefined && !cardId(options.beforeCardId)) throw new Error("invalid work-card cursor");
+    // Serial pages prevent an older page from arriving after a newer page.
+    if ([...this.cardPending.keys()].some(key => key.startsWith("list:"))) throw new Error("work-card list request already pending");
+    const requestId = crypto.randomUUID();
+    if (!WORK_CARD_UUID.test(requestId) || this.usedCardListIds.has(requestId)) throw new Error("invalid or reused work-card list request UUID");
+    this.usedCardListIds.add(requestId);
+    this.sendCard({type: "work-card.list", request_id: requestId, ...(options.limit === undefined ? {} : {limit: options.limit}), ...(options.beforeCardId === undefined ? {} : {before_card_id: options.beforeCardId})}, `list:${requestId}`);
+    return requestId;
+  }
+
+  private acceptWorkCardReceiptBacklog(event: unknown): event is WorkCardReceiptBacklogEvent {
+    const fields = ["type", "session_id", "pending_count", "deferred_count", "legacy_untracked_count", "retry_batch_size", "batch_limit", "max_send_attempts"];
+    if (!cardObject(event) || event.type !== "work-card.receipt.backlog" || Object.keys(event).length !== fields.length
+      || Object.keys(event).some(key => !fields.includes(key)) || event.session_id !== this.currentConversationId      || typeof event.pending_count !== "number" || !Number.isSafeInteger(event.pending_count) || event.pending_count < 0
+      || typeof event.deferred_count !== "number" || !Number.isSafeInteger(event.deferred_count) || event.deferred_count < 0
+      || typeof event.legacy_untracked_count !== "number" || !Number.isSafeInteger(event.legacy_untracked_count) || event.legacy_untracked_count < 0
+      || typeof event.retry_batch_size !== "number" || !Number.isSafeInteger(event.retry_batch_size) || event.retry_batch_size < 0
+      || typeof event.batch_limit !== "number" || !Number.isSafeInteger(event.batch_limit) || event.batch_limit < 1 || event.batch_limit > 100
+      || typeof event.max_send_attempts !== "number" || !Number.isSafeInteger(event.max_send_attempts) || event.max_send_attempts < 1 || event.max_send_attempts > 10
+      || event.retry_batch_size > event.pending_count || event.retry_batch_size > event.batch_limit
+      || !(event.pending_count > event.retry_batch_size || event.deferred_count > 0 || event.legacy_untracked_count > 0)) return false;
+    const signature = [event.pending_count, event.deferred_count, event.legacy_untracked_count,
+      event.retry_batch_size, event.batch_limit, event.max_send_attempts].join(":");
+    if (signature === this.receiptBacklogSignature) return false;
+    this.receiptBacklogSignature = signature;
+    return true;
+  }
+  private acceptWorkCardReceivedResult(event: unknown): event is WorkCardReceivedResultEvent {
+    if (!cardObject(event) || event.type !== "work-card.received.done"
+      || !["received", "already_received", "invalid_request", "session_unavailable", "project_unbound", "session_changed", "history_unavailable", "rejected", "unavailable"].includes(String(event.status))
+      || typeof event.message !== "string" || event.message.length > 512
+      || event.session_id !== this.currentConversationId || typeof event.presentation_id !== "string" || !WORK_CARD_UUID.test(event.presentation_id)
+      || !cardId(event.card_id) || this.workCardPresentationIds.get(event.presentation_id) !== event.card_id) return false;
+    const success = event.status === "received" || event.status === "already_received";
+    const allowed = new Set(["type", "status", "message", "session_id", "presentation_id", "card_id", ...(success ? ["received_at"] : [])]);
+    if (Object.keys(event).some(key => !allowed.has(key))) return false;
+    return success ? timestamp(event.received_at) : event.received_at === undefined;
+  }
+  private acceptCardEvent(event: unknown): event is WorkCardEvent {
+    if (cardObject(event) && event.type === "work-card.snapshot.view.done") {
+      if (!exactCardKeys(event, ["type", "session_id", "presentation_id", "card_id", "status", "message"])
+        || event.session_id !== this.currentConversationId || typeof event.presentation_id !== "string" || !WORK_CARD_UUID.test(event.presentation_id)
+        || !cardId(event.card_id) || typeof event.message !== "string" || event.message.length > 512 || typeof event.status !== "string"
+        || !["acknowledged", "already_acknowledged", "invalid_request", "session_unavailable", "project_unbound", "session_changed", "history_unavailable", "rejected", "unavailable"].includes(event.status)) return false;
+      const key = `snapshot-view:${event.presentation_id}:${event.card_id}`;
+      const pending = this.cardPending.get(key);
+      if (!pending || pending.session !== event.session_id || pending.itemId !== event.card_id) return false;
+      const success = event.status === "acknowledged" || event.status === "already_acknowledged";
+      // Without a request id, a failure on any retry may belong to an older
+      // attempt. Ignore it; only a durable success can safely settle the retry.
+      if (!success && this.snapshotViewAmbiguous.has(key)) return false;
+      const timer = this.snapshotViewTimers.get(key);
+      if (timer) window.clearTimeout(timer.timer);
+      this.snapshotViewTimers.delete(key);
+      this.cardPending.delete(key);
+      if (success) { this.snapshotViewAmbiguous.delete(key); this.cardRetired.add(key); }
+      else this.snapshotViewAmbiguous.add(key);
+      return true;
+    }
+    if (cardObject(event) && event.type === "work-card.receipt.backlog") return this.acceptWorkCardReceiptBacklog(event);
+    if (cardObject(event) && event.type === "work-card.received.done") return this.acceptWorkCardReceivedResult(event);
+    if (!cardObject(event) || typeof event.type !== "string" || typeof event.status !== "string" || typeof event.message !== "string") return false;
+    const op = ({"work-card.create.done":"create", "work-card.get.done":"get", "work-card.seen.done":"seen", "work-card.list.done":"list", "work-card.result.view.done":"result-view"} as Record<string, string>)[event.type];
+    if (!op) return false;
+    const usesRequestId = op === "create" || op === "list";
+    const identity = usesRequestId ? event.request_id : event.card_id;
+    if (op === "result-view") {
+      if (typeof event.session_id !== "string" || typeof event.presentation_id !== "string" || !WORK_CARD_UUID.test(event.presentation_id)
+        || !cardId(event.card_id) || typeof event.result_id !== "string" || typeof event.requirement_id !== "string") return false;
+    } else if (usesRequestId ? typeof identity !== "string" || !WORK_CARD_UUID.test(identity) : !cardId(identity)) return false;
+    if (op === "result-view" && event.request_id !== undefined && (typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id))) return false;
+    const key = op === "result-view" ? (event.request_id ? `result-view-id:${event.request_id}` : `result-view:${event.presentation_id}:${event.result_id}:${event.requirement_id}`) : `${op}:${identity}`;
+    const pending = this.cardPending.get(key);
+    if (!pending || pending.session !== this.currentConversationId) return false;
+    if (op === "result-view" && pending.resultIdentity && (pending.resultIdentity.presentationId !== event.presentation_id
+      || pending.resultIdentity.resultId !== event.result_id || pending.resultIdentity.requirementId !== event.requirement_id)) return false;
+    const errors = new Set(["invalid_request","session_unavailable","project_unbound","session_changed","history_unavailable","request_conflict","ledger_unavailable","incomplete","rejected","save_failed","save_uncertain","not_found","invalid_cursor","unavailable"]);
+    let valid = false;
+    if (errors.has(event.status)) {
+      const allowed = op === "result-view"
+        ? new Set(["type", "status", "message", "session_id", "presentation_id", "card_id", "result_id", "requirement_id", "request_id"])
+        : new Set(["type", "status", "message", usesRequestId ? "request_id" : "card_id"]);
+      valid = Object.keys(event).every(k => allowed.has(k));
+      if (op === "result-view") valid = valid && event.session_id === pending.session
+        && key === pending.key && event.card_id === pending.itemId;
+    } else if (op === "create" && (event.status === "saved" || event.status === "already_saved")) {
+      valid = cardId(event.card_id) && validCardScope(event.source_scope, pending.session) && validWorkCard(event.card, pending.session, event.card_id, pending.itemId)
+        && cardObject(event.card) && cardObject(event.card.snapshot) && cardObject(event.source_scope)
+        && event.card.snapshot.kind !== "linked_item_copy"
+        && event.card.snapshot.kind !== "linked_project_session_copy"
+        && (pending.itemId === undefined ? event.card.snapshot.kind !== "independent" : event.card.snapshot.kind === "independent")
+        && (event.card.snapshot.kind === "independent" ? event.source_scope.kind === "independent" : event.source_scope.project_id === event.card.snapshot.project_id);
+    } else if (op === "get" && event.status === "found") {
+      const snapshot = cardObject(event.card) && cardObject(event.card.snapshot) ? event.card.snapshot : undefined;
+      const linkedItemSnapshot = snapshot?.kind === "linked_item_copy"
+        ? snapshot as unknown as LinkedItemCopySnapshot : undefined;
+      const linkedProjectSnapshot = snapshot?.kind === "linked_project_session_copy"
+        ? snapshot as unknown as LinkedProjectSessionCopySnapshot : undefined;
+      const ordinarySnapshot = snapshot && snapshot.kind !== "linked_item_copy"
+        && snapshot.kind !== "linked_project_session_copy" ? snapshot : undefined;
+      valid = cardId(identity) && cardObject(event.card) && !!snapshot
+        && (linkedItemSnapshot
+          ? validLinkedParentCardScope(event.source_scope, pending.session, linkedItemSnapshot)
+          : linkedProjectSnapshot
+            ? validLinkedProjectSessionCopyScope(event.source_scope, pending.session, linkedProjectSnapshot)
+            : validCardScope(event.source_scope, pending.session))
+        && validWorkCard(event.card, pending.session, identity)
+        && (linkedItemSnapshot !== undefined || linkedProjectSnapshot !== undefined
+          || (!!ordinarySnapshot && (ordinarySnapshot.kind === "independent"
+            ? cardObject(event.source_scope) && event.source_scope.kind === "independent"
+            : cardObject(event.source_scope) && event.source_scope.project_id === ordinarySnapshot.project_id)));
+      if (valid && linkedItemSnapshot && typeof identity === "string") {
+        this.linkedItemCopyIdentities.set(identity, {
+          projectId: linkedItemSnapshot.project_id, itemId: linkedItemSnapshot.item_id,
+        });
+      } else if (valid && linkedProjectSnapshot && typeof identity === "string") {
+        this.linkedProjectSessionCopyIdentities.set(identity, {
+          projectId: linkedProjectSnapshot.source.project_id,
+          mappingClaim: linkedProjectSnapshot.source.mapping_claim,
+        });
+      }
+    } else if (op === "seen" && (event.status === "acknowledged" || event.status === "already_acknowledged")) {
+      const linkedItem = cardObject(event.source_scope) && event.source_scope.kind === "linked_item_copy";
+      const linkedProject = cardObject(event.source_scope) && event.source_scope.kind === "linked_project_session_copy";
+      const knownItem = typeof identity === "string" ? this.linkedItemCopyIdentities.get(identity) : undefined;
+      const knownProject = typeof identity === "string" ? this.linkedProjectSessionCopyIdentities.get(identity) : undefined;
+      valid = timestamp(event.viewed_at) && (linkedItem
+        ? !!knownItem && validLinkedParentCardScope(event.source_scope, pending.session)
+          && cardObject(event.source_scope) && event.source_scope.project_id === knownItem.projectId
+          && event.source_scope.item_id === knownItem.itemId
+        : linkedProject
+          ? !!knownProject && validLinkedProjectSessionCopyScope(event.source_scope, pending.session)
+            && cardObject(event.source_scope) && event.source_scope.project_id === knownProject.projectId
+            && event.source_scope.mapping_claim === knownProject.mappingClaim
+          : validCardScope(event.source_scope, pending.session));
+    } else if (op === "result-view" && (event.status === "acknowledged" || event.status === "already_acknowledged")) {
+      valid = event.session_id === pending.session && typeof event.requirement_id === "string"
+        && key === pending.key && event.card_id === pending.itemId;
+      if (event.local_assistant_reply_excerpt_detail !== undefined) {
+        const d = event.local_assistant_reply_excerpt_detail;
+        valid = valid && cardObject(d) && exactCardKeys(d, ["session_id", "item_id", "requirement_id", "result_id", "label", "escaped_excerpt_text", "source_availability", "result_status", "verification_status"])
+          && d.session_id === event.session_id && d.requirement_id === event.requirement_id && d.result_id === event.result_id
+          && typeof d.item_id === "string" && d.item_id.length > 0 && d.item_id.length <= 256
+          && typeof d.label === "string" && d.label.length > 0 && d.label.length <= 4096
+          && typeof d.escaped_excerpt_text === "string" && d.escaped_excerpt_text.length > 0 && d.escaped_excerpt_text.length <= 200000
+          && !/[<>"']|&(?!amp;|lt;|gt;|quot;|#x27;)/.test(d.escaped_excerpt_text)
+          && (d.source_availability === "available" || d.source_availability === "unavailable")
+          && d.result_status === "unknown" && d.verification_status === "not_verified";
+      }
+    } else if (op === "list" && event.status === "ok") {
+      valid = cardObject(event.source_scope) && event.source_scope.session_id === pending.session && Object.keys(event.source_scope).length === 1
+        && Array.isArray(event.items) && event.items.length <= 20 && event.items.every(validIndexItem)
+        && new Set(event.items.map((item: WorkCardIndexItem) => item.card_id)).size === event.items.length
+        && typeof event.has_more === "boolean" && (event.has_more ? event.items.length > 0 && cardId(event.next_cursor) && event.next_cursor === event.items[event.items.length - 1].card_id : event.next_cursor === null);
+    }
+    if (!valid) return false;
+    // Do not forward undocumented fields as part of a structured success event.
+    if (!errors.has(event.status)) {
+      const fields: Record<string, string[]> = {
+        create: ["type", "status", "message", "request_id", "card_id", "card", "source_scope"],
+        get: ["type", "status", "message", "card_id", "card", "source_scope"],
+        seen: ["type", "status", "message", "card_id", "viewed_at", "source_scope"],
+        "result-view": ["type", "status", "message", "session_id", "presentation_id", "card_id", "result_id", "requirement_id", "request_id", "local_assistant_reply_excerpt_detail"],
+        list: ["type", "status", "message", "request_id", "items", "has_more", "next_cursor", "source_scope"],
+      };
+      if (Object.keys(event).some(k => !fields[op].includes(k))) return false;
+    }
+    this.cardPending.delete(key);
+    return true;
+  }
+
   sendEvolutionRequest(value: unknown): void {
     const request = normalizeEvolutionHostRequest(value, this.currentConversationId);
     this.send({ type: request.type, conversation_id: request.conversation_id });
   }
 
-  private updateEvolutionConversationId(sessionId: string | null): void {
+  private updateEvolutionConversationId(sessionId: string | null, bindingChanged = false): void {
+    const disconnected = sessionId === null && !!this.currentConversationId;
+    if ((sessionId ?? "") !== this.currentConversationId || bindingChanged) {
+      this.retireCardRequests(); this.overviewPending.clear(); this.receiptBacklogSignature = "";
+      this.workCardPresentationIds.clear();
+      this.linkedItemCopyIdentities.clear();
+      this.linkedProjectSessionCopyIdentities.clear();
+    }
     this.currentConversationId = sessionId ?? "";
-    const update = window.myAgentDesktop?.setEvolutionConversationId?.(sessionId);
+    if (disconnected) {
+      this.autoRecognitionPending = null;
+      for (const handler of this.handlers) handler({ type: "client.connection.closed" });
+    }
+    let evolutionSessionId: string | null = null;
+    if (sessionId !== null) {
+      try {
+        evolutionSessionId = normalizeEvolutionHostRequest({ type: "evolution.inspect", conversation_id: sessionId }).conversation_id;
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+      }
+    }
+    const update = window.myAgentDesktop?.setEvolutionConversationId?.(evolutionSessionId);
     if (update) void update.catch(() => undefined);
   }
 
@@ -849,11 +1747,15 @@ export class AgentWsClient {
       activeDoc?: string;
       activeDocSelection?: string;
       turnMode?: "agent" | "ask";
+      requestId?: string;
       companionWorldContext?: CompanionWorldContextPayload;
     },
-  ): void {
+  ): { requestId: string; sessionId: string | null } {
+    const requestId = opts?.requestId ?? crypto.randomUUID();
+    const sessionId = this.currentConversationId || null;
     const payload: Record<string, unknown> = {
       type: "user.message",
+      request_id: requestId,
       text,
     };
     if (attachmentIds?.length) {
@@ -869,6 +1771,7 @@ export class AgentWsClient {
       payload.companion_world_context = opts.companionWorldContext;
     }
     this.send(payload);
+    return { requestId, sessionId };
   }
 
   stageFiles(paths: string[], shell?: string): void {

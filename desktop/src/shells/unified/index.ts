@@ -9,6 +9,7 @@ import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver 
 import { formatUserMessageHtml, parseUserMessage } from "../../user-message";
 import { messageReadingLayout, readingBodyHtml, prepareLazyReadingBody } from "./message-reading";
 import { activityRevealScrollDelta } from "./activity-scroll";
+import { ProjectWorkerProgressStatus, PROJECT_WORKER_PROGRESS_TTL_MS } from "./project-worker-progress";
 import { formatTerminalOutputForDisplay } from "./terminal-output";
 import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
@@ -78,16 +79,19 @@ import {
 } from "./output-display";
 import { renderProjectCompanionDockHtml } from "./sidebar-companion";
 import { bindChatFontControl, renderChatFontControl, syncChatFontControl } from "./chat-font-control";
-import { isSettingsSection, renderSettingsPane, type SettingsSection } from "./settings-panel";
+import { isSettingsSection, renderSettingsPane, renderSettingsSidebar, type SettingsSection } from "./settings-panel";
 import { writeTheme } from "../../settings";
 import { renderMusicPanel } from "./music-panel";
 import { renderShellDevPanel } from "./shell-dev-panel";
+import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
-import type { AgentWsClient, MemoryItem, ProposalItem, ServerEvent } from "../../api/ws";
+import type { AgentWsClient, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
-import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
+import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt } from "./confirm-preview";
+import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
+import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import {
@@ -113,6 +117,8 @@ import { buildCompanionWorldTurnContext } from "./companion-world-context";
 import { verifiedProjectEventToSharedEvent } from "./companion-world-app-events";
 import { normalizeTurnEvidenceEvent } from "./turn-evidence";
 import "./unified.css";
+import "./work-card.css";
+import "./current-work-overview.css";
 import "./neon-twin.css";
 import "./composer-companion.css";
 import { mountComposerLive2D } from "./composer-live2d";
@@ -121,6 +127,7 @@ import "./message-reading.css";
 import "./settings-panel.css";
 import "./music-panel.css";
 import "./shell-dev-panel.css";
+import "./single-chat-tools.css";
 
 export type Perspective = "default" | "project" | "night";
 
@@ -185,7 +192,8 @@ export function mountUnifiedShell(
     }
     perspective = p;
     shellEl.setAttribute("data-perspective", p === "night" ? "project" : p);
-    sidebarEl.classList.toggle("hidden", false);
+    // The legacy sidebar remains in the DOM for its event wiring, never as navigation.
+    sidebarEl.hidden = true;
     updatePlaceholder();
     renderChat();
     renderConfirmGlass();
@@ -195,6 +203,21 @@ export function mountUnifiedShell(
   }
 
   // ---- ui state ----
+  let autoRecognition = { sessionId: "", enabled: false, pending: "", action: "" as "" | "enable" | "revoke", error: false };
+  let currentWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
+  let currentWorkOverviewOpen = false;
+  const currentWorkOverviewExpandedRequirementItemIds = new Set<string>();
+  let currentWorkOverviewLoadingMore = false;
+  let currentWorkOverviewUnavailable = false;
+  let currentWorkOverviewRefreshTimer: number | null = null;
+  let currentWorkVisibilityRecheckTimer: number | null = null;
+  let currentWorkOverviewRefreshQueued = false;
+  const currentWorkOverviewExecutionStates = new Map<string, string>();
+  let currentWorkOverviewActiveRequest: string | null = null;
+  let currentWorkOverviewDetailLoadingCursor: string | null = null;
+  let currentWorkOverviewDetailPagingSupported = true;
+  type OverviewDetailTarget = { kind: "items" | "requirements"; groupKind: "project" | "independent" | "linked_source_snapshot"; groupId: string; itemId?: string };
+  const currentWorkOverviewRequests = new Map<string, { sessionId: string; cursor?: string; detail?: OverviewDetailTarget; detailPaging: boolean }>();
   const topbarState: TopbarState = {
     proposals: [] as ProposalItem[],
     intentLabel: "",
@@ -233,21 +256,183 @@ export function mountUnifiedShell(
     }
   }
 
+  function clearCurrentWorkVisibilityRecheck(): void {
+    if (currentWorkVisibilityRecheckTimer !== null) window.clearTimeout(currentWorkVisibilityRecheckTimer);
+    currentWorkVisibilityRecheckTimer = null;
+  }
+
+  function scheduleCurrentWorkVisibilityRecheck(result: WorkRecordsOverviewResultEvent | null, sessionId: string, reset = false, force = false): void {
+    if (reset) clearCurrentWorkVisibilityRecheck();
+    if (currentWorkVisibilityRecheckTimer !== null || (!force && !shouldScheduleOverviewVisibilityRecheck(result))
+      || (result !== null && result.session_id !== sessionId)) return;
+    currentWorkVisibilityRecheckTimer = window.setTimeout(() => {
+      currentWorkVisibilityRecheckTimer = null;
+      if (chat.model.sessionId !== sessionId) return;
+      if ([...currentWorkOverviewRequests.values()].some(request => request.sessionId === sessionId)) {
+        currentWorkOverviewRefreshQueued = true;
+        return;
+      }
+      queryStructuredCurrentWorkOverview(undefined, sessionId);
+    }, currentWorkOverviewRecheckDelayMs(result)) as unknown as number;
+  }
+  function queryStructuredCurrentWorkOverview(
+    cursor?: string, sessionId = chat.model.sessionId, detail?: OverviewDetailTarget,
+  ): void {
+    if (!sessionId) return;
+    if ([...currentWorkOverviewRequests.values()].some(request => request.sessionId === sessionId)) return;
+    try {
+      const detailPaging = currentWorkOverviewDetailPagingSupported;
+      const requestId = client.queryWorkRecordsOverview({ pageSize: 6, detailPaging, ...(cursor ? { cursor } : {}) });
+      currentWorkOverviewRequests.set(requestId, { sessionId, detailPaging, ...(cursor ? { cursor } : {}), ...(detail ? { detail } : {}) });
+      currentWorkOverviewActiveRequest = requestId;
+      currentWorkOverviewLoadingMore = Boolean(cursor) && !detail;
+      currentWorkOverviewDetailLoadingCursor = detail ? cursor ?? null : null;
+      // A same-session recheck must retain the last server projection until its replacement arrives.
+      if (!cursor && currentWorkOverviewResult?.session_id !== sessionId) {
+        currentWorkOverviewResult = null;
+        currentWorkOverviewUnavailable = true;
+      }
+      refreshTopbar();
+    } catch (error) {
+      currentWorkOverviewLoadingMore = false;
+      currentWorkOverviewDetailLoadingCursor = null;
+      if (!cursor && currentWorkOverviewResult?.session_id !== sessionId) {
+        currentWorkOverviewResult = null;
+        currentWorkOverviewUnavailable = true;
+      }
+      refreshTopbar();
+      setStatus(`当前工作概况查询未发送：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function requestCurrentWorkOverviewDetail(button: HTMLButtonElement): void {
+    const cursor = button.dataset.currentWorkDetailCursor;
+    const kind = button.dataset.currentWorkDetailKind;
+    const groupKind = button.dataset.currentWorkDetailGroupKind;
+    const groupId = button.dataset.currentWorkDetailGroupId;
+    const itemId = button.dataset.currentWorkDetailItemId;
+    const sessionId = chat.model.sessionId;
+    if (!cursor || !sessionId || (kind !== "items" && kind !== "requirements")
+      || (groupKind !== "project" && groupKind !== "independent" && groupKind !== "linked_source_snapshot") || !groupId
+      || (kind === "requirements" && !itemId) || (kind === "items" && itemId !== undefined)
+      || currentWorkOverviewResult?.session_id !== sessionId
+      || currentWorkOverviewDetailLoadingCursor !== null) return;
+    queryStructuredCurrentWorkOverview(cursor, sessionId, {
+      kind, groupKind, groupId, ...(itemId ? { itemId } : {}),
+    });
+  }
+  function scheduleCurrentWorkOverviewRefresh(): void {
+    const sessionId = chat.model.sessionId;
+    if (!sessionId) return;
+    if ([...currentWorkOverviewRequests.values()].some(request => request.sessionId === sessionId)) {
+      currentWorkOverviewRefreshQueued = true;
+      return;
+    }
+    if (currentWorkOverviewRefreshTimer !== null) return;
+    currentWorkOverviewRefreshTimer = window.setTimeout(() => {
+      currentWorkOverviewRefreshTimer = null;
+      const currentSessionId = chat.model.sessionId;
+      if (!currentSessionId) return;
+      if ([...currentWorkOverviewRequests.values()].some(request => request.sessionId === currentSessionId)) {
+        currentWorkOverviewRefreshQueued = true;
+        return;
+      }
+      queryStructuredCurrentWorkOverview(undefined, currentSessionId);
+    }, 300) as unknown as number;
+  }
+
+  function flushQueuedCurrentWorkOverviewRefresh(): void {
+    if (!currentWorkOverviewRefreshQueued) return;
+    currentWorkOverviewRefreshQueued = false;
+    scheduleCurrentWorkOverviewRefresh();
+  }
+  function toggleStructuredCurrentWorkOverview(): void {
+    currentWorkOverviewOpen = !currentWorkOverviewOpen;
+    if (currentWorkOverviewOpen) queryStructuredCurrentWorkOverview();
+    refreshTopbar();
+  }
+
+  function expandStructuredCurrentWorkOverview(): void {
+    const cursor = currentWorkOverviewResult?.page.next_cursor;
+    if (!cursor || currentWorkOverviewLoadingMore || !currentWorkOverviewResult) return;
+    queryStructuredCurrentWorkOverview(cursor, currentWorkOverviewResult.session_id);
+  }
+  function requestCurrentWorkOverview(): void {
+    const result = dispatchCurrentWorkOverviewRequest({
+      busy: chat.isWorking() || Boolean(chat.model.confirmPending),
+      allowed: isWorkbenchChatAllowed(),
+      send: (text) => {
+        const dispatch = client.sendMessage(text, undefined, { turnMode: currentTurnMode });
+        chat.pushUserMessage(text, {
+          requestId: dispatch.requestId,
+          sessionId: dispatch.sessionId,
+          receiptEligible: true,
+        });
+        topbarState.intentLabel = "";
+        resetUserScrollPin();
+        setStatus("正在查询当前工作概况…");
+      },
+    });
+    if (result === "busy") setStatus("当前回合或确认尚未结束，暂不能查询概况。");
+    else if (result === "unavailable") setStatus("当前对话不可发送，未发起概况查询。");
+    else if (result === "failed") setStatus("概况查询未能发送；未用旧卡片替代。");
+  }
+  // Keep the existing non-modal overview above the live composer, even as it resizes.
+  function sizeCurrentWorkPopover(): void {
+    const popover = topbarEl.querySelector<HTMLElement>("#unified-current-work-popover");
+    if (!popover) return;
+    const available = Math.floor(composerDock.getBoundingClientRect().top - popover.getBoundingClientRect().top - 8);
+    popover.style.maxHeight = `${Math.max(0, available)}px`;
+    popover.style.visibility = available < 48 ? "hidden" : "";
+  }
+
   function refreshTopbar(): void {
     syncTopbarFromProject();
     topbarState.memoryCount = memoryShelfState.memories.length;
     topbarState.pendingMemoryCount = memoryShelfState.pending.length || topbarState.proposals.length;
+    topbarState.autoRecognition = { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error };
+    topbarState.currentWorkOverview = buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
+      open: currentWorkOverviewOpen, loadingMore: currentWorkOverviewLoadingMore, unavailable: currentWorkOverviewUnavailable,
+      expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
+      detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
+    });
     renderTopbar(
       topbarEl,
       topbarState,
       openProposals,
-      handleNewChat,
-      undefined, // 会话 dropdown replaced by the sidebar session list
-      handleNewProject,
-      handleNewThread,
+      undefined, // single continuous conversation: no new-chat control
+      undefined,
+      undefined,
+      undefined,
       handleHeaderNextStepAction,
       openMemoryShelf,
+      requestCurrentWorkOverview,
+      toggleStructuredCurrentWorkOverview,
+      expandStructuredCurrentWorkOverview,
+      selectSingleChatTool,
+      setAutoRecognition,
     );
+    sizeCurrentWorkPopover();
+    topbarEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
+      button.addEventListener("click", () => requestCurrentWorkOverviewDetail(button));
+    });
+    topbarEl.querySelectorAll<HTMLDetailsElement>(".unified-current-work-requirements[data-current-work-item-id]").forEach(details => {
+      details.addEventListener("toggle", () => {
+        const itemId = details.dataset.currentWorkItemId;
+        if (!itemId) return;
+        if (details.open) currentWorkOverviewExpandedRequirementItemIds.add(itemId);
+        else currentWorkOverviewExpandedRequirementItemIds.delete(itemId);
+      });
+    });
+  }
+
+  function setAutoRecognition(action: "enable" | "revoke"): void {
+    if (!autoRecognition.sessionId || autoRecognition.sessionId !== chat.model.sessionId || autoRecognition.pending || (action === "enable") === autoRecognition.enabled) return;
+    try {
+      const requestId = client.setWorkRecordAutoRecognition(autoRecognition.sessionId, action);
+      autoRecognition = { ...autoRecognition, pending: requestId, action, error: false };
+    } catch { autoRecognition = { ...autoRecognition, error: true }; }
+    refreshTopbar();
   }
 
   const proposalsState: ProposalsState = {
@@ -362,6 +547,9 @@ export function mountUnifiedShell(
   };
 
   let statusText = "连接中…";
+  const projectWorkerProgressStatus = new ProjectWorkerProgressStatus();
+  let projectWorkerProgressTimer: number | null = null;
+  let projectWorkerProgressVisible = false;
   let cancelledStatusTimer: number | null = null;
   let composerWhisperTimer: number | null = null;
   let cancelSafetyTimer: number | null = null;
@@ -397,6 +585,9 @@ export function mountUnifiedShell(
   }
 
   // ---- chat session ----
+  const workCardPresentations = new WorkCardPresentationRegistry("");
+  const workCardResultExcerpts = new WorkCardResultExcerptView();
+  const pendingHistoryCardReads = new Map<string, string>();
   const chat = createChatSession(
     { showProcess: true, confirmInBlocks: true },
     {
@@ -405,7 +596,8 @@ export function mountUnifiedShell(
         renderConfirmGlass();
         syncWorkingVisual();
       },
-      onHistoryLoaded: () => {
+      onHistoryLoaded: (history) => {
+        hydrateHistoryWorkCards(history.blocks);
         renderedPrints = [];
         renderedSegmentPrints = [];
         resetLazyMarkdownObserver();
@@ -414,6 +606,28 @@ export function mountUnifiedShell(
           setStatus("就绪");
         }
         scrollChatToBottom();
+      },
+      onSessionBanner: (sessionId) => {
+        if (autoRecognition.sessionId !== sessionId) autoRecognition = { sessionId, enabled: false, pending: "", action: "", error: false };
+        workCardResultExcerpts.setSession(sessionId);
+        workCardPresentations.setSession(sessionId);
+        pendingHistoryCardReads.clear();
+        currentWorkOverviewRequests.clear();
+        if (currentWorkOverviewRefreshTimer !== null) window.clearTimeout(currentWorkOverviewRefreshTimer);
+        currentWorkOverviewRefreshTimer = null;
+        clearCurrentWorkVisibilityRecheck();
+        currentWorkOverviewRefreshQueued = false;
+        currentWorkOverviewExecutionStates.clear();
+        currentWorkOverviewActiveRequest = null;
+        currentWorkOverviewDetailPagingSupported = true;
+        currentWorkOverviewResult = null;
+        currentWorkOverviewOpen = false;
+        currentWorkOverviewExpandedRequirementItemIds.clear();
+        currentWorkOverviewLoadingMore = false;
+        currentWorkOverviewDetailLoadingCursor = null;
+        currentWorkOverviewUnavailable = Boolean(sessionId);
+        if (sessionId) queryStructuredCurrentWorkOverview(undefined, sessionId);
+        refreshTopbar();
       },
       onTurnStart: (event) => {
         resetProcessJumpCursor();
@@ -524,7 +738,7 @@ export function mountUnifiedShell(
   // ---- DOM layout ----
   root.innerHTML = `
     <div class="unified-shell" data-perspective="project" data-main-focus="chat" data-rail="now">
-      <aside class="unified-sidebar" id="unified-sidebar">
+      <aside class="unified-sidebar" id="unified-sidebar" hidden inert aria-hidden="true">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <nav class="sidebar-icon-bar" id="sidebar-icon-bar" aria-label="主导航">
           <button type="button" class="sidebar-icon-btn is-active" data-panel="now" title="当下"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span class="sidebar-icon-label">当下</span></button>
@@ -603,11 +817,15 @@ export function mountUnifiedShell(
             <div class="unified-switch-mask-card">正在加载项目会话…</div>
           </div>
           <main class="unified-chat" id="unified-chat"></main>
+          <section class="unified-tool-region" id="unified-tool-region" aria-label="工具" hidden>
+            <header class="unified-tool-heading"><span id="unified-tool-title">工具</span><button type="button" class="unified-btn" id="unified-tool-close">关闭</button></header>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
           <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
           <section class="unified-settings hidden" id="unified-settings" aria-labelledby="settings-page-heading" hidden></section>
           <section class="unified-music hidden" id="unified-music" aria-labelledby="music-page-heading" hidden></section>
           <section class="unified-shell-dev hidden" id="unified-shell-dev" aria-labelledby="shell-dev-page-heading" hidden></section>
+          <section id="unified-runtime-tool" class="unified-runtime-tool" hidden></section>
+          </section>
         </div>
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
@@ -643,6 +861,14 @@ export function mountUnifiedShell(
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
   bindImageLightboxClick(chatEl, "img.unified-generated-image");
+  const toolRegion = root.querySelector<HTMLElement>("#unified-tool-region")!;
+  const toolTitle = root.querySelector<HTMLElement>("#unified-tool-title")!;
+  const runtimeTool = root.querySelector<HTMLElement>("#unified-runtime-tool")!;
+  let runtimeToolOpen = false;
+  root.querySelector<HTMLButtonElement>("#unified-tool-close")!.addEventListener("click", () => {
+    if (runtimeToolOpen) { runtimeToolOpen = false; syncMainFocusView(); }
+    else showNowChat();
+  });
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const settingsEl = root.querySelector<HTMLElement>("#unified-settings")!;
@@ -669,6 +895,10 @@ export function mountUnifiedShell(
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
   const emptyFreeChatBtn = root.querySelector<HTMLButtonElement>("#empty-free-chat")!;
   const composerDock = root.querySelector<HTMLElement>("#unified-composer-dock")!;
+  const currentWorkResizeObserver = new ResizeObserver(sizeCurrentWorkPopover);
+  currentWorkResizeObserver.observe(composerDock);
+  currentWorkResizeObserver.observe(topbarEl);
+  window.addEventListener("resize", sizeCurrentWorkPopover, { passive: true });
   const composerMetaEl = root.querySelector<HTMLElement>("#unified-composer-meta")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
@@ -723,6 +953,8 @@ export function mountUnifiedShell(
 
   // project panel elements (only used in project perspective)
   const projectEls = setupProjectPanel(root);
+  const runtimeBadges = root.querySelector<HTMLElement>(".sidebar-runtime-badges")!;
+  runtimeTool.append(runtimeBadges);
   // ---- sidebar: session list (当下), project row, runtime badges ----
   const sidebarSessionListEl = root.querySelector<HTMLElement>("#sidebar-session-list")!;
   const sidebarSessionFiltersEl = root.querySelector<HTMLElement>("#sidebar-session-filters")!;
@@ -1020,12 +1252,50 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     composerMetaEl.hidden = !showMeta;
   }
 
-  function setStatus(text: string): void {
-    statusText = text;
+  function clearProjectWorkerProgressStatus(): void {
+    if (projectWorkerProgressTimer !== null) {
+      window.clearTimeout(projectWorkerProgressTimer);
+      projectWorkerProgressTimer = null;
+    }
+    projectWorkerProgressStatus.clear();
+    if (projectWorkerProgressVisible) {
+      projectWorkerProgressVisible = false;
+      paintStatus(statusText);
+    }
+  }
+
+  function paintStatus(text: string): void {
     statusEl.textContent = text;
     const idle = text === "就绪" && !shellEl.classList.contains("is-working");
     statusEl.classList.toggle("is-idle", idle);
     syncComposerMetaVisibility();
+  }
+
+  function setStatus(text: string): void {
+    clearProjectWorkerProgressStatus();
+    statusText = text;
+    paintStatus(text);
+  }
+
+  function showProjectWorkerProgress(event: ServerEvent): void {
+    const progressText = projectWorkerProgressStatus.accept(event, {
+      sessionId: chat.model.sessionId,
+      runId: chat.model.executionRunId,
+      executionState: chat.model.executionState,
+      turnActive: chat.model.turnActive,
+    });
+    if (!progressText) return;
+    if (projectWorkerProgressTimer !== null) window.clearTimeout(projectWorkerProgressTimer);
+    projectWorkerProgressVisible = true;
+    statusEl.textContent = progressText;
+    statusEl.classList.remove("is-idle");
+    syncComposerMetaVisibility();
+    projectWorkerProgressTimer = window.setTimeout(() => {
+      projectWorkerProgressTimer = null;
+      projectWorkerProgressStatus.clear();
+      projectWorkerProgressVisible = false;
+      paintStatus(statusText);
+    }, PROJECT_WORKER_PROGRESS_TTL_MS);
   }
 
   /** Feed / 小互动：输入框上方短句，不触发聊天区重绘或滚动。 */
@@ -1348,19 +1618,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       onCompanionCare("coffee");
     }
   });
-  document.addEventListener("keydown", (ev) => {
-    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
-    const key = ev.key.toLowerCase();
-    if (key === "k") {
-      ev.preventDefault();
-      if (projectState.railTab !== "now") showNowChat();
-      sidebarSessionSearchEl.focus();
-      sidebarSessionSearchEl.select();
-    } else if (key === "n") {
-      ev.preventDefault();
-      handleSidebarNewSession();
-    }
-  });
+  // Single-chat mode does not expose session creation or session search shortcuts.
 
   function refreshProjectThreads(): void {
     if (!projectState.projectId) return;
@@ -1431,6 +1689,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function clearChatForSwitch(): void {
+    autoRecognition = { sessionId: "", enabled: false, pending: "", action: "", error: false };
     chat.model.blocks = [];
     chat.model.sessionId = "";
     chat.model.turnCounter = 0;
@@ -2098,6 +2357,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function refreshDocsSidebar(): void {
+    if (projectState.mainFocus === "document") {
+      if (projectState.docView === "edit") captureDocDraftFromEditor();
+      renderDocumentPane();
+    }
     renderSidebar();
   }
 
@@ -2106,7 +2369,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectState.renamingDocPath = path;
     projectState.renameDraft = renameDraftForDoc(path);
     refreshDocsSidebar();
-    const input = projectEls.overlayBody.querySelector<HTMLInputElement>("#overlay-doc-rename-input");
+    const scope = projectState.mainFocus === "document" ? documentEl : projectEls.overlayBody;
+    const input = scope.querySelector<HTMLInputElement>("#overlay-doc-rename-input");
     input?.focus();
     input?.select();
   }
@@ -2147,7 +2411,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function confirmDeleteDoc(): void {
     const path = projectState.deleteConfirmPath;
-    if (!path) return;
+    if (!path || pendingDocAction === "delete") return;
     pendingDocAction = "delete";
     try {
       client.deleteDoc(path);
@@ -2173,6 +2437,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function setMainFocus(focus: MainFocus): void {
+    if (focus === "projects") {
+      setStatus("单对话页面不提供项目列表；请在对话中说明需要处理的工作。");
+      return;
+    }
     if (
       projectState.mainFocus === "document" &&
       focus !== "document" &&
@@ -2193,7 +2461,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     syncMainFocusView();
   }
 
+  function selectSingleChatTool(tool: "now" | "docs" | "settings" | "music" | "shell-dev" | "runtime"): void {
+    if (tool === "runtime") {
+      showNowChat();
+      if (projectState.mainFocus !== "chat") return;
+      runtimeToolOpen = true;
+      syncMainFocusView();
+      refreshTerminals();
+      refreshServices();
+      return;
+    }
+    runtimeToolOpen = false;
+    selectRailTab(tool);
+  }
+
   function selectRailTab(tab: RailTab): void {
+    if (tab === "projects") {
+      setStatus("单对话页面不提供项目列表；请在对话中说明需要处理的工作。");
+      return;
+    }
     if (
       projectState.railTab === "docs" &&
       tab !== "docs" &&
@@ -2204,13 +2490,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectState.railTab = tab;
     projectState.overlayPanel = null;
     shellEl.dataset.rail = tab;
-    if (tab !== "projects") {
-      projectState.switchConfirmTarget = null;
-    }
-    if (tab === "projects") {
-      projectState.projectSearchQuery = "";
-      try { client.listProjects(); } catch { /* ignore */ }
-    }
+    projectState.switchConfirmTarget = null;
     if (tab === "docs") {
       openDocumentReader();
       return;
@@ -2228,6 +2508,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     ) {
       return;
     }
+    if (projectState.mainFocus === "document") {
+      projectState.renamingDocPath = "";
+      projectState.renameDraft = "";
+      projectState.deleteConfirmPath = "";
+    }
     projectState.railTab = "now";
     projectState.overlayPanel = null;
     shellEl.dataset.rail = "now";
@@ -2236,15 +2521,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
-    const splitDocs = focus === "document" && projectState.docsChatSplit;
-    const chatFocus = focus === "chat" || splitDocs;
-    shellEl.dataset.mainFocus = splitDocs ? "docs-split" : focus;
-    shellEl.dataset.rail = projectState.railTab || "now";
-    shellEl.classList.toggle("is-docs-split", splitDocs);
-    chatEl.classList.toggle("hidden", !(focus === "chat" || splitDocs));
+    const chatFocus = true;
+    const toolOpen = focus !== "chat" || runtimeToolOpen;
+    toolRegion.hidden = !toolOpen;
+    runtimeTool.hidden = !runtimeToolOpen;
+    toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
+    // Preserve the chat theme and composer while the selected tool is open.
+    shellEl.dataset.mainFocus = "chat";
+    shellEl.dataset.rail = "now";
+    shellEl.classList.remove("is-docs-split");
+    chatEl.classList.remove("hidden");
     documentEl.classList.toggle("hidden", focus !== "document");
     projectsEl.classList.toggle("hidden", focus !== "projects");
-    chatEl.hidden = !(focus === "chat" || splitDocs);
+    chatEl.hidden = false;
     documentEl.hidden = focus !== "document";
     projectsEl.hidden = focus !== "projects";
     settingsEl.hidden = focus !== "settings";
@@ -2253,10 +2542,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     musicEl.classList.toggle("hidden", focus !== "music");
     shellDevEl.hidden = focus !== "shell-dev";
     shellDevEl.classList.toggle("hidden", focus !== "shell-dev");
-    const auxiliaryFocus = focus === "settings" || focus === "music" || focus === "shell-dev";
-    composerDock.hidden = auxiliaryFocus;
-    composer.hidden = auxiliaryFocus;
-    statusEl.hidden = auxiliaryFocus;
+    composerDock.hidden = false;
+    composer.hidden = false;
+    statusEl.hidden = false;
     tokenBar.hidden = !chatFocus;
     syncComposerMetaVisibility();
     if (focus === "document") {
@@ -2300,7 +2588,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const counts = settingsRuntimeCounts();
     // Async sidebar/runtime events must not replace inputs or interrupt a drag.
     if (settingsRenderedSection !== section || settingsRenderedName !== name) {
-      settingsEl.innerHTML = renderSettingsPane({
+      settingsEl.innerHTML = renderSettingsSidebar(section) + renderSettingsPane({
         section, partnerName: name, nicknameDraft: settingsNicknameDraft ?? name,
         avatarSrc: petAvatarSrc("idle", true),
         daysTogether: Math.max(1, Math.ceil((Date.now() - loadCompanionBond().firstMetAt) / 86_400_000)),
@@ -2423,15 +2711,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function currentShellDevViewBounds(): { x: number; y: number; width: number; height: number } | null {
     if (projectState.mainFocus !== "shell-dev") return null;
     const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
-    if (!slot) return null;
-    const rect = slot.getBoundingClientRect();
+    const preview = slot?.closest<HTMLElement>(".dual-lane-preview");
+    if (!slot || !preview) return null;
     const clip = shellDevEl.getBoundingClientRect();
-    const left = Math.max(0, clip.left, rect.left);
-    const top = Math.max(0, clip.top, rect.top);
-    const right = Math.min(window.innerWidth, clip.right, rect.right);
-    const bottom = Math.min(window.innerHeight, clip.bottom, rect.bottom);
-    if (right <= left || bottom <= top) return null;
-    return { x: left, y: top, width: right - left, height: bottom - top };
+    return shellDevPreviewBounds({
+      slot: slot.getBoundingClientRect(),
+      preview: preview.getBoundingClientRect(),
+      viewport: {
+        left: Math.max(0, clip.left),
+        top: Math.max(0, clip.top),
+        right: Math.min(window.innerWidth, clip.right),
+        bottom: Math.min(window.innerHeight, clip.bottom),
+      },
+    });
   }
 
   let currentEvolutionView: EvolutionView = evolutionView(null);
@@ -2624,7 +2916,22 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   async function refreshShellDevSyncHint(): Promise<void> {
-    const status = await window.myAgentDesktop?.getSandboxAdoptStatus?.().catch(() => undefined);
+    const api = window.myAgentDesktop;
+    let legacySessionLanes = false;
+    try {
+      legacySessionLanes = (await api?.getSessionLaneCapabilities?.())?.legacySessionLanes === true;
+    } catch {
+      // Missing, rejected, or throwing capability checks fail closed.
+    }
+    if (!legacySessionLanes) {
+      const hintEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-sync-hint]");
+      if (hintEl) {
+        hintEl.textContent = "";
+        hintEl.classList.add("hidden");
+      }
+      return;
+    }
+    const status = await api?.getSandboxAdoptStatus?.().catch(() => undefined);
     applyShellDevDualLaneStatus(status as Record<string, unknown> | undefined);
   }
 
@@ -2811,12 +3118,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function renderDocumentPane(): void {
     if (!projectState.projectId) {
-      documentEl.innerHTML = renderRailStageEmpty({
-        title: "绑定项目后查看文档",
-        copy: "打开项目后，这里会显示文档阅读区。",
-        action: "open-projects",
-        actionLabel: "打开项目",
-      });
+      documentEl.innerHTML = `<p class="unified-tool-unavailable" role="status">当前对话未绑定项目，文档暂不可用。</p>`;
       return;
     }
     const path = projectState.currentDocPath;
@@ -2831,7 +3133,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       renderedHtml: previewSource ? renderMarkdown(previewSource) : "",
       newDocName: projectState.newDocName,
       newDocFolder: projectState.newDocFolder,
-      includeCatalog: false,
+      includeCatalog: true,
       includeBack: false,
       view: projectState.docView,
       draft: projectState.docEditDraft,
@@ -2844,8 +3146,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       recentlyChanged: projectState.recentlyChangedDocs,
       placeholderCount: projectState.docPlaceholderCount,
       searchQuery: projectState.docSearchQuery,
+      renamingDocPath: projectState.renamingDocPath,
+      renameDraft: projectState.renameDraft,
+      deleteConfirmPath: projectState.deleteConfirmPath,
     });
     documentEl.innerHTML = html;
+    // The tool always shares the stage with chat; do not offer a document-only mode.
+    documentEl.querySelector('[data-action="toggle-docs-chat-split"]')?.remove();
     const reader = documentEl.querySelector(".unified-document-content");
     let resolved = outline;
     if (reader && projectState.docView === "preview") {
@@ -3549,8 +3856,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       chipBuf = [];
     };
     for (const block of blocks) {
-      if (block.kind === "notice") {
-        const path = adoptPathFromNotice(block.text);
+    if (block.kind === "notice") {
+        const path = block.plainText ? null : adoptPathFromNotice(block.text);
         if (path) {
           chipBuf.push(renderAdoptChip(path));
           continue;
@@ -3602,7 +3909,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       replyStreaming: blocks.some((block) => block.kind === "assistant-streaming" && block.text.trim() !== ""),
       hasReply: blocks.some((block) => block.kind === "assistant" && block.text.trim() !== ""),
       toolFailed: Boolean(lastFailedTool(tools)),
-      hasNotice: blocks.some((block) => block.kind === "notice" && !adoptPathFromNotice(block.text)),
+      hasNotice: blocks.some((block) => block.kind === "notice" && (block.plainText || !adoptPathFromNotice(block.text))),
       confirmPending: blocks.some((block) => block.kind === "confirm" && !block.resolved) || chat.model.confirmPending,
     };
   }
@@ -3670,9 +3977,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (!isRecentTurnBlock(block.turnIndex)) cls += " unified-turn-dim";
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
       }
+      const persistenceLabel = block.persistence?.state === "pending"
+        ? "待确认"
+        : block.persistence?.state === "saved"
+          ? "已保存"
+          : block.persistence?.state === "unknown"
+            ? "结果未知，请核对历史"
+            : "";
+      const persistenceHtml = persistenceLabel
+        ? ` <small class="unified-message-persistence" role="status">· ${persistenceLabel}</small>`
+        : "";
       return `<article class="${cls}" data-turn-index="${block.turnIndex}">
         <div class="unified-turn-label">你</div>
-        <div class="unified-turn-body">${formatUserMessageHtml(block.text)}</div>
+        <div class="unified-turn-body">${formatUserMessageHtml(block.text)}${persistenceHtml}</div>
       </article>`;
     }
     if (block.kind === "review-subagent") {
@@ -3712,8 +4029,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         <figcaption class="unified-generated-image-caption text-muted">${escapeHtml(fileName)}</figcaption>
       </figure>`;
     }
+    if (block.kind === "work-card-reference") {
+      const entry = workCardPresentations.get(block.presentationId)
+        ?? workCardPresentations.reference({ presentationId: block.presentationId, cardId: block.cardId, text: block.text });
+      return entry ? renderWorkCardEntry(entry) : `<section class="work-card-unavailable">历史工作卡片引用无效，未读取其他卡片。</section>`;
+    }
     if (block.kind === "notice") {
-      const adoptPath = adoptPathFromNotice(block.text);
+      const adoptPath = block.plainText ? null : adoptPathFromNotice(block.text);
       if (adoptPath) {
         return `<div class="unified-file-chips">${renderAdoptChip(adoptPath)}</div>`;
       }
@@ -3765,24 +4087,33 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         </div>`;
     }
     if (block.kind === "confirm") {
-      if (perspective === "night") return ""; // shown in overlay
+      if (perspective === "night" && block.confirmKind !== "work_record_post_turn" && block.confirmKind !== "project_worker_requirement_verification") return ""; // ordinary confirms use the overlay
+      const inlineScopedConfirm = block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification";
+      const confirmRequestId = inlineScopedConfirm ? escapeHtml(block.requestId) : block.requestId;
       const disabled = block.resolved ? "disabled" : "";
+      const excerptInvalid = block.confirmSubtype === "work_record_reply_excerpt" && parseWorkRecordReplyExcerpt(block.preview, block.sessionId || "") === null;
+      const candidateInvalid = block.confirmSubtype === "work_record_auto_candidate" && !parseWorkRecordAutoCandidate(block.workRecordCandidate, block.sessionId || "");
+      const verificationInvalid = block.confirmSubtype === "project_worker_requirement_verification" && (!parseProjectWorkerVerification(block.projectWorkerVerification, block.sessionId || "") || !block.preview.trim());
+      const approvalDisabled = block.resolved || excerptInvalid || candidateInvalid || verificationInvalid || isWorkCardRecallPreview(block.preview) ? "disabled" : "";
       const inProgress = isConfirmInProgressLabel(block.resolved);
       const isTerminal = Boolean(block.resolved) && !inProgress;
+      if (isTerminal && block.confirmKind === "project_worker_requirement_verification") {
+        return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
+      }
       // Pending + in-flight confirms: tool row in 过程 is the live source of truth (UX-030).
       if (isTerminal || inProgress) return "";
       const actions = `
-          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>允许此次</button>
-          <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
+          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${confirmRequestId}" ${approvalDisabled}>允许此次</button>
+          <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${confirmRequestId}" ${disabled}>拒绝</button>
           ${
             block.allowApproveAll
-              ? `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="a" data-id="${block.requestId}" ${disabled}>本会话均允许</button>`
+              ? `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="a" data-id="${confirmRequestId}" ${approvalDisabled}>本会话均允许</button>`
               : ""
           }`;
       if (block.resolved) {
         return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
       }
-      return renderConfirmCardHtml(block.preview, actions);
+      return renderConfirmCardHtml(block.preview, actions, block.confirmSubtype ? { confirmSubtype: block.confirmSubtype, sessionId: block.sessionId, workRecordCandidate: block.workRecordCandidate, projectWorkerVerification: block.projectWorkerVerification } : undefined);
     }
     return "";
   }
@@ -3832,6 +4163,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         return `A${block.turnIndex}:${block.text.length}`;
       case "assistant-streaming":
         return `AS${block.turnIndex}:${block.turnKey}:${block.text.length}`;
+      case "work-card-reference": {
+        const entry = workCardPresentations.get(block.presentationId);
+        return `WC:${block.presentationId}:${entry?.status ?? "missing"}:${entry?.cardId ?? block.cardId}`;
+      }
       case "notice":
         return `N:${block.text.length}`;
       case "generated-image":
@@ -4408,15 +4743,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
     confirmGlass.classList.remove("hidden");
     const disabled = confirm.resolved ? "disabled" : "";
+    const recall = isWorkCardRecallPreview(confirm.preview);
+    const approvalDisabled = confirm.resolved || recall ? "disabled" : "";
     const resolved = confirm.resolved
       ? `<div class="unified-confirm-resolved">${escapeHtml(confirm.resolved)}</div>`
       : `
         <div class="unified-confirm-glass-actions">
-          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${confirm.requestId}" ${disabled}>同意</button>
+          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${confirm.requestId}" ${approvalDisabled}>同意</button>
           <button type="button" class="unified-btn unified-btn-danger" data-confirm="n" data-id="${confirm.requestId}" ${disabled}>拒绝</button>
           ${
             confirm.allowApproveAll
-              ? `<button type="button" class="unified-btn" data-confirm="a" data-id="${confirm.requestId}" ${disabled}>本会话均允许</button>`
+              ? `<button type="button" class="unified-btn" data-confirm="a" data-id="${confirm.requestId}" ${approvalDisabled}>本会话均允许</button>`
               : ""
           }
         </div>`;
@@ -4426,12 +4763,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       ? `<p class="unified-confirm-reason">${escapeHtml(view.reason)}</p>`
       : "";
     confirmGlass.innerHTML = `
-      <div class="unified-confirm-glass-card ${confirm.resolved ? "resolved" : ""}">
+      <div class="unified-confirm-glass-card ${confirm.resolved ? "resolved" : ""} ${recall ? "is-work-card-recall" : ""}" ${recall ? "data-work-card-recall" : ""}>
         <div class="unified-confirm-kicker">需要确认</div>
         <div class="unified-confirm-glass-title">${escapeHtml(view.headline)}</div>
         ${reasonBlock}
         ${view.compact
-          ? `<details class="unified-confirm-details"><summary class="unified-confirm-details-toggle">查看详情</summary><pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre></details>`
+          ? `<details class="unified-confirm-details"><summary class="unified-confirm-details-toggle">查看详情</summary>${recall ? `<div class="unified-recall-scroll">${renderWorkCardRecallReadable(confirm.preview)}<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre></div>` : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}</details>`
           : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}
         ${resolved}
       </div>
@@ -4530,8 +4867,69 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     submitConfirmById(requestId, key as "y" | "n" | "a");
   });
 
+  // Keep the gate attached to the currently rendered card, not merely its request ID.
+  function recallDetailsOpen(id: string): boolean {
+    const inlinePostTurn = chat.model.blocks.some((block) =>
+      block.kind === "confirm" && block.requestId === id && (block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification"));
+    const container = perspective === "night" && !inlinePostTurn ? confirmGlass : chatEl;
+    for (const card of container.querySelectorAll<HTMLElement>("[data-work-card-recall]")) {
+      const button = Array.from(card.querySelectorAll<HTMLButtonElement>("[data-confirm][data-id]"))
+        .find(candidate => candidate.dataset.id === id);
+      if (button) return card.querySelector<HTMLDetailsElement>("details.unified-confirm-details")?.open === true;
+    }
+    return false;
+  }
+
+  // Native toggle does not bubble; capture it for both existing confirmation surfaces.
+  for (const container of [chatEl, confirmGlass]) {
+    container.addEventListener("toggle", (event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement)) return;
+      const card = details.closest<HTMLElement>("[data-work-card-recall]");
+      if (!card) return;
+      if (details.classList.contains("unified-recall-batch")) {
+        if (!details.open || details.dataset.loaded === "true") return;
+        const id = card.querySelector<HTMLButtonElement>("[data-confirm][data-id]")?.dataset.id;
+        const overlay = chat.model.confirmOverlay;
+        const block = chat.model.blocks.find(b => b.kind === "confirm" && b.requestId === id && !b.resolved);
+        const preview = overlay && overlay.requestId === id && !overlay.resolved ? overlay.preview : block?.kind === "confirm" ? block.preview : "";
+        const index = Number(details.dataset.recallBatch);
+        const target = details.querySelector<HTMLElement>(".unified-recall-batch-content");
+        if (!target) return;
+        const html = renderWorkCardRecallBatch(preview, index);
+        if (html) { target.innerHTML = html; details.dataset.loaded = "true"; }
+        return;
+      }
+      if (!details.classList.contains("unified-confirm-details")) return;
+      for (const button of card.querySelectorAll<HTMLButtonElement>('[data-confirm="y"], [data-confirm="a"]')) {
+        button.disabled = !details.open;
+      }
+    }, true);
+  }
+
   // ---- confirm submission helper (shared between click and keyboard) ----
   function submitConfirmById(id: string, choice: "y" | "n" | "a"): void {
+    const overlay = chat.model.confirmOverlay;
+    const block = chat.model.blocks.find(b => b.kind === "confirm" && b.requestId === id && !b.resolved);
+    const preview = overlay && overlay.requestId === id && !overlay.resolved ? overlay.preview : block?.kind === "confirm" ? block.preview : "";
+    if (choice !== "n" && block?.kind === "confirm" && block.confirmSubtype === "work_record_reply_excerpt"
+        && parseWorkRecordReplyExcerpt(block.preview, block.sessionId || "") === null) {
+      setStatus("摘录或会话绑定无法核对，请拒绝该确认");
+      return;
+    }
+    if (choice !== "n" && block?.kind === "confirm" && block.confirmSubtype === "project_worker_requirement_verification"
+        && !parseProjectWorkerVerification(block.projectWorkerVerification, block.sessionId || "")) {
+      setStatus("项目验收字段或会话绑定无法核对，请拒绝该确认");
+      return;
+    }    if (choice !== "n" && block?.kind === "confirm" && block.confirmSubtype === "work_record_auto_candidate"
+        && !parseWorkRecordAutoCandidate(block.workRecordCandidate, block.sessionId || "")) {
+      setStatus("候选或会话绑定无法核对，请拒绝该确认");
+      return;
+    }
+    if (!isConfirmChoiceAllowed(preview, choice, recallDetailsOpen(id))) {
+      setStatus("请先展开完整原始预览，再决定是否允许");
+      return;
+    }
     if (!chat.submitConfirm(id, choice)) {
       setStatus("请点最新一张工具确认卡");
       return;
@@ -4986,11 +5384,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (moreBtn) {
       ev.preventDefault();
       ev.stopPropagation();
-      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".overlay-doc-item")?.dataset.docPath;
+      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".doc-catalog-item")?.dataset.docPath;
       if (path) {
         const rect = moreBtn.getBoundingClientRect();
         showDocCatalogMenu(path, rect.left, rect.bottom + 4);
       }
+      return;
+    }
+    if (target.closest("#overlay-doc-rename-input")) return;
+    if (target.closest("[data-action=\'doc-delete-confirm\']")) { confirmDeleteDoc(); return; }
+    if (target.closest("[data-action=\'doc-delete-cancel\']")) {
+      projectState.deleteConfirmPath = "";
+      refreshDocsSidebar();
       return;
     }
     const docBtn = target.closest<HTMLElement>(".overlay-doc-item, .doc-catalog-item");
@@ -5162,6 +5567,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   documentEl.addEventListener("input", (ev) => {
+    if ((ev.target as HTMLElement).closest("#overlay-doc-rename-input")) { handleRailListInput(ev); return; }
     const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
     if (editor) {
       projectState.docEditDraft = editor.value;
@@ -5187,12 +5593,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>(".doc-catalog-search");
     if (searchInput) {
       projectState.docSearchQuery = searchInput.value;
-      // debounce-ish: re-render sidebar catalog only
-      renderSidebar();
+      const cursor = searchInput.selectionStart;
+      renderDocumentPane();
+      const replacement = documentEl.querySelector<HTMLInputElement>(".doc-catalog-search");
+      replacement?.focus();
+      if (cursor !== null) replacement?.setSelectionRange(cursor, cursor);
     }
   });
 
   documentEl.addEventListener("keydown", (ev) => {
+    if ((ev.target as HTMLElement).closest("#overlay-doc-rename-input") || ev.key === "F2") {
+      handleRailListKeydown(ev);
+      return;
+    }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       if (projectState.docView === "edit" && projectState.mainFocus === "document") {
         ev.preventDefault();
@@ -5274,6 +5687,20 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     renderSidebar();
   }
 
+  documentEl.addEventListener("contextmenu", (ev) => {
+    const row = (ev.target as HTMLElement).closest<HTMLElement>(".doc-catalog-item");
+    if (!row?.dataset.docPath || row.classList.contains("is-renaming")) return;
+    ev.preventDefault();
+    showDocCatalogMenu(row.dataset.docPath, ev.clientX, ev.clientY);
+  });
+  documentEl.addEventListener("focusout", (ev) => {
+    const input = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (!input) return;
+    const path = projectState.renamingDocPath;
+    window.setTimeout(() => {
+      if (input.isConnected && path && projectState.renamingDocPath === path && document.activeElement !== input) commitRenameDoc();
+    }, 0);
+  });
   projectEls.overlayBody.addEventListener("input", handleRailListInput);
   projectEls.taskFlow.addEventListener("input", handleRailListInput);
   projectEls.overlayBody.addEventListener("keydown", handleRailListKeydown);
@@ -5343,9 +5770,99 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   projectEls.switchConfirmBtn.addEventListener("click", () => projectCallbacks.onProjectSwitchConfirm());
   projectEls.switchCancelBtn.addEventListener("click", () => projectCallbacks.onProjectSwitchCancel());
 
+  bindWorkCardResultViewEvents(chatEl, {
+    currentSessionId: () => chat.model.sessionId,
+    getEntry: (presentationId) => workCardPresentations.get(presentationId),
+    send: (request) => {
+      request.request_id = crypto.randomUUID();
+      client.acknowledgeWorkCardResultView({
+        sessionId: request.session_id, presentationId: request.presentation_id,
+        cardId: request.card_id, resultId: request.result_id, requirementId: request.requirement_id,
+        requestId: request.request_id,
+      });
+    },
+    onExpanded: (detail, entry, request) => workCardResultExcerpts.opened(detail, entry, request),
+    onClosed: (detail) => {
+      for (const requestId of workCardResultExcerpts.closed(detail)) client.cancelWorkCardResultView(requestId);
+    },
+    onError: (error) => setStatus(`结果查看确认未发送：${error instanceof Error ? error.message : String(error)}`),
+  });
+
+  bindWorkCardSnapshotViewEvents(chatEl, {
+    currentSessionId: () => chat.model.sessionId,
+    getEntry: (presentationId) => workCardPresentations.get(presentationId),
+    send: (request) => client.acknowledgeWorkCardSnapshotView({sessionId: request.session_id, presentationId: request.presentation_id, cardId: request.card_id}),
+    onError: () => setStatus("快照查看确认未发送；请重新展开详情重试。"),
+  });
+
+  function hydrateHistoryWorkCards(blocks: ChatBlock[]): void {
+    const sessionId = chat.model.sessionId;
+    workCardResultExcerpts.setSession(sessionId);
+    workCardPresentations.setSession(sessionId);
+    const cardIds = new Set<string>();
+    for (const block of blocks) {
+      if (block.kind !== "work-card-reference") continue;
+      const entry = workCardPresentations.reference({ presentationId: block.presentationId, cardId: block.cardId, text: block.text });
+      if (entry?.origin === "history" && entry.status === "loading") cardIds.add(entry.cardId);
+    }
+    for (const cardId of cardIds) {
+      if (pendingHistoryCardReads.has(cardId)) continue;
+      const outcome = requestHistoryCardRead({
+        cardId,
+        sessionId,
+        currentSessionId: chat.model.sessionId,
+        pendingReads: pendingHistoryCardReads,
+        registry: workCardPresentations,
+        request: (requestedCardId) => client.getWorkCard(requestedCardId),
+      });
+      if (outcome === "failed") renderChat();
+    }
+  }
+
+  function settleHistoryCardReads(cardId: string, sessionId: string, card: Record<string, any> | null): void {
+    if (sessionId !== chat.model.sessionId || pendingHistoryCardReads.get(cardId) !== sessionId) return;
+    pendingHistoryCardReads.delete(cardId);
+    for (const entry of workCardPresentations.values()) {
+      if (entry.origin === "history" && entry.cardId === cardId && entry.status === "loading") {
+        workCardPresentations.resolve(entry.presentationId, sessionId, card);
+      }
+    }
+    renderChat();
+  }
+
+  function failHistoryCardReads(cardId: string, sessionId: string, message: string): void {
+    if (!failPendingHistoryCardRead({
+      cardId, sessionId, currentSessionId: chat.model.sessionId,
+      pendingReads: pendingHistoryCardReads, registry: workCardPresentations, message,
+    })) return;
+    renderChat();
+  }
   // ---- server events ----
   const off = client.onEvent((event: ServerEvent) => {
     switch (event.type) {
+      case "client.connection.closed":
+        chat.handleEvent(event);
+        autoRecognition = { sessionId: "", enabled: false, pending: "", action: "", error: false };
+        refreshTopbar();
+        break;
+      case "user.message.persisted":
+        chat.handleEvent(event);
+        break;
+      case "work-record.auto-recognition.done":
+        if (event.session_id !== autoRecognition.sessionId || event.session_id !== chat.model.sessionId || !autoRecognition.pending
+          || event.request_id !== autoRecognition.pending || event.action !== autoRecognition.action) break;
+        autoRecognition = { ...autoRecognition, enabled: event.enabled, pending: "", action: "", error: event.status !== "ok" };
+        refreshTopbar();
+        break;
+      case "work-record.post-turn.result":
+        if (event.session_id !== chat.model.sessionId) break;
+        if (!chat.handleEvent(event)) break;
+        // The ordinary turn-end refresh can finish before the asynchronous
+        // post-turn store commit. Refresh again only after a confirmed write.
+        if (event.outcome === "recorded" || event.outcome === "already_recorded") {
+          scheduleCurrentWorkOverviewRefresh();
+        }
+        break;
       case "session.banner":
         if (!shouldApplyProjectEvent(projectState, event.project_id)) break;
         // Session list in 当下 follows every new/opened session (debounced via threads timer).
@@ -5541,6 +6058,154 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           refreshProjectThreads();
         }
         break;
+
+      case "work-records.overview.result": {
+        if (event.session_id !== chat.model.sessionId) break;
+        const request = currentWorkOverviewRequests.get(event.request_id);
+        currentWorkOverviewRequests.delete(event.request_id);
+        if (!request || request.sessionId !== event.session_id || currentWorkOverviewActiveRequest !== event.request_id) break;
+        if (shouldFallbackOverviewDetailPaging(request.detailPaging, event.state, event.reason)) {
+          currentWorkOverviewDetailPagingSupported = false;
+          currentWorkOverviewLoadingMore = false;
+          currentWorkOverviewDetailLoadingCursor = null;
+          queryStructuredCurrentWorkOverview(undefined, event.session_id);
+          break;
+        }
+        if (request.detail) {
+          currentWorkOverviewDetailLoadingCursor = null;
+          const current = currentWorkOverviewResult;
+          const detailPage = event.detail_page;
+          const detailTargetMatches = !!detailPage && detailPage.kind === request.detail.kind
+            && detailPage.group_kind === request.detail.groupKind && detailPage.group_id === request.detail.groupId
+            && detailPage.item_id === (request.detail.itemId ?? null);
+          if (shouldRestartOverviewAfterExpiredCursor(event.state, request.cursor)
+            || event.state === "error"
+            || (current !== null && event.snapshot_id !== current.snapshot_id)) {
+            currentWorkOverviewUnavailable = true;
+            refreshTopbar();
+            queryStructuredCurrentWorkOverview(undefined, event.session_id);
+            break;
+          }
+          const merged = current && detailTargetMatches ? mergeCurrentWorkOverviewDetailPage(current, event) : null;
+          if (!merged) {
+            setStatus("当前工作详情页无法与本次概况安全合并；正在重新查询完整概况。");
+            currentWorkOverviewUnavailable = true;
+            refreshTopbar();
+            queryStructuredCurrentWorkOverview(undefined, event.session_id);
+            break;
+          }
+          currentWorkOverviewResult = merged;
+          currentWorkOverviewUnavailable = false;
+          refreshTopbar();
+          flushQueuedCurrentWorkOverviewRefresh();
+          break;
+        }
+        if (shouldRestartOverviewAfterExpiredCursor(event.state, request.cursor)) {
+          currentWorkOverviewLoadingMore = false;
+          currentWorkOverviewResult = event;
+          refreshTopbar();
+          queryStructuredCurrentWorkOverview(undefined, event.session_id);
+          break;
+        }
+        if (request.cursor && currentWorkOverviewResult
+          && event.snapshot_id !== currentWorkOverviewResult.snapshot_id) {
+          currentWorkOverviewLoadingMore = false;
+          currentWorkOverviewResult = { ...event, state: "expired", groups: [], unread_status: "unknown", unread_important_results: [] };
+          refreshTopbar();
+          queryStructuredCurrentWorkOverview(undefined, event.session_id);
+          break;
+        }
+        if (request.cursor && currentWorkOverviewResult && event.state === "visible") {
+          const appended = appendCurrentWorkOverviewPage(currentWorkOverviewResult, event);
+          if (!appended) {
+            currentWorkOverviewLoadingMore = false;
+            queryStructuredCurrentWorkOverview(undefined, event.session_id);
+            break;
+          }
+          currentWorkOverviewResult = appended;
+        } else {
+          currentWorkOverviewResult = { ...event, groups: event.groups.filter(group => group.visibility === "visible") };
+        }
+        currentWorkOverviewLoadingMore = false;
+        currentWorkOverviewUnavailable = false;
+        if (event.state === "no_records" || event.state === "collapsed" || (event.state === "visible" && event.visibility_counts.visible_groups === 0)) clearCurrentWorkVisibilityRecheck();
+        else scheduleCurrentWorkVisibilityRecheck(currentWorkOverviewResult, event.session_id);
+        if (!buildCurrentWorkOverviewPanel(currentWorkOverviewResult, { open: currentWorkOverviewOpen }).visible) currentWorkOverviewOpen = false;
+        refreshTopbar();
+        flushQueuedCurrentWorkOverviewRefresh();
+        break;
+      }
+      case "work-card.present": {
+        if (event.session_id !== chat.model.sessionId) break;
+        const received = receiveWorkCardPresentation({
+          registry: workCardPresentations,
+          event,
+          mergeReference: (entry) => {
+            const prior = chat.model.blocks.find((block): block is Extract<ChatBlock, { kind: "work-card-reference" }> => block.kind === "work-card-reference" && block.presentationId === entry.presentationId);
+            if (prior && prior.cardId !== entry.cardId) throw new Error("work-card presentation identity conflicts with chat history");
+            if (!prior) chat.model.blocks.push({ kind: "work-card-reference", presentationId: entry.presentationId, cardId: entry.cardId, text: "" });
+          },
+          sendReceived: (identity) => client.acknowledgeWorkCardReceived(identity),
+        });
+        if (received.receiptAttempt === "not_eligible") break;
+        if (received.receiptAttempt === "failed") setStatus("卡片接收回执发送失败；未确认接收，等待后续重放重试。");
+        renderChat();
+        scheduleCurrentWorkOverviewRefresh();
+        break;
+      }
+      case "work-card.receipt.backlog": {
+        if (event.session_id !== chat.model.sessionId) break;
+        const backlog = [
+          event.pending_count ? `待确认 ${event.pending_count}` : "",
+          event.deferred_count ? `已延后 ${event.deferred_count}` : "",
+          event.legacy_untracked_count ? `旧记录 ${event.legacy_untracked_count} 无接收追踪` : "",
+        ].filter(Boolean).join("，");
+        const replay = event.retry_batch_size
+          ? `本连接重放 ${event.retry_batch_size}/${event.batch_limit}`
+          : "本连接暂无可重放项";
+        setStatus(`工作卡回执积压：${backlog}；${replay}。不会自动请求下一批。`);
+        break;
+      }
+      case "work-card.received.done": {
+        if (event.session_id !== chat.model.sessionId) break;
+        if (event.status === "received" || event.status === "already_received") {
+          // Clear only an obsolete receipt warning; successful receipts stay otherwise silent.
+          if (statusText.startsWith("卡片接收回执发送失败") || statusText.startsWith("服务端未确认客户端接收：")) setStatus("就绪");
+        } else {
+          setStatus(`服务端未确认客户端接收：${event.message}`);
+        }
+        break;
+      }
+      case "work-card.snapshot.view.timeout":
+        if (event.session_id === chat.model.sessionId) setStatus("快照查看确认超时，未确认记录；可关闭后重新展开详情重试。");
+        break;
+      case "work-card.snapshot.view.done":
+        if (event.session_id !== chat.model.sessionId) break;
+        setStatus(event.status === "acknowledged" || event.status === "already_acknowledged"
+          ? "已记录快照详情查看；不代表结果已验证。"
+          : `快照查看未确认：${event.message}`);
+        if (event.status === "acknowledged" || event.status === "already_acknowledged") scheduleCurrentWorkOverviewRefresh();
+        break;
+      case "work-card.result.view.done":
+        if (event.session_id !== chat.model.sessionId) break;
+        workCardResultExcerpts.accept(event, chat.model.sessionId, workCardPresentations.get(event.presentation_id));
+        setStatus(event.status === "acknowledged" || event.status === "already_acknowledged"
+          ? "已记录该结果详情已展开；不代表认可或验收。"
+          : `结果查看未确认：${event.message}`);
+        if (event.status === "acknowledged" || event.status === "already_acknowledged") {
+          scheduleCurrentWorkVisibilityRecheck(currentWorkOverviewResult, event.session_id, true, true);
+          scheduleCurrentWorkOverviewRefresh();
+        }
+        break;
+
+      case "work-card.get.done": {
+        const capturedSession = "card_id" in event && event.card_id ? pendingHistoryCardReads.get(event.card_id) : undefined;
+        if (!capturedSession || !("card_id" in event) || !event.card_id) break;
+        if (event.status === "found") settleHistoryCardReads(event.card_id, capturedSession, event.card);
+        else if (event.status === "not_found") settleHistoryCardReads(event.card_id, capturedSession, null);
+        else failHistoryCardReads(event.card_id, capturedSession, event.message);
+        break;
+      }
 
       case "session.history":
         if (
@@ -5891,6 +6556,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
             renderDocumentPane();
           }
         }
+        if (projectState.mainFocus === "document" && projectState.currentDocPath !== event.path) renderDocumentPane();
         setStatus(`已重命名为 ${event.name}`);
         break;
 
@@ -5904,6 +6570,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           }
         }
         setStatus("文档已移入回收站");
+        if (projectState.mainFocus === "document") renderDocumentPane();
         renderSidebar();
         break;
 
@@ -5929,8 +6596,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         setStatus(event.reason);
         break;
 
+      case "activity.update":
+        if (!chat.handleEvent(event)) break;
+        showProjectWorkerProgress(event);
+        break;
+
       case "execution.state":
         if (!chat.handleEvent(event)) break;
+        if (event.state !== "running") clearProjectWorkerProgressStatus();
+        if (event.run_id) {
+          const previousOverviewState = currentWorkOverviewExecutionStates.get(event.run_id);
+          currentWorkOverviewExecutionStates.set(event.run_id, event.state);
+          if (shouldRefreshOverviewForExecutionState(previousOverviewState, event.state)) scheduleCurrentWorkOverviewRefresh();
+          if (currentWorkOverviewExecutionStates.size > 100) {
+            const oldestRunId = currentWorkOverviewExecutionStates.keys().next().value;
+            if (oldestRunId) currentWorkOverviewExecutionStates.delete(oldestRunId);
+          }
+        }
         if ((event.state === "queued" || event.state === "running") && event.run_id) {
           if (projectState.turnEvidenceRunId !== event.run_id) {
             projectState.turnEvidence = [];
@@ -6037,6 +6719,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "turn.end":
         if (!chat.handleEvent(event)) break;
+        clearProjectWorkerProgressStatus();
+        scheduleCurrentWorkOverviewRefresh();
         projectState.lastTurnFinishReason = event.finish_reason || "";
         setTurnEndStatus(event.finish_reason);
         syncWorkingVisual();
@@ -6155,6 +6839,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   return () => {
     destroyed = true;
     disposeComposerLive2D?.();
+    clearProjectWorkerProgressStatus();
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
     clearCancelSafety();
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
@@ -6168,6 +6853,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     focusObserver?.disconnect();
     unbindChatFontControl();
     settingsThemeObserver.disconnect();
+    currentWorkResizeObserver.disconnect();
+    window.removeEventListener("resize", sizeCurrentWorkPopover);
     musicViewResizeObserver.disconnect();
     shellDevViewResizeObserver.disconnect();
     window.removeEventListener("resize", syncMusicViewBounds);
@@ -6185,3 +6872,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     root.innerHTML = "";
   };
 }
+
+
+
+
+
+
+
+
+
+
+
+

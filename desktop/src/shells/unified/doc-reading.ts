@@ -418,6 +418,9 @@ export function renderDocumentReaderHtml(args: {
   placeholderCount?: number;
   searchQuery?: string;
   newDocFolder?: string;
+  renamingDocPath?: string;
+  renameDraft?: string;
+  deleteConfirmPath?: string;
 }): { html: string; outline: DocOutlineItem[] } {
   const view = args.view || "preview";
   const outlineSource = view === "edit" ? (args.draft ?? args.currentContent) : args.currentContent;
@@ -508,6 +511,9 @@ export function renderDocumentReaderHtml(args: {
       currentContent: args.currentContent,
       inputId: "doc-reader-new-input",
       createAction: "create-doc",
+      renamingDocPath: args.renamingDocPath,
+      renameDraft: args.renameDraft,
+      deleteConfirmPath: args.deleteConfirmPath,
       searchQuery: args.searchQuery,
       recentlyChanged: args.recentlyChanged,
       placeholderCount: args.placeholderCount,

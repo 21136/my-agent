@@ -219,7 +219,7 @@ def _builtin_models() -> list[ModelEntry]:
     ox567_pro_model = (
         os.environ.get("OX567_MODEL_PRO")
         or os.environ.get("OX567_MODEL")
-        or "gpt-6-sol"
+        or "gpt-6.1-terra"
     ).strip()
     ox567_flash_model = os.environ.get("OX567_MODEL_FLASH", "gpt-6-luna").strip()
     tokeness_base = os.environ.get("TOKENESS_BASE_URL", TOKENESS_DEFAULT_BASE_URL).rstrip("/")
@@ -277,7 +277,7 @@ def _builtin_models() -> list[ModelEntry]:
         ),
         ModelEntry(
             id="0x567-pro",
-            name="0x567 GPT-6 Sol (1M)",
+            name="0x567 GPT-6.1 Terra (1M)",
             vendor="0x567",
             base_url=ox567_base,
             provider_model=ox567_pro_model,

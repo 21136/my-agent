@@ -52,15 +52,10 @@ export function wireComposerAttachments(options: {
       onStatus?.("请先选择或新建项目");
       return;
     }
-    input.value = "";
-    input.style.height = "";
-    beforeSend?.();
-    chat.pushUserMessage(
-      attachmentIds.length ? composeDisplayMessage(text, attachments) : text,
-    );
-    fileDrop.clearAttachments();
+    let dispatch: { requestId: string; sessionId: string | null };
     try {
-      client.sendMessage(
+      beforeSend?.();
+      dispatch = client.sendMessage(
         text,
         attachmentIds.length ? attachmentIds : undefined,
         messageOpts?.(),
@@ -68,7 +63,22 @@ export function wireComposerAttachments(options: {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       onStatus?.(`发送失败：${message}`);
+      syncSendEnabled();
+      return;
     }
+
+    input.value = "";
+    input.style.height = "";
+    fileDrop.clearAttachments();
+    chat.pushUserMessage(
+      attachmentIds.length ? composeDisplayMessage(text, attachments) : text,
+      {
+        requestId: dispatch.requestId,
+        sessionId: dispatch.sessionId,
+        receiptEligible: true,
+        hasAttachments: attachmentIds.length > 0,
+      },
+    );
     syncSendEnabled();
   }
 

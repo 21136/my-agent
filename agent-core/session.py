@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import contextlib
 import os
+import re
 import secrets
+import stat
 import sys
+import threading
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -18,7 +23,7 @@ _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from llm_client import resolve_session_model
+from llm_client import HOST_INTERNAL_METADATA_KEY, resolve_session_model
 from paths import AgentPaths
 
 SESSIONS_DIRNAME = "sessions"
@@ -26,6 +31,8 @@ GOAL_FILENAME = "goal.md"
 GOAL_PROMPT = "这次主要做什么？"
 META_FILENAME = "meta.json"
 MESSAGES_FILENAME = "messages.jsonl"
+# HOST_INTERNAL_METADATA_KEY is reserved, not authority: future writers must
+# authenticate provenance and reject client injection before acting on its data.
 DIGEST_FILENAME = "digest.md"
 TOOL_OUTPUTS_DIRNAME = "tool_outputs"
 STATE_FILENAME = "state.json"
@@ -410,6 +417,13 @@ class Session:
     # UI-5972: desktop switch may defer full messages.jsonl load until first turn.
     messages_total_count: int | None = field(default=None, compare=False, repr=False)
     _messages_fully_loaded: bool = field(default=True, compare=False, repr=False)
+    _messages_disk_version: str | None = field(default=None, compare=False, repr=False)
+    _messages_version_initialized: bool = field(default=False, compare=False, repr=False)
+    _messages_unpersisted: bool = field(default=False, compare=False, repr=False)
+    _messages_corrupt: bool = field(default=False, compare=False, repr=False)
+    # Serialize same-object disk/message-list updates; the OS lock alone cannot
+    # protect the gap between a completed append and its in-memory list update.
+    _messages_instance_lock: Any = field(default_factory=threading.RLock, compare=False, repr=False)
 
     @property
     def goal_path(self) -> Path:
@@ -479,28 +493,107 @@ class Session:
         self.meta.turn_mode = normalize_turn_mode(mode)
 
     def append_message(self, message: dict[str, Any], *, persist: bool = True) -> None:
-        self.ensure_messages_loaded()
-        self.messages.append(message)
-        if persist:
+        with self._messages_instance_lock:
+            self.ensure_messages_loaded()
+            if not persist:
+                self.messages.append(message)
+                self._messages_unpersisted = True
+                return
             self._append_message_line(message)
+            self.messages.append(message)
+
+    def append_message_durable(self, message: dict[str, Any]) -> None:
+        """Append and fsync one message before a request journal is settled."""
+        with self._messages_instance_lock:
+            self.ensure_messages_loaded()
+            self._append_message_line(message, durable=True)
+            self.messages.append(message)
+
+    def append_sent_work_card_reference(self, presentation_id: str, card_id: str, *, run_id: str | None = None) -> tuple[int, bool]:
+        """Queue a host-authored card reference, not proof of delivery or viewing.
+
+        Trusted host only: before calling, verify the card in this exact Session's
+        ledger. Ledger, history and WS enqueue are not atomic; after uncertainty,
+        retry this same presentation_id/card_id/run_id, never regenerate identity.
+        Returns (zero-based JSONL record index, created); conflicts and stale/corrupt
+        data fail closed.
+        """
+        with self._messages_instance_lock:
+            if (not _valid_work_card_ref_ids(presentation_id, card_id)
+                    or (run_id is not None and not _valid_run_identity(run_id))):
+                raise SessionError("invalid work-card presentation identity")
+            self.ensure_messages_loaded()
+            with _session_messages_lock(self.session_dir):
+                self._initialize_messages_version_locked()
+                if self._messages_corrupt or self._messages_unpersisted or _messages_unusable_for_ref(self):
+                    raise SessionError("session messages changed or are incomplete")
+                found = None
+                pending: set[str] = set()
+                seen: set[str] = set()
+                for index, message in enumerate(self.messages):
+                    if _is_internal_work_card_message(message):
+                        if not _valid_work_card_ref(message):
+                            raise SessionError("invalid work-card reference record")
+                        prior_id = message['presentation_id']
+                        if prior_id in seen:
+                            raise SessionError("duplicate work-card presentation identity")
+                        seen.add(prior_id)
+                        if prior_id == presentation_id:
+                            if message['card_id'] != card_id or message.get('run_id') != run_id:
+                                raise SessionError("work-card presentation identity conflict")
+                            found = index
+                    if message.get('role') == 'assistant' and message.get('tool_calls'):
+                        calls=message['tool_calls']
+                        if type(calls) is not list or pending:
+                            raise SessionError("incomplete tool exchange")
+                        for call in calls:
+                            if type(call) is not dict or type(call.get('id')) is not str or not call['id']:
+                                raise SessionError("incomplete tool exchange")
+                            pending.add(call['id'])
+                    elif message.get('role') == 'tool':
+                        call_id=message.get('tool_call_id')
+                        if call_id in pending:
+                            pending.remove(call_id)
+                    elif pending:
+                        raise SessionError("incomplete tool exchange")
+                if found is not None:
+                    return found, False
+                if pending:
+                    raise SessionError("incomplete tool exchange")
+                message = {"role": "work_card_presentation", "_work_card_reference": 1,
+                           "presentation_id": presentation_id, "card_id": card_id}
+                if run_id is not None:
+                    message["run_id"] = run_id
+                line = json.dumps(message, ensure_ascii=False, separators=(',', ':')) + "\n"
+                with self.messages_path.open("a", encoding="utf-8", newline="\n") as handle:
+                    handle.write(line)
+                self._messages_disk_version = _messages_version(self.messages_path)
+                self.messages.append(message)
+                return len(self.messages) - 1, True
 
     def save(self) -> None:
-        """Persist goal, meta, and update agent ``state.json`` pointer."""
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        self.tool_outputs_dir.mkdir(parents=True, exist_ok=True)
-        self.meta.updated_at = utc_now_iso()
-        self.persist_goal()
-        _write_meta(self.meta_path, self.meta, agent_root=self.paths.agent_root)
-        if self._messages_fully_loaded:
-            _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
-        from file_guard import backup_session_files
-
-        backup_session_files(self.session_dir, self.paths.agent_root)
-        if not is_internal_session_id(self.conversation_id):
-            if is_terminal_harness(self.meta):
-                write_terminal_last_session_id(self.paths, self.conversation_id)
-            else:
-                write_last_conversation_id(self.paths, self.conversation_id)
+        """Persist messages with a disk-version check; metadata is not transactional."""
+        with self._messages_instance_lock:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
+            self.tool_outputs_dir.mkdir(parents=True, exist_ok=True)
+            with _session_messages_lock(self.session_dir):
+                if self._messages_fully_loaded:
+                    self._initialize_messages_version_locked()
+                    if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
+                        raise SessionError("session messages changed or contain damaged records; reload before saving")
+                    _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
+                    self._messages_disk_version = _messages_version(self.messages_path)
+                    self._messages_unpersisted = False
+                self.meta.updated_at = utc_now_iso()
+                self.persist_goal()
+                _write_meta(self.meta_path, self.meta, agent_root=self.paths.agent_root)
+                from file_guard import backup_session_files
+                backup_session_files(self.session_dir, self.paths.agent_root)
+            if not is_internal_session_id(self.conversation_id):
+                if is_terminal_harness(self.meta):
+                    write_terminal_last_session_id(self.paths, self.conversation_id)
+                else:
+                    write_last_conversation_id(self.paths, self.conversation_id)
 
     def refresh_pending_feedback_from_disk(self) -> None:
         """Reload ``pending_feedback`` from disk (executor may update meta.json directly)."""
@@ -510,28 +603,26 @@ class Session:
         self.meta.pending_feedback = list(loaded.pending_feedback)
 
     def ensure_messages_loaded(self) -> None:
-        """Load full messages.jsonl when desktop switch used a deferred load."""
-        if self._messages_fully_loaded:
-            return
-        skipped_lines: list[int] = []
-        messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
-        from context import repair_tool_messages
-
-        repaired = repair_tool_messages(messages)
-        if repaired != messages:
-            _write_messages_snapshot(
-                self.messages_path,
-                repaired,
-                agent_root=self.paths.agent_root,
-            )
-            messages = repaired
-        if skipped_lines:
-            self.corruption_notices.append(
-                format_messages_corruption_notice(skipped_lines)
-            )
-        self.messages = messages
-        self._messages_fully_loaded = True
-        self.messages_total_count = None
+        """Load and, where safe, repair under the shared message lock."""
+        with self._messages_instance_lock:
+            if self._messages_fully_loaded:
+                return
+            with _session_messages_lock(self.session_dir):
+                skipped_lines: list[int] = []
+                messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
+                from context import repair_tool_messages
+                repaired = repair_tool_messages(messages)
+                if repaired != messages and not skipped_lines:
+                    _write_messages_snapshot(self.messages_path, repaired, agent_root=self.paths.agent_root)
+                    messages = repaired
+                if skipped_lines:
+                    self.corruption_notices.append(format_messages_corruption_notice(skipped_lines))
+                self.messages = messages
+                self._messages_disk_version = _messages_version(self.messages_path)
+                self._messages_version_initialized = True
+                self._messages_corrupt = bool(skipped_lines)
+                self._messages_fully_loaded = True
+                self.messages_total_count = None
 
     @classmethod
     def load(
@@ -541,9 +632,27 @@ class Session:
         *,
         message_cap: int | None = None,
     ) -> Session:
-        session_dir = sessions_root(paths) / conversation_id
-        if not session_dir.is_dir():
-            raise SessionError(f"session does not exist: {conversation_id}")
+        if (type(conversation_id) is not str
+                or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}", conversation_id)
+                or conversation_id in {".", ".."} or conversation_id.endswith(".")):
+            raise SessionError("invalid session identity")
+        reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+        if conversation_id.split(".", 1)[0].upper() in reserved:
+            raise SessionError("invalid session identity")
+        session_root = sessions_root(paths)
+        try:
+            session_root_real = session_root.resolve(strict=True)
+            session_dir = session_root_real / conversation_id
+            session_dir_real = session_dir.resolve(strict=True)
+        except OSError as exc:
+            raise SessionError(f"session does not exist: {conversation_id}") from exc
+        if (session_dir_real.parent != session_root_real
+                or session_dir_real != session_dir
+                or not session_dir_real.is_dir()
+                or session_dir.is_symlink()
+                or (getattr(os.path, "isjunction", None) is not None and os.path.isjunction(session_dir))):
+            raise SessionError("session path escapes or is not a direct child of sessions root")
+        session_dir = session_dir_real
 
         goal = ""
         if (session_dir / GOAL_FILENAME).is_file():
@@ -554,33 +663,25 @@ class Session:
         skipped_lines: list[int] = []
         messages_total_count: int | None = None
         messages_fully_loaded = True
-        if message_cap is not None and message_cap <= 0:
-            messages: list[dict[str, Any]] = []
-            messages_total_count = _count_file_newlines(session_dir / MESSAGES_FILENAME)
-            messages_fully_loaded = False
-        elif message_cap is not None and message_cap > 0:
-            messages, messages_total_count = _read_messages_tail(
-                session_dir / MESSAGES_FILENAME,
-                message_cap,
-                skipped_lines=skipped_lines,
-            )
-            messages_fully_loaded = messages_total_count <= len(messages)
-        else:
-            messages = _read_messages(
-                session_dir / MESSAGES_FILENAME,
-                skipped_lines=skipped_lines,
-            )
-        if messages_fully_loaded:
-            from context import repair_tool_messages
-
-            repaired = repair_tool_messages(messages)
-            if repaired != messages:
-                _write_messages_snapshot(
-                    session_dir / MESSAGES_FILENAME,
-                    repaired,
-                    agent_root=paths.agent_root,
-                )
-                messages = repaired
+        messages_path = session_dir / MESSAGES_FILENAME
+        with _session_messages_lock(session_dir):
+            _recover_stream_journals_locked(session_dir, messages_path, conversation_id)
+            if message_cap is not None and message_cap <= 0:
+                messages: list[dict[str, Any]] = []
+                messages_total_count = _count_file_newlines(messages_path)
+                messages_fully_loaded = False
+            elif message_cap is not None and message_cap > 0:
+                messages, messages_total_count = _read_messages_tail(messages_path, message_cap, skipped_lines=skipped_lines)
+                messages_fully_loaded = messages_total_count <= len(messages)
+            else:
+                messages = _read_messages(messages_path, skipped_lines=skipped_lines)
+            if messages_fully_loaded:
+                from context import repair_tool_messages
+                repaired = repair_tool_messages(messages)
+                if repaired != messages and not skipped_lines:
+                    _write_messages_snapshot(messages_path, repaired, agent_root=paths.agent_root)
+                    messages = repaired
+            version = _messages_version(messages_path)
         notices: list[str] = []
         for kind in meta_issues:
             notices.append(format_meta_corruption_notice(kind))
@@ -596,13 +697,477 @@ class Session:
             corruption_notices=notices,
             messages_total_count=messages_total_count,
             _messages_fully_loaded=messages_fully_loaded,
+            _messages_disk_version=version,
+            _messages_version_initialized=True,
+            _messages_corrupt=bool(skipped_lines),
         )
 
-    def _append_message_line(self, message: dict[str, Any]) -> None:
+    def _initialize_messages_version_locked(self) -> None:
+        """Admit an untracked instance only if disk is complete and identical.
+
+        Caller holds the session message lock. Loaded instances are already bound
+        to their original version and must never be re-authorized this way.
+        """
+        if self._messages_version_initialized:
+            return
+        try:
+            version = _messages_version(self.messages_path)
+            if version is not None:
+                if self._messages_unpersisted:
+                    raise ValueError("unpersisted changes are not attributable")
+                index = 0
+                with self.messages_path.open("r", encoding="utf-8", newline="") as handle:
+                    for line in handle:
+                        if not line.endswith("\n") or not line.strip():
+                            raise ValueError("incomplete or empty record")
+                        record = json.loads(line, object_pairs_hook=_unique_message_object,
+                                            parse_constant=_reject_message_constant)
+                        if (type(record) is not dict or index >= len(self.messages)
+                                or not _exact_json_record(record, self.messages[index])):
+                            raise ValueError("records differ")
+                        index += 1
+                if index != len(self.messages) or _messages_version(self.messages_path) != version:
+                    raise ValueError("records changed")
+        except Exception:
+            raise SessionError("cannot establish exact existing session messages") from None
+        self._messages_disk_version = version
+        self._messages_version_initialized = True
+
+    def _append_message_line(self, message: dict[str, Any], *, durable: bool = False) -> None:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(message, ensure_ascii=False) + "\n"
-        with self.messages_path.open("a", encoding="utf-8") as handle:
-            handle.write(line)
+        with _session_messages_lock(self.session_dir):
+            self._initialize_messages_version_locked()
+            if self._messages_corrupt or _messages_version(self.messages_path) != self._messages_disk_version:
+                raise SessionError("session messages changed or contain damaged records; reload before appending")
+            if self.messages_path.exists():
+                with self.messages_path.open("rb") as existing:
+                    existing.seek(0, os.SEEK_END)
+                    if existing.tell():
+                        existing.seek(-1, os.SEEK_END)
+                        if existing.read(1) != b"\n":
+                            raise SessionError("session messages have an incomplete final line")
+            with self.messages_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(line)
+                if durable:
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            self._messages_disk_version = _messages_version(self.messages_path)
+
+
+def _valid_run_identity(run_id: Any) -> bool:
+    if type(run_id) is not str:
+        return False
+    try:
+        return str(uuid.UUID(run_id)) == run_id
+    except (ValueError, AttributeError):
+        return False
+
+
+def _valid_work_card_ref_ids(presentation_id: Any, card_id: Any) -> bool:
+    if type(presentation_id) is not str or type(card_id) is not str:
+        return False
+    try:
+        return str(uuid.UUID(presentation_id)) == presentation_id and re.fullmatch(r"wc-[0-9a-f]{64}", card_id) is not None
+    except (ValueError, AttributeError):
+        return False
+
+
+def _is_internal_work_card_message(message: Any) -> bool:
+    return (isinstance(message, dict) and (message.get("role") == "work_card_presentation"
+            or "_work_card_reference" in message))
+
+
+def _valid_work_card_ref(message: Any) -> bool:
+    keys = {"role", "_work_card_reference", "presentation_id", "card_id"}
+    run_bound = type(message) is dict and set(message) == keys | {"run_id"}
+    legacy = type(message) is dict and set(message) == keys
+    return ((run_bound or legacy) and message.get("role") == "work_card_presentation"
+            and type(message.get("_work_card_reference")) is int and message["_work_card_reference"] == 1
+            and _valid_work_card_ref_ids(message.get("presentation_id"), message.get("card_id"))
+            and (not run_bound or _valid_run_identity(message.get("run_id"))))
+
+
+def _messages_unusable_for_ref(session: Session) -> bool:
+    """Check exact complete disk/memory equivalence while holding the message lock."""
+    try:
+        version = _messages_version(session.messages_path)
+        if version != session._messages_disk_version:
+            return True
+        if version is None:
+            return bool(session.messages)
+        index = 0
+        with session.messages_path.open("r", encoding="utf-8", newline="") as handle:
+            for line in handle:
+                if not line.endswith("\n") or not line.strip():
+                    return True
+                row = json.loads(line, object_pairs_hook=_unique_message_object, parse_constant=_reject_message_constant)
+                if (type(row) is not dict or index >= len(session.messages)
+                        or not _exact_json_record(row, session.messages[index])):
+                    return True
+                index += 1
+        return index != len(session.messages) or _messages_version(session.messages_path) != version
+    except Exception:
+        return True
+
+
+def _unique_message_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_message_constant(_value: str) -> Any:
+    raise ValueError("non-finite JSON number")
+
+
+def _exact_json_record(left: Any, right: Any) -> bool:
+    # Python's equality treats True == 1 and 1 == 1.0; those are not the same
+    # parsed JSON facts and must not bootstrap an untracked Session.
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        return (all(type(key) is str for key in right) and left.keys() == right.keys()
+                and all(_exact_json_record(value, right[key]) for key, value in left.items()))
+    if type(left) is list:
+        return len(left) == len(right) and all(_exact_json_record(a, b) for a, b in zip(left, right))
+    if type(left) not in (str, int, float, bool, type(None)):
+        return False
+    if type(left) is float:
+        # Preserve the distinction between positive and negative zero as well.
+        return json.dumps(left, allow_nan=False) == json.dumps(right, allow_nan=False)
+    return left == right
+
+
+@contextlib.contextmanager
+def _session_messages_lock(session_dir: Path):
+    # Share the already established OS-backed lock implementation, but not the
+    # work-record lock namespace. Imports are delayed to avoid a module cycle.
+    from work_records import _file_lock, WorkRecordLockUnavailable
+    try:
+        with _file_lock(session_dir / ".messages.lock", 5.0):
+            yield
+    except WorkRecordLockUnavailable as exc:
+        raise SessionError("session message lock unavailable") from exc
+
+
+@contextlib.contextmanager
+def _open_messages_for_journal_recovery(session_dir: Path, messages_path: Path):
+    """Pin the session directory and safely open its private JSONL for read/append."""
+    session_real = session_dir.resolve(strict=True)
+    expected_path = session_real / MESSAGES_FILENAME
+    if os.path.normcase(os.path.abspath(messages_path)) != os.path.normcase(os.path.abspath(expected_path)):
+        raise SessionError("journal recovery messages path is outside its session")
+
+    def is_reparse(info: os.stat_result) -> bool:
+        attrs = getattr(info, "st_file_attributes", 0)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        return stat.S_ISLNK(info.st_mode) or bool(attrs & reparse_flag)
+
+    def regular_private(info: os.stat_result) -> bool:
+        return stat.S_ISREG(info.st_mode) and not is_reparse(info) and info.st_nlink == 1
+
+    def same_file(left: os.stat_result, right: os.stat_result) -> bool:
+        return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+    dir_fd = None
+    fd = None
+    directory_handle = None
+    file_handle = None
+    win_close_handle = None
+    try:
+        if os.name == "nt":
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            class _FileTime(ctypes.Structure):
+                _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+            class _ByHandleInfo(ctypes.Structure):
+                _fields_ = [
+                    ("attributes", wintypes.DWORD), ("creation", _FileTime),
+                    ("access", _FileTime), ("write", _FileTime),
+                    ("volume", wintypes.DWORD), ("size_high", wintypes.DWORD),
+                    ("size_low", wintypes.DWORD), ("links", wintypes.DWORD),
+                    ("index_high", wintypes.DWORD), ("index_low", wintypes.DWORD),
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            create_file = kernel32.CreateFileW
+            create_file.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                    wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            create_file.restype = wintypes.HANDLE
+            get_info = kernel32.GetFileInformationByHandle
+            get_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ByHandleInfo)]
+            get_info.restype = wintypes.BOOL
+            close_handle = kernel32.CloseHandle
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
+            win_close_handle = close_handle
+            invalid = ctypes.c_void_p(-1).value
+            share_read_write = 0x1 | 0x2  # Deliberately omit FILE_SHARE_DELETE while pinned.
+            open_existing = 3
+            create_new = 1
+            open_reparse = 0x00200000
+            backup_semantics = 0x02000000
+            file_read_attributes = 0x80
+            generic_read = 0x80000000
+            file_append_data = 0x4
+            attr_directory = 0x10
+            attr_reparse = 0x400
+
+            def win_open(path: Path, access: int, creation: int, flags: int):
+                handle = create_file(str(path), access, share_read_write, None, creation, flags, None)
+                if handle == invalid:
+                    error = ctypes.get_last_error()
+                    raise OSError(error, "CreateFileW failed for session recovery path", str(path))
+                return handle
+
+            def win_info(handle):
+                info = _ByHandleInfo()
+                if not get_info(handle, ctypes.byref(info)):
+                    error = ctypes.get_last_error()
+                    raise OSError(error, "GetFileInformationByHandle failed")
+                return info
+
+            directory_handle = win_open(
+                session_real, file_read_attributes, open_existing,
+                open_reparse | backup_semantics,
+            )
+            dir_info = win_info(directory_handle)
+            dir_stat = session_real.lstat()
+            if (dir_info.attributes & (attr_directory | attr_reparse) != attr_directory
+                    or not stat.S_ISDIR(dir_stat.st_mode) or is_reparse(dir_stat)
+                    or ((dir_info.index_high << 32) | dir_info.index_low) != dir_stat.st_ino):
+                raise OSError("session directory identity or reparse validation failed")
+
+            try:
+                before = messages_path.lstat()
+                existed = True
+            except FileNotFoundError:
+                before = None
+                existed = False
+            if before is not None and not regular_private(before):
+                raise OSError("messages.jsonl must be a private regular file")
+            try:
+                file_handle = win_open(
+                    messages_path, generic_read | file_append_data | file_read_attributes,
+                    open_existing if existed else create_new, open_reparse,
+                )
+            except OSError:
+                raise
+            info = win_info(file_handle)
+            file_attrs_ok = not (info.attributes & (attr_directory | attr_reparse))
+            if not file_attrs_ok or info.links != 1:
+                raise OSError("messages.jsonl is a reparse point, directory, or hardlink")
+            handle_identity = (info.volume, (info.index_high << 32) | info.index_low)
+            if info.volume != dir_info.volume:
+                raise OSError("messages.jsonl is not on the pinned session volume")
+            try:
+                opened_stat = messages_path.lstat()
+            except OSError:
+                raise
+            if (not regular_private(opened_stat)
+                    or opened_stat.st_ino != handle_identity[1]
+                    or (before is not None and not same_file(before, opened_stat))):
+                raise OSError("messages.jsonl changed identity while opening")
+            fd = msvcrt.open_osfhandle(
+                int(file_handle), os.O_RDWR | os.O_APPEND | os.O_BINARY,
+            )
+            file_handle = None  # The descriptor now owns the native handle.
+
+            def verify_open_identity() -> None:
+                current_dir = session_real.lstat()
+                current_file = messages_path.lstat()
+                current_info = win_info(msvcrt.get_osfhandle(fd))
+                opened = os.fstat(fd)
+                identity = (current_info.volume, (current_info.index_high << 32) | current_info.index_low)
+                if (is_reparse(current_dir) or not stat.S_ISDIR(current_dir.st_mode)
+                        or current_dir.st_ino != ((dir_info.index_high << 32) | dir_info.index_low)
+                        or not regular_private(current_file) or not regular_private(opened)
+                        or current_info.links != 1
+                        or current_info.volume != dir_info.volume
+                        or current_file.st_ino != identity[1]
+                        or opened.st_ino != identity[1]):
+                    raise OSError("messages.jsonl/session directory identity changed")
+
+        else:
+            directory_stat = session_real.lstat()
+            if not stat.S_ISDIR(directory_stat.st_mode) or is_reparse(directory_stat):
+                raise OSError("session directory is not a direct regular directory")
+            dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            dir_fd = os.open(session_real, dir_flags)
+            opened_dir = os.fstat(dir_fd)
+            if not stat.S_ISDIR(opened_dir.st_mode) or is_reparse(opened_dir) or not same_file(directory_stat, opened_dir):
+                raise OSError("session directory changed while opening")
+            try:
+                before = os.stat(MESSAGES_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
+                existed = True
+            except FileNotFoundError:
+                before = None
+                existed = False
+            if before is not None and not regular_private(before):
+                raise OSError("messages.jsonl must be a private regular file")
+            flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            if not existed:
+                flags |= os.O_CREAT | os.O_EXCL
+            fd = os.open(MESSAGES_FILENAME, flags, 0o600, dir_fd=dir_fd)
+            opened = os.fstat(fd)
+            current = os.stat(MESSAGES_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
+            if (not regular_private(opened) or not regular_private(current)
+                    or not same_file(opened, current)
+                    or (before is not None and not same_file(before, opened))):
+                raise OSError("messages.jsonl changed identity while opening")
+
+            def verify_open_identity() -> None:
+                current_dir = os.fstat(dir_fd)
+                named_dir = session_real.lstat()
+                opened_file = os.fstat(fd)
+                named_file = os.stat(MESSAGES_FILENAME, dir_fd=dir_fd, follow_symlinks=False)
+                if (not stat.S_ISDIR(current_dir.st_mode) or is_reparse(current_dir)
+                        or not same_file(current_dir, named_dir)
+                        or not regular_private(opened_file) or not regular_private(named_file)
+                        or not same_file(opened_file, named_file)):
+                    raise OSError("messages.jsonl/session directory identity changed")
+
+        verify_open_identity()
+        yield fd, verify_open_identity
+    except (OSError, ValueError) as exc:
+        raise SessionError("stream journal recovery failed closed: unsafe messages file") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+        elif file_handle is not None and win_close_handle is not None:
+            win_close_handle(file_handle)
+        if dir_fd is not None:
+            os.close(dir_fd)
+        if directory_handle is not None and win_close_handle is not None:
+            # The parent directory handle pins its identity against rename/replacement.
+            win_close_handle(directory_handle)
+
+
+def _read_messages_from_open_fd(fd: int) -> tuple[list[dict[str, Any]], list[int]]:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(fd, 128 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    try:
+        lines = b"".join(chunks).decode("utf-8").splitlines()
+    except UnicodeError as exc:
+        raise SessionError("session messages are not valid UTF-8") from exc
+    messages: list[dict[str, Any]] = []
+    skipped: list[int] = []
+    for line_no, line in enumerate(lines, 1):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            skipped.append(line_no)
+            continue
+        if isinstance(payload, dict):
+            messages.append(payload)
+        else:
+            skipped.append(line_no)
+    return messages, skipped
+
+
+def _append_jsonl_record_to_open_fd(fd: int, record: dict[str, Any], verify_identity: Callable[[], None]) -> None:
+    verify_identity()
+    end = os.lseek(fd, 0, os.SEEK_END)
+    if end:
+        os.lseek(fd, -1, os.SEEK_END)
+        if os.read(fd, 1) != b"\n":
+            raise SessionError("session messages have an incomplete final line")
+    verify_identity()
+    payload = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write while recovering session journal")
+        view = view[written:]
+    os.fsync(fd)
+
+
+def _recover_stream_journals_locked(
+    session_dir: Path, messages_path: Path, conversation_id: str,
+) -> None:
+    """Fold request journals into this session under its cross-process message lock."""
+    from stream_journal import journal_lease, lease_path_for, pending_journals, read_journal
+
+    journals = pending_journals(session_dir, conversation_id)
+    if not journals:
+        return
+    with _open_messages_for_journal_recovery(session_dir, messages_path) as (messages_fd, verify_identity):
+        messages, skipped = _read_messages_from_open_fd(messages_fd)
+        if skipped:
+            raise SessionError("cannot recover streamed reply into damaged session history")
+        by_request: dict[str, dict[str, Any]] = {}
+        for message in messages:
+            metadata = message.get(HOST_INTERNAL_METADATA_KEY)
+            if isinstance(metadata, dict) and isinstance(metadata.get("stream_request_id"), str):
+                request_id = metadata["stream_request_id"]
+                if request_id in by_request:
+                    raise SessionError("duplicate streamed reply request identity in session history")
+                by_request[request_id] = message
+        for path in journals:
+            try:
+                with journal_lease(lease_path_for(path), nonblocking=True) as acquired:
+                    if not acquired or not os.path.lexists(path):
+                        continue
+                    rows = read_journal(
+                        path, expected_session_dir=session_dir,
+                        expected_session_id=conversation_id, expected_request_id=path.stem,
+                    )
+                    header = rows[0]
+                    request_id = header["request_id"]
+                    content = "".join(row["text"] for row in rows if row["kind"] == "delta")
+                    settled = any(row["kind"] == "settled" for row in rows)
+                    prior = by_request.get(request_id)
+                    if prior is not None:
+                        prior_meta = prior.get(HOST_INTERNAL_METADATA_KEY)
+                        if (prior.get("role") != "assistant" or prior.get("content") != content
+                                or not isinstance(prior_meta, dict)
+                                or prior_meta.get("stream_run_id") != header.get("run_id")):
+                            raise ValueError("stream request identity conflicts with a non-matching assistant row")
+                    elif settled and content:
+                        raise ValueError("settled stream journal has no matching durable assistant row")
+                    elif not settled and content:
+                        message = {
+                            "role": "assistant", "content": content,
+                            HOST_INTERNAL_METADATA_KEY: {
+                                "stream_incomplete": True,
+                                "stream_finish_reason": "process_interrupted",
+                                "stream_request_id": request_id,
+                                "stream_run_id": header.get("run_id"),
+                            },
+                        }
+                        _append_jsonl_record_to_open_fd(messages_fd, message, verify_identity)
+                        messages.append(message)
+                        by_request[request_id] = message
+                    path.unlink()
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                raise SessionError("stream journal recovery failed closed") from exc
+
+
+def _messages_version(path: Path) -> str | None:
+    try:
+        with path.open("rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(128 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except FileNotFoundError:
+        return None
 
 
 def utc_now_iso() -> str:
@@ -722,10 +1287,11 @@ def reasoning_effort_label(level: str) -> str:
 
 
 def session_banner_event(session: Session) -> dict[str, Any]:
-    from llm_client import llm_model_label, resolve_session_model
+    from llm_client import llm_model_label
+    from llm_routing import resolve_model_id_for_role
     from sandbox_evolution import write_scope_label
 
-    model = session.meta.llm_model or resolve_session_model(list(session.meta.topics))
+    model = resolve_model_id_for_role("main_turn", session.meta)
     payload: dict[str, Any] = {
         "type": "session.banner",
         "session_id": session.conversation_id,
@@ -1429,13 +1995,20 @@ def _build_chat_history_from_messages(
     """User/assistant lines (+ inline_images from tool results) for Desktop hydration."""
     items: list[dict[str, Any]] = []
     total = 0
-    last_user: str | None = None
     pending_images: list[str] = []
 
     for message in messages:
         if not isinstance(message, dict):
             continue
         role = message.get("role")
+        if _is_internal_work_card_message(message):
+            if _valid_work_card_ref(message):
+                total += 1
+                _append_chat_history_item(items, {"role": "work_card", "type": "work_card_reference",
+                    "presentation_id": message["presentation_id"], "card_id": message["card_id"],
+                    "text": "工作卡回查引用；仅记录待恢复投递，不表示已送达、已查看或验收。"}, max_items=max_items)
+                pending_images = []
+            continue
         if role == "tool":
             for path in _image_paths_from_tool_message(message):
                 if path not in pending_images:
@@ -1450,15 +2023,14 @@ def _build_chat_history_from_messages(
             text = content.strip()
             if not text or _ui_skip_chat_text(text):
                 continue
-            if text == last_user:
-                continue
-            last_user = text
             total += 1
             _append_chat_history_item(items, {"role": "user", "text": text}, max_items=max_items)
             continue
 
         if role == "assistant":
-            if message.get("tool_calls"):
+            host_meta = message.get(HOST_INTERNAL_METADATA_KEY)
+            has_stream_identity = isinstance(host_meta, dict) and isinstance(host_meta.get("stream_request_id"), str)
+            if message.get("tool_calls") and not (has_stream_identity and isinstance(content, str)):
                 continue
             if not isinstance(content, str):
                 continue
@@ -1466,14 +2038,19 @@ def _build_chat_history_from_messages(
             if not text or _ui_skip_chat_text(text):
                 continue
             item: dict[str, Any] = {"role": "assistant", "text": text}
+            host_meta = message.get(HOST_INTERNAL_METADATA_KEY)
+            if isinstance(host_meta, dict) and host_meta.get("stream_incomplete") is True:
+                item["text"] = (
+                    text + "\n\n（流式回复中断；以上仅为此前已显示的片段，不代表完整答复。）"
+                )
             if pending_images:
                 item["inline_images"] = list(pending_images)
                 pending_images = []
             total += 1
             _append_chat_history_item(items, item, max_items=max_items)
-            last_user = None
 
     return items, total
+
 
 
 def build_session_chat_history(session: Session) -> list[dict[str, Any]]:
@@ -1485,7 +2062,16 @@ def build_session_chat_history(session: Session) -> list[dict[str, Any]]:
             max_items=max_items if max_items > 0 else None,
         )
         return items
-    items, _ = _build_chat_history_from_messages(session.messages)
+    messages = session.messages
+    if any(_is_internal_work_card_message(message) for message in messages):
+        try:
+            with _session_messages_lock(session.session_dir):
+                safe = not session._messages_corrupt and not _messages_unusable_for_ref(session)
+        except Exception:
+            safe = False
+        if not safe:
+            messages = [message for message in messages if not _is_internal_work_card_message(message)]
+    items, _ = _build_chat_history_from_messages(messages)
     return items
 
 
@@ -1498,20 +2084,34 @@ def build_session_chat_history_from_path(
     if not messages_path.is_file():
         return [], 0
     parsed: list[dict[str, Any]] = []
+    corrupt = False
     try:
-        with messages_path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                text_line = line.strip()
-                if not text_line:
-                    continue
-                try:
-                    message = json.loads(text_line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(message, dict):
-                    parsed.append(message)
-    except OSError:
+        with _session_messages_lock(messages_path.parent):
+            with messages_path.open("r", encoding="utf-8", newline="") as handle:
+                for line in handle:
+                    text_line = line.strip()
+                    if not text_line or not line.endswith("\n"):
+                        corrupt = True
+                        if not text_line:
+                            continue
+                    try:
+                        message = json.loads(text_line)
+                    except json.JSONDecodeError:
+                        corrupt = True
+                        continue
+                    try:
+                        json.loads(text_line, object_pairs_hook=_unique_message_object,
+                                   parse_constant=_reject_message_constant)
+                    except ValueError:
+                        corrupt = True
+                    if isinstance(message, dict):
+                        parsed.append(message)
+                    else:
+                        corrupt = True
+    except (OSError, UnicodeError, SessionError):
         return [], 0
+    if corrupt:
+        parsed = [message for message in parsed if not _is_internal_work_card_message(message)]
     return _build_chat_history_from_messages(parsed, max_items=max_items)
 
 
@@ -1954,11 +2554,12 @@ def _demo() -> None:
         history = build_session_chat_history(hist_session)
         assert history == [
             {"role": "user", "text": "你好"},
+            {"role": "user", "text": "你好"},
             {"role": "assistant", "text": "你好，需要什么？"},
         ]
         event = session_history_event(hist_session)
-        assert event["type"] == "session.history" and len(event["items"]) == 2
-        print("[PASS] T-905d: build_session_chat_history skips anchor/tool-only/kernel")
+        assert event["type"] == "session.history" and len(event["items"]) == 3
+        print("[PASS] T-905d: chat history preserves repeated turns and skips anchor/tool-only/kernel")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,26 @@
+/* Single conversation: keep legacy nodes for event wiring, not navigation. */
+html[data-theme] .unified-shell[data-perspective="project"],
+.unified-shell[data-perspective="project"] { grid-template-columns: minmax(0, 1fr); }
+.unified-shell[data-perspective="project"] .unified-sidebar[hidden] { display: none !important; }
+html[data-theme] .unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .unified-composer-dock),
+.unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .unified-composer-dock) { display: flex; }
+.unified-tool-region[hidden] { display: none !important; }
+.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) { display: flex; flex-direction: row; }
+.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 50%; min-width: 0; min-height: 0; max-height: none; }
+.unified-tool-region { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--ma-border); background: var(--ma-bg); }
+.unified-tool-heading { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .4rem .7rem; border-bottom: 1px solid var(--ma-border); }
+.unified-runtime-tool { flex: 1; min-height: 0; overflow: auto; padding: .75rem; }
+.unified-tool-unavailable { margin: 1rem; }
+@media (max-width: 800px) {
+  .unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
+  .unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
+  .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
+}
+.unified-tool-region .settings-category-nav { flex-direction: row; flex-wrap: wrap; padding: .4rem .7rem; }
+.unified-tool-region .settings-category-nav button { padding: .4rem .6rem; }
+.unified-tool-region .settings-category-nav button[aria-current="page"] { background: color-mix(in srgb, var(--ma-accent) 15%, transparent); }
+.unified-tool-region .settings-category-nav button[aria-current="page"]::after { display: none; }
+.unified-tool-region .settings-back-chat, .unified-tool-region .settings-device-note { display: none; }
+.unified-tool-region .settings-pane { padding: 1rem; }
+.unified-tool-region { --settings-line: #e9e6f2; --settings-soft: #f0eef9; --settings-chip: #f0edff; }
+html[data-theme="dark"] .unified-tool-region { --settings-line: #302a41; --settings-soft: #201c2d; --settings-chip: #302647; }

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 import re
@@ -81,6 +83,7 @@ _EVENT_SESSION_WORKSPACE_APPROVED = "session_workspace_approved"
 _DEFAULT_SPILL_CHARS = 32000
 _DEFAULT_PREVIEW_CHARS = 8000
 _TOOL_OUTPUTS_DIR = "tool_outputs"
+_MAX_HOST_CALL_RECEIPTS = 20
 
 
 @dataclass
@@ -101,6 +104,11 @@ class ExecutorSession:
     workspace_evolved_approved: bool = False
     evolution_id: str = ""
     host_run_id: str = ""
+    _host_call_receipts: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
+    _host_call_receipts_omitted_count: int = field(default=0, init=False, repr=False)
+    _host_call_receipts_generation: int = field(default=0, init=False, repr=False)
+    _host_call_receipts_run_id: str = field(default="", init=False, repr=False)
+    _host_call_receipts_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     evolution_authorization_id: str = ""
     evolution_stop_authorization_id: str = ""
     evolution_stop_instance_id: str = ""
@@ -165,6 +173,83 @@ class ExecutorSession:
     ordinary_work_intent: str = "execute"
     ordinary_task_scope: str = ""
     write_scope_root: str = ""
+
+    def __post_init__(self) -> None:
+        # Construction establishes generation zero; later run changes take effect only at begin_turn.
+        from evolution.context import normalize_host_run_id
+
+        self._host_call_receipts_run_id = normalize_host_run_id(self.host_run_id)
+
+    def snapshot_host_tool_receipts(
+        self,
+    ) -> tuple[int, str, list[dict[str, Any]], int]:
+        """Atomically snapshot (generation, bound host run, entries, omitted count).
+
+        Entries are ordered by execution-return/observation time, not call-start time.
+        """
+        with self._host_call_receipts_lock:
+            return (
+                self._host_call_receipts_generation,
+                self._host_call_receipts_run_id,
+                [dict(item) for item in self._host_call_receipts],
+                max(0, int(self._host_call_receipts_omitted_count)),
+            )
+
+    @property
+    def host_tool_receipts(self) -> list[dict[str, Any]]:
+        """Return a detached, bounded snapshot of minimal host-call receipts."""
+        return self.snapshot_host_tool_receipts()[2]
+
+    @property
+    def host_tool_receipts_omitted_count(self) -> int:
+        """Number of current-turn calls omitted or beyond the receipt cap."""
+        return self.snapshot_host_tool_receipts()[3]
+
+    def _begin_host_call_receipts_turn(self) -> int:
+        from evolution.context import normalize_host_run_id
+
+        with self._host_call_receipts_lock:
+            self._host_call_receipts_generation += 1
+            self._host_call_receipts_run_id = normalize_host_run_id(self.host_run_id)
+            self._host_call_receipts = []
+            self._host_call_receipts_omitted_count = 0
+            return self._host_call_receipts_generation
+
+    def _host_call_receipt_context(self) -> tuple[int, str]:
+        from evolution.context import normalize_host_run_id
+
+        with self._host_call_receipts_lock:
+            generation = self._host_call_receipts_generation
+            # A host bind can precede begin_turn. Never label that interval as the new run.
+            if normalize_host_run_id(self.host_run_id) != self._host_call_receipts_run_id:
+                return generation, ""
+            return generation, self._host_call_receipts_run_id
+
+    def _record_host_call_receipt(
+        self, *, generation: int, host_run_id: str, call_id: str, tool: str, ok: bool | None
+    ) -> None:
+        from evolution.context import normalize_host_run_id
+
+        valid_host_run_id = normalize_host_run_id(host_run_id)
+        if not valid_host_run_id:
+            return
+        with self._host_call_receipts_lock:
+            if generation != self._host_call_receipts_generation:
+                return
+            if self._host_call_receipts_run_id != valid_host_run_id:
+                return
+            if ok is None:
+                self._host_call_receipts_omitted_count += 1
+                return
+            if len(self._host_call_receipts) >= _MAX_HOST_CALL_RECEIPTS:
+                self._host_call_receipts_omitted_count += 1
+                return
+            self._host_call_receipts.append({
+                "host_run_id": valid_host_run_id,
+                "call_id": call_id,
+                "tool": tool,
+                "ok": ok,
+            })
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -760,6 +845,7 @@ def _validate_project_mode_call(
     arguments: dict[str, Any],
     *,
     agent_paths: AgentPaths | None = None,
+    runner_discovery_start: Path | None = None,
 ) -> ToolResult | None:
     from project_mode import project_mode_block_reason
 
@@ -770,6 +856,8 @@ def _validate_project_mode_call(
         tool_name=tool_name,
         arguments=arguments,
         ordinary_work_intent=ordinary_work_intent,
+        agent_paths=agent_paths,
+        runner_discovery_start=runner_discovery_start,
     )
     if reason is None:
         return None
@@ -1071,6 +1159,99 @@ def _ci_repair_blocks_delivery(session: Any, evolved_name: str, arguments: dict[
     return False
 
 
+
+_HOST_WRITE_LEASE_CAPABILITY = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _HostWriteLeaseContext:
+    capability: object
+    executor: object = field(repr=False, compare=False)
+    operation: str
+    target_key: str
+    thread_id: int
+    lease_is_current: Callable[[], bool] = field(repr=False, compare=False)
+    prepare_target: Callable[[], None] = field(repr=False, compare=False)
+
+
+_HOST_WRITE_LEASE_CONTEXT: ContextVar[_HostWriteLeaseContext | None] = ContextVar(
+    "agent_host_write_lease_context", default=None,
+)
+
+
+@contextmanager
+def _trusted_host_write_lease_context(
+    executor: ToolExecutor,
+    *,
+    operation: str,
+    target_path: Path,
+    target_identity: tuple[object, ...],
+    coordinator: object,
+    lease: object,
+    lease_is_current: Callable[[], bool],
+    prepare_target: Callable[[], None],
+):
+    """Bind a shared coordinator lease to one trusted executor/thread/path."""
+    from project_worker_execution import PROJECT_WORKER_COORDINATOR
+
+    if (coordinator is not PROJECT_WORKER_COORDINATOR
+            or type(executor) is not ToolExecutor
+            or operation not in {"write_text", "patch_file"}
+            or not callable(lease_is_current)
+            or not callable(prepare_target)):
+        raise PermissionError("trusted shared write lease context is unavailable")
+    try:
+        active = coordinator._is_active_lease(lease)
+        if (not active or target_identity not in getattr(lease, "targets", frozenset())
+                or lease_is_current() is not True):
+            raise PermissionError("shared write lease is not active for this target")
+        path_keys = getattr(lease, "path_targets", frozenset())
+        target_key = os.path.normcase(str(Path(target_path).absolute()))
+        parent_key = os.path.normcase(str(Path(target_path).parent.absolute()))
+        if (("absolute-target", target_key) not in path_keys
+                or ("absolute-parent", parent_key) not in path_keys):
+            raise PermissionError("shared write lease does not cover the canonical target")
+    except Exception:
+        raise PermissionError("shared write lease is not active for this target") from None
+
+    context = _HostWriteLeaseContext(
+        capability=_HOST_WRITE_LEASE_CAPABILITY,
+        executor=executor,
+        operation=operation,
+        target_key=os.path.normcase(str(Path(target_path).resolve(strict=False))),
+        thread_id=threading.get_ident(),
+        lease_is_current=lease_is_current,
+        prepare_target=prepare_target,
+    )
+    token = _HOST_WRITE_LEASE_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _HOST_WRITE_LEASE_CONTEXT.reset(token)
+
+
+def _host_write_lease_context_matches(
+    executor: ToolExecutor, *, operation: str, target_path: str,
+) -> bool | None:
+    """True for exact active context, False for mismatched nesting, else None."""
+    context = _HOST_WRITE_LEASE_CONTEXT.get()
+    if context is None:
+        return None
+    if (context.capability is not _HOST_WRITE_LEASE_CAPABILITY
+            or context.executor is not executor
+            or context.thread_id != threading.get_ident()):
+        return False
+    try:
+        target = executor.registry.agent_paths.resolve_under_agent(target_path, must_exist=False)
+        target_key = os.path.normcase(str(Path(target).resolve(strict=False)))
+        return bool(
+            operation == context.operation
+            and target_key == context.target_key
+            and context.lease_is_current() is True
+        )
+    except Exception:
+        return False
+
 @dataclass
 class ToolExecutor:
     """Dispatch builtins / run_evolved with confirm interaction."""
@@ -1083,6 +1264,8 @@ class ToolExecutor:
     on_registry_reloaded: Callable[[], None] | None = field(default=None, repr=False)
     cancel_event: threading.Event | None = field(default=None, repr=False)
     evolution_client: Any | None = field(default=None, repr=False)
+    project_worker_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
+    dialogue_recall_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
 
     @classmethod
     def create(
@@ -1125,6 +1308,7 @@ class ToolExecutor:
         from exec_reliability import clear_inline_write_guard
 
         clear_inline_write_guard(self.session)
+        self.session._begin_host_call_receipts_turn()
         self.session.turn_evidence = []
         self.session.llm_retry_notice_emitted = False
         self.session.service_postcondition = ""
@@ -1413,8 +1597,23 @@ class ToolExecutor:
             },
         )
 
+    def _shared_write_action(
+        self, tool_name: str, arguments: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        evolved = self._resolve_evolved_target(tool_name, arguments)
+        if evolved is None or evolved.name not in {"write_text", "patch_file"}:
+            return None
+        inner = run_evolved.coalesce_tool_arguments(arguments)
+        if bool(inner.get("dry_run")) or bool(arguments.get("dry_run")):
+            return None
+        path = inner.get("path")
+        if type(path) is not str or not path.strip():
+            return None
+        return evolved.name, path
+
     def run(self, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
         """Validate, optionally confirm, then execute a tool call."""
+        receipt_generation, receipt_host_run_id = self.session._host_call_receipt_context()
         started = time.perf_counter()
         name = tool_name.strip()
         args = dict(arguments or {})
@@ -1430,6 +1629,33 @@ class ToolExecutor:
             self._log_tool_call(name, args, canceled, confirm="cancelled", started=started)
             return canceled
 
+        # Agent.__post_init__ installs this host-only callback on the parent
+        # executor. Scoped project-worker executors do not carry it: they enter
+        # this same method while already holding ScopedProjectTools' lease.
+        if callable(self.project_worker_host_dispatch):
+            write_action = self._shared_write_action(name, args)
+            if write_action is not None:
+                operation, target_path = write_action
+                context_matches = _host_write_lease_context_matches(
+                    self, operation=operation, target_path=target_path,
+                )
+                if context_matches is False:
+                    return tool_fail(
+                        name, "shared_write_lease_context_mismatch",
+                        "nested file write does not match the host-held shared lease",
+                    )
+                if context_matches is None:
+                    try:
+                        from project_worker_independent import run_tool_with_shared_write_lease
+                        locked_result = run_tool_with_shared_write_lease(self, name, args)
+                    except Exception as exc:
+                        return tool_fail(
+                            name, "shared_write_lease_failed",
+                            f"could not safely acquire shared file-write lease ({type(exc).__name__})",
+                        )
+                    if locked_result is not None:
+                        return locked_result
+
         confirm_decision = "skipped"
 
         with session_write_scope(self.session.write_scope_root):
@@ -1438,6 +1664,8 @@ class ToolExecutor:
                 args,
                 started=started,
                 confirm_decision=confirm_decision,
+                receipt_generation=receipt_generation,
+                receipt_host_run_id=receipt_host_run_id,
             )
 
     def _run_with_write_scope(
@@ -1447,6 +1675,8 @@ class ToolExecutor:
         *,
         started: float,
         confirm_decision: str,
+        receipt_generation: int,
+        receipt_host_run_id: str,
     ) -> ToolResult:
         if self.session.evolution_id:
             from evolution.policy import evolution_tool_decision
@@ -1464,6 +1694,14 @@ class ToolExecutor:
 
         error = self.validate(name, args)
         if error is not None:
+            if self.registry.get_builtin(name) is None or (
+                name == "run_evolved"
+                and error.error is not None
+                and error.error.code == ToolErrorCode.TOOL_NOT_FOUND
+            ):
+                self._record_host_call_receipt(
+                    name, "", None, receipt_generation, receipt_host_run_id
+                )
             self._maybe_log_validation_guard(error)
             self._log_tool_call(name, args, error, confirm=confirm_decision, started=started)
             return error
@@ -1578,15 +1816,54 @@ class ToolExecutor:
         stop_hb, hb_thread = self._start_tool_progress_heartbeat(call_id, name)
         result: ToolResult
         try:
-            if name == "generate_image":
-                executed = self._execute_builtin(
-                    name,
-                    args,
-                    started=started,
-                    prepared_image_reference=prepared_image_reference,
+            try:
+                lease_context = _HOST_WRITE_LEASE_CONTEXT.get()
+                write_action = self._shared_write_action(name, args)
+                if (lease_context is not None and lease_context.executor is self
+                        and write_action is not None
+                        and _host_write_lease_context_matches(
+                            self, operation=write_action[0], target_path=write_action[1],
+                        ) is not True):
+                    executed = tool_fail(
+                        name, "shared_write_lease_expired",
+                        "host write lease or target identity changed before file execution",
+                    )
+                elif lease_context is not None and lease_context.executor is self and write_action is not None:
+                    try:
+                        if lease_context.operation == "write_text":
+                            lease_context.prepare_target()
+                        if lease_context.lease_is_current() is not True:
+                            raise PermissionError("shared write target changed before execution")
+                    except Exception as exc:
+                        executed = tool_fail(
+                            name, "shared_write_target_unsafe",
+                            f"could not safely prepare target under lease ({type(exc).__name__})",
+                        )
+                    else:
+                        if name == "generate_image":
+                            executed = self._execute_builtin(
+                                name, args, started=started,
+                                prepared_image_reference=prepared_image_reference,
+                            )
+                        else:
+                            executed = self._execute_builtin(name, args, started=started)
+                elif name == "generate_image":
+                    executed = self._execute_builtin(
+                        name,
+                        args,
+                        started=started,
+                        prepared_image_reference=prepared_image_reference,
+                    )
+                else:
+                    executed = self._execute_builtin(name, args, started=started)
+            except Exception:
+                self._record_host_call_receipt(
+                    name, call_id, None, receipt_generation, receipt_host_run_id, args
                 )
-            else:
-                executed = self._execute_builtin(name, args, started=started)
+                raise
+            self._record_host_call_receipt(
+                name, call_id, executed, receipt_generation, receipt_host_run_id, args
+            )
             result = _attach_desktop_inline_display_hint(self._maybe_spill_output(executed))
         except Exception as exc:
             result = tool_fail(
@@ -2721,11 +2998,20 @@ class ToolExecutor:
         if foreign_error is not None:
             return foreign_error
 
+        runner_discovery_start = None
+        if name == "run_evolved":
+            evolved_name = arguments.get("tool_name")
+            if evolved_name in {"structured_test", "run_project_tests"}:
+                evolved_tool = self.registry.get_evolved(evolved_name)
+                if evolved_tool is not None:
+                    runner_discovery_start = evolved_tool.directory
+
         project_error = _validate_project_mode_call(
             self.session,
             name,
             arguments,
             agent_paths=self.registry.agent_paths,
+            runner_discovery_start=runner_discovery_start,
         )
         if project_error is not None:
             return project_error
@@ -2789,16 +3075,25 @@ class ToolExecutor:
                 return ""
             return re.sub(r"\s+", " ", value).strip()[:limit]
 
-        raw_paths = list(extract_run_evolved_paths(tool_name, arguments))
-        for key in ("paths", "untracked_paths"):
-            values = data.get(key)
-            if isinstance(values, list):
-                raw_paths.extend(value for value in values if isinstance(value, str))
-        status_lines = data.get("status_lines")
-        if isinstance(status_lines, list):
-            for line in status_lines:
-                if isinstance(line, str) and len(line) > 3:
-                    raw_paths.append(line[3:].split(" -> ")[-1].strip())
+        snapshot_reported_changes = False
+        if evolved == "git_snapshot":
+            # git_snapshot reports pre-existing worktree state, not paths changed by this turn.
+            snapshot_reported_changes = any(
+                isinstance(data.get(key), list) and any(isinstance(value, str) and value.strip() for value in data[key])
+                for key in ("paths", "untracked_paths", "status_lines")
+            )
+            raw_paths: list[str] = []
+        else:
+            raw_paths = list(extract_run_evolved_paths(tool_name, arguments))
+            for key in ("paths", "untracked_paths"):
+                values = data.get(key)
+                if isinstance(values, list):
+                    raw_paths.extend(value for value in values if isinstance(value, str))
+            status_lines = data.get("status_lines")
+            if isinstance(status_lines, list):
+                for line in status_lines:
+                    if isinstance(line, str) and len(line) > 3:
+                        raw_paths.append(line[3:].split(" -> ")[-1].strip())
         clean_paths = list(dict.fromkeys(clip(path, 240) for path in raw_paths if clip(path, 240)))[:8]
         evidence: dict[str, Any] = {
             "tool": tool_name,
@@ -2858,8 +3153,11 @@ class ToolExecutor:
             elif not diff_summary and isinstance(data.get("empty"), bool):
                 diff_summary = "发现差异" if not data["empty"] else "未发现差异"
             elif not diff_summary and evolved in {"git_snapshot", "git_diff"}:
-                diff_summary = "发现变更" if clean_paths else "未发现差异"
+                has_changes = bool(clean_paths) or snapshot_reported_changes
+                diff_summary = "发现变更" if has_changes else "未发现差异"
             if diff_summary:
+                if evolved == "git_snapshot":
+                    diff_summary = f"工作树快照：{diff_summary}"
                 evidence["diff_summary"] = diff_summary
 
         self.session.turn_evidence.append(evidence)
@@ -3333,6 +3631,53 @@ class ToolExecutor:
             conversation_id=conversation_id_from_session(self.session.session_dir),
         )
 
+    def _record_host_call_receipt(
+        self,
+        tool_name: str,
+        call_id: str,
+        result: Any,
+        generation: int,
+        host_run_id: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> None:
+        from evolution.context import normalize_host_run_id
+
+        if not normalize_host_run_id(host_run_id):
+            return
+        # The label must come from this registry, never from model-controlled arguments.
+        builtin = self.registry.get_builtin(tool_name)
+        if builtin is None:
+            self.session._record_host_call_receipt(
+                generation=generation, host_run_id=host_run_id, call_id=call_id,
+                tool="", ok=None,
+            )
+            return
+        if not isinstance(result, ToolResult) or type(result.ok) is not bool:
+            self.session._record_host_call_receipt(
+                generation=generation, host_run_id=host_run_id, call_id=call_id,
+                tool=builtin.name, ok=None,
+            )
+            return
+        data = result.data if isinstance(result.data, dict) else {}
+        call_arguments = arguments if isinstance(arguments, dict) else {}
+        if (
+            call_arguments.get("dry_run") is True
+            or call_arguments.get("background") is True
+            or call_arguments.get("escalated") is True
+            or data.get("dry_run") is True
+            or data.get("background") is True
+            or data.get("escalated") is True
+        ):
+            self.session._record_host_call_receipt(
+                generation=generation, host_run_id=host_run_id, call_id=call_id,
+                tool=builtin.name, ok=None,
+            )
+            return
+        self.session._record_host_call_receipt(
+            generation=generation, host_run_id=host_run_id, call_id=call_id,
+            tool=builtin.name, ok=result.ok,
+        )
+
     def _execute_builtin(
         self,
         tool_name: str,
@@ -3341,6 +3686,31 @@ class ToolExecutor:
         started: float,
         prepared_image_reference: Any | None = None,
     ) -> ToolResult:
+        if tool_name == "recall_current_dialogue":
+            dispatch = self.dialogue_recall_host_dispatch
+            if not callable(dispatch):
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "current-dialogue recall host is not bound to this Agent",
+                    duration_ms=_elapsed_ms(started),
+                )
+            try:
+                return dispatch(arguments)
+            except Exception:
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "current-dialogue recall could not be safely completed",
+                    duration_ms=_elapsed_ms(started),
+                )
+        if tool_name == "run_project_workers":
+            dispatch = self.project_worker_host_dispatch
+            if not callable(dispatch):
+                return tool_fail(
+                    tool_name, ToolErrorCode.PERMISSION_DENIED,
+                    "trusted project worker host is not bound to this Agent",
+                    duration_ms=_elapsed_ms(started),
+                )
+            return dispatch(arguments)
         runner = _BUILTIN_RUNNERS[tool_name]
         if tool_name == "evolution":
             if self.evolution_client is None:
@@ -3453,6 +3823,11 @@ def maybe_spill_result(
     """
     threshold = spill_threshold_chars()
     preview_limit = preview_chars()
+
+    if result.ok and result.tool == "recall_current_dialogue":
+        # This host-only result is consumed by Agent, not forwarded as a normal tool turn.
+        # Spilling replaces its {status, answer, session_id} contract with {preview, spilled, hint}.
+        return result
 
     if result.ok:
         if result.data is None:

@@ -1,0 +1,44 @@
+.work-card-snapshot,
+.work-card-unavailable {
+  margin: 0.75rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--ma-border, rgba(255,255,255,.18));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--ma-surface, rgba(20,24,34,.8)) 88%, transparent);
+  color: var(--ma-text, inherit);
+  max-width: 56rem;
+  overflow-wrap: anywhere;
+}
+.work-card-snapshot-label,
+.work-card-captured,
+.work-card-project-id,
+.work-card-project-sources,
+.work-card-source-label,
+.work-card-source,
+.work-card-requirement-id { color: var(--ma-text-muted, #9299a8); font-size: .78rem; }
+.work-card-snapshot h3 { margin: .2rem 0 .35rem; font-size: 1.05rem; }
+.work-card-snapshot h4 { margin: .8rem 0 .4rem; font-size: .9rem; }
+.work-card-requirements { margin: 0; padding-left: 1.3rem; }
+.work-card-requirement { padding: .45rem 0 .55rem .2rem; border-top: 1px solid color-mix(in srgb, var(--ma-border, #888) 55%, transparent); }
+.work-card-requirement-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem; font-weight: 600; }
+.work-card-requirement-text,
+.work-card-result { margin: .25rem 0; white-space: pre-wrap; }
+.work-card-status { padding: .1rem .42rem; border-radius: 999px; background: color-mix(in srgb, var(--ma-accent, #78aaff) 16%, transparent); font-size: .75rem; }
+.work-card-sources { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .25rem; }
+.work-card-source { padding: .08rem .35rem; border: 1px solid color-mix(in srgb, var(--ma-border, #888) 60%, transparent); border-radius: 6px; }
+.work-card-stale-note { margin: .25rem 0; color: var(--ma-text-muted, #9299a8); font-size: .78rem; }
+.work-card-all { margin-top: .55rem; }
+.work-card-all > summary { cursor: pointer; color: var(--ma-accent, #78aaff); font-weight: 600; }
+.work-card-all-list { margin-top: .4rem; }
+.work-card-unavailable { color: var(--ma-text-muted, #9299a8); }
+.work-card-item-states { margin: 0; padding-left: 1.1rem; }
+.work-card-item-state { display: flex; flex-wrap: wrap; gap: .4rem; padding: .2rem 0; }
+
+.work-card-requirement-detail { margin-top: .35rem; }
+.work-card-requirement-detail > summary { cursor: pointer; color: var(--ma-accent, #78aaff); font-size: .8rem; }
+
+
+.work-card-scope-label { margin: .15rem 0; color: var(--ma-accent, #78aaff); font-size: .8rem; font-weight: 650; }
+.work-card-host-receipts { margin: .35rem 0 .35rem 1.1rem; padding-left: .9rem; font-size: .82rem; }
+.work-card-host-receipts li { padding: .12rem 0; }
+.work-card-host-receipts code { overflow-wrap: anywhere; }

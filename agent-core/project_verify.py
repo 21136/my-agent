@@ -356,6 +356,154 @@ def _invoke_evolved(paths: AgentPaths, rel: str, fn_name: str, payload: dict[str
     return fn(payload)
 
 
+
+
+def requirement_pytest_input_snapshot(project_root: Path, target: str) -> tuple[Any, ...]:
+    """Best-effort stale-input check, not authentication or a full environment snapshot."""
+    import os
+    if (type(target) is not str or re.fullmatch(r"[A-Za-z0-9_./-]+\.py::test_[A-Za-z0-9_]+", target) is None):
+        raise ValueError("invalid target")
+    parts = target.split("::")[0].split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError("invalid target path")
+    root = Path(project_root).resolve(strict=True)
+    def fact(path: Path) -> tuple[Any, ...]:
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise ValueError("aliased input")
+        if not path.exists():
+            return (str(path), None)
+        stat = path.stat()
+        return (str(path), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    facts = [fact(Path(sys.executable))]
+    current = root
+    for part in parts[:-1]:
+        facts.append(fact(current / "conftest.py"))
+        current = current / part
+        if current.is_symlink() or getattr(current, "is_junction", lambda: False)():
+            raise ValueError("aliased directory")
+    facts.extend((fact(current / "conftest.py"), fact(current / parts[-1])))
+    environment = tuple((key, os.environ.get(key)) for key in
+                        ("PATH", "PYTHONPATH", "PYTHONHOME", "PYTEST_ADDOPTS", "PYTEST_PLUGINS", "VIRTUAL_ENV"))
+    return (tuple(facts), environment)
+
+@dataclass(frozen=True, slots=True)
+class RequirementPytestResult:
+    """Untrusted project-produced report observation; never a verification receipt."""
+
+    reported_pass: bool
+    exit_code: int | None
+    test_count: int
+    reason: str
+
+
+def run_requirement_pytest(project_root: Path, target: str, *, cancel_event: Any,
+                           timeout_sec: int = 120) -> RequirementPytestResult:
+    """Cross-check a single node's exit, terminal summary, and JUnit self-report.
+
+    All three are project-controlled and provide no authentication. User consent,
+    host lifecycle binding, and the trusted-project boundary belong to the caller.
+    """
+    import os
+    import subprocess
+    import tempfile
+    import time
+    import xml.etree.ElementTree as ET
+
+    failure = lambda reason, code=None: RequirementPytestResult(False, code, 0, reason)
+    if (type(target) is not str or len(target) > 512
+            or re.fullmatch(r"[A-Za-z0-9_./-]+\.py::test_[A-Za-z0-9_]+", target) is None
+            or not hasattr(cancel_event, "is_set")
+            or type(timeout_sec) is not int or not 1 <= timeout_sec <= 1800):
+        return failure("invalid_input")
+    file_part, test_name = target.split("::")
+    if any(part in ("", ".", "..") for part in file_part.split("/")):
+        return failure("invalid_target")
+    try:
+        root = Path(project_root).resolve(strict=True)
+        candidate = root.joinpath(*file_part.split("/"))
+        cursor = root
+        for part in file_part.split("/"):
+            cursor = cursor / part
+            if cursor.is_symlink():
+                return failure("aliased_target")
+        if not root.is_dir() or not candidate.is_file() or not candidate.resolve(strict=True).is_relative_to(root):
+            return failure("missing_target")
+        target_stat = candidate.stat()
+        target_identity = (target_stat.st_dev, target_stat.st_ino, target_stat.st_size, target_stat.st_mtime_ns)
+        root_stat = root.stat()
+        root_identity = (root_stat.st_dev, root_stat.st_ino)
+        if cancel_event.is_set():
+            return failure("cancelled")
+        with tempfile.TemporaryDirectory(prefix="requirement-pytest-") as temp:
+            tmp = Path(temp)
+            report = tmp / "report.xml"
+            config = tmp / "pytest.ini"
+            config.write_text("[pytest]\n", encoding="utf-8")
+            env = os.environ.copy()
+            for key in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTHONPATH", "PYTHONHOME"):
+                env.pop(key, None)
+            env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            argv = [sys.executable, "-m", "pytest", "-q", "-c", str(config),
+                    "--rootdir", str(root), "-o", "xfail_strict=true", "--junitxml", str(report), target]
+            with (tmp / "stdout").open("wb") as stdout, (tmp / "stderr").open("wb") as stderr:
+                process = subprocess.Popen(argv, cwd=str(root), env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+                deadline = time.monotonic() + timeout_sec
+                while process.poll() is None:
+                    if cancel_event.is_set() or time.monotonic() >= deadline:
+                        if os.name == "nt":
+                            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           timeout=10, check=False)
+                        if process.poll() is None:
+                            process.kill()
+                        process.wait(timeout=10)
+                        return failure("cancelled" if cancel_event.is_set() else "timeout")
+                    time.sleep(0.05)
+                code = process.returncode
+            if cancel_event.is_set():
+                return failure("cancelled", code)
+            if code != 0:
+                return failure("pytest_failed", code)
+            # Cross-check the single-node terminal progress and final summary
+            # against JUnit. Both originate in project-controlled Python and are
+            # evidence only under the user's explicit trusted-project boundary.
+            stdout_path, stderr_path = tmp / "stdout", tmp / "stderr"
+            if stdout_path.stat().st_size > 2_000_000 or stderr_path.stat().st_size > 2_000_000:
+                return failure("console_output_too_large", code)
+            text = stdout_path.read_text(encoding="utf-8", errors="replace")
+            err = stderr_path.read_text(encoding="utf-8", errors="replace")
+            lines = [line.strip() for line in re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines()]
+            progress = [line for line in lines if re.fullmatch(r"[.sFxEX]+\s*\[100%\]", line)]
+            summaries = [line for line in lines if re.search(r"\b(?:passed|failed|skipped|xfailed|xpassed|error|errors)\b.*\bin\s+\d+(?:\.\d+)?s\s*$", line)]
+            if (len(progress) != 1 or re.fullmatch(r"\.\s*\[100%\]", progress[0]) is None
+                    or len(summaries) != 1 or re.fullmatch(r"1 passed in \d+(?:\.\d+)?s", summaries[0]) is None
+                    or err.strip()):
+                return failure("console_report_conflict", code)
+            if not report.is_file() or report.stat().st_size > 2_000_000:
+                return failure("report_missing_or_large", code)
+            document = ET.parse(report).getroot()
+            suites = [document] if document.tag == "testsuite" else list(document.findall("testsuite"))
+            cases = document.findall(".//testcase")
+            expected_class = file_part[:-3].replace("/", ".")
+            if (len(suites) != 1 or len(cases) != 1
+                    or suites[0].get("tests") != "1"
+                    or any(suites[0].get(k, "0") != "0" for k in ("errors", "failures", "skipped"))
+                    or cases[0].get("classname") != expected_class
+                    or cases[0].get("name") != test_name
+                    or any(cases[0].find(k) is not None for k in ("skipped", "failure", "error"))):
+                return failure("report_not_exact_pass", code)
+            end_stat = candidate.stat()
+            end_root_stat = root.stat()
+            if (candidate.is_symlink() or candidate.resolve(strict=True) != root.joinpath(*file_part.split("/"))
+                    or (end_stat.st_dev, end_stat.st_ino, end_stat.st_size, end_stat.st_mtime_ns) != target_identity
+                    or (end_root_stat.st_dev, end_root_stat.st_ino) != root_identity
+                    or cancel_event.is_set()):
+                return failure("target_changed_or_cancelled", code)
+            return RequirementPytestResult(True, code, 1, "untrusted_report_claims_pass")
+    except (OSError, ValueError, ET.ParseError):
+        return failure("execution_or_report_error")
+
 def run_project_tests(
     paths: AgentPaths,
     *,

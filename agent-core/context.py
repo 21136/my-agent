@@ -19,7 +19,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from agent import has_anchor_message
 from llm_client import LLMClient, LLMError, LLMResponse, load_config, resolve_context_limit, resolve_session_model
-from session import Session
+from session import HOST_INTERNAL_METADATA_KEY, Session, _is_internal_work_card_message
 from tools.schema import ToolErrorCode, tool_fail, to_json
 
 _INTERRUPTED_TOOL_MESSAGE = to_json(
@@ -529,19 +529,30 @@ def build_llm_messages(
         return []
 
     start = effective_compact_start(session)
-    if has_anchor_message(session):
+    def is_interrupted_stream(message: dict[str, Any]) -> bool:
+        metadata = message.get(HOST_INTERNAL_METADATA_KEY)
+        return isinstance(metadata, dict) and metadata.get("stream_incomplete") is True
+
+    if has_anchor_message(session) and not _is_internal_work_card_message(messages[0]):
         anchor = messages[0]
-        tail = messages[start:]
+        tail = [message for message in messages[start:]
+                if not _is_internal_work_card_message(message) and not is_interrupted_stream(message)]
         if start <= 1 and not tail:
             result = repair_tool_messages([anchor])
         elif start <= 1:
             result = repair_tool_messages([anchor, *tail])
         else:
-            result = repair_tool_messages([anchor, *messages[start:]])
+            result = repair_tool_messages([anchor, *tail])
     else:
-        result = repair_tool_messages(messages[start:])
+        result = repair_tool_messages([message for message in messages[start:]
+                                       if not _is_internal_work_card_message(message)
+                                       and not is_interrupted_stream(message)])
     # Legacy [Harness]/狂奔续接 lines in old transcripts never reach the model.
     result = _drop_harness_chat_messages(result)
+    # Only the top-level reserved namespace is host-private. Never mutate the
+    # persisted history or strip user content/tool arguments with similar text.
+    result = [{key: value for key, value in message.items()
+               if key != HOST_INTERNAL_METADATA_KEY} for message in result]
     return _attach_multimodal_images(session, result) if include_images else result
 
 
@@ -657,6 +668,8 @@ def format_messages_for_digest(
     lines: list[str] = []
     total = 0
     for message in messages:
+        if _is_internal_work_card_message(message):
+            continue
         role = message.get("role", "?")
         if role == "tool" and not opts.include_tools:
             continue
@@ -727,6 +740,8 @@ def _mechanical_digest_body(session: Session, messages: list[dict[str, Any]]) ->
     path_hints: set[str] = set()
 
     for message in messages:
+        if _is_internal_work_card_message(message):
+            continue
         role = message.get("role")
         content = message.get("content")
         if role == "user" and isinstance(content, str):

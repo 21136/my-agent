@@ -4846,3 +4846,33 @@
   padding-top: 0.5rem;
   border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent);
 }
+
+/* The exact outbound card-recall preview remains unwrapped and scrollable. */
+[data-work-card-recall] .unified-confirm-preview,
+[data-work-card-recall] .unified-confirm-glass-preview {
+  white-space: pre;
+  overflow: auto;
+  max-height: 12rem;
+  max-width: 100%;
+}
+.unified-confirm-glass-card.is-work-card-recall {
+  max-height: min(80vh, 48rem);
+  overflow: auto;
+}
+
+/* Readable projection is scrollable independently of the confirmation actions. */
+.unified-recall-scroll { max-height: min(42vh, 20rem); overflow: auto; margin-top: 0.5rem; }
+.unified-recall-readable { font-size: 0.8rem; line-height: 1.55; color: var(--ma-text); }
+.unified-recall-note, .unified-recall-raw-label { color: var(--ma-text-muted); margin: 0.4rem 0; font-size: 0.75rem; }
+.unified-recall-value { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.unified-recall-candidate { border-top: 1px solid var(--ma-border); margin-top: 0.55rem; padding-top: 0.45rem; }
+.unified-recall-item { padding-left: 0.65rem; }
+.unified-recall-item ol { margin: 0.2rem 0 0.4rem; padding-left: 1.5rem; }
+
+.unified-recall-batch { border-top: 1px solid var(--ma-border); padding: 0.35rem 0; }
+.unified-recall-batch > summary { cursor: pointer; color: var(--ma-accent); font-weight: 600; }
+/* The exact excerpt remains in the chat flow, with no independent clipping. */
+[data-work-record-reply-excerpt] > .unified-confirm-preview { max-height: none !important; overflow: visible; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Complete authorized candidate values remain in the conversation flow. */
+[data-work-record-auto-candidate] > .unified-confirm-preview { max-height: none !important; overflow: visible; overflow-wrap: anywhere; white-space: pre-wrap; }

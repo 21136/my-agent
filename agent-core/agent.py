@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
 import json
+from copy import copy, deepcopy
 import os
 import re
 import sys
@@ -42,10 +46,908 @@ from tools.executor import ExecutorSession, ToolExecutor
 from tools.logging import EvolveLog, read_events
 from tool_proxies import PROXY_EVOLVED_TOOL_NAMES, build_proxy_tool_definitions
 from tools.registry import BUILTIN_TOOLS, ToolRegistry
-from tools.schema import ToolErrorCode, ToolResult, tool_fail, to_json
+from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 DEFAULT_TOOL_LOOP_MAX = 50
+
+
+def _is_explicit_work_card_receipt_continue(user_text: str) -> bool:
+    """Only a standalone affirmative request, never an inferred or quoted action."""
+    if type(user_text) is not str:
+        return False
+    return re.fullmatch(
+        r"\s*(?:请|请帮我|帮我|麻烦)?继续恢复(?:当前会话的|本会话的)?工作卡(?:片)?(?:吧|一下)?[。！？!?]?\s*",
+        user_text,
+    ) is not None
+
+
+def _explicit_project_card_refresh(user_text: str) -> str | None:
+    """Locally recognize a few exact, standalone refresh phrasings; never infer scope."""
+    if type(user_text) is not str:
+        return None
+    project = r"([A-Za-z0-9][A-Za-z0-9._-]{0,63})"
+    patterns = (
+        r"(?:请|请帮我|帮我)?刷新项目工作卡[ \t]+" + project,
+        r"(?:请|请帮我|帮我)?把项目[ \t]+" + project + r"[ \t]*的工作卡(?:重新发一遍|再发一次|重新发一次|再发一遍)",
+        r"(?:请|请帮我|帮我)?(?:看看|查看)项目[ \t]+" + project + r"[ \t]*的?最新工作卡",
+    )
+    match = next((m for pattern in patterns if (m := re.fullmatch(
+        r"[ \t]*" + pattern + r"[。！!]?[ \t]*", user_text))), None)
+    if match is None:
+        return None
+    from project_mode import normalize_project_id
+    try:
+        project_id = normalize_project_id(match.group(1))
+        return project_id if project_id == match.group(1) else None
+    except Exception:
+        return None
+
+
+def _is_multi_project_card_refresh(user_text: str) -> bool:
+    if type(user_text) is not str:
+        return False
+    pid = r"[a-z][a-z0-9-]{0,63}"
+    multiple = pid + r"[ \t]*(?:和|与|以及|、)[ \t]*" + pid
+    return re.fullmatch(
+        r"[ \t]*(?:请|请帮我|帮我)?(?:看看|查看)项目[ \t]+" + multiple
+        + r"[ \t]*的?最新工作卡[。！!]?[ \t]*", user_text) is not None
+
+
+def _is_explicit_work_card_lookup(user_text: str) -> bool:
+    """Recognize only a standalone, affirmative historical work-card lookup."""
+    if type(user_text) is not str:
+        return False
+    text = user_text.strip()
+    if text.endswith(("。", "？", "！", ".", "?", "!")):
+        text = text[:-1].rstrip()
+    result_question_suffix = "\uff0c\u7ed3\u679c\u5982\u4f55"
+    if text.endswith(result_question_suffix):
+        text = text[:-len(result_question_suffix)].rstrip()
+    # Do not interpret quoted speech, multiple clauses, or potentially mixed actions.
+    if (not text or len(text) > 300 or re.search(r"[\r\n，,；;：:、。！？!?\"'`“”‘’「」『』<>]", text)
+            or re.search(r"不要|不必|不用|别|不找|不是|取消|创建|新建|生成|修改|更改|编辑|删除|移除|执行|运行|发送|打开|并|然后|以及|同时|顺便|接着|上传|下载|发布|提交|启动|重启|备份|写入|覆盖", text)):
+        return False
+    return re.fullmatch(
+        r"(?:请|请帮我|帮我|麻烦|麻烦帮我)?(?:找回|查找)"
+        r"(?:之前|以前|历史|过去|上次)(?:的|那张|那份|那一张)?"
+        r"(?:关于[^\s]{1,100}的)?工作卡(?:片)?(?:吧|一下)?", text,
+    ) is not None
+
+
+def _is_explicit_work_record_lookup(user_text: str) -> bool:
+    """Route explicit historical project/record lookups, not conversational recap."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    from turn_intent import classify_turn
+
+    # Preserve execution and every other established intent route.
+    if classify_turn(text) == "execute":
+        return False
+    lower = text.casefold()
+    has_historical_scope = any(marker in lower for marker in (
+        "之前", "以前", "过去", "历史", "上次", "以往", "旧项目",
+        "recorded", "previous", "prior", "past", "historical", "history",
+    ))
+    has_explicit_record_scope = any(marker in lower for marker in (
+        "工作记录", "项目记录", "事项记录", "任务记录", "work record",
+        "work-record", "project record", "task record", "mission log",
+        "mission-log", "work item", "work-item",
+    ))
+    has_project_or_item_scope = any(marker in lower for marker in (
+        "项目", "事项", "project", "work item", "work-item", "task",
+    ))
+    asks_for_record = any(marker in lower for marker in (
+        "记录", "回查", "检索", "查", "找", "recap", "summarize",
+        "requirements", "retrieve", "look up",
+    ))
+    asks_about_past_work = any(marker in lower for marker in (
+        "做了什么", "做过什么", "完成了什么", "有哪些", "哪些事项",
+        "项目进展", "项目结果", "之前做的", "以前做的", "what did",
+        "what was done", "what we did", "completed", "deliverables",
+    ))
+    return has_historical_scope and (
+        (has_explicit_record_scope and asks_for_record)
+        or (has_project_or_item_scope and asks_about_past_work)
+    )
+
+
+
+def _is_explicit_all_projects_work_overview(user_text: str) -> bool:
+    """Conservative full-message match; never infer project scope from model text."""
+    if not isinstance(user_text, str) or not user_text.strip():
+        return False
+    text = user_text.strip()
+    if any(mark in text for mark in ('"', "'", "`", "“", "”", "‘", "’", "「", "」", "『", "』", ">")):
+        return False
+    normalized = re.sub(r"[\s，。！？、；：,.!?;:（）()【】\[\]{}]+", "", text)
+    return re.fullmatch(
+        r"(?:请给我|给我|请帮我查看|请查看|帮我查看|查看|请展示|展示|请|帮我|看看|看一下)?"
+        r"(?:所有|全部)项目(?:的)?(?:工作概况|工作整体概况|工作总体概况|工作总览)"
+        r"(?:吧|吗|呢|一下)?", normalized,
+    ) is not None
+
+
+
+def _semantic_project_name_occurs_once(text: str, name: str) -> bool:
+    """Require one exact occurrence, preserving ASCII identifier token boundaries."""
+    ascii_identifier = re.compile(r"[A-Za-z0-9_-]")
+    occurrences = 0
+    for match in re.finditer(re.escape(name), text):
+        left_is_identifier = bool(name and name[0].isascii() and ascii_identifier.fullmatch(name[0]))
+        right_is_identifier = bool(name and name[-1].isascii() and ascii_identifier.fullmatch(name[-1]))
+        if (left_is_identifier and match.start() > 0
+                and ascii_identifier.fullmatch(text[match.start() - 1])):
+            continue
+        if (right_is_identifier and match.end() < len(text)
+                and ascii_identifier.fullmatch(text[match.end()])):
+            continue
+        occurrences += 1
+    return occurrences == 1
+
+
+def _resolve_semantic_project_names(session: Any, names: Any, user_text: str) -> list[str] | None:
+    """Resolve exact model-extracted names against the local trusted project-session index."""
+    if (type(names) is not tuple or not 1 <= len(names) <= 6
+            or type(user_text) is not str):
+        return None
+    try:
+        from paths import read_agent_state_payload
+        from project_mode import normalize_project_id, project_dir
+        from project_switch import PROJECT_SESSIONS_KEY, read_project_sessions
+
+        raw = read_agent_state_payload(session.paths).get(PROJECT_SESSIONS_KEY)
+        mapping = read_project_sessions(session.paths)
+        if (type(raw) is not dict or raw != mapping or not mapping
+                or any(normalize_project_id(pid) != pid for pid in mapping)):
+            return None
+        name_to_ids: dict[str, set[str]] = {}
+        for project_id in mapping:
+            # The canonical ID comes only from the local project_sessions index.
+            name_to_ids.setdefault(project_id, set()).add(project_id)
+            try:
+                local_name = project_dir(session.paths, project_id).name
+            except Exception:
+                continue
+            if isinstance(local_name, str) and local_name:
+                name_to_ids.setdefault(local_name, set()).add(project_id)
+
+        resolved: list[str] = []
+        for name in names:
+            if (type(name) is not str or not name or name != name.strip()
+                    or any(ord(char) < 32 or ord(char) == 127 for char in name)
+                    or not _semantic_project_name_occurs_once(user_text, name)):
+                return None
+            matches = name_to_ids.get(name, set())
+            if len(matches) != 1:
+                return None
+            project_id = next(iter(matches))
+            # A shorter candidate is not sufficient when the user's text contains
+            # a longer exact name/ID belonging to another trusted project.
+            if any(
+                other_name != name and name in other_name
+                and _semantic_project_name_occurs_once(user_text, other_name)
+                and any(other_id != project_id for other_id in other_ids)
+                for other_name, other_ids in name_to_ids.items()
+            ):
+                return None
+            if project_id in resolved:
+                return None
+            resolved.append(project_id)
+        return resolved
+    except Exception:
+        return None
+
+
+def _explicit_project_overview_selection(user_text: str) -> str | None:
+    """Recognize a narrow whole-message request; validate its IDs separately."""
+    if not isinstance(user_text, str):
+        return None
+    text = user_text.strip()
+    if any(mark in text for mark in ('"', "'", "`", "“", "”", "‘", "’", "「", "」", "『", "』", ">", "\n", "\r")):
+        return None
+    matched = re.fullmatch(
+        r"(?:请查看|帮我查看|请帮我查看|查看|请看|看看|请展示|展示)项目\s*(.*?)\s*的工作概况[。！？!?]?",
+        text,
+    )
+    return matched.group(1) if matched else None
+
+
+
+def _explicit_current_batch_project_overview(user_text: str) -> str | None:
+    """Recognize an exact project-id query scoped to this current Session's trusted batch."""
+    if not isinstance(user_text, str) or not user_text.strip() or len(user_text) > 220:
+        return None
+    from turn_intent import classify_turn
+
+    if classify_turn(user_text) == "execute":
+        return None
+    text = user_text.strip()
+    if any(mark in text for mark in ('"', "'", "`", "“", "”", "‘", "’", "「", "」", "『", "』", ">", "\n", "\r")):
+        return None
+    if re.search(r"之前|以前|过去|历史|上次|以往|旧项目|工作记录|回查|检索|找回|\brecord(?:ed)?\b|\bhistory\b", text):
+        return None
+    normalized = re.sub(r"[\s，。！？、；：,.!?;:（）()【】\[\]{}]+", " ", text).strip()
+    match = re.fullmatch(
+        r"(?:(?:请给我|给我|请帮我查看|帮我查看|请查看|查看|请看|看看|看一下|请|帮我)\s*)?"
+        r"项目\s*([a-z][a-z0-9-]{0,63})\s*(?:(?:现在|目前)\s*)?(?:的\s*)?"
+        r"(?:工作\s*)?(?:情况如何|情况怎么样|工作概况|工作总览|工作情况)(?:吗|呢|吧|一下)?",
+        normalized,
+    )
+    if not match:
+        return None
+    project_id = match.group(1)
+    if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", project_id) is None:
+        return None
+    return project_id
+
+def _is_explicit_current_project_overview(user_text: str) -> bool:
+    """Recognize only an affirmative, standalone overview request for this project."""
+    if not isinstance(user_text, str) or not user_text.strip():
+        return False
+    from turn_intent import classify_turn
+
+    if classify_turn(user_text) == "execute":
+        return False
+    text = user_text.strip().casefold()
+    if any(mark in text for mark in ('"', "'", "`", "“", "”", "‘", "’", "「", "」", "『", "』", ">")):
+        return False
+    normalized = re.sub(r"[\s，。！？、；：,.!?;:（）()【】\[\]{}]+", "", text)
+    if any(token in normalized for token in ("不要", "别", "不需要", "不用", "无需", "不必", "请勿", "禁止", "不想")):
+        return False
+    return re.fullmatch(
+        r"(?:请给我|给我|请帮我查看|请查看|帮我查看|查看|请看|看看|看一下|请|帮我)?"
+        r"(?:当前项目|本项目)(?:的)?(?:工作)?(?:情况如何|情况怎么样|工作概况|工作总览|工作情况)"
+        r"(?:吗|呢|吧|一下)?", normalized,
+    ) is not None
+
+def _is_explicit_current_work_overview(user_text: str) -> bool:
+    """Recognize only a standalone, affirmative request for this Session's overview."""
+    if not isinstance(user_text, str) or not user_text.strip():
+        return False
+    from turn_intent import classify_turn
+
+    if classify_turn(user_text) == "execute":
+        return False
+
+    text = user_text.strip().casefold()
+    if re.match(r"(?m)^\s*>", text):
+        return False
+    # Mentions inside quoted text are not an instruction to render the overview.
+    if any(mark in text for mark in ('"', "'", "`", "\u201c", "\u201d", "\u2018", "\u2019", "\u300c", "\u300d", "\u300e", "\u300f")):
+        return False
+
+    normalized = re.sub(r"[\s，。！？、；：,.!?;:（）()【】\[\]{}]+", "", text)
+    if any(token in normalized for token in (
+        "\u4e0d\u8981", "\u522b", "\u4e0d\u9700\u8981", "\u4e0d\u7528",
+        "\u65e0\u9700", "\u4e0d\u5fc5", "\u8bf7\u52ff", "\u7981\u6b62", "\u4e0d\u60f3",
+    )):
+        return False
+    # A current-session overview cannot answer a request for other projects or sessions.
+    if any(token in normalized for token in (
+        "\u5168\u9879\u76ee", "\u6574\u4e2a\u9879\u76ee", "\u6240\u6709\u9879\u76ee",
+        "\u5168\u90e8\u9879\u76ee", "\u8de8\u9879\u76ee", "\u591a\u9879\u76ee", "\u5176\u4ed6\u9879\u76ee",
+        "\u5168\u5de5\u7a0b", "\u6240\u6709\u5de5\u7a0b", "\u5168\u5c40", "\u5168\u5de5\u4f5c\u533a",
+        "\u6240\u6709\u5de5\u4f5c\u533a", "\u5168\u90e8\u5de5\u4f5c\u533a",
+        "\u8de8\u4f1a\u8bdd", "\u6240\u6709\u4f1a\u8bdd", "\u5168\u90e8\u4f1a\u8bdd",
+        "\u5176\u4ed6\u4f1a\u8bdd", "\u8de8\u5bf9\u8bdd", "\u5176\u4ed6\u5bf9\u8bdd",
+    )):
+        return False
+
+    markers = (
+        "\u5f53\u524d\u5de5\u4f5c\u6574\u4f53\u6982\u51b5",
+        "\u5f53\u524d\u5de5\u4f5c\u7684\u6574\u4f53\u6982\u51b5",
+        "\u5f53\u524d\u5de5\u4f5c\u603b\u4f53\u6982\u51b5",
+        "\u5f53\u524d\u5de5\u4f5c\u603b\u89c8",
+        "\u5f53\u524d\u5de5\u4f5c\u6982\u51b5",
+        "\u5f53\u524d\u7684\u5de5\u4f5c\u6982\u51b5",
+        "\u76ee\u524d\u5de5\u4f5c\u6574\u4f53\u6982\u51b5",
+        "\u76ee\u524d\u5de5\u4f5c\u603b\u89c8",
+        "\u76ee\u524d\u5de5\u4f5c\u6982\u51b5",
+        "\u76ee\u524d\u7684\u5de5\u4f5c\u6982\u51b5",
+        "\u73b0\u5728\u5de5\u4f5c\u6982\u51b5",
+        "\u5f53\u524d\u4f1a\u8bdd\u5de5\u4f5c\u6982\u51b5",
+        "当前会话的工作概况", "当前会话工作整体概况", "当前会话的工作整体概况",
+        "当前会话工作总览", "当前会话的工作总览",
+        "本会话工作概况", "本会话的工作概况", "本会话工作整体概况",
+        "本会话的工作整体概况", "本会话工作总览", "本会话的工作总览",
+    )
+    prefixes = (
+        "", "\u8bf7", "\u8bf7\u7ed9\u6211", "\u7ed9\u6211", "\u9ebb\u70e6",
+        "\u9ebb\u70e6\u7ed9\u6211", "\u5e2e\u6211", "\u8bf7\u5e2e\u6211",
+        "\u67e5\u770b", "\u67e5\u4e00\u4e0b", "\u67e5\u4e0b", "\u67e5\u8be2",
+        "\u770b\u770b", "\u770b\u4e00\u4e0b", "\u770b\u4e0b", "\u5e2e\u6211\u770b\u770b",
+        "\u5e2e\u6211\u770b\u4e0b", "\u8bf7\u770b\u770b", "\u8bf7\u67e5\u770b",
+        "\u5c55\u793a", "\u8bf7\u5c55\u793a", "\u5217\u51fa", "\u6c47\u603b",
+        "\u603b\u7ed3", "\u6982\u62ec", "\u8bf4\u4e0b", "\u6211\u60f3\u770b",
+        "\u6211\u60f3\u4e86\u89e3", "\u80fd\u5426\u67e5\u770b", "\u80fd\u4e0d\u80fd\u67e5\u770b",
+        "\u80fd\u5426\u7ed9\u6211", "\u80fd\u4e0d\u80fd\u7ed9\u6211",
+    )
+    suffixes = ("", "\u5427", "\u5417", "\u5462", "\u4e00\u4e0b", "\u4e0b", "\u5373\u53ef", "\u5c31\u884c")
+    return any(normalized == prefix + marker + suffix
+               for prefix in prefixes for marker in markers for suffix in suffixes)
+
+
+WORK_RECORD_RECALL_CONFIRM_EVENT_MAX_BYTES = 768 * 1024
 MAIN_LOOP_TEMPERATURE = 0.3
+
+
+class _ProjectWorkerRecordMatchError(ValueError):
+    def __init__(self, reason: str, *, project_id: str, task: str) -> None:
+        self.reason = reason
+        self.project_id = project_id
+        self.task = task
+        super().__init__(reason)
+
+
+def _match_project_worker_tasks_to_existing_requirements(requests, authorized_sources):
+    """Select only one exact-text requirement from each authorized project source."""
+    from work_records import _digest
+    matches = []
+    assigned_records: set[tuple[str, str, str]] = set()
+    for request in requests:
+        source = authorized_sources.get(request.project_id)
+        if source is None or source.project_id != request.project_id:
+            raise PermissionError("authorized project work-record source is unavailable")
+        store = source.store
+        store.validate_scope()
+        if store.project_id != request.project_id:
+            raise PermissionError("authorized source project binding changed")
+        items = store.list_items()
+        store.validate_scope()
+        candidates = []
+        for item in items:
+            if type(item) is not dict or type(item.get("scope")) is not dict:
+                continue
+            scope = item["scope"]
+            if scope.get("kind") != "project" or scope.get("project_id") != request.project_id:
+                continue
+            requirements = item.get("requirements")
+            if type(requirements) is not list:
+                continue
+            for requirement in requirements:
+                if (type(requirement) is dict and type(requirement.get("text")) is str
+                        and requirement["text"] == request.task
+                        and type(item.get("item_id")) is str
+                        and type(requirement.get("requirement_id")) is str):
+                    candidates.append((item, requirement))
+        if not candidates:
+            raise _ProjectWorkerRecordMatchError(
+                "missing_exact_requirement", project_id=request.project_id, task=request.task,
+            )
+        if len(candidates) != 1:
+            raise _ProjectWorkerRecordMatchError(
+                "ambiguous_exact_requirement", project_id=request.project_id, task=request.task,
+            )
+        item, requirement = candidates[0]
+        record_key = (request.project_id, item["item_id"], requirement["requirement_id"])
+        if record_key in assigned_records:
+            raise _ProjectWorkerRecordMatchError(
+                "requirement_reused_in_batch", project_id=request.project_id, task=request.task,
+            )
+        assigned_records.add(record_key)
+        matches.append({
+            "request": request,
+            "project_id": request.project_id,
+            "source_session_id": store.session_id,
+            "item_id": item["item_id"],
+            "item_title": item.get("title", ""),
+            "source_item_digest": _digest(item),
+            "requirement_id": requirement["requirement_id"],
+            "requirement_text": requirement["text"],
+            "requirement_status": requirement.get("status", "unknown"),
+        })
+    return matches
+
+
+def _project_worker_task_identity(conversation_id: str, match: dict[str, Any]) -> str:
+    raw = "\0".join((
+        conversation_id, match["project_id"], match["source_session_id"],
+        match["item_id"], match["requirement_id"], match["requirement_text"],
+    ))
+    return "task-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _worker_lifecycle_finish_reason(status: str) -> str:
+    return {
+        "failed": "error", "cancelled": "cancelled", "limit_reached": "timeout",
+    }.get(status, "unknown")
+
+
+class _CurrentDialogueWorkerRecordWriteError(RuntimeError):
+    def __init__(
+        self, *, item_id: str | None, persisted_task_count: int,
+        task_count: int, cancelled: bool = False, uncertain: bool = False,
+    ) -> None:
+        self.item_id = item_id
+        self.persisted_task_count = persisted_task_count
+        self.task_count = task_count
+        self.cancelled = cancelled
+        self.uncertain = uncertain
+        super().__init__("current dialogue worker record batch was not fully persisted")
+
+
+def _latest_current_user_request(session: Session) -> str | None:
+    for message in reversed(getattr(session, "messages", [])):
+        if type(message) is dict and message.get("role") == "user":
+            content = message.get("content")
+            return content if type(content) is str and content.strip() else None
+    return None
+
+
+def _independent_target_is_explicit_in_current_request(session: Session, target_path: str) -> bool:
+    """Require a literal path and positive write intent without global negation guesses."""
+    if type(target_path) is not str or not target_path.strip() or len(target_path) > 2048:
+        return False
+    request = _latest_current_user_request(session)
+    if request is None or len(request) > 24_000:
+        return False
+    target = target_path.strip()
+    target_start = request.find(target)
+    if target_start < 0:
+        return False
+    target_end = target_start + len(target)
+
+    action = re.compile(
+        r"写入|修改|更改|编辑|更新|覆盖|重写|改|动|创建(?:文件)?|保存到|write(?:\s+to)?|edit|modify|update|overwrite|create(?:\s+file)?|save(?:\s+to)?",
+        re.IGNORECASE,
+    )
+    negator_before_action = re.compile(
+        r"(?:\b(?:do\s+not|don't|dont|never|cannot|can't|must\s+not|should\s+not|not\s+to)\b|"
+        r"(?:\u4e0d(?:\u8981|\u60f3|\u613f|\u5fc5|\u7528|\u9700\u8981|\u5e94(?:\u8be5)?|\u8be5|\u80fd|\u53ef\u4ee5|\u8bb8|\u51c6|\u5f97|\u5b9c)?|"
+        r"\u7981\u6b62|\u4e25\u7981|\u8bf7\u52ff|\u52ff|\u5343\u4e07\u522b|\u8bf7\u522b|"
+        r"(?<!\u5206)(?<!\u7279)\u522b))\s*(?:(?:\u518d|\u7ee7\u7eed|\u53bb)\s*)?$",
+        re.IGNORECASE,
+    )
+
+    def is_negated(match: re.Match[str]) -> bool:
+        return bool(negator_before_action.search(request[max(0, match.start() - 40):match.start()]))
+
+    actions = list(action.finditer(request))
+    delimiters = list(re.finditer(r"[\r\n。！？!?；;，,]", request))
+    clause_start = max((match.end() for match in delimiters if match.end() <= target_start), default=0)
+    clause_end = min((match.start() for match in delimiters if match.start() >= target_end), default=len(request))
+    target_clause_actions = [
+        match for match in actions if match.start() >= clause_start and match.end() <= clause_end
+    ]
+    # Require positive write intent in the target's own clause; an unrelated
+    # edit elsewhere in the message cannot authorize this path.
+    if not any(not is_negated(match) for match in target_clause_actions):
+        return False
+
+    prior_actions = [match for match in target_clause_actions if match.end() <= target_start]
+    if prior_actions:
+        nearest = prior_actions[-1]
+        bridge = request[nearest.end():target_start]
+        if is_negated(nearest) and re.fullmatch(
+            r"[\s:：]*(?:(?:to|on|at)\s+)?(?:(?:\u8fd9\u4e2a|\u8be5|\u6b64|\u76ee\u6807)?"
+            r"(?:\u7b80\u5386|\u6587\u4ef6|\u8def\u5f84|\u6587\u6863))*[\s:：]*",
+            bridge, re.IGNORECASE,
+        ):
+            return False
+
+    following_actions = [match for match in target_clause_actions if match.start() >= target_end]
+    if following_actions:
+        nearest = following_actions[0]
+        bridge = request[target_end:nearest.start()]
+        if is_negated(nearest) and re.fullmatch(r"[\s:：-]*", bridge):
+            return False
+
+    # A bare negative continuation immediately after the named path refers to
+    # that target unless it names a different object ("other files").
+    later_actions = [match for match in actions if match.start() >= target_end]
+    if later_actions:
+        nearest = later_actions[0]
+        bridge = request[target_end:nearest.start()]
+        if is_negated(nearest) and re.fullmatch(r"[\s,，:：。.!?！？-]*", bridge):
+            tail = request[nearest.end():nearest.end() + 40]
+            if not re.match(r"\s*(?:other\b|\u5176\u4ed6|\u5176\u4ed6\u6587\u4ef6)", tail, re.IGNORECASE):
+                return False
+
+    return True
+
+
+def _create_current_dialogue_worker_records(
+    session: Session, original_request: str, requests,
+    *, parent_run_id: str, turn_epoch: int,
+    continue_check: Callable[[], bool] | None = None,
+):
+    """Create one independent current-dialogue item plus project-tagged task requirements."""
+    from work_records import WorkRecordStore
+    from project_worker_host import ProjectWorkerHostRequest
+
+    if type(original_request) is not str or not original_request.strip() or len(original_request) > 24_000:
+        raise ValueError("original request is missing or outside the bounded record size")
+    normalized_tasks = []
+    for request in requests:
+        task_text = request.task.strip()
+        if not task_text:
+            raise ValueError("worker task is empty")
+        normalized_tasks.append({
+            "project_id": request.project_id, "task": task_text,
+            "read_targets": list(request.read_targets), "write_targets": list(request.write_targets),
+        })
+    batch_payload = {
+        "conversation_id": session.conversation_id,
+        "parent_run_id": parent_run_id,
+        "turn_epoch": turn_epoch,
+        "original_request": original_request,
+        "tasks": normalized_tasks,
+    }
+    batch_digest = hashlib.sha256(
+        json.dumps(batch_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    store = WorkRecordStore(session)
+    if callable(continue_check) and continue_check() is not True:
+        raise _CurrentDialogueWorkerRecordWriteError(
+            item_id=None, persisted_task_count=0, task_count=len(requests), cancelled=True,
+        )
+    original_key = f"worker-batch-original:{batch_digest}"
+    original_event_id = f"worker-batch-original-{batch_digest}"
+
+    def find_event(key: str):
+        for item in store.list_items():
+            for event in item.get("history", []):
+                if type(event) is dict and event.get("idempotency_key") == key:
+                    return item, event
+        return None, None
+
+    try:
+        created_item_result = store.create_item_with_requirement(
+            title="多项目任务批次",
+            scope={"kind": "independent"},
+            requirement=original_request,
+            event_id=original_event_id,
+            idempotency_key=original_key,
+            return_commit_status=True,
+        )
+        item = created_item_result[0]
+    except Exception:
+        try:
+            item, _event = find_event(original_key)
+        except Exception:
+            raise _CurrentDialogueWorkerRecordWriteError(
+                item_id=None, persisted_task_count=0, task_count=len(requests), uncertain=True,
+            ) from None
+        if item is None:
+            raise _CurrentDialogueWorkerRecordWriteError(
+                item_id=None, persisted_task_count=0, task_count=len(requests),
+            ) from None
+    item_id = item.get("item_id") if type(item) is dict else None
+    original_event = next((row for row in item.get("history", [])
+                           if type(row) is dict and row.get("idempotency_key") == original_key), None)
+    original_requirement_id = (original_event.get("payload", {}).get("requirement_id")
+                               if type(original_event) is dict else None)
+    if type(item_id) is not str or not item_id or type(original_requirement_id) is not str:
+        raise _CurrentDialogueWorkerRecordWriteError(
+            item_id=item_id if type(item_id) is str else None,
+            persisted_task_count=0, task_count=len(requests),
+        )
+
+    task_rows = []
+    bound_requests = []
+    for index, (request, task) in enumerate(zip(requests, normalized_tasks)):
+        if callable(continue_check) and continue_check() is not True:
+            raise _CurrentDialogueWorkerRecordWriteError(
+                item_id=item_id, persisted_task_count=len(task_rows),
+                task_count=len(requests), cancelled=True,
+            )
+        key = f"worker-batch-task:{batch_digest}:{index}"
+        event_id = f"worker-batch-task-{batch_digest}-{index}"
+        try:
+            added = store.add_requirement(
+                item_id, task["task"], event_id=event_id,
+                source_ref={"kind": "project", "id": task["project_id"]},
+                idempotency_key=key,
+                return_commit_status=True,
+            )
+            requirement = added[0]
+        except Exception:
+            try:
+                latest_item, event = find_event(key)
+            except Exception:
+                raise _CurrentDialogueWorkerRecordWriteError(
+                    item_id=item_id, persisted_task_count=len(task_rows),
+                    task_count=len(requests), uncertain=True,
+                ) from None
+            requirement_id = (event.get("payload", {}).get("requirement_id")
+                              if type(event) is dict else None)
+            requirement = next((row for row in latest_item.get("requirements", [])
+                                if type(row) is dict and row.get("requirement_id") == requirement_id), None) if latest_item else None
+        if (type(requirement) is not dict or requirement.get("text") != task["task"]
+                or requirement.get("source_ref") != {"kind": "project", "id": task["project_id"]}):
+            raise _CurrentDialogueWorkerRecordWriteError(
+                item_id=item_id, persisted_task_count=len(task_rows), task_count=len(requests),
+            )
+        requirement_id = requirement.get("requirement_id")
+        if type(requirement_id) is not str or not requirement_id:
+            raise _CurrentDialogueWorkerRecordWriteError(
+                item_id=item_id, persisted_task_count=len(task_rows), task_count=len(requests),
+            )
+        task_id = "task-" + hashlib.sha256(
+            "\0".join((session.conversation_id, item_id, requirement_id, task["project_id"])).encode("utf-8")
+        ).hexdigest()
+        bound_request = ProjectWorkerHostRequest(
+            project_id=task["project_id"], task_id=task_id, task=task["task"],
+            read_targets=request.read_targets, write_targets=request.write_targets,
+        )
+        task_rows.append({
+            "project_id": task["project_id"], "task_id": task_id,
+            "task_input": task["task"], "item_id": item_id,
+            "requirement_id": requirement_id, "current_run_id": requirement.get("current_run_id"),
+            "source_ref": requirement["source_ref"],
+        })
+        bound_requests.append(bound_request)
+    store._validate_scope()
+    return store, item_id, original_requirement_id, task_rows, bound_requests, batch_digest
+
+
+def _serialize_project_worker_read_attempts(model_turn: Any) -> tuple[bool, list[dict[str, Any]]]:
+    """Compatibility wrapper for the shared strict, content-free serializer."""
+    from project_worker_read_evidence import serialize_project_worker_read_attempts
+    return serialize_project_worker_read_attempts(model_turn)
+
+
+def _record_current_dialogue_worker_lifecycle(
+    store: Any, *, session_id: str, item_id: str, requirement_id: str,
+    outcome: Any, reservation: Any, expected_requirement_text: str,
+) -> str:
+    """Persist an exact host result without manufacturing a worker start."""
+    from project_worker_host import project_worker_outcome_matches_reservation
+    from project_worker_model_loop import ProjectWorkerWriteReceipt
+    from work_records import WorkRecordStaleRun
+    if not project_worker_outcome_matches_reservation(reservation, outcome):
+        raise ValueError("worker lifecycle does not match its host reservation")
+    if (type(expected_requirement_text) is not str or not expected_requirement_text.strip()
+            or getattr(getattr(store, "_session", None), "conversation_id", None) != session_id
+            or getattr(reservation, "conversation_id", None) != session_id
+            or getattr(reservation, "project_id", None) != getattr(outcome, "project_id", None)
+            or getattr(reservation, "task_id", None) != getattr(outcome, "task_id", None)):
+        raise ValueError("worker requirement/session binding is invalid")
+    expected_task_id = "task-" + hashlib.sha256(
+        "\0".join((session_id, item_id, requirement_id, reservation.project_id)).encode("utf-8")
+    ).hexdigest()
+    if reservation.task_id != expected_task_id:
+        raise ValueError("worker reservation is not bound to this requirement")
+    item = store.get_item(item_id)
+    scope = item.get("scope") if type(item) is dict else None
+    if (type(item) is not dict or type(scope) is not dict or scope.get("kind") != "independent"
+            or scope.get("object_ref") not in (None, "")):
+        raise ValueError("current-dialogue worker item scope changed")
+    requirement = next((row for row in item.get("requirements", [])
+                        if type(row) is dict and row.get("requirement_id") == requirement_id), None)
+    if (requirement is None or requirement.get("text") != expected_requirement_text
+            or requirement.get("source_ref") != {"kind": "project", "id": reservation.project_id}):
+        raise ValueError("current-dialogue worker requirement binding changed")
+    current_run_id = requirement.get("current_run_id")
+    if current_run_id is None:
+        if outcome.status == "blocked" and outcome.model_turn is None:
+            # Host preflight rejection is a durable blocked fact, not a worker
+            # start/result. record_result atomically refuses if a start races it.
+            result_id = "worker-result-" + hashlib.sha256(
+                "\0".join((session_id, item_id, requirement_id, reservation.worker_run_id)).encode("utf-8")
+            ).hexdigest()
+            error_code = (outcome.error_code if type(outcome.error_code) is str
+                          and len(outcome.error_code.encode("utf-8")) <= 128 else "blocked")
+            summary = json.dumps({
+                "kind": "project_worker_host_lifecycle", "result_status": "blocked",
+                "session_id": session_id, "item_id": item_id, "requirement_id": requirement_id,
+                "project_id": reservation.project_id, "task_id": reservation.task_id,
+                "worker_id": reservation.worker_id, "worker_run_id": reservation.worker_run_id,
+                "reservation_id": reservation.reservation_id, "parent_run_id": reservation.parent_run_id,
+                "parent_epoch": reservation.turn_epoch, "host_status": "blocked",
+                "host_error_code": error_code, "worker_execution_started": False,
+                "worker_result_claimed": False, "acceptance_status": "not_run",
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            try:
+                store.record_result(
+                    item_id, requirement_id, run_id=reservation.worker_run_id, result_id=result_id,
+                    status="blocked", summary=summary,
+                    verification={"status": "not_verified", "evidence_refs": []}, sources=[],
+                )
+            except WorkRecordStaleRun:
+                # Another execution won the current-run CAS. Do not overwrite it.
+                return "blocked_not_recorded"
+            return "blocked_recorded"
+        if outcome.status == "cancelled" and outcome.model_turn is None:
+            return "not_started"
+        raise ValueError("worker start record is missing for a non-blocked outcome")
+    if current_run_id != reservation.worker_run_id:
+        if outcome.status == "blocked" and outcome.model_turn is None:
+            return "blocked_not_recorded"
+        raise WorkRecordStaleRun("worker outcome belongs to a stale current run")
+
+    write_receipts: list[dict[str, Any]] = []
+    write_receipts_available = False
+    try:
+        read_attempts_available, read_attempts = _serialize_project_worker_read_attempts(outcome.model_turn)
+    except Exception:
+        # Do not let malformed or absent evidence block persistence of the real lifecycle.
+        read_attempts_available, read_attempts = False, []
+    model_turn = outcome.model_turn
+    if model_turn is not None and type(model_turn.writes) is tuple and len(model_turn.writes) <= 32:
+        candidate_receipts = []
+        for receipt in model_turn.writes:
+            if (type(receipt) is not ProjectWorkerWriteReceipt
+                    or type(receipt.path) is not str or not receipt.path.strip()
+                    or len(receipt.path.encode("utf-8")) > 512
+                    or Path(receipt.path).is_absolute() or ".." in Path(receipt.path).parts
+                    or any(type(value) is not str for value in (receipt.status, receipt.verification, receipt.error_code))
+                    or type(receipt.characters_read_back) is not int or receipt.characters_read_back < 0
+                    or type(receipt.readback_succeeded) is not bool):
+                candidate_receipts = []
+                break
+            candidate_receipts.append({
+                "path": receipt.path, "status": receipt.status,
+                "verification": receipt.verification,
+                "characters_read_back": receipt.characters_read_back,
+                "error_code": receipt.error_code,
+                "readback_succeeded": receipt.readback_succeeded,
+            })
+        else:
+            write_receipts = candidate_receipts
+            write_receipts_available = True
+    result_id = "worker-result-" + hashlib.sha256(
+        "\0".join((session_id, item_id, requirement_id, reservation.worker_run_id)).encode("utf-8")
+    ).hexdigest()
+    summary = json.dumps({
+        "kind": "project_worker_host_lifecycle",
+        "result_status": "unknown",
+        "project_id": reservation.project_id,
+        "task_id": reservation.task_id,
+        "worker_id": reservation.worker_id,
+        "worker_run_id": reservation.worker_run_id,
+        "reservation_id": reservation.reservation_id,
+        "parent_run_id": reservation.parent_run_id,
+        "parent_epoch": reservation.turn_epoch,
+        "host_status": outcome.status,
+        "acceptance_status": "not_run",
+        "write_receipts_available": write_receipts_available,
+        "write_receipts": write_receipts,
+        "read_attempts_available": read_attempts_available,
+        "read_attempts": read_attempts,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    store.record_project_scoped_result_if_current_run(
+        item_id, requirement_id,
+        run_id=reservation.worker_run_id,
+        result_id=result_id,
+        status="unknown",
+        summary=summary,
+        project_id=reservation.project_id,
+        verification={
+            "status": "not_verified", "evidence_refs": [],
+            "host_execution": {
+                "sequence": reservation.turn_epoch,
+                "finish_reason": _worker_lifecycle_finish_reason(outcome.status),
+            },
+        },
+        sources=[],
+    )
+    return "unknown_recorded"
+
+def _record_current_dialogue_worker_unknown(
+    store: Any, *, session_id: str, item_id: str, requirement_id: str,
+    reservation: Any, reason: str,
+) -> bool:
+    """Settle only a verified begun reservation as unknown, without result/card claims."""
+    if (reason not in {"worker_outcome_missing", "worker_outcome_identity_mismatch"}
+            or getattr(getattr(store, "_session", None), "conversation_id", None) != session_id
+            or getattr(reservation, "conversation_id", None) != session_id
+            or type(item_id) is not str or type(requirement_id) is not str):
+        return False
+    item = store.get_item(item_id)
+    if type(item) is not dict:
+        return False
+    requirement = next((row for row in item.get("requirements", [])
+                        if type(row) is dict and row.get("requirement_id") == requirement_id), None)
+    worker_run_id = getattr(reservation, "worker_run_id", None)
+    if (requirement is None or type(worker_run_id) is not str
+            or requirement.get("current_run_id") != worker_run_id):
+        return False
+    result_id = "worker-result-" + hashlib.sha256(
+        "\0".join((session_id, item_id, requirement_id, worker_run_id)).encode("utf-8")
+    ).hexdigest()
+    summary = json.dumps({
+        "kind": "project_worker_host_lifecycle",
+        "result_status": "unknown",
+        "project_id": reservation.project_id,
+        "task_id": reservation.task_id,
+        "worker_id": reservation.worker_id,
+        "worker_run_id": worker_run_id,
+        "reservation_id": reservation.reservation_id,
+        "parent_run_id": reservation.parent_run_id,
+        "parent_epoch": reservation.turn_epoch,
+        "host_status": "unknown",
+        "outcome_integrity": reason,
+        "acceptance_status": "not_run",
+        "worker_result_claimed": False,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    try:
+        store.record_result_if_current_run(
+            item_id, requirement_id, run_id=worker_run_id, result_id=result_id,
+            status="unknown", summary=summary,
+            verification={"status": "not_verified", "evidence_refs": []}, sources=[],
+        )
+    except Exception:
+        return False
+    return True
+
+def reconcile_project_worker_batch_outcomes(binding_rows, reservations, outcomes):
+    """Keep only exact per-task outcomes; describe unresolved reservations as unknown."""
+    from project_worker_host import (
+        ProjectWorkerHostOutcome, ProjectWorkerReservation,
+        project_worker_outcome_matches_reservation,
+    )
+
+    rows = list(binding_rows) if isinstance(binding_rows, (list, tuple)) else []
+    reserved = list(reservations) if isinstance(reservations, (list, tuple)) else []
+    raw_outcomes = list(outcomes) if isinstance(outcomes, (list, tuple)) else []
+    expected = {}
+    invalid_expected = set()
+    for index, reservation in enumerate(reserved):
+        row = rows[index] if index < len(rows) else None
+        row_task_id = row.get("task_id") if type(row) is dict else None
+        if type(reservation) is not ProjectWorkerReservation or type(reservation.task_id) is not str:
+            if type(row_task_id) is str:
+                expected.setdefault(row_task_id, (row, None))
+                invalid_expected.add(row_task_id)
+            continue
+        task_id = reservation.task_id
+        if task_id in expected:
+            invalid_expected.add(task_id)
+            continue
+        expected[task_id] = (row if type(row) is dict else {}, reservation)
+        if (type(row) is not dict or row_task_id != task_id
+                or row.get("project_id") != reservation.project_id
+                or row.get("worker_id") != reservation.worker_id
+                or row.get("run_id") != reservation.worker_run_id):
+            invalid_expected.add(task_id)
+            if type(row_task_id) is str:
+                expected.setdefault(row_task_id, (row, None))
+                invalid_expected.add(row_task_id)
+    for index in range(len(reserved), len(rows)):
+        row = rows[index]
+        task_id = row.get("task_id") if type(row) is dict else None
+        if type(task_id) is str:
+            expected.setdefault(task_id, (row, None))
+            invalid_expected.add(task_id)
+
+    received_by_task = {}
+    unexpected_count = 0
+    for outcome in raw_outcomes:
+        if (type(outcome) is not ProjectWorkerHostOutcome or type(outcome.task_id) is not str
+                or outcome.task_id not in expected):
+            unexpected_count += 1
+            continue
+        received_by_task.setdefault(outcome.task_id, []).append(outcome)
+
+    verified = []
+    unknown = []
+    for task_id, (row, reservation) in expected.items():
+        candidates = received_by_task.get(task_id, [])
+        valid = (task_id not in invalid_expected and reservation is not None and type(row) is dict
+                 and len(candidates) == 1
+                 and project_worker_outcome_matches_reservation(reservation, candidates[0])
+                 and candidates[0].project_id == row.get("project_id")
+                 and candidates[0].task_id == row.get("task_id"))
+        if valid:
+            verified.append((row, reservation, candidates[0]))
+            continue
+        unknown.append({
+            "task_id": task_id,
+            "project_id": row.get("project_id") if type(row) is dict else None,
+            "item_id": row.get("item_id") if type(row) is dict else None,
+            "requirement_id": row.get("requirement_id") if type(row) is dict else None,
+            "worker_id": getattr(reservation, "worker_id", None),
+            "worker_run_id": getattr(reservation, "worker_run_id", None),
+            "reservation_id": getattr(reservation, "reservation_id", None),
+            "status": "unknown",
+            "dispatch_status": "unknown",
+            "error_code": "worker_outcome_missing" if not candidates else "worker_outcome_identity_mismatch",
+            "record_lifecycle_status": "unknown_not_recorded",
+        })
+    return tuple(verified), tuple(unknown), unexpected_count
+
 DELIVERY_COMPLETE_MARKER = "交付完成"
 SCAFFOLD_COMPLETE_MARKERS = ("已验收", "沉淀完成")
 SCAFFOLD_COMPLETE_REPLACEMENT = "〔验收未通过·已拦截〕"
@@ -377,6 +1279,27 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "Spawn read-only explore subagent with an explicit task string (paths and "
         "checkpoints). Parent must write scope, e.g. 只读 workspace/huiyi/src. "
         "Not for doc/code drift — use deliverable_review instead."
+    ),
+    "run_project_workers": (
+        "Dispatch explicitly identified project tasks (at most two different projects edited in parallel) and optionally one independent file write through the trusted host. "
+        "Only use project workers when the user task names each project and actionable requirements clearly. Use independent_write only when its exact target_path is literally named in the current user request; otherwise ask first. "
+        "if a project or task is ambiguous, ask first. Historical-record linkage requires one read-only "
+        "source authorization for all involved project work-record sidecars and one exact-text batch "
+        "confirmation. If no unique historical match exists, offer "
+        "one current-dialogue independent record creation confirmation or an explicitly unlinked path; "
+        "never dispatch on an unresolved choice. Never infer from the sidebar/current project or accept "
+        "model-supplied record/session IDs. Create a current-dialogue record only after confirmation of "
+        "the original request, complete task split, and project assignment; never write another project "
+        "Session or use this record as file permission. Never invent authorization or claim acceptance. "
+        "Provide exact project_id, task, read_targets "
+        "and write_targets. The host confirms scope, each exact outbound request and file writes separately."
+    ),
+    "recall_current_dialogue": (
+        "Search only older user/assistant messages in the current Session for the original user question. "
+        "Use for natural-language requests to find or recall prior conversation not available in current context; "
+        "do not use for project files, work records, work cards, or daily-journal lookup. No history is sent silently: "
+        "the host requires exact external-disclosure confirmation before the independent matcher sees any history. "
+        "This terminal read-only tool returns a user-facing answer without sending retrieved text back to you for another model call."
     ),
 }
 
@@ -780,27 +1703,78 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "required": ["task"],
         "additionalProperties": False,
     },
+    "recall_current_dialogue": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "run_project_workers": {
+        "type": "object",
+        "properties": {
+            "workers": {
+                "type": "array", "minItems": 1, "maxItems": 5,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "minLength": 1},
+                        "task": {"type": "string", "minLength": 1},
+                        "read_targets": {"type": "array", "items": {"type": "string"}},
+                        "write_targets": {"type": "array", "minItems": 1,
+                                           "items": {"type": "string"}},
+                        "pytest_target": {"type": "string", "minLength": 1,
+                                          "description": "Optional exact single pytest node for the recorded requirement; separately confirm trusted project execution. Success is only a project self-report, not authentication or proof of overall completion."},
+                    },
+                    "required": ["project_id", "task", "read_targets", "write_targets"],
+                    "additionalProperties": False,
+                },
+            },
+            "independent_write": {
+                "type": "object",
+                "description": "Optional single independent file write; use only when the user's current request explicitly names this exact target path.",
+                "properties": {
+                    "target_path": {"type": "string", "minLength": 1},
+                    "content": {"type": "string"},
+                },
+                "required": ["target_path", "content"],
+                "additionalProperties": False,
+            },
+        },
+        "anyOf": [{"required": ["workers"]}, {"required": ["independent_write"]}],
+        "additionalProperties": False,
+    },
 }
+
+
+def _project_worker_batch_size() -> int:
+    from project_worker_host import _MAX_WORKER_BATCH_SIZE
+    return _MAX_WORKER_BATCH_SIZE
 
 
 def builtin_parameters(name: str) -> dict[str, Any]:
     """JSON Schema for a builtin's arguments (TOOLS.md §7)."""
     try:
-        return _BUILTIN_PARAMETERS[name]
+        parameters = deepcopy(_BUILTIN_PARAMETERS[name])
     except KeyError as exc:
         raise KeyError(f"unknown builtin tool: {name!r}") from exc
+    if name == "run_project_workers":
+        parameters["properties"]["workers"]["maxItems"] = _project_worker_batch_size()
+    return parameters
 
 
 def build_builtin_tool_definition(name: str) -> dict[str, Any]:
     """Single OpenAI-compatible tool entry for *name*."""
     if name not in _BUILTIN_PARAMETERS:
         raise KeyError(f"unknown builtin tool: {name!r}")
+    description = _BUILTIN_DESCRIPTIONS[name]
+    if name == "run_project_workers":
+        description += f" Current host batch limit: {_project_worker_batch_size()} tasks."
     return {
         "type": "function",
         "function": {
             "name": name,
-            "description": _BUILTIN_DESCRIPTIONS[name],
-            "parameters": _BUILTIN_PARAMETERS[name],
+            "description": description,
+            "parameters": builtin_parameters(name),
         },
     }
 
@@ -820,12 +1794,15 @@ def build_llm_tools(
     session: Session,
     *,
     registry: ToolRegistry | None = None,
+    include_dialogue_recall: bool = False,
 ) -> list[dict[str, Any]]:
     """Builtin tools exposed to the LLM for this turn (T-702: ask omits run_evolved)."""
     tools = build_builtin_tools(registry=registry)
+    if not include_dialogue_recall:
+        tools = [tool for tool in tools if tool["function"]["name"] != "recall_current_dialogue"]
     tools.extend(build_proxy_tool_definitions())
     if session.meta.turn_mode == "ask":
-        blocked = {"run_evolved", "generate_image", "bind_project_dir", *PROXY_EVOLVED_TOOL_NAMES}
+        blocked = {"run_evolved", "generate_image", "bind_project_dir", "run_project_workers", *PROXY_EVOLVED_TOOL_NAMES}
         tools = [item for item in tools if item["function"]["name"] not in blocked]
     return tools
 
@@ -862,6 +1839,8 @@ class TurnResult:
     checker_used: bool = False
     checker_verdict: str | None = None
     checker_tool_rounds: int = 0
+    work_card_reference_intent: Any | None = None
+    work_card_result_reply_turn: Any | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -889,6 +1868,35 @@ class Agent:
     _cancel_finish_reason_fn: Callable[[], str | None] | None = field(default=None, repr=False)
     _pause_turn_wall: Callable[[], None] | None = field(default=None, repr=False)
     _resume_turn_wall: Callable[[], None] | None = field(default=None, repr=False)
+    # Experimental, request-scoped work-record recall; both stay disabled/unbound by default.
+    enable_work_record_recall: bool = False
+    work_record_recall_controller: Any | None = field(default=None, repr=False)
+    _active_current_dialogue_recall_context: tuple[Session, str, int] | None = field(
+        default=None, init=False, repr=False,
+    )
+    work_card_reference_intent: Any | None = field(default=None, repr=False)
+    multi_project_overview_recognizer: Any | None = field(default=None, repr=False)
+    project_card_refresh_recognizer: Any | None = field(default=None, repr=False)
+    # Experimental automatic recording is disabled unless both flag and controller are injected.
+    enable_work_record_recording: bool = False
+    work_record_recording_controller: Any | None = field(default=None, repr=False)
+    project_worker_host: Any | None = field(default=None, repr=False)
+    _project_worker_live_binding: tuple[str, int, Callable[[Session, str, int], bool]] | None = field(
+        default=None, repr=False,
+    )
+    _active_goal_runtime: Any | None = field(default=None, repr=False)
+    _multi_project_batch_requested: bool = field(default=False, repr=False)
+    _project_worker_progress_lock: Any = field(default_factory=threading.Lock, repr=False)
+    _project_worker_progress_scope: tuple[str, str, int] | None = field(default=None, repr=False)
+    _project_worker_progress_batch_seq: int = field(default=0, repr=False)
+    _project_worker_work_record_context: tuple[Any, Any] | None = field(default=None, repr=False)
+    _project_worker_work_record_required: bool = field(default=False, repr=False)
+    _project_worker_work_record_used: bool = field(default=False, repr=False)
+    _project_worker_work_record_result: Any | None = field(default=None, repr=False)
+    _project_worker_verification_result: Any | None = field(default=None, repr=False)
+    project_worker_verification_fn: Any | None = field(default=None, repr=False)
+    _current_dialogue_project_card_candidates: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _session_binding_transition: Callable[[Session], Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         setter = getattr(self.llm, "set_cancel_event", None)
@@ -900,6 +1908,1240 @@ class Agent:
             self.executor.session.evolution_stop_authorization_id = ""
             self.executor.session.evolution_stop_instance_id = ""
         self.executor.session.evolution_id = self.session.meta.evolution_id
+        if self.project_worker_host is None:
+            from project_worker_host import ProjectWorkerHost
+            self.project_worker_host = ProjectWorkerHost(
+                lambda: LLMClient(paths=self.session.paths)
+            )
+        self.executor.project_worker_host_dispatch = self._dispatch_project_workers_tool
+        self.executor.dialogue_recall_host_dispatch = self._dispatch_current_dialogue_recall_tool
+
+    def _dialogue_recall_tool_enabled(self) -> bool:
+        controller = self.work_record_recall_controller
+        store = getattr(controller, "_store", None)
+        matcher = getattr(controller, "_semantic_matcher", None)
+        confirm = getattr(self.executor, "confirm_fn", None)
+        if (not self.enable_work_record_recall or controller is None
+                or getattr(store, "_session", None) is not self.session or not callable(confirm)):
+            return False
+        try:
+            from llm_client import LLMClient
+            from work_records_luna_recall import WorkRecordsLunaRecall
+            client = getattr(matcher, "_client", None)
+            method = getattr(client, "chat_confirmed_json", None)
+            return bool(
+                type(matcher) is WorkRecordsLunaRecall and type(client) is LLMClient
+                and client.paths == self.session.paths
+                and getattr(method, "__func__", None) is LLMClient.chat_confirmed_json
+            )
+        except Exception:
+            return False
+
+    def bind_project_worker_live_context(
+        self, run_id: str, turn_epoch: int,
+        live_binding_check: Callable[[Session, str, int], bool],
+    ) -> None:
+        if (type(run_id) is not str or not run_id or type(turn_epoch) is not int
+                or turn_epoch <= 0 or not callable(live_binding_check)):
+            self._project_worker_live_binding = None
+            return
+        self._project_worker_live_binding = (run_id, turn_epoch, live_binding_check)
+
+    def bind_project_worker_work_record_context(
+        self, store: Any, execution: Any, run_id: str, turn_epoch: int,
+    ) -> None:
+        """Bind only a server-captured work-record run to this active host turn."""
+        self._project_worker_work_record_required = True
+        self._project_worker_work_record_context = None
+        self._project_worker_work_record_used = False
+        self._project_worker_work_record_result = None
+        self._project_worker_verification_result = None
+        from work_record_settlement import BoundExecution
+        live = self._project_worker_live_binding
+        if (
+            type(execution) is BoundExecution
+            and live is not None
+            and live[:2] == (run_id, turn_epoch)
+            and execution.session_id == self.session.conversation_id
+            and execution.run_id == run_id
+            and getattr(store, "_session", None) is self.session
+            and callable(getattr(store, "_validate_scope", None))
+        ):
+            self._project_worker_work_record_context = (store, execution)
+
+    def clear_project_worker_live_context(self, run_id: str, turn_epoch: int) -> None:
+        binding = self._project_worker_live_binding
+        if binding is not None and binding[:2] == (run_id, turn_epoch):
+            host = self.project_worker_host
+            release = getattr(host, "release_parent_run", None)
+            if callable(release):
+                release(
+                    conversation_id=self.session.conversation_id,
+                    parent_run_id=run_id,
+                    turn_epoch=turn_epoch,
+                )
+            self._project_worker_live_binding = None
+            self._project_worker_work_record_context = None
+            self._project_worker_work_record_required = False
+            self._project_worker_work_record_used = False
+            self._project_worker_work_record_result = None
+            self._project_worker_verification_result = None
+
+    def _dispatch_project_workers_tool(self, arguments: dict[str, Any]) -> ToolResult:
+        from uuid import uuid4
+        from project_worker_host import ProjectWorkerHostRequest, _MAX_WORKER_BATCH_SIZE
+
+        def denied(code: str) -> ToolResult:
+            return tool_fail("run_project_workers", ToolErrorCode.PERMISSION_DENIED, code)
+
+        if type(arguments) is not dict or not arguments or not set(arguments) <= {"workers", "independent_write"}:
+            return denied("worker dispatch accepts only workers and one independent_write request")
+        worker_items = arguments.get("workers")
+        if "workers" in arguments and (
+            type(worker_items) is not list or not 1 <= len(worker_items) <= _MAX_WORKER_BATCH_SIZE
+        ):
+            return denied(
+                f"project worker batch must be a one-to-{_MAX_WORKER_BATCH_SIZE}-item list"
+            )
+        independent_spec = arguments.get("independent_write")
+        if "independent_write" in arguments and independent_spec is None:
+            return denied("independent_write must be a single explicit object")
+        if "workers" not in arguments and "independent_write" not in arguments:
+            return denied("dispatch requires project workers or one independent_write")
+        if independent_spec is not None and (
+            type(independent_spec) is not dict
+            or set(independent_spec) != {"target_path", "content"}
+            or type(independent_spec.get("target_path")) is not str
+            or not independent_spec["target_path"].strip()
+            or type(independent_spec.get("content")) is not str
+            or len(independent_spec["content"]) > 1_000_000
+        ):
+            return denied("independent_write must name exactly one bounded target_path and content")
+        if independent_spec is not None and not _independent_target_is_explicit_in_current_request(
+            self.session, independent_spec["target_path"],
+        ):
+            return denied("independent file target must be explicitly named in the current user request; ask first")
+        if (self.session.meta.turn_mode != "agent"
+                or getattr(self.session, "_ordinary_work_intent", None) != "execute"):
+            return denied("current turn is not authorized for project execution")
+        binding = self._project_worker_live_binding
+        host = self.project_worker_host
+        confirm_fn = getattr(self.executor, "confirm_fn", None)
+        if binding is None or host is None or not callable(confirm_fn) or self.cancel_event.is_set():
+            return denied("trusted live project-worker host or confirmation bridge is unavailable")
+        requests = []
+        item_keys = {"project_id", "task", "read_targets", "write_targets"}
+        for item in worker_items or []:
+            if (type(item) is not dict or set(item) not in (item_keys, item_keys | {"pytest_target"})
+                    or ("pytest_target" in item and (type(item["pytest_target"]) is not str or not item["pytest_target"].strip()))
+                    or type(item.get("project_id")) is not str
+                    or type(item.get("task")) is not str
+                    or type(item.get("read_targets")) is not list
+                    or type(item.get("write_targets")) is not list
+                    or any(type(path) is not str for path in item.get("read_targets", []))
+                    or any(type(path) is not str for path in item.get("write_targets", []))):
+                return denied("each worker requires explicit project_id, task and path lists")
+            requests.append(ProjectWorkerHostRequest(
+                project_id=item["project_id"], task_id=uuid4().hex,
+                task=item["task"], read_targets=tuple(item["read_targets"]),
+                write_targets=tuple(item["write_targets"]),
+            ))
+        run_id, turn_epoch, live_binding_check = binding
+        requested_tests = [item.get("pytest_target") for item in (worker_items or []) if "pytest_target" in item]
+        if requested_tests and (len(requests) != 1 or not self._project_worker_work_record_required):
+            return denied("pytest target requires one explicitly bound recorded requirement")
+        if len({request.project_id for request in requests}) > 1:
+            # Track this only in memory until a worker clears its user scope gate.
+            # A refused/unstarted proposal must not permanently lock the Goal.
+            self._multi_project_batch_requested = True
+        if "workers" not in arguments:
+            from project_worker_independent import run_independent_write_from_host
+            result = run_independent_write_from_host(
+                self.executor,
+                worker_host=host,
+                target_path=independent_spec["target_path"],
+                content=independent_spec["content"],
+                host_binding_check=lambda: live_binding_check(self.session, run_id, turn_epoch) is True,
+                cancel_event=self.cancel_event,
+            )
+            if not result.ok:
+                error = result.error
+                return tool_fail(
+                    "run_project_workers",
+                    error.code if error is not None else "independent_write_failed",
+                    error.message if error is not None else "independent file write did not complete",
+                    details=error.details if error is not None else None,
+                )
+            return tool_ok("run_project_workers", {
+                "status": "independent_write_returned",
+                "acceptance_status": "not_run",
+                "independent_write": result.to_dict(),
+                "workers": [],
+            })
+        worker_record_binding = None
+        worker_batch_bindings = None
+        worker_batch_created_rows = None
+        worker_batch_created_store = None
+        worker_batch_reservations = None
+        worker_batch_unlinked = False
+        worker_batch_tracking_mode = None
+        worker_batch_start_fn = None
+        if self._project_worker_work_record_required and len(requests) == 1:
+            record_context = self._project_worker_work_record_context
+            if record_context is None:
+                return denied("recorded worker turn lacks a trusted requirement/run binding")
+            if self._project_worker_work_record_used:
+                return denied("recorded worker binding is single-use for this parent run")
+            if len(requests) != 1:
+                return denied("a single recorded requirement cannot be bound to a multi-worker batch")
+            store, execution = record_context
+            request = requests[0]
+            try:
+                from project_worker_work_record_settlement import ProjectWorkerWorkRecordBinding
+                from work_record_settlement import BoundExecution
+                if (type(execution) is not BoundExecution
+                        or execution.session_id != self.session.conversation_id
+                        or execution.run_id != run_id
+                        or store._session is not self.session):
+                    raise ValueError("captured work-record identity changed")
+                store._validate_scope()
+                item = store.get_item(execution.item_id)
+                scope = item.get("scope") if type(item) is dict else None
+                requirements = item.get("requirements") if type(item) is dict else None
+                requirement = next((row for row in requirements or []
+                                    if type(row) is dict
+                                    and row.get("requirement_id") == execution.requirement_id), None)
+                if (type(scope) is not dict or scope.get("kind") != "project"
+                        or scope.get("project_id") != request.project_id
+                        or type(requirement) is not dict
+                        or requirement.get("current_run_id") != run_id
+                        or type(requirement.get("text")) is not str):
+                    raise ValueError("requirement, project, or current run does not match")
+                link_preview = json.dumps({
+                    "session_id": execution.session_id,
+                    "run_id": execution.run_id,
+                    "item_id": execution.item_id,
+                    "requirement_id": execution.requirement_id,
+                    "requirement": requirement["text"],
+                    "project_id": request.project_id,
+                    "task_id": request.task_id,
+                    "worker_task": request.task,
+                }, ensure_ascii=False, indent=2)
+                link_choice = confirm_fn(
+                    "WORK_RECORD_LINK_CONFIRM\n任务与工作记录绑定确认：以下唯一 worker task 将关联到已确认的现有 requirement/run；"
+                    "不会创建或改写工作记录，要求完成和验证仍未知。\n" + link_preview,
+                    False,
+                )
+                if type(link_choice) is not str or link_choice != "y":
+                    return denied("worker task-to-requirement binding was not explicitly confirmed")
+                worker_batch_reservations = host.reserve_many(
+                    self.session, requests, parent_run_id=run_id, turn_epoch=turn_epoch,
+                    live_binding_check=live_binding_check,
+                )
+                if len(worker_batch_reservations) != 1:
+                    raise ValueError("single worker reservation unavailable")
+                worker_record_binding = ProjectWorkerWorkRecordBinding(
+                    execution, request, reservation=worker_batch_reservations[0],
+                )
+                self._project_worker_work_record_used = True
+            except Exception:
+                return denied("trusted task-to-requirement binding is unavailable or stale")
+
+        if worker_record_binding is None:
+            from multi_project_work_record_authorization import authorize_project_record_sources
+            from multi_project_work_record_bindings import (
+                ConversationWorkRecordBindings,
+                ExistingTaskBinding,
+            )
+
+            def confirm_record_gate(preview: str, label: str) -> str:
+                if self.cancel_event.is_set() or live_binding_check(self.session, run_id, turn_epoch) is not True:
+                    return "n"
+                try:
+                    choice = host._serialized_confirm(
+                        confirm_fn, self.cancel_event, f"{label}\n{preview}", False,
+                    )
+                except Exception:
+                    return "n"
+                return choice if (not self.cancel_event.is_set()
+                                  and live_binding_check(self.session, run_id, turn_epoch) is True) else "n"
+
+            def confirm_unlinked_execution(reason: str) -> bool:
+                preview = json.dumps({
+                    "reason": reason,
+                    "tasks": [{
+                        "project_id": request.project_id,
+                        "task": request.task,
+                        "read_targets": list(request.read_targets),
+                        "write_targets": list(request.write_targets),
+                    } for request in requests],
+                    "record_access": "none; do not read or write work-record sidecars",
+                    "record_effect": "unlinked; no task-to-requirement binding or lifecycle tracking",
+                    "execution_gates": [
+                        "each worker project scope is confirmed separately",
+                        "each exact outbound model request is confirmed separately",
+                        "each project file write is confirmed separately",
+                    ],
+                    "acceptance": "not_run",
+                }, ensure_ascii=False, indent=2)
+                choice = confirm_record_gate(
+                    preview,
+                    "PROJECT_WORKER_UNLINKED_EXECUTION_CONFIRM\n是否不关联工作记录、按以下范围继续执行？"
+                    "这不会读取/创建/绑定工作记录，也不会记录 worker 生命周期；现有项目范围、外发和写入确认仍全部保留。",
+                )
+                return choice == "y"
+
+            def confirm_current_dialogue_tracking(reason: str) -> bool:
+                original_request = _latest_current_user_request(self.session)
+                if original_request is None:
+                    return False
+                preview = json.dumps({
+                    "reason": reason,
+                    "original_user_request": original_request,
+                    "current_conversation_id": self.session.conversation_id,
+                    "record_scope": "independent WorkRecord item in the current dialogue only",
+                    "tasks": [{
+                        "project_id": request.project_id,
+                        "task": request.task.strip(),
+                        "read_targets": list(request.read_targets),
+                        "write_targets": list(request.write_targets),
+                    } for request in requests],
+                    "project_assignment": "user-confirmed descriptive ownership; not a file permission grant",
+                    "other_project_sessions": "no WorkRecordStore is read or written by this creation path",
+                    "record_effect": "preserve original request plus one requirement per worker in the current dialogue",
+                    "failure_boundary": "if the complete record batch cannot be persisted, no worker is dispatched",
+                    "execution_gates": [
+                        "each worker project scope is confirmed separately",
+                        "each exact outbound model request is confirmed separately",
+                        "each project file write is confirmed separately",
+                    ],
+                    "acceptance": "not_run",
+                }, ensure_ascii=False, indent=2)
+                return confirm_record_gate(
+                    preview,
+                    "CURRENT_DIALOGUE_WORK_RECORD_BATCH_CONFIRM\n是否将原始请求和以下逐项任务/项目归属记录到当前对话？"
+                    "只写当前 Session 的独立事项，不修改任何项目 Session，也不扩大 worker 文件权限。",
+                ) == "y"
+
+            def create_current_dialogue_tracking(reason: str):
+                nonlocal requests, worker_batch_created_rows, worker_batch_created_store
+                nonlocal worker_batch_reservations, worker_batch_tracking_mode, worker_batch_start_fn
+                original_request = _latest_current_user_request(self.session)
+                if original_request is None:
+                    return denied("CURRENT_DIALOGUE_RECORD_FAILED: original user request is unavailable; no worker was dispatched.")
+                if not confirm_current_dialogue_tracking(reason):
+                    return False
+                if self.cancel_event.is_set() or live_binding_check(self.session, run_id, turn_epoch) is not True:
+                    return denied("CURRENT_DIALOGUE_RECORD_CANCELLED: no worker was dispatched.")
+                try:
+                    store, item_id, original_requirement_id, task_rows, bound_requests, batch_digest = (
+                        _create_current_dialogue_worker_records(
+                            self.session, original_request, requests,
+                            parent_run_id=run_id, turn_epoch=turn_epoch,
+                            continue_check=lambda: (
+                                not self.cancel_event.is_set()
+                                and live_binding_check(self.session, run_id, turn_epoch) is True
+                            ),
+                        )
+                    )
+                except _CurrentDialogueWorkerRecordWriteError as exc:
+                    item_note = f" item_id={exc.item_id}" if exc.item_id else ""
+                    if exc.cancelled:
+                        return denied(
+                            "CURRENT_DIALOGUE_RECORD_CANCELLED_PARTIAL: no worker was dispatched; "
+                            f"the original request/item may be persisted with {exc.persisted_task_count}/{exc.task_count} task requirements.{item_note}"
+                        )
+                    if exc.uncertain:
+                        return denied(
+                            "CURRENT_DIALOGUE_RECORD_WRITE_UNCERTAIN: commit/readback could not be reconciled; "
+                            f"a partial current-dialogue item may exist.{item_note} No worker was dispatched; inspect before retry."
+                        )
+                    return denied(
+                        "CURRENT_DIALOGUE_RECORD_PARTIAL: no worker was dispatched; "
+                        f"{exc.persisted_task_count}/{exc.task_count} task requirements were confirmed persisted.{item_note} "
+                        "Do not claim the complete batch is tracked; inspect/retry the same confirmed batch."
+                    )
+                except Exception:
+                    return denied(
+                        "CURRENT_DIALOGUE_RECORD_CREATE_FAILED: the record batch was not confirmed complete; "
+                        "no worker was dispatched."
+                    )
+                try:
+                    reservations = host.reserve_many(
+                        self.session, bound_requests,
+                        parent_run_id=run_id, turn_epoch=turn_epoch,
+                        live_binding_check=live_binding_check,
+                    )
+                except Exception:
+                    return denied(
+                        f"CURRENT_DIALOGUE_RECORD_SAVED_NOT_DISPATCHED: item {item_id} contains the confirmed request/tasks, "
+                        "but host worker identities could not be reserved; no worker was dispatched."
+                    )
+                rows_by_reservation = {
+                    reservation.reservation_id: row
+                    for row, reservation in zip(task_rows, reservations)
+                }
+
+                def begin_reserved_requirement(request, reservation):
+                    row = rows_by_reservation.get(reservation.reservation_id)
+                    if (row is None or request.project_id != row["project_id"]
+                            or request.task_id != row["task_id"] or request.task != row["task_input"]
+                            or reservation.project_id != row["project_id"]
+                            or reservation.task_id != row["task_id"]
+                            or reservation.parent_run_id != run_id
+                            or reservation.turn_epoch != turn_epoch
+                            or reservation.conversation_id != self.session.conversation_id):
+                        return False
+                    try:
+                        if (self.cancel_event.is_set()
+                                or live_binding_check(self.session, run_id, turn_epoch) is not True):
+                            return False
+                        started_requirement = store.begin_requirement_run(
+                            item_id, row["requirement_id"],
+                            run_id=reservation.worker_run_id,
+                            expected_current_run_id=row.get("current_run_id"),
+                            expected_requirement_text=row["task_input"],
+                        )
+                    except Exception:
+                        return False
+                    return (type(started_requirement) is dict
+                            and started_requirement.get("current_run_id") == reservation.worker_run_id
+                            and started_requirement.get("status") == "in_progress")
+
+                worker_batch_start_fn = begin_reserved_requirement
+                worker_batch_created_rows = []
+                for row, reservation in zip(task_rows, reservations):
+                    persisted = dict(row)
+                    persisted.update({
+                        "task_id": reservation.task_id,
+                        "worker_id": reservation.worker_id,
+                        "worker_run_id": reservation.worker_run_id,
+                        "run_id": reservation.worker_run_id,
+                        "reservation_id": reservation.reservation_id,
+                        "parent_run_id": reservation.parent_run_id,
+                        "turn_epoch": reservation.turn_epoch,
+                        "record_mode": "created_current_dialogue",
+                    })
+                    worker_batch_created_rows.append(persisted)
+                worker_batch_created_store = store
+                worker_batch_reservations = reservations
+                worker_batch_tracking_mode = "created_current_dialogue"
+                requests = bound_requests
+                return True
+
+            project_ids = tuple(dict.fromkeys(request.project_id for request in requests))
+            try:
+                authorized_sources = authorize_project_record_sources(
+                    self.session, project_ids,
+                    confirm_fn=lambda preview, _allow: confirm_record_gate(
+                        preview, "WORK_RECORD_SOURCE_READ_CONFIRM",
+                    ),
+                    cancel_event=self.cancel_event,
+                )
+            except Exception:
+                if self.cancel_event.is_set():
+                    return denied("WORK_RECORD_SOURCE_READ_CANCELLED: the batch was not dispatched.")
+                tracking_result = create_current_dialogue_tracking(
+                    "existing project-session records were not authorized or unavailable",
+                )
+                if isinstance(tracking_result, ToolResult):
+                    return tracking_result
+                if tracking_result is False:
+                    if not confirm_unlinked_execution("current-dialogue record creation was declined"):
+                        return denied(
+                            "WORK_RECORD_SOURCE_READ_NOT_AUTHORIZED: current-dialogue tracking and unlinked execution "
+                            "were both declined; no project file or worker action occurred."
+                        )
+                    worker_batch_unlinked = True
+                else:
+                    authorized_sources = None
+                    matches = None
+
+            if not worker_batch_unlinked and worker_batch_tracking_mode is None:
+                try:
+                    matches = _match_project_worker_tasks_to_existing_requirements(requests, authorized_sources)
+                except _ProjectWorkerRecordMatchError as exc:
+                    reason = f"WORK_RECORD_REQUIREMENT_{exc.reason.upper()}"
+                    if self.cancel_event.is_set():
+                        return denied(f"{reason}: no worker was dispatched.")
+                    tracking_result = create_current_dialogue_tracking(
+                        f"{reason} for project {exc.project_id}; exact-text-only matching found no unique record",
+                    )
+                    if isinstance(tracking_result, ToolResult):
+                        return tracking_result
+                    if tracking_result is False:
+                        if not confirm_unlinked_execution(f"current-dialogue tracking was declined after {reason}"):
+                            return denied(
+                                f"{reason}: current-dialogue tracking and unlinked execution were declined; "
+                                "no record was created and no worker was dispatched."
+                            )
+                        worker_batch_unlinked = True
+                except Exception:
+                    if self.cancel_event.is_set():
+                        return denied("WORK_RECORD_SOURCE_UNREADABLE: no worker was dispatched.")
+                    tracking_result = create_current_dialogue_tracking(
+                        "authorized historical source could not be verified",
+                    )
+                    if isinstance(tracking_result, ToolResult):
+                        return tracking_result
+                    if tracking_result is False:
+                        if not confirm_unlinked_execution("current-dialogue tracking was declined after source verification failed"):
+                            return denied(
+                                "WORK_RECORD_SOURCE_UNREADABLE: no new record or worker action occurred."
+                            )
+                        worker_batch_unlinked = True
+
+            if not worker_batch_unlinked and worker_batch_tracking_mode is None:
+                # Derive stable task identities from exact trusted source lineage so a later
+                # parent run can continue the same task without reusing worker/run credentials.
+                from project_worker_host import ProjectWorkerHostRequest
+                bound_requests = []
+                for match in matches:
+                    request = match["request"]
+                    bound_requests.append(ProjectWorkerHostRequest(
+                        project_id=request.project_id,
+                        task_id=_project_worker_task_identity(self.session.conversation_id, match),
+                        task=request.task,
+                        read_targets=request.read_targets,
+                        write_targets=request.write_targets,
+                    ))
+                    match["request"] = bound_requests[-1]
+
+                try:
+                    worker_batch_reservations = host.reserve_many(
+                        self.session, bound_requests,
+                        parent_run_id=run_id, turn_epoch=turn_epoch,
+                        live_binding_check=live_binding_check,
+                    )
+                except Exception:
+                    return denied("WORKER_IDENTITY_RESERVATION_FAILED: no work-record binding or worker dispatch occurred.")
+
+                confirmation_rows = []
+                task_bindings = []
+                for match, reservation in zip(matches, worker_batch_reservations):
+                    request = match["request"]
+                    confirmation_rows.append({
+                        "project_id": match["project_id"],
+                        "source_session_id": match["source_session_id"],
+                        "item_id": match["item_id"],
+                        "item_title": match["item_title"],
+                        "requirement_id": match["requirement_id"],
+                        "requirement_text": match["requirement_text"],
+                        "requirement_status": match["requirement_status"],
+                        "task_input": request.task,
+                        "task_id": reservation.task_id,
+                        "worker_id": reservation.worker_id,
+                        "worker_run_id": reservation.worker_run_id,
+                        "parent_run_id": reservation.parent_run_id,
+                        "turn_epoch": reservation.turn_epoch,
+                        "reservation_id": reservation.reservation_id,
+                    })
+                    task_bindings.append(ExistingTaskBinding(
+                        project_id=match["project_id"],
+                        item_id=match["item_id"],
+                        requirement_id=match["requirement_id"],
+                        task_id=reservation.task_id,
+                        task_input=request.task,
+                        worker_id=reservation.worker_id,
+                        run_id=reservation.worker_run_id,
+                        source_item_digest=match["source_item_digest"],
+                    ))
+                batch_preview = json.dumps({
+                    "matching_policy": "exact_text_only_initial_version",
+                    "parent_run_id": run_id,
+                    "turn_epoch": turn_epoch,
+                    "tasks": confirmation_rows,
+                    "record_effect": "bind existing records only; no project requirement is created or changed",
+                    "acceptance": "not_run; lifecycle remains unknown and not_verified",
+                }, ensure_ascii=False, indent=2)
+                batch_choice = confirm_record_gate(
+                    batch_preview,
+                    "PROJECT_WORKER_BATCH_BIND_CONFIRM\n将以下全部 worker 任务关联到现有项目 requirement 并继续派发？",
+                )
+                if batch_choice != "y":
+                    return denied("WORK_RECORD_BATCH_BINDING_NOT_CONFIRMED: no binding or worker dispatch occurred.")
+                if self.cancel_event.is_set() or live_binding_check(self.session, run_id, turn_epoch) is not True:
+                    return denied("WORK_RECORD_BATCH_BINDING_STALE: parent run is no longer live; no worker dispatched.")
+
+                batch_id = f"batch-{run_id}-{turn_epoch}-{uuid4().hex}"
+                binding_store = ConversationWorkRecordBindings(self.session)
+                try:
+                    worker_batch_bindings = binding_store.bind_existing_tasks(
+                        batch_id=batch_id,
+                        tasks=task_bindings,
+                        authorized_sources=authorized_sources,
+                    )
+                except Exception as exc:
+                    if "prior linked worker start is unresolved" in str(exc):
+                        return denied(
+                            "WORKER_START_UNRESOLVED: a prior linked worker has a durable start receipt but no "
+                            "reliable terminal outcome. It may have completed writes or may still be running; "
+                            "automatic recovery and re-execution are blocked. Inspect the project manually; "
+                            "this tool has no safe process-ownership proof or automatic settlement path."
+                        )
+                    return denied(
+                        "WORK_RECORD_BATCH_BINDING_FAILED: existing record or source lineage changed; "
+                        "no worker was dispatched. Ask the user before retrying."
+                    )
+                if (len(worker_batch_bindings) != len(task_bindings)
+                        or any(row.get("task_id") != reservation.task_id
+                               or row.get("project_id") != match["project_id"]
+                               or row.get("item_id") != match["item_id"]
+                               or row.get("requirement_id") != match["requirement_id"]
+                               or row.get("task_input") != match["request"].task
+                               or row.get("requirement_text") != match["request"].task
+                               or row.get("source_item_digest") != match["source_item_digest"]
+                               or row.get("run_id") != reservation.worker_run_id
+                               or row.get("worker_id") != reservation.worker_id
+                               or row.get("source_session_id") != match["source_session_id"]
+                               or row.get("authorization_id") != authorized_sources[match["project_id"]].authorization_id
+                               for row, task, reservation, match in zip(
+                                   worker_batch_bindings, task_bindings, worker_batch_reservations, matches))):
+                    return denied(
+                        "WORK_RECORD_BATCH_BINDING_CHANGED: the persisted binding did not match the confirmed "
+                        "exact-text mapping; no worker was dispatched."
+                    )
+                linked_by_reservation = {
+                    reservation.reservation_id: (row, request, reservation)
+                    for row, request, reservation in zip(worker_batch_bindings, bound_requests, worker_batch_reservations)
+                }
+                def begin_linked_worker(request, reservation):
+                    entry = linked_by_reservation.get(reservation.reservation_id)
+                    if (entry is None or entry[1] != request or entry[2] != reservation
+                            or reservation.conversation_id != self.session.conversation_id
+                            or reservation.parent_run_id != run_id or reservation.turn_epoch != turn_epoch
+                            or self.cancel_event.is_set()
+                            or live_binding_check(self.session, run_id, turn_epoch) is not True):
+                        return False
+                    row = entry[0]
+                    binding_store.record_worker_start(
+                        binding_id=row["binding_id"], worker_id=reservation.worker_id,
+                        run_id=reservation.worker_run_id, reservation_id=reservation.reservation_id,
+                        parent_run_id=reservation.parent_run_id, turn_epoch=reservation.turn_epoch,
+                        project_id=reservation.project_id, task_id=reservation.task_id,
+                    )
+                    return True
+                worker_batch_start_fn = begin_linked_worker
+                worker_batch_tracking_mode = "linked_existing"
+                requests = bound_requests
+
+        def confirm_scope(preview: str) -> str:
+            return confirm_fn("项目 worker 范围确认：\n" + preview, False)
+
+        def confirm_outbound(preview: str) -> str:
+            return confirm_fn("项目 worker 即将向 0x567 gpt-6-luna 外发以下精确请求：\n" + preview, False)
+
+        def confirm_write(preview: str, _allow_all: bool) -> str:
+            return confirm_fn("项目 worker 文件写入确认：\n" + preview, False)
+
+        independent_pool = None
+        independent_future = None
+        if independent_spec is not None:
+            from project_worker_independent import run_independent_write_from_host
+            independent_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-independent-write")
+            independent_future = independent_pool.submit(
+                run_independent_write_from_host,
+                self.executor,
+                worker_host=host,
+                target_path=independent_spec["target_path"],
+                content=independent_spec["content"],
+                host_binding_check=lambda: live_binding_check(self.session, run_id, turn_epoch) is True,
+                cancel_event=self.cancel_event,
+            )
+        # One replaceable, bounded activity snapshot per host transition. Never
+        # include task text, paths, model output, or inferred completion status.
+        progress_lock = threading.Lock()
+        started_reservations: set[str] = set()
+        returned_reservations: set[str] = set()
+        progress_session_id = self.session.conversation_id
+        progress_total = len(requests)
+        progress_scope = (progress_session_id, run_id, turn_epoch)
+        with self._project_worker_progress_lock:
+            if self._project_worker_progress_scope != progress_scope:
+                self._project_worker_progress_scope = progress_scope
+                self._project_worker_progress_batch_seq = 0
+            self._project_worker_progress_batch_seq += 1
+            progress_batch_seq = self._project_worker_progress_batch_seq
+
+        def report_worker_progress(phase, request, reservation):
+            from project_worker_host import ProjectWorkerHostRequest, ProjectWorkerReservation
+            if (phase not in {"started", "returned"}
+                    or type(request) is not ProjectWorkerHostRequest
+                    or type(reservation) is not ProjectWorkerReservation
+                    or reservation.project_id != request.project_id
+                    or reservation.task_id != request.task_id
+                    or reservation.parent_run_id != run_id or reservation.turn_epoch != turn_epoch
+                    or reservation.conversation_id != progress_session_id):
+                return
+            with progress_lock, self._project_worker_progress_lock:
+                try:
+                    if (self._project_worker_progress_scope != progress_scope
+                            or self._project_worker_progress_batch_seq != progress_batch_seq
+                            or self.cancel_event.is_set() or self.session.conversation_id != progress_session_id
+                            or self._project_worker_live_binding != binding
+                            or live_binding_check(self.session, run_id, turn_epoch) is not True):
+                        return
+                except Exception:
+                    return
+                identity = reservation.reservation_id
+                if phase == "started":
+                    if identity in started_reservations or len(started_reservations) >= progress_total:
+                        return
+                    started_reservations.add(identity)
+                else:
+                    if identity not in started_reservations or identity in returned_reservations:
+                        return
+                    returned_reservations.add(identity)
+                project = request.project_id
+                safe_project = project if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", project) else "项目"
+                started = len(started_reservations)
+                returned = len(returned_reservations)
+                label = "已启动" if phase == "started" else "已返回"
+                self._emit_turn_event({
+                    "type": "activity.update", "run_id": run_id, "session_id": progress_session_id,
+                    "activity_source": "project_workers", "batch_seq": progress_batch_seq, "phase": phase,
+                    "project_id": safe_project, "started": started, "returned": returned,
+                    "total": progress_total,
+                    "text": f"项目 {safe_project} {label} · 已启动 {started}/{progress_total}，已返回 {returned}/{progress_total}",
+                })
+
+        multi_project_start_lock = threading.Lock()
+        multi_project_gate_checked = False
+
+        def before_project_worker_start(request, reservation):
+            nonlocal multi_project_gate_checked
+            if len({item.project_id for item in requests}) > 1:
+                with multi_project_start_lock:
+                    if not multi_project_gate_checked:
+                        goal_rt = self._active_goal_runtime
+                        if (goal_rt is not None and goal_rt.state is not None
+                                and goal_rt.state.status == "active"):
+                            try:
+                                goal_rt.mark_multi_project_unverified(tuple(dict.fromkeys(
+                                    item.project_id for item in requests
+                                )))
+                            except Exception:
+                                # An active Goal must not execute without its durable gate.
+                                return False
+                        # No active Goal is a supported legacy path; only an active
+                        # Goal makes persistence mandatory before worker execution.
+                        multi_project_gate_checked = True
+            if worker_batch_start_fn is None:
+                return True
+            try:
+                return worker_batch_start_fn(request, reservation) is True
+            except Exception:
+                return False
+
+        try:
+            from project_worker_host import (
+                _host_failure, _resolve_bound_project, project_worker_outcome_matches_reservation,
+            )
+            from worker_preflight_notice import format_worker_preflight_notice
+
+            reservations = worker_batch_reservations
+            if reservations is None:
+                try:
+                    reservations = host.reserve_many(
+                        self.session, requests, parent_run_id=run_id, turn_epoch=turn_epoch,
+                        live_binding_check=live_binding_check,
+                    )
+                except Exception:
+                    reservations = None
+
+            # Snapshot only the display basename of a host-validated project root.
+            # A missing/invalid binding has no display name and must not fall back
+            # to a logical ID, receipt, or local path in the user-facing notice.
+            project_display_names = {}
+            if reservations is not None and len(reservations) == len(requests):
+                for request, reservation in zip(requests, reservations):
+                    if (getattr(reservation, "project_id", None) != request.project_id
+                            or getattr(reservation, "task_id", None) != request.task_id):
+                        continue
+                    try:
+                        project_display_names[request.task_id] = _resolve_bound_project(
+                            self.session.paths, request.project_id,
+                        ).name
+                    except Exception:
+                        pass
+
+            if reservations is None or len(reservations) != len(requests):
+                # Preserve the host fallback without claiming an unverified
+                # identity; this branch must not emit an early notice.
+                outcomes = host.run_many(
+                    self.session, requests,
+                    scope_confirm_fn=confirm_scope,
+                    outbound_request_confirm_fn=confirm_outbound,
+                    write_confirm_fn=confirm_write,
+                    cancel_event=self.cancel_event,
+                    run_id=run_id,
+                    turn_epoch=turn_epoch,
+                    live_binding_check=live_binding_check,
+                    reservations=worker_batch_reservations,
+                    before_worker_start=before_project_worker_start,
+                    on_worker_progress=report_worker_progress,
+                )
+            elif len(requests) == 1:
+                outcomes = host.run_many(
+                    self.session, requests,
+                    scope_confirm_fn=confirm_scope,
+                    outbound_request_confirm_fn=confirm_outbound,
+                    write_confirm_fn=confirm_write,
+                    cancel_event=self.cancel_event,
+                    run_id=run_id,
+                    turn_epoch=turn_epoch,
+                    live_binding_check=live_binding_check,
+                    reservations=reservations,
+                    before_worker_start=before_project_worker_start,
+                    on_worker_progress=report_worker_progress,
+                )
+                if (len(outcomes) == 1
+                        and project_worker_outcome_matches_reservation(reservations[0], outcomes[0])
+                        and outcomes[0].status == "blocked" and outcomes[0].model_turn is None):
+                    notice = format_worker_preflight_notice(
+                        outcomes[0].error_code, project_display_names.get(outcomes[0].task_id),
+                    )
+                    if notice is not None:
+                        try:
+                            self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": notice})
+                        except Exception:
+                            pass
+            else:
+                # The host batch API returns only after every worker completes.
+                # Dispatch reserved singletons with the same two-worker cap and
+                # one-active-worker-per-project rule so prestart failures can be
+                # reported while unrelated siblings are still live.
+                from concurrent.futures import FIRST_COMPLETED, wait
+                outcomes_by_index = [None] * len(requests)
+                pending_indexes = list(range(len(requests)))
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent-project-worker-dispatch") as dispatch_pool:
+                    active_futures = {}
+                    while pending_indexes or active_futures:
+                        active_projects = {requests[idx].project_id for idx in active_futures.values()}
+                        while len(active_futures) < 2:
+                            eligible = next((idx for idx in pending_indexes
+                                             if requests[idx].project_id not in active_projects), None)
+                            if eligible is None:
+                                break
+                            pending_indexes.remove(eligible)
+                            request = requests[eligible]
+                            reservation = reservations[eligible]
+                            try:
+                                future = dispatch_pool.submit(
+                                    host.run_many, self.session, [request],
+                                    scope_confirm_fn=confirm_scope,
+                                    outbound_request_confirm_fn=confirm_outbound,
+                                    write_confirm_fn=confirm_write,
+                                    cancel_event=self.cancel_event,
+                                    run_id=run_id,
+                                    turn_epoch=turn_epoch,
+                                    live_binding_check=live_binding_check,
+                                    reservations=(reservation,),
+                                    before_worker_start=before_project_worker_start,
+                                    on_worker_progress=report_worker_progress,
+                                )
+                            except Exception:
+                                # This failure is outside the host boundary: preserve
+                                # the reservation as blocked, but do not claim a host
+                                # error code or discard outcomes from active siblings.
+                                outcome = _host_failure(
+                                    self.session, request, "agent_dispatch_pool_submit_failed",
+                                    status="blocked", reservation=reservation,
+                                )
+                                outcomes_by_index[eligible] = outcome
+                                if project_worker_outcome_matches_reservation(reservation, outcome):
+                                    notice = format_worker_preflight_notice(
+                                        outcome.error_code, project_display_names.get(outcome.task_id),
+                                    )
+                                    if notice is not None:
+                                        try:
+                                            self._emit_turn_event({
+                                                "type": "turn.notice", "level": "warn", "text": notice,
+                                            })
+                                        except Exception:
+                                            # A notice sink failure must not drop settled siblings.
+                                            pass
+                                continue
+                            active_futures[future] = eligible
+                            active_projects.add(request.project_id)
+                        if not active_futures:
+                            break
+                        completed, _ = wait(tuple(active_futures), return_when=FIRST_COMPLETED)
+                        for future in completed:
+                            index = active_futures.pop(future)
+                            request = requests[index]
+                            reservation = reservations[index]
+                            try:
+                                single_outcomes = future.result()
+                                outcome = single_outcomes[0] if len(single_outcomes) == 1 else None
+                            except Exception:
+                                outcome = None
+                            # Preserve absent or malformed host outcomes as unknown;
+                            # fabricating a result here would let an unverified task
+                            # bind to a real worker reservation.
+                            outcomes_by_index[index] = outcome
+                            if (outcome is None or outcome.status != "blocked"
+                                    or outcome.model_turn is not None
+                                    or not project_worker_outcome_matches_reservation(reservation, outcome)):
+                                continue
+                            notice = format_worker_preflight_notice(
+                                outcome.error_code, project_display_names.get(outcome.task_id),
+                            )
+                            if notice is not None:
+                                try:
+                                    self._emit_turn_event({
+                                        "type": "turn.notice", "level": "warn", "text": notice,
+                                    })
+                                except Exception:
+                                    # Reporting is best-effort; never retry a worker or
+                                    # skip result persistence/card publication.
+                                    pass
+                outcomes = tuple(outcome for outcome in outcomes_by_index if outcome is not None)
+        except Exception as exc:
+            independent_partial = None
+            if independent_future is not None:
+                try:
+                    independent_partial = independent_future.result()
+                except Exception as independent_exc:
+                    independent_partial = {
+                        "ok": False,
+                        "status": "unknown",
+                        "error_type": type(independent_exc).__name__,
+                    }
+            if independent_pool is not None:
+                independent_pool.shutdown(wait=True, cancel_futures=True)
+            details = {"project_worker_dispatch_status": "failed"}
+            if independent_partial is not None:
+                details["independent_write"] = (
+                    independent_partial.to_dict()
+                    if isinstance(independent_partial, ToolResult)
+                    else independent_partial
+                )
+            return tool_fail(
+                "run_project_workers", "worker_dispatch_failed",
+                f"project worker host dispatch failed safely ({type(exc).__name__}); independent lane status is included when it was requested",
+                details=details,
+            )
+        independent_result = None
+        if independent_future is not None:
+            try:
+                independent_result = independent_future.result()
+            except Exception as exc:
+                independent_result = None
+                independent_error = f"independent writer failed safely ({type(exc).__name__})"
+            else:
+                independent_error = None
+            finally:
+                if independent_pool is not None:
+                    independent_pool.shutdown(wait=True, cancel_futures=True)
+        else:
+            independent_error = None
+        if worker_record_binding is not None:
+            from project_worker_work_record_settlement import project_worker_outcome_matches_binding
+            if len(outcomes) == 1 and project_worker_outcome_matches_binding(worker_record_binding, outcomes[0]):
+                self._project_worker_work_record_result = (worker_record_binding, outcomes[0])
+                if requested_tests and callable(self.project_worker_verification_fn):
+                    try:
+                        self._project_worker_verification_result = self.project_worker_verification_fn(
+                            host=host, session=self.session, store=store, binding=worker_record_binding,
+                            outcome=outcomes[0], target=requested_tests[0], live_binding_check=live_binding_check)
+                    except Exception:
+                        self._project_worker_verification_result = None
+            else:
+                self._project_worker_work_record_result = None
+
+        batch_binding_by_task = {}
+        batch_reservation_by_task = {}
+        batch_lifecycle_by_task = {}
+        batch_verified_task_ids: set[str] = set()
+        batch_verified_outcomes = None
+        batch_unverified_worker_tasks = []
+        batch_unexpected_outcome_count = 0
+        batch_tracking_rows = (worker_batch_bindings if worker_batch_bindings is not None
+                               else worker_batch_created_rows)
+        if batch_tracking_rows is not None and worker_batch_reservations is not None:
+            from project_worker_host import ProjectWorkerReservation
+            batch_binding_by_task = {
+                row["task_id"]: row for row in batch_tracking_rows
+                if type(row) is dict and type(row.get("task_id")) is str
+            }
+            batch_reservation_by_task = {
+                row.task_id: row for row in worker_batch_reservations
+                if type(row) is ProjectWorkerReservation
+            }
+            verified_rows, unverified_rows, batch_unexpected_outcome_count = reconcile_project_worker_batch_outcomes(
+                batch_tracking_rows, worker_batch_reservations, outcomes,
+            )
+            batch_verified_outcomes = tuple(outcome for _binding, _reservation, outcome in verified_rows)
+            batch_unverified_worker_tasks = list(unverified_rows)
+            for unknown in unverified_rows:
+                lifecycle = "unknown_not_recorded"
+                binding_row = batch_binding_by_task.get(unknown["task_id"])
+                reservation = batch_reservation_by_task.get(unknown["task_id"])
+                if (worker_batch_tracking_mode == "created_current_dialogue"
+                        and binding_row is not None and reservation is not None
+                        and binding_row.get("task_id") == reservation.task_id
+                        and binding_row.get("project_id") == reservation.project_id
+                        and binding_row.get("worker_id") == reservation.worker_id
+                        and binding_row.get("run_id") == reservation.worker_run_id
+                        and binding_row.get("item_id") == unknown["item_id"]
+                        and binding_row.get("requirement_id") == unknown["requirement_id"]):
+                    try:
+                        recorded = _record_current_dialogue_worker_unknown(
+                            worker_batch_created_store, session_id=self.session.conversation_id,
+                            item_id=binding_row["item_id"], requirement_id=binding_row["requirement_id"],
+                            reservation=reservation, reason=unknown["error_code"],
+                        )
+                        if recorded:
+                            lifecycle = "unknown_recorded"
+                    except Exception:
+                        pass
+                if (worker_batch_tracking_mode == "linked_existing"
+                        and binding_row is not None and reservation is not None
+                        and binding_row.get("task_id") == reservation.task_id
+                        and binding_row.get("project_id") == reservation.project_id
+                        and binding_row.get("worker_id") == reservation.worker_id
+                        and binding_row.get("run_id") == reservation.worker_run_id):
+                    try:
+                        persisted = binding_store.get_binding(binding_row["binding_id"])
+                        expected_start = {"reservation_id": reservation.reservation_id,
+                                          "parent_run_id": reservation.parent_run_id,
+                                          "turn_epoch": reservation.turn_epoch}
+                        if persisted is not None and persisted.get("start_receipt") == expected_start:
+                            binding_store.record_worker_lifecycle(
+                                binding_id=binding_row["binding_id"], worker_id=reservation.worker_id,
+                                run_id=reservation.worker_run_id, sequence=reservation.turn_epoch,
+                                status="unknown", finish_reason="unknown",
+                            )
+                            lifecycle = "unknown_recorded"
+                    except Exception:
+                        pass
+                unknown["record_lifecycle_status"] = lifecycle
+                batch_lifecycle_by_task[unknown["task_id"]] = lifecycle
+            for binding_row, reservation, outcome in verified_rows:
+                batch_verified_task_ids.add(outcome.task_id)
+                try:
+                    if worker_batch_tracking_mode == "linked_existing":
+                        persisted = binding_store.get_binding(binding_row["binding_id"])
+                        expected_start = {"reservation_id": reservation.reservation_id,
+                                          "parent_run_id": reservation.parent_run_id,
+                                          "turn_epoch": reservation.turn_epoch}
+                        if persisted is None or persisted.get("start_receipt") != expected_start:
+                            raise ValueError("worker was not durably started")
+                        read_available, read_attempts = _serialize_project_worker_read_attempts(outcome.model_turn)
+                        binding_store.record_worker_lifecycle(
+                            binding_id=binding_row["binding_id"], worker_id=reservation.worker_id,
+                            run_id=reservation.worker_run_id, sequence=reservation.turn_epoch,
+                            status=outcome.status, finish_reason=_worker_lifecycle_finish_reason(outcome.status),
+                            read_attempts_available=read_available, read_attempts=read_attempts,
+                        )
+                    elif worker_batch_tracking_mode == "created_current_dialogue":
+                        batch_lifecycle_by_task[outcome.task_id] = _record_current_dialogue_worker_lifecycle(
+                            worker_batch_created_store, session_id=self.session.conversation_id,
+                            item_id=binding_row["item_id"], requirement_id=binding_row["requirement_id"],
+                            outcome=outcome, reservation=reservation,
+                            expected_requirement_text=binding_row["task_input"],
+                        )
+                    else:
+                        raise ValueError("worker tracking mode is unavailable")
+                    if worker_batch_tracking_mode != "created_current_dialogue":
+                        batch_lifecycle_by_task[outcome.task_id] = "unknown_recorded"
+                except Exception:
+                    batch_lifecycle_by_task[outcome.task_id] = "unknown_not_recorded"
+        linked_copy_status = "not_applicable"
+        if worker_batch_tracking_mode == "linked_existing":
+            linked_copy_status = "not_created"
+            selected_rows = [row for row in (batch_tracking_rows or [])
+                             if batch_lifecycle_by_task.get(row["task_id"]) in {"unknown_recorded", "blocked_recorded"}]
+            def copy_binding_current():
+                try:
+                    return (not self.cancel_event.is_set()
+                            and live_binding_check(self.session, run_id, turn_epoch) is True)
+                except Exception:
+                    return False
+            if selected_rows and copy_binding_current():
+                try:
+                    copy_sources = {row["project_id"]: authorized_sources[row["project_id"]] for row in selected_rows}
+                    proposal = binding_store.prepare_item_copies(
+                        binding_ids=[row["binding_id"] for row in selected_rows], authorized_sources=copy_sources,
+                    )
+                    preview = json.dumps({"items": proposal}, ensure_ascii=False, indent=2)
+                    if len(preview.encode("utf-8")) > 65536:
+                        raise ValueError("copy confirmation exceeds safe bound")
+                    choice = confirm_record_gate(
+                        preview,
+                        "LINKED_WORK_ITEM_COPY_CONFIRM\n"
+                        "\u662f\u5426\u5c06\u4ee5\u4e0b\u5df2\u5217\u51fa\u7684\u6765\u6e90\u5355\u4e2a\u4e8b\u9879\u53ca\u5173\u8054\u8981\u6c42\u5b57\u6bb5\u3001\u5bbf\u4e3b\u56de\u5408\u4e8b\u5b9e\u590d\u5236\u5e76\u4fdd\u5b58\u5230\u5f53\u524d\u4f1a\u8bdd\uff1f\n"
+                        "\u8fd9\u4e0d\u662f\u5b8c\u6574\u9879\u76ee\u5feb\u7167\uff1b\u5c06\u6301\u4e45\u4fdd\u7559\u4ee5\u4fbf\u672a\u6765\u91cd\u8fde\u5c55\u793a\uff08\u5c55\u793a\u5c1a\u672a\u63a5\u5165\uff09\uff1b\u4e0d\u6388\u6743\u5199\u5165\u6765\u6e90\u6216\u672a\u6765\u91cd\u8bfb\u6765\u6e90\uff1b\u4e0d\u91cd\u65b0\u6267\u884c\u3002\u4ec5\u4fdd\u5b58\u5f85\u53d1\u5e03\u610f\u56fe\uff0c\u5c1a\u672a\u53d1\u9001\u5de5\u4f5c\u5361\u3002",
+                    )
+                    if choice == "y" and copy_binding_current():
+                        binding_store.commit_confirmed_item_copies(
+                            proposed=proposal, authorized_sources=copy_sources, is_current=copy_binding_current,
+                        )
+                        linked_copy_status = "saved_pending_not_published"
+                    else:
+                        linked_copy_status = "not_authorized"
+                except Exception:
+                    linked_copy_status = "not_confirmed_unavailable_or_stale"
+            # Separate consent per source Session; the existing item-copy decision
+            # does not authorize copying the larger set of records.
+            project_session_copy_saved = []
+            if selected_rows and copy_binding_current():
+                for project_id in sorted({row["project_id"] for row in selected_rows}):
+                    try:
+                        project_rows = [row for row in selected_rows if row["project_id"] == project_id]
+                        source = authorized_sources[project_id]
+                        ids = [row["binding_id"] for row in project_rows]
+                        def project_copy_current():
+                            try:
+                                from multi_project_work_records import _read_project_sessions
+                                return (copy_binding_current()
+                                        and _read_project_sessions(self.session.paths).get(project_id) == source.store.session_id)
+                            except Exception:
+                                return False
+                        if not project_copy_current():
+                            continue
+                        proposal = binding_store.prepare_project_session_copy(
+                            project_id=project_id, binding_ids=ids, source=source)
+                        preview = json.dumps(proposal, ensure_ascii=False, indent=2)
+                        choice = confirm_record_gate(preview,
+                            "LINKED_PROJECT_SESSION_COPY_CONFIRM\n"
+                            "\u662f\u5426\u590d\u5236\u5e76\u6301\u4e45\u4fdd\u5b58\u4ee5\u4e0b\u6307\u5b9a\u6765\u6e90 Session \u7684\u5f53\u524d\u9879\u76ee\u4e8b\u9879\u3001\u8981\u6c42\u53ca\u72b6\u6001\u4e0e\u5bbf\u4e3b\u751f\u547d\u5468\u671f\u5230\u5f53\u524d\u4f1a\u8bdd\uff1f\n"
+                            "\u8fd9\u5e76\u975e\u6574\u4e2a\u9879\u76ee\u7684\u5168\u90e8\u5386\u53f2\uff1b\u4ec5\u4ee3\u8868\u5df2\u6388\u6743\u7684\u6307\u5b9a\u6765\u6e90 Session\uff0c\u4e0d\u4fdd\u8bc1\u8be5 Session \u4ecd\u662f\u9879\u76ee\u5f53\u524d\u6620\u5c04\u3002\u590d\u5236\u540e\u53ef\u91cd\u8fde\u4fdd\u7559\uff0c\u4e0d\u6388\u6743\u5199\u6765\u6e90\u6216\u672a\u6765\u91cd\u8bfb\uff0c\u4e0d\u91cd\u65b0\u6267\u884c\u3002\u4ec5\u4fdd\u5b58\u5f85\u53d1\u5e03\u610f\u56fe\uff0c\u5c1a\u672a\u53d1\u5e03\uff1b\u5bbf\u4e3b\u8fd4\u56de\u4e0d\u4ee3\u8868\u64cd\u4f5c\u6210\u529f\u6216\u9a8c\u8bc1\u901a\u8fc7\u3002"
+                        )
+                        if choice == "y" and project_copy_current():
+                            binding_store.prepare_project_session_copy(
+                                project_id=project_id, binding_ids=ids, source=source,
+                                expected=proposal, is_current=project_copy_current, commit=True,
+                            )
+                            project_session_copy_saved.append(project_id)
+                    except Exception:
+                        if copy_binding_current():
+                            self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": "来源 Session 项目副本未能安全确认或保存；未将其标记为已确认。"})
+                        continue
+            if project_session_copy_saved and copy_binding_current():
+                self._emit_turn_event({"type": "turn.notice", "level": "info", "text": "已保存经确认的来源 Session 项目记录副本；这是待发布投影，不表示操作完成或验证通过。"})
+            if copy_binding_current():
+                notice = ("已保存经确认的事项副本和待发布意图；事项卡片尚未发布。"
+                          if linked_copy_status == "saved_pending_not_published"
+                          else "未确认保存单个事项副本；未创建事项卡片。")
+                self._emit_turn_event({"type": "turn.notice", "level": "info", "text": notice})
+        rows = []
+        reportable_outcomes = batch_verified_outcomes if batch_tracking_rows is not None else outcomes
+        for outcome in reportable_outcomes:
+            model_turn = outcome.model_turn
+            try:
+                read_attempts_available, read_attempts = _serialize_project_worker_read_attempts(model_turn)
+            except Exception:
+                # Evidence is observational only; malformed worker metadata must not
+                # alter the outcome or trigger another execution attempt.
+                read_attempts_available, read_attempts = False, []
+            record_binding_status = "not_linked"
+            if worker_record_binding is not None:
+                from project_worker_work_record_settlement import project_worker_outcome_matches_binding
+                record_binding_status = (
+                    "confirmed" if len(outcomes) == 1
+                    and project_worker_outcome_matches_binding(worker_record_binding, outcome)
+                    else "mismatch"
+                )
+            batch_binding = batch_binding_by_task.get(outcome.task_id)
+            batch_reservation = batch_reservation_by_task.get(outcome.task_id)
+            if batch_tracking_rows is not None:
+                record_binding_status = (
+                    ("confirmed" if worker_batch_tracking_mode == "linked_existing"
+                     else "created_current_dialogue")
+                    if outcome.task_id in batch_verified_task_ids
+                    and batch_binding is not None and batch_reservation is not None
+                    else "mismatch"
+                )
+            rows.append({
+                "worker_id": outcome.worker_id,
+                "run_id": outcome.run_id,
+                "parent_run_id": getattr(outcome, "parent_run_id", outcome.run_id),
+                "worker_run_id": getattr(outcome, "worker_run_id", ""),
+                "reservation_id": getattr(outcome, "reservation_id", ""),
+                "turn_epoch": outcome.turn_epoch,
+                "conversation_id": outcome.conversation_id,
+                "project_id": outcome.project_id,
+                "task_id": outcome.task_id,
+                "status": outcome.status,
+                "model_turn_status": model_turn.status if model_turn is not None else None,
+                "model_summary": model_turn.final_text if model_turn is not None else "",
+                "requests": model_turn.requests if model_turn is not None else 0,
+                "writes": [
+                    {"path": receipt.path, "status": receipt.status,
+                     "verification": receipt.verification, "error_code": receipt.error_code}
+                    for receipt in (model_turn.writes if model_turn is not None else ())
+                ],
+                "read_attempts_available": read_attempts_available,
+                "read_attempts": read_attempts,
+                "acceptance_status": outcome.acceptance_status,
+                "acceptance_evidence": list(outcome.acceptance_evidence),
+                "record_binding_status": record_binding_status,
+                "record_lifecycle_status": batch_lifecycle_by_task.get(outcome.task_id, "not_applicable"),
+                "record_binding_id": batch_binding.get("binding_id") if batch_binding is not None else None,
+                "record_item_id": batch_binding.get("item_id") if worker_batch_tracking_mode == "created_current_dialogue" and batch_binding is not None else None,
+                "record_requirement_id": batch_binding.get("requirement_id") if worker_batch_tracking_mode == "created_current_dialogue" and batch_binding is not None else None,
+                "record_tracking_mode": worker_batch_tracking_mode or ("unlinked" if worker_batch_unlinked else "not_linked"),
+                "error_code": outcome.error_code,
+            })
+        if worker_batch_tracking_mode == "created_current_dialogue" and batch_tracking_rows is not None:
+            recorded_projects = tuple(sorted({
+                row["project_id"] for row in rows
+                if row.get("record_tracking_mode") == "created_current_dialogue"
+                and row.get("record_lifecycle_status") in {"unknown_recorded", "blocked_recorded"}
+                and type(row.get("project_id")) is str
+            }))
+            item_ids = tuple(sorted({
+                row["record_item_id"] for row in rows
+                if row.get("record_tracking_mode") == "created_current_dialogue"
+                and row.get("record_lifecycle_status") in {"unknown_recorded", "blocked_recorded"}
+                and type(row.get("record_item_id")) is str
+            }))
+            if recorded_projects and item_ids and len(item_ids) == 1:
+                self._current_dialogue_project_card_candidates.append({
+                    "session_id": self.session.conversation_id,
+                    "parent_run_id": run_id,
+                    "turn_epoch": turn_epoch,
+                    "item_id": item_ids[0],
+                    "project_ids": recorded_projects,
+                })
+
+        if independent_error is not None:
+            return tool_fail(
+                "run_project_workers", "independent_write_failed",
+                independent_error,
+                details={"workers": rows, "independent_write_status": "unknown"},
+            )
+        if independent_result is not None and not independent_result.ok:
+            error = independent_result.error
+            return tool_fail(
+                "run_project_workers",
+                error.code if error is not None else "independent_write_failed",
+                error.message if error is not None else "independent file write did not complete",
+                details={"workers": rows, "independent_write": independent_result.to_dict()},
+            )
+        return tool_ok("run_project_workers", {
+            "status": "worker_turns_partial_unknown" if batch_unverified_worker_tasks or batch_unexpected_outcome_count else "worker_turns_returned",
+            "acceptance_status": "not_run",
+            "linked_item_copy_status": linked_copy_status,
+            "independent_write": independent_result.to_dict() if independent_result is not None else None,
+            "work_record_binding_status": (
+                ("confirmed" if worker_batch_tracking_mode == "linked_existing"
+                 else "created_current_dialogue") if batch_tracking_rows is not None
+                and len(rows) == len(batch_tracking_rows)
+                and all(row["record_binding_status"] == (
+                    "confirmed" if worker_batch_tracking_mode == "linked_existing" else "created_current_dialogue"
+                ) for row in rows)
+                else "confirmed" if worker_record_binding is not None and len(rows) == 1
+                and rows[0]["record_binding_status"] == "confirmed"
+                else "mismatch" if worker_record_binding is not None or batch_tracking_rows is not None
+                else "not_linked"
+            ),
+            "workers": rows,
+            "unverified_worker_tasks": batch_unverified_worker_tasks,
+            "unexpected_worker_outcome_count": batch_unexpected_outcome_count,
+        })
 
     def bind_cancel_event(self, event: threading.Event) -> None:
         self.cancel_event = event
@@ -942,9 +3184,24 @@ class Agent:
 
     def request_cancel(self) -> None:
         self.cancel_event.set()
-        cancel_request = getattr(self.llm, "cancel_current_request", None)
-        if callable(cancel_request):
-            cancel_request()
+        controller = self.work_record_recall_controller
+        matcher = getattr(controller, "_semantic_matcher", None)
+        matcher_client = getattr(matcher, "_client", None)
+        seen: set[int] = set()
+        for client in (self.llm, matcher_client):
+            if client is None or id(client) in seen:
+                continue
+            seen.add(id(client))
+            try:
+                set_cancel_event = getattr(client, "set_cancel_event", None)
+                if callable(set_cancel_event):
+                    set_cancel_event(self.cancel_event)
+                cancel_request = getattr(client, "cancel_current_request", None)
+                if callable(cancel_request):
+                    cancel_request()
+            except Exception:
+                # Continue cancelling another distinct transport client; the shared event is set.
+                pass
 
     @classmethod
     def create(
@@ -958,6 +3215,10 @@ class Agent:
         evolution_client: Any | None = None,
         host_run_id: str = "",
         evolution_authorization_id: str = "",
+        enable_work_record_recall: bool = False,
+        work_record_recall_controller: Any | None = None,
+        enable_work_record_recording: bool = False,
+        work_record_recording_controller: Any | None = None,
     ) -> Agent:
         registry = ToolRegistry.load(session.paths)
         allowed = session_evolved_allowlist(session, registry=registry)
@@ -980,6 +3241,10 @@ class Agent:
             llm=llm if llm is not None else LLMClient(paths=session.paths),
             tool_loop_max=tool_loop_max,
             stream_handlers=stream_handlers,
+            enable_work_record_recall=enable_work_record_recall,
+            work_record_recall_controller=work_record_recall_controller,
+            enable_work_record_recording=enable_work_record_recording,
+            work_record_recording_controller=work_record_recording_controller,
         )
         agent.executor.on_registry_reloaded = agent._sync_allowed_evolved
         return agent
@@ -1096,7 +3361,6 @@ class Agent:
         self.executor.session.terminal_host_id = str(
             self.session.meta.terminal_host_id or ""
         ).strip()
-
 
     def _set_terminal_plan_phase(self, phase: str) -> None:
         self.executor.session.terminal_plan_phase = (phase or "").strip()
@@ -1339,6 +3603,7 @@ class Agent:
         )
 
         tool_rounds = 0
+        cancelled_worker_write_unknown = False
         llm_transport_attempts = 0
         transport_fallback_used = False
         empty_reply_attempts = 0
@@ -1777,6 +4042,43 @@ class Agent:
                 )
                 break
 
+            recall_tool_calls = [
+                call for call in response.tool_calls
+                if (type(call) is dict and type(call.get("function")) is dict
+                    and call["function"].get("name") == "recall_current_dialogue")
+            ]
+            if len(recall_tool_calls) == 1 and len(response.tool_calls) == 1:
+                context = self._active_current_dialogue_recall_context
+                captured_session = context[0] if type(context) is tuple and len(context) == 3 else self.session
+                try:
+                    tool_name, arguments = _parse_tool_call(recall_tool_calls[0])
+                    result = self.executor.run(tool_name, arguments)
+                    data = result.data if isinstance(result.data, dict) else {}
+                    answer = data.get("answer") if result.ok else None
+                    final_text = (
+                        answer if type(answer) is str and answer.strip()
+                        else "当前对话回查未能安全完成；未把检索结果发送回主模型。"
+                    )
+                except Exception:
+                    final_text = "当前对话回查未能安全完成；未把检索结果发送回主模型。"
+                if self.session is not captured_session:
+                    final_text = "会话已切换；原问题仍保留在原会话，本次回查结果未采用。"
+                    target_session = captured_session
+                else:
+                    target_session = self.session
+                target_session.append_message({"role": "assistant", "content": final_text})
+                return ToolLoopSegmentResult(
+                    final_text=final_text,
+                    tool_rounds=tool_rounds + 1,
+                    finish_reason="dialogue_recall_tool",
+                    exceeded=False,
+                    had_progress=segment_messages_show_progress(
+                        target_session.messages, segment_start_index,
+                    ),
+                    qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
+                )
+
             tool_rounds += 1
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
@@ -1797,7 +4099,26 @@ class Agent:
                 except ToolCallArgumentError as exc:
                     result = _tool_result_for_argument_error(exc)
                 else:
-                    result = self.executor.run(tool_name, arguments)
+                    if tool_name == "recall_current_dialogue" and len(response.tool_calls) > 1:
+                        result = tool_fail(
+                            tool_name, ToolErrorCode.VALIDATION_ERROR,
+                            "current-dialogue recall must be a sole read-only call; history was not read",
+                        )
+                    else:
+                        result = self.executor.run(tool_name, arguments)
+
+                if tool_name == "run_project_workers" and self.cancel_event.is_set():
+                    data = result.data if isinstance(result.data, dict) else {}
+                    if not data and result.error is not None and isinstance(result.error.details, dict):
+                        data = result.error.details
+                    worker_rows = data.get("workers")
+                    if isinstance(worker_rows, list):
+                        cancelled_worker_write_unknown = cancelled_worker_write_unknown or any(
+                            isinstance(row, dict) and isinstance(row.get("writes"), list)
+                            and any(isinstance(write, dict) and write.get("status") == "outcome_unknown"
+                                    for write in row["writes"])
+                            for row in worker_rows
+                        )
 
                 from git_review_rails import (
                     format_git_review_discipline_line,
@@ -1847,7 +4168,7 @@ class Agent:
                     fr = self._interrupt_finish_reason()
                     if fr == "timeout":
                         interrupt_kind = "timeout"
-                if interrupt_kind:
+                if interrupt_kind and not (cancelled_worker_write_unknown and self.cancel_event.is_set()):
                     label = _tool_interrupt_label(result, tool_name)
                     notice = format_tool_interrupt_notice(
                         interrupt_kind, tool_label=label
@@ -1980,35 +4301,45 @@ class Agent:
                 ):
                     new_cid = result.data.get("session_id")
                     if isinstance(new_cid, str) and new_cid.strip():
-                        self.session.save()
-                        self.session = Session.load(
-                            self.session.paths,
-                            new_cid.strip(),
-                        )
-                        self.executor.session = ExecutorSession.load(
-                            self.session.session_dir,
-                            allowed_evolved=session_evolved_allowlist(
-                                self.session,
-                                registry=self.executor.registry,
-                            ),
-                        )
-                        self._sync_turn_mode()
-                        loaded_system = build_system_prompt(self.session)
-                        static_system = loaded_system.static_prompt
-                        dynamic_system = loaded_system.dynamic_prompt
-                        # M0: do not continue the tool loop on the old session.
-                        notice = str(result.data.get("message") or "已切换上下文")
-                        self.session.append_message(
-                            {"role": "assistant", "content": notice}
-                        )
-                        self.session.save()
-                        return ToolLoopSegmentResult(
-                            final_text=notice,
-                            tool_rounds=tool_rounds,
-                            finish_reason="context_switched",
-                            exceeded=False,
-                            had_progress=True,
-                        )
+                        transition = self._session_binding_transition
+                        guard = transition(self.session) if callable(transition) else nullcontext(True)
+                        with guard as can_rebind:
+                            if not can_rebind:
+                                result.data["session_replaced"] = False
+                                result.data["message"] = (
+                                    "Session 切换因当前绑定或结果确认仍在处理中而暂缓；"
+                                    "未切换，请在当前操作结束后重新发起。"
+                                )
+                            else:
+                                self.session.save()
+                                self.session = Session.load(
+                                    self.session.paths,
+                                    new_cid.strip(),
+                                )
+                                self.executor.session = ExecutorSession.load(
+                                    self.session.session_dir,
+                                    allowed_evolved=session_evolved_allowlist(
+                                        self.session,
+                                        registry=self.executor.registry,
+                                    ),
+                                )
+                                self._sync_turn_mode()
+                                loaded_system = build_system_prompt(self.session)
+                                static_system = loaded_system.static_prompt
+                                dynamic_system = loaded_system.dynamic_prompt
+                                # M0: do not continue the tool loop on the old session.
+                                notice = str(result.data.get("message") or "已切换上下文")
+                                self.session.append_message(
+                                    {"role": "assistant", "content": notice}
+                                )
+                                self.session.save()
+                                return ToolLoopSegmentResult(
+                                    final_text=notice,
+                                    tool_rounds=tool_rounds,
+                                    finish_reason="context_switched",
+                                    exceeded=False,
+                                    had_progress=True,
+                                )
 
             if dynamic_dirty:
                 _refresh_dynamic_system()
@@ -2019,8 +4350,11 @@ class Agent:
                     kind = self._interrupt_finish_reason()
                     if kind not in {"timeout", "cancelled"}:
                         kind = "cancelled"
-                    notice = format_tool_interrupt_notice(
-                        kind, tool_label="本回合工具"
+                    notice = (
+                        "已请求停止；项目 worker 有写入结果无法确认，可能已产生更改。"
+                        "请先核查目标文件，不要直接重试。"
+                        if cancelled_worker_write_unknown else
+                        format_tool_interrupt_notice(kind, tool_label="本回合工具")
                     )
                     self.session.append_message(
                         {"role": "assistant", "content": notice}
@@ -2114,6 +4448,8 @@ class Agent:
             resolve_workspace_scope,
         )
 
+        self._active_goal_runtime = None
+        self._multi_project_batch_requested = False
         goal_rt = goal_runtime_for_session(self.session)
         if goal_rt is not None:
             accept_cmd, accept_exit = resolve_acceptance_from_session(self.session)
@@ -2177,6 +4513,7 @@ class Agent:
             event = goal_rt.status_event()
             if event is not None:
                 self._emit_turn_event(event)
+            self._active_goal_runtime = goal_rt
 
         total_tool_rounds = 0
         segment = 1
@@ -2356,6 +4693,9 @@ class Agent:
         )
 
         if goal_rt is not None:
+            multi_project_unverified = bool(
+                goal_rt.state is not None and goal_rt.state.multi_project_unverified
+            )
             if finish_reason in {"cancelled", "timeout", "stopped"}:
                 if goal_rt.state is not None and not goal_rt.state.stop_requested:
                     goal_rt.request_stop(
@@ -2367,6 +4707,20 @@ class Agent:
                 "tool_loop_exceeded",
             }:
                 goal_rt.mark_budget_paused()
+            elif multi_project_unverified:
+                goal_rt.finish_run(
+                    ok=finish_reason not in {"error", "provider_error"},
+                    finish_reason="multi_project_unverified",
+                )
+                finish_reason = finish_reason or "acceptance_incomplete"
+            elif self._multi_project_batch_requested:
+                # The batch was proposed but no worker crossed its last pre-start
+                # authorization gate; skip only this turn's bound-project acceptance.
+                goal_rt.finish_run(
+                    ok=finish_reason not in {"error", "provider_error"},
+                    finish_reason="multi_project_batch_not_started",
+                )
+                finish_reason = finish_reason or "batch_not_started"
             else:
                 accept_verdict = None
                 if goal_rt.state is not None and goal_rt.state.acceptance_command:
@@ -2400,10 +4754,32 @@ class Agent:
                         ok=finish_reason not in {"error", "provider_error"},
                         finish_reason=finish_reason or "completed",
                     )
+            if multi_project_unverified:
+                projects = "、".join(goal_rt.state.multi_project_ids) if goal_rt.state else "涉及项目"
+                notice = (
+                    "[Goal] 多项目 worker 批次未逐项验收，父 Goal 保持未完成："
+                    f"{projects}。未自动运行项目验收命令。"
+                )
+                notices.append(notice)
+                self.session.append_message({"role": "assistant", "content": notice})
+                self._emit_turn_event(
+                    {"type": "turn.notice", "level": "warn", "text": notice}
+                )
+            elif self._multi_project_batch_requested:
+                notice = (
+                    "[Goal] 多项目批次未获完整范围授权或尚未启动；本回合跳过单项目验收，"
+                    "Goal 未被标记为多项目未验证。"
+                )
+                notices.append(notice)
+                self.session.append_message({"role": "assistant", "content": notice})
+                self._emit_turn_event(
+                    {"type": "turn.notice", "level": "warn", "text": notice}
+                )
             event = goal_rt.status_event()
             if event is not None:
                 self._emit_turn_event(event)
-
+            self._active_goal_runtime = None
+        self._multi_project_batch_requested = False
         self.session.save()
         self.executor.end_execute_segments()
         return TurnResult(
@@ -2932,12 +5308,155 @@ class Agent:
         )
 
 
+    def _append_user_message_with_result_reply(
+        self, session: Session, user_text: str, *,
+        on_external_user_message_persisted: Callable[[Session], None] | None = None,
+        run_reply_hooks: bool = True,
+    ) -> None:
+        """Append a user turn, then report only an explicitly bound external source."""
+        reply_hook = getattr(self, "work_card_result_reply_turn", None) if run_reply_hooks else None
+        reply_pending = None
+        prepare_reply = getattr(reply_hook, "before_user_append", None)
+        if callable(prepare_reply):
+            try:
+                reply_pending = prepare_reply(session, user_text)
+            except Exception:
+                reply_pending = None
+
+        user_message_index = len(session.messages)
+        session.append_message({"role": "user", "content": user_text})
+        if callable(on_external_user_message_persisted):
+            try:
+                on_external_user_message_persisted(session)
+            except Exception:
+                # A receipt is observational; it must not retry or alter the turn.
+                pass
+
+        finish_reply = getattr(reply_hook, "after_user_append", None)
+        if reply_pending is not None and callable(finish_reply):
+            try:
+                finish_reply(reply_pending, session, user_text, user_message_index)
+            except Exception:
+                # Uncertain ACK handling must never suppress the selected turn path.
+                pass
+
     def run_turn(
         self,
         user_text: str,
         *,
         spawn_explore: bool | None = None,
         force_skip_plan_spawn: bool = False,
+        on_external_user_message_persisted: Callable[[Session], None] | None = None,
+    ) -> TurnResult:
+        self._active_current_dialogue_recall_context = None
+        if _is_multi_project_card_refresh(user_text):
+            session = self.session
+            session.ensure_messages_loaded()
+            session.turn_intent = "recall"
+            session.append_message({"role": "user", "content": user_text})
+            reply = "请明确一个项目及其来源后再刷新；本次未读取来源或执行任务。"
+            session.append_message({"role": "assistant", "content": reply})
+            return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                              finish_reason="linked_project_card_refresh_ambiguous", turn_intent="recall")
+        project_refresh = _explicit_project_card_refresh(user_text)
+        if project_refresh is not None:
+            return self._run_linked_project_card_refresh(user_text, project_refresh)
+        from linked_project_refresh_intent import eligible_refresh_question
+        if eligible_refresh_question(user_text):
+            return self._run_semantic_linked_project_card_refresh(user_text)
+        if _is_explicit_work_card_receipt_continue(user_text):
+            return self._run_work_card_receipt_continue(user_text)
+        if self.enable_work_record_recall:
+            if _is_explicit_work_card_lookup(user_text):
+                return self._run_work_card_recall(user_text)
+            from dialogue_recall import is_explicit_dialogue_recall
+            if (is_explicit_dialogue_recall(user_text)
+                    and not _is_explicit_work_record_lookup(user_text)):
+                return self._run_current_dialogue_recall(
+                    user_text,
+                    on_external_user_message_persisted=on_external_user_message_persisted,
+                )
+            semantic_card_intent = self._run_semantic_work_card_intent(user_text)
+            if semantic_card_intent is not None:
+                return semantic_card_intent
+            if _is_explicit_all_projects_work_overview(user_text):
+                return self._run_all_projects_work_overview(user_text)
+            selection = _explicit_project_overview_selection(user_text)
+            if selection is not None:
+                return self._run_all_projects_work_overview(user_text, selection=selection)
+            batch_project_id = _explicit_current_batch_project_overview(user_text)
+            if batch_project_id is not None:
+                bound_project_id = getattr(getattr(self.session, "meta", None), "project_id", "")
+                if batch_project_id == bound_project_id:
+                    return self._run_current_project_overview(user_text)
+                return self._run_current_batch_project_overview(user_text, batch_project_id)
+            if _is_explicit_current_project_overview(user_text):
+                return self._run_current_project_overview(user_text)
+            exact_current_overview = _is_explicit_current_work_overview(user_text)
+            if exact_current_overview:
+                controller = self.work_record_recall_controller
+                store = getattr(controller, "_store", None)
+                if controller is not None and getattr(store, "_session", None) is self.session:
+                    explicit_session = "当前会话" in user_text or "本会话" in user_text
+                    if not explicit_session:
+                        try:
+                            from multi_project_work_records import _read_project_sessions
+                            mapping = _read_project_sessions(self.session.paths)
+                        except Exception:
+                            mapping = {}
+                        if len(mapping) > 1:
+                            return self._run_all_projects_work_overview(user_text)
+                    return self._run_current_work_overview(user_text)
+
+            # `recall` classifies session-context recap (e.g. "刚才我们说了什么");
+            # only explicit historical project/work-record scope may leave normal chat.
+            if _is_explicit_work_record_lookup(user_text):
+                return self._run_work_record_recall(user_text)
+            recognizer = getattr(self, "multi_project_overview_recognizer", None)
+            if callable(recognizer) and not exact_current_overview:
+                try:
+                    from multi_project_luna_intent import is_eligible_overview_query
+                    eligible = is_eligible_overview_query(user_text) is True
+                except Exception:
+                    eligible = False
+                if eligible:
+                    return self._run_semantic_work_overview(user_text, recognizer)
+        controller = self.work_record_recording_controller
+        if self.enable_work_record_recording and controller is not None:
+            outcome = controller.run_turn(
+                user_text,
+                execute=lambda: self._run_turn_without_work_record_recording(
+                    user_text, spawn_explore=spawn_explore,
+                    force_skip_plan_spawn=force_skip_plan_spawn,
+                ),
+            )
+            if outcome.turn is not None:
+                turn = outcome.turn
+                notices = []
+                if outcome.storage_error:
+                    notices.append("\u5de5\u4f5c\u4e8b\u9879\u5df2\u6309\u539f\u6d41\u7a0b\u5904\u7406\uff0c\u4f46\u8bb0\u5f55\u4fdd\u5b58\u6216\u7ed3\u679c\u767b\u8bb0\u5931\u8d25\uff1b\u6267\u884c\u72b6\u6001\u4e0e\u8bb0\u5f55\u72b6\u6001\u9700\u5206\u522b\u6838\u5bf9\u3002")
+                if turn.finish_reason in {"cancelled", "stopped", "timeout", "context_switched"}:
+                    notices.append("\u672c\u56de\u5408\u5df2\u505c\u6b62\uff0c\u53ef\u80fd\u5df2\u4ea7\u751f\u90e8\u5206\u526f\u4f5c\u7528\uff1b\u672a\u786e\u8ba4\u56de\u6eda\uff0c\u7ed3\u679c\u4fdd\u6301\u672a\u77e5\u3002")
+                if notices:
+                    turn.assistant_text = (turn.assistant_text.rstrip() + "\n\n" + "\n".join(notices)).strip()
+                    turn.notices.extend(notices)
+                    self._patch_last_assistant_message(turn.assistant_text)
+                    self.session.save()
+                return turn
+            reply = outcome.reply or "事项未执行，请补充明确要求与范围。"
+            self.session.ensure_messages_loaded()
+            self._append_user_message_with_result_reply(self.session, user_text)
+            self.session.append_message({"role": "assistant", "content": reply})
+            return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="work_record_uncertain")
+        return self._run_turn_without_work_record_recording(
+            user_text, spawn_explore=spawn_explore,
+            force_skip_plan_spawn=force_skip_plan_spawn,
+            on_external_user_message_persisted=on_external_user_message_persisted,
+        )
+
+    def _run_turn_without_work_record_recording(
+        self, user_text: str, *, spawn_explore: bool | None, force_skip_plan_spawn: bool,
+        on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
         self._begin_skill_turn(user_text)
         try:
@@ -2945,9 +5464,943 @@ class Agent:
                 user_text,
                 spawn_explore=spawn_explore,
                 force_skip_plan_spawn=force_skip_plan_spawn,
+                on_external_user_message_persisted=on_external_user_message_persisted,
             )
         finally:
+            self._active_current_dialogue_recall_context = None
             self._clear_skill_turn()
+
+    def _run_semantic_work_overview(self, user_text: str, recognizer: Any) -> TurnResult:
+        """Treat model classification as untrusted scope hints, never as consent."""
+        session = self.session
+        action = "uncertain"
+        selection = None
+        try:
+            from multi_project_luna_intent import IntentCandidate, _ALL, _CURRENT
+            candidate = recognizer(user_text)
+            store = getattr(self.work_record_recall_controller, "_store", None)
+            if (self.session is not session or getattr(store, "_session", None) is not session
+                    or type(candidate) is not IntentCandidate or type(candidate.intent) is not str
+                    or type(candidate.project_names) is not tuple):
+                raise ValueError("invalid or stale candidate")
+            names = candidate.project_names
+            if candidate.intent == "all" and not names and _ALL.search(user_text):
+                action = "all"
+            elif candidate.intent == "current" and not names and _CURRENT.search(user_text):
+                action = "current"
+            elif candidate.intent == "selected":
+                resolved = _resolve_semantic_project_names(session, names, user_text)
+                if resolved is not None:
+                    action = "selected"
+                    selection = "、".join(resolved)
+        except Exception:
+            pass
+        # Keep local read/confirmation exceptions outside the classifier handler:
+        # a failure after reading must never be described as a no-read outcome.
+        if action == "all":
+            return self._run_all_projects_work_overview(user_text)
+        if action == "selected":
+            return self._run_all_projects_work_overview(user_text, selection=selection)
+        if action == "current":
+            # An explicit singular project reference is scoped to the current
+            # Session, not to every mapped project. Generic current work may span
+            # multiple projects and therefore retains the confirmed overview path.
+            singular_scope = any(marker in user_text for marker in (
+                "当前会话", "本会话", "这个项目", "当前项目", "本项目",
+            ))
+            if not singular_scope:
+                try:
+                    from multi_project_work_records import _read_project_sessions
+                    mapping = _read_project_sessions(session.paths)
+                except Exception:
+                    mapping = {}
+                if len(mapping) > 1:
+                    return self._run_all_projects_work_overview(user_text)
+            return self._run_current_work_overview(user_text)
+        # The recognizer may have sent the query after its own confirmation, so
+        # do not claim no outbound. Never echo candidate or provider diagnostics.
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        reply = "未能安全确定工作概况范围；请提供与本地项目目录名完全一致且唯一的项目名称，或提供准确项目 ID。未读取工作记录，也未执行任务。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0,
+                          finish_reason="work_record_overview_uncertain",
+                          turn_intent="recall", total_tool_rounds=0)
+
+    def _run_all_projects_work_overview(self, user_text: str, *, selection: str | None = None) -> TurnResult:
+        """One explicitly requested overview, delegated to the confirmed local reader."""
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        try:
+            from paths import read_agent_state_payload
+            from project_mode import normalize_project_id
+            from project_switch import PROJECT_SESSIONS_KEY, read_project_sessions
+
+            store = getattr(self.work_record_recall_controller, "_store", None)
+            confirm_fn = getattr(self.executor, "confirm_fn", None)
+            if store is None or getattr(store, "_session", None) is not session or not callable(confirm_fn):
+                raise ValueError("unbound overview or confirmation unavailable")
+            # The established reader drops malformed entries; compare to the raw
+            # index so that partial enumeration cannot be presented as all projects.
+            try:
+                raw = read_agent_state_payload(session.paths).get(PROJECT_SESSIONS_KEY)
+                mapping = read_project_sessions(session.paths)
+                valid_index = (isinstance(raw, dict) and bool(mapping) and raw == mapping
+                               and all(normalize_project_id(pid) == pid for pid in mapping))
+            except Exception:
+                valid_index = False
+                mapping = {}
+            if not valid_index:
+                reply = "未找到或无法核对项目会话索引；请先核对项目范围，未读取项目工作记录。"
+            else:
+                selected = sorted(mapping) if selection is None else [part.strip() for part in re.split(r"[、,，]", selection)]
+                invalid_selection = selection is not None and (
+                    not selected or len(selected) > 6 or len(set(selected)) != len(selected)
+                    or any(not re.fullmatch(r"[a-z][a-z0-9-]*", pid) or pid not in mapping for pid in selected)
+                )
+                if invalid_selection:
+                    reply = "无法确认所选项目；请用准确的项目名称，选择不重复且不超过 6 个已映射项目。未读取项目工作记录。"
+                elif len(selected) > 6:
+                    reply = "项目会话索引超过 6 个项目，未读取项目工作记录。请选不超过 6 个项目，例如：查看项目 alpha、beta 的工作概况（请换成准确的项目名称）。"
+                else:
+                    from multi_project_work_records import render_selected_projects_overview
+
+                    overview = render_selected_projects_overview(session, selected, confirm_fn)
+                    if not isinstance(overview, str) or not overview.strip():
+                        raise ValueError("overview renderer returned no text")
+                    reply = overview.strip()
+        except Exception:
+            # Confirmation/reader failures can happen after reads; do not claim
+            # that no read occurred and never fall through to ordinary execution.
+            reply = "多项目工作概况暂时未能安全核对；未调用 Agent 执行，也未自动重试。"
+        reply += "\n\n隐私提示：本问答会进入当前对话历史，后续对话模型可能读取。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0,
+                          finish_reason="multi_project_work_record_overview",
+                          turn_intent="recall", total_tool_rounds=0)
+
+    def _run_current_batch_project_overview(self, user_text: str, project_id: str) -> TurnResult:
+        """Render one exact project from this Session's bound scope or trusted batch."""
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        try:
+            from work_records_overview import render_current_batch_project_overview
+
+            overview = render_current_batch_project_overview(session, project_id)
+            if not isinstance(overview, str) or not overview.strip():
+                raise ValueError("overview renderer returned no text")
+            reply = "范围提示：仅依据当前会话的可信项目批次；未读取其他会话。\n" + overview.strip()
+        except Exception:
+            reply = "所询项目未能在当前会话可信记录中安全核对；未读取其他会话或调用 Agent 执行。"
+        reply += "\n\n隐私提示：本问答会进入当前对话历史，后续对话模型可能读取。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="current_batch_project_work_record_overview", turn_intent="recall")
+    def _run_current_project_overview(self, user_text: str) -> TurnResult:
+        """Read this exact, host-bound project Session without querying the model."""
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        try:
+            from paths import read_agent_state_payload
+            from project_mode import normalize_project_id
+            from project_switch import PROJECT_SESSIONS_KEY, read_project_sessions
+
+            store = getattr(self.work_record_recall_controller, "_store", None)
+            project_id = getattr(getattr(session, "meta", None), "project_id", "")
+            raw_mapping = read_agent_state_payload(session.paths).get(PROJECT_SESSIONS_KEY)
+            mapping = read_project_sessions(session.paths)
+            if (store is None or getattr(store, "_session", None) is not session
+                    or not isinstance(project_id, str) or not project_id
+                    or normalize_project_id(project_id) != project_id
+                    or getattr(store, "_bound_project_id", None) != project_id
+                    or type(raw_mapping) is not dict or raw_mapping != mapping
+                    or mapping.get(project_id) != session.conversation_id):
+                reply = "当前会话未绑定到可核对的当前项目；未读取其他会话或工作记录。"
+            else:
+                from work_records_overview import render_project_work_records_overview
+                reply = render_project_work_records_overview(session, project_id)
+        except Exception:
+            reply = "当前项目工作概况暂时未能安全核对；未调用 Agent 执行，也未自动重试。"
+        reply += "\n\n隐私提示：本问答会进入当前对话历史，后续对话模型可能读取。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="current_project_work_record_overview", turn_intent="recall")
+
+    def _run_current_work_overview(self, user_text: str) -> TurnResult:
+        """Return a read-only current-Session overview without invoking the Agent."""
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        try:
+            from work_records_overview import render_work_records_overview
+
+            overview = render_work_records_overview(session)
+            if not isinstance(overview, str) or not overview.strip():
+                raise ValueError("overview renderer returned no text")
+            reply = "范围提示：以下仅覆盖当前会话，不代表所有项目。\n" + overview.strip()
+        except Exception:
+            # Do not expose storage, session, or renderer diagnostics; never fall
+            # through to the Agent or retry after a failed local overview.
+            reply = "当前会话的工作概况暂时未能查清；未调用 Agent 执行，也未自动重试。"
+        reply += "\n\n隐私提示：本问答会进入当前对话历史，后续对话模型可能读取。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(
+            assistant_text=reply,
+            tool_rounds=0,
+            finish_reason="work_record_overview",
+            turn_intent="recall",
+            total_tool_rounds=0,
+        )
+
+    def _run_semantic_linked_project_card_refresh(self, user_text: str) -> TurnResult:
+        """Interpret only explicit card freshness candidates; interpretation grants no access."""
+        from linked_project_refresh_intent import parse_refresh_candidate
+        from multi_project_work_record_bindings import ConversationWorkRecordBindings
+        session = self.session
+        chosen = None
+        try:
+            namespace = ConversationWorkRecordBindings(session)
+            def identity():
+                return tuple(sorted((r["project_id"], r["binding_id"], r["source_session_id"])
+                                    for r in namespace.list_bindings()
+                                    if type(r.get("project_session_copy")) is dict))
+            before = identity()
+            candidates = tuple(sorted({r[0] for r in before}))
+            recognizer = self.project_card_refresh_recognizer
+            if (self.session is session and 1 <= len(candidates) <= 6 and callable(recognizer)
+                    and all(sum(row[0] == project for row in before) == 1 for project in candidates)):
+                proposed = recognizer(session.conversation_id, user_text, candidates)
+                candidate_json = json.dumps({"intent": "refresh", "project_id": proposed}, ensure_ascii=False)
+                if (self.session is session and not self.cancel_event.is_set() and identity() == before):
+                    chosen = parse_refresh_candidate(candidate_json, user_text, candidates)
+        except Exception:
+            chosen = None
+        if chosen is not None:
+            return self._run_linked_project_card_refresh(user_text, chosen)
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        reply = "未能安全确定要刷新的项目和来源；请明确一个项目 ID。未读取来源记录或执行任务。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="linked_project_card_refresh_uncertain", turn_intent="recall")
+
+    def _run_linked_project_card_refresh(self, user_text: str, project_id: str) -> TurnResult:
+        """Refresh a previously confirmed source scope without invoking a worker or model."""
+        from uuid import UUID, NAMESPACE_URL, uuid5
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        reply = "未能安全刷新指定来源会话工作卡；未派工、未假定卡片已送达。"
+        try:
+            from multi_project_work_record_authorization import authorize_project_record_sources
+            from multi_project_work_record_bindings import ConversationWorkRecordBindings
+            from multi_project_work_records import _read_project_sessions
+            binding = self._project_worker_live_binding
+            confirm = getattr(self.executor, "confirm_fn", None)
+            host = self.project_worker_host
+            if binding is None or not callable(confirm) or host is None:
+                raise ValueError("missing host turn")
+            run_id, epoch, live_check = binding
+            def current(candidate=session, candidate_run=run_id, candidate_epoch=epoch):
+                return (self.session is session and candidate is session and candidate_run == run_id
+                        and candidate_epoch == epoch and not self.cancel_event.is_set()
+                        and self._project_worker_live_binding is binding
+                        and live_check(session, run_id, epoch) is True)
+            if not current():
+                raise ValueError("stale host turn")
+            namespace = ConversationWorkRecordBindings(session)
+            candidates = [row for row in namespace.list_bindings()
+                          if row["project_id"] == project_id and type(row.get("project_session_copy")) is dict]
+            if len(candidates) != 1:
+                reply = ("当前会话存在多个可能的来源副本，无法唯一选择；请先明确需要的来源。"
+                         "目前不能安全选择其中一项，未读取来源、未派工。"
+                         if len(candidates) > 1 else
+                         "当前会话没有可唯一核对的已确认来源副本；请先明确并确认来源，未读取来源、未派工。")
+                raise ValueError("source copy missing or ambiguous")
+            original = candidates[0]
+            prior = original["project_session_copy"]["snapshot"]
+            ids = [fact["binding_id"] for fact in prior["worker_facts"]]
+            def ask(preview, _allow=False):
+                if not current():
+                    return "n"
+                result = host._serialized_confirm(confirm, self.cancel_event, preview, False)
+                return result if current() else "n"
+            sources = authorize_project_record_sources(
+                session, [project_id], confirm_fn=ask, cancel_event=self.cancel_event)
+            source = sources[project_id]
+            if source.store.session_id != original["source_session_id"] or not current():
+                raise ValueError("authorized source changed")
+            canonical_run = str(UUID(run_id))
+            refresh_id = str(uuid5(NAMESPACE_URL,
+                f"my-agent-refresh-turn:{session.conversation_id}:{UUID(run_id).hex}:{epoch}:{original['binding_id']}"))
+            options = dict(project_id=project_id, binding_ids=ids, source=source, refresh_id=refresh_id,
+                           refresh_run_id=canonical_run, refresh_turn_epoch=epoch)
+            preview = namespace.prepare_project_session_refresh(**options)
+            text = ("LINKED_PROJECT_SESSION_REFRESH_CONFIRM\n"
+                    "是否将以下指定来源 Session 的当前项目事项、要求及状态复制保存到当前会话？"
+                    "这是单个授权来源的快照，不是项目全部历史，也不保证当前映射；会保留旧卡，"
+                    "不授权未来重读或源写入，不重新执行；保存后仅待发布，不表示已送达或验证通过。\n"
+                    + json.dumps(preview, ensure_ascii=False, indent=2))
+            if len(text.encode("utf-8")) > 65536:
+                raise ValueError("confirmation preview exceeds safe limit")
+            if ask(text) != "y":
+                reply = "未确认刷新；没有创建新副本或重新派工。"
+            else:
+                def commit_live(candidate, candidate_run, candidate_epoch):
+                    try:
+                        return (current(candidate, candidate_run, candidate_epoch)
+                                and _read_project_sessions(session.paths).get(project_id) == source.store.session_id)
+                    except Exception:
+                        return False
+                namespace.prepare_project_session_refresh(**options, expected=preview, commit=True, is_current=commit_live)
+                reply = "已保存指定来源会话快照和待发布意图；未确认卡片送达，未重新派工，也不代表项目全部历史或验证通过。"
+        except Exception:
+            pass
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="linked_project_card_refresh", turn_intent="recall")
+
+    def _run_work_card_receipt_continue(self, user_text: str) -> TurnResult:
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        try:
+            operation = getattr(self, "work_card_receipt_continue_fn", None)
+            result = operation(session) if callable(operation) else None
+            if type(result) is not dict or result.get("status") not in {"ok", "partial"}:
+                raise ValueError("receipt continuation unavailable")
+            queued = result["queued_count"]
+            pending = result["pending_count"]
+            deferred = result["deferred_count"]
+            legacy = result["legacy_untracked_count"]
+            if any(type(value) is not int or value < 0 for value in (queued, pending, deferred, legacy)) or queued > 5:
+                raise ValueError("invalid continuation result")
+            reply = f"本次排队 {queued} 张工作卡，不代表客户端已接收。"
+            if result.get("has_more") is True:
+                reply += "尚有可继续处理的卡片；如需再处理一批，请再次提出。"
+            else:
+                reply += "本连接当前没有更多可继续排队的卡片。"
+            reply += f"当前共 {pending} 条尚未确认接收（包括已排队项）；已延后 {deferred} 条、旧记录无接收追踪 {legacy} 条；不自动重发。"
+            if result.get("status") == "partial":
+                reply += "本次部分操作未完成或已取消；未排队项仍待核实。"
+        except Exception:
+            reply = "未能安全继续恢复工作卡片；没有假定卡片已接收，请稍后核实。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="work_card_receipt_continue", turn_intent="recall")
+
+    def _finish_work_card_intent_stop(self, session: Session, user_text: str, *, cancelled: bool) -> TurnResult:
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        if cancelled:
+            reply = ("工作卡意图分类已取消或未完成；本条原文仅记录在当前会话，未据此读取候选或执行操作。"
+                     "分类请求可能已发出，不自动重试。")
+            reason = "work_card_intent_cancelled"
+        else:
+            reply = ("工作卡意图识别外发已拒绝；本条原文仅记录在当前会话，未发送候选卡片、"
+                     "未读取候选或执行操作。")
+            reason = "work_card_intent_declined"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason=reason, turn_intent="recall")
+
+    def _run_semantic_work_card_intent(self, user_text: str) -> TurnResult | None:
+        """Classify only locally screened card-history requests before early recall routing.
+
+        A pure-recall result still needs the independent candidate-disclosure confirmation
+        in _run_work_card_recall. Other classifications continue through the original turn
+        path with the untouched message.
+        """
+        session = self.session
+        intent = "uncertain"
+        try:
+            from work_card_intent import eligible_work_card_intent_question, classify_work_card_intent
+            if not eligible_work_card_intent_question(user_text):
+                return None
+            if self.cancel_event.is_set():
+                intent = "cancelled"
+            else:
+                from llm_client import LLMClient
+                controller = self.work_record_recall_controller
+                store = getattr(controller, "_store", None)
+                matcher = getattr(controller, "_semantic_matcher", None)
+                client = getattr(matcher, "_client", None)
+                confirm = getattr(self.executor, "confirm_fn", None)
+                method = getattr(client, "chat_confirmed_json", None)
+                if (type(client) is not LLMClient
+                        or getattr(method, "__func__", None) is not LLMClient.chat_confirmed_json
+                        or client.paths != session.paths or getattr(store, "_session", None) is not session
+                        or not callable(confirm)):
+                    intent = "unavailable"
+                else:
+                    client.set_cancel_event(self.cancel_event)
+
+                    def still_bound() -> bool:
+                        return (self.session is session and not self.cancel_event.is_set()
+                                and self.work_record_recall_controller is controller
+                                and getattr(controller, "_store", None) is store
+                                and getattr(controller, "_semantic_matcher", None) is matcher
+                                and getattr(matcher, "_client", None) is client
+                                and getattr(self.executor, "confirm_fn", None) is confirm
+                                and getattr(store, "_session", None) is session
+                                and client.paths == session.paths)
+
+                    def confirm_intent(preview: str, allow_all: bool) -> str:
+                        if allow_all is not False or not still_bound():
+                            return "n"
+                        choice = confirm(
+                            "工作卡意图识别外发确认：仅发送本条原文给 0x567 gpt-6-luna 分类；"
+                            "不发送候选卡片或记录内容。纯回查仍需另一次候选内容确认；分类不授权执行。\n精确请求预览：\n"
+                            + preview, False)
+                        return choice if still_bound() else "n"
+
+                    intent = classify_work_card_intent(
+                        client, session.conversation_id, user_text, confirm_intent, binding_check=still_bound)
+        except Exception:
+            # Classifier/configuration failure must not consume or rewrite the turn.
+            intent = "uncertain"
+
+        if self.session is not session:
+            session.ensure_messages_loaded()
+            session.turn_intent = "recall"
+            session.append_message({"role": "user", "content": user_text})
+            reply = "意图识别期间会话已切换；本条原文留在原会话，本次未读取候选或执行操作。请在目标会话重新发送。"
+            session.append_message({"role": "assistant", "content": reply})
+            return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                              finish_reason="work_card_intent_context_switched", turn_intent="recall")
+        if self.cancel_event.is_set() or intent == "cancelled":
+            return self._finish_work_card_intent_stop(session, user_text, cancelled=True)
+        if intent == "declined":
+            return self._finish_work_card_intent_stop(session, user_text, cancelled=False)
+        if intent == "recall_only":
+            # Model output cannot override either local execution detection or a separately
+            # classified follow-on clause (classify_turn gives recall references precedence).
+            from work_card_intent import has_follow_on_action
+            if not has_follow_on_action(user_text):
+                return self._run_work_card_recall(user_text, expected_session=session)
+        # contains_action / other / uncertain and locally execution-classified text
+        # preserve the original normal turn. Refusal/cancellation never falls through.
+        return None
+
+
+    def _run_work_card_recall(
+        self, user_text: str, *, expected_session: Session | None = None,
+    ) -> TurnResult:
+        """Recall saved cards read-only within the exact captured Session."""
+        session = expected_session if expected_session is not None else self.session
+        controller = self.work_record_recall_controller
+        matcher = getattr(controller, "_semantic_matcher", None)
+        recall_client = getattr(matcher, "_client", None)
+        try:
+            from llm_client import LLMClient
+            if type(recall_client) is LLMClient:
+                recall_client.set_cancel_event(self.cancel_event)
+        except Exception:
+            pass
+        if self.session is not session:
+            session.ensure_messages_loaded()
+            session.turn_intent = "recall"
+            session.append_message({"role": "user", "content": user_text})
+            reply = "回查期间会话已切换；原文保留在发起会话，本次未读取候选或执行操作。请在目标会话重新发送。"
+            session.append_message({"role": "assistant", "content": reply})
+            return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                              finish_reason="work_card_intent_context_switched", turn_intent="recall")
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        self._work_card_reference_intent = None
+        self.work_card_reference_intent = None
+        reply = self._work_card_recall_reply(user_text, session)
+        reference_intent = self._work_card_reference_intent
+        reply += "\n\n隐私提示：本问答会进入当前对话历史，后续对话模型可能读取。"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(assistant_text=reply, tool_rounds=0, total_tool_rounds=0,
+                          finish_reason="work_card_recall", turn_intent="recall",
+                          work_card_reference_intent=reference_intent)
+
+    def _work_card_recall_reply(self, user_text: str, session: Session) -> str:
+        failure = "本次当前会话工作卡回查未完成，不能判断是否存在匹配卡片；不会自动重试。"
+        try:
+            from work_card_ledger import WorkCardLedger
+            from work_card_recall import (prepare_recall, execute_recall, single_confirmation_event_bytes,
+                                          prepare_batch_recall, execute_batch_recall)
+            import work_card_recall as card_recall
+            from work_records import WorkRecordStore
+
+            controller = self.work_record_recall_controller
+            store = getattr(controller, "_store", None)
+            matcher = getattr(controller, "_semantic_matcher", None)
+            client = getattr(matcher, "_client", None)
+            confirm = getattr(self.executor, "confirm_fn", None)
+            # Only the real confirmed transport is authorized here; ordinary chat
+            # and arbitrary duck-typed providers cannot establish preview provenance.
+            method = getattr(client, "chat_confirmed_json", None)
+            if (self.session is not session or type(store) is not WorkRecordStore
+                    or store._session is not session or type(client) is not LLMClient
+                    or getattr(method, "__func__", None) is not LLMClient.chat_confirmed_json
+                    or client.paths != session.paths or not callable(confirm)):
+                return failure
+            ledger = WorkCardLedger(session, store)
+            entries = ledger.list_cards()
+            prepared = prepare_recall(ledger, entries, user_text)
+            confirmation_size = single_confirmation_event_bytes(prepared) if prepared.status == "ready" else None
+            if prepared.status == "ready" and confirmation_size is None:
+                return failure
+            use_batch = (prepared.status == "incomplete" and prepared.reason == "budget_exceeded") or (
+                prepared.status == "ready" and confirmation_size > card_recall.MAX_CONFIRM_EVENT_BYTES)
+            if prepared.status != "ready" and not use_batch:
+                return failure
+
+            batch_confirm = getattr(self, "work_card_batch_confirm_fn", None) if use_batch else None
+            if use_batch and batch_confirm is not None and not callable(batch_confirm):
+                return failure
+
+            def still_bound() -> bool:
+                return (self.session is session and self.work_record_recall_controller is controller
+                        and getattr(controller, "_store", None) is store
+                        and getattr(controller, "_semantic_matcher", None) is matcher
+                        and getattr(matcher, "_client", None) is client
+                        and getattr(self.executor, "confirm_fn", None) is confirm
+                        and (not use_batch or getattr(self, "work_card_batch_confirm_fn", None) is batch_confirm)
+                        and not self.cancel_event.is_set()
+                        and store._session is session and client.paths == session.paths)
+
+            def confirm_bound(preview: str, allow_all: bool) -> str:
+                if not still_bound():
+                    return "n"
+                if use_batch and batch_confirm is not None:
+                    choice = batch_confirm(preview, allow_all, session=session)
+                else:
+                    choice = confirm(preview, allow_all)
+                if not still_bound():
+                    return "n"
+                return choice
+
+            if use_batch:
+                batch_method = getattr(client, "chat_confirmed_json_batch", None)
+                if getattr(batch_method, "__func__", None) is not LLMClient.chat_confirmed_json_batch:
+                    return failure
+                batch = prepare_batch_recall(ledger, entries, user_text)
+                if batch.status != "ready" or not still_bound():
+                    return failure
+                batch_count = len(json.loads(batch.preview_json)["provider_payloads"])
+                self._emit_turn_event({"type": "turn.notice", "level": "info", "text":
+                    f"工作卡回查将分 {batch_count} 批，最多 {batch_count} 次模型请求，可能产生费用；"
+                    "实际费用未知。一次确认授权全部批次，请核对完整预览。"})
+                result = execute_batch_recall(ledger, batch, client, confirm_bound,
+                                              host_binding_check=still_bound)
+            else:
+                result = execute_recall(ledger, prepared, client, confirm_bound)
+            if use_batch and (result.status == "incomplete" or not still_bound()):
+                attempted = result.attempted_batches
+                remaining = result.remaining_batches
+                if (type(attempted) is int and type(remaining) is int and attempted >= 0
+                        and remaining >= 0 and attempted + remaining == batch_count):
+                    counts = f"已尝试 {attempted} 批，未尝试 {remaining} 批。"
+                    if attempted:
+                        counts += "已尝试批次可能已发送，结果可能未知。"
+                    return failure + " " + counts
+                return failure + " 发送情况无法确认。"
+            if not still_bound() or result.status not in {"match", "ambiguous", "candidates"}:
+                return failure
+            if not result.records:
+                return failure
+            if result.status == "ambiguous" or (result.status == "candidates" and len(result.records) > 1):
+                # Bound the chat response, not the model's complete candidate set.
+                # Titles are display-only; IDs remain intact for disambiguation.
+                limit = 5
+                rows = []
+                for record in result.records[:limit]:
+                    snapshot = record["snapshot"]
+                    independent = snapshot.get("kind") == "independent"
+                    cards = [snapshot.get("card")] if independent else snapshot.get("cards", [])
+                    first = cards[0] if cards else {}
+                    title = first.get("title", "") if isinstance(first, dict) else ""
+                    title = " ".join(title.split()) if isinstance(title, str) else ""
+                    if len(title) > 100:
+                        title = title[:100] + "…"
+                    rows.append(json.dumps({
+                        "card_id": record["card_id"], "saved_at": record["saved_at"],
+                        "scope": "独立事项" if independent else "项目",
+                        "首事项标题": title,
+                    }, ensure_ascii=False, sort_keys=True))
+                total = len(result.records)
+                return (f"当前会话有 {total} 张可能相关的历史工作卡，不能确定唯一匹配；"
+                        f"仅展示 {len(rows)} 张候选元信息，未展示 {total - len(rows)} 张。\n"
+                        + "\n".join(rows) +
+                        "\n这里不提供卡片选择操作；可补充更具体的描述重新发起回查，"
+                        "如需外发将再次确认。" + ("批量识别不保证语义查全。" if use_batch else ""))
+            # Render the locally re-read ledger record, never its internal JSON.
+            try:
+                if len(result.records) != 1:
+                    raise ValueError("invalid match cardinality")
+                from work_card_text import render_work_card_text
+                card_text = render_work_card_text(result.records[0])
+                if type(card_text) is not str or not card_text.strip():
+                    raise ValueError("empty card text")
+            except Exception:
+                return "可能相关的历史工作卡无法安全呈现；未标记已读，也不会自动重试。"
+            prepare_reference = getattr(self, "work_card_reference_intent_fn", None)
+            if result.status == "match" and callable(prepare_reference):
+                try:
+                    intent = prepare_reference(session, result)
+                    if intent is not None:
+                        self._work_card_reference_intent = intent
+                        self.work_card_reference_intent = intent
+                except Exception:
+                    # Intent preparation must not invalidate the confirmed local recall.
+                    pass
+            return ("当前会话找到一张可能相关的历史快照候选：\n" + card_text +
+                    ("\n批量识别不保证语义查全，也不表示这是唯一相关卡片。" if use_batch else ""))
+        except Exception:
+            # The request may already have been sent; do not claim otherwise or
+            # include exception text, which can contain private provider data.
+            return failure
+
+    def _current_dialogue_recall_answer(
+        self, session: Session, user_text: str, question_index: int,
+    ) -> tuple[str, str]:
+        """Use the existing confirmed matcher on this exact Session and persisted query."""
+        controller = self.work_record_recall_controller
+        matcher = getattr(controller, "_semantic_matcher", None)
+        confirm_fn = getattr(self.executor, "confirm_fn", None)
+        batch_confirm_method = getattr(self, "work_card_batch_confirm_fn", None)
+
+        def still_bound() -> bool:
+            return bool(
+                self.session is session
+                and self.work_record_recall_controller is controller
+                and getattr(controller, "_semantic_matcher", None) is matcher
+                and getattr(self.executor, "confirm_fn", None) is confirm_fn
+                and getattr(self, "work_card_batch_confirm_fn", None) is batch_confirm_method
+                and not self.cancel_event.is_set()
+            )
+
+        def confirm_batch(preview: str) -> bool:
+            if not callable(batch_confirm_method) or not still_bound():
+                return False
+            try:
+                choice = batch_confirm_method(preview, False, session=session)
+            except Exception:
+                return False
+            return type(choice) is str and choice == "y" and still_bound()
+
+        try:
+            from dialogue_recall import recall_current_dialogue
+            confirm = None
+            if callable(confirm_fn):
+                confirm = lambda preview: (
+                    still_bound() and confirm_fn(preview, False) == "y" and still_bound()
+                )
+            recalled = recall_current_dialogue(
+                session,
+                user_text,
+                matcher=matcher,
+                confirm=confirm,
+                confirm_batch=confirm_batch if callable(batch_confirm_method) else None,
+                current_session=lambda: session if still_bound() else None,
+                exclude_message_index=question_index,
+            )
+            status, answer = recalled.status, recalled.answer
+        except Exception:
+            status = "error"
+            answer = "当前对话回查未能安全完成；本次问题已保留，请补充线索后重试。"
+        answer += "\n\n隐私提示：本问答会保存在当前对话历史，后续模型对话可能读取。"
+        return status, answer
+
+    def _dispatch_current_dialogue_recall_tool(self, arguments: dict[str, Any]) -> ToolResult:
+        """Terminal, host-bound dispatch; retrieved history is never fed to another model call."""
+        tool_name = "recall_current_dialogue"
+        if type(arguments) is not dict or arguments:
+            return tool_fail(tool_name, ToolErrorCode.VALIDATION_ERROR, "tool accepts no model-supplied query or scope")
+        context = self._active_current_dialogue_recall_context
+        if (not self._dialogue_recall_tool_enabled() or type(context) is not tuple
+                or len(context) != 3):
+            return tool_ok(tool_name, {
+                "status": "unavailable",
+                "answer": "当前没有可核验的本会话回查入口；未读取或发送历史。",
+            })
+        session, user_text, question_index = context
+        if (session is not self.session or type(user_text) is not str
+                or type(question_index) is not int or self.cancel_event.is_set()):
+            return tool_ok(tool_name, {
+                "status": "stale_session",
+                "answer": "当前会话已变化或本轮已停止；未继续回查。",
+            })
+        try:
+            from turn_intent import classify_turn
+            if (classify_turn(user_text) in {"execute", "plan", "requirements"}
+                    or _is_explicit_work_card_lookup(user_text)
+                    or _is_explicit_work_record_lookup(user_text)
+                    or _is_explicit_all_projects_work_overview(user_text)
+                    or _is_explicit_current_project_overview(user_text)
+                    or _explicit_project_overview_selection(user_text) is not None
+                    or _explicit_current_batch_project_overview(user_text) is not None):
+                return tool_ok(tool_name, {
+                    "status": "unsupported_scope",
+                    "answer": "该请求属于工作记录、工作卡、项目范围或执行路径；本工具只回查当前对话原文，未读取其他来源。",
+                })
+            session.ensure_messages_loaded()
+            if (not session._messages_fully_loaded or session._messages_corrupt
+                    or session._messages_unpersisted or question_index >= len(session.messages)
+                    or session.messages[question_index] != {"role": "user", "content": user_text}):
+                return tool_ok(tool_name, {
+                    "status": "incomplete",
+                    "answer": "当前问题或 Session 历史无法核验；未读取或发送不完整历史。",
+                })
+        except Exception:
+            return tool_ok(tool_name, {
+                "status": "unavailable",
+                "answer": "当前 Session 范围无法安全核验；未读取或发送历史。",
+            })
+
+        status, answer = self._current_dialogue_recall_answer(session, user_text, question_index)
+        if self.session is not session or self.cancel_event.is_set():
+            status = "stale_session"
+            answer = "当前会话已变化或本轮已停止；回查结果未采用。"
+        return tool_ok(tool_name, {
+            "status": status, "answer": answer, "session_id": session.conversation_id,
+        })
+
+    def _run_current_dialogue_recall(
+        self, user_text: str, *,
+        on_external_user_message_persisted: Callable[[Session], None] | None = None,
+    ) -> TurnResult:
+        """Persist the query first, then recall only from its prior same-Session messages."""
+        session = self.session
+        try:
+            session.ensure_messages_loaded()
+            if session._messages_corrupt or not session._messages_fully_loaded:
+                raise ValueError("session messages incomplete")
+            session.turn_intent = "recall"
+            question_index = len(session.messages)
+            session.append_message_durable({"role": "user", "content": user_text})
+        except Exception:
+            reply = "本次回顾问题未能可靠写入当前对话；未启动原文回查。"
+            return TurnResult(assistant_text=reply, tool_rounds=0,
+                              finish_reason="dialogue_recall_question_persist_failed",
+                              turn_intent="recall", total_tool_rounds=0)
+        if callable(on_external_user_message_persisted) and self.session is session:
+            try:
+                on_external_user_message_persisted(session)
+            except Exception:
+                # Receipt delivery is observational; it must not retry or alter the turn.
+                pass
+        _status, reply = self._current_dialogue_recall_answer(session, user_text, question_index)
+        if self.session is session:
+            session.append_message({"role": "assistant", "content": reply})
+        else:
+            reply = "当前会话已切换；原问题保留在原会话，本次回查结果未写入新会话。"
+            session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(
+            assistant_text=reply,
+            tool_rounds=0,
+            finish_reason="dialogue_recall",
+            turn_intent="recall",
+            total_tool_rounds=0,
+        )
+
+    def _run_work_record_recall(self, user_text: str) -> TurnResult:
+        """Run one explicitly enabled, locally confirmed, read-only recall turn.
+
+        The confirmation preview includes the exact Luna messages plus every current
+        candidate title/requirement. WsBridge's per-request request_id binds the
+        approval to that preview; the complete session-bound record snapshot is
+        rechecked before sending. This is an experiment, not an automatic policy.
+        """
+        session = self.session
+        session.ensure_messages_loaded()
+        session.turn_intent = "recall"
+        session.append_message({"role": "user", "content": user_text})
+        reply = self._work_record_recall_reply(user_text)
+        reply += "\n\n" + "\u9690\u79c1\u63d0\u793a\uff1a\u672c\u95ee\u7b54\u4f1a\u4fdd\u5b58\u5230\u5f53\u524d\u5bf9\u8bdd\u5386\u53f2\uff0c\u540e\u7eed\u5bf9\u8bdd\u6a21\u578b\u53ef\u80fd\u8bfb\u53d6\u3002"
+        session.append_message({"role": "assistant", "content": reply})
+        return TurnResult(
+            assistant_text=reply,
+            tool_rounds=0,
+            finish_reason="work_record_recall",
+            turn_intent="recall",
+            total_tool_rounds=0,
+        )
+
+    def _work_record_recall_reply(self, user_text: str) -> str:
+        controller = self.work_record_recall_controller
+        store = getattr(controller, "_store", None)
+        matcher = getattr(controller, "_semantic_matcher", None)
+        session = self.session
+        confirm_fn = getattr(self.executor, "confirm_fn", None)
+        try:
+            # Fail closed before opening the store if this run cannot request a
+            # fresh, request_id-correlated confirmation through the existing bridge.
+            if not callable(confirm_fn):
+                return "\u672c\u6b21\u56de\u67e5\u6ca1\u6709\u53ef\u7528\u7684\u5916\u53d1\u786e\u8ba4\u901a\u9053\uff0c\u672a\u8bfb\u53d6\u6216\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            if store is None or getattr(store, "_session", None) is not session:
+                return "\u672c\u6b21\u56de\u67e5\u7684\u4f1a\u8bdd\u7ed1\u5b9a\u65e0\u6548\uff0c\u672a\u8bfb\u53d6\u6216\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            from work_records_experiment import WorkRecordExperimentController, build_semantic_excerpt
+            from work_records_luna_recall import (
+                EXPECTED_PROVIDER_MODEL,
+                EXPECTED_VENDOR,
+                MODEL_ID,
+                WorkRecordsLunaRecall,
+                get_registry as get_recall_registry,
+                request_fits_budget,
+            )
+            from work_records_semantic import SearchResult, WorkRecordCandidate
+
+            # Only the known adapter has a reproducible exact provider-message
+            # representation. An opaque matcher cannot safely show what it will send.
+            if (type(controller) is not WorkRecordExperimentController
+                    or type(matcher) is not WorkRecordsLunaRecall
+                    or type(matcher).match is not WorkRecordsLunaRecall.match):
+                return "\u65e0\u6cd5\u5b89\u5168\u5c55\u793a\u672c\u6b21\u56de\u67e5\u7684\u5b8c\u6574\u5916\u53d1\u5185\u5bb9\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            conversation_id = session.conversation_id
+            items = store.list_items()
+            candidate_disclosure: list[dict[str, Any]] = []
+            candidates = []
+            disclosed_text_bytes = 0
+            provider_text_bytes = 0
+            excerpt_policy = getattr(controller, "_semantic_excerpt_policy", None)
+            for item in items:
+                if not isinstance(item, dict):
+                    return "\u5f53\u524d\u4f1a\u8bdd\u8bb0\u5f55\u683c\u5f0f\u5f02\u5e38\uff0c\u56de\u67e5\u672a\u5b8c\u6210\uff1b\u8fd9\u4e0d\u4ee3\u8868\u76f8\u5173\u5de5\u4f5c\u6ca1\u6709\u53d1\u751f\u3002"
+                record_id, title = item.get("item_id"), item.get("title")
+                requirements = item.get("requirements", [])
+                if (not isinstance(record_id, str) or not isinstance(title, str)
+                        or not isinstance(requirements, list)
+                        or any(not isinstance(req, dict) or not isinstance(req.get("text"), str)
+                               for req in requirements)):
+                    return "\u5f53\u524d\u4f1a\u8bdd\u8bb0\u5f55\u683c\u5f0f\u5f02\u5e38\uff0c\u56de\u67e5\u672a\u5b8c\u6210\uff1b\u8fd9\u4e0d\u4ee3\u8868\u76f8\u5173\u5de5\u4f5c\u6ca1\u6709\u53d1\u751f\u3002"
+                if not title.strip():
+                    return "\u5f53\u524d\u4f1a\u8bdd\u5b58\u5728\u5f02\u5e38\u65e7\u5de5\u4f5c\u8bb0\u5f55\uff0c\u65e0\u6cd5\u53ef\u9760\u8bc6\u522b\uff1b\u56de\u67e5\u6682\u4e0d\u53ef\u7528\uff0c\u539f\u8bb0\u5f55\u672a\u5220\u9664\u3002"
+                requirement_texts = tuple(req["text"] for req in requirements)
+                if excerpt_policy is None:
+                    # The canonical JSON excerpt contains the exact raw values after
+                    # decoding; string-substring checks are invalid for escaped fields.
+                    excerpt = build_semantic_excerpt(title, requirement_texts)
+                else:
+                    excerpt = excerpt_policy(title, requirement_texts)
+                    if (not isinstance(excerpt, str)
+                            or any(text and text not in excerpt for text in requirement_texts)):
+                        return "\u65e0\u6cd5\u5b89\u5168\u5c55\u793a\u672c\u6b21\u56de\u67e5\u7684\u5b8c\u6574\u5916\u53d1\u5185\u5bb9\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+                # These raw text fields occur in both the user-visible disclosure and
+                # provider payload. Reject once their guaranteed UTF-8 lower bound already
+                # exceeds the event budget, before duplicating huge content into previews.
+                disclosed_text_bytes += len(title.encode("utf-8")) + sum(
+                    len(text.encode("utf-8")) for text in requirement_texts
+                )
+                provider_text_bytes += len(title.encode("utf-8")) + len(excerpt.encode("utf-8"))
+                if disclosed_text_bytes + provider_text_bytes > WORK_RECORD_RECALL_CONFIRM_EVENT_MAX_BYTES:
+                    return "\u672c\u6b21\u5916\u53d1\u786e\u8ba4\u8f7d\u8377\u8d85\u8fc7\u5b89\u5168\u4e0a\u9650\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+                candidate_disclosure.append({"id": record_id, "title": title, "requirements": list(requirement_texts)})
+                candidates.append(WorkRecordCandidate(
+                    record_id=record_id,
+                    title=title,
+                    excerpt=excerpt,
+                    session_id=conversation_id,
+                ))
+            validated = matcher._validate_candidates(tuple(candidates))
+            if validated is None:
+                return "\u5f53\u524d\u4f1a\u8bdd\u5019\u9009\u65e0\u6cd5\u5b89\u5168\u6838\u9a8c\uff0c\u56de\u67e5\u672a\u5b8c\u6210\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            messages = matcher._messages(user_text, validated)
+            # Match the recognizer's real request budget before asking for consent, so
+            # approval is never requested for a payload the adapter will later refuse.
+            try:
+                client_paths = getattr(matcher._client, "paths", None)
+                registry = get_recall_registry(client_paths) if client_paths is not None else get_recall_registry()
+                entry = registry.get(MODEL_ID)
+                provider_limit = getattr(entry, "max_input_tokens", None)
+                if (entry is None or getattr(entry, "id", None) != MODEL_ID
+                        or getattr(entry, "vendor", None) != EXPECTED_VENDOR
+                        or getattr(entry, "provider_model", None) != EXPECTED_PROVIDER_MODEL
+                        or not isinstance(provider_limit, int) or provider_limit <= 0):
+                    return "\u65e0\u6cd5\u9a8c\u8bc1\u5f53\u524d\u56de\u67e5\u6a21\u578b\u9884\u7b97\uff0c\u672a\u8bf7\u6c42\u5916\u53d1\u786e\u8ba4\u6216\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+                if not request_fits_budget(
+                    messages, input_budget=matcher._input_budget, provider_limit=provider_limit,
+                    output_reserve_tokens=matcher._output_reserve,
+                ):
+                    return "\u5f53\u524d\u5b8c\u6574\u5019\u9009\u8d85\u51fa\u56de\u67e5\u9884\u7b97\uff0c\u672a\u8bf7\u6c42\u5916\u53d1\u786e\u8ba4\u6216\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\uff1b\u8bf7\u7f29\u5c0f\u5f53\u524d\u4f1a\u8bdd\u8bb0\u5f55\u8303\u56f4\u3002"
+            except Exception:
+                return "\u65e0\u6cd5\u9a8c\u8bc1\u5f53\u524d\u56de\u67e5\u6a21\u578b\u9884\u7b97\uff0c\u672a\u8bf7\u6c42\u5916\u53d1\u786e\u8ba4\u6216\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            snapshot = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            snapshot_digest = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+            preview = json.dumps({
+                "purpose": "\u4ec5\u672c\u6b21\u5f53\u524d\u4f1a\u8bdd\u5de5\u4f5c\u8bb0\u5f55\u8bed\u4e49\u56de\u67e5\uff1b\u6279\u51c6\u4ec5\u6388\u6743\u4e0b\u65b9\u5b8c\u6574\u5185\u5bb9",
+                "history_disclosure": "\u672c\u95ee\u7b54\u4f1a\u4fdd\u5b58\u5230\u5f53\u524d\u5bf9\u8bdd\u5386\u53f2\uff0c\u540e\u7eed\u5bf9\u8bdd\u6a21\u578b\u53ef\u80fd\u8bfb\u53d6\u3002",
+                "target_session_id": conversation_id,
+                "record_snapshot_sha256": snapshot_digest,
+                "candidate_disclosure": candidate_disclosure,
+                "exact_provider_messages": messages,
+            }, ensure_ascii=False, indent=2)
+            # Bound the complete UTF-8 WebSocket event, not a character-count proxy.
+            # This is a 768 KiB event budget, with headroom relative to the ordinary
+            # server's 1 MiB max_size default (which is an inbound limit, not an outbound
+            # guarantee). Managed 64 KiB transports are not covered by this limit.
+            confirmation_event = json.dumps({
+                "type": "confirm.request",
+                "request_id": "0" * 36,
+                "preview": preview,
+                "allow_approve_all": False,
+                "run_id": "0" * 36,
+            }, ensure_ascii=False)
+            if (
+                len(confirmation_event.encode("utf-8"))
+                > WORK_RECORD_RECALL_CONFIRM_EVENT_MAX_BYTES
+            ):
+                return "\u672c\u6b21\u5916\u53d1\u786e\u8ba4\u8f7d\u8377\u8d85\u8fc7\u5b89\u5168\u4e0a\u9650\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            try:
+                choice = confirm_fn(preview, False)
+            except Exception:
+                return "\u5916\u53d1\u786e\u8ba4\u672a\u5b8c\u6210\uff0c\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            if not isinstance(choice, str) or choice.strip().casefold() not in {"y", "yes"}:
+                return "\u672c\u6b21\u56de\u67e5\u672a\u83b7\u5916\u53d1\u6388\u6743\uff0c\u672a\u53d1\u9001\u6216\u8bfb\u53d6\u5176\u4ed6\u4f1a\u8bdd\u8bb0\u5f55\u3002"
+            # No confirmation reuse: both the live Session binding and every byte-level
+            # record field must still match what was displayed before making the call.
+            if (self.session is not session or session.conversation_id != conversation_id
+                    or getattr(store, "_session", None) is not session
+                    or getattr(controller, "_store", None) is not store
+                    or getattr(controller, "_semantic_matcher", None) is not matcher):
+                return "\u786e\u8ba4\u540e\u4f1a\u8bdd\u7ed1\u5b9a\u53d1\u751f\u53d8\u5316\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            current_items = store.list_items()
+            current_snapshot = json.dumps(current_items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if hashlib.sha256(current_snapshot.encode("utf-8")).hexdigest() != snapshot_digest:
+                return "\u786e\u8ba4\u540e\u5f53\u524d\u4f1a\u8bdd\u8bb0\u5f55\u53d1\u751f\u53d8\u5316\uff0c\u5df2\u505c\u6b62\uff1b\u8bf7\u91cd\u65b0\u53d1\u8d77\u56de\u67e5\u5e76\u786e\u8ba4\u6700\u65b0\u5185\u5bb9\u3002"
+            if self.session is not session or session.conversation_id != conversation_id:
+                return "\u786e\u8ba4\u540e\u4f1a\u8bdd\u7ed1\u5b9a\u53d1\u751f\u53d8\u5316\uff0c\u5df2\u505c\u6b62\uff1b\u672a\u53d1\u9001\u5de5\u4f5c\u8bb0\u5f55\u3002"
+            class _ConfirmedMatcher:
+                def match(_self, question: str, prepared: Any) -> Any:
+                    rows = tuple(prepared)
+                    checked_rows = matcher._validate_candidates(rows)
+                    if (question != user_text or checked_rows is None
+                            or matcher._messages(question, checked_rows) != messages):
+                        return SearchResult("error", scope="current_session")
+                    return matcher.match(question, rows)
+
+            # Run the existing ID-verifying controller against a shallow copy whose
+            # matcher refuses any post-confirmation payload drift. Do not mutate the
+            # injected controller shared with other turns.
+            approved_controller = copy(controller)
+            approved_controller._semantic_matcher = _ConfirmedMatcher()
+            result = approved_controller._semantic_recall(user_text, items, include_result_details=True)
+            if store.list_items() != items:
+                return "\u786e\u8ba4\u540e\u5f53\u524d\u4f1a\u8bdd\u8bb0\u5f55\u53d1\u751f\u53d8\u5316\uff0c\u56de\u67e5\u7ed3\u679c\u672a\u91c7\u7528\u3002"
+            return result.reply if isinstance(getattr(result, "reply", None), str) else (
+                "\u5f53\u524d\u4f1a\u8bdd\u5de5\u4f5c\u8bb0\u5f55\u56de\u67e5\u672a\u80fd\u5b8c\u6210\uff1b\u8fd9\u4e0d\u4ee3\u8868\u76f8\u5173\u5de5\u4f5c\u6ca1\u6709\u53d1\u751f\u3002"
+            )
+        except Exception:
+            # Deliberately omit exception text: it may include user or provider content.
+            return "\u5f53\u524d\u4f1a\u8bdd\u5de5\u4f5c\u8bb0\u5f55\u56de\u67e5\u672a\u80fd\u5b8c\u6210\uff1b\u8fd9\u4e0d\u4ee3\u8868\u76f8\u5173\u5de5\u4f5c\u6ca1\u6709\u53d1\u751f\u3002"
 
     def _run_turn_impl(
         self,
@@ -2955,33 +6408,65 @@ class Agent:
         *,
         spawn_explore: bool | None = None,
         force_skip_plan_spawn: bool = False,
+        on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
         """Append user message, optional explore subagent, then parent tool loop."""
 
         self.session.ensure_messages_loaded()
-        prepare_session_for_s4(self.session)
-        # Sync shell/root onto executor BEFORE allowlist so F1 can see project binding.
-        self._sync_turn_mode()
-        self._sync_allowed_evolved()
-        self.executor._ensure_project_scope_tools_allowed()
-        pending_work_intent = getattr(self.session, "next_work_intent", None)
-        pending_task_scope = getattr(self.session, "next_task_scope", None)
-        self.session.next_work_intent = None
-        self.session.next_task_scope = None
-        self.executor.session.ordinary_work_intent = "execute"
-        self.executor.session.ordinary_task_scope = ""
-        self.session._ordinary_work_intent = "execute"
-        self.session._ordinary_task_scope = ""
-        self.session.subagent_overlay = None
-        self.session.turn_intent = None
-        self.session.plan_files_fingerprint_at_turn_start = None
-        self.session.scaffold_tool_turn = False
-        self.session.direct_implement_turn = False
-        self.session.skip_ordinary_plan_spawn = False
-        self.session.scaffold_check_status = None
-        self.session.scaffold_check_tool = None
+        preflight_session = self.session
+        try:
+            prepare_session_for_s4(self.session)
+            # Sync shell/root onto executor BEFORE allowlist so F1 can see project binding.
+            self._sync_turn_mode()
+            self._sync_allowed_evolved()
+            self.executor._ensure_project_scope_tools_allowed()
+            pending_work_intent = getattr(self.session, "next_work_intent", None)
+            pending_task_scope = getattr(self.session, "next_task_scope", None)
+            self.session.next_work_intent = None
+            self.session.next_task_scope = None
+            self.executor.session.ordinary_work_intent = "execute"
+            self.executor.session.ordinary_task_scope = ""
+            self.session._ordinary_work_intent = "execute"
+            self.session._ordinary_task_scope = ""
+            self.session.subagent_overlay = None
+            self.session.turn_intent = None
+            self.session.plan_files_fingerprint_at_turn_start = None
+            self.session.scaffold_tool_turn = False
+            self.session.direct_implement_turn = False
+            self.session.skip_ordinary_plan_spawn = False
+            self.session.scaffold_check_status = None
+            self.session.scaffold_check_tool = None
 
-        self.session.append_message({"role": "user", "content": user_text})
+            user_message_session = self.session
+            user_message_index = len(user_message_session.messages)
+        except Exception as preflight_error:
+            try:
+                self._append_user_message_with_result_reply(
+                    preflight_session, user_text,
+                    on_external_user_message_persisted=on_external_user_message_persisted,
+                    run_reply_hooks=False,
+                )
+            except Exception as persist_error:
+                raise persist_error from preflight_error
+            raise
+
+        self._append_user_message_with_result_reply(
+            user_message_session, user_text,
+            on_external_user_message_persisted=on_external_user_message_persisted,
+        )
+        self._active_current_dialogue_recall_context = None
+        if (self.session is user_message_session
+                and user_message_index < len(user_message_session.messages)
+                and user_message_session.messages[user_message_index] == {
+                    "role": "user", "content": user_text,
+                }
+                and user_message_session._messages_fully_loaded
+                and not user_message_session._messages_corrupt
+                and not user_message_session._messages_unpersisted):
+            # This index comes from the exact append in this turn; it is never rediscovered by text/role scans.
+            self._active_current_dialogue_recall_context = (
+                user_message_session, user_text, user_message_index,
+            )
 
         from loader import detect_scaffold_tool_turn
         from turn_intent import classify_turn, intent_label, should_spawn_explore_for_turn
@@ -3215,13 +6700,22 @@ class Agent:
         self.session.subagent_overlay = "\n\n".join(overlay_parts) if overlay_parts else None
         subagent_used = bool(overlay_parts)
 
-        tools = build_llm_tools(self.session, registry=self.executor.registry)
+        include_dialogue_recall = (
+            intent in {"qa", "recall"}
+            and not terminal
+            and self._dialogue_recall_tool_enabled()
+        )
+        tools = build_llm_tools(
+            self.session, registry=self.executor.registry,
+            include_dialogue_recall=include_dialogue_recall,
+        )
         from llm_routing import resolve_model_id_for_role
 
         model = resolve_model_id_for_role("main_turn", self.session.meta)
 
         if intent == "recall":
-            tools = []
+            tools = [tool for tool in tools
+                     if tool.get("function", {}).get("name") == "recall_current_dialogue"]
             loop_max = self._resolve_parent_loop_max(intent)
             segment_start_index = len(self.session.messages)
             loop_result = self._run_parent_tool_loop(

@@ -1238,6 +1238,37 @@ def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
         raise LLMCancelledError("subagent cancelled")
 
 
+def _exposed_tool_names(tools: list[dict[str, Any]]) -> frozenset[str]:
+    """Snapshot the exact names supplied in this model call, without aliases."""
+    return frozenset(
+        fn["name"] for spec in tools
+        if isinstance(spec, dict) and spec.get("type") == "function"
+        and isinstance((fn := spec.get("function")), dict)
+        and type(fn.get("name")) is str and fn["name"]
+    )
+
+
+def _run_exposed_tool(executor: ToolExecutor, tool_call: dict[str, Any],
+                      allowed: frozenset[str]) -> Any:
+    fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+    raw_name = fn.get("name") if isinstance(fn, dict) else None
+    if type(raw_name) is not str or raw_name not in allowed:
+        name = raw_name if type(raw_name) is str and len(raw_name) <= 128 else "(invalid)"
+        return _tool_result_for_argument_error(
+            ToolCallArgumentError(name, "tool was not exposed to this subagent")
+        )
+    try:
+        name, arguments = _parse_tool_call(tool_call)
+    except ToolCallArgumentError as exc:
+        return _tool_result_for_argument_error(exc)
+    # _parse_tool_call strips names; do not allow normalization or aliases.
+    if name != raw_name:
+        return _tool_result_for_argument_error(
+            ToolCallArgumentError(raw_name, "tool name must match the exposed name exactly")
+        )
+    return executor.run(name, arguments)
+
+
 @dataclass
 class SubagentRunner:
     """Run read-only subagents with isolated messages (not persisted)."""
@@ -1295,6 +1326,7 @@ class SubagentRunner:
 
         for round_index in range(cap):
             _raise_if_cancelled(cancel_event)
+            allowed_tools = _exposed_tool_names(tools)
             response = llm.chat(
                 working,
                 model=model,
@@ -1318,12 +1350,7 @@ class SubagentRunner:
 
             for tool_call in response.tool_calls:
                 _raise_if_cancelled(cancel_event)
-                try:
-                    tool_name, arguments = _parse_tool_call(tool_call)
-                except ToolCallArgumentError as exc:
-                    result = _tool_result_for_argument_error(exc)
-                else:
-                    result = executor.run(tool_name, arguments)
+                result = _run_exposed_tool(executor, tool_call, allowed_tools)
                 working.append(
                     {
                         "role": "tool",
@@ -1492,6 +1519,7 @@ class SubagentRunner:
 
         for round_index in range(cap):
             _raise_if_cancelled(cancel_event)
+            allowed_tools = _exposed_tool_names(tools)
             response = llm.chat(
                 working,
                 model=model,
@@ -1516,20 +1544,7 @@ class SubagentRunner:
 
             for tool_call in response.tool_calls:
                 _raise_if_cancelled(cancel_event)
-                try:
-                    tname, arguments = _parse_tool_call(tool_call)
-                except ToolCallArgumentError as exc:
-                    result = _tool_result_for_argument_error(exc)
-                else:
-                    if tname not in CHECKER_TOOL_NAMES:
-                        result = _tool_result_for_argument_error(
-                            ToolCallArgumentError(
-                                tname,
-                                f"tool {tname!r} not allowed for checker",
-                            )
-                        )
-                    else:
-                        result = executor.run(tname, arguments)
+                result = _run_exposed_tool(executor, tool_call, allowed_tools)
                 working.append(
                     {
                         "role": "tool",
@@ -1686,6 +1701,7 @@ class SubagentRunner:
                     if cap == 1
                     else f"规划模型思考中… (第 {round_index + 1}/{cap} 轮)"
                 )
+            allowed_tools = _exposed_tool_names(tools)
             response = llm.chat(
                 working,
                 model=model,
@@ -1711,12 +1727,7 @@ class SubagentRunner:
 
             for tool_call in response.tool_calls:
                 _raise_if_cancelled(cancel_event)
-                try:
-                    tool_name, arguments = _parse_tool_call(tool_call)
-                except ToolCallArgumentError as exc:
-                    result = _tool_result_for_argument_error(exc)
-                else:
-                    result = executor.run(tool_name, arguments)
+                result = _run_exposed_tool(executor, tool_call, allowed_tools)
                 working.append(
                     {
                         "role": "tool",
@@ -1845,6 +1856,7 @@ class SubagentRunner:
 
         for round_index in range(cap):
             _raise_if_cancelled(cancel_event)
+            allowed_tools = _exposed_tool_names(tools)
             response = llm.chat(
                 working,
                 model=model,
@@ -1867,12 +1879,7 @@ class SubagentRunner:
 
             for tool_call in response.tool_calls:
                 _raise_if_cancelled(cancel_event)
-                try:
-                    tool_name, arguments = _parse_tool_call(tool_call)
-                except ToolCallArgumentError as exc:
-                    result = _tool_result_for_argument_error(exc)
-                else:
-                    result = executor.run(tool_name, arguments)
+                result = _run_exposed_tool(executor, tool_call, allowed_tools)
                 working.append(
                     {
                         "role": "tool",

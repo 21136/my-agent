@@ -126,6 +126,18 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         confirm=False,
         dry_run_supported=False,
     ),
+    BuiltinTool(
+        "run_project_workers",
+        "Dispatch up to twenty-five explicitly scoped project tasks through the trusted host (at most two active workers); worker files, model requests and writes remain separately confirmed",
+        confirm=False,
+        dry_run_supported=False,
+    ),
+    BuiltinTool(
+        "recall_current_dialogue",
+        "Read-only retrieval from earlier user/assistant messages in this exact Session. Use only when the user asks about earlier conversation not available in context; the host requires a separate exact confirmation before sending any history to the independent recognizer. Does not read project files or work-record sidecars.",
+        confirm=False,
+        dry_run_supported=False,
+    ),
 )
 
 

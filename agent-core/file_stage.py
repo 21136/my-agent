@@ -6,6 +6,7 @@ import mimetypes
 import secrets
 import shutil
 import sys
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -311,12 +312,15 @@ class FileStageStore:
 
     def __init__(self) -> None:
         self._items: dict[str, dict[str, StagedAttachment]] = {}
+        self._lock = threading.RLock()
 
     def _bucket(self, session_id: str) -> dict[str, StagedAttachment]:
-        return self._items.setdefault(session_id, {})
+        with self._lock:
+            return self._items.setdefault(session_id, {})
 
     def register(self, session_id: str, item: StagedAttachment) -> None:
-        self._bucket(session_id)[item.id] = item
+        with self._lock:
+            self._bucket(session_id)[item.id] = item
 
     def stage_paths(
         self,
@@ -330,7 +334,6 @@ class FileStageStore:
             raise FileStageError(f"单次最多 {MAX_FILES_PER_BATCH} 个文件")
         config = load_host_scope(paths_ctx)
         staged: list[StagedAttachment] = []
-        bucket = self._bucket(session.conversation_id)
         for raw in paths:
             item = stage_absolute_path(
                 raw,
@@ -339,21 +342,32 @@ class FileStageStore:
                 shell=shell,
                 config=config,
             )
-            bucket[item.id] = item
+            self.register(session.conversation_id, item)
             staged.append(item)
         return staged
 
     def take(self, session_id: str, attachment_ids: list[str]) -> list[StagedAttachment]:
-        bucket = self._bucket(session_id)
-        items: list[StagedAttachment] = []
-        for attachment_id in attachment_ids:
-            item = bucket.pop(attachment_id, None)
-            if item is not None:
-                items.append(item)
-        return items
+        """Consume the whole unique, session-local batch or leave it untouched."""
+        with self._lock:
+            bucket = self._bucket(session_id)
+            ids = tuple(attachment_ids)
+            if not ids:
+                return []
+            if any(type(attachment_id) is not str for attachment_id in ids):
+                return []
+            if len(set(ids)) != len(ids):
+                return []
+
+            items = [bucket.get(attachment_id) for attachment_id in ids]
+            if any(item is None for item in items):
+                return []
+            for attachment_id in ids:
+                del bucket[attachment_id]
+            return items
 
     def unstage(self, session_id: str, attachment_id: str) -> bool:
-        return self._bucket(session_id).pop(attachment_id, None) is not None
+        with self._lock:
+            return self._bucket(session_id).pop(attachment_id, None) is not None
 
 
 def _demo() -> int:

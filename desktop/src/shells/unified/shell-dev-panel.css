@@ -218,7 +218,7 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
   flex-direction: column;
   gap: 0.4rem;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: min-content;
   padding: 0.55rem 0.65rem 0.65rem;
   border: 1px solid var(--ma-border);
   border-radius: var(--nt-r-md, 12px);

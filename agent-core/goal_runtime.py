@@ -144,6 +144,8 @@ class GoalState:
     next_step: str = ""
     budgets: GoalBudgets = field(default_factory=GoalBudgets)
     last_verification: LastVerification | None = None
+    multi_project_unverified: bool = False
+    multi_project_ids: list[str] = field(default_factory=list)
     pause_reason: str | None = None
     stop_requested: bool = False
     last_run_id: str | None = None
@@ -167,6 +169,8 @@ class GoalState:
                 if self.last_verification is not None
                 else None
             ),
+            "multi_project_unverified": bool(self.multi_project_unverified),
+            "multi_project_ids": list(self.multi_project_ids),
             "pause_reason": self.pause_reason,
             "stop_requested": bool(self.stop_requested),
             "last_run_id": self.last_run_id,
@@ -202,6 +206,11 @@ class GoalState:
                 if isinstance(raw.get("last_verification"), dict)
                 else None
             ),
+            multi_project_unverified=raw.get("multi_project_unverified") is True,
+            multi_project_ids=list(dict.fromkeys(
+                project_id for project_id in raw.get("multi_project_ids", [])
+                if type(project_id) is str and project_id.strip()
+            )) if type(raw.get("multi_project_ids", [])) is list else [],
             pause_reason=(
                 str(raw["pause_reason"])
                 if raw.get("pause_reason") is not None
@@ -484,6 +493,31 @@ class GoalRuntime:
             return False
         return state.status in {"idle", "active"}
 
+    def mark_multi_project_unverified(
+        self, project_ids: tuple[str, ...] | list[str],
+    ) -> GoalState:
+        """Persist a conservative gate: a multi-project batch is not yet verified."""
+        state = self._require_state()
+        if type(project_ids) not in (tuple, list) or len(project_ids) < 2:
+            raise ValueError("multi-project batch requires at least two project_ids")
+        if any(type(project_id) is not str or not project_id.strip() for project_id in project_ids):
+            raise ValueError("project_id must be a non-empty string")
+        requested = list(dict.fromkeys(project_ids))
+        if len(requested) < 2:
+            raise ValueError("multi-project batch requires at least two distinct project_ids")
+        state.multi_project_unverified = True
+        state.multi_project_ids = list(dict.fromkeys((*state.multi_project_ids, *requested)))
+        # A previous single-project pass cannot be presented as current evidence.
+        state.last_verification = None
+        state.status = "active"
+        state.pause_reason = None
+        state.next_step = (
+            "多项目 worker 批次尚未逐项验收，父 Goal 保持未完成："
+            + "、".join(state.multi_project_ids)
+        )
+        self.save()
+        return state
+
     def apply_acceptance(
         self,
         *,
@@ -494,6 +528,8 @@ class GoalRuntime:
         stderr: str = "",
     ) -> GoalState:
         state = self._require_state()
+        if state.multi_project_unverified:
+            raise RuntimeError("multi-project Goal remains unverified")
         expected = (
             int(expected_exit_code)
             if expected_exit_code is not None
@@ -548,6 +584,8 @@ class GoalRuntime:
         return state
 
     def apply_acceptance_result(self, result: dict[str, Any]) -> GoalState:
+        if self._require_state().multi_project_unverified:
+            raise RuntimeError("multi-project Goal remains unverified")
         verdict = normalize_project_acceptance_result(result)
         return self.apply_acceptance(
             command=str(verdict.get("command") or ""),

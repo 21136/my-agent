@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 DEFAULT_TURN_WALL_SEC = 900.0
 DEFAULT_STALL_WATCHDOG_SEC = 0.0
@@ -79,6 +79,7 @@ class TurnWatchdog:
 
     cancel_event: threading.Event
     on_auto_timeout: Callable[[str], None]
+    cancel_lock: Any | None = None
     wall_sec: float = field(default_factory=turn_wall_sec)
     stall_sec: float = field(default_factory=stall_watchdog_sec)
     _started_at: float = field(default=0.0, init=False)
@@ -187,11 +188,20 @@ class TurnWatchdog:
             time.sleep(0.05)
 
     def _trigger_auto_timeout(self, message: str) -> None:
-        with self._lock:
-            if self.cancel_event.is_set():
-                return
-            self._cancel_reason = "timeout"
-        self.cancel_event.set()
+        if self.cancel_lock is None:
+            with self._lock:
+                if self.cancel_event.is_set():
+                    return
+                self._cancel_reason = "timeout"
+            self.cancel_event.set()
+        else:
+            # Use the same ordering lock as durable result-view commits.
+            with self.cancel_lock:
+                with self._lock:
+                    if self.cancel_event.is_set():
+                        return
+                    self._cancel_reason = "timeout"
+                self.cancel_event.set()
         self.on_auto_timeout(message)
 
 

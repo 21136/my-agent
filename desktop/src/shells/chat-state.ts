@@ -1,4 +1,5 @@
 import type { ExecutionStateName, ServerEvent } from "../api/ws";
+import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate } from "./unified/confirm-preview";
 import { settledToolStatus } from "./tool-outcome";
 import {
   type ProcessActivityBlock,
@@ -18,16 +19,32 @@ import {
   toggleThinkOpen,
 } from "./activity-state";
 
+export type UserMessagePersistenceState = "pending" | "saved" | "unknown";
+export type UserMessagePersistence = {
+  requestId: string;
+  sessionId: string | null;
+  state: UserMessagePersistenceState;
+  receiptEligible: boolean;
+  /** Saved refers to the user message row only; attached-file retention remains unknown. */
+  attachmentRetention: "unknown" | "not_applicable";
+};
+
 export type ChatBlock =
-  | { kind: "user"; text: string; turnIndex: number }
+  | { kind: "user"; text: string; turnIndex: number; persistence?: UserMessagePersistence }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
-  | { kind: "notice"; text: string }
+  | { kind: "notice"; text: string; plainText?: boolean }
+  | { kind: "work-card-reference"; presentationId: string; cardId: string; text: string }
   | { kind: "generated-image"; agentPath: string; turnIndex: number }
   | (ProcessActivityBlock & { kind: "process" })
   | {
       kind: "confirm";
+      confirmKind?: "work_record_post_turn" | "project_worker_requirement_verification";
+      confirmSubtype?: "work_record_reply_excerpt" | "work_record_auto_candidate" | "project_worker_requirement_verification";
+      workRecordCandidate?: unknown;
+      projectWorkerVerification?: unknown;
+      sessionId?: string;
       requestId: string;
       preview: string;
       allowApproveAll: boolean;
@@ -98,6 +115,7 @@ export interface ChatSessionHooks {
 }
 
 const CANCEL_WATCHDOG_MS = 45_000;
+const USER_MESSAGE_REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** The current renderer protocol omits `diff`; validate the server extension at its boundary. */
 function hasStringDiff(
@@ -121,7 +139,7 @@ export interface ChatSession {
   beginTurnActivity(): void;
   resetTurnActivity(): void;
   isWorking(): boolean;
-  pushUserMessage(text: string): number;
+  pushUserMessage(text: string, persistence?: { requestId: string; sessionId: string | null; receiptEligible: boolean; hasAttachments?: boolean }): number;
   pushReviewSubagentCard(
     status: "running" | "done",
     opts?: { taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number },
@@ -174,12 +192,23 @@ export function isHarnessChatText(text: string): boolean {
   return trimmed.startsWith("[狂奔续接]") || trimmed.slice(0, 40).includes("[狂奔续接]");
 }
 
-export type SessionHistoryItem = {
-  role: "user" | "assistant";
-  text: string;
-  /** Agent-relative image paths to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
-  inline_images?: string[];
-};
+export type SessionHistoryItem =
+  | {
+      role: "user" | "assistant";
+      text: string;
+      /** Agent-relative image paths to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
+      inline_images?: string[];
+    }
+  | {
+      role: "work_card";
+      type: "work_card_reference";
+      presentation_id: string;
+      card_id: string;
+      text: string;
+    };
+
+const WORK_CARD_PRESENTATION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const WORK_CARD_IDENTITY = /^wc-[0-9a-f]{64}$/;
 
 export function historyFromItems(
   items: SessionHistoryItem[],
@@ -189,7 +218,19 @@ export function historyFromItems(
   const seeds: HistoryStarSeed[] = [];
 
   for (const item of items) {
-    if (item.role === "user") {
+    if (item.role === "work_card") {
+      const validReference = item.type === "work_card_reference"
+        && typeof item.presentation_id === "string" && WORK_CARD_PRESENTATION_UUID.test(item.presentation_id)
+        && typeof item.card_id === "string" && WORK_CARD_IDENTITY.test(item.card_id)
+        && typeof item.text === "string";
+      blocks.push({
+        kind: "work-card-reference",
+        presentationId: typeof item.presentation_id === "string" ? item.presentation_id : "",
+        cardId: typeof item.card_id === "string" ? item.card_id : "",
+        text: validReference ? item.text : "历史工作卡片引用无效，无法安全读取卡片。",
+      });
+      continue;
+    }    if (item.role === "user") {
       const text = item.text.trim();
       if (isHarnessChatText(text)) {
         continue;
@@ -334,6 +375,10 @@ export function createChatSession(
   let cancelWatchdog: ReturnType<typeof setTimeout> | null = null;
   let deferredHistory: Extract<ServerEvent, { type: "session.history" }> | null = null;
   const acceptedCallIds = new Set<string>();
+  // Scoped, single-dialogue post-turn confirmations never own the active turn.
+  const postTurnConfirmations = new Map<string, { sessionId: string; done: boolean; subtype?: "work_record_reply_excerpt" | "work_record_auto_candidate" }>();
+  const requirementVerificationConfirmations = new Map<string, { sessionId: string; runId: string; done: boolean; payload: unknown; preview: string }>();
+  const postTurnResults = new Set<string>();
 
   let turnKeySeq = 0;
   /** Unique per turn: two turns started in the same millisecond used to share one 过程 key. */
@@ -506,7 +551,7 @@ export function createChatSession(
     const keptUsers = sameSession
       ? model.blocks.filter(
           (block): block is ChatBlock & { kind: "user" } =>
-            block.kind === "user" && block.turnIndex === liveTurn,
+            block.kind === "user" && (block.turnIndex === liveTurn || Boolean(block.persistence)),
         )
       : [];
     const keptAssistants = sameSession
@@ -537,9 +582,9 @@ export function createChatSession(
       });
     }
     for (const user of keptUsers) {
-      const present = model.blocks.some(
-        (block) => block.kind === "user" && block.text === user.text,
-      );
+      const present = model.blocks.some((block) => block.kind === "user" && (user.persistence
+        ? block.persistence?.requestId === user.persistence.requestId && block.persistence.sessionId === user.persistence.sessionId
+        : block.text === user.text));
       if (!present) model.blocks.push(user);
     }
     if (keptProcess) {
@@ -573,7 +618,7 @@ export function createChatSession(
   }
 
   function markConfirmResolved(requestId: string, label: string): void {
-    if (options.confirmInBlocks) {
+    if (options.confirmInBlocks || postTurnConfirmations.has(requestId) || requirementVerificationConfirmations.has(requestId)) {
       const block = model.blocks.find((b) => b.kind === "confirm" && b.requestId === requestId);
       if (block?.kind === "confirm") {
         block.resolved = label;
@@ -587,7 +632,7 @@ export function createChatSession(
   function expirePreviousConfirms(exceptRequestId: string): void {
     if (!options.confirmInBlocks) return;
     for (const block of model.blocks) {
-      if (block.kind === "confirm" && !block.resolved && block.requestId !== exceptRequestId) {
+      if (block.kind === "confirm" && !postTurnConfirmations.has(block.requestId) && !requirementVerificationConfirmations.has(block.requestId) && !block.resolved && block.requestId !== exceptRequestId) {
         block.resolved = "已过期";
       }
     }
@@ -596,7 +641,7 @@ export function createChatSession(
   function finalizeInProgressConfirms(terminalLabel: string): void {
     if (options.confirmInBlocks) {
       for (const block of model.blocks) {
-        if (block.kind === "confirm" && isConfirmInProgressLabel(block.resolved)) {
+        if (block.kind === "confirm" && !postTurnConfirmations.has(block.requestId) && !requirementVerificationConfirmations.has(block.requestId) && isConfirmInProgressLabel(block.resolved)) {
           block.resolved = terminalLabel;
         }
       }
@@ -610,6 +655,29 @@ export function createChatSession(
   }
 
   function submitConfirm(requestId: string, choice: "y" | "n" | "a"): boolean {
+    const verification = requirementVerificationConfirmations.get(requestId);
+    if (verification) {
+      const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId);
+      const parsed = block?.kind === "confirm" ? parseProjectWorkerVerification(block.projectWorkerVerification, model.sessionId) : null;
+      const original = parseProjectWorkerVerification(verification.payload, verification.sessionId);
+      if (verification.sessionId !== model.sessionId || verification.runId !== normalizedRunId(model.executionRunId) || model.cancelRequested || !["queued", "running"].includes(model.executionState) || verification.done || block?.kind !== "confirm" || block.resolved
+          || choice === "a" || (choice !== "n" && (!block.preview.trim() || block.preview !== verification.preview || !parsed || !original || Object.keys(original).some(key => parsed[key as keyof typeof parsed] !== original[key as keyof typeof original])))) return false;
+      markConfirmResolved(requestId, choice === "n" ? "提交拒绝…" : "提交中…");
+      notify();
+      return true;
+    }
+    const postTurn = postTurnConfirmations.get(requestId);
+    if (postTurn) {
+      const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId);
+      if (postTurn.sessionId !== model.sessionId || postTurn.done || block?.kind !== "confirm" || block.resolved
+          || (postTurn.subtype !== undefined && choice === "a")
+          || (postTurn.subtype === "work_record_auto_candidate" && choice !== "n" && !parseWorkRecordAutoCandidate(block.workRecordCandidate, model.sessionId))) {
+        return false;
+      }
+      markConfirmResolved(requestId, choice === "n" ? "提交拒绝…" : "提交中…");
+      notify();
+      return true;
+    }
     const currentId = model.confirmOverlay?.requestId;
     if (!currentId || requestId !== currentId) {
       return false;
@@ -631,11 +699,17 @@ export function createChatSession(
       !model.turnActive
       && !model.confirmPending
       && model.toolsRunning === 0
-      && !["queued", "running", "stopping"].includes(model.executionState)
+      && !["queued", "running"].includes(model.executionState)
     ) {
       return false;
     }
     model.cancelRequested = true;
+    for (const [requestId, verification] of requirementVerificationConfirmations) {
+      if (!verification.done) {
+        verification.done = true;
+        markConfirmResolved(requestId, "已取消");
+      }
+    }
     model.confirmSubmitting = false;
     if (model.confirmOverlay?.requestId) {
       markConfirmResolved(model.confirmOverlay.requestId, "取消中…");
@@ -686,9 +760,21 @@ export function createChatSession(
     return model.turnCounter;
   }
 
-  function pushUserMessage(text: string): number {
+  function pushUserMessage(
+    text: string,
+    tracking?: { requestId: string; sessionId: string | null; receiptEligible: boolean; hasAttachments?: boolean },
+  ): number {
     const turnIndex = beginTurn();
-    model.blocks.push({ kind: "user", text, turnIndex });
+    const persistence = tracking
+      ? {
+          requestId: tracking.requestId,
+          sessionId: tracking.sessionId,
+          state: tracking.sessionId ? "pending" as const : "unknown" as const,
+          receiptEligible: Boolean(tracking.sessionId) && tracking.receiptEligible,
+          attachmentRetention: tracking.hasAttachments ? "unknown" as const : "not_applicable" as const,
+        }
+      : undefined;
+    model.blocks.push({ kind: "user", text, turnIndex, ...(persistence ? { persistence } : {}) });
     notify();
     return turnIndex;
   }
@@ -851,10 +937,53 @@ export function createChatSession(
     return eventRunId !== currentRunId;
   }
 
+  function markPendingUserMessagesUnknown(sessionId: string): void {
+    if (!sessionId) return;
+    for (const block of model.blocks) {
+      if (block.kind === "user" && block.persistence?.sessionId === sessionId && block.persistence.state === "pending") {
+        block.persistence = { ...block.persistence, state: "unknown" };
+      }
+    }
+  }
+
+  function acceptPersistedUserMessage(event: Extract<ServerEvent, { type: "user.message.persisted" }>): boolean {
+    if (Object.keys(event).length !== 3
+      || Object.keys(event).some((key) => key !== "type" && key !== "session_id" && key !== "request_id")
+      || typeof event.session_id !== "string" || !event.session_id || event.session_id !== model.sessionId
+      || typeof event.request_id !== "string" || !USER_MESSAGE_REQUEST_UUID.test(event.request_id)) return false;
+    const matches = model.blocks.filter((block) => block.kind === "user"
+      && block.persistence?.requestId === event.request_id
+      && block.persistence.sessionId === event.session_id
+      && block.persistence.receiptEligible);
+    if (matches.length !== 1) return false;
+    const block = matches[0];
+    if (block.kind !== "user" || !block.persistence || block.persistence.state === "saved") return false;
+    block.persistence = { ...block.persistence, state: "saved" };
+    notify();
+    return true;
+  }
+
   function handleEvent(event: ServerEvent): boolean {
     if (isStaleRunEvent(event)) return false;
     switch (event.type) {
+      case "user.message.persisted": {
+        if (!acceptPersistedUserMessage(event)) return false;
+        break;
+      }
+      case "client.connection.closed": {
+        markPendingUserMessagesUnknown(model.sessionId);
+        for (const [requestId, verification] of requirementVerificationConfirmations) {
+          if (!verification.done) {
+            verification.done = true;
+            markConfirmResolved(requestId, "连接已断开");
+          }
+        }
+        notify();
+        break;
+      }
       case "session.banner": {
+        if (model.sessionId && model.sessionId !== event.session_id) markPendingUserMessagesUnknown(model.sessionId);
+        if (model.sessionId !== event.session_id) { postTurnConfirmations.clear(); requirementVerificationConfirmations.clear(); postTurnResults.clear(); }
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
         if (!sessionChanged && turnIsBusy()) {
           model.sessionId = event.session_id;
@@ -891,6 +1020,12 @@ export function createChatSession(
       case "execution.state": {
         if (event.sequence < model.executionSequence) return false;
         const runId = normalizedRunId(event.run_id);
+        for (const [requestId, verification] of requirementVerificationConfirmations) {
+          if (!verification.done && (verification.runId !== runId || !["queued", "running"].includes(event.state))) {
+            verification.done = true;
+            markConfirmResolved(requestId, event.state === "stopping" ? "已取消" : verification.runId === runId ? "执行已结束" : "已过期");
+          }
+        }
         if (runId) model.executionRunId = runId;
         model.executionState = event.state;
         model.executionSequence = event.sequence;
@@ -937,6 +1072,7 @@ export function createChatSession(
         notify();
         break;
       case "turn.end":
+        markPendingUserMessagesUnknown(model.sessionId);
         if (event.run_id && !model.executionRunId) {
           const runId = normalizedRunId(event.run_id);
           if (runId) model.executionRunId = runId;
@@ -1165,11 +1301,29 @@ export function createChatSession(
         notify();
         break;
       }
+      case "work-record.post-turn.result": {
+        const messages: Record<string, string> = {
+          recorded: "事后工作记录已保存并关联原回合；事项尚未验证。",
+          already_recorded: "本条消息的工作记录此前已保存，本次未重复写入。",
+          not_recorded: "本次事后记录未完成；不会重新执行原工作。",
+          append_not_allowed: "候选需要追加已有事项，本次仅允许新建，未写入。",
+          uncertain: "事后记录结果无法确认，请核对记录；不要重新执行原工作。",
+        };
+        if (!event.session_id || event.session_id !== model.sessionId ||
+            typeof event.request_id !== "string" || !event.request_id.trim() ||
+            !Object.hasOwn(messages, event.outcome) || postTurnResults.has(event.request_id)) return false;
+        postTurnResults.add(event.request_id);
+        const message = typeof event.message === "string" && event.message.trim() ? event.message : messages[event.outcome];
+        model.blocks.push({ kind: "notice", text: message, plainText: true });
+        notify();
+        break;
+      }
       case "notice":
         model.blocks.push({ kind: "notice", text: event.text });
         notify();
         break;
       case "error":
+        markPendingUserMessagesUnknown(model.sessionId);
         if (options.showProcess) {
           // Error ends the turn: without this the pill kept "等待模型…" and refused to collapse.
           settleCurrentTurnProcesses();
@@ -1180,6 +1334,46 @@ export function createChatSession(
         notify();
         break;
       case "confirm.request": {
+        if (event.confirm_subtype === "project_worker_requirement_verification") {
+          const sessionId = typeof event.session_id === "string" ? event.session_id : "";
+          const runId = normalizedRunId(event.run_id);
+          const currentRunId = normalizedRunId(model.executionRunId);
+          if (!sessionId || sessionId !== model.sessionId || !runId || !currentRunId || runId !== currentRunId || model.cancelRequested || !["queued", "running"].includes(model.executionState) || event.allow_approve_all !== false
+              || typeof event.request_id !== "string" || !event.request_id.trim()
+              || requirementVerificationConfirmations.has(event.request_id) || postTurnConfirmations.has(event.request_id)) return false;
+          const payload = parseProjectWorkerVerification(event.project_worker_verification, sessionId);
+          const preview = typeof event.preview === "string" ? event.preview : "";
+          requirementVerificationConfirmations.set(event.request_id, { sessionId, runId, done: false, payload: payload ?? event.project_worker_verification, preview });
+          model.blocks.push({
+            kind: "confirm", confirmKind: "project_worker_requirement_verification",
+            confirmSubtype: "project_worker_requirement_verification", sessionId,
+            projectWorkerVerification: payload ?? event.project_worker_verification,
+            requestId: event.request_id, preview: typeof event.preview === "string" ? event.preview : "", allowApproveAll: false,
+          });
+          notify();
+          break;
+        }
+        if (event.project_worker_verification !== undefined || (event.confirm_subtype !== undefined
+            && event.confirm_subtype !== "work_record_reply_excerpt" && event.confirm_subtype !== "work_record_auto_candidate")) return false;
+        if (event.confirm_kind === "work_record_post_turn") {
+          const sessionId = typeof event.session_id === "string" ? event.session_id : "";
+          if (!sessionId || sessionId !== model.sessionId || typeof event.request_id !== "string" || !event.request_id.trim() || postTurnConfirmations.has(event.request_id)) {
+            return false;
+          }
+          const subtype = event.confirm_subtype === "work_record_reply_excerpt" || event.confirm_subtype === "work_record_auto_candidate" ? event.confirm_subtype : undefined;
+          postTurnConfirmations.set(event.request_id, { sessionId, done: false, subtype });
+          model.blocks.push({
+            kind: "confirm",
+            confirmKind: "work_record_post_turn",
+            ...(subtype ? { confirmSubtype: subtype, sessionId } : {}),
+            ...(subtype === "work_record_auto_candidate" ? { workRecordCandidate: event.work_record_candidate } : {}),
+            requestId: event.request_id,
+            preview: subtype && typeof event.preview !== "string" ? "" : event.preview,
+            allowApproveAll: subtype ? false : event.allow_approve_all,
+          });
+          notify();
+          break;
+        }
         model.confirmPending = true;
         model.confirmSubmitting = false;
         expirePreviousConfirms(event.request_id);
@@ -1202,6 +1396,48 @@ export function createChatSession(
         break;
       }
       case "confirm.done": {
+        const verification = requirementVerificationConfirmations.get(event.request_id);
+        if (verification || event.confirm_subtype === "project_worker_requirement_verification") {
+          if (!verification || verification.done || event.confirm_subtype !== "project_worker_requirement_verification"
+              || event.session_id !== model.sessionId || event.session_id !== verification.sessionId
+              || normalizedRunId(event.run_id) !== verification.runId
+              || !model.blocks.some((block) => block.kind === "confirm" && block.requestId === event.request_id
+                && block.confirmSubtype === "project_worker_requirement_verification")) return false;
+          verification.done = true;
+          markConfirmResolved(event.request_id, CONFIRM_LABELS[event.choice] ?? event.choice);
+          hooks.onConfirmDone?.(event.choice);
+          notify();
+          break;
+        }
+        const postTurn = postTurnConfirmations.get(event.request_id);
+        if (postTurn || event.confirm_kind === "work_record_post_turn") {
+          if (
+            !postTurn
+            || postTurn.done
+            || event.confirm_kind !== "work_record_post_turn"
+            || event.session_id !== model.sessionId
+            || event.session_id !== postTurn.sessionId
+            || (postTurn.subtype !== undefined && event.confirm_subtype !== postTurn.subtype)
+            || !model.blocks.some((block) => block.kind === "confirm" && block.requestId === event.request_id)
+          ) {
+            return false;
+          }
+          if (postTurn.subtype === "work_record_auto_candidate") {
+            const block = model.blocks.find(item => item.kind === "confirm" && item.requestId === event.request_id);
+            const original = block?.kind === "confirm" ? parseWorkRecordAutoCandidate(block.workRecordCandidate, postTurn.sessionId) : null;
+            const completed = parseWorkRecordAutoCandidate(event.work_record_candidate, postTurn.sessionId);
+            if (original && (!completed || original.title !== completed.title || original.requirement !== completed.requirement
+              || original.operation !== completed.operation || original.item_id !== completed.item_id
+              || original.request_id !== completed.request_id || original.run_id !== completed.run_id
+              || original.sequence !== completed.sequence || original.terminal_state !== completed.terminal_state
+              || original.finish_reason !== completed.finish_reason || original.scope.kind !== completed.scope.kind
+              || (original.scope.kind === "project" && (completed.scope.kind !== "project" || original.scope.project_id !== completed.scope.project_id)))) return false;
+          }
+          postTurn.done = true;
+          markConfirmResolved(event.request_id, CONFIRM_LABELS[event.choice] ?? event.choice);
+          notify();
+          break;
+        }
         const isCurrent = model.confirmOverlay?.requestId === event.request_id;
         const resolved = CONFIRM_LABELS[event.choice] ?? event.choice;
         markConfirmResolved(event.request_id, resolved);
@@ -1252,3 +1488,4 @@ export function createChatSession(
     handleEvent,
   };
 }
+
