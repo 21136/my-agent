@@ -1,0 +1,40 @@
+export type ManagedCheckpointRequest = {
+  format: 1;
+  mode: 'managed_source_checkpoint_request_v1';
+  reviewDigest: string;
+  proposalDigest: string;
+  selectedPaths: string[];
+};
+export type ManagedSourceCheckpoint = {
+  format: 1;
+  mode: 'managed_selected_source_checkpoint_v1';
+  review: Record<string, unknown>;
+  request: ManagedCheckpointRequest;
+  files: Array<Record<string, unknown> & { bytesBase64: string }>;
+  rawBytes: number;
+  execution: false;
+  readyForMerge: false;
+  readyForLaunch: false;
+  nativeConsent: false;
+  checkpointDigest: string;
+};
+export type ManagedSourceCheckpointReceipt = {
+  format: 1;
+  mode: 'managed_source_checkpoint_receipt_v1';
+  reviewDigest: string;
+  proposalDigest: string;
+  checkpointDigest: string;
+  selectedPaths: string[];
+  rawBytes: number;
+  storedBytes: number;
+  checkpointCreated: true;
+  execution: false;
+  readyForMerge: false;
+  readyForLaunch: false;
+  nativeConsent: false;
+};
+export function validateManagedCheckpointRequest(value: unknown): ManagedCheckpointRequest;
+export function captureManagedSourceCheckpoint(input: { review: unknown; request: unknown; stableRoot: string; sandboxRoot: string }): ManagedSourceCheckpoint;
+export function validateManagedSourceCheckpoint(value: unknown): ManagedSourceCheckpoint;
+export function persistManagedSourceCheckpoint(input: { sandboxRoot: string; checkpoint: unknown }): ManagedSourceCheckpointReceipt;
+export function readManagedSourceCheckpoint(input: { sandboxRoot: string; checkpointDigest: string }): ManagedSourceCheckpoint;
