@@ -1,3 +1,4 @@
+import { createShellDevAdoptionController } from "./shell-dev-adoption";
 import { hydrateAgentImageElements } from "../../agent-image-hydrate";
 import { bindImageLightboxClick } from "../../image-lightbox";
 import { setAgentBusy } from "../../agent-busy";
@@ -72,6 +73,7 @@ import {
   renderAdoptChip,
   renderReviewCallout,
   renderToolFailAlert,
+  resolveEffectiveToolName,
 } from "./output-display";
 import { renderProjectCompanionDockHtml } from "./sidebar-companion";
 import { bindChatFontControl, renderChatFontControl, syncChatFontControl } from "./chat-font-control";
@@ -79,6 +81,11 @@ import { isSettingsSection, renderSettingsPane, type SettingsSection } from "./s
 import { writeTheme } from "../../settings";
 import { renderMusicPanel } from "./music-panel";
 import { renderShellDevPanel } from "./shell-dev-panel";
+import { createManagedReviewController } from "./shell-dev-review";
+import { mountManagedReviewBrowser } from "./managed-review-browser";
+import { mountManagedSourceSelection } from "./managed-source-selection";
+import type { AgentWsClient, ProposalItem, ServerEvent } from "../../api/ws";
+import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
@@ -106,6 +113,7 @@ import { verifiedProjectEventToSharedEvent } from "./companion-world-app-events"
 import { normalizeTurnEvidenceEvent } from "./turn-evidence";
 import "./unified.css";
 import "./neon-twin.css";
+import "./composer-companion.css";
 import "./sidebar-v2.css";
 import "./message-reading.css";
 import "./settings-panel.css";
@@ -116,6 +124,14 @@ export type Perspective = "default" | "project" | "night";
 
 const FOCUS_TURNS = 2;
 const RECALL_TURNS = 3;
+
+async function openSessionThenBeginSwitch(
+  openSession: () => Promise<void>,
+  beginSwitch: () => void,
+): Promise<void> {
+  await openSession();
+  beginSwitch();
+}
 
 function isRecallIntent(intent: string, intentLabel: string): boolean {
   return intent === "recall" || intentLabel.includes("回顾");
@@ -488,7 +504,7 @@ export function mountUnifiedShell(
         (b.kind === "assistant" || b.kind === "assistant-streaming")
         && b.turnIndex === turnIndex,
     );
-    if (!block || block.kind === "assistant-streaming") return null;
+    if (!block || block.kind !== "assistant") return null;
     return block.text;
   });
 
@@ -587,10 +603,11 @@ export function mountUnifiedShell(
             <div class="unified-token-bar hidden" id="unified-token-bar"></div>
           </div>
           <footer class="unified-composer" id="unified-composer">
+            <span class="unified-composer-companion" aria-hidden="true"><img src="${new URL("./assets/composer-companion.png", import.meta.url).href}" alt="" width="400" height="240" draggable="false" /></span>
             <button type="button" class="unified-btn unified-mode-pill" id="unified-mode-toggle" data-mode="agent" title="切换 动手(Agent) / 只聊(Ask) 模式">动手</button>
             <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
-            <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入/粘贴文件…"></textarea>
-            <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
+            <textarea class="unified-input" id="unified-input" rows="2" aria-label="输入消息" placeholder="和小魔王说点什么…"></textarea>
+            <button type="button" class="unified-btn unified-btn-accent" id="unified-send" aria-label="发送消息" title="发送消息"><span aria-hidden="true">↑</span></button>
           </footer>
         </div>
       </div>
@@ -766,47 +783,8 @@ export function mountUnifiedShell(
   }
 
 function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
-  const hour = new Date().getHours();
-  const idx = Math.floor(new Date().getMinutes() / 10) % 4;
-  if (mode === "ask") {
-    return [
-      "当前是「只聊」模式：随便问我、找我复盘，或者天马行空聊会儿…",
-      "只聊不改文件：把你的纠结或想法丢过来，我帮你一起参谋…",
-      "纯聊天模式中：想查哪段逻辑、或者想聊点闲篇？直接说…",
-      "放心聊，现在不会动你的磁盘文件，想问什么尽管开口…",
-    ][idx];
+    return mode === "ask" ? "和小魔王说点什么…" : "和小魔王说点什么，或一起做点什么…";
   }
-  if (hour >= 22 || hour < 5) {
-    return [
-      "夜深了，还想折腾点什么？直接丢给我，我替你兜底…",
-      "深夜场在线中：想改代码、抓 Bug，还是随便跟我说说话？",
-      "这么晚还在忙，把你想做的用一句话丢过来，剩下的交给我…",
-      "熬夜搭档随时待命：直接说改哪儿，或者拖个文件/截图进来…",
-    ][idx];
-  }
-  if (hour < 11) {
-    return [
-      "早安，今天我们先拿哪块硬骨头开刀？",
-      "清晨脑子最清醒，把今天最想搞定的事直接告诉我…",
-      "早呀，想巡检代码、跑测试，还是开个新活儿？",
-      "墨镜擦亮了，说吧，今天第一件事让我干嘛？",
-    ][idx];
-  }
-  if (hour < 18) {
-    return [
-      "说吧，这轮想让我改哪儿、查哪儿？（支持直接拖入或粘贴文件）",
-      "有什么难缠的活儿直接甩过来，我帮你一口气搞定…",
-      "在呢，想审改动、修 Bug，还是聊聊新点子？",
-      "把需求或报错贴进来，我们俩联手把它拿下…",
-    ][idx];
-  }
-  return [
-    "晚上好，今天还想打磨点什么细节？直接交给我…",
-    "晚间主场：不管是改代码、跑测试还是闲聊，随时奉陪…",
-    "忙完一天了，有什么收尾的活儿丢给我来干吧…",
-    "跟我说说你现在的想法，或者直接让我去看看你刚改的代码…",
-  ][idx];
-}
 
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
     freeChatActive = !hasProject && Boolean(sessionId);
@@ -833,7 +811,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     sandboxWriteScopeBannerEl.classList.toggle("hidden", !show);
     if (sandboxWriteScopeBannerTextEl) {
       sandboxWriteScopeBannerTextEl.textContent = show
-        ? `实验进化 · ${text} · 主壳 5173 稳定不变，实验看 5174`
+        ? `实验进化会话 · ${text}（稳定树只读）`
         : "";
     }
   }
@@ -1160,6 +1138,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       projectId: projectState.projectId,
       activeSessionId: projectState.activeSessionId,
       currentSessionId: sid,
+      currentLane: client.getLane(),
       working: chat.isWorking(),
       query: sidebarSessionQuery,
       filter: sidebarSessionFilter,
@@ -1241,11 +1220,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       refreshTopbar();
       if (sessionsOpen) renderSessionsDropdown();
     } catch {
-      try {
-        client.listSessions();
-      } catch {
-        /* offline: keep the last list */
-      }
+      try { client.listSessions(); } catch { /* offline: keep the last list */ }
     }
     refreshProjectThreads();
   }
@@ -1259,15 +1234,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectId: string,
     lane: "stable" | "sandbox" = "stable",
   ): void {
-    if (!sid || sid === sessionListInput().currentSessionId) return;
+    if (!sid || (sid === sessionListInput().currentSessionId && lane === client.getLane())) return;
     if (chat.isWorking()) {
       setStatus("助手执行中，请稍后再切换会话");
       return;
     }
     void (async () => {
       try {
-        beginBoundSessionSwitch(sid, projectId, "打开会话");
-        await client.openSession(sid, lane);
+        await openSessionThenBeginSwitch(
+          () => client.openSession(sid, lane),
+          () => beginBoundSessionSwitch(sid, projectId, "打开会话"),
+        );
       } catch (err) {
         completeHydrationWait();
         setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1746,23 +1723,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       });
     });
     expandEl.querySelectorAll<HTMLButtonElement>("[data-open-session]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const sid = btn.dataset.openSession;
         if (!sid) return;
         const item = sessionsDropdown.find((s) => s.session_id === sid);
         const lane = item?.execution_lane === "sandbox" ? "sandbox" : "stable";
-        void (async () => {
-          try {
-            beginBoundSessionSwitch(sid, item?.project_id || "", "打开会话");
-            await client.openSession(sid, lane);
-            sessionsOpen = false;
-            expandEl.classList.add("hidden");
-            expandEl.innerHTML = "";
-          } catch (err) {
-            completeHydrationWait();
-            setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
-          }
-        })();
+        try {
+          await openSessionThenBeginSwitch(
+            () => client.openSession(sid, lane),
+            () => beginBoundSessionSwitch(sid, item?.project_id || "", "打开会话"),
+          );
+          sessionsOpen = false;
+          expandEl.classList.add("hidden");
+          expandEl.innerHTML = "";
+        } catch (err) {
+          completeHydrationWait();
+          setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+        }
       });
     });
   }
@@ -1883,25 +1860,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     onNewThread: () => {
       handleNewThread();
     },
-    onOpenThread: (sessionId: string) => {
+    onOpenThread: async (sessionId: string) => {
       const sid = sessionId.trim();
       if (!sid || sid === projectState.currentSessionId) return;
       if (chat.isWorking()) {
         setStatus("助手执行中，请稍后再切换会话线");
         return;
       }
-      projectState.railTab = "now";
-      projectState.overlayPanel = null;
-      setMainFocus("chat");
-      void (async () => {
-        try {
-          beginBoundSessionSwitch(sid, projectState.projectId, "打开会话线");
-          await client.openSession(sid, "stable");
-        } catch (err) {
-          completeHydrationWait();
-          setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
-        }
-      })();
+      try {
+        await openSessionThenBeginSwitch(
+          () => client.openSession(sid),
+          () => beginBoundSessionSwitch(sid, projectState.projectId, "打开会话线"),
+        );
+        projectState.railTab = "now";
+        projectState.overlayPanel = null;
+        setMainFocus("chat");
+      } catch (err) {
+        completeHydrationWait();
+        setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
+      }
     },
     onReturnActiveThread: () => {
       const active = projectState.activeSessionId.trim();
@@ -2397,6 +2374,58 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return { x: left, y: top, width: right - left, height: bottom - top };
   }
 
+  let currentEvolutionView: EvolutionView = evolutionView(null);
+  let evolutionHostAvailable: boolean | null = null;
+  let evolutionBeginPending = false;
+  function syncShellDevEvolutionView(view = currentEvolutionView): void {
+    currentEvolutionView = view;
+    const label = shellDevEl.querySelector<HTMLElement>("[data-evolution-status]");
+    const checks = shellDevEl.querySelector<HTMLElement>("[data-evolution-checks]");
+    if (label) label.textContent = evolutionHostAvailable === false ? "测试 Host 未启用" : view.label;
+    if (checks) checks.textContent = view.openChecks.join(" · ");
+    const hasSession = Boolean(chat.model.sessionId);
+    const begin = shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-begin]");
+    const inspect = shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-inspect]");
+    const stop = shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-stop]");
+    if (begin) begin.disabled = !hasSession || view.active || evolutionHostAvailable === false || evolutionBeginPending;
+    if (inspect) inspect.disabled = !hasSession || evolutionHostAvailable === false;
+    if (stop) stop.disabled = !hasSession || !view.canStop || evolutionHostAvailable === false;
+  }
+
+  async function requestEvolutionAction(action: "begin" | "inspect" | "stop"): Promise<void> {
+    if (!chat.model.sessionId) {
+      shellDevFeedback("请先在当前会话完成一轮，再操作演化。", "error");
+      return;
+    }
+    const api = window.myAgentDesktop;
+    if (action === "begin") { evolutionBeginPending = true; syncShellDevEvolutionView(); }
+    const request = action === "begin" ? api?.beginEvolution : action === "stop" ? api?.stopEvolution : api?.getEvolutionState;
+    if (!request) {
+      if (action === "begin") evolutionBeginPending = false;
+      evolutionHostAvailable = false;
+      syncShellDevEvolutionView();
+      shellDevFeedback("当前桌面未连接固定测试 Host。", "error");
+      return;
+    }
+    try {
+      const result = await request();
+      if (result.status === "disabled") {
+        if (action === "begin") evolutionBeginPending = false;
+        evolutionHostAvailable = false;
+        syncShellDevEvolutionView();
+        shellDevFeedback(result.message || "固定测试 Host 未启用。", "error");
+      } else {
+        evolutionHostAvailable = true;
+        syncShellDevEvolutionView();
+        shellDevFeedback(action === "inspect" ? "正在读取当前会话状态…" : action === "begin" ? "已在当前会话发起授权；请切回聊天检查确认卡。" : "停止请求已发送。", "busy");
+      }
+    } catch (error) {
+      if (action === "begin") evolutionBeginPending = false;
+      syncShellDevEvolutionView();
+      shellDevFeedback("演化请求失败：" + (error instanceof Error ? error.message : String(error)), "error");
+    }
+  }
+
   function shellDevFeedback(text: string, tone: "neutral" | "ok" | "error" | "busy" = "neutral"): void {
     const el = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-feedback]");
     if (!el) return;
@@ -2434,6 +2463,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   let shellDevOpenTimer: number | null = null;
   let shellDevLastOpenOk = false;
+  let evolutionRelayErrorCleanup: (() => void) | null = null;
 
   async function openShellDevPreviewIfReady(): Promise<void> {
     const api = window.myAgentDesktop;
@@ -2497,11 +2527,16 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   async function refreshShellDevSyncHint(): Promise<void> {
     const hintEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-sync-hint]");
     if (!hintEl) return;
-    const raw = await window.myAgentDesktop?.getSandboxAdoptStatus?.();
-    const status = raw as { needsSandboxSync?: boolean; stableAheadOfSandbox?: number | null } | undefined;
-    const ahead = status?.stableAheadOfSandbox ?? 0;
-    if (status?.needsSandboxSync && ahead > 0) {
-      hintEl.textContent = `稳定分支比 sandbox 新 ${ahead} 个提交（常见于刚合入）。请点「同步 sandbox 与稳定」，否则 5174 仍是旧实验树。`;
+    const capabilities = await window.myAgentDesktop?.getSessionLaneCapabilities?.().catch(() => undefined);
+    if (capabilities?.legacySessionLanes !== true) {
+      hintEl.textContent = "";
+      hintEl.classList.add("hidden");
+      return;
+    }
+    const status = await window.myAgentDesktop?.getSandboxAdoptStatus?.().catch(() => undefined);
+    const ahead = typeof status?.stableAheadOfSandbox === "number" ? status.stableAheadOfSandbox : 0;
+    if (status?.needsSandboxSync === true && ahead > 0) {
+      hintEl.textContent = `稳定分支比 sandbox 新 ${ahead} 个提交。当前同步入口未启用；所选源码合入不会自动同步 sandbox。`;
       hintEl.classList.remove("hidden");
       return;
     }
@@ -2526,21 +2561,34 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
       const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
       shellDevEl.innerHTML = renderShellDevPanel(mainUrl, previewUrl);
+      const syncHint = document.createElement("p");
+      syncHint.setAttribute("data-shell-dev-sync-hint", "");
+      syncHint.classList.add("hidden");
+      shellDevEl.querySelector(".shell-dev-lanes")?.after(syncHint);
+      syncShellDevEvolutionView();
+      if (!evolutionRelayErrorCleanup) {
+        const onRelayError = (event: Event) => {
+          const detail = (event as CustomEvent<unknown>).detail;
+          const message = typeof detail === "string" ? detail : "sidecar WebSocket 未连接";
+          shellDevFeedback("演化请求未送达：" + message, "error");
+        };
+        window.addEventListener("evolution:transport-error", onRelayError);
+        evolutionRelayErrorCleanup = () => window.removeEventListener("evolution:transport-error", onRelayError);
+      }
+      shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-begin]")?.addEventListener("click", () => { void requestEvolutionAction("begin"); });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-inspect]")?.addEventListener("click", () => { void requestEvolutionAction("inspect"); });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-stop]")?.addEventListener("click", () => { void requestEvolutionAction("stop"); });
       const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
       if (slot) shellDevViewResizeObserver.observe(slot);
-      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", () => {
-        void (async () => {
-          try {
-            setPerspective("project", "session");
-            shellDevFeedback("正在启动 sandbox 运行时并打开实验会话…");
-            await client.createSandboxSession();
-          } catch (err) {
-            shellDevFeedback(
-              err instanceof Error ? err.message : "无法打开实验会话",
-              "error",
-            );
-          }
-        })();
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", async () => {
+        try {
+          shellDevFeedback("正在启动实验运行时并打开会话…", "busy");
+          await client.createSandboxSession();
+          setPerspective("project", "session");
+          shellDevFeedback("已在实验运行时请求打开会话。", "ok");
+        } catch (error) {
+          shellDevFeedback(error instanceof Error ? error.message : String(error), "error");
+        }
       });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-popout]")?.addEventListener("click", () => {
         void window.myAgentDesktop?.openShellDevPopout?.().then((result) => {
@@ -2573,128 +2621,54 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           shellDevFeedback(result?.message || "提取失败，请确认预览页已打开。");
         });
       });
-      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]")?.addEventListener("click", () => {
-        void (async () => {
-          const mergeBtn = shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]");
-          try {
-            const raw = await window.myAgentDesktop?.getSandboxAdoptStatus?.();
-            if (!raw || (raw as { message?: string }).message === "workbench unavailable") {
-              shellDevFeedback("请在 Electron 桌面壳内使用合入功能。", "error");
-              return;
-            }
-            const status = raw as {
-              readyToMerge?: boolean;
-              fatalBlockers?: string[];
-              needsSandboxCommit?: boolean;
-              needsStableStash?: boolean;
-              needsSandboxSync?: boolean;
-              stableAheadOfSandbox?: number | null;
-              currentBranch?: string;
-              sandboxBranch?: string;
-              commitsAhead?: number | null;
-              recentCommits?: string[];
-              sandboxDirtyProduct?: string[];
-              stableDirtyProduct?: string[];
-            };
-
-            if (status.fatalBlockers?.length) {
-              shellDevFeedback(status.fatalBlockers[0], "error");
-              return;
-            }
-
-            if (
-              !status.readyToMerge &&
-              !status.needsSandboxCommit &&
-              !status.needsStableStash &&
-              (status.commitsAhead ?? 0) === 0
-            ) {
-              if (status.needsSandboxSync) {
-                shellDevFeedback(
-                  `稳定已领先 sandbox ${status.stableAheadOfSandbox ?? "?"} 个提交，无需再合入。请点「同步 sandbox 与稳定」。`,
-                  "neutral",
-                );
-              } else {
-                shellDevFeedback("当前没有可合入的实验提交。", "error");
-              }
-              return;
-            }
-
-            const sandboxCommitMessage = "chore(sandbox): prepare merge into stable";
-            const plan: string[] = [];
-            if (status.needsSandboxCommit) {
-              plan.push(
-                `在 sandbox 提交 ${status.sandboxDirtyProduct?.length ?? "?"} 处改动（说明：${sandboxCommitMessage}）`,
-              );
-            }
-            if (status.needsStableStash) {
-              plan.push(`把稳定树 ${status.stableDirtyProduct?.length ?? "?"} 处改动 stash 掉`);
-            }
-            const commitLines = status.recentCommits?.length
-              ? status.recentCommits.map((c) => `  ${c}`).join("\n")
-              : status.commitsAhead != null
-                ? `  共 ${status.commitsAhead} 个提交`
-                : "";
-            const mergeLine = `合并 ${status.sandboxBranch ?? "experiment/sandbox"} → ${status.currentBranch ?? "HEAD"}（整支，含 agent-core + desktop）`;
-
-            const confirmBody = status.readyToMerge
-              ? [`将执行：${mergeLine}`, commitLines ? `待合入：\n${commitLines}` : "", "", "完成后会弹出结果窗口。继续？"]
-              : [
-                  "将自动完成合入准备并 merge：",
-                  ...plan.map((p) => `• ${p}`),
-                  `• ${mergeLine}`,
-                  commitLines ? `\n已有待合入提交：\n${commitLines}` : "",
-                  "",
-                  "取消则不做任何 git 操作。合入成功后会自动 git stash pop 恢复稳定树本地改动，并弹出结果窗口。继续？",
-                ];
-            if (!window.confirm(confirmBody.filter(Boolean).join("\n"))) return;
-
-            if (mergeBtn) mergeBtn.disabled = true;
-            shellDevFeedback("正在合入，请稍候（sandbox 提交 / stash / merge）…", "busy");
-            const result = await window.myAgentDesktop?.mergeSandboxIntoStable?.({
-              autoCommitSandbox: Boolean(status.needsSandboxCommit),
-              sandboxCommitMessage,
-              autoStashStable: Boolean(status.needsStableStash),
-            });
-            if (!result) {
-              shellDevFeedback("合入调用失败。", "error");
-              return;
-            }
-            const parts = [result.message, result.steps?.join(" → "), result.detail].filter(Boolean);
-            shellDevFeedback(parts.join("\n"), result.ok ? "ok" : "error");
-            if (result.ok) await refreshShellDevSyncHint();
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            shellDevFeedback(`合入过程异常：${message}`, "error");
-          } finally {
-            if (mergeBtn) mergeBtn.disabled = false;
-          }
-        })();
-      });
-      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reset-main]")?.addEventListener("click", () => {
-        void window.myAgentDesktop?.resetShellDevMainLane?.().then(async (result) => {
-          if (result?.ok) {
-            shellDevFeedback(result.message, "ok");
-            await refreshShellDevLaneLabels();
-            await openShellDevPreviewIfReady();
-            return;
-          }
-          shellDevFeedback(result?.message || "恢复主壳失败。", "error");
+      const managedReviewButton = shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-managed-review]");
+      const managedReviewOutput = shellDevEl.querySelector<HTMLElement>("[data-managed-review-output]");
+      const managedReviewContainer = shellDevEl.querySelector<HTMLElement>("[data-managed-review-browser]");
+      const managedSelectionContainer = shellDevEl.querySelector<HTMLElement>("[data-managed-source-selection]");
+      if (managedReviewButton && managedReviewOutput && managedReviewContainer && managedSelectionContainer) {
+        const managedReviewBrowser = mountManagedReviewBrowser(managedReviewContainer);
+        const managedSourceSelection = mountManagedSourceSelection(managedSelectionContainer, {
+          isDesktop: Boolean(window.myAgentDesktop?.inspectManagedSourceReview && window.myAgentDesktop?.proposeManagedSourceSelection),
+          propose: (request) => window.myAgentDesktop?.proposeManagedSourceSelection?.(request)
+            ?? Promise.resolve({ ok: false as const, message: "当前运行环境不支持范围核验。" }),
+          createCheckpoint: window.myAgentDesktop?.createManagedSourceCheckpoint
+            ? (request) => window.myAgentDesktop!.createManagedSourceCheckpoint!(request)
+            : undefined,
+          executeMerge: window.myAgentDesktop?.executeManagedSelectedMerge
+            ? (request) => window.myAgentDesktop!.executeManagedSelectedMerge!(request)
+            : undefined,
         });
+        const managedReview = createManagedReviewController({
+          inspect: () => window.myAgentDesktop?.inspectManagedSourceReview?.()
+            ?? Promise.resolve({ ok: false as const, message: "当前运行环境不支持管理源码审查。" }),
+          button: managedReviewButton,
+          output: managedReviewOutput,
+          isDesktop: Boolean(window.myAgentDesktop?.inspectManagedSourceReview),
+          onReset: () => { managedReviewBrowser.clear(); managedSourceSelection.clear(); managedReviewOutput.textContent = ""; managedReviewOutput.hidden = true; },
+          onReport: (report) => { managedReviewBrowser.show(report); managedSourceSelection.show(report); },
+        });
+        managedReviewButton.addEventListener("click", () => { void managedReview.inspect(); });
+      }
+      const adoption = createShellDevAdoptionController(window.myAgentDesktop, shellDevFeedback, (busy) => {
+        const button = shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]");
+        if (button) button.disabled = busy;
       });
-      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sync-sandbox]")?.addEventListener("click", () => {
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]")?.addEventListener("click", () => { void adoption.merge(); });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-status]")?.addEventListener("click", () => { void adoption.inspect(); });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reset-main]")?.addEventListener("click", () => {
         void (async () => {
-          const ok = window.confirm(
-            "将把当前稳定分支 merge 进 .worktrees/sandbox（experiment/sandbox），让 5174 与稳定代码对齐。继续？",
-          );
-          if (!ok) return;
-          shellDevFeedback("正在同步 sandbox…", "busy");
-          const result = await window.myAgentDesktop?.syncSandboxWorktree?.();
-          if (!result) {
-            shellDevFeedback("同步调用失败。", "error");
-            return;
-          }
-          shellDevFeedback([result.message, result.detail].filter(Boolean).join("\n"), result.ok ? "ok" : "error");
-          await refreshShellDevSyncHint();
+          try {
+            const api = window.myAgentDesktop;
+            const capabilities = await api?.getSessionLaneCapabilities?.().catch(() => undefined);
+            const reset = capabilities?.legacySessionLanes === true && api?.resetShellDevMainLane
+              ? api.resetShellDevMainLane : api?.resetShellDevMain;
+            const result = await reset?.();
+            shellDevFeedback(result?.message || (result?.ok ? "已返回稳定版。" : "返回稳定版失败。"), result?.ok ? "ok" : "error");
+            if (result?.ok) {
+              await refreshShellDevLaneLabels();
+              await openShellDevPreviewIfReady();
+            }
+          } catch (error) { shellDevFeedback(String(error), "error"); }
         })();
       });
     }
@@ -3766,6 +3740,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         return `AS${block.turnIndex}:${block.turnKey}:${block.text.length}`;
       case "notice":
         return `N:${block.text.length}`;
+      case "generated-image":
+        return `GI${block.turnIndex}:${block.agentPath}`;
       case "process": {
         ensureProcessEntries(block);
         const entriesSig = activityEntriesPrint(
@@ -3955,7 +3931,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         }
         const children = Array.from(chatEl.children);
         for (const i of changed) {
-          children[i].outerHTML = renderChatSegment(segments[i]);
+          children[i].outerHTML = renderChatSegment(segments[i], i === segments.length - 1);
         }
         finish();
         return;
@@ -3968,7 +3944,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         const prefixOk = renderedSegmentPrints.every((p, i) => p === curSegPrints[i]);
         if (prefixOk && chatEl.children.length === renderedSegmentPrints.length) {
           const newSegs = segments.slice(renderedSegmentPrints.length);
-          chatEl.insertAdjacentHTML("beforeend", newSegs.map(renderChatSegment).join(""));
+          chatEl.insertAdjacentHTML("beforeend", newSegs.map((segment, index) => renderChatSegment(segment, index === newSegs.length - 1)).join(""));
           finish();
           return;
         }
@@ -3976,7 +3952,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       resetLazyMarkdownObserver();
       markdownRenderEager = false;
-      chatEl.innerHTML = segments.map(renderChatSegment).join("");
+      chatEl.innerHTML = segments.map((segment, index) => renderChatSegment(segment, index === segments.length - 1)).join("");
       markdownRenderEager = true;
       finish();
       return;
@@ -4369,7 +4345,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   // ---- input events ----
-  function sendComposerMessage(ev?: KeyboardEvent): void {
+  function sendComposerMessage(): void {
     const text = input.value.trim();
     const attachmentIds = fileDrop.getAttachments().map((item) => item.id);
     composerWire.sendCurrentMessage();
@@ -4395,8 +4371,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return lines.join("\n");
   }
 
-  sendBtn.addEventListener("click", (ev) => {
-    sendComposerMessage(ev);
+  sendBtn.addEventListener("click", () => {
+    sendComposerMessage();
   });
   stopBtn.addEventListener("click", () => {
     sendStopRequest();
@@ -4404,7 +4380,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && ev.shiftKey) {
       ev.preventDefault();
-      sendComposerMessage(ev);
+      sendComposerMessage();
     }
   });
 
@@ -5271,6 +5247,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           resetProjectScopedState(projectState);
         }
         if (event.session_id !== chat.model.sessionId) {
+          currentEvolutionView = evolutionView(null);
+          evolutionHostAvailable = null;
+          evolutionBeginPending = false;
+          syncShellDevEvolutionView();
           renderedPrints = [];
           renderedSegmentPrints = [];
           projectState.turnEvidence = [];
@@ -5315,19 +5295,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         syncCompanionToBackend();
         renderSidebarSessions();
         renderSidebarProjectRow();
-        topbarState.sessionCount = sessionsDropdown.length;
-        refreshTopbar();
-        if (sessionsOpen) renderSessionsDropdown();
         if (!chat.model.blocks.length && !chat.isWorking()) {
           renderedPrints = [];
           renderedSegmentPrints = [];
           renderChat();
         }
+        topbarState.sessionCount = sessionsDropdown.length;
+        refreshTopbar();
+        if (sessionsOpen) renderSessionsDropdown();
         break;
 
       case "session.memory":
         topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
-        break;
         updateTokenBar(event.token_usage, event.token_limit);
         break;
 
@@ -5337,6 +5316,38 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "evolve.proposals":
         handleProposalsEvent(event.items);
+        break;
+
+      case "evolution.bound":
+        if (event.conversation_id !== chat.model.sessionId) break;
+        evolutionBeginPending = false;
+        evolutionHostAvailable = true;
+        currentEvolutionView = { active: true, evolution_id: event.evolution_id, label: "范围已绑定，正在读取状态…", canStop: false, currentCandidate: null, openChecks: [] };
+        shellDevFeedback("当前会话已绑定固定演化范围。", "ok");
+        syncShellDevEvolutionView();
+        void requestEvolutionAction("inspect");
+        break;
+
+      case "evolution.denied":
+        if (event.conversation_id !== chat.model.sessionId) break;
+        evolutionBeginPending = false;
+        syncShellDevEvolutionView();
+        shellDevFeedback("未确认演化范围；当前会话没有新增授权。", "neutral");
+        break;
+
+      case "evolution.state": {
+        if (event.conversation_id !== chat.model.sessionId) break;
+        evolutionHostAvailable = true;
+        const view = evolutionView(event.projection as EvolutionProjection);
+        syncShellDevEvolutionView(view);
+        shellDevFeedback([view.label, ...view.openChecks].join(" · "), view.active ? "ok" : "neutral");
+        break;
+      }
+
+      case "evolution.stop.result":
+        if (event.conversation_id !== chat.model.sessionId) break;
+        shellDevFeedback("停止结果：" + String(event.result.status ?? "未知"), event.result.status === "succeeded" ? "ok" : "error");
+        void requestEvolutionAction("inspect");
         break;
 
       case "context.switch.request":
@@ -5937,6 +5948,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "confirm.request":
       case "confirm.done":
+        if (event.type === "confirm.request" && /当前会话绑定到 local_managed 演化范围/.test(event.preview)) {
+          shellDevFeedback("请切回当前会话，在确认卡中核对 owned_paths 并授权。", "busy");
+        }
         if (!chat.handleEvent(event)) break;
         if (event.type === "confirm.request") {
           requestAnimationFrame(() => {
@@ -5947,6 +5961,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "error": {
         const rawMessage = String(event.message || "").trim();
+        if (evolutionBeginPending) {
+          evolutionBeginPending = false;
+          syncShellDevEvolutionView();
+          shellDevFeedback(rawMessage || "演化请求失败。", "error");
+        }
         const noProject = /no active project session/i.test(rawMessage);
         let statusHandled = false;
         if (pendingDocAction) {
@@ -6044,6 +6063,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     shellDevEl.removeEventListener("scroll", syncShellDevViewBounds);
     void window.myAgentDesktop?.setBilibiliViewState?.({ visible: false });
     void window.myAgentDesktop?.setShellDevViewState?.({ visible: false });
+    evolutionRelayErrorCleanup?.();
+    evolutionRelayErrorCleanup = null;
     fileDrop.destroy();
     off();
     shellEl.classList.remove("is-working");

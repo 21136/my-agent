@@ -6,9 +6,11 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePreviewLanePaths } from "./sandbox-paths.mjs";
+import { assertDependencies, auditDependencies, formatAudit } from "./dependency-audit.mjs";
 
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const viteBin = path.join(desktopDir, "node_modules", "vite", "bin", "vite.js");
+assertDependencies(desktopDir);
 const previewLane = resolvePreviewLanePaths();
 const skipPreview = process.env.MY_AGENT_SKIP_PREVIEW_DEV === "1";
 
@@ -30,6 +32,12 @@ function logPreview(chunk, isErr) {
 
 function startPreviewLane() {
   if (skipPreview) return;
+  const preflight = auditDependencies(previewLane.previewCwd);
+  if (!preflight.ok) {
+    console.warn(formatAudit(preflight));
+    console.warn("[preview:5174] Disabled because dependencies drifted. The main lane is not changed.");
+    return;
+  }
   previewProc = spawn(process.execPath, [previewLane.previewViteBin, "--config", previewLane.previewConfig], {
     cwd: previewLane.previewCwd,
     env: process.env,
@@ -42,7 +50,7 @@ function startPreviewLane() {
     if (skipPreview) return;
     if (signal) return;
     if (code === 0 || code === null) return;
-    console.warn(`[preview:5174] dev server exited (code=${code}). Shell preview may fall back to 5173.`);
+    console.warn(`[preview:5174] dev server exited (code=${code}). Preview is unavailable; this does not validate the experimental version.`);
   });
 }
 

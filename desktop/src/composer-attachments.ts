@@ -1,5 +1,5 @@
 import type { AgentWsClient, CompanionWorldContextPayload } from "./api/ws";
-import type { FileDropHandle } from "./file-drop";
+import type { FileDropHandle, StagedFile } from "./file-drop";
 import type { ChatSession } from "./shells/chat-state";
 import { userMessagePreview } from "./user-message";
 
@@ -79,7 +79,7 @@ export function wireComposerAttachments(options: {
 
 function composeDisplayMessage(
   text: string,
-  attachments: Array<{ name: string; ref: string; size: number; mime: string; readable_text: boolean }>,
+  attachments: StagedFile[],
 ): string {
   if (!attachments.length) {
     return text;

@@ -38,8 +38,8 @@ export function resolvePreviewLanePaths() {
 
   const sandboxVite = path.join(sandboxDesktop, "node_modules", "vite", "bin", "vite.js");
   const sandboxConfig = path.join(sandboxDesktop, "vite.shell-preview.config.ts");
-  const previewViteBin = existsSync(sandboxVite) ? sandboxVite : stableViteBin;
-  const previewConfig = existsSync(sandboxConfig) ? sandboxConfig : stablePreviewConfig;
+  const previewViteBin = sandboxVite; // Do not silently borrow another lane's dependencies.
+  const previewConfig = sandboxConfig;
 
   return {
     sandboxRoot,

@@ -196,7 +196,7 @@ export function mountHostSettings(client: AgentWsClient): HostSettingsApi {
     const candidateApiAvailable = Boolean(window.myAgentDesktop?.switchSidecarCandidate);
     candidateSection.innerHTML = `
       <div class="host-candidate-title">Host Agent 候选版本</div>
-      <p class="host-candidate-hint">选择 Agent 根目录下的候选 worktree（实验 agent-core 一般为 <code>.worktrees/sandbox</code>）；系统会先启动并健康检查，失败时自动恢复旧版本。只开 5174 预览不会切换 sidecar。</p>
+      <p class="host-candidate-hint">选择 Agent 根目录下的候选 worktree；系统会先启动并健康检查，失败时自动恢复旧版本。</p>
       <div class="host-candidate-row">
         <input class="host-candidate-path" type="text" readonly value="${escapeHtml(candidateRoot ?? "")}" placeholder="尚未选择候选目录" />
         <button type="button" class="host-settings-btn" data-action="candidate-pick" ${candidateBusy ? "disabled" : ""}>选择…</button>

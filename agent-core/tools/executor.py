@@ -28,6 +28,7 @@ from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
 from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
     deliverable_review,
+    evolution,
     explore,
     fetch_url,
     generate_image,
@@ -63,6 +64,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "show_images": show_images.run,
     "generate_image": generate_image.run,
     "run_evolved": run_evolved.run,
+    "evolution": evolution.run,
     "propose_context_switch": propose_context_switch.run,
     "deliverable_review": deliverable_review.run,
     "explore": explore.run,
@@ -95,6 +97,12 @@ class ExecutorSession:
 
     session_dir: Path | None = None
     workspace_evolved_approved: bool = False
+    evolution_id: str = ""
+    host_run_id: str = ""
+    evolution_authorization_id: str = ""
+    evolution_stop_authorization_id: str = ""
+    evolution_stop_instance_id: str = ""
+    evolution_confirm_with_receipt: Callable[[str, bool], tuple[str, str]] | None = field(default=None, repr=False)
     allowed_evolved: set[str] | None = None
     blocked_tools: frozenset[str] = field(default_factory=frozenset)
     turn_mode: str = "agent"
@@ -173,6 +181,7 @@ class ExecutorSession:
         terminal_foreign_root = ""
         terminal_host_id = ""
         write_scope_root = ""
+        evolution_id = ""
         if session_dir is not None:
             meta_path = session_dir / _META_FILENAME
             if meta_path.is_file():
@@ -208,9 +217,13 @@ class ExecutorSession:
                     )
                     terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
                     write_scope_root = str(payload.get("write_scope_root", "") or "").strip()
+                    from session import normalize_evolution_id
+
+                    evolution_id = normalize_evolution_id(payload.get("evolution_id", ""))
         return cls(
             session_dir=session_dir,
             workspace_evolved_approved=approved,
+            evolution_id=evolution_id,
             allowed_evolved=allowed_evolved,
             active_shell=active_shell,
             project_root=project_root,
@@ -264,6 +277,12 @@ class ExecutorSession:
         )
         self.terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
         self.write_scope_root = str(payload.get("write_scope_root", "") or "").strip()
+        from session import normalize_evolution_id
+
+        refreshed_evolution_id = normalize_evolution_id(payload.get("evolution_id", ""))
+        if refreshed_evolution_id != self.evolution_id:
+            self.evolution_authorization_id = ""
+        self.evolution_id = refreshed_evolution_id
 
 
 def _executor_session_meta(session: ExecutorSession):
@@ -276,6 +295,7 @@ def _executor_session_meta(session: ExecutorSession):
         terminal_cwd=session.terminal_cwd,
         terminal_foreign_root=session.terminal_foreign_root,
         terminal_host_id=session.terminal_host_id,
+        evolution_id=session.evolution_id,
     )
 
 
@@ -1060,6 +1080,7 @@ class ToolExecutor:
     evolve_log: EvolveLog | None = None
     on_registry_reloaded: Callable[[], None] | None = field(default=None, repr=False)
     cancel_event: threading.Event | None = field(default=None, repr=False)
+    evolution_client: Any | None = field(default=None, repr=False)
 
     @classmethod
     def create(
@@ -1071,6 +1092,7 @@ class ToolExecutor:
         confirm_fn: ConfirmFn | None = None,
         on_event: EventFn | None = None,
         evolve_log: EvolveLog | None = None,
+        evolution_client: Any | None = None,
     ) -> ToolExecutor:
         agent_paths = paths or AgentPaths.discover()
         registry = ToolRegistry.load(agent_paths)
@@ -1081,6 +1103,7 @@ class ToolExecutor:
             confirm_fn=confirm_fn,
             on_event=on_event,
             evolve_log=evolve_log if evolve_log is not None else EvolveLog.for_agent(agent_paths),
+            evolution_client=evolution_client,
         )
 
     def reload_registry(self) -> None:
@@ -1423,6 +1446,20 @@ class ToolExecutor:
         started: float,
         confirm_decision: str,
     ) -> ToolResult:
+        if self.session.evolution_id:
+            from evolution.policy import evolution_tool_decision
+
+            decision = evolution_tool_decision(self.session.evolution_id, name, args)
+            if decision.get("decision") != "allow":
+                denied = tool_fail(
+                    name,
+                    str(decision.get("code") or "permission_denied"),
+                    str(decision.get("reason") or "tool is blocked in an evolution session"),
+                    duration_ms=_elapsed_ms(started),
+                )
+                self._log_tool_call(name, args, denied, confirm=confirm_decision, started=started)
+                return denied
+
         error = self.validate(name, args)
         if error is not None:
             self._maybe_log_validation_guard(error)
@@ -3201,6 +3238,10 @@ class ToolExecutor:
         prepared_image_reference: Any | None = None,
     ) -> ToolResult:
         runner = _BUILTIN_RUNNERS[tool_name]
+        if tool_name == "evolution":
+            if self.evolution_client is None:
+                return tool_fail(tool_name, "permission_denied", "evolution control client is not attached to this trusted Host", duration_ms=_elapsed_ms(started))
+            return runner(arguments, client=self.evolution_client, session=self.session)
         if tool_name == "run_evolved":
             return runner(
                 arguments,

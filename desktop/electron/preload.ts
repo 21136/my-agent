@@ -1,11 +1,36 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { EvolutionHostRequest } from "./evolution/main-bridge";
 
 type SessionControlAction = "suspend" | "resume";
+type EvolutionRequestResult = { status: "queued" | "disabled"; message?: string };
+const EVOLUTION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function isEvolutionHostRequest(value: unknown): value is EvolutionHostRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const request = value as Record<string, unknown>;
+  return Object.keys(request).length === 2
+    && Object.hasOwn(request, "type")
+    && Object.hasOwn(request, "conversation_id")
+    && (request.type === "evolution.begin" || request.type === "evolution.inspect" || request.type === "evolution.stop")
+    && typeof request.conversation_id === "string"
+    && EVOLUTION_UUID.test(request.conversation_id);
+}
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {
+  getEvolutionState: () => ipcRenderer.invoke("evolution:getState", null) as Promise<EvolutionRequestResult>,
+  beginEvolution: () => ipcRenderer.invoke("evolution:begin", null) as Promise<EvolutionRequestResult>,
+  stopEvolution: () => ipcRenderer.invoke("evolution:stop", null) as Promise<EvolutionRequestResult>,
+  setEvolutionConversationId: (sessionId: string | null) => ipcRenderer.invoke("evolution:session", sessionId) as Promise<boolean>,
+  onEvolutionRequest: (handler: (request: EvolutionHostRequest) => void) => {
+    const listener = (_event: unknown, value: unknown) => {
+      if (isEvolutionHostRequest(value)) handler(value);
+    };
+    ipcRenderer.on("evolution:request", listener);
+    return () => ipcRenderer.removeListener("evolution:request", listener);
+  },
   getSidecar: () => ipcRenderer.invoke("sidecar:get"),
-  getSandboxSidecar: () => ipcRenderer.invoke("sidecar:get-sandbox"),
-  ensureSandboxSidecar: () => ipcRenderer.invoke("sidecar:ensure-sandbox"),
+  getSessionLaneCapabilities: () => ipcRenderer.invoke("sidecar:session-lane-capabilities") as Promise<{ legacySessionLanes: boolean }>,
+  getSandboxSidecar: () => ipcRenderer.invoke("sidecar:get-sandbox") as Promise<{ host: string; port: number } | null>,
+  ensureSandboxSidecar: () => ipcRenderer.invoke("sidecar:ensure-sandbox") as Promise<{ ok: boolean; host?: string; port?: number; message?: string }>,
   switchSidecarCandidate: (root: string) => ipcRenderer.invoke("sidecar:switch-candidate", root),
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
@@ -15,17 +40,16 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   getShellDevPreviewUrl: () => ipcRenderer.invoke("shell-dev:get-preview-url") as Promise<string>,
   getShellDevMainUrl: () => ipcRenderer.invoke("shell-dev:get-main-url") as Promise<string>,
   promoteShellDevPreview: () => ipcRenderer.invoke("shell-dev:promote-preview") as Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>,
+  resetShellDevMain: () => ipcRenderer.invoke("shell-dev:reset-main") as Promise<{ ok: boolean; message?: string; mainUrl?: string }>,
   getSandboxAdoptStatus: () => ipcRenderer.invoke("shell-dev:sandbox-adopt-status") as Promise<Record<string, unknown>>,
-  syncSandboxWorktree: () =>
-    ipcRenderer.invoke("shell-dev:sync-sandbox") as Promise<{ ok: boolean; message: string; detail?: string }>,
-  resetShellDevMainLane: () =>
-    ipcRenderer.invoke("shell-dev:reset-main-lane") as Promise<{ ok: boolean; message: string; mainUrl?: string }>,
-  mergeSandboxIntoStable: (options?: {
-    autoCommitSandbox?: boolean;
-    sandboxCommitMessage?: string;
-    autoStashStable?: boolean;
-  }) =>
-    ipcRenderer.invoke("shell-dev:merge-sandbox", options ?? {}) as Promise<{
+  syncSandboxWorktree: () => ipcRenderer.invoke("shell-dev:sync-sandbox") as Promise<{ ok: boolean; message: string; detail?: string }>,
+  resetShellDevMainLane: () => ipcRenderer.invoke("shell-dev:reset-main-lane") as Promise<{ ok: boolean; message: string; mainUrl?: string }>,
+  inspectManagedSourceReview: () => ipcRenderer.invoke("shell-dev:managed-source-review") as Promise<{ ok: true; report: Record<string, any> } | { ok: false; message: string }>,
+  proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => ipcRenderer.invoke("shell-dev:managed-source-selection", request) as Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>,
+  createManagedSourceCheckpoint: (request: { format: 1; mode: "managed_source_checkpoint_request_v1"; reviewDigest: string; proposalDigest: string; selectedPaths: string[] }) => ipcRenderer.invoke("shell-dev:managed-source-checkpoint", request) as Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string }>,
+  executeManagedSelectedMerge: (request: { format: 1; mode: "managed_selected_merge_request_v1"; checkpointDigest: string }) => ipcRenderer.invoke("shell-dev:managed-selected-merge", request) as Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string; maintenanceRequired?: boolean }>,
+  mergeSandboxIntoStable: () =>
+    ipcRenderer.invoke("shell-dev:merge-sandbox") as Promise<{
       ok: boolean;
       message: string;
       detail?: string;
@@ -77,7 +101,13 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
 });
 
 export type MyAgentDesktopApi = {
+  getEvolutionState: () => Promise<EvolutionRequestResult>;
+  beginEvolution: () => Promise<EvolutionRequestResult>;
+  stopEvolution: () => Promise<EvolutionRequestResult>;
+  setEvolutionConversationId: (sessionId: string | null) => Promise<boolean>;
+  onEvolutionRequest: (handler: (request: EvolutionHostRequest) => void) => () => void;
   getSidecar: () => Promise<{ host: string; port: number } | null>;
+  getSessionLaneCapabilities: () => Promise<{ legacySessionLanes: boolean }>;
   getSandboxSidecar: () => Promise<{ host: string; port: number } | null>;
   ensureSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
   switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;
@@ -89,14 +119,15 @@ export type MyAgentDesktopApi = {
   getShellDevPreviewUrl: () => Promise<string>;
   getShellDevMainUrl: () => Promise<string>;
   promoteShellDevPreview: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
+  resetShellDevMain: () => Promise<{ ok: boolean; message?: string; mainUrl?: string }>;
   getSandboxAdoptStatus: () => Promise<Record<string, unknown>>;
   syncSandboxWorktree: () => Promise<{ ok: boolean; message: string; detail?: string }>;
   resetShellDevMainLane: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
-  mergeSandboxIntoStable: (options?: {
-    autoCommitSandbox?: boolean;
-    sandboxCommitMessage?: string;
-    autoStashStable?: boolean;
-  }) => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[] }>;
+  inspectManagedSourceReview: () => Promise<{ ok: true; report: Record<string, any> } | { ok: false; message: string }>;
+  proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>;
+  createManagedSourceCheckpoint: (request: { format: 1; mode: "managed_source_checkpoint_request_v1"; reviewDigest: string; proposalDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string }>;
+  executeManagedSelectedMerge: (request: { format: 1; mode: "managed_selected_merge_request_v1"; checkpointDigest: string }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string; maintenanceRequired?: boolean }>;
+  mergeSandboxIntoStable: () => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[]; merged?: boolean; synced?: boolean; recoveryStash?: string }>;
   openShellDevPreview: (bounds: { x: number; y: number; width: number; height: number }) => Promise<{
     ok: boolean;
     url?: string;

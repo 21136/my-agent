@@ -1,3 +1,6 @@
+import type { EvolutionProjection } from "../evolution-state";
+import { normalizeEvolutionHostRequest, type EvolutionHostRequest } from "./evolution-bridge";
+
 export type LlmModelListItem = {
   id: string;
   name: string;
@@ -159,6 +162,10 @@ export type ServerEvent =
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
   | { type: "turn.end"; ok: boolean; finish_reason: string; run_id?: string }
   | { type: "evolve.proposals"; items: ProposalItem[] }
+  | { type: "evolution.bound"; evolution_id: string; conversation_id: string; host_run_id: string }
+  | { type: "evolution.denied"; conversation_id: string }
+  | { type: "evolution.state"; evolution_id: string; conversation_id: string; host_run_id: string; projection: EvolutionProjection }
+  | { type: "evolution.stop.result"; conversation_id: string; host_run_id: string; result: Record<string, unknown> }
   | { type: "assistant.delta"; text: string; run_id?: string }
   | { type: "assistant.done"; text: string; run_id?: string }
   | { type: "reasoning.delta"; text: string; run_id?: string }
@@ -181,6 +188,7 @@ export type ServerEvent =
       /** Agent-relative image paths for Desktop inline preview (CHAT-IMAGE-DISPLAY). */
       display_paths?: string[];
       logs_tail?: string;
+      diff?: string;
       run_id?: string;
     }
   | {
@@ -317,18 +325,23 @@ export type ServerEvent =
   | {
       type: "project.doc.list.done";
       docs: ProjectDocItem[];
+      placeholder_count?: number;
     }
   | {
       type: "project.doc.read.done";
       path: string;
       content: string;
       size: number;
+      mtime?: number;
+      content_hash?: string;
     }
   | { type: "project.doc.create.done"; path: string; name: string }
-  | { type: "project.doc.write.done"; path: string; name: string; size: number }
+  | { type: "project.doc.write.done"; path: string; name: string; size: number; mtime?: number; content_hash?: string }
+  | { type: "project.doc.write.conflict"; path: string; message: string; mtime: number; content_hash: string; size: number }
+  | { type: "project.doc.restore.done"; path: string; name: string }
   | { type: "project.doc.rename.done"; path: string; old_path: string; name: string }
   | { type: "project.doc.delete.done"; path: string; name: string; is_standard?: boolean }
-  | { type: "project.undo.available"; description: string }
+  | { type: "project.undo.available"; description: string; undo_kind?: "restore_doc"; undo_payload?: Record<string, unknown> }
   | { type: "project.detect"; project_id: string; reason: string; file_count: number }
   | {
       type: "project.verify.done";
@@ -528,7 +541,6 @@ export type HostScopeRoot = {
 type EventHandler = (event: ServerEvent) => void;
 
 export type SidecarLane = "stable" | "sandbox";
-
 export type SessionListItem = {
   session_id: string;
   title: string;
@@ -539,38 +551,39 @@ export type SessionListItem = {
   execution_lane?: SidecarLane;
 };
 
-/** Stable + sandbox trees often share copied session ids; show one row per id. */
+export type SessionLaneCapabilities = { legacySessionLanes: boolean };
+
+/** Missing or denied capability never authorizes legacy sidecar enumeration. */
+export function isLegacyLaneQueryAllowed(capabilities: SessionLaneCapabilities | null | undefined): boolean {
+  return capabilities?.legacySessionLanes === true;
+}
+
+/** Stable + sandbox trees can contain copied session ids; keep the newer row. */
 export function mergeSessionLists(
   stable: SessionListItem[],
   sandbox: SessionListItem[],
 ): SessionListItem[] {
   const byId = new Map<string, SessionListItem>();
-  for (const item of stable) {
-    byId.set(item.session_id, { ...item, execution_lane: item.execution_lane ?? "stable" });
-  }
+  for (const item of stable) byId.set(item.session_id, { ...item, execution_lane: item.execution_lane ?? "stable" });
   for (const item of sandbox) {
     const laneItem = { ...item, execution_lane: item.execution_lane ?? "sandbox" };
-    const prev = byId.get(item.session_id);
-    if (!prev) {
-      byId.set(item.session_id, laneItem);
-      continue;
-    }
-    const nextAt = laneItem.updated_at || "";
-    const prevAt = prev.updated_at || "";
-    if (nextAt > prevAt) {
-      byId.set(item.session_id, laneItem);
-    }
+    const previous = byId.get(item.session_id);
+    if (!previous || (laneItem.updated_at || "") > (previous.updated_at || "")) byId.set(item.session_id, laneItem);
   }
-  const merged = Array.from(byId.values());
-  merged.sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-  return merged.slice(0, 50);
+  return Array.from(byId.values())
+    .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))
+    .slice(0, 50);
 }
 
 export class AgentWsClient {
   private ws: WebSocket | null = null;
+  private connectionAttempt: { socket: WebSocket; promise: Promise<void>; reject: (error: Error) => void } | null = null;
   private handlers = new Set<EventHandler>();
   private reconnectTimer: number | null = null;
+  private currentConversationId = "";
+  private destroyed = false;
   private lane: SidecarLane = "stable";
+  private legacyLaneQueriesAllowed = false;
   private sessionListMergedInflight: Promise<SessionListItem[]> | null = null;
   private stableSessionsCache: SessionListItem[] = [];
   private sandboxSessionsCache: SessionListItem[] = [];
@@ -583,46 +596,57 @@ export class AgentWsClient {
     return this.lane;
   }
 
-  private async resolveSidecarInfo(lane: SidecarLane): Promise<{ host: string; port: number }> {
-    const api = window.myAgentDesktop;
-    if (!api) {
-      throw new Error("myAgentDesktop preload API missing");
+  private async laneCapabilities(): Promise<SessionLaneCapabilities> {
+    // Missing identity is not permission to inspect legacy sidecar lanes.
+    try {
+      return await window.myAgentDesktop?.getSessionLaneCapabilities?.() ?? { legacySessionLanes: false };
+    } catch {
+      return { legacySessionLanes: false };
     }
+  }
+
+  private async resolveSidecarInfo(lane: SidecarLane): Promise<{ host: string; port: number }> {
+    const capabilities = await this.laneCapabilities();
+    if (!isLegacyLaneQueryAllowed(capabilities)) {
+      throw new Error("fixed managed Host cannot query legacy sidecar lanes");
+    }
+    const api = window.myAgentDesktop;
+    if (!api) throw new Error("myAgentDesktop preload API missing");
     if (lane === "sandbox") {
       const ensured = await api.ensureSandboxSidecar?.();
-      if (!ensured?.ok) {
-        throw new Error(ensured?.message || "sandbox sidecar unavailable");
-      }
+      if (!ensured?.ok) throw new Error(ensured?.message || "sandbox sidecar unavailable");
       const info = await api.getSandboxSidecar?.();
-      if (!info) {
-        throw new Error("sandbox sidecar not ready");
-      }
+      if (!info) throw new Error("sandbox sidecar not ready");
       return info;
     }
     const info = await api.getSidecar();
-    if (!info) {
-      throw new Error("stable sidecar not ready");
-    }
+    if (!info) throw new Error("stable sidecar not ready");
     return info;
   }
 
   async ensureLane(lane: SidecarLane): Promise<void> {
-    if (this.lane === lane && this.ws?.readyState === WebSocket.OPEN) {
-      return;
+    if (this.destroyed) throw new Error("WebSocket client destroyed");
+    if (this.lane !== lane) return this.switchLane(lane);
+    if (this.ws?.readyState === WebSocket.OPEN) return;
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
-    await this.switchLane(lane);
+    await this.connect();
   }
 
   async switchLane(lane: SidecarLane): Promise<void> {
     const info = await this.resolveSidecarInfo(lane);
+    if (this.destroyed) throw new Error("WebSocket client destroyed");
+    this.updateEvolutionConversationId(null);
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
+      const previous = this.ws;
       this.ws = null;
+      this.retireSocket(previous, new Error("WebSocket connection superseded by lane switch"));
     }
     this.lane = lane;
     this.host = info.host;
@@ -631,57 +655,132 @@ export class AgentWsClient {
   }
 
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const url = `ws://${this.host}:${this.port}`;
-      const ws = new WebSocket(url);
-      this.ws = ws;
+    if (this.destroyed) return Promise.reject(new Error("WebSocket client destroyed"));
+    if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (this.ws?.readyState === WebSocket.CONNECTING && this.connectionAttempt?.socket === this.ws) {
+      return this.connectionAttempt.promise;
+    }
+    if (this.ws) {
+      const previous = this.ws;
+      this.ws = null;
+      this.retireSocket(previous, new Error("WebSocket connection superseded"));
+    }
+    const url = `ws://${this.host}:${this.port}`;
+    const ws = new WebSocket(url);
+    this.ws = ws;
 
-      ws.addEventListener("open", () => {
-        if (this.reconnectTimer !== null) {
-          window.clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        // Rehydrate persistent terminal visibility after the initial connect
-        // and every reconnect; the unified shell also requests an explicit
-        // snapshot after its event handler is mounted.
-        this.send({ type: "terminal.list" });
-        resolve();
-      });
-
-      ws.addEventListener("message", (ev) => {
-        try {
-          const data = JSON.parse(String(ev.data)) as ServerEvent;
-          if (data && typeof data === "object" && "type" in data) {
-            for (const handler of this.handlers) handler(data);
-          }
-        } catch {
-          // ignore malformed frames
-        }
-      });
-
-      ws.addEventListener("error", () => {
-        reject(new Error(`WebSocket error: ${url}`));
-      });
-
-      ws.addEventListener("close", () => {
-        this.ws = null;
-        this.reconnectTimer = window.setTimeout(() => {
-          void this.reconnect();
-        }, 2000);
-      });
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (error: Error) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = (error) => reject(error);
     });
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (this.connectionAttempt?.socket === ws) this.connectionAttempt = null;
+      if (error) rejectAttempt(error);
+      else resolveAttempt();
+    };
+    this.connectionAttempt = { socket: ws, promise, reject: settle };
+
+    ws.addEventListener("open", () => {
+      if (this.destroyed || this.ws !== ws) {
+        settle(new Error(this.destroyed ? "WebSocket client destroyed" : "WebSocket connection superseded"));
+        return;
+      }
+      if (this.reconnectTimer !== null) {
+        window.clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      // Rehydrate persistent terminal visibility after the initial connect
+      // and every reconnect; the unified shell also requests an explicit
+      // snapshot after its event handler is mounted.
+      try {
+        this.send({ type: "terminal.list" });
+        settle();
+      } catch (error) {
+        settle(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+
+    ws.addEventListener("message", (ev) => {
+      if (this.destroyed || this.ws !== ws) return;
+      try {
+        const data = JSON.parse(String(ev.data)) as ServerEvent;
+        if (data && typeof data === "object" && "type" in data) {
+          if (data.type === "session.banner") {
+            this.updateEvolutionConversationId(data.session_id);
+            data.execution_lane ??= this.lane;
+          }
+          if (data.type === "session.list") {
+            data.sessions = data.sessions.map((session) => ({ ...session, execution_lane: session.execution_lane ?? this.lane }));
+          }
+          for (const handler of this.handlers) handler(data);
+        }
+      } catch {
+        // ignore malformed frames
+      }
+    });
+
+    ws.addEventListener("error", () => {
+      if (this.destroyed || this.ws !== ws) {
+        settle(new Error(this.destroyed ? "WebSocket client destroyed" : "WebSocket connection superseded"));
+        return;
+      }
+      settle(new Error(`WebSocket error: ${url}`));
+    });
+
+    ws.addEventListener("close", () => {
+      if (this.ws !== ws) {
+        settle(new Error(this.destroyed ? "WebSocket client destroyed" : "WebSocket connection superseded"));
+        return;
+      }
+      this.ws = null;
+      settle(new Error("WebSocket closed before connection opened"));
+      if (this.destroyed) return;
+      this.updateEvolutionConversationId(null);
+      this.scheduleReconnect();
+    });
+    return promise;
+  }
+
+  private retireSocket(socket: WebSocket, reason: Error): void {
+    if (this.connectionAttempt?.socket === socket) {
+      const attempt = this.connectionAttempt;
+      this.connectionAttempt = null;
+      attempt.reject(reason);
+    }
+    try { socket.close(); } catch { /* ignore a retired socket close error */ }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.destroyed || this.reconnectTimer !== null) return;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnect();
+    }, 2000);
   }
 
   private async reconnect(): Promise<void> {
+    if (this.destroyed) return;
     try {
-      const info = await this.resolveSidecarInfo(this.lane);
-      this.host = info.host;
-      this.port = info.port;
+      const capabilities = await this.laneCapabilities();
+      // Fixed Hosts reconnect only their bound sidecar. A selected sandbox
+      // lane must never silently fall back to the stable endpoint.
+      const sidecar = this.lane === "sandbox" || isLegacyLaneQueryAllowed(capabilities)
+        ? await this.resolveSidecarInfo(this.lane)
+        : await window.myAgentDesktop?.getSidecar();
+      if (this.destroyed) return;
+      if (sidecar) {
+        this.host = sidecar.host;
+        this.port = sidecar.port;
+      }
       await this.connect();
     } catch {
-      this.reconnectTimer = window.setTimeout(() => {
-        void this.reconnect();
-      }, 2000);
+      if (this.destroyed) return;
+      this.scheduleReconnect();
     }
   }
 
@@ -692,14 +791,16 @@ export class AgentWsClient {
 
   /** Tear down WebSocket; used when switching pet ↔ workbench. */
   destroy(): void {
+    this.destroyed = true;
+    this.updateEvolutionConversationId(null);
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
+      const previous = this.ws;
       this.ws = null;
+      this.retireSocket(previous, new Error("WebSocket client destroyed"));
     }
     this.handlers.clear();
   }
@@ -719,6 +820,17 @@ export class AgentWsClient {
       throw new Error("WebSocket not connected");
     }
     this.ws.send(JSON.stringify(payload));
+  }
+
+  sendEvolutionRequest(value: unknown): void {
+    const request = normalizeEvolutionHostRequest(value, this.currentConversationId);
+    this.send({ type: request.type, conversation_id: request.conversation_id });
+  }
+
+  private updateEvolutionConversationId(sessionId: string | null): void {
+    this.currentConversationId = sessionId ?? "";
+    const update = window.myAgentDesktop?.setEvolutionConversationId?.(sessionId);
+    if (update) void update.catch(() => undefined);
   }
 
   sendMessage(
@@ -805,122 +917,78 @@ export class AgentWsClient {
     this.send({ type: "session.list" });
   }
 
-  async openSession(sessionId: string, lane: SidecarLane = "stable"): Promise<void> {
-    await this.ensureLane(lane);
-    this.send({ type: "session.open", session_id: sessionId });
-  }
-
-  /** One-shot WS so listing never tears down the active chat connection. */
   private fetchSessionListEphemeral(lane: SidecarLane, timeoutMs = 12_000): Promise<SessionListItem[]> {
     return new Promise((resolve, reject) => {
-      void this.resolveSidecarInfo(lane)
-        .then((info) => {
-          const url = `ws://${info.host}:${info.port}`;
-          const ws = new WebSocket(url);
-          let settled = false;
-          const finish = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            window.clearTimeout(timeout);
-            try {
-              ws.close();
-            } catch {
-              /* ignore */
-            }
-            fn();
-          };
-          const timeout = window.setTimeout(() => {
-            finish(() => reject(new Error(`session.list timeout (${lane})`)));
-          }, timeoutMs);
-          ws.addEventListener("open", () => {
-            ws.send(JSON.stringify({ type: "session.list" }));
-          });
-          ws.addEventListener("message", (ev) => {
-            try {
-              const data = JSON.parse(String(ev.data)) as {
-                type?: string;
-                sessions?: SessionListItem[];
-              };
-              if (data?.type !== "session.list" || !Array.isArray(data.sessions)) {
-                return;
-              }
-              finish(() => {
-                resolve(
-                  data.sessions.map((session) => ({
-                    ...session,
-                    execution_lane: session.execution_lane ?? lane,
-                  })),
-                );
-              });
-            } catch {
-              /* wait for a valid frame */
-            }
-          });
-          ws.addEventListener("error", () => {
-            finish(() => reject(new Error(`WebSocket error: ${url}`)));
-          });
-          ws.addEventListener("close", () => {
-            finish(() => reject(new Error(`WebSocket closed before session.list (${lane})`)));
-          });
-        })
-        .catch(reject);
+      void this.resolveSidecarInfo(lane).then((info) => {
+        const url = `ws://${info.host}:${info.port}`;
+        const ws = new WebSocket(url);
+        let settled = false;
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          try { ws.close(); } catch { /* ignore */ }
+          fn();
+        };
+        const timeout = window.setTimeout(() => finish(() => reject(new Error(`session.list timeout (${lane})`))), timeoutMs);
+        ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "session.list" })));
+        ws.addEventListener("message", (ev) => {
+          try {
+            const data = JSON.parse(String(ev.data)) as { type?: string; sessions?: SessionListItem[] };
+            if (data.type !== "session.list" || !Array.isArray(data.sessions)) return;
+            const sessions = data.sessions;
+            finish(() => resolve(sessions.map((session) => ({ ...session, execution_lane: session.execution_lane ?? lane }))));
+          } catch { /* wait for a valid frame */ }
+        });
+        ws.addEventListener("error", () => finish(() => reject(new Error(`WebSocket error: ${url}`))));
+        ws.addEventListener("close", () => finish(() => reject(new Error(`WebSocket closed before session.list (${lane})`))));
+      }).catch(reject);
     });
   }
 
-  applySessionListPush(
-    sessions: Array<{
-      session_id: string;
-      title: string;
-      preview?: string;
-      updated_at: string;
-      message_count?: number;
-      project_id?: string;
-      execution_lane?: SidecarLane;
-    }>,
-  ): SessionListItem[] {
-    const mapped: SessionListItem[] = sessions.map((session) => ({
-      session_id: session.session_id,
-      title: session.title,
-      preview: session.preview,
-      updated_at: session.updated_at,
-      message_count: session.message_count,
-      project_id: session.project_id,
-      execution_lane: session.execution_lane ?? this.lane,
+  applySessionListPush(sessions: SessionListItem[]): SessionListItem[] {
+    const mapped = sessions.map((session) => ({
+      ...session,
+      execution_lane: this.legacyLaneQueriesAllowed ? session.execution_lane ?? this.lane : this.lane,
     }));
-    if (this.lane === "sandbox") {
-      this.sandboxSessionsCache = mapped;
-    } else {
-      this.stableSessionsCache = mapped;
-    }
-    return mergeSessionLists(this.stableSessionsCache, this.sandboxSessionsCache);
+    if (this.lane === "sandbox") this.sandboxSessionsCache = mapped;
+    else this.stableSessionsCache = mapped;
+    return this.legacyLaneQueriesAllowed
+      ? mergeSessionLists(this.stableSessionsCache, this.sandboxSessionsCache)
+      : mapped;
   }
 
   async listSessionsMerged(): Promise<SessionListItem[]> {
-    if (this.sessionListMergedInflight) {
-      return this.sessionListMergedInflight;
-    }
-    const run = async (): Promise<SessionListItem[]> => {
-      const [stableFetched, sandboxFetched] = await Promise.all([
+    if (this.sessionListMergedInflight) return this.sessionListMergedInflight;
+    const run = async () => {
+      const capabilities = await this.laneCapabilities();
+      this.legacyLaneQueriesAllowed = isLegacyLaneQueryAllowed(capabilities);
+      if (!this.legacyLaneQueriesAllowed) {
+        try { this.listSessions(); } catch { /* current socket may be reconnecting */ }
+        return this.lane === "sandbox" ? this.sandboxSessionsCache : this.stableSessionsCache;
+      }
+      const [stable, sandbox] = await Promise.all([
         this.fetchSessionListEphemeral("stable").catch(() => null),
         this.fetchSessionListEphemeral("sandbox", 8_000).catch(() => null),
       ]);
-      if (stableFetched) {
-        this.stableSessionsCache = stableFetched;
-      }
-      if (sandboxFetched) {
-        this.sandboxSessionsCache = sandboxFetched;
-      }
+      if (stable) this.stableSessionsCache = stable;
+      if (sandbox) this.sandboxSessionsCache = sandbox;
       return mergeSessionLists(this.stableSessionsCache, this.sandboxSessionsCache);
     };
-    this.sessionListMergedInflight = run().finally(() => {
-      this.sessionListMergedInflight = null;
-    });
+    this.sessionListMergedInflight = run().finally(() => { this.sessionListMergedInflight = null; });
     return this.sessionListMergedInflight;
   }
 
   async createSandboxSession(): Promise<void> {
     await this.ensureLane("sandbox");
+    this.updateEvolutionConversationId(null);
     this.send({ type: "session.create_sandbox" });
+  }
+
+  async openSession(sessionId: string, lane: SidecarLane = this.lane): Promise<void> {
+    await this.ensureLane(lane);
+    this.updateEvolutionConversationId(null);
+    this.send({ type: "session.open", session_id: sessionId });
   }
 
   refreshSession(): void {
@@ -968,6 +1036,7 @@ export class AgentWsClient {
   }
 
   openProject(projectId: string): void {
+    this.updateEvolutionConversationId(null);
     this.send({ type: "project.open", project_id: projectId });
   }
 
@@ -1036,6 +1105,7 @@ export class AgentWsClient {
     projectId: string,
     options?: { confirm?: boolean; requestId?: string },
   ): void {
+    this.updateEvolutionConversationId(null);
     this.send({
       type: "project.switch",
       project_id: projectId,
@@ -1052,6 +1122,7 @@ export class AgentWsClient {
   }
 
   newProjectThread(projectId?: string): void {
+    this.updateEvolutionConversationId(null);
     this.send({
       type: "project.thread.new",
       ...(projectId ? { project_id: projectId } : {}),
@@ -1198,9 +1269,17 @@ export async function createWsClient(): Promise<AgentWsClient> {
 declare global {
   interface Window {
     myAgentDesktop?: {
+      getEvolutionState?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
+      beginEvolution?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
+      stopEvolution?: () => Promise<{ status: "queued" | "disabled"; message?: string }>;
+      setEvolutionConversationId?: (sessionId: string | null) => Promise<boolean>;
+      onEvolutionRequest?: (handler: (request: EvolutionHostRequest) => void) => () => void;
       getSidecar: () => Promise<{ host: string; port: number } | null>;
-      getSandboxSidecar?: () => Promise<{ host: string; port: number } | null>;
+      getSessionLaneCapabilities?: () => Promise<SessionLaneCapabilities>;
       ensureSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
+      getSandboxSidecar?: () => Promise<{ host: string; port: number } | null>;
+      syncSandboxWorktree?: () => Promise<{ ok: boolean; message: string; detail?: string }>;
+      resetShellDevMainLane?: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
       switchSidecarCandidate?: (root: string) => Promise<Record<string, unknown>>;
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
@@ -1210,14 +1289,13 @@ declare global {
       getShellDevPreviewUrl?: () => Promise<string>;
       getShellDevMainUrl?: () => Promise<string>;
       promoteShellDevPreview?: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
+      resetShellDevMain?: () => Promise<{ ok: boolean; message?: string; mainUrl?: string }>;
       getSandboxAdoptStatus?: () => Promise<Record<string, unknown>>;
-      syncSandboxWorktree?: () => Promise<{ ok: boolean; message: string; detail?: string }>;
-      resetShellDevMainLane?: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
-      mergeSandboxIntoStable?: (options?: {
-        autoCommitSandbox?: boolean;
-        sandboxCommitMessage?: string;
-        autoStashStable?: boolean;
-      }) => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[] }>;
+      inspectManagedSourceReview?: () => Promise<{ ok: true; report: Record<string, any> } | { ok: false; message: string }>;
+      proposeManagedSourceSelection?: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>;
+      createManagedSourceCheckpoint?: (request: { format: 1; mode: "managed_source_checkpoint_request_v1"; reviewDigest: string; proposalDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string }>;
+      executeManagedSelectedMerge?: (request: { format: 1; mode: "managed_selected_merge_request_v1"; checkpointDigest: string }) => Promise<{ ok: true; receipt: Record<string, unknown> } | { ok: false; message: string; maintenanceRequired?: boolean }>;
+      mergeSandboxIntoStable?: () => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[]; merged?: boolean; synced?: boolean; recoveryStash?: string }>;
       openShellDevPreview?: (bounds: { x: number; y: number; width: number; height: number }) => Promise<{
         ok: boolean;
         url?: string;

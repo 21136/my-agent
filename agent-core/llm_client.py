@@ -26,6 +26,7 @@ from llm_models import (
     get_registry,
     is_tokeness_gateway,
 )
+from paths import AgentPaths
 from tools.http_client import make_httpx_client
 
 _REASONING_EFFORT_LEVELS = frozenset({"low", "medium", "high", "max"})
@@ -355,8 +356,11 @@ def resolve_context_limit(model: str, *, config: LLMConfig | None = None) -> int
 class LLMClient:
     """Thin OpenAI-compatible client; streaming when ``stream`` handlers are passed."""
 
-    def __init__(self, config: LLMConfig | None = None) -> None:
+    def __init__(
+        self, config: LLMConfig | None = None, *, paths: AgentPaths | None = None
+    ) -> None:
         self.config = config or load_config()
+        self.paths = paths
         self._cancel_event: threading.Event | None = None
         self._active_client: httpx.Client | None = None
         self._active_response: httpx.Response | None = None
@@ -400,13 +404,19 @@ class LLMClient:
         """POST ``/v1/chat/completions``; streams deltas when ``stream`` handlers are set."""
         self._raise_if_cancelled()
         effective_timeout = self.config.timeout_sec if timeout_sec is None else timeout_sec
-        registry = get_registry()
+        registry = (
+            get_registry(self.paths) if self.paths is not None else get_registry()
+        )
         model_ref = model or registry.default_flash_id
         entry = registry.resolve(model_ref)
         if entry is None:
             raise LLMApiError(f"unsupported llm model: {model_ref!r}", status_code=400)
 
-        api_key = entry.resolve_api_key()
+        api_key = (
+            entry.resolve_api_key(self.paths)
+            if self.paths is not None
+            else entry.resolve_api_key()
+        )
         if not api_key:
             env_hint = entry.api_key_env or "LLM_API_KEY"
             raise LLMMissingApiKeyError(f"API key not set for model {entry.id} (set {env_hint})")

@@ -7,6 +7,7 @@ import os
 import secrets
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,6 +38,14 @@ SessionPhase = Literal["S1", "S2", "S3", "S4"]
 TurnMode = Literal["ask", "agent"]
 DEFAULT_TURN_MODE: TurnMode = "agent"
 VALID_TURN_MODES = frozenset({"ask", "agent"})
+
+def normalize_evolution_id(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return value if str(uuid.UUID(value)) == value else ""
+    except (ValueError, AttributeError, TypeError):
+        return ""
 
 # Deprecated since shell consolidation (Phase 3). Kept for old session compatibility.
 ShellId = Literal["grow", "daily", "govern", "project", "unified"]
@@ -137,6 +146,7 @@ class SessionMeta:
     updated_at: str = ""
     phase: SessionPhase = "S1"
     workspace_evolved_approved: bool = False
+    evolution_id: str = ""
     pending_feedback: list[dict[str, Any]] = field(default_factory=list)
     compact_before_index: int = 0
     evolve_offer_pending: bool = False
@@ -198,6 +208,7 @@ class SessionMeta:
             "terminal_foreign_root": self.terminal_foreign_root,
             "terminal_host_id": self.terminal_host_id,
             "write_scope_root": self.write_scope_root,
+            "evolution_id": self.evolution_id,
         }
 
     @classmethod
@@ -314,6 +325,8 @@ class SessionMeta:
             except Exception:
                 write_scope_root = ""
 
+        evolution_id = normalize_evolution_id(payload.get("evolution_id", ""))
+
         turn_mode = normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE))
         if harness == "terminal":
             turn_mode = "agent"
@@ -327,6 +340,7 @@ class SessionMeta:
             updated_at=updated_at,
             phase=phase,
             workspace_evolved_approved=bool(payload.get("workspace_evolved_approved", False)),
+            evolution_id=evolution_id,
             pending_feedback=pending_feedback,
             compact_before_index=int(payload.get("compact_before_index", 0) or 0),
             evolve_offer_pending=bool(payload.get("evolve_offer_pending", False)),
@@ -731,16 +745,8 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         payload["project_id"] = session.meta.project_id
         payload["project_root"] = session.meta.project_root or None
         payload["project_plan_status"] = session.meta.project_plan_status or "draft"
-    from sandbox_evolution import is_sandbox_agent_root
-
     scope = (session.meta.write_scope_root or "").strip()
-    if is_sandbox_agent_root(session.paths):
-        payload["execution_lane"] = "sandbox"
-        label = write_scope_label(scope, paths=session.paths)
-        if label:
-            payload["write_scope_label"] = label
-    elif scope:
-        payload["execution_lane"] = "stable"
+    if scope:
         payload["write_scope_root"] = scope
         label = write_scope_label(scope)
         if label:
@@ -894,13 +900,9 @@ def list_session_summaries(
     - Project-bound: one row per project_id (newest / project_sessions mapping);
       title = project_id
     """
-    from sandbox_evolution import is_sandbox_agent_root
-
     root = sessions_root(paths)
     if not root.is_dir():
         return []
-
-    list_lane = "sandbox" if is_sandbox_agent_root(paths) else "stable"
 
     preferred: dict[str, str] = {}
     try:
@@ -953,9 +955,7 @@ def list_session_summaries(
             title = project_id
         else:
             title = goal[:80] if goal else (first_user[:80] if first_user else cid)
-        if list_lane == "sandbox" and not project_id:
-            title = f"[实验·运行] {title}"[:120]
-        elif write_scope_root and not project_id:
+        if write_scope_root and not project_id:
             title = f"[实验] {title}"[:120]
         preview = last_user[:120] if last_user else ""
         entries.append({
@@ -965,7 +965,6 @@ def list_session_summaries(
             "updated_at": updated_at,
             "message_count": msg_count,
             "project_id": project_id,
-            "execution_lane": list_lane,
         })
 
     # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at.
@@ -1221,7 +1220,7 @@ def create_sandbox_evolution_session(paths: AgentPaths) -> Session:
     session = create_new(paths, write_scope_root=scope)
     session.goal = "实验进化（sandbox）"
     session.append_message(
-        {"role": "user", "content": sandbox_session_seed_content(scope, paths=paths)},
+        {"role": "user", "content": sandbox_session_seed_content(scope)},
         persist=False,
     )
     session.save()

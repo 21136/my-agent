@@ -34,6 +34,15 @@ _STATE_CORRUPTION_NOTICE = (
 )
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
+
+
 def format_state_corruption_notice() -> str:
     """User-facing text when ``data/state.json`` is structurally unreadable (T-1823-05)."""
     return _STATE_CORRUPTION_NOTICE
@@ -151,6 +160,8 @@ class AgentPaths:
     evolve: Path
     # Ephemeral; mutated in place when state.json is structurally bad (T-1823-05 / IT-56).
     corruption_notices: list[str] = field(default_factory=list, compare=False)
+    _fixed_code_root: Path | None = field(default=None, compare=False, repr=False)
+    _managed_readonly_context: Any | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def discover(cls, start: Path | str | None = None) -> AgentPaths:
@@ -168,6 +179,71 @@ class AgentPaths:
             workspace=root / "workspace",
             data=root / "data",
             evolve=root / "evolve",
+        )
+
+    @classmethod
+    def from_fixed_layout(cls, code_root: Path | str, instance_root: Path | str) -> AgentPaths:
+        """Bind immutable code/evolve to a separately marked mutable instance home."""
+        from fixed_host import canonical_layout_root, paths_overlap
+
+        code = canonical_layout_root(code_root, label="code_root")
+        instance = canonical_layout_root(instance_root, label="instance_root")
+        if paths_overlap(code, instance):
+            raise ValueError("fixed Host code_root and instance_root must not overlap")
+        if not _is_agent_root(code):
+            raise ValueError(f"fixed Host code_root is not an agent code root: {code}")
+        evolve = canonical_layout_root(code / "evolve", label="code_root/evolve")
+        instance_children = {
+            name: canonical_layout_root(instance / name, label=f"instance_root/{name}")
+            for name in ("data", "workspace", "profile")
+        }
+        marker_path = instance / ".fixed-host-instance.json"
+        if marker_path.is_symlink() or getattr(marker_path, "is_junction", lambda: False)():
+            raise ValueError("fixed Host instance marker cannot be a link")
+        try:
+            if not marker_path.is_file() or marker_path.stat().st_size > 4096:
+                raise ValueError("fixed Host instance marker is not a bounded file")
+            marker_raw = marker_path.read_bytes()
+            marker = json.loads(
+                marker_raw.decode("utf-8", errors="strict"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("fixed Host instance marker is missing or invalid") from exc
+        expected = {
+            "format": 1,
+            "mode": "launcher_fixture_v1",
+            "code_root": str(code),
+        }
+        if type(marker) is not dict or marker != expected or type(marker.get("format")) is not int:
+            raise ValueError("fixed Host instance marker does not match this layout")
+        return cls(
+            agent_root=instance,
+            workspace=instance_children["workspace"],
+            data=instance_children["data"],
+            evolve=evolve,
+            _fixed_code_root=code,
+        )
+
+    @classmethod
+    def from_managed_readonly(cls, context: Any) -> AgentPaths:
+        """Map a validated managed production context without root discovery."""
+        revalidate = getattr(context, "revalidate", None)
+        required = ("code_root", "evolve_root", "host_state_root", "host_profile_root", "workspace_root", "data_root")
+        if not callable(revalidate) or any(not isinstance(getattr(context, name, None), Path) for name in required):
+            raise ValueError("managed read-only context is not validated")
+        revalidate()
+        code = context.code_root.resolve(strict=True)
+        evolve = context.evolve_root.resolve(strict=True)
+        if evolve != (code / "evolve").resolve(strict=True):
+            raise ValueError("managed read-only evolve mapping differs from bound code")
+        return cls(
+            agent_root=code,
+            workspace=context.workspace_root,
+            data=context.data_root,
+            evolve=evolve,
+            _fixed_code_root=code,
+            _managed_readonly_context=context,
         )
 
     def resolve_under_agent(self, raw: str, *, must_exist: bool = False) -> Path:
@@ -190,6 +266,10 @@ class AgentPaths:
 
     def resolve_under_agent_for_write(self, raw: str, *, must_exist: bool = False) -> Path:
         """Resolve under agent root for writes; reject deny-list paths only."""
+        if self._is_fixed_evolve_target(raw):
+            raise PathDeniedForWriteError(
+                f"固定 Host 的 evolve 代码为只读路径：{raw!r}", path=raw,
+            )
         resolved = self._resolve(raw, base=self.agent_root, must_exist=must_exist)
         try:
             rel = self.to_agent_relative(resolved)
@@ -259,6 +339,8 @@ class AgentPaths:
     def to_agent_relative(self, path: Path | str) -> str:
         """POSIX-style path relative to agent root (for tool payloads / logs)."""
         resolved = Path(path).resolve()
+        if self._fixed_code_root is not None and _is_within(resolved, self.evolve.resolve()):
+            return (Path("evolve") / resolved.relative_to(self.evolve.resolve())).as_posix()
         if _is_within(resolved, self.agent_root.resolve()):
             return resolved.relative_to(self.agent_root.resolve()).as_posix()
         from external_project import to_external_agent_relative
@@ -303,6 +385,22 @@ class AgentPaths:
         _assert_within(resolved, self.workspace, raw=str(path), label="workspace")
         return resolved.relative_to(self.workspace.resolve()).as_posix()
 
+    def _is_fixed_evolve_target(self, raw: str) -> bool:
+        if self._fixed_code_root is None or not isinstance(raw, str):
+            return False
+        text = raw.strip()
+        if not text:
+            return False
+        candidate = Path(text)
+        if not candidate.is_absolute() and text.replace("\\", "/").split("/", 1)[0].casefold() == "evolve":
+            return True
+        if candidate.is_absolute():
+            try:
+                return _is_within(candidate.resolve(), self.evolve.resolve())
+            except OSError:
+                return False
+        return False
+
     def _resolve(self, raw: str, *, base: Path, must_exist: bool) -> Path:
         if not isinstance(raw, str):
             raise TypeError("path must be a string")
@@ -314,6 +412,19 @@ class AgentPaths:
 
         base_resolved = base.resolve()
         candidate = Path(text)
+        if self._fixed_code_root is not None and base_resolved == self.agent_root.resolve():
+            if candidate.is_absolute():
+                resolved_candidate = candidate.resolve()
+                if _is_within(resolved_candidate, self.evolve.resolve()):
+                    if must_exist and not resolved_candidate.exists():
+                        raise FileNotFoundError(f"path does not exist: {text}")
+                    return resolved_candidate
+            elif text.replace("\\", "/").split("/", 1)[0].casefold() == "evolve":
+                resolved_candidate = (self._fixed_code_root / candidate).resolve()
+                _assert_within(resolved_candidate, self.evolve, raw=text, label="evolve")
+                if must_exist and not resolved_candidate.exists():
+                    raise FileNotFoundError(f"path does not exist: {text}")
+                return resolved_candidate
         if candidate.is_absolute():
             resolved = candidate.resolve()
             from external_project import to_external_agent_relative

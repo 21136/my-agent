@@ -39,6 +39,7 @@ export interface SessionListInput {
   projectId: string;
   activeSessionId: string;
   currentSessionId: string;
+  currentLane?: "stable" | "sandbox";
   working: boolean;
   query: string;
   filter: SessionFilter;
@@ -105,12 +106,14 @@ export function shortTime(value: string, now: Date = new Date()): string {
 export function buildSessionRows(input: SessionListInput): SessionRow[] {
   const rows: SessionRow[] = [];
   const pid = input.projectId.trim();
+  const currentLane = input.currentLane ?? "stable";
   const useThreads = Boolean(pid) && input.threads.length > 0;
   for (const s of input.sessions) {
     const sid = s.session_id;
-    const isCurrent = sid === input.currentSessionId;
+    const lane = s.execution_lane === "sandbox" ? "sandbox" : "stable";
+    const isCurrent = sid === input.currentSessionId && lane === currentLane;
     if (s.project_id) {
-      if (useThreads && s.project_id === pid) continue;
+      if (useThreads && s.project_id === pid && lane === currentLane) continue;
       rows.push({
         kind: "project",
         sessionId: sid,
@@ -120,7 +123,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: s.updated_at,
         dot: isCurrent && input.working ? "running" : "project",
         current: isCurrent,
-        sidecarLane: s.execution_lane === "sandbox" ? "sandbox" : "stable",
+        sidecarLane: lane,
       });
       continue;
     }
@@ -128,7 +131,6 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
     if (s.message_count === 0 && !isCurrent) continue;
     const count = s.message_count ? `${s.message_count} 句` : "";
     const untitled = !s.title || s.title === sid;
-    const lane = s.execution_lane === "sandbox" ? "sandbox" : "stable";
     rows.push({
       kind: "chat",
       sessionId: sid,
@@ -154,7 +156,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: t.updatedAt,
         dot: isCurrent && input.working ? "running" : live ? "live" : "archived",
         current: isCurrent,
-        sidecarLane: "stable",
+        sidecarLane: currentLane,
       });
     }
   }
@@ -186,7 +188,7 @@ function rowTime(row: SessionRow): number {
 function renderRow(row: SessionRow, now: Date): string {
   const attrs = row.kind === "thread"
     ? `data-thread-id="${escapeHtml(row.sessionId)}"`
-    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}" data-sidecar-lane="${escapeHtml(row.sidecarLane)}"`;
+    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}" data-sidecar-lane="${row.sidecarLane}"`;
   const tag = row.current ? '<span class="ma-session-tag">当前</span>' : "";
   return `<button type="button" class="ma-session${row.current ? " is-current" : ""}${row.kind === "thread" ? " is-thread" : ""}" ${attrs}${row.current ? ' aria-current="true"' : ""}>
     <span class="ma-session-dot is-${row.dot}" aria-hidden="true"></span>

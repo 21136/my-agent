@@ -333,6 +333,11 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "reference_context='current_attachment'. To reuse a past image, pass a short topic/phrase; "
         "if candidates are returned, ask the user which image and retry with its reference_id."
     ),
+    "evolution": (
+        "Inspect or evolve only the candidate attached to this same conversation. "
+        "Use action plus its strict payload; never provide conversation ids, grants, host paths, "
+        "tokens, or shell commands. User confirmation and supervisor authorization are enforced separately."
+    ),
     "run_evolved": (
         "Run a registered evolved tool by name (see session catalog). "
         "For write_evolve ONLY: put path and content_base64 as TOP-LEVEL fields "
@@ -580,6 +585,15 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["prompt"],
+        "additionalProperties": False,
+    },
+    "evolution": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["inspect", "patch", "snapshot", "build", "launch", "stop", "run_case"]},
+            "payload": {"type": "object", "additionalProperties": True},
+        },
+        "required": ["action", "payload"],
         "additionalProperties": False,
     },
     "run_evolved": {
@@ -853,6 +867,11 @@ class Agent:
         if callable(setter):
             setter(self.cancel_event)
         self.executor.cancel_event = self.cancel_event
+        if self.executor.session.evolution_id != self.session.meta.evolution_id:
+            self.executor.session.evolution_authorization_id = ""
+            self.executor.session.evolution_stop_authorization_id = ""
+            self.executor.session.evolution_stop_instance_id = ""
+        self.executor.session.evolution_id = self.session.meta.evolution_id
 
     def bind_cancel_event(self, event: threading.Event) -> None:
         self.cancel_event = event
@@ -908,6 +927,9 @@ class Agent:
         confirm_fn: Any | None = None,
         tool_loop_max: int = DEFAULT_TOOL_LOOP_MAX,
         stream_handlers: StreamHandlers | None = None,
+        evolution_client: Any | None = None,
+        host_run_id: str = "",
+        evolution_authorization_id: str = "",
     ) -> Agent:
         registry = ToolRegistry.load(session.paths)
         allowed = session_evolved_allowlist(session, registry=registry)
@@ -916,12 +938,18 @@ class Agent:
             session_dir=session.session_dir,
             allowed_evolved=allowed,
             confirm_fn=confirm_fn,
+            evolution_client=evolution_client,
         )
+        from evolution.context import normalize_host_run_id
+        from session import normalize_evolution_id
+        executor.session.host_run_id = normalize_host_run_id(host_run_id)
+        executor.session.evolution_authorization_id = normalize_evolution_id(evolution_authorization_id)
+        executor.session.evolution_id = session.meta.evolution_id
         executor.session.turn_mode = session.meta.turn_mode
         agent = cls(
             session=session,
             executor=executor,
-            llm=llm or LLMClient(),
+            llm=llm if llm is not None else LLMClient(paths=session.paths),
             tool_loop_max=tool_loop_max,
             stream_handlers=stream_handlers,
         )
@@ -955,6 +983,38 @@ class Agent:
             getattr(self.session, "_ci_repair_auto_turns", 0) or 0
         ) + 1
 
+    def bind_host_run_context(self, run_id: str, authorization_id: str = "") -> None:
+        """Bind ephemeral trusted execution identity; never persist run/grant ids in SessionMeta."""
+        from evolution.context import normalize_host_run_id
+        from session import normalize_evolution_id
+
+        self.executor.session.host_run_id = normalize_host_run_id(run_id)
+        self.executor.session.evolution_authorization_id = normalize_evolution_id(authorization_id)
+
+    def _refresh_evolution_overlay(self) -> None:
+        evolution_id = self.session.meta.evolution_id
+        if not evolution_id:
+            self.session._turn_evolution_overlay = None
+            return
+        from evolution.context import format_evolution_overlay
+
+        client = self.executor.evolution_client
+        host_run_id = self.executor.session.host_run_id
+        if client is None or not host_run_id:
+            self.session._turn_evolution_overlay = (
+                f"[演化监督器] 当前会话已绑定 {evolution_id}，但稳定 Host 回合身份/控制客户端未连接；"
+                "候选状态未知，不得推测已修复或已验收。"
+            )
+            return
+        try:
+            response = client.inspect(evolution_id, self.session.conversation_id, host_run_id)
+            projection = response.get("result") if isinstance(response, dict) and response.get("status") == "succeeded" else None
+            if not isinstance(projection, dict) or projection.get("evolution_id") != evolution_id or projection.get("conversation_id") != self.session.conversation_id:
+                projection = None
+        except Exception:
+            projection = None
+        self.session._turn_evolution_overlay = format_evolution_overlay(projection)
+
     def _sync_allowed_evolved(self) -> None:
         self.executor.session.allowed_evolved = session_evolved_allowlist(
             self.session,
@@ -966,6 +1026,11 @@ class Agent:
         from session import normalize_harness, normalize_terminal_path_field
 
         self.executor.session.turn_mode = self.session.meta.turn_mode
+        if self.executor.session.evolution_id != self.session.meta.evolution_id:
+            self.executor.session.evolution_authorization_id = ""
+            self.executor.session.evolution_stop_authorization_id = ""
+            self.executor.session.evolution_stop_instance_id = ""
+        self.executor.session.evolution_id = self.session.meta.evolution_id
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
         self.executor.session.active_shell = self.session.meta.active_shell
         self.executor.session.project_root = self.session.meta.project_root
@@ -1257,6 +1322,7 @@ class Agent:
         action_nudge_injected = False
         tools_payload: list[dict[str, Any]] | None = tools if tools else None
 
+        self._refresh_evolution_overlay()
         loaded_system = build_system_prompt(self.session)
         static_system = loaded_system.static_prompt
         dynamic_system = loaded_system.dynamic_prompt
@@ -1265,6 +1331,7 @@ class Agent:
 
         def _refresh_dynamic_system() -> None:
             nonlocal loaded_system, dynamic_system
+            self._refresh_evolution_overlay()
             loaded_system = build_system_prompt(self.session)
             dynamic_system = loaded_system.dynamic_prompt
 
