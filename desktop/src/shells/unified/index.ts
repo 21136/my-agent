@@ -115,6 +115,7 @@ import { normalizeTurnEvidenceEvent } from "./turn-evidence";
 import "./unified.css";
 import "./neon-twin.css";
 import "./composer-companion.css";
+import { mountComposerLive2D } from "./composer-live2d";
 import "./sidebar-v2.css";
 import "./message-reading.css";
 import "./settings-panel.css";
@@ -615,7 +616,7 @@ export function mountUnifiedShell(
             <div class="unified-token-bar hidden" id="unified-token-bar"></div>
           </div>
           <footer class="unified-composer" id="unified-composer">
-            <span class="unified-composer-companion" aria-hidden="true"><img src="${new URL("./assets/composer-companion.png", import.meta.url).href}" alt="" width="400" height="240" draggable="false" /></span>
+            <span class="unified-composer-companion" aria-hidden="true"><canvas class="unified-composer-live2d" hidden></canvas><img src="${new URL("./assets/composer-companion.png", import.meta.url).href}" alt="" width="400" height="240" draggable="false" /></span>
             <div class="unified-mode-toggle" id="unified-mode-toggle" role="group" aria-label="对话模式" data-mode="agent" title="切换 动手(Agent) / 只聊(Ask) 模式">
               <button type="button" class="unified-mode-seg" data-mode-value="ask" aria-pressed="false">只聊</button>
               <button type="button" class="unified-mode-seg" data-mode-value="agent" aria-pressed="true">动手</button>
@@ -630,6 +631,9 @@ export function mountUnifiedShell(
       <div class="unified-confirm-glass hidden" id="workbench-dialog" role="dialog" aria-modal="true"></div>
     </div>
   `;
+
+  const composerCompanion = root.querySelector<HTMLElement>(".unified-composer-companion");
+  const disposeComposerLive2D = composerCompanion ? mountComposerLive2D(composerCompanion) : undefined;
 
   // ---- element refs ----
   const shellEl = root.querySelector<HTMLElement>(".unified-shell")!;
@@ -6150,6 +6154,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   return () => {
     destroyed = true;
+    disposeComposerLive2D?.();
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
     clearCancelSafety();
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
