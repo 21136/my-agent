@@ -16,6 +16,7 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value);
 const HASH = /^[a-f0-9]{64}$/;
 const SOURCE_EXTENSIONS = ['.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json', '.css', '.scss', '.sass', '.less', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.woff', '.woff2', '.ttf', '.otf'];
+const FIXED_TEST_ROOTS = ['desktop/tests', 'agent-core/tests'];
 const MANAGED_GIT_METADATA_SOURCE = 'desktop/launcher/managed-clean-git-metadata.mjs';
 const MANAGED_GIT_METADATA_OUTPUT = 'desktop/dist-electron/managed-clean-git-metadata.mjs';
 const MAX_RECORD_BYTES = 16 * 1024 * 1024;
@@ -240,6 +241,7 @@ function assertStaticDiscoverySyntax({ sourceRoot, sourceFiles, sourceCache, ts 
     return false;
   };
   for (const relative of sourceFiles) {
+    if (isFixedTestRootPath(relative)) continue;
     if (!/\.(?:[cm]?[jt]sx?)$/i.test(relative)) continue;
     const absolute = path.resolve(sourceRoot, ...relative.split('/'));
     const bytes = sourceBytesAt(sourceCache, absolute);
@@ -260,6 +262,10 @@ function assertStaticDiscoverySyntax({ sourceRoot, sourceFiles, sourceCache, ts 
   }
 }
 export { assertStaticDiscoverySyntax };
+function isFixedTestRootPath(relative) {
+  const normalized = relative.replaceAll('\\', '/').toLowerCase();
+  return FIXED_TEST_ROOTS.some(root => normalized === root || normalized.startsWith(`${root}/`));
+}
 function sourceBytesAt(cache, absolute) {
   const bytes = cache.bytesByAbsolutePath.get(pathKey(absolute));
   return bytes ? Buffer.from(bytes) : undefined;
@@ -548,6 +554,10 @@ function installVerifiedSourceReadOverlay(sourceRoot, cache) {
 export { installVerifiedSourceReadOverlay };
 function resolveBoundarySpecifier({ specifier, importer, sourceRoot, toolchainRoot, sourceFiles, toolchainFiles, packageRequire, sourceBase, extensionCandidates = SOURCE_EXTENSIONS, conditions = ['node', 'import', 'default'] }) {
   if (!specifier || specifier.startsWith('#')) fail('empty or package-import-map specifier is prohibited');
+  if (typeof sourceRoot !== 'string' || !path.isAbsolute(sourceRoot) || path.resolve(sourceRoot) !== sourceRoot) fail('source root path is not canonical');
+  let canonicalSourceRoot;
+  try { canonicalSourceRoot = realpathSync.native(sourceRoot); } catch { fail('source root path is missing or aliased'); }
+  if (canonicalSourceRoot !== sourceRoot) fail('source root path is aliased or noncanonical');
   const queryIndex = specifier.indexOf('?');
   const query = queryIndex < 0 ? '' : specifier.slice(queryIndex);
   const cleanSpecifier = queryIndex < 0 ? specifier : specifier.slice(0, queryIndex);
@@ -597,6 +607,7 @@ function resolveBoundarySpecifier({ specifier, importer, sourceRoot, toolchainRo
   const relativeSource = inSource ? path.relative(sourceRoot, canonicalTarget).split(path.sep).join('/') : '';
   const relativeToolchain = inToolchain ? path.relative(toolchainRoot, canonicalTarget).split(path.sep).join('/') : '';
   if (inSource && sourceFiles && !sourceFiles.has(relativeSource)) fail(`resolved source import is outside committed inventory: ${specifier}`);
+  if (inSource && isFixedTestRootPath(relativeSource)) fail(`production source import into fixed test root is prohibited: ${specifier}`);
   if (inToolchain && toolchainFiles && !toolchainFiles.has(relativeToolchain)) fail(`resolved dependency is outside pinned toolchain inventory: ${specifier}`);
   if (!inSource && !inToolchain) fail(`resolved import escaped source and pinned toolchain: ${specifier}`);
   return `${canonicalTarget}${query}`;
