@@ -195,6 +195,7 @@ export function mountUnifiedShell(
     updated_at: string;
     message_count?: number;
     project_id?: string;
+    execution_lane?: "stable" | "sandbox";
   }> = [];
   let sessionsOpen = false;
   let sessionsTab: "chat" | "project" = "chat";
@@ -832,7 +833,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     sandboxWriteScopeBannerEl.classList.toggle("hidden", !show);
     if (sandboxWriteScopeBannerTextEl) {
       sandboxWriteScopeBannerTextEl.textContent = show
-        ? `实验进化会话 · ${text}（稳定树只读）`
+        ? `实验进化 · ${text} · 主壳 5173 稳定不变，实验看 5174`
         : "";
     }
   }
@@ -1228,28 +1229,50 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (projectState.mainFocus === "settings") renderSettingsStage();
   }
 
-  function refreshSidebarSessions(): void {
+  async function refreshSidebarSessionsMerged(): Promise<void> {
     try {
-      client.listSessions();
+      sessionsDropdown = await client.listSessionsMerged();
+      sidebarSessionsLoaded = true;
+      calibrateCompanionFirstMetFromSessions(sessionsDropdown);
+      syncCompanionToBackend();
+      renderSidebarSessions();
+      renderSidebarProjectRow();
+      topbarState.sessionCount = sessionsDropdown.length;
+      refreshTopbar();
+      if (sessionsOpen) renderSessionsDropdown();
     } catch {
-      /* offline: keep the last list */
+      try {
+        client.listSessions();
+      } catch {
+        /* offline: keep the last list */
+      }
     }
     refreshProjectThreads();
   }
 
-  function openSidebarSession(sid: string, projectId: string): void {
+  function refreshSidebarSessions(): void {
+    void refreshSidebarSessionsMerged();
+  }
+
+  function openSidebarSession(
+    sid: string,
+    projectId: string,
+    lane: "stable" | "sandbox" = "stable",
+  ): void {
     if (!sid || sid === sessionListInput().currentSessionId) return;
     if (chat.isWorking()) {
       setStatus("助手执行中，请稍后再切换会话");
       return;
     }
-    try {
-      beginBoundSessionSwitch(sid, projectId, "打开会话");
-      client.openSession(sid);
-    } catch (err) {
-      completeHydrationWait();
-      setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
-    }
+    void (async () => {
+      try {
+        beginBoundSessionSwitch(sid, projectId, "打开会话");
+        await client.openSession(sid, lane);
+      } catch (err) {
+        completeHydrationWait();
+        setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
   }
 
   function handleSidebarNewSession(): void {
@@ -1302,7 +1325,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
     const row = target.closest<HTMLElement>("[data-open-session]");
     if (row?.dataset.openSession) {
-      openSidebarSession(row.dataset.openSession, row.dataset.projectId || "");
+      const lane = row.dataset.sidecarLane === "sandbox" ? "sandbox" : "stable";
+      openSidebarSession(row.dataset.openSession, row.dataset.projectId || "", lane);
     }
   });
   root.querySelector<HTMLButtonElement>("#sidebar-new-chat")!.addEventListener("click", () => handleSidebarNewSession());
@@ -1436,7 +1460,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (listSessionsTimer !== null) window.clearTimeout(listSessionsTimer);
     listSessionsTimer = window.setTimeout(() => {
       listSessionsTimer = null;
-      client.listSessions();
+      refreshSidebarSessions();
     }, 250);
   }
 
@@ -1726,16 +1750,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         const sid = btn.dataset.openSession;
         if (!sid) return;
         const item = sessionsDropdown.find((s) => s.session_id === sid);
-        try {
-          beginBoundSessionSwitch(sid, item?.project_id || "", "打开会话");
-          client.openSession(sid);
-          sessionsOpen = false;
-          expandEl.classList.add("hidden");
-          expandEl.innerHTML = "";
-        } catch (err) {
-          completeHydrationWait();
-          setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
-        }
+        const lane = item?.execution_lane === "sandbox" ? "sandbox" : "stable";
+        void (async () => {
+          try {
+            beginBoundSessionSwitch(sid, item?.project_id || "", "打开会话");
+            await client.openSession(sid, lane);
+            sessionsOpen = false;
+            expandEl.classList.add("hidden");
+            expandEl.innerHTML = "";
+          } catch (err) {
+            completeHydrationWait();
+            setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
       });
     });
   }
@@ -1866,13 +1893,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       projectState.railTab = "now";
       projectState.overlayPanel = null;
       setMainFocus("chat");
-      try {
-        beginBoundSessionSwitch(sid, projectState.projectId, "打开会话线");
-        client.openSession(sid);
-      } catch (err) {
-        completeHydrationWait();
-        setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
-      }
+      void (async () => {
+        try {
+          beginBoundSessionSwitch(sid, projectState.projectId, "打开会话线");
+          await client.openSession(sid, "stable");
+        } catch (err) {
+          completeHydrationWait();
+          setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
     },
     onReturnActiveThread: () => {
       const active = projectState.activeSessionId.trim();
@@ -2465,6 +2494,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
   }
 
+  async function refreshShellDevSyncHint(): Promise<void> {
+    const hintEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-sync-hint]");
+    if (!hintEl) return;
+    const raw = await window.myAgentDesktop?.getSandboxAdoptStatus?.();
+    const status = raw as { needsSandboxSync?: boolean; stableAheadOfSandbox?: number | null } | undefined;
+    const ahead = status?.stableAheadOfSandbox ?? 0;
+    if (status?.needsSandboxSync && ahead > 0) {
+      hintEl.textContent = `稳定分支比 sandbox 新 ${ahead} 个提交（常见于刚合入）。请点「同步 sandbox 与稳定」，否则 5174 仍是旧实验树。`;
+      hintEl.classList.remove("hidden");
+      return;
+    }
+    hintEl.textContent = "";
+    hintEl.classList.add("hidden");
+  }
+
   async function refreshShellDevLaneLabels(): Promise<void> {
     const api = window.myAgentDesktop;
     const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
@@ -2473,6 +2517,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const previewEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-url]");
     if (mainEl) mainEl.textContent = mainUrl;
     if (previewEl) previewEl.textContent = previewUrl;
+    await refreshShellDevSyncHint();
   }
 
   async function renderShellDevStage(): Promise<void> {
@@ -2484,9 +2529,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
       if (slot) shellDevViewResizeObserver.observe(slot);
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", () => {
-        client.createSandboxSession();
-        setPerspective("project", "session");
-        shellDevFeedback("正在打开实验进化会话（写入仅限 sandbox）…");
+        void (async () => {
+          try {
+            setPerspective("project", "session");
+            shellDevFeedback("正在启动 sandbox 运行时并打开实验会话…");
+            await client.createSandboxSession();
+          } catch (err) {
+            shellDevFeedback(
+              err instanceof Error ? err.message : "无法打开实验会话",
+              "error",
+            );
+          }
+        })();
       });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-popout]")?.addEventListener("click", () => {
         void window.myAgentDesktop?.openShellDevPopout?.().then((result) => {
@@ -2533,6 +2587,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
               fatalBlockers?: string[];
               needsSandboxCommit?: boolean;
               needsStableStash?: boolean;
+              needsSandboxSync?: boolean;
+              stableAheadOfSandbox?: number | null;
               currentBranch?: string;
               sandboxBranch?: string;
               commitsAhead?: number | null;
@@ -2543,6 +2599,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
             if (status.fatalBlockers?.length) {
               shellDevFeedback(status.fatalBlockers[0], "error");
+              return;
+            }
+
+            if (
+              !status.readyToMerge &&
+              !status.needsSandboxCommit &&
+              !status.needsStableStash &&
+              (status.commitsAhead ?? 0) === 0
+            ) {
+              if (status.needsSandboxSync) {
+                shellDevFeedback(
+                  `稳定已领先 sandbox ${status.stableAheadOfSandbox ?? "?"} 个提交，无需再合入。请点「同步 sandbox 与稳定」。`,
+                  "neutral",
+                );
+              } else {
+                shellDevFeedback("当前没有可合入的实验提交。", "error");
+              }
               return;
             }
 
@@ -2588,12 +2661,40 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
             }
             const parts = [result.message, result.steps?.join(" → "), result.detail].filter(Boolean);
             shellDevFeedback(parts.join("\n"), result.ok ? "ok" : "error");
+            if (result.ok) await refreshShellDevSyncHint();
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             shellDevFeedback(`合入过程异常：${message}`, "error");
           } finally {
             if (mergeBtn) mergeBtn.disabled = false;
           }
+        })();
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reset-main]")?.addEventListener("click", () => {
+        void window.myAgentDesktop?.resetShellDevMainLane?.().then(async (result) => {
+          if (result?.ok) {
+            shellDevFeedback(result.message, "ok");
+            await refreshShellDevLaneLabels();
+            await openShellDevPreviewIfReady();
+            return;
+          }
+          shellDevFeedback(result?.message || "恢复主壳失败。", "error");
+        });
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sync-sandbox]")?.addEventListener("click", () => {
+        void (async () => {
+          const ok = window.confirm(
+            "将把当前稳定分支 merge 进 .worktrees/sandbox（experiment/sandbox），让 5174 与稳定代码对齐。继续？",
+          );
+          if (!ok) return;
+          shellDevFeedback("正在同步 sandbox…", "busy");
+          const result = await window.myAgentDesktop?.syncSandboxWorktree?.();
+          if (!result) {
+            shellDevFeedback("同步调用失败。", "error");
+            return;
+          }
+          shellDevFeedback([result.message, result.detail].filter(Boolean).join("\n"), result.ok ? "ok" : "error");
+          await refreshShellDevSyncHint();
         })();
       });
     }
@@ -5208,20 +5309,20 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         break;
 
       case "session.list":
-        sessionsDropdown = event.sessions;
+        sessionsDropdown = client.applySessionListPush(event.sessions);
         sidebarSessionsLoaded = true;
-        calibrateCompanionFirstMetFromSessions(event.sessions);
+        calibrateCompanionFirstMetFromSessions(sessionsDropdown);
         syncCompanionToBackend();
         renderSidebarSessions();
         renderSidebarProjectRow();
+        topbarState.sessionCount = sessionsDropdown.length;
+        refreshTopbar();
+        if (sessionsOpen) renderSessionsDropdown();
         if (!chat.model.blocks.length && !chat.isWorking()) {
           renderedPrints = [];
           renderedSegmentPrints = [];
           renderChat();
         }
-        topbarState.sessionCount = event.sessions.length;
-        refreshTopbar();
-        if (sessionsOpen) renderSessionsDropdown();
         break;
 
       case "session.memory":

@@ -11,6 +11,7 @@ export interface SessionSummary {
   updated_at: string;
   message_count?: number;
   project_id?: string;
+  execution_lane?: "stable" | "sandbox";
 }
 
 export interface ThreadSummary {
@@ -54,6 +55,7 @@ export interface SessionRow {
   updatedAt: string;
   dot: SessionDot;
   current: boolean;
+  sidecarLane: "stable" | "sandbox";
 }
 
 function escapeHtml(text: string): string {
@@ -118,6 +120,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: s.updated_at,
         dot: isCurrent && input.working ? "running" : "project",
         current: isCurrent,
+        sidecarLane: s.execution_lane === "sandbox" ? "sandbox" : "stable",
       });
       continue;
     }
@@ -125,15 +128,17 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
     if (s.message_count === 0 && !isCurrent) continue;
     const count = s.message_count ? `${s.message_count} 句` : "";
     const untitled = !s.title || s.title === sid;
+    const lane = s.execution_lane === "sandbox" ? "sandbox" : "stable";
     rows.push({
       kind: "chat",
       sessionId: sid,
       projectId: "",
       title: untitled ? (s.message_count ? "随手闲聊" : "新会话") : s.title,
-      meta: ["随聊", count].filter(Boolean).join(" · "),
+      meta: ["随聊", lane === "sandbox" ? "实验运行时" : "", count].filter(Boolean).join(" · "),
       updatedAt: s.updated_at,
       dot: isCurrent && input.working ? "running" : "idle",
       current: isCurrent,
+      sidecarLane: lane,
     });
   }
   if (useThreads) {
@@ -149,6 +154,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: t.updatedAt,
         dot: isCurrent && input.working ? "running" : live ? "live" : "archived",
         current: isCurrent,
+        sidecarLane: "stable",
       });
     }
   }
@@ -180,7 +186,7 @@ function rowTime(row: SessionRow): number {
 function renderRow(row: SessionRow, now: Date): string {
   const attrs = row.kind === "thread"
     ? `data-thread-id="${escapeHtml(row.sessionId)}"`
-    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}"`;
+    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}" data-sidecar-lane="${escapeHtml(row.sidecarLane)}"`;
   const tag = row.current ? '<span class="ma-session-tag">当前</span>' : "";
   return `<button type="button" class="ma-session${row.current ? " is-current" : ""}${row.kind === "thread" ? " is-thread" : ""}" ${attrs}${row.current ? ' aria-current="true"' : ""}>
     <span class="ma-session-dot is-${row.dot}" aria-hidden="true"></span>

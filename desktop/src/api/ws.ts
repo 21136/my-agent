@@ -96,6 +96,7 @@ export type ServerEvent =
       llm_model_override?: boolean;
       write_scope_root?: string;
       write_scope_label?: string;
+      execution_lane?: SidecarLane;
     }
   | {
       type: "session.models";
@@ -220,6 +221,7 @@ export type ServerEvent =
         updated_at: string;
         message_count?: number;
         project_id?: string;
+        execution_lane?: SidecarLane;
       }>;
     }
   | {
@@ -525,14 +527,108 @@ export type HostScopeRoot = {
 
 type EventHandler = (event: ServerEvent) => void;
 
+export type SidecarLane = "stable" | "sandbox";
+
+export type SessionListItem = {
+  session_id: string;
+  title: string;
+  preview?: string;
+  updated_at: string;
+  message_count?: number;
+  project_id?: string;
+  execution_lane?: SidecarLane;
+};
+
+/** Stable + sandbox trees often share copied session ids; show one row per id. */
+export function mergeSessionLists(
+  stable: SessionListItem[],
+  sandbox: SessionListItem[],
+): SessionListItem[] {
+  const byId = new Map<string, SessionListItem>();
+  for (const item of stable) {
+    byId.set(item.session_id, { ...item, execution_lane: item.execution_lane ?? "stable" });
+  }
+  for (const item of sandbox) {
+    const laneItem = { ...item, execution_lane: item.execution_lane ?? "sandbox" };
+    const prev = byId.get(item.session_id);
+    if (!prev) {
+      byId.set(item.session_id, laneItem);
+      continue;
+    }
+    const nextAt = laneItem.updated_at || "";
+    const prevAt = prev.updated_at || "";
+    if (nextAt > prevAt) {
+      byId.set(item.session_id, laneItem);
+    }
+  }
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+  return merged.slice(0, 50);
+}
+
 export class AgentWsClient {
   private ws: WebSocket | null = null;
   private handlers = new Set<EventHandler>();
   private reconnectTimer: number | null = null;
+  private lane: SidecarLane = "stable";
+  private sessionListMergedInflight: Promise<SessionListItem[]> | null = null;
+  private stableSessionsCache: SessionListItem[] = [];
+  private sandboxSessionsCache: SessionListItem[] = [];
   constructor(
     private host: string,
     private port: number,
   ) {}
+
+  getLane(): SidecarLane {
+    return this.lane;
+  }
+
+  private async resolveSidecarInfo(lane: SidecarLane): Promise<{ host: string; port: number }> {
+    const api = window.myAgentDesktop;
+    if (!api) {
+      throw new Error("myAgentDesktop preload API missing");
+    }
+    if (lane === "sandbox") {
+      const ensured = await api.ensureSandboxSidecar?.();
+      if (!ensured?.ok) {
+        throw new Error(ensured?.message || "sandbox sidecar unavailable");
+      }
+      const info = await api.getSandboxSidecar?.();
+      if (!info) {
+        throw new Error("sandbox sidecar not ready");
+      }
+      return info;
+    }
+    const info = await api.getSidecar();
+    if (!info) {
+      throw new Error("stable sidecar not ready");
+    }
+    return info;
+  }
+
+  async ensureLane(lane: SidecarLane): Promise<void> {
+    if (this.lane === lane && this.ws?.readyState === WebSocket.OPEN) {
+      return;
+    }
+    await this.switchLane(lane);
+  }
+
+  async switchLane(lane: SidecarLane): Promise<void> {
+    const info = await this.resolveSidecarInfo(lane);
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+      this.ws = null;
+    }
+    this.lane = lane;
+    this.host = info.host;
+    this.port = info.port;
+    await this.connect();
+  }
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -578,11 +674,9 @@ export class AgentWsClient {
 
   private async reconnect(): Promise<void> {
     try {
-      const sidecar = await window.myAgentDesktop?.getSidecar();
-      if (sidecar) {
-        this.host = sidecar.host;
-        this.port = sidecar.port;
-      }
+      const info = await this.resolveSidecarInfo(this.lane);
+      this.host = info.host;
+      this.port = info.port;
       await this.connect();
     } catch {
       this.reconnectTimer = window.setTimeout(() => {
@@ -711,11 +805,121 @@ export class AgentWsClient {
     this.send({ type: "session.list" });
   }
 
-  openSession(sessionId: string): void {
+  async openSession(sessionId: string, lane: SidecarLane = "stable"): Promise<void> {
+    await this.ensureLane(lane);
     this.send({ type: "session.open", session_id: sessionId });
   }
 
-  createSandboxSession(): void {
+  /** One-shot WS so listing never tears down the active chat connection. */
+  private fetchSessionListEphemeral(lane: SidecarLane, timeoutMs = 12_000): Promise<SessionListItem[]> {
+    return new Promise((resolve, reject) => {
+      void this.resolveSidecarInfo(lane)
+        .then((info) => {
+          const url = `ws://${info.host}:${info.port}`;
+          const ws = new WebSocket(url);
+          let settled = false;
+          const finish = (fn: () => void) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeout);
+            try {
+              ws.close();
+            } catch {
+              /* ignore */
+            }
+            fn();
+          };
+          const timeout = window.setTimeout(() => {
+            finish(() => reject(new Error(`session.list timeout (${lane})`)));
+          }, timeoutMs);
+          ws.addEventListener("open", () => {
+            ws.send(JSON.stringify({ type: "session.list" }));
+          });
+          ws.addEventListener("message", (ev) => {
+            try {
+              const data = JSON.parse(String(ev.data)) as {
+                type?: string;
+                sessions?: SessionListItem[];
+              };
+              if (data?.type !== "session.list" || !Array.isArray(data.sessions)) {
+                return;
+              }
+              finish(() => {
+                resolve(
+                  data.sessions.map((session) => ({
+                    ...session,
+                    execution_lane: session.execution_lane ?? lane,
+                  })),
+                );
+              });
+            } catch {
+              /* wait for a valid frame */
+            }
+          });
+          ws.addEventListener("error", () => {
+            finish(() => reject(new Error(`WebSocket error: ${url}`)));
+          });
+          ws.addEventListener("close", () => {
+            finish(() => reject(new Error(`WebSocket closed before session.list (${lane})`)));
+          });
+        })
+        .catch(reject);
+    });
+  }
+
+  applySessionListPush(
+    sessions: Array<{
+      session_id: string;
+      title: string;
+      preview?: string;
+      updated_at: string;
+      message_count?: number;
+      project_id?: string;
+      execution_lane?: SidecarLane;
+    }>,
+  ): SessionListItem[] {
+    const mapped: SessionListItem[] = sessions.map((session) => ({
+      session_id: session.session_id,
+      title: session.title,
+      preview: session.preview,
+      updated_at: session.updated_at,
+      message_count: session.message_count,
+      project_id: session.project_id,
+      execution_lane: session.execution_lane ?? this.lane,
+    }));
+    if (this.lane === "sandbox") {
+      this.sandboxSessionsCache = mapped;
+    } else {
+      this.stableSessionsCache = mapped;
+    }
+    return mergeSessionLists(this.stableSessionsCache, this.sandboxSessionsCache);
+  }
+
+  async listSessionsMerged(): Promise<SessionListItem[]> {
+    if (this.sessionListMergedInflight) {
+      return this.sessionListMergedInflight;
+    }
+    const run = async (): Promise<SessionListItem[]> => {
+      const [stableFetched, sandboxFetched] = await Promise.all([
+        this.fetchSessionListEphemeral("stable").catch(() => null),
+        this.fetchSessionListEphemeral("sandbox", 8_000).catch(() => null),
+      ]);
+      if (stableFetched) {
+        this.stableSessionsCache = stableFetched;
+      }
+      if (sandboxFetched) {
+        this.sandboxSessionsCache = sandboxFetched;
+      }
+      return mergeSessionLists(this.stableSessionsCache, this.sandboxSessionsCache);
+    };
+    this.sessionListMergedInflight = run().finally(() => {
+      this.sessionListMergedInflight = null;
+    });
+    return this.sessionListMergedInflight;
+  }
+
+  async createSandboxSession(): Promise<void> {
+    await this.ensureLane("sandbox");
     this.send({ type: "session.create_sandbox" });
   }
 
@@ -995,6 +1199,8 @@ declare global {
   interface Window {
     myAgentDesktop?: {
       getSidecar: () => Promise<{ host: string; port: number } | null>;
+      getSandboxSidecar?: () => Promise<{ host: string; port: number } | null>;
+      ensureSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
       switchSidecarCandidate?: (root: string) => Promise<Record<string, unknown>>;
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
@@ -1005,6 +1211,8 @@ declare global {
       getShellDevMainUrl?: () => Promise<string>;
       promoteShellDevPreview?: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
       getSandboxAdoptStatus?: () => Promise<Record<string, unknown>>;
+      syncSandboxWorktree?: () => Promise<{ ok: boolean; message: string; detail?: string }>;
+      resetShellDevMainLane?: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
       mergeSandboxIntoStable?: (options?: {
         autoCommitSandbox?: boolean;
         sandboxCommitMessage?: string;

@@ -38,6 +38,7 @@ import { shellDevEmbedZoom } from "./shell-dev-embed-zoom";
 import {
   getSandboxAdoptStatus,
   prepareAndMergeSandboxIntoStable,
+  syncSandboxWorktreeWithStable,
   type SandboxAdoptPrepareOptions,
 } from "./sandbox-adopt";
 import { loadAppIcon } from "./app-icon";
@@ -126,6 +127,7 @@ const STATE_PATH = path.join(AGENT_ROOT, "data", "state.json");
 const CONSTELLATION_PATH = path.join(AGENT_ROOT, "data", "constellation.json");
 const SHOW_SHORTCUT = "CommandOrControl+Shift+M";
 const DEFAULT_WS_PORT = Number(process.env.MY_AGENT_WS_PORT ?? "8765") || 8765;
+const SANDBOX_WS_PORT = Number(process.env.MY_AGENT_SANDBOX_WS_PORT ?? "8766") || 8766;
 /** Cold Python import on first launch can exceed 30s on Windows. */
 const SIDECAR_READY_TIMEOUT_MS =
   Number(process.env.MY_AGENT_SIDECAR_READY_MS ?? "90000") || 90000;
@@ -154,7 +156,30 @@ let quitInProgress = false;
 let sidecarRestarting = false;
 let sidecarOwned = false;
 let activeSidecarRoot = AGENT_ROOT;
+let sandboxSidecar: ChildProcess | null = null;
+let sandboxSidecarInfo: { host: string; port: number } | null = null;
+let sandboxSidecarOwned = false;
 const sidecarSupervisor = new SidecarSupervisor();
+
+function resolveSandboxRootPath(): string | null {
+  const raw = process.env.MY_AGENT_SANDBOX_ROOT?.trim();
+  const sandboxRoot = raw ? path.resolve(raw) : path.join(AGENT_ROOT, ".worktrees", "sandbox");
+  const markers = [
+    path.join(sandboxRoot, "evolve", "_index.core.toml"),
+    path.join(sandboxRoot, "evolve", "_index.toml"),
+  ];
+  if (!existsSync(sandboxRoot) || !markers.some((marker) => existsSync(marker))) {
+    return null;
+  }
+  return sandboxRoot;
+}
+
+function sandboxSidecarSpawnEnv(sandboxRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...sidecarSpawnEnv(),
+    MY_AGENT_SANDBOX_ROOT: sandboxRoot,
+  };
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -605,6 +630,141 @@ function stopSidecar(): void {
   sidecarOwned = false;
 }
 
+function stopSandboxSidecar(): void {
+  const root = resolveSandboxRootPath();
+  if (sandboxSidecar && !sandboxSidecar.killed) {
+    try {
+      sandboxSidecar.kill();
+    } catch {
+      // process may already be gone
+    }
+  }
+  if (root) {
+    const lockPath = path.join(root, "data", "sessions", ".interface.lock");
+    if (existsSync(lockPath)) {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+  sandboxSidecar = null;
+  sandboxSidecarInfo = null;
+  sandboxSidecarOwned = false;
+}
+
+function startSandboxSidecar(root: string): Promise<SidecarStartResult> {
+  return new Promise((resolve, reject) => {
+    const script = path.join(root, "agent-core", "server.py");
+    const args = [script, "--port", String(SANDBOX_WS_PORT)];
+    sandboxSidecar = spawn(pythonCommand(), args, {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: sandboxSidecarSpawnEnv(root),
+    });
+    const proc = sandboxSidecar;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("sandbox sidecar ready timeout"));
+      }
+    }, SIDECAR_READY_TIMEOUT_MS);
+
+    const handlePayload = (payload: Record<string, unknown>) => {
+      if (payload.error === "lock_conflict") {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          const lock = payload.lock;
+          if (lock && typeof lock === "object") {
+            resolve({ ok: false, lockConflict: lock as LockHolder });
+          } else {
+            resolve({
+              ok: false,
+              message: typeof payload.message === "string" ? payload.message : "lock_conflict",
+            });
+          }
+        }
+        return;
+      }
+      if (payload.ready === true && typeof payload.port === "number") {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          sandboxSidecarInfo = {
+            host: typeof payload.host === "string" ? payload.host : "127.0.0.1",
+            port: payload.port,
+          };
+          sandboxSidecarOwned = true;
+          resolve({ ok: true, ...sandboxSidecarInfo });
+        }
+      }
+    };
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      const line = chunk.toString("utf-8").trim();
+      for (const part of line.split("\n")) {
+        if (!part.trim()) continue;
+        try {
+          handlePayload(JSON.parse(part) as Record<string, unknown>);
+        } catch {
+          // ignore non-JSON stdout
+        }
+      }
+    });
+
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      console.error("[sandbox-sidecar]", chunk.toString("utf-8"));
+    });
+
+    proc.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      }
+    });
+
+    proc.on("exit", (code) => {
+      sandboxSidecar = null;
+      sandboxSidecarInfo = null;
+      sandboxSidecarOwned = false;
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        if (code === 2) {
+          resolve({ ok: false, message: "sandbox interface lock held by another UI" });
+        } else {
+          reject(new Error(`sandbox sidecar exited before ready (code ${code})`));
+        }
+      }
+    });
+  });
+}
+
+async function ensureSandboxSidecar(): Promise<SidecarStartResult> {
+  const root = resolveSandboxRootPath();
+  if (!root) {
+    sandboxSidecarInfo = null;
+    return { ok: false, message: "sandbox worktree not ready" };
+  }
+  if (
+    !sandboxSidecarOwned
+    && sandboxSidecarInfo === null
+    && (await waitForPortOpen("127.0.0.1", SANDBOX_WS_PORT))
+  ) {
+    console.log(`[sandbox-sidecar] reusing listener on 127.0.0.1:${SANDBOX_WS_PORT}`);
+    sandboxSidecarInfo = { host: "127.0.0.1", port: SANDBOX_WS_PORT };
+    return { ok: true, ...sandboxSidecarInfo };
+  }
+  if (sandboxSidecarInfo && sandboxSidecar && !sandboxSidecar.killed) {
+    return { ok: true, ...sandboxSidecarInfo };
+  }
+  return startSandboxSidecar(root);
+}
+
 async function isAgentBusy(): Promise<boolean> {
   if (!workbenchWindow || workbenchWindow.isDestroyed()) {
     return false;
@@ -740,20 +900,41 @@ function readPersistedShellRendererUrl(): string | null {
   }
 }
 
+function readStateJson(): Record<string, unknown> {
+  if (!existsSync(STATE_PATH)) return {};
+  try {
+    const loaded = JSON.parse(readFileSync(STATE_PATH, "utf-8")) as Record<string, unknown>;
+    return loaded && typeof loaded === "object" ? loaded : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStateJson(payload: Record<string, unknown>): void {
+  writeFileSync(STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+}
+
 function persistShellRendererUrl(url: string): void {
   const normalized = normalizeShellDevPreviewBase(url);
   if (!normalized || !isAllowedShellRendererPromotion(normalized)) return;
-  let payload: Record<string, unknown> = {};
-  if (existsSync(STATE_PATH)) {
-    try {
-      const loaded = JSON.parse(readFileSync(STATE_PATH, "utf-8")) as Record<string, unknown>;
-      if (loaded && typeof loaded === "object") payload = loaded;
-    } catch {
-      payload = {};
-    }
-  }
+  const payload = readStateJson();
   payload.desktop_shell_renderer_url = normalized;
-  writeFileSync(STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  writeStateJson(payload);
+}
+
+/** 「采用预览为主壳」会写入 data/state.json；合入/同步后应恢复 5173 主轨。 */
+function clearPersistedShellRendererUrl(): boolean {
+  const payload = readStateJson();
+  if (!("desktop_shell_renderer_url" in payload)) return false;
+  delete payload.desktop_shell_renderer_url;
+  writeStateJson(payload);
+  return true;
+}
+
+async function reloadWorkbenchMainLaneStable(): Promise<void> {
+  if (!workbenchWindow || workbenchWindow.isDestroyed()) return;
+  const main = defaultShellMainDevBase();
+  await workbenchWindow.webContents.loadURL(main).catch(() => {});
 }
 
 function resolveShellMainDevUrl(): string {
@@ -955,6 +1136,8 @@ function registerShortcuts(): void {
 }
 
 ipcMain.handle("sidecar:get", () => sidecarInfo);
+ipcMain.handle("sidecar:get-sandbox", () => sandboxSidecarInfo);
+ipcMain.handle("sidecar:ensure-sandbox", () => ensureSandboxSidecar());
 ipcMain.handle("sidecar:switch-candidate", (_event, rawRoot: unknown) => switchSidecarCandidate(rawRoot));
 ipcMain.handle("app:switch-to-cli", () => switchToCli());
 
@@ -1036,6 +1219,34 @@ function showSandboxAdoptResultDialog(result: {
   else void dialog.showMessageBox(box);
 }
 
+ipcMain.handle("shell-dev:reset-main-lane", async (event) => {
+  if (!assertShellDevWorkbenchSender(event)) {
+    return { ok: false, message: "workbench unavailable" };
+  }
+  const cleared = clearPersistedShellRendererUrl();
+  await reloadWorkbenchMainLaneStable();
+  return {
+    ok: true,
+    message: cleared
+      ? "已清除记住的预览主壳地址，主窗口已指向稳定 5173。"
+      : "主窗口已指向稳定 5173（无需清除 state）。",
+    mainUrl: defaultShellMainDevBase(),
+  };
+});
+
+ipcMain.handle("shell-dev:sync-sandbox", async (event) => {
+  if (!assertShellDevWorkbenchSender(event)) {
+    return { ok: false, message: "workbench unavailable" };
+  }
+  const result = await syncSandboxWorktreeWithStable();
+  if (result.ok) {
+    clearPersistedShellRendererUrl();
+    await reloadWorkbenchMainLaneStable();
+  }
+  showSandboxAdoptResultDialog(result);
+  return result;
+});
+
 ipcMain.handle("shell-dev:merge-sandbox", async (event, rawOptions: unknown) => {
   if (!assertShellDevWorkbenchSender(event)) {
     const blocked = { ok: false, message: "workbench unavailable" };
@@ -1044,6 +1255,10 @@ ipcMain.handle("shell-dev:merge-sandbox", async (event, rawOptions: unknown) => 
   }
   const options = (rawOptions && typeof rawOptions === "object" ? rawOptions : {}) as SandboxAdoptPrepareOptions;
   const result = await prepareAndMergeSandboxIntoStable(options);
+  if (result.ok) {
+    clearPersistedShellRendererUrl();
+    await reloadWorkbenchMainLaneStable();
+  }
   showSandboxAdoptResultDialog(result);
   return result;
 });
@@ -1052,22 +1267,24 @@ ipcMain.handle("shell-dev:promote-preview", async (event) => {
   if (!assertShellDevWorkbenchSender(event)) {
     return { ok: false, message: "workbench unavailable" };
   }
+  const win = workbenchWindow;
+  if (!win || win.isDestroyed()) {
+    return { ok: false, message: "workbench unavailable" };
+  }
   const previewUrl = normalizeShellDevPreviewBase(shellDevPreviewBaseUrl || defaultShellDevPreviewBase());
   if (!previewUrl || !isAllowedShellRendererPromotion(previewUrl)) {
     return { ok: false, message: "预览地址无效" };
   }
   const previousMain =
-    normalizeShellDevPreviewBase(workbenchWindow.webContents.getURL()) || defaultShellMainDevBase();
+    normalizeShellDevPreviewBase(win.webContents.getURL()) || defaultShellMainDevBase();
   try {
     persistShellRendererUrl(previewUrl);
-    await workbenchWindow.webContents.loadURL(previewUrl);
+    await win.webContents.loadURL(previewUrl);
     const view = shellDevPreviewView;
     if (view && !view.webContents.isDestroyed() && previousMain !== previewUrl) {
       shellDevPreviewBaseUrl = previousMain;
       wireShellDevPreviewNavigation(view, previousMain);
-      if (view.isVisible()) {
-        await view.webContents.loadURL(previousMain).catch(() => {});
-      }
+      await view.webContents.loadURL(previousMain).catch(() => {});
     }
     return { ok: true, mainUrl: previewUrl, previewUrl: previousMain };
   } catch (err) {
@@ -1391,6 +1608,9 @@ app.whenReady().then(async () => {
 
   try {
     await ensureSidecar();
+    void ensureSandboxSidecar().catch((err) => {
+      console.warn("[sandbox-sidecar] optional start failed:", err);
+    });
   } catch (err) {
     console.error("Failed to start Python sidecar:", err);
     await dialog.showMessageBox({
@@ -1416,6 +1636,7 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   quitting = true;
   globalShortcut.unregisterAll();
+  stopSandboxSidecar();
   stopSidecar();
 });
 

@@ -24,12 +24,15 @@ export type SandboxAdoptStatus = {
   currentBranch: string;
   sandboxBranch: string;
   commitsAhead: number | null;
+  /** Commits on stable branch not yet in experiment/sandbox (合入后常见，需同步 worktree). */
+  stableAheadOfSandbox: number | null;
   stableDirtyProduct: string[];
   sandboxDirtyProduct: string[];
   /** Human-only issues (missing branch, nothing to merge, …). */
   fatalBlockers: string[];
   needsSandboxCommit: boolean;
   needsStableStash: boolean;
+  needsSandboxSync: boolean;
   readyToMerge: boolean;
   recentCommits: string[];
 };
@@ -111,6 +114,7 @@ export async function getSandboxAdoptStatus(): Promise<SandboxAdoptStatus> {
   const needsSandboxCommit = sandboxDirtyProduct.length > 0;
 
   let commitsAhead: number | null = null;
+  let stableAheadOfSandbox: number | null = null;
   let recentCommits: string[] = [];
   if ((await branchExists(SANDBOX_BRANCH)) && currentBranch !== "?") {
     const countRes = await runGit(repoRoot, ["rev-list", "--count", `${currentBranch}..${SANDBOX_BRANCH}`]);
@@ -118,13 +122,20 @@ export async function getSandboxAdoptStatus(): Promise<SandboxAdoptStatus> {
       const n = Number.parseInt(countRes.stdout.trim(), 10);
       commitsAhead = Number.isFinite(n) ? n : null;
     }
+    const behindRes = await runGit(repoRoot, ["rev-list", "--count", `${SANDBOX_BRANCH}..${currentBranch}`]);
+    if (behindRes.code === 0) {
+      const n = Number.parseInt(behindRes.stdout.trim(), 10);
+      stableAheadOfSandbox = Number.isFinite(n) ? n : null;
+    }
     const logRes = await runGit(repoRoot, ["log", "--oneline", "-8", `${currentBranch}..${SANDBOX_BRANCH}`]);
     if (logRes.code === 0 && logRes.stdout.trim()) {
       recentCommits = logRes.stdout.trim().split(/\r?\n/).filter(Boolean);
     }
   }
 
-  if (commitsAhead === 0 && !needsSandboxCommit) {
+  const needsSandboxSync = (stableAheadOfSandbox ?? 0) > 0;
+
+  if ((commitsAhead ?? 0) === 0 && !needsSandboxCommit && !needsSandboxSync) {
     fatalBlockers.push("没有可合入的实验提交；先在 sandbox 里改代码并提交。");
   }
 
@@ -138,18 +149,77 @@ export async function getSandboxAdoptStatus(): Promise<SandboxAdoptStatus> {
     currentBranch,
     sandboxBranch: SANDBOX_BRANCH,
     commitsAhead,
+    stableAheadOfSandbox,
     stableDirtyProduct,
     sandboxDirtyProduct,
     fatalBlockers,
     needsSandboxCommit,
     needsStableStash,
+    needsSandboxSync,
     readyToMerge,
     recentCommits,
   };
 }
 
+/** After stable merges experiment/sandbox, bring the sandbox worktree branch up to date with stable. */
+export async function syncSandboxWorktreeWithStable(): Promise<SandboxAdoptResult> {
+  const status = await getSandboxAdoptStatus();
+  if (status.fatalBlockers.length > 0 && !status.sandboxActive) {
+    return { ok: false, message: status.fatalBlockers[0] };
+  }
+  if (!status.needsSandboxSync) {
+    return { ok: true, message: "Sandbox 已与当前稳定分支同步，无需操作。" };
+  }
+  if (status.sandboxDirtyProduct.length > 0) {
+    return {
+      ok: false,
+      message: "Sandbox 有未提交改动，请先 commit 或丢弃后再同步。",
+      detail: status.sandboxDirtyProduct.slice(0, 12).join("\n"),
+    };
+  }
+
+  const sandboxRoot = resolveSandboxRoot();
+  const branchErr = await assertSandboxWorktreeBranch(sandboxRoot);
+  if (branchErr) return branchErr;
+  const mergeRes = await runGit(sandboxRoot, [
+    "merge",
+    status.currentBranch,
+    "-X",
+    "theirs",
+    "--no-edit",
+    "-m",
+    `chore(sandbox): sync with ${status.currentBranch} after stable merge`,
+  ]);
+  if (mergeRes.code !== 0) {
+    return {
+      ok: false,
+      message: "同步 sandbox 失败（可能有冲突，请在 .worktrees/sandbox 内手动解决）。",
+      detail: (mergeRes.stderr || mergeRes.stdout).trim(),
+    };
+  }
+  return {
+    ok: true,
+    message: `已将 ${status.currentBranch} 合入 sandbox 工作区（${SANDBOX_BRANCH}）。请重启 start-desktop.bat，5174 会与稳定对齐。`,
+    detail: mergeRes.stdout.trim() || undefined,
+  };
+}
+
+async function assertSandboxWorktreeBranch(sandboxRoot: string): Promise<SandboxAdoptResult | null> {
+  const branchRes = await runGit(sandboxRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const head = branchRes.code === 0 ? branchRes.stdout.trim() : "";
+  if (head && head !== SANDBOX_BRANCH) {
+    return {
+      ok: false,
+      message: `Sandbox 工作区当前在「${head}」分支，应在 ${SANDBOX_BRANCH}。请在 .worktrees/sandbox 内 checkout 正确分支。`,
+    };
+  }
+  return null;
+}
+
 async function commitSandboxProduct(message: string): Promise<SandboxAdoptResult> {
   const sandboxRoot = resolveSandboxRoot();
+  const branchErr = await assertSandboxWorktreeBranch(sandboxRoot);
+  if (branchErr) return branchErr;
   const addRes = await runGit(sandboxRoot, ["add", "--", ...PRODUCT_PATH_ARGS]);
   if (addRes.code !== 0) {
     return { ok: false, message: "Sandbox 暂存失败。", detail: addRes.stderr || addRes.stdout };
@@ -258,11 +328,14 @@ export async function prepareAndMergeSandboxIntoStable(
     steps.push("已恢复合入前 stash 的稳定树本地改动");
   }
 
+  const syncHint =
+    "合入后请点壳预览里的「同步 sandbox 与稳定」，否则 5174 仍是合入前的旧实验树。";
+
   return {
     ok: true,
     message: stashedStableProduct
-      ? "合入完成，并已恢复合入前的稳定树本地改动。请重启 start-desktop.bat，在 5173 验收。"
-      : "合入完成。请重启 start-desktop.bat，在 5173 验收。",
+      ? `合入完成，并已恢复合入前的稳定树本地改动。请重启 start-desktop.bat，在 5173 验收。${syncHint}`
+      : `合入完成。请重启 start-desktop.bat，在 5173 验收。${syncHint}`,
     detail: mergeRes.stdout.trim() || undefined,
     steps,
   };

@@ -4,6 +4,8 @@ type SessionControlAction = "suspend" | "resume";
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {
   getSidecar: () => ipcRenderer.invoke("sidecar:get"),
+  getSandboxSidecar: () => ipcRenderer.invoke("sidecar:get-sandbox"),
+  ensureSandboxSidecar: () => ipcRenderer.invoke("sidecar:ensure-sandbox"),
   switchSidecarCandidate: (root: string) => ipcRenderer.invoke("sidecar:switch-candidate", root),
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
@@ -14,6 +16,10 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   getShellDevMainUrl: () => ipcRenderer.invoke("shell-dev:get-main-url") as Promise<string>,
   promoteShellDevPreview: () => ipcRenderer.invoke("shell-dev:promote-preview") as Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>,
   getSandboxAdoptStatus: () => ipcRenderer.invoke("shell-dev:sandbox-adopt-status") as Promise<Record<string, unknown>>,
+  syncSandboxWorktree: () =>
+    ipcRenderer.invoke("shell-dev:sync-sandbox") as Promise<{ ok: boolean; message: string; detail?: string }>,
+  resetShellDevMainLane: () =>
+    ipcRenderer.invoke("shell-dev:reset-main-lane") as Promise<{ ok: boolean; message: string; mainUrl?: string }>,
   mergeSandboxIntoStable: (options?: {
     autoCommitSandbox?: boolean;
     sandboxCommitMessage?: string;
@@ -72,6 +78,8 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
 
 export type MyAgentDesktopApi = {
   getSidecar: () => Promise<{ host: string; port: number } | null>;
+  getSandboxSidecar: () => Promise<{ host: string; port: number } | null>;
+  ensureSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
   switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;
@@ -82,6 +90,8 @@ export type MyAgentDesktopApi = {
   getShellDevMainUrl: () => Promise<string>;
   promoteShellDevPreview: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
   getSandboxAdoptStatus: () => Promise<Record<string, unknown>>;
+  syncSandboxWorktree: () => Promise<{ ok: boolean; message: string; detail?: string }>;
+  resetShellDevMainLane: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
   mergeSandboxIntoStable: (options?: {
     autoCommitSandbox?: boolean;
     sandboxCommitMessage?: string;

@@ -731,8 +731,16 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         payload["project_id"] = session.meta.project_id
         payload["project_root"] = session.meta.project_root or None
         payload["project_plan_status"] = session.meta.project_plan_status or "draft"
+    from sandbox_evolution import is_sandbox_agent_root
+
     scope = (session.meta.write_scope_root or "").strip()
-    if scope:
+    if is_sandbox_agent_root(session.paths):
+        payload["execution_lane"] = "sandbox"
+        label = write_scope_label(scope, paths=session.paths)
+        if label:
+            payload["write_scope_label"] = label
+    elif scope:
+        payload["execution_lane"] = "stable"
         payload["write_scope_root"] = scope
         label = write_scope_label(scope)
         if label:
@@ -886,9 +894,13 @@ def list_session_summaries(
     - Project-bound: one row per project_id (newest / project_sessions mapping);
       title = project_id
     """
+    from sandbox_evolution import is_sandbox_agent_root
+
     root = sessions_root(paths)
     if not root.is_dir():
         return []
+
+    list_lane = "sandbox" if is_sandbox_agent_root(paths) else "stable"
 
     preferred: dict[str, str] = {}
     try:
@@ -941,7 +953,9 @@ def list_session_summaries(
             title = project_id
         else:
             title = goal[:80] if goal else (first_user[:80] if first_user else cid)
-        if write_scope_root and not project_id:
+        if list_lane == "sandbox" and not project_id:
+            title = f"[实验·运行] {title}"[:120]
+        elif write_scope_root and not project_id:
             title = f"[实验] {title}"[:120]
         preview = last_user[:120] if last_user else ""
         entries.append({
@@ -951,6 +965,7 @@ def list_session_summaries(
             "updated_at": updated_at,
             "message_count": msg_count,
             "project_id": project_id,
+            "execution_lane": list_lane,
         })
 
     # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at.
@@ -1206,7 +1221,7 @@ def create_sandbox_evolution_session(paths: AgentPaths) -> Session:
     session = create_new(paths, write_scope_root=scope)
     session.goal = "实验进化（sandbox）"
     session.append_message(
-        {"role": "user", "content": sandbox_session_seed_content(scope)},
+        {"role": "user", "content": sandbox_session_seed_content(scope, paths=paths)},
         persist=False,
     )
     session.save()
