@@ -22,7 +22,10 @@ const EXIT_WAIT_MS = 15_000;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const HELPER_PATH = path.resolve(MODULE_DIR, '../scripts/managed-toolchain-read-guard.py');
 const CONTROL_SANDBOX = path.resolve(MODULE_DIR, '../..');
-const PROJECT_ROOT = path.resolve(CONTROL_SANDBOX, '../..');
+const PROJECT_ROOT = path.basename(CONTROL_SANDBOX) === 'sandbox'
+  && path.basename(path.dirname(CONTROL_SANDBOX)) === '.worktrees'
+  ? path.resolve(CONTROL_SANDBOX, '../..')
+  : CONTROL_SANDBOX;
 const ERROR_PREFIX = 'managed_toolchain_read_guard_invalid: ';
 
 function guardError(message) { return new TypeError(ERROR_PREFIX + message); }
