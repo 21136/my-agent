@@ -1,0 +1,34 @@
+[tool]
+name = "sort_by_extension"
+description = "将 workspace 下某目录中的文件按扩展名移入子文件夹（如 pdf/、txt/）；无扩展名进 _no_ext/"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 的目录路径"
+[schema.input.properties.include_hidden]
+type = "boolean"
+default = false
+description = "是否处理以 . 开头的文件"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+source_dir = { type = "string" }
+count = { type = "integer" }
+moved = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

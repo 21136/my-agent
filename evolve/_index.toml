@@ -1,0 +1,38 @@
+# my-agent 主题注册表（唯一索引）
+# 维护：用户手改。LLM 不得自动新增 topic。
+# 详见 docs/MEMORY.md · docs/TOOLS.md
+
+[[topic]]
+id = "coding"
+name = "开发与代码"
+description = "Python、agent-core、Git、工具实现、文档结构"
+prompt = "prompts/coding.md"
+memory_dirs = ["memories/coding"]
+tool_dirs = ["tools/coding"]
+llm_model = "deepseek-v4-pro"   # 含本主题时会话升档；见 RUNTIME §6.1
+
+[[topic]]
+id = "writing"
+name = "写作与内容"
+description = "稿子、文案、视频脚本、对外表述"
+prompt = "prompts/writing.md"
+memory_dirs = ["memories/writing"]
+tool_dirs = ["tools/writing"]
+
+[[topic]]
+id = "workflow"
+name = "个人工作流"
+description = "文件整理、重复性操作、日程类任务"
+prompt = "prompts/workflow.md"
+memory_dirs = ["memories/workflow"]
+tool_dirs = ["tools/workflow"]
+
+[[topic]]
+id = "safety"
+name = "安全与边界"
+description = "路径、确认、隐私、不落盘策略"
+prompt = "prompts/safety.md"
+memory_dirs = []
+tool_dirs = []
+
+# tools/common/ 不在此列出：凡 status=active 的 common 工具每个 session 都注入清单（已决）

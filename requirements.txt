@@ -1,0 +1,3 @@
+# my-agent Phase 1+ dependencies
+# Python 3.12+
+httpx>=0.27

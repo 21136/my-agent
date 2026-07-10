@@ -1,0 +1,24 @@
+---
+description: my-agent project map and Phase 1 conventions for new sessions
+alwaysApply: true
+---
+
+# my-agent 项目地图
+
+**新会话先读** [`docs/MAP.md`](../../docs/MAP.md) 与 [`docs/TASKS.md`](../../docs/TASKS.md) 当前 Phase。
+
+## 当前代码状态（2026-07-09）
+
+- **Phase 1 M1a done**（`T-101`～`T-112`）；下一步 Phase 2 `T-201` LLM。
+- 代码在 `agent-core/`；设计在 `docs/`；进化产物在 `evolve/`（尚无 `evolve/tools/` 种子）。
+- Python 3.12+；`requirements.txt` 仅 `httpx`；**不要**擅自 git commit。
+
+## 导入约定
+
+- 在 `agent-core/` 下工作：`from paths import AgentPaths`，`from tools.schema import ToolResult`，`from tools.registry import ToolRegistry`。
+- 目录名 `agent-core` 不可 `import agent_core`。
+- Builtin 统一入口：`tools/builtin/<name>.py` 的 `run(arguments) -> ToolResult`。
+
+## 实施顺序
+
+按 `TASKS.md` 顺序；实现前对照 `TOOLS.md` / `RUNTIME.md` 已决条款；M1 不做 skill。

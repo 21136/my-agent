@@ -1,0 +1,34 @@
+[tool]
+name = "write_text"
+description = "向 workspace 写文本；path 相对 workspace；冲突默认 skip"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "content"]
+[schema.input.properties.path]
+type = "string"
+[schema.input.properties.content]
+type = "string"
+[schema.input.properties.on_conflict]
+type = "string"
+enum = ["skip", "rename", "overwrite"]
+default = "skip"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+written = { type = "string" }
+skipped = { type = "boolean" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60
