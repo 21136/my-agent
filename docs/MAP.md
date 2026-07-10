@@ -953,7 +953,7 @@ python evolve.py
 | workflow prompt | `evolve/prompts/workflow.md` |
 | 久远记忆 | `evolve/memories/workflow/downloads-sort.md`（`T-504`） |
 
-**下一步**：`T-006` 远端 push，或 Phase 6 可选项（`T-601b` / `T-605`）。
+**下一步**：可选 `T-601b` / `T-605` skill；日常用 `git commit` 策展 `evolve/`。
 
 ### 9.38 T-604 Git 回滚习惯（README + CLI 提示）
 
