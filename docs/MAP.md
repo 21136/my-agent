@@ -21,9 +21,9 @@
 | **Phase 3** | 记忆三件套 / 主题索引 | **done**（`T-301`～`T-308`） |
 | **Phase 4** | 进化写入 | **done**（`T-401`～`T-407`；`T-406` 文档已决） |
 | **Phase 5** | 真实任务固化 tool + memory | **done**（`T-501`～`T-504`） |
-| **Phase 6** | M4 治理（review / audit） | **进行中**（`T-601`～`T-604` done） |
+| **Phase 6** | M4 治理（review / audit） | **done**（`T-601`～`T-604`、`T-006`） |
 
-**Phase 2 已完成**（`T-201`～`T-210`）。**Phase 3（M1c）已完成**（`T-301`～`T-308`）。**Phase 4（M2 进化写入）已完成**（`T-401`～`T-407`）。**Phase 5（M3）已完成**：`sort_by_extension`（T-502）+ `downloads-sort` memory（T-504）。
+**Phase 2～6 与 `T-006` 已完成**。远端：https://github.com/21136/my-agent（private，默认分支 `main`）。可选：`T-601b` / `T-605` skill。
 
 ---
 

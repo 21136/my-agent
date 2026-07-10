@@ -134,8 +134,8 @@ TOOLS.md 评审
 
 | 项 | 状态 |
 |----|------|
-| 代码阶段 | Phase 6 M4（`T-601`～`T-604` done） |
-| 下一步 | `T-006` 远端 push；可选 `T-601b` / `T-605` skill |
+| 代码阶段 | Phase 6 M4 + **T-006**（`T-601`～`T-604`、GitHub 私有远端） |
+| 下一步 | 可选 `T-601b` / `T-605` skill；日常 `git commit` 策展 `evolve/` |
 | Skill | **M1 不做**；M4 可选 |
 
 详见 [docs/MAP.md](docs/MAP.md) §2。

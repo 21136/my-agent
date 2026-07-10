@@ -22,7 +22,7 @@
 | T-005c | 工具系统修订（6 Builtin + 主题 tools + common） | `docs/TOOLS.md` v0.2、`evolve/_index.toml` | T-005b | §14 检查项可勾选 | done |
 | T-005d | 对话层设计（RUNTIME） | `docs/RUNTIME.md` | T-005b,T-005c | §11 检查项可勾选 | done |
 | T-005e | 进化写入设计（proposal / 防重复） | `docs/EVOLVE.md` | T-005d | §13 检查项可勾选 | done |
-| T-006 | Git 首次 push 私有远端 + `requirements.txt` | remote + 首 commit | T-001～T-005e 评审后 | `git push` 成功；`httpx>=0.27` | todo |
+| T-006 | Git 首次 push 私有远端 + `requirements.txt` | remote + 首 commit | T-001～T-005e 评审后 | `git push` 成功；`httpx>=0.27` | done |
 
 ---
 
@@ -166,7 +166,7 @@ python agent.py
 
 exit 0；含 `[PASS] T-308: evolved catalog (common+topic) + run_evolved allowlist`。详见 [MAP.md](./MAP.md) §9.23。
 
-**Phase 3（M1c）已全部完成**；**Phase 4（M2）已完成**（`T-401`～`T-407`）。**Phase 5（M3）已完成**（`T-501`～`T-504`）。**Phase 6（M4）进行中**：`T-601`～`T-604` done；下一步 `T-006` 远端 push 或 Phase 6 可选项。
+**Phase 3（M1c）已全部完成**；**Phase 4（M2）已完成**（`T-401`～`T-407`）。**Phase 5（M3）已完成**（`T-501`～`T-504`）。**Phase 6（M4）已完成**（`T-601`～`T-604`）；**`T-006` 远端 push done**。可选：`T-601b` / `T-605` skill。
 
 **T-401 手工验收**（`agent-core/` 下）：
 
@@ -428,6 +428,21 @@ python my-agent audit --topic coding --only-llm
 | `git_hints.py` | 2 条 `[PASS] T-604` |
 | `my-agent review` / `audit`（cli） | 末段 `== Git ==` |
 | `proposals accept` | 消息含 `Git: git commit -m "evolve: accept …"` |
+
+**T-006 手工验收**（仓库根）：
+
+```powershell
+cd D:\my-agent
+git remote -v
+git branch -vv
+# 默认分支 main；私有远端 origin → github.com/21136/my-agent
+```
+
+| 场景 | 预期 |
+|------|------|
+| `git push` | 成功；`requirements.txt` 含 `httpx>=0.27` |
+| `evolve/proposals/` | 仅 `.gitkeep` + `archive/.gitkeep`（无 demo 垃圾） |
+| `evolve/memories/` | 保留 `example.md`、`downloads-sort.md` |
 
 ---
 
