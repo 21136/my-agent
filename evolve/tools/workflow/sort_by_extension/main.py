@@ -13,7 +13,8 @@ _NO_EXT_FOLDER = "_no_ext"
 def _agent_root() -> Path:
     current = Path(__file__).resolve().parent
     for directory in (current, *current.parents):
-        if (directory / "evolve" / "_index.toml").is_file():
+        evolve_marker = directory / "evolve"
+        if (evolve_marker / "_index.core.toml").is_file() or (evolve_marker / "_index.toml").is_file():
             return directory
     raise RuntimeError("could not locate agent root")
 
@@ -52,9 +53,31 @@ def _unique_target(target: Path) -> Path:
         index += 1
 
 
+def _load_workflow():
+    core = _agent_core_dir()
+    if str(core) not in sys.path:
+        sys.path.insert(0, str(core))
+    from host_scope import (
+        HostPathDeniedError,
+        HostRootNotFoundError,
+        HostScopeConfigError,
+        HostScopePermissionError,
+    )
+    from host_tools import resolve_workflow_dir
+    from paths import AgentPaths, PathOutOfBoundsError
+
+    host_errors = (
+        HostPathDeniedError,
+        HostRootNotFoundError,
+        HostScopeConfigError,
+        HostScopePermissionError,
+    )
+    return AgentPaths, PathOutOfBoundsError, resolve_workflow_dir, host_errors
+
+
 def run_sort(payload: dict[str, Any]) -> dict[str, Any]:
     """Move files directly under ``path`` into ``<ext>/`` subfolders."""
-    AgentPaths, PathOutOfBoundsError = _load_paths()
+    AgentPaths, PathOutOfBoundsError, resolve_workflow_dir, host_errors = _load_workflow()
     paths = AgentPaths.discover(start=_agent_root())
 
     path_arg = payload.get("path")
@@ -65,16 +88,15 @@ def run_sort(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        source_dir = paths.resolve_under_workspace(path_arg, must_exist=True)
+        wf = resolve_workflow_dir(paths, path_arg, write=True)
     except PathOutOfBoundsError as exc:
         return {"ok": False, "error": str(exc)}
-    except (TypeError, ValueError) as exc:
+    except host_errors as exc:
+        return {"ok": False, "error": str(exc)}
+    except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
-    if not source_dir.is_dir():
-        return {"ok": False, "error": f"not a directory: {paths.to_workspace_relative(source_dir)}"}
-
-    rel_source = paths.to_workspace_relative(source_dir)
+    source_dir = wf.absolute
     moved: list[dict[str, str]] = []
 
     for item in sorted(source_dir.iterdir(), key=lambda p: p.name.lower()):
@@ -86,8 +108,8 @@ def run_sort(payload: dict[str, Any]) -> dict[str, Any]:
         ext_folder = _extension_folder(item)
         target_dir = source_dir / ext_folder
         target_path = _unique_target(target_dir / item.name)
-        rel_from = paths.to_workspace_relative(item)
-        rel_to = paths.to_workspace_relative(target_path)
+        rel_from = wf.display_path(item)
+        rel_to = wf.display_path(target_path)
 
         if rel_from == rel_to:
             continue
@@ -105,24 +127,22 @@ def run_sort(payload: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "ok": True,
-        "source_dir": rel_source,
+        "source_dir": wf.label,
         "count": len(moved),
         "moved": moved,
     }
+    result.update(wf.log_fields())
     if dry_run:
         result["dry_run"] = True
     return result
 
 
 def main() -> None:
-    payload = json.load(sys.stdin)
-    if not isinstance(payload, dict):
-        print(json.dumps({"ok": False, "error": "stdin must be a JSON object"}, ensure_ascii=False))
-        raise SystemExit(1)
-    result = run_sort(payload)
-    print(json.dumps(result, ensure_ascii=False))
-    if result.get("ok") is False:
-        raise SystemExit(1)
+    core = _agent_core_dir()
+    if str(core) not in sys.path:
+        sys.path.insert(0, str(core))
+    from evolve_tool_io import run_tool_main
+    run_tool_main(run_sort)
 
 
 def _demo() -> None:

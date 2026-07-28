@@ -1,0 +1,40 @@
+[tool]
+name = "run_demo"
+description = "在 agent-core 下运行 python 脚本验收（如 python loader.py）；捕获 stdout/stderr 与退出码"
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 agent 根或 agent-core 的 .py 路径"
+[schema.input.properties.extra_args]
+type = "array"
+items = { type = "string" }
+default = []
+description = "追加给脚本的参数，如 [\"demo\"] 或 [\"--demo\"]"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 120
+description = "子进程超时秒数"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+command = { type = "array" }
+exit_code = { type = "integer" }
+stdout = { type = "string" }
+stderr = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 130

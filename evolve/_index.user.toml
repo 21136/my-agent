@@ -1,0 +1,11 @@
+# 用户扩展主题 — 由你策展；git diff 此处即你的扩展变更。
+# 新增主题：REPL「注册主题 <id>」（T-803）或手改本文件。
+# 详见 docs/EXTENSIONS.md
+
+[[topic]]
+id = "data"
+name = "数据处理"
+description = "CSV、JSON、日志等数据文件的读写与分析"
+prompt = "prompts/data.md"
+memory_dirs = ["memories/data"]
+tool_dirs = ["tools/data"]

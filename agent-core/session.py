@@ -32,6 +32,17 @@ STATE_LAST_SESSION_KEY = "last_conversation_id"
 VALID_PHASES = frozenset({"S1", "S2", "S3", "S4"})
 SessionPhase = Literal["S1", "S2", "S3", "S4"]
 
+TurnMode = Literal["ask", "agent"]
+DEFAULT_TURN_MODE: TurnMode = "agent"
+VALID_TURN_MODES = frozenset({"ask", "agent"})
+
+ShellId = Literal["grow", "daily", "govern", "project"]
+DEFAULT_ACTIVE_SHELL: ShellId = "daily"
+VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
+
+PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
+VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
+
 ANCHOR_HEADER = "[本次会议上下文]"
 
 
@@ -52,6 +63,14 @@ class SessionMeta:
     compact_before_index: int = 0
     evolve_offer_pending: bool = False
     evolve_offer_used: bool = False
+    turn_mode: TurnMode = DEFAULT_TURN_MODE
+    active_shell: ShellId = DEFAULT_ACTIVE_SHELL
+    project_root: str = ""
+    project_id: str = ""
+    project_plan_status: PlanStatus = ""
+    project_plan_confirmed_at: str = ""
+    project_phase_fingerprint: str = ""
+    project_doc_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +83,14 @@ class SessionMeta:
             "compact_before_index": self.compact_before_index,
             "evolve_offer_pending": self.evolve_offer_pending,
             "evolve_offer_used": self.evolve_offer_used,
+            "turn_mode": self.turn_mode,
+            "active_shell": self.active_shell,
+            "project_root": self.project_root,
+            "project_id": self.project_id,
+            "project_plan_status": self.project_plan_status,
+            "project_plan_confirmed_at": self.project_plan_confirmed_at,
+            "project_phase_fingerprint": self.project_phase_fingerprint,
+            "project_doc_fingerprint": self.project_doc_fingerprint,
         }
 
     @classmethod
@@ -87,6 +114,35 @@ class SessionMeta:
         if not isinstance(updated_at, str):
             updated_at = ""
 
+        active_shell_raw = payload.get("active_shell", DEFAULT_ACTIVE_SHELL)
+        active_shell: ShellId = (
+            active_shell_raw if active_shell_raw in VALID_SHELLS else DEFAULT_ACTIVE_SHELL
+        )
+
+        project_root = payload.get("project_root", "")
+        if not isinstance(project_root, str):
+            project_root = ""
+
+        project_id = payload.get("project_id", "")
+        if not isinstance(project_id, str):
+            project_id = ""
+
+        plan_raw = payload.get("project_plan_status", "")
+        project_plan_status: PlanStatus = (
+            plan_raw if plan_raw in VALID_PLAN_STATUSES else ""
+        )
+
+        confirmed_at = payload.get("project_plan_confirmed_at", "")
+        if not isinstance(confirmed_at, str):
+            confirmed_at = ""
+
+        phase_fp = payload.get("project_phase_fingerprint", "")
+        if not isinstance(phase_fp, str):
+            phase_fp = ""
+        doc_fp = payload.get("project_doc_fingerprint", "")
+        if not isinstance(doc_fp, str):
+            doc_fp = ""
+
         return cls(
             topics=topics,
             llm_model=llm_model,
@@ -97,6 +153,14 @@ class SessionMeta:
             compact_before_index=int(payload.get("compact_before_index", 0) or 0),
             evolve_offer_pending=bool(payload.get("evolve_offer_pending", False)),
             evolve_offer_used=bool(payload.get("evolve_offer_used", False)),
+            turn_mode=normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE)),
+            active_shell=active_shell,
+            project_root=project_root.strip(),
+            project_id=project_id.strip(),
+            project_plan_status=project_plan_status,
+            project_plan_confirmed_at=confirmed_at,
+            project_phase_fingerprint=phase_fp,
+            project_doc_fingerprint=doc_fp,
         )
 
 
@@ -110,6 +174,13 @@ class Session:
     meta: SessionMeta
     messages: list[dict[str, Any]]
     paths: AgentPaths
+    subagent_overlay: str | None = field(default=None, compare=False, repr=False)
+    turn_intent: str | None = field(default=None, compare=False, repr=False)
+    scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
+    scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
+    scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
+    # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
+    corruption_notices: list[str] = field(default_factory=list, compare=False, repr=False)
 
     @property
     def goal_path(self) -> Path:
@@ -150,6 +221,9 @@ class Session:
         if phase is not None:
             self.meta.phase = phase
 
+    def set_turn_mode(self, mode: TurnMode) -> None:
+        self.meta.turn_mode = normalize_turn_mode(mode)
+
     def append_message(self, message: dict[str, Any], *, persist: bool = True) -> None:
         self.messages.append(message)
         if persist:
@@ -183,8 +257,24 @@ class Session:
         if (session_dir / GOAL_FILENAME).is_file():
             goal = (session_dir / GOAL_FILENAME).read_text(encoding="utf-8")
 
-        meta = _read_meta(session_dir / META_FILENAME)
-        messages = _read_messages(session_dir / MESSAGES_FILENAME)
+        meta_issues: list[str] = []
+        meta = _read_meta(session_dir / META_FILENAME, corruption_kinds=meta_issues)
+        skipped_lines: list[int] = []
+        messages = _read_messages(
+            session_dir / MESSAGES_FILENAME,
+            skipped_lines=skipped_lines,
+        )
+        from context import repair_orphaned_tool_calls
+
+        repaired = repair_orphaned_tool_calls(messages)
+        if repaired != messages:
+            _write_messages_snapshot(session_dir / MESSAGES_FILENAME, repaired)
+            messages = repaired
+        notices: list[str] = []
+        for kind in meta_issues:
+            notices.append(format_meta_corruption_notice(kind))
+        if skipped_lines:
+            notices.append(format_messages_corruption_notice(skipped_lines))
         return cls(
             conversation_id=conversation_id,
             session_dir=session_dir,
@@ -192,6 +282,7 @@ class Session:
             meta=meta,
             messages=messages,
             paths=paths,
+            corruption_notices=notices,
         )
 
     def _append_message_line(self, message: dict[str, Any]) -> None:
@@ -203,6 +294,63 @@ class Session:
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def normalize_turn_mode(value: Any) -> TurnMode:
+    if isinstance(value, str):
+        lowered = value.strip().casefold()
+        if lowered in VALID_TURN_MODES:
+            return lowered  # type: ignore[return-value]
+    return DEFAULT_TURN_MODE
+
+
+def parse_turn_mode_command(line: str) -> TurnMode | None:
+    """Parse REPL mode switch: 只聊/ask → ask; 动手/agent → agent."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    lower = stripped.casefold()
+    if lower in {"只聊", "ask"}:
+        return "ask"
+    if lower in {"动手", "agent"}:
+        return "agent"
+    return None
+
+
+def turn_mode_label(mode: TurnMode) -> str:
+    if mode == "ask":
+        return "只聊 (read-only; run_evolved disabled)"
+    return "动手 (full tools including run_evolved)"
+
+
+def session_banner_event(session: Session) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "session.banner",
+        "session_id": session.conversation_id,
+        "goal": session.goal.strip() or None,
+        "topics": list(session.meta.topics),
+        "turn_mode": session.meta.turn_mode,
+        "turn_mode_label": turn_mode_label(session.meta.turn_mode),
+        "phase": session.meta.phase,
+        "active_shell": session.meta.active_shell,
+    }
+    if session.meta.project_id:
+        from project_mode import project_dir, read_task_stats
+
+        payload["project_id"] = session.meta.project_id
+        payload["project_root"] = session.meta.project_root or None
+        payload["project_plan_status"] = session.meta.project_plan_status or "draft"
+        tasks_path = project_dir(session.paths, session.meta.project_id) / "TASKS.md"
+        stats = read_task_stats(tasks_path)
+        payload["project_tasks_done"] = stats.done
+        payload["project_tasks_total"] = stats.total
+        if session.meta.project_plan_status == "confirmed":
+            payload["project_plan_label"] = f"{stats.open_count}/{stats.total} 未完成"
+        elif session.meta.project_plan_status == "plan_dirty":
+            payload["project_plan_label"] = "计划已变更 · 待确认"
+        else:
+            payload["project_plan_label"] = "计划待确认"
+    return payload
 
 
 def generate_conversation_id(*, now: datetime | None = None) -> str:
@@ -269,15 +417,9 @@ def find_latest_session_id(
 
 
 def read_last_conversation_id(paths: AgentPaths) -> str | None:
-    state_path = paths.data / STATE_FILENAME
-    if not state_path.is_file():
-        return None
-    try:
-        payload = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
+    from paths import read_agent_state_payload
+
+    payload = read_agent_state_payload(paths)
     raw = payload.get(STATE_LAST_SESSION_KEY)
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -291,18 +433,11 @@ def read_last_conversation_id(paths: AgentPaths) -> str | None:
 
 
 def write_last_conversation_id(paths: AgentPaths, conversation_id: str) -> None:
-    state_path = paths.data / STATE_FILENAME
-    payload: dict[str, Any] = {}
-    if state_path.is_file():
-        try:
-            loaded = json.loads(state_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                payload = loaded
-        except (OSError, json.JSONDecodeError):
-            payload = {}
+    from paths import read_agent_state_payload, write_agent_state_payload
+
+    payload = read_agent_state_payload(paths)
     payload[STATE_LAST_SESSION_KEY] = conversation_id
-    paths.data.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_agent_state_payload(paths, payload)
 
 
 def create_new(
@@ -310,7 +445,7 @@ def create_new(
     *,
     conversation_id: str | None = None,
 ) -> Session:
-    """Start a fresh session (``新会话``); empty goal/topics/messages."""
+    """Start a fresh session (``新会话``); empty goal/topics; phase S4 (direct chat)."""
     cid = conversation_id or generate_conversation_id()
     session_dir = sessions_root(paths) / cid
     if session_dir.exists():
@@ -320,7 +455,7 @@ def create_new(
         topics=[],
         llm_model=resolve_session_model([]),
         updated_at=utc_now_iso(),
-        phase="S1",
+        phase="S4",
     )
     session = Session(
         conversation_id=cid,
@@ -364,6 +499,50 @@ def build_anchor_message(session: Session) -> dict[str, str]:
     return {"role": "user", "content": content}
 
 
+_UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]")
+
+
+def build_session_chat_history(session: Session) -> list[dict[str, str]]:
+    """User/assistant lines for desktop chat hydration (DESKTOP §5.2 session.history)."""
+    items: list[dict[str, str]] = []
+    last_user: str | None = None
+
+    for message in session.messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role == "user":
+            if not isinstance(content, str):
+                continue
+            text = content.strip()
+            if not text:
+                continue
+            if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+                continue
+            if text == last_user:
+                continue
+            last_user = text
+            items.append({"role": "user", "text": text})
+            continue
+
+        if role == "assistant":
+            if not isinstance(content, str):
+                continue
+            text = content.strip()
+            if not text:
+                continue
+            items.append({"role": "assistant", "text": text})
+            last_user = None
+
+    return items
+
+
+def session_history_event(session: Session) -> dict[str, Any]:
+    return {
+        "type": "session.history",
+        "items": build_session_chat_history(session),
+    }
+
+
 def prompt_and_set_goal(
     session: Session,
     input_fn: Callable[[str], str],
@@ -382,15 +561,32 @@ def prompt_and_set_goal(
     return goal
 
 
-def _read_meta(meta_path: Path) -> SessionMeta:
+def _read_meta(
+    meta_path: Path,
+    *,
+    corruption_kinds: list[str] | None = None,
+) -> SessionMeta:
+    """Load SessionMeta; optionally record structural failure kinds for notices.
+
+    Kinds: ``missing`` | ``unreadable`` | ``non_object``. Field-level defaults
+    via ``from_dict`` are not corruption (DOC-05). Callers that omit
+    ``corruption_kinds`` stay silent (e.g. refresh_pending_feedback).
+    """
+    default = SessionMeta(llm_model=resolve_session_model([]), updated_at=utc_now_iso())
     if not meta_path.is_file():
-        return SessionMeta(llm_model=resolve_session_model([]), updated_at=utc_now_iso())
+        if corruption_kinds is not None:
+            corruption_kinds.append("missing")
+        return default
     try:
         payload = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return SessionMeta(llm_model=resolve_session_model([]), updated_at=utc_now_iso())
+        if corruption_kinds is not None:
+            corruption_kinds.append("unreadable")
+        return default
     if not isinstance(payload, dict):
-        return SessionMeta(llm_model=resolve_session_model([]), updated_at=utc_now_iso())
+        if corruption_kinds is not None:
+            corruption_kinds.append("non_object")
+        return default
     return SessionMeta.from_dict(payload)
 
 
@@ -407,20 +603,70 @@ def _write_meta(meta_path: Path, meta: SessionMeta) -> None:
     meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _read_messages(messages_path: Path) -> list[dict[str, Any]]:
+def format_meta_corruption_notice(kind: str) -> str:
+    """User-facing text when meta.json structurally failed (T-1823-03)."""
+    if kind == "missing":
+        lead = "会话元数据缺失，已回退默认（meta.json）。"
+    else:
+        lead = "会话元数据损坏，已回退默认（meta.json）。"
+    return f"{lead}主题/壳/项目绑定可能已丢失，请核对顶栏。"
+
+
+def format_messages_corruption_notice(skipped_lines: list[int]) -> str:
+    """User-facing text when bad ``messages.jsonl`` lines were skipped (T-1823-01)."""
+    count = len(skipped_lines)
+    text = f"会话历史有 {count} 行损坏已跳过（messages.jsonl）。聊天区仅显示可读消息。"
+    if skipped_lines and count <= 12:
+        text += f" 行号: {', '.join(str(n) for n in skipped_lines)}。"
+    return text
+
+
+def corruption_notice_events(session: Session) -> list[dict[str, Any]]:
+    """WS events for session + paths corruption notices (emit after ``session.history``)."""
+    texts: list[str] = []
+    for text in session.corruption_notices:
+        if isinstance(text, str) and text.strip():
+            texts.append(text)
+    for text in session.paths.corruption_notices:
+        if isinstance(text, str) and text.strip() and text not in texts:
+            texts.append(text)
+    return [{"type": "turn.notice", "level": "warn", "text": text} for text in texts]
+
+
+def emit_corruption_notices(
+    emit: Callable[[dict[str, Any]], None],
+    session: Session,
+) -> None:
+    for event in corruption_notice_events(session):
+        emit(event)
+
+
+def _read_messages(
+    messages_path: Path,
+    *,
+    skipped_lines: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Load message dicts from jsonl; optionally record 1-based physical line skips."""
     if not messages_path.is_file():
         return []
     messages: list[dict[str, Any]] = []
-    for line in messages_path.read_text(encoding="utf-8").splitlines():
+    for line_no, line in enumerate(
+        messages_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
         text = line.strip()
         if not text:
             continue
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
+            if skipped_lines is not None:
+                skipped_lines.append(line_no)
             continue
         if isinstance(payload, dict):
             messages.append(payload)
+        elif skipped_lines is not None:
+            skipped_lines.append(line_no)
     return messages
 
 
@@ -436,7 +682,7 @@ def _demo() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "evolve").mkdir()
-        (root / "evolve" / "_index.toml").write_text("", encoding="utf-8")
+        (root / "evolve" / "_index.core.toml").write_text("", encoding="utf-8")
         (root / "workspace").mkdir()
         paths = AgentPaths.from_root(root)
 
@@ -488,12 +734,12 @@ def _demo() -> None:
 
         empty_root = root / "empty-agent"
         (empty_root / "evolve").mkdir(parents=True)
-        (empty_root / "evolve" / "_index.toml").write_text("", encoding="utf-8")
+        (empty_root / "evolve" / "_index.core.toml").write_text("", encoding="utf-8")
         (empty_root / "workspace").mkdir()
         empty_paths = AgentPaths.from_root(empty_root)
         fresh = resume_latest(empty_paths)
         assert fresh.messages == []
-        assert fresh.meta.phase == "S1"
+        assert fresh.meta.phase == "S4"
         print("[PASS] resume_latest creates session when none exist")
 
         anchor = build_anchor_message(loaded)
@@ -505,6 +751,7 @@ def _demo() -> None:
         print("[PASS] build_anchor_message template")
 
         goal_session = create_new(paths, conversation_id="demo-goal")
+        goal_session.meta.phase = "S1"
         captured: list[str] = []
 
         def fake_input(prompt: str) -> str:
@@ -521,6 +768,12 @@ def _demo() -> None:
         anchor_goal = build_anchor_message(reloaded)
         assert "目标: Write MEMORY.md" in anchor_goal["content"]
         print("[PASS] T-303: goal prompt → goal.md → anchor context")
+
+        quick = create_new(paths, conversation_id="demo-quick")
+        assert quick.meta.phase == "S4"
+        assert quick.goal == ""
+        assert quick.meta.topics == []
+        print("[PASS] create_new: direct chat (S4, empty goal/topics)")
 
         refresh_session = create_new(paths, conversation_id="demo-pending")
         refresh_session.meta.pending_feedback = [
@@ -544,6 +797,37 @@ def _demo() -> None:
         none_id = none.conversation_id
         assert resume_or_create(empty_paths).conversation_id == none_id
         print("[PASS] resume_or_create falls back to latest when no state pointer")
+
+        mode_session = create_new(paths, conversation_id="demo-mode")
+        assert mode_session.meta.turn_mode == "agent"
+        mode_session.set_turn_mode("ask")
+        mode_session.save()
+        reloaded_mode = Session.load(paths, "demo-mode")
+        assert reloaded_mode.meta.turn_mode == "ask"
+        assert parse_turn_mode_command("只聊") == "ask"
+        assert parse_turn_mode_command("动手") == "agent"
+        assert parse_turn_mode_command("ask") == "ask"
+        assert parse_turn_mode_command("agent") == "agent"
+        assert parse_turn_mode_command("hello") is None
+        print("[PASS] T-702: turn_mode persist + parse_turn_mode_command")
+
+        hist_session = create_new(paths, conversation_id="_demo_chat_hist")
+        hist_session.messages = [
+            build_anchor_message(hist_session),
+            {"role": "user", "content": "你好"},
+            {"role": "user", "content": "你好"},
+            {"role": "assistant", "content": "你好，需要什么？"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "x", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]},
+            {"role": "user", "content": "[内核] 请直接回答"},
+        ]
+        history = build_session_chat_history(hist_session)
+        assert history == [
+            {"role": "user", "text": "你好"},
+            {"role": "assistant", "text": "你好，需要什么？"},
+        ]
+        event = session_history_event(hist_session)
+        assert event["type"] == "session.history" and len(event["items"]) == 2
+        print("[PASS] T-905d: build_session_chat_history skips anchor/tool-only/kernel")
 
 
 if __name__ == "__main__":

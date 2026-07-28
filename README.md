@@ -2,19 +2,26 @@
 
 个人用、可自我进化的本地 Agent。**`evolve/` 以 Git 为真源**；`data/evolve_log.jsonl` 记引用与审计，不代替版本回滚。
 
-**当前版本：0.2.14** · **Phase 6 M4**（`T-601`～`T-604` done）
+**当前版本：0.2.14** · **Phase 6 M4**（`T-601`～`T-604` done）· Phase 18 稳定化见 [docs/STABILIZATION.md](docs/STABILIZATION.md)
 
 ## 快速开始
 
 ```powershell
-# Python 3.12+
+# 前置：Python 3.12+、Node.js LTS（桌面壳）
 pip install -r requirements.txt
 
-# 对话 REPL（仓库根目录）
+# CLI 对话 REPL（仓库根目录；Windows 请用 start.bat 强制 UTF-8，见 docs/DESKTOP.md §3.8.1）
 .\start.bat
-# 或
-cd agent-core
-python main.py
+# 裸跑可能在 CP936 控制台乱码：
+#   cd agent-core
+#   python main.py
+
+# 桌面壳（默认入口；首次自动 npm install）
+.\start-desktop.bat
+# 或手动：
+#   cd desktop
+#   npm install
+#   npm run dev
 
 # 无 LLM 调工具
 python my-agent tool list
@@ -26,6 +33,33 @@ python my-agent audit --topic coding
 ```
 
 环境变量：`LLM_API_KEY`（对话 / audit）；`MY_AGENT_FEEDBACK_ON_EXIT=1`（exit 时可选反馈）。详见 [docs/MAP.md](docs/MAP.md) §8。
+
+### DOC-09 · Fresh bootstrap（新机器 / 新 clone · S-51）
+
+> **定稿**：T-1806-doc-09 · 验收对照 [STABILIZATION.md](docs/STABILIZATION.md) §3.11.1。  
+> `data/` **不进 Git**（DOC-06）；换机请另拷备份，见 [STABILIZATION.md](docs/STABILIZATION.md) §3.9.4。
+
+| 步 | 动作 | 验收 |
+|----|------|------|
+| 0 | **前置** | `python --version` → **3.12+**；桌面还要 Node.js LTS（`npm -v`）。过旧 Python：先升级，勿指望深处报错清晰 |
+| 1 | **clone** | `git clone <private-url> my-agent` → `cd my-agent` |
+| 2 | **pip** | `pip install -r requirements.txt`（须含 **`httpx`** + **`websockets`**） |
+| 3 | **密钥** | 设置本机 `LLM_API_KEY`（对话 / `web_search` / audit）；无 key 仍可跑无 LLM 的 `tool` CLI |
+| 4a | **桌面首启**（推荐） | 双击 / 运行 `.\start-desktop.bat` → 缺 `desktop/node_modules` 时自动 `npm install` → Electron + sidecar |
+| 4b | **CLI 首启** | `.\start.bat`（强制 UTF-8；勿裸跑 `python …\main.py` 除非已设 DOC-08 环境） |
+| 5 | **就绪** | sidecar stdout / 日志含 `{"ready": true, ...}`；桌面顶栏 WS 就绪；CLI 出现 REPL 提示 |
+
+**可选**：换机后把备份的 `data/`（及 `workspace/`）拷回仓库根下同名路径，再启动。
+
+**常见失败**：
+
+| 现象 | 处理 |
+|------|------|
+| `Python not found` / `npm not found` | 安装并加入 PATH；重开终端 |
+| `ModuleNotFoundError: httpx` / `websockets` | 在仓库根重跑 `pip install -r requirements.txt` |
+| 桌面首启卡住在 npm | 进 `desktop/` 手动 `npm.cmd install`（Windows） |
+| 端口 8765 占用 / 双开 | 见 S-52：关旧实例或托盘「接管」；勿多开抢端口 |
+| 控制台中文乱码 | 用 `start.bat` / 桌面 spawn（DOC-08 · DESKTOP §3.8.1） |
 
 ---
 
@@ -116,6 +150,7 @@ CLI 在 **accept**、**review**、**audit** 结束时会打印简短 Git 提示�
 | [docs/GOVERNANCE.md](docs/GOVERNANCE.md) | review、audit、suspect、`ReviewReport` |
 | [docs/MEMORY.md](docs/MEMORY.md) | 三件套 + `evolve/_index.toml` |
 | [docs/TOOLS.md](docs/TOOLS.md) | 6 Builtin + 主题 tools |
+| [docs/STABILIZATION.md](docs/STABILIZATION.md) | Phase 18 稳定化（DOC-01～09 · smoke · Gate） |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 文档版本历史 |
 
 ## 建设顺序（一页纸）

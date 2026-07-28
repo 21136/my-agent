@@ -1,0 +1,35 @@
+[tool]
+name = "host_grep"
+description = "在托管区内按正则搜索文件内容；path 须 host:<id>/…"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "pattern"]
+[schema.input.properties.path]
+type = "string"
+[schema.input.properties.pattern]
+type = "string"
+[schema.input.properties.glob]
+type = "string"
+[schema.input.properties.ignore_case]
+type = "boolean"
+default = false
+[schema.input.properties.max_results]
+type = "integer"
+default = 50
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = false
+workspace_only = false
+timeout_sec = 120

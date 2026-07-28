@@ -127,7 +127,7 @@
 
 #### 对话边界（v0.2.5 修订）
 
-- **默认续接**最近 thread（`data/sessions/`）；**`新会话`** 才新建 `conversation_id` 并问 goal/主题
+- **默认续接**最近 thread（`data/sessions/`）；**`新会话`** 新建 `conversation_id` 并**直接开聊**（S4，空 goal/topics）；主题用 `换主题` / `主题 …` 另设
 - `exit`：保存 thread 并退出；**不强制** proposal
 - `Ctrl+C`：中断当前输入/confirm；**不**结束 thread
 - Proposal：**仅显式触发**（见 [EVOLVE.md](./EVOLVE.md)）；每 **检查点** **≤2 条**（同会话可多次检查点）
@@ -269,7 +269,11 @@
 | `data/conversations/` | 默认 **仅摘要** 入 Git；全文 optional | 见 §6.4 |
 | API key | 本机环境变量 | 不在 U 盘明文 |
 
-**换机流程**：插盘（可选）→ `git clone` / `pull` → 安装 Python → 配置 API key → 启动 CLI。
+**DOC-06 · `data/` 备份（必读）**：`data/sessions/`、`state.json`、`host_scope.json` 等 **默认不进 Git**（见根 `.gitignore`）。`git pull` **恢复不了**聊天与壳映射；换机 / 防误删请定期复制整个 `data/`（及需要的 `workspace/`）。完整表与建议见 [STABILIZATION.md](./STABILIZATION.md) **§3.9.4**。
+
+**DOC-07 · 资源清理**：`evolve_log.jsonl` 无自动轮转；`sessions/_*` 与 `repl_sessions/*.pkl` 可按策略手删（**勿**删 `state.json` 仍引用的真实会话）。见 [STABILIZATION.md](./STABILIZATION.md) **§3.10.1**。
+
+**换机流程**：插盘（可选）→ 按 [README](../README.md) **DOC-09**（clone → pip → npm/首启）→ 配置 API key → **拷回备份的 `data/`** → 启动。
 
 「插盘即用」保留为体验目标，但文档承认需安装运行时与配置密钥。
 
@@ -468,6 +472,9 @@ my-agent/
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.2.1+DOC-09 | 2026-07-18 | §6.1 换机流程链 [README](../README.md) DOC-09 bootstrap |
+| 0.2.1+DOC-07 | 2026-07-18 | §6.1：**DOC-07** 资源清理指针 → STABILIZATION §3.10.1 |
+| 0.2.1+DOC-06 | 2026-07-18 | §6.1：**DOC-06** `data/` 不在 git + 备份指针 → STABILIZATION §3.9.4 |
 | 0.1.0 | 2026-07-09 | 初稿：脚手架 + 项目文档 |
 | 0.2.0 | 2026-07-09 | 整合四轮 LLM 评审；见 `docs/REVIEW-SUMMARY.md` |
 | 0.2.1 | 2026-07-09 | 去除 Word 专项化；`templates/` → `assets/` |

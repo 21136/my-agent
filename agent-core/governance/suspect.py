@@ -199,7 +199,7 @@ def _demo() -> None:
         root = Path(tmp)
         evolve = root / "evolve"
         evolve.mkdir()
-        (evolve / "_index.toml").write_text('[[topic]]\nid = "workflow"\n', encoding="utf-8")
+        (evolve / "_index.core.toml").write_text('[[topic]]\nid = "workflow"\n', encoding="utf-8")
         mem_path = evolve / "memories" / "workflow" / "streak-demo.md"
         mem_path.parent.mkdir(parents=True)
         mem_path.write_text(

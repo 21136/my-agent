@@ -1,0 +1,58 @@
+[tool]
+name = "rename_batch"
+description = "批量重命名目录顶层文件：加前缀/后缀、替换子串、或顺序编号；path 可为 workspace 相对或 host:<id>/…"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "mode"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 或 host:<id>/… 的目录路径"
+[schema.input.properties.mode]
+type = "string"
+enum = ["prefix", "suffix", "replace", "number"]
+[schema.input.properties.prefix]
+type = "string"
+description = "mode=prefix 时添加到文件名前"
+[schema.input.properties.suffix]
+type = "string"
+description = "mode=suffix 时添加到扩展名之前"
+[schema.input.properties.find]
+type = "string"
+description = "mode=replace 时要替换的子串"
+[schema.input.properties.replace]
+type = "string"
+description = "mode=replace 时替换为"
+[schema.input.properties.number_stem]
+type = "string"
+description = "mode=number 时新文件名主干（默认保留原 stem）"
+[schema.input.properties.number_start]
+type = "integer"
+default = 1
+[schema.input.properties.number_pad]
+type = "integer"
+default = 3
+description = "mode=number 时序号位数"
+[schema.input.properties.include_hidden]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+source_dir = { type = "string" }
+count = { type = "integer" }
+renamed = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

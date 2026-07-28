@@ -1,0 +1,208 @@
+.host-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 1rem;
+}
+
+.host-settings-overlay.hidden {
+  display: none !important;
+}
+
+.host-settings-panel {
+  width: min(520px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: var(--ma-surface);
+  border: 1px solid var(--ma-border);
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+.host-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--ma-border);
+}
+
+.host-settings-title {
+  font-weight: 600;
+}
+
+.host-settings-body {
+  padding: 0.75rem 1rem;
+  overflow: auto;
+  flex: 1;
+}
+
+.host-settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.host-settings-item {
+  border: 1px solid var(--ma-border);
+  border-radius: 3px;
+  padding: 0.6rem 0.75rem;
+  background: var(--ma-bg);
+}
+
+.host-settings-item-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.host-settings-id {
+  font-weight: 600;
+  font-family: var(--ma-mono, monospace);
+}
+
+.host-settings-badge {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  border: 1px solid var(--ma-border);
+  color: var(--ma-text-muted);
+}
+
+.host-settings-path {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--ma-text-muted);
+  word-break: break-all;
+}
+
+.host-settings-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.host-settings-btn {
+  border: 1px solid var(--ma-border);
+  background: transparent;
+  color: var(--ma-text);
+  padding: 0.25rem 0.55rem;
+  border-radius: 2px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.host-settings-btn:hover {
+  border-color: var(--ma-accent);
+  color: var(--ma-accent);
+}
+
+.host-settings-btn-accent {
+  border-color: var(--ma-accent);
+  color: var(--ma-accent);
+}
+
+.host-settings-btn-danger:hover {
+  border-color: var(--ma-danger, #c44);
+  color: var(--ma-danger, #c44);
+}
+
+.host-settings-empty {
+  color: var(--ma-text-muted);
+  font-size: 0.9rem;
+  padding: 0.5rem 0;
+}
+
+.host-settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--ma-border);
+}
+
+.host-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--ma-border);
+}
+
+.host-settings-field label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--ma-text-muted);
+  margin-bottom: 0.2rem;
+}
+
+.host-settings-field input,
+.host-settings-field select {
+  width: 100%;
+  border: 1px solid var(--ma-border);
+  background: var(--ma-bg);
+  color: var(--ma-text);
+  padding: 0.35rem 0.5rem;
+  border-radius: 2px;
+  font: inherit;
+}
+
+.host-settings-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--ma-text-muted);
+}
+
+.host-settings-error {
+  color: var(--ma-danger, #c44);
+  font-size: 0.85rem;
+}
+
+.host-wizard-note {
+  font-size: 0.85rem;
+  color: var(--ma-text-muted);
+  margin: 0.5rem 0;
+}
+
+.host-wizard-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  cursor: pointer;
+}
+
+.host-wizard-check input {
+  margin-top: 0.2rem;
+}
+
+.host-confirm-bar {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--ma-accent);
+  border-radius: 3px;
+  background: var(--ma-bg);
+}
+
+.host-confirm-text {
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  margin-bottom: 0.5rem;
+}
+
+.host-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+}

@@ -1,0 +1,43 @@
+[tool]
+name = 'repl'
+description = 'interactive Python REPL, maintains state across calls via session_id'
+version = '1.0.0'
+status = 'active'
+topics = ['common']
+
+[entry]
+type = 'python'
+path = 'main.py'
+
+[schema.input]
+type = 'object'
+required = ['code']
+[schema.input.properties.code]
+type = 'string'
+description = 'Python code to execute'
+[schema.input.properties.session_id]
+type = 'string'
+default = 'default'
+description = 'REPL session ID, same ID shares variable state'
+[schema.input.properties.reset]
+type = 'boolean'
+default = false
+description = 'reset session state (clear variables)'
+[schema.input.properties.dry_run]
+type = 'boolean'
+default = false
+description = 'preview only'
+
+[schema.output]
+type = 'object'
+[schema.output.properties]
+session_id = { type = 'string' }
+stdout = { type = 'string' }
+stderr = { type = 'string' }
+error = { type = 'string' }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 60

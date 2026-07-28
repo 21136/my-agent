@@ -1,0 +1,59 @@
+[tool]
+name = "git_clone"
+description = "Shallow clone a public https git repo into workspace or evolve/tools"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["url", "dest", "target"]
+
+[schema.input.properties.url]
+type = "string"
+description = "https git repository URL"
+
+[schema.input.properties.dest]
+type = "string"
+description = "Destination directory relative to agent root (see target)"
+
+[schema.input.properties.target]
+type = "string"
+enum = ["workspace", "evolve_tools"]
+description = "workspace = under workspace/; evolve_tools = under evolve/tools/<scope>/..."
+
+[schema.input.properties.branch]
+type = "string"
+description = "Optional branch name (--branch)"
+
+[schema.input.properties.tag]
+type = "string"
+description = "Optional tag name (--branch, detached HEAD)"
+
+[schema.input.properties.depth]
+type = "integer"
+default = 1
+description = "Shallow clone depth (--depth)"
+
+[schema.input.properties.on_conflict]
+type = "string"
+default = "skip"
+description = "skip | rename | overwrite when dest exists"
+
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "Preview git clone command only"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 300

@@ -1,0 +1,41 @@
+[tool]
+name = "archive_by_date"
+description = "将 workspace 目录顶层文件按修改日期移入 YYYY-MM/ 子文件夹"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 的目录路径"
+[schema.input.properties.date_field]
+type = "string"
+enum = ["mtime", "ctime"]
+default = "mtime"
+[schema.input.properties.folder_format]
+type = "string"
+default = "%Y-%m"
+description = "strftime 格式，用于子文件夹名"
+[schema.input.properties.include_hidden]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+source_dir = { type = "string" }
+count = { type = "integer" }
+moved = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

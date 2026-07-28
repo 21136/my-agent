@@ -37,6 +37,8 @@ EVENT_FEEDBACK_POSITIVE = "feedback_positive"
 EVENT_FEEDBACK_NEGATIVE = "feedback_negative"
 EVENT_MARKED_SUSPECT = "marked_suspect"
 EVENT_AUDIT_COMPLETED = "audit_completed"
+EVENT_SUBAGENT_RUN = "subagent_run"
+EVENT_GUARD = "guard"
 _DEFAULT_ARG_MAX_CHARS = 500
 _SENSITIVE_KEYS = frozenset(
     {
@@ -106,6 +108,17 @@ class EvolveLog:
         if result.error is not None:
             fields["error_code"] = result.error.code
             fields["error_message"] = result.error.message
+        if isinstance(result.data, dict):
+            for key in (
+                "host_src_id",
+                "host_src_rel",
+                "host_dst_id",
+                "host_dst_rel",
+                "host_root_id",
+            ):
+                value = result.data.get(key)
+                if isinstance(value, str) and value:
+                    fields[key] = value
         self.append_event(EVENT_TOOL_CALL, **fields)
 
     def log_session_workspace_approved(
@@ -340,6 +353,46 @@ class EvolveLog:
             fields["conversation_id"] = conversation_id
         self.append_event(EVENT_AUDIT_COMPLETED, **fields)
 
+    def log_subagent_run(
+        self,
+        *,
+        kind: str,
+        tool_rounds: int,
+        truncated: bool,
+        paths_cited: list[str],
+        conversation_id: str | None = None,
+        verdict: str | None = None,
+        tool_name: str | None = None,
+    ) -> None:
+        fields: dict[str, Any] = {
+            "kind": kind,
+            "tool_rounds": tool_rounds,
+            "truncated": truncated,
+            "paths_cited": list(paths_cited),
+        }
+        if conversation_id is not None:
+            fields["conversation_id"] = conversation_id
+        if verdict is not None:
+            fields["verdict"] = verdict
+        if tool_name is not None:
+            fields["tool_name"] = tool_name
+        self.append_event(EVENT_SUBAGENT_RUN, **fields)
+
+    def log_guard_event(
+        self,
+        *,
+        guard_type: str,
+        conversation_id: str | None = None,
+        **fields: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "guard_type": guard_type,
+            **sanitize_log_value(fields),
+        }
+        if conversation_id is not None:
+            payload["conversation_id"] = conversation_id
+        self.append_event(EVENT_GUARD, **payload)
+
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -430,9 +483,16 @@ def _demo() -> None:
             reason="read_file:memories/workflow/downloads-sort.md",
             conversation_id="demo",
         )
+        log.log_subagent_run(
+            kind="explore",
+            tool_rounds=3,
+            truncated=False,
+            paths_cited=["docs/MAP.md"],
+            conversation_id="demo",
+        )
 
         events = read_events(log_path)
-        assert len(events) == 6
+        assert len(events) == 7
         assert events[0]["event"] == EVENT_TOOL_CALL
         assert events[0]["tool"] == "grep"
         assert events[0]["ok"] is True
@@ -446,7 +506,10 @@ def _demo() -> None:
         assert events[5]["event"] == EVENT_ENTITY_USED
         assert events[5]["entity_id"] == "downloads-sort"
         assert events[5]["level"] == "L2"
+        assert events[6]["event"] == EVENT_SUBAGENT_RUN
+        assert events[6]["kind"] == "explore"
         print(f"[PASS] wrote {len(events)} evolve_log line(s)")
+        print("[PASS] T-706: log_subagent_run appends subagent_run event")
         print("[PASS] T-602a: log_entity_used appends entity_used event")
 
         long_args = {"content": "x" * 800}
@@ -460,6 +523,19 @@ def _demo() -> None:
         assert redacted["api_key"] == "[redacted]"
         assert redacted["query"] == "ok"
         print("[PASS] sanitize_log_value redacts sensitive keys")
+
+        secret_tool = "sk-demo-must-not-hit-disk"
+        log.log_tool_call(
+            tool="http_get",
+            arguments={"url": "https://example.com", "api_key": secret_tool},
+            result=tool_ok("http_get", {"status": 200}, duration_ms=1),
+            conversation_id="demo",
+        )
+        disk_text = log_path.read_text(encoding="utf-8")
+        assert secret_tool not in disk_text
+        tool_events = [event for event in read_events(log_path) if event.get("event") == EVENT_TOOL_CALL]
+        assert tool_events[-1]["arguments"]["api_key"] == "[redacted]"
+        print("[PASS] IT-60: evolve_log tool_call redacts api_key on disk")
 
 
 if __name__ == "__main__":

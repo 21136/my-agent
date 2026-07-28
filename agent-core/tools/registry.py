@@ -82,6 +82,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool("web_search", "Search the web for links and snippets", confirm=False, dry_run_supported=False),
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),
+    BuiltinTool(
+        "propose_context_switch",
+        "Propose switching project/shell context (requires user confirm)",
+        confirm=True,
+        dry_run_supported=False,
+    ),
 )
 
 
@@ -204,7 +210,7 @@ def parse_tool_manifest(manifest_path: Path, *, evolve_dir: Path) -> EvolvedTool
 
     entry_rel = _require_str(entry_section, "path", manifest_path=manifest_path)
     script_path = (tool_dir / entry_rel).resolve()
-    if not script_path.is_file():
+    if status in {"active", "staged"} and not script_path.is_file():
         raise ToolManifestError(f"entry script not found: {entry_rel}", manifest_path=manifest_path)
     try:
         script_path.relative_to(tool_dir.resolve())

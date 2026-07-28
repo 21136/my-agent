@@ -1,0 +1,34 @@
+[tool]
+name = "move_to_trash"
+description = "将 workspace 内文件或目录移入 _trash/（可恢复）；path 相对 workspace"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 的文件或目录"
+[schema.input.properties.trash_dir]
+type = "string"
+default = "_trash"
+description = "回收站目录，相对 workspace"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+path = { type = "string" }
+trash_path = { type = "string" }
+skipped = { type = "boolean" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

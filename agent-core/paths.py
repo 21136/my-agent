@@ -9,14 +9,73 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from tools.schema import ToolErrorCode
 
-_AGENT_MARKER = Path("evolve") / "_index.toml"
+if TYPE_CHECKING:
+    from host_scope import HostScopeConfig
+
+_AGENT_MARKERS = (
+    Path("evolve") / "_index.core.toml",
+    Path("evolve") / "_index.toml",
+)
 _STATE_REL = Path("data") / "state.json"
+
+_STATE_CORRUPTION_NOTICE = (
+    "全局状态文件损坏，已按空索引降级（state.json）。"
+    "壳/项目会话映射可能已丢失，下次切换会重建。"
+)
+
+
+def format_state_corruption_notice() -> str:
+    """User-facing text when ``data/state.json`` is structurally unreadable (T-1823-05)."""
+    return _STATE_CORRUPTION_NOTICE
+
+
+def note_state_corruption(paths: AgentPaths) -> None:
+    """Record a once-per-paths notice for corrupt state.json (idempotent)."""
+    text = format_state_corruption_notice()
+    if text not in paths.corruption_notices:
+        paths.corruption_notices.append(text)
+
+
+def read_agent_state_payload(
+    paths: AgentPaths,
+    *,
+    note_corruption: bool = True,
+) -> dict[str, Any]:
+    """Load ``data/state.json`` as a dict; corrupt/missing → ``{}``.
+
+    Missing file is normal (no notice). Unreadable JSON or non-object roots
+    degrade to ``{}`` and optionally append to ``paths.corruption_notices``.
+    """
+    state_path = paths.data / "state.json"
+    if not state_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        if note_corruption:
+            note_state_corruption(paths)
+        return {}
+    if not isinstance(loaded, dict):
+        if note_corruption:
+            note_state_corruption(paths)
+        return {}
+    return loaded
+
+
+def write_agent_state_payload(paths: AgentPaths, payload: dict[str, Any]) -> None:
+    state_path = paths.data / "state.json"
+    paths.data.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 class PathError(Exception):
@@ -42,6 +101,8 @@ class AgentPaths:
     workspace: Path
     data: Path
     evolve: Path
+    # Ephemeral; mutated in place when state.json is structurally bad (T-1823-05 / IT-56).
+    corruption_notices: list[str] = field(default_factory=list, compare=False)
 
     @classmethod
     def discover(cls, start: Path | str | None = None) -> AgentPaths:
@@ -52,7 +113,8 @@ class AgentPaths:
     def from_root(cls, agent_root: Path | str) -> AgentPaths:
         root = Path(agent_root).resolve()
         if not _is_agent_root(root):
-            raise FileNotFoundError(f"not an agent root (missing {_AGENT_MARKER}): {root}")
+            marker_hint = " or ".join(str(marker) for marker in _AGENT_MARKERS)
+            raise FileNotFoundError(f"not an agent root (missing {marker_hint}): {root}")
         return cls(
             agent_root=root,
             workspace=root / "workspace",
@@ -67,6 +129,24 @@ class AgentPaths:
     def resolve_under_workspace(self, raw: str, *, must_exist: bool = False) -> Path:
         """Resolve *raw* under workspace/ (write_text, workspace_only evolved)."""
         return self._resolve(raw, base=self.workspace, must_exist=must_exist)
+
+    def resolve_under_host(
+        self,
+        raw: str,
+        *,
+        config: HostScopeConfig,
+        write: bool = False,
+        must_exist: bool = False,
+    ) -> Path:
+        """Resolve ``host:<id>/relative`` (HOST-SCOPE S1, T-1003)."""
+        from host_scope import resolve_host_path
+
+        return resolve_host_path(
+            raw,
+            config=config,
+            write=write,
+            must_exist=must_exist,
+        ).absolute
 
     def is_under_agent(self, path: Path | str) -> bool:
         return _is_within(Path(path).resolve(), self.agent_root.resolve())
@@ -110,7 +190,9 @@ class AgentPaths:
 
 
 def find_agent_root(*, start: Path | str | None = None) -> Path:
-    """Walk upward to locate the directory containing ``evolve/_index.toml``.
+    """Walk upward to locate the directory containing evolve index marker.
+
+    Accepts ``evolve/_index.core.toml`` (Phase 8) or legacy ``evolve/_index.toml``.
 
     Resolution order:
     1. ``MY_AGENT_ROOT`` environment variable (if valid)
@@ -122,8 +204,9 @@ def find_agent_root(*, start: Path | str | None = None) -> Path:
         root = Path(env_root).expanduser()
         if _is_agent_root(root):
             return root.resolve()
+        marker_hint = " or ".join(str(marker) for marker in _AGENT_MARKERS)
         raise FileNotFoundError(
-            f"MY_AGENT_ROOT is set but missing {_AGENT_MARKER}: {root}"
+            f"MY_AGENT_ROOT is set but missing evolve index ({marker_hint}): {root}"
         )
 
     origins: list[Path] = []
@@ -141,8 +224,9 @@ def find_agent_root(*, start: Path | str | None = None) -> Path:
         if found is not None:
             return found
 
+    marker_hint = " or ".join(str(marker) for marker in _AGENT_MARKERS)
     raise FileNotFoundError(
-        f"could not locate agent root (missing {_AGENT_MARKER}); "
+        f"could not locate agent root (missing {marker_hint}); "
         "set MY_AGENT_ROOT or run from inside the repo"
     )
 
@@ -163,7 +247,7 @@ def _walk_up(start: Path) -> Path | None:
 
 def _is_agent_root(directory: Path) -> bool:
     try:
-        return (directory / _AGENT_MARKER).is_file()
+        return any((directory / marker).is_file() for marker in _AGENT_MARKERS)
     except OSError:
         return False
 
@@ -244,6 +328,111 @@ def _demo() -> None:
     project = paths.resolve_under_agent("docs/PROJECT.md", must_exist=True)
     assert project.is_file()
     print(f"[PASS] must_exist: {project.name}")
+
+    _demo_t1003(paths)
+
+
+def _demo_t1003(paths: AgentPaths) -> None:
+    from host_scope import (
+        HostPathDeniedError,
+        HostRootNotFoundError,
+        HostScopePermissionError,
+        add_host_root,
+        empty_host_scope,
+        resolve_host_path,
+    )
+
+    print()
+    print("--- T-1003 host resolve ---")
+
+    with tempfile.TemporaryDirectory(prefix="paths-t1003-") as tmp:
+        host_dir = Path(tmp)
+        notes = host_dir / "notes.txt"
+        notes.write_text("hello host", encoding="utf-8")
+        secret_dir = host_dir / ".ssh"
+        secret_dir.mkdir()
+        (secret_dir / "id_rsa").write_text("fake", encoding="utf-8")
+
+        config = empty_host_scope()
+        add_host_root(
+            paths,
+            config,
+            host_id="downloads",
+            directory=host_dir,
+            label="Test Downloads",
+            read=True,
+            write=False,
+        )
+
+        resolved = paths.resolve_under_host(
+            "host:downloads/notes.txt",
+            config=config,
+            must_exist=True,
+        )
+        assert resolved == notes.resolve()
+        print("[PASS] T-1003: host:downloads/notes.txt resolves")
+
+        try:
+            paths.resolve_under_host("host:unknown/foo", config=config)
+            print("[FAIL] T-1003: unknown host id should be rejected")
+            raise SystemExit(1)
+        except HostRootNotFoundError:
+            print("[PASS] T-1003: reject host:unknown/foo")
+
+        escape_attempts = (
+            "host:downloads/../../outside",
+            "host:downloads/foo/../../../outside",
+        )
+        for raw in escape_attempts:
+            try:
+                parse_host_uri = __import__("host_scope", fromlist=["parse_host_uri"]).parse_host_uri
+                parse_host_uri(raw)
+                paths.resolve_under_host(raw, config=config)
+                print(f"[FAIL] T-1003: expected rejection for {raw!r}")
+                raise SystemExit(1)
+            except (ValueError, PathOutOfBoundsError):
+                print(f"[PASS] T-1003: reject escape {raw!r}")
+
+        try:
+            paths.resolve_under_host("host:downloads/.ssh/id_rsa", config=config)
+            print("[FAIL] T-1003: .ssh/id_rsa should be path_denied")
+            raise SystemExit(1)
+        except HostPathDeniedError as exc:
+            assert exc.code == ToolErrorCode.PATH_DENIED
+            print("[PASS] T-1003: host:downloads/.ssh/id_rsa -> path_denied")
+
+        try:
+            paths.resolve_under_host(
+                "host:downloads/notes.txt",
+                config=config,
+                write=True,
+            )
+            print("[FAIL] T-1003: write on read-only root should be rejected")
+            raise SystemExit(1)
+        except HostScopePermissionError:
+            print("[PASS] T-1003: write rejected when host root write=false")
+
+        config_write = empty_host_scope()
+        add_host_root(
+            paths,
+            config_write,
+            host_id="docs",
+            directory=host_dir,
+            label="Writable test",
+            read=True,
+            write=True,
+        )
+        out = paths.resolve_under_host(
+            "host:docs/new.txt",
+            config=config_write,
+            write=True,
+        )
+        assert out.parent == host_dir.resolve()
+        print("[PASS] T-1003: write resolve allowed when host root write=true")
+
+        direct = resolve_host_path("host:downloads/notes.txt", config=config, must_exist=True)
+        assert direct.relative == "notes.txt"
+        print("[PASS] T-1003: ResolvedHostPath.relative")
 
 
 if __name__ == "__main__":

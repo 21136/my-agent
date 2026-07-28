@@ -29,6 +29,7 @@ class ToolErrorCode(StrEnum):
 
     # paths / filesystem (Phase 1 builtins)
     PATH_OUT_OF_BOUNDS = "path_out_of_bounds"
+    PATH_DENIED = "path_denied"
     FILE_TOO_LARGE = "file_too_large"
     BINARY_FILE = "binary_file"
     NOT_FOUND = "not_found"

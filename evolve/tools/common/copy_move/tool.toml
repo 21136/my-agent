@@ -1,0 +1,39 @@
+[tool]
+name = "copy_move"
+description = "在 workspace 内复制或移动文件/目录；source/dest 相对 workspace；冲突默认 skip"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["operation", "source", "dest"]
+[schema.input.properties.operation]
+type = "string"
+enum = ["copy", "move"]
+[schema.input.properties.source]
+type = "string"
+[schema.input.properties.dest]
+type = "string"
+[schema.input.properties.on_conflict]
+type = "string"
+enum = ["skip", "overwrite", "rename"]
+default = "skip"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+operation = { type = "string" }
+source = { type = "string" }
+dest = { type = "string" }
+skipped = { type = "boolean" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

@@ -1,0 +1,32 @@
+---
+description: Prefer workorder-runner propose mode; Cursor applies for native Accept UX
+alwaysApply: true
+---
+
+# Workorder runner · Propose + 原生 Accept
+
+## 默认分工
+
+- **思考 / 定方案**：Cursor
+- **生成代码 / patch**：`workorder-runner` + DeepSeek（`submit_workorder`）
+- **落盘与 Accept 流**：Cursor **原生编辑工具**（保留内联 diff / Accept）
+
+## 工单必须带
+
+`apply_mode: "propose"`。缺省 `write` 仅给 CLI/自动化；**在 Cursor 里一律 propose。**
+
+## 收到 `status: "proposed"` 后（必须）
+
+1. 读 `proposed_changes[]`
+2. 用 Cursor 原生编辑按条 apply
+3. 用户走内联 diff / Accept
+4. Accept 后再跑验证（propose 模式 runner 不执行 verify）
+
+## 降级
+
+MCP 不可用 → 声明离线后 Cursor 直写。
+
+## 不要
+
+- Cursor 会话默认 `write`（绕过 Accept）
+- `propose` + `isolate: "worktree"`

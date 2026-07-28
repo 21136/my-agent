@@ -1,0 +1,41 @@
+[tool]
+name = "flatten_dir"
+description = "将 workspace 子目录中的文件提升到指定目录顶层；冲突默认 rename"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 的根目录"
+[schema.input.properties.on_conflict]
+type = "string"
+enum = ["skip", "rename"]
+default = "rename"
+[schema.input.properties.include_hidden]
+type = "boolean"
+default = false
+[schema.input.properties.remove_empty_dirs]
+type = "boolean"
+default = true
+description = "移动后删除变空的子目录"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+source_dir = { type = "string" }
+count = { type = "integer" }
+moved = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 120

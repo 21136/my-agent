@@ -1,0 +1,42 @@
+[tool]
+name = "patch_file"
+description = "按行号范围或唯一锚点替换 agent 根下文本文件片段（docs/agent-core/evolve/workspace）"
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "replacement"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 agent 根的文本文件路径"
+[schema.input.properties.replacement]
+type = "string"
+[schema.input.properties.start_line]
+type = "integer"
+minimum = 1
+description = "与 end_line 合用：1-based 含首含尾"
+[schema.input.properties.end_line]
+type = "integer"
+minimum = 1
+[schema.input.properties.find]
+type = "string"
+description = "无行号时：替换首次出现的锚点子串（须唯一）"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+path = { type = "string" }
+mode = { type = "string" }
+lines_changed = { type = "integer" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 60

@@ -3,8 +3,8 @@ id: downloads-sort
 topics: [workflow]
 status: active
 summary: workspace 下载夹按扩展名整理：workflow 主题下用 sort_by_extension，先 dry_run 再执行
-use_count: 1
-last_used_at: "2026-07-10T06:59:25.764140Z"
+use_count: 2
+last_used_at: "2026-07-10T07:59:01.650923Z"
 ---
 
 ## 场景

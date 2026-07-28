@@ -1,0 +1,822 @@
+/* Daily shell · Amp（极致嗨）— DAILY-SHELL v0.3
+   idle：亮底 + shimmer；busy：四色快扫（3s）+ inset 霓虹脉冲（1.8s）。 */
+
+.daily-shell {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  --daily-bg: #faf6f2;
+  --daily-surface: #ffffff;
+  --daily-text: #1a1210;
+  --daily-text-muted: #6b5d52;
+  --daily-text-dim: #9a8b7c;
+  --daily-accent: #ff2d92;
+  --daily-accent-2: #ff6b35;
+  --daily-glass: rgba(255, 255, 255, 0.72);
+  --daily-radius-sm: 14px;
+  --daily-radius-lg: 22px;
+  --daily-radius-pill: 999px;
+  --daily-border: rgba(255, 45, 146, 0.12);
+  --daily-shadow-soft: 0 4px 24px color-mix(in srgb, var(--daily-accent) 8%, transparent);
+  --daily-flow-a: #ff6b6b;
+  --daily-flow-b: #ff2d92;
+  --daily-flow-c: #ffd93d;
+  --daily-flow-d: #4ecdc4;
+  background-color: var(--daily-bg);
+  background-image: linear-gradient(
+    120deg,
+    transparent 0%,
+    color-mix(in srgb, var(--daily-accent) 5%, transparent) 42%,
+    color-mix(in srgb, var(--daily-flow-d) 5%, transparent) 58%,
+    transparent 100%
+  );
+  background-size: 220% 220%;
+  animation: amp-idle-shimmer 10s ease-in-out infinite;
+}
+
+.daily-shell.is-working {
+  animation: amp-gradient-flow 3s ease-in-out infinite;
+  background-color: var(--daily-flow-b);
+  background-image: linear-gradient(
+    125deg,
+    var(--daily-flow-a) 0%,
+    var(--daily-flow-b) 22%,
+    var(--daily-flow-c) 48%,
+    var(--daily-flow-d) 72%,
+    var(--daily-flow-a) 100%
+  );
+  background-size: 360% 360%;
+}
+
+.daily-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  background: linear-gradient(
+    125deg,
+    color-mix(in srgb, var(--daily-flow-a) 88%, white) 0%,
+    color-mix(in srgb, var(--daily-flow-b) 90%, white) 25%,
+    color-mix(in srgb, var(--daily-flow-c) 85%, white) 50%,
+    color-mix(in srgb, var(--daily-flow-d) 88%, white) 75%,
+    color-mix(in srgb, var(--daily-flow-a) 88%, white) 100%
+  );
+  background-size: 360% 360%;
+}
+
+.daily-shell.is-working::before {
+  opacity: 0.42;
+  animation: amp-gradient-flow 3s ease-in-out infinite reverse;
+}
+
+.daily-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--daily-accent) 45%, transparent);
+}
+
+.daily-shell.is-working::after {
+  opacity: 1;
+  animation: amp-shell-glow 1.8s ease-in-out infinite;
+}
+
+.daily-shell > * {
+  position: relative;
+  z-index: 1;
+  transition:
+    background 0.35s ease,
+    border-color 0.35s ease,
+    color 0.35s ease,
+    box-shadow 0.35s ease;
+}
+
+/* is-working — 全层参与变色（透明/玻璃，让底色透上来） */
+
+.daily-shell.is-working .daily-chat-layer {
+  background: transparent;
+}
+
+.daily-shell.is-working .daily-turn-label {
+  color: color-mix(in srgb, var(--daily-text) 55%, white);
+  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.45);
+}
+
+.daily-shell.is-working .daily-turn-body {
+  color: color-mix(in srgb, var(--daily-text) 88%, #3d1010);
+  text-shadow: 0 1px 14px rgba(255, 255, 255, 0.55);
+}
+
+.daily-shell.is-working .daily-turn-user .daily-turn-body {
+  background: color-mix(in srgb, white 8%, transparent);
+  box-shadow: 0 4px 28px color-mix(in srgb, var(--daily-flow-b) 18%, transparent);
+}
+
+.daily-shell.is-working .daily-turn-assistant .daily-turn-body {
+  background: color-mix(in srgb, white 5%, transparent);
+}
+
+.daily-shell.is-working .daily-turn-recall .daily-turn-body {
+  background: color-mix(in srgb, white 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--daily-accent) 28%, transparent);
+}
+
+.daily-shell.is-working .daily-notice {
+  color: color-mix(in srgb, var(--daily-text) 70%, white);
+  background: color-mix(in srgb, white 10%, transparent);
+  box-shadow: 0 2px 16px color-mix(in srgb, var(--daily-flow-c) 12%, transparent);
+}
+
+.daily-shell.is-working .daily-markdown a {
+  color: color-mix(in srgb, white 15%, var(--daily-accent));
+}
+
+.daily-shell.is-working .daily-markdown code {
+  background: color-mix(in srgb, white 32%, transparent);
+  border: none;
+  box-shadow: 0 1px 8px color-mix(in srgb, var(--daily-flow-b) 10%, transparent);
+}
+
+.daily-shell.is-working .daily-markdown pre {
+  background: color-mix(in srgb, white 28%, transparent);
+  border: none;
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--daily-flow-d) 12%, transparent);
+}
+
+.daily-shell.is-working .daily-markdown blockquote {
+  background: color-mix(in srgb, white 20%, transparent);
+  border-left: none;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, white 30%, var(--daily-accent-2));
+}
+
+.daily-shell.is-working .daily-composer {
+  background: transparent;
+  border-top: none;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.daily-shell.is-working .daily-composer-capsule {
+  background: color-mix(in srgb, white 10%, transparent);
+  box-shadow:
+    0 8px 32px color-mix(in srgb, var(--daily-flow-b) 22%, transparent),
+    0 0 0 1px color-mix(in srgb, white 32%, var(--daily-accent));
+  backdrop-filter: blur(8px);
+}
+
+.daily-shell.is-working .daily-input {
+  background: transparent;
+  border: none;
+  color: color-mix(in srgb, var(--daily-text) 90%, #2a0818);
+  box-shadow: none;
+}
+
+.daily-shell.is-working .daily-input::placeholder {
+  color: color-mix(in srgb, var(--daily-text-muted) 75%, white);
+}
+
+.daily-shell.is-working .daily-btn:not(.daily-btn-accent):not(.daily-btn-danger) {
+  background: color-mix(in srgb, white 35%, transparent);
+  border: none;
+  color: color-mix(in srgb, var(--daily-text) 85%, #2a0818);
+}
+
+.daily-shell.is-working .daily-btn-accent {
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--daily-flow-b) 40%, transparent);
+}
+
+.daily-shell.is-working .daily-confirm-glass {
+  background: color-mix(in srgb, var(--daily-flow-b) 28%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.daily-shell.is-working .daily-confirm-card {
+  background: color-mix(in srgb, white 32%, transparent);
+  border: none;
+  box-shadow:
+    0 16px 48px color-mix(in srgb, var(--daily-flow-b) 25%, transparent),
+    0 0 0 1px color-mix(in srgb, white 38%, var(--daily-accent));
+  backdrop-filter: blur(12px);
+}
+
+@keyframes amp-idle-shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes amp-gradient-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes amp-shell-glow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 48px color-mix(in srgb, var(--daily-flow-b) 18%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--daily-flow-c) 28%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 64px color-mix(in srgb, var(--daily-accent) 28%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--daily-flow-d) 45%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .daily-shell {
+    animation: none;
+  }
+
+  .daily-shell.is-working {
+    animation: none;
+    background-size: 100% 100%;
+    background-position: 50% 50%;
+  }
+
+  .daily-shell.is-working::before {
+    animation: none;
+    background-size: 100% 100%;
+    background-position: 50% 50%;
+  }
+
+  .daily-shell.is-working::after {
+    animation: none;
+    box-shadow:
+      inset 0 0 0 2px color-mix(in srgb, var(--daily-flow-b) 65%, transparent),
+      inset 0 0 0 4px color-mix(in srgb, var(--daily-flow-d) 35%, transparent);
+  }
+}
+
+/* z2 — chat layer */
+
+.daily-chat-layer {
+  position: absolute;
+  inset: 0;
+  bottom: 5.5rem;
+  z-index: 2;
+  overflow-y: auto;
+  padding: 1.5rem 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.daily-chat-layer > .daily-turn,
+.daily-chat-layer > .daily-notice {
+  width: 100%;
+  max-width: 40rem;
+}
+
+.daily-turn {
+  margin-bottom: 1.85rem;
+  transition: opacity 0.35s ease;
+  width: 100%;
+}
+
+.daily-turn-enter {
+  animation: amp-turn-enter 0.32s cubic-bezier(0.22, 1.1, 0.36, 1);
+}
+
+@keyframes amp-turn-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.daily-turn-dim:not(.in-view) {
+  opacity: 0.55;
+}
+
+.daily-turn-recall .daily-turn-body {
+  font-size: 1.16rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--daily-radius-sm);
+  background: color-mix(in srgb, var(--daily-accent) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--daily-accent) 20%, transparent);
+}
+
+.daily-turn-label {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--daily-text-muted);
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.03em;
+}
+
+.daily-turn-user .daily-turn-body {
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--daily-radius-sm);
+  background: color-mix(in srgb, var(--daily-accent) 5%, transparent);
+  box-shadow: var(--daily-shadow-soft);
+}
+
+.daily-turn-assistant .daily-turn-body {
+  padding: 0.15rem 0.1rem;
+}
+
+.daily-turn-body {
+  font-size: 1.12rem;
+  line-height: 1.65;
+  color: var(--daily-text);
+  word-break: break-word;
+}
+
+.daily-turn-streaming .daily-turn-body::after {
+  content: "▍";
+  display: inline;
+  margin-left: 1px;
+  color: var(--daily-accent);
+  animation: amp-stream-cursor 0.85s step-end infinite;
+}
+
+@keyframes amp-stream-cursor {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+.daily-notice {
+  font-size: 0.9rem;
+  color: var(--daily-text-muted);
+  margin: 0.75rem 0;
+  padding: 0.55rem 0.9rem;
+  border-radius: var(--daily-radius-sm);
+  background: color-mix(in srgb, var(--daily-accent) 4%, var(--daily-surface));
+  box-shadow: var(--daily-shadow-soft);
+}
+
+/* Markdown */
+
+.daily-markdown {
+  line-height: 1.6;
+}
+
+.daily-markdown > :first-child {
+  margin-top: 0;
+}
+
+.daily-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.daily-markdown h1,
+.daily-markdown h2,
+.daily-markdown h3,
+.daily-markdown h4 {
+  margin: 1.1em 0 0.45em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--daily-text);
+}
+
+.daily-markdown h1 {
+  font-size: 1.45rem;
+}
+
+.daily-markdown h2 {
+  font-size: 1.25rem;
+}
+
+.daily-markdown h3 {
+  font-size: 1.14rem;
+}
+
+.daily-markdown p {
+  margin: 0.55em 0;
+}
+
+.daily-markdown ul,
+.daily-markdown ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+
+.daily-markdown li {
+  margin: 0.2em 0;
+}
+
+.daily-markdown li > p {
+  margin: 0.15em 0;
+}
+
+.daily-markdown strong {
+  font-weight: 600;
+}
+
+.daily-markdown hr {
+  border: none;
+  border-top: 1px solid var(--daily-border);
+  margin: 1em 0;
+}
+
+.daily-markdown blockquote {
+  margin: 0.6em 0;
+  padding: 0.5em 0.9em;
+  border-radius: 0 var(--daily-radius-sm) var(--daily-radius-sm) 0;
+  border-left: none;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--daily-accent-2) 55%, transparent);
+  color: var(--daily-text-muted);
+  background: color-mix(in srgb, var(--daily-accent) 4%, transparent);
+}
+
+.daily-markdown code {
+  font-family: var(--ma-mono);
+  font-size: 0.88em;
+  padding: 0.12em 0.4em;
+  border-radius: 8px;
+  color: var(--daily-text);
+  background: color-mix(in srgb, var(--daily-accent) 6%, var(--daily-surface));
+  border: none;
+}
+
+.daily-markdown pre {
+  margin: 0.65em 0;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  border-radius: var(--daily-radius-sm);
+  color: var(--daily-text);
+  background: color-mix(in srgb, var(--daily-text) 3%, var(--daily-surface));
+  border: none;
+  box-shadow: var(--daily-shadow-soft);
+}
+
+.daily-markdown pre code {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.daily-markdown .table-wrap,
+.daily-markdown table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+}
+
+.daily-markdown table {
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.daily-markdown th,
+.daily-markdown td {
+  padding: 0.4em 0.65em;
+  border: 1px solid var(--daily-border);
+  text-align: left;
+  vertical-align: top;
+  color: var(--daily-text);
+}
+
+.daily-markdown th {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--daily-accent) 5%, var(--daily-surface));
+}
+
+.daily-markdown tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--daily-accent) 3%, var(--daily-surface));
+}
+
+.daily-markdown a {
+  color: var(--daily-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* z3 — composer（胶囊输入条，无硬分割线） */
+
+.daily-composer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem 1rem;
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--daily-bg) 92%, transparent) 0%,
+    color-mix(in srgb, var(--daily-bg) 55%, transparent) 55%,
+    transparent 100%
+  );
+  border-top: none;
+  transition:
+    background 0.45s ease,
+    box-shadow 0.45s ease;
+}
+
+.daily-composer.disabled .daily-composer-capsule {
+  opacity: 0.72;
+}
+
+.daily-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  min-height: 1.1rem;
+  padding: 0 0.25rem;
+}
+
+.daily-composer-status {
+  flex: 1;
+  text-align: right;
+  font-size: 0.76rem;
+  color: var(--daily-text-muted);
+  letter-spacing: 0.02em;
+  font-weight: 500;
+}
+
+.daily-composer-status.is-busy {
+  color: var(--daily-accent);
+  font-weight: 600;
+}
+
+.daily-composer-row {
+  display: flex;
+  justify-content: center;
+  padding: 0 0.15rem;
+}
+
+.daily-composer-capsule {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem;
+  width: 100%;
+  max-width: 40rem;
+  padding: 0.35rem 0.35rem 0.35rem 1rem;
+  border-radius: var(--daily-radius-pill);
+  background: color-mix(in srgb, var(--daily-surface) 72%, transparent);
+  box-shadow:
+    var(--daily-shadow-soft),
+    0 0 0 1px color-mix(in srgb, var(--daily-accent) 8%, transparent);
+  backdrop-filter: blur(14px);
+  transition:
+    background 0.45s ease,
+    box-shadow 0.45s ease;
+}
+
+.daily-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--daily-text);
+  padding: 0.5rem 0;
+  border-radius: 0;
+  resize: none;
+  min-height: 2.35rem;
+  max-height: 8rem;
+  font: inherit;
+  line-height: 1.5;
+  box-shadow: none;
+}
+
+.daily-input::placeholder {
+  color: var(--daily-text-dim);
+}
+
+.daily-input:focus {
+  outline: none;
+}
+
+.daily-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.daily-btn {
+  border: none;
+  background: transparent;
+  color: var(--daily-text);
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--daily-radius-pill);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+.daily-btn-accent {
+  background: linear-gradient(
+    135deg,
+    var(--daily-accent) 0%,
+    color-mix(in srgb, var(--daily-accent-2) 70%, var(--daily-accent)) 100%
+  );
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.5rem 1.05rem;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--daily-accent) 35%, transparent);
+}
+
+.daily-btn-accent:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.daily-shell.is-working .daily-composer-status.is-busy {
+  color: color-mix(in srgb, white 20%, var(--daily-accent));
+  animation: amp-status-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes amp-status-pulse {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.daily-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* z4 — confirm glass */
+
+.daily-confirm-glass {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--daily-bg) 55%, transparent);
+  backdrop-filter: blur(10px);
+  animation: daily-glass-in 0.2s ease;
+}
+
+.daily-confirm-glass.hidden {
+  display: none !important;
+}
+
+@keyframes daily-glass-in {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(10px);
+  }
+}
+
+.daily-confirm-card {
+  width: min(28rem, 100%);
+  padding: 1.15rem 1.25rem;
+  border-radius: var(--daily-radius-lg);
+  border: none;
+  background: var(--daily-glass);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 20px 50px color-mix(in srgb, var(--daily-accent) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--daily-accent) 12%, transparent);
+  color: var(--daily-text);
+}
+
+.daily-confirm-card.resolved {
+  opacity: 0.9;
+}
+
+.daily-confirm-title {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--daily-text);
+}
+
+.daily-confirm-preview {
+  font-family: var(--ma-mono);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--daily-text-muted);
+  margin: 0 0 0.85rem;
+}
+
+.daily-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.daily-btn-danger {
+  border: none;
+  color: var(--ma-danger);
+  background: color-mix(in srgb, var(--ma-danger) 8%, transparent);
+}
+
+.daily-confirm-resolved {
+  font-size: 0.85rem;
+  color: var(--daily-text-muted);
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* reduced-motion — T-904i5 partial */
+
+@media (prefers-reduced-motion: reduce) {
+  .daily-turn {
+    transition: none;
+  }
+
+  .daily-turn-enter {
+    animation: none;
+  }
+
+  .daily-turn-streaming .daily-turn-body::after {
+    animation: none;
+    opacity: 0.7;
+  }
+
+  .daily-confirm-glass {
+    animation: none;
+  }
+
+  .daily-shell.is-working .daily-composer-status.is-busy {
+    animation: none;
+  }
+}
+
+.daily-shell[data-reduced-motion] .daily-turn {
+  transition: none;
+}
+
+.daily-shell[data-reduced-motion] .daily-turn-enter {
+  animation: none;
+}
+
+.daily-shell[data-reduced-motion] .daily-turn-streaming .daily-turn-body::after {
+  animation: none;
+  opacity: 0.7;
+}
+
+.daily-shell[data-reduced-motion] .daily-confirm-glass {
+  animation: none;
+}
+
+.daily-shell[data-reduced-motion] {
+  animation: none;
+}
+
+.daily-shell[data-reduced-motion].is-working {
+  animation: none;
+  background-size: 100% 100%;
+  background-position: 50% 50%;
+}
+
+.daily-shell[data-reduced-motion].is-working::before {
+  animation: none;
+  background-size: 100% 100%;
+  background-position: 50% 50%;
+  opacity: 0.35;
+}
+
+.daily-shell[data-reduced-motion].is-working::after {
+  animation: none;
+  box-shadow:
+    inset 0 0 0 2px color-mix(in srgb, var(--daily-flow-b) 65%, transparent),
+    inset 0 0 0 4px color-mix(in srgb, var(--daily-flow-d) 35%, transparent);
+}

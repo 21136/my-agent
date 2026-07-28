@@ -1,6 +1,6 @@
-# my-agent 主题注册表（唯一索引）
-# 维护：用户手改。LLM 不得自动新增 topic。
-# 详见 docs/MEMORY.md · docs/TOOLS.md
+# 种子主题索引 — 随仓库发布；勿在此添加个人主题。
+# 个人主题请写入 _index.user.toml 或使用 REPL「注册主题 …」。
+# 详见 docs/EXTENSIONS.md · docs/MEMORY.md · docs/TOOLS.md
 
 [[topic]]
 id = "coding"

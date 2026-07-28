@@ -13,7 +13,8 @@ _VALID_CONFLICTS = frozenset({"skip", "rename", "overwrite"})
 def _agent_root() -> Path:
     current = Path(__file__).resolve().parent
     for directory in (current, *current.parents):
-        if (directory / "evolve" / "_index.toml").is_file():
+        evolve_marker = directory / "evolve"
+        if (evolve_marker / "_index.core.toml").is_file() or (evolve_marker / "_index.toml").is_file():
             return directory
     raise RuntimeError("could not locate agent root")
 
@@ -96,14 +97,11 @@ def _renamed_target(target: Path) -> Path:
 
 
 def main() -> None:
-    payload = json.load(sys.stdin)
-    if not isinstance(payload, dict):
-        print(json.dumps({"ok": False, "error": "stdin must be a JSON object"}, ensure_ascii=False))
-        raise SystemExit(1)
-    result = run_write(payload)
-    print(json.dumps(result, ensure_ascii=False))
-    if result.get("ok") is False:
-        raise SystemExit(1)
+    core = _agent_core_dir()
+    if str(core) not in sys.path:
+        sys.path.insert(0, str(core))
+    from evolve_tool_io import run_tool_main
+    run_tool_main(run_write)
 
 
 def _demo() -> None:

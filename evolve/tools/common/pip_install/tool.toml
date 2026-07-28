@@ -1,0 +1,47 @@
+[tool]
+name = 'pip_install'
+description = 'install python packages via pip, capture output/exit_code'
+version = '1.0.0'
+status = 'active'
+topics = ['common']
+
+[entry]
+type = 'python'
+path = 'main.py'
+
+[schema.input]
+type = 'object'
+[schema.input.properties.packages]
+type = 'array'
+items = { type = 'string' }
+description = 'list of package names to install'
+[schema.input.properties.requirements]
+type = 'string'
+description = 'path to requirements.txt'
+[schema.input.properties.upgrade]
+type = 'boolean'
+default = false
+description = 'add --upgrade flag'
+[schema.input.properties.timeout_sec]
+type = 'integer'
+default = 120
+description = 'subprocess timeout'
+[schema.input.properties.dry_run]
+type = 'boolean'
+default = false
+description = 'preview command only'
+
+[schema.output]
+type = 'object'
+[schema.output.properties]
+command = { type = 'array' }
+exit_code = { type = 'integer' }
+stdout = { type = 'string' }
+stderr = { type = 'string' }
+truncated = { type = 'boolean' }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 130

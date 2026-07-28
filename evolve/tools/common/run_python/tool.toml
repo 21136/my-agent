@@ -1,0 +1,44 @@
+[tool]
+name = "run_python"
+description = "运行 workspace/ 或 agent 根下的 Python 脚本，捕获 stdout/stderr/exit_code"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace/ 或 agent 根的 .py 路径"
+[schema.input.properties.extra_args]
+type = "array"
+items = { type = "string" }
+default = []
+description = "追加给脚本的参数"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 120
+description = "子进程超时秒数"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "仅预览命令，不执行"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+command = { type = "array" }
+exit_code = { type = "integer" }
+stdout = { type = "string" }
+stderr = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 130

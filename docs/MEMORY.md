@@ -20,6 +20,8 @@
 | **久远记忆** | 跨会话的软事实与背景 | 项目背景、历史做法、参考资料摘要 | `evolve/memories/<topic>/*.md` | 启动注入 **id + summary 索引**；正文按需 `read_file` |
 | **短期记忆** | 仅本 thread 有效的工作上下文 | 本次会议目标、多轮对话、压缩摘要 | `goal.md` + `messages.jsonl` + `digest.md` | 锚定块 + messages；见 [RUNTIME.md](./RUNTIME.md) |
 
+**桌面呈现（T-905d）**：磁盘 `messages.jsonl` 仍 **完整**；grow 聊天区仅显示过滤后的 user/assistant 可见行（`session.history`），与顶栏条数元数据（`session.memory`）分工见 [DESKTOP.md](./DESKTOP.md) §5.2.1。
+
 一句话：
 
 > **Prompt 管默认习惯，久远记忆管你知道什么，短期记忆管你现在在干什么。**
@@ -78,13 +80,14 @@ tool_dirs = []
 
 **`tools/common/`**：不在 topic 条目中声明；凡 `status=active` 的 common 工具 **每个 session 都** 列入 evolved 清单（见 [TOOLS.md](./TOOLS.md) §4）。
 
-**主题数量**：无磁盘硬上限；`_index.toml` 由 **用户手改** 注册，LLM **不得**自动创建新主题。
+**主题数量**：无磁盘硬上限。种子主题在 `_index.core.toml`；用户扩展在 `_index.user.toml`（合并加载，见 [EXTENSIONS.md](./EXTENSIONS.md)）。**LLM 不得**自动注册新主题；用户通过 REPL `注册主题 <id>` 或手改 user 索引。
 
 ### 3.3 目录结构（实现后）
 
 ```
 evolve/
-├── _index.toml                 # 主题：prompt + memory + tool_dirs
+├── _index.core.toml            # 种子主题（随仓库）
+├── _index.user.toml            # 用户扩展主题（可为空）；见 EXTENSIONS.md
 ├── prompts/
 │   ├── coding.md
 │   ├── writing.md
@@ -224,11 +227,11 @@ summary: my-agent 个人进化 agent，Python 3.12，建设顺序先 tool 后 sk
 
 > Session 默认 **续接**最近 thread；仅 **`新会话`** 新建 `conversation_id`。见 RUNTIME §2。
 
-### 6.1 目标（仅 `新会话` 时询问）
+### 6.1 目标（可选 · 非新会话默认）
 
-1. CLI 问：「这次主要做什么？」
-2. 写入 `data/sessions/<id>/goal.md`（**gitignore**）
-3. 主题确认后写入 `meta.json`
+1. **`新会话` 默认不问目标**（直接 S4 开聊）；见 [RUNTIME.md](./RUNTIME.md) §2、[DESKTOP.md](./DESKTOP.md) §3.2.1。
+2. 显式调用 `prompt_and_set_goal`（测试或日后 `目标 …` 命令）时：问「这次主要做什么？」→ 写入 `data/sessions/<id>/goal.md`（**gitignore**）。
+3. 主题确认后写入 `meta.json`。
 
 续接时沿用已有 `goal.md`，不重复问。
 
@@ -237,7 +240,7 @@ summary: my-agent 个人进化 agent，Python 3.12，建设顺序先 tool 后 sk
 | 来源 | 说明 |
 |------|------|
 | `goal.md` | 本 thread 目标 |
-| `meta.json` | 已确认 `topics[]` |
+| `meta.json` | 已确认 `topics[]` 等；字段默认与兼容见 [RUNTIME.md](./RUNTIME.md) **§2.4 DOC-05** |
 | 锚定块 | messages 首条模板（RUNTIME §5） |
 | `messages.jsonl` | 多轮对话 + tool 结果；**仅本机** |
 | `digest.md` | context 压缩后的 **早前对话摘要**（§6.3） |

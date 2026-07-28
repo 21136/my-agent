@@ -21,7 +21,7 @@
 |------|------|
 | `memory` 新建 / 更新 | `skill` proposal（M4） |
 | `prompt_patch`（`append_section`） | 自动生成 `.py` / `tool.toml` |
-| `tool_suggestion` 规格书 | 自动新增 `_index.toml` topic |
+| `tool_suggestion` 规格书 | 自动新增 topic（须 `注册主题`；见 [EXTENSIONS.md](./EXTENSIONS.md)） |
 | `evolve_log` 写入事件 | 第二 LLM 审校 proposal |
 | 防重复最小集（§6） | 向量语义去重（M4+） |
 
@@ -89,7 +89,7 @@ S4 对话中 LLM 发现可固化内容
 | 固定步骤、可脚本化 | `tool_suggestion` | **仅 spec**；用户手放 `tools/<topic>/` |
 | 多步 SOP | — | M2 不做；提示 M4 skill |
 
-`topics[]` 必须来自 `evolve/_index.toml` 已有 `id`；LLM **不得**提议新 topic。
+`topics[]` 必须来自合并后主题索引已有 `id`；LLM **不得**提议新 topic（用户经 `注册主题` 扩展；见 [EXTENSIONS.md](./EXTENSIONS.md)）。
 
 ### 3.4 生成前注入（降噪 + 防重复）
 
@@ -334,14 +334,14 @@ evidence_fingerprint = hash(quote 原文)
   ├─ memory + create ──► 写入 evolve/memories/<topic>/<id>.md
   ├─ memory + update ──► 目标文件追加 ## 修订 YYYY-MM-DD（不覆盖正文）
   ├─ prompt_patch ─────► append_section 到 evolve/prompts/<topic>.md
-  ├─ tool_suggestion ──► status=accepted；evolve_log「待实现」；用户手建 tools/
+  ├─ tool_suggestion ──► status=accepted；evolve_log「待实现」；会话内用 `write_evolve` 写 tools/，或手建/Cursor
   └─ rejected ─────────► status=rejected；可移 proposals/archive/
 ```
 
 | 项 | 说明 |
 |----|------|
 | `_index.toml` | M2 **不**自动修改 |
-| tool 实现 | 接受 **≠** 生成代码；你审阅后放入 `tools/<topic>/<name>/`，`status: active` 后才进会话清单 |
+| tool 实现 | 接受后可用 **`write_evolve`** 写 `tools/<topic>/<name>/`（每次 confirm）；或手建/Cursor。`status: active` 后进会话清单 |
 | 热重载 | 接受后 **不重载** 当前 session overlay（已决）；下次启动/换主题生效 |
 | 冲突字段 | 接受后可在目标 `meta` 或 frontmatter 写 `conflicts_with: [id, ...]` |
 

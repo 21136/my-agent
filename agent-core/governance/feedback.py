@@ -201,7 +201,7 @@ def _demo() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "evolve").mkdir()
-        (root / "evolve" / "_index.toml").write_text("[[topic]]\nid = \"workflow\"\n", encoding="utf-8")
+        (root / "evolve" / "_index.core.toml").write_text("[[topic]]\nid = \"workflow\"\n", encoding="utf-8")
         (root / "workspace").mkdir()
         (root / "data").mkdir()
         paths = AgentPaths.from_root(root)

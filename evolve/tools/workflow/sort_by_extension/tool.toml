@@ -1,6 +1,6 @@
 [tool]
 name = "sort_by_extension"
-description = "将 workspace 下某目录中的文件按扩展名移入子文件夹（如 pdf/、txt/）；无扩展名进 _no_ext/"
+description = "将目录中的文件按扩展名移入子文件夹（如 pdf/、txt/）；无扩展名进 _no_ext/；path 可为 workspace 相对或 host:<id>/…"
 version = "1.0.0"
 status = "active"
 topics = ["workflow"]
@@ -14,7 +14,7 @@ type = "object"
 required = ["path"]
 [schema.input.properties.path]
 type = "string"
-description = "相对 workspace 的目录路径"
+description = "相对 workspace 或 host:<id>/… 的目录路径"
 [schema.input.properties.include_hidden]
 type = "boolean"
 default = false

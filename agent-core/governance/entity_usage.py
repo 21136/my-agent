@@ -14,6 +14,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from loader import copy_evolve_index_files
 from paths import AgentPaths
 from tools.logging import EvolveLog, utc_now_iso
 
@@ -236,7 +237,7 @@ def _demo() -> None:
         root = Path(tmp)
         evolve = root / "evolve"
         evolve.mkdir()
-        shutil.copy2(paths.evolve / "_index.toml", evolve / "_index.toml")
+        copy_evolve_index_files(paths.evolve, evolve)
         mem_path = evolve / "memories" / "workflow" / "entity-usage-demo.md"
         mem_path.parent.mkdir(parents=True)
         mem_path.write_text(

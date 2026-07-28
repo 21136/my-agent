@@ -1,0 +1,76 @@
+/* theme-light (P) — DESKTOP §9.3.2 */
+:root,
+html[data-theme="light"] {
+  --ma-bg: #f6f3ed;
+  --ma-surface: #ede8df;
+  --ma-text: #2c2925;
+  --ma-text-muted: #7a746a;
+  --ma-border: #d4cec4;
+  --ma-accent: #b4532a;
+  --ma-accent-muted: #c4a882;
+  --ma-danger: #9b4d4d;
+  --ma-focus: rgba(180, 83, 42, 0.4);
+  --ma-grow-flow-a: #ede0c8;
+  --ma-grow-flow-b: #d4a06a;
+  --ma-grow-flow-c: #b4532a;
+  --ma-project-bg: #eef3f8;
+  --ma-project-surface: #f8fafc;
+  --ma-project-accent: #2563eb;
+  --ma-project-flow-a: #93c5fd;
+  --ma-project-flow-b: #2563eb;
+  --ma-project-flow-c: #0d9488;
+  --ma-font: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ma-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+/* theme-dark (R) — DESKTOP §9.3.2 */
+html[data-theme="dark"] {
+  --ma-bg: #1a1917;
+  --ma-surface: #252320;
+  --ma-text: #e6e2da;
+  --ma-text-muted: #9a948a;
+  --ma-border: #3a3834;
+  --ma-accent: #d4a06a;
+  --ma-accent-muted: #a67c52;
+  --ma-danger: #c97b7b;
+  --ma-focus: rgba(212, 160, 106, 0.45);
+  --ma-grow-flow-a: #2a241c;
+  --ma-grow-flow-b: #4a3828;
+  --ma-grow-flow-c: #8b5a32;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--ma-bg);
+  color: var(--ma-text);
+  font-family: var(--ma-font);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell-placeholder {
+  padding: 2rem;
+}
+
+.text-muted {
+  color: var(--ma-text-muted);
+}

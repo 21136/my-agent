@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 280" fill="none">
+  <!-- ��K�� � my-agent companion -->
+  <defs>
+    <linearGradient id="hair" x1="100" y1="20" x2="100" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e8eef8"/>
+      <stop offset="0.5" stop-color="#b8c8e8"/>
+      <stop offset="1" stop-color="#8898c8"/>
+    </linearGradient>
+    <linearGradient id="coat" x1="60" y1="130" x2="140" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2a3050"/>
+      <stop offset="1" stop-color="#141828"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#00d4ff"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="100" y1="70" x2="100" y2="140" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffe8dc"/>
+      <stop offset="1" stop-color="#f5d0c0"/>
+    </linearGradient>
+    <radialGradient id="eyeL" cx="0" cy="0" r="1" gradientTransform="translate(78 98) scale(8)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4af"/>
+      <stop offset="1" stop-color="#126"/>
+    </radialGradient>
+    <radialGradient id="eyeR" cx="0" cy="0" r="1" gradientTransform="translate(122 98) scale(8)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4af"/>
+      <stop offset="1" stop-color="#126"/>
+    </radialGradient>
+  </defs>
+
+  <!-- � -->
+  <path d="M55 95 Q40 140 48 200 Q55 240 70 260 L130 260 Q145 240 152 200 Q160 140 145 95 Z" fill="url(#hair)" opacity="0.9"/>
+
+  <!-- �S / W -->
+  <path d="M68 155 L50 275 L150 275 L132 155 Q100 148 68 155Z" fill="url(#coat)"/>
+  <path d="M75 160 L62 270 L88 270 L95 175 Z" fill="#1a2038" opacity="0.6"/>
+  <path d="M125 160 L138 270 L112 270 L105 175 Z" fill="#1a2038" opacity="0.6"/>
+
+  <!-- �� accent -->
+  <path d="M82 155 L100 175 L118 155 Q100 162 82 155Z" fill="url(#accent)" opacity="0.85"/>
+  <rect x="96" y="172" width="8" height="18" rx="2" fill="url(#accent)" opacity="0.7"/>
+
+  <!-- � -->
+  <rect x="90" y="138" width="20" height="22" rx="6" fill="url(#skin)"/>
+
+  <!-- 8 -->
+  <ellipse cx="100" cy="105" rx="38" ry="42" fill="url(#skin)"/>
+
+  <!-- 35 -->
+  <ellipse cx="62" cy="108" rx="7" ry="10" fill="#f0c8b8"/>
+  <ellipse cx="138" cy="108" rx="7" ry="10" fill="#f0c8b8"/>
+
+  <!-- w -->
+  <path d="M62 78 Q68 55 100 50 Q132 55 138 78 Q130 68 100 65 Q70 68 62 78Z" fill="url(#hair)"/>
+  <path d="M72 72 Q80 58 100 56 Q120 58 128 72 L122 88 Q100 72 78 88 Z" fill="#c8d4ec"/>
+  <path d="M88 60 L92 82 L86 78 Z" fill="#dce4f4"/>
+  <path d="M112 60 L108 82 L114 78 Z" fill="#dce4f4"/>
+
+  <!-- <} -->
+  <ellipse cx="82" cy="102" rx="11" ry="12" fill="#fff"/>
+  <ellipse cx="118" cy="102" rx="11" ry="12" fill="#fff"/>
+
+  <!-- y� -->
+  <circle cx="83" cy="103" r="7" fill="url(#eyeL)"/>
+  <circle cx="119" cy="103" r="7" fill="url(#eyeR)"/>
+
+  <!-- �T�I -->
+  <circle cx="85" cy="101" r="2.5" fill="#fff" opacity="0.9"/>
+  <circle cx="121" cy="101" r="2.5" fill="#fff" opacity="0.9"/>
+  <circle cx="80" cy="105" r="1" fill="#fff" opacity="0.5"/>
+  <circle cx="116" cy="105" r="1" fill="#fff" opacity="0.5"/>
+
+  <!-- k� -->
+  <path d="M71 98 Q78 92 86 96" stroke="#3a2848" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+  <path d="M129 98 Q122 92 114 96" stroke="#3a2848" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+
+  <!-- n� -->
+  <ellipse cx="72" cy="115" rx="8" ry="4" fill="#f8a0a8" opacity="0.35"/>
+  <ellipse cx="128" cy="115" rx="8" ry="4" fill="#f8a0a8" opacity="0.35"/>
+
+  <!-- 4 -->
+  <path d="M94 122 Q100 127 106 122" stroke="#d08080" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+
+  <!-- 4p / �a -->
+  <path d="M148 72 L168 58 L162 78 L152 82 Z" fill="url(#accent)" opacity="0.9"/>
+  <circle cx="155" cy="74" r="3" fill="#fff" opacity="0.6"/>
+
+  <!-- ��I� -->
+  <circle cx="58" cy="168" r="3" fill="#00d4ff" opacity="0.8">
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="142" cy="168" r="3" fill="#a855f7" opacity="0.8">
+    <animate attributeName="opacity" values="0.8;0.4;0.8" dur="2.3s" repeatCount="indefinite"/>
+  </circle>
+</svg>

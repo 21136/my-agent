@@ -1,0 +1,41 @@
+[tool]
+name = "study_note"
+description = "organize markdown notes by tags"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = []
+[schema.input.properties.source_dir]
+type = "string"
+description = "source dir under workspace, default inbox"
+default = "inbox"
+[schema.input.properties.target_dir]
+type = "string"
+description = "target dir under workspace, default notes"
+default = "notes"
+[schema.input.properties.action]
+type = "string"
+description = "list=preview, organize=execute"
+enum = ["list", "organize"]
+default = "list"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean"}
+dry_run = { type = "boolean"}
+entries = { type = "array"}
+category_counts = { type = "object"}
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 60

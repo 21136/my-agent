@@ -1,0 +1,29 @@
+[tool]
+name = "host_list"
+description = "列出已登记托管目录（host:<id>/…）；只读，不 confirm"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "host:<id> 或 host:<id>/子目录，例如 host:downloads"
+[schema.input.properties.recursive]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = false
+workspace_only = false
+timeout_sec = 60

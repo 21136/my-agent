@@ -1,0 +1,45 @@
+[tool]
+name = "run_tests"
+description = "一键跑验收 demo：按 suite 批量执行 agent-core / evolve 工具的 python demo，汇总通过/失败"
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+[schema.input.properties.suite]
+type = "string"
+enum = ["quick", "core", "governance", "evolve", "all"]
+default = "quick"
+description = "预置套件：quick=冒烟；core=agent-core 主要 demo；governance=治理模块；evolve=全部 evolved demo；all=三者合并"
+[schema.input.properties.jobs]
+type = "array"
+description = "可选：覆盖 suite，逐项 {path, extra_args?, cwd?}；path 相对 agent 根，cwd 默认 agent-core"
+items = { type = "object" }
+[schema.input.properties.stop_on_fail]
+type = "boolean"
+default = false
+description = "首个失败时是否停止后续任务"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 180
+description = "每个子任务超时秒数"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+suite = { type = "string" }
+total = { type = "integer" }
+passed = { type = "integer" }
+failed = { type = "integer" }
+results = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 900

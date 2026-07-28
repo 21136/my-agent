@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import sys
@@ -27,12 +29,47 @@ from tools.registry import BUILTIN_TOOLS, ToolRegistry
 
 SECTION_SEPARATOR = "\n---\n"
 CORE_REL = Path("prompts") / "core.txt"
-INDEX_REL = Path("_index.toml")
+INDEX_LEGACY_REL = Path("_index.toml")
+INDEX_CORE_REL = Path("_index.core.toml")
+INDEX_USER_REL = Path("_index.user.toml")
+INDEX_REL = INDEX_LEGACY_REL  # backward-compat alias for tests referencing INDEX_REL
 SAFETY_REL = Path("prompts") / "safety.md"
 MEMORIES_DIRNAME = "memories"
 PROMPTS_DIRNAME = "prompts"
 
 _ARCHIVED_STATUS = frozenset({"archived"})
+
+
+class TopicIndexError(Exception):
+    """Invalid or conflicting topic index (EXTENSIONS §3.3)."""
+
+
+class TopicRegisterError(ValueError):
+    """Invalid topic registration request (EXTENSIONS §4)."""
+
+
+TOPIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_USER_INDEX_HEADER = (
+    "# 用户扩展主题 — 由你策展；git diff 此处即你的扩展变更。\n"
+    "# 新增主题：REPL「注册主题 <id>」或手改本文件。\n"
+    "# 详见 docs/EXTENSIONS.md\n\n"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterTopicSpec:
+    topic_id: str
+    name: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterTopicResult:
+    topic_id: str
+    index_path: str
+    prompt_path: str
+    memory_dir: str
+    tool_dir: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +111,24 @@ def load_core_text(*, agent_core_dir: Path | None = None) -> str:
 
 
 def load_topic_index(evolve_dir: Path) -> list[TopicIndexEntry]:
-    index_path = evolve_dir / INDEX_REL
+    """Load merged topic index: ``_index.core.toml`` + ``_index.user.toml``.
+
+    Falls back to legacy ``_index.toml`` when core is absent (EXTENSIONS §3.3).
+    """
+    core_path = evolve_dir / INDEX_CORE_REL
+    if core_path.is_file():
+        core_entries = _load_topic_index_file(core_path)
+        user_path = evolve_dir / INDEX_USER_REL
+        user_entries = _load_topic_index_file(user_path) if user_path.is_file() else []
+        return _merge_topic_index(core_entries, user_entries)
+
+    legacy_path = evolve_dir / INDEX_LEGACY_REL
+    if legacy_path.is_file():
+        return _load_topic_index_file(legacy_path)
+    return []
+
+
+def _load_topic_index_file(index_path: Path) -> list[TopicIndexEntry]:
     if not index_path.is_file():
         return []
     try:
@@ -109,6 +163,160 @@ def load_topic_index(evolve_dir: Path) -> list[TopicIndexEntry]:
             )
         )
     return entries
+
+
+def _merge_topic_index(
+    core_entries: list[TopicIndexEntry],
+    user_entries: list[TopicIndexEntry],
+) -> list[TopicIndexEntry]:
+    core_ids = {entry.id for entry in core_entries}
+    conflicts = sorted({entry.id for entry in user_entries if entry.id in core_ids})
+    if conflicts:
+        raise TopicIndexError(
+            "user topic id conflicts with core index: " + ", ".join(conflicts)
+        )
+    return [*core_entries, *user_entries]
+
+
+def copy_evolve_index_files(src_evolve: Path, dst_evolve: Path) -> None:
+    """Copy index files present under *src_evolve* into *dst_evolve* (governance demos)."""
+    dst_evolve.mkdir(parents=True, exist_ok=True)
+    for rel in (INDEX_CORE_REL, INDEX_USER_REL, INDEX_LEGACY_REL):
+        src = src_evolve / rel
+        if src.is_file():
+            shutil.copy2(src, dst_evolve / rel)
+
+
+def load_core_topic_ids(evolve_dir: Path) -> frozenset[str]:
+    core_path = evolve_dir / INDEX_CORE_REL
+    if not core_path.is_file():
+        return frozenset()
+    return frozenset(entry.id for entry in _load_topic_index_file(core_path))
+
+
+def load_user_topic_ids(evolve_dir: Path) -> frozenset[str]:
+    user_path = evolve_dir / INDEX_USER_REL
+    if not user_path.is_file():
+        return frozenset()
+    return frozenset(entry.id for entry in _load_topic_index_file(user_path))
+
+
+def validate_register_topic_id(topic_id: str, evolve_dir: Path) -> None:
+    """Raise :class:`TopicRegisterError` when *topic_id* cannot be registered."""
+    text = topic_id.strip()
+    if not text:
+        raise TopicRegisterError("topic id is required")
+    if not TOPIC_ID_RE.fullmatch(text):
+        raise TopicRegisterError(
+            "topic id must match [a-z][a-z0-9_]* (lowercase letters, digits, underscore)"
+        )
+    if not (evolve_dir / INDEX_CORE_REL).is_file():
+        raise TopicRegisterError(
+            "注册主题 requires evolve/_index.core.toml (run T-801 migration first)"
+        )
+    if text in load_core_topic_ids(evolve_dir):
+        raise TopicRegisterError(f"topic id reserved by core index: {text}")
+    if text in load_user_topic_ids(evolve_dir):
+        raise TopicRegisterError(f"topic already registered in user index: {text}")
+
+
+def format_user_topic_toml_block(spec: RegisterTopicSpec) -> str:
+    prompt_rel = f"prompts/{spec.topic_id}.md"
+    memory_dir = f"memories/{spec.topic_id}"
+    tool_dir = f"tools/{spec.topic_id}"
+    lines = [
+        "[[topic]]",
+        f'id = {_toml_string(spec.topic_id)}',
+        f"name = {_toml_string(spec.name)}",
+        f"description = {_toml_string(spec.description)}",
+        f"prompt = {_toml_string(prompt_rel)}",
+        f'memory_dirs = [{_toml_string(memory_dir)}]',
+        f'tool_dirs = [{_toml_string(tool_dir)}]',
+    ]
+    return "\n".join(lines)
+
+
+def build_topic_prompt_scaffold(*, name: str, registered_at: str) -> str:
+    return (
+        f"# {name}\n\n"
+        f"> 用户扩展主题 · 注册于 {registered_at}\n"
+        "> 在此写下本主题的硬规则（路径、确认策略、常用模式）。\n\n"
+        "## 范围\n\n"
+        "（待填写）\n\n"
+        "## 硬规则\n\n"
+        "（待填写）\n"
+    )
+
+
+def format_register_topic_preview(spec: RegisterTopicSpec, *, evolve_dir: Path) -> str:
+    index_rel = INDEX_USER_REL.as_posix()
+    prompt_rel = f"prompts/{spec.topic_id}.md"
+    memory_rel = f"memories/{spec.topic_id}/"
+    tool_rel = f"tools/{spec.topic_id}/"
+    block = format_user_topic_toml_block(spec)
+    return (
+        f"将追加到 evolve/{index_rel}:\n"
+        f"{block}\n\n"
+        f"将创建:\n"
+        f"- evolve/{prompt_rel}\n"
+        f"- evolve/{memory_rel}\n"
+        f"- evolve/{tool_rel}"
+    )
+
+
+def register_user_topic(
+    evolve_dir: Path,
+    spec: RegisterTopicSpec,
+    *,
+    registered_at: str | None = None,
+) -> RegisterTopicResult:
+    """Append topic to user index and create scaffold paths (EXTENSIONS §4.2)."""
+    validate_register_topic_id(spec.topic_id, evolve_dir)
+    stamp = registered_at or utc_now_iso()
+
+    prompt_rel = Path("prompts") / f"{spec.topic_id}.md"
+    memory_dir = Path("memories") / spec.topic_id
+    tool_dir = Path("tools") / spec.topic_id
+    prompt_path = evolve_dir / prompt_rel
+    memory_path = evolve_dir / memory_dir
+    tool_path = evolve_dir / tool_dir
+    user_index_path = evolve_dir / INDEX_USER_REL
+
+    conflicts: list[str] = []
+    if prompt_path.is_file():
+        conflicts.append(prompt_rel.as_posix())
+    if memory_path.exists():
+        conflicts.append(memory_dir.as_posix() + "/")
+    if tool_path.exists():
+        conflicts.append(tool_dir.as_posix() + "/")
+    if conflicts:
+        raise TopicRegisterError("paths already exist: " + ", ".join(conflicts))
+
+    block = format_user_topic_toml_block(spec)
+    if user_index_path.is_file():
+        existing = user_index_path.read_text(encoding="utf-8")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        user_index_path.write_text(existing + "\n" + block + "\n", encoding="utf-8")
+    else:
+        user_index_path.write_text(_USER_INDEX_HEADER + block + "\n", encoding="utf-8")
+
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(build_topic_prompt_scaffold(name=spec.name, registered_at=stamp), encoding="utf-8")
+    memory_path.mkdir(parents=True, exist_ok=True)
+    tool_path.mkdir(parents=True, exist_ok=True)
+
+    return RegisterTopicResult(
+        topic_id=spec.topic_id,
+        index_path=user_index_path.relative_to(evolve_dir).as_posix(),
+        prompt_path=prompt_rel.as_posix(),
+        memory_dir=memory_dir.as_posix(),
+        tool_dir=tool_dir.as_posix(),
+    )
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def scan_memory_index(evolve_dir: Path) -> list[MemoryIndexEntry]:
@@ -152,7 +360,7 @@ def scan_memory_index(evolve_dir: Path) -> list[MemoryIndexEntry]:
 
 
 def format_topic_index(entries: list[TopicIndexEntry]) -> str:
-    """Render ``evolve/_index.toml`` for S0 injection (MEMORY §4.1, RUNTIME §4.1)."""
+    """Render merged topic index for S0 injection (MEMORY §4.1, RUNTIME §4.1)."""
     lines = ["[主题索引]"]
     if not entries:
         lines.append("(none registered)")
@@ -189,6 +397,8 @@ def format_builtin_summary() -> str:
 def format_session_overlay(session: Session) -> str:
     topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     goal = session.goal.strip() or "(unset)"
+    subagent = "used" if session.subagent_overlay else "none"
+    intent = session.turn_intent or "(pending)"
     return "\n".join(
         [
             "[本次会议]",
@@ -196,8 +406,60 @@ def format_session_overlay(session: Session) -> str:
             f"goal: {goal}",
             f"topics: {topics}",
             f"llm_model: {session.meta.llm_model}",
+            f"turn_mode: {session.meta.turn_mode}",
+            f"turn_intent: {intent}",
+            f"subagent: {subagent}",
         ]
     )
+
+
+def format_turn_discipline_overlay(session: Session) -> str | None:
+    """Per-turn overlay hints for T-701 (complements core.txt Turn discipline)."""
+    if session.meta.phase != "S4":
+        return None
+    lines = [
+        "[轮次纪律 · turn]",
+        "qa/plan：先文字答；execute：有子代理摘要则直接 write_evolved，勿重复读范例。",
+    ]
+    if session.meta.turn_mode == "ask":
+        short_max = os.environ.get("PARENT_SHORT_MAX", "5")
+        lines.append(
+            "turn_mode: ask — 只聊：read/list/grep/web/fetch + `探索` 可用；run_evolved 已禁用。说 `动手` 切换。"
+        )
+        lines.append(
+            f"tool_budget: ask — 每轮 ≤{short_max} 轮，run_evolved 已禁用（T-907）"
+        )
+    else:
+        segment_max = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX", "50")
+        lines.append("turn_mode: agent — 动手：含 run_evolved 写 workspace / evolve。")
+        lines.append(
+            f"tool_budget: agent — 每 segment ≤{segment_max} 轮，可自动续跑（T-907）"
+        )
+    if session.scaffold_tool_turn:
+        lines.append(
+            "scaffold_tool: yes — 本轮创建 evolved 工具：禁 write_text 写脚手架文件名；可暂存 _staging.toml；只用 write_evolve（顶层 path+content_base64）。"
+        )
+    elif session.subagent_overlay:
+        if "[子代理摘要 · checker]" in session.subagent_overlay:
+            lines.append(
+                "subagent: checker — 验收报告已注入；勿自动修复文件；"
+                "verdict≠pass 时勿宣称「已验收/沉淀完成」。"
+            )
+        else:
+            lines.append(
+                "subagent: used — 已注入 explore 摘要；父循环勿对「已读」路径再 read/grep（除非摘要 truncated）。"
+            )
+    elif session.turn_intent == "recall":
+        lines.append(
+            "turn_intent: recall — 根据上文直接回顾；父循环不调工具（T-905）。"
+        )
+    elif session.turn_intent in {"execute", "research"}:
+        lines.append(
+            f"turn_intent: {session.turn_intent} — 深调研应由子代理完成；可说 `探索 …` 或等待自动 explore。"
+        )
+    else:
+        lines.append("subagent: none — 深调研可建议用户 `探索 …`。")
+    return "\n".join(lines)
 
 
 def format_evolve_escalation_hint(session: Session) -> str | None:
@@ -371,6 +633,162 @@ def format_session_evolved_catalog(
     return "\n".join(lines)
 
 
+def format_capability_hints(
+    session: Session,
+    *,
+    registry: ToolRegistry | None = None,
+) -> str:
+    """System hints when evolved tools are missing or builtins must suffice."""
+    reg = registry or ToolRegistry.load(session.paths)
+    topics = list(session.meta.topics)
+    session_tools = reg.session_evolved(topics)
+    common_names = [tool.name for tool in session_tools if tool.scope == "common"]
+    topic_tool_names = [tool.name for tool in session_tools if tool.scope != "common"]
+
+    lines = ["[能力提示]"]
+    if topics:
+        if not topic_tool_names:
+            topic_labels = "、".join(topics)
+            common_label = ", ".join(common_names) if common_names else "（无）"
+            lines.append(
+                f"- 当前主题（{topic_labels}）尚无 active 的专用 evolved 工具；"
+                f"仅 common：{common_label}。"
+            )
+        else:
+            lines.append(
+                f"- 本会话 evolved：common [{', '.join(common_names)}]；"
+                f"主题 [{', '.join(topic_tool_names)}]"
+            )
+    else:
+        common_label = ", ".join(common_names) if common_names else "write_text"
+        lines.append(f"- 未确认主题时仅有 common：{common_label}")
+
+    lines.append("- 只读：read_file · list_dir · grep（本地）；web_search · fetch_url（网络）")
+    lines.append(
+        "- 写/改 workspace：run_evolved → write_text / append_text / copy_move / move_to_trash；先试 dry_run"
+    )
+    lines.append(
+        "- 查项目/跨壳回忆：run_evolved → project_catalog 得 session_id；再 read_file data/sessions/<id>/messages.jsonl"
+        "（读**其他**会话须 confirm）；技术细节 read_file workspace/<id>/…"
+    )
+    lines.append(
+        "- 落地新 evolved 工具：run_evolved → write_evolve；**path + content_base64 放 run_evolved 顶层**"
+        "（勿嵌套 arguments.content）；先 main.py 再 tool.toml；每次 confirm，无 a）"
+    )
+
+    active_by_name = {
+        tool.name: tool for tool in reg.evolved() if tool.status == "active"
+    }
+    if "sort_by_extension" in active_by_name and "workflow" not in topics:
+        lines.append(
+            "- workflow 整理工具（sort_by_extension / rename_batch / flatten_dir / "
+            "dedupe_by_name / archive_by_date）：确认 workflow 主题后可用"
+        )
+    coding_tools = [
+        name
+        for name in ("run_demo", "run_tests", "git_snapshot", "patch_file")
+        if name in active_by_name
+    ]
+    if coding_tools and "coding" not in topics:
+        lines.append(
+            f"- coding 工具（{' / '.join(coding_tools)}）：确认 coding 主题后可用"
+        )
+
+    lines.append(
+        "- 若无合适工具：诚实说明限制并给出手工步骤；可说「记住」提交 tool 建议到 evolve/proposals"
+    )
+    return "\n".join(lines)
+
+
+def format_tool_loop_user_message(
+    session: Session,
+    *,
+    tool_rounds: int,
+    tool_loop_max: int,
+    registry: ToolRegistry | None = None,
+    segment: int | None = None,
+    total_tool_rounds: int | None = None,
+) -> str:
+    """User-facing message when the tool inner loop hits its cap without progress."""
+    reg = registry or ToolRegistry.load(session.paths)
+    allowed = sorted(session_evolved_allowlist(session, registry=reg))
+    topics = session.meta.topics
+    topic_label = "、".join(topics) if topics else "（未确认）"
+    tools_label = ", ".join(allowed) if allowed else "（无）"
+
+    segment_note = ""
+    if segment is not None and segment > 1:
+        segment_note = f"（execute segment {segment}"
+        if total_tool_rounds is not None:
+            segment_note += f"，累计 {total_tool_rounds} 轮"
+        segment_note += "）"
+
+    return (
+        f"本轮工具调用已达 {tool_loop_max} 轮上限{segment_note}（本 segment 已执行 {tool_rounds} 轮），"
+        "未能得到最终文字回复，且本轮无可见进展。\n\n"
+        "常见原因：\n"
+        "1. 任务需要的能力尚无对应 evolved 工具\n"
+        "2. 需要其他主题的工具（例如 workflow 的 sort_by_extension）但未确认该主题\n"
+        "3. 在反复观察（read_file / grep / list_dir）而未收敛到结论\n\n"
+        f"本会话可用 evolved：{tools_label}\n"
+        f"当前主题：{topic_label}\n\n"
+        "建议：简化问题后重试；或输入「主题 workflow」等确认合适主题；"
+        "若长期缺工具，可说「记住」提交 tool 建议。"
+    )
+
+
+def format_segment_pause_message(
+    *,
+    segment: int,
+    total_tool_rounds: int,
+    auto_continue: bool,
+) -> str:
+    """Message when execute segment cap hit with progress (T-705)."""
+    lines = [
+        f"execute segment {segment} 已达本轮上限（累计 {total_tool_rounds} 轮工具调用），已有进展。",
+        "",
+        "已完成部分：见上文 tool 结果与 assistant 回复。",
+    ]
+    if auto_continue:
+        lines.append("")
+        lines.append("将自动继续下一 segment。")
+    else:
+        lines.append("")
+        lines.append("输入「继续」以执行下一 segment。")
+    return "\n".join(lines)
+
+
+TASK_PAUSED_MARKER = "本项已完成。回复「继续」开始下一项。"
+
+
+def format_task_paused_notice(*, next_open_task: str | None = None) -> str:
+    """User-facing notice when project task-stop gate ends the turn (T-2006)."""
+    lines = [TASK_PAUSED_MARKER]
+    if next_open_task:
+        lines.append(f"下一项：{next_open_task}")
+    return "\n".join(lines)
+
+
+def ensure_task_paused_text(text: str, *, next_open_task: str | None = None) -> str:
+    """Append pause notice if missing from assistant text."""
+    body = (text or "").rstrip()
+    if "回复「继续」" in body or "回复『继续』" in body or "本项已完成" in body:
+        return body
+    notice = format_task_paused_notice(next_open_task=next_open_task)
+    if not body:
+        return notice
+    return f"{body}\n\n{notice}"
+
+
+def format_total_cap_message(*, total_tool_rounds: int, total_max: int) -> str:
+    """Message when PARENT_EXECUTE_TOTAL_MAX is reached (T-705)."""
+    return (
+        f"本条用户消息已达 execute 总安全顶（{total_max} 轮工具调用，已用 {total_tool_rounds} 轮）。\n\n"
+        "已完成部分：见上文 tool 结果。\n\n"
+        "建议：输入「继续」开新轮对话续做，或缩小任务范围后重试。"
+    )
+
+
 def session_evolved_allowlist(
     session: Session,
     *,
@@ -381,6 +799,69 @@ def session_evolved_allowlist(
     return frozenset(tool.name for tool in reg.session_evolved(session.meta.topics))
 
 
+def detect_scaffold_tool_turn(user_text: str) -> bool:
+    """True when the user is asking to create/scaffold an evolved tool this turn."""
+    text = user_text.strip()
+    if not text:
+        return False
+    lower = text.casefold()
+    markers = (
+        "write_evolve",
+        "evolve/tools/",
+        "tool.toml",
+        "新工具",
+        "创建工具",
+        "造工具",
+        "加工具",
+        "注册工具",
+        "scaffold",
+        "/main.py",
+        "json_query",
+        "scaffold tool",
+        "scaffold a tool",
+        "new evolved tool",
+        "evolve tool",
+    )
+    if any(m in lower or m in text for m in markers):
+        return True
+    if "工具" in text and any(v in text for v in ("创建", "造", "写", "实现", "加", "新建")):
+        return True
+    if re.search(
+        r"\b(build|create|implement|add|scaffold|write|make)\b.{0,48}\btool\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def format_scaffold_tool_overlay() -> str:
+    """Per-turn overlay when user is scaffolding an evolved tool."""
+    return """[本轮：创建 evolved 工具 — 硬约束]
+- **禁止** write_text 写 `evolve/tools/<scope>/<name>/` 下 `main.py` / `tool.toml` / `README.md`；可 `write_text` 暂存到 `workspace/_staging.toml` 再 `content_workspace_path`
+- **只用** run_evolved → write_evolve：`path` + `content_base64` 与 `tool_name` **同级**，`arguments` 为 `{}`
+- **顺序**：先 `.../main.py`，再 `.../tool.toml`（`status = "draft"`）
+- `tool.toml` **必须** `content_base64`；**`on_conflict: overwrite`**（默认 skip 遇已存在文件会失败）"""
+
+
+def format_write_evolve_cookbook(*, scaffold_turn: bool = False) -> str:
+    """Mandatory overlay when write_evolve is available (fixes LLM nested JSON escaping)."""
+    staging = (
+        "6. 备选（**仅 scaffold 回合**）：`write_text` → `workspace/_staging.toml`，"
+        "再 `content_workspace_path: \"_staging.toml\"`\n"
+        if scaffold_turn
+        else ""
+    )
+    return f"""[write_evolve 调用规范 — 必读]
+通过 run_evolved 写 evolve/tools/ 下新工具时：
+1. **顶层字段**（与 tool_name 同级，见 run_evolved 函数 schema）：`path`、`content_base64`、`on_conflict`
+2. **禁止**把 TOML/多行正文放进 `arguments.content`（双引号会导致 tool_calls JSON 解析失败）
+3. **顺序**：先 `.../main.py`，再 `.../tool.toml`（tool.toml 先用 `status = "draft"`）
+4. `content_base64` = UTF-8 正文的**标准 base64**（tool.toml 必须用 base64）
+5. **`on_conflict: overwrite`**（默认 skip 在文件已存在时返回失败）
+{staging}示例：`{{"tool_name":"write_evolve","path":"evolve/tools/data/foo/main.py","content_base64":"cHJpbnQoJ29rJyk=","on_conflict":"overwrite","arguments":{{}}}}`"""
+
+
 def format_evolved_catalog_overlay(
     session: Session,
     *,
@@ -388,7 +869,19 @@ def format_evolved_catalog_overlay(
 ) -> str:
     """Evolved catalog section for §4.2 overlay after topics are confirmed."""
     reg = registry or ToolRegistry.load(session.paths)
-    return format_session_evolved_catalog(session.meta.topics, registry=reg)
+    catalog = format_session_evolved_catalog(session.meta.topics, registry=reg)
+    hints = format_capability_hints(session, registry=reg)
+    parts = [catalog, hints]
+    allowlist = session_evolved_allowlist(session, registry=reg)
+    if "write_evolve" in allowlist:
+        parts.append(format_write_evolve_cookbook(scaffold_turn=session.scaffold_tool_turn))
+    return "\n\n".join(parts)
+
+
+def load_project_prompt(evolve_dir: Path) -> str:
+    from project_mode import load_project_prompt as _load
+
+    return _load(evolve_dir)
 
 
 def load_digest(session: Session) -> str | None:
@@ -421,6 +914,9 @@ def build_system_prompt(
 
     if include_overlay:
         sections.append(("session", format_session_overlay(session)))
+        turn_discipline = format_turn_discipline_overlay(session)
+        if turn_discipline:
+            sections.append(("turn_discipline", turn_discipline))
         sections.append(("safety", load_safety_prompt(evolve_dir)))
 
         for topic_id, prompt_text in load_confirmed_topic_prompts(
@@ -435,9 +931,61 @@ def build_system_prompt(
             )
         )
 
+        if session.scaffold_tool_turn:
+            sections.append(("scaffold_tool", format_scaffold_tool_overlay()))
+
         escalation = format_evolve_escalation_hint(session)
         if escalation:
             sections.append(("evolve_escalation", escalation))
+
+        if session.subagent_overlay:
+            sections.append(("subagent_summary", session.subagent_overlay.strip()))
+
+        if session.meta.active_shell == "project" and session.meta.project_root:
+            from project_mode import (
+                first_open_task_line,
+                format_project_overlay,
+                is_project_continue_utterance,
+                project_dir,
+                read_task_stats,
+            )
+
+            tasks_path = (
+                project_dir(session.paths, session.meta.project_id) / "TASKS.md"
+                if session.meta.project_id
+                else None
+            )
+            stats = read_task_stats(tasks_path) if tasks_path is not None else None
+            tasks_text = (
+                tasks_path.read_text(encoding="utf-8")
+                if tasks_path is not None and tasks_path.is_file()
+                else ""
+            )
+            last_user = ""
+            for msg in reversed(session.messages):
+                if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                    last_user = msg["content"]
+                    break
+            continue_turn = is_project_continue_utterance(last_user)
+            sections.append(
+                (
+                    "project_prompt",
+                    load_project_prompt(evolve_dir),
+                )
+            )
+            sections.append(
+                (
+                    "project_mode",
+                    format_project_overlay(
+                        project_root=session.meta.project_root,
+                        project_id=session.meta.project_id,
+                        plan_status=session.meta.project_plan_status or "draft",
+                        task_stats=stats,
+                        continue_turn=continue_turn,
+                        next_open_task=first_open_task_line(tasks_text),
+                    ),
+                )
+            )
 
         digest = load_digest(session)
         if digest:
@@ -586,7 +1134,7 @@ def _demo() -> None:
             "---\ntopics: [workflow]\nstatus: active\nsummary: no id field\n---\n",
             encoding="utf-8",
         )
-        (evolve / INDEX_REL).write_text(
+        (evolve / INDEX_CORE_REL).write_text(
             '[[topic]]\nid = "workflow"\nname = "工作流"\n'
             'description = "整理与重复任务"\n'
             'prompt = "prompts/workflow.md"\n'
@@ -772,13 +1320,36 @@ def _demo() -> None:
         )
         assert blocked.ok is False
         assert blocked.error is not None
-        assert "not allowed" in blocked.error.message
+        assert "不在本会话清单" in blocked.error.message
         allowed_call = executor.run(
             "run_evolved",
             {"tool_name": "coding_probe", "arguments": {}},
         )
         assert allowed_call.ok is True
         print("[PASS] T-308: evolved catalog (common+topic) + run_evolved allowlist")
+
+        coding_only_loaded = build_system_prompt(
+            coding_only, paths=paths, agent_core_dir=agent_core, registry=demo_reg
+        )
+        assert "[能力提示]" in coding_only_loaded.prompt
+        writing_only = Session(
+            conversation_id="loader-writing-hints",
+            session_dir=paths.data / "sessions" / "loader-writing-hints",
+            goal="hints",
+            meta=SessionMeta(
+                topics=["writing"],
+                llm_model="deepseek-v4-flash",
+                updated_at=utc_now_iso(),
+                phase="S4",
+            ),
+            messages=[],
+            paths=paths,
+        )
+        writing_loaded = build_system_prompt(
+            writing_only, paths=paths, agent_core_dir=agent_core, registry=demo_reg
+        )
+        assert "尚无 active 的专用 evolved 工具" in writing_loaded.prompt
+        print("[PASS] capability hints when topic has no evolved tools")
 
         log_path = paths.data / "evolve_log.jsonl"
         log = EvolveLog(log_path)
@@ -831,6 +1402,81 @@ def _demo() -> None:
         assert "SAFETY-STUB" not in base_only.prompt
         print("[PASS] include_overlay=False yields S0 base only")
 
+        # T-801: dual index merge (EXTENSIONS §3)
+        legacy_root = Path(tempfile.mkdtemp(prefix="loader-t801-legacy-"))
+        try:
+            legacy_evolve = legacy_root / "evolve"
+            legacy_evolve.mkdir(parents=True)
+            (legacy_evolve / INDEX_LEGACY_REL).write_text(
+                '[[topic]]\nid = "workflow"\nname = "工作流"\n'
+                'description = "legacy only"\n'
+                'prompt = "prompts/workflow.md"\n'
+                'memory_dirs = ["memories/workflow"]\n'
+                'tool_dirs = ["tools/workflow"]\n',
+                encoding="utf-8",
+            )
+            legacy_topics = load_topic_index(legacy_evolve)
+            assert len(legacy_topics) == 1
+            assert legacy_topics[0].id == "workflow"
+            print("[PASS] T-801: legacy _index.toml only")
+        finally:
+            shutil.rmtree(legacy_root, ignore_errors=True)
+
+        merge_root = Path(tempfile.mkdtemp(prefix="loader-t801-merge-"))
+        try:
+            merge_evolve = merge_root / "evolve"
+            merge_evolve.mkdir(parents=True)
+            (merge_evolve / INDEX_CORE_REL).write_text(
+                '[[topic]]\nid = "coding"\nname = "开发"\n'
+                'description = "core"\n'
+                'prompt = "prompts/coding.md"\n'
+                'memory_dirs = ["memories/coding"]\n'
+                'tool_dirs = ["tools/coding"]\n',
+                encoding="utf-8",
+            )
+            (merge_evolve / INDEX_USER_REL).write_text(
+                '[[topic]]\nid = "data"\nname = "数据处理"\n'
+                'description = "user ext"\n'
+                'prompt = "prompts/data.md"\n'
+                'memory_dirs = ["memories/data"]\n'
+                'tool_dirs = ["tools/data"]\n',
+                encoding="utf-8",
+            )
+            merged = load_topic_index(merge_evolve)
+            assert [entry.id for entry in merged] == ["coding", "data"]
+            print("[PASS] T-801: core + user merge")
+        finally:
+            shutil.rmtree(merge_root, ignore_errors=True)
+
+        conflict_root = Path(tempfile.mkdtemp(prefix="loader-t801-conflict-"))
+        try:
+            conflict_evolve = conflict_root / "evolve"
+            conflict_evolve.mkdir(parents=True)
+            (conflict_evolve / INDEX_CORE_REL).write_text(
+                '[[topic]]\nid = "workflow"\nname = "工作流"\n'
+                'description = "core"\n'
+                'prompt = "prompts/workflow.md"\n'
+                'memory_dirs = []\n'
+                'tool_dirs = []\n',
+                encoding="utf-8",
+            )
+            (conflict_evolve / INDEX_USER_REL).write_text(
+                '[[topic]]\nid = "workflow"\nname = "dup"\n'
+                'description = "conflict"\n'
+                'prompt = "prompts/workflow.md"\n'
+                'memory_dirs = []\n'
+                'tool_dirs = []\n',
+                encoding="utf-8",
+            )
+            try:
+                load_topic_index(conflict_evolve)
+                raise AssertionError("expected TopicIndexError")
+            except TopicIndexError as exc:
+                assert "workflow" in str(exc)
+            print("[PASS] T-801: core/user id conflict raises TopicIndexError")
+        finally:
+            shutil.rmtree(conflict_root, ignore_errors=True)
+
     # Real repo smoke (uses checked-in core + safety).
     paths = AgentPaths.discover()
     repo_session = Session(
@@ -850,6 +1496,7 @@ def _demo() -> None:
     assert len(repo_topics) >= 4
     assert any(e.id == "coding" and e.tool_dirs == ("tools/coding",) for e in repo_topics)
     assert any(e.id == "safety" and e.tool_dirs == () for e in repo_topics)
+    assert any(e.id == "data" and e.tool_dirs == ("tools/data",) for e in repo_topics)
     topic_block = format_topic_index(repo_topics)
     assert "coding:" in topic_block and "开发与代码" in topic_block
     assert "tool_dirs: tools/coding" in topic_block
@@ -857,7 +1504,7 @@ def _demo() -> None:
     base_repo = build_system_prompt(repo_session, include_overlay=False)
     assert "tool_dirs: tools/coding" in base_repo.prompt
     assert "tool_dirs: tools/workflow" in base_repo.prompt
-    print("[PASS] T-301: _index.toml → id/name/description/tool_dirs in system")
+    print("[PASS] T-301: merged topic index → id/name/description/tool_dirs in system")
 
     repo_memories = scan_memory_index(paths.evolve)
     repo_memory_block = format_memory_index(repo_memories)
@@ -909,11 +1556,32 @@ def _demo() -> None:
         repo_reg = ToolRegistry.load(paths)
         repo_allow = session_evolved_allowlist(coding_session, registry=repo_reg)
         repo_catalog = format_evolved_catalog_overlay(coding_session, registry=repo_reg)
-        assert repo_allow == frozenset({"write_text"})
+        required_tools = frozenset(
+            {
+                "write_text",
+                "append_text",
+                "copy_move",
+                "move_to_trash",
+                "write_evolve",
+                "run_demo",
+                "run_tests",
+                "git_snapshot",
+                "patch_file",
+                "run_python",
+                "repl",
+            }
+        )
+        assert required_tools.issubset(repo_allow)
+        assert "run_demo" in repo_catalog
+        assert "run_tests" in repo_catalog
         assert "write_text" in repo_catalog
-        assert "sort_by_extension" not in repo_catalog
+        assert "append_text" in repo_catalog
+        assert "write_evolve" in repo_catalog
+        catalog_body, _, capability_hints = repo_catalog.partition("[能力提示]")
+        assert "sort_by_extension" not in catalog_body
+        assert "sort_by_extension" in capability_hints
         assert "[本会话可用 evolved 工具]" in repo_catalog
-        print("[PASS] T-308: real repo catalog matches allowlist (write_text)")
+        print("[PASS] T-308: real repo catalog matches allowlist (common + topic)")
 
         workflow_m3 = Session(
             conversation_id="loader-workflow-m3",
@@ -930,9 +1598,49 @@ def _demo() -> None:
         )
         wf_allow = session_evolved_allowlist(workflow_m3, registry=repo_reg)
         wf_catalog = format_evolved_catalog_overlay(workflow_m3, registry=repo_reg)
-        assert wf_allow == frozenset({"write_text", "sort_by_extension"})
-        assert "sort_by_extension" in wf_catalog
-        print("[PASS] T-502: workflow sort_by_extension in catalog + allowlist")
+        required_wf_tools = frozenset(
+            {
+                "write_text",
+                "append_text",
+                "copy_move",
+                "move_to_trash",
+                "write_evolve",
+                "sort_by_extension",
+                "rename_batch",
+                "flatten_dir",
+                "dedupe_by_name",
+                "archive_by_date",
+                "run_python",
+                "repl",
+            }
+        )
+        assert required_wf_tools.issubset(wf_allow)
+        assert "rename_batch" in wf_catalog
+        print("[PASS] T-502: workflow tools in catalog + allowlist")
+
+        data_session = Session(
+            conversation_id="loader-data-t805",
+            session_dir=paths.data / "sessions" / "loader-data-t805",
+            goal="preview csv",
+            meta=SessionMeta(
+                topics=["data"],
+                llm_model="deepseek-v4-flash",
+                updated_at=utc_now_iso(),
+                phase="S4",
+            ),
+            messages=[],
+            paths=paths,
+        )
+        data_allow = session_evolved_allowlist(data_session, registry=repo_reg)
+        data_catalog = format_evolved_catalog_overlay(data_session, registry=repo_reg)
+        assert "csv_head" in data_allow
+        assert "csv_head" in data_catalog
+        data_prompt_path = paths.evolve / "prompts" / "data.md"
+        if data_prompt_path.is_file():
+            data_loaded = build_system_prompt(data_session)
+            assert "topic_prompt:data" in data_loaded.section_names
+            assert "csv_head" in data_loaded.prompt
+        print("[PASS] T-805: data topic + csv_head in catalog + allowlist")
     else:
         print("[SKIP] T-305 real repo: evolve/prompts/coding.md not present (see T-307)")
 
@@ -972,6 +1680,100 @@ def _demo() -> None:
     assert "read_file" in core_text and "grep" in core_text
     assert "T-209" not in core_text
     print("[PASS] core.txt: identity, boundaries, no pretend (T-209)")
+
+    assert "Turn discipline" in core_text
+    assert "子代理摘要" in core_text or "explore subagent" in core_text.lower()
+    assert "TASKS.md" in core_text
+    assert "parallel" in core_text.lower() or "Parallel" in core_text
+    print("[PASS] T-701: core.txt Turn discipline (qa/plan, subagent, execute, parallel)")
+
+    discipline_session = Session(
+        "_t701",
+        paths.data / "sessions" / "_t701",
+        "discipline",
+        SessionMeta(topics=["coding"], llm_model="pro", updated_at=utc_now_iso(), phase="S4"),
+        [],
+        paths,
+    )
+    discipline_loaded = build_system_prompt(discipline_session)
+    assert "subagent: none" in discipline_loaded.prompt
+    assert "turn_discipline" in discipline_loaded.section_names
+    assert "轮次纪律" in discipline_loaded.prompt
+    print("[PASS] T-701: session overlay subagent: none + turn_discipline section")
+
+    from subagent import SubagentResult, format_subagent_overlay
+
+    discipline_session.subagent_overlay = format_subagent_overlay(
+        SubagentResult(
+            kind="explore",
+            summary="demo summary",
+            paths_cited=["evolve/tools/coding/run_demo/tool.toml"],
+            tool_rounds=2,
+            truncated=False,
+            task="demo",
+        )
+    )
+    with_sub = build_system_prompt(discipline_session)
+    assert "subagent: used" in with_sub.prompt
+    assert "subagent_summary" in with_sub.section_names
+    assert "[子代理摘要 · explore]" in with_sub.prompt
+    assert "subagent: used" in with_sub.prompt
+    assert "勿重复" in with_sub.prompt or "勿对" in with_sub.prompt
+    print("[PASS] T-701: subagent: used + summary overlay; discipline hints when used")
+
+    ask_overlay = Session(
+        "_t702",
+        paths.data / "sessions" / "_t702",
+        "ask",
+        SessionMeta(topics=[], llm_model="flash", updated_at=utc_now_iso(), phase="S4", turn_mode="ask"),
+        [],
+        paths,
+    )
+    ask_loaded = build_system_prompt(ask_overlay)
+    assert "turn_mode: ask" in ask_loaded.prompt
+    assert "run_evolved 已禁用" in ask_loaded.prompt
+    assert "tool_budget: ask" in ask_loaded.prompt
+    agent_overlay = Session(
+        "_t907",
+        paths.data / "sessions" / "_t907",
+        "agent budget",
+        SessionMeta(topics=[], llm_model="flash", updated_at=utc_now_iso(), phase="S4", turn_mode="agent"),
+        [],
+        paths,
+    )
+    agent_loaded = build_system_prompt(agent_overlay)
+    assert "tool_budget: agent" in agent_loaded.prompt
+    print("[PASS] T-702/T-907: overlay turn_mode + tool_budget hints")
+
+    from turn_intent import classify_turn, should_spawn_explore
+
+    assert classify_turn("帮我列计划") == "plan"
+    assert not should_spawn_explore("帮我列计划")
+    intent_session = Session(
+        "_t703",
+        paths.data / "sessions" / "_t703",
+        "intent",
+        SessionMeta(topics=[], llm_model="flash", updated_at=utc_now_iso(), phase="S4"),
+        [],
+        paths,
+    )
+    intent_session.turn_intent = "execute"
+    intent_loaded = build_system_prompt(intent_session)
+    assert "turn_intent: execute" in intent_loaded.prompt
+    print("[PASS] T-703: turn_intent in session overlay + plan skips explore")
+
+    pause_msg = format_segment_pause_message(segment=1, total_tool_rounds=10, auto_continue=False)
+    assert "已完成部分" in pause_msg
+    assert "继续" in pause_msg
+    total_msg = format_total_cap_message(total_tool_rounds=50, total_max=50)
+    assert "总安全顶" in total_msg
+    print("[PASS] T-705: segment pause + total cap messages")
+
+    assert detect_scaffold_tool_turn("build a parser tool for evolve")
+    assert not detect_scaffold_tool_turn("what tools are available?")
+    assert "_staging.toml" in format_write_evolve_cookbook(scaffold_turn=True)
+    assert "_staging.toml" not in format_write_evolve_cookbook(scaffold_turn=False)
+    print("[PASS] P2: scaffold detect EN + cookbook staging only on scaffold turn")
 
 
 if __name__ == "__main__":

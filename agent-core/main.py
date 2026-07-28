@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
@@ -41,9 +41,17 @@ from evolve import (
 )
 from loader import log_session_start, log_topics_confirmed
 from tools.logging import EvolveLog, read_events
-from llm_client import LLMError, LLMMissingApiKeyError, load_config
+from llm_client import (
+    LLMCancelledError,
+    LLMError,
+    LLMMissingApiKeyError,
+    StreamHandlers,
+    load_config,
+)
 from paths import AgentPaths
 from router import (
+    ParsedRegisterTopicCommand,
+    ParsedTopicCommand,
     TopicCommandKind,
     TopicProposal,
     TopicRoutingError,
@@ -51,12 +59,42 @@ from router import (
     apply_topic_confirmation,
     build_topic_confirm_prompt,
     format_proposal_banner,
+    parse_register_topic_command,
     parse_topic_command,
     registered_topic_ids,
     resolve_topic_confirmation,
+    run_register_topic_flow,
     run_topic_routing_s2,
 )
-from session import Session, create_new, prompt_and_set_goal, resume_or_create, utc_now_iso
+from session import (
+    GOAL_PROMPT,
+    Session,
+    TurnMode,
+    create_new,
+    parse_turn_mode_command,
+    resume_or_create,
+    turn_mode_label,
+    utc_now_iso,
+)
+from host_scope_cli import (
+    HostScopeCommandError,
+    parse_host_scope_command,
+    run_host_scope_command,
+    run_t1004_demo,
+)
+from project_cli import (
+    ProjectCommandError,
+    parse_project_command,
+    run_project_command,
+    try_short_plan_confirm,
+)
+from subagent import (
+    CheckerTask,
+    SubagentRunner,
+    format_subagent_overlay,
+    parse_checker_command,
+    parse_explore_command,
+)
 
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
@@ -81,8 +119,11 @@ class ConversationRepl:
     input_fn: InputFn
     output_fn: OutputFn
     config: ReplConfig = field(default_factory=ReplConfig)
+    assistant_output_fn: OutputFn | None = field(default=None, repr=False)
+    stream_handlers: StreamHandlers | None = field(default=None, repr=False)
     _stop: bool = field(default=False, repr=False)
     _checkpoint_gate: CheckpointGate = field(default_factory=CheckpointGate, repr=False)
+    last_turn_finish_reason: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_session(
@@ -93,6 +134,7 @@ class ConversationRepl:
         input_fn: InputFn | None = None,
         output_fn: OutputFn | None = None,
         config: ReplConfig | None = None,
+        stream_handlers: StreamHandlers | None = None,
     ) -> ConversationRepl:
         agent_paths = paths or session.paths
         io_in = input_fn or input
@@ -104,12 +146,15 @@ class ConversationRepl:
             agent=Agent.create(
                 session,
                 confirm_fn=make_confirm_fn(io_out, io_in, checkpoint_gate=gate),
+                stream_handlers=stream_handlers,
             ),
             input_fn=io_in,
             output_fn=io_out,
             config=config or ReplConfig(),
+            stream_handlers=stream_handlers,
             _checkpoint_gate=gate,
         )
+        repl._wire_turn_events()
         return repl
 
     def run(self) -> int:
@@ -119,7 +164,9 @@ class ConversationRepl:
             )
         self._log_session_start()
         self._print_session_banner()
-        self.output_fn("Commands: 新会话 | 主题 … | 加主题 … | 换主题 | 压缩 | proposals | exit [--record]")
+        self.output_fn(
+            "Commands: 新会话 | 只聊 | 动手 | 主题 … | 加主题 … | 注册主题 … | 换主题 | 项目 … | 托管目录 … | 压缩 | 探索 … | 验收 … | check … | proposals | exit [--record]"
+        )
 
         while not self._stop:
             self._checkpoint_gate.begin_line()
@@ -182,8 +229,68 @@ class ConversationRepl:
                 self.output_fn(f"compress error: {exc}")
             return "continue"
 
+        mode_cmd = parse_turn_mode_command(stripped)
+        if mode_cmd is not None:
+            self._handle_turn_mode_command(mode_cmd)
+            return "continue"
+
         if lower == "proposals" or lower.startswith("proposals "):
             self._handle_proposals_command(stripped)
+            return "continue"
+
+        explore_task = parse_explore_command(stripped)
+        if explore_task is not None:
+            self._handle_explore_command(explore_task)
+            return "continue"
+
+        checker_task = parse_checker_command(stripped)
+        if checker_task is not None:
+            self._handle_checker_command(checker_task)
+            return "continue"
+
+        register_cmd = parse_register_topic_command(stripped)
+        if register_cmd is not None:
+            self._handle_register_topic_command(register_cmd)
+            return "continue"
+
+        try:
+            host_cmd = parse_host_scope_command(stripped)
+        except HostScopeCommandError as exc:
+            self.output_fn(f"error: {exc}")
+            return "continue"
+        if host_cmd is not None:
+            run_host_scope_command(
+                self.paths,
+                host_cmd,
+                input_fn=self.input_fn,
+                output_fn=self.output_fn,
+            )
+            return "continue"
+
+        if try_short_plan_confirm(self.session, stripped, self.output_fn):
+            self._rebind_agent()
+            self._print_session_banner()
+            return "continue"
+
+        try:
+            project_cmd = parse_project_command(stripped)
+        except ProjectCommandError as exc:
+            self.output_fn(f"error: {exc}")
+            return "continue"
+        if project_cmd is not None:
+            result = run_project_command(
+                self.session,
+                self.paths,
+                project_cmd,
+                output_fn=self.output_fn,
+            )
+            if result.session is not None:
+                self.session = result.session
+                self._rebind_agent()
+                self._print_session_banner()
+            elif result.meta_changed:
+                self._rebind_agent()
+                self._print_session_banner()
             return "continue"
 
         topic_cmd = parse_topic_command(stripped)
@@ -193,32 +300,55 @@ class ConversationRepl:
 
         try:
             result = self.agent.run_turn(stripped)
+            self.last_turn_finish_reason = result.finish_reason
+            if self.agent.session.conversation_id != self.session.conversation_id:
+                self.session = self.agent.session
+                self._print_session_banner()
         except ToolLoopExceededError as exc:
+            self.last_turn_finish_reason = None
             self.output_fn(f"error: {exc}")
             return "continue"
+        except LLMCancelledError:
+            self.last_turn_finish_reason = "cancelled"
+            return "continue"
         except LLMError as exc:
+            self.last_turn_finish_reason = None
             self.output_fn(f"llm error: {exc}")
             return "continue"
 
+        for notice in result.notices:
+            self.output_fn(notice)
         if result.assistant_text:
-            self.output_fn(result.assistant_text)
+            if self.assistant_output_fn is not None:
+                self.assistant_output_fn(result.assistant_text)
+            else:
+                self.output_fn(result.assistant_text)
             if not self.session.meta.evolve_offer_used and detect_escalation_offer(
                 result.assistant_text
             ):
                 note_escalation_offer(self.session)
+        elif self.assistant_output_fn is not None:
+            # C9: empty reply still closes the desktop turn (paired with turn.end).
+            self.assistant_output_fn("")
         return "continue"
 
     def start_new_session(self) -> None:
         self.session = create_new(self.paths)
         reset_evolve_escalation(self.session)
-        goal = prompt_and_set_goal(self.session, self.input_fn)
-        if not goal:
-            self.output_fn("(goal unset)")
         self.session.save()
         self._log_session_start()
-        self._run_topic_flow(mode="replace", header="新会话")
         self._rebind_agent()
         self._print_session_banner()
+
+    def _handle_register_topic_command(self, command: ParsedRegisterTopicCommand) -> None:
+        registered = run_register_topic_flow(
+            self.paths,
+            command,
+            input_fn=self._prompt_line,
+            output_fn=self.output_fn,
+        )
+        if registered:
+            self._rebind_agent()
 
     def _handle_topic_command(self, command: ParsedTopicCommand) -> None:
         if command.kind == TopicCommandKind.RE_ROUTE:
@@ -357,6 +487,106 @@ class ConversationRepl:
             "用法: proposals | proposals list | proposals accept <id> | proposals reject <id>"
         )
 
+    def _handle_explore_command(self, task: str) -> None:
+        """Run explore subagent only; print summary (T-706)."""
+        runner = SubagentRunner(
+            paths=self.paths,
+            evolve_log=EvolveLog.for_agent(self.paths),
+        )
+        try:
+            result = runner.run_explore(
+                task,
+                session=self.session,
+                llm=self.agent.llm,
+                confirm_fn=self.agent.executor.confirm_fn,
+                cancel_event=self.agent.cancel_event,
+            )
+        except LLMCancelledError:
+            self.output_fn("(explore cancelled)")
+            return
+        except LLMError as exc:
+            self.output_fn(f"explore error: {exc}")
+            return
+        except ValueError as exc:
+            self.output_fn(f"explore error: {exc}")
+            return
+
+        overlay = format_subagent_overlay(result)
+        self.session.subagent_overlay = overlay
+        self.output_fn(overlay)
+
+    def _handle_checker_command(self, task: CheckerTask) -> None:
+        """Run Phase 16 demo probe + checker subagent only (T-1612)."""
+        tool_name = task.tool_name.strip()
+        demo_result = self.agent.executor.run_scaffold_demo_probe(tool_name)
+        if demo_result.get("attempted"):
+            exit_code = demo_result.get("exit_code")
+            self.output_fn(
+                f"[内核] demo probe: {tool_name} exit_code={exit_code}"
+            )
+        else:
+            reason = demo_result.get("skipped_reason", "not attempted")
+            self.output_fn(f"[内核] demo probe skipped: {reason}")
+
+        runner = SubagentRunner(
+            paths=self.paths,
+            evolve_log=EvolveLog.for_agent(self.paths),
+        )
+        resolved = CheckerTask(
+            tool_name=tool_name,
+            tool_dir=task.tool_dir,
+            reference_tool=task.reference_tool,
+            demo_result=demo_result,
+            user_checklist=task.user_checklist,
+        )
+        try:
+            result = runner.run_checker(
+                resolved,
+                session=self.session,
+                llm=self.agent.llm,
+                confirm_fn=self.agent.executor.confirm_fn,
+                cancel_event=self.agent.cancel_event,
+            )
+        except LLMCancelledError:
+            self.output_fn("(checker cancelled)")
+            return
+        except LLMError as exc:
+            self.output_fn(f"checker error: {exc}")
+            return
+        except ValueError as exc:
+            self.output_fn(f"checker error: {exc}")
+            return
+
+        overlay = format_subagent_overlay(result)
+        self.session.subagent_overlay = overlay
+        self.session.scaffold_check_status = result.verdict
+        self.session.scaffold_check_tool = tool_name
+        emit = getattr(self.agent, "on_turn_event", None)
+        if callable(emit):
+            from subagent import format_checker_verdict_notice
+
+            verdict = result.verdict or "fail"
+            emit({"type": "checker.verdict", "tool_name": tool_name, "verdict": verdict})
+            emit(
+                {
+                    "type": "turn.notice",
+                    "level": "info",
+                    "text": format_checker_verdict_notice(tool_name, verdict),
+                }
+            )
+            emit({"type": "turn.notice", "level": "info", "text": overlay})
+        self.output_fn(overlay)
+
+    def _handle_turn_mode_command(self, mode: TurnMode) -> None:
+        """Switch ask/agent mode (T-702)."""
+        if self.session.meta.turn_mode == mode:
+            self.output_fn(f"turn_mode already: {mode} ({turn_mode_label(mode)})")
+            return
+        self.session.set_turn_mode(mode)
+        self.session.save()
+        self._rebind_agent()
+        self.output_fn(f"turn_mode: {mode} — {turn_mode_label(mode)}")
+
     def _maybe_review_proposals(
         self,
         proposal_ids: tuple[str, ...],
@@ -437,14 +667,44 @@ class ConversationRepl:
                 self.input_fn,
                 checkpoint_gate=self._checkpoint_gate,
             ),
+            stream_handlers=self.stream_handlers,
         )
+        self._wire_turn_events()
+
+    def _wire_turn_events(self) -> None:
+        def on_turn_event(event: dict[str, Any]) -> None:
+            event_type = event.get("type")
+            if event_type == "turn.start":
+                intent = event.get("intent", "")
+                label = event.get("intent_label", "")
+                self.output_fn(f"[本轮·{intent}] {label}")
+            elif event_type == "turn.notice":
+                level = event.get("level", "info")
+                text = str(event.get("text", "")).strip()
+                if not text:
+                    return
+                prefix = "[提醒] " if level == "warn" else ""
+                self.output_fn(f"{prefix}{text}")
+
+        self.agent.on_turn_event = on_turn_event
 
     def _print_session_banner(self) -> None:
         topics = ", ".join(self.session.meta.topics) if self.session.meta.topics else "(none)"
         goal = self.session.goal.strip() or "(unset)"
         self.output_fn(
-            f"--- session {self.session.conversation_id} | goal: {goal} | topics: {topics} ---"
+            f"--- session {self.session.conversation_id} | goal: {goal} | "
+            f"topics: {topics} | mode: {self.session.meta.turn_mode} ---"
         )
+        self._print_corruption_notices()
+
+    def _print_corruption_notices(self) -> None:
+        seen: set[str] = set()
+        for text in list(self.session.corruption_notices) + list(
+            self.paths.corruption_notices
+        ):
+            if isinstance(text, str) and text.strip() and text not in seen:
+                seen.add(text)
+                self.output_fn(f"[warn] {text}")
 
     def _log_session_start(self) -> None:
         log_session_start(self.session)
@@ -478,6 +738,11 @@ def build_parser() -> argparse.ArgumentParser:
         const="summary",
         choices=("summary", "full"),
         help="On exit, archive to data/conversations/ (summary or full messages)",
+    )
+    parser.add_argument(
+        "--takeover",
+        action="store_true",
+        help="Take over session from Electron desktop when interface lock is held",
     )
     parser.add_argument("--demo", action="store_true", help="Run scripted acceptance checks")
     return parser
@@ -546,13 +811,20 @@ def make_confirm_fn(
     gate = checkpoint_gate or CheckpointGate()
 
     def confirm(preview: str, allow_approve_all: bool) -> str:
-        output_fn(preview)
-        if allow_approve_all:
-            prompt = "Confirm [y]es / [n]o / [a]llow workspace evolved this session? "
-            valid = {"y", "n", "a"}
-        else:
-            prompt = "Confirm [y]es / [n]o? "
+        from tools.executor import CONTEXT_SWITCH_CONFIRM_PREFIX
+
+        if preview.startswith(CONTEXT_SWITCH_CONFIRM_PREFIX):
+            output_fn("【换线确认】请确认是否切换项目/会话（详情见上方 context.switch 提示）")
+            prompt = "换线 Confirm [y]es / [n]o? "
             valid = {"y", "n"}
+        else:
+            output_fn(preview)
+            if allow_approve_all:
+                prompt = "Confirm [y]es / [n]o / [a]llow workspace evolved this session? "
+                valid = {"y", "n", "a"}
+            else:
+                prompt = "Confirm [y]es / [n]o? "
+                valid = {"y", "n"}
         while True:
             try:
                 raw = input_fn(prompt)
@@ -578,6 +850,15 @@ def main(argv: list[str] | None = None) -> int:
         return _demo()
 
     paths = AgentPaths.discover()
+    from interface_lock import InterfaceLockGuard, InterfaceLockError
+
+    lock_guard = InterfaceLockGuard(paths, "cli")
+    try:
+        lock_guard.acquire(takeover=args.takeover)
+    except InterfaceLockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     record_mode: RecordMode = "off"
     show_warning = False
     if args.record == "summary":
@@ -592,40 +873,25 @@ def main(argv: list[str] | None = None) -> int:
         paths=paths,
         config=ReplConfig(record_on_exit=record_mode, show_record_warning=show_warning),
     )
-    return repl.run()
+    try:
+        return repl.run()
+    finally:
+        lock_guard.release()
 
 
 def _demo() -> int:
     paths = AgentPaths.discover()
     outputs: list[str] = []
 
-    for sid in (
-        "_repl_demo",
-        "_repl_chat",
-        "_repl_new",
-        "_repl_goal",
-        "_repl_reject",
-        "_repl_override",
-        "_repl_t401",
-        "_repl_t401b",
-        "_repl_t401c",
-        "_repl_t402",
-        "_repl_t403",
-        "_repl_t403b",
-        "_repl_t403c",
-        "_repl_t404",
-        "_repl_t404b",
-    ):
-        demo_dir = paths.data / "sessions" / sid
+    sessions_root = paths.data / "sessions"
+    for demo_dir in sessions_root.glob("_repl*"):
         if demo_dir.is_dir():
             shutil.rmtree(demo_dir)
-        for suffix in (".json", "-full.jsonl"):
-            archive = paths.data / _CONVERSATIONS_DIR / f"{sid}{suffix}"
+    conv_dir = paths.data / _CONVERSATIONS_DIR
+    if conv_dir.is_dir():
+        for archive in conv_dir.glob("_repl*"):
             if archive.is_file():
                 archive.unlink()
-    for demo_dir in (paths.data / "sessions").glob("_repl_t602b*"):
-        if demo_dir.is_dir():
-            shutil.rmtree(demo_dir)
 
     def out(text: str) -> None:
         outputs.append(text)
@@ -745,19 +1011,25 @@ def _demo() -> int:
     assert chat_session.digest_path.is_file()
     print("[PASS] scripted REPL: chat, 压缩, 主题, exit --record")
 
-    new_inputs = iter(["y"])
-    new_session = create_new(paths, conversation_id="_repl_new")
+    new_inputs = iter(["unused"])
     new_outputs: list[str] = []
 
     def new_out(text: str) -> None:
         new_outputs.append(text)
 
     new_repl = ConversationRepl.from_session(
-        new_session,
+        create_new(paths, conversation_id="_repl_new"),
         paths=paths,
         input_fn=lambda p: next(new_inputs),
         output_fn=new_out,
     )
+    new_repl.start_new_session()
+    assert new_repl.session.goal == ""
+    assert new_repl.session.meta.topics == []
+    assert new_repl.session.meta.phase == "S4"
+    assert not any(GOAL_PROMPT in line for line in new_outputs)
+    assert not any("已确认主题" in line for line in new_outputs)
+    print("[PASS] 新会话: 直接开聊 (no goal/S2)")
 
     import sys
 
@@ -766,18 +1038,6 @@ def _demo() -> int:
 
     def fake_s2(session, client=None, paths=None):
         return TopicProposal(topics=("coding", "workflow"), reason="demo")
-
-    mod.run_topic_routing_s2 = fake_s2
-    try:
-        new_repl.session.set_goal("docs work")
-        new_repl.session.save()
-        new_repl._run_topic_flow(mode="replace", header="新会话")
-        new_repl._rebind_agent()
-        assert new_repl.session.meta.topics == ["coding", "workflow"]
-        assert any("已确认主题" in line for line in new_outputs)
-        print("[PASS] 新会话 flow: goal + topic confirm (accept)")
-    finally:
-        mod.run_topic_routing_s2 = original_s2
 
     reject_inputs = iter(["n"])
     reject_session = create_new(paths, conversation_id="_repl_reject")
@@ -819,39 +1079,37 @@ def _demo() -> int:
     finally:
         mod.run_topic_routing_s2 = original_s2
 
-    goal_inputs = iter(["完善记忆模块", "y"])
+    goal_inputs = iter([])
     goal_outputs: list[str] = []
 
     def goal_out(text: str) -> None:
         goal_outputs.append(text)
 
+    goal_session = create_new(paths, conversation_id="_repl_goal")
+    goal_session.set_goal("完善记忆模块")
+    goal_session.set_topics(["workflow"], phase="S4")
+    goal_session.save()
+    saved_id = goal_session.conversation_id
+
+    from agent import prepare_session_for_s4
+    from loader import build_system_prompt
+
+    prepare_session_for_s4(goal_session)
+    assert "目标: 完善记忆模块" in goal_session.messages[0]["content"]
+    loaded = build_system_prompt(goal_session)
+    assert "goal: 完善记忆模块" in loaded.prompt
+    print("[PASS] T-303: goal.md + anchor + system when goal set")
+
     goal_repl = ConversationRepl.from_session(
-        create_new(paths, conversation_id="_repl_goal"),
+        create_new(paths, conversation_id="_repl_goal_start"),
         paths=paths,
         input_fn=lambda p: next(goal_inputs),
         output_fn=goal_out,
     )
-
-    def fake_s2_workflow(session, client=None, paths=None):
-        return TopicProposal(topics=("workflow",), reason="demo")
-
-    mod.run_topic_routing_s2 = fake_s2_workflow
-    try:
-        goal_repl.start_new_session()
-        saved_id = goal_repl.session.conversation_id
-        assert goal_repl.session.goal == "完善记忆模块"
-        assert goal_repl.session.goal_path.read_text(encoding="utf-8") == "完善记忆模块"
-        assert goal_repl.session.meta.topics == ["workflow"]
-        from agent import prepare_session_for_s4
-        from loader import build_system_prompt
-
-        prepare_session_for_s4(goal_repl.session)
-        assert "目标: 完善记忆模块" in goal_repl.session.messages[0]["content"]
-        loaded = build_system_prompt(goal_repl.session)
-        assert "goal: 完善记忆模块" in loaded.prompt
-        print("[PASS] T-303: 新会话首屏问目标；goal 注入 anchor + system")
-    finally:
-        mod.run_topic_routing_s2 = original_s2
+    goal_repl.start_new_session()
+    assert goal_repl.session.goal == ""
+    assert not any(GOAL_PROMPT in line for line in goal_outputs)
+    print("[PASS] T-303: 新会话不问目标 (直接开聊)")
 
     resumed = Session.load(paths, saved_id)
     resume_outputs: list[str] = []
@@ -1359,6 +1617,180 @@ def _demo() -> int:
     assert reloaded_t602b.meta.pending_feedback == []
     print("[PASS] T-602b: exit asks feedback; y → feedback_positive + clear pending")
     os.environ.pop(_ENV_FEEDBACK_ON_EXIT, None)
+
+    # T-706: 探索 command runs subagent only (no parent run_turn)
+    from tools.logging import EVENT_SUBAGENT_RUN
+
+    t706_id = f"_repl_t706_{utc_now_iso().replace(':', '').replace('-', '')[-10:]}"
+    t706_session = create_new(paths, conversation_id=t706_id)
+    t706_session.set_goal("explore demo")
+    t706_session.set_topics(["coding"], phase="S4")
+    t706_session.save()
+    t706_outputs: list[str] = []
+    t706_read_args = json.dumps(
+        {"path": "evolve/tools/coding/run_tests/tool.toml"},
+        ensure_ascii=False,
+    )
+    t706_before = len(read_events(log_path))
+    t706_repl = ConversationRepl.from_session(
+        t706_session,
+        paths=paths,
+        input_fn=lambda _p: "",
+        output_fn=lambda t: t706_outputs.append(t),
+    )
+    t706_repl.agent = Agent.create(
+        t706_session,
+        llm=_MockLLM(
+            responses=[
+                LLMResponse(
+                    model="mock",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "explore_read",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": t706_read_args},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                    usage=None,
+                    raw={},
+                ),
+                LLMResponse(
+                    model="mock",
+                    content="run_tests：按 suite 批量跑 demo 验收脚本。",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=None,
+                    raw={},
+                ),
+            ]
+        ),
+        confirm_fn=lambda _p, _a: "y",
+    )
+    msgs_before = len(t706_session.messages)
+    t706_repl.handle_line("探索 evolve/tools/coding 里 run_tests 做什么")
+    assert any("[子代理摘要 · explore]" in line for line in t706_outputs)
+    assert any("run_tests" in line for line in t706_outputs)
+    assert len(t706_session.messages) == msgs_before
+    t706_sub_events = [
+        e
+        for e in read_events(log_path)[t706_before:]
+        if e.get("event") == EVENT_SUBAGENT_RUN
+    ]
+    assert t706_sub_events
+    print("[PASS] T-706: 探索 command runs subagent only; summary printed; no parent turn")
+
+    # T-1612: 验收 command runs demo probe + checker only (no parent run_turn)
+    from tools.builtin.run_evolved import run_scaffold_demo
+    from tools.registry import ToolRegistry
+
+    t1612_id = f"_repl_t1612_{utc_now_iso().replace(':', '').replace('-', '')[-10:]}"
+    t1612_session = create_new(paths, conversation_id=t1612_id)
+    t1612_session.set_goal("checker demo")
+    t1612_session.set_topics(["coding"], phase="S4")
+    t1612_session.save()
+    t1612_outputs: list[str] = []
+    t1612_before = len(read_events(log_path))
+    t1612_repl = ConversationRepl.from_session(
+        t1612_session,
+        paths=paths,
+        input_fn=lambda _p: "",
+        output_fn=lambda t: t1612_outputs.append(t),
+    )
+    reg_t1612 = ToolRegistry.load(paths)
+    wt_tool = reg_t1612.get_evolved("write_text")
+    assert wt_tool is not None
+    wt_demo = run_scaffold_demo(wt_tool)
+    wt_read_args = json.dumps(
+        {"path": "evolve/tools/common/write_text/tool.toml"},
+        ensure_ascii=False,
+    )
+    t1612_repl.agent = Agent.create(
+        t1612_session,
+        llm=_MockLLM(
+            responses=[
+                LLMResponse(
+                    model="mock",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "chk1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": wt_read_args},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                    usage=None,
+                    raw={},
+                ),
+                LLMResponse(
+                    model="mock",
+                    content="write_text 验收通过。\nCHECKER_VERDICT: pass",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=None,
+                    raw={},
+                ),
+            ]
+        ),
+        confirm_fn=lambda _p, _a: "y",
+    )
+    msgs_t1612_before = len(t1612_session.messages)
+    t1612_repl.handle_line("验收 write_text")
+    assert any("demo probe" in line for line in t1612_outputs)
+    assert any("[子代理摘要 · checker]" in line for line in t1612_outputs)
+    assert any("验收: PASS" in line for line in t1612_outputs)
+    assert len(t1612_session.messages) == msgs_t1612_before
+    t1612_sub_events = [
+        e
+        for e in read_events(log_path)[t1612_before:]
+        if e.get("event") == EVENT_SUBAGENT_RUN and e.get("kind") == "checker"
+    ]
+    assert t1612_sub_events
+    assert t1612_sub_events[-1].get("verdict") == "pass"
+    print("[PASS] T-1612: 验收 command demo probe + checker; no parent turn")
+
+    # T-702: 只聊 / 动手 mode switch; ask blocks run_evolved
+    from agent import build_llm_tools
+
+    t702_id = f"_repl_t702_{utc_now_iso().replace(':', '').replace('-', '')[-10:]}"
+    t702_session = create_new(paths, conversation_id=t702_id)
+    t702_session.set_goal("mode demo")
+    t702_session.set_topics(["workflow"], phase="S4")
+    t702_session.save()
+    t702_outputs: list[str] = []
+    t702_repl = ConversationRepl.from_session(
+        t702_session,
+        paths=paths,
+        input_fn=lambda _p: "",
+        output_fn=lambda t: t702_outputs.append(t),
+    )
+    t702_repl.handle_line("只聊")
+    assert t702_session.meta.turn_mode == "ask"
+    assert any("turn_mode: ask" in line for line in t702_outputs)
+    ask_tools = build_llm_tools(t702_session)
+    assert "run_evolved" not in [t["function"]["name"] for t in ask_tools]
+    blocked = t702_repl.agent.executor.validate(
+        "run_evolved",
+        {"tool_name": "write_text", "arguments": {"path": "_x.txt", "content": "hi"}},
+    )
+    assert blocked is not None and not blocked.ok
+    print("[PASS] T-702: 只聊 sets ask; run_evolved blocked")
+
+    t702_outputs.clear()
+    t702_repl.handle_line("动手")
+    assert t702_session.meta.turn_mode == "agent"
+    assert any("turn_mode: agent" in line for line in t702_outputs)
+    agent_tools = build_llm_tools(t702_session)
+    assert "run_evolved" in [t["function"]["name"] for t in agent_tools]
+    print("[PASS] T-702: 动手 restores agent + run_evolved in LLM tools")
+
+    run_t1004_demo(paths)
+
+    from host_tools import _demo as host_tools_demo
+
+    host_tools_demo()
 
     if load_config().api_key:
         print("[SKIP] interactive live REPL (use: python main.py)")

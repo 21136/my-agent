@@ -1,7 +1,8 @@
 # my-agent 项目地图（MAP）
 
-> 版本 2026-07-09 · **新会话请先读本文 + `TASKS.md` 当前 Phase**  
-> 设计文档已收口（CHANGELOG 0.2.14）；代码处于 **Phase 6 M4**（`T-601` done）。
+> 版本 2026-07-18 · **新会话请先读本文 + `TASKS.md`**  
+> 代码 **Phase 1～18 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
+> **冻结状态**：**已解冻**（T-1890-10）— 可开新功能 Phase；须遵守 **§2.1** / DOC-04。
 
 ---
 
@@ -21,9 +22,36 @@
 | **Phase 3** | 记忆三件套 / 主题索引 | **done**（`T-301`～`T-308`） |
 | **Phase 4** | 进化写入 | **done**（`T-401`～`T-407`；`T-406` 文档已决） |
 | **Phase 5** | 真实任务固化 tool + memory | **done**（`T-501`～`T-504`） |
+| **Phase 5b** | P1 common 文件工具 | **done**（`T-505`） |
+| **Phase 5e** | 进化写侧 `write_evolve` | **done**（`T-508`） |
+| **Phase 5c** | P2 workflow 整理工具 | **done**（`T-506`） |
+| **Phase 5d** | P3 coding 开发工具 | **done**（`T-507`） |
 | **Phase 6** | M4 治理（review / audit） | **done**（`T-601`～`T-604`、`T-006`） |
+| **Phase 7** | M5 对话编排（顺手度） | **done**（T-701～T-706、T-704、T-705） |
+| **Phase 8** | 用户扩展层（双索引） | **done**（T-801～T-803、T-805；见 [EXTENSIONS.md](./EXTENSIONS.md)） |
+| **Phase 9** | Electron 桌面壳 | **done**（T-904a～f、T-904i、**T-904g/i daily Amp**；见 [DESKTOP.md](./DESKTOP.md)） |
+| **Phase 10** | 主机托管区（host scope） | **done**（T-1001～T-1008；见 [HOST-SCOPE.md](./HOST-SCOPE.md)） |
+| **Phase 11** | 项目模式（project 壳 + 三件套 + 计划确认） | **done**（T-1102～T-1113；见 [PROJECT-MODE.md](./PROJECT-MODE.md)） |
+| **Phase 12** | 拖拽文件（project 壳 `_incoming/` 优先） | **M0 done**（T-1201～T-1208；见 [FILES-DROP.md](./FILES-DROP.md)） |
+| **Phase 14** | 工具确认管线加固（confirm 队列 + UI 状态机） | **done**（T-1301～T-1308；见 [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · BUG-008） |
+| **Phase 15** | 回合控制（Stop · `turn.cancel` · confirm 90s） | **done**（T-1401～T-1408；S-05/S-26/S-28；见 [TURN-CONTROL.md](./TURN-CONTROL.md) · BUG-014 **fixed**） |
+| **Phase 16** | 运行时行为约束（stall · 拒调 · demo probe） | **M1 done**（T-1511,T-1514～T-1516,T-1520 + M0；见 [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) v0.2.0） |
+| **Phase 17** | Checker 子代理（监工 / 独立验收） | **M1 done**（T-1601,T-1610～T-1614,T-1620～T-1623；见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) v0.2.0） |
+| **Phase 18** | **稳定化专项**（全表面矩阵 + 平台韧性 · P0/P1 smoke · Gate IT） | **done · 已解冻**（[STABILIZATION.md](./STABILIZATION.md) **v1.1.0**；T-1890-01～10 全 done） |
+| **Phase 19** | **上下文换线**（LLM 识别换线意图 + 用户确认门） | **done**（[CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) v0.3.0；T-1902～T-1907 M0～M2） |
+| **Phase 20** | **项目 Task 一停门**（每 `TASKS` 条目完成即停） | **M0+M1 done**（[TASK-STOP.md](./TASK-STOP.md) v0.2.0；T-2001～T-2007；M2=T-2008 defer） |
 
-**Phase 2～6 与 `T-006` 已完成**。远端：https://github.com/21136/my-agent（private，默认分支 `main`）。可选：`T-601b` / `T-605` skill。
+### 2.1 解冻说明（T-1890-09 / T-1890-10）
+
+| 项 | 说明 |
+|----|------|
+| **现状** | Phase 18 放行全齐；**T-1890-10 已签字**（2026-07-18：「同意解冻：可恢复 feature Phase」） |
+| **冻结** | **已解除** — 可开新功能 Phase |
+| **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
+| **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
+| **下一功能** | Phase 20 M2 可选 · [TASK-STOP.md](./TASK-STOP.md)（T-2008 侧栏高亮 defer） |
+
+**Phase 1～18 设计/验收已落地**；远端：https://github.com/21136/my-agent（private，默认分支 `main`）。可选：`T-601b` / `T-605` skill / `T-804` / **T-904i6**（starfield 清理）。
 
 ---
 
@@ -33,9 +61,15 @@
 my-agent/
 ├── agent-core/                 # 内核 Python（稳定、少变）
 │   ├── paths.py                # T-102 agent 根 + workspace 边界
+│   ├── host_scope.py           # T-1002 host_scope.json 加载 / denylist
+│   ├── host_scope_cli.py       # T-1004 托管目录 REPL
+│   ├── host_scope_api.py       # T-1008 桌面 WS 托管区 API
+│   ├── host_tools.py           # T-1005 host 只读；T-1006 copy_move；T-1007 resolve_workflow_dir
 │   ├── llm_client.py           # T-201 DeepSeek / OpenAI 兼容薄封装
-│   ├── agent.py                # T-202 tools + T-206 主循环 + T-208 context 检查
-│   ├── context.py              # T-208 digest 压缩（RUNTIME §8）
+│   ├── agent.py                # T-202 tools + T-206 主循环 + T-706 explore 集成
+│   ├── subagent.py             # T-706 explore + T-1610 checker 子代理
+│   ├── turn_intent.py          # T-703 classify_turn + should_spawn_explore
+│   ├── context.py              # T-208 digest 压缩 + repair_orphaned_tool_calls（BUG-005）
 │   ├── session.py              # T-203 续接 + 持久化
 │   ├── loader.py               # T-204 system 基础 + overlay
 │   ├── router.py               # T-205 主题 JSON / 快捷命令
@@ -53,6 +87,13 @@ my-agent/
 │   │   ├── audit.py            # T-603 LLM audit
 │   │   └── git_hints.py        # T-604 commit / rollback hints
 │   ├── main.py                 # T-207 REPL + 命令
+│   ├── server.py               # T-904a Electron WebSocket sidecar
+│   ├── activity_router.py      # T-906 外壳/主题活动路由
+│   ├── project_mode.py         # T-1107 三件套 / 计划门 / 验收
+│   ├── project_cli.py          # T-1103 CLI `项目 …`
+│   ├── project_switch.py       # T-1113 项目 ↔ 专用会话索引与切换
+│   ├── project_api.py          # T-1109 / T-1112 / T-1113 桌面 WS project.*（切换替换会话：memory←context · history←session）
+│   ├── interface_lock.py       # T-904i Electron↔CLI 会话锁
 │   ├── prompts/
 │   │   └── core.txt            # 内核规则（T-209）
 │   └── tools/
@@ -72,13 +113,15 @@ my-agent/
 │       ├── my-agent            # agent-core 下启动器（同 cli_tools）
 │       └── ...
 ├── evolve/                     # 用户策展，Git 真源
-│   ├── _index.toml             # 主题索引（prompt + memory_dirs + tool_dirs）
+│   ├── _index.core.toml        # 种子主题索引（Phase 8；原 _index.toml）
+│   ├── _index.user.toml        # 用户扩展主题索引（Phase 8；可为空）
+│   ├── _index.toml             # 迁移前兼容；T-801 后 deprecated
 │   ├── prompts/                # 主题 overlay + safety.md（始终加载）
 │   ├── memories/               # 记忆 md（规划）
-│   ├── tools/                  # evolved 工具（种子 write_text）
-│   │   ├── common/write_text/  # T-111
-│   │   └── workflow/sort_by_extension/  # T-502 按扩展名整理
-│   │   └── <topic>/<name>/     # 主题专用
+│   ├── tools/                  # evolved 工具
+│   │   ├── common/             # T-111 write_text；T-505 append_text / copy_move / move_to_trash
+│   │   └── workflow/           # T-502 + T-506（5 件）
+│   │   └── <topic>/<name>/     # 其他主题专用
 │   └── proposals/              # T-402 生成；用户审后 accept（T-404）
 ├── docs/                       # 设计真源（先评审再写代码）
 │   ├── MAP.md                  # ← 本文件
@@ -86,15 +129,30 @@ my-agent/
 │   ├── TOOLS.md                # 工具协议 §6～§7
 │   ├── RUNTIME.md              # 对话层
 │   ├── MEMORY.md               # 三件套 + 主题路由
+│   ├── EXTENSIONS.md           # Phase 8 用户扩展层（双索引）
+│   ├── DESKTOP.md              # Phase 9 Electron 桌面壳
+│   ├── PROJECT-MODE.md         # Phase 11 项目模式（project 壳）
+│   ├── BUGS.md                 # 运行时缺陷索引（2026-07-11 桌面联调）
 │   ├── EVOLVE.md               # proposal
 │   └── GOVERNANCE.md           # M4 治理
+├── desktop/                    # T-904c～f Electron 壳
+│   ├── electron/main.ts        # 托盘 / 快捷键 / 切 CLI / 真退出 / 无系统菜单
+│   └── src/
+│       ├── shells/grow/        # 生长期 UI + 全窗运行态
+│       ├── shells/daily/       # 日用 Amp（T-904i）
+│       ├── shells/project/     # 项目期 UI（T-1105～T-1113）
+│       ├── shells/chat-state.ts
+│       ├── agent-busy.ts       # 全窗 busy + Main 退出查询
+│       └── app-chrome.css      # 顶栏 + .app-frame.is-agent-busy
 ├── data/                       # gitignore（除可选 conversations 摘要）
-│   ├── state.json
+│   ├── state.json              # last_conversation_id, project_sessions, preferred_ui
 │   ├── sessions/<id>/          # goal, messages.jsonl, tool_outputs/
+│   │   └── .interface.lock     # Electron↔CLI 锁 (T-904i)
 │   └── evolve_log.jsonl        # T-110 起每次 tool 调用
 ├── workspace/                  # gitignore，用户工作文件
-├── requirements.txt            # httpx>=0.27；Python 3.12+
-├── start.bat                   # T-210 双击进 CLI REPL
+├── requirements.txt            # httpx, websockets；Python 3.12+
+├── start-desktop.bat           # 默认入口 → Electron (T-904f)
+├── start.bat                   # CLI REPL 备用入口
 ├── my-agent                    # T-112 根目录启动器 → cli_tools.py
 └── README.md
 ```
@@ -222,7 +280,7 @@ flowchart TD
 - `evolve/tools/<topic>/<name>/tool.toml` → `topics` 须含 `<topic>`
 - `[entry] path = "main.py"` 必须存在
 
-当前仓库 **已有** `evolve/tools/common/write_text/`（T-111）与 `evolve/tools/workflow/sort_by_extension/`（T-502）。
+当前仓库 **common 五件套**（`write_text` + T-505 三件 + `write_evolve` T-508）+ **workflow 五件套** + **coding 四件套**。
 
 ---
 
@@ -245,7 +303,25 @@ flowchart TD
 | `LLM_MODEL` | 通用会话（flash） | `deepseek-v4-flash` |
 | `LLM_MODEL_CODING` | 含 `coding` 主题 | `deepseek-v4-pro` |
 | `LLM_TIMEOUT_SEC` | 主对话超时 | `120` |
+| `CONFIRM_TIMEOUT_SEC` | 工具确认等待（Phase 15 · [TURN-CONTROL.md](./TURN-CONTROL.md)） | `90`（已实现） |
+| `TURN_WALL_SEC` | 单用户消息完整 turn 墙钟（Phase 16 · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md)） | `900` |
+| `STALL_WATCHDOG_SEC` | 无有效 WS 进度自动停止（Phase 16；`0` 关闭） | `0`（opt-in `180`） |
+| `TURN_STALL_SEC` | 无 WS 事件自动停止（P1 defer） | `180` |
+| `WRITE_INLINE_MAX_CHARS` | 内联写入上限（Phase 16 T-1511 · [TURN-CONTROL.md](./TURN-CONTROL.md) §9.1） | `8192` |
+| `AUTO_DEMO_ON_WRITE_EVOLVE` | grow scaffold 写完 `tool.toml` 后自动 demo（T-1520） | `1` |
+| `SUBAGENT_CHECKER_MAX` | checker 子代理 tool 轮次上限（Phase 17） | `5` |
+| `CHECKER_SUMMARY_MAX_CHARS` | checker 摘要注入父 overlay 上限 | `3000` |
+| `CHECKER_AUTO_ON_SCAFFOLD` | grow scaffold 后自动 checker（M1 T-1620） | `0`（设 `1` 开启） |
+| `CHECKER_MODEL` | checker 模型覆盖（空=跟 session） | 空 |
 | `LLM_CONTEXT_LIMIT` | context 上限（可选覆盖） | flash `128000` / pro `1000000` |
+| `SUBAGENT_EXPLORE_MAX` | explore 子代理 tool 轮次上限 | `8` |
+| `SUBAGENT_SUMMARY_MAX_CHARS` | 子代理摘要注入父 overlay 上限 | `4000` |
+| `MY_AGENT_AUTO_EXPLORE` | execute/research 自动 spawn explore | `1`（`0` 关闭） |
+| `PARENT_SHORT_MAX` | **`turn_mode=ask`** 父循环 tool 轮次上限（T-907 后） | `5` |
+| `PARENT_EXECUTE_SEGMENT_MAX` | execute 每 segment tool 轮次上限 | `50` |
+| `PARENT_EXECUTE_TOTAL_MAX` | execute 每条用户消息总 tool 轮次安全顶 | `50` |
+| `MY_AGENT_AUTO_CONTINUE` | execute segment cap 后有进展时自动续跑 | `1`（`0` 提示输入「继续」） |
+| `turn_mode`（session） | `ask` 只聊 / `agent` 动手（默认） | 持久化于 `meta.json`；ask 禁 `run_evolved` |
 
 Phase 2 主对话复用 `LLM_API_KEY`（与 `web_search` 相同），详见 `RUNTIME.md` §6.1。
 
@@ -280,6 +356,8 @@ python router.py                      # T-205 主题路由
 python agent.py                       # T-202 tools + T-206 agent loop + T-208 auto compact
 python context.py                     # T-208 digest 压缩
 python main.py --demo                 # T-207 REPL（脚本验收）
+python subagent.py                    # T-706 explore 子代理 demo
+python turn_intent.py                 # T-703 轻量分类 demo
 ```
 
 每个文件的 `if __name__ == "__main__"` 内含 `_demo()`，exit 0 即通过。
@@ -326,6 +404,90 @@ python ..\evolve\tools\common\write_text\main.py demo
 ```
 
 exit 0 且 7 条 `[PASS]`：`registry` 扫描、`dry_run` 不写盘、`skip`/`overwrite`/`rename`、越界拒绝。
+
+### 9.4b T-505 P1 common 文件工具
+
+| 工具 | 路径 | 作用 |
+|------|------|------|
+| `append_text` | `evolve/tools/common/append_text/` | 追加 UTF-8 文本；`create_if_missing` 默认 true |
+| `copy_move` | `evolve/tools/common/copy_move/` | `operation`: `copy` \| `move`；`on_conflict`: skip/overwrite/rename |
+| `move_to_trash` | `evolve/tools/common/move_to_trash/` | 移入 `workspace/_trash/`（默认）；支持目录 |
+
+```powershell
+cd D:\my-agent\agent-core
+python ..\evolve\tools\common\append_text\main.py demo
+python ..\evolve\tools\common\copy_move\main.py demo
+python ..\evolve\tools\common\move_to_trash\main.py demo
+python tools\registry.py   # live evolved scan 应含 5 个 active 工具
+```
+
+**CLI 示例**（PowerShell 单引号 + `\"`）：
+
+```powershell
+python my-agent tool run evolved append_text --json '{\"path\":\"_log.txt\",\"content\":\"line\\n\"}' --dry-run -y
+python my-agent tool run evolved copy_move --json '{\"operation\":\"copy\",\"source\":\"_a.txt\",\"dest\":\"_b.txt\"}' -y
+python my-agent tool run evolved move_to_trash --json '{\"path\":\"_old.txt\"}' -y
+```
+
+每个 `main.py demo` exit 0；四件 workspace common 工具**每个 session** 均列入 evolved 清单（与 `write_text` 相同）。
+
+### 9.4e T-508 `write_evolve`（进化写侧）
+
+| 工具 | 路径 | 作用 |
+|------|------|------|
+| `write_evolve` | `evolve/tools/common/write_evolve/` | 向 `evolve/tools/<scope>/<name>/` 写 `tool.toml` / `main.py` / `README.md` |
+
+```powershell
+cd D:\my-agent\agent-core
+python ..\evolve\tools\common\write_evolve\main.py demo
+python tools\registry.py   # live evolved scan 应含 14 个 active 工具
+```
+
+`workspace_only=false`：**无** session `a`；每次写入须 confirm。路径仅限 `evolve/tools/` 下已注册 scope（`common` + 合并索引各主题 `tool_dirs`；见 [EXTENSIONS.md](./EXTENSIONS.md)）。
+
+**2026-07-12 管线加固（P0）**：`tool.toml` 写前 `parse_tool_manifest` 预检；`on_conflict=skip` 遇已存在文件 → `ok: false`；成功写 `tool.toml` 后 executor **热重载 registry**（同会话可立即 `run_evolved` 新工具）。见 [TOOLS.md](./TOOLS.md) §7.6 / §8.1。
+
+**P1（同日前）**：执行器 `write_evolve` 内容预检；scaffold 回合允许 `workspace/_staging.toml` 暂存；`tool.start` 展示 coalesce 后参数；`activity_router` 识别用户注册主题路径。
+
+**P2（同日前）**：`detect_scaffold_tool_turn` 英文覆盖；cookbook 暂存步骤仅 scaffold 回合；`tests/test_write_evolve_pipeline.py` 聚焦单测纳入 `run_tests quick`。
+
+### 9.4c T-506 P2 workflow 整理工具
+
+| 工具 | 作用 |
+|------|------|
+| `rename_batch` | 顶层文件批量重命名（prefix / suffix / replace / number） |
+| `flatten_dir` | 子目录文件提升到顶层；可选删除空目录 |
+| `dedupe_by_name` | 按 basename 报告重复（只读，不删） |
+| `archive_by_date` | 按 mtime/ctime 移入 `YYYY-MM/` |
+
+```powershell
+cd D:\my-agent\agent-core
+python ..\evolve\tools\workflow\rename_batch\main.py demo
+python ..\evolve\tools\workflow\flatten_dir\main.py demo
+python ..\evolve\tools\workflow\dedupe_by_name\main.py demo
+python ..\evolve\tools\workflow\archive_by_date\main.py demo
+python tools\registry.py   # live evolved scan 应含 13 个 active 工具
+```
+
+确认 **workflow** 主题后 system 清单含五件 workflow 工具；**coding** 主题会话含四件 coding 工具。
+
+### 9.4d T-507 P3 coding 开发工具
+
+| 工具 | 作用 |
+|------|------|
+| `run_demo` | `agent-core/` 下跑 Python 验收脚本 |
+| `run_tests` | 按 suite 批量跑 demo（`quick` / `core` / `governance` / `evolve` / `all`） |
+| `git_snapshot` | 只读 git status + diff --stat |
+| `patch_file` | 行号或锚点补丁（agent 根文本文件；仅已有文件） |
+
+```powershell
+cd D:\my-agent\agent-core
+python ..\evolve\tools\coding\run_demo\main.py demo
+python ..\evolve\tools\coding\run_tests\main.py demo
+python ..\evolve\tools\coding\git_snapshot\main.py demo
+python ..\evolve\tools\coding\patch_file\main.py demo
+python tools\registry.py   # live evolved scan 应含 13 个 active 工具
+```
 
 ### 9.5 T-112 CLI `tool run`（Phase 1 完成）
 
@@ -475,7 +637,7 @@ exit 0；T-202 的 7 条 `[PASS]` + T-206 的 4 条 `[PASS]`（无 key 时 +1 `[
 | `Agent.run_turn` | user → assistant(tool_calls) → tool → assistant |
 | `maybe_auto_compact` | 每轮 LLM 前检查 85% 阈值（T-208） |
 | `messages.jsonl` | 每轮追加；`Session.load` 可续读 |
-| tool 内循环上限 | 10 轮无最终回复 → `ToolLoopExceededError` |
+| tool 内循环上限 | **T-907 后**：`agent` 模式 50 轮/segment（`PARENT_EXECUTE_*`）；`ask` 模式 5 轮。见 [MODE-BUDGET.md](./MODE-BUDGET.md) |
 | `Agent.create` | 绑定 `ToolExecutor` + 会话 evolved 白名单 |
 
 有 key 时可选 live：`list_dir docs` 一句话总结。
@@ -500,7 +662,7 @@ python main.py --record full
 | 命令 / 场景 | 预期 |
 |-------------|------|
 | 默认启动 | `resume_or_create` 续接最近 session |
-| `新会话` | 问 goal → S2 主题提议 → 确认 → 写 `meta.json` |
+| `新会话` | **直接开聊**（S4）；`换主题` 仍走 S2 确认 |
 | `主题 workflow` / `加主题 …` / `换主题` | 替换 / 并集 / 重走 S2 |
 | `压缩` | 手动触发 digest 压缩（RUNTIME §8）；同 thread 不换 id |
 | `exit` / `exit --record` | 保存 session；可选归档 `data/conversations/` |
@@ -635,7 +797,7 @@ python -c "from paths import AgentPaths; from loader import scan_memory_index, f
 
 实现位置：`loader.py` 的 `scan_memory_index` / `format_memory_index`；`build_system_prompt` §4.1 第三层注入。
 
-### 9.18 T-303 Session 目标问答（`goal.md` + 对话上下文）
+### 9.18 T-303 Session 目标（`goal.md` + 对话上下文）
 
 ```powershell
 cd D:\my-agent\agent-core
@@ -645,19 +807,19 @@ python main.py --demo
 
 | 场景 | 预期 |
 |------|------|
-| `新会话` / `new` | 首屏问「这次主要做什么？」（`session.GOAL_PROMPT`） |
-| 回答后 | 写入 `data/sessions/<id>/goal.md`；`meta.phase` S1→S2 |
+| `新会话` / `new` | **直接开聊**（S4）；空 goal/topics；**不问** `GOAL_PROMPT` |
+| `prompt_and_set_goal` | **仅**测试或显式调用时问目标 → 写入 `goal.md`；`meta.phase` S1→S2 |
 | 续接启动 | **不**重复问目标；沿用磁盘 `goal.md` |
 | 锚定块 | `prepare_session_for_s4` 插入 `目标: <goal 全文>`（RUNTIME §5） |
 | system overlay | `[本次会议]` 段含 `goal: …`（`loader.format_session_overlay`） |
 
-`session.py`：`prompt_and_set_goal` · `persist_goal` · `GOAL_PROMPT`  
-`main.py`：`ConversationRepl.start_new_session()` 调用上述 API。
+`session.py`：`prompt_and_set_goal` · `persist_goal` · `GOAL_PROMPT`（保留，非默认路径）  
+`main.py`：`start_new_session()` → `create_new` S4，不触发 goal/S2。
 
 exit 0 时应含：
 
 - `session.py`: `[PASS] T-303: goal prompt → goal.md → anchor context`
-- `main.py --demo`: `[PASS] T-303: 新会话首屏问目标；goal 注入 anchor + system` 与 `[PASS] T-303: resume 不重复问目标`
+- `main.py --demo`: `[PASS] 新会话: 直接开聊 (no goal/S2)` 与 `[PASS] T-303: resume 不重复问目标`
 
 ### 9.19 T-304 主题路由阶段1（S2 LLM 提议 + S3 用户确认）
 
@@ -1134,19 +1296,344 @@ exit 0；`[久远记忆]` 段含 `downloads-sort (workflow):` 索引行。正文
 python my-agent tool run read_file --json '{\"path\":\"evolve/memories/workflow/downloads-sort.md\"}' -y
 ```
 
+### 9.39 T-706 explore 子代理（ORCHESTRATION §4）
+
+```powershell
+cd D:\my-agent\agent-core
+python subagent.py
+python agent.py          # 含 [PASS] T-706
+python main.py --demo    # 含 [PASS] T-706: 探索 命令
+```
+
+| 场景 | 预期 |
+|------|------|
+| `SubagentRunner.run_explore` | 独立 messages；≤8 轮；禁止 `run_evolved` |
+| 摘要 | `[子代理摘要 · explore]` 注入父 system overlay（仅当前 turn） |
+| `探索 …` / `调研 …` / `explore …` | 只跑子代理；打印摘要；**不**追加父 `run_turn` |
+| 自动 spawn | 「造/读 + 路径」类 execute → 先 explore 再父循环 |
+| `evolve_log` | `event=subagent_run`（`kind`, `tool_rounds`, `paths_cited`） |
+| Builtin | 仍 6 个 function；子代理不暴露为第 7 个 tool |
+
+**对话验收**（有 `LLM_API_KEY`）：
+
+```text
+you> 探索 evolve/tools/coding 里 run_demo 和 run_tests 各做什么
+# → 仅子代理摘要
+
+you> 按 run_demo 模式造 bar 工具并更新 TASKS（coding 主题）
+# → 子代理读范例 → 父代理 write_evolve；父循环不应重复 read 范例
+```
+
+### 9.39b T-1610～T-1614 checker 子代理（CHECKER-SUBAGENT §4）
+
+```powershell
+cd D:\my-agent\agent-core
+python subagent.py          # 含 T-1610～T-1613 [PASS]
+python main.py --demo       # 含 [PASS] T-1612: 验收 command
+python -m unittest tests.test_checker_subagent tests.test_runtime_guards tests.test_runtime_guards_m1 -v
+```
+
+| 场景 | 预期 |
+|------|------|
+| `验收 write_text` / `check write_text` | 先 `run_scaffold_demo`；再 checker；**不**进入父 `run_turn` |
+| `SubagentRunner.run_checker` | 独立 messages；≤5 轮；仅 `read_file`/`list_dir`/`grep` |
+| 报告 | `[子代理摘要 · checker]` + `验收: PASS\|FAIL\|WARN` + checklist |
+| `evolve_log` | `event=subagent_run` · `kind=checker` · `verdict` |
+| Stop | `cancel_event` 透传；checker 退出；父 turn 可 `cancelled` |
+| fail | 不自动修复；不锁会话 |
+| M1 自动 | `CHECKER_AUTO_ON_SCAFFOLD=1` + grow scaffold + auto demo → `checker.verdict` WS + 顶栏 notice |
+| M1 完成门 | 非 `pass` 时 assistant 文案中「已验收/沉淀完成」被内核替换 |
+
+**对话验收**（有 `LLM_API_KEY`）：
+
+```text
+you> 验收 write_text
+# → demo probe 行 + checker 报告；messages.jsonl 无子代理 tool 消息
+```
+
+### 9.40 T-701 Turn discipline（ORCHESTRATION §6）
+
+```powershell
+cd D:\my-agent\agent-core
+python loader.py
+```
+
+| 场景 | 预期 |
+|------|------|
+| `core.txt` | 含 **Turn discipline**：qa/plan 先答、子代理调研、execute 直接 write_evolve、并行只读 tool_calls |
+| `[本次会议]` overlay | `subagent: none`（默认）或 `subagent: used`（本轮 explore 后） |
+| `turn_discipline` 段 | S4 会话注入；子代理已用时提示勿重复 read「已读」路径 |
+| 与 T-706 | `[子代理摘要 · explore]` 与 `subagent: used` 同轮出现 |
+
+exit 0 时应含 3 条 `[PASS] T-701:`。
+
+### 9.41 T-702 Ask / Agent 模式（ORCHESTRATION §7）
+
+```powershell
+cd D:\my-agent\agent-core
+python session.py
+python main.py --demo
+```
+
+| 命令 | 预期 |
+|------|------|
+| `只聊` / `ask` | `turn_mode: ask`；父循环无 `run_evolved` function |
+| `动手` / `agent` | `turn_mode: agent`；恢复 6 builtin |
+| `探索 …` | ask 模式下仍可用（只读子代理） |
+| 续接 session | `meta.json` 保留 `turn_mode` |
+
+exit 0 时应含 `[PASS] T-702:`（session / executor / agent / loader / main）。
+
+### 9.42 T-703 轻量分类（ORCHESTRATION §8）
+
+```powershell
+cd D:\my-agent\agent-core
+python turn_intent.py
+python agent.py
+python loader.py
+```
+
+| `classify_turn` | 自动 explore |
+|-----------------|--------------|
+| `qa` / `plan` | 否 |
+| `research` / `execute`（含造/读/路径等标记） | 是 |
+
+overlay 含 `turn_intent: …`（当前轮，不落盘）。`MY_AGENT_AUTO_EXPLORE=0` 关闭自动 spawn。
+
+### 9.43 T-705 execute 多 segment 续跑（ORCHESTRATION §5）
+
+```powershell
+cd D:\my-agent\agent-core
+python agent.py          # 含 [PASS] T-705: multi-segment execute
+python loader.py         # 含 [PASS] T-705: segment pause + total cap messages
+```
+
+| 场景 | 预期 |
+|------|------|
+| `execute` 意图 | 多 segment；每 segment 默认 ≤50 轮；总顶 50 轮 |
+| 有进展 | `run_evolved ok` 或 checklist `[x]` → 自动下一 segment |
+| 交付 | assistant 含「交付完成」→ 结束 |
+| `MY_AGENT_AUTO_CONTINUE=0` | segment cap 后提示「输入继续」 |
+| REPL | 自动续跑时打印 `…继续执行 (segment 2/…)` |
+
+### 9.44 T-704 qa 短循环软提醒（ORCHESTRATION §9）
+
+```powershell
+cd D:\my-agent\agent-core
+python agent.py          # 含 [PASS] T-704: qa soft reminder at max-1 tool round
+```
+
+| 场景 | 预期 |
+|------|------|
+| `qa` + 连续 tool | 第 `PARENT_SHORT_MAX-1` 轮后注入「请直接回答」 |
+| `plan` / `execute` | 不注入 |
+| 消息 | `[内核] 请直接回答：根据已有上下文给出文字回复，勿再调用工具。` |
+
+### 9.45 T-905 轮次反馈与 recall（TURN-FEEDBACK）
+
+```powershell
+cd D:\my-agent\agent-core
+python turn_intent.py    # recall + E1 泛问句
+python agent.py          # 含 [PASS] T-905: recall → no tools
+```
+
+| 场景 | 预期 |
+|------|------|
+| `刚刚我们说了什么` | `recall` · 无 tools · `turn.start` |
+| 泛问句「还需要加什么工具」 | `qa` 非 `research` |
+| 桌面 grow | 顶栏意图 + `N 条 · 未压缩`；运行中全壳暖色渐变（§3.2.3）；关窗真退出、忙时确认 |
+| 桌面续接 | 重开 grow → 聊天区可见过往 user/assistant（`session.history`） |
+
+设计：[TURN-FEEDBACK.md](./TURN-FEEDBACK.md)。
+
+### 9.46 T-905d 桌面续接历史（session.history）
+
+```powershell
+cd D:\my-agent\agent-core
+python session.py       # 含 [PASS] T-905d: build_session_chat_history
+python server.py        # 含 session.history in emit_session_state
+```
+
+| 场景 | 预期 |
+|------|------|
+| 重开 Electron / 刷新连接 | `session.history` 替换 grow `blocks` |
+| 锚定 / tool / `[内核]` | 不进聊天区 |
+| 连续重复 user | 去重后一条 |
+
+实现：`session.py` · `server.py` · `desktop/src/shells/grow/index.ts`。协议： [DESKTOP.md](./DESKTOP.md) §5.2.1。
+
+### 9.47 T-906 活动路由（Activity Router + ui.route）
+
+```powershell
+cd D:\my-agent\agent-core
+python activity_router.py
+python server.py --demo
+cd ..\desktop
+npm run build
+```
+
+| 场景 | 预期 |
+|------|------|
+| 「造 coding 工具」 | `ui.route` → `grow`；`topics` 含 `coding` |
+| 「用 sort_by_extension …」 | `ui.route` → `daily`；加 `workflow` |
+| 手动改外壳下拉 | 勾选「锁定」；后续忽略 `ui.route` |
+| grow ↔ daily 切换 | 对话块保留（壳保活） |
+
+实现：`activity_router.py` · `agent.py` · `server.py` · `desktop/main.ts` · `app-chrome.ts`。协议： [DESKTOP.md](./DESKTOP.md) §3.9 · §5.2.2。
+
+### 9.48 T-907 模式驱动预算（MODE-BUDGET，已实现）
+
+设计：[MODE-BUDGET.md](./MODE-BUDGET.md) · 编排指针：[ORCHESTRATION.md](./ORCHESTRATION.md) v0.2.2。
+
+| 原则 | 说明 |
+|------|------|
+| `turn_mode=agent` | 统一 `PARENT_EXECUTE_*` + T-705 segment 续跑 |
+| `turn_mode=ask` | `PARENT_SHORT_MAX` 短循环 |
+| `turn_intent` | 仅 explore 触发、意图条、overlay 纪律（**不**决定预算） |
+| 不采纳 | 续接词表（推过去/继续 → execute） |
+
+```powershell
+cd D:\my-agent\agent-core
+python agent.py          # 含 [PASS] T-907a/b/c
+python loader.py         # 含 [PASS] T-702/T-907: tool_budget overlay
+```
+
+### 9.49 T-1002 host_scope 配置加载（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_scope.py
+```
+
+| 场景 | 预期 |
+|------|------|
+| 无 `data/host_scope.json` | 空 `host_roots`；`[PASS] missing ...` |
+| 登记 agent 内 `workspace/` | `HostScopeConfigError`；`[PASS] reject host root inside agent tree` |
+| 外部目录 + `.ssh/id_rsa` | `is_path_denied` → true |
+| `host:demoext/notes.txt` | `parse_host_uri` 成功 |
+| `C:/Windows/...` | `system_deny`（Windows） |
+
+实现：`host_scope.py` · `data/host_scope.json`（gitignore）。设计： [HOST-SCOPE.md](./HOST-SCOPE.md) · 手工验收： [TASKS.md](./TASKS.md) §Phase 10 T-1002。
+
+### 9.50 T-1003 resolve_under_host（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python paths.py
+```
+
+| 场景 | 预期 |
+|------|------|
+| `host:downloads/notes.txt`（已登记只读 root） | resolve 成功；`[PASS] T-1003: ... resolves` |
+| `host:unknown/foo` | `HostRootNotFoundError` |
+| `host:downloads/../../outside` | `ValueError` 或 `PathOutOfBoundsError` |
+| `host:downloads/.ssh/id_rsa` | `HostPathDeniedError` / `path_denied` |
+| `write=true` 且 root `write:false` | `HostScopePermissionError` |
+
+实现：`paths.py` `resolve_under_host` · `host_scope.resolve_host_path`。验收： [TASKS.md](./TASKS.md) §T-1003。
+
+### 9.51 T-1004 托管目录 REPL（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_scope_cli.py
+```
+
+| 场景 | 预期 |
+|------|------|
+| `托管目录 添加 downloads <外部路径> 只读` + `y` | 写入 `host_scope.json` |
+| `托管目录 列表` | 显示 id / 只读 / 绝对路径 |
+| 重复 id / agent 内 `workspace` | `error:` 拒绝 |
+| `托管目录 删除` / `写 … 开` | confirm；`n` 取消 |
+
+实现：`host_scope_cli.py` · `main.py` `handle_line`。验收： [TASKS.md](./TASKS.md) §T-1004。
+
+### 9.52 T-1005 host 只读工具（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_tools.py
+```
+
+| 工具 | `run_evolved` 名 | 说明 |
+|------|------------------|------|
+| 列目录 | `host_list` | `path`: `host:downloads` 或 `host:id/sub` |
+| 读文件 | `host_read` | ≤512KB UTF-8 |
+| 搜索 | `host_grep` | 正则 + 可选 `glob` |
+
+`policy.confirm=false`；executor 跳过 confirm。验收： [TASKS.md](./TASKS.md) §T-1005。
+
+### 9.53 T-1006 host_copy_move（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_tools.py
+```
+
+| 项 | 说明 |
+|----|------|
+| 工具 | `host_copy_move`：`copy`/`move`，`source`/`dest` 为 `host:…` |
+| confirm | 每次；**无** session `a`（`workspace_only=false`） |
+| 日志 | `evolve_log`：`host_src_id` / `host_dst_id` / 同 root 时 `host_root_id` |
+
+验收： [TASKS.md](./TASKS.md) §T-1006。
+
+### 9.54 T-1007 workflow 适配 host 路径（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_tools.py
+```
+
+| 项 | 说明 |
+|----|------|
+| 解析 | `host_tools.resolve_workflow_dir`：`host:<id>/…` 或 workspace 相对 |
+| 工具 | `sort_by_extension`、`rename_batch` 的 `path` 支持 `host:` |
+| confirm | `host:` 路径**每次** confirm，**无** session `a`（executor `_arguments_use_host_scope`） |
+| 日志 | 结果含 `host_root_id`（host 操作时） |
+
+验收： [TASKS.md](./TASKS.md) §T-1007。
+
+### 9.55 T-1008 桌面托管区设置（HOST-SCOPE）
+
+```powershell
+cd D:\my-agent\agent-core
+python host_scope_api.py
+```
+
+| 项 | 说明 |
+|----|------|
+| API | `host_scope_api.py`；WS 见 [HOST-SCOPE.md](./HOST-SCOPE.md) §6.4 |
+| 消息 | `host_scope.list` / `.add` / `.remove` / `.write` / `.repath` / `.wizard` |
+| 桌面 | `host-settings.ts` + `host-settings.css`；顶栏 **托管区** |
+| Electron | `pickDirectory` · `getDownloadsPath` · `getDesktopPath` |
+| confirm | 添加 / 开写 / 删除 / repath / wizard 读写 → UI 内确认（S11） |
+| wizard | 首次无托管区 → 可选 **下载 / 桌面** + **只读 / 读写** |
+| 改动 | **更换文件夹**（repath）；**开启写**；只读项提示整理须开写 |
+
+验收： [TASKS.md](./TASKS.md) §T-1008 · `npm run dev` 手工。
+
+**Phase 7 完成标志**：见 [ORCHESTRATION.md](./ORCHESTRATION.md) §12。
+
 ---
 
 ## 10. 设计文档 → 问题索引
 
 | 要问的问题 | 读哪里 |
 |------------|--------|
+| 单轮 tool 预算、子代理 explore | [ORCHESTRATION.md](./ORCHESTRATION.md)（T-701～T-706） |
 | 下一个 task 是什么 | `docs/TASKS.md` |
 | ToolResult / confirm / 落盘 | `docs/TOOLS.md` §6 |
 | 某 builtin 参数与限额 | `docs/TOOLS.md` §7.x |
 | `tool.toml` 格式 | `docs/TOOLS.md` §5 |
 | 会话 / digest / LLM | `docs/RUNTIME.md` |
-| 主题与 `_index.toml` | `docs/MEMORY.md` |
+| 主题与索引 | `docs/MEMORY.md` · `docs/EXTENSIONS.md` |
 | proposal 与防重复 | `docs/EVOLVE.md` |
+| Electron 桌面壳 / UI | `docs/DESKTOP.md`（T-904） |
+| 项目模式 / project 壳 | `docs/PROJECT-MODE.md`（T-1101～T-1113） |
+| 主机托管区 / 桌面设置 | `docs/HOST-SCOPE.md` · `docs/DESKTOP.md` §3.10 |
+| 桌面壳已知缺陷 / 联调 | `docs/BUGS.md` · `docs/bugs/` |
+| 工具确认管线 / confirm 加固 | `docs/CONFIRM-PIPELINE.md`（Phase 14 · BUG-008） |
 | review / suspect | `docs/GOVERNANCE.md` |
 | 里程碑与非目标 | `docs/PROJECT.md` |
 | 先 tool 后 skill | `docs/LAYERS.md` |

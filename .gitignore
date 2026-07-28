@@ -1,24 +1,27 @@
 # 本地状态与运行时（RUNTIME / MAP：data 默认不进 Git）
-data/state.json
-data/sessions/
-data/evolve_log.jsonl
-data/reviews/
+data/
 agent-core/data/
 
 # 敏感工作文件
 workspace/
 
-# 可选：全文对话录制
-data/conversations/
 # Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 
-# 环境密钥
+# 环境密钥与本机私货
 .env
 .env.*
+.money-state.json
+.cursor/mcp.json
+
+# Node / Electron（desktop/.gitignore 亦有；根级兜底）
+node_modules/
+dist/
+dist-electron/
+*.log
 
 # OS
 Thumbs.db

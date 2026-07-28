@@ -17,6 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
 from governance.collector import ReviewCollector, ReviewOptions
 from governance.report import report_to_dict
 from governance.renderer import ReviewRenderer, ReviewSink, render_cli, render_json, render_markdown
+from loader import copy_evolve_index_files
 from paths import AgentPaths
 from tools.logging import EvolveLog
 
@@ -114,7 +115,7 @@ def _demo() -> None:
         data.mkdir()
         shutil.copytree(paths.evolve / "tools", evolve / "tools")
         shutil.copytree(paths.evolve / "prompts", evolve / "prompts")
-        shutil.copy2(paths.evolve / "_index.toml", evolve / "_index.toml")
+        copy_evolve_index_files(paths.evolve, evolve)
         (evolve / "memories" / "coding").mkdir(parents=True)
 
         _write_memory(

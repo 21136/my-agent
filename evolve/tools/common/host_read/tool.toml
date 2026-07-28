@@ -1,0 +1,25 @@
+[tool]
+name = "host_read"
+description = "读取托管区内 UTF-8 文本（≤512KB）；path 须 host:<id>/file"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = false
+workspace_only = false
+timeout_sec = 60

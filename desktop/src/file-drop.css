@@ -1,0 +1,106 @@
+.file-drop-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.file-drop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 10%, var(--ma-bg));
+  font-size: 0.82rem;
+}
+
+.file-drop-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+.file-drop-chip-meta {
+  color: var(--ma-text-muted);
+  font-size: 0.75rem;
+}
+
+.file-drop-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--ma-text-muted);
+  cursor: pointer;
+  padding: 0 0.15rem;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.file-drop-chip-remove:hover {
+  color: var(--ma-text);
+}
+
+.grow-composer.file-drop-active,
+.daily-composer.file-drop-active {
+  border-color: var(--ma-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ma-accent) 45%, transparent);
+}
+
+.grow-composer.file-drop-active {
+  background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));
+}
+
+.daily-composer.file-drop-active .daily-composer-capsule {
+  border-color: color-mix(in srgb, var(--ma-accent) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 35%, transparent);
+}
+
+.history-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+}
+
+.history-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 30%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 8%, transparent);
+  font-size: 0.82rem;
+}
+
+.history-attachment-name {
+  font-weight: 600;
+}
+
+.history-attachment-meta {
+  color: var(--ma-text-muted);
+  font-size: 0.75rem;
+}
+
+.history-user-body {
+  white-space: pre-wrap;
+}
+
+.grow-composer {
+  flex-wrap: wrap;
+}
+
+.grow-composer .grow-input {
+  flex: 1 1 12rem;
+}
+
+.grow-composer .grow-btn {
+  flex: 0 0 auto;
+}
+
+.daily-composer .file-drop-chips {
+  padding: 0 0.25rem 0.35rem;
+}

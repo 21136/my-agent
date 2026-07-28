@@ -6,6 +6,7 @@ import json
 import re
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -16,7 +17,18 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from llm_client import LLMClient, load_config
-from loader import build_system_prompt, load_topic_index
+from loader import (
+    INDEX_CORE_REL,
+    INDEX_USER_REL,
+    RegisterTopicSpec,
+    TopicRegisterError,
+    build_system_prompt,
+    format_register_topic_preview,
+    load_topic_index,
+    load_user_topic_ids,
+    register_user_topic,
+    validate_register_topic_id,
+)
 from paths import AgentPaths
 from session import Session, SessionMeta, utc_now_iso
 
@@ -38,6 +50,13 @@ class TopicCommandKind(StrEnum):
     REPLACE = "replace"
     APPEND = "append"
     RE_ROUTE = "re_route"
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedRegisterTopicCommand:
+    topic_id: str
+    name: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +179,100 @@ def registered_topic_ids(paths: AgentPaths) -> frozenset[str]:
 def build_route_user_message(goal: str) -> str:
     """User message for S2 topic routing (RUNTIME.md §6.4)."""
     return ROUTE_USER_MESSAGE_TEMPLATE.format(goal=goal.strip() or "(unset)")
+
+
+def parse_register_topic_command(text: str) -> ParsedRegisterTopicCommand | None:
+    """Parse REPL ``注册主题 <id> [name] [description…]`` (EXTENSIONS §4)."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.casefold()
+    if stripped.startswith("注册主题"):
+        prefix_len = len("注册主题")
+    elif lowered.startswith("register topic"):
+        prefix_len = len("register topic")
+    else:
+        return None
+
+    payload = stripped[prefix_len:].strip()
+    if not payload:
+        raise TopicRegisterError("注册主题 requires topic id")
+    tokens = _split_topic_tokens(payload)
+    topic_id = tokens[0]
+    name = tokens[1] if len(tokens) > 1 else None
+    description = " ".join(tokens[2:]).strip() if len(tokens) > 2 else None
+    if description == "":
+        description = None
+    return ParsedRegisterTopicCommand(topic_id=topic_id, name=name, description=description)
+
+
+def build_register_topic_spec(
+    command: ParsedRegisterTopicCommand,
+    evolve_dir: Path,
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None] | None = None,
+) -> RegisterTopicSpec:
+    topic_id = command.topic_id.strip()
+    validate_register_topic_id(topic_id, evolve_dir)
+
+    name = command.name.strip() if command.name else ""
+    if not name:
+        if output_fn is not None:
+            output_fn("主题显示名称（例如：数据处理）：")
+        name = input_fn("主题显示名称: ").strip()
+    if not name:
+        raise TopicRegisterError("topic name is required")
+
+    description = command.description.strip() if command.description else ""
+    if not description:
+        if output_fn is not None:
+            output_fn("一句话描述（例如：CSV、JSON、日志分析）：")
+        description = input_fn("一句话描述: ").strip()
+    if not description:
+        raise TopicRegisterError("topic description is required")
+
+    return RegisterTopicSpec(topic_id=topic_id, name=name, description=description)
+
+
+def run_register_topic_flow(
+    paths: AgentPaths,
+    command: ParsedRegisterTopicCommand,
+    *,
+    input_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+) -> bool:
+    """Interactive REPL flow; returns True when registration succeeds."""
+    try:
+        spec = build_register_topic_spec(
+            command,
+            paths.evolve,
+            input_fn=input_fn,
+            output_fn=output_fn,
+        )
+        validate_register_topic_id(spec.topic_id, paths.evolve)
+    except TopicRegisterError as exc:
+        output_fn(f"error: {exc}")
+        return False
+
+    output_fn(format_register_topic_preview(spec, evolve_dir=paths.evolve))
+    answer = input_fn("确认注册？(y/n): ").strip().casefold()
+    if answer not in {"y", "yes", "是"}:
+        output_fn("已取消注册。")
+        return False
+
+    try:
+        result = register_user_topic(paths.evolve, spec)
+    except TopicRegisterError as exc:
+        output_fn(f"error: {exc}")
+        return False
+
+    output_fn(
+        f"已注册主题 {result.topic_id}。"
+        f"本会话可用「主题 {result.topic_id}」或「加主题 {result.topic_id}」加载。"
+    )
+    return True
 
 
 def parse_topic_command(text: str) -> ParsedTopicCommand | None:
@@ -482,6 +595,81 @@ def _demo() -> None:
         assert veto_result is None
         assert session.meta.topics == before_topics
         print("[PASS] T-304: reject leaves topics unchanged")
+
+    register_cmd = parse_register_topic_command("注册主题 data 数据处理 CSV JSON 日志")
+    assert register_cmd is not None
+    assert register_cmd.topic_id == "data"
+    assert register_cmd.name == "数据处理"
+    assert register_cmd.description == "CSV JSON 日志"
+    print("[PASS] T-803: parse 注册主题 …")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        evolve = Path(tmp) / "evolve"
+        evolve.mkdir(parents=True)
+        (evolve / INDEX_CORE_REL).write_text(
+            '[[topic]]\nid = "workflow"\nname = "工作流"\n'
+            'description = "core"\n'
+            'prompt = "prompts/workflow.md"\n'
+            'memory_dirs = ["memories/workflow"]\n'
+            'tool_dirs = ["tools/workflow"]\n',
+            encoding="utf-8",
+        )
+        demo_paths = AgentPaths.from_root(Path(tmp))
+
+        try:
+            validate_register_topic_id("workflow", evolve)
+            raise AssertionError("expected TopicRegisterError for core id")
+        except TopicRegisterError:
+            pass
+
+        spec = RegisterTopicSpec(
+            topic_id="data",
+            name="数据处理",
+            description="CSV、JSON、日志",
+        )
+        preview = format_register_topic_preview(spec, evolve_dir=evolve)
+        assert 'id = "data"' in preview
+        assert "evolve/prompts/data.md" in preview
+        result = register_user_topic(evolve, spec, registered_at="2026-07-10T00:00:00Z")
+        assert result.topic_id == "data"
+        assert "data" in load_user_topic_ids(evolve)
+        assert (evolve / "prompts" / "data.md").is_file()
+        assert (evolve / "memories" / "data").is_dir()
+        assert (evolve / "tools" / "data").is_dir()
+        merged = load_topic_index(evolve)
+        assert any(entry.id == "data" for entry in merged)
+        print("[PASS] T-803: register_user_topic writes index + scaffold")
+
+        prompts: list[str] = []
+
+        def fake_input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            if "确认注册" in prompt:
+                return "y"
+            return ""
+
+        def fake_output(message: str) -> None:
+            prompts.append(message)
+
+        ok = run_register_topic_flow(
+            demo_paths,
+            ParsedRegisterTopicCommand(topic_id="analytics", name="分析", description="数据分析"),
+            input_fn=fake_input,
+            output_fn=fake_output,
+        )
+        assert ok
+        assert "analytics" in load_user_topic_ids(evolve)
+        print("[PASS] T-803: run_register_topic_flow confirm registers topic")
+
+        cancelled = run_register_topic_flow(
+            demo_paths,
+            ParsedRegisterTopicCommand(topic_id="metrics", name="指标", description="指标看板"),
+            input_fn=lambda _prompt: "n",
+            output_fn=lambda _message: None,
+        )
+        assert not cancelled
+        assert "metrics" not in load_user_topic_ids(evolve)
+        print("[PASS] T-803: run_register_topic_flow n cancels")
 
     if load_config().api_key:
         live_session = Session(

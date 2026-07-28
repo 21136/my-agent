@@ -25,6 +25,7 @@ from governance.entities import (
 )
 from governance.report import ReviewReport, ReviewScope, ReviewSummary
 from governance.renderer import ReviewRenderer, ReviewSink
+from loader import copy_evolve_index_files
 from llm_client import LLMClient, LLMResponse, load_config
 from paths import AgentPaths
 from tools.logging import EvolveLog, utc_now_iso
@@ -579,7 +580,7 @@ def _demo() -> None:
         data = Path(tmp) / "data"
         evolve.mkdir()
         data.mkdir()
-        shutil.copy2(paths.evolve / "_index.toml", evolve / "_index.toml")
+        copy_evolve_index_files(paths.evolve, evolve)
         shutil.copytree(paths.evolve / "prompts", evolve / "prompts")
         (evolve / "memories" / "coding").mkdir(parents=True)
         (evolve / "memories" / "coding" / "encoding-pref-demo.md").write_text(

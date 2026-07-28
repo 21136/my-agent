@@ -17,15 +17,28 @@ if str(_AGENT_CORE) not in sys.path:
 from agent import has_anchor_message
 from llm_client import LLMClient, LLMResponse, load_config, resolve_context_limit, resolve_session_model
 from session import Session
+from tools.schema import ToolErrorCode, tool_fail, to_json
+
+_INTERRUPTED_TOOL_MESSAGE = to_json(
+    tool_fail(
+        "unknown",
+        ToolErrorCode.VALIDATION_ERROR,
+        "tool call did not complete (session recovered)",
+    )
+)
 
 DEFAULT_COMPACT_RATIO = 0.85
 DEFAULT_KEEP_TURNS = 8
 DEFAULT_DIGEST_MAX_CHARS = 8000
+FIRST_COMPACT_USER_MESSAGE = (
+    "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
+)
 DIGEST_SECTION_HEADER = re.compile(r"^#\s*压缩\s+(\d+)\s*$", re.MULTILINE)
 DIGEST_TEMPLATE_SECTIONS = (
     "## 目标",
     "## 已做",
     "## 未决",
+    "## 活跃项目",
     "## 关键路径与命令",
     "## 用户约束",
 )
@@ -143,6 +156,55 @@ def compute_compact_split_index(
     return split_index
 
 
+def repair_orphaned_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ensure every assistant ``tool_calls`` block has matching tool role replies.
+
+    OpenAI-compatible APIs reject histories where tool_call_ids lack tool messages
+    (e.g. sidecar crash or confirm interrupt after the assistant line was persisted).
+    """
+    if not messages:
+        return []
+
+    repaired: list[dict[str, Any]] = []
+    index = 0
+    total = len(messages)
+
+    while index < total:
+        message = messages[index]
+        tool_calls = message.get("tool_calls")
+        if message.get("role") == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            repaired.append(message)
+            index += 1
+            existing: dict[str, dict[str, Any]] = {}
+            while index < total and messages[index].get("role") == "tool":
+                tool_message = messages[index]
+                call_id = tool_message.get("tool_call_id")
+                if isinstance(call_id, str) and call_id:
+                    existing[call_id] = tool_message
+                repaired.append(tool_message)
+                index += 1
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    continue
+                call_id = tool_call.get("id")
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+                if call_id not in existing:
+                    repaired.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": _INTERRUPTED_TOOL_MESSAGE,
+                        }
+                    )
+            continue
+
+        repaired.append(message)
+        index += 1
+
+    return repaired
+
+
 def build_llm_messages(session: Session) -> list[dict[str, Any]]:
     """Messages for LLM payload: anchor + post-digest history (disk keeps full log)."""
     messages = session.messages
@@ -154,11 +216,11 @@ def build_llm_messages(session: Session) -> list[dict[str, Any]]:
         anchor = messages[0]
         tail = messages[start:]
         if start <= 1 and not tail:
-            return [anchor]
+            return repair_orphaned_tool_calls([anchor])
         if start <= 1:
-            return [anchor, *tail]
-        return [anchor, *messages[start:]]
-    return messages[start:]
+            return repair_orphaned_tool_calls([anchor, *tail])
+        return repair_orphaned_tool_calls([anchor, *messages[start:]])
+    return repair_orphaned_tool_calls(messages[start:])
 
 
 def should_auto_compact(
@@ -211,17 +273,28 @@ def format_messages_for_digest(messages: list[dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
-def build_digest_summarize_prompt(*, goal: str, transcript: str) -> str:
+def build_digest_summarize_prompt(*, goal: str, transcript: str, project_hint: str = "") -> str:
     sections = "\n".join(DIGEST_TEMPLATE_SECTIONS)
+    project_line = f"\n活跃项目提示：{project_hint}\n" if project_hint.strip() else ""
     return (
         "将以下对话片段压缩为结构化摘要，用于后续续聊时回忆上下文。\n"
         "要求：\n"
         f"- 严格使用以下 Markdown 二级标题（缺一不可）：\n{sections}\n"
+        "- 「活跃项目」须写明 project_root 与未决 task（以 TASKS.md 为准，勿猜）\n"
         "- 只输出摘要正文，不要前言或结语\n"
         "- 保留具体路径、命令、文件名与用户明确约束\n"
         "- 若有关键事实需长期保留，在「用户约束」末尾注明：可说「记住」写入 evolve\n"
-        f"\n本次会议目标：{goal.strip() or '(unset)'}\n\n"
+        f"\n本次会议目标：{goal.strip() or '(unset)'}{project_line}\n\n"
         f"对话片段：\n{transcript}"
+    )
+
+
+def _project_digest_hint(session: Session) -> str:
+    if session.meta.active_shell != "project" or not session.meta.project_root:
+        return ""
+    return (
+        f"根 {session.meta.project_root}；计划 {session.meta.project_plan_status or 'draft'}；"
+        "未决见 TASKS.md（须 read_file）"
     )
 
 
@@ -237,7 +310,11 @@ def summarize_messages_for_digest(
     if not transcript.strip():
         return _empty_digest_body(session.goal)
 
-    prompt = build_digest_summarize_prompt(goal=session.goal, transcript=transcript)
+    prompt = build_digest_summarize_prompt(
+        goal=session.goal,
+        transcript=transcript,
+        project_hint=_project_digest_hint(session),
+    )
     model = session.meta.llm_model or resolve_session_model(session.meta.topics)
     response = llm.chat(
         [{"role": "user", "content": prompt}],
@@ -315,6 +392,23 @@ def compact_context(
     )
 
 
+def session_memory_event(session: Session) -> dict[str, Any]:
+    """WebSocket / CLI payload for thread memory visibility (TURN-FEEDBACK §5)."""
+    compacted = session.digest_path.is_file() or session.meta.compact_before_index > 1
+    sections = count_digest_sections(session.digest_path) if session.digest_path.is_file() else 0
+    cfg = load_context_config()
+    payload: dict[str, Any] = {
+        "type": "session.memory",
+        "message_count": len(session.messages),
+        "memory_mode": "compact" if compacted else "full",
+        "memory_mode_label": "已压缩" if compacted else "未压缩",
+    }
+    if compacted:
+        payload["digest_sections"] = sections
+        payload["keep_turns"] = cfg.keep_turns
+    return payload
+
+
 def maybe_auto_compact(
     session: Session,
     system_prompt: str,
@@ -370,6 +464,20 @@ def _demo() -> None:
     assert cfg.keep_turns == DEFAULT_KEEP_TURNS
     assert cfg.digest_max_chars == DEFAULT_DIGEST_MAX_CHARS
     print("[PASS] default context config")
+
+    broken = [
+        {
+            "role": "assistant",
+            "content": "calling tool",
+            "tool_calls": [{"id": "call_x", "type": "function", "function": {"name": "grep", "arguments": "{}"}}],
+        },
+        {"role": "user", "content": "next question"},
+    ]
+    fixed = repair_orphaned_tool_calls(broken)
+    assert len(fixed) == 3
+    assert fixed[1]["role"] == "tool" and fixed[1]["tool_call_id"] == "call_x"
+    assert fixed[2]["role"] == "user"
+    print("[PASS] repair_orphaned_tool_calls inserts missing tool replies")
 
     assert estimate_text_tokens("abcd") == 1
     assert estimate_text_tokens("") == 0

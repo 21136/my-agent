@@ -1,0 +1,26 @@
+.daily-starfield-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: var(--daily-bg);
+}
+
+.daily-starfield-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.starfield-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 90% 80% at 50% 42%,
+    transparent 0%,
+    transparent 62%,
+    rgba(0, 0, 0, 0.18) 100%
+  );
+}

@@ -80,25 +80,30 @@ evolve/
 ├── _index.toml              # 主题：prompt + memory + tool_dirs
 ├── tools/
 │   ├── common/              # 跨主题；每个 session 都列入 LLM 清单
-│   │   └── write_text/
-│   │       ├── tool.toml
-│   │       └── main.py
+│   │   ├── write_text/
+│   │   ├── append_text/     # T-505
+│   │   ├── copy_move/
+│   │   └── move_to_trash/
 │   ├── coding/
 │   │   └── <tool_name>/
 │   └── workflow/
-│       └── sort_downloads/
+│       ├── sort_by_extension/
+│       ├── rename_batch/      # T-506
+│       ├── flatten_dir/
+│       ├── dedupe_by_name/
+│       └── archive_by_date/
 ```
 
 | 路径 | 含义 |
 |------|------|
-| `tools/common/<name>/` | 跨主题必备（如 `write_text`）；**每 session 都注入清单** |
+| `tools/common/<name>/` | 跨主题必备（`write_text`、`append_text`、`copy_move`、`move_to_trash` 等）；**每 session 都注入清单** |
 | `tools/<topic>/<name>/` | 主题专用；仅 session 确认含该 topic 时注入清单 |
 
 由你在放入前 **审阅源码**；内核不自动生成。`status: active` 才可通过 `run_evolved` 被会话清单引用（CLI 调试可跑任意 status，见 §7）。
 
-### 4.2 与 `evolve/_index.toml` 的关系
+### 4.2 与主题索引的关系
 
-索引由 [MEMORY.md](./MEMORY.md) 定义；每个 topic 增加 `tool_dirs`：
+索引由 [MEMORY.md](./MEMORY.md) 定义；启动时合并 `_index.core.toml` + `_index.user.toml`（见 [EXTENSIONS.md](./EXTENSIONS.md)）。每个 topic 增加 `tool_dirs`：
 
 ```toml
 [[topic]]
@@ -118,12 +123,19 @@ Builtin 恒为 6 个 function；evolved **不**平铺为独立 function，仅在
 [本会话可用 evolved 工具]（调用 run_evolved.tool_name）
 ## common（始终）
 - write_text: 向 workspace 写文本文件
+- append_text: 追加文本到 workspace 文件
+- copy_move: workspace 内复制或移动
+- move_to_trash: 移入 _trash/ 软删除
 
 ## coding（本会话主题）
 - format_py: …
 
 ## workflow（本会话主题）
-- sort_downloads: …
+- sort_by_extension: 按扩展名整理顶层文件
+- rename_batch: 批量重命名
+- flatten_dir: 扁平化子目录文件
+- dedupe_by_name: 查重报告（不删除）
+- archive_by_date: 按修改日期归档
 ```
 
 主题确认流程见 MEMORY §4；CLI `tool run` **不受**主题限制。
@@ -335,13 +347,39 @@ DeepSeek 搜索**不是**独立 REST，而是经 Anthropic 兼容端点 `https:/
 | 项 | 值 |
 |----|-----|
 | 参数 | `tool_name`, `arguments`, `dry_run?` |
+| **`write_evolve` 快捷字段**（与 `tool_name` **同级**，合并进内层 `arguments`） | `path`, `content_base64`, `content_workspace_path`, `on_conflict` |
 | 执行 | `python evolve/tools/.../main.py`，stdin JSON |
-| 脚本约定 | exit 0 + stdout 一行 JSON |
+| 脚本约定 | exit 0 + stdout 一行 JSON；**失败时** stdout 仍可为 `{"ok":false,"error":"..."}`，执行器会解析该 JSON（不只看 stderr） |
+
+`write_evolve` 推荐形态（避免 `tool_calls` JSON 转义失败）：
+
+```json
+{
+  "tool_name": "write_evolve",
+  "path": "evolve/tools/common/foo/main.py",
+  "content_base64": "<UTF-8 标准 base64>",
+  "on_conflict": "overwrite",
+  "arguments": {},
+  "dry_run": false
+}
+```
+
+| `on_conflict` | 行为 |
+|---------------|------|
+| `overwrite` | 覆盖已有文件（**造工具推荐**） |
+| `rename` | 写入 `main-1.py` 等 |
+| `skip`（默认） | 目标已存在 → **`ok: false`**，提示改用 `overwrite` / `rename`（`dry_run` 预览仍返回 `skipped: true`） |
+
+**参数合并（coalesce）**：`tool_name == "write_evolve"` 时，顶层 `path` / `content_base64` / `content_workspace_path` / `on_conflict` 会并入内层 `arguments`；**同名 key 已在内层 `arguments` 里则内层优先**（推荐顶层传、内层 `{}`）。`dry_run` 顶层为 `true` 时优先；否则可读内层布尔值。
+
+**执行器预检（P1）**：`tool.toml` 必须 `content_base64` 或 `content_workspace_path`；`main.py` / `README.md` 含换行、双引号或较长正文时禁止 plain `content`。scaffold 回合禁止 `write_text` 写脚手架**文件名**（`main.py` / `tool.toml` / `README.md`），可写 `workspace/_staging*` 暂存；非 scaffold 回合仅拒绝 `evolve/tools/<scope>/<name>/` 下上述三文件路径（`workspace/` 内同名文件如项目 `README.md` **允许**）。
+
+**`dry_run` 优先级**：`run_evolved` 顶层 `dry_run: true` 时始终预览；顶层为 `false` 或未设时，可读内层 `arguments.dry_run` 布尔值。
 
 ```text
 stdin:  { "path": "...", "dry_run": false }
-stdout: { "ok": true, "written": "workspace/out.txt" }
-stderr: 人类可读日志
+stdout: { "ok": true, "written": "evolve/tools/common/foo/main.py" }
+stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 ```
 
 ---
@@ -351,8 +389,48 @@ stderr: 人类可读日志
 | 工具 | 目录 | 作用 |
 |------|------|------|
 | `write_text` | `tools/common/write_text/` | 写 workspace；无此工具则 LLM 只能读不能改 |
+| `append_text` | `tools/common/append_text/` | 向 workspace 文本文件追加内容（T-505） |
+| `copy_move` | `tools/common/copy_move/` | workspace 内复制/移动文件或目录（T-505） |
+| `move_to_trash` | `tools/common/move_to_trash/` | 移入 `_trash/` 软删除（T-505） |
+| `write_evolve` | `tools/common/write_evolve/` | 向 `evolve/tools/<scope>/<name>/` 写 `tool.toml` / `main.py`（T-508；进化落地） |
+| `git_clone` | `tools/common/git_clone/` | 浅克隆 https 公开仓到 `workspace/` 或 `evolve/tools/`（T-1115） |
+| `project_catalog` | `tools/common/project_catalog/` | 项目列表 + session_id + 跨壳查阅指引（T-1117） |
 
-主题专用种子（可选）：`tools/workflow/sort_downloads/` 等，按真实任务再加。
+主题专用种子（workflow，T-506）：
+
+| 工具 | 目录 | 作用 |
+|------|------|------|
+| `sort_by_extension` | `tools/workflow/sort_by_extension/` | 按扩展名分子文件夹（T-502） |
+| `rename_batch` | `tools/workflow/rename_batch/` | 批量重命名顶层文件 |
+| `flatten_dir` | `tools/workflow/flatten_dir/` | 子目录文件提升到顶层 |
+| `dedupe_by_name` | `tools/workflow/dedupe_by_name/` | 按文件名报告重复（只读） |
+| `archive_by_date` | `tools/workflow/archive_by_date/` | 按日期归档到 `YYYY-MM/` |
+
+**coding**（T-507）：
+
+| 工具 | 目录 | 作用 |
+|------|------|------|
+| `run_demo` | `tools/coding/run_demo/` | 运行 `agent-core/` 下 Python 验收脚本 |
+| `run_tests` | `tools/coding/run_tests/` | 按 suite 批量跑 demo（quick / core / governance / evolve / all） |
+| `git_snapshot` | `tools/coding/git_snapshot/` | 只读 git status + diff --stat |
+| `patch_file` | `tools/coding/patch_file/` | 行号/锚点文本补丁（agent 根；**仅改已有文件**） |
+
+**data**（T-805，用户扩展主题）：
+
+| 工具 | 目录 | 作用 |
+|------|------|------|
+| `csv_head` | `tools/data/csv_head/` | 预览 CSV 前 N 行、列类型推断、总行数 |
+
+### 8.1 写入边界
+
+| 区域 | 可用工具 | 说明 |
+|------|----------|------|
+| `workspace/` | `write_text` / `append_text` / `copy_move` / `move_to_trash` / **`git_clone`**（`target=workspace`） | `write_*` 等 `workspace_only=true` 可 session `a`；**`git_clone` 每次 confirm** |
+| `evolve/tools/<scope>/<name>/` | **`write_evolve`** · **`git_clone`**（`target=evolve_tools`） | `write_evolve` 仅三件套；`git_clone` 可拉整仓参考；均 **无 `a`** |
+| `agent-core/`、`docs/` 等已有文件 | `patch_file` | 不能创建新路径 |
+| `evolve/prompts/`、`memories/` | proposal 接受路由 | 不经 tool 直写；见 EVOLVE §7 |
+
+**进化新工具闭环**：`记住`（可选 `tool_suggestion`）→ **`write_evolve` 先 `main.py` 再 `tool.toml`**（`status: active` 时 `write_evolve` 校验 `main.py` 已存在）→ **`tool.toml` 写盘前经 `parse_tool_manifest` 预检**（非法清单拒绝写入，避免 `ToolRegistry.load()` 启动失败）→ 成功写入 `tool.toml` 后**同会话内自动重载 registry**（新 `active` 工具立即可 `run_evolved`）。`registry` 仅对 `active`/`staged` 要求 entry script；`draft` 可仅有清单。多行或含 `"` 的正文优先 **`content_base64`**（UTF-8 标准 base64），避免 `tool_calls` JSON 转义失败；造工具时 **`on_conflict: overwrite`**。写完后建议 `git diff` + commit。
 
 ---
 
@@ -402,7 +480,11 @@ agent-core/tools/
 evolve/
 ├── _index.toml
 └── tools/
-    ├── common/write_text/
+    ├── common/
+    │   ├── write_text/
+    │   ├── append_text/
+    │   ├── copy_move/
+    │   └── move_to_trash/
     └── <topic>/<name>/
 ```
 

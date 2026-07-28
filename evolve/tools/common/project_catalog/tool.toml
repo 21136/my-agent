@@ -1,0 +1,31 @@
+[tool]
+name = "project_catalog"
+description = "List workspace projects with session ids and task progress (read-only)"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+
+[schema.input.properties.include_summaries]
+type = "boolean"
+default = false
+description = "Include truncated PROJECT.md summary per project"
+
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 60

@@ -1,0 +1,44 @@
+[tool]
+name = "write_evolve"
+description = "向 evolve/tools/<scope>/<name>/ 写文本（tool.toml / main.py）；多行或含引号时用 content_base64（UTF-8 的 base64），避免 JSON 转义失败"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "须匹配 evolve/tools/<scope>/<tool_name>/<file>；scope 为 common 或 _index 中的主题"
+[schema.input.properties.content]
+type = "string"
+description = "文件正文（UTF-8）；与 content_base64 二选一"
+[schema.input.properties.content_base64]
+type = "string"
+description = "文件正文的 base64（UTF-8）；推荐用于 tool.toml / 含双引号的源码"
+[schema.input.properties.content_workspace_path]
+type = "string"
+description = "从 workspace/ 下已有文件读取正文（替代 content / content_base64）"
+[schema.input.properties.on_conflict]
+type = "string"
+enum = ["skip", "rename", "overwrite"]
+default = "skip"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+path = { type = "string" }
+written = { type = "string" }
+skipped = { type = "boolean" }
+bytes_written = { type = "integer" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 60

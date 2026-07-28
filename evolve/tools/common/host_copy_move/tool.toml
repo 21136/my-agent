@@ -1,0 +1,37 @@
+[tool]
+name = "host_copy_move"
+description = "在托管区之间或同区内复制/移动；source/dest 须 host:<id>/…；每次 confirm"
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["operation", "source", "dest"]
+[schema.input.properties.operation]
+type = "string"
+enum = ["copy", "move"]
+[schema.input.properties.source]
+type = "string"
+[schema.input.properties.dest]
+type = "string"
+[schema.input.properties.on_conflict]
+type = "string"
+enum = ["skip", "overwrite", "rename"]
+default = "skip"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 120

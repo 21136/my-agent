@@ -1,0 +1,36 @@
+[tool]
+name = "dedupe_by_name"
+description = "扫描 workspace 目录，按文件名找出重复项（只报告，不删除）"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 workspace 的扫描根目录"
+[schema.input.properties.recursive]
+type = "boolean"
+default = true
+[schema.input.properties.include_hidden]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+source_dir = { type = "string" }
+duplicate_groups = { type = "integer" }
+duplicates = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = true
+timeout_sec = 120

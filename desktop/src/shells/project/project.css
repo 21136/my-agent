@@ -1,0 +1,408 @@
+/* Project shell · blueprint (Phase 11 M2) */
+
+.project-shell {
+  --project-bg: var(--ma-project-bg, #eef3f8);
+  --project-surface: var(--ma-project-surface, #f8fafc);
+  --project-accent: var(--ma-project-accent, #2563eb);
+  --project-accent-soft: color-mix(in srgb, var(--project-accent) 12%, white);
+  --project-border: color-mix(in srgb, var(--project-accent) 14%, #cbd5e1);
+  --project-text-muted: #64748b;
+  --project-flow-a: var(--ma-project-flow-a, #93c5fd);
+  --project-flow-b: var(--ma-project-flow-b, #2563eb);
+  --project-flow-c: var(--ma-project-flow-c, #0d9488);
+
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background-color: var(--project-bg);
+  background-image: linear-gradient(
+    160deg,
+    transparent 0%,
+    color-mix(in srgb, var(--project-accent) 4%, transparent) 45%,
+    color-mix(in srgb, var(--project-flow-c) 5%, transparent) 70%,
+    transparent 100%
+  );
+}
+
+.project-shell.is-working {
+  animation: project-shell-flow 4.5s ease-in-out infinite;
+  background-color: var(--project-flow-b);
+  background-image: linear-gradient(
+    125deg,
+    var(--project-bg) 0%,
+    var(--project-flow-a) 22%,
+    var(--project-flow-b) 48%,
+    var(--project-flow-c) 72%,
+    var(--project-bg) 100%
+  );
+  background-size: 320% 320%;
+}
+
+.project-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.85rem 0.75rem;
+  border-right: 1px solid var(--project-border);
+  background: color-mix(in srgb, var(--project-surface) 92%, white);
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--project-accent) 6%, transparent);
+}
+
+.project-sidebar-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.project-sidebar-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #0f172a;
+}
+
+.project-sidebar-meta {
+  font-size: 0.78rem;
+  color: var(--project-text-muted);
+}
+
+.project-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+}
+
+.project-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.project-picker-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--project-text-muted);
+}
+
+.project-picker-refresh {
+  border: none;
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.7rem;
+  color: var(--project-accent);
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-picker-refresh:hover {
+  background: color-mix(in srgb, var(--project-accent) 8%, white);
+}
+
+.project-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 9.5rem;
+  overflow: auto;
+  padding-right: 0.1rem;
+}
+
+.project-picker-empty {
+  font-size: 0.75rem;
+  color: var(--project-text-muted);
+  padding: 0.35rem 0.2rem;
+}
+
+.project-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  width: 100%;
+  border: 1px solid var(--project-border);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  background: white;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.project-picker-item:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--project-accent) 35%, var(--project-border));
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--project-accent) 10%, transparent);
+}
+
+.project-picker-item.is-current {
+  border-color: color-mix(in srgb, var(--project-accent) 45%, white);
+  background: var(--project-accent-soft);
+}
+
+.project-picker-item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.project-picker-item-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.project-picker-item-meta {
+  font-size: 0.72rem;
+  color: var(--project-text-muted);
+}
+
+.project-switch-card {
+  border: 1px solid color-mix(in srgb, #d97706 28%, white);
+  background: color-mix(in srgb, #fbbf24 14%, white);
+  border-radius: 12px;
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.project-switch-card.hidden {
+  display: none;
+}
+
+.project-switch-card-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.project-switch-card-message {
+  font-size: 0.75rem;
+  color: var(--project-text-muted);
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.project-switch-card-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.project-sidebar-tabs {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.15rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--project-accent) 6%, white);
+}
+
+.project-sidebar-tab {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--project-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-sidebar-tab.is-active {
+  color: #0f172a;
+  background: white;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--project-accent) 12%, transparent);
+}
+
+.project-sidebar-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.project-sidebar-panel.hidden {
+  display: none;
+}
+
+.project-plan-card {
+  border: 1px solid color-mix(in srgb, var(--project-accent) 28%, white);
+  background: var(--project-accent-soft);
+  border-radius: 12px;
+  padding: 0.65rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.project-plan-card.hidden {
+  display: none;
+}
+
+.project-plan-card-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.project-plan-preview {
+  font-size: 0.75rem;
+  color: var(--project-text-muted);
+  max-height: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.project-plan-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.project-verify-card {
+  border: 1px solid var(--project-border);
+  border-radius: 12px;
+  padding: 0.6rem 0.65rem;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.project-verify-card.hidden {
+  display: none;
+}
+
+.project-verify-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.project-verify-command {
+  font-family: var(--ma-mono);
+  font-size: 0.72rem;
+  color: var(--project-text-muted);
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.project-verify-result {
+  font-size: 0.75rem;
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 6rem;
+  overflow: auto;
+}
+
+.project-verify-result.is-pass {
+  color: #047857;
+}
+
+.project-verify-result.is-fail {
+  color: #b91c1c;
+}
+
+.project-markdown-panel h1,
+.project-markdown-panel h2,
+.project-markdown-panel h3 {
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0.35rem;
+  color: #0f172a;
+}
+
+.project-markdown-panel ul {
+  padding-left: 1.1rem;
+  margin: 0.25rem 0;
+}
+
+.project-markdown-panel li {
+  font-size: 0.8rem;
+  margin: 0.15rem 0;
+}
+
+.project-markdown-panel input[type="checkbox"] {
+  pointer-events: none;
+}
+
+.project-markdown-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+
+.project-markdown-panel th,
+.project-markdown-panel td {
+  border: 1px solid var(--project-border);
+  padding: 0.25rem 0.35rem;
+  text-align: left;
+}
+
+.project-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-main .grow-shell {
+  height: 100%;
+  --ma-bg: var(--project-bg);
+  --ma-surface: var(--project-surface);
+  --ma-accent: var(--project-accent);
+  --ma-grow-flow-a: var(--project-flow-a);
+  --ma-grow-flow-b: var(--project-flow-b);
+  --ma-grow-flow-c: var(--project-flow-c);
+}
+
+.project-main .grow-btn-accent {
+  background: var(--project-accent);
+  border-color: color-mix(in srgb, var(--project-accent) 80%, black);
+}
+
+.project-main .grow-topbar {
+  border-bottom-color: var(--project-border);
+  background: color-mix(in srgb, var(--project-surface) 88%, white);
+}
+
+.project-main .grow-composer {
+  border-top-color: var(--project-border);
+  background: color-mix(in srgb, var(--project-surface) 90%, white);
+}
+
+@keyframes project-shell-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@media (max-width: 900px) {
+  .project-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .project-sidebar {
+    max-height: 42vh;
+    border-right: none;
+    border-bottom: 1px solid var(--project-border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-shell.is-working {
+    animation: none;
+  }
+}

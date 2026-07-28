@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>崩坏：星穹铁道 — Honkai: Star Rail</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=ZCOOL+QingKe+HuangYou&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'ZCOOL QingKe HuangYou', 'Noto Sans SC', sans-serif;
+    background: #0a0e1a;
+    color: #e5e5e5;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  .starfield {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    z-index: -1;
+    background:
+      radial-gradient(2px 2px at 20px 30px, rgba(255,215,0,0.8), transparent),
+      radial-gradient(2px 2px at 100px 200px, rgba(0,255,255,0.6), transparent),
+      radial-gradient(1px 1px at 300px 100px, #fff, transparent),
+      radial-gradient(1px 1px at 500px 400px, #fff, transparent),
+      radial-gradient(2px 2px at 700px 150px, rgba(255,215,0,0.7), transparent),
+      radial-gradient(1px 1px at 900px 500px, #fff, transparent),
+      radial-gradient(2px 2px at 1100px 300px, rgba(0,255,255,0.5), transparent),
+      radial-gradient(1px 1px at 1300px 600px, #fff, transparent),
+      radial-gradient(2px 2px at 1500px 100px, rgba(255,215,0,0.9), transparent),
+      radial-gradient(1px 1px at 1700px 700px, #fff, transparent);
+    background-size: 200px 200px;
+    animation: drift 120s linear infinite;
+  }
+  @keyframes drift {
+    0% { transform: translate(0,0); }
+    100% { transform: translate(-200px, -200px); }
+  }
+  .starfield::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 200%; height: 200%;
+    box-shadow:
+      10px 20px 0 0 rgba(255,255,255,0.4),
+      30px 80px 0 0 rgba(255,215,0,0.3),
+      100px 150px 0 0 rgba(255,255,255,0.2),
+      200px 300px 0 0 rgba(0,255,255,0.3),
+      400px 50px 0 0 rgba(255,255,255,0.5),
+      600px 400px 0 0 rgba(255,215,0,0.2),
+      800px 200px 0 0 rgba(255,255,255,0.3),
+      1000px 500px 0 0 rgba(0,255,255,0.4),
+      1200px 100px 0 0 rgba(255,215,0,0.3),
+      1400px 600px 0 0 rgba(255,255,255,0.5),
+      1600px 300px 0 0 rgba(0,255,255,0.2),
+      1800px 700px 0 0 rgba(255,215,0,0.4);
+    animation: twinkle 4s ease-in-out infinite alternate;
+  }
+  @keyframes twinkle {
+    0% { opacity: 0.6; }
+    100% { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .starfield, .starfield::after, .hero {
+      animation: none !important;
+    }
+  }
+  .overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: radial-gradient(ellipse at 20% 50%, rgba(0,100,255,0.05) 0%, transparent 70%),
+                radial-gradient(ellipse at 80% 20%, rgba(255,215,0,0.03) 0%, transparent 60%);
+    z-index: 0;
+    pointer-events: none;
+  }
+  main {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 2rem;
+    width: 100%;
+    animation: fadeSlide 1.5s ease-out both;
+  }
+  @keyframes fadeSlide {
+    0% { opacity: 0; transform: translateY(30px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .hero h1 {
+    font-family: 'ZCOOL QingKe HuangYou', serif;
+    font-size: clamp(3rem, 15vw, 8rem);
+    font-weight: 900;
+    background: linear-gradient(135deg, #ffd700 0%, #ff8c00 50%, #ffd700 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.2em;
+    line-height: 1.1;
+  }
+  .hero .subbrand {
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1rem, 5vw, 2.5rem);
+    color: #88ccff;
+    text-shadow: 0 0 20px rgba(0,200,255,0.4);
+    letter-spacing: 0.15em;
+    margin-bottom: 0.8em;
+  }
+  .hero .tagline {
+    font-size: clamp(1rem, 3vw, 1.8rem);
+    color: #c0d0e0;
+    max-width: 700px;
+    margin-bottom: 2em;
+    opacity: 0.9;
+    line-height: 1.7;
+  }
+  .hero .cta {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .cta-button {
+    display: inline-block;
+    padding: 0.8rem 2.5rem;
+    border: 2px solid #ffd700;
+    border-radius: 50px;
+    font-size: 1.3rem;
+    font-family: 'ZCOOL QingKe HuangYou', sans-serif;
+    color: #ffd700;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    letter-spacing: 0.1em;
+  }
+  .cta-button:hover {
+    background: rgba(255,215,0,0.15);
+    box-shadow: 0 0 25px rgba(255,215,0,0.3), inset 0 0 15px rgba(255,215,0,0.1);
+    transform: scale(1.05);
+  }
+  .cta-button.primary {
+    background: linear-gradient(145deg, #ffd700, #e6b800);
+    color: #0a0e1a;
+    border-color: transparent;
+    font-weight: bold;
+  }
+  .cta-button.primary:hover {
+    box-shadow: 0 0 35px rgba(255,215,0,0.5);
+    transform: scale(1.05) translateY(-2px);
+  }
+  .sections {
+    width: 100%;
+    max-width: 1200px;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4rem;
+    margin: 4rem auto;
+  }
+  .section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 3rem 1rem;
+    border-top: 1px solid rgba(255,215,0,0.2);
+    animation: fadeIn 1s ease-out both;
+    animation-delay: calc(var(--order) * 0.2s);
+  }
+  @keyframes fadeIn {
+    0% { opacity: 0; transform: translateY(40px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .section h2 {
+    font-family: 'ZCOOL QingKe HuangYou', serif;
+    font-size: clamp(2rem, 8vw, 3.5rem);
+    color: #ffd700;
+    margin-bottom: 1rem;
+  }
+  .section p {
+    font-size: clamp(1rem, 2.5vw, 1.4rem);
+    max-width: 600px;
+    color: #b0c4d8;
+    line-height: 2;
+  }
+  @media (max-width: 768px) {
+    .hero { padding: 1rem; }
+    .cta-button { font-size: 1rem; padding: 0.6rem 1.5rem; }
+    .sections { padding: 1rem; gap: 2rem; }
+    .section { padding: 2rem 1rem; }
+  }
+  footer {
+    width: 100%;
+    text-align: center;
+    padding: 2rem;
+    color: #667;
+    font-size: 0.8rem;
+    border-top: 1px solid rgba(255,215,0,0.1);
+    margin-top: 2rem;
+  }
+</style>
+</head>
+<body>
+<div class="starfield"></div>
+<div class="overlay"></div>
+<main>
+  <section class="hero">
+    <h1>星穹铁道</h1>
+    <div class="subbrand">Honkai: Star Rail</div>
+    <p class="tagline">踏上星穹列车，穿越无尽银河，在每一颗星球上书写开拓者的传奇。</p>
+    <div class="cta">
+      <a href="#" class="cta-button primary">启程</a>
+      <a href="#journey" class="cta-button">了解更多</a>
+    </div>
+  </section>
+
+  <div class="sections" id="journey">
+    <section class="section" style="--order:1;">
+      <h2>开拓之旅</h2>
+      <p>从雅利洛到仙舟，从雪原到星海。每一站都是新的冒险，每一次跃迁都是命运的邂逅。</p>
+    </section>
+    <section class="section" style="--order:2;">
+      <h2>命途掠影</h2>
+      <p>毁灭、巡猎、智识、同谐… 万千命途交织于星空之下，而你，将选择自己的道路。</p>
+    </section>
+    <section class="section" style="--order:3;">
+      <h2>列车留言</h2>
+      <p>「愿此行，终抵群星。」—— 帕姆<br>列车永远欢迎每一位开拓者，无论你来自何方。</p>
+    </section>
+  </div>
+
+  <footer>
+    <p>非官方粉丝创作 · 崩坏：星穹铁道 © miHoYo</p>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,35 @@
+[tool]
+name = "git_snapshot"
+description = "只读 Git 快照：status --porcelain 与 diff --stat（可选 staged）"
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+[schema.input.properties.paths]
+type = "array"
+items = { type = "string" }
+description = "可选，限制 diff 范围（相对 agent 根）"
+[schema.input.properties.include_staged]
+type = "boolean"
+default = true
+description = "是否包含 git diff --cached --stat"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+branch = { type = "string" }
+status_lines = { type = "array" }
+diff_stat = { type = "string" }
+staged_diff_stat = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+workspace_only = false
+timeout_sec = 30
