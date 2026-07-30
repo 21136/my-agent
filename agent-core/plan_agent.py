@@ -219,25 +219,47 @@ class PlanAgent:
         "先做", "再做", "提前", "推迟", "暂缓", "跳过", "拆成", "拆分",
         "加一个", "新增", "加个", "添加任务", "调整顺序", "重新排序",
         "把", "移到", "放到", "先别做", "不要做",
+        "加上", "补充", "还需要", "还要", "需要", "加个任务",
+        "加一条", "新增一个", "再加", "还缺", "少了",
     ]
+
+    _EXECUTION_KEYWORDS = [
+        "写", "实现", "修复", "重构", "帮我", "帮我写",
+        "写代码", "改bug", "测试一下", "部署", "编译",
+        "继续", "下一", "开始", "run", "运行", "怎么",
+        "为什么", "介绍", "解释", "查看", "看看", "检查",
+        "你好", "谢谢", "项目", "会话", "切换", "打开",
+    ]
+
+    _TRIVIAL_RESPONSES = frozenset({
+        "好的", "可以", "嗯", "行", "好", "ok", "yes", "no",
+        "对", "不对", "是", "不是", "知道了", "明白", "了解",
+        "", "继续", "下一步",
+    })
 
     def classify_message(self, text: str) -> RouteDecision:
         """Determine whether a user message is plan change, execution, or mixed."""
         stripped = text.strip()
         lowered = stripped.lower()
 
+        # Trivial responses always go to main agent
+        if lowered in self._TRIVIAL_RESPONSES or len(stripped) < 4:
+            return "forward"
+
         has_plan = any(kw in lowered for kw in self._PLAN_KEYWORDS)
-        has_execution = len(stripped) > 30 or any(
-            kw in lowered for kw in ["写", "实现", "修复", "重构", "帮我",
-                                       "写代码", "改bug", "测试", "部署",
-                                       "继续", "下一", "开始", "run", "运行"]
+        has_execution = len(stripped) > 60 or any(
+            kw in lowered for kw in self._EXECUTION_KEYWORDS
         )
 
         if has_plan and not has_execution:
             return "handle"
         if has_plan and has_execution:
             return "split"
-        return "forward"
+        if has_execution:
+            return "forward"
+        # No plan keywords AND no execution keywords AND short message (4-60 chars)
+        # In project mode, this is likely a task description → handle
+        return "handle"
 
     # ---- helpers ----
 
