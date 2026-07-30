@@ -795,6 +795,30 @@
   text-align: center;
 }
 
+/* ---- degradation dot ---- */
+.sidebar-degrade-dot {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 6;
+}
+.sidebar-degrade-dot.is-l2 {
+  background: #d4a000;
+  animation: degrade-pulse 2s ease-in-out infinite;
+}
+.sidebar-degrade-dot.is-l3 {
+  background: #dc2626;
+  animation: degrade-pulse 1s ease-in-out infinite;
+}
+@keyframes degrade-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
 /* ---- overlay panel (slides over task flow) ---- */
 .sidebar-overlay {
   position: absolute;

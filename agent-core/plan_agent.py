@@ -38,6 +38,15 @@ from session import Session
 
 ChangeKind = Literal["add", "drop", "skip", "reorder", "toggle", "confirm", "external"]
 
+DegradationLevel = Literal["L1", "L2", "L3"]
+
+
+_LEVEL_LABEL: dict[DegradationLevel, str] = {
+    "L1": "全功能",
+    "L2": "无推理",
+    "L3": "无 Plan",
+}
+
 
 @dataclass
 class PlanChange:
@@ -116,7 +125,8 @@ class PlanAgent:
     _change_counter: int = 0
     _llm: Any = field(default=None, repr=False)
     _undo_stack: list[UndoEntry] = field(default_factory=list)
-    _undo_applying: bool = field(default=False, repr=False)  # skip undo push during undo execution
+    _undo_applying: bool = field(default=False, repr=False)
+    _degradation_level: DegradationLevel = field(default="L1")  # skip undo push during undo execution
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -595,9 +605,24 @@ class PlanAgent:
         from llm_client import LLMClient, DEFAULT_MODEL
         import os
         model = os.environ.get("PLAN_AGENT_MODEL", DEFAULT_MODEL)
-        self._llm = LLMClient()
+        try:
+            self._llm = LLMClient()
+        except Exception:
+            self._degradation_level = "L2"
+            raise
         self._llm._plan_model = model
+        self._degradation_level = "L1"
         return self._llm
+
+    def pulse(self) -> DegradationLevel:
+        """Return current degradation level. Call this to get the status indicator."""
+        if self._degradation_level != "L1":
+            # Already degraded; try recovery
+            try:
+                self._ensure_llm()
+            except Exception:
+                pass
+        return self._degradation_level
 
     def split_task(self, line: int) -> str:
         """Use LLM to split a single task into 2-5 subtasks.
@@ -638,6 +663,7 @@ class PlanAgent:
                 temperature=0.0,
             )
         except Exception as exc:
+            self._degradation_level = "L2"
             return self._fallback_split(line, task_description, f"LLM 调用失败（{exc}）")
 
         raw = response.content.strip()
@@ -724,6 +750,7 @@ class PlanAgent:
                 temperature=0.0,
             )
         except Exception as exc:
+            self._degradation_level = "L2"
             return self._fallback_add_task(text, extra=f"LLM 调用失败（{exc}）")
 
         raw = response.content.strip()
@@ -839,6 +866,8 @@ class PlanAgent:
             "tasks_open": stats.open_count,
             "tasks_all_done": stats.all_done,
             "needs_confirm": needs_confirm,
+            "degradation_level": self.pulse(),
+            "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
             "warnings": warnings,
             "auto_fix_actions": auto_fix_actions,
             "change_log": [

@@ -96,6 +96,9 @@ export interface ProjectPanelState {
   // Undo toast
   undoDescription: string;
   undoTimerId: number | null;
+  // Degradation indicator
+  degradationLevel: string;
+  degradationLabel: string;
 }
 
 export interface ProjectPanelCallbacks {
@@ -416,6 +419,17 @@ function overlayTitle(panel: OverlayPanel): string {
   }
 }
 
+// ---- degradation banner ----
+
+function renderDegradeBanner(level: string, label: string, explain: string): string {
+  const accent = level === "L3" ? "var(--ma-danger)" : "#d4a000";
+  return `<div class="sidebar-change-banner" style="border-color:${accent};background:color-mix(in srgb, ${accent} 6%, var(--ma-surface));">
+    <span style="font-size:0.72rem;">⚠ 项目管理器: ${label}</span>
+    <div style="font-size:0.72rem;color:var(--ma-text-muted);margin:0.2rem 0;">${explain}</div>
+    <button type="button" class="unified-btn" data-action="dismiss-degrade" style="font-size:0.68rem;padding:0.15rem 0.4rem;">关闭</button>
+  </div>`;
+}
+
 // ---- change banner / plan confirmation inline ----
 
 function renderChangeBanner(state: ProjectPanelState): string {
@@ -540,7 +554,8 @@ export function applyProjectPlanState(
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.planChangeLog = event.change_log ?? [];
   state.planWarnings = event.warnings ?? [];
-  // Show auto_fix actions as part of warnings display
+  state.degradationLevel = event.degradation_level ?? "L1";
+  state.degradationLabel = event.degradation_label ?? "全功能";
   const autoFixes = event.auto_fix_actions ?? [];
   if (autoFixes.length > 0) {
     state.planWarnings = [...autoFixes, ...state.planWarnings];
@@ -680,32 +695,17 @@ export function renderProjectSidebar(
     els.sidebarProgressWrap.classList.add("hidden");
   }
 
-  // Plan Agent warnings
-  if (state.planWarnings.length > 0) {
-    const warnHtml = state.planWarnings
-      .map((w) => `<div style="padding:0.2rem 0.75rem;font-size:0.78rem;color:#d4a000;">⚠ ${escapeHtml(w)}</div>`)
-      .join("");
-    els.changeBanner.classList.remove("hidden");
-    els.changeBanner.innerHTML = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">项目管理器反馈</div>
-      ${warnHtml}
-      <button type="button" class="unified-btn" data-action="dismiss-warnings" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+  // --- banner area: single priority chain ---
+  // Priority: undo > detection > degradation > warnings > change_banner
+  let bannerHtml = "";
+
+  if (state.undoDescription) {
+    bannerHtml = `<div class="sidebar-undo-toast">
+      <span>${escapeHtml(state.undoDescription)}</span>
+      <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
     </div>`;
-  } else if (!state.detectedProject) {
-    // change banner (only if no detection banner and no warnings)
-    els.changeBanner.innerHTML = renderChangeBanner(state);
-  }
-
-  // task flow (main view)
-  els.taskFlow.innerHTML = renderTaskFlow(
-    state,
-    state.highlightChanges && state.highlightedLines.size > 0 ? state.highlightedLines : null,
-  );
-
-  // detection banner (project.detect)
-  if (state.detectedProject && !state.projectId) {
-    els.changeBanner.classList.remove("hidden");
-    els.changeBanner.innerHTML = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));">
+  } else if (state.detectedProject && !state.projectId) {
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到项目目录</div>
       <div class="sidebar-change-banner-changes">${escapeHtml(state.detectedProject.reason)}</div>
       <div class="sidebar-change-banner-actions">
@@ -713,20 +713,39 @@ export function renderProjectSidebar(
         <button type="button" class="unified-btn" data-action="detect-dismiss">忽略</button>
       </div>
     </div>`;
-    // Don't render the normal change banner when detection is active
+  } else if (state.degradationLevel !== "L1") {
+    const level = state.degradationLevel || "L1";
+    const label = state.degradationLabel || level;
+    const explain = level === "L3"
+      ? "项目管理器不可用，退回直接文件操作模式。勾选/排序仍可用，拆分和新任务需通过聊天框。"
+      : "LLM 服务暂时不可用，拆分和新任务退回单条添加模式。勾选和排序正常。";
+    bannerHtml = renderDegradeBanner(level, label, explain);
+  } else if (state.planWarnings.length > 0) {
+    const warnHtml = state.planWarnings
+      .map((w) => `<div style="padding:0.2rem 0.75rem;font-size:0.78rem;color:#d4a000;">⚠ ${escapeHtml(w)}</div>`)
+      .join("");
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">项目管理器反馈</div>
+      ${warnHtml}
+      <button type="button" class="unified-btn" data-action="dismiss-warnings" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+    </div>`;
   } else {
-    // change banner
-    els.changeBanner.innerHTML = renderChangeBanner(state);
+    bannerHtml = renderChangeBanner(state);
   }
 
-  // undo toast
-  if (state.undoDescription) {
+  if (bannerHtml) {
     els.changeBanner.classList.remove("hidden");
-    els.changeBanner.innerHTML = `<div class="sidebar-undo-toast">
-      <span>${escapeHtml(state.undoDescription)}</span>
-      <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
-    </div>`;
+    els.changeBanner.innerHTML = bannerHtml;
+  } else {
+    els.changeBanner.classList.add("hidden");
+    els.changeBanner.innerHTML = "";
   }
+
+  // task flow (main view)
+  els.taskFlow.innerHTML = renderTaskFlow(
+    state,
+    state.highlightChanges && state.highlightedLines.size > 0 ? state.highlightedLines : null,
+  );
 
   // icon bar: verify only visible in confirmed
   const verifyBtn = els.iconBar.querySelector<HTMLElement>("#icon-btn-verify");
@@ -737,6 +756,21 @@ export function renderProjectSidebar(
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");
   if (projectBadge) {
     projectBadge.textContent = String(state.projects.length);
+  }
+  // degradation indicator
+  const degradeDot = els.iconBar.querySelector<HTMLElement>("#sidebar-degrade-dot");
+  if (degradeDot) {
+    const level = state.degradationLevel || "L1";
+    if (level === "L1") {
+      degradeDot.classList.add("hidden");
+    } else {
+      degradeDot.classList.remove("hidden");
+      degradeDot.className = degradeDot.className
+        .replace("hidden", "")
+        .replace("is-l2", "").replace("is-l3", "").trim();
+      degradeDot.classList.add(`is-${level.toLowerCase()}`);
+      degradeDot.title = `项目管理器: ${state.degradationLabel || level}`;
+    }
   }
   // active icon
   for (const btn of els.iconBar.querySelectorAll<HTMLButtonElement>(".sidebar-icon-btn")) {

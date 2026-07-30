@@ -127,6 +127,8 @@ export function mountUnifiedShell(
     planWarnings: [],
     undoDescription: "",
     undoTimerId: null,
+    degradationLevel: "L1",
+    degradationLabel: "全功能",
   };
 
   let statusText = "连接中…";
@@ -258,6 +260,7 @@ export function mountUnifiedShell(
             <span class="sidebar-icon">☰</span>
             <span class="sidebar-icon-badge" id="project-count-badge">0</span>
           </button>
+          <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
         </div>
         <div class="sidebar-overlay hidden" id="sidebar-overlay">
           <div class="sidebar-overlay-header">
@@ -1385,6 +1388,13 @@ export function mountUnifiedShell(
         if (projectState.undoTimerId) { window.clearTimeout(projectState.undoTimerId); projectState.undoTimerId = null; }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         try { client.undoLastPlanOp(); } catch { /* ignore */ }
+        return;
+      case "toggle-degrade-info":
+        setStatus(`项目管理器状态: ${projectState.degradationLabel} (${projectState.degradationLevel})`);
+        return;
+      case "dismiss-degrade":
+        projectState.degradationLevel = "L1"; // visually dismiss; real level restored on next state
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
         projectState.planWarnings = [];
