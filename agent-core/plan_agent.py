@@ -230,6 +230,117 @@ class PlanAgent:
             return "split"
         return "forward"
 
+    # ---- helpers ----
+
+    def _current_stats(self):
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        return read_task_stats(tasks_path)
+
+    def next_task_text(self) -> str | None:
+        """Return the text of the first undone task, or None."""
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return None
+        text = tasks_path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            m = __import__("re").match(r"^\s*-\s*\[\s\]\s+(.*)", line)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    # ---- quality checks ----
+
+    def quality_check(self) -> list[str]:
+        """Run all quality checks on TASKS.md. Returns list of warning strings."""
+        warnings: list[str] = []
+        warnings.extend(self._check_duplicates())
+        warnings.extend(self._check_granularity())
+        warnings.extend(self._check_empty_phases())
+        return warnings
+
+    def _check_duplicates(self) -> list[str]:
+        """Detect identical or near-identical task descriptions (>=85% similar)."""
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return []
+        text = tasks_path.read_text(encoding="utf-8")
+        import re
+        from difflib import SequenceMatcher
+
+        entries: list[tuple[int, str]] = []
+        for i, line in enumerate(text.splitlines()):
+            m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
+            if m:
+                entries.append((i, m.group(1).strip()))
+
+        warnings: list[str] = []
+        for a in range(len(entries)):
+            for b in range(a + 1, len(entries)):
+                la, da = entries[a]
+                lb, db = entries[b]
+                ratio = SequenceMatcher(None, da, db).ratio()
+                if ratio >= 0.85:
+                    warnings.append(
+                        f"[重复] 行 {la} 和 {lb} 高度相似 ({ratio:.0%})："
+                        f"\"{da[:40]}\" ≈ \"{db[:40]}\""
+                    )
+        return warnings
+
+    def _check_granularity(self) -> list[str]:
+        """Flag tasks that are too vague (single short word) or too long (>120 chars)."""
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return []
+        text = tasks_path.read_text(encoding="utf-8")
+        import re
+        warnings: list[str] = []
+        for i, line in enumerate(text.splitlines()):
+            m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
+            if m:
+                desc = m.group(1).strip()
+                if len(desc) < 10:
+                    warnings.append(
+                        f"[粒度] 行 {i} 任务过短（{len(desc)} 字）：\"{desc}\""
+                    )
+                elif len(desc) > 120:
+                    warnings.append(
+                        f"[粒度] 行 {i} 任务过长（{len(desc)} 字），建议拆分"
+                    )
+        return warnings
+
+    def _check_empty_phases(self) -> list[str]:
+        """Flag ## Phase sections with no tasks under them."""
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return []
+        text = tasks_path.read_text(encoding="utf-8")
+        import re
+        lines = text.splitlines()
+        warnings: list[str] = []
+        current_phase: str | None = None
+        phase_line: int = -1
+        has_tasks = False
+
+        for i, line in enumerate(lines):
+            if line.strip().startswith("## "):
+                if current_phase is not None and not has_tasks:
+                    warnings.append(
+                        f"[空阶段] 行 {phase_line} \"{current_phase}\" 下无任何任务"
+                    )
+                current_phase = line.strip().lstrip("#").strip()
+                phase_line = i
+                has_tasks = False
+            elif re.match(r"^\s*-\s*\[[ x]\]\s+", line):
+                has_tasks = True
+
+        # Check last phase
+        if current_phase is not None and not has_tasks:
+            warnings.append(
+                f"[空阶段] 行 {phase_line} \"{current_phase}\" 下无任何任务"
+            )
+
+        return warnings
+
     # ---- state payload ----
 
     def build_state(self, session: Session | None = None) -> dict[str, Any]:
@@ -244,6 +355,8 @@ class PlanAgent:
 
         needs_confirm = self.check_plan_dirty()
 
+        warnings = self.quality_check()
+
         return {
             "type": "project.plan.state",
             "project_id": self.project_id,
@@ -255,6 +368,7 @@ class PlanAgent:
             "tasks_open": stats.open_count,
             "tasks_all_done": stats.all_done,
             "needs_confirm": needs_confirm,
+            "warnings": warnings,
             "change_log": [
                 {
                     "id": c.id,

@@ -37,9 +37,15 @@
 ## 执行纪律
 
 1. **先计划后代码**：首轮填 `PROJECT.md` + `TASKS.md`；请用户确认后再实现。
-2. **一小步一勾选**：每完成一个 task，同轮更新 `TASKS.md` 为 `[x]`。
+2. **一小步一勾选**：每完成一个 task，**必须使用 `report_progress` 工具**报告进度（不要直接写 `TASKS.md`）。
+   - `project_id`：当前项目 ID（见 project_id 字段）
+   - `task_line`：已完成的 checkbox 行号（0-indexed）
+   - `summary`：本轮实际做了什么
+   - `subtasks`（可选）：如果做了子步骤但 TASKS.md 没列出来，填上
+   - `add_tasks`（可选）：如果执行中发现计划遗漏了任务，填上
+   - 项目管理器会自动更新 `TASKS.md`、检查质量、返回下一个任务。
 3. **改 Phase / 范围 / 验收** → 文档更新后状态为 `plan_dirty`，须用户再确认。
-4. **仅增删 task、不改 Phase** → 可直接改 `TASKS.md`，保持 `confirmed`。
+4. **仅增删 task、不改 Phase** → 通过 `report_progress` 的 `add_tasks` / `skip_tasks` 参数处理。
 5. **交付**：`TASKS.md` 无 `- [ ]` 且 `PROJECT.md` 验收命令跑通后，才可写「交付完成」。
 
 ## Task 一停门（硬 · TASK-STOP）

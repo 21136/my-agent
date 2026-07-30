@@ -91,6 +91,8 @@ export interface ProjectPanelState {
   quickAddText: string;
   // auto-detect
   detectedProject: { id: string; reason: string } | null;
+  // Plan Agent warnings
+  planWarnings: string[];
 }
 
 export interface ProjectPanelCallbacks {
@@ -534,6 +536,7 @@ export function applyProjectPlanState(
   state.tasksTotal = event.tasks_total ?? 0;
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.planChangeLog = event.change_log ?? [];
+  state.planWarnings = event.warnings ?? [];
 
   // Diff old vs new task phases
   const oldSnapshot = state.taskPhases.length > 0
@@ -667,6 +670,22 @@ export function renderProjectSidebar(
     els.sidebarTitle.textContent = "项目";
     els.sidebarMeta.textContent = "未绑定项目 · 使用「项目 新建 <id>」";
     els.sidebarProgressWrap.classList.add("hidden");
+  }
+
+  // Plan Agent warnings
+  if (state.planWarnings.length > 0) {
+    const warnHtml = state.planWarnings
+      .map((w) => `<div style="padding:0.2rem 0.75rem;font-size:0.78rem;color:#d4a000;">⚠ ${escapeHtml(w)}</div>`)
+      .join("");
+    els.changeBanner.classList.remove("hidden");
+    els.changeBanner.innerHTML = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">项目管理器反馈</div>
+      ${warnHtml}
+      <button type="button" class="unified-btn" data-action="dismiss-warnings" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+    </div>`;
+  } else if (!state.detectedProject) {
+    // change banner (only if no detection banner and no warnings)
+    els.changeBanner.innerHTML = renderChangeBanner(state);
   }
 
   // task flow (main view)

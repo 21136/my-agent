@@ -334,6 +334,20 @@ def project_mode_block_reason(
             for path in extract_run_evolved_paths(tool_name, arguments):
                 if path and not is_under_project_root(path, project_root):
                     return f"patch_file 仅限项目目录内：{project_root}"
+
+        # Block direct writes to TASKS.md — must use report_progress
+        if tool_name == "run_evolved" and evolved_name in _WRITE_TOOLS:
+            for path in extract_run_evolved_paths(tool_name, arguments):
+                if path and is_project_tasks_path(path, project_root):
+                    return (
+                        "不要直接写 TASKS.md。已完成一条任务后，请调用 "
+                        "run_evolved(tool_name=\"report_progress\", arguments={"
+                        "project_id: \"<项目id>\", summary: \"<做了什么>\", "
+                        "task_line: <勾选的行号>, subtasks: [<实际拆出的子任务>], "
+                        "add_tasks: [<新发现的任务>]})。"
+                        "项目管理器会自动更新 TASKS.md 并检查质量。"
+                    )
+
         return None
 
     # Plan gate: any session bound to project_root — even if router switched shell.

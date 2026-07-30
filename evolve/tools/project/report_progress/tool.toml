@@ -1,0 +1,46 @@
+[tool]
+name = "report_progress"
+description = "向项目管理器报告任务进度。完成一条 TASKS 勾选后调用此工具而非直接 write_text 改 TASKS.md。可同时拆分当前 task 为子任务、新增发现的任务。项目管理器会验证并更新 TASKS.md。"
+version = "1.0.0"
+status = "active"
+topics = ["project", "coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["summary"]
+[schema.input.properties.summary]
+type = "string"
+description = "本轮完成的工作摘要"
+[schema.input.properties.task_line]
+type = "integer"
+description = "已完成的 task 在 TASKS.md 中的行号（0-indexed），用于自动勾选 [x]"
+[schema.input.properties.subtasks]
+type = "array"
+description = "拆分出的子任务描述列表（实际做了但 TASKS.md 没列出的子步骤）"
+items = { type = "string" }
+[schema.input.properties.add_tasks]
+type = "array"
+description = "执行过程中新发现的应加入计划的任务描述列表"
+items = { type = "string" }
+[schema.input.properties.skip_tasks]
+type = "array"
+description = "需要暂缓（skip）的任务行号列表"
+items = { type = "integer" }
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+tasks_done = { type = "integer" }
+tasks_total = { type = "integer" }
+next_task = { type = "string" }
+warnings = { type = "array", items = { type = "string" } }
+
+[policy]
+confirm = false
+dry_run_supported = false
+allow_approve_all = false
+timeout_sec = 30

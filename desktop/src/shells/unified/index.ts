@@ -124,6 +124,7 @@ export function mountUnifiedShell(
     newDocName: "",
     quickAddText: "",
     detectedProject: null,
+    planWarnings: [],
   };
 
   let statusText = "连接中…";
@@ -1375,6 +1376,10 @@ export function mountUnifiedShell(
         return;
       case "detect-dismiss":
         projectState.detectedProject = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-warnings":
+        projectState.planWarnings = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "expand-banner":

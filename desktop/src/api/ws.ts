@@ -124,6 +124,7 @@ export type ServerEvent =
       tasks_open: number;
       tasks_all_done: boolean;
       needs_confirm: boolean;
+      warnings: string[];
       change_log: PlanChangeItem[];
     }
   | { type: "project.plan.confirm_changes.done" }
