@@ -351,6 +351,11 @@ def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
     for action in result.pop("_auto_fix_actions", []):
         events.append({"type": "notice", "text": action})
 
+    # Emit undo toast if available
+    undo_desc = result.pop("_undo_desc", None)
+    if undo_desc:
+        events.append({"type": "project.undo.available", "description": undo_desc})
+
     # Build plan state (auto_fix runs again inside, extract any new actions too)
     plan_state = agent.build_state(session)
     for action in plan_state.get("auto_fix_actions", []):
@@ -486,6 +491,18 @@ def _dispatch_plan_message(
 
         if msg_type == "project.plan.state":
             return agent.build_state(session)
+
+        if msg_type == "project.plan.undo":
+            entry = agent.undo_last()
+            if entry is None:
+                return {"type": "error", "message": "没有可撤销的操作"}
+            return {
+                "_events": [
+                    {"type": "notice", "text": f"已撤销：{entry.description}"},
+                    project_state_payload(session, paths),
+                    agent.build_state(session),
+                ]
+            }
 
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")

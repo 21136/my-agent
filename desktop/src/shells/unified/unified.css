@@ -967,6 +967,23 @@
   font-size: 0.82rem;
 }
 
+/* ---- undo toast ---- */
+.sidebar-undo-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  background: color-mix(in srgb, var(--ma-accent) 10%, var(--ma-surface));
+  border-bottom: 1px solid var(--ma-accent);
+}
+.sidebar-undo-toast span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- context menu ---- */
 .context-menu {
   position: fixed;

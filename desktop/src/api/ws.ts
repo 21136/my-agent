@@ -143,6 +143,7 @@ export type ServerEvent =
     }
   | { type: "project.doc.create.done"; path: string; name: string }
   | { type: "project.task.add.done"; line: number; description: string; tasks_done: number; tasks_total: number }
+  | { type: "project.undo.available"; description: string }
   | { type: "project.detect"; project_id: string; reason: string; file_count: number; has_tasks: boolean }
   | {
       type: "project.verify.done";
@@ -498,6 +499,10 @@ export class AgentWsClient {
 
   addTask(description: string, phase?: string): void {
     this.send({ type: "project.task.add", description, phase: phase ?? "" });
+  }
+
+  undoLastPlanOp(): void {
+    this.send({ type: "project.plan.undo" });
   }
 
   runProjectVerify(): void {

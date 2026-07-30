@@ -49,6 +49,14 @@ class PlanChange:
     line: int | None = None
 
 
+@dataclass
+class UndoEntry:
+    """A reversible mutation. Stored on a stack (max 50)."""
+    description: str  # "已删除「旧任务」"
+    reverse_kind: str  # "toggle" | "insert" | "move" | "drop"
+    reverse_data: dict  # params for the reverse operation
+
+
 _PLAN_REASONING_SYSTEM = """你是一个项目管理器。你的任务是理解用户的需求，分析当前的项目任务结构，然后输出精准的修改操作。
 
 ## 输出格式
@@ -95,6 +103,8 @@ class PlanAgent:
     _last_fingerprint: str = ""
     _change_counter: int = 0
     _llm: Any = field(default=None, repr=False)
+    _undo_stack: list[UndoEntry] = field(default_factory=list)
+    _undo_applying: bool = field(default=False, repr=False)  # skip undo push during undo execution
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -196,12 +206,69 @@ class PlanAgent:
         self._record_change("confirm", "(计划确认)", reason="plan confirmed")
         self._save_state()
 
+    def undo_last(self) -> UndoEntry | None:
+        """Pop and execute the most recent undo entry. Returns None if stack empty."""
+        if not self._undo_stack:
+            return None
+        entry = self._undo_stack.pop()
+        self._undo_applying = True
+        try:
+            if entry.reverse_kind == "toggle":
+                self.toggle_task(entry.reverse_data["line"], entry.reverse_data["done"])
+            elif entry.reverse_kind == "move":
+                self.reorder_task(entry.reverse_data["line"], entry.reverse_data["direction"])
+            elif entry.reverse_kind == "insert":
+                pos = entry.reverse_data["position"]
+                content = entry.reverse_data["content"]
+                tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+                fls = tasks_path.read_text(encoding="utf-8").splitlines()
+                fls.insert(pos, content)
+                txt = "\n".join(fls)
+                if not txt.endswith("\n"): txt += "\n"
+                tasks_path.write_text(txt, encoding="utf-8")
+            elif entry.reverse_kind == "unskip":
+                cur = entry.reverse_data["current_line"]
+                orig = entry.reverse_data["original_line"]
+                steps = cur - orig
+                for _ in range(steps):
+                    reorder_task_line(self.paths, self.project_id, cur, "up")
+                    cur -= 1
+            elif entry.reverse_kind == "drop":
+                self.drop_task(entry.reverse_data["line"])
+            self._save_state()
+        except Exception:
+            # Rollback undo entry if it failed
+            self._undo_stack.append(entry)
+            self._undo_applying = False
+            return None
+        self._undo_applying = False
+        return entry
+
+    def push_undo(self, description: str, reverse_kind: str, reverse_data: dict) -> None:
+        """Manually push an undo entry (for add_task operations outside _mutate_and_check)."""
+        self._undo_stack.append(UndoEntry(
+            description=description,
+            reverse_kind=reverse_kind,
+            reverse_data=reverse_data,
+        ))
+        if len(self._undo_stack) > 50:
+            self._undo_stack.pop(0)
+        self._save_state()
+
     # ---- task operations (wrapped with change log + auto-fix) ----
 
     def _mutate_and_check(self, result: dict[str, Any], kind: ChangeKind,
-                          task_text: str, reason: str = "", line: int | None = None) -> dict[str, Any]:
+                          task_text: str, reason: str = "", line: int | None = None,
+                          undo: UndoEntry | None = None) -> dict[str, Any]:
         """After any mutation, run auto_fix + quality_check. Returns enriched result."""
         self._record_change(kind, task_text, reason=reason, line=line)
+
+        if undo is not None and not self._undo_applying:
+            self._undo_stack.append(undo)
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
+            result["_undo_desc"] = undo.description
+
         self._save_state()
 
         actions = self.auto_fix()
@@ -213,37 +280,84 @@ class PlanAgent:
         return result
 
     def toggle_task(self, line: int, done: bool) -> dict[str, Any]:
+        # Capture pre-state for undo
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        task_text = f"line {line}"
+        if tasks_path.is_file():
+            fls = tasks_path.read_text(encoding="utf-8").splitlines()
+            if 0 <= line < len(fls):
+                import re
+                m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", fls[line])
+                if m: task_text = m.group(1).strip()
+
         result = toggle_task_line(self.paths, self.project_id, line, done)
-        text = str(result.get("line", line))
-        return self._mutate_and_check(result, "toggle", f"line {text}", reason="toggle", line=line)
+        label = "已勾选" if done else "已取消勾选"
+        undo = UndoEntry(
+            description=f"{label}「{task_text[:30]}」",
+            reverse_kind="toggle",
+            reverse_data={"line": line, "done": not done},
+        )
+        return self._mutate_and_check(result, "toggle", f"line {line}",
+                                       reason="toggle", line=line, undo=undo)
 
     def reorder_task(self, line: int, direction: str) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
-        task_text = ""
+        task_text = f"line {line}"
         if tasks_path.is_file():
             file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
             if 0 <= line < len(file_lines):
                 task_text = file_lines[line].strip()
         result = reorder_task_line(self.paths, self.project_id, line, direction)
+        label = "已上移" if direction == "up" else "已下移"
+        reverse_dir = "down" if direction == "up" else "up"
+        # After swap: if moved up (line→line-1), undo target is at line-1 going down
+        #             if moved down (line→line+1), undo target is at line+1 going up
+        new_line = line - 1 if direction == "up" else line + 1
+        undo = UndoEntry(
+            description=f"{label}「{task_text[:30]}」",
+            reverse_kind="move",
+            reverse_data={"line": new_line, "direction": reverse_dir},
+        )
         return self._mutate_and_check(result, "reorder", task_text or f"line {line}",
-                                       reason=f"move {direction}", line=line)
+                                       reason=f"move {direction}", line=line, undo=undo)
 
     def drop_task(self, line: int) -> dict[str, Any]:
+        # Capture pre-state content BEFORE deletion
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        original_content = f"line {line}"
+        if tasks_path.is_file():
+            fls = tasks_path.read_text(encoding="utf-8").splitlines()
+            if 0 <= line < len(fls):
+                original_content = fls[line]
+
         result = drop_task_line(self.paths, self.project_id, line)
-        removed = result.get("removed", f"line {line}")
-        return self._mutate_and_check(result, "drop", removed, reason="drop", line=line)
+        removed = result.get("removed", original_content)
+        undo = UndoEntry(
+            description=f"已删除「{removed.strip()[:30]}」",
+            reverse_kind="insert",
+            reverse_data={"position": line, "content": original_content},
+        )
+        return self._mutate_and_check(result, "drop", removed, reason="drop",
+                                       line=line, undo=undo)
 
     def skip_task(self, line: int) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
-        task_text = ""
+        task_text = f"line {line}"
         if tasks_path.is_file():
             file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
             if 0 <= line < len(file_lines):
                 task_text = file_lines[line].strip()
         result = skip_task_line(self.paths, self.project_id, line)
+        new_pos = result.get("new_position", line)
+        # Skip moved task from `line` to `new_pos` (end of phase).
+        # Undo: move it back up from new_pos to original `line`
+        undo = UndoEntry(
+            description=f"已暂缓「{task_text[:30]}」",
+            reverse_kind="unskip",
+            reverse_data={"current_line": new_pos, "original_line": line},
+        )
         return self._mutate_and_check(result, "skip", task_text or f"line {line}",
-                                       reason="skip", line=line)
-        return result
+                                       reason="skip", line=line, undo=undo)
 
     # ---- helpers ----
 
@@ -449,8 +563,14 @@ class PlanAgent:
                 break
 
         try:
-            add_task_to_tasks_md(self.paths, self.project_id, phase_title, text)
+            result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, text)
+            new_line = result.get("line", -1)
             self._record_change("add", text, reason="quick-add fallback")
+            self.push_undo(
+                description=f"已添加「{text[:30]}」",
+                reverse_kind="drop",
+                reverse_data={"line": new_line},
+            )
             self._save_state()
             prefix = f"{extra}。已添加到 {phase_title}：" if extra else f"已添加到 {phase_title}："
             return prefix + text[:60]
@@ -539,8 +659,14 @@ class PlanAgent:
                             break
                     if not phase_title:
                         phase_title = "Phase 1"
-                    add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
+                    result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
+                    new_line = result.get("line", -1)
                     self._record_change("add", desc, reason=f"LLM: {op.get('reason', text[:40])}")
+                    self.push_undo(
+                        description=f"已添加「{desc[:30]}」",
+                        reverse_kind="drop",
+                        reverse_data={"line": new_line},
+                    )
                     applied.append(f"+ {phase_title}: {desc}")
 
                 elif kind == "skip":

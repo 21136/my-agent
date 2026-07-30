@@ -93,6 +93,9 @@ export interface ProjectPanelState {
   detectedProject: { id: string; reason: string } | null;
   // Plan Agent warnings
   planWarnings: string[];
+  // Undo toast
+  undoDescription: string;
+  undoTimerId: number | null;
 }
 
 export interface ProjectPanelCallbacks {
@@ -714,6 +717,15 @@ export function renderProjectSidebar(
   } else {
     // change banner
     els.changeBanner.innerHTML = renderChangeBanner(state);
+  }
+
+  // undo toast
+  if (state.undoDescription) {
+    els.changeBanner.classList.remove("hidden");
+    els.changeBanner.innerHTML = `<div class="sidebar-undo-toast">
+      <span>${escapeHtml(state.undoDescription)}</span>
+      <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
+    </div>`;
   }
 
   // icon bar: verify only visible in confirmed

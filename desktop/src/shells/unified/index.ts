@@ -125,6 +125,8 @@ export function mountUnifiedShell(
     quickAddText: "",
     detectedProject: null,
     planWarnings: [],
+    undoDescription: "",
+    undoTimerId: null,
   };
 
   let statusText = "连接中…";
@@ -1378,6 +1380,12 @@ export function mountUnifiedShell(
         projectState.detectedProject = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
+      case "undo-last":
+        projectState.undoDescription = "";
+        if (projectState.undoTimerId) { window.clearTimeout(projectState.undoTimerId); projectState.undoTimerId = null; }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        try { client.undoLastPlanOp(); } catch { /* ignore */ }
+        return;
       case "dismiss-warnings":
         projectState.planWarnings = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -1767,6 +1775,17 @@ export function mountUnifiedShell(
       case "project.task.add.done":
         // Refresh tasks from server to replace optimistic placeholder
         client.refreshProject();
+        break;
+
+      case "project.undo.available":
+        projectState.undoDescription = event.description;
+        if (projectState.undoTimerId) { window.clearTimeout(projectState.undoTimerId); }
+        projectState.undoTimerId = window.setTimeout(() => {
+          projectState.undoDescription = "";
+          projectState.undoTimerId = null;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }, 3000) as unknown as number;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.detect":
