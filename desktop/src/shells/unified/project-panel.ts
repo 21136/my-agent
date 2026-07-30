@@ -103,6 +103,7 @@ export interface ProjectPanelState {
   changesLevel: string | null;
   autoConfirmTimerId: number | null;
   externalChanges: boolean;
+  suggestions: string[];
 }
 
 export interface ProjectPanelCallbacks {
@@ -586,6 +587,7 @@ export function applyProjectPlanState(
   state.degradationLabel = event.degradation_label ?? "全功能";
   state.changesLevel = event.changes_level ?? null;
   state.externalChanges = event.external_changes ?? false;
+  state.suggestions = event.suggestions ?? [];
   const autoFixes = event.auto_fix_actions ?? [];
   if (autoFixes.length > 0) {
     state.planWarnings = [...autoFixes, ...state.planWarnings];
@@ -726,7 +728,7 @@ export function renderProjectSidebar(
   }
 
   // --- banner area: single priority chain ---
-  // Priority: undo > external > detection > degradation > warnings > change_banner
+  // Priority: undo > external > suggestions > detection > degradation > warnings > change_banner
   let bannerHtml = "";
 
   if (state.undoDescription) {

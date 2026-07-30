@@ -127,7 +127,11 @@ class PlanAgent:
     _undo_stack: list[UndoEntry] = field(default_factory=list)
     _undo_applying: bool = field(default=False, repr=False)
     _degradation_level: DegradationLevel = field(default="L1")
-    _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation  # skip undo push during undo execution
+    _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation
+    _stale_task_line: int = -1  # line of current task last seen
+    _stale_task_count: int = 0  # consecutive build_state calls with same current
+    _suggestions: list[str] = field(default_factory=list)
+    _last_progress_time: float = 0.0  # time.time() of last report_progress call
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -514,13 +518,15 @@ class PlanAgent:
         return warnings
 
     def _check_granularity(self) -> list[str]:
-        """Flag tasks that are too vague (single short word) or too long (>120 chars)."""
+        """Flag tasks that are too vague or too long. Also check phase overload."""
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         if not tasks_path.is_file():
             return []
         text = tasks_path.read_text(encoding="utf-8")
         import re
         warnings: list[str] = []
+
+        # Per-task granularity
         for i, line in enumerate(text.splitlines()):
             m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
             if m:
@@ -533,6 +539,25 @@ class PlanAgent:
                     warnings.append(
                         f"[粒度] 行 {i} 任务过长（{len(desc)} 字），建议拆分"
                     )
+
+        # Phase overload: warn if any phase has >12 tasks
+        current_phase = ""
+        phase_task_count = 0
+        for line in text.splitlines():
+            if line.strip().startswith("## "):
+                if phase_task_count > 12:
+                    warnings.append(
+                        f"[阶段过长] {current_phase} 有 {phase_task_count} 个任务，建议拆分阶段"
+                    )
+                current_phase = line.strip().lstrip("#").strip()
+                phase_task_count = 0
+            elif re.match(r"^\s*-\s*\[[ x]\]\s+", line):
+                phase_task_count += 1
+        if phase_task_count > 12:
+            warnings.append(
+                f"[阶段过长] {current_phase} 有 {phase_task_count} 个任务，建议拆分阶段"
+            )
+
         return warnings
 
     def _check_empty_phases(self) -> list[str]:
@@ -874,6 +899,24 @@ class PlanAgent:
         # Always update snapshot after checking
         self._last_tasks_snapshot = current_tasks
 
+        # Stale task detection: same current task across multiple build_state calls
+        self._suggestions = []
+        current_line = -1
+        for line_n, line_t in enumerate(current_tasks.splitlines()):
+            if line_t.strip().startswith("- [ ]"):
+                current_line = line_n
+                break
+        if current_line >= 0 and current_line == self._stale_task_line:
+            self._stale_task_count += 1
+        else:
+            self._stale_task_line = current_line
+            self._stale_task_count = 1
+        if self._stale_task_count >= 5:
+            task_text = current_tasks.splitlines()[current_line].strip()
+            self._suggestions.append(
+                f"[耗时提醒] 任务「{task_text[:40]}」已保持 {self._stale_task_count} 轮未完成，是否拆分为更小的子任务？"
+            )
+
         # Always run checks on every state request
         auto_fix_actions = self.auto_fix()
         warnings = self.quality_check()
@@ -891,6 +934,7 @@ class PlanAgent:
             "needs_confirm": needs_confirm,
             "changes_level": changes_level,
             "external_changes": external_changes,
+            "suggestions": list(self._suggestions),
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
             "warnings": warnings,
@@ -911,7 +955,32 @@ class PlanAgent:
     # ---- report progress from main agent ----
 
     def report_progress(self, task_line: int | None, summary: str) -> dict[str, Any]:
-        """Main agent reports completing a task."""
+        """Main agent reports completing a task. Verify with file output check."""
+        import time as _time
+
+        # Verify: check if any files were modified under project dir since last report
+        verification_note = ""
+        project_root = project_dir(self.paths, self.project_id)
+        if self._last_progress_time > 0 and project_root.is_dir():
+            found_new = False
+            try:
+                for f in project_root.rglob("*"):
+                    if f.is_file() and f.suffix not in {".md", ".txt"}:
+                        try:
+                            if f.stat().st_mtime >= self._last_progress_time:
+                                found_new = True
+                                break
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            if not found_new:
+                verification_note = (
+                    "[验证失败] 未检测到新的源码文件产出。"
+                    "如确实完成请忽略，否则请在下一轮补充代码产出后重新标记。"
+                )
+
+        self._last_progress_time = _time.time()
         self._record_change(
             "toggle" if task_line is not None else "add",
             summary,
@@ -919,7 +988,13 @@ class PlanAgent:
             line=task_line,
         )
         self._save_state()
-        return self.build_state()
+        state = self.build_state()
+        # Append verification note AFTER build_state (which resets _suggestions)
+        if verification_note:
+            state["warnings"] = list(state.get("warnings", [])) + [verification_note]
+            state["suggestions"] = list(state.get("suggestions", [])) + [verification_note]
+            self._suggestions.append(verification_note)
+        return state
 
 
 # ---- singleton registry (one PlanAgent per project) ----

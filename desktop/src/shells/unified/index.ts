@@ -132,6 +132,7 @@ export function mountUnifiedShell(
     changesLevel: null,
     autoConfirmTimerId: null,
     externalChanges: false,
+    suggestions: [],
   };
 
   let statusText = "连接中…";
@@ -1410,6 +1411,10 @@ export function mountUnifiedShell(
         return;
       case "dismiss-external":
         projectState.externalChanges = false;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-suggestions":
+        projectState.suggestions = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
