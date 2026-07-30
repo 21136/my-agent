@@ -1567,7 +1567,10 @@ export function mountUnifiedShell(
           client.planDropTask(task.line);
           break;
         case "split":
-          setStatus("拆分功能将在 Phase 5 通过 Plan Agent LLM 实现");
+          setStatus("项目管理器分析中…");
+          try { client.splitPlanTask(task.line); } catch (err) {
+            setStatus(`拆分失败：${err instanceof Error ? err.message : String(err)}`);
+          }
           return;
       }
     } catch (err) {

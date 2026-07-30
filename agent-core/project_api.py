@@ -504,6 +504,19 @@ def _dispatch_plan_message(
                 ]
             }
 
+        if msg_type == "project.plan.split_task":
+            line = message.get("line")
+            if not isinstance(line, int) or line < 0:
+                raise ProjectApiError("project.plan.split_task requires line (non-negative int)")
+            summary = agent.split_task(line)
+            return {
+                "_events": [
+                    {"type": "notice", "text": summary},
+                    project_state_payload(session, paths),
+                    agent.build_state(session),
+                ]
+            }
+
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")
             summary = str(message.get("summary", ""))

@@ -505,6 +505,10 @@ export class AgentWsClient {
     this.send({ type: "project.plan.undo" });
   }
 
+  splitPlanTask(line: number): void {
+    this.send({ type: "project.plan.split_task", line });
+  }
+
   runProjectVerify(): void {
     this.send({ type: "project.verify" });
   }

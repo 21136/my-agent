@@ -89,6 +89,18 @@ def _build_reasoning_prompt(tasks_text: str, user_intent: str) -> str:
 请分析以上内容，输出对此项目计划的修改操作 JSON。"""
 
 
+_SPLIT_SYSTEM = """你是一个项目管理器。用户要求拆分一条任务为多个更小的子任务。
+
+## 规则
+1. 拆成 2-5 个具体可执行的子任务，每个 5-15 分钟可完成
+2. 保持子任务描述简洁（< 60 字）
+3. 仅输出 JSON 数组，每个元素是一条子任务描述字符串，不要额外解释
+4. 格式: ["子任务1描述", "子任务2描述", "子任务3描述"]
+"""
+
+
+
+
 @dataclass
 class PlanAgent:
     """Manages the project plan for one project workspace.
@@ -586,6 +598,106 @@ class PlanAgent:
         self._llm = LLMClient()
         self._llm._plan_model = model
         return self._llm
+
+    def split_task(self, line: int) -> str:
+        """Use LLM to split a single task into 2-5 subtasks.
+        Toggles the original task as done and inserts subtasks as undone lines below it."""
+        import json as json_mod
+        import re
+
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return "TASKS.md 不存在"
+
+        file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+        if line < 0 or line >= len(file_lines):
+            return f"行 {line} 超出范围"
+
+        m = re.match(r"^\s*-\s*\[([ xX])\]\s+(.*)", file_lines[line])
+        if not m:
+            return f"行 {line} 不是任务行"
+        task_description = m.group(2).strip()
+
+        # Gather surrounding context (± 10 lines of task context)
+        ctx_start = max(0, line - 10)
+        ctx_end = min(len(file_lines), line + 10)
+        context = "\n".join(file_lines[ctx_start:ctx_end])
+
+        try:
+            llm = self._ensure_llm()
+        except Exception as exc:
+            return self._fallback_split(line, task_description, f"LLM 不可用（{exc}）")
+
+        try:
+            response = llm.chat(
+                [
+                    {"role": "system", "content": _SPLIT_SYSTEM},
+                    {"role": "user", "content": f"任务上下文：\n{context}\n\n请拆分任务：{task_description}"},
+                ],
+                model=getattr(llm, "_plan_model", "deepseek-v4-flash"),
+                temperature=0.0,
+            )
+        except Exception as exc:
+            return self._fallback_split(line, task_description, f"LLM 调用失败（{exc}）")
+
+        raw = response.content.strip()
+        # Parse JSON array from response
+        subtasks: list[str] = []
+        try:
+            if "```" in raw:
+                raw = raw.split("```")[1].split("```")[0].strip()
+                if raw.startswith("json"):
+                    raw = raw[4:].strip()
+            parsed = json_mod.loads(raw)
+            if isinstance(parsed, list):
+                subtasks = [str(s).strip() for s in parsed if str(s).strip()]
+        except (json_mod.JSONDecodeError, IndexError):
+            pass
+
+        if not subtasks:
+            return self._fallback_split(line, task_description, "LLM 返回格式异常")
+
+        # Toggle original as done
+        self.toggle_task(line, True)
+
+        # Insert subtasks as new task lines below the original
+        from project_mode import add_task_to_tasks_md
+        # Find the phase this task belongs to
+        phase_title = "Phase 1"
+        for i in range(line, -1, -1):
+            if file_lines[i].strip().startswith("## "):
+                phase_title = file_lines[i].strip().lstrip("#").strip()
+                break
+
+        for i, sub in enumerate(subtasks):
+            add_task_to_tasks_md(self.paths, self.project_id, phase_title, sub)
+            self._record_change("add", sub, reason=f"split of line {line}: {task_description[:30]}")
+            self.push_undo(
+                description=f"已拆分「{sub[:20]}」",
+                reverse_kind="drop",
+                reverse_data={"line": line + 1 + i},  # approx position
+            )
+
+        self._save_state()
+        self.auto_fix()
+
+        return f"已将「{task_description[:30]}」拆分为 {len(subtasks)} 项：" + ", ".join(s[:20] for s in subtasks)
+
+    def _fallback_split(self, line: int, task_description: str, extra: str) -> str:
+        """Fallback: mark the task as done, add a single continuation subtask."""
+        self.toggle_task(line, True)
+        from project_mode import add_task_to_tasks_md
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+        phase_title = "Phase 1"
+        for i in range(line, -1, -1):
+            if file_lines[i].strip().startswith("## "):
+                phase_title = file_lines[i].strip().lstrip("#").strip()
+                break
+        desc = f"继续：{task_description[:40]}"
+        add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
+        self._save_state()
+        return f"{extra}。已标记完成并添加续做任务：「{desc}」"
 
     def reason_about_intent(self, text: str) -> str:
         """Use LLM to reason about user intent and produce structured plan changes.
