@@ -131,6 +131,7 @@ export function mountUnifiedShell(
     degradationLabel: "全功能",
     changesLevel: null,
     autoConfirmTimerId: null,
+    externalChanges: false,
   };
 
   let statusText = "连接中…";
@@ -1405,6 +1406,10 @@ export function mountUnifiedShell(
         return;
       case "dismiss-degrade":
         projectState.degradationLevel = "L1"; // visually dismiss; real level restored on next state
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-external":
+        projectState.externalChanges = false;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":

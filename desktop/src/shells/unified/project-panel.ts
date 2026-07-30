@@ -102,6 +102,7 @@ export interface ProjectPanelState {
   // Change confirmation
   changesLevel: string | null;
   autoConfirmTimerId: number | null;
+  externalChanges: boolean;
 }
 
 export interface ProjectPanelCallbacks {
@@ -584,6 +585,7 @@ export function applyProjectPlanState(
   state.degradationLevel = event.degradation_level ?? "L1";
   state.degradationLabel = event.degradation_label ?? "全功能";
   state.changesLevel = event.changes_level ?? null;
+  state.externalChanges = event.external_changes ?? false;
   const autoFixes = event.auto_fix_actions ?? [];
   if (autoFixes.length > 0) {
     state.planWarnings = [...autoFixes, ...state.planWarnings];
@@ -724,13 +726,19 @@ export function renderProjectSidebar(
   }
 
   // --- banner area: single priority chain ---
-  // Priority: undo > detection > degradation > warnings > change_banner
+  // Priority: undo > external > detection > degradation > warnings > change_banner
   let bannerHtml = "";
 
   if (state.undoDescription) {
     bannerHtml = `<div class="sidebar-undo-toast">
       <span>${escapeHtml(state.undoDescription)}</span>
       <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
+    </div>`;
+  } else if (state.externalChanges) {
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">检测到外部修改</div>
+      <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
+      <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
     </div>`;
   } else if (state.detectedProject && !state.projectId) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));">

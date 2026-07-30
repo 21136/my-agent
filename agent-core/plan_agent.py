@@ -126,7 +126,8 @@ class PlanAgent:
     _llm: Any = field(default=None, repr=False)
     _undo_stack: list[UndoEntry] = field(default_factory=list)
     _undo_applying: bool = field(default=False, repr=False)
-    _degradation_level: DegradationLevel = field(default="L1")  # skip undo push during undo execution
+    _degradation_level: DegradationLevel = field(default="L1")
+    _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation  # skip undo push during undo execution
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -178,6 +179,10 @@ class PlanAgent:
             ],
         }
         self._state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Update snapshot for external change detection
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if tasks_path.is_file():
+            self._last_tasks_snapshot = tasks_path.read_text(encoding="utf-8")
 
     # ---- change log ----
 
@@ -860,6 +865,15 @@ class PlanAgent:
         else:
             changes_level = None
 
+        # Detect external changes (git, editor, etc modifying TASKS.md directly)
+        current_tasks = artifacts.get("TASKS.md", "")
+        external_changes = False
+        if self._last_tasks_snapshot and current_tasks != self._last_tasks_snapshot:
+            external_changes = True
+            self._record_change("external", "(外部修改)", reason="TASKS.md changed outside PlanAgent")
+        # Always update snapshot after checking
+        self._last_tasks_snapshot = current_tasks
+
         # Always run checks on every state request
         auto_fix_actions = self.auto_fix()
         warnings = self.quality_check()
@@ -868,7 +882,7 @@ class PlanAgent:
             "type": "project.plan.state",
             "project_id": self.project_id,
             "plan_status": plan_status,
-            "tasks_markdown": artifacts.get("TASKS.md", ""),
+            "tasks_markdown": current_tasks,
             "map_markdown": artifacts.get("MAP.md", ""),
             "tasks_done": stats.done,
             "tasks_total": stats.total,
@@ -876,6 +890,7 @@ class PlanAgent:
             "tasks_all_done": stats.all_done,
             "needs_confirm": needs_confirm,
             "changes_level": changes_level,
+            "external_changes": external_changes,
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
             "warnings": warnings,
