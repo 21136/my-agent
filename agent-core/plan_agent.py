@@ -248,18 +248,89 @@ class PlanAgent:
                 return m.group(1).strip()
         return None
 
-    # ---- quality checks ----
+    # ---- quality checks + auto-fix ----
 
     def quality_check(self) -> list[str]:
-        """Run all quality checks on TASKS.md. Returns list of warning strings."""
+        """Run all quality checks. Returns warnings (auto-fix is applied first)."""
         warnings: list[str] = []
         warnings.extend(self._check_duplicates())
         warnings.extend(self._check_granularity())
         warnings.extend(self._check_empty_phases())
         return warnings
 
+    def auto_fix(self) -> list[str]:
+        """Run auto-fix on TASKS.md. Returns list of actions taken.
+        Safe: only removes >=95% similar undone duplicate task lines, keeping one.
+        """
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        if not tasks_path.is_file():
+            return []
+        import re
+        from difflib import SequenceMatcher
+
+        file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+        actions: list[str] = []
+
+        # ---- duplicate removal (>=95% similar undone tasks) ----
+        # Build entries: (line_number, description, is_done)
+        entries: list[tuple[int, str, bool]] = []
+        for i, line in enumerate(file_lines):
+            m = re.match(r"^\s*-\s*\[([ xX])\]\s+(.*)", line)
+            if m:
+                done = m.group(1).lower() == "x"
+                entries.append((i, m.group(2).strip(), done))
+
+        # Find pairs >= 95% similar, both undone → remove the later one
+        to_remove: set[int] = set()
+        for a in range(len(entries)):
+            for b in range(a + 1, len(entries)):
+                la, da, done_a = entries[a]
+                lb, db, done_b = entries[b]
+                if la in to_remove or lb in to_remove:
+                    continue
+                ratio = SequenceMatcher(None, da, db).ratio()
+                if ratio >= 0.95:
+                    if done_a and done_b:
+                        # Both done: remove the shorter one
+                        remove_line = la if len(da) < len(db) else lb
+                        keep_line = lb if remove_line == la else la
+                    elif done_a:
+                        remove_line = lb  # keep done, remove undone duplicate
+                        keep_line = la
+                    elif done_b:
+                        remove_line = la
+                        keep_line = lb
+                    else:
+                        # Both undone: keep the longer one (more detail), remove shorter
+                        remove_line = la if len(da) < len(db) else lb
+                        keep_line = lb if remove_line == la else la
+
+                    to_remove.add(remove_line)
+                    actions.append(
+                        f"[自动清理] 删除重复任务行 {remove_line} "
+                        f"（与行 {keep_line} {ratio:.0%} 相似）"
+                    )
+                    self._record_change(
+                        "drop",
+                        file_lines[remove_line].strip(),
+                        reason=f"auto-fix: duplicate of line {keep_line} ({ratio:.0%})",
+                        line=remove_line,
+                    )
+
+        if to_remove:
+            # Remove lines in reverse order (highest index first)
+            for line_idx in sorted(to_remove, reverse=True):
+                file_lines.pop(line_idx)
+            content = "\n".join(file_lines)
+            if not content.endswith("\n"):
+                content += "\n"
+            tasks_path.write_text(content, encoding="utf-8")
+            self._save_state()
+
+        return actions
+
     def _check_duplicates(self) -> list[str]:
-        """Detect identical or near-identical task descriptions (>=85% similar)."""
+        """Detect >=85% similar task descriptions (not auto-fixed, just warnings)."""
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         if not tasks_path.is_file():
             return []
@@ -279,9 +350,9 @@ class PlanAgent:
                 la, da = entries[a]
                 lb, db = entries[b]
                 ratio = SequenceMatcher(None, da, db).ratio()
-                if ratio >= 0.85:
+                if 0.92 <= ratio < 0.95:
                     warnings.append(
-                        f"[重复] 行 {la} 和 {lb} 高度相似 ({ratio:.0%})："
+                        f"[相似] 行 {la} 和 {lb} 疑似重复 ({ratio:.0%})："
                         f"\"{da[:40]}\" ≈ \"{db[:40]}\""
                     )
         return warnings

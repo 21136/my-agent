@@ -162,6 +162,19 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
         session.save()
     emit(project_state_payload(session, paths))
     emit(session_banner_event(session))
+
+    # Plan Agent: auto-fix + quality check every turn
+    agent = _plan_agent(session, paths)
+    if agent is not None:
+        actions = agent.auto_fix()
+        warnings = agent.quality_check()
+        for action in actions:
+            emit({"type": "notice", "text": action})
+        # Emit updated plan state with warnings
+        plan_state = agent.build_state(session)
+        plan_state["_auto_fix_actions"] = actions
+        emit(plan_state)
+
     maybe_emit_plan_request(session, paths, emit)
 
 
