@@ -537,6 +537,11 @@ export function applyProjectPlanState(
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.planChangeLog = event.change_log ?? [];
   state.planWarnings = event.warnings ?? [];
+  // Show auto_fix actions as part of warnings display
+  const autoFixes = event.auto_fix_actions ?? [];
+  if (autoFixes.length > 0) {
+    state.planWarnings = [...autoFixes, ...state.planWarnings];
+  }
 
   // Diff old vs new task phases
   const oldSnapshot = state.taskPhases.length > 0

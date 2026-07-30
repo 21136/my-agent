@@ -125,6 +125,7 @@ export type ServerEvent =
       tasks_all_done: boolean;
       needs_confirm: boolean;
       warnings: string[];
+      auto_fix_actions: string[];
       change_log: PlanChangeItem[];
     }
   | { type: "project.plan.confirm_changes.done" }

@@ -163,16 +163,12 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
     emit(project_state_payload(session, paths))
     emit(session_banner_event(session))
 
-    # Plan Agent: auto-fix + quality check every turn
+    # Plan Agent: emit plan state (build_state runs auto_fix + quality_check internally)
     agent = _plan_agent(session, paths)
     if agent is not None:
-        actions = agent.auto_fix()
-        warnings = agent.quality_check()
-        for action in actions:
-            emit({"type": "notice", "text": action})
-        # Emit updated plan state with warnings
         plan_state = agent.build_state(session)
-        plan_state["_auto_fix_actions"] = actions
+        for action in plan_state.get("auto_fix_actions", []):
+            emit({"type": "notice", "text": action})
         emit(plan_state)
 
     maybe_emit_plan_request(session, paths, emit)
@@ -348,13 +344,16 @@ def _plan_agent(session: Session, paths: AgentPaths) -> PlanAgent | None:
 
 def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
                       result: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "_events": [
-            result,
-            project_state_payload(session, paths),
-            agent.build_state(session),
-        ]
-    }
+    """Wrap a PlanAgent task mutation result with project.state + plan.state + auto_fix notices."""
+    events: list[dict[str, Any]] = [result, project_state_payload(session, paths)]
+
+    # Emit auto_fix actions as notices
+    for action in result.pop("_auto_fix_actions", []):
+        events.append({"type": "notice", "text": action})
+
+    # Build plan state (which also runs auto_fix+quality_check)
+    events.append(agent.build_state(session))
+    return {"_events": events}
 
 
 def dispatch_doc_message(

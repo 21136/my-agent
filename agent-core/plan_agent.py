@@ -164,14 +164,26 @@ class PlanAgent:
         self._record_change("confirm", "(计划确认)", reason="plan confirmed")
         self._save_state()
 
-    # ---- task operations (wrapped with change log) ----
+    # ---- task operations (wrapped with change log + auto-fix) ----
+
+    def _mutate_and_check(self, result: dict[str, Any], kind: ChangeKind,
+                          task_text: str, reason: str = "", line: int | None = None) -> dict[str, Any]:
+        """After any mutation, run auto_fix + quality_check. Returns enriched result."""
+        self._record_change(kind, task_text, reason=reason, line=line)
+        self._save_state()
+
+        actions = self.auto_fix()
+        warnings = self.quality_check()
+
+        result["_auto_fix_actions"] = actions
+        result["_warnings"] = warnings
+        result["_next_task"] = self.next_task_text()
+        return result
 
     def toggle_task(self, line: int, done: bool) -> dict[str, Any]:
         result = toggle_task_line(self.paths, self.project_id, line, done)
-        text = result.get("line", line)
-        self._record_change("toggle", f"line {text}", reason="manual toggle", line=line)
-        self._save_state()
-        return result
+        text = str(result.get("line", line))
+        return self._mutate_and_check(result, "toggle", f"line {text}", reason="toggle", line=line)
 
     def reorder_task(self, line: int, direction: str) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -181,16 +193,13 @@ class PlanAgent:
             if 0 <= line < len(file_lines):
                 task_text = file_lines[line].strip()
         result = reorder_task_line(self.paths, self.project_id, line, direction)
-        self._record_change("reorder", task_text or f"line {line}", reason=f"move {direction}", line=line)
-        self._save_state()
-        return result
+        return self._mutate_and_check(result, "reorder", task_text or f"line {line}",
+                                       reason=f"move {direction}", line=line)
 
     def drop_task(self, line: int) -> dict[str, Any]:
         result = drop_task_line(self.paths, self.project_id, line)
         removed = result.get("removed", f"line {line}")
-        self._record_change("drop", removed, reason="manual drop", line=line)
-        self._save_state()
-        return result
+        return self._mutate_and_check(result, "drop", removed, reason="drop", line=line)
 
     def skip_task(self, line: int) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -200,8 +209,8 @@ class PlanAgent:
             if 0 <= line < len(file_lines):
                 task_text = file_lines[line].strip()
         result = skip_task_line(self.paths, self.project_id, line)
-        self._record_change("skip", task_text or f"line {line}", reason="manual skip", line=line)
-        self._save_state()
+        return self._mutate_and_check(result, "skip", task_text or f"line {line}",
+                                       reason="skip", line=line)
         return result
 
     # ---- message routing ----
@@ -415,7 +424,7 @@ class PlanAgent:
     # ---- state payload ----
 
     def build_state(self, session: Session | None = None) -> dict[str, Any]:
-        """Build project.plan.state payload."""
+        """Build project.plan.state payload. Runs auto_fix + quality_check every time."""
         artifacts = read_project_artifacts(self.paths, self.project_id)
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         stats = read_task_stats(tasks_path)
@@ -426,6 +435,8 @@ class PlanAgent:
 
         needs_confirm = self.check_plan_dirty()
 
+        # Always run checks on every state request
+        auto_fix_actions = self.auto_fix()
         warnings = self.quality_check()
 
         return {
@@ -440,6 +451,7 @@ class PlanAgent:
             "tasks_all_done": stats.all_done,
             "needs_confirm": needs_confirm,
             "warnings": warnings,
+            "auto_fix_actions": auto_fix_actions,
             "change_log": [
                 {
                     "id": c.id,
