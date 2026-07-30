@@ -850,6 +850,15 @@ class PlanAgent:
             plan_status = session.meta.project_plan_status or "draft"
 
         needs_confirm = self.check_plan_dirty()
+        pending = self.pending_changes()
+
+        # Changes level: phase (manual) vs task (30s auto) vs null
+        if needs_confirm:
+            changes_level = "phase"
+        elif pending:
+            changes_level = "task"
+        else:
+            changes_level = None
 
         # Always run checks on every state request
         auto_fix_actions = self.auto_fix()
@@ -866,6 +875,7 @@ class PlanAgent:
             "tasks_open": stats.open_count,
             "tasks_all_done": stats.all_done,
             "needs_confirm": needs_confirm,
+            "changes_level": changes_level,
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
             "warnings": warnings,

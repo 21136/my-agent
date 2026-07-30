@@ -99,6 +99,9 @@ export interface ProjectPanelState {
   // Degradation indicator
   degradationLevel: string;
   degradationLabel: string;
+  // Change confirmation
+  changesLevel: string | null;
+  autoConfirmTimerId: number | null;
 }
 
 export interface ProjectPanelCallbacks {
@@ -438,6 +441,8 @@ function renderChangeBanner(state: ProjectPanelState): string {
     state.planOverlay && state.planStatus !== "confirmed";
   const needsPlanDirtyBanner =
     state.planStatus === "plan_dirty" && !needsPlanConfirm;
+  const isTaskLevelChange =
+    state.changesLevel === "task" && !needsPlanConfirm && !needsPlanDirtyBanner;
 
   // Plan confirmation takes priority over change banner
   if (needsPlanConfirm) {
@@ -448,6 +453,28 @@ function renderChangeBanner(state: ProjectPanelState): string {
       <div class="sidebar-change-banner-title">${escapeHtml(planLabel)} (${escapeHtml(state.projectId)})</div>
       <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-plan" style="margin-right:0.4rem;">确认开工</button>
       <button type="button" class="unified-btn" data-action="edit-plan">修改计划</button>
+    </div>`;
+  }
+
+  // Task-level changes: 30s auto-confirm
+  if (isTaskLevelChange) {
+    let changesHtml = "";
+    if (state.planChangeLog.length > 0) {
+      const recent = state.planChangeLog.slice(-6);
+      changesHtml = recent.map((c) => {
+        const icon = c.kind === "toggle" ? "✓" : c.kind === "add" ? "+" : c.kind === "drop" ? "−" : c.kind === "skip" ? "~" : "⇅";
+        return `${icon} ${escapeHtml(c.task_text)}`;
+      }).join("<br>");
+    } else {
+      changesHtml = "任务已变更";
+    }
+    return `<div class="sidebar-change-banner" style="border-color:color-mix(in srgb, var(--ma-accent) 50%, transparent);background:color-mix(in srgb, var(--ma-accent) 4%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">任务已变更 · <span data-countdown="30">30</span>s 后自动确认</div>
+      <div class="sidebar-change-banner-changes">${changesHtml}</div>
+      <div class="sidebar-change-banner-actions">
+        <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-changes">确认</button>
+        <button type="button" class="unified-btn" data-action="collapse-banner">关闭</button>
+      </div>
     </div>`;
   }
 
@@ -474,7 +501,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
 
     const highlightLabel = state.highlightChanges ? "取消高亮" : "查看变更";
     return `<div class="sidebar-change-banner">
-      <div class="sidebar-change-banner-title">⚠ 计划已变更 · 待确认</div>
+      <div class="sidebar-change-banner-title">⚠ 计划已变更 · 请确认</div>
       <div class="sidebar-change-banner-changes">${changesHtml}</div>
       <div class="sidebar-change-banner-actions">
         <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-changes">确认变更</button>
@@ -556,6 +583,7 @@ export function applyProjectPlanState(
   state.planWarnings = event.warnings ?? [];
   state.degradationLevel = event.degradation_level ?? "L1";
   state.degradationLabel = event.degradation_label ?? "全功能";
+  state.changesLevel = event.changes_level ?? null;
   const autoFixes = event.auto_fix_actions ?? [];
   if (autoFixes.length > 0) {
     state.planWarnings = [...autoFixes, ...state.planWarnings];

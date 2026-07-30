@@ -124,6 +124,7 @@ export type ServerEvent =
       tasks_open: number;
       tasks_all_done: boolean;
       needs_confirm: boolean;
+      changes_level: string | null;
       degradation_level: string;
       degradation_label: string;
       warnings: string[];

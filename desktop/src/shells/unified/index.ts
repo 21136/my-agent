@@ -129,6 +129,8 @@ export function mountUnifiedShell(
     undoTimerId: null,
     degradationLevel: "L1",
     degradationLabel: "全功能",
+    changesLevel: null,
+    autoConfirmTimerId: null,
   };
 
   let statusText = "连接中…";
@@ -1350,6 +1352,11 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
       case "confirm-changes":
+        if (projectState.autoConfirmTimerId !== null) {
+          window.clearInterval(projectState.autoConfirmTimerId);
+          projectState.autoConfirmTimerId = null;
+        }
+        projectState.changesLevel = null;
         try { client.planConfirmChanges(); } catch { /* ignore */ }
         break;
       case "edit-plan":
@@ -1369,6 +1376,10 @@ export function mountUnifiedShell(
       case "collapse-banner":
         projectState.planBannerCollapsed = true;
         projectState.highlightChanges = false;
+        if (projectState.autoConfirmTimerId !== null) {
+          window.clearInterval(projectState.autoConfirmTimerId);
+          projectState.autoConfirmTimerId = null;
+        }
         break;
       case "detect-switch":
         {
@@ -1671,6 +1682,29 @@ export function mountUnifiedShell(
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
           renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        }
+
+        // Auto-confirm timer for task-level changes
+        if (projectState.autoConfirmTimerId !== null) {
+          window.clearInterval(projectState.autoConfirmTimerId);
+          projectState.autoConfirmTimerId = null;
+        }
+        if (projectState.changesLevel === "task") {
+          let remaining = 30;
+          const countdownInterval = window.setInterval(() => {
+            remaining--;
+            const el = sidebarEl.querySelector<HTMLElement>("[data-countdown]");
+            if (el) el.textContent = String(remaining);
+            if (remaining <= 0) {
+              window.clearInterval(countdownInterval);
+              if (projectState.autoConfirmTimerId === countdownInterval as unknown as number) {
+                projectState.changesLevel = null;
+                try { client.planConfirmChanges(); } catch { /* */ }
+                renderProjectSidebar(projectEls, projectState, projectCallbacks);
+              }
+            }
+          }, 1000);
+          projectState.autoConfirmTimerId = countdownInterval as unknown as number;
         }
         break;
 
