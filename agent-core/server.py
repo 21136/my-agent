@@ -444,81 +444,6 @@ class WsSessionHandler:
 
         self._file_stage = FileStageStore()
 
-    async def _maybe_plan_intercept(
-        self, text: str, repl: ConversationRepl, bridge: WsBridge,
-    ) -> bool:
-        """If Plan Agent wants to handle this message, do so and return True.
-        Otherwise return False (pass through to main agent)."""
-        from plan_agent import PlanAgent, get_plan_agent
-        from project_api import ProjectApiError, project_state_payload
-        from project_mode import add_task_to_tasks_md, normalize_project_id
-
-        session = repl.session
-        if session.meta.active_shell != "project" or not session.meta.project_id:
-            return False
-
-        pid = session.meta.project_id.strip()
-        try:
-            agent = get_plan_agent(self.paths, pid)
-        except Exception:
-            return False
-
-        decision = agent.classify_message(text)
-        if decision == "forward":
-            return False
-
-        # "handle" or "split": extract plan changes, apply via Plan Agent
-        stripped = text.strip()
-
-        # Try to add as a new task
-        try:
-            # Find current phase
-            tasks_path = (
-                __import__("project_mode").project_dir(self.paths, pid) / "TASKS.md"
-            )
-            phase_title = ""
-            if tasks_path.is_file():
-                for line in tasks_path.read_text(encoding="utf-8").splitlines():
-                    if line.strip().startswith("## "):
-                        phase_title = line.strip().lstrip("#").strip()
-                        # Use first phase that still has undone tasks
-                        break
-
-            if not phase_title:
-                phase_title = "Phase 1"
-
-            add_task_to_tasks_md(self.paths, pid, phase_title, stripped)
-            agent._record_change("add", stripped, reason="chat intercept")
-            agent._save_state()
-            actions = agent.auto_fix()
-            warnings = agent.quality_check()
-
-            bridge.emit({
-                "type": "notice",
-                "text": f"项目管理器：已添加任务「{stripped[:50]}」到 {phase_title}",
-            })
-            for action in actions:
-                bridge.emit({"type": "notice", "text": action})
-            bridge.emit(project_state_payload(session, self.paths))
-            bridge.emit(agent.build_state(session))
-
-            if decision == "split":
-                # Also forward to main agent for execution part
-                bridge.emit({
-                    "type": "notice",
-                    "text": "同时将消息转发给主 Agent 执行",
-                })
-                return False
-
-            return True
-
-        except Exception as exc:
-            bridge.emit({
-                "type": "notice",
-                "text": f"项目管理器处理失败：{exc}，已转发给主 Agent",
-            })
-            return False
-
     async def handle(self, websocket: ServerConnection) -> None:
         loop = asyncio.get_running_loop()
         outbox: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
@@ -666,10 +591,6 @@ class WsSessionHandler:
             attachments = self._file_stage.take(repl.session.conversation_id, attachment_ids)
             if attachment_ids and len(attachments) != len(attachment_ids):
                 emit_error(bridge, "unknown or expired attachment id")
-                return
-
-            # Plan Agent interception: in project mode, check if message is plan-only
-            if text.strip() and await self._maybe_plan_intercept(text, repl, bridge):
                 return
 
             line = compose_user_message(text=text, attachments=attachments)

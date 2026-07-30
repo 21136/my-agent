@@ -347,12 +347,15 @@ def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
     """Wrap a PlanAgent task mutation result with project.state + plan.state + auto_fix notices."""
     events: list[dict[str, Any]] = [result, project_state_payload(session, paths)]
 
-    # Emit auto_fix actions as notices
+    # Emit auto_fix actions from mutation result as notices
     for action in result.pop("_auto_fix_actions", []):
         events.append({"type": "notice", "text": action})
 
-    # Build plan state (which also runs auto_fix+quality_check)
-    events.append(agent.build_state(session))
+    # Build plan state (auto_fix runs again inside, extract any new actions too)
+    plan_state = agent.build_state(session)
+    for action in plan_state.get("auto_fix_actions", []):
+        events.append({"type": "notice", "text": action})
+    events.append(plan_state)
     return {"_events": events}
 
 
@@ -501,9 +504,9 @@ def _dispatch_plan_message(
             return result
 
         if msg_type == "project.plan.classify":
-            text = str(message.get("text", ""))
-            decision = agent.classify_message(text)
-            return {"type": "project.plan.classify.done", "decision": decision}
+            # Deprecated — Plan Agent no longer does chat interception.
+            # User messages go to main Agent via chat; sidebar quick-add is Plan Agent input.
+            return {"type": "project.plan.classify.done", "decision": "forward"}
 
     except ProjectModeError as exc:
         return {"type": "error", "message": str(exc)}
