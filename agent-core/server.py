@@ -37,7 +37,7 @@ from paths import AgentPaths
 from sidecar_logging import configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, create_new, emit_corruption_notices, list_session_ids, resume_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, create_new, emit_corruption_notices, list_session_summaries, resume_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
 try:
@@ -267,7 +267,6 @@ class WsBridge:
         if event_type in {
             "context.switch.request",
             "context.switch.done",
-            "shell.switch.done",
             "session.banner",
             "session.history",
             "session.memory",
@@ -330,7 +329,7 @@ class WsBridge:
         self.emit(session_memory_event(session))
         self.emit(session_history_event(session))
         self.emit(_proposals_payload(self.paths))
-        if session.meta.project_id and session.meta.active_shell == "project":
+        if session.meta.project_id:
             from project_api import project_state_payload
 
             self.emit(project_state_payload(session, self.paths))
@@ -431,6 +430,8 @@ async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: 
     finally:
         bridge._turn_busy.clear()
         bridge.end_turn()
+        # UX-019: emit updated token usage after every turn
+        bridge.emit(session_memory_event(repl.session))
         # C9: always close the turn so desktop can resetTurnActivity (BUG-012).
         bridge.emit({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
 
@@ -457,14 +458,6 @@ class WsSessionHandler:
         sender_task = asyncio.create_task(self._sender(websocket, outbox))
         bridge.emit_session_state(repl.session)
         emit_corruption_notices(bridge.emit, repl.session)
-        from activity_router import compute_session_route, emit_activity_route
-
-        emit_activity_route(
-            bridge.emit,
-            repl.session,
-            compute_session_route(repl.session, self.paths),
-            topics_changed=False,
-        )
 
         try:
             async for raw in websocket:
@@ -670,8 +663,8 @@ class WsSessionHandler:
             return
 
         if msg_type == "session.list":
-            ids = list_session_ids(self.paths)
-            bridge.emit({"type": "session.list", "session_ids": ids})
+            summaries = list_session_summaries(self.paths)
+            bridge.emit({"type": "session.list", "sessions": summaries})
             return
 
         if msg_type == "session.open":
@@ -690,10 +683,6 @@ class WsSessionHandler:
 
         if msg_type == "session.refresh":
             bridge.emit_session_state(repl.session)
-            from activity_router import compute_session_route, emit_activity_route
-
-            route = compute_session_route(repl.session, self.paths)
-            emit_activity_route(bridge.emit, repl.session, route, topics_changed=False)
             return
 
         if msg_type == "proposal.accept":
@@ -730,53 +719,16 @@ class WsSessionHandler:
                 emit_error(bridge, str(exc))
             return
 
-        if msg_type == "shell.switch":
-            shell_raw = message.get("shell")
-            if not isinstance(shell_raw, str) or shell_raw not in {"grow", "daily", "project", "govern"}:
-                emit_error(bridge, "shell.switch requires shell: grow|daily|project|govern")
-                return
-            from shell_switch import ShellSwitchError, switch_shell
-
-            project_id = message.get("project_id")
-            pid = project_id.strip() if isinstance(project_id, str) else None
-            try:
-                new_session, replaced = switch_shell(
-                    self.paths,
-                    repl.session,
-                    shell_raw,  # type: ignore[arg-type]
-                    project_id=pid,
-                )
-            except ShellSwitchError as exc:
-                emit_error(bridge, str(exc))
-                return
-            # Always adopt returned session: govern↔grow may keep the same
-            # conversation_id but return a reloaded object (active_shell updated).
-            cid_changed = new_session.conversation_id != repl.session.conversation_id
-            repl.session = new_session
-            if cid_changed:
-                repl._rebind_agent()
-            bridge.emit_session_state(repl.session)
-            emit_corruption_notices(bridge.emit, repl.session)
-            from activity_router import compute_session_route, emit_activity_route
-
-            emit_activity_route(
-                bridge.emit,
-                repl.session,
-                compute_session_route(repl.session, self.paths),
-                topics_changed=False,
-            )
-            bridge.emit(
-                {
-                    "type": "shell.switch.done",
-                    "shell": shell_raw,
-                    "session_id": repl.session.conversation_id,
-                    "session_replaced": replaced,
-                }
-            )
-            return
-
         if isinstance(msg_type, str) and msg_type.startswith("host_scope."):
             await self._dispatch_host_scope(message, bridge)
+            return
+
+        if isinstance(msg_type, str) and msg_type.startswith("project.doc."):
+            await self._dispatch_doc(message, repl, bridge)
+            return
+
+        if isinstance(msg_type, str) and msg_type == "project.task.add":
+            await self._dispatch_task_add(message, repl, bridge)
             return
 
         if isinstance(msg_type, str) and (
@@ -786,6 +738,49 @@ class WsSessionHandler:
             return
 
         emit_error(bridge, f"unknown type: {msg_type}")
+
+    async def _dispatch_doc(
+        self,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        from project_api import ProjectApiError, dispatch_doc_message
+
+        try:
+            payload = await asyncio.to_thread(
+                dispatch_doc_message, repl.session, self.paths, message
+            )
+            if isinstance(payload, dict) and "_events" in payload:
+                for event in payload["_events"]:
+                    bridge.emit(event)
+                return
+            bridge.emit(payload)
+        except ProjectApiError as exc:
+            emit_error(bridge, str(exc))
+
+    async def _dispatch_task_add(
+        self,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        from project_api import ProjectApiError, dispatch_task_add
+
+        try:
+            payload = await asyncio.to_thread(
+                dispatch_task_add, repl.session, self.paths, message
+            )
+            if isinstance(payload, dict) and "_events" in payload:
+                if "_session" in payload:
+                    repl.session = payload["_session"]
+                    repl._rebind_agent()
+                for event in payload["_events"]:
+                    bridge.emit(event)
+                return
+            bridge.emit(payload)
+        except ProjectApiError as exc:
+            emit_error(bridge, str(exc))
 
     async def _dispatch_project(
         self,

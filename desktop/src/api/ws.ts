@@ -26,6 +26,8 @@ export type ServerEvent =
       memory_mode_label: string;
       digest_sections?: number;
       keep_turns?: number;
+      token_usage?: number;
+      token_limit?: number;
     }
   | { type: "turn.start"; intent: string; intent_label: string }
   | { type: "turn.notice"; level?: "info" | "warn"; text: string }
@@ -42,19 +44,18 @@ export type ServerEvent =
   | { type: "tool.start"; tool: string; call_id: string; summary: string }
   | { type: "tool.end"; tool: string; call_id: string; ok: boolean; summary: string; output_path?: string }
   | { type: "prompt.request"; prompt: string }
-  | { type: "session.list"; session_ids: string[] }
+  | {
+      type: "session.list";
+      sessions: Array<{
+        session_id: string;
+        title: string;
+        updated_at: string;
+      }>;
+    }
   | {
       type: "host_scope.state" | "host_scope.updated";
       roots: HostScopeRoot[];
       wizard_suggested: boolean;
-    }
-  | {
-      type: "ui.route";
-      shell: "grow" | "daily" | "govern" | "project";
-      topics: string[];
-      topics_added?: string[];
-      reason: string;
-      auto: boolean;
     }
   | {
       type: "project.state";
@@ -98,6 +99,50 @@ export type ServerEvent =
     }
   | { type: "plan.done"; request_id: string; choice: string | null }
   | {
+      type: "project.task.toggle.done";
+      line: number;
+      done: boolean;
+      tasks_done: number;
+      tasks_total: number;
+    }
+  | { type: "project.task.toggle.error"; line: number; message: string }
+  | { type: "project.task.reorder.done"; line: number; direction: string; tasks_done: number; tasks_total: number }
+  | { type: "project.task.reorder.error"; line: number; message: string }
+  | { type: "project.task.drop.done"; line: number; removed: string; tasks_done: number; tasks_total: number }
+  | { type: "project.task.drop.error"; line: number; message: string }
+  | { type: "project.task.skip.done"; line: number; new_position: number; tasks_done: number; tasks_total: number }
+  | { type: "project.task.skip.error"; line: number; message: string }
+  // project.plan.* events
+  | {
+      type: "project.plan.state";
+      project_id: string;
+      plan_status: string;
+      tasks_markdown: string;
+      map_markdown: string;
+      tasks_done: number;
+      tasks_total: number;
+      tasks_open: number;
+      tasks_all_done: boolean;
+      needs_confirm: boolean;
+      change_log: PlanChangeItem[];
+    }
+  | { type: "project.plan.confirm_changes.done" }
+  | { type: "project.plan.classify.done"; decision: "handle" | "forward" | "split" }
+  // project.doc.* events
+  | {
+      type: "project.doc.list.done";
+      docs: ProjectDocItem[];
+    }
+  | {
+      type: "project.doc.read.done";
+      path: string;
+      content: string;
+      size: number;
+    }
+  | { type: "project.doc.create.done"; path: string; name: string }
+  | { type: "project.task.add.done"; line: number; description: string; tasks_done: number; tasks_total: number }
+  | { type: "project.detect"; project_id: string; reason: string; file_count: number; has_tasks: boolean }
+  | {
       type: "project.verify.done";
       ok: boolean;
       passed: boolean;
@@ -118,12 +163,6 @@ export type ServerEvent =
       target_session_id: string | null;
       message: string;
       needs_confirm: boolean;
-    }
-  | {
-      type: "shell.switch.done";
-      shell: string;
-      session_id: string;
-      session_replaced: boolean;
     }
   | {
       type: "project.switch.done";
@@ -169,7 +208,8 @@ export type ServerEvent =
   | { type: "file.unstaged"; attachment_id: string }
   | { type: "file.error"; message: string; path?: string };
 
-export type ShellId = "grow" | "daily" | "project" | "govern";
+/** @deprecated — kept for old shell compatibility; will be removed in Phase 4 */
+export type ShellId = string;
 
 export type StagedFileItem = {
   id: string;
@@ -190,6 +230,22 @@ export type ProposalItem = {
   topics: string[];
 };
 
+export type ProjectDocItem = {
+  path: string;
+  name: string;
+  size: number;
+  is_standard: boolean;
+};
+
+export type PlanChangeItem = {
+  id: string;
+  kind: string;
+  task_text: string;
+  reason: string;
+  time: string;
+  line?: number | null;
+};
+
 export type HostScopeRoot = {
   id: string;
   label: string;
@@ -206,8 +262,6 @@ export class AgentWsClient {
   private ws: WebSocket | null = null;
   private handlers = new Set<EventHandler>();
   private reconnectTimer: number | null = null;
-  private activeShell: ShellId = "grow";
-
   constructor(
     private host: string,
     private port: number,
@@ -285,24 +339,14 @@ export class AgentWsClient {
     this.handlers.clear();
   }
 
-  setActiveShell(shell: ShellId): void {
-    this.activeShell = shell;
+  /** @deprecated compat for old shells; no-op in unified shell */
+  isActiveShell(_shell: string): boolean {
+    return true;
   }
 
-  getActiveShell(): ShellId {
-    return this.activeShell;
-  }
-
-  isActiveShell(shell: ShellId): boolean {
-    return this.activeShell === shell;
-  }
-
-  shellSwitch(shell: ShellId, projectId?: string): void {
-    const payload: Record<string, unknown> = { type: "shell.switch", shell };
-    if (projectId) {
-      payload.project_id = projectId;
-    }
-    this.send(payload);
+  /** @deprecated compat for old shells; no-op in unified shell */
+  shellSwitch(_shell: string, _projectId?: string): void {
+    // no-op
   }
 
   send(payload: Record<string, unknown>): void {
@@ -323,11 +367,11 @@ export class AgentWsClient {
     this.send(payload);
   }
 
-  stageFiles(paths: string[], shell?: ShellId): void {
+  stageFiles(paths: string[], shell?: string): void {
     this.send({
       type: "file.stage",
       paths,
-      shell: shell ?? this.activeShell,
+      shell: shell ?? "grow",
     });
   }
 
@@ -373,6 +417,14 @@ export class AgentWsClient {
     this.send({ type: "proposal.reject", proposal_id: proposalId });
   }
 
+  listSessions(): void {
+    this.send({ type: "session.list" });
+  }
+
+  openSession(sessionId: string): void {
+    this.send({ type: "session.open", session_id: sessionId });
+  }
+
   refreshSession(): void {
     this.send({ type: "session.refresh" });
   }
@@ -395,6 +447,55 @@ export class AgentWsClient {
 
   sendContextSwitchResponse(requestId: string, choice: "y" | "n"): void {
     this.send({ type: "context.switch.response", request_id: requestId, choice });
+  }
+
+  toggleTask(line: number, done: boolean): void {
+    this.send({ type: "project.task.toggle", line, done });
+  }
+
+  // project.plan.* convenience methods
+  sendPlanMessage(payload: Record<string, unknown>): void {
+    this.send(payload);
+  }
+
+  planToggleTask(line: number, done: boolean): void {
+    this.sendPlanMessage({ type: "project.plan.toggle_task", line, done });
+  }
+
+  planReorderTask(line: number, direction: "up" | "down"): void {
+    this.sendPlanMessage({ type: "project.plan.reorder_task", line, direction });
+  }
+
+  planDropTask(line: number): void {
+    this.sendPlanMessage({ type: "project.plan.drop_task", line });
+  }
+
+  planSkipTask(line: number): void {
+    this.sendPlanMessage({ type: "project.plan.skip_task", line });
+  }
+
+  planConfirmChanges(): void {
+    this.sendPlanMessage({ type: "project.plan.confirm_changes" });
+  }
+
+  planGetState(): void {
+    this.sendPlanMessage({ type: "project.plan.state" });
+  }
+
+  listDocs(): void {
+    this.send({ type: "project.doc.list" });
+  }
+
+  readDoc(path: string): void {
+    this.send({ type: "project.doc.read", path });
+  }
+
+  createDoc(path: string, content?: string): void {
+    this.send({ type: "project.doc.create", path, content: content ?? "" });
+  }
+
+  addTask(description: string, phase?: string): void {
+    this.send({ type: "project.task.add", description, phase: phase ?? "" });
   }
 
   runProjectVerify(): void {

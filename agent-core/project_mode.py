@@ -556,6 +556,360 @@ def sync_plan_dirty_if_structure_changed(session: object, paths: AgentPaths) -> 
     return False
 
 
+def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) -> dict[str, Any]:
+    """Toggle a single checkbox line in TASKS.md. Returns {type, line, done, tasks_done, tasks_total}."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
+
+    target = file_lines[line]
+    if done:
+        new_line = _TASK_OPEN_RE.sub("- [x] ", target, count=1)
+    else:
+        new_line = _TASK_DONE_RE.sub("- [ ] ", target, count=1)
+
+    if new_line == target:
+        raise ProjectModeError(f"line {line} is not a task checkbox")
+
+    file_lines[line] = new_line
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.toggle.done",
+        "line": line,
+        "done": done,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+def find_task_line_range(tasks_path: Path, line: int) -> tuple[int, int] | None:
+    """Find the range of contiguous task lines containing `line`. Returns (start, end) or None."""
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        return None
+    if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
+        return None
+
+    start = line
+    while start > 0 and (_TASK_OPEN_RE.match(file_lines[start - 1]) or _TASK_DONE_RE.match(file_lines[start - 1])):
+        start -= 1
+
+    end = line
+    while end < len(file_lines) - 1 and (_TASK_OPEN_RE.match(file_lines[end + 1]) or _TASK_DONE_RE.match(file_lines[end + 1])):
+        end += 1
+
+    return (start, end)
+
+
+def reorder_task_line(paths: AgentPaths, project_id: str, line: int, direction: str) -> dict[str, Any]:
+    """Move a task one position up or down within its contiguous task group."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
+
+    if direction == "up":
+        if line == 0:
+            raise ProjectModeError("already at top")
+        # Check both lines are task checkboxes
+        if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
+            raise ProjectModeError(f"line {line} is not a task checkbox")
+        if not (_TASK_OPEN_RE.match(file_lines[line - 1]) or _TASK_DONE_RE.match(file_lines[line - 1])):
+            raise ProjectModeError("cannot move across phase boundary")
+        file_lines[line], file_lines[line - 1] = file_lines[line - 1], file_lines[line]
+    elif direction == "down":
+        if line >= len(file_lines) - 1:
+            raise ProjectModeError("already at bottom")
+        if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
+            raise ProjectModeError(f"line {line} is not a task checkbox")
+        if not (_TASK_OPEN_RE.match(file_lines[line + 1]) or _TASK_DONE_RE.match(file_lines[line + 1])):
+            raise ProjectModeError("cannot move across phase boundary")
+        file_lines[line], file_lines[line + 1] = file_lines[line + 1], file_lines[line]
+    else:
+        raise ProjectModeError(f"unknown direction: {direction}")
+
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.reorder.done",
+        "line": line,
+        "direction": direction,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+def drop_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, Any]:
+    """Remove a task line from TASKS.md."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
+
+    if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
+        raise ProjectModeError(f"line {line} is not a task checkbox")
+
+    removed = file_lines.pop(line)
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.drop.done",
+        "line": line,
+        "removed": removed.strip(),
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+def skip_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, Any]:
+    """Move a task to end of its Phase (contiguous task block)."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
+
+    task_range = find_task_line_range(tasks_path, line)
+    if task_range is None:
+        raise ProjectModeError(f"line {line} is not a task checkbox")
+
+    start, end = task_range
+    if end - start == 0:
+        raise ProjectModeError("only one task in group; nothing to skip past")
+
+    task_line = file_lines.pop(line)
+    # Insert at end of task group
+    file_lines.insert(end, task_line)
+
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.skip.done",
+        "line": line,
+        "new_position": end,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]]:
+    """List all .md files in the project directory."""
+    root = project_dir(paths, project_id)
+    if not root.is_dir():
+        return []
+    docs: list[dict[str, Any]] = []
+    for fpath in sorted(root.rglob("*.md")):
+        rel = str(fpath.relative_to(root)).replace("\\", "/")
+        try:
+            size = fpath.stat().st_size
+        except OSError:
+            size = 0
+        docs.append({
+            "path": rel,
+            "name": fpath.name,
+            "size": size,
+            "is_standard": rel in PROJECT_ARTIFACTS,
+        })
+    return docs
+
+
+def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
+    """Read a single .md file from the project directory. Returns {type, path, content}."""
+    root = project_dir(paths, project_id)
+    safe_path = doc_path.replace("\\", "/").lstrip("/")
+    full = (root / safe_path).resolve()
+    if not str(full).startswith(str(root.resolve())):
+        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    if not full.is_file():
+        raise ProjectModeError(f"document not found: {doc_path}")
+    content = full.read_text(encoding="utf-8")
+    return {
+        "type": "project.doc.read.done",
+        "path": safe_path,
+        "content": content,
+        "size": len(content),
+    }
+
+
+def create_project_doc(paths: AgentPaths, project_id: str, doc_path: str, content: str = "") -> dict[str, Any]:
+    """Create a new .md file in the project directory."""
+    root = project_dir(paths, project_id)
+    safe_path = doc_path.replace("\\", "/").lstrip("/")
+    if not safe_path.endswith(".md"):
+        safe_path += ".md"
+    full = (root / safe_path).resolve()
+    if not str(full).startswith(str(root.resolve())):
+        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    if full.exists():
+        raise ProjectModeError(f"document already exists: {safe_path}")
+    full.parent.mkdir(parents=True, exist_ok=True)
+    default_content = content if content else f"# {full.stem}\n\n"
+    full.write_text(default_content, encoding="utf-8")
+    return {
+        "type": "project.doc.create.done",
+        "path": safe_path,
+        "name": full.name,
+    }
+
+
+def add_task_to_tasks_md(paths: AgentPaths, project_id: str, phase_title: str, description: str) -> dict[str, Any]:
+    """Add a new task line under the given Phase in TASKS.md."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    insert_idx = -1
+
+    for i, line in enumerate(file_lines):
+        if line.strip().startswith("## ") and phase_title.lower() in line.lower():
+            # Find the last task line under this phase
+            j = i + 1
+            while j < len(file_lines):
+                if file_lines[j].strip().startswith("## "):
+                    break
+                if _TASK_OPEN_RE.match(file_lines[j]) or _TASK_DONE_RE.match(file_lines[j]):
+                    insert_idx = j
+                j += 1
+            if insert_idx >= 0:
+                insert_idx += 1
+            else:
+                # No tasks yet, insert after phase header
+                insert_idx = i + 1
+                # Skip blank lines after header
+                while insert_idx < len(file_lines) and not file_lines[insert_idx].strip():
+                    insert_idx += 1
+            break
+
+    if insert_idx < 0:
+        # Phase not found, append to end
+        insert_idx = len(file_lines)
+        if file_lines and file_lines[-1].strip():
+            file_lines.append("")
+
+    task_line = f"- [ ] {description}"
+    file_lines.insert(insert_idx, task_line)
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.add.done",
+        "line": insert_idx,
+        "description": description,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+_SOURCE_EXTS = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".vue", ".go", ".rs", ".java",
+    ".c", ".cpp", ".h", ".rb", ".php", ".swift", ".kt", ".scala",
+    ".css", ".scss", ".html", ".md", ".json", ".yaml", ".yml", ".toml",
+})
+
+
+def detect_potential_project(paths: AgentPaths, current_project_id: str = "") -> dict[str, Any] | None:
+    """Scan workspace for recently-modified dirs that look like projects.
+
+    Returns {type: project.detect, project_id, reason, file_count} or None.
+    Only detects directories NOT already bound to the current session.
+    """
+    root = paths.workspace
+    if not root.is_dir():
+        return None
+
+    import time
+    now = time.time()
+    cutoff = now - 600  # 10 minutes
+
+    candidates: list[tuple[str, float, int, bool]] = []  # (name, mtime, files, has_tasks)
+
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if name.startswith(".") or name == _TEMPLATE_DIRNAME:
+            continue
+        if name == current_project_id:
+            continue
+
+        # Count source files under this directory (shallow scan, max depth 3)
+        file_count = 0
+        has_tasks = (entry / "TASKS.md").is_file()
+        max_mtime = entry.stat().st_mtime
+
+        try:
+            for sub in entry.rglob("*"):
+                if sub.is_file():
+                    if sub.suffix.lower() in _SOURCE_EXTS or sub.name.endswith(".md"):
+                        file_count += 1
+                    try:
+                        mt = sub.stat().st_mtime
+                        if mt > max_mtime:
+                            max_mtime = mt
+                    except OSError:
+                        pass
+                if file_count > 20:  # early cutoff
+                    break
+        except OSError:
+            pass
+
+        if file_count >= 2 and max_mtime >= cutoff:
+            candidates.append((name, max_mtime, file_count, has_tasks))
+
+    if not candidates:
+        return None
+
+    # Pick the most recently modified candidate
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    best = candidates[0]
+
+    reason = (
+        f"检测到 workspace/{best[0]} 下有 {best[2]} 个源文件，"
+        f"{'含 TASKS.md' if best[3] else '建议创建项目以追踪任务进度'}"
+    )
+
+    return {
+        "type": "project.detect",
+        "project_id": best[0],
+        "reason": reason,
+        "file_count": best[2],
+        "has_tasks": best[3],
+    }
+
+
 def _demo() -> None:
     paths = AgentPaths.discover()
     ensure_template(paths)
