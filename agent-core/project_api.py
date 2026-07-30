@@ -404,39 +404,32 @@ def dispatch_task_add(
     paths: AgentPaths,
     message: dict[str, Any],
 ) -> dict[str, Any]:
-    """Handle project.task.add."""
+    """Handle project.task.add — route through PlanAgent LLM reasoning."""
     _project_pid(session)
     pid = session.meta.project_id.strip()
-    phase_title = str(message.get("phase", ""))
     description = str(message.get("description", "")).strip()
 
     if not description:
         raise ProjectApiError("project.task.add requires description")
 
-    # Determine phase: use specified, or the current most relevant
-    if not phase_title:
-        artifacts = read_project_artifacts(paths, pid)
-        tasks_text = artifacts.get("TASKS.md", "")
-        for line in tasks_text.splitlines():
-            if line.strip().startswith("## "):
-                phase_title = line.strip().lstrip("#").strip()
-                break
-        if not phase_title:
-            phase_title = "Phase 1"
-
     agent = _plan_agent(session, paths)
-    try:
-        result = add_task_to_tasks_md(paths, pid, phase_title, description)
-    except ProjectModeError as exc:
-        return {"type": "error", "message": str(exc)}
+    if agent is None:
+        raise ProjectApiError("PlanAgent not available for current session")
 
-    if agent is not None:
-        agent._record_change("add", description, reason="quick-add")
-        agent._save_state()
+    # Let PlanAgent reason about the intent using LLM
+    summary = agent.reason_about_intent(description)
 
-    return _plan_task_result(agent, session, paths, result) if agent else {
-        "_events": [result, project_state_payload(session, paths)]
-    }
+    events: list[dict[str, Any]] = [
+        {"type": "notice", "text": f"项目管理器分析: {description}"},
+    ]
+    for line in summary.split("\n"):
+        stripped = line.strip()
+        if stripped:
+            events.append({"type": "notice", "text": stripped})
+
+    events.append(project_state_payload(session, paths))
+    events.append(agent.build_state(session))
+    return {"_events": events}
 
 
 def _dispatch_plan_message(

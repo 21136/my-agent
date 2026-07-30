@@ -49,6 +49,38 @@ class PlanChange:
     line: int | None = None
 
 
+_PLAN_REASONING_SYSTEM = """你是一个项目管理器。你的任务是理解用户的需求，分析当前的项目任务结构，然后输出精准的修改操作。
+
+## 输出格式
+返回 JSON 对象，包含 operations 数组。每个操作对象要有以下字段：
+- "kind": "add" | "skip" | "split" | "reorder"
+- "phase": 目标 Phase 标题（仅 add 需要）
+- "description": 任务描述（add 需要）；拆出的子任务描述列表（split 需要）
+- "line": 行号（skip/reorder/split 需要）
+- "reason": 简短解释
+
+## 规则
+1. 理解用户的真实意图。例如"在每个阶段加测试" = 每个 Phase 都加一条测试相关任务。
+2. 如果有完全重复的已有任务，不要新增，跳过它们。
+3. 保持任务描述简洁（< 80 字）。
+4. 只输出 JSON，不要额外解释。
+5. Phase 标题使用项目文档中已有的精确标题。
+"""
+
+
+def _build_reasoning_prompt(tasks_text: str, user_intent: str) -> str:
+    """Build a user prompt for PlanAgent LLM reasoning."""
+    return f"""## 当前任务列表
+
+{tasks_text}
+
+## 用户需求
+
+{user_intent}
+
+请分析以上内容，输出对此项目计划的修改操作 JSON。"""
+
+
 @dataclass
 class PlanAgent:
     """Manages the project plan for one project workspace.
@@ -62,6 +94,7 @@ class PlanAgent:
     _change_log: list[PlanChange] = field(default_factory=list)
     _last_fingerprint: str = ""
     _change_counter: int = 0
+    _llm: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -393,6 +426,151 @@ class PlanAgent:
             )
 
         return warnings
+
+    # ---- LLM reasoning ----
+
+    def _fallback_add_task(self, text: str, extra: str = "") -> str:
+        """Fallback: add text as a single task to the first phase with undone tasks."""
+        from project_mode import add_task_to_tasks_md
+
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
+
+        # Pick first phase that has undone tasks, or first phase overall
+        phase_title = "Phase 1"
+        current_phase = ""
+        for line in tasks_text.splitlines():
+            if line.strip().startswith("## "):
+                current_phase = line.strip().lstrip("#").strip()
+                if not phase_title or phase_title == "Phase 1":
+                    phase_title = current_phase
+            if "- [ ]" in line and current_phase:
+                phase_title = current_phase  # use the phase that still has work
+                break
+
+        try:
+            add_task_to_tasks_md(self.paths, self.project_id, phase_title, text)
+            self._record_change("add", text, reason="quick-add fallback")
+            self._save_state()
+            prefix = f"{extra}。已添加到 {phase_title}：" if extra else f"已添加到 {phase_title}："
+            return prefix + text[:60]
+        except Exception as exc:
+            return f"添加失败：{exc}"
+
+    def _ensure_llm(self):
+        if self._llm is not None:
+            return self._llm
+        from llm_client import LLMClient, DEFAULT_MODEL
+        import os
+        model = os.environ.get("PLAN_AGENT_MODEL", DEFAULT_MODEL)
+        self._llm = LLMClient()
+        self._llm._plan_model = model
+        return self._llm
+
+    def reason_about_intent(self, text: str) -> str:
+        """Use LLM to reason about user intent and produce structured plan changes.
+        Returns a human-readable summary of what was done."""
+        try:
+            llm = self._ensure_llm()
+        except Exception as exc:
+            return self._fallback_add_task(text, extra=f"LLM 不可用（{exc}）")
+
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        tasks_text = ""
+        if tasks_path.is_file():
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+
+        user_prompt = _build_reasoning_prompt(tasks_text, text)
+
+        try:
+            response = llm.chat(
+                [
+                    {"role": "system", "content": _PLAN_REASONING_SYSTEM},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model=getattr(llm, "_plan_model", "deepseek-v4-flash"),
+                temperature=0.0,
+            )
+        except Exception as exc:
+            return self._fallback_add_task(text, extra=f"LLM 调用失败（{exc}）")
+
+        raw = response.content.strip()
+        # Extract JSON from response
+        try:
+            # Handle markdown code blocks
+            if "```" in raw:
+                lines = raw.splitlines()
+                json_lines = []
+                in_block = False
+                for line in lines:
+                    if line.strip().startswith("```"):
+                        if in_block:
+                            break
+                        in_block = True
+                        continue
+                    if in_block:
+                        json_lines.append(line)
+                raw = "\n".join(json_lines)
+
+            result = json.loads(raw)
+            operations = result.get("operations", []) if isinstance(result, dict) else []
+        except (json.JSONDecodeError, AttributeError):
+            return self._fallback_add_task(text)
+
+        if not operations:
+            return self._fallback_add_task(text)
+
+        # Apply operations
+        applied: list[str] = []
+        for op in operations:
+            kind = op.get("kind", "")
+            try:
+                if kind == "add":
+                    phase = op.get("phase", "")
+                    desc = op.get("description", "")
+                    if not desc:
+                        continue
+                    from project_mode import add_task_to_tasks_md
+                    # Find matching phase title
+                    phase_title = ""
+                    for line in tasks_text.splitlines():
+                        if line.strip().startswith("## ") and phase.lower() in line.lower():
+                            phase_title = line.strip().lstrip("#").strip()
+                            break
+                    if not phase_title:
+                        phase_title = "Phase 1"
+                    add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
+                    self._record_change("add", desc, reason=f"LLM: {op.get('reason', text[:40])}")
+                    applied.append(f"+ {phase_title}: {desc}")
+
+                elif kind == "skip":
+                    line = op.get("line", -1)
+                    if line >= 0:
+                        self.skip_task(line)
+                        applied.append(f"~ 行 {line} 已暂缓")
+
+                elif kind == "split":
+                    line = op.get("line", -1)
+                    subtasks = op.get("description", [])
+                    if isinstance(subtasks, list) and line >= 0:
+                        # Toggle original as done
+                        self.toggle_task(line, True)
+                        for sub in subtasks:
+                            self._record_change("add", str(sub), reason=f"split of line {line}")
+                        applied.append(f"⇅ 行 {line} 拆分为 {len(subtasks)} 项")
+
+            except Exception:
+                continue  # skip failed ops, apply what we can
+
+        self._save_state()
+        actions = self.auto_fix()
+        for action in actions:
+            applied.append(action)
+
+        if not applied:
+            return self._fallback_add_task(text, extra="所有 LLM 操作执行失败")
+
+        return "\n".join(applied)
 
     # ---- state payload ----
 
