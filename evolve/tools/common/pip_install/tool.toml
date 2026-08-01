@@ -1,47 +1,45 @@
 [tool]
-name = 'pip_install'
-description = 'install python packages via pip, capture output/exit_code'
-version = '1.0.0'
-status = 'suspect'
-topics = ['common']
+name = "pip_install"
+description = """用当前解释器安装 Python 包（python -m pip install）。packages 与 requirements 二选一。
+
+包名拒 shell 元字符；requirements 须在 agent root 内。dry_run 仅预览。每次安装须 confirm（dry_run 除外）。"""
+version = "1.1.0"
+status = "active"
+topics = ["common"]
 
 [entry]
-type = 'python'
-path = 'main.py'
+type = "python"
+path = "main.py"
 
 [schema.input]
-type = 'object'
+type = "object"
 [schema.input.properties.packages]
-type = 'array'
-items = { type = 'string' }
-description = 'list of package names to install'
+type = "array"
+items = { type = "string" }
+description = "包名/规格列表，如 [\"httpx==0.27.0\"]"
 [schema.input.properties.requirements]
-type = 'string'
-description = 'path to requirements.txt'
+type = "string"
+description = "相对 agent root 的 requirements.txt"
 [schema.input.properties.upgrade]
-type = 'boolean'
+type = "boolean"
 default = false
-description = 'add --upgrade flag'
 [schema.input.properties.timeout_sec]
-type = 'integer'
+type = "integer"
 default = 120
-description = 'subprocess timeout'
+description = "超时秒数，上限 300"
 [schema.input.properties.dry_run]
-type = 'boolean'
+type = "boolean"
 default = false
-description = 'preview command only'
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "可选；预留，用于对齐项目目录语境"
 
 [schema.output]
-type = 'object'
-[schema.output.properties]
-command = { type = 'array' }
-exit_code = { type = 'integer' }
-stdout = { type = 'string' }
-stderr = { type = 'string' }
-truncated = { type = 'boolean' }
+type = "object"
 
 [policy]
 confirm = true
 dry_run_supported = true
 allow_approve_all = false
-timeout_sec = 130
+timeout_sec = 310

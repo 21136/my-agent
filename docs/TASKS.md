@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 26** 项目开发工具补齐 **M0 done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)）；M1 待开；Phase 25/24 见下；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 26** 项目开发工具补齐 **M0+M1 done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)）；M2 defer；Phase 25/24 见下；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1095,14 +1095,14 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 26 — 项目开发工具补齐（HTTP / 启停收敛 / Git 写侧）
 
-> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.3.0**  
+> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.4.0**  
 > 触发：写项目盘点——缺 HTTP 探活、端口治理、受控 commit；`dev_start` 与 `run_service` 重叠。  
-> **纪律**：先文档后实现；**D1～D4 已决**；**M0+M1 done**；M2 defer。
+> **纪律**：先文档后实现；**D1～D4 已决**；**M0+M1+M2 done**（Phase 26 完成）。
 
 ### DOC-04 准入（提案自检）
 
 - [x] 影响矩阵行：见 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) §5.1（evolve 工具 / confirm；可选 Progress Gate；壳/host/计划门无）
-- [x] 回归 ID：**IT-80～IT-84** · 可选 **S-80**（同文档 §5.2）
+- [x] 回归 ID：**IT-80～IT-86** · 可选 **S-80**（同文档 §5.2）
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
@@ -1113,9 +1113,9 @@ python turn_intent.py    # 分类用例无回归
 | T-2605 | M1：端口治理 | `run_service` · `port_status`/`kill_port` + IT-83 | T-2603 | kill_port confirm | **done** |
 | T-2606 | M1：`git_commit` | `evolve/tools/coding/git_commit/` + IT-84 | T-2602 | 禁 force；confirm；dry_run | **done** |
 | T-2607 | M0/M1 目录与提示挂钩 | `tool-catalog/buckets/run.md` 等 | T-2603,T-2604 | INDEX 可见、勿双荐 | **done** |
-| T-2608 | M2：DB / pip（可选） | 见文档 §1.2 P2 | T-2605,T-2606 | 另文或补节后再做 | defer |
+| T-2608 | M2：`db_query` + `pip_install` active | §3.5/§3.6 + IT-85/86 | T-2605,T-2606 | 只读默认；包名校验；测绿 | **done** |
 
-**完成标志（M0+M1）**：IT-80～84 绿；启停主路径清晰；可探活、清端口、受控 commit。
+**完成标志**：IT-80～86 绿；写项目主路径（起服 / 探活 / 清端口 / 提交 / SQLite / pip）齐备。
 
 ---
 

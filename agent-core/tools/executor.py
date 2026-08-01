@@ -1498,6 +1498,22 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
                 return False
+        # db_query: readonly SELECT path skips confirm; write=true requires confirm.
+        if evolved is not None and evolved.name == "db_query":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("write")):
+                pass  # fall through → confirm
+            else:
+                return False
+        # pip_install dry_run skips confirm.
+        if evolved is not None and evolved.name == "pip_install":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:

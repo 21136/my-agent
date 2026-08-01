@@ -13,7 +13,7 @@ _COMPILE_EVIDENCE_TOOLS = frozenset({"mvn_exec"})
 _TEST_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_tests", "npm_exec"})
 _BUILD_FE_EVIDENCE_TOOLS = frozenset({"npm_exec"})
 _VERIFY_DB_EVIDENCE_TOOLS = frozenset(
-    {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request"}
+    {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request", "db_query"}
 )
 
 

@@ -1,6 +1,6 @@
 # 项目开发工具补齐（PROJECT-DEV-TOOLS）
 
-> 版本 **0.3.0** · 2026-08-01 · **状态：M0+M1 实现**（D1～D4 已决）  
+> 版本 **0.4.0** · 2026-08-01 · **状态：M0+M1+M2 实现**（Phase 26 完成）  
 > Phase **26** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [GIT-VENDOR.md](./GIT-VENDOR.md)
 
 ## 0. 为什么开这个 Phase
@@ -105,6 +105,35 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 - 工作区须在 agent root 内；拒绝 `.git` 外逃逸。
 - confirm = true；dry_run 预览 `status` + 将提交文件列表。
 
+### 3.5 `db_query`（M2）
+
+```text
+db_path: agent root 相对路径（.sqlite / .db / .sqlite3）
+sql: 单条语句
+readonly: default true
+max_rows: default 100（上限 500）
+write: default false — true 时允许 DML/DDL（须 confirm）
+```
+
+- **仅 SQLite 文件库**（stdlib `sqlite3`）；不做 postgres/mysql DSN（避免密钥进工具参数）。
+- `readonly=true`：只允许 `SELECT` / `WITH…SELECT` / `PRAGMA` / `EXPLAIN`；连接 `uri=file:…?mode=ro`。
+- 禁止多语句（`;` 分隔）、禁止 `ATTACH`。
+- 结果行/单元格截断；Progress Gate：成功查询可作 `verify_db` 证据。
+
+### 3.6 `pip_install` 出 suspect（M2）
+
+```text
+packages?: string[]  XOR  requirements?: 相对路径
+upgrade?: bool
+working_dir?: 相对路径（可选，仅用于解析 requirements）
+dry_run?: bool
+```
+
+- `status` → **active**；confirm = true（dry_run 跳过）。
+- package 名仅允许 `A-Za-z0-9_.\-\[\]<>=!~,`（拒 shell 元字符与空格命令注入）。
+- `requirements` 必须落在 agent root 内已存在文件。
+- 使用 `sys.executable -m pip install`；超时可配，上限 300s。
+
 ---
 
 ## 4. 非目标
@@ -136,6 +165,8 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 | **IT-82** | `dev_start` 收敛后清单/文档只暴露一条主路径；旧名不双活误导 |
 | **IT-83** | `kill_port` confirm + 端口释放（M1） |
 | **IT-84** | `git_commit` dry_run / 真提交 / 禁 force（M1） |
+| **IT-85** | `db_query` 只读 SELECT；写语句在 readonly 下被拒 |
+| **IT-86** | `pip_install` active + dry_run；非法包名拒绝；requirements 越界拒绝 |
 
 手工 smoke（可选）：**S-80** 起 `run_service` → `http_request` 探活 → 勾相关 TASK。
 
@@ -148,8 +179,8 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 | **doc** | 本文 + MAP/TASKS | **done** |
 | **D1～D4** | 用户确认 | **done**（采纳默认） |
 | **M0** | `http_request` + `dev_start` 薄封装 + INDEX | **done** |
-| **M1** | 端口治理 + `git_commit` | todo |
-| **M2** | DB 速查 / pip 出 suspect | defer 直至 M1 完 |
+| **M1** | 端口治理 + `git_commit` | **done** |
+| **M2** | DB 速查 / pip 出 suspect | **done** |
 
 ---
 
@@ -160,3 +191,4 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 | 0.1.0 | 2026-08-01 | 初稿：盘点缺口、默认提案 D1–D4、DOC-04、IT 预留；**未实现** |
 | 0.1.1 | 2026-08-01 | D1～D4 **已决**（采纳默认）；仍未实现代码 |
 | 0.2.0 | 2026-08-01 | M0：`http_request` · `dev_start`→`run_service` · IT-80～82 · catalog |
+| 0.3.0 | 2026-08-01 | M1：`port_status`/`kill_port` · `git_commit` · IT-83/84 |

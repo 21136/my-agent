@@ -11,6 +11,8 @@
 | `run_service` | **托管长驻进程**（主路径）：start/stop/status/logs/wait |
 | `dev_start` | 一键前后端的**薄封装**（内部只调 `run_service`）；单服务请直接用 `run_service` |
 | `http_request` | HTTP 探活 / 调 API（loopback GET/HEAD 不 confirm；其它须 confirm）。**探本地勿用** builtin `fetch_url` |
+| `db_query` | SQLite 速查（默认只读 SELECT；`write=true` 须 confirm） |
+| `pip_install` | `python -m pip install`（packages 或 requirements；dry_run 可预览） |
 | `run_demo` | 在 `agent-core/` 下跑 `python <script>.py` 冒烟 |
 | `run_tests` | 批量跑约定 demo / 测试套件 |
 | `git_snapshot` | 只读：`git status --porcelain` + `diff --stat`（可选 staged） |
@@ -26,3 +28,5 @@
 - **探活 / 调本地 API**：`http_request`（勿用 `fetch_url` 打 localhost）。
 - **端口占用**：`run_service` · `port_status` / `kill_port`（杀端口须 confirm）。
 - **提交代码**：`git_commit`（仅 add+commit）；推送仍由人来。
+- **SQLite**：`db_query`；远程库不在本工具范围。
+- **装 Python 包**：`pip_install`（勿把可疑参数塞进 packages）。

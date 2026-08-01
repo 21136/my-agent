@@ -1,0 +1,43 @@
+[tool]
+name = "db_query"
+description = """SQLite 速查（Phase 26 M2）。默认只读：SELECT/WITH/PRAGMA/EXPLAIN。write=true 才允许 DML/DDL（须 confirm）。
+
+仅本地 .sqlite/.db 文件（相对 agent root）；不做远程 DSN。禁多语句与 ATTACH。"""
+version = "1.0.0"
+status = "active"
+topics = ["common", "data"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["db_path", "sql"]
+[schema.input.properties.db_path]
+type = "string"
+description = "相对 agent root 的 SQLite 文件，如 workspace/demo/app.db"
+[schema.input.properties.sql]
+type = "string"
+description = "单条 SQL"
+[schema.input.properties.readonly]
+type = "boolean"
+default = true
+description = "true 时以只读 URI 打开，并拒绝非读语句"
+[schema.input.properties.write]
+type = "boolean"
+default = false
+description = "true 允许写（隐含关闭只读门）；须 confirm"
+[schema.input.properties.max_rows]
+type = "integer"
+default = 100
+description = "返回最大行数，上限 500"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = false
+allow_approve_all = false
+timeout_sec = 30

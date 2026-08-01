@@ -26,6 +26,8 @@ _REQUIRED = {
         "http_request",
         "dev_start",
         "git_commit",
+        "db_query",
+        "pip_install",
     ),
     "organize.md": ("sort_by_extension", "rename_batch", "dedupe_by_name"),
     "project.md": ("report_progress", "project_catalog"),
