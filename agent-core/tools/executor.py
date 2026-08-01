@@ -1474,8 +1474,9 @@ class ToolExecutor:
 
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             action = str(inner.get("action") or "").strip().lower()
-            if action in {"status", "logs", "wait", "list"}:
+            if action in {"status", "logs", "wait", "list", "port_status"}:
                 return False
+            # kill_port / start / stop / restart fall through → confirm
         # http_request (D2): loopback GET/HEAD skip confirm; else require confirm.
         if evolved is not None and evolved.name == "http_request":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -1485,6 +1486,13 @@ class ToolExecutor:
                 return False
         # dev_start dry_run is planning only — skip confirm.
         if evolved is not None and evolved.name == "dev_start":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
+        # git_commit dry_run is planning only — skip confirm.
+        if evolved is not None and evolved.name == "git_commit":
             from tools.builtin import run_evolved as _run_evolved_mod
 
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)

@@ -1095,14 +1095,14 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 26 — 项目开发工具补齐（HTTP / 启停收敛 / Git 写侧）
 
-> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.2.0**  
+> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.3.0**  
 > 触发：写项目盘点——缺 HTTP 探活、端口治理、受控 commit；`dev_start` 与 `run_service` 重叠。  
-> **纪律**：先文档后实现；**D1～D4 已决**；**M0 done**；M1 待开。
+> **纪律**：先文档后实现；**D1～D4 已决**；**M0+M1 done**；M2 defer。
 
 ### DOC-04 准入（提案自检）
 
 - [x] 影响矩阵行：见 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) §5.1（evolve 工具 / confirm；可选 Progress Gate；壳/host/计划门无）
-- [x] 回归 ID 预留：**IT-80～IT-84** · 可选 **S-80**（同文档 §5.2）
+- [x] 回归 ID：**IT-80～IT-84** · 可选 **S-80**（同文档 §5.2）
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
@@ -1110,12 +1110,12 @@ python turn_intent.py    # 分类用例无回归
 | T-2602 | 用户确认 D1～D4 | 文档 §2.2 已决 | T-2601 | 默认提案采纳 | **done** |
 | T-2603 | M0：`http_request` | `evolve/tools/common/http_request/` + IT-80/81 | T-2602 | 契约符合 §3.1；测绿 | **done** |
 | T-2604 | M0：`dev_start` 收敛 | 薄封装调 `run_service` + INDEX | T-2602 | IT-82；清单主路径为 `run_service` | **done** |
-| T-2605 | M1：端口治理 | `run_service` 扩展或独立工具 + IT-83 | T-2603 | kill_port confirm | todo |
-| T-2606 | M1：`git_commit` | evolved + IT-84 | T-2602 | 禁 force；confirm；dry_run | todo |
+| T-2605 | M1：端口治理 | `run_service` · `port_status`/`kill_port` + IT-83 | T-2603 | kill_port confirm | **done** |
+| T-2606 | M1：`git_commit` | `evolve/tools/coding/git_commit/` + IT-84 | T-2602 | 禁 force；confirm；dry_run | **done** |
 | T-2607 | M0/M1 目录与提示挂钩 | `tool-catalog/buckets/run.md` 等 | T-2603,T-2604 | INDEX 可见、勿双荐 | **done** |
 | T-2608 | M2：DB / pip（可选） | 见文档 §1.2 P2 | T-2605,T-2606 | 另文或补节后再做 | defer |
 
-**完成标志（M0）**：D1～D4 已决；IT-80～82 绿；启停只推荐一条主路径；助手能 `run_service` + `http_request` 探活。
+**完成标志（M0+M1）**：IT-80～84 绿；启停主路径清晰；可探活、清端口、受控 commit。
 
 ---
 

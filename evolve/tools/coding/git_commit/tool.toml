@@ -1,0 +1,43 @@
+[tool]
+name = "git_commit"
+description = """受控 Git 提交（Phase 26 M1）：仅 git add + commit。禁止 push / force / amend / 改 config。
+
+无 paths 时只暂存已跟踪变更（git add -u）。dry_run 预览 status 与将提交列表（不 confirm）。"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["message"]
+[schema.input.properties.message]
+type = "string"
+description = "commit message（非空）"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root 的仓库子目录；空=agent root。须落在某 git 仓内且仓根不越出 agent root"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 别名"
+[schema.input.properties.paths]
+type = "array"
+items = { type = "string" }
+description = "可选：只暂存这些相对路径；省略则 git add -u（仅已跟踪）"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 60

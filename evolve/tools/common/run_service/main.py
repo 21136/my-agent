@@ -19,9 +19,9 @@ from typing import Any
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _MAX_LOG_CHARS = 48000
-# Used by agent-core executor for action-gated confirm (status/logs/wait/list skip).
-READ_ACTIONS = frozenset({"status", "logs", "wait", "list"})
-MUTATING_ACTIONS = frozenset({"start", "stop", "restart"})
+# Used by agent-core executor for action-gated confirm (status/logs/wait/list/port_status skip).
+READ_ACTIONS = frozenset({"status", "logs", "wait", "list", "port_status"})
+MUTATING_ACTIONS = frozenset({"start", "stop", "restart", "kill_port"})
 
 
 def _agent_root() -> Path:
@@ -535,6 +535,142 @@ def _action_wait(paths, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_port(payload: dict[str, Any]) -> tuple[int | None, str | None]:
+    raw = payload.get("port")
+    if raw is None or raw == "":
+        return None, "port is required"
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        return None, "port must be an integer"
+    if port < 1 or port > 65535:
+        return None, "port must be in 1..65535"
+    return port, None
+
+
+def _pids_listening_on_port(port: int) -> list[int]:
+    """Best-effort PIDs with a TCP LISTEN on *port* (local)."""
+    pids: set[int] = set()
+    if sys.platform == "win32":
+        try:
+            completed = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+            )
+        except Exception:
+            return []
+        needle_suffix = f":{port}"
+        for line in (completed.stdout or "").splitlines():
+            upper = line.upper()
+            if "LISTEN" not in upper:
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local = parts[1]
+            try:
+                local_port = int(local.rsplit(":", 1)[-1])
+            except ValueError:
+                continue
+            if local_port != port:
+                continue
+            try:
+                pids.add(int(parts[-1]))
+            except ValueError:
+                continue
+        return sorted(p for p in pids if p > 0)
+
+    # Unix: prefer lsof, fall back to ss
+    try:
+        completed = subprocess.run(
+            ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        for line in (completed.stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pids.add(int(line))
+        if pids:
+            return sorted(pids)
+    except Exception:
+        pass
+    try:
+        completed = subprocess.run(
+            ["ss", "-ltnp", f"sport = :{port}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        for match in re.finditer(r"pid=(\d+)", completed.stdout or ""):
+            pids.add(int(match.group(1)))
+    except Exception:
+        pass
+    return sorted(p for p in pids if p > 0)
+
+
+def _action_port_status(paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _ = paths
+    port, err = _parse_port(payload)
+    if err:
+        return {"ok": False, "error": err}
+    assert port is not None
+    pids = _pids_listening_on_port(port)
+    open_ = _port_open(port)
+    return {
+        "ok": True,
+        "action": "port_status",
+        "port": port,
+        "listening": bool(pids) or open_,
+        "connectable": open_,
+        "pids": pids,
+    }
+
+
+def _action_kill_port(paths, payload: dict[str, Any]) -> dict[str, Any]:
+    _ = paths
+    port, err = _parse_port(payload)
+    if err:
+        return {"ok": False, "error": err}
+    assert port is not None
+    force = payload.get("force", True)
+    if isinstance(force, str):
+        force = force.strip().lower() not in {"0", "false", "no"}
+    pids = _pids_listening_on_port(port)
+    if not pids:
+        return {
+            "ok": True,
+            "action": "kill_port",
+            "port": port,
+            "killed": [],
+            "note": "no listening pid found",
+            "connectable": _port_open(port),
+        }
+    kills: list[dict[str, Any]] = []
+    for pid in pids:
+        info = _kill_tree(pid, force=bool(force))
+        kills.append({"pid": pid, **info})
+    time.sleep(0.3)
+    remaining = _pids_listening_on_port(port)
+    return {
+        "ok": len(remaining) == 0,
+        "action": "kill_port",
+        "port": port,
+        "killed": kills,
+        "remaining_pids": remaining,
+        "connectable": _port_open(port),
+    }
+
+
 def _action_list(paths, _payload: dict[str, Any]) -> dict[str, Any]:
     services_dir = _services_dir(paths)
     items: list[dict[str, Any]] = []
@@ -577,6 +713,8 @@ def run_service(payload: dict[str, Any]) -> dict[str, Any]:
         "logs": _action_logs,
         "wait": _action_wait,
         "list": _action_list,
+        "port_status": _action_port_status,
+        "kill_port": _action_kill_port,
         "restart": None,  # filled below
     }
 
@@ -615,7 +753,10 @@ def run_service(payload: dict[str, Any]) -> dict[str, Any]:
     if handler is None:
         return {
             "ok": False,
-            "error": f"unknown action '{action}' (use start|stop|status|logs|wait|list|restart)",
+            "error": (
+                f"unknown action '{action}' "
+                "(use start|stop|status|logs|wait|list|restart|port_status|kill_port)"
+            ),
         }
     return handler(paths, payload)
 

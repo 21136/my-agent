@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-01** · **新会话请先读本文 + `TASKS.md`**  
 > 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 26** [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（**M0 done** · 待 M1）；Phase 25 [RUN-SERVICE.md](./RUN-SERVICE.md)；Phase 24 [PROGRESS-GATE.md](./PROGRESS-GATE.md)；[UX-POLISH.md](./UX-POLISH.md)。  
+> **当前焦点**：**Phase 26** [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（**M0+M1 done** · M2 defer）；Phase 25 [RUN-SERVICE.md](./RUN-SERVICE.md)；Phase 24 [PROGRESS-GATE.md](./PROGRESS-GATE.md)；[UX-POLISH.md](./UX-POLISH.md)。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---

@@ -14,6 +14,7 @@
 | `run_demo` | 在 `agent-core/` 下跑 `python <script>.py` 冒烟 |
 | `run_tests` | 批量跑约定 demo / 测试套件 |
 | `git_snapshot` | 只读：`git status --porcelain` + `diff --stat`（可选 staged） |
+| `git_commit` | 受控提交：`add` + `commit`（禁 push/force/amend）；`dry_run` 可预览 |
 | `csv_head` | 预览 CSV 前 N 行（表头、列类型、总行数） |
 | `doc_parser` | 解析 `.doc` / `.docx` / `.xlsx` 为可读文本（支持 `host:`） |
 
@@ -23,3 +24,5 @@
 - 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。
 - **长驻服务**（监听端口、不退出）：用 **`run_service`**（主路径）；`dev_start` 仅作前后端一键糖。不要 `mvn_exec` / `npm_exec` / `repl`。详见 [RUN-SERVICE.md](../../../docs/RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](../../../docs/PROJECT-DEV-TOOLS.md)。
 - **探活 / 调本地 API**：`http_request`（勿用 `fetch_url` 打 localhost）。
+- **端口占用**：`run_service` · `port_status` / `kill_port`（杀端口须 confirm）。
+- **提交代码**：`git_commit`（仅 add+commit）；推送仍由人来。
