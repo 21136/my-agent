@@ -1,8 +1,8 @@
 # 日用壳 · 极致嗨（daily · Amp）
 
-> 版本 **0.3.1-draft** · 2026-07-12  
-> 状态：`implemented`（**Amp i1–i9 done**；i6 清理 optional）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §3.3 · [TURN-FEEDBACK.md](./TURN-FEEDBACK.md) · `TASKS.md` T-904g / **T-904i***
+> 版本 **0.3.2** · 2026-07-30  
+> 状态：**superseded** — 独立 `shells/daily/` **已删除**；Amp 手感并入 `unified` 的 **`perspective=night`**；starfield 在 `desktop/src/skins/starfield/`。本文保留作设计溯源。  
+> 关联：[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [DESKTOP.md](./DESKTOP.md) §0 · [UX-POLISH.md](./UX-POLISH.md)
 
 ---
 

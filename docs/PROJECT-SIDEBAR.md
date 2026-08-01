@@ -1,8 +1,11 @@
 # Project Sidebar Redesign
 
-> 状态：设计文档 · 待审核（已决议 12 项关键决策）
-> 日期：2026-07-29
-> 最后一轮讨论：Plan Agent 架构 + 消息路由模型 + 5 项追加决策
+> 状态：**implemented**（本地 ahead）+ **§15.10 / Phase 22 可见计划搭档 done**（2026-07-31）  
+> 日期：2026-07-29（设计）· 2026-07-30（文档对齐）· 2026-07-31（可见搭档决议 + 实施）  
+> **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
+> **§15.10**：侧栏建议卡 / 低风险 auto_fix / 下一步芯片 — **done**（T-2202～T-2207）。  
+> 最后一轮讨论：Plan Agent 架构 + 消息路由 + **可见计划搭档（侧栏动作，非聊天刷屏）**  
+> 代码锚点：`agent-core/plan_agent.py` · `desktop/src/shells/unified/project-panel.ts`
 
 ---
 
@@ -32,6 +35,7 @@
     15.7 [撤销机制](#157-撤销机制)
     15.8 [plan_dirty 确认粒度](#158-plan_dirty-确认粒度)
     15.9 [外部 TASKS.md 修改](#159-外部-tasksmd-修改)
+    15.10 [可见计划搭档](#1510-可见计划搭档已决--2026-07-31--done)（**done** · Phase 22）
 
 ---
 
@@ -696,6 +700,8 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 ## 13. 实施阶段
 
+> **2026-07-30**：下列 Phase 1～6（文档编号）对应本地 commit 的 Plan Agent / 侧栏工作，**已落地**（ahead of origin）。验收框保留作对照清单。
+
 ### Phase 1：任务流主视图 + 可拖拽宽度（1 天）
 
 **不涉及 Plan Agent**。纯前端：将侧边栏从 "5 抽屉" 改为"任务流 + 底部图标栏"。
@@ -813,17 +819,112 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 ### 15.4 Plan Agent 的主动性边界
 
-**决议：Plan Agent 只给建议，不自动执行。用户或主 Agent 触发时才动。**
+**原决议（保留精神）：** 不替代用户做顺序/范围决策；不在聊天框刷屏。  
+**2026-07-31 修订：** 见 **§15.10**——质检结果必须变成侧栏可操作建议；**一类低风险可自动修**。
 
 | 场景 | Plan Agent 行为 |
 |------|----------------|
 | task 连续 3+ 小时未完成 | 侧边栏 banner："此任务耗时较长，是否拆分？" [拆分] [忽略] |
 | Phase 超过 12 个 task | banner："Phase 2 有 15 个任务，建议拆分或重排" [查看] [忽略] |
 | 检测到外部修改 TASKS.md | banner："检测到外部修改 TASKS.md" [查看变更] [忽略] |
-| 建议先做 A 再做 B | **不做。** 顺序判断留给用户，Plan Agent 不替代用户决策 |
-| 自动修改 Phase 结构 | **不做。** 只有用户通过右键菜单或聊天明确要求时才修改 |
+| 建议先做 A 再做 B | **不做。** 顺序判断留给用户 |
+| 自动修改 Phase 结构 | **不做**（除非用户明确要求） |
+| 完全重复 task 行 | **可自动修**（§15.10）；侧栏告知已清理 |
+| 疑似重复 / 粒度过粗 | **模糊相似已关掉**；粒度过粗等仍走建议卡 `[拆分/忽略]`，不自动改 |
 
-所有建议类 banner 都有"忽略"按钮，持续 5 分钟后自动消失。用户一天内忽略 3 次同类建议后，当天不再提示同类。
+所有**建议类** banner 都有「忽略」；持续约 5 分钟可自动消失。用户一天内忽略 3 次同类建议后，当天不再提示同类。
+
+---
+
+### 15.10 可见计划搭档（已决 · 2026-07-31 · **done**）
+
+> **状态**：**done** · 跟踪 **[Phase 22](./TASKS.md)**（T-2201～T-2207）  
+> **触发**：侧栏「项目管理器反馈」只给人看黄条警告，体感 Plan Agent 鸡肋；用户要「看得见的计划搭档」，但不要聊天里一直说话费 token。  
+> **已修洞**：`project-panel.ts` banner 链已渲染 `suggestions` 建议卡；`warnings` 不再作为唯一反馈。
+
+#### 已决
+
+| ID | 决议 |
+|----|------|
+| **V1** | 搭档**只活在左侧栏**（不在主聊天开第二对话） |
+| **V2** | 不靠「署名旁白」证明存在；靠**动作常在眼前**：拆分 / 暂缓 / 确认变更 / 建议卡 |
+| **V3** | 质检（原「项目反馈器」）**必须进 Plan Agent 决策环**：警告 → 结构化建议 → 侧栏可点；禁止只展示不可操作的纯文案（suggestions 未渲染洞一并修） |
+| **V4** | **低风险可自动修**：如完全重复 task 行删除（`auto_fix` 已有同类）；修完用侧栏短告知（可撤销若已有 undo） |
+| **V5** | **非低风险只建议**：建议拆分、Phase 过长、任务过短等 → 建议卡 [采纳] [忽略]。**不做**模糊「疑似重复」（并行脚手架会误伤） |
+| **V6** | 没事可点时：侧栏默认露出**当前下一步** + 行上右键/悬浮动作入口；不刷空话 |
+| **V7** | 侧栏输入框 = **Plan Agent 专用通道**（非「加任务框」）；反馈仅 **建议卡 + 短 notice**，不开第二套对话气泡；主聊天仍给主 Agent |
+| **V8** | **LLM 优先、规则只兜底**：侧栏每句先交给 Plan LLM 自由决策（统一短 system + 进度/行号上下文）；本地关键词 / `auto_fix` 精确去重 / L2 加任务仅在 LLM 不可用或解析失败时介入 |
+| **V9** | 进度摘要含 **⚠ 异常信号**（夹心 / 跳段 / 空 Phase / 下一项被拽回）；system 覆盖意图分流与常见结构问题；有 ⚠ 时优化禁止空 `operations` 装没事；仍由 LLM 决定挂靠，代码不改挂 |
+
+#### 非目标
+
+| 非目标 | 理由 |
+|--------|------|
+| 主聊天里 Plan Agent 旁白 | V1；费 token |
+| 代码硬改 LLM 选的 Phase | V8；系统照做 operations |
+| 每条警告都调 LLM | 建议卡仍规则优先；侧栏**用户话**走 LLM |
+| 新开第二 WebSocket / 第二会话 | 复用现有 `project.plan.*` |
+
+#### 影响矩阵（DOC-04）
+
+| 面 | 影响 | 回归要点 |
+|----|------|----------|
+| 桌面侧栏 | banner 链：suggestions 可点；warnings→建议卡；auto_fix 短告知 | 不影响主聊天气泡流 |
+| Plan Agent | `quality_check` → 可操作 `suggestions[]`；V4 走 `auto_fix` | 不改主 Agent turn 预算 |
+| WS | 扩展 `project.plan.state.suggestions` 字段；采纳复用既有 plan 消息 | grow/daily 无侧栏不受影响 |
+| 主聊天 / token | **不**注入 Plan Agent 旁白 | Phase 21 进度闭环不变 |
+
+#### 回归 ID（动手时补绿）
+
+| ID | 断言（摘要） |
+|----|----------------|
+| S-70 | 完全重复 task → auto_fix 删重 + state 含告知文案 |
+| S-71 | 模糊近重复（并行模块句式）**不**出 merge_dup 建议卡；完全重复仍走 S-70 |
+| S-72 | `suggestions` 非空时前端可渲染采纳/忽略（非纯黄条） |
+| IT-70 | 采纳 suggestion → 等价已有 plan API（split/skip/…） |
+| IT-71 | 主聊天 transcript 无 Plan Agent 长旁白事件 |
+
+#### 建议卡形状（协议草案 · 动手可微调）
+
+```json
+{
+  "id": "sug-…",
+  "kind": "merge_dup | split | skip | confirm_changes | …",
+  "title": "短句",
+  "body": "可选说明",
+  "risk": "low | suggest",
+  "action": "merge_tasks | split_task | skip_task | …",
+  "payload": { "…": "调用既有 plan handler 所需字段" }
+}
+```
+
+- `risk=low` 且已 auto_fix：不进待采纳队列，进 `auto_fix_actions` / 短告知条。  
+- `risk=suggest`：侧栏卡 `[采纳]` → `project.plan.accept_suggestion`（或直接发对应 `project.plan.*`）· `[忽略]` → 本地/会话忽略（对齐 §15.4 忽略冷却）。
+
+#### MVP 实施锚点（动手时 · 见 T-2202～）
+
+| 层 | 做什么 | 锚点文件 |
+|----|--------|----------|
+| UI | banner 链补 **suggestions**；warnings 升级建议卡；auto_fix 告知条 | `desktop/src/shells/unified/project-panel.ts` |
+| 协议 | `suggestions` 带 `action`/`payload`；采纳走既有 plan API | `server.py` · WS handlers |
+| 后端 | `quality_check` → 可操作项；V4 `auto_fix`；文案进 state | `plan_agent.py` |
+| 测试 | S-70～72 · IT-70～71 | `agent-core/tests/` · 桌面冒烟 |
+
+#### 验收
+
+| 场景 | 预期 |
+|------|------|
+| 完全重复两行 task | 自动删其一 + 侧栏「已自动清理…」可感知 |
+| 并行模块相似句式 | **不出**「疑似重复」卡（会误伤） |
+| 侧栏说「优化下任务」 | Plan Agent 检查/刷新建议；**不**把原话写进 Phase |
+| 仅 warnings、无按钮 | **失败**（回归 V3 / S-72） |
+| 主聊天 | 不出现 Plan Agent 长旁白（IT-71） |
+| Phase 21 | `report_progress` / 一停仍绿 |
+
+#### 实施门
+
+- **文档**：本 § + TASKS Phase 22 + MAP/UX-POLISH 指针 → **done**
+- **代码**：T-2202～T-2207 → **done**（2026-07-31）
 
 ### 15.5 渐进实施路径
 

@@ -39,7 +39,7 @@ class ToolEntry:
 class ToolPolicy:
     confirm: bool
     dry_run_supported: bool
-    workspace_only: bool
+    allow_approve_all: bool
     timeout_sec: int
 
 
@@ -76,9 +76,9 @@ class ToolManifestError(ValueError):
 
 
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
-    BuiltinTool("read_file", "Read a text file under agent root", confirm=False, dry_run_supported=False),
-    BuiltinTool("list_dir", "List directory entries under agent root", confirm=False, dry_run_supported=False),
-    BuiltinTool("grep", "Search local file contents", confirm=False, dry_run_supported=False),
+    BuiltinTool("read_file", "Read a text file under agent root or host:<id>/… paths (use list_dir to discover host ids)", confirm=False, dry_run_supported=False),
+    BuiltinTool("list_dir", "List directory entries under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
+    BuiltinTool("grep", "Search local file contents under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
     BuiltinTool("web_search", "Search the web for links and snippets", confirm=False, dry_run_supported=False),
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),
@@ -133,7 +133,7 @@ class ToolRegistry:
         return tuple(
             tool
             for tool in self._evolved_list
-            if tool.scope == "common" or tool.scope in topic_set
+            if tool.scope == "common" or "common" in tool.topics or tool.scope in topic_set
         )
 
     def session_evolved(self, topics: list[str]) -> tuple[EvolvedTool, ...]:
@@ -223,7 +223,7 @@ def parse_tool_manifest(manifest_path: Path, *, evolve_dir: Path) -> EvolvedTool
     policy = ToolPolicy(
         confirm=_require_bool(policy_section, "confirm", manifest_path=manifest_path),
         dry_run_supported=_require_bool(policy_section, "dry_run_supported", manifest_path=manifest_path),
-        workspace_only=_require_bool(policy_section, "workspace_only", manifest_path=manifest_path),
+        allow_approve_all=_load_allow_approve_all(policy_section, manifest_path=manifest_path),
         timeout_sec=_require_positive_int(policy_section, "timeout_sec", manifest_path=manifest_path),
     )
 
@@ -343,6 +343,21 @@ def _require_bool(table: dict[str, Any], key: str, *, manifest_path: Path) -> bo
     return value
 
 
+def _load_allow_approve_all(policy_section: dict[str, Any], *, manifest_path: Path) -> bool:
+    """Read ``allow_approve_all``, falling back to ``workspace_only`` for back-compat."""
+    if "allow_approve_all" in policy_section:
+        value = policy_section["allow_approve_all"]
+        if not isinstance(value, bool):
+            raise ToolManifestError("policy.allow_approve_all must be a boolean", manifest_path=manifest_path)
+        return value
+    if "workspace_only" in policy_section:
+        value = policy_section["workspace_only"]
+        if not isinstance(value, bool):
+            raise ToolManifestError("policy.workspace_only must be a boolean", manifest_path=manifest_path)
+        return value
+    raise ToolManifestError("policy must include allow_approve_all (or workspace_only for back-compat)", manifest_path=manifest_path)
+
+
 def _require_positive_int(table: dict[str, Any], key: str, *, manifest_path: Path) -> int:
     value = table.get(key)
     if not isinstance(value, int) or value < 1:
@@ -353,7 +368,7 @@ def _require_positive_int(table: dict[str, Any], key: str, *, manifest_path: Pat
 def _demo() -> None:
     paths = AgentPaths.discover()
     registry = ToolRegistry.load(paths)
-    assert len(registry.builtins()) == 6
+    assert len(registry.builtins()) == 7
     print(f"[PASS] builtins: {[tool.name for tool in registry.builtins()]}")
     print(f"[PASS] live evolved scan: {len(registry.evolved())} tool(s)")
 
@@ -464,7 +479,7 @@ type = "object"
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60
 """,
         encoding="utf-8",

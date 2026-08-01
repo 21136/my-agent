@@ -1,56 +1,54 @@
 import "./app-chrome.css";
+import type { AgentWsClient } from "./api/ws";
 import {
-  readActiveShell,
-  readShellRouteLocked,
   readTheme,
-  SHELL_LABELS,
-  writeActiveShell,
-  writeShellRouteLocked,
   writeTheme,
-  type ShellId,
   type ThemeId,
 } from "./settings";
 
+export type SessionModelId = "deepseek-v4-flash" | "deepseek-v4-pro";
+
 export type AppChromeHandlers = {
-  onShellChange: (shell: ShellId, meta: { manual: boolean }) => void;
   onSwitchToCli: () => Promise<void>;
   onOpenSettings?: () => void;
+  client?: AgentWsClient;
 };
 
 export type AppChromeApi = {
-  setShell: (shell: ShellId) => void;
   showRouteNotice: (text: string, onUndo?: () => void) => void;
+  setModel: (model: string) => void;
 };
+
+const MODEL_FLASH: SessionModelId = "deepseek-v4-flash";
+const MODEL_PRO: SessionModelId = "deepseek-v4-pro";
+
+function normalizeModelSelectValue(model: string | undefined): SessionModelId {
+  const key = (model || "").trim().toLowerCase();
+  if (key.includes("pro")) return MODEL_PRO;
+  return MODEL_FLASH;
+}
 
 export function mountAppChrome(
   root: HTMLElement,
   handlers: AppChromeHandlers,
 ): AppChromeApi {
-  const shell = readActiveShell();
   const theme = readTheme();
-  const locked = readShellRouteLocked();
 
   root.innerHTML = `
     <header class="app-chrome">
       <span class="app-chrome-title">my-agent</span>
       <div class="app-chrome-group">
-        <span class="app-chrome-label">外壳</span>
-        <select id="chrome-shell" aria-label="外壳">
-          <option value="grow">生长</option>
-          <option value="project">项目</option>
-          <option value="daily">日用</option>
-          <option value="govern">治理</option>
-        </select>
-        <label class="app-chrome-lock" title="勾选后不再根据任务自动切换外壳">
-          <input type="checkbox" id="chrome-shell-lock" />
-          锁定
-        </label>
-      </div>
-      <div class="app-chrome-group">
         <span class="app-chrome-label">外观</span>
         <select id="chrome-theme" aria-label="外观">
           <option value="light">亮色</option>
           <option value="dark">暗色</option>
+        </select>
+      </div>
+      <div class="app-chrome-group">
+        <span class="app-chrome-label">模型</span>
+        <select id="chrome-model" aria-label="模型">
+          <option value="${MODEL_FLASH}">Flash</option>
+          <option value="${MODEL_PRO}">Pro</option>
         </select>
       </div>
       <span class="app-chrome-spacer"></span>
@@ -60,45 +58,26 @@ export function mountAppChrome(
     </header>
   `;
 
-  const shellSelect = root.querySelector<HTMLSelectElement>("#chrome-shell")!;
-  const shellLock = root.querySelector<HTMLInputElement>("#chrome-shell-lock")!;
   const themeSelect = root.querySelector<HTMLSelectElement>("#chrome-theme")!;
+  const modelSelect = root.querySelector<HTMLSelectElement>("#chrome-model")!;
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
 
-  shellSelect.value = shell;
   themeSelect.value = theme;
-  shellLock.checked = locked;
 
   let routeTimer: number | null = null;
-  let programmaticShell = false;
-
-  function applyShell(shellId: ShellId, manual: boolean): void {
-    if (!(shellId in SHELL_LABELS)) return;
-    programmaticShell = !manual;
-    shellSelect.value = shellId;
-    writeActiveShell(shellId);
-    handlers.onShellChange(shellId, { manual });
-    programmaticShell = false;
-  }
-
-  shellSelect.addEventListener("change", () => {
-    const next = shellSelect.value as ShellId;
-    if (!(next in SHELL_LABELS)) return;
-    if (!programmaticShell) {
-      writeShellRouteLocked(true);
-      shellLock.checked = true;
-    }
-    applyShell(next, !programmaticShell);
-  });
-
-  shellLock.addEventListener("change", () => {
-    writeShellRouteLocked(shellLock.checked);
-  });
+  let syncingModel = false;
 
   themeSelect.addEventListener("change", () => {
     const next = themeSelect.value as ThemeId;
     writeTheme(next);
+  });
+
+  modelSelect.addEventListener("change", () => {
+    if (syncingModel) return;
+    const next = normalizeModelSelectValue(modelSelect.value);
+    modelSelect.value = next;
+    handlers.client?.setSessionModel(next);
   });
 
   cliBtn.addEventListener("click", () => {
@@ -113,11 +92,18 @@ export function mountAppChrome(
     handlers.onOpenSettings?.();
   });
 
+  const unsubBanner = handlers.client?.onEvent((event) => {
+    if (event.type !== "session.banner") return;
+    syncingModel = true;
+    modelSelect.value = normalizeModelSelectValue(event.llm_model);
+    syncingModel = false;
+  });
+
+  void unsubBanner;
+
+  modelSelect.title = "切换主 Agent 模型（Flash 128k / Pro 1M）";
+
   return {
-    setShell(shellId: ShellId): void {
-      if (shellSelect.value === shellId) return;
-      applyShell(shellId, false);
-    },
     showRouteNotice(text: string, onUndo?: () => void): void {
       if (routeTimer !== null) {
         window.clearTimeout(routeTimer);
@@ -145,6 +131,11 @@ export function mountAppChrome(
         routeNotice.innerHTML = "";
         routeTimer = null;
       }, 8000);
+    },
+    setModel(model: string): void {
+      syncingModel = true;
+      modelSelect.value = normalizeModelSelectValue(model);
+      syncingModel = false;
     },
   };
 }

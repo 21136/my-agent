@@ -113,6 +113,46 @@ def resolve_session_model(topics: list[str], *, config: LLMConfig | None = None)
     return cfg.model
 
 
+def normalize_session_model(raw: str, *, config: LLMConfig | None = None) -> str | None:
+    """Map UI/alias strings to configured flash or pro ids; None if unknown."""
+    cfg = config or load_config()
+    key = raw.strip().casefold().replace("_", "-")
+    if not key:
+        return None
+    flash_keys = {
+        cfg.model.casefold(),
+        "flash",
+        "v4-flash",
+        "deepseek-v4-flash",
+        DEFAULT_MODEL.casefold(),
+    }
+    pro_keys = {
+        cfg.model_coding.casefold(),
+        "pro",
+        "v4-pro",
+        "deepseek-v4-pro",
+        DEFAULT_MODEL_CODING.casefold(),
+    }
+    if key in flash_keys:
+        return cfg.model
+    if key in pro_keys:
+        return cfg.model_coding
+    return None
+
+
+def llm_model_label(model: str, *, config: LLMConfig | None = None) -> str:
+    """Short UI label for session banner / chrome."""
+    cfg = config or load_config()
+    normalized = normalize_session_model(model, config=cfg)
+    if normalized == cfg.model_coding:
+        return "Pro"
+    if normalized == cfg.model:
+        return "Flash"
+    if "pro" in model.casefold():
+        return "Pro"
+    return "Flash"
+
+
 def resolve_context_limit(model: str, *, config: LLMConfig | None = None) -> int:
     """Context token ceiling for *model* (§6.1 flash 128k / pro 1M)."""
     cfg = config or load_config()

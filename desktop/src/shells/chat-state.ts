@@ -35,7 +35,6 @@ export type HistoryStarSeed = {
 export interface ChatSessionModel {
   sessionId: string;
   confirmPending: boolean;
-  /** True after user clicked confirm until confirm.done arrives (C5). */
   confirmSubmitting: boolean;
   cancelRequested: boolean;
   confirmOverlay: ConfirmOverlay | null;
@@ -46,6 +45,7 @@ export interface ChatSessionModel {
   turnActive: boolean;
   turnFinished: boolean;
   toolsRunning: number;
+  _toolTimers: Map<string, number>;
 }
 
 export interface ChatSessionOptions {
@@ -163,6 +163,7 @@ export function createChatSession(
     turnActive: false,
     turnFinished: false,
     toolsRunning: 0,
+    _toolTimers: new Map<string, number>(),
   };
 
   let cancelWatchdog: ReturnType<typeof setTimeout> | null = null;
@@ -378,8 +379,12 @@ export function createChatSession(
               ),
           );
           model.assistantBuffer = "";
+          // insert a visible notice so the chat shows cancellation was processed
+          const label = event.finish_reason === "timeout" ? "回合超时已停止" : "回合已停止";
+          model.blocks.push({ kind: "notice", text: label });
         }
         resetTurnActivity();
+        model._toolTimers.clear();
         model.confirmPending = false;
         model.confirmSubmitting = false;
         hooks.onTurnEnd?.(event.ok, event.finish_reason);
@@ -399,6 +404,7 @@ export function createChatSession(
         break;
       case "tool.start":
         model.toolsRunning += 1;
+        model._toolTimers.set(event.call_id, Date.now());
         if (options.showProcess) {
           const proc = ensureProcessBlock();
           proc.lines.push(`· ${event.tool}  ${event.summary}`);
@@ -408,6 +414,15 @@ export function createChatSession(
         break;
       case "tool.end":
         model.toolsRunning = Math.max(0, model.toolsRunning - 1);
+        if (options.showProcess) {
+          const startTime = model._toolTimers.get(event.call_id);
+          if (startTime) {
+            const ms = Date.now() - startTime;
+            const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+            const proc = ensureProcessBlock();
+            proc.lines.push(`  ${event.ok ? "✓" : "✗"} ${event.tool} (${dur})`);
+          }
+        }
         if (model.turnFinished && model.toolsRunning === 0) {
           model.turnActive = false;
         }
@@ -434,17 +449,23 @@ export function createChatSession(
         }
         const finalText = event.text.trim();
         const turnIndex = currentTurnIndex();
-        const streamIdx = model.blocks.findIndex(
-          (b) =>
-            b.kind === "assistant-streaming" &&
-            b.turnKey === model.currentTurnKey &&
-            b.turnIndex === turnIndex,
-        );
-        if (streamIdx >= 0) {
-          model.blocks.splice(streamIdx, 1);
+        // Drop every streaming bubble for this turn (key mismatch used to leave orphans).
+        for (let i = model.blocks.length - 1; i >= 0; i--) {
+          const b = model.blocks[i];
+          if (b.kind === "assistant-streaming" && b.turnIndex === turnIndex) {
+            model.blocks.splice(i, 1);
+          }
         }
         if (finalText) {
-          model.blocks.push({ kind: "assistant", text: finalText, turnIndex });
+          const last = model.blocks[model.blocks.length - 1];
+          // Idempotent: duplicate assistant.done must not create a second identical bubble.
+          const dup =
+            last?.kind === "assistant" &&
+            last.turnIndex === turnIndex &&
+            last.text === finalText;
+          if (!dup) {
+            model.blocks.push({ kind: "assistant", text: finalText, turnIndex });
+          }
         }
         model.assistantBuffer = "";
         model.turnFinished = true;

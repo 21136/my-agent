@@ -49,7 +49,7 @@ class WorkflowDir:
                 raise RuntimeError("host workflow dir missing host metadata")
             rel = path.resolve().relative_to(self.host_root.resolve()).as_posix()
             return f"host:{self.host_id}/{rel}"
-        return self.paths.to_workspace_relative(path)
+        return self.paths.to_agent_relative(path)
 
     def log_fields(self) -> dict[str, str]:
         if self.is_host and self.host_id:
@@ -92,13 +92,13 @@ def resolve_workflow_dir(
             host_root=resolved.host_root,
         )
 
-    source_dir = paths.resolve_under_workspace(text, must_exist=True)
+    source_dir = paths.resolve_under_agent(text, must_exist=True)
     if not source_dir.is_dir():
         raise FileNotFoundError(f"not a directory: {text}")
     return WorkflowDir(
         paths=paths,
         absolute=source_dir,
-        label=paths.to_workspace_relative(source_dir),
+        label=paths.to_agent_relative(source_dir),
         is_host=False,
     )
 

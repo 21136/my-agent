@@ -409,7 +409,7 @@ def dispatch_task_add(
     paths: AgentPaths,
     message: dict[str, Any],
 ) -> dict[str, Any]:
-    """Handle project.task.add — route through PlanAgent LLM reasoning."""
+    """Handle project.task.add — route through PlanAgent LLM; feedback on sidebar."""
     _project_pid(session)
     pid = session.meta.project_id.strip()
     description = str(message.get("description", "")).strip()
@@ -421,19 +421,21 @@ def dispatch_task_add(
     if agent is None:
         raise ProjectApiError("PlanAgent not available for current session")
 
-    # Let PlanAgent reason about the intent using LLM
-    summary = agent.reason_about_intent(description)
+    try:
+        summary = agent.reason_about_intent(description)
+    except Exception as exc:
+        agent.set_partner_notices(f"计划搭档出错：{exc}")
+        summary = str(exc)
 
+    # V7: partner reply lives in project.plan.state.partner_notices (sidebar),
+    # not as main-chat bubbles — those felt like "no reaction" while waiting on LLM.
     events: list[dict[str, Any]] = [
-        {"type": "notice", "text": f"项目管理器分析: {description}"},
+        project_state_payload(session, paths),
+        agent.build_state(session),
     ]
-    for line in summary.split("\n"):
-        stripped = line.strip()
-        if stripped:
-            events.append({"type": "notice", "text": stripped})
-
-    events.append(project_state_payload(session, paths))
-    events.append(agent.build_state(session))
+    if summary and not agent._last_partner_notices:
+        agent.set_partner_notices(summary)
+        events[-1] = agent.build_state(session)
     return {"_events": events}
 
 
@@ -516,6 +518,32 @@ def _dispatch_plan_message(
                     agent.build_state(session),
                 ]
             }
+
+        if msg_type == "project.plan.accept_suggestion":
+            sid = str(message.get("suggestion_id") or "").strip()
+            if not sid:
+                raise ProjectApiError("project.plan.accept_suggestion requires suggestion_id")
+            result = agent.accept_suggestion(sid)
+            events: list[dict[str, Any]] = [
+                project_state_payload(session, paths),
+                agent.build_state(session),
+            ]
+            summary = result.get("summary") if isinstance(result, dict) else None
+            if isinstance(summary, str) and summary.strip():
+                events.insert(0, {"type": "notice", "text": summary})
+            undo_desc = result.get("_undo_desc") if isinstance(result, dict) else None
+            if isinstance(undo_desc, str) and undo_desc:
+                events.insert(0, {"type": "project.undo.available", "description": undo_desc})
+            for action in (result.get("_auto_fix_actions") or []) if isinstance(result, dict) else []:
+                events.insert(0, {"type": "notice", "text": action})
+            return {"_events": events}
+
+        if msg_type == "project.plan.ignore_suggestion":
+            sid = str(message.get("suggestion_id") or "").strip()
+            if not sid:
+                raise ProjectApiError("project.plan.ignore_suggestion requires suggestion_id")
+            agent.ignore_suggestion(sid)
+            return agent.build_state(session)
 
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")

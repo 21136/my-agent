@@ -1,12 +1,13 @@
 # 记忆系统设计（MEMORY）
 
-> 版本 0.2.3 · 2026-07-09 · 与 `RUNTIME.md` 配套
+> 版本 0.2.4 · 2026-07-31 · 与 `RUNTIME.md` 配套  
+> **工具执行面**已与主题解绑：见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)（Phase 23）。本文件主题路由仍管 **prompt / memory** 按需加载。
 
 ---
 
 ## 1. 目标
 
-定义 my-agent 的 **记忆三件套**与 **统一主题索引**：按职责分层、按主题组织；与 **按主题放置的 evolved tools** 共用 `evolve/_index.toml`。
+定义 my-agent 的 **记忆三件套**与 **统一主题索引**：按职责分层、按主题组织；与 evolved tools **目录约定**共用 `evolve/_index.toml` 的 `tool_dirs`（**组织用**，**不是**调用门禁）。
 
 本阶段 **不涉及** skill 自动路由；升格与 proposal 协议见 [EVOLVE.md](./EVOLVE.md)。
 
@@ -78,7 +79,7 @@ memory_dirs = []
 tool_dirs = []
 ```
 
-**`tools/common/`**：不在 topic 条目中声明；凡 `status=active` 的 common 工具 **每个 session 都** 列入 evolved 清单（见 [TOOLS.md](./TOOLS.md) §4）。
+**`tools/common/`**：不在 topic 条目中声明；物理上跨主题放置。执行面见 [TOOLS.md](./TOOLS.md) §4.3 / [TOOL-CATALOG.md](./TOOL-CATALOG.md)（凡 `active` 可调，不因未确认主题而拒）。
 
 **主题数量**：无磁盘硬上限。种子主题在 `_index.core.toml`；用户扩展在 `_index.user.toml`（合并加载，见 [EXTENSIONS.md](./EXTENSIONS.md)）。**LLM 不得**自动注册新主题；用户通过 REPL `注册主题 <id>` 或手改 user 索引。
 
@@ -126,7 +127,7 @@ data/sessions/<conversation_id>/
 1. `agent-core/prompts/core.txt`（内核规则）
 2. **`evolve/_index.toml`** 渲染为主题列表（id / name / description）
 3. **全局久远记忆索引**（所有 active 的 `id + summary`）
-4. **Builtin 说明**（6 个，见 TOOLS.md）；evolved 清单在主题确认后注入
+4. **Builtin 说明**（6 个，见 TOOLS.md）；evolved **导引**注入短 INDEX（[TOOL-CATALOG.md](./TOOL-CATALOG.md)），**不**等主题确认才开放执行面
 
 **不加载**任何 `coding.md` 等主题 prompt 全文。
 
@@ -157,7 +158,7 @@ User:  y
 用户确认主题后，追加注入 system（或 session overlay）：
 
 - 每个命中主题的 `evolve/prompts/<topic>.md` **全文**
-- **本会话 evolved 工具清单**：`tools/common/*`（全部 active）+ 各命中 `tool_dirs` 下 active 工具（name + description，供 `run_evolved` 选用）
+- （历史）曾在此注入「本会话 evolved 工具清单」— **Phase 23 superseded**：执行面 = 全部 `active`；导引见 INDEX / 桶，与 `topics[]` 解绑
 
 久远记忆 **不**在阶段 2 重复列出；阶段 0 全局索引每行已含 `(topic)`，MVP 够用。
 
@@ -166,10 +167,10 @@ User:  y
 ### 4.4 流程图
 
 ```
-启动 → 注入 core + _index + 记忆全局索引
+启动 → 注入 core + _index + 记忆全局索引 + 工具 INDEX
     → 问「这次做什么？」→ 写 goal.md
     → 阶段1：LLM 输出 topics[] → 用户确认
-    → 阶段2：加载主题 prompt + common/主题 evolved 清单
+    → 阶段2：加载主题 prompt（工具执行面已在启动即开放 active）
     → 正常对话（6 Builtin + run_evolved）
 exit → goal 可摘要入 evolve_log；不自动升格
 ```
@@ -273,7 +274,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 |------|------|
 | **Skill（L2）** | 多步 SOP；M4 可选。可引用某主题下 memory / evolved 名 |
 | **Tool（L3）** | Evolved 按 `tools/<topic>/` 与 `tools/common/` 放置；Builtin 固定 6 个 |
-| **主题路由** | **同一 `_index.toml`** 驱动 prompt、memory 索引、evolved 会话清单 |
+| **主题路由** | **同一 `_index.toml`** 驱动 prompt、memory 索引；工具 **目录**可挂 `tool_dirs`，**执行**见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
 
 ---
 
@@ -284,7 +285,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | 事件 | evolve_log 字段 |
 |------|-----------------|
 | session 启动 | `conversation_id`, `memory_ids_loaded[]`, `topics_available[]` |
-| 主题确认 | `topics_confirmed[]`, `prompt_files_loaded[]`, **`evolved_tools_listed[]`** |
+| 主题确认 | `topics_confirmed[]`, `prompt_files_loaded[]`（`evolved_tools_listed[]` 历史字段可空；导引改 INDEX） |
 | memory L2 引用 | `entity_used`：`entity_id`, `level: L2`, `reason`（路径或 tool 名） |
 | session 结束 | `goal_summary?` |
 
@@ -298,7 +299,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | 2 | 换主题时 prompt overlay | **默认替换**：`新会话` / `换主题` / `主题 X` 确认后 `meta.topics` = 本次集合并重载 overlay；**仅** `加主题 …`（或自然语言「再加上 workflow」）为并集追加；「只保留 writing」= 单主题替换 |
 | 3 | `_index.toml` / evolve 变更何时生效 | **accept / 手改不重载**（与 EVOLVE 一致）；**`换主题` / `加主题` / `主题 X` 立即重读磁盘并重载 overlay**；`新会话` / 下次启动读最新 |
 | 4 | `_index` 位置 | `evolve/_index.toml` |
-| 5 | common 工具 | 每 session 列入 evolved 清单 |
+| 5 | common 工具 | 目录约定跨主题；执行面 = 凡 active（Phase 23） |
 | 6 | L2 `entity_used` | 仅 `read_file` → `evolve/memories/**`；见 GOVERNANCE §3.1 |
 
 ---
@@ -311,7 +312,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 - [ ] 短期 goal 与 `PROJECT.md` §6.4 gitignore 一致
 - [ ] 升格策略为「使用中 LLM 提议」，无自动硬规则
 
-- [ ] 与 `evolve/_index.toml`、TOOLS 主题工具规则一致
+- [ ] 与 `evolve/_index.toml`、TOOLS 目录约定一致；工具硬锁见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)（已取消）
 
 实现验收见 `TASKS.md` Phase 3（T-301～T-308）。
 
@@ -321,6 +322,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 
 | 文档 | 内容 |
 |------|------|
+| [TOOL-CATALOG.md](./TOOL-CATALOG.md) | 工具 INDEX / 取消主题硬锁（与主题 prompt 解耦） |
 | [LAYERS.md](./LAYERS.md) | 先 tool 后 skill；L1 含 prompt + 久远记忆 |
 | [RUNTIME.md](./RUNTIME.md) | 续接 session、system 拼装、digest |
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、M2 写入 |

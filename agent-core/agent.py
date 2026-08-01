@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -22,9 +23,11 @@ from loader import (
     session_evolved_allowlist,
 )
 from llm_client import (
+    LLMApiError,
     LLMCancelledError,
     LLMClient,
     LLMError,
+    LLMNetworkError,
     LLMResponse,
     LLMTimeoutError,
     StreamHandlers,
@@ -349,7 +352,7 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                     "project.create = new workspace project + dedicated session; "
                     "project.switch = switch to an existing project session; "
                     "shell.switch = switch grow/daily/project/govern shell line; "
-                    "session.new = blank session on the current shell (same project if project)"
+                    "session.new = blank ordinary chat (parks project session if any; does not open a second project line)"
                 ),
             },
             "target": {
@@ -552,6 +555,7 @@ class Agent:
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
         self.executor.session.active_shell = self.session.meta.active_shell
         self.executor.session.project_root = self.session.meta.project_root
+        self.executor.session.project_id = self.session.meta.project_id
         self.executor.session.project_plan_status = self.session.meta.project_plan_status
 
     def _emit_turn_event(self, event: dict[str, Any]) -> None:
@@ -705,6 +709,7 @@ class Agent:
         from loader import build_system_prompt
 
         tool_rounds = 0
+        segment_retried = False
         final_text = ""
         finish_reason: str | None = None
         reminder_injected = False
@@ -725,6 +730,18 @@ class Agent:
                     qa_soft_reminder_injected=reminder_injected,
                 )
             system = build_system_prompt(self.session).prompt
+            if self.cancel_event.is_set():
+                return ToolLoopSegmentResult(
+                    final_text="",
+                    tool_rounds=tool_rounds,
+                    finish_reason=self._interrupt_finish_reason(),
+                    exceeded=False,
+                    had_progress=segment_messages_show_progress(
+                        self.session.messages,
+                        segment_start_index,
+                    ),
+                    qa_soft_reminder_injected=reminder_injected,
+                )
             if should_auto_compact(system, self.session, model=model):
                 self._emit_turn_event(
                     {
@@ -780,6 +797,30 @@ class Agent:
                     ),
                     qa_soft_reminder_injected=reminder_injected,
                 )
+            except (LLMApiError, LLMNetworkError) as exc:
+                if not segment_retried:
+                    segment_retried = True
+                    err_kind = type(exc).__name__.replace("LLM", "").replace("Error", "").lower()
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": f"LLM {err_kind}，2s 后重试…（{exc}）",
+                        }
+                    )
+                    time.sleep(2.0)
+                    continue
+                return ToolLoopSegmentResult(
+                    final_text="",
+                    tool_rounds=tool_rounds,
+                    finish_reason="timeout",
+                    exceeded=False,
+                    had_progress=segment_messages_show_progress(
+                        self.session.messages,
+                        segment_start_index,
+                    ),
+                    qa_soft_reminder_injected=reminder_injected,
+                )
             except LLMTimeoutError:
                 return ToolLoopSegmentResult(
                     final_text="",
@@ -792,6 +833,20 @@ class Agent:
                     ),
                     qa_soft_reminder_injected=reminder_injected,
                 )
+            # after SSE stream returns, check cancel before processing tool calls
+            if self.cancel_event.is_set():
+                return ToolLoopSegmentResult(
+                    final_text="",
+                    tool_rounds=tool_rounds,
+                    finish_reason=self._interrupt_finish_reason(),
+                    exceeded=False,
+                    had_progress=segment_messages_show_progress(
+                        self.session.messages,
+                        segment_start_index,
+                    ),
+                    qa_soft_reminder_injected=reminder_injected,
+                )
+
             finish_reason = response.finish_reason
 
             if not response.tool_calls:
@@ -819,12 +874,40 @@ class Agent:
                     result = _tool_result_for_argument_error(exc)
                 else:
                     result = self.executor.run(tool_name, arguments)
+
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_call.get("id", ""),
                     "content": to_json(result),
                 }
                 self.session.append_message(tool_message)
+
+                # —— retry on recoverable validation errors (TOOL-RETRY) ——
+                if (
+                    not result.ok
+                    and _is_retryable(result)
+                    and tool_rounds > 0
+                ):
+                    error = result.error
+                    error_text = error.message if error else str(result)
+                    details = getattr(error, "details", None) or {}
+                    received = details.get("received_keys", [])
+                    hint_parts = [
+                        f"[内核] 工具调用失败，请修正后重试（不消耗回合配额）：",
+                        f"  {tool_name}: {error_text}",
+                    ]
+                    if received:
+                        hint_parts.append(f"  你传入了这些键：{', '.join(received)}")
+                    expected = details.get("expected")
+                    if isinstance(expected, dict):
+                        params = [f"{k} ({v})" for k, v in expected.items()]
+                        hint_parts.append(f"  期望参数：{', '.join(params)}")
+                    # don't count this round; LLM retries next iteration
+                    tool_rounds -= 1
+                    self.session.append_message(
+                        {"role": "user", "content": "\n".join(hint_parts)}
+                    )
+                    break  # stop processing remaining tool_calls from this response
                 if (
                     result.ok
                     and tool_name == "propose_context_switch"
@@ -1104,8 +1187,10 @@ class Agent:
     def run_turn(self, user_text: str, *, spawn_explore: bool | None = None) -> TurnResult:
         """Append user message, optional explore subagent, then parent tool loop."""
         prepare_session_for_s4(self.session)
-        self._sync_allowed_evolved()
+        # Sync shell/root onto executor BEFORE allowlist so F1 can see project binding.
         self._sync_turn_mode()
+        self._sync_allowed_evolved()
+        self.executor._ensure_project_scope_tools_allowed()
         self.session.subagent_overlay = None
         self.session.turn_intent = None
         self.session.scaffold_tool_turn = False
@@ -1122,41 +1207,27 @@ class Agent:
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
 
-        from activity_router import (
-            apply_route_topics,
-            compute_activity_route,
-            emit_activity_route,
-            should_persist_activity_shell,
-        )
-        from evolve import list_pending_proposals
+        from activity_router import apply_route_topics, infer_topic_scope
 
-        activity_route = compute_activity_route(
-            user_text=user_text,
-            intent=intent,
-            session=self.session,
-            paths=self.session.paths,
-            pending_proposals=len(list_pending_proposals(self.session.paths)),
-        )
+        scope = infer_topic_scope(user_text, paths=self.session.paths)
+        topics_to_add: tuple[str, ...] = ()
+        if scope and scope not in {"common"}:
+            topics_to_add = (scope,)
+        elif scope == "common":
+            topics_to_add = ()
+
         from project_mode import project_plan_gate_open
 
         if project_plan_gate_open(self.session.meta):
-            if activity_route.shell != "project":
-                from activity_router import ActivityRoute, _project_topics
+            # Keep active_shell=project during draft (PROJECT-MODE §0e F2).
+            # activity_router already routes plan-gate turns to project.
+            topics_to_add = topics_to_add or ("coding",)
 
-                activity_route = ActivityRoute(
-                    "project",
-                    _project_topics(self.session),
-                    "项目 · 计划待确认",
-                )
-            self.session.meta.active_shell = "project"
-            self._sync_turn_mode()
-        elif should_persist_activity_shell(self.session.meta.active_shell, activity_route):
-            self.session.meta.active_shell = activity_route.shell
-            self._sync_turn_mode()
-        topics_changed = apply_route_topics(self.session, activity_route.topics_to_add)
+        topics_changed = apply_route_topics(self.session, topics_to_add)
         if topics_changed:
             self._sync_allowed_evolved()
         self._sync_turn_mode()
+        self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()
 
         subagent_tool_rounds = 0
@@ -1184,13 +1255,6 @@ class Agent:
                     ),
                 }
             )
-        emit_activity_route(
-            self._emit_turn_event,
-            self.session,
-            activity_route,
-            topics_changed=topics_changed,
-        )
-
         if spawn_explore_flag:
             from subagent import SubagentRunner, format_subagent_overlay
 
@@ -1208,7 +1272,12 @@ class Agent:
             subagent_tool_rounds = explore_result.tool_rounds
 
         tools = build_llm_tools(self.session, registry=self.executor.registry)
-        model = self.session.meta.llm_model or resolve_session_model(self.session.meta.topics)
+        # project / coding sessions always use the 1M-context model
+        has_project = bool(self.session.meta.project_root and self.session.meta.project_root.strip())
+        topics = list(self.session.meta.topics)
+        if has_project and "coding" not in topics:
+            topics.append("coding")
+        model = self.session.meta.llm_model or resolve_session_model(topics)
 
         if intent == "recall":
             tools = []
@@ -1353,6 +1422,42 @@ def prepare_session_for_s4(session: Session) -> None:
     session.save()
 
 
+def _is_retryable(result: ToolResult) -> bool:
+    """True when the error is recoverable via parameter correction."""
+    if not result.error:
+        return False
+    if result.error.code == ToolErrorCode.CONFIRM_REJECTED:
+        return False  # user explicitly said no
+    details = result.error.details or {}
+    if details.get("retry") is True:
+        return True
+    if result.error.code == ToolErrorCode.VALIDATION_ERROR:
+        return True
+    if result.error.code == ToolErrorCode.TOOL_NOT_FOUND:
+        # only retry if there's a close match available
+        return bool(details.get("available_tools"))
+    return False
+
+
+def _repair_json_arguments(raw: str) -> str:
+    """Attempt conservative repair of common LLM JSON argument errors.
+
+    Only fixes unambiguous cases; returns unchanged string otherwise.
+    """
+    text = raw.strip()
+    if not text:
+        return text
+
+    # 1. trailing comma before closing brace/bracket: {"a": 1,} → {"a": 1}
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # 2. single-quoted keys/string values at top level: {'a': 'b'} → {"a": "b"}
+    if text.startswith("{") and "'" in text and '"' not in text:
+        text = re.sub(r"'([^']*)'", r'"\1"', text)
+
+    return text
+
+
 class ToolCallArgumentError(ValueError):
     """Raised when tool_call.function.arguments is not valid JSON."""
 
@@ -1378,15 +1483,30 @@ def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     try:
         parsed = json.loads(raw_args or "{}")
     except json.JSONDecodeError as exc:
-        hint = (
-            "Fix JSON escaping in arguments (nested quotes in write_evolve content often break parsing). "
-            "Prefer content_base64 for multi-line tool.toml / main.py bodies."
-        )
-        raise ToolCallArgumentError(
-            tool_name,
-            f"tool_call arguments JSON invalid: {exc.msg} (char {exc.pos}). {hint}",
-            raw_args=raw_args[:400],
-        ) from exc
+        repair = _repair_json_arguments(raw_args)
+        if repair != raw_args:
+            try:
+                parsed = json.loads(repair)
+            except json.JSONDecodeError:
+                hint = (
+                    "Fix JSON escaping in arguments (nested quotes in write_evolve content often break parsing). "
+                    "Prefer content_base64 for multi-line tool.toml / main.py bodies."
+                )
+                raise ToolCallArgumentError(
+                    tool_name,
+                    f"tool_call arguments JSON invalid: {exc.msg} (char {exc.pos}). {hint}",
+                    raw_args=raw_args[:400],
+                ) from exc
+        else:
+            hint = (
+                "Fix JSON escaping in arguments (nested quotes in write_evolve content often break parsing). "
+                "Prefer content_base64 for multi-line tool.toml / main.py bodies."
+            )
+            raise ToolCallArgumentError(
+                tool_name,
+                f"tool_call arguments JSON invalid: {exc.msg} (char {exc.pos}). {hint}",
+                raw_args=raw_args[:400],
+            ) from exc
     if not isinstance(parsed, dict):
         raise ToolCallArgumentError(
             tool_name,
@@ -1397,14 +1517,14 @@ def _parse_tool_call(tool_call: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def _tool_result_for_argument_error(exc: ToolCallArgumentError) -> ToolResult:
-    details: dict[str, Any] = {}
+    details: dict[str, Any] = {"retry": True}
     if exc.raw_args:
         details["arguments_preview"] = exc.raw_args
     return tool_fail(
         exc.tool_name,
         ToolErrorCode.VALIDATION_ERROR,
         str(exc),
-        details=details or None,
+        details=details,
     )
 
 
@@ -1439,11 +1559,12 @@ def _demo_tools() -> None:
     registry = ToolRegistry.load()
     tools = build_builtin_tools(registry=registry)
 
-    assert len(tools) == 6, len(tools)
+    assert len(tools) == 7, len(tools)
     print(f"[PASS] build_builtin_tools returns {len(tools)} tools")
 
     names = [item["function"]["name"] for item in tools]
-    assert names == list(BUILTIN_TOOL_NAMES), names
+    expected = [t.name for t in BUILTIN_TOOLS]
+    assert names == expected, names
     print(f"[PASS] tool names: {', '.join(names)}")
 
     for item in tools:
@@ -1645,7 +1766,7 @@ def _demo_m3_workflow_sort(paths: AgentPaths) -> None:
     (demo_dir / "photo.jpg").write_text("jpg", encoding="utf-8")
     (demo_dir / "readme").write_text("no ext", encoding="utf-8")
 
-    rel = paths.to_workspace_relative(demo_dir)
+    rel = "workspace/_agent_m3_sort"
     sort_payload = json.dumps(
         {"tool_name": "sort_by_extension", "arguments": {"path": rel}, "dry_run": False},
         ensure_ascii=False,
@@ -1885,7 +2006,7 @@ def _demo_t702(paths: AgentPaths) -> None:
     ask_tools = build_llm_tools(session)
     ask_names = [item["function"]["name"] for item in ask_tools]
     assert "run_evolved" not in ask_names
-    assert len(ask_names) == 5
+    assert len(ask_names) == 6
     print("[PASS] T-702: ask mode LLM tools exclude run_evolved")
 
     agent = Agent.create(session, confirm_fn=lambda _p, _a: "y")

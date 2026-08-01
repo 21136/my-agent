@@ -1,9 +1,9 @@
 # 回合控制设计（TURN-CONTROL）
 
-> 版本 **0.2.0** · 2026-07-13  
-> **状态**：**M0 implemented**（T-1401～T-1408；待桌面重启手工验收）  
-> 关联：[CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [DESKTOP.md](./DESKTOP.md) §3.2.3 · §5.1 · §5.4 · [BUGS.md](./BUGS.md) · [TASKS.md](./TASKS.md) §Phase 15  
-> 动机：2026-07-13 grow 会话搭 `npm_exec` 时多次「思考中… / 处理中…」持续 **10+ 分钟**（Phase 14 已修 confirm 空转，但 **无用户 Stop**、确认 **3600s**、LLM **pro + 大上下文** 仍可假死）
+> 版本 **0.2.1** · 2026-07-30  
+> **状态**：**implemented**（T-1401～T-1408；Stop / Escape · UX-002）  
+> **UI 路径**：`shells/unified/` + `shells/pet/`（旧 grow/project/daily 路径已删）  
+> 关联：[CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [DESKTOP.md](./DESKTOP.md) §0 · [UX-POLISH.md](./UX-POLISH.md) · [BUGS.md](./BUGS.md) · [TASKS.md](./TASKS.md) §Phase 15
 
 ---
 
@@ -11,7 +11,7 @@
 
 | ID | 决议 |
 |----|------|
-| **R1** | 桌面四壳（grow / project / daily / pet）在 **`isWorking()`** 时展示 **「停止」**；点击即发 `turn.cancel`，**不**走 `TURN_LOCK` |
+| **R1** | **unified / pet** 在 **`isWorking()`** 时展示 **「停止」**（Escape 亦可）；点击即发 `turn.cancel`，**不**走 `TURN_LOCK` |
 | **R2** | `turn.cancel` **必须** `_dispatch_inline` 处理（与 `confirm.response` 同级），回合线程阻塞时仍可送达 |
 | **R3** | 取消后 sidecar **必发** `turn.end`（`finish_reason: cancelled`）+ 若 pending confirm 则 `confirm.done`（`choice: cancelled`） |
 | **R4** | `confirm_fn` 单次 `queue.get` 超时从 **3600s** 改为 **`CONFIRM_TIMEOUT_SEC`（默认 90s）**；与 `LLM_TIMEOUT_SEC`（120s）同量级 |
@@ -292,9 +292,8 @@ Phase 14 状态表仍成立；新增行：
 | `agent-core/tests/test_turn_cancel.py` | 新增：cancel during confirm / mock LLM |
 | `desktop/src/api/ws.ts` | 协议类型 |
 | `desktop/src/shells/chat-state.ts` | `turn.end` cancelled · confirm cancelled |
-| `desktop/src/shells/grow/index.ts` | Stop 按钮 |
-| `desktop/src/shells/project/index.ts` | 同 grow |
-| `desktop/src/shells/daily/index.ts` | 同 grow |
+| `desktop/src/shells/unified/index.ts` | Stop / Escape |
+| `desktop/src/shells/pet/index.ts` | Stop（伴侣窗） |
 | `desktop/src/shells/pet/index.ts` | 展开态 Stop |
 | `docs/DESKTOP.md` | §3.2.3 Stop · §5.1 协议表 |
 | `docs/CONFIRM-PIPELINE.md` | §5.2 补充 `choice: cancelled`；超时默认 90s 注记 |

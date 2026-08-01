@@ -87,17 +87,22 @@ class ExecutorSession:
     scaffold_tool_turn: bool = False
     active_shell: str = ""
     project_root: str = ""
+    project_id: str = ""
     project_plan_status: str = ""
     in_execute_segment: bool = False
     segment_scaffold_tools: dict[str, ScaffoldDemoRecord] = field(default_factory=dict)
     task_stop_armed: bool = False
     task_done_baseline: int | None = None
+    armed_task_id: str = ""
+    armed_task_text: str = ""
+    turn_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
         approved = False
         active_shell = ""
         project_root = ""
+        project_id = ""
         project_plan_status = ""
         if session_dir is not None:
             meta_path = session_dir / _META_FILENAME
@@ -110,6 +115,7 @@ class ExecutorSession:
                     approved = bool(payload.get(_WORKSPACE_APPROVED_KEY, False))
                     active_shell = str(payload.get("active_shell", "") or "")
                     project_root = str(payload.get("project_root", "") or "").strip()
+                    project_id = str(payload.get("project_id", "") or "").strip()
                     project_plan_status = str(payload.get("project_plan_status", "") or "")
         return cls(
             session_dir=session_dir,
@@ -117,6 +123,7 @@ class ExecutorSession:
             allowed_evolved=allowed_evolved,
             active_shell=active_shell,
             project_root=project_root,
+            project_id=project_id,
             project_plan_status=project_plan_status,
         )
 
@@ -135,6 +142,7 @@ class ExecutorSession:
             return
         self.active_shell = str(payload.get("active_shell", "") or "")
         self.project_root = str(payload.get("project_root", "") or "").strip()
+        self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
 
 
@@ -419,6 +427,41 @@ def _write_evolve_wrote_tool_manifest(tool_name: str, arguments: dict[str, Any],
     return False
 
 
+def _enrich_write_evolve_result(
+    result: ToolResult,
+    registry: Any,
+    allowed_evolved: set[str] | None,
+) -> None:
+    """Add scope info to write_evolve result so the agent can act on it."""
+    if not isinstance(result.data, dict):
+        return
+    written = result.data.get("written")
+    if not isinstance(written, str):
+        return
+    tool_name = _tool_name_from_evolve_path(written)
+    if tool_name is None:
+        return
+    tool = registry.get_evolved(tool_name)
+    if tool is None:
+        return
+    scope = tool.scope
+    topics = list(tool.topics) if tool.topics else []
+    visible = allowed_evolved is None or tool_name in allowed_evolved
+    result.data["tool_scope"] = scope
+    result.data["tool_topics"] = topics
+    result.data["tool_visible_now"] = visible
+    if not visible and scope != "common" and "common" not in topics:
+        result.data["tool_visible_hint"] = (
+            f"此工具 scope={scope}，当前会话缺少主题「{scope}」。"
+            f"执行「加主题 {scope}」或修改 tool.toml topics 添加「common」后即可使用。"
+        )
+    elif not visible and scope == "common":
+        result.data["tool_visible_hint"] = (
+            "工具 scope=common 但未出现在 allowed 清单，可能 status 非 active。"
+            f"当前 status={tool.status}，需改为 active 后重试。"
+        )
+
+
 def _validate_project_mode_call(
     session: ExecutorSession,
     tool_name: str,
@@ -487,13 +530,88 @@ def _validate_foreign_project_write(
     return None
 
 
+# PROJECT-MODE §0d E8: block repl bypass of npm_exec / mvn_exec in project mode
+_REPL_BUILD_BYPASS_RE = re.compile(
+    r"(?is)"
+    r"\b(?:npm|pnpm|yarn|mvn|gradlew?)\b"
+    r"|npm\.cmd|pnpm\.cmd|yarn\.cmd|mvn\.cmd"
+    r"|nodejs[/\\]+npm"
+    r"|NPM_CONFIG_REGISTRY"
+)
+
+
+def _validate_project_repl_build_bypass(
+    session: ExecutorSession,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolResult | None:
+    """Refuse repl code that shells out to package managers / Maven (E8)."""
+    if session.active_shell != "project":
+        return None
+    if tool_name != "run_evolved":
+        return None
+    evolved_name = arguments.get("tool_name")
+    if not isinstance(evolved_name, str) or evolved_name.strip() != "repl":
+        return None
+    inner = arguments.get("arguments")
+    if not isinstance(inner, dict):
+        inner = {}
+    # Also accept top-level code if coalesce left it there
+    code = inner.get("code")
+    if not isinstance(code, str):
+        code = arguments.get("code") if isinstance(arguments.get("code"), str) else ""
+    if not code or not _REPL_BUILD_BYPASS_RE.search(code):
+        return None
+    return tool_fail(
+        tool_name,
+        ToolErrorCode.VALIDATION_ERROR,
+        (
+            "项目模式下禁止用 repl 跑 npm/pnpm/yarn/mvn。"
+            "请改用 run_evolved → npm_exec 或 mvn_exec，"
+            "参数 working_dir（可用 cwd 别名）指向 workspace/<id>/…"
+        ),
+        details={
+            "guard_type": "project_repl_build_bypass",
+            "retry": True,
+            "hint": {
+                "npm_exec": {
+                    "working_dir": "workspace/<id>/frontend",
+                    "args": ["run", "build"],
+                },
+                "mvn_exec": {
+                    "working_dir": "workspace/<id>/backend",
+                    "args": ["-q", "compile"],
+                },
+            },
+        },
+    )
+
+
 def _validate_task_stop_write(
     session: ExecutorSession,
     tool_name: str,
     arguments: dict[str, Any],
 ) -> ToolResult | None:
-    """Phase 20 M1: after marking a TASKS [x], block next-task product writes."""
+    """Phase 20 M1 + Phase 24 G5: after [x], block next-task writes and re-report."""
+    from progress_gate import report_progress_repeat_block_reason
     from project_mode import task_stop_block_reason
+
+    repeat = report_progress_repeat_block_reason(
+        active_shell=session.active_shell,
+        task_stop_armed=session.task_stop_armed,
+        tool_name=tool_name,
+        arguments=arguments,
+    )
+    if repeat is not None:
+        return tool_fail(
+            tool_name,
+            ToolErrorCode.VALIDATION_ERROR,
+            repeat,
+            details={
+                "guard_type": "progress_gate_repeat",
+                "active_shell": session.active_shell,
+            },
+        )
 
     reason = task_stop_block_reason(
         active_shell=session.active_shell,
@@ -512,6 +630,39 @@ def _validate_task_stop_write(
             "guard_type": "task_stop",
             "active_shell": session.active_shell,
             "project_root": session.project_root,
+        },
+    )
+
+
+def _validate_progress_gate_evidence(
+    session: ExecutorSession,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolResult | None:
+    """Phase 24 G1/G2: require this-turn matched tool success before report_progress."""
+    if tool_name != "run_evolved":
+        return None
+    evolved = arguments.get("tool_name")
+    if not isinstance(evolved, str) or evolved.strip() != "report_progress":
+        return None
+    from progress_gate import report_progress_evidence_block_reason
+
+    reason = report_progress_evidence_block_reason(
+        active_shell=session.active_shell,
+        armed_task_text=session.armed_task_text or "",
+        turn_evidence=list(session.turn_evidence or []),
+    )
+    if reason is None:
+        return None
+    return tool_fail(
+        tool_name,
+        ToolErrorCode.VALIDATION_ERROR,
+        reason,
+        details={
+            "guard_type": "progress_gate_evidence",
+            "armed_task_id": session.armed_task_id,
+            "armed_task_text": session.armed_task_text,
+            "evidence_count": len(session.turn_evidence or []),
         },
     )
 
@@ -602,19 +753,28 @@ class ToolExecutor:
         self.session.segment_scaffold_tools.clear()
 
     def begin_turn(self) -> None:
-        """Reset per-turn task-stop gate (Phase 20 M1)."""
+        """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
         self.session.task_stop_armed = False
         self.session.task_done_baseline = None
+        self.session.armed_task_id = ""
+        self.session.armed_task_text = ""
+        self.session.turn_evidence = []
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             return
-        from project_mode import project_id_from_root, read_task_stats
+        from project_mode import first_open_task, project_id_from_root, read_task_stats
 
-        pid = project_id_from_root(self.session.project_root)
+        pid = (self.session.project_id or "").strip() or project_id_from_root(
+            self.session.project_root
+        )
         if not pid:
             return
         tasks_path = self.registry.agent_paths.workspace / pid / "TASKS.md"
         stats = read_task_stats(tasks_path)
         self.session.task_done_baseline = stats.done
+        if tasks_path.is_file():
+            _, body, tid = first_open_task(tasks_path.read_text(encoding="utf-8"))
+            self.session.armed_task_id = tid or ""
+            self.session.armed_task_text = body or ""
 
     def end_execute_segments(self) -> None:
         self.session.in_execute_segment = False
@@ -652,6 +812,7 @@ class ToolExecutor:
         self.reload_registry()
         if self.on_registry_reloaded is not None:
             self.on_registry_reloaded()
+        _enrich_write_evolve_result(result, self.registry, self.session.allowed_evolved)
         self._maybe_auto_scaffold_demo(tool_name, arguments, result)
 
     def _maybe_auto_scaffold_demo(
@@ -717,6 +878,17 @@ class ToolExecutor:
         started = time.perf_counter()
         name = tool_name.strip()
         args = dict(arguments or {})
+
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            canceled = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "tool call cancelled",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, args, canceled, confirm="cancelled", started=started)
+            return canceled
+
         confirm_decision = "skipped"
 
         error = self.validate(name, args)
@@ -724,6 +896,8 @@ class ToolExecutor:
             self._maybe_log_validation_guard(error)
             self._log_tool_call(name, args, error, confirm=confirm_decision, started=started)
             return error
+
+        self._maybe_inject_report_progress_project_id(name, args)
 
         builtin = self.registry.get_builtin(name)
         assert builtin is not None
@@ -779,6 +953,7 @@ class ToolExecutor:
         )
         if name == "read_file" and result.ok:
             self._maybe_record_memory_entity_used(args, result)
+        self._record_turn_evidence(name, args, result)
         if result.ok:
             self._maybe_reload_registry_after_write_evolve(name, args, result)
             self._maybe_arm_task_stop(name, args, result)
@@ -994,10 +1169,17 @@ class ToolExecutor:
 
         evolved_name = arguments.get("tool_name")
         if not isinstance(evolved_name, str) or not evolved_name.strip():
+            allowed = sorted(self.session.allowed_evolved or ())
             return tool_fail(
                 name,
                 ToolErrorCode.VALIDATION_ERROR,
                 "tool_name is required for run_evolved",
+                details={
+                    "expected": {"tool_name": "string (必需)", "arguments": "object (可选)", "dry_run": "boolean (可选)"},
+                    "received_keys": sorted(arguments.keys()),
+                    "available_tools": allowed,
+                    "retry": True,
+                },
             )
 
         evolved = self.registry.get_evolved(evolved_name.strip())
@@ -1011,8 +1193,13 @@ class ToolExecutor:
                     "requested_tool": evolved_name.strip(),
                     "available_tools": allowed,
                     "hint": "tool_name 须出现在本会话 evolved 清单；只观察可用 builtin",
+                    "retry": True,
                 },
             )
+
+        # §0e F1 belt-and-suspenders: project-bound sessions always admit scope=project tools
+        # even if allowed_evolved was computed before shell/root sync.
+        self._ensure_project_scope_tools_allowed()
 
         if self.session.allowed_evolved is not None and evolved.name not in self.session.allowed_evolved:
             allowed = sorted(self.session.allowed_evolved)
@@ -1064,6 +1251,10 @@ class ToolExecutor:
         if project_error is not None:
             return project_error
 
+        repl_bypass = _validate_project_repl_build_bypass(self.session, name, arguments)
+        if repl_bypass is not None:
+            return repl_bypass
+
         foreign_error = _validate_foreign_project_write(self.session, name, arguments)
         if foreign_error is not None:
             return foreign_error
@@ -1072,7 +1263,97 @@ class ToolExecutor:
         if task_stop_error is not None:
             return task_stop_error
 
+        progress_gate_error = _validate_progress_gate_evidence(self.session, name, arguments)
+        if progress_gate_error is not None:
+            return progress_gate_error
+
         return None
+
+    def _ensure_project_scope_tools_allowed(self) -> None:
+        """Admit active scope=project tools when this executor session is project-bound (F1)."""
+        if self.session.allowed_evolved is None:
+            return
+        bound = (self.session.active_shell or "").strip() == "project" or bool(
+            (self.session.project_root or "").strip()
+        )
+        if not bound:
+            return
+        extra = {
+            tool.name
+            for tool in self.registry.evolved()
+            if tool.status == "active" and tool.scope == "project"
+        }
+        if not extra:
+            return
+        current = set(self.session.allowed_evolved)
+        if extra <= current:
+            return
+        self.session.allowed_evolved = current | extra
+
+    def _maybe_inject_report_progress_project_id(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """§0e F4 + armed identity: fill project_id / task_id / task_text when omitted."""
+        if tool_name != "run_evolved":
+            return
+        evolved = arguments.get("tool_name")
+        if not isinstance(evolved, str) or evolved.strip() != "report_progress":
+            return
+        inner = arguments.get("arguments")
+        if not isinstance(inner, dict):
+            inner = {}
+        else:
+            inner = dict(inner)
+
+        existing = inner.get("project_id")
+        if not (isinstance(existing, str) and existing.strip()):
+            from project_mode import project_id_from_root
+
+            injected = (self.session.project_id or "").strip()
+            if not injected:
+                injected = project_id_from_root(self.session.project_root) or ""
+            if injected:
+                inner["project_id"] = injected
+
+        # Turn-locked identity wins over model-supplied id/line.
+        armed_id = (self.session.armed_task_id or "").strip()
+        if armed_id:
+            inner["task_id"] = armed_id
+        armed_text = (self.session.armed_task_text or "").strip()
+        if armed_text:
+            inner["task_text"] = armed_text
+
+        arguments["arguments"] = inner
+
+    def _record_turn_evidence(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        """Phase 24: append this-turn tool outcome for progress_gate matching."""
+        from progress_gate import make_evidence_entry
+        from project_mode import extract_run_evolved_paths
+
+        evolved = ""
+        if tool_name == "run_evolved":
+            raw = arguments.get("tool_name")
+            if isinstance(raw, str):
+                evolved = raw.strip()
+            # Never treat report_progress itself as completion evidence.
+            if evolved == "report_progress":
+                return
+        paths = extract_run_evolved_paths(tool_name, arguments)
+        self.session.turn_evidence.append(
+            make_evidence_entry(
+                tool_name=tool_name,
+                evolved_name=evolved or tool_name,
+                ok=bool(result.ok),
+                paths=paths,
+            )
+        )
 
     def _maybe_arm_task_stop(
         self,
@@ -1080,7 +1361,7 @@ class ToolExecutor:
         arguments: dict[str, Any],
         result: ToolResult,
     ) -> None:
-        """Arm task-stop after TASKS.md done-count increases (Phase 20 M1)."""
+        """Arm task-stop after TASKS.md done-count increases (Phase 20 M1 / §0e F3)."""
         if not result.ok or self.session.task_stop_armed:
             return
         if self.session.active_shell != "project" or not self.session.project_root.strip():
@@ -1088,11 +1369,9 @@ class ToolExecutor:
         if tool_name != "run_evolved":
             return
         evolved_name = arguments.get("tool_name")
-        if not isinstance(evolved_name, str) or evolved_name.strip() not in _WORKSPACE_WRITE_TOOLS:
+        if not isinstance(evolved_name, str):
             return
-        data = result.data if isinstance(result.data, dict) else {}
-        if data.get("dry_run"):
-            return
+        evolved_name = evolved_name.strip()
 
         from project_mode import (
             extract_run_evolved_paths,
@@ -1101,12 +1380,22 @@ class ToolExecutor:
             read_task_stats,
         )
 
-        touched_tasks = False
-        for path in extract_run_evolved_paths(tool_name, arguments):
-            if is_project_tasks_path(path, self.session.project_root):
-                touched_tasks = True
-                break
-        if not touched_tasks:
+        via_report = evolved_name == "report_progress"
+        via_write = evolved_name in _WORKSPACE_WRITE_TOOLS
+        if not via_report and not via_write:
+            return
+
+        if via_write:
+            touched_tasks = False
+            for path in extract_run_evolved_paths(tool_name, arguments):
+                if is_project_tasks_path(path, self.session.project_root):
+                    touched_tasks = True
+                    break
+            if not touched_tasks:
+                return
+
+        data = result.data if isinstance(result.data, dict) else {}
+        if data.get("dry_run"):
             return
 
         pid = project_id_from_root(self.session.project_root)
@@ -1126,6 +1415,7 @@ class ToolExecutor:
                     "done": stats.done,
                     "baseline": baseline,
                     "project_root": self.session.project_root,
+                    "via": "report_progress" if via_report else evolved_name,
                 },
             )
 
@@ -1142,9 +1432,29 @@ class ToolExecutor:
             return None
         paths = self.registry.agent_paths
         current = conversation_id_from_session(self.session.session_dir)
-        from shell_switch import cross_session_read_target
 
-        return cross_session_read_target(paths, current, path_arg)
+        from tools.builtin.read_file import resolve_read_path
+
+        if not isinstance(path_arg, str) or not path_arg.strip():
+            return None
+        try:
+            resolved = resolve_read_path(paths, path_arg.strip())
+        except (FileNotFoundError, TypeError, ValueError):
+            return None
+        try:
+            rel = paths.to_agent_relative(resolved).replace("\\", "/")
+        except Exception:
+            return None
+        if not rel.startswith("data/sessions/"):
+            return None
+        parts = rel.split("/")
+        if len(parts) < 3:
+            return None
+        target_id = parts[2].strip()
+        current_cid = current.strip()
+        if not target_id or target_id == current_cid:
+            return None
+        return target_id
 
     def _needs_confirm(
         self,
@@ -1164,7 +1474,7 @@ class ToolExecutor:
             return False
         if (
             evolved is not None
-            and evolved.policy.workspace_only
+            and evolved.policy.allow_approve_all
             and self.session.workspace_evolved_approved
             and not _arguments_use_host_scope(arguments)
         ):
@@ -1188,7 +1498,7 @@ class ToolExecutor:
         preview = build_confirm_preview(tool_name, arguments, evolved=evolved)
         allow_approve_all = (
             evolved is not None
-            and evolved.policy.workspace_only
+            and evolved.policy.allow_approve_all
             and not _arguments_use_host_scope(arguments)
         )
         if self.confirm_fn is not None:
@@ -1449,21 +1759,21 @@ def build_confirm_preview(
         if arguments.get("dry_run"):
             lines.append("Mode: dry_run")
         if evolved is not None:
-            lines.append(f"Policy: workspace_only={evolved.policy.workspace_only}")
-            if evolved.name == "host_copy_move" and isinstance(inner, dict):
-                try:
-                    from host_tools import host_path_confirm_line
-                    from paths import AgentPaths
+            lines.append(f"Policy: allow_approve_all={evolved.policy.allow_approve_all}")
+            if evolved.name in {"host_copy_move", "copy_move"} and isinstance(inner, dict):
+                source = inner.get("source")
+                if isinstance(source, str) and source.strip().lower().startswith("host:"):
+                    try:
+                        from host_tools import host_path_confirm_line
+                        from paths import AgentPaths
 
-                    agent_paths = AgentPaths.discover()
-                    source = inner.get("source")
-                    dest = inner.get("dest")
-                    if isinstance(source, str):
+                        agent_paths = AgentPaths.discover()
+                        dest = inner.get("dest")
                         lines.append(host_path_confirm_line(agent_paths, "Source", source, write=False))
-                    if isinstance(dest, str):
-                        lines.append(host_path_confirm_line(agent_paths, "Dest", dest, write=True))
-                except Exception as exc:
-                    lines.append(f"Host paths: (preview failed: {exc})")
+                        if isinstance(dest, str):
+                            lines.append(host_path_confirm_line(agent_paths, "Dest", dest, write=True))
+                    except Exception as exc:
+                        lines.append(f"Host paths: (preview failed: {exc})")
     else:
         if arguments:
             lines.append(f"Arguments: {json.dumps(arguments, ensure_ascii=False, sort_keys=True)}")
@@ -1471,11 +1781,6 @@ def build_confirm_preview(
         path_arg = arguments.get("path")
         if isinstance(path_arg, str):
             try:
-                from shell_switch import cross_session_read_target
-                from paths import AgentPaths
-
-                paths = AgentPaths.discover()
-                # preview only — no session dir required for message
                 rel = path_arg.strip().replace("\\", "/")
                 if rel.startswith("data/sessions/"):
                     parts = rel.split("/")
@@ -1559,8 +1864,8 @@ print(json.dumps({"ok": True, "remote": payload.get("message", "")}))
             encoding="utf-8",
         )
 
-        _write_manifest(tool_ws / "tool.toml", name="echo_json", workspace_only=True)
-        _write_manifest(tool_remote / "tool.toml", name="remote_echo", workspace_only=False, topics=["coding"])
+        _write_manifest(tool_ws / "tool.toml", name="echo_json", allow_approve_all=True)
+        _write_manifest(tool_remote / "tool.toml", name="remote_echo", allow_approve_all=False, topics=["coding"])
 
         registry = ToolRegistry.load(paths)
         from tools.registry import parse_tool_manifest
@@ -1630,7 +1935,7 @@ print(json.dumps({"ok": True, "remote": payload.get("message", "")}))
             {"tool_name": "echo_json", "arguments": {"message": "no prompt"}},
         )
         assert skipped.ok and not prompts
-        print("[PASS] workspace_only evolved skips confirm after a")
+        print("[PASS] allow_approve_all evolved skips confirm after a")
 
         prompts_queue = ["y"]
         still_confirm = executor.run(
@@ -1638,7 +1943,7 @@ print(json.dumps({"ok": True, "remote": payload.get("message", "")}))
             {"tool_name": "remote_echo", "arguments": {"message": "remote"}},
         )
         assert still_confirm.ok and prompts
-        print("[PASS] non-workspace_only evolved still confirms")
+        print("[PASS] non-allow_approve_all evolved still confirms")
 
         reloaded = ToolExecutor(
             registry=registry,
@@ -1673,7 +1978,7 @@ else:
 """,
             encoding="utf-8",
         )
-        _write_manifest(tool_write / "tool.toml", name="write_probe", workspace_only=True)
+        _write_manifest(tool_write / "tool.toml", name="write_probe", allow_approve_all=True)
         write_tool = parse_tool_manifest(tool_write / "tool.toml", evolve_dir=evolve)
         registry = ToolRegistry(agent_paths=paths, evolved=[echo_tool, remote_tool, write_tool])
         executor.registry = registry
@@ -1896,7 +2201,7 @@ else:
             assert reload_exec.registry.get_evolved("registry_reload_demo") is None
             demo_dir.mkdir(parents=True, exist_ok=True)
             (demo_dir / "main.py").write_text('print("reload")\n', encoding="utf-8")
-            _write_manifest(demo_dir / "tool.toml", name="registry_reload_demo", workspace_only=False)
+            _write_manifest(demo_dir / "tool.toml", name="registry_reload_demo", allow_approve_all=False)
             manifest_text = (demo_dir / "tool.toml").read_text(encoding="utf-8")
             (demo_dir / "tool.toml").unlink()
             reload_result = reload_exec.run(
@@ -1963,7 +2268,7 @@ else:
                 'if __name__ == "__main__":\n    import sys\n    print("[PASS] guard demo")\n',
                 encoding="utf-8",
             )
-            _write_manifest(demo_tool_dir / "tool.toml", name="guard_demo_tool", workspace_only=True)
+            _write_manifest(demo_tool_dir / "tool.toml", name="guard_demo_tool", allow_approve_all=True)
             guard_exec.registry = ToolRegistry.load(paths)
             probe = guard_exec.run_scaffold_demo_probe("guard_demo_tool")
             assert probe.get("attempted") is True and probe.get("exit_code") == 0
@@ -2020,7 +2325,7 @@ else:
         print(to_json(approved, indent=2))
 
 
-def _write_manifest(path: Path, *, name: str, workspace_only: bool, topics: list[str] | None = None) -> None:
+def _write_manifest(path: Path, *, name: str, allow_approve_all: bool, topics: list[str] | None = None) -> None:
     topic_list = topics or ["common"]
     topics_literal = ", ".join(f'"{topic}"' for topic in topic_list)
     path.write_text(
@@ -2047,7 +2352,7 @@ type = "object"
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = {"true" if workspace_only else "false"}
+allow_approve_all = {"true" if allow_approve_all else "false"}
 timeout_sec = 30
 """,
         encoding="utf-8",

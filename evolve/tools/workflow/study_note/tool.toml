@@ -2,7 +2,7 @@
 name = "study_note"
 description = "organize markdown notes by tags"
 version = "1.0.0"
-status = "active"
+status = "archived"
 topics = ["workflow"]
 
 [entry]
@@ -14,11 +14,11 @@ type = "object"
 required = []
 [schema.input.properties.source_dir]
 type = "string"
-description = "source dir under workspace, default inbox"
+description = "source dir under agent root, default inbox"
 default = "inbox"
 [schema.input.properties.target_dir]
 type = "string"
-description = "target dir under workspace, default notes"
+description = "target dir under agent root, default notes"
 default = "notes"
 [schema.input.properties.action]
 type = "string"
@@ -37,5 +37,5 @@ category_counts = { type = "object"}
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

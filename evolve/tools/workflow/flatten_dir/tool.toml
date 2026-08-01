@@ -1,6 +1,6 @@
 [tool]
 name = "flatten_dir"
-description = "将 workspace 子目录中的文件提升到指定目录顶层；冲突默认 rename"
+description = "将目录子文件夹中的文件提升到顶层；path 相对 agent root；冲突默认 rename"
 version = "1.0.0"
 status = "active"
 topics = ["workflow"]
@@ -14,7 +14,7 @@ type = "object"
 required = ["path"]
 [schema.input.properties.path]
 type = "string"
-description = "相对 workspace 的根目录"
+description = "相对 agent root 的根目录"
 [schema.input.properties.on_conflict]
 type = "string"
 enum = ["skip", "rename"]
@@ -37,5 +37,5 @@ moved = { type = "array" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 120

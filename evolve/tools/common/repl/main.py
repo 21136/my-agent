@@ -1,9 +1,10 @@
-""" repl -  interactive Python RESL maintains state across calls via session_id."""
+""" repl -  interactive Python REPL maintains state across calls via session_id."""
 
 from __future__ import annotations
 
 import io
 import json
+import os
 import pickle
 import sys
 import textwrap
@@ -84,6 +85,8 @@ def run_repl(payload: dict[str, Any]) -> dict[str, Any]:
 
     if dry_run:
         return {"ok": True, "dry_run": True, "session_id": session_id, "code_preview": code_str[:200]}
+
+    os.chdir(str(_agent_root()))
 
     ns = _load_ns(session_id)
     if reset:

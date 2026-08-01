@@ -351,7 +351,7 @@ type = "object"
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 60
 """
 
@@ -368,8 +368,8 @@ def _demo() -> None:
     paths = AgentPaths.discover()
     registry = ToolRegistry.load()
     tool = registry.get_evolved("write_evolve")
-    assert tool is not None and tool.status == "active" and tool.policy.workspace_only is False
-    print("[PASS] registry loads write_evolve (common, active, workspace_only=false)")
+    assert tool is not None and tool.status == "active" and tool.policy.allow_approve_all is False
+    print("[PASS] registry loads write_evolve (common, active, allow_approve_all=false)")
 
     rel_toml = "evolve/tools/common/write_evolve_demo/tool.toml"
     rel_py = "evolve/tools/common/write_evolve_demo/main.py"

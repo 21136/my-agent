@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：稳定化 **Phase 18 done · 已解冻**；Phase 19 **done**；**Phase 20 设计已决**（[TASK-STOP.md](./TASK-STOP.md) v0.2.0）— 实现 T-2003～ · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 24** 进度硬闸门 **doc**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)）；Phase 20～23 见下表；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1019,7 +1019,59 @@ python turn_intent.py    # 分类用例无回归
 
 ---
 
-### T-1002 手工验收（`host_scope.json` 加载与校验）
+### T-1002 手工验收（`host_sco
+## Phase 21 — 项目进度闭环（report_progress 可达）
+
+> 设计：[PROJECT-MODE.md](./PROJECT-MODE.md) **§0e** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)  
+> **状态**：实现 **done**（2026-07-31；工作区 TASKS 曾空文件，以设计文档与测试为准）
+
+| ID | 任务 | 状态 |
+|----|------|------|
+| T-2101～T-2107 | 清单并入 / draft 壳 / 一停武装 / project_id 注入等 | **done** |
+
+---
+
+## Phase 22 — 可见计划搭档
+
+> 设计：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.10**  
+> **状态**：**done**（T-2201～T-2207）
+
+---
+
+## Phase 23 — 工具目录 INDEX
+
+> 设计：[TOOL-CATALOG.md](./TOOL-CATALOG.md)  
+> **状态**：**done**（M0～M5 · Mp/Mq/Mr）
+
+---
+
+## Phase 24 — 进度硬闸门（Progress Gate）
+
+> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.1.0**  
+> 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证。  
+> 产品选择：**无本回合对口工具成功证据不可勾**；人只审规则/身份异常卡；工具失败走找 bug，无强制勾选。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §5.1（执行门 / report_progress / 侧栏异常卡 / overlay；grow 不变）
+- [x] 回归 ID：**S-70～S-74** · **IT-70～IT-73**（同文档 §5.2）；既有一停 / armed 身份回归 IT-73
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-2401 | 设计文档 + MAP/TASKS 挂钩 | `PROGRESS-GATE.md` v0.1.0 · 本表 | — | G0～G7 可勾选；DOC-04 齐全 | **done** |
+| T-2402 | 本回合证据账本（executor） | `executor.py` turn_evidence | T-2401 | 工具 ok/失败可查询；跨 turn 清空 | **done** |
+| T-2403 | 证据类分类纯函数 | `project_mode.py`（或邻接模块）+ IT-70 | T-2401 | 标题→write/compile/test/build_fe/verify_db/unknown | **done** |
+| T-2404 | report_progress 证据门 | `report_progress` + 内核校验 + IT-71 | T-2402,T-2403 | 无对口本回合证据 → 不 toggle | **done** |
+| T-2405 | 一停扩展：禁同 turn 再 report | task-stop + IT-72 | T-2404 | 第二次 report_progress 硬拒 | **done** |
+| T-2406 | 异常卡（规则/身份）无强勾 | Plan/侧栏 notices | T-2404 | 仅规则冲突可人审；失败无强制勾入口 | todo |
+| T-2407 | overlay / project.md 一句对齐 | loader · evolve/prompts | T-2404 | 文案含「无对口证据不可勾」 | todo |
+| T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | todo |
+
+**完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒。
+
+---
+
+pe.json` 加载与校验）
 
 **环境**：`cd D:\my-agent\agent-core`（或你的 agent 根下 `agent-core/`）。
 

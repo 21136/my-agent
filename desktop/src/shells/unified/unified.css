@@ -265,6 +265,43 @@
   border-bottom: 1px solid var(--ma-border);
 }
 
+.unified-sessions-header {
+  flex-shrink: 0;
+}
+
+.unified-sessions-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.35rem;
+}
+
+.unified-sessions-tab {
+  border: 1px solid var(--ma-border);
+  background: transparent;
+  color: var(--ma-text-muted);
+  padding: 0.25rem 0.65rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.unified-sessions-tab.is-active {
+  color: var(--ma-text);
+  border-color: var(--ma-text-muted);
+  background: var(--ma-bg);
+}
+
+.unified-sessions-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-top: 0.35rem;
+  padding-right: 0.15rem;
+}
+
+.unified-sessions-empty {
+  margin: 0.5rem 0;
+}
+
 .unified-surface {
   border: 1px solid var(--ma-border);
   background: var(--ma-bg);

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
@@ -300,11 +300,22 @@ async function ensureSidecar(): Promise<void> {
 }
 
 function stopSidecar(): void {
-  if (sidecarOwned && sidecar && !sidecar.killed) {
+  if (sidecar && !sidecar.killed) {
     try {
       sidecar.kill();
     } catch {
-      // process may already be gone (Windows taskkill race)
+      // process may already be gone
+    }
+  }
+  // On Windows, ChildProcess.kill() uses TerminateProcess which skips Python's
+  // atexit handlers, so the .interface.lock file is never cleaned up.  Remove it
+  // here so the next launch doesn't see a stale "session occupied" lock.
+  const lockPath = path.join(AGENT_ROOT, "data", "sessions", ".interface.lock");
+  if (existsSync(lockPath)) {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // best-effort
     }
   }
   sidecar = null;

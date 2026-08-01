@@ -1,0 +1,20 @@
+# 执行构建（run）
+
+> L1 · Phase 23 M4。调用：`run_evolved` · `tool_name=<名>`（须 `active`）。
+
+| 工具 | 作用 |
+|------|------|
+| `run_python` | 跑 agent root 下 Python 脚本，返回 stdout/stderr/exit_code |
+| `repl` | 会话内交互 Python（`session_id` 保状态）。**项目模式禁止**用 repl 跑 npm/mvn |
+| `npm_exec` | 在指定目录跑 npm/pnpm/yarn；读项目 `ENV.md`；目录参数用 `working_dir`（可用别名 `cwd`） |
+| `mvn_exec` | 跑 Maven；同样读 `ENV.md`；用 `working_dir` |
+| `run_demo` | 在 `agent-core/` 下跑 `python <script>.py` 冒烟 |
+| `run_tests` | 批量跑约定 demo / 测试套件 |
+| `git_snapshot` | 只读：`git status --porcelain` + `diff --stat`（可选 staged） |
+| `csv_head` | 预览 CSV 前 N 行（表头、列类型、总行数） |
+| `doc_parser` | 解析 `.doc` / `.docx` / `.xlsx` 为可读文本（支持 `host:`） |
+
+## 注意
+
+- 测前端：目标目录已有 `node_modules` 时**不要先 install**；直接 `run` / `build` / `test`（除非 `force_install`）。
+- 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。

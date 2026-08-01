@@ -1,7 +1,7 @@
 [tool]
 name = "report_progress"
-description = "向项目管理器报告任务进度。完成一条 TASKS 勾选后调用此工具而非直接 write_text 改 TASKS.md。可同时拆分当前 task 为子任务、新增发现的任务。项目管理器会验证并更新 TASKS.md。"
-version = "1.0.0"
+description = "向项目管理器报告任务进度。完成一条 TASKS 勾选后调用此工具而非直接 write_text 改 TASKS.md。可同时拆分当前 task 为子任务、新增发现的任务。项目管理器会验证并更新 TASKS.md。project_id 可省略（项目会话由内核从 meta 注入）。勾选须本回合对口工具成功证据（PROGRESS-GATE）。"
+version = "1.2.0"
 status = "active"
 topics = ["project", "coding"]
 
@@ -15,9 +15,18 @@ required = ["summary"]
 [schema.input.properties.summary]
 type = "string"
 description = "本轮完成的工作摘要"
+[schema.input.properties.project_id]
+type = "string"
+description = "项目 id；项目会话可省略，由 executor 从 meta.project_id 注入（§0e F4）"
 [schema.input.properties.task_line]
 type = "integer"
-description = "已完成的 task 在 TASKS.md 中的行号（0-indexed），用于自动勾选 [x]"
+description = "已完成 task 在 TASKS.md 的行号（0-indexed）。若 Plan 搭档刚插入/重排过任务，行号可能过期；请在 summary 写明 T-xxx，或传 task_id——内核会按身份重解析后勾选"
+[schema.input.properties.task_id]
+type = "string"
+description = "稳定任务 id，如 T-011；优先于 task_line。项目会话由内核按本轮 armed 任务注入/覆盖"
+[schema.input.properties.task_text]
+type = "string"
+description = "本轮锁定任务的 checkbox 正文；无 T-id 时用于解析。项目会话由内核注入"
 [schema.input.properties.subtasks]
 type = "array"
 description = "拆分出的子任务描述列表（实际做了但 TASKS.md 没列出的子步骤）"

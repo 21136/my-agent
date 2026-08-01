@@ -21,17 +21,17 @@ from project_mode import (
 )
 from project_switch import (
     execute_project_switch,
+    lookup_project_session,
     plan_project_switch,
     record_project_session,
+    session_exists,
 )
-from session import Session, create_new, write_last_conversation_id
+from session import Session, build_seed_message, create_new, write_last_conversation_id
 
-ContextAction = Literal["project.create", "project.switch", "shell.switch", "session.new"]
+ContextAction = Literal["project.create", "project.switch", "session.new"]
 SUPPORTED_ACTIONS = frozenset(
-    {"project.create", "project.switch", "shell.switch", "session.new"}
+    {"project.create", "project.switch", "session.new"}
 )
-SHELL_TARGETS = frozenset({"grow", "daily", "project", "govern"})
-SESSION_NEW_TARGETS = SHELL_TARGETS | {"current"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,29 +68,8 @@ def normalize_proposal(
     rid = (request_id or "").strip() or str(uuid.uuid4())
     reason_text = (reason or "").strip()
 
-    if act == "shell.switch":
-        shell = target.strip().casefold()
-        if shell not in SHELL_TARGETS:
-            raise ContextSwitchError(
-                f"shell.switch target must be one of: {', '.join(sorted(SHELL_TARGETS))}"
-            )
-        pid: str | None = None
-        if project_id and str(project_id).strip():
-            pid = normalize_project_id(str(project_id))
-        return ContextSwitchProposal(
-            action=act,
-            target=shell,
-            reason=reason_text,
-            request_id=rid,
-            project_id=pid,
-        )
-
     if act == "session.new":
         shell = target.strip().casefold() or "current"
-        if shell not in SESSION_NEW_TARGETS:
-            raise ContextSwitchError(
-                "session.new target must be current or grow|daily|project|govern"
-            )
         pid = None
         if project_id and str(project_id).strip():
             pid = normalize_project_id(str(project_id))
@@ -129,21 +108,10 @@ def build_context_switch_request(
         side_effects.append("可能加载该项目专用会话（聊天区替换）")
         title = f"切换项目 · {proposal.target}"
     elif proposal.action == "session.new":
-        shell = _resolve_session_new_shell(session, proposal.target)
-        display_target = shell
-        side_effects.append(f"在「{shell}」壳新建空白会话")
+        display_target = "当前"
+        side_effects.append("新建空白会话")
         side_effects.append("聊天区将清空为新会话（旧会话仍保留在磁盘）")
-        if shell == "project":
-            pid = proposal.project_id or current_pid or "(需已绑定项目)"
-            side_effects.append(f"仍绑定项目：{pid}")
-        title = f"新会话 · {shell}"
-    else:
-        side_effects.append(f"切换到外壳 · {proposal.target}")
-        side_effects.append("将加载该壳专用会话（聊天区可能替换）")
-        if proposal.target == "project":
-            pid = proposal.project_id or current_pid or "(需指定项目)"
-            side_effects.append(f"项目：{pid}")
-        title = f"切换外壳 · {proposal.target}"
+        title = "新会话"
 
     return {
         "type": "context.switch.request",
@@ -172,31 +140,9 @@ def apply_context_switch(
         return _apply_project_create(paths, session, proposal.target)
     if proposal.action == "project.switch":
         return _apply_project_switch(paths, session, proposal.target)
-    if proposal.action == "shell.switch":
-        return _apply_shell_switch(paths, session, proposal)
     if proposal.action == "session.new":
         return _apply_session_new(paths, session, proposal)
     raise ContextSwitchError(f"unsupported action: {proposal.action}")
-
-
-def _resolve_session_new_shell(session: Session, target: str) -> str:
-    from shell_switch import lookup_shell_owner
-
-    if target == "current":
-        owner = lookup_shell_owner(session.paths, session.conversation_id)
-        return owner or session.meta.active_shell or "daily"
-    return target
-
-
-def _current_shell_line(session: Session) -> str:
-    from shell_switch import lookup_shell_owner
-
-    owner = lookup_shell_owner(session.paths, session.conversation_id)
-    if owner:
-        return owner
-    if session.meta.active_shell == "project" and (session.meta.project_id or "").strip():
-        return "project"
-    return session.meta.active_shell or "daily"
 
 
 def _apply_session_new(
@@ -204,66 +150,37 @@ def _apply_session_new(
     session: Session,
     proposal: ContextSwitchProposal,
 ) -> tuple[Session, str]:
-    from shell_switch import (
-        _clear_project_binding,
-        record_shell_session,
-    )
+    """Blank chat session. Never opens a second session for an existing project (D6).
 
-    shell = _resolve_session_new_shell(session, proposal.target)
-    current = _current_shell_line(session)
-    if shell != current:
-        raise ContextSwitchError(
-            f"session.new 仅限当前壳（当前 {current}）；跨壳请先 shell.switch 到 {shell}"
-        )
-
+    If the previous session was project-bound, the project mapping is left alone (parked);
+    the new session is unbound ordinary chat.
+    """
     fresh = create_new(paths)
-    if shell == "project":
-        pid = (proposal.project_id or session.meta.project_id or "").strip()
-        if not pid:
-            raise ContextSwitchError("project 壳新会话需要当前已绑定项目或提供 project_id")
-        from project_cli import bind_project_session
-
-        plan_status = session.meta.project_plan_status or "draft"
-        bind_project_session(fresh, pid, plan_status=plan_status)
-        if plan_status == "confirmed" and session.meta.project_plan_confirmed_at:
-            fresh.meta.project_plan_confirmed_at = session.meta.project_plan_confirmed_at
-        fresh.meta.project_phase_fingerprint = session.meta.project_phase_fingerprint
-        fresh.meta.project_doc_fingerprint = session.meta.project_doc_fingerprint
-        fresh.save()
-        record_project_session(paths, pid, fresh.conversation_id)
-        write_last_conversation_id(paths, fresh.conversation_id)
-        return fresh, f"已在项目 {pid} 新建会话（旧对话仍保留）"
-
-    fresh.meta.active_shell = shell  # type: ignore[assignment]
-    _clear_project_binding(fresh.meta)
-    fresh.save()
-    if shell in {"grow", "daily"}:
-        record_shell_session(paths, shell, fresh.conversation_id)
+    _inject_seed(fresh, session, proposal.reason)
     write_last_conversation_id(paths, fresh.conversation_id)
-    return fresh, f"已在外壳 · {shell} 新建会话（旧对话仍保留）"
-
-
-def _apply_shell_switch(
-    paths: AgentPaths,
-    session: Session,
-    proposal: ContextSwitchProposal,
-) -> tuple[Session, str]:
-    from shell_switch import ShellSwitchError, switch_shell
-
-    shell = proposal.target
-    if shell not in SHELL_TARGETS:
-        raise ContextSwitchError(f"invalid shell: {shell}")
-    try:
-        updated, replaced = switch_shell(
-            paths,
-            session,
-            shell,  # type: ignore[arg-type]
-            project_id=proposal.project_id,
+    prev_pid = (session.meta.project_id or "").strip()
+    if prev_pid:
+        return (
+            fresh,
+            f"已新建普通对话（项目 {prev_pid} 会话已挂起，可从侧栏/列表续接）",
         )
-    except ShellSwitchError as exc:
-        raise ContextSwitchError(str(exc)) from exc
-    note = "（会话已替换）" if replaced else "（同会话）"
-    return updated, f"已切换到外壳 · {shell}{note}"
+    return fresh, "已新建会话（已衔接上文上下文）"
+
+
+def _inject_seed(fresh: Session, previous: Session, reason: str) -> None:
+    """Write a seed message so the new session's agent remembers the previous context."""
+    goal = previous.goal.strip()
+    hint = ""
+    if reason and "工具" in reason:
+        hint = "新会话已重新加载 evolved 工具清单，之前创建的工具现已可用。"
+    seed = build_seed_message(
+        previous_session_id=previous.conversation_id,
+        previous_goal=goal,
+        reason=reason,
+        hint=hint,
+    )
+    fresh.append_message(seed, persist=False)
+    fresh.save()
 
 
 def _apply_project_create(
@@ -290,10 +207,36 @@ def _apply_project_create(
     if current_pid == pid and session.meta.active_shell == "project":
         record_project_session(paths, pid, session.conversation_id)
         write_last_conversation_id(paths, session.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, pid)
+        except Exception:
+            pass
         verb = "已打开" if not created else "已创建"
         return session, f"{verb}项目 workspace/{pid}（当前会话）"
 
-    # Unbound session may bind in place; bound to another project → new session.
+    # D6: project already has a dedicated session → resume it (never open a second).
+    mapped = lookup_project_session(paths, pid)
+    if mapped and session_exists(paths, mapped) and mapped != session.conversation_id:
+        loaded = Session.load(paths, mapped)
+        if (loaded.meta.project_id or "").strip() != pid:
+            from project_cli import bind_project_session
+
+            bind_project_session(loaded, pid, plan_status="draft")
+            loaded.save()
+        record_project_session(paths, pid, loaded.conversation_id)
+        write_last_conversation_id(paths, loaded.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, pid)
+        except Exception:
+            pass
+        verb = "已创建并续接" if created else "已续接"
+        return loaded, f"{verb}项目 workspace/{pid}（会话 {mapped}）"
+
+    # Unbound session may bind in place; bound to another project → new session for NEW project only.
     if not current_pid:
         from project_cli import bind_project_session
 
@@ -301,16 +244,29 @@ def _apply_project_create(
         session.save()
         record_project_session(paths, pid, session.conversation_id)
         write_last_conversation_id(paths, session.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, pid)
+        except Exception:
+            pass
         verb = "已创建并打开" if created else "已打开"
         return session, f"{verb}项目 workspace/{pid}（计划待确认）"
 
     fresh = create_new(paths)
+    _inject_seed(fresh, session, reason=f"切换到项目 {pid}")
     from project_cli import bind_project_session
 
     bind_project_session(fresh, pid, plan_status="draft")
     fresh.save()
     record_project_session(paths, pid, fresh.conversation_id)
     write_last_conversation_id(paths, fresh.conversation_id)
+    try:
+        from project_env import ensure_project_env
+
+        ensure_project_env(paths, pid)
+    except Exception:
+        pass
     verb = "已创建并切换到" if created else "已切换到"
     return fresh, f"{verb}项目 workspace/{pid}（新会话 · 计划待确认）"
 
@@ -407,23 +363,13 @@ def done_events(
             "session_id": updated.conversation_id,
             "session_replaced": session_replaced,
             "message": message,
-            "shell": updated.meta.active_shell if choice == "y" else previous.meta.active_shell,
+            "shell": "",
         }
     ]
     if choice != "y":
         return events
 
-    if proposal.action == "shell.switch":
-        events.append(
-            {
-                "type": "shell.switch.done",
-                "shell": updated.meta.active_shell,
-                "session_id": updated.conversation_id,
-                "session_replaced": session_replaced,
-            }
-        )
-
-    if updated.meta.active_shell == "project" or proposal.action.startswith("project."):
+    if proposal.action.startswith("project."):
         events.append(project_state_payload(updated, updated.paths))
     events.append(session_banner_event(updated))
     if session_replaced:

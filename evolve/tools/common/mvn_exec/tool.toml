@@ -1,89 +1,49 @@
 [tool]
-
 name = "mvn_exec"
-
-description = "在 workspace 子目录执行 Maven 命令，捕获 stdout/stderr/exit_code"
-
-version = "1.0.0"
-
+description = "在 agent root 子目录执行 Maven（读 ENV.md tools.mvn）。目录用 working_dir（可用 cwd 别名），如 workspace/<id>/backend。示例 args: [\"-q\",\"compile\"]。"
+version = "1.1.0"
 status = "active"
-
 topics = ["common"]
 
-
-
 [entry]
-
 type = "python"
-
 path = "main.py"
 
-
-
 [schema.input]
-
 type = "object"
-
 required = ["args"]
-
 [schema.input.properties.args]
-
 type = "array"
-
 items = { type = "string" }
-
 description = "mvn 参数，如 [\"-q\", \"test\"] 或 [\"package\", \"-DskipTests\"]"
-
 [schema.input.properties.working_dir]
-
 type = "string"
-
 default = ""
-
-description = "相对 workspace/ 的项目目录；空则 workspace 根"
-
+description = "相对 agent root 的项目目录，如 workspace/<id>/backend；也可用别名 cwd"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 的别名（E7）；两者都有时以 working_dir 为准"
 [schema.input.properties.timeout_sec]
-
 type = "integer"
-
 default = 300
-
 description = "子进程超时秒数"
-
 [schema.input.properties.dry_run]
-
 type = "boolean"
-
 default = false
-
 description = "仅预览命令，不执行"
 
-
-
 [schema.output]
-
 type = "object"
-
 [schema.output.properties]
-
 command = { type = "array" }
-
 cwd = { type = "string" }
-
 exit_code = { type = "integer" }
-
 stdout = { type = "string" }
-
 stderr = { type = "string" }
 
-
-
 [policy]
-
 confirm = true
-
 dry_run_supported = true
-
-workspace_only = false
-
+allow_approve_all = false
 timeout_sec = 310

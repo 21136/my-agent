@@ -40,19 +40,11 @@ def _resolve_script(paths, path_arg: str) -> Path:
     text = path_arg.strip().replace("\\", "/").lstrip("/")
     if not text:
         raise ValueError("path is required")
-    if text.startswith("workspace/"):
-        text = text.removeprefix("workspace/")
 
     try:
-        candidate = paths.resolve_under_workspace(text, must_exist=True)
+        candidate = paths.resolve_under_agent(text, must_exist=True)
     except (FileNotFoundError, TypeError, ValueError):
-        candidate = None
-
-    if candidate is None or not candidate.is_file():
-        try:
-            candidate = paths.resolve_under_agent(text, must_exist=True)
-        except (FileNotFoundError, TypeError, ValueError) as exc:
-            raise ValueError(f"file not found: {path_arg}") from exc
+        raise ValueError(f"file not found: {path_arg}")
 
     if candidate.suffix.lower() != ".py":
         raise ValueError("only .py scripts are allowed")
@@ -148,8 +140,8 @@ def _demo() -> None:
     assert tool is not None and tool.status in {"active", "draft"}
     print("[PASS] registry loads run_python")
 
-    rel = "_run_python_demo.py"
-    target = paths.workspace / rel
+    rel = "workspace/_run_python_demo.py"
+    target = paths.agent_root / rel
     target.write_text("print('hello world')", encoding="utf-8")
 
     live = run(

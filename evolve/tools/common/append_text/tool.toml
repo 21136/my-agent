@@ -1,6 +1,6 @@
 [tool]
 name = "append_text"
-description = "向 workspace 文本文件追加内容；path 相对 workspace；文件不存在时可创建"
+description = "向 agent root 文本文件追加内容；path 相对 agent root 或 host:<id>/…；文件不存在时可创建"
 version = "1.0.0"
 status = "active"
 topics = ["common"]
@@ -35,5 +35,5 @@ bytes_appended = { type = "integer" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

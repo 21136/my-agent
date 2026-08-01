@@ -174,7 +174,7 @@ def _demo() -> None:
     (demo_dir / "README").write_text("no ext", encoding="utf-8")
     (demo_dir / ".hidden").write_text("skip", encoding="utf-8")
 
-    rel = paths.to_workspace_relative(demo_dir)
+    rel = paths.to_agent_relative(demo_dir)
 
     dry = run(
         {

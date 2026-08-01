@@ -17,7 +17,8 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from plan_agent import PlanAgent, get_plan_agent, drop_plan_agent
+from plan_agent import get_plan_agent
+from project_mode import resolve_progress_task_line
 
 
 def run(args: dict[str, Any]) -> dict[str, Any]:
@@ -29,16 +30,35 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
     agent = get_plan_agent(paths, project_id)
     summary = args.get("summary", "").strip()
     task_line = args.get("task_line")
+    task_id = args.get("task_id")
     subtasks = args.get("subtasks", [])
     add_tasks = args.get("add_tasks", [])
     skip_tasks = args.get("skip_tasks", [])
 
-    # 1. Toggle the completed task
-    if isinstance(task_line, int) and task_line >= 0:
+    raw_line = task_line if isinstance(task_line, int) else None
+    tid = task_id.strip() if isinstance(task_id, str) else None
+    task_text = args.get("task_text")
+    text = task_text.strip() if isinstance(task_text, str) else None
+    resolved_line, resolve_note = resolve_progress_task_line(
+        paths,
+        project_id,
+        task_line=raw_line,
+        task_id=tid,
+        summary=summary,
+        task_text=text,
+    )
+
+    # 1. Toggle the completed task (identity-stable: T-xxx beats stale line)
+    if isinstance(resolved_line, int) and resolved_line >= 0:
         try:
-            agent.toggle_task(task_line, True)
+            agent.toggle_task(resolved_line, True)
         except Exception as exc:
-            return {"ok": False, "error": f"toggle_task line {task_line}: {exc}"}
+            return {
+                "ok": False,
+                "error": f"toggle_task line {resolved_line}: {exc}",
+                "resolved_line": resolved_line,
+                "resolve_note": resolve_note,
+            }
 
     # 2. Add subtasks discovered during execution
     for desc in subtasks:
@@ -60,6 +80,8 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
 
     # 5. Run quality checks
     warnings = agent.quality_check()
+    if resolve_note:
+        warnings = list(warnings) + [resolve_note]
 
     # 6. Get next task
     next_task = agent.next_task_text()
@@ -74,6 +96,8 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
         "tasks_total": agent._current_stats().total,
         "next_task": next_task,
         "warnings": warnings,
+        "resolved_line": resolved_line,
+        "resolve_note": resolve_note,
     }
 
 

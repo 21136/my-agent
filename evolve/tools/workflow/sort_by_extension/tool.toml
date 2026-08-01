@@ -14,7 +14,7 @@ type = "object"
 required = ["path"]
 [schema.input.properties.path]
 type = "string"
-description = "相对 workspace 或 host:<id>/… 的目录路径"
+description = "相对 agent root 或 host:<id>/… 的目录路径"
 [schema.input.properties.include_hidden]
 type = "boolean"
 default = false
@@ -30,5 +30,5 @@ moved = { type = "array" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

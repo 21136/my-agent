@@ -240,6 +240,54 @@ def should_auto_compact(
     return tokens >= threshold
 
 
+def estimate_session_context_tokens(session: Session, *, system_prompt: str | None = None) -> int:
+    """Estimate tokens for the payload that would be sent on the next main-agent call."""
+    system = system_prompt
+    if system is None:
+        try:
+            from loader import build_system_prompt
+
+            system = build_system_prompt(session).prompt
+        except Exception:
+            system = ""
+    return estimate_context_tokens(system, build_llm_messages(session))
+
+
+def validate_llm_model_switch(session: Session, raw_model: str) -> str:
+    """Normalize target model and refuse unsafe Pro→Flash downgrades.
+
+    Policy (B): if estimated context ≥ target_limit × CONTEXT_COMPACT_RATIO (default 85%),
+    refuse — user must 「压缩」 or 「新会话」 first. No silent auto-compact on switch.
+    """
+    from llm_client import normalize_session_model
+    from session import SessionError
+
+    canonical = normalize_session_model(raw_model)
+    if canonical is None:
+        raise SessionError(
+            f"unsupported llm model: {raw_model!r} (use deepseek-v4-flash or deepseek-v4-pro)"
+        )
+
+    target_limit = resolve_context_limit(canonical)
+    current_model = session.meta.llm_model or resolve_session_model(list(session.meta.topics))
+    current_limit = resolve_context_limit(current_model)
+
+    # Same ceiling or upgrade (flash→pro): always OK.
+    if target_limit >= current_limit:
+        return canonical
+
+    cfg = load_context_config()
+    threshold = int(target_limit * cfg.compact_ratio)
+    tokens = estimate_session_context_tokens(session)
+    if tokens >= threshold:
+        raise SessionError(
+            f"当前上下文约 {tokens} tokens，已达 Flash 切换阈值"
+            f"（{threshold}/{target_limit}，{int(cfg.compact_ratio * 100)}%）。"
+            "请先「压缩」或「新会话」后再切到 Flash。"
+        )
+    return canonical
+
+
 def count_digest_sections(digest_path: Path) -> int:
     if not digest_path.is_file():
         return 0
@@ -397,11 +445,20 @@ def session_memory_event(session: Session) -> dict[str, Any]:
     compacted = session.digest_path.is_file() or session.meta.compact_before_index > 1
     sections = count_digest_sections(session.digest_path) if session.digest_path.is_file() else 0
     cfg = load_context_config()
+
+    # UX-019: estimate token usage for frontend indicator
+    model = session.meta.llm_model or resolve_session_model(session.meta.topics)
+    token_limit = resolve_context_limit(model)
+    llm_messages = build_llm_messages(session)
+    token_usage = estimate_messages_tokens(llm_messages)
+
     payload: dict[str, Any] = {
         "type": "session.memory",
         "message_count": len(session.messages),
         "memory_mode": "compact" if compacted else "full",
         "memory_mode_label": "已压缩" if compacted else "未压缩",
+        "token_usage": token_usage,
+        "token_limit": token_limit,
     }
     if compacted:
         payload["digest_sections"] = sections

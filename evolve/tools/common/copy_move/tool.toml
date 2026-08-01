@@ -1,6 +1,6 @@
 [tool]
 name = "copy_move"
-description = "在 workspace 内复制或移动文件/目录；source/dest 相对 workspace；冲突默认 skip"
+description = "在 agent root 或托管区间复制/移动文件/目录；source/dest 相对 agent root 或 host:<id>/…；冲突默认 skip"
 version = "1.0.0"
 status = "active"
 topics = ["common"]
@@ -23,6 +23,9 @@ type = "string"
 type = "string"
 enum = ["skip", "overwrite", "rename"]
 default = "skip"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
 
 [schema.output]
 type = "object"
@@ -35,5 +38,5 @@ skipped = { type = "boolean" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
-timeout_sec = 60
+allow_approve_all = true
+timeout_sec = 120

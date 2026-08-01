@@ -10,6 +10,7 @@ Phase 5+: LLM-based split/suggest will be added.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -66,36 +67,203 @@ class UndoEntry:
     reverse_data: dict  # params for the reverse operation
 
 
-_PLAN_REASONING_SYSTEM = """你是一个项目管理器。你的任务是理解用户的需求，分析当前的项目任务结构，然后输出精准的修改操作。
+_PLAN_SYSTEM = """你是侧栏 **Plan Agent（计划搭档）**，拥有本项目 TASKS.md 的编排权。
+用户在侧栏输入的每一句都是对你说的。系统**只执行**你返回的 JSON，不会事后改挂 Phase。
 
-## 输出格式
-返回 JSON 对象，包含 operations 数组。每个操作对象要有以下字段：
-- "kind": "add" | "skip" | "split" | "reorder"
-- "phase": 目标 Phase 标题（仅 add 需要）
-- "description": 任务描述（add 需要）；拆出的子任务描述列表（split 需要）
-- "line": 行号（skip/reorder/split 需要）
-- "reason": 简短解释
+## 输出
+只输出 JSON：{"operations":[ ... ]}
+字段：kind(add|move|drop|skip|split|reorder)、phase、description、line(0-indexed)、direction(up|down)、reason。
 
-## 规则
-1. 理解用户的真实意图。例如"在每个阶段加测试" = 每个 Phase 都加一条测试相关任务。
-2. 如果有完全重复的已有任务，不要新增，跳过它们。
-3. 保持任务描述简洁（< 80 字）。
-4. 只输出 JSON，不要额外解释。
-5. Phase 标题使用项目文档中已有的精确标题。
+## 意图分流（先分清用户要什么）
+- 「加一个 / 新增 …」→ add（不要把整句口令当标题）
+- 「提前 / 推后 / 挪到 / 放到」→ move 或 reorder，禁止再 add 一条同名任务
+- 「暂缓 / 先不做 / 跳过」→ skip（不是勾完成，也不是删）
+- 「删除 / 不要了」→ drop
+- 「拆分」→ split
+- 「优化 / 整理 / 检查 / 太乱」→ 审顺序与结构；若进度摘要里有 ⚠ 异常信号，必须处理（move/drop/skip/add 测试等），**禁止**空 operations 假装没事
+- 不要把「优化下计划」「需要加测试」等**元口令**写成任务标题
+
+## 顺序（看摘要里的 ⚠，再对照全文 [x]/[ ]）
+- **夹心**：靠前 Phase 仍有 [ ]，后面 Phase 已大量 [x] → 通常 move 到当前前沿或独立基建 Phase
+- **跳段**：靠前 Phase 仍大量 [ ]，后面 Phase 却已开始 [x] → 调整顺序或暂缓偷跑项
+- **下一项被拽歪**：全局第一个 [ ] 不是当前应做的工作 → move/reorder 纠正
+- 中途发现的前置（如对接数据库）：按**执行顺序**挂当前前沿或新基建段，勿只因语义像脚手架就塞回已收尾的早期 Phase
+
+## 内容与结构
+- 完全重复 → 不必再 add（系统也会自动清极高相似重复）
+- 并行模块脚手架（医师 Entity vs 医保 Entity）**不是**重复，勿合并
+- 过粗可 split；无意义碎片可 drop/merge（用 drop+add）
+- 空 Phase：补任务或去掉空段（drop 不适用标题时，可 add 占位或在 reason 说明）
+- 模块做完缺「本阶段测试/联调」→ 可 add 测试任务
+- 挂哪一段、是否新建 Phase，由你决定；无改动且摘要无 ⚠ 时才返回 {"operations":[]}
 """
 
 
-def _build_reasoning_prompt(tasks_text: str, user_intent: str) -> str:
-    """Build a user prompt for PlanAgent LLM reasoning."""
-    return f"""## 当前任务列表
+_PLAN_META_COMMAND_RE = re.compile(
+    r"(优化|整理|清理|检查|查重|太乱|帮我看|看看计划|质检|auto[\s_-]?fix)",
+    re.IGNORECASE,
+)
+_PLAN_MUTATE_RE = re.compile(
+    r"(提前|推后|暂缓|跳过|拆分|重排|删除|合并|挪到|放到|移到|先做|再做|顺序)",
+    re.IGNORECASE,
+)
+_PLAN_ADD_PREFIX_RE = re.compile(
+    r"^(加(一)?个|新增|添加(一)?(个|条)?任务|记一?条)[:：\s]*",
+    re.IGNORECASE,
+)
 
-{tasks_text}
 
-## 用户需求
+def looks_like_plan_meta_command(text: str) -> bool:
+    """True when input asks Plan Agent to review/fix the plan (not a new task title)."""
+    t = (text or "").strip()
+    if not t or len(t) > 80:
+        return False
+    if re.match(r"^T-\d+", t, re.IGNORECASE):
+        return False
+    if re.match(r"^-\s*\[[ xX]?\]", t):
+        return False
+    return bool(_PLAN_META_COMMAND_RE.search(t))
+
+
+def looks_like_new_task_utterance(text: str) -> bool:
+    """Heuristic: user is naming a work item to add (safe L2 fallback)."""
+    t = (text or "").strip()
+    if not t or looks_like_plan_meta_command(t):
+        return False
+    if _PLAN_MUTATE_RE.search(t):
+        return False
+    if re.fullmatch(r"(你好|在吗|嗨|hello|hi)[.!！？\s]*", t, re.IGNORECASE):
+        return False
+    if _PLAN_ADD_PREFIX_RE.match(t):
+        return True
+    return len(t) >= 4
+
+
+def strip_add_prefix(text: str) -> str:
+    t = (text or "").strip()
+    return _PLAN_ADD_PREFIX_RE.sub("", t).strip() or t
+
+
+def _plan_progress_brief(tasks_text: str) -> str:
+    """Compact progress + explicit anomaly signals for Plan LLM."""
+    from project_mode import (
+        active_phase_title_from_lines,
+        iter_phase_headers,
+        phase_open_and_done_counts,
+    )
+
+    lines = tasks_text.splitlines()
+    headers = iter_phase_headers(lines)
+    if not headers:
+        return "（尚无 Phase）"
+
+    rows: list[str] = []
+    phase_stats: list[tuple[str, int, int]] = []
+    for _, title in headers:
+        open_n, done_n = phase_open_and_done_counts(lines, title)
+        phase_stats.append((title, open_n, done_n))
+        if open_n == 0 and done_n > 0:
+            status = "已完成"
+        elif open_n > 0 and done_n == 0:
+            status = "未开始"
+        elif open_n > 0:
+            status = "进行中"
+        else:
+            status = "空"
+        rows.append(f"- {title}: {done_n} done / {open_n} open · {status}")
+
+    active = active_phase_title_from_lines(lines)
+    next_open = None
+    next_line = None
+    for i, line in enumerate(lines):
+        m = re.match(r"^\s*-\s*\[\s\]\s+(.*)", line)
+        if m:
+            next_open = m.group(1).strip()
+            next_line = i
+            break
+    rows.append(f"- 当前前沿 Phase: {active or '（无未完成）'}")
+    rows.append(
+        f"- 全局下一项: {f'行{next_line}|{next_open}' if next_open is not None else '（无）'}"
+    )
+
+    alerts: list[str] = []
+    for i, (title, open_n, done_n) in enumerate(phase_stats):
+        later_done = any(d > 0 for _, _, d in phase_stats[i + 1 :])
+        if not later_done or open_n <= 0:
+            continue
+        if done_n > 0:
+            alerts.append(
+                f"⚠ 夹心：「{title}」仍有 {open_n} 条未完成，但后续 Phase 已有完成项"
+                "——优化时应 move（或说明为何不挪），禁止空操作装没事"
+            )
+        elif open_n >= 2:
+            alerts.append(
+                f"⚠ 跳段：「{title}」仍有 {open_n} 条未开始/未完成，"
+                "但后续 Phase 已开始勾选——检查是否偷跑"
+            )
+    # Empty phases
+    for title, open_n, done_n in phase_stats:
+        if open_n == 0 and done_n == 0:
+            alerts.append(f"⚠ 空 Phase：「{title}」下没有任务")
+    # Next item dragged back into mostly-done early phase
+    if next_open and active:
+        for title, open_n, done_n in phase_stats:
+            if title != active:
+                continue
+            if done_n >= 2 and open_n >= 1:
+                later_done = False
+                saw = False
+                for t, _o, d in phase_stats:
+                    if t == title:
+                        saw = True
+                        continue
+                    if saw and d > 0:
+                        later_done = True
+                        break
+                if later_done:
+                    alerts.append(
+                        f"⚠ 下一项被拽回：「{next_open[:40]}」落在已大部分完成的「{title}」，"
+                        "而后面 Phase 已推进"
+                    )
+            break
+
+    if alerts:
+        # de-dupe while preserving order
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for a in alerts:
+            if a in seen:
+                continue
+            seen.add(a)
+            uniq.append(a)
+        rows.append("- 异常信号:")
+        rows.extend(f"  {a}" for a in uniq)
+    else:
+        rows.append("- 异常信号: （无）")
+    return "\n".join(rows)
+
+
+def _format_tasks_with_line_numbers(tasks_text: str) -> str:
+    lines = tasks_text.splitlines()
+    return "\n".join(f"{i}|{line}" for i, line in enumerate(lines))
+
+
+def _build_plan_prompt(tasks_text: str, user_intent: str) -> str:
+    """Context for Plan LLM — progress + numbered TASKS; no routing hints."""
+    brief = _plan_progress_brief(tasks_text)
+    numbered = _format_tasks_with_line_numbers(tasks_text)
+    return f"""## 进度摘要（先看异常信号 ⚠）
+
+{brief}
+
+## TASKS.md（行号|内容；[x]=完成 [ ]=未完成）
+
+{numbered}
+
+## 用户说
 
 {user_intent}
-
-请分析以上内容，输出对此项目计划的修改操作 JSON。"""
+"""
 
 
 _SPLIT_SYSTEM = """你是一个项目管理器。用户要求拆分一条任务为多个更小的子任务。
@@ -130,11 +298,22 @@ class PlanAgent:
     _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation
     _stale_task_line: int = -1  # line of current task last seen
     _stale_task_count: int = 0  # consecutive build_state calls with same current
-    _suggestions: list[str] = field(default_factory=list)
+    _suggestions: list[dict[str, Any]] = field(default_factory=list)
+    _last_suggestions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _ignored_suggestion_ids: set[str] = field(default_factory=set)
     _last_progress_time: float = 0.0  # time.time() of last report_progress call
+    _last_partner_notices: list[str] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         self._load_state()
+
+    def set_partner_notices(self, summary: str | list[str]) -> None:
+        """Sidebar-visible Plan Agent reply (V7 — not main-chat bubbles)."""
+        if isinstance(summary, list):
+            lines = [str(x).strip() for x in summary if str(x).strip()]
+        else:
+            lines = [ln.strip() for ln in str(summary).splitlines() if ln.strip()]
+        self._last_partner_notices = lines[:12]
 
     # ---- persistence ----
 
@@ -153,6 +332,9 @@ class PlanAgent:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             self._last_fingerprint = data.get("fingerprint", "")
             self._change_counter = data.get("change_counter", 0)
+            ignored = data.get("ignored_suggestion_ids", [])
+            if isinstance(ignored, list):
+                self._ignored_suggestion_ids = {str(x) for x in ignored if x}
             for entry in data.get("change_log", []):
                 self._change_log.append(PlanChange(
                     id=entry.get("id", ""),
@@ -170,6 +352,7 @@ class PlanAgent:
         data = {
             "fingerprint": self._last_fingerprint,
             "change_counter": self._change_counter,
+            "ignored_suggestion_ids": sorted(self._ignored_suggestion_ids)[-200:],
             "change_log": [
                 {
                     "id": c.id,
@@ -410,17 +593,108 @@ class PlanAgent:
 
     # ---- quality checks + auto-fix ----
 
+    @staticmethod
+    def _suggestion(
+        *,
+        kind: str,
+        title: str,
+        body: str,
+        key: str,
+        risk: str = "suggest",
+        action: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "id": f"sug-{kind}-{key}",
+            "kind": kind,
+            "title": title,
+            "body": body,
+            "risk": risk,
+            "action": action,
+            "payload": payload or {},
+        }
+
+    def quality_suggestions(self) -> list[dict[str, Any]]:
+        """Structured actionable suggestions (Phase 22 / §15.10 V3).
+
+        Only emit cards the user can **采纳** (or we would waste a trip for Ignore-only nags).
+        Near-duplicate fuzzy matching was removed (parallel scaffolds false-positive).
+        Exact dups still go through auto_fix.
+        """
+        items: list[dict[str, Any]] = []
+        items.extend(self._suggest_granularity())
+        # empty_phase / phase_long without action = Ignore-only noise — omit
+        return [
+            s
+            for s in items
+            if s.get("action") and s["id"] not in self._ignored_suggestion_ids
+        ]
+
     def quality_check(self) -> list[str]:
-        """Run all quality checks. Returns warnings (auto-fix is applied first)."""
-        warnings: list[str] = []
-        warnings.extend(self._check_duplicates())
-        warnings.extend(self._check_granularity())
-        warnings.extend(self._check_empty_phases())
-        return warnings
+        """Legacy string warnings derived from structured suggestions."""
+        return [str(s.get("body", "")) for s in self.quality_suggestions()]
+
+    def ignore_suggestion(self, suggestion_id: str) -> None:
+        sid = str(suggestion_id or "").strip()
+        if not sid:
+            raise ProjectModeError("ignore_suggestion requires suggestion_id")
+        self._ignored_suggestion_ids.add(sid)
+        self._save_state()
+
+    def accept_suggestion(self, suggestion_id: str) -> dict[str, Any]:
+        """Apply a previously emitted suggestion via its action/payload."""
+        sid = str(suggestion_id or "").strip()
+        sug = self._last_suggestions.get(sid)
+        if sug is None:
+            # UI may hold cards across sidecar restart; rebuild actionable catalog.
+            rebuilt = {s["id"]: s for s in self.quality_suggestions() if s.get("id")}
+            self._last_suggestions = rebuilt
+            sug = rebuilt.get(sid)
+        if sug is None:
+            raise ProjectModeError(f"unknown or stale suggestion: {sid}")
+        action = sug.get("action")
+        payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+        if not action:
+            raise ProjectModeError(f"suggestion is not actionable: {sid}")
+
+        if action == "drop_task":
+            line = payload.get("line")
+            if not isinstance(line, int) or line < 0:
+                raise ProjectModeError("drop_task suggestion missing line")
+            result = self.drop_task(line)
+            self._ignored_suggestion_ids.add(sid)
+            self._save_state()
+            return result
+
+        if action == "split_task":
+            line = payload.get("line")
+            if not isinstance(line, int) or line < 0:
+                raise ProjectModeError("split_task suggestion missing line")
+            summary = self.split_task(line)
+            self._ignored_suggestion_ids.add(sid)
+            self._save_state()
+            return {"ok": True, "summary": summary, "_next_task": self.next_task_text()}
+
+        if action == "skip_task":
+            line = payload.get("line")
+            if not isinstance(line, int) or line < 0:
+                raise ProjectModeError("skip_task suggestion missing line")
+            result = self.skip_task(line)
+            self._ignored_suggestion_ids.add(sid)
+            self._save_state()
+            return result
+
+        if action == "confirm_changes":
+            self.confirm_plan()
+            self._ignored_suggestion_ids.add(sid)
+            self._save_state()
+            return {"ok": True, "_next_task": self.next_task_text()}
+
+        raise ProjectModeError(f"unsupported suggestion action: {action}")
 
     def auto_fix(self) -> list[str]:
         """Run auto-fix on TASKS.md. Returns list of actions taken.
-        Safe: only removes >=95% similar undone duplicate task lines, keeping one.
+        Safe: only removes >=95% similar duplicate task lines, keeping one.
         """
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         if not tasks_path.is_file():
@@ -431,8 +705,7 @@ class PlanAgent:
         file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
         actions: list[str] = []
 
-        # ---- duplicate removal (>=95% similar undone tasks) ----
-        # Build entries: (line_number, description, is_done)
+        # ---- duplicate removal (>=95% similar) ----
         entries: list[tuple[int, str, bool]] = []
         for i, line in enumerate(file_lines):
             m = re.match(r"^\s*-\s*\[([ xX])\]\s+(.*)", line)
@@ -440,7 +713,6 @@ class PlanAgent:
                 done = m.group(1).lower() == "x"
                 entries.append((i, m.group(2).strip(), done))
 
-        # Find pairs >= 95% similar, both undone → remove the later one
         to_remove: set[int] = set()
         for a in range(len(entries)):
             for b in range(a + 1, len(entries)):
@@ -451,34 +723,34 @@ class PlanAgent:
                 ratio = SequenceMatcher(None, da, db).ratio()
                 if ratio >= 0.95:
                     if done_a and done_b:
-                        # Both done: remove the shorter one
                         remove_line = la if len(da) < len(db) else lb
                         keep_line = lb if remove_line == la else la
                     elif done_a:
-                        remove_line = lb  # keep done, remove undone duplicate
+                        remove_line = lb
                         keep_line = la
                     elif done_b:
                         remove_line = la
                         keep_line = lb
                     else:
-                        # Both undone: keep the longer one (more detail), remove shorter
                         remove_line = la if len(da) < len(db) else lb
                         keep_line = lb if remove_line == la else la
 
                     to_remove.add(remove_line)
+                    removed_text = file_lines[remove_line].strip()
+                    m_rm = re.match(r"^\s*-\s*\[[ xX]\]\s+(.*)", removed_text)
+                    label = (m_rm.group(1).strip() if m_rm else removed_text)[:40]
                     actions.append(
-                        f"[自动清理] 删除重复任务行 {remove_line} "
+                        f"[自动清理] 已删除重复任务「{label}」"
                         f"（与行 {keep_line} {ratio:.0%} 相似）"
                     )
                     self._record_change(
                         "drop",
-                        file_lines[remove_line].strip(),
+                        removed_text,
                         reason=f"auto-fix: duplicate of line {keep_line} ({ratio:.0%})",
                         line=remove_line,
                     )
 
         if to_remove:
-            # Remove lines in reverse order (highest index first)
             for line_idx in sorted(to_remove, reverse=True):
                 file_lines.pop(line_idx)
             content = "\n".join(file_lines)
@@ -489,116 +761,87 @@ class PlanAgent:
 
         return actions
 
-    def _check_duplicates(self) -> list[str]:
-        """Detect >=85% similar task descriptions (not auto-fixed, just warnings)."""
+    def _suggest_granularity(self) -> list[dict[str, Any]]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         if not tasks_path.is_file():
             return []
         text = tasks_path.read_text(encoding="utf-8")
         import re
-        from difflib import SequenceMatcher
+        out: list[dict[str, Any]] = []
 
-        entries: list[tuple[int, str]] = []
         for i, line in enumerate(text.splitlines()):
             m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
-            if m:
-                entries.append((i, m.group(1).strip()))
+            if not m:
+                continue
+            desc = m.group(1).strip()
+            if len(desc) < 10:
+                out.append(self._suggestion(
+                    kind="too_short",
+                    title="过短占位，建议删除",
+                    body=(
+                        f"行 {i}「{desc}」仅 {len(desc)} 字，多半是占位。"
+                        f"采纳 = 删除该行；忽略 = 本会话不再提示。"
+                    ),
+                    key=f"short-{i}",
+                    action="drop_task",
+                    payload={"line": i},
+                ))
+            elif len(desc) > 120:
+                out.append(self._suggestion(
+                    kind="split",
+                    title="建议拆分任务",
+                    body=(
+                        f"行 {i} 过长（{len(desc)} 字）。"
+                        f"采纳 = 拆成更小步骤；忽略 = 本会话不再提示。"
+                    ),
+                    key=f"long-{i}",
+                    action="split_task",
+                    payload={"line": i},
+                ))
 
-        warnings: list[str] = []
-        for a in range(len(entries)):
-            for b in range(a + 1, len(entries)):
-                la, da = entries[a]
-                lb, db = entries[b]
-                ratio = SequenceMatcher(None, da, db).ratio()
-                if 0.92 <= ratio < 0.95:
-                    warnings.append(
-                        f"[相似] 行 {la} 和 {lb} 疑似重复 ({ratio:.0%})："
-                        f"\"{da[:40]}\" ≈ \"{db[:40]}\""
-                    )
-        return warnings
+        # phase_long without a safe auto action — skip (Ignore-only cards banned)
+        return out
 
-    def _check_granularity(self) -> list[str]:
-        """Flag tasks that are too vague or too long. Also check phase overload."""
-        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
-        if not tasks_path.is_file():
-            return []
-        text = tasks_path.read_text(encoding="utf-8")
-        import re
-        warnings: list[str] = []
-
-        # Per-task granularity
-        for i, line in enumerate(text.splitlines()):
-            m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
-            if m:
-                desc = m.group(1).strip()
-                if len(desc) < 10:
-                    warnings.append(
-                        f"[粒度] 行 {i} 任务过短（{len(desc)} 字）：\"{desc}\""
-                    )
-                elif len(desc) > 120:
-                    warnings.append(
-                        f"[粒度] 行 {i} 任务过长（{len(desc)} 字），建议拆分"
-                    )
-
-        # Phase overload: warn if any phase has >12 tasks
-        current_phase = ""
-        phase_task_count = 0
-        for line in text.splitlines():
-            if line.strip().startswith("## "):
-                if phase_task_count > 12:
-                    warnings.append(
-                        f"[阶段过长] {current_phase} 有 {phase_task_count} 个任务，建议拆分阶段"
-                    )
-                current_phase = line.strip().lstrip("#").strip()
-                phase_task_count = 0
-            elif re.match(r"^\s*-\s*\[[ x]\]\s+", line):
-                phase_task_count += 1
-        if phase_task_count > 12:
-            warnings.append(
-                f"[阶段过长] {current_phase} 有 {phase_task_count} 个任务，建议拆分阶段"
-            )
-
-        return warnings
-
-    def _check_empty_phases(self) -> list[str]:
-        """Flag ## Phase sections with no tasks under them."""
+    def _suggest_empty_phases(self) -> list[dict[str, Any]]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         if not tasks_path.is_file():
             return []
         text = tasks_path.read_text(encoding="utf-8")
         import re
         lines = text.splitlines()
-        warnings: list[str] = []
+        out: list[dict[str, Any]] = []
         current_phase: str | None = None
         phase_line: int = -1
         has_tasks = False
 
+        def _flush() -> None:
+            nonlocal current_phase, phase_line, has_tasks
+            if current_phase is not None and not has_tasks:
+                out.append(self._suggestion(
+                    kind="empty_phase",
+                    title="空阶段",
+                    body=f"「{current_phase}」（行 {phase_line}）下没有任务。",
+                    key=f"empty-{phase_line}",
+                ))
+
         for i, line in enumerate(lines):
             if line.strip().startswith("## "):
-                if current_phase is not None and not has_tasks:
-                    warnings.append(
-                        f"[空阶段] 行 {phase_line} \"{current_phase}\" 下无任何任务"
-                    )
+                _flush()
                 current_phase = line.strip().lstrip("#").strip()
                 phase_line = i
                 has_tasks = False
             elif re.match(r"^\s*-\s*\[[ x]\]\s+", line):
                 has_tasks = True
-
-        # Check last phase
-        if current_phase is not None and not has_tasks:
-            warnings.append(
-                f"[空阶段] 行 {phase_line} \"{current_phase}\" 下无任何任务"
-            )
-
-        return warnings
+        _flush()
+        return out
 
     # ---- LLM reasoning ----
 
     def _fallback_add_task(self, text: str, extra: str = "") -> str:
-        """Fallback: add text as a single task to the first phase with undone tasks."""
+        """Add text as a single task to the first phase with undone tasks."""
         from project_mode import add_task_to_tasks_md
 
+        desc = strip_add_prefix(text)
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
 
@@ -615,19 +858,50 @@ class PlanAgent:
                 break
 
         try:
-            result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, text)
+            result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
             new_line = result.get("line", -1)
-            self._record_change("add", text, reason="quick-add fallback")
+            self._record_change("add", desc, reason="plan-channel add")
             self.push_undo(
-                description=f"已添加「{text[:30]}」",
+                description=f"已添加「{desc[:30]}」",
                 reverse_kind="drop",
                 reverse_data={"line": new_line},
             )
             self._save_state()
             prefix = f"{extra}。已添加到 {phase_title}：" if extra else f"已添加到 {phase_title}："
-            return prefix + text[:60]
+            return prefix + desc[:60]
         except Exception as exc:
             return f"添加失败：{exc}"
+
+    def _plan_channel_fallback(self, text: str, extra: str = "") -> str:
+        """L2兜底 only — LLM 不可用 / 解析失败时。正常路径应已走 LLM。"""
+        if looks_like_plan_meta_command(text):
+            return self._handle_meta_plan_command(text)
+        if looks_like_new_task_utterance(text):
+            return self._fallback_add_task(text, extra=extra)
+        msg = (
+            "（兜底）LLM 不可用或未返回可执行操作；侧栏反馈只走建议卡与短告知，"
+            "不会把原话写进 TASKS。可稍后重试，或说：加任务「…」。"
+        )
+        if extra:
+            return f"{extra}。{msg}"
+        return msg
+
+    def _llm_noop_summary(self, text: str, *, prefix: str = "") -> str:
+        """LLM returned empty operations — trust it; do not dump as task."""
+        label = text.strip()[:24]
+        actions = self.auto_fix()
+        suggestions = self.quality_suggestions()
+        self._last_suggestions = {
+            str(s["id"]): s for s in suggestions if isinstance(s, dict) and s.get("id")
+        }
+        self._save_state()
+        lines: list[str] = list(actions)
+        if prefix:
+            lines.append(prefix)
+        lines.append(f"计划搭档已处理：未改 TASKS。未把「{label}」写成任务。")
+        if suggestions:
+            lines.append(f"另有 {len(suggestions)} 条建议卡可点「采纳」。")
+        return "\n".join(lines)
 
     def _ensure_llm(self):
         if self._llm is not None:
@@ -755,63 +1029,79 @@ class PlanAgent:
         self._save_state()
         return f"{extra}。已标记完成并添加续做任务：「{desc}」"
 
-    def reason_about_intent(self, text: str) -> str:
-        """Use LLM to reason about user intent and produce structured plan changes.
-        Returns a human-readable summary of what was done."""
-        try:
-            llm = self._ensure_llm()
-        except Exception as exc:
-            return self._fallback_add_task(text, extra=f"LLM 不可用（{exc}）")
-
-        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
-        tasks_text = ""
-        if tasks_path.is_file():
-            tasks_text = tasks_path.read_text(encoding="utf-8")
-
-        user_prompt = _build_reasoning_prompt(tasks_text, text)
-
-        try:
-            response = llm.chat(
-                [
-                    {"role": "system", "content": _PLAN_REASONING_SYSTEM},
-                    {"role": "user", "content": user_prompt},
-                ],
-                model=getattr(llm, "_plan_model", "deepseek-v4-flash"),
-                temperature=0.0,
+    def _handle_meta_plan_command(self, text: str) -> str:
+        """Local-only兜底 when LLM unavailable (auto_fix + suggestion cards)."""
+        actions = self.auto_fix()
+        suggestions = self.quality_suggestions()
+        self._last_suggestions = {
+            str(s["id"]): s for s in suggestions if isinstance(s, dict) and s.get("id")
+        }
+        self._save_state()
+        label = text.strip()[:24]
+        lines: list[str] = list(actions)
+        if suggestions:
+            lines.append(
+                f"计划搭档已检查：{len(suggestions)} 条可执行建议（点「采纳」才会改 TASKS；"
+                f"「忽略」= 本会话不再提示）。未把「{label}」写成任务。"
             )
-        except Exception as exc:
-            self._degradation_level = "L2"
-            return self._fallback_add_task(text, extra=f"LLM 调用失败（{exc}）")
+        else:
+            lines.append(
+                f"已检查计划：没有需要你拍板的改动（完全重复会已自动清）。"
+                f"未把「{label}」写成任务。"
+            )
+        return "\n".join(lines)
 
-        raw = response.content.strip()
-        # Extract JSON from response
-        try:
-            # Handle markdown code blocks
-            if "```" in raw:
-                lines = raw.splitlines()
-                json_lines = []
-                in_block = False
-                for line in lines:
-                    if line.strip().startswith("```"):
-                        if in_block:
-                            break
-                        in_block = True
-                        continue
+    @staticmethod
+    def _parse_operations_json(raw: str) -> tuple[list[dict[str, Any]], bool]:
+        """Return (operations, parsed_ok). parsed_ok True even when operations is empty."""
+        text = (raw or "").strip()
+        if not text:
+            return [], False
+        if "```" in text:
+            lines = text.splitlines()
+            json_lines: list[str] = []
+            in_block = False
+            for line in lines:
+                if line.strip().startswith("```"):
                     if in_block:
-                        json_lines.append(line)
-                raw = "\n".join(json_lines)
-
-            result = json.loads(raw)
-            operations = result.get("operations", []) if isinstance(result, dict) else []
+                        break
+                    in_block = True
+                    continue
+                if in_block:
+                    json_lines.append(line)
+            text = "\n".join(json_lines)
+        try:
+            result = json.loads(text)
         except (json.JSONDecodeError, AttributeError):
-            return self._fallback_add_task(text)
+            return [], False
+        if isinstance(result, dict):
+            ops = result.get("operations", [])
+            return (ops if isinstance(ops, list) else []), True
+        if isinstance(result, list):
+            return result, True
+        return [], False
 
-        if not operations:
-            return self._fallback_add_task(text)
+    def _apply_plan_operations(self, operations: list[Any], *, reason_prefix: str) -> list[str]:
+        """Apply LLM plan ops. Process move/drop from high line numbers first."""
+        from project_mode import add_task_to_tasks_md, move_task_to_phase
 
-        # Apply operations
         applied: list[str] = []
-        for op in operations:
+        ops = [op for op in operations if isinstance(op, dict)]
+
+        def _line_key(op: dict[str, Any]) -> int:
+            line = op.get("line", -1)
+            return line if isinstance(line, int) else -1
+
+        # Higher lines first so earlier indices stay stable within one batch.
+        ordered = sorted(
+            ops,
+            key=lambda op: (
+                0 if op.get("kind") in {"move", "drop"} else 1,
+                -_line_key(op),
+            ),
+        )
+
+        for op in ordered:
             kind = op.get("kind", "")
             try:
                 if kind == "add":
@@ -819,53 +1109,129 @@ class PlanAgent:
                     desc = op.get("description", "")
                     if not desc:
                         continue
-                    from project_mode import add_task_to_tasks_md
-                    # Find matching phase title
-                    phase_title = ""
-                    for line in tasks_text.splitlines():
-                        if line.strip().startswith("## ") and phase.lower() in line.lower():
-                            phase_title = line.strip().lstrip("#").strip()
-                            break
+                    phase_title = str(phase).strip() if phase else ""
                     if not phase_title:
-                        phase_title = "Phase 1"
+                        continue
                     result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
                     new_line = result.get("line", -1)
-                    self._record_change("add", desc, reason=f"LLM: {op.get('reason', text[:40])}")
+                    landed = result.get("phase") or phase_title
+                    self._record_change(
+                        "add",
+                        desc,
+                        reason=f"{reason_prefix}: {op.get('reason', '')}"[:120],
+                    )
                     self.push_undo(
                         description=f"已添加「{desc[:30]}」",
                         reverse_kind="drop",
                         reverse_data={"line": new_line},
                     )
-                    applied.append(f"+ {phase_title}: {desc}")
+                    applied.append(f"+ {landed}: {desc}")
+
+                elif kind in {"move", "rephase"}:
+                    line = op.get("line", -1)
+                    phase = str(op.get("phase", "") or "").strip()
+                    if not isinstance(line, int) or line < 0 or not phase:
+                        continue
+                    result = move_task_to_phase(self.paths, self.project_id, line, phase)
+                    desc = str(result.get("description") or "")
+                    landed = str(result.get("phase") or phase)
+                    self._record_change(
+                        "reorder",
+                        desc,
+                        reason=f"{reason_prefix}: {op.get('reason', 'move')}"[:120],
+                        line=result.get("line"),
+                    )
+                    applied.append(f"→ 移到 {landed}: {desc[:50]}")
+
+                elif kind == "drop":
+                    line = op.get("line", -1)
+                    if isinstance(line, int) and line >= 0:
+                        self.drop_task(line)
+                        applied.append(f"× 已删除行 {line}")
 
                 elif kind == "skip":
                     line = op.get("line", -1)
-                    if line >= 0:
+                    if isinstance(line, int) and line >= 0:
                         self.skip_task(line)
                         applied.append(f"~ 行 {line} 已暂缓")
 
                 elif kind == "split":
                     line = op.get("line", -1)
                     subtasks = op.get("description", [])
-                    if isinstance(subtasks, list) and line >= 0:
-                        # Toggle original as done
+                    if isinstance(subtasks, list) and isinstance(line, int) and line >= 0:
                         self.toggle_task(line, True)
                         for sub in subtasks:
                             self._record_change("add", str(sub), reason=f"split of line {line}")
                         applied.append(f"⇅ 行 {line} 拆分为 {len(subtasks)} 项")
 
-            except Exception:
-                continue  # skip failed ops, apply what we can
+                elif kind == "reorder":
+                    line = op.get("line", -1)
+                    direction = str(op.get("direction") or op.get("description") or "up")
+                    if isinstance(line, int) and line >= 0 and direction in {"up", "down"}:
+                        self.reorder_task(line, direction)
+                        applied.append(f"↕ 行 {line} {direction}")
 
+            except Exception:
+                continue
+
+        return applied
+
+    def reason_about_intent(self, text: str) -> str:
+        """LLM-first plan channel. Local heuristics only when LLM/parse fails (兜底)."""
+        try:
+            llm = self._ensure_llm()
+        except Exception as exc:
+            out = self._plan_channel_fallback(text, extra=f"LLM 不可用（{exc}）")
+            self.set_partner_notices(out)
+            return out
+
+        # Exact-dup cleanup is a silent safety net, not a substitute for LLM judgment.
+        pre_actions = self.auto_fix()
+
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
+
+        try:
+            response = llm.chat(
+                [
+                    {"role": "system", "content": _PLAN_SYSTEM},
+                    {"role": "user", "content": _build_plan_prompt(tasks_text, text)},
+                ],
+                model=getattr(llm, "_plan_model", "deepseek-v4-flash"),
+                temperature=0.0,
+            )
+        except Exception as exc:
+            self._degradation_level = "L2"
+            out = self._plan_channel_fallback(text, extra=f"LLM 调用失败（{exc}）")
+            self.set_partner_notices(out)
+            return out
+
+        raw = response.content or ""
+        operations, parsed_ok = self._parse_operations_json(raw)
+        if not parsed_ok:
+            out = self._plan_channel_fallback(text, extra="LLM 返回无法解析")
+            self.set_partner_notices(out)
+            return out
+        if not operations:
+            prefix = "\n".join(pre_actions) if pre_actions else ""
+            out = self._llm_noop_summary(text, prefix=prefix)
+            self.set_partner_notices(out)
+            return out
+
+        applied = list(pre_actions)
+        applied.extend(self._apply_plan_operations(operations, reason_prefix="LLM"))
         self._save_state()
-        actions = self.auto_fix()
-        for action in actions:
+        for action in self.auto_fix():
             applied.append(action)
 
         if not applied:
-            return self._fallback_add_task(text, extra="所有 LLM 操作执行失败")
+            out = self._llm_noop_summary(text)
+            self.set_partner_notices(out)
+            return out
 
-        return "\n".join(applied)
+        out = "\n".join(applied)
+        self.set_partner_notices(out)
+        return out
 
     # ---- state payload ----
 
@@ -899,27 +1265,47 @@ class PlanAgent:
         # Always update snapshot after checking
         self._last_tasks_snapshot = current_tasks
 
-        # Stale task detection: same current task across multiple build_state calls
+        # Always auto_fix first so suggestion line numbers match post-fix file
+        auto_fix_actions = self.auto_fix()
+        if auto_fix_actions and tasks_path.is_file():
+            current_tasks = tasks_path.read_text(encoding="utf-8")
+            self._last_tasks_snapshot = current_tasks
+            artifacts = read_project_artifacts(self.paths, self.project_id)
+            stats = read_task_stats(tasks_path)
+
+        # Stale task detection + next step (after auto_fix)
         self._suggestions = []
+        import re as _re
         current_line = -1
+        next_task_text: str | None = None
         for line_n, line_t in enumerate(current_tasks.splitlines()):
             if line_t.strip().startswith("- [ ]"):
                 current_line = line_n
+                m = _re.match(r"^\s*-\s*\[\s\]\s+(.*)", line_t)
+                next_task_text = m.group(1).strip() if m else line_t.strip()
                 break
         if current_line >= 0 and current_line == self._stale_task_line:
             self._stale_task_count += 1
         else:
             self._stale_task_line = current_line
             self._stale_task_count = 1
-        if self._stale_task_count >= 5:
-            task_text = current_tasks.splitlines()[current_line].strip()
-            self._suggestions.append(
-                f"[耗时提醒] 任务「{task_text[:40]}」已保持 {self._stale_task_count} 轮未完成，是否拆分为更小的子任务？"
+        if self._stale_task_count >= 5 and current_line >= 0:
+            stale = self._suggestion(
+                kind="stale",
+                title="耗时提醒",
+                body=(
+                    f"任务「{(next_task_text or '')[:40]}」已保持 "
+                    f"{self._stale_task_count} 轮未完成，是否拆分为更小的子任务？"
+                ),
+                key=f"stale-{current_line}",
+                action="split_task",
+                payload={"line": current_line},
             )
+            if stale["id"] not in self._ignored_suggestion_ids:
+                self._suggestions.append(stale)
 
-        # Always run checks on every state request
-        auto_fix_actions = self.auto_fix()
-        warnings = self.quality_check()
+        self._suggestions.extend(self.quality_suggestions())
+        self._last_suggestions = {s["id"]: s for s in self._suggestions}
 
         return {
             "type": "project.plan.state",
@@ -935,10 +1321,13 @@ class PlanAgent:
             "changes_level": changes_level,
             "external_changes": external_changes,
             "suggestions": list(self._suggestions),
+            "next_task": next_task_text,
+            "next_task_line": current_line if current_line >= 0 else None,
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
-            "warnings": warnings,
+            "warnings": [],  # actionable items live in suggestions (Phase 22)
             "auto_fix_actions": auto_fix_actions,
+            "partner_notices": list(self._last_partner_notices),
             "change_log": [
                 {
                     "id": c.id,
@@ -981,19 +1370,53 @@ class PlanAgent:
                 )
 
         self._last_progress_time = _time.time()
+        from project_mode import resolve_progress_task_line
+
+        resolved_line, resolve_note = resolve_progress_task_line(
+            self.paths,
+            self.project_id,
+            task_line=task_line if isinstance(task_line, int) else None,
+            summary=summary,
+        )
+        if isinstance(resolved_line, int) and resolved_line >= 0:
+            try:
+                self.toggle_task(resolved_line, True)
+            except Exception:
+                # Fall through to change log so UI still sees the report attempt.
+                pass
         self._record_change(
-            "toggle" if task_line is not None else "add",
+            "toggle" if resolved_line is not None else "add",
             summary,
             reason=f"agent progress: {summary[:80]}",
-            line=task_line,
+            line=resolved_line,
         )
         self._save_state()
         state = self.build_state()
-        # Append verification note AFTER build_state (which resets _suggestions)
+        # Append notes AFTER build_state (which resets _suggestions)
+        extra: list[dict[str, Any]] = []
+        if resolve_note:
+            extra.append(
+                self._suggestion(
+                    kind="resolve",
+                    title="进度行号校正",
+                    body=resolve_note,
+                    key=f"resolve-{int(self._last_progress_time)}",
+                )
+            )
         if verification_note:
-            state["warnings"] = list(state.get("warnings", [])) + [verification_note]
-            state["suggestions"] = list(state.get("suggestions", [])) + [verification_note]
-            self._suggestions.append(verification_note)
+            extra.append(
+                self._suggestion(
+                    kind="verify",
+                    title="产出核验",
+                    body=verification_note,
+                    key=f"verify-{int(self._last_progress_time)}",
+                )
+            )
+        if extra:
+            state["suggestions"] = list(state.get("suggestions", [])) + extra
+            self._suggestions.extend(extra)
+            for note in extra:
+                self._last_suggestions[note["id"]] = note
         return state
 
 

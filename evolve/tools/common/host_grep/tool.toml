@@ -2,7 +2,7 @@
 name = "host_grep"
 description = "在托管区内按正则搜索文件内容；path 须 host:<id>/…"
 version = "1.0.0"
-status = "active"
+status = "archived"
 topics = ["common"]
 
 [entry]
@@ -31,5 +31,5 @@ type = "object"
 [policy]
 confirm = false
 dry_run_supported = false
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 120

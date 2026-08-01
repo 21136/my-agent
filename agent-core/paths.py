@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +94,30 @@ class PathOutOfBoundsError(PathError):
         self.boundary = boundary
 
 
+class PathDeniedForWriteError(PathError):
+    """Resolved path is within agent root but on the write deny-list."""
+
+    code = ToolErrorCode.PATH_DENIED
+
+    def __init__(self, message: str, *, path: str) -> None:
+        super().__init__(message)
+        self.path = path
+
+
+# Write deny-list — paths matching these patterns are read-only even within agent root.
+_WRITE_DENY_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"(^|[/\\])\.git([/\\]|$)"),
+    re.compile(r"(^|[/\\])data[/\\]sessions([/\\]|$)"),
+    re.compile(r"(^|[/\\])node_modules([/\\]|$)"),
+    re.compile(r"(^|[/\\])__pycache__([/\\]|$)"),
+    re.compile(r"(^|[/\\])\.pytest_cache([/\\]|$)"),
+    re.compile(r"(^|[/\\])dist([/\\]|$)"),
+    re.compile(r"(^|[/\\])dist-electron([/\\]|$)"),
+    re.compile(r"(^|[/\\])build([/\\]|$)"),
+    re.compile(r"(^|[/\\])\.env$"),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentPaths:
     """Resolved agent root and standard subdirectories."""
@@ -123,12 +148,36 @@ class AgentPaths:
         )
 
     def resolve_under_agent(self, raw: str, *, must_exist: bool = False) -> Path:
-        """Resolve *raw* under agent root (read_file / list_dir / grep)."""
-        return self._resolve(raw, base=self.agent_root, must_exist=must_exist)
+        """Resolve *raw* under agent root (read_file / list_dir / grep).
+
+        Also accepts ``host:<id>/…`` URIs that delegate to host scope.
+        """
+        stripped = raw.strip()
+        if stripped.lower().startswith("host:"):
+            from host_scope import load_host_scope, resolve_host_path
+
+            config = load_host_scope(self)
+            resolved = resolve_host_path(stripped, config=config, must_exist=must_exist)
+            return resolved.absolute
+        return self._resolve(stripped, base=self.agent_root, must_exist=must_exist)
 
     def resolve_under_workspace(self, raw: str, *, must_exist: bool = False) -> Path:
         """Resolve *raw* under workspace/ (write_text, workspace_only evolved)."""
         return self._resolve(raw, base=self.workspace, must_exist=must_exist)
+
+    def resolve_under_agent_for_write(self, raw: str, *, must_exist: bool = False) -> Path:
+        """Resolve under agent root for writes; reject deny-list paths only."""
+        resolved = self._resolve(raw, base=self.agent_root, must_exist=must_exist)
+        try:
+            rel = self.to_agent_relative(resolved)
+        except (ValueError, PathError):
+            rel = str(resolved)
+        for pattern in _WRITE_DENY_PATTERNS:
+            if pattern.search(rel):
+                raise PathDeniedForWriteError(
+                    f"禁止写入此路径（受保护）：{raw!r}", path=raw,
+                )
+        return resolved
 
     def resolve_under_host(
         self,

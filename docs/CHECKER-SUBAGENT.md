@@ -1,9 +1,9 @@
 # Checker 子代理 / 监工（CHECKER-SUBAGENT）
 
-> 版本 **0.2.0** · 2026-07-13  
-> **状态**：**M0+M1 已实现**（T-1601,T-1610～T-1614,T-1620～T-1623）— [TASKS.md](./TASKS.md) §Phase 17 · 稳定化 **S-36～S-38** pass（T-1808-bug-03）  
-> 关联：[ORCHESTRATION.md](./ORCHESTRATION.md) §4 · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) · `subagent.py` · [TOOLS.md](./TOOLS.md)  
-> 动机：grow 沉淀工具时，**同一主会话 LLM** 既写又验不可靠；需要 **独立上下文 + 另一次 DeepSeek** 做验收报告。与 **约束线**（Phase 16）互补：约束 **执法**，checker **审计**。
+> 版本 **0.2.1** · 2026-07-30  
+> **状态**：**M0+M1 已实现**（T-1601,T-1610～T-1614,T-1620～T-1623）  
+> 关联：[ORCHESTRATION.md](./ORCHESTRATION.md) §4 · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) · `subagent.py` · [TOOLS.md](./TOOLS.md) · [DESKTOP.md](./DESKTOP.md) §0  
+> 动机：沉淀工具时，**同一主会话 LLM** 既写又验不可靠；需要 **独立上下文 + 另一次 DeepSeek** 做验收报告。与 **约束线**（Phase 16）互补：约束 **执法**，checker **审计**。
 
 ---
 

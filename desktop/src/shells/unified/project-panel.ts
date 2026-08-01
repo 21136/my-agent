@@ -1,6 +1,8 @@
-import type { AgentWsClient, PlanChangeItem, ProjectDocItem, ServerEvent } from "../../api/ws";
+import type { AgentWsClient, PlanChangeItem, PlanSuggestion, ProjectDocItem, ServerEvent } from "../../api/ws";
 import { renderMarkdown } from "../../markdown";
 import { escapeHtml } from "../chat-state";
+
+export type { PlanSuggestion };
 
 // ---- new task-flow types ----
 
@@ -91,7 +93,7 @@ export interface ProjectPanelState {
   quickAddText: string;
   // auto-detect
   detectedProject: { id: string; reason: string } | null;
-  // Plan Agent warnings
+  // Plan Agent warnings (legacy / non-structured)
   planWarnings: string[];
   // Undo toast
   undoDescription: string;
@@ -103,7 +105,12 @@ export interface ProjectPanelState {
   changesLevel: string | null;
   autoConfirmTimerId: number | null;
   externalChanges: boolean;
-  suggestions: string[];
+  suggestions: PlanSuggestion[];
+  autoFixNotices: string[];
+  partnerNotices: string[];
+  partnerBusy: boolean;
+  nextTask: string | null;
+  nextTaskLine: number | null;
 }
 
 export interface ProjectPanelCallbacks {
@@ -117,6 +124,94 @@ export interface ProjectPanelCallbacks {
 }
 
 // ---- helpers ----
+
+function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PlanSuggestion[] = [];
+  raw.forEach((item, i) => {
+    if (typeof item === "string") {
+      const body = item.trim();
+      if (!body) return;
+      out.push({
+        id: `legacy-${i}`,
+        kind: "info",
+        title: "计划建议",
+        body,
+        risk: "suggest",
+      });
+      return;
+    }
+    if (!item || typeof item !== "object") return;
+    const o = item as Record<string, unknown>;
+    const id = typeof o.id === "string" && o.id ? o.id : `sug-${i}`;
+    const body = typeof o.body === "string" ? o.body : String(o.title ?? "");
+    if (!body && !o.title) return;
+    out.push({
+      id,
+      kind: typeof o.kind === "string" ? o.kind : "info",
+      title: typeof o.title === "string" && o.title ? o.title : "计划建议",
+      body: body || String(o.title),
+      risk: typeof o.risk === "string" ? o.risk : "suggest",
+      action: typeof o.action === "string" ? o.action : null,
+      payload: o.payload && typeof o.payload === "object"
+        ? (o.payload as Record<string, unknown>)
+        : {},
+    });
+  });
+  return out;
+}
+
+function renderSuggestionCards(suggestions: PlanSuggestion[]): string {
+  const actionable = suggestions.filter((s) => Boolean(s.action));
+  if (actionable.length === 0) return "";
+  const cards = actionable.map((s) => {
+    const acceptLabel = s.action === "drop_task" ? "删除" : "采纳";
+    return `<div class="sidebar-suggestion-card" style="padding:0.35rem 0;border-bottom:1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);">
+      <div style="font-size:0.78rem;font-weight:600;color:var(--ma-text);">${escapeHtml(s.title)}</div>
+      <div style="font-size:0.74rem;color:var(--ma-text-muted);margin:0.15rem 0 0.35rem;line-height:1.35;">${escapeHtml(s.body)}</div>
+      <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+        <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">${acceptLabel}</button>
+        <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">忽略</button>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">计划搭档</div>
+    ${cards}
+  </div>`;
+}
+
+function renderPartnerNotices(notices: string[], busy: boolean): string {
+  const lines = notices
+    .map((n) => n.trim())
+    .filter(Boolean)
+    .map((n) => `<div style="font-size:0.78rem;opacity:0.92;margin-top:0.2rem">${escapeHtml(n)}</div>`)
+    .join("");
+  const title = busy ? "计划搭档 · 思考中…" : "计划搭档";
+  return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">${title}</div>
+    ${lines || (busy ? `<div style="font-size:0.78rem;opacity:0.7;margin-top:0.2rem">正在理解你的话…</div>` : "")}
+  </div>`;
+}
+
+function renderAutoFixNotice(notices: string[]): string {
+  const lines = notices
+    .map((n) => `<div style="padding:0.15rem 0;font-size:0.76rem;color:var(--ma-text);">${escapeHtml(n)}</div>`)
+    .join("");
+  return `<div class="sidebar-change-banner" style="border-color:#3d8b5a;background:color-mix(in srgb, #3d8b5a 8%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">已自动清理</div>
+    ${lines}
+    <button type="button" class="unified-btn" data-action="dismiss-auto-fix" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+  </div>`;
+}
+
+function renderNextStepChip(state: ProjectPanelState): string {
+  if (!state.projectId || !state.nextTask) return "";
+  return `<div class="sidebar-next-step" style="padding:0.4rem 0.75rem;font-size:0.78rem;border-bottom:1px solid var(--ma-border);background:color-mix(in srgb, var(--ma-accent) 5%, var(--ma-surface));">
+    <span style="color:var(--ma-text-muted);">下一步</span>
+    <span style="margin-left:0.4rem;color:var(--ma-text);font-weight:560;">${escapeHtml(state.nextTask)}</span>
+  </div>`;
+}
 
 function planStatusLabel(state: ProjectPanelState): string {
   if (state.planStatus === "confirmed") {
@@ -287,7 +382,7 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
   }
   // Quick-add input at bottom of task flow
   html += `<div style="display:flex;gap:0.3rem;padding:0.5rem 0.75rem;border-top:1px solid var(--ma-border);margin-top:0.25rem;">
-    <input type="text" class="overlay-search-input" id="sidebar-quick-add-input" placeholder="添加任务…" value="${escapeHtml(state.quickAddText)}" style="margin-bottom:0;font-size:0.8rem;">
+    <input type="text" class="overlay-search-input" id="sidebar-quick-add-input" placeholder="对计划说话…" value="${escapeHtml(state.quickAddText)}" style="margin-bottom:0;font-size:0.8rem;" title="侧栏整条给计划搭档：加任务 / 优化 / 暂缓…；反馈为建议卡与短告知">
   </div>`;
 
   return html;
@@ -587,11 +682,12 @@ export function applyProjectPlanState(
   state.degradationLabel = event.degradation_label ?? "全功能";
   state.changesLevel = event.changes_level ?? null;
   state.externalChanges = event.external_changes ?? false;
-  state.suggestions = event.suggestions ?? [];
-  const autoFixes = event.auto_fix_actions ?? [];
-  if (autoFixes.length > 0) {
-    state.planWarnings = [...autoFixes, ...state.planWarnings];
-  }
+  state.suggestions = normalizeSuggestions(event.suggestions ?? []);
+  state.autoFixNotices = event.auto_fix_actions ?? [];
+  state.partnerNotices = event.partner_notices ?? [];
+  state.partnerBusy = false;
+  state.nextTask = event.next_task ?? null;
+  state.nextTaskLine = typeof event.next_task_line === "number" ? event.next_task_line : null;
 
   // Diff old vs new task phases
   const oldSnapshot = state.taskPhases.length > 0
@@ -728,7 +824,7 @@ export function renderProjectSidebar(
   }
 
   // --- banner area: single priority chain ---
-  // Priority: undo > external > suggestions > detection > degradation > warnings > change_banner
+  // Priority: undo > partner reply/busy > external > suggestions > auto_fix > …
   let bannerHtml = "";
 
   if (state.undoDescription) {
@@ -736,12 +832,18 @@ export function renderProjectSidebar(
       <span>${escapeHtml(state.undoDescription)}</span>
       <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
     </div>`;
+  } else if (state.partnerBusy || (state.partnerNotices && state.partnerNotices.length > 0)) {
+    bannerHtml = renderPartnerNotices(state.partnerNotices || [], Boolean(state.partnerBusy));
   } else if (state.externalChanges) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到外部修改</div>
       <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
       <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
     </div>`;
+  } else if (state.suggestions.length > 0) {
+    bannerHtml = renderSuggestionCards(state.suggestions);
+  } else if (state.autoFixNotices.length > 0) {
+    bannerHtml = renderAutoFixNotice(state.autoFixNotices);
   } else if (state.detectedProject && !state.projectId) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到项目目录</div>
@@ -763,7 +865,7 @@ export function renderProjectSidebar(
       .map((w) => `<div style="padding:0.2rem 0.75rem;font-size:0.78rem;color:#d4a000;">⚠ ${escapeHtml(w)}</div>`)
       .join("");
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">项目管理器反馈</div>
+      <div class="sidebar-change-banner-title">计划提示</div>
       ${warnHtml}
       <button type="button" class="unified-btn" data-action="dismiss-warnings" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
     </div>`;
@@ -779,8 +881,8 @@ export function renderProjectSidebar(
     els.changeBanner.innerHTML = "";
   }
 
-  // task flow (main view)
-  els.taskFlow.innerHTML = renderTaskFlow(
+  // task flow (main view) + next-step chip (V6)
+  els.taskFlow.innerHTML = renderNextStepChip(state) + renderTaskFlow(
     state,
     state.highlightChanges && state.highlightedLines.size > 0 ? state.highlightedLines : null,
   );

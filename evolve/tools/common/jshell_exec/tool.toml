@@ -2,7 +2,7 @@
 name = "jshell_exec"
 description = "interactive Java REPL via jshell, maintains state across calls via session_id"
 version = "1.0.0"
-status = "active"
+status = "suspect"
 topics = ["common"]
 
 [entry]
@@ -44,5 +44,5 @@ error = { type = "string" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 40

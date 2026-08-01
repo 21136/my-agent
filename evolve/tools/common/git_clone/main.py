@@ -141,7 +141,7 @@ def _resolve_workspace_dest(paths, dest_arg: str) -> tuple[Path, str]:
         raise ValueError("dest must not contain ..")
     if text.startswith("workspace/"):
         text = text.removeprefix("workspace/")
-    resolved = paths.resolve_under_workspace(text, must_exist=False)
+    resolved = paths.resolve_under_agent(text, must_exist=False)
     rel = paths.to_agent_relative(resolved)
     return resolved, rel
 

@@ -1,6 +1,6 @@
 [tool]
 name = "move_to_trash"
-description = "将 workspace 内文件或目录移入 _trash/（可恢复）；path 相对 workspace"
+description = "将 agent root 内文件或目录移入 _trash/（可恢复）；path 相对 agent root"
 version = "1.0.0"
 status = "active"
 topics = ["common"]
@@ -14,11 +14,11 @@ type = "object"
 required = ["path"]
 [schema.input.properties.path]
 type = "string"
-description = "相对 workspace 的文件或目录"
+description = "相对 agent root 的文件或目录"
 [schema.input.properties.trash_dir]
 type = "string"
 default = "_trash"
-description = "回收站目录，相对 workspace"
+description = "回收站目录，相对 agent root"
 
 [schema.output]
 type = "object"
@@ -30,5 +30,5 @@ skipped = { type = "boolean" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

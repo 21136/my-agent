@@ -95,6 +95,20 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
         self.assertIn("continue_turn", overlay)
         self.assertIn("current_task: - [ ] next one", overlay)
         self.assertIn("task_stop:", overlay)
+        self.assertIn("report_progress", overlay)
+
+        # Confirmed turns always expose current_task; T-id becomes armed_task_id.
+        overlay2 = format_project_overlay(
+            project_root="workspace/x",
+            project_id="x",
+            plan_status="confirmed",
+            continue_turn=False,
+            next_open_task="- [ ] T-012 Service work",
+            armed_task_id="T-012",
+        )
+        self.assertIn("current_task:", overlay2)
+        self.assertIn("armed_task_id: T-012", overlay2)
+        self.assertNotIn("continue_turn", overlay2)
 
     def test_task_paused_notice(self) -> None:
         notice = format_task_paused_notice(next_open_task="- [ ] T-2")
@@ -107,7 +121,10 @@ class TaskStopHardGateTests(unittest.TestCase):
     """IT-52: after marking [x], same-turn product write is rejected."""
 
     def setUp(self) -> None:
-        self.paths = make_temp_agent_paths(self, copy_tool_dirs=("common/write_text",))
+        self.paths = make_temp_agent_paths(
+            self,
+            copy_tool_dirs=("common/write_text", "project/report_progress"),
+        )
         # Copy template into temp workspace for create_project
         live = Path(__file__).resolve().parents[2] / "workspace" / "_template"
         dest = self.paths.workspace / "_template"
@@ -138,34 +155,83 @@ class TaskStopHardGateTests(unittest.TestCase):
         self.root = f"workspace/{self.pid}"
         tasks = project_dir(self.paths, self.pid) / "TASKS.md"
         tasks.write_text(
-            "# tasks\n\n- [ ] T-001 skeleton\n- [ ] T-002 engine\n",
+            "# tasks\n\n- [ ] T-001 skeleton Entity write\n- [ ] T-002 engine Service\n",
             encoding="utf-8",
         )
 
     def _executor(self) -> ToolExecutor:
+        import os
+
+        os.environ["MY_AGENT_ROOT"] = str(self.paths.agent_root)
+        self.addCleanup(lambda: os.environ.pop("MY_AGENT_ROOT", None))
+
         registry = ToolRegistry.load(self.paths)
+        allow = {"write_text", "report_progress"}
         executor = ToolExecutor.create(
             paths=self.paths,
             session_dir=self.session.session_dir,
+            allowed_evolved=allow,
             confirm_fn=lambda _p, _a: "y",
         )
         executor.registry = registry
         executor.session.active_shell = "project"
         executor.session.project_root = self.root
+        executor.session.project_id = self.pid
         executor.session.project_plan_status = "confirmed"
+        executor.session.allowed_evolved = allow
         executor.begin_turn()
         return executor
 
+    def _report_progress_args(self, *, task_line: int = 2, summary: str = "done T-001") -> dict:
+        return {
+            "tool_name": "report_progress",
+            "arguments": {
+                "summary": summary,
+                "task_line": task_line,
+            },
+        }
+
     def _write_args(self, rel_under_project: str, content: str) -> dict:
-        # write_text paths are workspace-relative: <id>/...
         return {
             "tool_name": "write_text",
             "arguments": {
-                "path": f"{self.pid}/{rel_under_project}",
+                "path": f"workspace/{self.pid}/{rel_under_project}",
                 "content": content,
                 "on_conflict": "overwrite",
             },
         }
+
+    def test_begin_turn_arms_task_and_inject_overrides_stale_id(self) -> None:
+        executor = self._executor()
+        self.assertEqual(executor.session.armed_task_id, "T-001")
+        self.assertIn("T-001", executor.session.armed_task_text)
+
+        args = {
+            "tool_name": "report_progress",
+            "arguments": {
+                "summary": "必备材料 Service 完成",  # no T-id; wrong claimed id
+                "task_line": 3,  # neighbor T-002
+                "task_id": "T-002",
+            },
+        }
+        executor._maybe_inject_report_progress_project_id("run_evolved", args)
+        inner = args["arguments"]
+        self.assertEqual(inner["task_id"], "T-001")
+        self.assertIn("T-001", inner["task_text"])
+        self.assertEqual(inner["project_id"], self.pid)
+
+        # Phase 24: need this-turn write evidence before report_progress.
+        written = executor.run(
+            "run_evolved",
+            self._write_args("src/Seed.java", "class Seed {}"),
+        )
+        self.assertTrue(written.ok, written.error)
+
+        result = executor.run("run_evolved", args)
+        self.assertTrue(result.ok, result.error)
+        text = (project_dir(self.paths, self.pid) / "TASKS.md").read_text(encoding="utf-8")
+        self.assertIn("- [x] T-001 skeleton Entity write", text)
+        self.assertIn("- [ ] T-002 engine Service", text)
 
     def test_block_reason_unit(self) -> None:
         reason = task_stop_block_reason(
@@ -190,10 +256,13 @@ class TaskStopHardGateTests(unittest.TestCase):
 
     def test_mark_checkbox_then_product_write_rejected(self) -> None:
         executor = self._executor()
-        mark = (
-            "# tasks\n\n- [x] T-001 skeleton\n- [ ] T-002 engine\n"
+        self.assertTrue(
+            executor.run(
+                "run_evolved",
+                self._write_args("src/Seed.java", "class Seed {}"),
+            ).ok
         )
-        result_tasks = executor.run("run_evolved", self._write_args("TASKS.md", mark))
+        result_tasks = executor.run("run_evolved", self._report_progress_args())
         self.assertTrue(result_tasks.ok, result_tasks.error)
         self.assertTrue(executor.session.task_stop_armed)
 
@@ -217,8 +286,13 @@ class TaskStopHardGateTests(unittest.TestCase):
 
     def test_new_turn_clears_arm_and_allows_write(self) -> None:
         executor = self._executor()
-        mark = "# tasks\n\n- [x] T-001 skeleton\n- [ ] T-002 engine\n"
-        self.assertTrue(executor.run("run_evolved", self._write_args("TASKS.md", mark)).ok)
+        self.assertTrue(
+            executor.run(
+                "run_evolved",
+                self._write_args("src/Seed.java", "class Seed {}"),
+            ).ok
+        )
+        self.assertTrue(executor.run("run_evolved", self._report_progress_args()).ok)
         self.assertTrue(executor.session.task_stop_armed)
 
         executor.begin_turn()

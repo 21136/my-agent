@@ -30,6 +30,24 @@ function isRecallIntent(intent: string, intentLabel: string): boolean {
   return intent === "recall" || intentLabel.includes("回顾");
 }
 
+/** Sidebar Plan Agent channel helpers (align with agent-core plan_agent.py). */
+function looksLikePlanMetaCommand(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length > 80) return false;
+  if (/^T-\d+/i.test(t)) return false;
+  return /优化|整理|清理|检查|查重|太乱|帮我看|看看计划|质检|auto[\s_-]?fix/i.test(t);
+}
+
+function looksLikeNewTaskUtterance(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length < 4) return false;
+  if (looksLikePlanMetaCommand(t)) return false;
+  if (/提前|推后|暂缓|跳过|拆分|重排|删除|合并|挪到|放到|移到|先做|再做|顺序/i.test(t)) {
+    return false;
+  }
+  return true;
+}
+
 function recentTurnIndices(blocks: ChatBlock[], k: number): number[] {
   const turns = new Set<number>();
   for (const block of blocks) {
@@ -83,8 +101,20 @@ export function mountUnifiedShell(
     sessionCount: 0,
   };
 
-  let sessionsDropdown: Array<{ session_id: string; title: string; updated_at: string }> = [];
+  let sessionsDropdown: Array<{
+    session_id: string;
+    title: string;
+    preview?: string;
+    updated_at: string;
+    message_count?: number;
+    project_id?: string;
+  }> = [];
   let sessionsOpen = false;
+  let sessionsTab: "chat" | "project" = "chat";
+
+  function refreshTopbar(): void {
+    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
+  }
 
   const proposalsState: ProposalsState = {
     proposals: [] as ProposalItem[],
@@ -133,6 +163,11 @@ export function mountUnifiedShell(
     autoConfirmTimerId: null,
     externalChanges: false,
     suggestions: [],
+    autoFixNotices: [],
+    partnerNotices: [],
+    partnerBusy: false,
+    nextTask: null,
+    nextTaskLine: null,
   };
 
   let statusText = "连接中…";
@@ -173,12 +208,12 @@ export function mountUnifiedShell(
           renderChat();
           requestAnimationFrame(() => scrollToRecallTurns());
         }
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         setStatus(event.intent_label);
       },
       onCheckerVerdict: (event) => {
         topbarState.checkerLabel = checkerVerdictStatusText(event.verdict);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         setStatus(topbarState.checkerLabel);
       },
       onConfirmRequest: () => {
@@ -481,21 +516,66 @@ export function mountUnifiedShell(
     }
   }
 
-  // ---- new session ----
-  function handleNewSession(): void {
+  // ---- new chat / new project (UX-POLISH §7.6) ----
+  function handleNewChat(): void {
     if (chat.isWorking()) {
-      setStatus("助手执行中，请稍后再开新会话");
+      setStatus("助手执行中，请稍后再开新对话");
       return;
+    }
+    if (projectState.projectId) {
+      const ok = window.confirm(
+        "将挂起当前项目会话并打开普通对话（不是同项目新会话）。继续？",
+      );
+      if (!ok) return;
     }
     try {
       client.sendCommand("新会话");
-      setStatus("新会话…");
+      setStatus("普通对话…");
     } catch (err) {
-      setStatus(`新会话失败：${err instanceof Error ? err.message : String(err)}`);
+      setStatus(`开对话失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function handleNewProject(): void {
+    if (chat.isWorking()) {
+      setStatus("助手执行中，请稍后再新建项目");
+      return;
+    }
+    if (projectState.projectId) {
+      const ok = window.confirm("离开当前项目去建新项目？");
+      if (!ok) return;
+    }
+    const raw = window.prompt("新项目 id（字母数字与连字符）:");
+    if (raw === null) return;
+    const id = raw.trim();
+    if (!id) {
+      setStatus("未输入项目 id");
+      return;
+    }
+    try {
+      client.sendCommand(`项目 新建 ${id}`);
+      setStatus(`新建项目 ${id}…`);
+    } catch (err) {
+      setStatus(`新建项目失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
   // ---- sessions dropdown ----
+  function relativeTime(iso: string): string {
+    if (!iso) return "";
+    const then = new Date(iso).getTime();
+    const diffMs = Date.now() - then;
+    if (diffMs < 0) return "";
+    const min = Math.floor(diffMs / 60000);
+    if (min < 1) return "刚刚";
+    if (min < 60) return `${min} 分钟前`;
+    const hours = Math.floor(min / 60);
+    if (hours < 24) return `${hours} 小时前`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days} 天前`;
+    return new Date(iso).toLocaleDateString("zh-CN");
+  }
+
   function handleOpenSessions(): void {
     try {
       client.listSessions();
@@ -509,30 +589,66 @@ export function mountUnifiedShell(
       expandEl.innerHTML = "";
       return;
     }
+    sessionsTab = perspective === "project" || projectState.projectId ? "project" : "chat";
     renderSessionsDropdown();
   }
 
   function renderSessionsDropdown(): void {
-    let html = `<div class="unified-expand-title">最近会话 <button type="button" class="unified-btn" id="unified-sessions-close">关闭</button></div>`;
-    if (!sessionsDropdown.length) {
-      html += `<p class="text-muted">加载中…</p>`;
+    const chatItems = sessionsDropdown.filter((s) => !s.project_id);
+    const projectItems = sessionsDropdown.filter((s) => !!s.project_id);
+    const items = sessionsTab === "project" ? projectItems : chatItems;
+    const emptyHint = sessionsDropdown.length
+      ? sessionsTab === "project"
+        ? "暂无项目会话"
+        : "暂无普通对话"
+      : "加载中…";
+
+    let listHtml = "";
+    if (!items.length) {
+      listHtml = `<p class="text-muted unified-sessions-empty">${emptyHint}</p>`;
     } else {
-      for (const s of sessionsDropdown) {
+      for (const s of items) {
         const isCurrent = s.session_id === (chat.model as any).sessionId;
-        html += `<div class="unified-expand-item ${isCurrent ? "is-current" : ""}">
+        const time = relativeTime(s.updated_at);
+        const preview =
+          sessionsTab === "chat" && s.preview
+            ? `<span class="unified-expand-item-preview">${escapeHtml(s.preview)}</span>`
+            : "";
+        const count = s.message_count ? `${s.message_count} 条消息` : "";
+        const meta = [time, count].filter(Boolean).join(" · ");
+        listHtml += `<div class="unified-expand-item ${isCurrent ? "is-current" : ""}">
           <span class="unified-expand-item-title">${escapeHtml(s.title)}</span>
-          <span class="unified-expand-item-meta">${escapeHtml(s.session_id)}</span>
+          ${preview}
+          <span class="unified-expand-item-meta">${escapeHtml(meta || s.session_id)}</span>
           <button type="button" class="unified-btn" data-open-session="${escapeHtml(s.session_id)}" ${isCurrent ? "disabled" : ""}>${isCurrent ? "当前" : "打开"}</button>
         </div>`;
       }
     }
-    expandEl.innerHTML = html;
+
+    expandEl.innerHTML = `
+      <div class="unified-sessions-header">
+        <div class="unified-expand-title">会话 <button type="button" class="unified-btn" id="unified-sessions-close">关闭</button></div>
+        <div class="unified-sessions-tabs" role="tablist">
+          <button type="button" class="unified-sessions-tab ${sessionsTab === "chat" ? "is-active" : ""}" data-sessions-tab="chat" role="tab">对话 (${chatItems.length})</button>
+          <button type="button" class="unified-sessions-tab ${sessionsTab === "project" ? "is-active" : ""}" data-sessions-tab="project" role="tab">项目 (${projectItems.length})</button>
+        </div>
+      </div>
+      <div class="unified-sessions-list">${listHtml}</div>
+    `;
     expandEl.classList.remove("hidden");
 
     expandEl.querySelector("#unified-sessions-close")?.addEventListener("click", () => {
       sessionsOpen = false;
       expandEl.classList.add("hidden");
       expandEl.innerHTML = "";
+    });
+    expandEl.querySelectorAll<HTMLButtonElement>("[data-sessions-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.dataset.sessionsTab;
+        if (tab !== "chat" && tab !== "project") return;
+        sessionsTab = tab;
+        renderSessionsDropdown();
+      });
     });
     expandEl.querySelectorAll<HTMLButtonElement>("[data-open-session]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -587,7 +703,7 @@ export function mountUnifiedShell(
     // also sync topbarState for renderTopbar
     topbarState.proposals = items;
     syncProposalsState();
-    renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
     renderProposalsPanel();
   }
 
@@ -968,12 +1084,13 @@ export function mountUnifiedShell(
   const RENDER_THROTTLE_MS = 100;
 
   function renderChat(): void {
+    // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
+    doRender();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
     }, RENDER_THROTTLE_MS);
-    doRender();
   }
 
   function renderConfirmGlass(): void {
@@ -1214,17 +1331,21 @@ export function mountUnifiedShell(
         const desc = input.value.trim();
         if (desc) {
           projectState.quickAddText = "";
+          projectState.partnerBusy = true;
+          projectState.partnerNotices = [];
 
-          // Optimistic: add task to first phase
-          const phase = projectState.taskPhases.find((p) => p.tasks.length > 0);
-          if (phase) {
-            const newTask: TaskItem = {
-              line: -1,  // placeholder; server will assign real line
-              text: desc,
-              done: false,
-              status: "new",
-            };
-            phase.tasks.push(newTask);
+          // Optimistic row only when utterance is clearly a new task title
+          if (looksLikeNewTaskUtterance(desc)) {
+            const phase = projectState.taskPhases.find((p) => p.tasks.length > 0);
+            if (phase) {
+              const newTask: TaskItem = {
+                line: -1,  // placeholder; server will assign real line
+                text: desc,
+                done: false,
+                status: "new",
+              };
+              phase.tasks.push(newTask);
+            }
           }
 
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -1232,7 +1353,12 @@ export function mountUnifiedShell(
           try {
             client.addTask(desc);
           } catch (err) {
+            projectState.partnerBusy = false;
+            projectState.partnerNotices = [
+              `发送失败：${err instanceof Error ? err.message : String(err)}`,
+            ];
             setStatus(`添加任务失败：${err instanceof Error ? err.message : String(err)}`);
+            renderProjectSidebar(projectEls, projectState, projectCallbacks);
             client.refreshProject(); // fallback reload from server
           }
         }
@@ -1415,6 +1541,26 @@ export function mountUnifiedShell(
         return;
       case "dismiss-suggestions":
         projectState.suggestions = [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "accept-suggestion": {
+        const sid = btn.dataset.suggestionId;
+        if (sid) {
+          try { client.acceptPlanSuggestion(sid); } catch { /* ignore */ }
+        }
+        return;
+      }
+      case "ignore-suggestion": {
+        const sid = btn.dataset.suggestionId;
+        if (sid) {
+          projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          try { client.ignorePlanSuggestion(sid); } catch { /* ignore */ }
+        }
+        return;
+      }
+      case "dismiss-auto-fix":
+        projectState.autoFixNotices = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
@@ -1649,23 +1795,24 @@ export function mountUnifiedShell(
           if (!perspectiveLocked) setPerspective("default", "session");
         }
         updatePlaceholder();
-        setStatus(`会话 ${event.session_id} · ${event.turn_mode_label}`);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         if (perspective === "project") {
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
+        client.listSessions();
         break;
 
       case "session.list":
         sessionsDropdown = event.sessions;
         topbarState.sessionCount = event.sessions.length;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         if (sessionsOpen) renderSessionsDropdown();
         break;
 
       case "session.memory":
         topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         updateTokenBar(event.token_usage, event.token_limit);
         break;
 
@@ -1680,7 +1827,7 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         }
         break;
 
@@ -1691,7 +1838,7 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         }
 
         // Auto-confirm timer for task-level changes
@@ -1747,7 +1894,7 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         }
         updatePlaceholder();
         setStatus(event.message);
@@ -1776,7 +1923,7 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         }
         client.refreshProject();
         break;
@@ -1897,7 +2044,7 @@ export function mountUnifiedShell(
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           if (projectState.projectId) {
             topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-            renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+            renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
           }
           client.refreshProject();
         }
@@ -1941,7 +2088,7 @@ export function mountUnifiedShell(
 
   // ---- initial render ----
   updatePlaceholder();
-  renderTopbar(topbarEl, topbarState, openProposals, handleNewSession, handleOpenSessions);
+  renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
   renderProposalsPanel();
   renderChat();
   setComposerEnabled(true);

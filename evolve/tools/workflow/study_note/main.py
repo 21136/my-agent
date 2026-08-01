@@ -107,15 +107,15 @@ def run_study_note(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": f"action must be one of {sorted(_VALID_ACTIONS)}"}
 
     try:
-        source_dir = paths.resolve_under_workspace(source_arg, must_exist=True)
-        target_root = paths.resolve_under_workspace(target_arg, must_exist=False)
+        source_dir = paths.resolve_under_agent(source_arg, must_exist=True)
+        target_root = paths.resolve_under_agent(target_arg, must_exist=False)
     except PathOutOfBoundsError as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
     if not source_dir.is_dir():
-        return {"ok": False, "error": f"not a directory: {paths.to_workspace_relative(source_dir)}"}
+        return {"ok": False, "error": f"not a directory: {paths.to_agent_relative(source_dir)}"}
 
     entries: list[dict[str, Any]] = []
     category_counts: dict[str, int] = {}
@@ -129,8 +129,8 @@ def run_study_note(payload: dict[str, Any]) -> dict[str, Any]:
         dest = target_root / tag / path.name
         entries.append(
             {
-                "from": paths.to_workspace_relative(path),
-                "to": paths.to_workspace_relative(dest),
+                "from": paths.to_agent_relative(path),
+                "to": paths.to_agent_relative(dest),
                 "tags": tags,
                 "primary_tag": tag,
             }
@@ -143,15 +143,15 @@ def run_study_note(payload: dict[str, Any]) -> dict[str, Any]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             final_dest = _unique_target(dest) if dest.exists() else dest
             path.rename(final_dest)
-            entries[-1]["to"] = paths.to_workspace_relative(final_dest)
+            entries[-1]["to"] = paths.to_agent_relative(final_dest)
         except OSError as exc:
             return {"ok": False, "error": str(exc), "partial": entries}
 
     result: dict[str, Any] = {
         "ok": True,
         "action": action,
-        "source_dir": paths.to_workspace_relative(source_dir),
-        "target_dir": paths.to_workspace_relative(target_root),
+        "source_dir": paths.to_agent_relative(source_dir),
+        "target_dir": paths.to_agent_relative(target_root),
         "entries": entries,
         "category_counts": category_counts,
     }
@@ -198,8 +198,8 @@ def _demo() -> None:
         {
             "tool_name": "study_note",
             "arguments": {
-                "source_dir": paths.to_workspace_relative(demo_in),
-                "target_dir": paths.to_workspace_relative(demo_out),
+                "source_dir": paths.to_agent_relative(demo_in),
+                "target_dir": paths.to_agent_relative(demo_out),
                 "action": "list",
             },
             "dry_run": True,
@@ -213,8 +213,8 @@ def _demo() -> None:
         {
             "tool_name": "study_note",
             "arguments": {
-                "source_dir": paths.to_workspace_relative(demo_in),
-                "target_dir": paths.to_workspace_relative(demo_out),
+                "source_dir": paths.to_agent_relative(demo_in),
+                "target_dir": paths.to_agent_relative(demo_out),
                 "action": "organize",
             },
             "dry_run": False,

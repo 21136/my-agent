@@ -1,4 +1,4 @@
-"""write_text — write UTF-8 text under workspace (TOOLS.md §5, TASKS T-111)."""
+"""write_text — write UTF-8 text under agent root (TOOLS.md §5, TASKS T-111)."""
 
 from __future__ import annotations
 
@@ -27,14 +27,14 @@ def _load_paths():
     core = _agent_core_dir()
     if str(core) not in sys.path:
         sys.path.insert(0, str(core))
-    from paths import AgentPaths, PathOutOfBoundsError
+    from paths import AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
-    return AgentPaths, PathOutOfBoundsError
+    return AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
 
 def run_write(payload: dict[str, Any]) -> dict[str, Any]:
-    """Core logic: resolve path under workspace and write or simulate."""
-    AgentPaths, PathOutOfBoundsError = _load_paths()
+    """Core logic: resolve path under agent root and write or simulate."""
+    AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError = _load_paths()
     paths = AgentPaths.discover(start=_agent_root())
 
     path_arg = payload.get("path")
@@ -55,14 +55,14 @@ def run_write(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        target = paths.resolve_under_workspace(path_arg, must_exist=False)
-    except PathOutOfBoundsError as exc:
+        target = paths.resolve_under_agent_for_write(path_arg, must_exist=False)
+    except (PathOutOfBoundsError, PathDeniedForWriteError) as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
 
     if target.exists() and on_conflict == "skip":
-        rel = paths.to_workspace_relative(target)
+        rel = paths.to_agent_relative(target)
         if dry_run:
             return {"ok": True, "dry_run": True, "skipped": True, "path": rel}
         return {"ok": True, "skipped": True, "path": rel}
@@ -70,7 +70,7 @@ def run_write(payload: dict[str, Any]) -> dict[str, Any]:
     if target.exists() and on_conflict == "rename":
         target = _renamed_target(target)
 
-    rel_written = paths.to_workspace_relative(target)
+    rel_written = paths.to_agent_relative(target)
 
     if dry_run:
         return {"ok": True, "dry_run": True, "would_write": rel_written, "skipped": False}
@@ -119,8 +119,8 @@ def _demo() -> None:
     assert tool is not None and tool.status == "active"
     print("[PASS] registry loads write_text (active)")
 
-    rel = "_write_text_demo.txt"
-    target = paths.workspace / rel
+    rel = "workspace/_write_text_demo.txt"
+    target = paths.agent_root / rel
     if target.exists():
         target.unlink()
 
@@ -168,7 +168,7 @@ def _demo() -> None:
     assert overwrite.ok and target.read_text(encoding="utf-8") == "updated"
     print("[PASS] on_conflict=overwrite")
 
-    rename_path = paths.workspace / "_write_text_demo-1.txt"
+    rename_path = paths.agent_root / "workspace/_write_text_demo-1.txt"
     if rename_path.exists():
         rename_path.unlink()
     rename = run(
@@ -192,6 +192,17 @@ def _demo() -> None:
     )
     assert not bad.ok
     print("[PASS] path_out_of_bounds rejected")
+
+    deny = run(
+        {
+            "tool_name": "write_text",
+            "arguments": {"path": ".env", "content": "SECRET=bad"},
+            "dry_run": False,
+        },
+        registry=registry,
+    )
+    assert not deny.ok
+    print("[PASS] .env write denied")
 
     target.unlink(missing_ok=True)
     rename_path.unlink(missing_ok=True)

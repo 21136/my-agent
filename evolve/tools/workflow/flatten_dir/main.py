@@ -91,14 +91,14 @@ def run_flatten(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        root = paths.resolve_under_workspace(path_arg, must_exist=True)
+        root = paths.resolve_under_agent(path_arg, must_exist=True)
     except PathOutOfBoundsError as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
     if not root.is_dir():
-        return {"ok": False, "error": f"not a directory: {paths.to_workspace_relative(root)}"}
+        return {"ok": False, "error": f"not a directory: {paths.to_agent_relative(root)}"}
 
     moved: list[dict[str, str]] = []
     for source in _iter_nested_files(root, include_hidden=include_hidden):
@@ -110,8 +110,8 @@ def run_flatten(payload: dict[str, Any]) -> dict[str, Any]:
                 continue
             target = _unique_target(target)
 
-        rel_from = paths.to_workspace_relative(source)
-        rel_to = paths.to_workspace_relative(target)
+        rel_from = paths.to_agent_relative(source)
+        rel_to = paths.to_agent_relative(target)
         moved.append({"from": rel_from, "to": rel_to})
 
         if dry_run:
@@ -127,7 +127,7 @@ def run_flatten(payload: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "ok": True,
-        "source_dir": paths.to_workspace_relative(root),
+        "source_dir": paths.to_agent_relative(root),
         "count": len(moved),
         "moved": moved,
     }
@@ -167,7 +167,7 @@ def _demo() -> None:
             child.unlink()
     (nested / "a.txt").write_text("a", encoding="utf-8")
     (nested / "b.txt").write_text("b", encoding="utf-8")
-    rel = paths.to_workspace_relative(demo_dir)
+    rel = paths.to_agent_relative(demo_dir)
 
     dry = run(
         {

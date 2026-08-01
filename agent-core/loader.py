@@ -387,10 +387,27 @@ def format_memory_index(entries: list[MemoryIndexEntry]) -> str:
 def format_builtin_summary() -> str:
     lines = [
         "[Builtin 工具]",
-        "恒为 6 个 function；evolved 工具经 run_evolved 调用，见本会话清单：",
+        "恒为 7 个 function；evolved 工具经 run_evolved 调用，见本会话清单：",
     ]
     for tool in BUILTIN_TOOLS:
         lines.append(f"- {tool.name}: {tool.description}")
+    return "\n".join(lines)
+
+
+def _format_host_scope_overlay(paths: AgentPaths) -> str:
+    """List registered host directories so the LLM knows about host:<id>/… paths."""
+    from host_scope import load_host_scope
+
+    config = load_host_scope(paths)
+    roots = getattr(config, "roots", None) or {}
+    if not roots:
+        return ""
+    lines = ["[托管区 · host scope]", "以下外部目录已注册，可用 host:<id>/… 路径直接访问："]
+    for host_id, root_info in roots.items():
+        label = getattr(root_info, "label", host_id) or host_id
+        rw = "读写" if getattr(root_info, "write", False) else "只读"
+        path = getattr(root_info, "path", "") or ""
+        lines.append(f"- host:{host_id} ({rw}) — {label} ({path})")
     return "\n".join(lines)
 
 
@@ -609,10 +626,15 @@ def format_session_evolved_catalog(
     topics: list[str],
     *,
     registry: ToolRegistry | None = None,
+    extra_tools: tuple | None = None,
 ) -> str:
     """Human-readable evolved catalog for system overlay (TOOLS.md §4.3, T-308)."""
     reg = registry or ToolRegistry.load()
-    session_tools = reg.session_evolved(topics)
+    by_name = {tool.name: tool for tool in reg.session_evolved(topics)}
+    if extra_tools:
+        for tool in extra_tools:
+            by_name.setdefault(tool.name, tool)
+    session_tools = tuple(by_name[name] for name in sorted(by_name))
 
     by_scope: dict[str, list[str]] = {}
     for tool in session_tools:
@@ -625,7 +647,12 @@ def format_session_evolved_catalog(
     for scope in ("common", *sorted(key for key in by_scope if key != "common")):
         if scope not in by_scope:
             continue
-        heading = "始终" if scope == "common" else "本会话主题"
+        if scope == "common":
+            heading = "始终"
+        elif scope == "project":
+            heading = "项目壳"
+        else:
+            heading = "本会话主题"
         lines.append(f"## {scope}（{heading}）")
         lines.extend(by_scope[scope])
     if len(session_tools) == 0:
@@ -638,65 +665,24 @@ def format_capability_hints(
     *,
     registry: ToolRegistry | None = None,
 ) -> str:
-    """System hints when evolved tools are missing or builtins must suffice."""
-    reg = registry or ToolRegistry.load(session.paths)
-    topics = list(session.meta.topics)
-    session_tools = reg.session_evolved(topics)
-    common_names = [tool.name for tool in session_tools if tool.scope == "common"]
-    topic_tool_names = [tool.name for tool in session_tools if tool.scope != "common"]
-
-    lines = ["[能力提示]"]
-    if topics:
-        if not topic_tool_names:
-            topic_labels = "、".join(topics)
-            common_label = ", ".join(common_names) if common_names else "（无）"
-            lines.append(
-                f"- 当前主题（{topic_labels}）尚无 active 的专用 evolved 工具；"
-                f"仅 common：{common_label}。"
-            )
-        else:
-            lines.append(
-                f"- 本会话 evolved：common [{', '.join(common_names)}]；"
-                f"主题 [{', '.join(topic_tool_names)}]"
-            )
-    else:
-        common_label = ", ".join(common_names) if common_names else "write_text"
-        lines.append(f"- 未确认主题时仅有 common：{common_label}")
-
-    lines.append("- 只读：read_file · list_dir · grep（本地）；web_search · fetch_url（网络）")
-    lines.append(
-        "- 写/改 workspace：run_evolved → write_text / append_text / copy_move / move_to_trash；先试 dry_run"
-    )
-    lines.append(
-        "- 查项目/跨壳回忆：run_evolved → project_catalog 得 session_id；再 read_file data/sessions/<id>/messages.jsonl"
-        "（读**其他**会话须 confirm）；技术细节 read_file workspace/<id>/…"
-    )
-    lines.append(
-        "- 落地新 evolved 工具：run_evolved → write_evolve；**path + content_base64 放 run_evolved 顶层**"
-        "（勿嵌套 arguments.content）；先 main.py 再 tool.toml；每次 confirm，无 a）"
-    )
-
-    active_by_name = {
-        tool.name: tool for tool in reg.evolved() if tool.status == "active"
-    }
-    if "sort_by_extension" in active_by_name and "workflow" not in topics:
-        lines.append(
-            "- workflow 整理工具（sort_by_extension / rename_batch / flatten_dir / "
-            "dedupe_by_name / archive_by_date）：确认 workflow 主题后可用"
-        )
-    coding_tools = [
-        name
-        for name in ("run_demo", "run_tests", "git_snapshot", "patch_file")
-        if name in active_by_name
+    """Short capability hints (Phase 23 M3: tool names live in INDEX, not here)."""
+    _ = registry  # retained for call-site compatibility
+    lines = [
+        "[能力提示]",
+        "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
+        "执行面：凡 status=active 均可 `run_evolved`（不因主题拒调）。",
+        "- 只读：read_file · list_dir · grep（本地）；web_search · fetch_url（网络）",
+        "- 写/改：run_evolved → write_text / append_text / copy_move / move_to_trash；先试 dry_run",
+        "- 查项目/跨会话：run_evolved → project_catalog；再 read_file data/sessions/<id>/messages.jsonl"
+        "（读**其他**会话须 confirm）",
+        "- 造新工具：run_evolved → write_evolve（细则见 buckets/evolve.md；scaffold 回合另有短提示）",
+        "- 若无合适工具：诚实说明限制；可说「记住」提交 tool 建议到 evolve/proposals",
     ]
-    if coding_tools and "coding" not in topics:
-        lines.append(
-            f"- coding 工具（{' / '.join(coding_tools)}）：确认 coding 主题后可用"
+    if session.meta.topics:
+        lines.insert(
+            2,
+            f"- 已加载主题 prompt：{', '.join(session.meta.topics)}（管习惯/记忆，不管工具锁）",
         )
-
-    lines.append(
-        "- 若无合适工具：诚实说明限制并给出手工步骤；可说「记住」提交 tool 建议到 evolve/proposals"
-    )
     return "\n".join(lines)
 
 
@@ -789,15 +775,46 @@ def format_total_cap_message(*, total_tool_rounds: int, total_max: int) -> str:
     )
 
 
+def _project_shell_bound(session: Session) -> bool:
+    """True when session is on project shell or still bound to a project_root (§0e F1)."""
+    if (session.meta.active_shell or "").strip() == "project":
+        return True
+    return bool((session.meta.project_root or "").strip())
+
+
+def session_evolved_tools(
+    session: Session,
+    *,
+    registry: ToolRegistry | None = None,
+):
+    """Active evolved tools listed in catalog overlay (topics + project-scope when bound).
+
+    Phase 23 M1: **execution** allowlist is separate — see ``session_evolved_allowlist``.
+    Catalog still topic-filtered until M3 swaps in INDEX.
+    """
+    from tools.registry import EvolvedTool
+
+    reg = registry or ToolRegistry.load(session.paths)
+    by_name: dict[str, EvolvedTool] = {
+        tool.name: tool for tool in reg.session_evolved(session.meta.topics)
+    }
+    if _project_shell_bound(session):
+        for tool in reg.evolved():
+            if tool.status == "active" and tool.scope == "project":
+                by_name.setdefault(tool.name, tool)
+    return tuple(by_name[name] for name in sorted(by_name))
+
+
 def session_evolved_allowlist(
     session: Session,
     *,
     registry: ToolRegistry | None = None,
 ) -> frozenset[str]:
-    """Allowed ``run_evolved.tool_name`` values for this session (common + topic scopes)."""
+    """Allowed ``run_evolved.tool_name`` values (Phase 23 M1: all ``active``, no topic lock)."""
     reg = registry or ToolRegistry.load(session.paths)
-    return frozenset(tool.name for tool in reg.session_evolved(session.meta.topics))
-
+    return frozenset(
+        tool.name for tool in reg.evolved() if tool.status == "active"
+    )
 
 def detect_scaffold_tool_turn(user_text: str) -> bool:
     """True when the user is asking to create/scaffold an evolved tool this turn."""
@@ -862,19 +879,45 @@ def format_write_evolve_cookbook(*, scaffold_turn: bool = False) -> str:
 {staging}示例：`{{"tool_name":"write_evolve","path":"evolve/tools/data/foo/main.py","content_base64":"cHJpbnQoJ29rJyk=","on_conflict":"overwrite","arguments":{{}}}}`"""
 
 
+TOOL_CATALOG_INDEX_REL = Path("evolve") / "tool-catalog" / "INDEX.md"
+TOOL_CATALOG_INDEX_MAX_CHARS = 2048
+
+
+def load_tool_catalog_index(
+    paths: AgentPaths,
+    *,
+    max_chars: int = TOOL_CATALOG_INDEX_MAX_CHARS,
+) -> str:
+    """Load L0 tool INDEX for system overlay (Phase 23 M3). Truncates if oversized."""
+    path = paths.agent_root / TOOL_CATALOG_INDEX_REL
+    if not path.is_file():
+        return (
+            "[工具索引缺失] 期望路径：evolve/tool-catalog/INDEX.md。"
+            "请用 read_file 查 evolve/tools/ 或恢复 INDEX。"
+        )
+    text = path.read_text(encoding="utf-8").strip()
+    if len(text) <= max_chars:
+        return text
+    return (
+        text[: max_chars - 80].rstrip()
+        + "\n\n…（INDEX 已截断；完整文件：read_file evolve/tool-catalog/INDEX.md）"
+    )
+
+
 def format_evolved_catalog_overlay(
     session: Session,
     *,
     registry: ToolRegistry | None = None,
 ) -> str:
-    """Evolved catalog section for §4.2 overlay after topics are confirmed."""
+    """Phase 23 M3: inject short INDEX (+ hints); no full per-tool catalog listing."""
     reg = registry or ToolRegistry.load(session.paths)
-    catalog = format_session_evolved_catalog(session.meta.topics, registry=reg)
+    index = load_tool_catalog_index(session.paths)
     hints = format_capability_hints(session, registry=reg)
-    parts = [catalog, hints]
-    allowlist = session_evolved_allowlist(session, registry=reg)
-    if "write_evolve" in allowlist:
-        parts.append(format_write_evolve_cookbook(scaffold_turn=session.scaffold_tool_turn))
+    parts = [index, hints]
+    # write_evolve cookbook: only when scaffolding this turn (avoid every-turn bulk)
+    allow = session_evolved_allowlist(session, registry=reg)
+    if "write_evolve" in allow and session.scaffold_tool_turn:
+        parts.append(format_write_evolve_cookbook(scaffold_turn=True))
     return "\n\n".join(parts)
 
 
@@ -910,6 +953,7 @@ def build_system_prompt(
         ("topic_index", format_topic_index(topic_index)),
         ("memory_index", format_memory_index(scan_memory_index(evolve_dir))),
         ("builtin_summary", format_builtin_summary()),
+        ("host_scope", _format_host_scope_overlay(agent_paths)),
     ]
 
     if include_overlay:
@@ -943,6 +987,7 @@ def build_system_prompt(
 
         if session.meta.active_shell == "project" and session.meta.project_root:
             from project_mode import (
+                extract_task_id,
                 first_open_task_line,
                 format_project_overlay,
                 is_project_continue_utterance,
@@ -967,6 +1012,7 @@ def build_system_prompt(
                     last_user = msg["content"]
                     break
             continue_turn = is_project_continue_utterance(last_user)
+            next_open = first_open_task_line(tasks_text)
             sections.append(
                 (
                     "project_prompt",
@@ -982,7 +1028,8 @@ def build_system_prompt(
                         plan_status=session.meta.project_plan_status or "draft",
                         task_stats=stats,
                         continue_turn=continue_turn,
-                        next_open_task=first_open_task_line(tasks_text),
+                        next_open_task=next_open,
+                        armed_task_id=extract_task_id(next_open or ""),
                     ),
                 )
             )
@@ -1277,13 +1324,15 @@ def _demo() -> None:
         workflow_loaded = build_system_prompt(
             workflow_only, paths=paths, agent_core_dir=agent_core, registry=demo_reg
         )
-        assert "workflow_probe" in workflow_loaded.prompt
-        assert "coding_probe" not in workflow_loaded.prompt
-        assert "write_text" in workflow_loaded.prompt
+        # Phase 23 M3: overlay is INDEX (or missing stub), not per-tool catalog lines
+        assert "工具索引" in workflow_loaded.prompt or "工具索引缺失" in workflow_loaded.prompt
+        assert "- workflow_probe:" not in workflow_loaded.prompt
+        assert "- coding_probe:" not in workflow_loaded.prompt
         coding_allow = session_evolved_allowlist(coding_session, registry=demo_reg)
         workflow_allow = session_evolved_allowlist(workflow_only, registry=demo_reg)
+        # Phase 23 M1: allowlist is all active (not topic-filtered)
+        assert coding_allow == workflow_allow
         assert coding_allow == frozenset({"write_text", "coding_probe", "workflow_probe"})
-        assert workflow_allow == frozenset({"write_text", "workflow_probe"})
         coding_only = Session(
             conversation_id="loader-coding-tools",
             session_dir=paths.data / "sessions" / "loader-coding-tools",
@@ -1298,13 +1347,7 @@ def _demo() -> None:
             paths=paths,
         )
         coding_only_allow = session_evolved_allowlist(coding_only, registry=demo_reg)
-        assert coding_only_allow == frozenset({"write_text", "coding_probe"})
-        catalog_names = {
-            line.split(":", 1)[0].removeprefix("- ").strip()
-            for line in workflow_loaded.prompt.splitlines()
-            if line.startswith("- ") and ": " in line
-        }
-        assert workflow_allow.issubset(catalog_names)
+        assert coding_only_allow == frozenset({"write_text", "coding_probe", "workflow_probe"})
 
         from tools.executor import ToolExecutor
 
@@ -1572,16 +1615,11 @@ def _demo() -> None:
             }
         )
         assert required_tools.issubset(repo_allow)
-        assert "run_demo" in repo_catalog
-        assert "run_tests" in repo_catalog
-        assert "write_text" in repo_catalog
-        assert "append_text" in repo_catalog
-        assert "write_evolve" in repo_catalog
-        catalog_body, _, capability_hints = repo_catalog.partition("[能力提示]")
-        assert "sort_by_extension" not in catalog_body
-        assert "sort_by_extension" in capability_hints
-        assert "[本会话可用 evolved 工具]" in repo_catalog
-        print("[PASS] T-308: real repo catalog matches allowlist (common + topic)")
+        assert "工具索引" in repo_catalog
+        assert "buckets/" in repo_catalog
+        assert "[本会话可用 evolved 工具]" not in repo_catalog
+        assert "- run_demo:" not in repo_catalog
+        print("[PASS] T-308: INDEX overlay + allowlist all active (Phase 23 M3)")
 
         workflow_m3 = Session(
             conversation_id="loader-workflow-m3",
@@ -1615,8 +1653,9 @@ def _demo() -> None:
             }
         )
         assert required_wf_tools.issubset(wf_allow)
-        assert "rename_batch" in wf_catalog
-        print("[PASS] T-502: workflow tools in catalog + allowlist")
+        assert "工具索引" in wf_catalog
+        assert "organize.md" in wf_catalog
+        print("[PASS] T-502: workflow tools in allowlist; INDEX points organize bucket")
 
         data_session = Session(
             conversation_id="loader-data-t805",
@@ -1634,13 +1673,13 @@ def _demo() -> None:
         data_allow = session_evolved_allowlist(data_session, registry=repo_reg)
         data_catalog = format_evolved_catalog_overlay(data_session, registry=repo_reg)
         assert "csv_head" in data_allow
-        assert "csv_head" in data_catalog
+        assert "工具索引" in data_catalog
         data_prompt_path = paths.evolve / "prompts" / "data.md"
         if data_prompt_path.is_file():
             data_loaded = build_system_prompt(data_session)
             assert "topic_prompt:data" in data_loaded.section_names
-            assert "csv_head" in data_loaded.prompt
-        print("[PASS] T-805: data topic + csv_head in catalog + allowlist")
+            assert "csv_head" in data_loaded.prompt  # from topic prompt, not full catalog
+        print("[PASS] T-805: data topic prompt + csv_head allowlist; INDEX overlay")
     else:
         print("[SKIP] T-305 real repo: evolve/prompts/coding.md not present (see T-307)")
 

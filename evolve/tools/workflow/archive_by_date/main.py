@@ -75,16 +75,16 @@ def run_archive(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        source_dir = paths.resolve_under_workspace(path_arg, must_exist=True)
+        source_dir = paths.resolve_under_agent(path_arg, must_exist=True)
     except PathOutOfBoundsError as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
     if not source_dir.is_dir():
-        return {"ok": False, "error": f"not a directory: {paths.to_workspace_relative(source_dir)}"}
+        return {"ok": False, "error": f"not a directory: {paths.to_agent_relative(source_dir)}"}
 
-    rel_source = paths.to_workspace_relative(source_dir)
+    rel_source = paths.to_agent_relative(source_dir)
     moved: list[dict[str, str]] = []
 
     for item in sorted(source_dir.iterdir(), key=lambda p: p.name.lower()):
@@ -101,8 +101,8 @@ def run_archive(payload: dict[str, Any]) -> dict[str, Any]:
 
         target_dir = source_dir / folder_name
         target_path = _unique_target(target_dir / item.name)
-        rel_from = paths.to_workspace_relative(item)
-        rel_to = paths.to_workspace_relative(target_path)
+        rel_from = paths.to_agent_relative(item)
+        rel_to = paths.to_agent_relative(target_path)
         if rel_from == rel_to:
             continue
 
@@ -160,7 +160,7 @@ def _demo() -> None:
             child.rmdir()
     sample = demo_dir / "report.pdf"
     sample.write_text("pdf", encoding="utf-8")
-    rel = paths.to_workspace_relative(demo_dir)
+    rel = paths.to_agent_relative(demo_dir)
 
     dry = run(
         {

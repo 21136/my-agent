@@ -27,5 +27,5 @@ type = "object"
 [policy]
 confirm = false
 dry_run_supported = true
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 60

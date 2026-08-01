@@ -1,35 +1,21 @@
-export type AgentBusyShell = "daily" | "grow" | "project";
-
-const shellBusy: Record<AgentBusyShell, boolean> = { daily: false, grow: false, project: false };
-let activeShell: AgentBusyShell = "grow";
+let busy = false;
 
 function syncAppFrame(): void {
   const frame = document.querySelector<HTMLElement>(".app-frame");
   if (!frame) return;
+  frame.classList.toggle("is-agent-busy", busy);
+}
 
-  const on = shellBusy[activeShell];
-  frame.classList.toggle("is-agent-busy", on);
-  if (on) {
-    frame.dataset.busyShell = activeShell;
-  } else {
-    delete frame.dataset.busyShell;
+export function setAgentBusy(on: boolean, _shell?: string): void {
+  busy = on;
+  syncAppFrame();
+  const modelSelect = document.querySelector<HTMLSelectElement>("#chrome-model");
+  if (modelSelect) {
+    modelSelect.disabled = on;
+    modelSelect.title = on ? "回合进行中，结束后再切换模型" : "切换主 Agent 模型（Flash 128k / Pro 1M）";
   }
 }
 
-/** 当前可见外壳（决定全窗染色的色带） */
-export function setActiveShell(shell: AgentBusyShell): void {
-  activeShell = shell;
-  syncAppFrame();
-}
-
-export function setAgentBusy(busy: boolean, shell?: AgentBusyShell): void {
-  if (shell) {
-    shellBusy[shell] = busy;
-  }
-  syncAppFrame();
-}
-
-/** 任外壳在跑（关窗确认等） */
 export function isAgentBusy(): boolean {
-  return shellBusy.daily || shellBusy.grow || shellBusy.project;
+  return busy;
 }

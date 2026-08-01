@@ -28,9 +28,9 @@ def _load_paths():
     core = _agent_core_dir()
     if str(core) not in sys.path:
         sys.path.insert(0, str(core))
-    from paths import AgentPaths, PathOutOfBoundsError
+    from paths import AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
-    return AgentPaths, PathOutOfBoundsError
+    return AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
 
 def _renamed_target(target: Path) -> Path:
@@ -54,8 +54,8 @@ def _trash_destination(trash_root: Path, source: Path) -> Path:
 
 
 def run_trash(payload: dict[str, Any]) -> dict[str, Any]:
-    """Move *path* under workspace into trash_dir."""
-    AgentPaths, PathOutOfBoundsError = _load_paths()
+    """Move *path* under agent root into trash_dir."""
+    AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError = _load_paths()
     paths = AgentPaths.discover(start=_agent_root())
 
     path_arg = payload.get("path")
@@ -69,14 +69,14 @@ def run_trash(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        source = paths.resolve_under_workspace(path_arg, must_exist=True)
-        trash_root = paths.resolve_under_workspace(trash_dir_arg, must_exist=False)
-    except PathOutOfBoundsError as exc:
+        source = paths.resolve_under_agent(path_arg, must_exist=True)
+        trash_root = paths.resolve_under_agent_for_write(trash_dir_arg, must_exist=False)
+    except (PathOutOfBoundsError, PathDeniedForWriteError) as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
-    rel_source = paths.to_workspace_relative(source)
+    rel_source = paths.to_agent_relative(source)
 
     if source.resolve() == trash_root.resolve():
         return {"ok": False, "error": "cannot trash the trash directory itself"}
@@ -88,7 +88,7 @@ def run_trash(payload: dict[str, Any]) -> dict[str, Any]:
         pass
 
     target = _trash_destination(trash_root, source)
-    rel_trash = paths.to_workspace_relative(target)
+    rel_trash = paths.to_agent_relative(target)
 
     if dry_run:
         return {
@@ -136,10 +136,10 @@ def _demo() -> None:
     assert tool is not None and tool.status == "active"
     print("[PASS] registry loads move_to_trash (active)")
 
-    rel = "_trash_demo.txt"
-    source = paths.workspace / rel
+    rel = "workspace/_trash_demo.txt"
+    source = paths.agent_root / rel
     source.write_text("delete me", encoding="utf-8")
-    trash_file = paths.workspace / "_trash" / rel
+    trash_file = paths.agent_root / "_trash/_trash_demo.txt"
 
     dry = run(
         {
@@ -165,25 +165,28 @@ def _demo() -> None:
     print("[PASS] live move to _trash")
 
     trash_file.unlink()
-    (paths.workspace / "_trash").rmdir()
+    # remove test directories only; real _trash/ may have other content
+    trash_demo_dir = paths.agent_root / "_trash/_trash_demo_dir"
+    if trash_demo_dir.is_dir():
+        shutil.rmtree(trash_demo_dir)
 
-    nested = paths.workspace / "_trash_demo_dir"
+    nested = paths.agent_root / "workspace/_trash_demo_dir"
     nested.mkdir(exist_ok=True)
     (nested / "a.txt").write_text("a", encoding="utf-8")
 
     dir_live = run(
         {
             "tool_name": "move_to_trash",
-            "arguments": {"path": "_trash_demo_dir"},
+            "arguments": {"path": "workspace/_trash_demo_dir"},
             "dry_run": False,
         },
         registry=registry,
     )
     assert dir_live.ok and not nested.exists()
-    assert (paths.workspace / "_trash" / "_trash_demo_dir" / "a.txt").is_file()
+    assert (paths.agent_root / "_trash/_trash_demo_dir/a.txt").is_file()
     print("[PASS] directory moved to trash")
 
-    shutil.rmtree(paths.workspace / "_trash")
+    shutil.rmtree(paths.agent_root / "_trash/_trash_demo_dir")
 
     bad = run(
         {

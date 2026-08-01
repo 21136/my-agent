@@ -1,4 +1,4 @@
-"""copy_move — copy or move paths within workspace (P1 common)."""
+"""copy_move — copy or move paths under agent root or across host roots."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ def _load_paths():
     core = _agent_core_dir()
     if str(core) not in sys.path:
         sys.path.insert(0, str(core))
-    from paths import AgentPaths, PathOutOfBoundsError
+    from paths import AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
-    return AgentPaths, PathOutOfBoundsError
+    return AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
 
 def _renamed_target(target: Path) -> Path:
@@ -77,8 +77,8 @@ def _resolve_dest(
 
 
 def run_copy_move(payload: dict[str, Any]) -> dict[str, Any]:
-    """Copy or move *source* to *dest* under workspace."""
-    AgentPaths, PathOutOfBoundsError = _load_paths()
+    """Copy or move *source* to *dest* under agent root."""
+    AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError = _load_paths()
     paths = AgentPaths.discover(start=_agent_root())
 
     operation = payload.get("operation")
@@ -102,10 +102,15 @@ def run_copy_move(payload: dict[str, Any]) -> dict[str, Any]:
 
     dry_run = bool(payload.get("dry_run", False))
 
+    # host: paths → delegate to host_tools
+    if source_arg.strip().lower().startswith("host:"):
+        from host_tools import run_host_copy_move
+        return run_host_copy_move(payload, paths=paths)
+
     try:
-        source = paths.resolve_under_workspace(source_arg, must_exist=True)
-        dest = paths.resolve_under_workspace(dest_arg, must_exist=False)
-    except PathOutOfBoundsError as exc:
+        source = paths.resolve_under_agent(source_arg, must_exist=True)
+        dest = paths.resolve_under_agent_for_write(dest_arg, must_exist=False)
+    except (PathOutOfBoundsError, PathDeniedForWriteError) as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
@@ -122,17 +127,17 @@ def run_copy_move(payload: dict[str, Any]) -> dict[str, Any]:
             pass
 
     resolved_dest, skipped = _resolve_dest(source, dest, on_conflict=on_conflict)
-    rel_source = paths.to_workspace_relative(source)
+    rel_source = paths.to_agent_relative(source)
     if skipped or resolved_dest is None:
         return {
             "ok": True,
             "operation": operation,
             "source": rel_source,
-            "dest": paths.to_workspace_relative(dest),
+            "dest": paths.to_agent_relative(dest),
             "skipped": True,
         }
 
-    rel_dest = paths.to_workspace_relative(resolved_dest)
+    rel_dest = paths.to_agent_relative(resolved_dest)
 
     if dry_run:
         return {
@@ -195,8 +200,8 @@ def _demo() -> None:
     assert tool is not None and tool.status == "active"
     print("[PASS] registry loads copy_move (active)")
 
-    src = paths.workspace / "_copy_move_src.txt"
-    dst = paths.workspace / "_copy_move_dst.txt"
+    src = paths.agent_root / "workspace/_copy_move_src.txt"
+    dst = paths.agent_root / "workspace/_copy_move_dst.txt"
     src.write_text("hello", encoding="utf-8")
     dst.unlink(missing_ok=True)
 
@@ -205,8 +210,8 @@ def _demo() -> None:
             "tool_name": "copy_move",
             "arguments": {
                 "operation": "copy",
-                "source": "_copy_move_src.txt",
-                "dest": "_copy_move_dst.txt",
+                "source": "workspace/_copy_move_src.txt",
+                "dest": "workspace/_copy_move_dst.txt",
             },
             "dry_run": True,
         },
@@ -220,8 +225,8 @@ def _demo() -> None:
             "tool_name": "copy_move",
             "arguments": {
                 "operation": "copy",
-                "source": "_copy_move_src.txt",
-                "dest": "_copy_move_dst.txt",
+                "source": "workspace/_copy_move_src.txt",
+                "dest": "workspace/_copy_move_dst.txt",
             },
             "dry_run": False,
         },
@@ -235,8 +240,8 @@ def _demo() -> None:
             "tool_name": "copy_move",
             "arguments": {
                 "operation": "copy",
-                "source": "_copy_move_src.txt",
-                "dest": "_copy_move_dst.txt",
+                "source": "workspace/_copy_move_src.txt",
+                "dest": "workspace/_copy_move_dst.txt",
                 "on_conflict": "skip",
             },
             "dry_run": False,
@@ -251,15 +256,15 @@ def _demo() -> None:
             "tool_name": "copy_move",
             "arguments": {
                 "operation": "move",
-                "source": "_copy_move_src.txt",
-                "dest": "_copy_move_moved.txt",
+                "source": "workspace/_copy_move_src.txt",
+                "dest": "workspace/_copy_move_moved.txt",
             },
             "dry_run": False,
         },
         registry=registry,
     )
     assert moved.ok and not src.exists()
-    assert (paths.workspace / "_copy_move_moved.txt").read_text(encoding="utf-8") == "hello"
+    assert (paths.agent_root / "workspace/_copy_move_moved.txt").read_text(encoding="utf-8") == "hello"
     print("[PASS] live move")
 
     bad = run(
@@ -268,7 +273,7 @@ def _demo() -> None:
             "arguments": {
                 "operation": "copy",
                 "source": "../outside.txt",
-                "dest": "_x.txt",
+                "dest": "workspace/_x.txt",
             },
             "dry_run": False,
         },
@@ -278,7 +283,7 @@ def _demo() -> None:
     print("[PASS] path_out_of_bounds rejected")
 
     dst.unlink(missing_ok=True)
-    (paths.workspace / "_copy_move_moved.txt").unlink(missing_ok=True)
+    (paths.agent_root / "workspace/_copy_move_moved.txt").unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

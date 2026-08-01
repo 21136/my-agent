@@ -1,3 +1,34 @@
+## [0.3.0] - 2026-07-30
+
+### 架构（壳合并 · 未完全合入 remote）
+
+- **unified 壳**：删除 `shells/grow|daily|project|govern`；`shell-router` 只挂载 `shells/unified/`；perspective = `default` | `project` | `night`
+- **starfield** 迁至 `desktop/src/skins/starfield/`；`pet` 仍独立窗
+- **顶栏**：移除壳选择器 / 自动切壳 UI；设计见 [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)
+- **说明**：后端 `active_shell` / `shell_sessions` 仍作会话线标签；`activity_router` 主题路由保留
+
+### 工具系统
+
+- **WRITE-SCOPE**：`paths.resolve_under_agent_for_write` + deny-list；写工具默认 agent root（见 [WRITE-SCOPE.md](./WRITE-SCOPE.md)）
+- **`workspace_only` → `allow_approve_all`**：session `a` = 本会话 agent root 均允许
+- **TOOL-RETRY**：参数/JSON 可恢复错误自修正一次（见 [TOOL-RETRY.md](./TOOL-RETRY.md)）
+- **第六轮工具审视**：host 只读 evolved 归档；`repl` CWD→agent root；`run_evolved` Windows 管道死锁修复
+
+### UX / 项目侧栏
+
+- **UX-POLISH**：UX-001～020（高亮、Escape 停、自动撑高、Y/N/A、会话列表、token 指示器等）；第五轮流式滚动缓解；见 [UX-POLISH.md](./UX-POLISH.md)
+- **Plan Agent + 任务流侧栏**：本地 commit ahead（侧栏任务流、确认粒度、外部 TASKS 检测、proactive suggestions 等）；见 [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)
+
+### 文档
+
+- **MAP.md** / **project-map.mdc** / **DESKTOP.md** 等对齐 unified + WRITE-SCOPE + TOOL-RETRY（2026-07-30）
+- **PROJECT-MODE §0c/§0d**：ENV.md + 构建硬约束 E7–E10（已实施）
+- **PROJECT-MODE §0e / Phase 21 / BUG-021**：项目进度闭环（**done** · 2026-07-31；`report_progress` 清单 / draft 壳 / 一停武装）
+- **Phase 22 / PROJECT-SIDEBAR §15.10**：可见计划搭档（**done** · 2026-07-31；侧栏建议卡 · 低风险 auto_fix · 不刷主聊旁白）
+- **Phase 23 / TOOL-CATALOG**：取消工具主题硬锁；每轮只注入 INDEX（**done** · 2026-07-31；M0～M5 + Mp/Mq/Mr）
+
+---
+
 ## [0.2.59] - 2026-07-18
 
 ### 修复（放行后 · STD-001）

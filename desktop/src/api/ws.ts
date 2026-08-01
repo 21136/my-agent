@@ -49,7 +49,10 @@ export type ServerEvent =
       sessions: Array<{
         session_id: string;
         title: string;
+        preview?: string;
         updated_at: string;
+        message_count?: number;
+        project_id?: string;
       }>;
     }
   | {
@@ -126,11 +129,14 @@ export type ServerEvent =
       needs_confirm: boolean;
       changes_level: string | null;
       external_changes: boolean;
-      suggestions: string[];
+      suggestions: Array<string | PlanSuggestion>;
+      next_task?: string | null;
+      next_task_line?: number | null;
       degradation_level: string;
       degradation_label: string;
       warnings: string[];
       auto_fix_actions: string[];
+      partner_notices?: string[];
       change_log: PlanChangeItem[];
     }
   | { type: "project.plan.confirm_changes.done" }
@@ -252,6 +258,16 @@ export type PlanChangeItem = {
   reason: string;
   time: string;
   line?: number | null;
+};
+
+export type PlanSuggestion = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  risk: "low" | "suggest" | string;
+  action?: string | null;
+  payload?: Record<string, unknown>;
 };
 
 export type HostScopeRoot = {
@@ -512,6 +528,14 @@ export class AgentWsClient {
 
   splitPlanTask(line: number): void {
     this.send({ type: "project.plan.split_task", line });
+  }
+
+  acceptPlanSuggestion(suggestionId: string): void {
+    this.send({ type: "project.plan.accept_suggestion", suggestion_id: suggestionId });
+  }
+
+  ignorePlanSuggestion(suggestionId: string): void {
+    this.send({ type: "project.plan.ignore_suggestion", suggestion_id: suggestionId });
   }
 
   runProjectVerify(): void {

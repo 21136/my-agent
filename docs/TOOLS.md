@@ -1,7 +1,9 @@
 # 工具系统设计（TOOLS）
 
-> 版本 0.2.3 · 2026-07-09 · 与 `MEMORY.md`（`evolve/_index.toml`）配套  
-> M1a 设计文档，**先评审再写代码**
+> 版本 **0.3.1** · 2026-07-31 · 与 `MEMORY.md`（双索引）配套  
+> **工具发现 / 执行面（Phase 23）**：[TOOL-CATALOG.md](./TOOL-CATALOG.md) — **取消主题硬锁**；每轮注入 INDEX，细则读桶  
+> **现行写入边界**：[WRITE-SCOPE.md](./WRITE-SCOPE.md)；参数自修正：[TOOL-RETRY.md](./TOOL-RETRY.md)  
+> M1a 设计文档演进；实现以代码 + 上述文档为准
 
 ---
 
@@ -14,9 +16,9 @@
 | 约束 | 说明 |
 |------|------|
 | **Builtin 封顶 6 个** | 长期不随使用增长 |
-| **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `tools/common/` |
+| **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 仅经 `run_evolved` 调用 |
-| **主题过滤清单** | 会话确认主题后，仅向 LLM 列出相关 evolved + **全部 common** |
+| **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
 
 本阶段 **不涉及** skill 自动路由、proposal 自动生成脚本。
 
@@ -96,10 +98,10 @@ evolve/
 
 | 路径 | 含义 |
 |------|------|
-| `tools/common/<name>/` | 跨主题必备（`write_text`、`append_text`、`copy_move`、`move_to_trash` 等）；**每 session 都注入清单** |
-| `tools/<topic>/<name>/` | 主题专用；仅 session 确认含该 topic 时注入清单 |
+| `tools/common/<name>/` | 跨主题必备（`write_text`、`append_text`、`copy_move`、`move_to_trash` 等）；目录约定 |
+| `tools/<topic>/<name>/` | 按主题文件夹放置；**Phase 23 起不再**「仅确认该 topic 才可调用」 |
 
-由你在放入前 **审阅源码**；内核不自动生成。`status: active` 才可通过 `run_evolved` 被会话清单引用（CLI 调试可跑任意 status，见 §7）。
+由你在放入前 **审阅源码**；内核不自动生成。`status: active` 才可通过 `run_evolved` 调用（CLI 调试可跑任意 status，见 §7）。`suspect` / `archived` 不进执行面。
 
 ### 4.2 与主题索引的关系
 
@@ -115,30 +117,26 @@ tool_dirs = ["tools/coding"]
 
 `tools/common/` **不**写在 topic 里；加载规则写死：**永远并入本会话 evolved 清单**。
 
-### 4.3 会话内 LLM 可见的 evolved 清单
+### 4.3 会话内 LLM 可见的 evolved 导引（Phase 23）
 
-Builtin 恒为 6 个 function；evolved **不**平铺为独立 function，仅在 system 中列目录，经 `run_evolved` 调用：
+> **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
+
+Builtin 恒为 6 个 function；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
+
+- **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
+- **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
+- **主题确认**（MEMORY §4）仍加载 **prompt / memory**；**不再**决定「能调哪些工具」。
+- CLI `tool run` 仍不受主题限制。
+
+历史示例（已废弃，勿再实现为硬锁）：
 
 ```text
 [本会话可用 evolved 工具]（调用 run_evolved.tool_name）
 ## common（始终）
-- write_text: 向 workspace 写文本文件
-- append_text: 追加文本到 workspace 文件
-- copy_move: workspace 内复制或移动
-- move_to_trash: 移入 _trash/ 软删除
-
+- write_text: …
 ## coding（本会话主题）
 - format_py: …
-
-## workflow（本会话主题）
-- sort_by_extension: 按扩展名整理顶层文件
-- rename_batch: 批量重命名
-- flatten_dir: 扁平化子目录文件
-- dedupe_by_name: 查重报告（不删除）
-- archive_by_date: 按修改日期归档
 ```
-
-主题确认流程见 MEMORY §4；CLI `tool run` **不受**主题限制。
 
 ---
 
@@ -177,7 +175,7 @@ skipped = { type = "boolean" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true   # 旧名 workspace_only（仍可读兼容）
 timeout_sec = 60
 ```
 
@@ -195,17 +193,19 @@ timeout_sec = 60
     → 若 confirm：预览，等待 y/n/a（§6.3）
     → 若 dry_run：透传 evolved
     → 执行 → evolve_log → 回填 LLM（§6.4 超长结果落盘）
+    → 可恢复参数错误：agent 可自修正一次（TOOL-RETRY），不计入工具配额
 ```
 
-### 6.3 Confirm 交互（已决）
+### 6.3 Confirm 交互（已决 · 2026-07-30 更新）
 
 | 输入 | 行为 |
 |------|------|
 | `y` | 执行本次 |
 | `n` | 拒绝 |
-| `a` | **仅** `workspace_only=true` 的 **evolved** tool：本会话后续同类调用 **免 confirm**；写 log `session_workspace_approved`；记入 `meta.json` `workspace_evolved_approved: true` |
+| `a` | **仅** `allow_approve_all=true` 的 **evolved** tool：本会话后续同类调用 **免 confirm**（作用域 = **agent root**，deny-list 仍生效）；写 log；记入 session 批准状态 |
 
-Builtin **无** `a`；`workspace_only=false` 的 evolved **无** `a`。
+Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。  
+旧字段名 `workspace_only` 仍可读，语义等同 `allow_approve_all`。
 
 ### 6.4 超长 tool 结果落盘（已决，对齐 Cursor）
 
@@ -421,14 +421,33 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 |------|------|------|
 | `csv_head` | `tools/data/csv_head/` | 预览 CSV 前 N 行、列类型推断、总行数 |
 
-### 8.1 写入边界
+### 8.1 写入边界（WRITE-SCOPE · 2026-07-30）
 
 | 区域 | 可用工具 | 说明 |
 |------|----------|------|
-| `workspace/` | `write_text` / `append_text` / `copy_move` / `move_to_trash` / **`git_clone`**（`target=workspace`） | `write_*` 等 `workspace_only=true` 可 session `a`；**`git_clone` 每次 confirm** |
-| `evolve/tools/<scope>/<name>/` | **`write_evolve`** · **`git_clone`**（`target=evolve_tools`） | `write_evolve` 仅三件套；`git_clone` 可拉整仓参考；均 **无 `a`** |
-| `agent-core/`、`docs/` 等已有文件 | `patch_file` | 不能创建新路径 |
+| **agent root 内**（非 deny-list） | `write_text` / `append_text` / `copy_move` / `move_to_trash` / 多数 workflow·exec | `resolve_under_agent_for_write`；`allow_approve_all=true` 可 session `a` |
+| **deny-list** | — | `.git/`、`data/sessions/`、`.env`、`node_modules/`、`__pycache__/` 等硬拒 |
+| `evolve/tools/<scope>/<name>/` | **`write_evolve`** · **`git_clone`**（`target=evolve_tools`） | `write_evolve` 仅三件套；均 **无 `a`** |
+| `agent-core/`、`docs/` 等已有文件 | `patch_file`（及通用写工具） | `patch_file` 不能创建新路径 |
 | `evolve/prompts/`、`memories/` | proposal 接受路由 | 不经 tool 直写；见 EVOLVE §7 |
+| agent root **外** | host 路径 | 走 host scope；与 WRITE-SCOPE 无关 |
+
+详见 [WRITE-SCOPE.md](./WRITE-SCOPE.md)。
+
+### 8.2 项目构建工具（PROJECT-MODE §0d）
+
+| 工具 | 目录参数 | 备注 |
+|------|----------|------|
+| `npm_exec` | **`working_dir`**（可用别名 `cwd`） | 读 `ENV.md` 的 package_manager；已有 `node_modules` 时默认拒 `install`（`force_install` 可覆盖） |
+| `mvn_exec` | **`working_dir`**（可用别名 `cwd`） | 读 `ENV.md` 的 `tools.mvn` |
+
+示例（项目内前端）：
+
+```json
+{ "tool_name": "npm_exec", "arguments": { "working_dir": "workspace/<id>/frontend", "args": ["run", "build"] } }
+```
+
+项目模式下 **禁止** 用 `repl` 跑 `npm`/`pnpm`/`yarn`/`mvn`/`gradle`（executor 硬拒）。详见 [PROJECT-MODE.md](./PROJECT-MODE.md) §0d。
 
 **进化新工具闭环**：`记住`（可选 `tool_suggestion`）→ **`write_evolve` 先 `main.py` 再 `tool.toml`**（`status: active` 时 `write_evolve` 校验 `main.py` 已存在）→ **`tool.toml` 写盘前经 `parse_tool_manifest` 预检**（非法清单拒绝写入，避免 `ToolRegistry.load()` 启动失败）→ 成功写入 `tool.toml` 后**同会话内自动重载 registry**（新 `active` 工具立即可 `run_evolved`）。`registry` 仅对 `active`/`staged` 要求 entry script；`draft` 可仅有清单。多行或含 `"` 的正文优先 **`content_base64`**（UTF-8 标准 base64），避免 `tool_calls` JSON 转义失败；造工具时 **`on_conflict: overwrite`**。写完后建议 `git diff` + commit。
 
@@ -446,7 +465,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 ## 10. 安全（与 PROJECT §6.4 一致）
 
-- **无进程沙箱**；`workspace_only` 为约定
+- **无进程沙箱**；写范围靠 deny-list + confirm；`allow_approve_all` 为会话级约定
 - `run_evolved` 不可关闭 confirm
 - 日志不记密钥与完整大文件内容
 
@@ -457,7 +476,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 | 能力 | 说明 |
 |------|------|
 | Memory / Prompt | 主题路由；见 MEMORY.md |
-| Evolved tool | 主题目录 + common；清单随 session 过滤 |
+| Evolved tool | 主题目录 + common（组织）；执行面 = active（[TOOL-CATALOG.md](./TOOL-CATALOG.md)） |
 | Skill（M4+） | 编排已有 tool 名；不增加 Builtin 数量 |
 
 ---
@@ -495,11 +514,11 @@ evolve/
 | # | 议题 | 决议 |
 |---|------|------|
 | 1 | Builtin 数量与名单 | **6 个**：read/list/grep/web_search/fetch_url/run_evolved |
-| 2 | Evolved 暴露 | **仅** `run_evolved`；清单按主题 + common 注入 system |
-| 3 | 主题索引 | 统一 **`evolve/_index.toml`** |
-| 4 | 跨主题工具 | **`tools/common/`**，每 session 都列入清单 |
+| 2 | Evolved 暴露 | **仅** `run_evolved`；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
+| 3 | 主题索引 | 统一 **`evolve/_index.toml`**（驱动 prompt/memory；工具执行解绑） |
+| 4 | 跨主题工具 | **`tools/common/`** 仍为目录约定；active 均可调 |
 | 5 | 本地搜 vs 上网搜 | **分开**；`grep` 与 `web_search` 并存 |
-| 6 | confirm 交互 | `y/n`；`a` 仅 **workspace_only evolved** 本会话免确认；log `session_workspace_approved` |
+| 6 | confirm 交互 | `y/n`；`a` 仅 **allow_approve_all evolved** 本会话免确认（agent root） |
 | 7 | `web_search` 后端 | 默认 **DeepSeek**（Anthropic 子调用 + `LLM_API_KEY`）；可选 `brave`；§7.4 schema 不变 |
 | 8 | `fetch_url` 实现 | **`httpx`**；stdlib HTML 去标签；SSRF；默认 32k chars / 2MB raw；§7.5 |
 | 9 | 超长 tool 结果 | **>8k** 落盘 `tool_outputs/`；LLM 见 2k 预览 + `output_path` |
@@ -522,6 +541,7 @@ evolve/
 
 | 文档 | 内容 |
 |------|------|
+| [TOOL-CATALOG.md](./TOOL-CATALOG.md) | Phase 23：INDEX / 桶 / 取消主题硬锁 |
 | [MEMORY.md](./MEMORY.md) | 主题路由、三件套、`_index.toml` |
 | [TASKS.md](./TASKS.md) | 实施 task |
 | [PROJECT.md](./PROJECT.md) | 总览 |

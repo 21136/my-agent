@@ -1,8 +1,167 @@
 # 项目模式设计（PROJECT-MODE）
 
-> 版本 **0.2.4** · 2026-07-19  
-> **状态**：**设计已决**（T-1101 done；实现见 [TASKS.md](./TASKS.md) §Phase 11 · **M3 done**）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §3 · [RUNTIME.md](./RUNTIME.md) · [MEMORY.md](./MEMORY.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [TASK-STOP.md](./TASK-STOP.md)（Phase 20 草案） · `TASKS.md` §Phase 11 / 20
+> 版本 **0.3.2** · 2026-07-30  
+> **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E10 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · `TASKS.md` Phase 11/20/**21** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
+
+---
+
+## 0b. UI 迁移说明（2026-07-30）
+
+| 旧 | 新 |
+|----|-----|
+| `desktop/src/shells/project/` | `desktop/src/shells/unified/` + `project-panel.ts` |
+| 顶栏切到 project 壳 | 绑定项目 → `data-perspective="project"` |
+| 静态 TASKS markdown | 任务流 + Plan Agent（见 PROJECT-SIDEBAR） |
+
+正文 **P1「第四外壳 project」** 等决议仍描述产品语义；**前端路径以本表为准**。
+
+---
+
+## 0c. 本机工具链 ENV.md（已决 · 2026-07-30）
+
+| ID | 决议 |
+|----|------|
+| **E1** | 每项目一份 `workspace/<id>/ENV.md`（YAML：`tools` + `prefer`） |
+| **E2** | 新建/打开/切换项目时 **自动脚手架**：探测本机 node/npm/pnpm/yarn/mvn/java |
+| **E3** | 再次进入时 **刷新 `tools`，保留 `prefer`**（手改偏好不被覆盖） |
+| **E4** | **不**每轮注入 system；`npm_exec`/`mvn_exec` **自动读** ENV 解析路径与 package_manager |
+| **E5** | LLM 只需关心 `prefer`（pnpm / JDK17）；可用 `read_file` 查看/改偏好 |
+| **E6** | 实现：`agent-core/project_env.py`；挂钩 `create_project` / `execute_project_switch` / `context_switch` 项目创建 |
+
+---
+
+## 0d. 构建工具硬约束补强（已决 · done · 2026-07-30）
+
+> 触发：huiyi 会话「测前端」时 LLM 用错参数名 `cwd`（应为 `working_dir`），随即改用 `repl` + 手写 `npm.cmd` **绕开 ENV**，长时间 `npm install`，用户体感「约束没用」。
+
+### 已决条款
+
+| ID | 决议 | 状态 |
+|----|------|------|
+| **E7** | `npm_exec` / `mvn_exec`：接受别名 **`cwd` → `working_dir`**（两者都有时以 `working_dir` 为准） | **done** |
+| **E8** | **项目模式下禁止用 `repl` 跑包管理/构建**（检测 code 中的 `npm`/`pnpm`/`yarn`/`mvn`/`gradle` 等）：executor 硬拒，错误提示改走 `npm_exec` / `mvn_exec` + `working_dir` | **done** |
+| **E9** | `project.md` + `npm_exec` 硬拒：已有 `node_modules` 时默认拒 `install`（需 `force_install: true`）；纪律写明先 `run build`/`test` | **done** |
+| **E10** | `npm_exec`/`mvn_exec` 的 tool.toml + TOOLS：主参数 `working_dir`；文档说明 `cwd` 仅为别名 | **done** |
+
+### 非目标（本轮不做）
+
+| 非目标 | 理由 |
+|--------|------|
+| 禁止一切 `npm install` | 缺依赖时仍需要；只约束「有依赖还硬装」与「用 repl 装」 |
+| 每轮注入整份 ENV.md 进 system | 仍按 E4；路径由工具吃 |
+| 自动选国内镜像 | 可选后续；本次不强制 |
+
+### 验收（实施后）
+
+| 场景 | 预期 |
+|------|------|
+| `npm_exec` 传 `cwd` 不传 `working_dir` | 等价于 `working_dir`，或明确错误「请用 working_dir」 |
+| 项目会话 `repl` 里 `subprocess…npm install` | `ok:false`，提示改用 `npm_exec` |
+| `workspace/<id>/frontend/node_modules` 已存在仍先 install | `npm_exec` `ok:false`，提示改 `run build` 或 `force_install` |
+| 正确 `npm_exec` + `working_dir` | 继续读 ENV.md 选二进制（E4） |
+
+### 实施锚点
+
+| 层 | 文件 |
+|----|------|
+| evolved | `evolve/tools/common/npm_exec/main.py` · `mvn_exec/main.py` · 各自 `tool.toml` |
+| 硬门 | `agent-core/tools/executor.py` → `_validate_project_repl_build_bypass` |
+| 提示 | `evolve/prompts/project.md` |
+| 文档 | 本 § · [TOOLS.md](./TOOLS.md) §8.2 · [UX-POLISH.md](./UX-POLISH.md) 记录 |
+| 测试 | `agent-core/tests/test_project_build_guards.py` |
+
+---
+
+## 0e. 项目进度闭环补强（已决 · done · 2026-07-31）
+
+> **后续**：勾选证据硬闸（本回合对口成功才可 [x]）见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) · Phase 24。
+
+> 触发：huiyi（`20260730-27fd72d2`）助手完成工作后称「`report_progress` 不在清单」；用户质疑「工具缺失？」。  
+> 证据：2026-07-30 隔离环境门禁模拟（见 [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
+> 任务跟踪：`TASKS.md` **Phase 21**（T-2102～T-2107 **done**）。
+
+### 死结（产品 · 已修）
+
+```text
+实现 → report_progress 在清单（F1）→ 注入 project_id（F4）→ 勾选 TASKS
+     → 武装一停（F3）→ 同 turn 禁下一产物 → 用户「继续」
+```
+
+### 已决条款
+
+| ID | 决议 | 状态 |
+|----|------|------|
+| **F1** | **不**新增索引主题 `project`（维持 **P8**）。当 `active_shell=="project"`（或已绑定 `project_root`）时，`session_evolved_allowlist` **额外并入** `scope=="project"` 且 `status=active` 的 evolved 工具（当前即 `report_progress`） | **done** |
+| **F2** | 删除 `agent.run_turn` 在 `project_plan_gate_open` 时把 `active_shell` 强制改为 `"grow"` 的逻辑；draft 轮次保持 **`project`** | **done** |
+| **F3** | `report_progress` **成功**后武装 task-stop | **done** |
+| **F4** | executor 对 `report_progress`：缺 `project_id` 时从会话注入；tool.toml 旁注 | **done** |
+| **F5** | `format_project_overlay`（confirmed）文案对齐硬门 | **done** |
+| **F6** | WS `PlanAgent.report_progress`：有 `task_line` 时调用 `toggle_task` | **done** |
+
+### 非目标（本轮不做）
+
+| 非目标 | 理由 |
+|--------|------|
+| 注册 `_index` 主题 `id=project` | 与 P8 冲突；F1 用壳态并入即可 |
+| 放开 confirmed 后直写 TASKS.md | 进度真源仍归 Plan Agent / report_progress |
+| 自动「造」report_progress 工具 | 工具已存在；问题是清单，不是磁盘 |
+| 改 P17（取消 coding 主题） | coding 工具仍需；F1 叠加 project scope |
+
+### 影响矩阵（DOC-04）
+
+| 面 | 影响 |
+|----|------|
+| 清单 / loader | `session_evolved_allowlist`（或 registry 调用方）按壳并入 project scope |
+| 回合入口 | `agent.run_turn` draft 不再改 shell→grow |
+| 执行门 | task-stop 武装路径；`report_progress` 参数注入 |
+| 提示 | `format_project_overlay` ·（可选）`project.md` 一句对齐 |
+| Plan API | `plan_agent.report_progress` 行为或文档 |
+| 桌面 | 无强制 UI 改动；侧栏靠 after_turn 读盘刷新即可 |
+| grow/daily | **不变**（仅 project 壳/绑定会话） |
+
+### 回归 ID（实施时必跑）
+
+| ID | 场景 |
+|----|------|
+| **S-60** | project 会话清单含 `report_progress`；grow+coding **不含**（除非另有 project 绑定） |
+| **S-61** | draft 多轮聊天后 `active_shell` 仍为 `project`；`项目 确认` / `plan.response` 成功 |
+| **S-62** | confirmed 后 `report_progress` 勾选 → TASKS `[x]` ↑ → 同 turn 再写产物被拒（一停）→「继续」可做下一项 |
+| **IT-60** | `session_evolved_allowlist` / validate：project 壳可见 `report_progress` |
+| **IT-61** | 缺 `project_id` 时注入后 `report_progress` 可跑通（fixture） |
+| **IT-62** | `project_plan_gate_open` 轮次不把 shell 写成 grow（单测） |
+
+### 验收
+
+| 场景 | 预期 |
+|------|------|
+| 绑 project + topics=coding | 清单含 `report_progress` |
+| draft 聊计划后点确认 | 成功；`project.md` 仍注入；after_turn 发 `project.state` |
+| 完成一 task 调 `report_progress` | TASKS 勾选；侧栏刷新；`finish_reason=task_paused`（或等价文案） |
+| 同 turn 再写下一 task 产物 | 硬拒 |
+| 缺 `project_id` 只传 summary/task_line | 仍成功（注入） |
+| grow 会话无项目绑定 | 清单仍无 `report_progress` |
+
+### 实施锚点
+
+| 层 | 文件 |
+|----|------|
+| 清单 | `loader.session_evolved_tools` / `session_evolved_allowlist` / catalog overlay |
+| draft 壳 | `agent.py` `run_turn`（已去掉 grow 翻转） |
+| 一停 | `executor._maybe_arm_task_stop`（含 `report_progress`） |
+| 注入 | `executor._maybe_inject_report_progress_project_id` |
+| 文案 | `project_mode.format_project_overlay` · `evolve/prompts/project.md` |
+| Plan API | `plan_agent.report_progress` → `toggle_task` |
+| schema | `evolve/tools/project/report_progress/tool.toml` |
+| 测试 | `tests/test_project_progress_loop.py` · `tests/test_task_stop.py` |
+
+### 与 P8 / P17 / P20 关系
+
+| 已决 | 关系 |
+|------|------|
+| **P8** 不注册 project 主题 | **维持**；F1 用壳态并入 scope，不引入主题 id |
+| **P17** 追加 coding | **维持** |
+| **P20** / TASK-STOP | F3 修复「勾选路径」后一停门重新有效；直写 TASKS 仍禁 |
 
 ---
 
@@ -281,7 +440,7 @@ workspace/
 | 顶栏 | `生长 \| 项目 \| 日用 \| 治理` + `项目 · <id>` |
 | 顶栏进度 | `draft` → **计划待确认**；`plan_dirty` → **计划已变更 · 待确认**；`confirmed` → **`5/12` 未完成**（点击 popover 列未勾 task，可选实现） |
 | 计划确认 | **计划确认卡**（`plan.confirm` WS，对齐 §3.2.1 tool confirm） |
-| 壳目录 | `desktop/src/shells/project/`（M0 可薄包装 grow） |
+| UI 目录 | `desktop/src/shells/unified/` + `project-panel.ts`（旧 `shells/project/` 已删） |
 
 ### 8.2 M1
 

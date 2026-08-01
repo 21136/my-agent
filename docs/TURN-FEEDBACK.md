@@ -1,8 +1,8 @@
 # 轮次反馈与友好提醒（TURN-FEEDBACK）
 
-> 版本 **0.2.1** · 2026-07-11  
-> 状态：**已实现**（T-905a～d；见 `TASKS.md`）
-> 关联：[RUNTIME.md](./RUNTIME.md) §7–8 · [DESKTOP.md](./DESKTOP.md) §3.2.2 · [ORCHESTRATION.md](./ORCHESTRATION.md) §8–9 · [MEMORY.md](./MEMORY.md)
+> 版本 **0.2.2** · 2026-07-30  
+> 状态：**已实现**（T-905a～d）；UI 现挂 **unified** 顶栏/状态栏（旧 `shells/grow/` 路径已删）  
+> 关联：[RUNTIME.md](./RUNTIME.md) §7–8 · [DESKTOP.md](./DESKTOP.md) §0 · [UX-POLISH.md](./UX-POLISH.md) · [ORCHESTRATION.md](./ORCHESTRATION.md)
 
 ---
 
@@ -249,8 +249,8 @@ CLI：`turn.start` → 打印 `[本轮·recall] …`；`turn.notice` → `print`
 | 阶段 | 范围 | 文件（预期） |
 |------|------|----------------|
 | **P0** | `recall` 分类 + 更早软提醒 + `turn.start` | `turn_intent.py`, `agent.py`, `server.py` |
-| **P0** | 状态栏：`思考中` → 分场景文案 | `desktop/src/shells/grow/index.ts` |
-| **P1** | `session.memory` + 顶栏展示 | `server.py`, `grow/index.ts`, `context.py` |
+| **P0** | 状态栏：`思考中` → 分场景文案 | `desktop/src/shells/unified/index.ts` |
+| **P1** | `session.memory` + 顶栏展示 | `server.py`, `unified/index.ts`, `context.py` |
 | **P1** | L3 偏航 `turn.notice` | `agent.py` |
 | **P1** | **`session.history` 续接灌聊天区** | `session.py`, `server.py`, grow（T-905d） |
 | **P2** | 设置项、CLI 对齐、TASKS 条目 | `settings.ts`, `main.py` |

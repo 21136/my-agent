@@ -1,14 +1,15 @@
 # my-agent 项目地图（MAP）
 
-> 版本 2026-07-18 · **新会话请先读本文 + `TASKS.md`**  
-> 代码 **Phase 1～18 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **冻结状态**：**已解冻**（T-1890-10）— 可开新功能 Phase；须遵守 **§2.1** / DOC-04。
+> 版本 **2026-08-01** · **新会话请先读本文 + `TASKS.md`**  
+> 代码 **Phase 1～23 done**（进度身份武装已落地、待合入叙述）；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
+> **当前焦点**：**Phase 24** 进度硬闸门 **doc**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)）；[UX-POLISH.md](./UX-POLISH.md)。  
+> **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
 
 ## 1. 一句话
 
-个人用、可进化的本地 Agent：**Git 为真源**，LLM 只能通过 **6 个 Builtin + `run_evolved`** 动手；进化产物在 `evolve/`（prompt / memory / tool），**M1 不做 skill**。
+个人用、可进化的本地 Agent：**Git 为真源**，LLM 只能通过 **6 个 Builtin + `run_evolved`** 动手；写路径默认 **agent root**（deny-list 精确拦截）；进化产物在 `evolve/`（prompt / memory / tool），**M1 不做 skill**。
 
 ---
 
@@ -29,29 +30,37 @@
 | **Phase 6** | M4 治理（review / audit） | **done**（`T-601`～`T-604`、`T-006`） |
 | **Phase 7** | M5 对话编排（顺手度） | **done**（T-701～T-706、T-704、T-705） |
 | **Phase 8** | 用户扩展层（双索引） | **done**（T-801～T-803、T-805；见 [EXTENSIONS.md](./EXTENSIONS.md)） |
-| **Phase 9** | Electron 桌面壳 | **done**（T-904a～f、T-904i、**T-904g/i daily Amp**；见 [DESKTOP.md](./DESKTOP.md)） |
+| **Phase 9** | Electron 桌面壳（历史：grow/daily/project） | **done** → 已合并为 **unified**（见下） |
 | **Phase 10** | 主机托管区（host scope） | **done**（T-1001～T-1008；见 [HOST-SCOPE.md](./HOST-SCOPE.md)） |
-| **Phase 11** | 项目模式（project 壳 + 三件套 + 计划确认） | **done**（T-1102～T-1113；见 [PROJECT-MODE.md](./PROJECT-MODE.md)） |
-| **Phase 12** | 拖拽文件（project 壳 `_incoming/` 优先） | **M0 done**（T-1201～T-1208；见 [FILES-DROP.md](./FILES-DROP.md)） |
-| **Phase 14** | 工具确认管线加固（confirm 队列 + UI 状态机） | **done**（T-1301～T-1308；见 [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · BUG-008） |
-| **Phase 15** | 回合控制（Stop · `turn.cancel` · confirm 90s） | **done**（T-1401～T-1408；S-05/S-26/S-28；见 [TURN-CONTROL.md](./TURN-CONTROL.md) · BUG-014 **fixed**） |
-| **Phase 16** | 运行时行为约束（stall · 拒调 · demo probe） | **M1 done**（T-1511,T-1514～T-1516,T-1520 + M0；见 [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) v0.2.0） |
-| **Phase 17** | Checker 子代理（监工 / 独立验收） | **M1 done**（T-1601,T-1610～T-1614,T-1620～T-1623；见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) v0.2.0） |
-| **Phase 18** | **稳定化专项**（全表面矩阵 + 平台韧性 · P0/P1 smoke · Gate IT） | **done · 已解冻**（[STABILIZATION.md](./STABILIZATION.md) **v1.1.0**；T-1890-01～10 全 done） |
-| **Phase 19** | **上下文换线**（LLM 识别换线意图 + 用户确认门） | **done**（[CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) v0.3.0；T-1902～T-1907 M0～M2） |
-| **Phase 20** | **项目 Task 一停门**（每 `TASKS` 条目完成即停） | **M0+M1 done**（[TASK-STOP.md](./TASK-STOP.md) v0.2.0；T-2001～T-2007；M2=T-2008 defer） |
+| **Phase 11** | 项目模式（三件套 + 计划确认） | **done**（T-1102～T-1113；UI 现为 unified `perspective=project`） |
+| **Phase 12** | 拖拽文件 | **M0 done**（T-1201～T-1208；见 [FILES-DROP.md](./FILES-DROP.md)） |
+| **Phase 14** | 工具确认管线加固 | **done**（T-1301～T-1308；见 [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md)） |
+| **Phase 15** | 回合控制（Stop · `turn.cancel` · confirm 90s） | **done**（见 [TURN-CONTROL.md](./TURN-CONTROL.md)） |
+| **Phase 16** | 运行时行为约束 | **M1 done**（见 [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md)） |
+| **Phase 17** | Checker 子代理 | **M1 done**（见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md)） |
+| **Phase 18** | **稳定化专项** | **done · 已解冻**（[STABILIZATION.md](./STABILIZATION.md) **v1.1.0**） |
+| **Phase 19** | **上下文换线** | **done**（[CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) v0.3.0） |
+| **Phase 20** | **项目 Task 一停门** | **M0+M1 done**（[TASK-STOP.md](./TASK-STOP.md)；M2=T-2008 defer） |
+| **Phase 21** | **项目进度闭环**（report_progress 清单 / draft 壳 / 一停武装） | **done**（[PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) fixed） |
+| **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
+| **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
+| **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
+| **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
+| **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
+| **UX-POLISH** | 统一壳手感打磨（UX-001～020 + 第五～七轮） | **进行中**（[UX-POLISH.md](./UX-POLISH.md)） |
+| **Plan Agent / 侧栏** | 任务流 + Plan Agent 拥有 TASKS | **done（本地 ahead）**；可见搭档见 **Phase 22 / §15.10**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)） |
 
 ### 2.1 解冻说明（T-1890-09 / T-1890-10）
 
 | 项 | 说明 |
 |----|------|
-| **现状** | Phase 18 放行全齐；**T-1890-10 已签字**（2026-07-18：「同意解冻：可恢复 feature Phase」） |
+| **现状** | Phase 18 放行全齐；**T-1890-10 已签字**（2026-07-18） |
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一功能** | Phase 20 M2 可选 · [TASK-STOP.md](./TASK-STOP.md)（T-2008 侧栏高亮 defer） |
+| **下一焦点** | **Phase 24** [PROGRESS-GATE.md](./PROGRESS-GATE.md) 实施（T-2402～）；[UX-POLISH.md](./UX-POLISH.md) 剩余项；文档与未提交工作区对齐后合入 |
 
-**Phase 1～18 设计/验收已落地**；远端：https://github.com/21136/my-agent（private，默认分支 `main`）。可选：`T-601b` / `T-605` skill / `T-804` / **T-904i6**（starfield 清理）。
+**远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
 
 ---
 
@@ -60,7 +69,7 @@
 ```text
 my-agent/
 ├── agent-core/                 # 内核 Python（稳定、少变）
-│   ├── paths.py                # T-102 agent 根 + workspace 边界
+│   ├── paths.py                # T-102 agent 根；resolve_under_agent_for_write + deny-list
 │   ├── host_scope.py           # T-1002 host_scope.json 加载 / denylist
 │   ├── host_scope_cli.py       # T-1004 托管目录 REPL
 │   ├── host_scope_api.py       # T-1008 桌面 WS 托管区 API
@@ -88,19 +97,22 @@ my-agent/
 │   │   └── git_hints.py        # T-604 commit / rollback hints
 │   ├── main.py                 # T-207 REPL + 命令
 │   ├── server.py               # T-904a Electron WebSocket sidecar
-│   ├── activity_router.py      # T-906 外壳/主题活动路由
+│   ├── paths.py                # + resolve_under_agent_for_write / deny-list（WRITE-SCOPE）
+│   ├── activity_router.py      # 主题活动路由（壳切 UI 已退役；active_shell 仍作会话线标签）
+│   ├── plan_agent.py           # Plan Agent（侧栏 TASKS 主人）
 │   ├── project_mode.py         # T-1107 三件套 / 计划门 / 验收
 │   ├── project_cli.py          # T-1103 CLI `项目 …`
 │   ├── project_switch.py       # T-1113 项目 ↔ 专用会话索引与切换
-│   ├── project_api.py          # T-1109 / T-1112 / T-1113 桌面 WS project.*（切换替换会话：memory←context · history←session）
+│   ├── project_api.py          # 桌面 WS project.* + plan.*
+│   ├── shell_switch.py         # 会话线 park / project 绑定（前端不再切壳 DOM）
 │   ├── interface_lock.py       # T-904i Electron↔CLI 会话锁
 │   ├── prompts/
-│   │   └── core.txt            # 内核规则（T-209）
+│   │   └── core.txt            # 内核规则（T-209；写路径 = agent root）
 │   └── tools/
 │       ├── schema.py           # T-101 统一 ToolResult / ToolError
 │       ├── http_client.py      # httpx 工厂（SOCKS 代理回退）
-│       ├── registry.py         # T-105/106 builtin 清单 + evolved 扫描/校验
-│       ├── executor.py         # T-108–T-110 confirm / spill / log
+│       ├── registry.py         # builtin + evolved；allow_approve_all（旧名 workspace_only 兼容）
+│       ├── executor.py         # confirm / spill / log / 增强错误（TOOL-RETRY）
 │       ├── logging.py          # T-110 evolve_log.jsonl
 │       ├── builtin/
 │       │   ├── read_file.py    # T-103
@@ -108,7 +120,7 @@ my-agent/
 │       │   ├── grep.py         # T-104a
 │       │   ├── web_search.py   # T-104b
 │       │   ├── fetch_url.py    # T-104c
-│       │   └── run_evolved.py  # T-107
+│       │   └── run_evolved.py  # T-107（含 Windows 管道修复）
 │       ├── cli_tools.py        # T-112 my-agent tool run
 │       ├── my-agent            # agent-core 下启动器（同 cli_tools）
 │       └── ...
@@ -118,32 +130,34 @@ my-agent/
 │   ├── _index.toml             # 迁移前兼容；T-801 后 deprecated
 │   ├── prompts/                # 主题 overlay + safety.md（始终加载）
 │   ├── memories/               # 记忆 md（规划）
-│   ├── tools/                  # evolved 工具
-│   │   ├── common/             # T-111 write_text；T-505 append_text / copy_move / move_to_trash
-│   │   └── workflow/           # T-502 + T-506（5 件）
+│   ├── tools/                  # evolved 工具（写路径 = agent root）
+│   │   ├── common/             # write_text / append_text / copy_move / …
+│   │   ├── workflow/           # flatten / dedupe / archive / …
 │   │   └── <topic>/<name>/     # 其他主题专用
 │   └── proposals/              # T-402 生成；用户审后 accept（T-404）
 ├── docs/                       # 设计真源（先评审再写代码）
 │   ├── MAP.md                  # ← 本文件
 │   ├── TASKS.md                # 实施细表（task id + 状态）
-│   ├── TOOLS.md                # 工具协议 §6～§7
-│   ├── RUNTIME.md              # 对话层
-│   ├── MEMORY.md               # 三件套 + 主题路由
-│   ├── EXTENSIONS.md           # Phase 8 用户扩展层（双索引）
-│   ├── DESKTOP.md              # Phase 9 Electron 桌面壳
-│   ├── PROJECT-MODE.md         # Phase 11 项目模式（project 壳）
-│   ├── BUGS.md                 # 运行时缺陷索引（2026-07-11 桌面联调）
-│   ├── EVOLVE.md               # proposal
-│   └── GOVERNANCE.md           # M4 治理
-├── desktop/                    # T-904c～f Electron 壳
-│   ├── electron/main.ts        # 托盘 / 快捷键 / 切 CLI / 真退出 / 无系统菜单
+│   ├── TOOLS.md                # 工具协议
+│   ├── DESKTOP.md              # Electron · unified 壳
+│   ├── SHELL-CONSOLIDATION.md  # 壳合并（已实施）
+│   ├── WRITE-SCOPE.md          # 写范围放开（已实施）
+│   ├── TOOL-RETRY.md           # 参数自修正（已实施）
+│   ├── UX-POLISH.md            # 体验打磨（进行中）
+│   ├── PROJECT-SIDEBAR.md      # Plan Agent + 任务流侧栏
+│   ├── PROJECT-MODE.md         # 项目模式（三件套 / 计划门）
+│   ├── BUGS.md                 # 运行时缺陷索引
+│   └── …                       # RUNTIME / MEMORY / EVOLVE / STABILIZATION / …
+├── desktop/                    # Electron 壳
+│   ├── electron/main.ts        # 托盘 / 快捷键 / 切 CLI / 真退出 / 通知
 │   └── src/
-│       ├── shells/grow/        # 生长期 UI + 全窗运行态
-│       ├── shells/daily/       # 日用 Amp（T-904i）
-│       ├── shells/project/     # 项目期 UI（T-1105～T-1113）
+│       ├── shells/unified/     # 唯一全功能聊天壳（perspective: default|project|night）
+│       ├── shells/pet/         # 伴侶独立窗（默认入口）
 │       ├── shells/chat-state.ts
-│       ├── agent-busy.ts       # 全窗 busy + Main 退出查询
-│       └── app-chrome.css      # 顶栏 + .app-frame.is-agent-busy
+│       ├── skins/starfield/    # night 视角可选星空（自 daily 迁出）
+│       ├── agent-busy.ts       # 全窗 busy
+│       ├── app-chrome.ts/.css  # 顶栏（无壳选择器）
+│       └── shell-router.ts     # → mountUnifiedShell
 ├── data/                       # gitignore（除可选 conversations 摘要）
 │   ├── state.json              # last_conversation_id, project_sessions, preferred_ui
 │   ├── sessions/<id>/          # goal, messages.jsonl, tool_outputs/
@@ -1460,7 +1474,7 @@ python server.py        # 含 session.history in emit_session_state
 | 锚定 / tool / `[内核]` | 不进聊天区 |
 | 连续重复 user | 去重后一条 |
 
-实现：`session.py` · `server.py` · `desktop/src/shells/grow/index.ts`。协议： [DESKTOP.md](./DESKTOP.md) §5.2.1。
+实现：`session.py` · `server.py` · `desktop/src/shells/unified/index.ts`。协议： [DESKTOP.md](./DESKTOP.md) §5.2.1。
 
 ### 9.47 T-906 活动路由（Activity Router + ui.route）
 

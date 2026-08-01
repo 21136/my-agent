@@ -1,8 +1,9 @@
 # 工具确认管线设计（CONFIRM-PIPELINE）
 
-> 版本 **0.1.0** · 2026-07-13  
-> **状态**：**done**（T-1301～T-1308）— 见 [TASKS.md](./TASKS.md) §Phase 14 · [BUG-008](./bugs/2026-07-13-confirm-pipeline-stuck.md)  
-> 关联：[DESKTOP.md](./DESKTOP.md) §3.2.1 · §5.1 · §5.4 · [BUGS.md](./BUGS.md) · [TOOLS.md](./TOOLS.md) §6.3 · `write_evolve`
+> 版本 **0.1.1** · 2026-07-30  
+> **状态**：**done**（T-1301～T-1308）  
+> **UI 路径**：现行实现在 `desktop/src/shells/unified/` + `chat-state.ts`（旧 grow/project/daily 路径已删；night 视角可用玻璃 overlay）  
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [BUGS.md](./BUGS.md) · [TOOLS.md](./TOOLS.md) §6.3 · `write_evolve`
 
 ---
 
@@ -14,12 +15,12 @@
 | **C2** | 确认超时（`queue.Empty`）**必须** `emit confirm.done`（`choice: n`）+ `notice`，再返回 |
 | **C3** | 桌面 **仅接受** `confirmOverlay.requestId`；点击后立即 `block.resolved`，重绘不得复活按钮 |
 | **C4** | 新 `confirm.request` 到达时，**作废**同轮旧 confirm 块（标「已过期」） |
-| **C5** | 状态栏由 **`chat-state` 钩子**驱动（`onConfirmRequest` / `onConfirmDone` / `onToolEnd` / `assistant.done`），grow/project **禁止**手写「就绪/执行中」覆盖 |
+| **C5** | 状态栏由 **`chat-state` 钩子**驱动；unified **禁止**手写「就绪/执行中」覆盖 |
 | **C6** | `ToolExecutor.run` **`try/finally`** 保证 `tool.end` 必发（含异常路径） |
 | **C7** | `write_evolve` 的 `content_base64` **确认前** `b64decode(validate=True)`；失败 **不弹确认** |
 | **C8** | 大文件 scaffold **优先** `content_workspace_path` / `files`；`content_base64` 仅小片段（`tool.toml` 等） |
 | **C9** | `_run_line` 结束 **必发** `turn.end`（或空 `assistant.done`），对称 `turn.start` / `beginTurnActivity` |
-| **C10** | 三壳（grow / project / daily / pet）**共用** confirm 状态机；差异仅在呈现（块内 vs 玻璃层） |
+| **C10** | **unified + pet** 共用 confirm 状态机；差异仅在呈现（块内 vs night 玻璃层 vs pet 气泡） |
 
 ---
 
@@ -183,9 +184,9 @@ M0 可仅用前端「新 request 到达 → 标记旧块 resolved=已过期」�
 | `agent-core/tools/executor.py` | `run` finally `tool.end` C6；base64 预检 C7 |
 | `agent-core/main.py` | 空 `assistant_text` 仍结束回合 C9 |
 | `desktop/src/shells/chat-state.ts` | `isWorking` / `confirmSubmitting` C5 |
-| `desktop/src/shells/grow/index.ts` | 去手写 status；confirm 点击 C3 |
-| `desktop/src/shells/project/index.ts` | 同 grow |
-| `desktop/src/shells/daily/index.ts` | 玻璃 confirm 对齐 C3（已有 overlay） |
+| `desktop/src/shells/unified/index.ts` | confirm 块内 + night overlay；C3/C5 |
+| `desktop/src/shells/chat-state.ts` | 确认状态机共用 |
+| `desktop/src/shells/pet/index.ts` | 气泡内确认 |
 | `desktop/src/shells/pet/index.ts` | 同 daily |
 | `agent-core/tests/test_confirm_pipeline.py` | 新增：错 ID、超时、双 confirm |
 

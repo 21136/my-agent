@@ -1,4 +1,4 @@
-"""append_text — append UTF-8 text under workspace (P1 common)."""
+"""append_text — append UTF-8 text under agent root (P1 common)."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ def _load_paths():
     core = _agent_core_dir()
     if str(core) not in sys.path:
         sys.path.insert(0, str(core))
-    from paths import AgentPaths, PathOutOfBoundsError
+    from paths import AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
-    return AgentPaths, PathOutOfBoundsError
+    return AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError
 
 
 def run_append(payload: dict[str, Any]) -> dict[str, Any]:
-    """Append *content* to a workspace text file."""
-    AgentPaths, PathOutOfBoundsError = _load_paths()
+    """Append *content* to a text file under agent root."""
+    AgentPaths, PathDeniedForWriteError, PathOutOfBoundsError = _load_paths()
     paths = AgentPaths.discover(start=_agent_root())
 
     path_arg = payload.get("path")
@@ -51,13 +51,13 @@ def run_append(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        target = paths.resolve_under_workspace(path_arg, must_exist=False)
-    except PathOutOfBoundsError as exc:
+        target = paths.resolve_under_agent_for_write(path_arg, must_exist=False)
+    except (PathOutOfBoundsError, PathDeniedForWriteError) as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
 
-    rel = paths.to_workspace_relative(target)
+    rel = paths.to_agent_relative(target)
     created = not target.exists()
 
     if created and not create_if_missing:
@@ -122,8 +122,8 @@ def _demo() -> None:
     assert tool is not None and tool.status == "active"
     print("[PASS] registry loads append_text (active)")
 
-    rel = "_append_text_demo.txt"
-    target = paths.workspace / rel
+    rel = "workspace/_append_text_demo.txt"
+    target = paths.agent_root / rel
     target.unlink(missing_ok=True)
 
     create = run(
@@ -163,7 +163,7 @@ def _demo() -> None:
         {
             "tool_name": "append_text",
             "arguments": {
-                "path": "_append_missing.txt",
+                "path": "workspace/_append_missing.txt",
                 "content": "x",
                 "create_if_missing": False,
             },
@@ -184,6 +184,17 @@ def _demo() -> None:
     )
     assert not bad.ok
     print("[PASS] path_out_of_bounds rejected")
+
+    deny = run(
+        {
+            "tool_name": "append_text",
+            "arguments": {"path": ".git/config", "content": "bad"},
+            "dry_run": False,
+        },
+        registry=registry,
+    )
+    assert not deny.ok
+    print("[PASS] .git/ write denied")
 
     target.unlink(missing_ok=True)
 

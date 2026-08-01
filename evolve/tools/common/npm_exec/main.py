@@ -50,16 +50,46 @@ def _find_npm() -> str:
     return "npm"
 
 
+def _resolve_pkg_bin(cwd: Path) -> tuple[str, str]:
+    """Prefer ENV.md tools + prefer.package_manager near cwd."""
+    try:
+        core = _agent_root() / "agent-core"
+        if str(core) not in sys.path:
+            sys.path.insert(0, str(core))
+        from project_env import load_env_near, resolve_package_manager_bin
+
+        env = load_env_near(cwd)
+        return resolve_package_manager_bin(env)
+    except Exception:
+        return "npm", _find_npm()
+
+
 def _resolve_working_dir(paths, path_arg: str | None) -> Path:
     if not path_arg:
-        return paths.workspace
+        return paths.agent_root
     text = path_arg.strip().replace("\\", "/").lstrip("/")
-    if text.startswith("workspace/"):
-        text = text.removeprefix("workspace/")
     try:
-        return paths.resolve_under_workspace(text, must_exist=True)
+        return paths.resolve_under_agent(text, must_exist=True)
     except Exception:
-        return paths.workspace / text
+        pass
+    # Bare project-relative: try under workspace/
+    if not text.startswith("workspace/"):
+        try:
+            return paths.resolve_under_agent(f"workspace/{text}", must_exist=True)
+        except Exception:
+            pass
+    return paths.agent_root / text
+
+
+def _coalesce_working_dir(payload: dict[str, Any]) -> str:
+    """E7: accept cwd as alias for working_dir."""
+    working = payload.get("working_dir", "")
+    if isinstance(working, str) and working.strip():
+        return working.strip()
+    cwd = payload.get("cwd", "")
+    if isinstance(cwd, str) and cwd.strip():
+        return cwd.strip()
+    return ""
 
 
 def npm_exec(payload: dict[str, Any]) -> dict[str, Any]:
@@ -75,19 +105,38 @@ def npm_exec(payload: dict[str, Any]) -> dict[str, Any]:
     if not args:
         return {"ok": False, "error": "args is required (e.g. ['install'], ['run', 'dev'])"}
 
-    working_dir_arg = payload.get("working_dir", "")
+    working_dir_arg = _coalesce_working_dir(payload)
     timeout_sec = int(payload.get("timeout_sec", _DEFAULT_TIMEOUT))
     if timeout_sec < 1:
         timeout_sec = 1
     dry_run = bool(payload.get("dry_run", False))
+    force_install = bool(payload.get("force_install", False))
 
     try:
         cwd = _resolve_working_dir(paths, working_dir_arg)
     except Exception as exc:
         return {"ok": False, "error": f"invalid working_dir: {exc}"}
 
-    npm = _find_npm()
-    command = [npm, *args]
+    # E9: skip redundant install when node_modules already present
+    if (
+        not force_install
+        and args
+        and args[0] in {"install", "i", "ci", "add"}
+        and (cwd / "node_modules").is_dir()
+    ):
+        return {
+            "ok": False,
+            "error": (
+                f"{cwd} 已有 node_modules；测前端/验证请直接 "
+                "npm_exec args=['run','build'] 或 ['run','test']，"
+                "不要先 install。确需重装时传 force_install=true"
+            ),
+            "cwd": str(cwd),
+            "hint": "working_dir 示例: workspace/<id>/frontend",
+        }
+
+    pm_label, pm_bin = _resolve_pkg_bin(cwd)
+    command = [pm_bin, *args]
 
     if dry_run:
         return {
@@ -95,6 +144,7 @@ def npm_exec(payload: dict[str, Any]) -> dict[str, Any]:
             "dry_run": True,
             "command": command,
             "cwd": str(cwd),
+            "package_manager": pm_label,
         }
 
     env = {**os.environ, "CI": "true"}
@@ -111,9 +161,19 @@ def npm_exec(payload: dict[str, Any]) -> dict[str, Any]:
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"npm command timed out after {timeout_sec}s", "command": command}
+        return {
+            "ok": False,
+            "error": f"{pm_label} command timed out after {timeout_sec}s",
+            "command": command,
+            "package_manager": pm_label,
+        }
     except OSError as exc:
-        return {"ok": False, "error": f"npm not available: {exc}", "command": command}
+        return {
+            "ok": False,
+            "error": f"{pm_label} not available: {exc}",
+            "command": command,
+            "package_manager": pm_label,
+        }
 
     stdout, stdout_trunc = _truncate(completed.stdout or "")
     stderr, stderr_trunc = _truncate(completed.stderr or "")
@@ -121,6 +181,7 @@ def npm_exec(payload: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "cwd": str(cwd),
         "command": command,
+        "package_manager": pm_label,
         "exit_code": completed.returncode,
         "stdout": stdout,
         "stderr": stderr,

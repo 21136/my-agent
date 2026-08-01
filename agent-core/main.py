@@ -70,6 +70,7 @@ from session import (
     GOAL_PROMPT,
     Session,
     TurnMode,
+    build_seed_message,
     create_new,
     parse_turn_mode_command,
     resume_or_create,
@@ -333,7 +334,17 @@ class ConversationRepl:
         return "continue"
 
     def start_new_session(self) -> None:
+        prev = self.session
         self.session = create_new(self.paths)
+        # E1: carry previous session context as a seed message
+        if prev is not None and prev.conversation_id:
+            seed = build_seed_message(
+                previous_session_id=prev.conversation_id,
+                previous_goal=prev.goal.strip(),
+                reason="用户发起新会话",
+                hint="",
+            )
+            self.session.append_message(seed, persist=False)
         reset_evolve_escalation(self.session)
         self.session.save()
         self._log_session_start()

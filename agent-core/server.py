@@ -394,6 +394,12 @@ def _build_repl(session: Session, paths: AgentPaths, bridge: WsBridge) -> Conver
     return repl
 
 
+def _emit_session_list(bridge: WsBridge, paths: AgentPaths) -> None:
+    """S-1: proactively push updated session list to keep dropdown fresh."""
+    summaries = list_session_summaries(paths)
+    bridge.emit({"type": "session.list", "sessions": summaries})
+
+
 def _repl_refreshes_session_state(line: str) -> bool:
     """REPL meta-commands that replace session overlay / chat history on desktop."""
     lower = line.strip().casefold()
@@ -598,6 +604,7 @@ class WsSessionHandler:
             await _run_line(repl, bridge, line, self.paths)
             if _repl_refreshes_session_state(line):
                 bridge.emit_session_state(repl.session)
+                _emit_session_list(bridge, self.paths)
             return
 
         if msg_type == "file.stage":
@@ -678,6 +685,7 @@ class WsSessionHandler:
                 repl._rebind_agent()
                 bridge.emit_session_state(repl.session)
                 emit_corruption_notices(bridge.emit, repl.session)
+                _emit_session_list(bridge, self.paths)
             except Exception as exc:
                 emit_error(bridge, str(exc))
             return
@@ -809,8 +817,9 @@ class WsSessionHandler:
                 message,
             )
             if isinstance(payload, dict) and "_events" in payload:
-                repl.session = payload["_session"]
-                repl._rebind_agent()
+                if "_session" in payload:
+                    repl.session = payload["_session"]
+                    repl._rebind_agent()
                 for event in payload["_events"]:
                     bridge.emit(event)
                 return

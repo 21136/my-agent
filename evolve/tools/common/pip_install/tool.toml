@@ -2,7 +2,7 @@
 name = 'pip_install'
 description = 'install python packages via pip, capture output/exit_code'
 version = '1.0.0'
-status = 'active'
+status = 'suspect'
 topics = ['common']
 
 [entry]
@@ -43,5 +43,5 @@ truncated = { type = 'boolean' }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 130

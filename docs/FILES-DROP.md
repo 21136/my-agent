@@ -1,8 +1,8 @@
 # 拖拽文件设计（FILES-DROP）
 
-> 版本 **0.1.0** · 2026-07-12  
-> **状态**：**M0 done**（project / grow / daily；见 [TASKS.md](./TASKS.md) §Phase 12）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §5 · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [TOOLS.md](./TOOLS.md) §7.1
+> 版本 **0.1.1** · 2026-07-30  
+> **状态**：**M0 done**（挂载点现为 **unified / pet**；旧 project/grow/daily 壳路径已删）  
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [TOOLS.md](./TOOLS.md) §7.1
 
 ---
 
@@ -12,23 +12,23 @@
 |----|------|
 | **F1** | 拖放真源在 **sidecar**；渲染进程只上报本地绝对路径 |
 | **F2** | 拖入 **≠** 自动发消息；先 **附件 chip**，用户点发送才进回合 |
-| **F3** | 助手仍通过 `read_file` / `host_read` / `run_evolved` 动手；**WS 不传文件正文** |
-| **F4** | **project 壳**：区外文件 → `workspace/<project>/_incoming/<drop_id>/` |
-| **F5** | **grow / daily 壳**：区外文件 → `workspace/_drops/<session_id>/<drop_id>/`（T-1205 后 grow 对齐） |
+| **F3** | 助手仍通过 `read_file` / host builtin / `run_evolved` 动手；**WS 不传文件正文** |
+| **F4** | **project 视角**（已绑项目）：区外文件 → `workspace/<project>/_incoming/<drop_id>/` |
+| **F5** | **非 project 视角**：区外文件 → `workspace/_drops/<session_id>/<drop_id>/` |
 | **F6** | 已在 **host 托管区**内 → **引用** `host:<id>/rel`，不复制（T-1205） |
 | **F7** | 已在 **workspace** 内 → **引用** `workspace/rel`，不复制 |
-| **F8** | **agent 内部**（`evolve/`、`agent-core/`、`docs/` 等非 workspace）→ **硬拒** |
+| **F8** | **agent 内部**（`evolve/`、`agent-core/`、`docs/` 等非 workspace）→ **硬拒**（拖放策略；WRITE-SCOPE 放开的是工具写，不是拖放落点） |
 | **F9** | 允许 **纯附件** 发送（无文字时注入默认句） |
-| **F10** | 计划门 **不挡** 用户拖入 `_incoming/`（用户自备参考代码）；**挡** 助手写 `src/`（既有 P10） |
+| **F10** | 计划门 **不挡** 用户拖入 `_incoming/`；**挡** 助手写 `src/`（既有 P10） |
 | **F11** | 历史回放：`user` 消息含 `[附件]` 块（服务端拼文本） |
 
----
+**实现锚点**：`desktop/src/file-drop.ts` · `composer-attachments.ts` · `shells/unified/index.ts` · `shells/pet/`。
 
 ## 1. 动机
 
 桌面 Agent 的典型动作是「把本地代码/文档丢给助手」。纯打字描述路径摩擦大；复制进 `workspace/` 再说明也繁琐。
 
-拖拽应成为 **project 壳**（做产物）的一等输入方式，与 grow 壳「养 agent」的通用拖放共用协议、分落点策略。
+拖拽应成为 **project 视角**（做产物）的一等输入方式，与非项目会话的通用拖放共用协议、分落点策略。
 
 ---
 
@@ -107,7 +107,7 @@
 
 - preload 暴露 `getPathForFile(file)`（`electron.webUtils`）。
 - `dragover` / `drop` 在 composer；`preventDefault()`。
-- pet 壳拖放：**defer**（T-1208）；范围草案见 [PET-SHELL.md](./PET-SHELL.md) §3.4。
+- pet 壳拖放：**done**（与 unified 共用 `file-drop.ts`）。
 
 ---
 
@@ -119,7 +119,7 @@
 | `agent-core/server.py` | 路由 `file.*`、扩展 `user.message` |
 | `desktop/src/file-drop.ts` | drag 监听、chips、WS |
 | `desktop/electron/preload.ts` | `getPathForFile` |
-| `desktop/src/shells/project/index.ts` | M0 挂载 |
+| `desktop/src/shells/unified/index.ts` | 挂载点（+ pet） |
 
 ---
 

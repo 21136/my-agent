@@ -1,4 +1,4 @@
-"""dedupe_by_name — report duplicate filenames under workspace (P2 workflow)."""
+"""dedupe_by_name — report duplicate filenames under agent root (P2 workflow)."""
 
 from __future__ import annotations
 
@@ -64,18 +64,18 @@ def run_dedupe(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = bool(payload.get("dry_run", False))
 
     try:
-        root = paths.resolve_under_workspace(path_arg, must_exist=True)
+        root = paths.resolve_under_agent(path_arg, must_exist=True)
     except PathOutOfBoundsError as exc:
         return {"ok": False, "error": str(exc)}
     except (TypeError, ValueError, FileNotFoundError) as exc:
         return {"ok": False, "error": str(exc)}
 
     if not root.is_dir():
-        return {"ok": False, "error": f"not a directory: {paths.to_workspace_relative(root)}"}
+        return {"ok": False, "error": f"not a directory: {paths.to_agent_relative(root)}"}
 
     by_name: dict[str, list[str]] = defaultdict(list)
     for file_path in _iter_files(root, recursive=recursive, include_hidden=include_hidden):
-        by_name[file_path.name].append(paths.to_workspace_relative(file_path))
+        by_name[file_path.name].append(paths.to_agent_relative(file_path))
 
     duplicates = [
         {"name": name, "paths": sorted(paths_list)}
@@ -85,7 +85,7 @@ def run_dedupe(payload: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "ok": True,
-        "source_dir": paths.to_workspace_relative(root),
+        "source_dir": paths.to_agent_relative(root),
         "duplicate_groups": len(duplicates),
         "duplicates": duplicates,
     }
@@ -130,7 +130,7 @@ def _demo() -> None:
     nested.mkdir(parents=True)
     (nested / "dup.txt").write_text("b", encoding="utf-8")
     (nested / "unique.txt").write_text("c", encoding="utf-8")
-    rel = paths.to_workspace_relative(demo_dir)
+    rel = paths.to_agent_relative(demo_dir)
 
     report = run(
         {"tool_name": "dedupe_by_name", "arguments": {"path": rel}, "dry_run": False},

@@ -1,8 +1,8 @@
 # 伴侶壳 · 桌宠（pet）
 
-> 版本 **0.2.1** · 2026-07-18  
-> **状态**：`implemented`（M0 + **M1 done** · 2026-07-13；**DOC-01** pet→daily 映射 §1.3）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §3.3.6 · [DAILY-SHELL.md](./DAILY-SHELL.md) · [TURN-FEEDBACK.md](./TURN-FEEDBACK.md) · [FILES-DROP.md](./FILES-DROP.md) · [TASKS.md](./TASKS.md)
+> 版本 **0.2.2** · 2026-07-30  
+> **状态**：`implemented`（M0 + M1）；工作台 = **`shells/unified/`**（不再是 grow/daily/project 三壳）  
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [FILES-DROP.md](./FILES-DROP.md) · [TASKS.md](./TASKS.md)
 
 ---
 
@@ -12,21 +12,21 @@
 
 | ID | 决议 |
 |----|------|
-| **P0** | 桌宠是 **默认入口**；重活进 **工作台**（grow / daily / project 全窗） |
-| **P1** | 桌宠 **UI 壳** = `pet`；**后端会话** = `daily`（`shell_switch` · `shell_sessions.daily`） |
+| **P0** | 桌宠是 **默认入口**；重活进 **工作台**（unified 全窗） |
+| **P1** | 桌宠 **UI 壳** = `pet`；**后端会话线** 仍可映射 `daily`（`shell_sessions.daily`；兼容历史） |
 | **P2** | 桌宠与工作台 **WS 互斥**（`session:control` suspend / resume） |
 | **P3** | busy 仅 **光球 mood**（idle / listening / busy / nudge）；**不**全窗 `is-agent-busy` 染色 |
 | **P4** | `confirm.request` 时气泡 **自动展开**；确认卡在气泡内 |
 | **P5** | 关窗 = **缩托盘**；托盘退出才杀 sidecar |
-| **P6** | 聊天区默认只展示 **最近 6 轮**（UI 裁剪；服务端 daily 会话仍全量） |
+| **P6** | 聊天区默认只展示 **最近 6 轮**（UI 裁剪；服务端会话仍全量） |
 
 ### M1（2026-07-13 评审 · 已决）
 
 | ID | 决议 |
 |----|------|
-| **P7** | **重活接引**：**部分场景自动开工作台**；其余 notice + 一键（§3.1.1 A/B 档） |
-| **P8** | **拖放**：与 daily **完全同规则**（FILES-DROP F1–F11；落点 F5 `_drops/`） |
-| **P9** | **6 轮裁剪**：`recall` 期间 **临时多显示几轮**（§3.2.1） |
+| **P7** | **重活接引**：**部分场景自动开工作台**；其余 notice + 一键 |
+| **P8** | **拖放**：与 unified 非 project 视角同规则（FILES-DROP F5 `_drops/`） |
+| **P9** | **6 轮裁剪**：`recall` 期间 **临时多显示几轮** |
 | **P10** | **M1a 可拆开 ship**；推荐顺序 **i3 → i2 → i1**（或 i2+i3 打包、i1 单发） |
 | **P11** | **govern**：桌宠侧 **仅 B 档**（不自动开）；用户点「去工作台」时 **落 grow**，**永不**落 govern 占位壳 |
 | **P12** | **气泡视觉**：长期 **白底简洁** + 轻 accent；**不**搬 daily Amp 霓彩进气泡 |

@@ -36,9 +36,10 @@ TurnMode = Literal["ask", "agent"]
 DEFAULT_TURN_MODE: TurnMode = "agent"
 VALID_TURN_MODES = frozenset({"ask", "agent"})
 
-ShellId = Literal["grow", "daily", "govern", "project"]
-DEFAULT_ACTIVE_SHELL: ShellId = "daily"
-VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
+# Deprecated since shell consolidation (Phase 3). Kept for old session compatibility.
+ShellId = Literal["grow", "daily", "govern", "project", "unified"]
+DEFAULT_ACTIVE_SHELL: ShellId = "grow"
+VALID_SHELLS = frozenset({"grow", "daily", "govern", "project", "unified"})
 
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
@@ -56,6 +57,7 @@ class SessionMeta:
 
     topics: list[str] = field(default_factory=list)
     llm_model: str = ""
+    llm_model_override: bool = False
     updated_at: str = ""
     phase: SessionPhase = "S1"
     workspace_evolved_approved: bool = False
@@ -76,6 +78,7 @@ class SessionMeta:
         return {
             "topics": list(self.topics),
             "llm_model": self.llm_model,
+            "llm_model_override": self.llm_model_override,
             "updated_at": self.updated_at,
             "phase": self.phase,
             "workspace_evolved_approved": self.workspace_evolved_approved,
@@ -109,6 +112,8 @@ class SessionMeta:
         llm_model = payload.get("llm_model", "")
         if not isinstance(llm_model, str):
             llm_model = ""
+
+        llm_model_override = bool(payload.get("llm_model_override", False))
 
         updated_at = payload.get("updated_at", "")
         if not isinstance(updated_at, str):
@@ -146,6 +151,7 @@ class SessionMeta:
         return cls(
             topics=topics,
             llm_model=llm_model,
+            llm_model_override=llm_model_override,
             updated_at=updated_at,
             phase=phase,
             workspace_evolved_approved=bool(payload.get("workspace_evolved_approved", False)),
@@ -217,9 +223,23 @@ class Session:
     def set_topics(self, topics: list[str], *, phase: SessionPhase | None = None) -> None:
         cleaned = [topic.strip() for topic in topics if topic.strip()]
         self.meta.topics = cleaned
-        self.meta.llm_model = resolve_session_model(cleaned)
+        if not self.meta.llm_model_override:
+            self.meta.llm_model = resolve_session_model(cleaned)
         if phase is not None:
             self.meta.phase = phase
+
+    def set_llm_model(self, model: str, *, override: bool = True) -> str:
+        """Set session LLM model (deepseek-v4-flash / deepseek-v4-pro). Returns canonical id."""
+        from llm_client import normalize_session_model
+
+        canonical = normalize_session_model(model)
+        if canonical is None:
+            raise SessionError(
+                f"unsupported llm model: {model!r} (use deepseek-v4-flash or deepseek-v4-pro)"
+            )
+        self.meta.llm_model = canonical
+        self.meta.llm_model_override = override
+        return canonical
 
     def set_turn_mode(self, mode: TurnMode) -> None:
         self.meta.turn_mode = normalize_turn_mode(mode)
@@ -324,6 +344,9 @@ def turn_mode_label(mode: TurnMode) -> str:
 
 
 def session_banner_event(session: Session) -> dict[str, Any]:
+    from llm_client import llm_model_label, resolve_session_model
+
+    model = session.meta.llm_model or resolve_session_model(list(session.meta.topics))
     payload: dict[str, Any] = {
         "type": "session.banner",
         "session_id": session.conversation_id,
@@ -331,6 +354,9 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         "topics": list(session.meta.topics),
         "turn_mode": session.meta.turn_mode,
         "turn_mode_label": turn_mode_label(session.meta.turn_mode),
+        "llm_model": model,
+        "llm_model_label": llm_model_label(model),
+        "llm_model_override": bool(session.meta.llm_model_override),
         "phase": session.meta.phase,
         "active_shell": session.meta.active_shell,
     }
@@ -386,6 +412,144 @@ def list_session_ids(
         if (entry / META_FILENAME).is_file() or (entry / MESSAGES_FILENAME).is_file():
             ids.append(conversation_id)
     return sorted(ids)
+
+
+def _extract_user_messages(messages_path: Path) -> tuple[str, str, int]:
+    """Return (first_user_content, last_user_content, message_count) from a jsonl file.
+
+    Skips anchor / kernel / seed prefixes so title and preview are real user messages.
+    """
+    try:
+        text = messages_path.read_text(encoding="utf-8")
+    except OSError:
+        return "", "", 0
+
+    lines = [l for l in text.splitlines() if l.strip()]
+    msg_count = len(lines)
+    first_user = ""
+    last_user = ""
+
+    for line in lines:
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = str(msg.get("content", "")).strip()
+            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
+                first_user = content
+                break
+
+    for line in reversed(lines):
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = str(msg.get("content", "")).strip()
+            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
+                last_user = content
+                break
+
+    return first_user, last_user, msg_count
+
+
+def list_session_summaries(
+    paths: AgentPaths,
+    *,
+    limit: int = 50,
+    include_internal: bool = False,
+) -> list[dict[str, Any]]:
+    """Return recent session summaries for UX-020 / §7.6 dropdown.
+
+    Each entry: session_id, title, preview, updated_at, message_count, project_id.
+    - Unbound sessions: title = goal[:80] > first user message[:80] > conversation_id
+    - Project-bound: one row per project_id (newest / project_sessions mapping);
+      title = project_id
+    """
+    root = sessions_root(paths)
+    if not root.is_dir():
+        return []
+
+    preferred: dict[str, str] = {}
+    try:
+        from project_switch import read_project_sessions
+
+        preferred = read_project_sessions(paths)
+    except Exception:
+        preferred = {}
+
+    entries: list[dict[str, Any]] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        cid = entry.name
+        if not include_internal and is_internal_session_id(cid):
+            continue
+        if not ((entry / META_FILENAME).is_file() or (entry / MESSAGES_FILENAME).is_file()):
+            continue
+        goal = ""
+        updated_at = ""
+        project_id = ""
+        meta_path = entry / META_FILENAME
+        if meta_path.is_file():
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    updated_at = str(payload.get("updated_at", "") or "")
+                    raw_pid = payload.get("project_id", "")
+                    if isinstance(raw_pid, str):
+                        project_id = raw_pid.strip()
+            except (OSError, json.JSONDecodeError):
+                pass
+        goal_path = entry / GOAL_FILENAME
+        if goal_path.is_file():
+            try:
+                goal = goal_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                pass
+
+        first_user, last_user, msg_count = _extract_user_messages(entry / MESSAGES_FILENAME)
+        if project_id:
+            title = project_id
+        else:
+            title = goal[:80] if goal else (first_user[:80] if first_user else cid)
+        preview = last_user[:120] if last_user else ""
+        entries.append({
+            "session_id": cid,
+            "title": title,
+            "preview": preview,
+            "updated_at": updated_at,
+            "message_count": msg_count,
+            "project_id": project_id,
+        })
+
+    # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at
+    by_project: dict[str, dict[str, Any]] = {}
+    unbound: list[dict[str, Any]] = []
+    for item in entries:
+        pid = str(item.get("project_id") or "").strip()
+        if not pid:
+            unbound.append(item)
+            continue
+        mapped = preferred.get(pid)
+        if mapped and item["session_id"] == mapped:
+            by_project[pid] = item
+            continue
+        if pid in by_project and by_project[pid]["session_id"] == mapped:
+            continue
+        existing = by_project.get(pid)
+        if existing is None:
+            by_project[pid] = item
+        elif mapped and existing["session_id"] != mapped and item["session_id"] == mapped:
+            by_project[pid] = item
+        elif not mapped or existing["session_id"] != mapped:
+            if str(item.get("updated_at") or "") > str(existing.get("updated_at") or ""):
+                by_project[pid] = item
+
+    merged = unbound + list(by_project.values())
+    merged.sort(key=lambda e: e["updated_at"], reverse=True)
+    return merged[:limit]
 
 
 def find_latest_session_id(
@@ -451,11 +615,25 @@ def create_new(
     if session_dir.exists():
         raise SessionError(f"session already exists: {cid}")
 
+    # UX-016: carry over workspace_evolved_approved from latest session
+    workspace_approved = False
+    latest_id = find_latest_session_id(paths, include_internal=True)
+    if latest_id is not None:
+        latest_meta_path = sessions_root(paths) / latest_id / META_FILENAME
+        if latest_meta_path.is_file():
+            try:
+                latest_payload = json.loads(latest_meta_path.read_text(encoding="utf-8"))
+                if isinstance(latest_payload, dict):
+                    workspace_approved = bool(latest_payload.get("workspace_evolved_approved", False))
+            except (OSError, json.JSONDecodeError):
+                pass
+
     meta = SessionMeta(
         topics=[],
         llm_model=resolve_session_model([]),
         updated_at=utc_now_iso(),
         phase="S4",
+        workspace_evolved_approved=workspace_approved,
     )
     session = Session(
         conversation_id=cid,
@@ -499,7 +677,30 @@ def build_anchor_message(session: Session) -> dict[str, str]:
     return {"role": "user", "content": content}
 
 
-_UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]")
+SEED_PREFIX = "[上下文衔接]"
+
+
+def build_seed_message(
+    *,
+    previous_session_id: str,
+    previous_goal: str,
+    reason: str,
+    hint: str = "",
+) -> dict[str, str]:
+    """Injected into a new session so the agent remembers why it was created."""
+    parts = [
+        f"{SEED_PREFIX}",
+        f"延续自会话: {previous_session_id}",
+    ]
+    if reason:
+        parts.append(f"切换原因: {reason}")
+    parts.append(f"上一会话目标: {previous_goal.strip() or '(unset)'}")
+    if hint:
+        parts.append(f"提示: {hint}")
+    return {"role": "user", "content": "\n".join(parts)}
+
+
+_UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]", SEED_PREFIX)
 
 
 def build_session_chat_history(session: Session) -> list[dict[str, str]]:

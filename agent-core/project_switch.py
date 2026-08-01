@@ -13,10 +13,22 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths, read_agent_state_payload, write_agent_state_payload
 from project_mode import ProjectModeError, normalize_project_id, project_dir
-from session import Session, create_new, sessions_root, write_last_conversation_id
+from session import Session, build_seed_message, create_new, sessions_root, write_last_conversation_id
 
 PROJECT_SESSIONS_KEY = "project_sessions"
 SwitchAction = Literal["noop", "bind_current", "load_session", "new_session"]
+
+
+def _inject_project_seed(fresh: Session, previous: Session, project_id: str) -> None:
+    """Write a seed message when project switch creates a new session."""
+    seed = build_seed_message(
+        previous_session_id=previous.conversation_id,
+        previous_goal=previous.goal.strip(),
+        reason=f"切换到项目 {project_id}",
+        hint=f"当前项目 workspace/{project_id}，TASKS.md 包含任务列表。",
+    )
+    fresh.append_message(seed, persist=False)
+    fresh.save()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +173,12 @@ def execute_project_switch(
     plan: ProjectSwitchPlan,
 ) -> tuple[Session, str]:
     if plan.action == "noop":
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, plan.project_id)
+        except Exception:
+            pass
         return session, plan.message
 
     if plan.action == "bind_current":
@@ -168,6 +186,12 @@ def execute_project_switch(
         session.save()
         record_project_session(paths, plan.project_id, session.conversation_id)
         write_last_conversation_id(paths, session.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, plan.project_id)
+        except Exception:
+            pass
         return session, plan.message
 
     if plan.action == "load_session":
@@ -180,14 +204,27 @@ def execute_project_switch(
         loaded.save()
         record_project_session(paths, plan.project_id, loaded.conversation_id)
         write_last_conversation_id(paths, loaded.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, plan.project_id)
+        except Exception:
+            pass
         return loaded, plan.message
 
     if plan.action == "new_session":
         fresh = create_new(paths)
+        _inject_project_seed(fresh, session, plan.project_id)
         _bind(fresh, plan.project_id, plan_status="draft")
         fresh.save()
         record_project_session(paths, plan.project_id, fresh.conversation_id)
         write_last_conversation_id(paths, fresh.conversation_id)
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, plan.project_id)
+        except Exception:
+            pass
         return fresh, plan.message
 
     raise ProjectModeError(f"unknown switch action: {plan.action}")

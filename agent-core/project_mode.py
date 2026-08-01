@@ -27,6 +27,8 @@ _TEMPLATE_DIRNAME = "_template"
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
+_TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
+_TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
 _ACCEPT_CMD_RE = re.compile(r"命令[：:]\s*`([^`]+)`", re.IGNORECASE)
 _ACCEPT_EXIT_RE = re.compile(r"退出码\s*(\d+)", re.IGNORECASE)
 _PYTHON_SCRIPT_RE = re.compile(r"python(?:3)?\s+([^\s`]+\.py)", re.IGNORECASE)
@@ -124,6 +126,12 @@ def create_project(paths: AgentPaths, project_id: str) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     for name in PROJECT_ARTIFACTS:
         shutil.copy2(src / name, dest / name)
+    try:
+        from project_env import ensure_project_env
+
+        ensure_project_env(paths, pid)
+    except Exception:
+        pass
     return dest
 
 
@@ -249,6 +257,17 @@ def first_open_task_line(tasks_text: str) -> str | None:
         if _TASK_OPEN_RE.match(line):
             return line.strip()
     return None
+
+
+def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
+    """Return (line_idx, body, tid) for the first open checkbox, else (None, None, None)."""
+    for i, line in enumerate(tasks_text.splitlines()):
+        if not _TASK_OPEN_RE.match(line):
+            continue
+        m = _TASK_CHECKBOX_RE.match(line)
+        body = m.group(1).strip() if m else line.strip()
+        return i, body, extract_task_id(body)
+    return None, None, None
 
 
 def task_stop_block_reason(
@@ -382,6 +401,7 @@ def format_project_overlay(
     task_stats: TaskStats | None = None,
     continue_turn: bool = False,
     next_open_task: str | None = None,
+    armed_task_id: str | None = None,
 ) -> str:
     lines = [
         "[项目模式 · project]",
@@ -394,18 +414,29 @@ def format_project_overlay(
             "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
         )
     else:
-        lines.append("plan_gate: 已确认 — 可写项目内代码；每步更新 TASKS.md")
+        lines.append(
+            "plan_gate: 已确认 — 可写项目内代码；"
+            "用 report_progress 勾选，禁止直写 TASKS.md"
+        )
         lines.append(
             "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
         )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
+    if plan_status == "confirmed":
+        if next_open_task:
+            lines.append(f"current_task: {next_open_task}")
+        armed = (armed_task_id or "").strip() or extract_task_id(next_open_task or "")
+        if armed:
+            lines.append(f"armed_task_id: {armed}")
+            lines.append(
+                "report_progress: 勾选须本回合对口工具成功证据；"
+                "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
+            )
     if continue_turn and plan_status == "confirmed":
         lines.append(
             "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
         )
-        if next_open_task:
-            lines.append(f"current_task: {next_open_task}")
     return "\n".join(lines)
 
 
@@ -568,6 +599,140 @@ def sync_plan_dirty_if_structure_changed(session: object, paths: AgentPaths) -> 
         meta.project_plan_status = "plan_dirty"
         return True
     return False
+
+
+def normalize_task_id(raw: str | None) -> str | None:
+    """Return canonical `T-011` from `T-011` / `t-11` / bare digits, else None."""
+    if not raw or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    m = _TASK_ID_RE.search(text)
+    if m:
+        return f"T-{m.group(1)}"
+    if text.isdigit():
+        return f"T-{text}"
+    return None
+
+
+def extract_task_id(*texts: str | None) -> str | None:
+    """First `T-NNN` token across texts, preserving original digit width (T-011)."""
+    for text in texts:
+        if not text:
+            continue
+        m = _TASK_ID_RE.search(str(text))
+        if m:
+            return f"T-{m.group(1)}"
+    return None
+
+
+def find_task_line_by_id(
+    paths: AgentPaths,
+    project_id: str,
+    task_id: str,
+    *,
+    prefer_open: bool = True,
+) -> int | None:
+    """0-indexed TASKS.md line whose checkbox text contains task_id (e.g. T-011)."""
+    tid = extract_task_id(task_id) or normalize_task_id(task_id)
+    if not tid:
+        return None
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        return None
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    open_hit: int | None = None
+    any_hit: int | None = None
+    token_re = re.compile(rf"\b{re.escape(tid)}\b", re.IGNORECASE)
+    for i, raw in enumerate(file_lines):
+        m = _TASK_CHECKBOX_RE.match(raw)
+        if not m:
+            continue
+        body = m.group(1)
+        if not token_re.search(body):
+            continue
+        if any_hit is None:
+            any_hit = i
+        if prefer_open and _TASK_OPEN_RE.match(raw):
+            open_hit = i
+            break
+    if prefer_open and open_hit is not None:
+        return open_hit
+    return any_hit
+
+
+def resolve_progress_task_line(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    task_line: int | None = None,
+    task_id: str | None = None,
+    summary: str = "",
+    task_text: str | None = None,
+) -> tuple[int | None, str]:
+    """Resolve which TASKS.md line to toggle for report_progress.
+
+    Prefer stable ``T-NNN`` / ``task_text`` over raw ``task_line`` (Plan Partner
+    inserts shift line numbers; LLMs also pass stale indices after re-read).
+    When identity is known, never toggle a different line because of task_line.
+    """
+    tid = extract_task_id(task_id, summary, task_text)
+    id_line = find_task_line_by_id(paths, project_id, tid) if tid else None
+
+    line_text = ""
+    if isinstance(task_line, int) and task_line >= 0:
+        tasks_path = project_dir(paths, project_id) / "TASKS.md"
+        if tasks_path.is_file():
+            file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+            if 0 <= task_line < len(file_lines):
+                line_text = file_lines[task_line]
+
+    if id_line is not None:
+        if isinstance(task_line, int) and task_line >= 0 and task_line != id_line:
+            return (
+                id_line,
+                f"resolved {tid} at line {id_line} (ignored stale task_line={task_line})",
+            )
+        return id_line, f"resolved {tid} at line {id_line}"
+
+    if task_text and str(task_text).strip():
+        needle = str(task_text).strip()
+        tasks_path = project_dir(paths, project_id) / "TASKS.md"
+        if tasks_path.is_file():
+            file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+            exact_hit: int | None = None
+            contains_hit: int | None = None
+            for i, raw in enumerate(file_lines):
+                if not _TASK_OPEN_RE.match(raw):
+                    continue
+                m = _TASK_CHECKBOX_RE.match(raw)
+                if not m:
+                    continue
+                body = m.group(1).strip()
+                if body.lower() == needle.lower():
+                    exact_hit = i
+                    break
+                if contains_hit is None and needle.lower() in body.lower():
+                    contains_hit = i
+            hit = exact_hit if exact_hit is not None else contains_hit
+            if hit is not None:
+                if isinstance(task_line, int) and task_line >= 0 and task_line != hit:
+                    return (
+                        hit,
+                        f"resolved by task_text at line {hit} "
+                        f"(ignored stale task_line={task_line})",
+                    )
+                return hit, f"resolved by task_text at line {hit}"
+
+    if isinstance(task_line, int) and task_line >= 0:
+        if tid and line_text and not re.search(rf"\b{re.escape(tid)}\b", line_text, re.I):
+            return (
+                None,
+                f"refused: task_line={task_line} does not contain {tid} "
+                f"and no matching id line found",
+            )
+        return task_line, ""
+
+    return None, "no task_line/task_id/task_text to resolve"
 
 
 def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) -> dict[str, Any]:
@@ -795,37 +960,103 @@ def create_project_doc(paths: AgentPaths, project_id: str, doc_path: str, conten
     }
 
 
-def add_task_to_tasks_md(paths: AgentPaths, project_id: str, phase_title: str, description: str) -> dict[str, Any]:
-    """Add a new task line under the given Phase in TASKS.md."""
+def iter_phase_headers(file_lines: list[str]) -> list[tuple[int, str]]:
+    """Return [(line_index, phase_title), ...] for ``## `` headers."""
+    out: list[tuple[int, str]] = []
+    for i, line in enumerate(file_lines):
+        if line.strip().startswith("## "):
+            out.append((i, line.strip().lstrip("#").strip()))
+    return out
+
+
+def find_phase_title(file_lines: list[str], needle: str) -> str | None:
+    """Match phase by substring (case-insensitive); None if no hit."""
+    if not needle or not str(needle).strip():
+        return None
+    key = str(needle).strip().lower()
+    for _, title in iter_phase_headers(file_lines):
+        if key in title.lower() or title.lower() in key:
+            return title
+    return None
+
+
+def phase_open_and_done_counts(file_lines: list[str], phase_title: str) -> tuple[int, int]:
+    """Count open / done checkboxes under a phase header."""
+    headers = iter_phase_headers(file_lines)
+    start = -1
+    end = len(file_lines)
+    for idx, (line_i, title) in enumerate(headers):
+        if title.lower() == phase_title.lower() or phase_title.lower() in title.lower():
+            start = line_i + 1
+            if idx + 1 < len(headers):
+                end = headers[idx + 1][0]
+            break
+    if start < 0:
+        return 0, 0
+    open_n = 0
+    done_n = 0
+    for j in range(start, end):
+        if _TASK_OPEN_RE.match(file_lines[j]):
+            open_n += 1
+        elif _TASK_DONE_RE.match(file_lines[j]):
+            done_n += 1
+    return open_n, done_n
+
+
+def active_phase_title_from_lines(file_lines: list[str]) -> str | None:
+    """Phase that contains the first open checkbox (current work frontier)."""
+    current: str | None = None
+    for line in file_lines:
+        if line.strip().startswith("## "):
+            current = line.strip().lstrip("#").strip()
+        elif _TASK_OPEN_RE.match(line) and current:
+            return current
+    return None
+
+
+def add_task_to_tasks_md(
+    paths: AgentPaths,
+    project_id: str,
+    phase_title: str,
+    description: str,
+) -> dict[str, Any]:
+    """Add a new task under the Phase chosen by the caller (Plan Agent LLM).
+
+    Trusts ``phase_title``: match existing ``## `` header, or create a new section
+    at EOF. Never silently remap into Phase 1.
+    """
     tasks_path = project_dir(paths, project_id) / "TASKS.md"
     if not tasks_path.is_file():
         raise ProjectModeError(f"TASKS.md not found for project {project_id}")
 
     file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    matched = find_phase_title(file_lines, phase_title) if phase_title else None
+    resolved = matched or (phase_title.strip() if isinstance(phase_title, str) and phase_title.strip() else "")
     insert_idx = -1
 
-    for i, line in enumerate(file_lines):
-        if line.strip().startswith("## ") and phase_title.lower() in line.lower():
-            # Find the last task line under this phase
-            j = i + 1
-            while j < len(file_lines):
-                if file_lines[j].strip().startswith("## "):
-                    break
+    if matched:
+        headers = iter_phase_headers(file_lines)
+        for idx, (line_i, title) in enumerate(headers):
+            if title != matched:
+                continue
+            phase_end = headers[idx + 1][0] if idx + 1 < len(headers) else len(file_lines)
+            last_task = -1
+            for j in range(line_i + 1, phase_end):
                 if _TASK_OPEN_RE.match(file_lines[j]) or _TASK_DONE_RE.match(file_lines[j]):
-                    insert_idx = j
-                j += 1
-            if insert_idx >= 0:
-                insert_idx += 1
+                    last_task = j
+            if last_task >= 0:
+                insert_idx = last_task + 1
             else:
-                # No tasks yet, insert after phase header
-                insert_idx = i + 1
-                # Skip blank lines after header
+                insert_idx = line_i + 1
                 while insert_idx < len(file_lines) and not file_lines[insert_idx].strip():
                     insert_idx += 1
             break
-
-    if insert_idx < 0:
-        # Phase not found, append to end
+    elif resolved:
+        if file_lines and file_lines[-1].strip():
+            file_lines.append("")
+        file_lines.append(f"## {resolved}")
+        insert_idx = len(file_lines)
+    else:
         insert_idx = len(file_lines)
         if file_lines and file_lines[-1].strip():
             file_lines.append("")
@@ -842,6 +1073,77 @@ def add_task_to_tasks_md(paths: AgentPaths, project_id: str, phase_title: str, d
         "type": "project.task.add.done",
         "line": insert_idx,
         "description": description,
+        "phase": resolved,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
+def move_task_to_phase(
+    paths: AgentPaths,
+    project_id: str,
+    line: int,
+    phase_title: str,
+) -> dict[str, Any]:
+    """Move an existing checkbox line to another Phase (preserves [ ] / [x] text)."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range")
+    raw = file_lines[line]
+    if not (_TASK_OPEN_RE.match(raw) or _TASK_DONE_RE.match(raw)):
+        raise ProjectModeError(f"line {line} is not a task checkbox")
+
+    task_line = file_lines.pop(line)
+    matched = find_phase_title(file_lines, phase_title) if phase_title else None
+    resolved = matched or (phase_title.strip() if phase_title and str(phase_title).strip() else "")
+    if not resolved:
+        raise ProjectModeError("move_task_to_phase requires phase_title")
+
+    insert_idx = -1
+    if matched:
+        headers = iter_phase_headers(file_lines)
+        for idx, (line_i, title) in enumerate(headers):
+            if title != matched:
+                continue
+            phase_end = headers[idx + 1][0] if idx + 1 < len(headers) else len(file_lines)
+            last_task = -1
+            for j in range(line_i + 1, phase_end):
+                if _TASK_OPEN_RE.match(file_lines[j]) or _TASK_DONE_RE.match(file_lines[j]):
+                    last_task = j
+            if last_task >= 0:
+                insert_idx = last_task + 1
+            else:
+                insert_idx = line_i + 1
+                while insert_idx < len(file_lines) and not file_lines[insert_idx].strip():
+                    insert_idx += 1
+            break
+    else:
+        if file_lines and file_lines[-1].strip():
+            file_lines.append("")
+        file_lines.append(f"## {resolved}")
+        insert_idx = len(file_lines)
+
+    if insert_idx < 0:
+        insert_idx = len(file_lines)
+    file_lines.insert(insert_idx, task_line)
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+
+    m = re.match(r"^\s*-\s*\[[ xX]\]\s+(.*)", task_line)
+    desc = m.group(1).strip() if m else task_line.strip()
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.move.done",
+        "from_line": line,
+        "line": insert_idx,
+        "phase": resolved,
+        "description": desc,
         "tasks_done": stats.done,
         "tasks_total": stats.total,
     }

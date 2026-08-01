@@ -1,8 +1,9 @@
 # 上下文换线设计（CONTEXT-SWITCH）
 
-> 版本 **0.3.0** · 2026-07-19  
+> 版本 **0.3.1** · 2026-07-30  
 > **状态**：**M0+M1+M2 已实现**（T-1902～T-1907）  
-> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) P7/P14/P16 · [DESKTOP.md](./DESKTOP.md) §3.9 · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [BUGS.md](./BUGS.md) BUG-020 · 触发案例：口语「新项目 …」仍挂旧项目会话
+> **壳合并后**：前端不再 DOM 切壳；「跨壳」语义退化为 **会话线标签 / 项目绑定 / 新会话**。`ui.route` 硬切已退役；`active_shell` 仍可出现在 meta。  
+> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [DESKTOP.md](./DESKTOP.md) §0 · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · BUG-020
 
 ---
 
@@ -10,15 +11,15 @@
 
 | ID | 决议 |
 |----|------|
-| **X1** | **换线意图**（换壳 / 换项目 / 新会话 / 新建项目）与 **线内干活** 分离；前者改会话所有权，后者不改 |
+| **X1** | **换线意图**（换会话线 / 换项目 / 新会话 / 新建项目）与 **线内干活** 分离；前者改会话所有权，后者不改 |
 | **X2** | **识别优先由 LLM**（自然语言）；系统提供结构化提案通道，不靠堆正则覆盖口语 |
 | **X3** | **换线必须用户确认或拒绝**；无确认 = 不改 `shell_sessions` / `project_sessions` / `active_shell` 绑定 |
-| **X4** | **执行只走内核既有 API**（`项目 新建/切换`、`shell.switch`、`新会话` 等）；禁止 LLM 用 `write_text`「假装」立项或换线 |
-| **X5** | **显式元命令**（`项目 新建 <id>`、`新会话`、顶栏切壳）可 **免确认或轻确认**；口语路径一律走确认卡 |
+| **X4** | **执行只走内核既有 API**（`项目 新建/切换`、会话切换、`新会话` 等）；禁止 LLM 用 `write_text`「假装」立项或换线 |
+| **X5** | **显式元命令**（`项目 新建 <id>`、`新会话`、顶栏新会话按钮）可 **免确认或轻确认**；口语路径一律走确认卡 |
 | **X6** | 确认前 **禁止** 对「目标新上下文」写盘；提案回合默认 **只提案、不写线外路径** |
 | **X7** | UI / 队列 **复用** confirm 管线心智（`request_id` · 超时 · 旧卡作废）；事件可独立命名以免与 tool confirm 混淆 |
-| **X8** | `activity_router` 的 `ui.route` **仍可**软推壳；**真换会话所有权** 不经过 soft persist（延续 BUG-020） |
-| **X9** | 分期：M0 项目立项/切换 → M1 跨壳换线 → M2 同壳「新话题/新会话」建议 |
+| **X8** | `activity_router` **可**推荐主题；**真换会话所有权** 不经过 soft persist（延续 BUG-020）。前端 **不再** 因 `ui.route` 硬切 DOM |
+| **X9** | 分期：M0 项目立项/切换 → M1 跨会话线换线 → M2 「新话题/新会话」建议 |
 
 ---
 

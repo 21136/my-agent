@@ -1,53 +1,19 @@
-import type { ServerEvent, ShellId } from "../../api/ws";
+import type { ServerEvent } from "../../api/ws";
 
-export type PetRouteEvent = Extract<ServerEvent, { type: "ui.route" }>;
+/** @deprecated — ui.route removed; stub kept for backward compat during Phase 3→4 cleanup */
 export type RouteTier = "auto" | "prompt" | "ignore";
 
-const AUTO_REASON_MARKERS = [
-  "proposal 待处理",
-  "计划待确认",
-  "养 agent",
-  "evolved",
-  "造 / 改 evolved",
-  "workspace 项目",
-  "workspace 开发",
-  "只读探索 evolve",
-] as const;
-
-export function classifyPetRoute(event: PetRouteEvent): RouteTier {
-  if (!event.auto || event.shell === "daily") {
-    return "ignore";
-  }
-  if (event.shell === "govern") {
-    return "prompt";
-  }
-  if (event.shell === "grow" || event.shell === "project") {
-    return isAutoOpenReason(event.reason) ? "auto" : "prompt";
-  }
-  return "ignore";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function classifyPetRoute(event: any): RouteTier {
+  if (!event || !event.auto || event.shell === "daily") return "ignore";
+  return "prompt";
 }
 
-function isAutoOpenReason(reason: string): boolean {
-  return AUTO_REASON_MARKERS.some((marker) => reason.includes(marker));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function formatRouteNotice(event: any, _tier: RouteTier): string {
+  return `在工作台：${event?.reason ?? ""}`;
 }
 
-export function resolveWorkbenchShell(shell: ShellId): { shell: ShellId; mappedNotice?: string } {
-  if (shell === "govern") {
-    return {
-      shell: "grow",
-      mappedNotice: "治理壳未就绪，已在生长壳打开",
-    };
-  }
+export function resolveWorkbenchShell(shell: string): { shell: string; mappedNotice?: string } {
   return { shell };
-}
-
-export function formatRouteNotice(event: PetRouteEvent, tier: RouteTier): string {
-  const topicNote =
-    event.topics_added && event.topics_added.length
-      ? ` · 已加主题 ${event.topics_added.join(", ")}`
-      : "";
-  if (tier === "auto") {
-    return `已切到工作台：${event.reason}${topicNote}`;
-  }
-  return `更适合在工作台：${event.reason}${topicNote}`;
 }

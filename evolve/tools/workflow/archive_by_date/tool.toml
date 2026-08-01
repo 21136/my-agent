@@ -1,6 +1,6 @@
 [tool]
 name = "archive_by_date"
-description = "将 workspace 目录顶层文件按修改日期移入 YYYY-MM/ 子文件夹"
+description = "将目录顶层文件按修改日期移入 YYYY-MM/ 子文件夹；path 相对 agent root"
 version = "1.0.0"
 status = "active"
 topics = ["workflow"]
@@ -14,7 +14,7 @@ type = "object"
 required = ["path"]
 [schema.input.properties.path]
 type = "string"
-description = "相对 workspace 的目录路径"
+description = "相对 agent root 的目录路径"
 [schema.input.properties.date_field]
 type = "string"
 enum = ["mtime", "ctime"]
@@ -37,5 +37,5 @@ moved = { type = "array" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

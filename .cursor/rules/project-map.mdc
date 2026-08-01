@@ -5,41 +5,29 @@ alwaysApply: true
 
 # my-agent 项目地图
 
-**新会话先读** [`docs/MAP.md`](../../docs/MAP.md)（含 **§2.1 解冻说明**）与 [`docs/TASKS.md`](../../docs/TASKS.md)。稳定化：[STABILIZATION.md](../../docs/STABILIZATION.md) **v1.1.0 · 已解冻**。
+**新会话先读** [`docs/MAP.md`](../../docs/MAP.md)（含 **§2.1**）与 [`docs/TASKS.md`](../../docs/TASKS.md)。稳定化：[STABILIZATION.md](../../docs/STABILIZATION.md) **v1.1.0 · 已解冻**。
 
-## 当前代码状态（2026-07-18）
+## 当前代码状态（2026-07-31）
 
-- **Phase 18 稳定化**：**done · 已解冻**（T-1890-01～10 全 done；[STABILIZATION.md](../../docs/STABILIZATION.md) v1.1.0）。
-- **冻结 / 解冻（T-1890-10）**：
-  - **已解冻** — 可开新功能 Phase。
-  - **准入**：新 Phase 必须走 [DOC-04](../../docs/TASKS.md) / STABILIZATION §9.3（§3 矩阵行 + 回归 S-/IT- ID）；缺省驳回。
-  - **放行后债**：[stabilization-backlog.md](../../docs/stabilization-backlog.md) — STD-001 → **BUG-020 fixed**；M2-I（T-1830）仍 defer。
-  - 详情见 [`docs/MAP.md`](../../docs/MAP.md) **§2.1**。
-- **Phase 19**：**done** — 换线确认门（项目 / 跨壳 / 同壳新会话）；[CONTEXT-SWITCH.md](../../docs/CONTEXT-SWITCH.md) v0.3.0；T-1902～T-1907。
-- **Phase 20**：**M0+M1 done** — 项目 Task 一停门（prompt · 关 auto-continue · 硬门 · `task_paused`）；[TASK-STOP.md](../../docs/TASK-STOP.md) v0.2.0；T-2001～T-2007；M2=T-2008 defer。
-- **Phase 1～17 done**（Phase 9：Electron 桌面壳 grow + **daily Amp** + **pet M1**；见 `docs/DESKTOP.md`）。
-- **Phase 8** 用户扩展层：`data` + `csv_head`；见 `docs/EXTENSIONS.md`。
+- **Phase 1～21**：基线 **done**（18 解冻；19 换线门；20 一停门；21 进度闭环 / BUG-021）。
+- **Phase 22**：**done** — 可见计划搭档（侧栏建议卡 · 低风险 auto_fix · 禁主聊旁白）；[PROJECT-SIDEBAR.md](../../docs/PROJECT-SIDEBAR.md) §15.10 · [TASKS.md](../../docs/TASKS.md) T-2201～T-2207。
+- **Phase 23**：**done** — 工具目录 INDEX（取消主题硬锁 · 每轮只注入短目录 · Mp/Mq/Mr）；[TOOL-CATALOG.md](../../docs/TOOL-CATALOG.md) · T-2301～T-2361。
+- **壳合并**：**done（前端）** — 唯一聊天壳 `desktop/src/shells/unified/`（perspective: `default` | `project` | `night`）；`pet` 独立窗；旧 `grow`/`daily`/`project`/`govern` 目录已删。设计见 [SHELL-CONSOLIDATION.md](../../docs/SHELL-CONSOLIDATION.md)。后端仍用 `active_shell` / `shell_sessions` 作**会话线标签**（非 DOM 切壳）。
+- **WRITE-SCOPE**：**done** — `resolve_under_agent_for_write` + deny-list；evolved 写路径默认 agent root。[WRITE-SCOPE.md](../../docs/WRITE-SCOPE.md)。
+- **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
+- **UX-POLISH**：**进行中** — UX-001～020 多数完成；第五～七轮见 [UX-POLISH.md](../../docs/UX-POLISH.md)。
+- **Plan Agent / 侧栏**：**done（本地 ahead）** — 任务流 + Plan Agent 拥有 TASKS；可见搭档见 Phase 22。
+- **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。
-- 桌面壳联调缺陷见 [`docs/BUGS.md`](../../docs/BUGS.md)（BUG-001～019 **全 fixed**；确认管线见 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md)）。
-- **grow 运行态**（2026-07-12）：助手执行时 **全窗 + 壳体** 暖色渐变（含 app-chrome）；[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §3.2.3。
-- **桌面真退出**（2026-07-12）：关窗/托盘退出杀 sidecar；助手忙时确认；[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §4.4.2。
-- **T-905** 轮次反馈 / `recall` / **续接历史**（`session.history`）：[`docs/TURN-FEEDBACK.md`](../../docs/TURN-FEEDBACK.md)、[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §5.2.1。
-- **T-906** 活动路由 / 自动切壳 / 壳保活：[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §3.9 · §5.2.2。
-- **T-907** 模式驱动预算（**已实现**）：[`docs/MODE-BUDGET.md`](../../docs/MODE-BUDGET.md) — `turn_mode=agent` 统一宽预算，intent 仅管提示。
-- **Phase 10** 主机托管区：**done**（T-1001～T-1008）；设计 [HOST-SCOPE.md](../../docs/HOST-SCOPE.md) v0.2.9；桌面设置见 [DESKTOP.md](../../docs/DESKTOP.md) §3.10。
-- **Phase 11** 项目模式：**M3 done**（[PROJECT-MODE.md](../../docs/PROJECT-MODE.md) v0.2.1；侧栏项目列表 + **一会话一项目**切换续接）。
-- **`git_clone`**（T-1115）：https 浅克隆到 `workspace` 或 `evolve/tools`；见 [GIT-VENDOR.md](../../docs/GIT-VENDOR.md)。
-- **壳级会话隔离**（T-1116～T-1117）：grow/daily/project 三线独立；`project_catalog`；跨会话 `read_file` confirm。
-- **daily · Amp**（2026-07-12）：**T-904i1–i9 done**（亮底霓彩、四色 busy、胶囊输入、全窗染色）；[`docs/DAILY-SHELL.md`](../../docs/DAILY-SHELL.md) v0.3.1。
-- **pet · 伴侶**（2026-07-12）：**M0** 默认入口 — 右下角光球 + 窄聊天气泡；[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §3.3.6。
-- **Electron 无系统菜单**（2026-07-12）：Win/Linux 隐藏 File/Help；[`docs/DESKTOP.md`](../../docs/DESKTOP.md) §4.3。
-- **Phase 12 拖拽文件**（2026-07-12）：**M0 done** — project / grow / daily / pet 拖放；见 [FILES-DROP.md](../../docs/FILES-DROP.md)。
-- **Phase 14 确认管线**（2026-07-13）：**done** — BUG-008～013；见 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md) · T-1301～T-1308。
-- **Phase 15 回合控制**（2026-07-13）：**done** — Stop · `turn.cancel` · confirm 90s；BUG-014 **fixed**；见 [TURN-CONTROL.md](../../docs/TURN-CONTROL.md)。
-- **Phase 16 行为约束**（2026-07-13）：**M1 done** — 内联写入硬顶、`run_scaffold_demo`、tool.toml 后自动 demo、窄域拒调 `run_python demo`、guard 事件；见 [RUNTIME-GUARDS.md](../../docs/RUNTIME-GUARDS.md) v0.2.0 · T-1510～T-1516,T-1518,T-1519,T-1520。
-- **Phase 17 checker 监工**（2026-07-14）：**M1 done** — 手动 `验收`/`check` + grow 自动 checker（`CHECKER_AUTO_ON_SCAFFOLD`）、桌面验收 notice、完成声明门；见 [CHECKER-SUBAGENT.md](../../docs/CHECKER-SUBAGENT.md) v0.2.0 · T-1610～T-1614,T-1620～T-1623。
-- **联调修复**（2026-07-14）：BUG-015～019 — sidecar `AgentPaths` 导入、WS `ConnectionClosed`、guard `log_guard_event`、`project.switch` `session_memory_event` 导入；见 [BUGS.md](../../docs/BUGS.md)。
+- 缺陷索引：[BUGS.md](../../docs/BUGS.md)；确认管线 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md)。
+- 桌面协议与形态：[DESKTOP.md](../../docs/DESKTOP.md)（以 **unified** 为准；历史 grow/daily 章节标 deprecated）。
+- 项目模式：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md)（UI = unified project perspective）。
+- 拖放：[FILES-DROP.md](../../docs/FILES-DROP.md)（挂载点 = unified / pet）。
+- Host 托管区：[HOST-SCOPE.md](../../docs/HOST-SCOPE.md)。
+- `tool.toml` 字段：`allow_approve_all`（旧名 `workspace_only` 仍可读）；session `a` = 本会话 agent root 均允许。
+- **项目 ENV.md**（E1–E6 done）：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md) §0c；**E7–E10 构建硬约束 done**（§0d）。
+- **Phase 21 项目进度闭环**：**done** — [PROJECT-MODE.md](../../docs/PROJECT-MODE.md) §0e · [BUG-021](../../docs/bugs/2026-07-30-project-progress-deadlock.md) fixed。
 
 ## 导入约定
 

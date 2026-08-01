@@ -2,7 +2,7 @@
 name = "host_copy_move"
 description = "在托管区之间或同区内复制/移动；source/dest 须 host:<id>/…；每次 confirm"
 version = "1.0.0"
-status = "active"
+status = "archived"
 topics = ["common"]
 
 [entry]
@@ -33,5 +33,5 @@ type = "object"
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = false
+allow_approve_all = false
 timeout_sec = 120

@@ -75,12 +75,20 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
 
 
 def resolve_read_path(paths: AgentPaths, raw: str) -> Path:
-    """Resolve *raw* per TOOLS §7.1 (agent root, or workspace for bare names)."""
-    agent_path = paths.resolve_under_agent(raw, must_exist=False)
+    """Resolve *raw* per TOOLS §7.1 (agent root, workspace, or host: prefix)."""
+    stripped = raw.strip()
+
+    if stripped.lower().startswith("host:"):
+        from host_scope import load_host_scope, resolve_host_path
+
+        config = load_host_scope(paths)
+        resolved = resolve_host_path(stripped, config=config, must_exist=True)
+        return resolved.absolute
+
+    agent_path = paths.resolve_under_agent(stripped, must_exist=False)
     if agent_path.exists():
         return agent_path
 
-    stripped = raw.strip()
     if Path(stripped).is_absolute():
         raise FileNotFoundError(stripped)
 

@@ -89,6 +89,15 @@ def run(
 
     if allowed_tools is not None and tool.name not in allowed_tools:
         allowed = sorted(allowed_tools)
+        scope = tool.scope
+        topics = list(tool.topics) if tool.topics else []
+        if scope == "common" or "common" in topics:
+            hint = "此工具 scope=common 但未出现在 allowed 清单，可能 status 非 active 或 registry 未刷新"
+        else:
+            hint = (
+                f"工具 scope={scope}，当前会话缺少主题「{scope}」。"
+                f"可执行「加主题 {scope}」激活，或修改 tool.toml 的 topics 添加「common」后重试。"
+            )
         return _fail(
             f"工具「{tool.name}」不在本会话清单",
             ToolErrorCode.TOOL_NOT_FOUND,
@@ -97,7 +106,7 @@ def run(
             details={
                 "requested_tool": tool.name,
                 "available_tools": allowed,
-                "hint": "确认合适主题后重试，或改用清单内工具",
+                "hint": hint,
             },
         )
 
@@ -178,19 +187,42 @@ def execute_evolved_tool(
     proc.stdin.close()
     proc.stdin = None
 
+    # Read stdout / stderr in background threads to prevent Windows pipe deadlock.
+    # When evolved tool output exceeds ~4 KB, the OS pipe buffer fills, the child
+    # blocks on write, and a bare poll() loop never sees it exit (BUG-014).
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _read(stream, chunks):
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                return
+            chunks.append(chunk)
+
+    stdout_thread = threading.Thread(target=_read, args=(proc.stdout, stdout_chunks), daemon=True)
+    stderr_thread = threading.Thread(target=_read, args=(proc.stderr, stderr_chunks), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
     deadline = time.monotonic() + tool.policy.timeout_sec
     while proc.poll() is None:
         if cancel_event is not None and cancel_event.is_set():
             _terminate_subprocess(proc)
-            proc.communicate()
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
             raise _EvolvedCancelledError()
         if time.monotonic() >= deadline:
             _terminate_subprocess(proc)
-            proc.communicate()
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
             raise subprocess.TimeoutExpired(cmd=proc.args, timeout=tool.policy.timeout_sec)
         time.sleep(0.05)
 
-    stdout, stderr = proc.communicate()
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
 
     try:
         inner = _parse_stdout_json(stdout)
@@ -268,11 +300,28 @@ def run_scaffold_demo(
         cwd=str(tool.directory),
         env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8:replace"},
     )
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _drain(stream, chunks):
+        while True:
+            chunk = stream.read(8192)
+            if not chunk:
+                return
+            chunks.append(chunk)
+
+    st_reader = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks), daemon=True)
+    se_reader = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks), daemon=True)
+    st_reader.start()
+    se_reader.start()
+
     deadline = time.monotonic() + limit
     while proc.poll() is None:
         if cancel_event is not None and cancel_event.is_set():
             _terminate_subprocess(proc)
-            proc.communicate()
+            st_reader.join(timeout=2)
+            se_reader.join(timeout=2)
             return {
                 **base,
                 "ok": False,
@@ -283,7 +332,8 @@ def run_scaffold_demo(
             }
         if time.monotonic() >= deadline:
             _terminate_subprocess(proc)
-            proc.communicate()
+            st_reader.join(timeout=2)
+            se_reader.join(timeout=2)
             return {
                 **base,
                 "ok": False,
@@ -293,7 +343,10 @@ def run_scaffold_demo(
             }
         time.sleep(0.05)
 
-    stdout, stderr = proc.communicate()
+    st_reader.join(timeout=5)
+    se_reader.join(timeout=5)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
     exit_code = proc.returncode if proc.returncode is not None else -1
     stdout_text = stdout or ""
     stderr_text = stderr or ""

@@ -1,8 +1,22 @@
 # Electron 桌面壳设计（DESKTOP）
 
-> 版本 **0.3.12-draft** · 2026-07-18  
-> 状态：`doc`（**grow M0–M1 done** + T-905/906/907 + **运行态全窗渐变**；**daily · Amp done** 见 [DAILY-SHELL.md](./DAILY-SHELL.md) v0.3.1；**project · M3 done** 见 [PROJECT-MODE.md](./PROJECT-MODE.md) §8.4；`govern` defer；**§5 协议表** 与实现对齐见 T-1813-04；**DOC-08** CLI UTF-8 见 §3.8.1；**T-1824-03** sidecar spawn UTF-8；**DOC-01** pet→daily 见 §3.3.6）  
-> 关联：[PROJECT.md](./PROJECT.md) §3 · [PROJECT-MODE.md](./PROJECT-MODE.md) · [RUNTIME.md](./RUNTIME.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [TURN-FEEDBACK.md](./TURN-FEEDBACK.md) · [BUGS.md](./BUGS.md) · `TASKS.md` T-904 / T-905 / **T-906** / **T-1113** 系列
+> 版本 **0.4.0** · 2026-07-30  
+> 状态：`doc` — **当前 UI 真源 = `shells/unified/`**（perspective: default | project | night）+ **`shells/pet/`**；旧 grow/daily/project/govern **已删除**。历史章节保留作设计溯源，标 **deprecated**。  
+> 关联：[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
+
+---
+
+## 0. 当前形态（2026-07-30 · 已决）
+
+| 表面 | 路径 | 说明 |
+|------|------|------|
+| **统一聊天壳** | `desktop/src/shells/unified/` | 唯一全功能工作台；`shell-router` 只挂载此壳 |
+| **视角** | `data-perspective` | `default`（车间+过程块）· `project`（侧栏任务流）· `night`（暗色/Amp 手感，可选 starfield） |
+| **伴侣窗** | `desktop/src/shells/pet/` | 默认入口；独立窗；backend 会话线仍可标 `daily` |
+| **皮肤** | `desktop/src/skins/starfield/` | 自旧 daily 迁出 |
+| **不再存在** | `shells/grow|daily|project|govern` | 代码已删；勿再引用为实现路径 |
+
+**切壳 DOM / `ui.route` 硬切**：已退役。主题/项目切换在 **壳内**完成；后端 `active_shell` 仅作会话线标签（见 SHELL-CONSOLIDATION §0）。
 
 ---
 
@@ -27,7 +41,7 @@
 
 摘自 [PROJECT.md](./PROJECT.md) §2.3：**并存 + 可导入，不是替代 Cursor**。
 
-桌面壳 **按使用阶段分版**（见 §3）：现阶段默认 **生长期**——指挥加工具、审 proposal；日后加 **日用壳** 等，旧版保留可切换。
+桌面壳 **以 unified 为唯一工作台**（见 §0）；伴侣窗独立。历史「分阶段多壳」已合并。
 
 ---
 
@@ -35,11 +49,11 @@
 
 ### 2.1 目标
 
-1. **分阶段外壳**：每个使用阶段一版 UI（`grow` / `daily` / `govern` …）；**新版不删旧版**，设置或命令切换。
-2. **用了再推进**：先实现当前阶段外壳（**生长期**）；日用、治理等 **等你真用到再做**。
+1. **统一工作台 + 伴侣窗**：聊天交互集中在 `unified`；差异用 perspective；pet 独立。
+2. **用了再推进**：能力按真实使用打磨（见 UX-POLISH），不堆仪表盘。
 3. **轻入口 + 内核复用**：Electron 只换 I/O；`agent.py` / `session.py` / `evolve.py` 不重写。
-4. **交互顺手**：流式、**点击确认**（工具 confirm / proposal 均用按钮，**不**在输入框打 `y/n/a`）；各阶段信息量不同。
-5. **入口**：**默认 Electron**；`start.bat` / 菜单 **随时切 CLI**；不建议两界同时抢同一 session（§3.8）。
+4. **交互顺手**：流式、**点击确认**（工具 confirm / proposal 均用按钮，**不**在输入框打 `y/n/a`）；键盘快捷键见 UX-POLISH。
+5. **入口**：**默认 Electron**；`start.bat` / 菜单 **随时切 CLI**；不建议两界同时抢同一 session。
 
 ### 2.2 非目标（第一版不做）
 
@@ -54,41 +68,43 @@
 
 ---
 
-## 3. 产品形态：分阶段外壳（核心）
+## 3. 产品形态：统一壳 + 视角（核心）
 
-### 3.1 原则
+> **§3.1～3.x 以下大量「grow/daily/project 分壳」叙述为 Phase 9～11 历史设计。**  
+> **实现以 §0 + [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) 为准。**
+
+### 3.1 原则（现行）
 
 | 原则 | 说明 |
 |------|------|
-| **阶段 ≠ 功能模块** | 一版 Shell 对应「这段时间你怎么用 my-agent」，不是「设置页 / 聊天页」拆页 |
-| **旧版不删** | 实现 `daily` 后 `grow` 仍在 `desktop/src/shells/grow/`；切换即可 |
-| **用了再做** | 不预先设计完全部；你进入日用阶段再设计 `daily` 线框 |
-| **默认随阶段变** | 内核 **Activity Router** 按当前任务推断 `shell` + `topics`；桌面自动切壳（可锁定覆盖） |
-| **壳保活** | 切换外壳 **hide/show**，不销毁 DOM；**会话**按壳分线（T-1116），切壳换 backend + `session.history` |
+| **一个聊天壳** | `unified` 承载全部聊天交互；差异用 **perspective**，不切 DOM |
+| **pet 独立** | 伴侣是独立产品形态，不与聊天壳合并 |
+| **旧版已删** | 不再保留 `shells/grow|daily|project|govern` 目录 |
+| **主题路由 ≠ 切壳** | `activity_router` 可推荐主题；**不再**驱动前端切壳 |
+| **会话线标签** | 后端 `active_shell` / `shell_sessions` 仍可区分会话归属（兼容 pet/历史数据） |
 
 ```text
 desktop/src/shells/
-  pet/       # 伴侶期 — 默认入口（T-pet M0）
-  grow/      # 生长期 — 工作台内
-  daily/     # 日用期 — Amp（T-904i done）
-  project/   # 项目期 — workspace 三件套 + 切换续接（T-1105～T-1113）
-  govern/    # 治理期 — 占位，后做
-  repl/      # 可选：纯 REPL 窗，与 CLI 同信息量
+  unified/   # 唯一全功能聊天壳
+  pet/       # 伴侶期 — 默认入口（独立窗）
+  chat-state.ts
+desktop/src/skins/
+  starfield/ # night 视角可选背景
 ```
 
-**切换（已定 · T-906）**：
+**切换（现行）**：
 
-- **自动**：内核每轮 `turn.start` 前后发 `ui.route`；桌面未锁定时 **硬切** 对应外壳，顶栏提示 + **撤销**（8s）
-- **手动**：顶栏 `外壳 → 生长 | 项目 | 日用 | 治理`；改选手动项 → 自动勾选 **「锁定」**，本会话不再自动切
-- **取消锁定**：取消勾选「锁定」→ 恢复跟随任务
-- 持久化：`localStorage` `active_shell` · `shell_route_locked`；`theme` 仍独立
-- REPL：`外壳 日用` 等（与菜单等价；CLI 不消费 `ui.route`）
+- **视角**：外观/项目绑定驱动 `default` | `project` | `night`（见 settings · unified）
+- **项目**：侧栏 / `project.switch`（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)）
+- **新会话 / 会话列表**：顶栏按钮 + `session.refresh` / `session.list` / `session.open`（UX-018/020）
+- **模型**：顶栏「模型」下拉 Flash / Pro → `session.set_model`（`deepseek-v4-flash` / `deepseek-v4-pro`）；`session.banner.llm_model` 同步
+- **历史**：曾有顶栏「外壳」下拉 + `ui.route` 自动切壳（T-906）— **已移除**
 
-### 3.2 Shell `grow` · 生长期（**布局已决：版 4 顶栏当前任务**）
+### 3.2 Shell `grow` · 生长期（**deprecated · 能力并入 unified default**）
 
-**你现阶段在干什么**：指挥加 tool、过 proposal、试 `write_evolve`。
+**历史定位**：指挥加 tool、过 proposal、试 `write_evolve`。现行由 `unified` + `perspective=default` 承担。
 
-**布局（定稿）**：
+**布局（定稿 · 历史）**：
 
 ```text
 ┌─ my-agent ─────────────────────────────────────────────────────┐
@@ -640,6 +656,7 @@ data/sessions/.interface.lock   # { "ui": "electron"|"cli", "pid": N, "since": I
 | `session.list` | 拉会话列表 | `data/sessions/*` |
 | `session.open` | 切换 session id | `resume_or_create` 变体 |
 | `session.refresh` | 重推会话状态 + `ui.route`（grow 挂载 / 重连） | `emit_session_state` + `compute_session_route` |
+| `session.set_model` | 切换会话模型 `deepseek-v4-flash` / `deepseek-v4-pro`；忙时拒绝；Pro→Flash 超 Flash×85% 拒绝（须先压缩/新会话） | `validate_llm_model_switch` + `Session.set_llm_model` + banner |
 | `proposal.accept` / `reject` | 审阅 proposal | `evolve.py` |
 | `shell.switch` | `{ shell: grow\|daily\|project\|govern, project_id? }` 切壳并换专用会话 | `shell_switch.switch_shell` |
 | `host_scope.list` | 拉托管区配置 | `host_scope_api` |

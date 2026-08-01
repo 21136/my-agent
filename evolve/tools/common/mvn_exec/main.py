@@ -50,16 +50,43 @@ def _find_mvn() -> str:
     return "mvn"
 
 
+def _resolve_mvn_bin(cwd: Path) -> str:
+    try:
+        core = _agent_root() / "agent-core"
+        if str(core) not in sys.path:
+            sys.path.insert(0, str(core))
+        from project_env import load_env_near, resolve_mvn_bin
+
+        return resolve_mvn_bin(load_env_near(cwd))
+    except Exception:
+        return _find_mvn()
+
+
 def _resolve_working_dir(paths, path_arg: str | None) -> Path:
     if not path_arg:
-        return paths.workspace
+        return paths.agent_root
     text = path_arg.strip().replace("\\", "/").lstrip("/")
-    if text.startswith("workspace/"):
-        text = text.removeprefix("workspace/")
     try:
-        return paths.resolve_under_workspace(text, must_exist=True)
+        return paths.resolve_under_agent(text, must_exist=True)
     except Exception:
-        return paths.workspace / text
+        pass
+    if not text.startswith("workspace/"):
+        try:
+            return paths.resolve_under_agent(f"workspace/{text}", must_exist=True)
+        except Exception:
+            pass
+    return paths.agent_root / text
+
+
+def _coalesce_working_dir(payload: dict[str, Any]) -> str:
+    """E7: accept cwd as alias for working_dir."""
+    working = payload.get("working_dir", "")
+    if isinstance(working, str) and working.strip():
+        return working.strip()
+    cwd = payload.get("cwd", "")
+    if isinstance(cwd, str) and cwd.strip():
+        return cwd.strip()
+    return ""
 
 
 def mvn_exec(payload: dict[str, Any]) -> dict[str, Any]:
@@ -75,7 +102,7 @@ def mvn_exec(payload: dict[str, Any]) -> dict[str, Any]:
     if not args:
         return {"ok": False, "error": "args is required (e.g. ['-q', 'test'], ['package', '-DskipTests'])"}
 
-    working_dir_arg = payload.get("working_dir", "")
+    working_dir_arg = _coalesce_working_dir(payload)
     timeout_sec = int(payload.get("timeout_sec", _DEFAULT_TIMEOUT))
     if timeout_sec < 1:
         timeout_sec = 1
@@ -86,7 +113,7 @@ def mvn_exec(payload: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "error": f"invalid working_dir: {exc}"}
 
-    mvn = _find_mvn()
+    mvn = _resolve_mvn_bin(cwd)
     command = [mvn, *args]
 
     if dry_run:

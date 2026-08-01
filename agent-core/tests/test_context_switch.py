@@ -195,6 +195,7 @@ class ContextSwitchTests(unittest.TestCase):
             == self.session.conversation_id
         )
 
+    @unittest.skip("shell.switch deprecated after shell consolidation")
     def test_propose_shell_switch_to_grow(self) -> None:
         run_project_command(
             self.session,
@@ -259,6 +260,7 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertEqual(self.session.meta.project_id, normalize_project_id(self.pid_a))
         self.assertEqual(self.session.meta.active_shell, "project")
 
+    @unittest.skip("cross-shell session.new deprecated after shell consolidation")
     def test_propose_session_new_on_grow(self) -> None:
         from shell_switch import record_shell_session, read_shell_sessions
 
@@ -288,7 +290,8 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertNotEqual(new_cid, old_cid)
         self.assertEqual(read_shell_sessions(self.paths).get("grow"), new_cid)
 
-    def test_propose_session_new_on_project_keeps_binding(self) -> None:
+    def test_propose_session_new_on_project_parks_binding(self) -> None:
+        """UX-POLISH §7.6 D6/D8: session.new leaves project mapping; new chat is unbound."""
         run_project_command(
             self.session,
             self.paths,
@@ -316,13 +319,15 @@ class ContextSwitchTests(unittest.TestCase):
         assert isinstance(result.data, dict)
         new_cid = result.data.get("session_id")
         self.assertNotEqual(new_cid, old_cid)
-        self.assertEqual(read_project_sessions(self.paths).get(pid), new_cid)
+        # Project session stays parked on the old conversation.
+        self.assertEqual(read_project_sessions(self.paths).get(pid), old_cid)
         from session import Session
 
         loaded = Session.load(self.paths, str(new_cid))
-        self.assertEqual(loaded.meta.project_id, pid)
-        self.assertEqual(loaded.meta.project_plan_status, "confirmed")
+        self.assertEqual(loaded.meta.project_id, "")
+        self.assertNotEqual(loaded.meta.project_plan_status, "confirmed")
 
+    @unittest.skip("cross-shell session.new deprecated after shell consolidation")
     def test_session_new_rejects_cross_shell_target(self) -> None:
         run_project_command(
             self.session,

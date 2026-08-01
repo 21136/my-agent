@@ -1,13 +1,9 @@
-/** Global context-switch confirm overlay (Phase 19 · all shells). */
+/** Global context-switch confirm overlay (Phase 19 · unified shell). */
 
 import type { AgentWsClient, ServerEvent } from "./api/ws";
-import { SHELL_LABELS, type ShellId } from "./settings";
 import "./context-switch-overlay.css";
 
-export type ContextSwitchOverlayHandlers = {
-  /** After confirmed shell.switch — sync chrome + visible shell. */
-  onShellApplied?: (shell: ShellId) => void;
-};
+export type ContextSwitchOverlayHandlers = Record<string, never>;
 
 type OverlayState = {
   requestId: string;
@@ -21,7 +17,7 @@ type OverlayState = {
 export function mountContextSwitchOverlay(
   parent: HTMLElement,
   client: AgentWsClient,
-  handlers: ContextSwitchOverlayHandlers = {},
+  _handlers: ContextSwitchOverlayHandlers = {},
 ): () => void {
   const root = document.createElement("div");
   root.id = "context-switch-overlay-host";
@@ -52,7 +48,7 @@ export function mountContextSwitchOverlay(
     const effects = (event.side_effects ?? []).map((line) => `· ${line}`).join("\n");
     const current = event.current?.project_id
       ? `当前：${event.current.shell ?? "?"} · ${event.current.project_id}`
-      : `当前外壳：${event.current?.shell ?? "?"}`;
+      : "";
     const reason = event.reason ? `原因：${event.reason}` : "";
     state = {
       requestId: event.request_id,
@@ -84,9 +80,6 @@ export function mountContextSwitchOverlay(
       state.busy = false;
       render();
     }
-    if (choice === "n") {
-      // done event will clear; optimistic hide is fine
-    }
   });
 
   const off = client.onEvent((event: ServerEvent) => {
@@ -95,20 +88,7 @@ export function mountContextSwitchOverlay(
       return;
     }
     if (event.type === "context.switch.done") {
-      const appliedShell =
-        event.applied && event.action === "shell.switch"
-          ? (event.shell || event.target)
-          : null;
       clear();
-      if (
-        appliedShell &&
-        (appliedShell === "grow" ||
-          appliedShell === "daily" ||
-          appliedShell === "project" ||
-          appliedShell === "govern")
-      ) {
-        handlers.onShellApplied?.(appliedShell);
-      }
       return;
     }
   });
@@ -126,8 +106,4 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-export function shellLabel(shell: string): string {
-  return SHELL_LABELS[shell as ShellId] ?? shell;
 }

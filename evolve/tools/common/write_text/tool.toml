@@ -1,6 +1,6 @@
 [tool]
 name = "write_text"
-description = "向 workspace 写文本；path 相对 workspace；冲突默认 skip"
+description = "向 agent root 写文本（除 deny-list）；path 相对 agent root 或 host:<id>/…；冲突默认 skip"
 version = "1.0.0"
 status = "active"
 topics = ["common"]
@@ -30,5 +30,5 @@ skipped = { type = "boolean" }
 [policy]
 confirm = true
 dry_run_supported = true
-workspace_only = true
+allow_approve_all = true
 timeout_sec = 60

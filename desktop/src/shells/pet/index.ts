@@ -3,14 +3,13 @@ import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import "../../file-drop.css";
 import { renderMarkdown } from "../../markdown";
-import { writeActiveShell } from "../../settings";
 import { formatUserMessageHtml } from "../../user-message";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, type ChatBlock, type ChatSession } from "../chat-state";
 import {
   classifyPetRoute,
   formatRouteNotice,
   resolveWorkbenchShell,
-  type PetRouteEvent,
+
 } from "./pet-route";
 import "./pet.css";
 
@@ -56,7 +55,8 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
   let bubbleOpen = false;
   let recallActive = false;
   let recallHighlightTurns = new Set<number>();
-  let pendingRoute: PetRouteEvent | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pendingRoute: any = null;
   let cancelledStatusTimer: number | null = null;
 
   root.innerHTML = `
@@ -212,11 +212,10 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
     });
   }
 
-  async function goToWorkbench(target: ShellId): Promise<void> {
+  async function goToWorkbench(target: string): Promise<void> {
     const { shell, mappedNotice } = resolveWorkbenchShell(target);
     try {
-      client.shellSwitch(shell);
-      writeActiveShell(shell);
+      localStorage.setItem("active_shell", shell);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       chat.model.blocks.push({ kind: "notice", text: `切换外壳失败：${message}` });
@@ -240,19 +239,19 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
     }
   }
 
-  function handleUiRoute(event: PetRouteEvent): void {
-    const tier = classifyPetRoute(event);
+  function handleUiRoute(evt: any): void {
+    const tier = classifyPetRoute(evt);
     if (tier === "ignore") return;
 
     if (tier === "auto") {
       if (!bubbleOpen) {
         setBubbleOpen(true);
       }
-      void goToWorkbench(event.shell);
+      void goToWorkbench(evt.shell);
       return;
     }
 
-    pendingRoute = event;
+    pendingRoute = evt;
     if (!bubbleOpen) {
       setBubbleOpen(true);
     }
@@ -523,17 +522,11 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
   });
 
   const off = client.onEvent((event: ServerEvent) => {
-    if (!client.isActiveShell(BACKEND_SHELL)) return;
-    if (event.type === "ui.route") {
-      handleUiRoute(event);
-      return;
-    }
     if (event.type === "evolve.proposals") return;
     chat.handleEvent(event);
   });
 
-  client.setActiveShell(BACKEND_SHELL);
-  client.shellSwitch(BACKEND_SHELL);
+  localStorage.setItem("active_shell", BACKEND_SHELL);
 
   bindPointerPassthrough();
   api?.petSetIgnoreMouseEvents?.(true);
