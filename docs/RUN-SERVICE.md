@@ -43,6 +43,8 @@
 - 不做跨机编排、不健康自动重启
 - 不把超时拉长塞进 `mvn_exec`
 
+后续补齐（HTTP 探活、`dev_start` 收敛、端口/Git）：见 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（Phase 26 · **doc**）。
+
 ## 回归
 
 - **IT-75**：start → ready → logs → stop（`tests/test_run_service.py`）

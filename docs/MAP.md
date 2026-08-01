@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-01** · **新会话请先读本文 + `TASKS.md`**  
 > 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 25** [RUN-SERVICE.md](./RUN-SERVICE.md)（托管长驻）；**Phase 24** [PROGRESS-GATE.md](./PROGRESS-GATE.md)；[UX-POLISH.md](./UX-POLISH.md)。  
+> **当前焦点**：**Phase 26** [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（**doc · D1～D4 已决** · 待 M0）；Phase 25 [RUN-SERVICE.md](./RUN-SERVICE.md) M0；Phase 24 [PROGRESS-GATE.md](./PROGRESS-GATE.md)；[UX-POLISH.md](./UX-POLISH.md)。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -45,7 +45,8 @@
 | **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
 | **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
 | **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)） |
-| **Phase 25** | **托管长驻服务**（`run_service`） | **M0**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
+| **Phase 25** | **托管长驻服务**（`run_service`） | **M0 done**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
+| **Phase 26** | **项目开发工具补齐**（HTTP / 启停收敛 / Git 写侧） | **doc · D1～D4 已决**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) v0.1.1） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
@@ -60,7 +61,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一焦点** | **Phase 24** [PROGRESS-GATE.md](./PROGRESS-GATE.md) 实施（T-2402～）；[UX-POLISH.md](./UX-POLISH.md) 剩余项；文档与未提交工作区对齐后合入 |
+| **下一焦点** | **Phase 26 M0**（`http_request` + `dev_start` 薄封装）；Phase 24 剩余 T-2406～；[UX-POLISH.md](./UX-POLISH.md) |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
 
