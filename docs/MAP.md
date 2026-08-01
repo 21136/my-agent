@@ -1,8 +1,8 @@
 # my-agent 项目地图（MAP）
 
 > 版本 **2026-08-01** · **新会话请先读本文 + `TASKS.md`**  
-> 代码 **Phase 1～23 done**（进度身份武装已落地、待合入叙述）；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 24** 进度硬闸门 **doc**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)）；[UX-POLISH.md](./UX-POLISH.md)。  
+> 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
+> **当前焦点**：**Phase 25** [RUN-SERVICE.md](./RUN-SERVICE.md)（托管长驻）；**Phase 24** [PROGRESS-GATE.md](./PROGRESS-GATE.md)；[UX-POLISH.md](./UX-POLISH.md)。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -44,6 +44,8 @@
 | **Phase 21** | **项目进度闭环**（report_progress 清单 / draft 壳 / 一停武装） | **done**（[PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) fixed） |
 | **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
 | **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
+| **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)） |
+| **Phase 25** | **托管长驻服务**（`run_service`） | **M0**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |

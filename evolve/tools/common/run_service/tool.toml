@@ -1,0 +1,77 @@
+[tool]
+name = "run_service"
+description = """托管长驻进程（dev server / spring-boot:run 等）。勿用 mvn_exec/npm_exec/repl 跑会挂起的服务——它们有超时并会杀子进程。
+
+actions:
+- start — 后台启动；可选 ready_regex / ready_port 等到就绪再返回
+- stop — 停掉（含进程树）
+- status — 查存活与元数据（不 confirm）
+- logs — 读尾部日志（不 confirm）
+- wait — 等到就绪或超时（不 confirm）
+- list — 列出已登记服务（不 confirm）
+
+状态与日志：data/services/<name>.json · data/services/<name>.log"""
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "start | stop | status | logs | wait | list"
+[schema.input.properties.name]
+type = "string"
+description = "服务名（字母数字_-，≤64）；list 可不传"
+[schema.input.properties.command]
+type = "string"
+description = "start 用：shell 命令，如 mvn spring-boot:run 或 npm run dev"
+[schema.input.properties.args]
+type = "array"
+items = { type = "string" }
+description = "start 用：无 shell 的 argv（与 command 二选一；有 command 时忽略）"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root 的工作目录，如 workspace/<id>/backend；可用别名 cwd"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 的别名"
+[schema.input.properties.ready_regex]
+type = "string"
+default = ""
+description = "日志匹配即就绪（Python re）；start/wait 可用"
+[schema.input.properties.ready_port]
+type = "integer"
+description = "TCP 端口可连即就绪；start/wait 可用"
+[schema.input.properties.ready_timeout_sec]
+type = "integer"
+default = 90
+description = "start 内等待就绪的秒数；0=立即返回不等待"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 90
+description = "wait 动作的超时秒数"
+[schema.input.properties.tail_lines]
+type = "integer"
+default = 80
+description = "logs 返回末尾行数"
+[schema.input.properties.force]
+type = "boolean"
+default = true
+description = "stop 时强制杀进程树"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = false
+allow_approve_all = false
+timeout_sec = 200

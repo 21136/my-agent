@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 24** 进度硬闸门 **doc**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)）；Phase 20～23 见下表；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 25** 托管长驻服务 **M0**（[RUN-SERVICE.md](./RUN-SERVICE.md)）；Phase 24 进度硬闸门进行中；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1068,6 +1068,28 @@ python turn_intent.py    # 分类用例无回归
 | T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | todo |
 
 **完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒。
+
+---
+
+## Phase 25 — 托管长驻服务（run_service）
+
+> 设计：[RUN-SERVICE.md](./RUN-SERVICE.md) **v0.1.0**  
+> 触发：huiyi 助手无法用 `mvn_exec`/`npm_exec` 起 backend/frontend（超时杀进程）。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：STABILIZATION §3 **evolve 工具执行**面（新增 common 工具 + confirm 动作门）；不改桌面壳 / host / 计划门
+- [x] 回归 ID：**IT-75**（生命周期）· **IT-76**（confirm 门）— `tests/test_run_service.py`
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-2501 | 设计文档 + MAP/TASKS | `RUN-SERVICE.md` · 本表 | — | DOC-04 齐全 | **done** |
+| T-2502 | `run_service` evolved 工具 | `evolve/tools/common/run_service/` | T-2501 | start/stop/status/logs/wait；状态落 `data/services/` | **done** |
+| T-2503 | confirm 动作门 | `executor._needs_confirm` | T-2502 | status/logs/wait/list 不 confirm；start/stop 要 | **done** |
+| T-2504 | 目录 INDEX 挂钩 | `tool-catalog/buckets/run.md` | T-2502 | 表中可见 + 勿用 mvn 跑长驻 | **done** |
+| T-2505 | IT-75 / IT-76 | `tests/test_run_service.py` | T-2502,T-2503 | 单测绿 | **done** |
+
+**完成标志**：IT-75/76 绿；助手可用 `run_service` 起 spring-boot / npm dev 而不依赖 bat。
 
 ---
 

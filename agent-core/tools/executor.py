@@ -1468,6 +1468,14 @@ class ToolExecutor:
             path_arg = arguments.get("path")
             if isinstance(path_arg, str) and self._cross_session_read_target(path_arg):
                 return True
+        # run_service: only start/stop/restart need confirm; status/logs/wait/list are read-only.
+        if evolved is not None and evolved.name == "run_service":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            action = str(inner.get("action") or "").strip().lower()
+            if action in {"status", "logs", "wait", "list"}:
+                return False
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:
