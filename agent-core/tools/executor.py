@@ -1476,6 +1476,20 @@ class ToolExecutor:
             action = str(inner.get("action") or "").strip().lower()
             if action in {"status", "logs", "wait", "list"}:
                 return False
+        # http_request (D2): loopback GET/HEAD skip confirm; else require confirm.
+        if evolved is not None and evolved.name == "http_request":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if not _http_request_needs_confirm(inner):
+                return False
+        # dev_start dry_run is planning only — skip confirm.
+        if evolved is not None and evolved.name == "dev_start":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:
@@ -1733,6 +1747,30 @@ def _tool_result_summary(result: ToolResult) -> str:
             text = value.strip()
             return text[:120] + ("…" if len(text) > 120 else "")
     return "ok" if result.ok else "failed"
+
+
+def _http_request_needs_confirm(inner: dict[str, Any]) -> bool:
+    """Phase 26 D2: confirm unless loopback + GET/HEAD."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    method = str(inner.get("method") or "GET").strip().upper()
+    url = str(inner.get("url") or "").strip()
+    if method not in {"GET", "HEAD"}:
+        return True
+    try:
+        host = urlparse(url).hostname
+    except Exception:
+        return True
+    if not host:
+        return True
+    lowered = host.lower().strip("[]")
+    if lowered in {"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"}:
+        return False
+    try:
+        return not ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return True
 
 
 def _arguments_use_host_scope(arguments: dict[str, Any]) -> bool:

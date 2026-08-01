@@ -1,0 +1,50 @@
+[tool]
+name = "dev_start"
+description = """一键起停项目前后端的薄封装——内部只调 run_service（Phase 26）。单服务请直接用 run_service。
+
+默认 backend=mvn spring-boot:run:8080、frontend=npm run dev:3000，可用 backend/frontend 对象覆盖。stop=true 停止。"""
+version = "1.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["project_dir"]
+[schema.input.properties.project_dir]
+type = "string"
+description = "项目目录，相对 agent root，如 workspace/huiyi"
+[schema.input.properties.backend]
+type = "object"
+description = "后端 {dir, command, port}；默认 backend / mvn spring-boot:run / 8080"
+[schema.input.properties.frontend]
+type = "object"
+description = "前端 {dir, command, port}；默认 frontend / npm run dev / 3000"
+[schema.input.properties.backend_only]
+type = "boolean"
+default = false
+[schema.input.properties.frontend_only]
+type = "boolean"
+default = false
+[schema.input.properties.stop]
+type = "boolean"
+default = false
+description = "停止该项目由 dev_start 登记的 run_service 实例"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+[schema.input.properties.ready_timeout_sec]
+type = "integer"
+default = 90
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 200

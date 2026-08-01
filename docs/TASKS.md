@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 26** 项目开发工具补齐 **doc**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)）；Phase 25 `run_service` M0 done；Phase 24 进行中；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 26** 项目开发工具补齐 **M0 done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)）；M1 待开；Phase 25/24 见下；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1095,9 +1095,9 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 26 — 项目开发工具补齐（HTTP / 启停收敛 / Git 写侧）
 
-> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.1.1**  
+> 设计：[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) **v0.2.0**  
 > 触发：写项目盘点——缺 HTTP 探活、端口治理、受控 commit；`dev_start` 与 `run_service` 重叠。  
-> **纪律**：先文档后实现；**D1～D4 已决**（2026-08-01）→ 可开 M0 实现。
+> **纪律**：先文档后实现；**D1～D4 已决**；**M0 done**；M1 待开。
 
 ### DOC-04 准入（提案自检）
 
@@ -1108,11 +1108,11 @@ python turn_intent.py    # 分类用例无回归
 |----|------|--------|------|------|------|
 | T-2601 | 设计文档 + MAP/TASKS 挂钩 | `PROJECT-DEV-TOOLS.md` · 本表 | — | 缺口表 + D1～D4 + DOC-04 齐全 | **done** |
 | T-2602 | 用户确认 D1～D4 | 文档 §2.2 已决 | T-2601 | 默认提案采纳 | **done** |
-| T-2603 | M0：`http_request` | `evolve/tools/…` + IT-80/81 | T-2602 | 契约符合 §3.1；测绿 | todo |
-| T-2604 | M0：`dev_start` 收敛 | 薄封装调 `run_service` + INDEX | T-2602 | IT-82；清单无双主路径 | todo |
+| T-2603 | M0：`http_request` | `evolve/tools/common/http_request/` + IT-80/81 | T-2602 | 契约符合 §3.1；测绿 | **done** |
+| T-2604 | M0：`dev_start` 收敛 | 薄封装调 `run_service` + INDEX | T-2602 | IT-82；清单主路径为 `run_service` | **done** |
 | T-2605 | M1：端口治理 | `run_service` 扩展或独立工具 + IT-83 | T-2603 | kill_port confirm | todo |
 | T-2606 | M1：`git_commit` | evolved + IT-84 | T-2602 | 禁 force；confirm；dry_run | todo |
-| T-2607 | M0/M1 目录与提示挂钩 | `tool-catalog/buckets/run.md` 等 | T-2603,T-2604 | INDEX 可见、勿双荐 | todo |
+| T-2607 | M0/M1 目录与提示挂钩 | `tool-catalog/buckets/run.md` 等 | T-2603,T-2604 | INDEX 可见、勿双荐 | **done** |
 | T-2608 | M2：DB / pip（可选） | 见文档 §1.2 P2 | T-2605,T-2606 | 另文或补节后再做 | defer |
 
 **完成标志（M0）**：D1～D4 已决；IT-80～82 绿；启停只推荐一条主路径；助手能 `run_service` + `http_request` 探活。

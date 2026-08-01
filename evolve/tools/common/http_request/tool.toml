@@ -1,0 +1,48 @@
+[tool]
+name = "http_request"
+description = """发 HTTP 请求（探活 / 调本地 API）。loopback 上 GET/HEAD 不 confirm；其它 method 或非 localhost 须 confirm。
+
+勿用 builtin fetch_url 探本地服务——fetch_url 会拦 localhost。长驻进程用 run_service 起，再用本工具探。"""
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["url"]
+[schema.input.properties.url]
+type = "string"
+description = "http:// 或 https:// URL"
+[schema.input.properties.method]
+type = "string"
+default = "GET"
+description = "GET|HEAD|POST|PUT|PATCH|DELETE（大小写不敏感）"
+[schema.input.properties.headers]
+type = "object"
+description = "可选请求头（字符串值）"
+[schema.input.properties.body]
+type = "string"
+description = "原始请求体（与 json 二选一；json 优先）"
+[schema.input.properties.json]
+description = "JSON 体（自动 Content-Type: application/json）；与 body 二选一"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 15
+description = "超时秒数，上限 60"
+[schema.input.properties.max_body_chars]
+type = "integer"
+default = 32768
+description = "响应 body 截断字符数，上限 65536"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = false
+allow_approve_all = false
+timeout_sec = 70

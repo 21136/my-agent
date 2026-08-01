@@ -1,6 +1,6 @@
 # 项目开发工具补齐（PROJECT-DEV-TOOLS）
 
-> 版本 **0.1.1** · 2026-08-01 · **状态：doc（D1～D4 已决 · 未实现）**  
+> 版本 **0.2.0** · 2026-08-01 · **状态：M0 实现**（D1～D4 已决）  
 > Phase **26** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [GIT-VENDOR.md](./GIT-VENDOR.md)
 
 ## 0. 为什么开这个 Phase
@@ -147,7 +147,7 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 |--------|------|------|
 | **doc** | 本文 + MAP/TASKS | **done** |
 | **D1～D4** | 用户确认 | **done**（采纳默认） |
-| **M0** | `http_request` + `dev_start` 薄封装 + INDEX | todo |
+| **M0** | `http_request` + `dev_start` 薄封装 + INDEX | **done** |
 | **M1** | 端口治理 + `git_commit` | todo |
 | **M2** | DB 速查 / pip 出 suspect | defer 直至 M1 完 |
 
@@ -159,3 +159,4 @@ working_dir, message, paths?（可选暂存子集）, dry_run?
 |------|------|------|
 | 0.1.0 | 2026-08-01 | 初稿：盘点缺口、默认提案 D1–D4、DOC-04、IT 预留；**未实现** |
 | 0.1.1 | 2026-08-01 | D1～D4 **已决**（采纳默认）；仍未实现代码 |
+| 0.2.0 | 2026-08-01 | M0：`http_request` · `dev_start`→`run_service` · IT-80～82 · catalog |
