@@ -17,4 +17,4 @@
 
 ## common 文件工具
 
-`write_text` 写整文件 · `append_text` 追加 · `copy_move` 复制/移动 · `move_to_trash` 软删除到 `_trash/`。
+`write_text` 写整文件 · `patch_file` 改已有 · `copy_move` 复制/移动 · `move_to_trash` 软删除到 `_trash/`。`append_text` 已归档。

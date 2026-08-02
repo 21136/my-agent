@@ -673,14 +673,14 @@ jshell_exec: jshell [code] with [session_id]
 
 各自只有少量专属参数。如果未来加 `go_exec`、`cargo_exec`、`dotnet_exec`……会无限膨胀。
 
-**建议**：**讨论中**。可考虑一个通用 `shell_exec` 工具：
+**建议**：**已升格为 Phase 28** — 见 [SHELL-CHANNEL.md](./SHELL-CHANNEL.md)（工具名默认 `run_command`；与下文 `shell_exec` 同义）。可考虑一个通用执行工具：
 ```
-shell_exec:
-  command: ["npm", "run", "dev"]
+run_command / shell_exec:
+  command: "npm run build"
   working_dir: "workspace/frontend"
   timeout_sec: 300
 ```
-但这会失去每个工具 input schema 的精确校验（如 `npm_exec` 的 `args` 是 `array`，`jshell_exec` 的 `code` 是 `string`）。权衡点：**工具数量 vs 参数精确性**。
+权衡点：**工具数量 vs 参数精确性** — Phase 28 选择数量收敛 + 确认先严后松。
 
 #### 6.3.4 `copy_move` 不支持 host: 路径
 

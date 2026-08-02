@@ -64,6 +64,12 @@ export type ServerEvent =
       armed_task_id?: string | null;
       armed_task_text?: string | null;
       items: Array<{ tool: string; ok: boolean }>;
+      reliability?: {
+        postcondition?: "ok" | "fail" | "none" | "blocked" | string;
+        circuit_open?: string[];
+        playbook_id?: string | null;
+        failure_class?: string | null;
+      };
     }
   | {
       type: "services.state";
@@ -673,6 +679,7 @@ declare global {
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
       openPet?: () => Promise<void>;
+      openExternal?: (url: string) => Promise<boolean>;
       petSetIgnoreMouseEvents?: (ignore: boolean) => void;
       petSetBounds?: (mode: "collapsed" | "expanded") => Promise<void>;
       onSessionControl?: (handler: (action: "suspend" | "resume") => void) => () => void;

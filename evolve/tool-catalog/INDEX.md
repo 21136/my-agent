@@ -6,8 +6,8 @@
 
 | 桶 | 何时读 | 路径 |
 |----|--------|------|
-| 写文件 | 新建/改文本、搬移、回收站、补丁 | `buckets/write.md` |
-| 执行构建 | npm/mvn/python/测试/demo、CSV/文档预览 | `buckets/run.md` |
+| 写文件 | 新建 `write_text` / 改已有 `patch_file`、搬移、回收站 | `buckets/write.md` |
+| 执行构建 | `run_command` / `run_service` / `repair_node_modules` / `browser_open` / git_* | `buckets/run.md` |
 | 整理 | 按扩展名 / 去重 / 归档 / 重命名 | `buckets/organize.md` |
 | 项目 | 进度勾选、项目目录查询 | `buckets/project.md` |
 | 进化 | `write_evolve`、克隆进 tools | `buckets/evolve.md` |

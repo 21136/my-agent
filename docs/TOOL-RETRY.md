@@ -50,7 +50,7 @@ LLM 看到错误后**没有重试机会**，这次工具调用直接算一轮，
 | **一次重试** | 参数错误时自动让 LLM 修正一次，不重复计数 |
 | **具体错误提示** | 告诉 LLM 具体的参数问题，不是 "invalid arguments" |
 | **JSON 修复兜底** | LLM 生成的 broken JSON 尝试自动修复而非直接失败 |
-| **不增加工具轮次** | 修正回合不计入 `PARENT_EXECUTE_*` 配额 |
+| **不增加工具轮次** | **仅参数/schema 修正**不计入 `PARENT_EXECUTE_*`；**命令 exit_code≠0 / cancel / timeout 必须计轮** |
 | **上限一次** | 修正一次还失败就放弃，避免死循环 |
 
 ---
@@ -274,3 +274,4 @@ python tools/executor.py     # 增强错误消息验收
 |------|------|
 | 2026-07-29 | 初稿。 |
 | 2026-07-30 | **实施完成**；文档标 `implemented`。 |
+| 2026-08-02 | **收紧**：`exit_code` / cancel / timeout **不计** free-retry（huiyi 空转烧配额）。 |

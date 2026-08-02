@@ -2,7 +2,7 @@
 name = "mvn_exec"
 description = "在 agent root 子目录执行 Maven（读 ENV.md tools.mvn）。目录用 working_dir（可用 cwd 别名），如 workspace/<id>/backend。示例 args: [\"-q\",\"compile\"]。"
 version = "1.1.0"
-status = "active"
+status = "archived"
 topics = ["common"]
 
 [entry]

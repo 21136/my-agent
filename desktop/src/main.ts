@@ -13,6 +13,23 @@ async function boot(): Promise<void> {
     throw new Error("#app missing");
   }
 
+  // Belt-and-suspenders with Electron will-navigate: keep workbench from loading http(s).
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const href = anchor.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void window.myAgentDesktop?.openExternal?.(href);
+    },
+    true,
+  );
+
   let client: AgentWsClient | null = null;
   let teardownUi: (() => void) | null = null;
 
@@ -54,7 +71,7 @@ async function boot(): Promise<void> {
 
     const teardownContextSwitch = mountContextSwitchOverlay(app!, client, {});
 
-    const cleanup = mountShell(host, "grow", client);
+    const cleanup = mountShell(host, "project", client);
 
     teardownUi = () => {
       teardownContextSwitch();

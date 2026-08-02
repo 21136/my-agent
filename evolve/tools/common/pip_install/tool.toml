@@ -4,7 +4,7 @@ description = """用当前解释器安装 Python 包（python -m pip install）�
 
 包名拒 shell 元字符；requirements 须在 agent root 内。dry_run 仅预览。每次安装须 confirm（dry_run 除外）。"""
 version = "1.1.0"
-status = "active"
+status = "archived"
 topics = ["common"]
 
 [entry]

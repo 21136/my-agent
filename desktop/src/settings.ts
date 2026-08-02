@@ -14,10 +14,10 @@ export function writeTheme(theme: ThemeId): void {
 
 export function applyTheme(theme: ThemeId = readTheme()): void {
   document.documentElement.dataset.theme = theme;
-  // also sync unified shell perspective
+  // Phase 34: do not stomp workbench data-perspective (night is theme, not entry).
   const shell = document.querySelector<HTMLElement>(".unified-shell");
   if (shell) {
-    shell.setAttribute("data-perspective", theme === "dark" ? "night" : "default");
+    shell.classList.toggle("is-dark-theme", theme === "dark");
   }
 }
 

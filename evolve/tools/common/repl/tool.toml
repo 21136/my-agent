@@ -2,7 +2,7 @@
 name = 'repl'
 description = 'interactive Python REPL, maintains state across calls via session_id'
 version = '1.0.0'
-status = 'active'
+status = "suspect"
 topics = ['common']
 
 [entry]

@@ -87,6 +87,19 @@ def run(
             },
         )
 
+    if tool.status != "active":
+        return _fail(
+            f"工具「{tool.name}」status={tool.status}，不可执行（须 active）",
+            ToolErrorCode.TOOL_NOT_FOUND,
+            started,
+            tool_name=tool.name,
+            details={
+                "requested_tool": tool.name,
+                "status": tool.status,
+                "hint": "已归档/非 active 工具请改用 run_command 或 run_service",
+            },
+        )
+
     if allowed_tools is not None and tool.name not in allowed_tools:
         allowed = sorted(allowed_tools)
         scope = tool.scope

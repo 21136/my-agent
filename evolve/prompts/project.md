@@ -72,13 +72,15 @@
 ## 本机工具链（ENV.md）
 
 - 项目根有 **`ENV.md`**（新建/打开/切换项目时内核自动刷新 `tools` 段；**手改 `prefer`**）。
-- `npm_exec` / `mvn_exec` **自动读** `ENV.md` 的路径与 `prefer.package_manager`（npm|pnpm|yarn），**不要**用 `repl`/`which` 再探一遍。
-- 需要改偏好（如改用 pnpm、JDK 17）时：`read_file` → 改 `prefer` → 再跑构建工具。
-- `ENV.md` **不**每轮注入 system；路径由工具吃掉。
+- **一次性构建/测试**：用 `run_command`（`command` + `working_dir`）。`mvn_exec` / `npm_exec` / `run_python` / `pip_install` 已归档，勿调。
+- 需要改偏好（如改用 pnpm、JDK 17）时：`read_file` → 改 `ENV.md` `prefer` → 再跑命令。
+- `ENV.md` **不**每轮注入 system。
 
 ## 构建 / 测前端纪律（硬）
 
-1. **目录参数**：只用 `working_dir`（可用别名 `cwd`），例如 `workspace/<id>/frontend`。**禁止**只写错字段导致落到 agent root。
-2. **禁止 `repl` 跑 npm/pnpm/yarn/mvn**：必须 `run_evolved` → `npm_exec` / `mvn_exec`。
-3. **测前端 / 验证构建**：若目标目录已有 `node_modules`，**禁止先 `install`**；直接 `args: ["run","build"]` / `["run","test"]` / `["run","dev"]`。仅当没有 `node_modules` 或用户明确要求重装时才 `install`（可传 `force_install: true`）。
-4. 后端同理：优先 `mvn_exec` + `working_dir: workspace/<id>/backend`，缺依赖再用网络拉；本地 `.m2` 已有时可用 `-o`。
+1. **目录参数**：`working_dir`（或 `cwd`），例如 `workspace/<id>/frontend`。**禁止**落到 agent root 误跑。
+2. **禁止 `repl` 跑 npm/pnpm/yarn/mvn**：必须 `run_evolved` → `run_command`。
+3. **测前端 / 验证构建**：若已有 `node_modules`，**禁止先 install**；用 `run_command`：`npm run build` / `npm run test`。长驻 dev server 用 **`run_service`**（或 `run_command` + `background:true`），不要无 background 的前台 `run_command`。
+4. 后端同理：`run_command` + `working_dir: workspace/<id>/backend`（如 `mvn -q test`）；**spring-boot:run 等不退出进程 → `run_service` / background**。
+5. **给人看本地页**：`browser_open`（`http://127.0.0.1:…`）；探活用 `http_request`，勿用 `fetch_url` 打 localhost。
+6. **Git**：`git_commit` 提交；`git_branch` 建/切分支；`git_push` 推当前分支（禁 force）。

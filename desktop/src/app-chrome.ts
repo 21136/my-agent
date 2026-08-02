@@ -54,6 +54,7 @@ export function mountAppChrome(
       <span class="app-chrome-spacer"></span>
       <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
       ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-btn" id="chrome-settings">托管区</button>' : ""}
+      <button type="button" class="app-chrome-btn" id="chrome-pet">伴侣窗</button>
       <button type="button" class="app-chrome-btn" id="chrome-cli">改用终端 (CLI)</button>
     </header>
   `;
@@ -61,6 +62,7 @@ export function mountAppChrome(
   const themeSelect = root.querySelector<HTMLSelectElement>("#chrome-theme")!;
   const modelSelect = root.querySelector<HTMLSelectElement>("#chrome-model")!;
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
+  const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
 
   themeSelect.value = theme;
@@ -85,6 +87,10 @@ export function mountAppChrome(
     void handlers.onSwitchToCli().finally(() => {
       cliBtn.disabled = false;
     });
+  });
+
+  petBtn.addEventListener("click", () => {
+    void window.myAgentDesktop?.openPet?.();
   });
 
   const settingsBtn = root.querySelector<HTMLButtonElement>("#chrome-settings");

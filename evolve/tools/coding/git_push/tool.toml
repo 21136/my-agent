@@ -1,0 +1,44 @@
+[tool]
+name = "git_push"
+description = """受控推送（Phase 32）：仅推送当前分支到 remote（默认 origin）。
+
+永远确认（dry_run 除外）。禁止 --force / --force-with-lease。PR/gh 另 Phase。"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root 的仓库子目录；空=agent root"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 别名"
+[schema.input.properties.remote]
+type = "string"
+default = "origin"
+description = "远端名（非 URL）"
+[schema.input.properties.set_upstream]
+type = "boolean"
+default = false
+description = "是否加 -u（首次推送建上游）"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "git push --dry-run（不写远端）"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 120

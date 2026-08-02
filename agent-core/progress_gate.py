@@ -9,11 +9,11 @@ EvidenceKind = Literal["write", "compile", "test", "build_fe", "verify_db", "unk
 _WRITE_EVIDENCE_TOOLS = frozenset(
     {"write_text", "append_text", "patch_file", "copy_move", "write_evolve"}
 )
-_COMPILE_EVIDENCE_TOOLS = frozenset({"mvn_exec"})
-_TEST_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_tests", "npm_exec"})
-_BUILD_FE_EVIDENCE_TOOLS = frozenset({"npm_exec"})
+_COMPILE_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_command"})
+_TEST_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_tests", "npm_exec", "run_command"})
+_BUILD_FE_EVIDENCE_TOOLS = frozenset({"npm_exec", "run_command"})
 _VERIFY_DB_EVIDENCE_TOOLS = frozenset(
-    {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request", "db_query"}
+    {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request", "db_query", "run_command"}
 )
 
 
@@ -92,22 +92,22 @@ def evidence_satisfies(
         hit = names & _COMPILE_EVIDENCE_TOOLS
         if hit:
             return True, f"compile evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合编译成功证据（mvn_exec）"
+        return False, "缺少本回合编译成功证据（run_command/mvn_exec）"
     if kind == "test":
         hit = names & _TEST_EVIDENCE_TOOLS
         if hit:
             return True, f"test evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合测试/编译成功证据（mvn_exec/run_tests/npm_exec）"
+        return False, "缺少本回合测试/编译成功证据（run_command/mvn_exec/run_tests/npm_exec）"
     if kind == "build_fe":
         hit = names & _BUILD_FE_EVIDENCE_TOOLS
         if hit:
             return True, f"build_fe evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合前端构建成功证据（npm_exec）"
+        return False, "缺少本回合前端构建成功证据（run_command/npm_exec）"
     if kind == "verify_db":
         hit = names & _VERIFY_DB_EVIDENCE_TOOLS
         if hit:
             return True, f"verify_db evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合数据库核验成功证据（run_python/repl/jshell_exec/mvn_exec）"
+        return False, "缺少本回合数据库核验成功证据（run_command/run_python/repl/…）"
     return False, f"unknown evidence kind: {kind}"
 
 

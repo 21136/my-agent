@@ -38,6 +38,22 @@ async function boot(): Promise<void> {
     throw new Error("#pet-app missing");
   }
 
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      const href = anchor.getAttribute("href") || "";
+      if (!/^https?:\/\//i.test(href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void window.myAgentDesktop?.openExternal?.(href);
+    },
+    true,
+  );
+
   try {
     await connectAndMount();
   } catch (err) {

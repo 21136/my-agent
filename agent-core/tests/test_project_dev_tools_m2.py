@@ -110,7 +110,7 @@ class DbQueryTests(unittest.TestCase):
 
 
 class PipInstallTests(unittest.TestCase):
-    def test_it86_active_dry_run_and_validation(self) -> None:
+    def test_it86_archived_module_still_validates(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/pip_install",)) as paths:
             main_py = paths.evolve / "tools" / "common" / "pip_install" / "main.py"
             mod = _load_mod(main_py, "pip_install_m2")
@@ -119,7 +119,7 @@ class PipInstallTests(unittest.TestCase):
             registry = ToolRegistry.load(paths)
             tool = registry.get_evolved("pip_install")
             self.assertIsNotNone(tool)
-            self.assertEqual(tool.status, "active")
+            self.assertEqual(tool.status, "archived")
 
             dry = mod.run_pip_install({"packages": ["httpx"], "dry_run": True})
             self.assertTrue(dry.get("ok"), dry)
@@ -142,33 +142,25 @@ class PipInstallTests(unittest.TestCase):
             )
             self.assertTrue(dry_req.get("ok"), dry_req)
 
+            # Archived: executor rejects even with allowlist + confirm.
             confirms: list[str] = []
 
             def confirm_fn(preview: str, allow_approve_all: bool = False) -> str:
                 confirms.append(preview)
-                return "n"
+                return "y"
 
             executor = ToolExecutor(
                 registry=registry,
                 session=ExecutorSession(allowed_evolved={"pip_install"}),
                 confirm_fn=confirm_fn,
             )
-            d = executor.run(
-                "run_evolved",
-                {
-                    "tool_name": "pip_install",
-                    "arguments": {"packages": ["httpx"], "dry_run": True},
-                },
-            )
-            self.assertTrue(d.ok, d)
-            self.assertEqual(confirms, [])
-
             denied = executor.run(
                 "run_evolved",
-                {"tool_name": "pip_install", "arguments": {"packages": ["httpx"]}},
+                {"tool_name": "pip_install", "arguments": {"packages": ["httpx"], "dry_run": True}},
             )
             self.assertFalse(denied.ok)
-            self.assertTrue(confirms)
+            self.assertIn("不可执行", (denied.error.message if denied.error else ""))
+            self.assertEqual(confirms, [])
 
 
 if __name__ == "__main__":

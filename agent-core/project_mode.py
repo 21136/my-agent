@@ -33,7 +33,9 @@ _ACCEPT_CMD_RE = re.compile(r"命令[：:]\s*`([^`]+)`", re.IGNORECASE)
 _ACCEPT_EXIT_RE = re.compile(r"退出码\s*(\d+)", re.IGNORECASE)
 _PYTHON_SCRIPT_RE = re.compile(r"python(?:3)?\s+([^\s`]+\.py)", re.IGNORECASE)
 
-_CODING_TOOLS = frozenset({"run_python", "run_tests", "run_demo", "patch_file"})
+_CODING_TOOLS = frozenset(
+    {"run_python", "run_command", "run_tests", "run_demo", "patch_file"}
+)
 _WRITE_TOOLS = frozenset({"write_text", "append_text", "copy_move", "move_to_trash"})
 
 
@@ -374,7 +376,7 @@ def project_mode_block_reason(
         if evolved_name in _CODING_TOOLS:
             return (
                 f"计划未确认（{plan_status or 'draft'}）；"
-                "请先完成 PROJECT/TASKS 并请用户「项目 确认」后再写代码或 run_python"
+                "请先完成 PROJECT/TASKS 并请用户「项目 确认」后再写代码或 run_command"
             )
         if evolved_name in _WRITE_TOOLS or evolved_name == "git_clone":
             for path in extract_run_evolved_paths(tool_name, arguments):
@@ -526,7 +528,9 @@ def run_acceptance_check(
     project_id: str,
     spec: AcceptanceSpec,
 ) -> dict[str, Any]:
-    """Run PROJECT.md acceptance via run_python (no confirm gate)."""
+    """Run PROJECT.md acceptance via run_command (python script)."""
+    import sys
+
     from tools.builtin.run_evolved import run
     from tools.registry import ToolRegistry
 
@@ -542,13 +546,27 @@ def run_acceptance_check(
             "expected_exit_code": spec.expected_exit_code,
         }
 
+    pid = normalize_project_id(project_id)
     registry = ToolRegistry.load(paths)
+    # Prefer quoting that works under PowerShell -Command and bash -lc.
+    script_abs = str(script_path.resolve())
+    py = sys.executable
+    if sys.platform == "win32":
+        command = f'& "{py}" "{script_abs}"'
+    else:
+        command = f'"{py}" "{script_abs}"'
     tool_result = run(
-        {"tool_name": "run_python", "arguments": {"path": rel}},
+        {
+            "tool_name": "run_command",
+            "arguments": {
+                "command": command,
+                "working_dir": f"workspace/{pid}",
+            },
+        },
         registry=registry,
     )
     if not tool_result.ok:
-        message = tool_result.error.message if tool_result.error else "run_python failed"
+        message = tool_result.error.message if tool_result.error else "run_command failed"
         return {
             "ok": False,
             "passed": False,
@@ -567,7 +585,7 @@ def run_acceptance_check(
         "exit_code": exit_code,
         "expected_exit_code": spec.expected_exit_code,
         "command": spec.display,
-        "path": data.get("path", f"workspace/{rel}"),
+        "path": f"workspace/{rel}",
         "stdout": data.get("stdout", ""),
         "stderr": data.get("stderr", ""),
     }
@@ -1249,10 +1267,10 @@ def _demo() -> None:
         project_root=root,
         plan_status="draft",
         tool_name="run_evolved",
-        arguments={"tool_name": "run_python", "arguments": {"path": "demo.py"}},
+        arguments={"tool_name": "run_command", "arguments": {"command": "echo hi", "working_dir": root}},
     )
     assert reason and "未确认" in reason
-    print("[PASS] plan gate blocks run_python")
+    print("[PASS] plan gate blocks run_command")
 
     reason2 = project_mode_block_reason(
         active_shell="project",

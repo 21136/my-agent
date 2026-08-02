@@ -2,7 +2,7 @@
 name = "jshell_exec"
 description = "interactive Java REPL via jshell, maintains state across calls via session_id"
 version = "1.0.0"
-status = "suspect"
+status = "archived"
 topics = ["common"]
 
 [entry]

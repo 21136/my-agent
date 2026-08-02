@@ -12,7 +12,7 @@
 ### A. 用户项目（`workspace/<id>/` · 项目窗口）
 
 - 跟项目三件套（`PROJECT.md` / `MAP.md` / `TASKS.md`）与侧栏计划，**不要**把 my-agent 仓库的 `docs/MAP.md` / `docs/TASKS.md` 当成该项目的任务清单。
-- 小步交付、验收命令以该项目自己的约定为准；构建用 `npm_exec` / `mvn_exec`（见 `ENV.md`）。
+- 小步交付、验收命令以该项目自己的约定为准；一次性构建/测试优先 `run_command`；长驻用 `run_service`（或 `run_command` + `background:true`）；给人看本地页用 `browser_open`。
 
 ### B. 维护 my-agent 内核（改 agent-core / evolve / docs）
 
@@ -20,16 +20,22 @@
 - 在 `agent-core/` 下开发；`from paths import AgentPaths`（目录名带连字符，**不要** `import agent_core`）。
 - **先读** 本仓库 `docs/MAP.md`、`docs/TASKS.md` 当前 task，再改代码；严格对照 `TOOLS.md` / `RUNTIME.md` / `MEMORY.md` 已决条款。
 - 小步交付：每步可 `python <module>.py` 或 `python main.py --demo`；也可用 evolved **`run_demo`**。
-- **不要**未经用户要求 `git commit`；提交前可用 **`git_snapshot`** 看 status/diff。
+- **不要**未经用户要求 `git commit` / `git push`；提交前可用 **`git_snapshot`**；分支用 **`git_branch`**；推送用 **`git_push`**（禁 force，须确认）。
 
 ## coding 相关 evolved 工具
 
 | 工具 | 作用 |
 |------|------|
-| `run_demo` | 在 `agent-core/` 下运行 `python <script>.py [extra_args]`，捕获 stdout/stderr/exit_code |
-| `git_snapshot` | 只读 `git status --porcelain` + `diff --stat`（可选 staged） |
-| `git_clone` | 浅克隆 **https** 公开仓到 `workspace/`（vendor）或 `evolve/tools/`（造工具参考）；**每次 confirm**；项目窗通常仅 workspace |
-| `patch_file` | 按行号或唯一 `find` 锚点替换 agent 根下文本（`docs/` / `agent-core/` / `evolve/` / `workspace/`） |
+| `run_command` | 通用 shell（一次性）；`background:true` 升格 `run_service` |
+| `run_service` | 长驻进程托管 |
+| `browser_open` | 系统浏览器打开 http(s) |
+| `run_demo` | 在 `agent-core/` 下运行 `python <script>.py` |
+| `git_snapshot` | 只读 status + diff --stat |
+| `git_commit` | 受控 add+commit（禁 force/amend/push） |
+| `git_branch` | list / create / switch（禁 force checkout） |
+| `git_push` | 推送当前分支（禁 force；永远确认） |
+| `git_clone` | 浅克隆 https 到 workspace 或 evolve/tools |
+| `patch_file` | 按行号或唯一锚点改已有文本 |
 
 以上工具 **`workspace_only=false`**：每次 `run_evolved` 须 confirm（无本会话 `a` 免确认）。
 
@@ -46,7 +52,7 @@
 
 动手只用 **6 Builtin + `run_evolved`**；读记忆正文用 `read_file evolve/memories/...`。
 
-**common 文件工具**：`write_text` · `append_text` · `copy_move` · `move_to_trash`（均 `workspace_only`，先试 `dry_run`）。
+**common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
 
 ## 与本仓库记忆
 

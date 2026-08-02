@@ -6,7 +6,7 @@ description = "在 workspace 子目录运行 npm 命令，捕获 stdout/stderr/e
 
 version = "1.0.0"
 
-status = "active"
+status = "archived"
 
 topics = ["common"]
 

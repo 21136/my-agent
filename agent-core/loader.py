@@ -672,7 +672,7 @@ def format_capability_hints(
         "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
         "执行面：凡 status=active 均可 `run_evolved`（不因主题拒调）。",
         "- 只读：read_file · list_dir · grep（本地）；web_search · fetch_url（网络）",
-        "- 写/改：run_evolved → write_text / append_text / copy_move / move_to_trash；先试 dry_run",
+        "- 写/改：run_evolved → write_text（新建）/ patch_file（改已有）/ copy_move / move_to_trash；先试 dry_run",
         "- 查项目/跨会话：run_evolved → project_catalog；再 read_file data/sessions/<id>/messages.jsonl"
         "（读**其他**会话须 confirm）",
         "- 造新工具：run_evolved → write_evolve（细则见 buckets/evolve.md；scaffold 回合另有短提示）",
@@ -1602,16 +1602,14 @@ def _demo() -> None:
         required_tools = frozenset(
             {
                 "write_text",
-                "append_text",
+                "patch_file",
                 "copy_move",
                 "move_to_trash",
                 "write_evolve",
                 "run_demo",
                 "run_tests",
                 "git_snapshot",
-                "patch_file",
-                "run_python",
-                "repl",
+                "run_command",
             }
         )
         assert required_tools.issubset(repo_allow)
@@ -1639,7 +1637,7 @@ def _demo() -> None:
         required_wf_tools = frozenset(
             {
                 "write_text",
-                "append_text",
+                "patch_file",
                 "copy_move",
                 "move_to_trash",
                 "write_evolve",
@@ -1648,8 +1646,7 @@ def _demo() -> None:
                 "flatten_dir",
                 "dedupe_by_name",
                 "archive_by_date",
-                "run_python",
-                "repl",
+                "run_command",
             }
         )
         assert required_wf_tools.issubset(wf_allow)

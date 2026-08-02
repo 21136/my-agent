@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 27** 执行可观测 **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Cursor 对齐路线图**（[CURSOR-ALIGN.md](./CURSOR-ALIGN.md)）；Phase 28 M0+M1 done；Phase 27 M1 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1141,8 +1141,69 @@ python turn_intent.py    # 分类用例无回归
 | T-2707 | 提示词/catalog 对齐 | evolve prompts · run.md | T-2703 | 禁 mvn 起长驻；指向可观测 | **done** |
 | T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | **done**（IT-90～93；S-90 手工） |
 
-**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。 **已达成**。  
+**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。 **已达成**。
 **完成标志（M1）**：长工具有 progress；`run_service` 后侧栏自动刷新；本回合证据条可见。 **已达成**。
+
+---
+
+## Phase 28 — 通用执行通道（run_command + 归档分域 exec）
+
+> 设计：[SHELL-CHANNEL.md](./SHELL-CHANNEL.md) **v0.3.0** · **状态：M0+M1 done**  
+> 触发：Cursor 式少原语 vs 分域 `*_exec` 膨胀；产品定筋——接近真 shell、先归档跑命令类、确认先严后松。  
+> **修订**：废止 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)「不做裸 shell」defer（改为有边界的通用通道）。  
+> **下一步**：M2 确认放宽（另签）；可选 M1.5 迁 `run_python` guard。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) §6.1（evolve 执行 / confirm 策略 / catalog·提示词 / 可选 Progress Gate；壳/host/计划门无；`run_service` 不破坏）
+- [x] 回归 ID 预留：**IT-100～IT-103** · **S-100**（同文档 §6.2）；既有 IT-75/76 · IT-90～93
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-2801 | 设计文档 + MAP/TASKS 挂钩 | `SHELL-CHANNEL.md` · 本表 | — | D1～D4 + DOC-04 齐全 | **done** |
+| T-2802 | 开放问题 Q1～Q5 签字 | 文档 §8 → v0.2.0 | T-2801 | 已决无「待签」阻塞 M0 | **done** |
+| T-2803 | M0：`run_command` evolved 工具 | `evolve/tools/common/run_command/` | T-2802 | 契约符合 §3；cwd 越界拒 | **done** |
+| T-2804 | M0：confirm 硬门（不可 approve_all 跳过） | `executor._needs_confirm` + IT-101 | T-2803 | 全确认 | **done** |
+| T-2805 | M0：INDEX / prompts / Gate 映射 | `tool-catalog` · prompts | T-2803 | 主荐 run_command + run_service | **done** |
+| T-2806 | M0：IT-100～102 | `tests/test_run_command.py` | T-2803,T-2804 | 测绿 | **done** |
+| T-2807 | M1：第一波 `*_exec` archived + IT-103 | tool.toml · INDEX | T-2806 | 旧工具出执行面 | **done** |
+| T-2808 | M1：S-100 + 文档 | smoke 清单 · v0.3.0 | T-2807 | 文档已列；手工 | **done** |
+| T-2809 | M2：确认策略放宽 | 修订 §3.2 | T-2808 | **并入 Phase 29 / [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) Track A** | **moved** |
+
+**完成标志（M0）**：一条真 shell 通道可用且每条必确认；长驻仍走 `run_service`。  
+**完成标志（M1）**：跑命令类分域工具退出默认推荐/执行面。
+
+---
+
+## Phase 29～34 — 对齐 Cursor 剩余面（路线图）
+
+> 总设计：[CURSOR-ALIGN.md](./CURSOR-ALIGN.md) **v0.2.0** · **状态：§6 已签；Phase 29 A+B done**  
+> 触发：Phase 28 后盘点——确认摩擦、归档尾巴、编辑收敛、终端升格、Git push、浏览器、工作台 UI。  
+> **纪律**：§6 已签；按轨推进。
+
+### DOC-04 准入（提案自检 · 总册）
+
+- [x] 影响矩阵行：见 [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) §5（confirm / evolve / executor·run_service / 桌面入口 / guards / Gate）
+- [x] Phase 29 回归：**IT-110**（分层确认）· 扩 IT-103（pip/run_python）· lifecycle / guards
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-2900 | 路线图落盘 + MAP/TASKS | `CURSOR-ALIGN.md` · 本表 | Phase 28 | 7 轨可读 | **done** |
+| T-2901 | §6 全轨默认签字 | 文档 → v0.2.0 | T-2900 | 无「待签」阻塞 Phase 29 | **done** |
+| T-2902 | Track A：A2 分层确认 | `run_command_policy.py` · executor · IT-110 | T-2901 | 项目内 build/test 可免；install/danger 仍确认 | **done** |
+| T-2903 | Track B：归档 pip/run_python + guard 扩 | tool.toml · catalog · project_mode | T-2901 | 非 active 拒调；验收走 run_command | **done** |
+| T-30xx | Phase 30：Track C 编辑收敛 | INDEX · `append_text` archived · IT-120 | T-2901 | C1 | **done** |
+| T-3101 | Phase 31 D1：background 升格 | `run_command` → `run_service` · IT-130 | T-2901 | dry_run 预览；escalate+stop；永远确认 | **done** |
+| T-3201 | Phase 32 E：git_branch + git_push | coding tools · IT-140/141 | T-2901 | list 免确认；create/switch/push 确认；禁 force | **done** |
+| T-3301 | Phase 33 F1：browser_open | common tool · IT-150 | T-2901 | loopback 免确认；外网确认；禁非 http(s) | **done** |
+| T-34xx | Phase 34：Track G 工作台 | WORKBENCH-UI | T-2901 + Q1～Q3 | 另开细表 | **M0 done** |
+| T-3500 | Phase 35：执行可靠性设计 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · G14 | — | D0 签字 | **done** |
+| T-3501 | M0：后置条件成功声明门 + 熔断 | agent / executor · IT-160/161 | T-3500 | 假「已启动」改写；同指纹×3 熔断 | **done** |
+| T-3502 | M1：失败分型 + 剧本 nudge | exec_reliability · IT-162 | T-3501 | A–F 日志；P-npm/P-sql/P-port | **done** |
+| T-3503 | M2：侧栏可靠性条 | turn.evidence.reliability · S-160 | T-3502 | 后置条件/熔断/剧本可见 | **done** |
+| T-3504 | D1：废止剧本 + 本地执行硬化设计 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) v0.6+ | T-3503 | 已签字 | **done** |
+| T-3505 | M3a：关剧本 nudge + run_command 长超时 | exec_reliability · run_command · IT-163/164 | T-3504 | 无外部 Agent 依赖 | **done** |
+| T-3506 | M3b：repair_node_modules 显式工具 | evolve/tools/common/repair_node_modules · IT-165 | T-3505 | 点名调用，非剧本触发 | **done** |
 
 ---
 

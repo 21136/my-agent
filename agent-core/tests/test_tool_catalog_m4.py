@@ -15,19 +15,19 @@ _BUCKETS = _ROOT / "evolve" / "tool-catalog" / "buckets"
 
 # Minimal active names that must appear in some bucket (M4 registry of record).
 _REQUIRED = {
-    "write.md": ("write_text", "append_text", "copy_move", "move_to_trash", "patch_file"),
+    "write.md": ("write_text", "copy_move", "move_to_trash", "patch_file"),
     "run.md": (
-        "run_python",
-        "npm_exec",
-        "mvn_exec",
+        "run_command",
         "run_demo",
         "csv_head",
         "run_service",
         "http_request",
+        "browser_open",
         "dev_start",
         "git_commit",
+        "git_branch",
+        "git_push",
         "db_query",
-        "pip_install",
     ),
     "organize.md": ("sort_by_extension", "rename_batch", "dedupe_by_name"),
     "project.md": ("report_progress", "project_catalog"),
