@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 26** 项目开发工具补齐 **M0+M1 done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)）；M2 defer；Phase 25/24 见下；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 27** 执行可观测 **doc**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1116,6 +1116,33 @@ python turn_intent.py    # 分类用例无回归
 | T-2608 | M2：`db_query` + `pip_install` active | §3.5/§3.6 + IT-85/86 | T-2605,T-2606 | 只读默认；包名校验；测绿 | **done** |
 
 **完成标志**：IT-80～86 绿；写项目主路径（起服 / 探活 / 清端口 / 提交 / SQLite / pip）齐备。
+
+---
+
+## Phase 27 — 执行可观测（聊天过程 + 侧栏服务/进度）
+
+> 设计：[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) **v0.1.0**  
+> 触发：确认工具后只见「已执行」、无启动过程；侧栏看不见服务与本回合证据 → 排障黑盒。  
+> 产品选择：**聊天过程与侧栏看板都要**。  
+> **纪律**：先文档后实现；D1～D3 未确认前不写代码（有默认提案）。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) §6.1（桌面聊天 / 项目侧栏 / 可选 WS 事件；工具语义与硬门不变）
+- [x] 回归 ID 预留：**IT-90～IT-93** · **S-90**（同文档 §6.2）
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-2701 | 设计文档 + MAP/TASKS | `EXEC-OBSERVABILITY.md` · 本表 | — | 双面目标 + DOC-04 齐全 | **done** |
+| T-2702 | 用户确认 D1～D3 | 文档 §5.2 | T-2701 | 默认采纳或改写已决 | todo |
+| T-2703 | M0：聊天 RunningCard | `chat-state` / unified 确认流 | T-2702 | 同意后可见运行中+秒表；end 更新 | todo |
+| T-2704 | M0：确认文案去黑盒 | confirm 标签文案 | T-2703 | 「已同意，执行中…」≠ 单独「已执行」当成功 | todo |
+| T-2705 | M0：侧栏 Services | project-panel + list/刷新 | T-2702 | 可见登记服务 alive/端口 | todo |
+| T-2706 | M1：progress/services 事件 + 证据条 | server WS + 侧栏 Turn | T-2703,T-2705 | IT-91～93 | todo |
+| T-2707 | 提示词/catalog 对齐 | evolve prompts · run.md | T-2703 | 禁 mvn 起长驻；指向可观测 | todo |
+| T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | todo |
+
+**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。
 
 ---
 
