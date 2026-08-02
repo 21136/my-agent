@@ -12,6 +12,7 @@ import {
   Menu,
   nativeImage,
   screen,
+  shell,
   Tray,
 } from "electron";
 
@@ -144,8 +145,8 @@ function buildTray(): void {
   tray = new Tray(trayIcon());
   tray.setToolTip("my-agent");
   const menu = Menu.buildFromTemplate([
-    { label: "显示伴侶", click: () => void showPetWindow() },
     { label: "打开工作台", click: () => void openWorkbenchWindow() },
+    { label: "显示伴侶", click: () => void showPetWindow() },
     { type: "separator" },
     { label: "改用终端 (CLI)", click: () => void switchToCli() },
     { type: "separator" },
@@ -157,7 +158,7 @@ function buildTray(): void {
     },
   ]);
   tray.setContextMenu(menu);
-  tray.on("double-click", () => void showPetWindow());
+  tray.on("double-click", () => void openWorkbenchWindow());
 }
 
 function startSidecar(takeover = false): Promise<SidecarStartResult> {
@@ -467,6 +468,31 @@ async function loadRenderer(win: BrowserWindow, page: "pet" | "workbench"): Prom
   await win.loadFile(path.join(__dirname, "../dist", file));
 }
 
+function isAppOwnedUrl(url: string): boolean {
+  const text = url.trim();
+  if (!text || text === "about:blank") return true;
+  if (text.startsWith("file:")) return true;
+  const dev = process.env.VITE_DEV_SERVER_URL;
+  if (dev && text.startsWith(dev)) return true;
+  return false;
+}
+
+/** Chat markdown links must not navigate the workbench (white-screen / ERR_CONNECTION_REFUSED). */
+function wireExternalNavigation(win: BrowserWindow): void {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isAppOwnedUrl(url)) {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    }
+    return { action: "allow" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (isAppOwnedUrl(url)) return;
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+}
+
 async function createPetWindow(): Promise<void> {
   if (petWindow && !petWindow.isDestroyed()) {
     return;
@@ -508,6 +534,7 @@ async function createPetWindow(): Promise<void> {
   });
 
   await loadRenderer(petWindow, "pet");
+  wireExternalNavigation(petWindow);
 
   petWindow.on("closed", () => {
     petWindow = null;
@@ -540,10 +567,11 @@ async function createWorkbenchWindow(): Promise<void> {
     event.preventDefault();
     sendSessionControl(workbenchWindow, "suspend");
     workbenchWindow?.hide();
-    void showPetWindow();
+    // Phase 34: hide to tray; do not bounce back to pet as default entry
   });
 
   await loadRenderer(workbenchWindow, "workbench");
+  wireExternalNavigation(workbenchWindow);
 
   workbenchWindow.on("closed", () => {
     workbenchWindow = null;
@@ -645,15 +673,20 @@ async function switchToCli(): Promise<void> {
 }
 
 function registerShortcuts(): void {
-  if (!globalShortcut.register(SHOW_SHORTCUT, () => void showPetWindow())) {
+  if (!globalShortcut.register(SHOW_SHORTCUT, () => void openWorkbenchWindow())) {
     console.warn(`Failed to register shortcut ${SHOW_SHORTCUT}`);
   }
 }
 
 ipcMain.handle("sidecar:get", () => sidecarInfo);
 ipcMain.handle("app:switch-to-cli", () => switchToCli());
-ipcMain.handle("app:open-workbench", () => openWorkbenchWindow());
-ipcMain.handle("app:open-pet", () => showPetWindow());
+ipcMain.handle("app:open-external", async (_event, raw: unknown) => {
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) return false;
+  await shell.openExternal(url);
+  return true;
+});
 
 ipcMain.on("pet:set-ignore-mouse-events", (_event, ignore: unknown) => {
   if (!petWindow || petWindow.isDestroyed()) return;
@@ -731,8 +764,7 @@ app.whenReady().then(async () => {
     return;
   }
 
-  await createPetWindow();
-  petWindow?.show();
+  await openWorkbenchWindow();
 });
 
 app.on("window-all-closed", () => {

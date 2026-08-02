@@ -1,9 +1,9 @@
 # 运行时行为约束（RUNTIME-GUARDS）
 
-> 版本 **0.2.0** · 2026-07-13  
-> **状态**：**M0+M1 已实现**（T-1510～T-1516,T-1518～T-1520 done）— [TASKS.md](./TASKS.md) §Phase 16  
+> 版本 **0.2.1** · 2026-08-02  
+> **状态**：**M0+M1 已实现** + **G13 空头动作声明门**（announce without tools → nudge）  
 > 关联：[TURN-CONTROL.md](./TURN-CONTROL.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [TOOLS.md](./TOOLS.md) · [ORCHESTRATION.md](./ORCHESTRATION.md)  
-> 动机：2026-07-13 grow 沉淀 `mvn_exec` — 文件已落盘，但 **思考中卡死**、Stop 不灵、助手 **违反纪律** 反复 `run_python` / confirm；Phase 14/15 解决「管线诚实 + 用户可打断」，**不**解决「模型乱来仍能把回合拖死」。
+> 动机：2026-07-13 grow 沉淀 `mvn_exec` — 文件已落盘，但 **思考中卡死**、Stop 不灵、助手 **违反纪律** 反复 `run_python` / confirm；Phase 14/15 解决「管线诚实 + 用户可打断」，**不**解决「模型乱来仍能把回合拖死」。另：huiyi 联调「重新建库建表：」后无 tool_calls → **G13**。
 
 ---
 
@@ -23,6 +23,8 @@
 | **G10** | 禁止粗暴封锁 `run_python`：仅在当前 execute segment、grow scaffold、目标为本 segment 新写 tool 的 demo 时拒调；staging 与 project 壳不受影响 |
 | **G11** | 内联正文解码后 `>8192` 且无 `content_workspace_path` → confirm 前 `validation_error` |
 | **G12** | Checker 见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md)：本 Phase **执法并产出硬事实**，checker **独立审计** |
+| **G13** | **空头动作声明门**：agent 模式正文匹配「正在/接下来/我来/建表…」且 **无 tool_calls** → 注入内核 nudge **一次**并继续回合；ask/recall 不触发 |
+| **G14** | **执行可靠性**（后置条件 + 熔断；**剧本自动 nudge 废止中** · 见 [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) §3.4/M3）— 管「假成功 / 同招空转」，修好环境靠本地长任务能力 |
 
 ---
 
@@ -235,3 +237,5 @@ demo probe 失败产生 `notice`、result 摘要与审计事件，供父代理�
 | 0.1.0 | 2026-07-13 | 草案：与 checker 分线；迁入 T-1410～T-1412 |
 | 0.2.0 | 2026-07-13 | 设计定稿：900s 墙钟、stall opt-in、窄域拒调、tool.toml 后自动 demo |
 | 0.2.1 | 2026-07-19 | §3.1 指针：project Task 一停（Phase 20 草案 · [TASK-STOP.md](./TASK-STOP.md)）；墙钟仍为 L2 兜底 |
+| 0.2.2 | 2026-08-02 | G13 空头动作门；G14 指针 → [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) |
+| 0.2.3 | 2026-08-02 | G14：剧本废止倾向 + M3 本地执行硬化指针 |

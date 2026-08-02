@@ -22,12 +22,10 @@ from server import WsBridge
 from session import create_new, session_banner_event, session_history_event
 from context import session_memory_event
 
-from tests.isolation_helpers import make_temp_agent_paths
-
 
 class ProjectSwitchTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.paths = make_temp_agent_paths(self)
+        self.paths = AgentPaths.discover()
         token = secrets.token_hex(4)
         self.project_a = f"test-switch-a-{token}"
         self.project_b = f"test-switch-b-{token}"
@@ -36,6 +34,43 @@ class ProjectSwitchTests(unittest.TestCase):
             conversation_id=f"_test_proj_switch_{secrets.token_hex(4)}",
         )
         self._extra_session_ids: list[str] = []
+        self._state_before = self._read_state()
+        self._project_sessions_before = dict(read_project_sessions(self.paths))
+        self.addCleanup(self._cleanup)
+
+    def _read_state(self) -> dict:
+        state_path = self.paths.data / "state.json"
+        if not state_path.is_file():
+            return {}
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _cleanup(self) -> None:
+        for pid in (self.project_a, self.project_b):
+            shutil.rmtree(project_dir(self.paths, normalize_project_id(pid)), ignore_errors=True)
+        session_ids = [self.session.conversation_id, *self._extra_session_ids]
+        for sid in session_ids:
+            shutil.rmtree(self.paths.data / "sessions" / sid, ignore_errors=True)
+
+        mapping = dict(self._project_sessions_before)
+        for pid in (self.project_a, self.project_b):
+            mapping.pop(normalize_project_id(pid), None)
+        payload = dict(self._state_before)
+        if mapping:
+            payload[PROJECT_SESSIONS_KEY] = mapping
+        else:
+            payload.pop(PROJECT_SESSIONS_KEY, None)
+        state_path = self.paths.data / "state.json"
+        if payload:
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        elif state_path.is_file():
+            state_path.unlink(missing_ok=True)
 
     def _seed_project_b(self) -> None:
         create_project(self.paths, self.project_b)

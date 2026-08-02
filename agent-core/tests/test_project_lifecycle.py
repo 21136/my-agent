@@ -28,17 +28,56 @@ from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode, tool_ok
 
-from tests.isolation_helpers import make_temp_agent_paths
-
 
 class ProjectLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.paths = make_temp_agent_paths(self, copy_tool_dirs=("common/run_command",))
+        self.paths = AgentPaths.discover()
         self.project_id = f"test-lifecycle-{secrets.token_hex(4)}"
         self.session = create_new(
             self.paths,
             conversation_id=f"_test_proj_lifecycle_{secrets.token_hex(4)}",
         )
+        self._state_before = self._read_state()
+        self._project_sessions_before = read_project_sessions(self.paths)
+        self.addCleanup(self._cleanup)
+
+    def _read_state(self) -> dict:
+        state_path = self.paths.data / "state.json"
+        if not state_path.is_file():
+            return {}
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _cleanup(self) -> None:
+        pid = normalize_project_id(self.project_id)
+        shutil.rmtree(project_dir(self.paths, pid), ignore_errors=True)
+        shutil.rmtree(
+            self.paths.data / "sessions" / self.session.conversation_id,
+            ignore_errors=True,
+        )
+        payload = self._read_state()
+        mapping = dict(read_project_sessions(self.paths))
+        if pid in mapping:
+            del mapping[pid]
+        payload[PROJECT_SESSIONS_KEY] = mapping
+        state_path = self.paths.data / "state.json"
+        if self._state_before:
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        elif state_path.is_file() and not mapping:
+            payload.pop(PROJECT_SESSIONS_KEY, None)
+            if payload:
+                state_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                state_path.unlink(missing_ok=True)
 
     def test_project_new_creates_workspace_and_triad(self) -> None:
         """T-1803-01: 项目 新建 creates workspace/<id>/ + PROJECT/MAP/TASKS."""
@@ -94,15 +133,11 @@ class ProjectLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(self.session.meta.project_plan_status, "confirmed")
 
-    def _run_command_arguments(self) -> dict[str, object]:
+    def _run_python_arguments(self) -> dict[str, object]:
         pid = normalize_project_id(self.project_id)
         return {
-            "tool_name": "run_command",
-            "arguments": {
-                "command": "echo hi",
-                "working_dir": f"workspace/{pid}",
-                "dry_run": True,
-            },
+            "tool_name": "run_python",
+            "arguments": {"path": f"{pid}/main.py", "dry_run": True},
         }
 
     def _make_executor(self) -> ToolExecutor:
@@ -111,7 +146,7 @@ class ProjectLifecycleTests(unittest.TestCase):
             registry=ToolRegistry.load(self.paths),
             session=ExecutorSession.load(
                 self.session.session_dir,
-                allowed_evolved={"run_command"},
+                allowed_evolved={"run_python"},
             ),
             confirm_fn=lambda _preview, _allow_all: "y",
         )
@@ -141,12 +176,12 @@ class ProjectLifecycleTests(unittest.TestCase):
         self.assertTrue(any("计划已确认" in line for line in outputs))
         self.assertFalse(any(line.startswith("error:") for line in outputs))
 
-    def test_draft_rejects_run_command_plan_gate(self) -> None:
-        """T-1803-03: draft plan blocks run_command via executor plan gate."""
+    def test_draft_rejects_run_python_plan_gate(self) -> None:
+        """T-1803-03: draft plan blocks run_python via executor plan gate."""
         self._run_project_new()
         executor = self._make_executor()
 
-        result = executor.run("run_evolved", self._run_command_arguments())
+        result = executor.run("run_evolved", self._run_python_arguments())
 
         self.assertFalse(result.ok)
         assert result.error is not None
@@ -155,10 +190,14 @@ class ProjectLifecycleTests(unittest.TestCase):
         details = result.error.details or {}
         self.assertEqual(details.get("project_plan_status"), "draft")
 
-    def test_confirmed_allows_run_command(self) -> None:
-        """T-1803-03: confirmed plan passes plan gate; run_command proceeds (mocked)."""
+    def test_confirmed_allows_run_python(self) -> None:
+        """T-1803-03: confirmed plan passes plan gate; run_python proceeds (mocked)."""
         self._run_project_new()
         self._run_project_confirm()
+
+        pid = normalize_project_id(self.project_id)
+        script = project_dir(self.paths, pid) / "main.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
 
         mock_runner = MagicMock(
             return_value=tool_ok(
@@ -172,7 +211,7 @@ class ProjectLifecycleTests(unittest.TestCase):
             "tools.executor._BUILTIN_RUNNERS",
             {"run_evolved": mock_runner},
         ):
-            result = executor.run("run_evolved", self._run_command_arguments())
+            result = executor.run("run_evolved", self._run_python_arguments())
 
         self.assertTrue(result.ok)
         mock_runner.assert_called_once()

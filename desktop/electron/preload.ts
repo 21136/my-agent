@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
   openPet: () => ipcRenderer.invoke("app:open-pet") as Promise<void>,
+  openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url) as Promise<boolean>,
   petSetIgnoreMouseEvents: (ignore: boolean) => ipcRenderer.send("pet:set-ignore-mouse-events", ignore),
   petSetBounds: (mode: PetBoundsMode) => ipcRenderer.invoke("pet:set-bounds", mode),
   onSessionControl: (handler: (action: SessionControlAction) => void) => {
@@ -36,6 +37,7 @@ export type MyAgentDesktopApi = {
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;
   openPet: () => Promise<void>;
+  openExternal: (url: string) => Promise<boolean>;
   petSetIgnoreMouseEvents: (ignore: boolean) => void;
   petSetBounds: (mode: PetBoundsMode) => Promise<void>;
   onSessionControl: (handler: (action: SessionControlAction) => void) => () => void;

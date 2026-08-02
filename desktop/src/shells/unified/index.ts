@@ -63,12 +63,12 @@ function isRecentTurn(turnIndex: number, currentTurnIndex: number): boolean {
 }
 
 function computeInitialPerspective(
-  activeShell: string | undefined,
+  _activeShell: string | undefined,
   projectRoot: string | undefined,
 ): Perspective {
+  // Phase 34: workbench always uses project layout (sidebar on).
   if (projectRoot) return "project";
-  if (activeShell === "project" && !projectRoot) return "default";
-  return "default";
+  return "project";
 }
 
 export function mountUnifiedShell(
@@ -76,22 +76,23 @@ export function mountUnifiedShell(
   client: AgentWsClient,
   shellId: string = "grow",
 ): () => void {
-  // ---- perspective state ----
-  let perspective: Perspective = "default";
-  let perspectiveLocked = false;
+  // ---- perspective state (Phase 34: default = workbench / project layout) ----
+  let perspective: Perspective = "project";
+  let perspectiveLocked = true;
 
   function setPerspective(p: Perspective, reason: string = "manual"): void {
-    if (perspectiveLocked && reason === "auto") return;
+    if (perspectiveLocked && reason === "auto" && p !== "project") return;
+    // Workbench keeps project layout; night is not an entry mode.
+    if (p === "default") p = "project";
     perspective = p;
-    shellEl.setAttribute("data-perspective", p);
-    sidebarEl.classList.toggle("hidden", p !== "project");
+    shellEl.setAttribute("data-perspective", p === "night" ? "project" : p);
+    sidebarEl.classList.toggle("hidden", false);
     updatePlaceholder();
     renderChat();
     renderConfirmGlass();
     syncWorkingVisual();
-    if (p === "project") {
-      refreshServices();
-    }
+    refreshServices();
+    updateWorkbenchEmpty();
   }
 
   // ---- ui state ----
@@ -179,6 +180,10 @@ export function mountUnifiedShell(
     turnArmedId: "",
     turnArmedText: "",
     turnEvidence: [],
+    turnPostcondition: "none",
+    turnCircuitOpen: [],
+    turnPlaybookId: "",
+    turnFailureClass: "",
   };
 
   let statusText = "连接中…";
@@ -293,8 +298,8 @@ export function mountUnifiedShell(
 
   // ---- DOM layout ----
   root.innerHTML = `
-    <div class="unified-shell" data-perspective="default">
-      <aside class="unified-sidebar hidden" id="unified-sidebar">
+    <div class="unified-shell" data-perspective="project">
+      <aside class="unified-sidebar" id="unified-sidebar">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <div class="unified-sidebar-header">
           <div class="unified-sidebar-title" id="project-sidebar-title">项目</div>
@@ -336,6 +341,16 @@ export function mountUnifiedShell(
       <div class="unified-main">
         <header class="unified-topbar" id="unified-topbar"></header>
         <section class="unified-expand hidden" id="unified-expand"></section>
+        <div class="workbench-empty" id="workbench-empty" hidden>
+          <div class="workbench-empty-card">
+            <h2 class="workbench-empty-title">选择或新建项目</h2>
+            <p class="workbench-empty-copy">打开应用即工作台。先选一个项目，再开始对话与改代码。</p>
+            <div class="workbench-empty-actions">
+              <button type="button" class="unified-btn unified-btn-accent" id="empty-new-project">新建项目</button>
+              <button type="button" class="unified-btn" id="empty-pick-project">我的项目</button>
+            </div>
+          </div>
+        </div>
         <main class="unified-chat" id="unified-chat"></main>
         <div class="unified-status" id="unified-status"></div>
         <div class="unified-token-bar hidden" id="unified-token-bar"></div>
@@ -355,6 +370,9 @@ export function mountUnifiedShell(
   const topbarEl = root.querySelector<HTMLElement>("#unified-topbar")!;
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
+  const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
+  const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
+  const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
@@ -423,11 +441,18 @@ export function mountUnifiedShell(
     if (!isNaN(w)) saveSidebarWidth(w);
   });
 
-  // ---- perspective-dependent placeholder ----
   function updatePlaceholder(): void {
-    input.placeholder = perspective === "project"
+    input.placeholder = projectState.projectId
       ? "输入消息，或拖入代码文件…"
-      : "输入消息，或拖入文件…";
+      : "先选择或新建项目…";
+  }
+
+  function updateWorkbenchEmpty(): void {
+    const empty = !projectState.projectId;
+    workbenchEmptyEl.hidden = !empty;
+    chatEl.classList.toggle("is-empty-gated", empty);
+    composer.classList.toggle("is-empty-gated", empty);
+    updatePlaceholder();
   }
 
   // ---- file drop + composer ----
@@ -437,7 +462,7 @@ export function mountUnifiedShell(
     shell: shellId,
     canAccept: () => {
       if (chat.model.confirmPending) return false;
-      if (perspective === "project" && !projectState.projectId) return false;
+      if (!projectState.projectId) return false;
       return true;
     },
     onChange: () => composerWire.syncSendEnabled(),
@@ -451,6 +476,7 @@ export function mountUnifiedShell(
     chat,
     fileDrop,
     onStatus: (text) => setStatus(text),
+    allowSend: () => Boolean(projectState.projectId),
     beforeSend: () => {
       topbarState.intentLabel = "";
       setStatus("发送中…");
@@ -1924,15 +1950,16 @@ export function mountUnifiedShell(
           topbarState.projectLabel = `项目 · ${event.project_id} · ${plan}`;
           setPerspective("project", "session");
         } else {
+          projectState.projectId = "";
           topbarState.projectLabel = "";
-          if (!perspectiveLocked) setPerspective("default", "session");
+          setPerspective("project", "session");
         }
         updatePlaceholder();
+        updateWorkbenchEmpty();
+        composerWire.syncSendEnabled();
         setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
         renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
-        if (perspective === "project") {
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         client.listSessions();
         break;
 
@@ -2028,6 +2055,18 @@ export function mountUnifiedShell(
         projectState.turnArmedId = event.armed_task_id || "";
         projectState.turnArmedText = event.armed_task_text || "";
         projectState.turnEvidence = Array.isArray(event.items) ? event.items : [];
+        {
+          const rel = event.reliability;
+          projectState.turnPostcondition =
+            rel && typeof rel.postcondition === "string" ? rel.postcondition : "none";
+          projectState.turnCircuitOpen = Array.isArray(rel?.circuit_open)
+            ? rel.circuit_open.filter((x): x is string => typeof x === "string")
+            : [];
+          projectState.turnPlaybookId =
+            rel && typeof rel.playbook_id === "string" ? rel.playbook_id : "";
+          projectState.turnFailureClass =
+            rel && typeof rel.failure_class === "string" ? rel.failure_class : "";
+        }
         if (perspective === "project") {
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
@@ -2060,6 +2099,8 @@ export function mountUnifiedShell(
           renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
         }
         updatePlaceholder();
+        updateWorkbenchEmpty();
+        composerWire.syncSendEnabled();
         setStatus(event.message);
         break;
 
@@ -2269,9 +2310,27 @@ export function mountUnifiedShell(
   setComposerEnabled(true);
   setStatus("已连接");
 
-  // ---- initial perspective from shellId hint ----
-  const initPerspective = computeInitialPerspective(shellId, undefined);
-  if (initPerspective !== "default") setPerspective(initPerspective, "auto");
+  // Phase 34: workbench layout + empty gate
+  emptyNewBtn.addEventListener("click", () => handleNewProject());
+  emptyPickBtn.addEventListener("click", () => {
+    projectState.overlayPanel = "projects";
+    projectState.switchConfirmTarget = null;
+    projectState.projectSearchQuery = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.listProjects();
+    } catch {
+      /* ignore */
+    }
+  });
+  setPerspective("project", "auto");
+  updateWorkbenchEmpty();
+  composerWire.syncSendEnabled();
+  try {
+    client.listProjects();
+  } catch {
+    /* ignore */
+  }
 
   return () => {
     destroyed = true;

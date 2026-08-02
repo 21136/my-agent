@@ -52,6 +52,10 @@ QA_SOFT_REMINDER_MESSAGE = (
 RECALL_SOFT_REMINDER_MESSAGE = (
     "[内核] 根据上文直接回顾，勿 read_file/grep messages.jsonl。"
 )
+ACTION_ANNOUNCE_NUDGE_MESSAGE = (
+    "[内核] 你刚宣布了具体操作但本回合未调用工具。"
+    "请立刻用工具执行；若只需说明或提问，请改写为不含「正在/接下来/我来/建表…」的纯文字。"
+)
 TURN_DRIFT_NOTICE = (
     "[提醒] 这类问题可以直接根据上文回答；若仍在查文件，可回复「别查了直接说」。"
 )
@@ -61,6 +65,22 @@ _DEFAULT_EXECUTE_TOTAL_MAX = 50
 
 _CHECKLIST_PROGRESS_RE = re.compile(
     r"(?:\[[xX✓✔]\]|[-*]\s*\[[xX]\])",
+)
+
+# Future-tense / in-progress action announce without tools (huiyi: 「重新建库建表：」).
+_ACTION_ANNOUNCE_RE = re.compile(
+    r"(?:"
+    r"(?:重新)?建(?:库|表)"
+    r"|我来(?:帮你)?(?:做|写|改|跑|建|修|启|执行)"
+    r"|现在(?:就)?(?:开始|去|来)(?:建|写|跑|修|启|安装|编译|导入|执行)"
+    r"|接下来(?:我)?(?:来|去|会|将)?(?:建|写|跑|修|启|安装|编译|导入|执行)"
+    r"|马上(?:就)?(?:建|写|跑|修|启|执行)"
+    r"|正在(?:重新)?(?:建|写|跑|修|启|安装|编译|导入)"
+    r"|先(?:去)?(?:建|写|跑|修|启|导入|执行)"
+    r"|I(?:'ll| will)\s+(?:now\s+)?(?:create|write|run|fix|start|build|import)"
+    r"|Let me\s+(?:create|write|run|fix|start|build|import)"
+    r")",
+    re.IGNORECASE,
 )
 
 
@@ -113,6 +133,13 @@ def claims_scaffold_complete(text: str) -> bool:
     return any(marker in text for marker in SCAFFOLD_COMPLETE_MARKERS)
 
 
+def announces_pending_action(text: str) -> bool:
+    """True when assistant text announces an imminent side-effecting action (no tools yet)."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return _ACTION_ANNOUNCE_RE.search(text) is not None
+
+
 def apply_scaffold_completion_gate(text: str, verdict: str | None) -> str:
     """Strip scaffold completion claims when checker verdict is not pass (T-1623)."""
     if verdict == "pass" or not claims_scaffold_complete(text):
@@ -121,6 +148,19 @@ def apply_scaffold_completion_gate(text: str, verdict: str | None) -> str:
     for marker in SCAFFOLD_COMPLETE_MARKERS:
         cleaned = cleaned.replace(marker, SCAFFOLD_COMPLETE_REPLACEMENT)
     return cleaned
+
+
+def apply_service_postcondition_gate(
+    text: str,
+    messages: list[dict[str, Any]],
+) -> str:
+    """Rewrite start/alive success claims when postcondition unmet (G14 / T-3501)."""
+    from exec_reliability import apply_service_success_gate, run_service_postcondition_ok
+
+    return apply_service_success_gate(
+        text,
+        postcondition_ok=run_service_postcondition_ok(messages),
+    )
 
 
 def tool_result_shows_progress(content: str) -> bool:
@@ -468,6 +508,7 @@ class ToolLoopSegmentResult:
     exceeded: bool = False
     had_progress: bool = False
     qa_soft_reminder_injected: bool = False
+    action_announce_nudge_injected: bool = False
 
 
 @dataclass
@@ -680,6 +721,45 @@ class Agent:
 
         return final_text, finish_reason, checker_used, checker_verdict, checker_tool_rounds
 
+    def _apply_service_postcondition_gate(
+        self,
+        *,
+        final_text: str,
+        finish_reason: str | None,
+    ) -> str:
+        """G14: rewrite '已启动/可访问' claims when run_service postcondition unmet."""
+        if finish_reason in {"cancelled", "timeout", "context_switched"}:
+            return final_text
+        if not final_text:
+            return final_text
+        gated = apply_service_postcondition_gate(final_text, self.session.messages)
+        if gated == final_text:
+            return final_text
+        self._patch_last_assistant_message(gated)
+        self.executor.session.postcondition_claim_blocked = True
+        try:
+            self.executor._emit_turn_evidence()
+        except Exception:
+            pass
+        self._emit_turn_event(
+            {
+                "type": "turn.notice",
+                "level": "warn",
+                "text": "成功声明未满足后置条件（进程未就绪），已拦截口头「已启动/可访问」。",
+            }
+        )
+        try:
+            log = self.executor.evolve_log
+            if log is not None:
+                log.log_guard_event(
+                    guard_type="service_postcondition",
+                    conversation_id=self.session.conversation_id,
+                    preview=final_text[:240],
+                )
+        except Exception:
+            pass
+        return gated
+
     def _resolve_parent_loop_max(self, intent: str) -> int:
         """Budget follows turn_mode (T-907); intent does not cap tool rounds."""
         if intent == "recall":
@@ -714,6 +794,7 @@ class Agent:
         finish_reason: str | None = None
         reminder_injected = False
         recall_injected = False
+        action_nudge_injected = False
         tools_payload: list[dict[str, Any]] | None = tools if tools else None
 
         for _ in range(max_rounds):
@@ -728,6 +809,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
             system = build_system_prompt(self.session).prompt
             if self.cancel_event.is_set():
@@ -741,6 +823,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
             if should_auto_compact(system, self.session, model=model):
                 self._emit_turn_event(
@@ -796,6 +879,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
             except (LLMApiError, LLMNetworkError) as exc:
                 if not segment_retried:
@@ -820,6 +904,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
             except LLMTimeoutError:
                 return ToolLoopSegmentResult(
@@ -832,6 +917,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
             # after SSE stream returns, check cancel before processing tool calls
             if self.cancel_event.is_set():
@@ -845,12 +931,48 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
 
             finish_reason = response.finish_reason
 
             if not response.tool_calls:
                 final_text = (response.content or "").strip()
+                # Agent mode: announced side-effect without tools → nudge once, continue.
+                if (
+                    final_text
+                    and tools_payload
+                    and not recall_soft_reminder
+                    and self.session.meta.turn_mode == "agent"
+                    and announces_pending_action(final_text)
+                    and not action_nudge_injected
+                    and max_rounds > 1
+                ):
+                    self.session.append_message(
+                        {"role": "assistant", "content": final_text}
+                    )
+                    self.session.append_message(
+                        {"role": "user", "content": ACTION_ANNOUNCE_NUDGE_MESSAGE}
+                    )
+                    action_nudge_injected = True
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": "检测到空头动作声明，已要求本回合调用工具。",
+                        }
+                    )
+                    try:
+                        log = self.executor.evolve_log
+                        if log is not None:
+                            log.log_guard_event(
+                                guard_type="action_announce_no_tools",
+                                conversation_id=self.session.conversation_id,
+                                preview=final_text[:240],
+                            )
+                    except Exception:
+                        pass
+                    continue
                 if final_text:
                     assistant_msg = {"role": "assistant", "content": final_text}
                     self.session.append_message(assistant_msg)
@@ -881,6 +1003,23 @@ class Agent:
                     "content": to_json(result),
                 }
                 self.session.append_message(tool_message)
+
+                # G14: circuit just opened → inject kernel nudge once per open.
+                opened_fp = getattr(self.executor.session, "circuit_just_opened", "") or ""
+                if opened_fp:
+                    from exec_reliability import EXEC_CIRCUIT_NUDGE_MESSAGE
+
+                    self.executor.session.circuit_just_opened = ""
+                    self.session.append_message(
+                        {"role": "user", "content": EXEC_CIRCUIT_NUDGE_MESSAGE}
+                    )
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": "同类失败已熔断，请换策略或停下说明。",
+                        }
+                    )
 
                 # —— retry on recoverable validation errors (TOOL-RETRY) ——
                 if (
@@ -954,6 +1093,7 @@ class Agent:
                         segment_start_index,
                     ),
                     qa_soft_reminder_injected=reminder_injected,
+                    action_announce_nudge_injected=action_nudge_injected,
                 )
 
             if (
@@ -978,6 +1118,7 @@ class Agent:
                 exceeded=True,
                 had_progress=had_progress,
                 qa_soft_reminder_injected=reminder_injected,
+                action_announce_nudge_injected=action_nudge_injected,
             )
 
         had_progress = segment_messages_show_progress(
@@ -991,6 +1132,7 @@ class Agent:
             exceeded=False,
             had_progress=had_progress,
             qa_soft_reminder_injected=reminder_injected,
+            action_announce_nudge_injected=action_nudge_injected,
         )
 
     def _run_execute_segments(
@@ -1110,6 +1252,11 @@ class Agent:
             checker_verdict,
             checker_tool_rounds,
         ) = self._finalize_scaffold_checker(
+            final_text=final_text,
+            finish_reason=finish_reason,
+        )
+
+        final_text = self._apply_service_postcondition_gate(
             final_text=final_text,
             finish_reason=finish_reason,
         )
@@ -1423,12 +1570,26 @@ def prepare_session_for_s4(session: Session) -> None:
 
 
 def _is_retryable(result: ToolResult) -> bool:
-    """True when the error is recoverable via parameter correction."""
+    """True when the error is recoverable via parameter correction (TOOL-RETRY).
+
+    Process/command outcomes (exit_code, cancel) must **consume** the tool-round
+    budget — free retries are only for schema/argument mistakes.
+    """
     if not result.error:
         return False
     if result.error.code == ToolErrorCode.CONFIRM_REJECTED:
         return False  # user explicitly said no
     details = result.error.details or {}
+    if details.get("retry") is False:
+        return False
+    if details.get("guard_type") == "exec_circuit":
+        return False
+    # Evolved/shell already ran: not a parameter typo.
+    if "exit_code" in details:
+        return False
+    msg = (result.error.message or "").lower()
+    if "cancelled" in msg or "timed out" in msg or "timeout" in msg:
+        return False
     if details.get("retry") is True:
         return True
     if result.error.code == ToolErrorCode.VALIDATION_ERROR:

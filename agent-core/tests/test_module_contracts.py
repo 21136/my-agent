@@ -146,9 +146,7 @@ class ModuleContractTests(unittest.TestCase):
 
 class ProjectApiLazyImportTests(unittest.TestCase):
     def setUp(self) -> None:
-        from tests.isolation_helpers import make_temp_agent_paths
-
-        self.paths = make_temp_agent_paths(self)
+        self.paths = AgentPaths.discover()
         token = secrets.token_hex(4)
         self.project_a = f"test-api-a-{token}"
         self.project_b = f"test-api-b-{token}"
@@ -157,6 +155,41 @@ class ProjectApiLazyImportTests(unittest.TestCase):
             conversation_id=f"_test_api_lazy_{secrets.token_hex(4)}",
         )
         self._extra_session_ids: list[str] = []
+        self._state_before = self._read_state()
+        self._project_sessions_before = dict(read_project_sessions(self.paths))
+        self.addCleanup(self._cleanup)
+
+    def _read_state(self) -> dict:
+        state_path = self.paths.data / "state.json"
+        if not state_path.is_file():
+            return {}
+        try:
+            loaded = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _cleanup(self) -> None:
+        for pid in (self.project_a, self.project_b):
+            shutil.rmtree(project_dir(self.paths, normalize_project_id(pid)), ignore_errors=True)
+        for sid in [self.session.conversation_id, *self._extra_session_ids]:
+            shutil.rmtree(self.paths.data / "sessions" / sid, ignore_errors=True)
+        mapping = dict(self._project_sessions_before)
+        for pid in (self.project_a, self.project_b):
+            mapping.pop(normalize_project_id(pid), None)
+        payload = dict(self._state_before)
+        if mapping:
+            payload[PROJECT_SESSIONS_KEY] = mapping
+        else:
+            payload.pop(PROJECT_SESSIONS_KEY, None)
+        state_path = self.paths.data / "state.json"
+        if payload:
+            state_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        elif state_path.is_file():
+            state_path.unlink(missing_ok=True)
 
     def test_perform_project_switch_session_replaced_branch_imports(self) -> None:
         """T-1803-07: session_replaced path executes lazy imports without ImportError."""

@@ -1,0 +1,71 @@
+[tool]
+name = "run_command"
+description = "通用 shell：一次性命令捕获 stdout/stderr/exit；background=true 时升格为 run_service 托管（返回 name+日志尾）。预期永不退出也可直接用 run_service。"
+version = "1.2.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["command"]
+[schema.input.properties.command]
+type = "string"
+description = "整行 shell 命令（Win: powershell -Command；Unix: bash -lc）"
+[schema.input.properties.working_dir]
+type = "string"
+description = "相对 agent root 的工作目录（可用别名 cwd）；默认 agent root"
+[schema.input.properties.cwd]
+type = "string"
+description = "working_dir 的别名"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 120
+description = "子进程超时秒数；普通命令硬顶 600。npm/pnpm/yarn install、rmdir/rimraf node_modules 等自动走长超时（默认 1800，MY_AGENT_RUN_COMMAND_LONG_TIMEOUT_SEC 可配）"
+[schema.input.properties.env]
+type = "object"
+description = "增量环境变量（敏感键拒绝）"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "仅预览将执行的 cwd/command，不 spawn"
+[schema.input.properties.background]
+type = "boolean"
+default = false
+description = "true：不前台跑，升格为 run_service start（Phase 31 D1）"
+[schema.input.properties.name]
+type = "string"
+description = "background 时可选服务名；默认 cmd-<8hex>"
+[schema.input.properties.ready_regex]
+type = "string"
+description = "background：日志匹配即就绪（传给 run_service）"
+[schema.input.properties.ready_port]
+type = "integer"
+description = "background：端口可连即就绪"
+[schema.input.properties.ready_timeout_sec]
+type = "integer"
+default = 0
+description = "background：等就绪秒数；0=立即返回"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean" }
+exit_code = { type = "integer" }
+stdout = { type = "string" }
+stderr = { type = "string" }
+cwd = { type = "string" }
+elapsed_ms = { type = "integer" }
+truncated = { type = "boolean" }
+background = { type = "boolean" }
+escalated = { type = "boolean" }
+name = { type = "string" }
+logs_tail = { type = "string" }
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 1810

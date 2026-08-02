@@ -17,10 +17,13 @@ export function wireComposerAttachments(options: {
   fileDrop: FileDropHandle;
   onStatus?: (text: string) => void;
   beforeSend?: () => void;
+  /** Extra gate (e.g. workbench empty state requires a project). */
+  allowSend?: () => boolean;
 }): ComposerAttachmentWire {
-  const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend } = options;
+  const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend, allowSend } = options;
 
   function canSend(): boolean {
+    if (allowSend && !allowSend()) return false;
     const text = input.value.trim();
     return Boolean(text) || fileDrop.getAttachments().length > 0;
   }
@@ -36,6 +39,10 @@ export function wireComposerAttachments(options: {
     const attachments = fileDrop.getAttachments();
     const attachmentIds = attachments.map((item) => item.id);
     if ((!text && !attachmentIds.length) || chat.model.confirmPending) return;
+    if (allowSend && !allowSend()) {
+      onStatus?.("请先选择或新建项目");
+      return;
+    }
     input.value = "";
     beforeSend?.();
     chat.pushUserMessage(

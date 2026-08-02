@@ -121,6 +121,11 @@ export interface ProjectPanelState {
   turnArmedId: string;
   turnArmedText: string;
   turnEvidence: Array<{ tool: string; ok: boolean }>;
+  // G14 M2 — exec reliability strip
+  turnPostcondition: string;
+  turnCircuitOpen: string[];
+  turnPlaybookId: string;
+  turnFailureClass: string;
 }
 
 export interface ProjectPanelCallbacks {
@@ -815,6 +820,47 @@ export function setupProjectPanel(container: HTMLElement): {
 
 // ---- Phase 27 services panel ----
 
+function renderReliabilityStrip(state: ProjectPanelState): string {
+  const pc = (state.turnPostcondition || "none").trim() || "none";
+  const pcLabel =
+    pc === "ok"
+      ? "后置条件 · 已满足"
+      : pc === "fail"
+        ? "后置条件 · 未满足"
+        : pc === "blocked"
+          ? "后置条件 · 声明已拦截"
+          : "后置条件 · 未检测";
+  const pcCls =
+    pc === "ok" ? "ok" : pc === "fail" || pc === "blocked" ? "fail" : "none";
+  const circuit =
+    state.turnCircuitOpen.length > 0
+      ? state.turnCircuitOpen.map((fp) => escapeHtml(fp)).join("<br>")
+      : "无";
+  const circuitCls = state.turnCircuitOpen.length > 0 ? "fail" : "none";
+  const failCls = state.turnFailureClass
+    ? escapeHtml(state.turnFailureClass)
+    : "";
+  // Hide strip when nothing interesting.
+  if (
+    pc === "none" &&
+    state.turnCircuitOpen.length === 0 &&
+    !state.turnFailureClass
+  ) {
+    return "";
+  }
+  const failRow = failCls
+    ? `<div class="sidebar-reliability-row is-warn">分型：类 ${failCls}</div>`
+    : "";
+  return `<div class="sidebar-reliability">
+      <div class="sidebar-services-header"><span>可靠性</span></div>
+      <div class="sidebar-reliability-row is-${pcCls}">${pcLabel}</div>
+      <div class="sidebar-reliability-row is-${circuitCls}">熔断：${
+        state.turnCircuitOpen.length > 0 ? `<span class="sidebar-reliability-fps">${circuit}</span>` : "无"
+      }</div>
+      ${failRow}
+    </div>`;
+}
+
 function renderServicesPanel(state: ProjectPanelState): string {
   const armed =
     state.turnArmedId || state.turnArmedText
@@ -832,10 +878,12 @@ function renderServicesPanel(state: ProjectPanelState): string {
             return `<div class="sidebar-evidence-row is-${cls}"><span>${mark}</span> ${escapeHtml(e.tool)}</div>`;
           })
           .join("");
+  const reliability = renderReliabilityStrip(state);
   const evidenceBlock = `<div class="sidebar-turn-evidence">
       <div class="sidebar-services-header"><span>本回合</span></div>
       ${armed}
       <div class="sidebar-evidence-list">${evidenceRows}</div>
+      ${reliability}
     </div>`;
 
   const rows =

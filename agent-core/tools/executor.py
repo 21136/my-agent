@@ -96,6 +96,18 @@ class ExecutorSession:
     armed_task_id: str = ""
     armed_task_text: str = ""
     turn_evidence: list[dict[str, Any]] = field(default_factory=list)
+    # G14 / EXEC-RELIABILITY M0 — segment-scoped circuit breaker
+    failure_streak_fp: str = ""
+    failure_streak_count: int = 0
+    circuit_open_fingerprints: set[str] = field(default_factory=set)
+    circuit_just_opened: str = ""
+    playbook_nudged: set[str] = field(default_factory=set)
+    pending_playbook_id: str = ""
+    # G14 M2 — sidebar reliability snapshot
+    last_playbook_id: str = ""
+    last_failure_class: str = ""
+    service_postcondition: str = ""  # "" | "ok" | "fail"
+    postcondition_claim_blocked: bool = False
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -266,11 +278,39 @@ def _is_run_python_demo_call(inner: dict[str, Any]) -> bool:
     return normalized.endswith("/main.py") or normalized.endswith("main.py")
 
 
+def _is_run_command_demo_call(inner: dict[str, Any]) -> bool:
+    """Detect run_command that re-runs an evolve tool main.py demo."""
+    command = inner.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return False
+    normalized = command.strip().replace("\\", "/")
+    if "_staging" in normalized:
+        return False
+    match = re.search(
+        r"evolve/tools/[a-z][a-z0-9_]*/([a-z][a-z0-9_]*)/main\.py",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    return match is not None
+
+
+def _demo_tool_name_from_run_command(inner: dict[str, Any]) -> str | None:
+    command = inner.get("command")
+    if not isinstance(command, str):
+        return None
+    match = re.search(
+        r"evolve/tools/[a-z][a-z0-9_]*/([a-z][a-z0-9_]*)/main\.py",
+        command.replace("\\", "/"),
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def _validate_run_python_scaffold_guard(
     session: ExecutorSession,
     outer_arguments: dict[str, Any],
 ) -> ToolResult | None:
-    """Reject duplicate run_python demo for tools already probed this segment (T-1515)."""
+    """Reject duplicate demo for tools already probed this segment (T-1515 / Phase 29)."""
     if not session.in_execute_segment:
         return None
     if session.active_shell == "project":
@@ -278,14 +318,28 @@ def _validate_run_python_scaffold_guard(
     if not session.scaffold_tool_turn and session.active_shell != "grow":
         return None
 
-    inner = _merged_evolved_arguments(outer_arguments, "run_python")
-    if not _is_run_python_demo_call(inner):
+    evolved = outer_arguments.get("tool_name")
+    if not isinstance(evolved, str):
+        return None
+    evolved_name = evolved.strip()
+
+    tool_name: str | None = None
+    if evolved_name == "run_python":
+        inner = _merged_evolved_arguments(outer_arguments, "run_python")
+        if not _is_run_python_demo_call(inner):
+            return None
+        path = inner.get("path")
+        if not isinstance(path, str):
+            return None
+        tool_name = _tool_name_from_evolve_path(path)
+    elif evolved_name == "run_command":
+        inner = _merged_evolved_arguments(outer_arguments, "run_command")
+        if not _is_run_command_demo_call(inner):
+            return None
+        tool_name = _demo_tool_name_from_run_command(inner)
+    else:
         return None
 
-    path = inner.get("path")
-    if not isinstance(path, str):
-        return None
-    tool_name = _tool_name_from_evolve_path(path)
     if tool_name is None:
         return None
 
@@ -300,7 +354,7 @@ def _validate_run_python_scaffold_guard(
         ToolErrorCode.VALIDATION_ERROR,
         (
             f"工具「{tool_name}」已在本 segment 自动运行 demo probe（{summary}）。"
-            "请勿重复 run_python demo；请根据上方 demo 结果修复或继续交付。"
+            "请勿重复 run_python/run_command demo；请根据上方 demo 结果修复或继续交付。"
         ),
         details={
             "guard_type": "run_python_demo_rejected",
@@ -337,6 +391,20 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
         if isinstance(message, str) and message.strip():
             return message
         return "[guard] task 一停门：请先结束本回合，用户回复「继续」后再写下一产物"
+    if guard_type == "exec_circuit":
+        fp = fields.get("fingerprint", "")
+        return f"[guard] 同类失败已熔断，禁止再调同一命令（{fp}）"
+    if guard_type == "exec_circuit_opened":
+        fp = fields.get("fingerprint", "")
+        return f"[guard] 同类失败×{fields.get('count', '?')} 已熔断（{fp}）"
+    if guard_type == "exec_failure_class":
+        cls = fields.get("failure_class", "?")
+        pb = fields.get("playbook_id")
+        if pb:
+            return f"[guard] 失败分型 {cls} · 剧本 {pb}"
+        return f"[guard] 失败分型 {cls}"
+    if guard_type == "exec_playbook":
+        return f"[guard] 剧本建议 · {fields.get('playbook_id', '?')}"
     message = fields.get("message")
     if isinstance(message, str) and message.strip():
         return f"[guard] {message}"
@@ -567,20 +635,16 @@ def _validate_project_repl_build_bypass(
         ToolErrorCode.VALIDATION_ERROR,
         (
             "项目模式下禁止用 repl 跑 npm/pnpm/yarn/mvn。"
-            "请改用 run_evolved → npm_exec 或 mvn_exec，"
+            "请改用 run_evolved → run_command，"
             "参数 working_dir（可用 cwd 别名）指向 workspace/<id>/…"
         ),
         details={
             "guard_type": "project_repl_build_bypass",
             "retry": True,
             "hint": {
-                "npm_exec": {
+                "run_command": {
                     "working_dir": "workspace/<id>/frontend",
-                    "args": ["run", "build"],
-                },
-                "mvn_exec": {
-                    "working_dir": "workspace/<id>/backend",
-                    "args": ["-q", "compile"],
+                    "command": "npm run build",
                 },
             },
         },
@@ -667,6 +731,29 @@ def _validate_progress_gate_evidence(
     )
 
 
+def _validate_exec_circuit(
+    session: ExecutorSession,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolResult | None:
+    """G14: block same tool+command fingerprint after consecutive failures."""
+    from exec_reliability import call_fingerprint, circuit_blocks
+
+    fp = call_fingerprint(tool_name, arguments)
+    if not circuit_blocks(session, fp):
+        return None
+    return tool_fail(
+        tool_name,
+        ToolErrorCode.VALIDATION_ERROR,
+        "同类失败已熔断：请换策略或停下来说明，勿重复同一命令。",
+        details={
+            "guard_type": "exec_circuit",
+            "fingerprint": fp,
+            "retry": False,
+        },
+    )
+
+
 def _validate_scaffold_evolved_call(
     executor_session: ExecutorSession,
     evolved_name: str,
@@ -748,9 +835,12 @@ class ToolExecutor:
         self.registry = ToolRegistry.load(self.registry.agent_paths)
 
     def begin_execute_segment(self) -> None:
-        """Reset per-segment scaffold guard state (T-1515)."""
+        """Reset per-segment scaffold guard state (T-1515) and G14 circuit."""
         self.session.in_execute_segment = True
         self.session.segment_scaffold_tools.clear()
+        from exec_reliability import clear_circuit_state
+
+        clear_circuit_state(self.session)
 
     def begin_turn(self) -> None:
         """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
@@ -759,6 +849,10 @@ class ToolExecutor:
         self.session.armed_task_id = ""
         self.session.armed_task_text = ""
         self.session.turn_evidence = []
+        self.session.service_postcondition = ""
+        self.session.postcondition_claim_blocked = False
+        self.session.last_failure_class = ""
+        self.session.last_playbook_id = ""
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
@@ -780,7 +874,7 @@ class ToolExecutor:
         self._emit_turn_evidence()
 
     def _emit_turn_evidence(self) -> None:
-        """Phase 27 M1 — push armed task + this-turn evidence for sidebar."""
+        """Phase 27 M1 + G14 M2 — armed task, evidence, reliability for sidebar."""
         items: list[dict[str, Any]] = []
         for entry in self.session.turn_evidence or []:
             if not isinstance(entry, dict):
@@ -789,12 +883,35 @@ class ToolExecutor:
             if not label:
                 continue
             items.append({"tool": label, "ok": bool(entry.get("ok"))})
+
+        if self.session.postcondition_claim_blocked:
+            postcondition = "blocked"
+        elif self.session.service_postcondition in {"ok", "fail"}:
+            postcondition = self.session.service_postcondition
+        else:
+            postcondition = "none"
+
+        open_fps = sorted(self.session.circuit_open_fingerprints or ())
+        short_fps: list[str] = []
+        for fp in open_fps[:5]:
+            text = str(fp)
+            if len(text) > 64:
+                text = text[:61] + "…"
+            short_fps.append(text)
+
         self._emit_event(
             "turn.evidence",
             {
                 "armed_task_id": (self.session.armed_task_id or "").strip() or None,
                 "armed_task_text": (self.session.armed_task_text or "").strip() or None,
                 "items": items,
+                "reliability": {
+                    "postcondition": postcondition,
+                    "circuit_open": short_fps,
+                    # D1: do not surface playbook ids in sidebar
+                    "playbook_id": None,
+                    "failure_class": (self.session.last_failure_class or "").strip() or None,
+                },
             },
         )
 
@@ -1040,13 +1157,108 @@ class ToolExecutor:
         if name == "read_file" and result.ok:
             self._maybe_record_memory_entity_used(args, result)
         self._record_turn_evidence(name, args, result)
-        self._emit_turn_evidence()
         self._maybe_emit_services_state_after_tool(name, args, result)
+        self._update_exec_circuit(name, args, result)
+        self._emit_turn_evidence()
         if result.ok:
             self._maybe_reload_registry_after_write_evolve(name, args, result)
             self._maybe_arm_task_stop(name, args, result)
         self._log_tool_call(name, args, result, confirm=confirm_decision, started=started)
         return result
+
+    def _update_exec_circuit(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        """G14: classify failure, queue playbooks, open circuit at threshold."""
+        from exec_reliability import (
+            call_fingerprint,
+            circuit_threshold,
+            classify_failure,
+            is_circuit_countable_failure,
+            queue_playbook_nudge,
+            record_circuit_failure,
+            record_circuit_success,
+        )
+
+        insight = classify_failure(result)
+        countable = is_circuit_countable_failure(result)
+        self._maybe_update_service_postcondition(tool_name, arguments, result, insight)
+
+        if insight.failure_class not in {"A"} or countable:
+            if countable or insight.failure_class in {"B", "C", "D", "E", "F"}:
+                self.session.last_failure_class = insight.failure_class
+                self._record_guard_event(
+                    "exec_failure_class",
+                    {
+                        "ok": False,
+                        "failure_class": insight.failure_class,
+                        "playbook_id": insight.playbook_id,
+                        "preview": insight.blob_preview,
+                        "tool": tool_name,
+                    },
+                )
+        # D1: playbook auto-nudge abolished — queue is no-op unless legacy env on.
+        if insight.playbook_id and queue_playbook_nudge(self.session, insight.playbook_id):
+            self.session.last_playbook_id = insight.playbook_id
+            self._record_guard_event(
+                "exec_playbook",
+                {
+                    "ok": False,
+                    "playbook_id": insight.playbook_id,
+                    "failure_class": insight.failure_class,
+                },
+            )
+
+        fp = call_fingerprint(tool_name, arguments)
+        if not countable:
+            if result.ok and insight.failure_class == "A":
+                record_circuit_success(self.session)
+            return
+        opened = record_circuit_failure(self.session, fp)
+        if opened:
+            self._record_guard_event(
+                "exec_circuit_opened",
+                {
+                    "ok": False,
+                    "fingerprint": fp,
+                    "count": circuit_threshold(),
+                    "failure_class": insight.failure_class,
+                    "playbook_id": insight.playbook_id,
+                },
+            )
+
+    def _maybe_update_service_postcondition(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+        insight: Any,
+    ) -> None:
+        """Track run_service ready+alive for sidebar postcondition (G14 M2)."""
+        evolved = ""
+        if tool_name == "run_evolved":
+            raw = arguments.get("tool_name")
+            evolved = raw.strip() if isinstance(raw, str) else ""
+        if evolved != "run_service":
+            return
+        data = result.data if isinstance(result.data, dict) else {}
+        action = str(data.get("action") or "").strip().lower()
+        if action and action not in {"start", "restart", "status", "wait_ready", ""}:
+            return
+        state = data.get("state") if isinstance(data.get("state"), dict) else {}
+        ready = data.get("ready")
+        alive = state.get("alive") if isinstance(state, dict) else None
+        if ready is True and alive is True:
+            self.session.service_postcondition = "ok"
+            return
+        if ready is False or alive is False or result.ok is False:
+            self.session.service_postcondition = "fail"
+            return
+        if insight.failure_class in {"B", "E"} and insight.playbook_id:
+            self.session.service_postcondition = "fail"
 
     def _run_propose_context_switch(
         self,
@@ -1244,6 +1456,10 @@ class ToolExecutor:
                 details={"blocked_tools": sorted(self.session.blocked_tools)},
             )
 
+        circuit_error = _validate_exec_circuit(self.session, name, arguments)
+        if circuit_error is not None:
+            return circuit_error
+
         if name == "run_evolved" and self.session.turn_mode == "ask":
             return tool_fail(
                 name,
@@ -1281,6 +1497,19 @@ class ToolExecutor:
                     "requested_tool": evolved_name.strip(),
                     "available_tools": allowed,
                     "hint": "tool_name 须出现在本会话 evolved 清单；只观察可用 builtin",
+                    "retry": True,
+                },
+            )
+
+        if evolved.status != "active":
+            return tool_fail(
+                name,
+                ToolErrorCode.TOOL_NOT_FOUND,
+                f"工具「{evolved.name}」status={evolved.status}，不可执行（须 active）",
+                details={
+                    "requested_tool": evolved.name,
+                    "status": evolved.status,
+                    "hint": "已归档/非 active 工具请改用 run_command 或 run_service",
                     "retry": True,
                 },
             )
@@ -1330,7 +1559,7 @@ class ToolExecutor:
             if inline_error is not None:
                 return inline_error
 
-        if evolved.name == "run_python":
+        if evolved.name in {"run_python", "run_command"}:
             demo_error = _validate_run_python_scaffold_guard(self.session, arguments)
             if demo_error is not None:
                 return demo_error
@@ -1433,6 +1662,12 @@ class ToolExecutor:
             # Never treat report_progress itself as completion evidence.
             if evolved == "report_progress":
                 return
+        # dry_run / background escalate must not satisfy Progress Gate.
+        data = result.data if isinstance(result.data, dict) else {}
+        if data.get("dry_run") is True:
+            return
+        if data.get("background") is True or data.get("escalated") is True:
+            return
         paths = extract_run_evolved_paths(tool_name, arguments)
         self.session.turn_evidence.append(
             make_evidence_entry(
@@ -1572,6 +1807,15 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if not _http_request_needs_confirm(inner):
                 return False
+        # browser_open (Phase 33 F1): loopback skip; dry_run skip; external confirm.
+        if evolved is not None and evolved.name == "browser_open":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
+            if not _browser_open_needs_confirm(inner):
+                return False
         # dev_start dry_run is planning only — skip confirm.
         if evolved is not None and evolved.name == "dev_start":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -1579,12 +1823,20 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
                 return False
-        # git_commit dry_run is planning only — skip confirm.
-        if evolved is not None and evolved.name == "git_commit":
+        # git_commit / git_push dry_run is planning only — skip confirm.
+        if evolved is not None and evolved.name in {"git_commit", "git_push"}:
             from tools.builtin import run_evolved as _run_evolved_mod
 
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
+                return False
+        # git_branch: list + dry_run skip confirm; create/switch confirm.
+        if evolved is not None and evolved.name == "git_branch":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            action = str(inner.get("action") or "").strip().lower()
+            if action == "list" or bool(inner.get("dry_run")):
                 return False
         # db_query: readonly SELECT path skips confirm; write=true requires confirm.
         if evolved is not None and evolved.name == "db_query":
@@ -1595,13 +1847,37 @@ class ToolExecutor:
                 pass  # fall through → confirm
             else:
                 return False
-        # pip_install dry_run skips confirm.
+        # pip_install dry_run skips confirm (tool may be archived; keep for copies).
         if evolved is not None and evolved.name == "pip_install":
             from tools.builtin import run_evolved as _run_evolved_mod
 
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
                 return False
+        # run_command (Phase 29 A2): layered confirm; never skip via approve_all when required.
+        if evolved is not None and evolved.name == "run_command":
+            from tools.builtin import run_evolved as _run_evolved_mod
+            from run_command_policy import run_command_requires_confirm
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")) or bool(arguments.get("dry_run")):
+                return False
+            command = inner.get("command") if isinstance(inner.get("command"), str) else ""
+            working = ""
+            for key in ("working_dir", "cwd"):
+                raw = inner.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    working = raw.strip()
+                    break
+            needs, _reason = run_command_requires_confirm(
+                command=command,
+                working_dir=working,
+                project_root=self.session.project_root or "",
+                background=bool(inner.get("background")),
+            )
+            if not needs:
+                return False
+            return True
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:
@@ -1920,6 +2196,30 @@ def _http_request_needs_confirm(inner: dict[str, Any]) -> bool:
         return True
 
 
+def _browser_open_needs_confirm(inner: dict[str, Any]) -> bool:
+    """Phase 33 F1: confirm unless loopback http(s)."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    url = str(inner.get("url") or "").strip()
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return True
+    if parsed.scheme not in {"http", "https"}:
+        return True
+    host = parsed.hostname
+    if not host:
+        return True
+    lowered = host.lower().strip("[]")
+    if lowered in {"localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"}:
+        return False
+    try:
+        return not ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return True
+
+
 def _arguments_use_host_scope(arguments: dict[str, Any]) -> bool:
     """True when nested run_evolved arguments reference ``host:`` URIs."""
     nested = arguments.get("arguments")
@@ -1953,6 +2253,22 @@ def build_confirm_preview(
             lines.append("Mode: dry_run")
         if evolved is not None:
             lines.append(f"Policy: allow_approve_all={evolved.policy.allow_approve_all}")
+            if evolved.name == "run_command" and isinstance(inner, dict):
+                if bool(inner.get("background")):
+                    lines.append("Mode: background → escalate to run_service start")
+                else:
+                    lines.append("Note: exits when done; long-lived processes use run_service (or background:true)")
+                try:
+                    from run_command_policy import classify_run_command
+
+                    cmd = inner.get("command") if isinstance(inner.get("command"), str) else ""
+                    lines.append(f"Command class: {classify_run_command(cmd)}")
+                except Exception:
+                    pass
+            if evolved.name == "browser_open" and isinstance(inner, dict):
+                url = inner.get("url") if isinstance(inner.get("url"), str) else ""
+                lines.append(f"Open in system browser: {url}")
+                lines.append("Note: loopback may skip confirm; external always confirms")
             if evolved.name in {"host_copy_move", "copy_move"} and isinstance(inner, dict):
                 source = inner.get("source")
                 if isinstance(source, str) and source.strip().lower().startswith("host:"):

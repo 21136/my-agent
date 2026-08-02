@@ -40,7 +40,8 @@
 | **P1** | Git 写侧（受控 commit） | 做完无法收尾；仅 snapshot | `git_commit`（confirm；禁 force / 禁改 config） | **M1** |
 | **P2** | DB 速查 | Gate 有 `verify_db`，工具弱 | `db_query`（只读默认；路径/DSN 受限） | **M2** |
 | **P2** | `pip_install` 出 suspect | Python 项目别扭 | 评审后 active 或文档声明替代 | **M2** |
-| **defer** | 裸 shell / 多语言构建器 / 浏览器自动化 | 扩大攻击面与超时模型 | 不做 | — |
+| **→ P28** | 通用 shell（有边界） | 分域 `*_exec` 膨胀 | [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) | Phase 28 |
+| **defer** | 多语言专属构建器 / 浏览器自动化 | 扩大攻击面 | 不做 | — |
 
 ---
 
@@ -50,7 +51,7 @@
 
 1. **先文档后实现**；TASKS / MAP 留痕；缺 DOC-04 不写代码。
 2. **不**把长驻超时塞进 `mvn_exec` / `npm_exec`（仍由 `run_service` 承担）。
-3. **不**引入无边界的通用 shell。
+3. ~~**不**引入无边界的通用 shell。~~ → **已废止（2026-08-02）**：有边界的通用通道见 [SHELL-CHANNEL.md](./SHELL-CHANNEL.md)（Phase 28）；长驻仍不塞进 `mvn_exec`。
 4. HTTP 工具默认 **localhost / 显式 URL**；禁止无 confirm 的任意外网写（见 §3.1）。
 5. Git 写侧若做：**必须 confirm**；**禁止** `--force`、改 `git config`、交互 rebase。
 

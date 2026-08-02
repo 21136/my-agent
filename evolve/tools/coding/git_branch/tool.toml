@@ -1,0 +1,47 @@
+[tool]
+name = "git_branch"
+description = """受控分支操作（Phase 32）：list / create / switch。
+
+禁 force checkout、禁 delete、禁改 git config。create 可设 switch=true（checkout -b）。list 不 confirm。"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "list | create | switch"
+[schema.input.properties.name]
+type = "string"
+description = "create/switch 的分支名"
+[schema.input.properties.switch]
+type = "boolean"
+default = false
+description = "create 时是否立即 checkout -b"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root 的仓库子目录；空=agent root"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 别名"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "create/switch 预览，不改仓"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 60

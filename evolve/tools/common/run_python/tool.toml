@@ -2,7 +2,7 @@
 name = "run_python"
 description = "运行 agent root 下的 Python 脚本，捕获 stdout/stderr/exit_code"
 version = "1.0.0"
-status = "active"
+status = "archived"
 topics = ["common"]
 
 [entry]

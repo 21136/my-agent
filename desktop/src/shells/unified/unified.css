@@ -568,6 +568,32 @@
 .sidebar-evidence-row.is-fail {
   color: #c44;
 }
+.sidebar-reliability {
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed color-mix(in srgb, var(--ma-border) 70%, transparent);
+}
+.sidebar-reliability-row {
+  font-size: 0.72rem;
+  color: var(--ma-text-muted);
+  margin-top: 0.15rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.sidebar-reliability-row.is-ok {
+  color: #2a8;
+}
+.sidebar-reliability-row.is-fail {
+  color: #c44;
+}
+.sidebar-reliability-row.is-warn {
+  color: #c80;
+}
+.sidebar-reliability-fps {
+  display: inline-block;
+  font-family: var(--ma-mono);
+  font-size: 0.68rem;
+}
 .sidebar-services-header {
   display: flex;
   justify-content: space-between;
@@ -1430,3 +1456,52 @@
   color: var(--ma-text-muted);
   margin-top: 0.5rem;
 }
+
+/* Phase 34 — workbench empty state (no project bound) */
+.workbench-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 12rem;
+  padding: 2rem 1.5rem;
+}
+
+.workbench-empty[hidden] {
+  display: none !important;
+}
+
+.workbench-empty-card {
+  max-width: 28rem;
+  text-align: center;
+}
+
+.workbench-empty-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.35rem;
+  font-weight: 650;
+  color: var(--ma-text);
+}
+
+.workbench-empty-copy {
+  margin: 0 0 1.25rem;
+  color: var(--ma-text-muted);
+  line-height: 1.45;
+}
+
+.workbench-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: center;
+}
+
+.unified-chat.is-empty-gated {
+  display: none;
+}
+
+.unified-composer.is-empty-gated {
+  opacity: 0.45;
+  pointer-events: none;
+}
+

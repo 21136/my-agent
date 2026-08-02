@@ -1,0 +1,33 @@
+[tool]
+name = "browser_open"
+description = """用系统默认浏览器打开 http(s) URL（Phase 33 F1）。
+
+loopback（localhost/127.0.0.1）可免确认；外网须确认。不做无头截图（Playwright = F2 defer）。
+验收本地页：run_service/起服 → browser_open 或 http_request 探活。"""
+version = "1.0.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["url"]
+[schema.input.properties.url]
+type = "string"
+description = "http:// 或 https:// URL（禁 userinfo）"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "仅校验/预览 URL，不打开浏览器"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 30
