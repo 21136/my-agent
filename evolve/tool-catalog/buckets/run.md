@@ -25,6 +25,7 @@
 - 测前端：目标目录已有 `node_modules` 时**不要先 install**；直接 `run` / `build` / `test`（除非 `force_install`）。
 - 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。
 - **长驻服务**（监听端口、不退出）：用 **`run_service`**（主路径）；`dev_start` 仅作前后端一键糖。不要 `mvn_exec` / `npm_exec` / `repl`。详见 [RUN-SERVICE.md](../../../docs/RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](../../../docs/PROJECT-DEV-TOOLS.md)。
+- **执行可见性**：同意工具后桌面会显示运行卡与耗时；项目侧栏 **Services** 可刷新登记服务/日志尾（[EXEC-OBSERVABILITY.md](../../../docs/EXEC-OBSERVABILITY.md)）。不要用拉长 `mvn_exec` 超时冒充「看得见」。
 - **探活 / 调本地 API**：`http_request`（勿用 `fetch_url` 打 localhost）。
 - **端口占用**：`run_service` · `port_status` / `kill_port`（杀端口须 confirm）。
 - **提交代码**：`git_commit`（仅 add+commit）；推送仍由人来。

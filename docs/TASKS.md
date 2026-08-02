@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 27** 执行可观测 **doc**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 27** 执行可观测 **M0 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1121,10 +1121,9 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 27 — 执行可观测（聊天过程 + 侧栏服务/进度）
 
-> 设计：[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) **v0.1.0**  
+> 设计：[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) **v0.1.2** · **M0 done**  
 > 触发：确认工具后只见「已执行」、无启动过程；侧栏看不见服务与本回合证据 → 排障黑盒。  
-> 产品选择：**聊天过程与侧栏看板都要**。  
-> **纪律**：先文档后实现；D1～D3 未确认前不写代码（有默认提案）。
+> 产品选择：**聊天过程与侧栏看板都要**。
 
 ### DOC-04 准入（提案自检）
 
@@ -1134,19 +1133,19 @@ python turn_intent.py    # 分类用例无回归
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
 | T-2701 | 设计文档 + MAP/TASKS | `EXEC-OBSERVABILITY.md` · 本表 | — | 双面目标 + DOC-04 齐全 | **done** |
-| T-2702 | 用户确认 D1～D3 | 文档 §5.2 | T-2701 | 默认采纳或改写已决 | todo |
-| T-2703 | M0：聊天 RunningCard | `chat-state` / unified 确认流 | T-2702 | 同意后可见运行中+秒表；end 更新 | todo |
-| T-2704 | M0：确认文案去黑盒 | confirm 标签文案 | T-2703 | 「已同意，执行中…」≠ 单独「已执行」当成功 | todo |
-| T-2705 | M0：侧栏 Services | project-panel + list/刷新 | T-2702 | 可见登记服务 alive/端口 | todo |
+| T-2702 | 用户确认 D1～D3 | 文档 §5.2 | T-2701 | 默认采纳或改写已决 | **done** |
+| T-2703 | M0：聊天 RunningCard | `chat-state` / unified 确认流 | T-2702 | 同意后可见运行中+秒表；end 更新 | **done** |
+| T-2704 | M0：确认文案去黑盒 | confirm 标签文案 | T-2703 | 「已同意，执行中…」≠ 单独「已执行」当成功 | **done** |
+| T-2705 | M0：侧栏 Services | project-panel + list/刷新 | T-2702 | 可见登记服务 alive/端口 | **done** |
 | T-2706 | M1：progress/services 事件 + 证据条 | server WS + 侧栏 Turn | T-2703,T-2705 | IT-91～93 | todo |
-| T-2707 | 提示词/catalog 对齐 | evolve prompts · run.md | T-2703 | 禁 mvn 起长驻；指向可观测 | todo |
-| T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | todo |
+| T-2707 | 提示词/catalog 对齐 | evolve prompts · run.md | T-2703 | 禁 mvn 起长驻；指向可观测 | **done** |
+| T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | **done**（IT-90/92；IT-91/93→M1；S-90 手工） |
 
-**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。
+**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。 **已达成**。
 
 ---
 
-pe.json` 加载与校验）
+### T-1002 手工验收（`host_scope.json` 加载与校验）
 
 **环境**：`cd D:\my-agent\agent-core`（或你的 agent 根下 `agent-core/`）。
 

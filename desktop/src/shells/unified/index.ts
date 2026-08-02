@@ -4,7 +4,7 @@ import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import { renderMarkdown } from "../../markdown";
 import { formatUserMessageHtml } from "../../user-message";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, type ChatBlock } from "../chat-state";
+import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
@@ -89,6 +89,9 @@ export function mountUnifiedShell(
     renderChat();
     renderConfirmGlass();
     syncWorkingVisual();
+    if (p === "project") {
+      refreshServices();
+    }
   }
 
   // ---- ui state ----
@@ -168,6 +171,11 @@ export function mountUnifiedShell(
     partnerBusy: false,
     nextTask: null,
     nextTaskLine: null,
+    services: [],
+    servicesLoading: false,
+    servicesError: "",
+    servicesLogName: "",
+    servicesLogText: "",
   };
 
   let statusText = "连接中…";
@@ -253,6 +261,9 @@ export function mountUnifiedShell(
         if (!chat.model.confirmPending) {
           setTurnEndStatus(finishReason);
         }
+        if (perspective === "project") {
+          refreshServices();
+        }
         // UX-017: notify when user switched away
         if (document.visibilityState !== "visible" && ("Notification" in window)) {
           if (Notification.permission === "granted") {
@@ -289,6 +300,7 @@ export function mountUnifiedShell(
             <div class="sidebar-progress-bar-fill" id="sidebar-progress-fill" style="width:0%"></div>
           </div>
         </div>
+        <div class="sidebar-services" id="sidebar-services"></div>
         <div class="sidebar-task-flow" id="sidebar-task-flow"></div>
         <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
         <div class="sidebar-icon-bar" id="sidebar-icon-bar">
@@ -803,9 +815,74 @@ export function mountUnifiedShell(
     },
   };
 
+  function refreshServices(): void {
+    if (perspective !== "project") return;
+    projectState.servicesLoading = true;
+    projectState.servicesError = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.listServices();
+    } catch (err) {
+      projectState.servicesLoading = false;
+      projectState.servicesError = err instanceof Error ? err.message : String(err);
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
   // ---- chat rendering ----
   function isRecentTurnBlock(turnIndex: number): boolean {
     return turnIndex >= chat.currentTurnIndex() - (FOCUS_TURNS - 1);
+  }
+
+  function renderToolCards(
+    tools: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>,
+  ): string {
+    if (!tools.length) return "";
+    const now = Date.now();
+    const cards = tools.map((t) => {
+      const running = t.status === "running";
+      const elapsedMs = running ? now - t.startedAt : (t.endedAt ?? now) - t.startedAt;
+      const statusLabel =
+        t.status === "running"
+          ? `运行中… ${formatToolElapsed(elapsedMs)}`
+          : t.status === "ok"
+            ? `完成 · ${formatToolElapsed(elapsedMs)}`
+            : `失败 · ${formatToolElapsed(elapsedMs)}`;
+      const endBit =
+        t.endSummary && !running
+          ? `<div class="unified-tool-end">${escapeHtml(t.endSummary)}</div>`
+          : "";
+      return `<div class="unified-tool-card is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
+        <div class="unified-tool-title">${escapeHtml(t.tool)}</div>
+        <div class="unified-tool-summary">${escapeHtml(t.summary)}</div>
+        <div class="unified-tool-status"><span class="unified-tool-elapsed">${escapeHtml(statusLabel)}</span></div>
+        ${endBit}
+      </div>`;
+    });
+    return `<div class="unified-tool-cards">${cards.join("")}</div>`;
+  }
+
+  function tickRunningToolElapsed(): void {
+    const now = Date.now();
+    chatEl.querySelectorAll<HTMLElement>(".unified-tool-card.is-running").forEach((el) => {
+      const started = Number(el.dataset.startedAt || "0");
+      if (!started) return;
+      const span = el.querySelector<HTMLElement>(".unified-tool-elapsed");
+      if (span) span.textContent = `运行中… ${formatToolElapsed(now - started)}`;
+    });
+  }
+
+  let toolElapsedTimer: number | null = null;
+  function syncToolElapsedTimer(): void {
+    const hasRunning = chat.model.blocks.some(
+      (b) => b.kind === "process" && b.tools?.some((t) => t.status === "running"),
+    );
+    if (hasRunning && toolElapsedTimer === null) {
+      toolElapsedTimer = window.setInterval(tickRunningToolElapsed, 1000);
+    } else if (!hasRunning && toolElapsedTimer !== null) {
+      window.clearInterval(toolElapsedTimer);
+      toolElapsedTimer = null;
+    }
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -842,7 +919,12 @@ export function mountUnifiedShell(
       const reasoning = block.reasoning
         ? `<div class="unified-process-reasoning">${escapeHtml(block.reasoning)}</div>`
         : "";
-      const title = block.reasoning ? "思考中…" : "过程";
+      const toolsHtml = renderToolCards(block.tools ?? []);
+      const title = block.tools?.some((t) => t.status === "running")
+        ? "执行中…"
+        : block.reasoning
+          ? "思考中…"
+          : "过程";
       const toggle = block.collapsed ? "展开" : "收起";
       return `
         <div class="unified-process ${block.collapsed ? "collapsed" : ""}" data-turn="${block.turnKey}">
@@ -850,14 +932,21 @@ export function mountUnifiedShell(
             <span>${title}</span>
             <button type="button" class="unified-btn" data-process-toggle="${block.turnKey}">${toggle}</button>
           </div>
+          ${toolsHtml}
           <div class="unified-process-lines">${reasoning}${lines}</div>
         </div>`;
     }
     if (block.kind === "confirm") {
       if (perspective === "night") return ""; // shown in overlay
       const disabled = block.resolved ? "disabled" : "";
+      const inProgress = isConfirmInProgressLabel(block.resolved);
+      const resolvedCls = block.resolved
+        ? inProgress
+          ? "is-running"
+          : "resolved"
+        : "";
       const resolved = block.resolved
-        ? `<div class="text-muted">${escapeHtml(block.resolved)}</div>`
+        ? `<div class="text-muted unified-confirm-status">${escapeHtml(block.resolved)}</div>`
         : `
         <div class="unified-expand-actions">
           <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>同意</button>
@@ -869,7 +958,7 @@ export function mountUnifiedShell(
           }
         </div>`;
       return `
-        <div class="unified-surface unified-confirm ${block.resolved ? "resolved" : ""}">
+        <div class="unified-surface unified-confirm ${resolvedCls}">
           <div class="unified-expand-title">工具确认</div>
           <pre class="unified-confirm-preview">${escapeHtml(block.preview)}</pre>
           ${resolved}
@@ -924,7 +1013,9 @@ export function mountUnifiedShell(
       case "notice":
         return `N:${block.text.length}`;
       case "process":
-        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}`;
+        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${(block.tools ?? [])
+          .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}`)
+          .join(",")}`;
       case "confirm":
         return `C${block.requestId}:${block.resolved ?? "_"}`;
     }
@@ -1086,10 +1177,12 @@ export function mountUnifiedShell(
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
+      syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
   }
 
@@ -1311,6 +1404,30 @@ export function mountUnifiedShell(
       }
     }
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  });
+
+  // Phase 27 — Services panel actions
+  projectEls.servicesPanel.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    const action = btn.dataset.action;
+    if (action === "services-refresh") {
+      refreshServices();
+      return;
+    }
+    if (action === "service-logs") {
+      const name = btn.dataset.serviceName;
+      if (!name) return;
+      projectState.servicesLogName = name;
+      projectState.servicesLogText = "";
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      try {
+        client.fetchServiceLogs(name, 40);
+      } catch (err) {
+        projectState.servicesError = err instanceof Error ? err.message : String(err);
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }
+    }
   });
 
   // Overlay back button
@@ -1828,6 +1945,7 @@ export function mountUnifiedShell(
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
           renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject);
+          refreshServices();
         }
         break;
 
@@ -1867,6 +1985,19 @@ export function mountUnifiedShell(
 
       case "project.list":
         applyProjectListEvent(projectState, event);
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "services.list.done":
+        projectState.servicesLoading = false;
+        projectState.servicesError = "";
+        projectState.services = Array.isArray(event.services) ? event.services : [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "services.logs.done":
+        projectState.servicesLogName = event.name;
+        projectState.servicesLogText = event.text || "";
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -2061,6 +2192,11 @@ export function mountUnifiedShell(
           projectState.verifyResult = { passed: false, text: event.message };
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
+        if (projectState.servicesLoading) {
+          projectState.servicesLoading = false;
+          projectState.servicesError = event.message;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
         if (projectState.switchInProgress || projectState.switchOverlay) {
           projectState.switchInProgress = false;
           projectState.pendingPickerId = "";
@@ -2103,6 +2239,7 @@ export function mountUnifiedShell(
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
     clearCancelSafety();
     if (thinkingTimer !== null) window.clearInterval(thinkingTimer);
+    if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
     if (renderThrottleTimer !== null) window.clearTimeout(renderThrottleTimer);
     renderedPrints = [];
     focusObserver?.disconnect();

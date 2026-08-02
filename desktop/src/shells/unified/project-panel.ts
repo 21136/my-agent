@@ -1,8 +1,8 @@
-import type { AgentWsClient, PlanChangeItem, PlanSuggestion, ProjectDocItem, ServerEvent } from "../../api/ws";
+import type { AgentWsClient, PlanChangeItem, PlanSuggestion, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
 import { renderMarkdown } from "../../markdown";
 import { escapeHtml } from "../chat-state";
 
-export type { PlanSuggestion };
+export type { PlanSuggestion, ServiceListItem };
 
 // ---- new task-flow types ----
 
@@ -111,6 +111,12 @@ export interface ProjectPanelState {
   partnerBusy: boolean;
   nextTask: string | null;
   nextTaskLine: number | null;
+  // Phase 27 — managed services panel
+  services: ServiceListItem[];
+  servicesLoading: boolean;
+  servicesError: string;
+  servicesLogName: string;
+  servicesLogText: string;
 }
 
 export interface ProjectPanelCallbacks {
@@ -736,6 +742,7 @@ export function setupProjectPanel(container: HTMLElement): {
   sidebarProgressWrap: HTMLElement;
   sidebarProgressFill: HTMLElement;
   taskFlow: HTMLElement;
+  servicesPanel: HTMLElement;
   changeBanner: HTMLElement;
   iconBar: HTMLElement;
   overlayPanel: HTMLElement;
@@ -772,6 +779,7 @@ export function setupProjectPanel(container: HTMLElement): {
     sidebarProgressWrap: el("project-sidebar-progress"),
     sidebarProgressFill: el("sidebar-progress-fill"),
     taskFlow: el("sidebar-task-flow"),
+    servicesPanel: el("sidebar-services"),
     changeBanner: el("sidebar-change-banner"),
     iconBar: el("sidebar-icon-bar"),
     overlayPanel: el("sidebar-overlay"),
@@ -801,6 +809,51 @@ export function setupProjectPanel(container: HTMLElement): {
   };
 }
 
+// ---- Phase 27 services panel ----
+
+function renderServicesPanel(state: ProjectPanelState): string {
+  const rows =
+    state.services.length === 0
+      ? `<div class="sidebar-services-empty">${state.servicesLoading ? "加载中…" : "暂无登记服务"}</div>`
+      : state.services
+          .map((s) => {
+            const alive = s.alive ? "alive" : "dead";
+            const port =
+              s.ready_port != null && s.ready_port !== undefined
+                ? ` · :${escapeHtml(String(s.ready_port))}`
+                : "";
+            const status = s.status ? escapeHtml(String(s.status)) : s.alive ? "running" : "stopped";
+            return `<div class="sidebar-service-row is-${alive}">
+              <div class="sidebar-service-main">
+                <span class="sidebar-service-dot" title="${alive}"></span>
+                <span class="sidebar-service-name">${escapeHtml(s.name)}</span>
+                <span class="sidebar-service-meta">${status}${port}</span>
+              </div>
+              <button type="button" class="unified-btn sidebar-service-logs" data-action="service-logs" data-service-name="${escapeHtml(s.name)}" style="font-size:0.7rem;padding:0.1rem 0.35rem;">日志</button>
+            </div>`;
+          })
+          .join("");
+  const err = state.servicesError
+    ? `<div class="sidebar-services-error">${escapeHtml(state.servicesError)}</div>`
+    : "";
+  const log =
+    state.servicesLogName && state.servicesLogText
+      ? `<details class="sidebar-services-log" open>
+          <summary>${escapeHtml(state.servicesLogName)} 日志尾</summary>
+          <pre>${escapeHtml(state.servicesLogText)}</pre>
+        </details>`
+      : state.servicesLogName
+        ? `<div class="sidebar-services-empty">（无日志）</div>`
+        : "";
+  return `<div class="sidebar-services-header">
+      <span>Services</span>
+      <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
+    </div>
+    ${err}
+    <div class="sidebar-services-list">${rows}</div>
+    ${log}`;
+}
+
 // ---- main render ----
 
 export function renderProjectSidebar(
@@ -822,6 +875,9 @@ export function renderProjectSidebar(
     els.sidebarMeta.textContent = "未绑定项目 · 使用「项目 新建 <id>」";
     els.sidebarProgressWrap.classList.add("hidden");
   }
+
+  // Phase 27 — Services panel (always in project sidebar)
+  els.servicesPanel.innerHTML = renderServicesPanel(state);
 
   // --- banner area: single priority chain ---
   // Priority: undo > partner reply/busy > external > suggestions > auto_fix > …

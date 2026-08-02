@@ -690,6 +690,7 @@ def _action_list(paths, _payload: dict[str, Any]) -> dict[str, Any]:
                 "pid": data.get("pid"),
                 "cwd": data.get("cwd"),
                 "command": data.get("command"),
+                "ready_port": data.get("ready_port"),
             }
         )
         if data.get("name"):

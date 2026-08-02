@@ -11,6 +11,16 @@ export type ChatBlock =
       reasoning: string;
       collapsed: boolean;
       turnKey: string;
+      /** Phase 27 M0 — per-call running cards */
+      tools?: Array<{
+        callId: string;
+        tool: string;
+        summary: string;
+        status: "running" | "ok" | "fail";
+        startedAt: number;
+        endedAt?: number;
+        endSummary?: string;
+      }>;
     }
   | {
       kind: "confirm";
@@ -137,10 +147,24 @@ export function checkerVerdictStatusText(verdict: string): string {
   return "验收：失败";
 }
 
+/** Phase 27 M0 — RunningCard elapsed label. */
+export function formatToolElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m${String(s).padStart(2, "0")}s`;
+}
+
+export function isConfirmInProgressLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  return label.includes("执行中") || label === "提交中…";
+}
+
 const CONFIRM_LABELS: Record<string, string> = {
-  y: "已执行",
+  y: "已同意，执行中…",
   n: "已跳过",
-  a: "本会话均允许",
+  a: "本会话均允许 · 执行中…",
   timeout: "确认超时",
   stale: "已过期",
   cancelled: "已取消",
@@ -224,6 +248,22 @@ export function createChatSession(
       if (block.kind === "confirm" && !block.resolved && block.requestId !== exceptRequestId) {
         block.resolved = "已过期";
       }
+    }
+  }
+
+  function finalizeInProgressConfirms(terminalLabel: string): void {
+    if (options.confirmInBlocks) {
+      for (const block of model.blocks) {
+        if (block.kind === "confirm" && isConfirmInProgressLabel(block.resolved)) {
+          block.resolved = terminalLabel;
+        }
+      }
+    }
+    if (isConfirmInProgressLabel(model.confirmOverlay?.resolved)) {
+      model.confirmOverlay = {
+        ...model.confirmOverlay!,
+        resolved: terminalLabel,
+      };
     }
   }
 
@@ -317,6 +357,7 @@ export function createChatSession(
       reasoning: "",
       collapsed: false,
       turnKey: model.currentTurnKey,
+      tools: [],
     };
     model.blocks.push(block);
     return block;
@@ -383,6 +424,7 @@ export function createChatSession(
           const label = event.finish_reason === "timeout" ? "回合超时已停止" : "回合已停止";
           model.blocks.push({ kind: "notice", text: label });
         }
+        finalizeInProgressConfirms(event.finish_reason === "cancelled" ? "已取消" : "已完成执行");
         resetTurnActivity();
         model._toolTimers.clear();
         model.confirmPending = false;
@@ -407,6 +449,14 @@ export function createChatSession(
         model._toolTimers.set(event.call_id, Date.now());
         if (options.showProcess) {
           const proc = ensureProcessBlock();
+          if (!proc.tools) proc.tools = [];
+          proc.tools.push({
+            callId: event.call_id,
+            tool: event.tool,
+            summary: event.summary || event.tool,
+            status: "running",
+            startedAt: Date.now(),
+          });
           proc.lines.push(`· ${event.tool}  ${event.summary}`);
         }
         hooks.onToolStart?.(currentTurnIndex());
@@ -416,15 +466,35 @@ export function createChatSession(
         model.toolsRunning = Math.max(0, model.toolsRunning - 1);
         if (options.showProcess) {
           const startTime = model._toolTimers.get(event.call_id);
-          if (startTime) {
-            const ms = Date.now() - startTime;
-            const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
-            const proc = ensureProcessBlock();
-            proc.lines.push(`  ${event.ok ? "✓" : "✗"} ${event.tool} (${dur})`);
+          const now = Date.now();
+          const started = startTime ?? now;
+          const ms = now - started;
+          const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+          const proc = ensureProcessBlock();
+          proc.lines.push(`  ${event.ok ? "✓" : "✗"} ${event.tool} (${dur})`);
+          if (!proc.tools) proc.tools = [];
+          let card = proc.tools.find((t) => t.callId === event.call_id);
+          if (!card) {
+            card = {
+              callId: event.call_id,
+              tool: event.tool,
+              summary: event.tool,
+              status: "running",
+              startedAt: started,
+            };
+            proc.tools.push(card);
           }
+          card.status = event.ok ? "ok" : "fail";
+          card.endedAt = now;
+          card.endSummary = event.summary || (event.ok ? "完成" : "失败");
+          model._toolTimers.delete(event.call_id);
         }
         if (model.turnFinished && model.toolsRunning === 0) {
           model.turnActive = false;
+        }
+        // When all tools done after an approve, flip confirm label to terminal state.
+        if (model.toolsRunning === 0) {
+          finalizeInProgressConfirms("已完成执行");
         }
         hooks.onToolEnd?.(currentTurnIndex());
         notify();

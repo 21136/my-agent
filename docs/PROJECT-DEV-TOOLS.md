@@ -192,3 +192,4 @@ dry_run?: bool
 | 0.1.1 | 2026-08-01 | D1～D4 **已决**（采纳默认）；仍未实现代码 |
 | 0.2.0 | 2026-08-01 | M0：`http_request` · `dev_start`→`run_service` · IT-80～82 · catalog |
 | 0.3.0 | 2026-08-01 | M1：`port_status`/`kill_port` · `git_commit` · IT-83/84 |
+| 0.4.0 | 2026-08-01 | M2：`db_query` · `pip_install` active · IT-85/86 |

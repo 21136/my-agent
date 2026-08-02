@@ -732,6 +732,10 @@ class WsSessionHandler:
             await self._dispatch_host_scope(message, bridge)
             return
 
+        if isinstance(msg_type, str) and msg_type.startswith("services."):
+            await self._dispatch_services(message, bridge)
+            return
+
         if isinstance(msg_type, str) and msg_type.startswith("project.doc."):
             await self._dispatch_doc(message, repl, bridge)
             return
@@ -843,6 +847,23 @@ class WsSessionHandler:
             )
             bridge.emit(payload)
         except HostScopeConfigError as exc:
+            emit_error(bridge, str(exc))
+
+    async def _dispatch_services(
+        self,
+        message: dict[str, Any],
+        bridge: WsBridge,
+    ) -> None:
+        from services_api import ServicesApiError, dispatch_services_message
+
+        try:
+            payload = await asyncio.to_thread(
+                dispatch_services_message,
+                self.paths,
+                message,
+            )
+            bridge.emit(payload)
+        except ServicesApiError as exc:
             emit_error(bridge, str(exc))
 
 

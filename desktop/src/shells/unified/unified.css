@@ -470,6 +470,132 @@
   font-size: 0.85rem;
 }
 
+/* Phase 27 — RunningCards */
+.unified-tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.5rem;
+}
+.unified-tool-card {
+  border: 1px solid var(--ma-border);
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+}
+.unified-tool-card.is-running {
+  border-color: color-mix(in srgb, var(--ma-accent) 55%, var(--ma-border));
+}
+.unified-tool-card.is-fail {
+  border-color: color-mix(in srgb, #c44 60%, var(--ma-border));
+  background: color-mix(in srgb, #c44 8%, var(--ma-surface));
+}
+.unified-tool-card.is-ok {
+  border-color: color-mix(in srgb, #2a8 45%, var(--ma-border));
+}
+.unified-tool-title {
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--ma-text);
+}
+.unified-tool-summary,
+.unified-tool-status,
+.unified-tool-end {
+  font-size: 0.75rem;
+  color: var(--ma-text-muted);
+  margin-top: 0.15rem;
+  word-break: break-word;
+}
+.unified-tool-card.is-fail .unified-tool-end {
+  color: #c44;
+}
+.unified-confirm.is-running {
+  opacity: 1;
+  border-left: 3px solid var(--ma-accent);
+}
+
+/* Phase 27 — sidebar Services */
+.sidebar-services {
+  padding: 0.45rem 0.65rem 0.35rem;
+  border-bottom: 1px solid var(--ma-border);
+  font-size: 0.8rem;
+}
+.sidebar-services-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: var(--ma-text);
+  margin-bottom: 0.3rem;
+}
+.sidebar-services-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.sidebar-service-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+.sidebar-service-main {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.sidebar-service-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--ma-text-muted);
+  flex-shrink: 0;
+}
+.sidebar-service-row.is-alive .sidebar-service-dot {
+  background: #2a8;
+}
+.sidebar-service-row.is-dead .sidebar-service-dot {
+  background: #999;
+}
+.sidebar-service-name {
+  font-weight: 600;
+  color: var(--ma-text);
+  white-space: nowrap;
+}
+.sidebar-service-meta {
+  color: var(--ma-text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-services-empty,
+.sidebar-services-error {
+  color: var(--ma-text-muted);
+  font-size: 0.75rem;
+  padding: 0.15rem 0;
+}
+.sidebar-services-error {
+  color: #c44;
+}
+.sidebar-services-log {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+}
+.sidebar-services-log pre {
+  max-height: 9rem;
+  overflow: auto;
+  margin: 0.25rem 0 0;
+  padding: 0.35rem;
+  background: color-mix(in srgb, var(--ma-surface) 80%, transparent);
+  border: 1px solid var(--ma-border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--ma-mono);
+  font-size: 0.7rem;
+}
+
 /* ================================================================
    Confirm blocks
    ================================================================ */

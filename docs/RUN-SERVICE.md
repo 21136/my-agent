@@ -43,7 +43,9 @@
 - 不做跨机编排、不健康自动重启
 - 不把超时拉长塞进 `mvn_exec`
 
-后续补齐（HTTP 探活、`dev_start` 收敛、端口/Git）：见 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（Phase 26 · **doc**）。
+后续补齐（HTTP 探活、`dev_start` 收敛、端口/Git）：见 [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)（Phase 26 · **M0+M1 done**）。
+
+M1 起本工具亦支持 `port_status` / `kill_port`。
 
 ## 回归
 

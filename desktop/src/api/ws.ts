@@ -215,12 +215,31 @@ export type ServerEvent =
       message?: string;
       shell?: string;
     }
-  | {
-      type: "file.staged";
-      items: StagedFileItem[];
-    }
+  | { type: "file.staged"; items: StagedFileItem[] }
   | { type: "file.unstaged"; attachment_id: string }
-  | { type: "file.error"; message: string; path?: string };
+  | { type: "file.error"; message: string; path?: string }
+  | {
+      type: "services.list.done";
+      ok: boolean;
+      services: ServiceListItem[];
+    }
+  | {
+      type: "services.logs.done";
+      ok: boolean;
+      name: string;
+      log_path?: string;
+      text: string;
+    };
+
+export type ServiceListItem = {
+  name: string;
+  alive: boolean;
+  status?: string | null;
+  pid?: number | null;
+  cwd?: string | null;
+  command?: string | null;
+  ready_port?: number | null;
+};
 
 /** @deprecated — kept for old shell compatibility; will be removed in Phase 4 */
 export type ShellId = string;
@@ -594,6 +613,15 @@ export class AgentWsClient {
 
   skipHostScopeWizard(): void {
     this.send({ type: "host_scope.wizard", skip: true });
+  }
+
+  /** Phase 27 — project sidebar Services panel (read-only). */
+  listServices(): void {
+    this.send({ type: "services.list" });
+  }
+
+  fetchServiceLogs(name: string, tailLines = 40): void {
+    this.send({ type: "services.logs", name, tail_lines: tailLines });
   }
 }
 
