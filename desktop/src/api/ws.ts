@@ -42,7 +42,34 @@ export type ServerEvent =
   | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean }
   | { type: "confirm.done"; request_id: string; choice: string }
   | { type: "tool.start"; tool: string; call_id: string; summary: string }
-  | { type: "tool.end"; tool: string; call_id: string; ok: boolean; summary: string; output_path?: string }
+  | {
+      type: "tool.end";
+      tool: string;
+      call_id: string;
+      ok: boolean;
+      summary: string;
+      output_path?: string;
+      logs_tail?: string;
+    }
+  | {
+      type: "tool.progress";
+      call_id: string;
+      text?: string;
+      pct?: number;
+      phase?: string;
+      elapsed_sec?: number;
+    }
+  | {
+      type: "turn.evidence";
+      armed_task_id?: string | null;
+      armed_task_text?: string | null;
+      items: Array<{ tool: string; ok: boolean }>;
+    }
+  | {
+      type: "services.state";
+      ok?: boolean;
+      services: ServiceListItem[];
+    }
   | { type: "prompt.request"; prompt: string }
   | {
       type: "session.list";

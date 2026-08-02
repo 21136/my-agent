@@ -1,6 +1,6 @@
 # 执行可观测（EXEC-OBSERVABILITY）
 
-> 版本 **0.1.2** · 2026-08-02 · **状态：M0 done**  
+> 版本 **0.2.0** · 2026-08-02 · **状态：M1 done**  
 > Phase **27** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [UX-POLISH.md](./UX-POLISH.md)
 
 ## 0. 为什么开这个 Phase
@@ -167,7 +167,7 @@ project 视角侧栏新增 **Services** 块：
 |--------|------|------|
 | **doc** | 本文 + MAP/TASKS | **done（本文）** |
 | **M0** | 聊天 RunningCard + 确认文案；侧栏 Services 刷新 | **done** |
-| **M1** | `tool.progress` / `services.state`；证据条；长驻日志默认展开策略打磨 | todo |
+| **M1** | `tool.progress` / `services.state`；证据条；长驻日志默认展开策略打磨 | **done** |
 | **M2** | pet 壳对齐（可选）；日志「跟随」刷新 | defer |
 
 ---
@@ -185,3 +185,4 @@ T-2701 文档 · T-2702 D1～D3 确认 · T-2703 聊天 RunningCard · T-2704 �
 | 0.1.0 | 2026-08-02 | 初稿：聊天+侧栏双面；M0/M1；DOC-04；默认 D1–D3 |
 | 0.1.1 | 2026-08-02 | D1～D3 **已决**；开 M0 |
 | 0.1.2 | 2026-08-02 | M0：**RunningCard** + 确认文案；WS `services.list`/`logs`；侧栏 Services；IT-90/92 |
+| 0.2.0 | 2026-08-02 | M1：`tool.progress` 心跳 · `services.state` · `turn.evidence` 证据条；IT-91/93 |

@@ -760,6 +760,7 @@ class ToolExecutor:
         self.session.armed_task_text = ""
         self.session.turn_evidence = []
         if self.session.active_shell != "project" or not self.session.project_root.strip():
+            self._emit_turn_evidence()
             return
         from project_mode import first_open_task, project_id_from_root, read_task_stats
 
@@ -767,6 +768,7 @@ class ToolExecutor:
             self.session.project_root
         )
         if not pid:
+            self._emit_turn_evidence()
             return
         tasks_path = self.registry.agent_paths.workspace / pid / "TASKS.md"
         stats = read_task_stats(tasks_path)
@@ -775,6 +777,84 @@ class ToolExecutor:
             _, body, tid = first_open_task(tasks_path.read_text(encoding="utf-8"))
             self.session.armed_task_id = tid or ""
             self.session.armed_task_text = body or ""
+        self._emit_turn_evidence()
+
+    def _emit_turn_evidence(self) -> None:
+        """Phase 27 M1 — push armed task + this-turn evidence for sidebar."""
+        items: list[dict[str, Any]] = []
+        for entry in self.session.turn_evidence or []:
+            if not isinstance(entry, dict):
+                continue
+            label = str(entry.get("evolved_name") or entry.get("tool") or "").strip()
+            if not label:
+                continue
+            items.append({"tool": label, "ok": bool(entry.get("ok"))})
+        self._emit_event(
+            "turn.evidence",
+            {
+                "armed_task_id": (self.session.armed_task_id or "").strip() or None,
+                "armed_task_text": (self.session.armed_task_text or "").strip() or None,
+                "items": items,
+            },
+        )
+
+    def _emit_services_state(self) -> None:
+        """Phase 27 M1 — push managed service list after start/stop mutations."""
+        try:
+            from services_api import dispatch_services_message
+
+            payload = dispatch_services_message(
+                self.registry.agent_paths,
+                {"type": "services.list"},
+            )
+            self._emit_event(
+                "services.state",
+                {"ok": True, "services": payload.get("services") or []},
+            )
+        except Exception:
+            # Observability must not fail the tool call.
+            return
+
+    def _maybe_emit_services_state_after_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        if tool_name != "run_evolved":
+            return
+        evolved = arguments.get("tool_name")
+        if not isinstance(evolved, str):
+            return
+        evolved = evolved.strip()
+        if evolved not in {"run_service", "dev_start"}:
+            return
+        # Refresh on any completed call (list/status also cheap; keeps sidebar truthful).
+        _ = result
+        self._emit_services_state()
+
+    def _start_tool_progress_heartbeat(self, call_id: str) -> tuple[threading.Event, threading.Thread]:
+        """Emit tool.progress every few seconds while a tool is running (Phase 27 M1)."""
+        stop = threading.Event()
+
+        def _beat() -> None:
+            n = 0
+            while not stop.wait(5.0):
+                n += 1
+                secs = n * 5
+                self._emit_event(
+                    "tool.progress",
+                    {
+                        "call_id": call_id,
+                        "text": f"仍在执行… {secs}s",
+                        "phase": "running",
+                        "elapsed_sec": secs,
+                    },
+                )
+
+        thread = threading.Thread(target=_beat, name=f"tool-progress-{call_id[:8]}", daemon=True)
+        thread.start()
+        return stop, thread
 
     def end_execute_segments(self) -> None:
         self.session.in_execute_segment = False
@@ -931,6 +1011,8 @@ class ToolExecutor:
             },
         )
         # C6: always emit tool.end even when execute raises (BUG-011).
+        # Phase 27 M1: heartbeat progress while the tool runs (incl. long run_service waits).
+        stop_hb, hb_thread = self._start_tool_progress_heartbeat(call_id)
         result: ToolResult
         try:
             result = self._maybe_spill_output(self._execute_builtin(name, args, started=started))
@@ -941,19 +1023,25 @@ class ToolExecutor:
                 f"tool execution failed: {exc}",
                 duration_ms=_elapsed_ms(started),
             )
-        self._emit_event(
-            "tool.end",
-            {
-                "tool": name,
-                "call_id": call_id,
-                "ok": result.ok,
-                "summary": _tool_result_summary(result),
-                "output_path": result.output_path,
-            },
-        )
+        finally:
+            stop_hb.set()
+            hb_thread.join(timeout=0.2)
+        end_payload: dict[str, Any] = {
+            "tool": name,
+            "call_id": call_id,
+            "ok": result.ok,
+            "summary": _tool_result_summary(result),
+            "output_path": result.output_path,
+        }
+        logs_tail = _result_logs_tail(result)
+        if logs_tail:
+            end_payload["logs_tail"] = logs_tail
+        self._emit_event("tool.end", end_payload)
         if name == "read_file" and result.ok:
             self._maybe_record_memory_entity_used(args, result)
         self._record_turn_evidence(name, args, result)
+        self._emit_turn_evidence()
+        self._maybe_emit_services_state_after_tool(name, args, result)
         if result.ok:
             self._maybe_reload_registry_after_write_evolve(name, args, result)
             self._maybe_arm_task_stop(name, args, result)
@@ -1762,15 +1850,50 @@ def _tool_event_summary(
 
 
 def _tool_result_summary(result: ToolResult) -> str:
-    if not result.ok and result.error:
-        return result.error.message or "failed"
     data = result.data if isinstance(result.data, dict) else {}
+    # Prefer structured run_service failure / not-ready hints (Phase 27 IT-91).
+    if isinstance(data.get("warning"), str) and data["warning"].strip():
+        text = data["warning"].strip()
+        return text[:120] + ("…" if len(text) > 120 else "")
+    if not result.ok and result.error:
+        base = result.error.message or "failed"
+        tail = _result_logs_tail(result)
+        if tail:
+            last = tail.strip().splitlines()[-1].strip() if tail.strip() else ""
+            if last:
+                combined = f"{base} · {last}"
+                return combined[:120] + ("…" if len(combined) > 120 else "")
+        return base
     for key in ("path", "message", "preview"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             text = value.strip()
             return text[:120] + ("…" if len(text) > 120 else "")
+    if data.get("ready") is False and data.get("action") in {"start", "restart", "wait"}:
+        return "started but not ready"
     return "ok" if result.ok else "failed"
+
+
+def _result_logs_tail(result: ToolResult) -> str | None:
+    """Extract truncated logs_tail from evolved tool data / error details."""
+    candidates: list[Any] = []
+    if isinstance(result.data, dict):
+        candidates.append(result.data.get("logs_tail"))
+        start = result.data.get("start")
+        if isinstance(start, dict):
+            candidates.append(start.get("logs_tail"))
+    if result.error and isinstance(result.error.details, dict):
+        candidates.append(result.error.details.get("logs_tail"))
+        start = result.error.details.get("start")
+        if isinstance(start, dict):
+            candidates.append(start.get("logs_tail"))
+    for raw in candidates:
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip()
+            if len(text) > 4096:
+                return text[-4096:]
+            return text
+    return None
 
 
 def _http_request_needs_confirm(inner: dict[str, Any]) -> bool:

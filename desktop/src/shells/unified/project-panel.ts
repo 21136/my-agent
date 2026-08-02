@@ -117,6 +117,10 @@ export interface ProjectPanelState {
   servicesError: string;
   servicesLogName: string;
   servicesLogText: string;
+  // Phase 27 M1 — turn evidence strip
+  turnArmedId: string;
+  turnArmedText: string;
+  turnEvidence: Array<{ tool: string; ok: boolean }>;
 }
 
 export interface ProjectPanelCallbacks {
@@ -812,6 +816,28 @@ export function setupProjectPanel(container: HTMLElement): {
 // ---- Phase 27 services panel ----
 
 function renderServicesPanel(state: ProjectPanelState): string {
+  const armed =
+    state.turnArmedId || state.turnArmedText
+      ? `<div class="sidebar-turn-armed">武装：${escapeHtml(
+          [state.turnArmedId, state.turnArmedText].filter(Boolean).join(" · "),
+        )}</div>`
+      : "";
+  const evidenceRows =
+    state.turnEvidence.length === 0
+      ? `<div class="sidebar-services-empty">本回合尚无工具证据</div>`
+      : state.turnEvidence
+          .map((e) => {
+            const mark = e.ok ? "✓" : "✗";
+            const cls = e.ok ? "ok" : "fail";
+            return `<div class="sidebar-evidence-row is-${cls}"><span>${mark}</span> ${escapeHtml(e.tool)}</div>`;
+          })
+          .join("");
+  const evidenceBlock = `<div class="sidebar-turn-evidence">
+      <div class="sidebar-services-header"><span>本回合</span></div>
+      ${armed}
+      <div class="sidebar-evidence-list">${evidenceRows}</div>
+    </div>`;
+
   const rows =
     state.services.length === 0
       ? `<div class="sidebar-services-empty">${state.servicesLoading ? "加载中…" : "暂无登记服务"}</div>`
@@ -845,7 +871,8 @@ function renderServicesPanel(state: ProjectPanelState): string {
       : state.servicesLogName
         ? `<div class="sidebar-services-empty">（无日志）</div>`
         : "";
-  return `<div class="sidebar-services-header">
+  return `${evidenceBlock}
+    <div class="sidebar-services-header">
       <span>Services</span>
       <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
     </div>

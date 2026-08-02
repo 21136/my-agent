@@ -176,6 +176,9 @@ export function mountUnifiedShell(
     servicesError: "",
     servicesLogName: "",
     servicesLogText: "",
+    turnArmedId: "",
+    turnArmedText: "",
+    turnEvidence: [],
   };
 
   let statusText = "连接中…";
@@ -852,11 +855,24 @@ export function mountUnifiedShell(
         t.endSummary && !running
           ? `<div class="unified-tool-end">${escapeHtml(t.endSummary)}</div>`
           : "";
+      const progressBit =
+        running && t.progressText
+          ? `<div class="unified-tool-progress">${escapeHtml(t.progressText)}</div>`
+          : "";
+      const logsBit =
+        t.logsTail && !running
+          ? `<details class="unified-tool-logs" open>
+              <summary>日志尾</summary>
+              <pre>${escapeHtml(t.logsTail)}</pre>
+            </details>`
+          : "";
       return `<div class="unified-tool-card is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
         <div class="unified-tool-title">${escapeHtml(t.tool)}</div>
         <div class="unified-tool-summary">${escapeHtml(t.summary)}</div>
         <div class="unified-tool-status"><span class="unified-tool-elapsed">${escapeHtml(statusLabel)}</span></div>
+        ${progressBit}
         ${endBit}
+        ${logsBit}
       </div>`;
     });
     return `<div class="unified-tool-cards">${cards.join("")}</div>`;
@@ -1014,7 +1030,7 @@ export function mountUnifiedShell(
         return `N:${block.text.length}`;
       case "process":
         return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${(block.tools ?? [])
-          .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}`)
+          .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}:${t.progressText ?? ""}:${(t.logsTail ?? "").length}`)
           .join(",")}`;
       case "confirm":
         return `C${block.requestId}:${block.resolved ?? "_"}`;
@@ -1995,10 +2011,26 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
+      case "services.state":
+        projectState.servicesLoading = false;
+        projectState.servicesError = "";
+        projectState.services = Array.isArray(event.services) ? event.services : [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
       case "services.logs.done":
         projectState.servicesLogName = event.name;
         projectState.servicesLogText = event.text || "";
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "turn.evidence":
+        projectState.turnArmedId = event.armed_task_id || "";
+        projectState.turnArmedText = event.armed_task_text || "";
+        projectState.turnEvidence = Array.isArray(event.items) ? event.items : [];
+        if (perspective === "project") {
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
         break;
 
       case "project.switch.request":
@@ -2133,6 +2165,13 @@ export function mountUnifiedShell(
       case "tool.start":
         chat.handleEvent(event);
         setStatus(`· ${event.tool}`);
+        break;
+
+      case "tool.progress":
+        chat.handleEvent(event);
+        if (typeof event.text === "string" && event.text.trim()) {
+          setStatus(event.text.trim());
+        }
         break;
 
       case "tool.end":

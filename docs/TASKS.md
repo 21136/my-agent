@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 27** 执行可观测 **M0 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 27** 执行可观测 **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)）；Phase 26 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1121,7 +1121,7 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 27 — 执行可观测（聊天过程 + 侧栏服务/进度）
 
-> 设计：[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) **v0.1.2** · **M0 done**  
+> 设计：[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) **v0.2.0** · **M1 done**  
 > 触发：确认工具后只见「已执行」、无启动过程；侧栏看不见服务与本回合证据 → 排障黑盒。  
 > 产品选择：**聊天过程与侧栏看板都要**。
 
@@ -1137,11 +1137,12 @@ python turn_intent.py    # 分类用例无回归
 | T-2703 | M0：聊天 RunningCard | `chat-state` / unified 确认流 | T-2702 | 同意后可见运行中+秒表；end 更新 | **done** |
 | T-2704 | M0：确认文案去黑盒 | confirm 标签文案 | T-2703 | 「已同意，执行中…」≠ 单独「已执行」当成功 | **done** |
 | T-2705 | M0：侧栏 Services | project-panel + list/刷新 | T-2702 | 可见登记服务 alive/端口 | **done** |
-| T-2706 | M1：progress/services 事件 + 证据条 | server WS + 侧栏 Turn | T-2703,T-2705 | IT-91～93 | todo |
+| T-2706 | M1：progress/services 事件 + 证据条 | server WS + 侧栏 Turn | T-2703,T-2705 | IT-91～93 | **done** |
 | T-2707 | 提示词/catalog 对齐 | evolve prompts · run.md | T-2703 | 禁 mvn 起长驻；指向可观测 | **done** |
-| T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | **done**（IT-90/92；IT-91/93→M1；S-90 手工） |
+| T-2708 | IT/S 留痕 | 测 + smoke 记录 | T-2705,T-2706 | IT-90～；S-90 | **done**（IT-90～93；S-90 手工） |
 
-**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。 **已达成**。
+**完成标志（M0）**：确认后不再「静音」；侧栏能看见服务；失败有可读原因。 **已达成**。  
+**完成标志（M1）**：长工具有 progress；`run_service` 后侧栏自动刷新；本回合证据条可见。 **已达成**。
 
 ---
 

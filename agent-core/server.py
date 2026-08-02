@@ -251,9 +251,15 @@ class WsBridge:
             self._pending_confirm_id = None
 
     def on_executor_event(self, event_type: str, payload: dict[str, Any]) -> None:
-        if event_type in {"tool.start", "tool.end"}:
-            if self.turn_watchdog is not None:
+        if event_type in {"tool.start", "tool.end", "tool.progress"}:
+            if self.turn_watchdog is not None and event_type in {"tool.start", "tool.end"}:
                 self.turn_watchdog.note_progress_event(event_type)
+            self.emit({"type": event_type, **payload})
+            return
+        if event_type == "turn.evidence":
+            self.emit({"type": event_type, **payload})
+            return
+        if event_type == "services.state":
             self.emit({"type": event_type, **payload})
             return
         if event_type == "session.workspace_evolved_approved":

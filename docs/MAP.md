@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-02** · **新会话请先读本文 + `TASKS.md`**  
 > 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 27** [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)（**M0 done** · 聊天 RunningCard + 侧栏 Services）；Phase 24 / [UX-POLISH.md](./UX-POLISH.md)；Phase 26 **done**。  
+> **当前焦点**：**Phase 27** [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)（**M1 done**）；Phase 24 / [UX-POLISH.md](./UX-POLISH.md)；Phase 26 **done**。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -47,7 +47,7 @@
 | **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)） |
 | **Phase 25** | **托管长驻服务**（`run_service`） | **M0 done**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
 | **Phase 26** | **项目开发工具补齐**（HTTP / 启停 / 端口 / Git / SQLite / pip） | **done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) v0.4.0；IT-80～86） |
-| **Phase 27** | **执行可观测**（聊天过程 + 侧栏服务/进度） | **M0 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)；IT-90/92） |
+| **Phase 27** | **执行可观测**（聊天过程 + 侧栏服务/进度） | **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)；IT-90～93） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
@@ -62,7 +62,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一焦点** | **Phase 27 M1**（`tool.progress` / `services.state` / 证据条）；Phase 24 剩余 T-2406～；[UX-POLISH.md](./UX-POLISH.md) |
+| **下一焦点** | Phase 24 剩余 T-2406～；[UX-POLISH.md](./UX-POLISH.md)；Phase 27 M2=defer |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
 

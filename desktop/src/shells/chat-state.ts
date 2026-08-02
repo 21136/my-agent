@@ -20,6 +20,8 @@ export type ChatBlock =
         startedAt: number;
         endedAt?: number;
         endSummary?: string;
+        progressText?: string;
+        logsTail?: string;
       }>;
     }
   | {
@@ -487,6 +489,9 @@ export function createChatSession(
           card.status = event.ok ? "ok" : "fail";
           card.endedAt = now;
           card.endSummary = event.summary || (event.ok ? "完成" : "失败");
+          if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {
+            card.logsTail = event.logs_tail.trim();
+          }
           model._toolTimers.delete(event.call_id);
         }
         if (model.turnFinished && model.toolsRunning === 0) {
@@ -498,6 +503,24 @@ export function createChatSession(
         }
         hooks.onToolEnd?.(currentTurnIndex());
         notify();
+        break;
+      case "tool.progress":
+        if (options.showProcess) {
+          const proc = model.blocks.find(
+            (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
+          );
+          const card = proc?.kind === "process"
+            ? proc.tools?.find((t) => t.callId === event.call_id)
+            : undefined;
+          if (card && card.status === "running") {
+            if (typeof event.text === "string" && event.text.trim()) {
+              card.progressText = event.text.trim();
+            } else if (typeof event.elapsed_sec === "number") {
+              card.progressText = `仍在执行… ${event.elapsed_sec}s`;
+            }
+            notify();
+          }
+        }
         break;
       case "reasoning.delta":
         if (options.showProcess) {
