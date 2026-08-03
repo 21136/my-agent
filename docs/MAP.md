@@ -1,8 +1,8 @@
 # my-agent 项目地图（MAP）
 
-> 版本 **2026-08-02** · **新会话请先读本文 + `TASKS.md`**  
+> 版本 **2026-08-03** · **新会话请先读本文 + `TASKS.md`**  
 > 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase 35 **G14 M0–M3 done**（[EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md)）；Phase 34 工作台可交错。
+> **当前焦点**：Phase 36 **项目多会话线**（设计 [PROJECT-THREADS.md](./PROJECT-THREADS.md) · M0）；Phase 35 G14 done；Phase 34 工作台可交错。
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -51,6 +51,7 @@
 | **Phase 28** | **通用执行通道**（`run_command` + 归档分域 `*_exec`） | **M0+M1 done**（[SHELL-CHANNEL.md](./SHELL-CHANNEL.md) v0.3.0；IT-100～103；M2→Phase 29） |
 | **Phase 29～34** | **对齐 Cursor 剩余面** | **29～33** · **34 M0** done（[CURSOR-ALIGN.md](./CURSOR-ALIGN.md)）；G M1/M2 待做 |
 | **Phase 35** | **执行可靠性**（后置条件 · 熔断 · 本地执行硬化） | **done**（[EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · G14 · M0–M3） |
+| **Phase 36** | **项目多会话线**（一活线 · 砍线归档 · 可选交接） | **M0 设计**（[PROJECT-THREADS.md](./PROJECT-THREADS.md)；T-3600） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
@@ -65,7 +66,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一焦点** | Phase 34 G 工作台；huiyi 可用 repair_node_modules 清前端依赖 |
+| **下一焦点** | Phase 36 项目多会话线（M1 起实现）；huiyi 污染线可先用现有「新会话」权宜，正式能力见 PROJECT-THREADS |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
 
@@ -1652,6 +1653,7 @@ python host_scope_api.py
 | proposal 与防重复 | `docs/EVOLVE.md` |
 | Electron 桌面壳 / UI | `docs/DESKTOP.md`（T-904） |
 | 项目模式 / project 壳 | `docs/PROJECT-MODE.md`（T-1101～T-1113） |
+| 项目多会话线 / 新开线 | `docs/PROJECT-THREADS.md`（Phase 36 · T-3600） |
 | 主机托管区 / 桌面设置 | `docs/HOST-SCOPE.md` · `docs/DESKTOP.md` §3.10 |
 | 桌面壳已知缺陷 / 联调 | `docs/BUGS.md` · `docs/bugs/` |
 | 工具确认管线 / confirm 加固 | `docs/CONFIRM-PIPELINE.md`（Phase 14 · BUG-008） |

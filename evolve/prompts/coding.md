@@ -28,6 +28,7 @@
 |------|------|
 | `run_command` | 通用 shell（一次性）；`background:true` 升格 `run_service` |
 | `run_service` | 长驻进程托管 |
+| `repair_node_modules` | **前端依赖损坏**：删 `node_modules`（可选 lock）+ 重装；优先于此，勿拆成 rmdir+npm install |
 | `browser_open` | 系统浏览器打开 http(s) |
 | `run_demo` | 在 `agent-core/` 下运行 `python <script>.py` |
 | `git_snapshot` | 只读 status + diff --stat |

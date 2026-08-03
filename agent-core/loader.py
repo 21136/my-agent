@@ -710,8 +710,9 @@ def format_tool_loop_user_message(
         segment_note += "）"
 
     return (
-        f"本轮工具调用已达 {tool_loop_max} 轮上限{segment_note}（本 segment 已执行 {tool_rounds} 轮），"
-        "未能得到最终文字回复，且本轮无可见进展。\n\n"
+        f"本条消息的 segment 工具预算已用尽（本 segment 上限 {tool_loop_max} 轮"
+        f"{segment_note}，已执行 {tool_rounds} 轮），未能得到最终文字回复，且本段无可见进展。\n\n"
+        "每条用户消息都会重新计算工具预算；若任务未完成，请发新消息（如「继续」）再试。\n\n"
         "常见原因：\n"
         "1. 任务需要的能力尚无对应 evolved 工具\n"
         "2. 需要其他主题的工具（例如 workflow 的 sort_by_extension）但未确认该主题\n"
@@ -731,7 +732,7 @@ def format_segment_pause_message(
 ) -> str:
     """Message when execute segment cap hit with progress (T-705)."""
     lines = [
-        f"execute segment {segment} 已达本轮上限（累计 {total_tool_rounds} 轮工具调用），已有进展。",
+        f"本条消息的工具预算已用尽（segment {segment}，本消息累计 {total_tool_rounds} 轮），已有进展。",
         "",
         "已完成部分：见上文 tool 结果与 assistant 回复。",
     ]
@@ -740,7 +741,7 @@ def format_segment_pause_message(
         lines.append("将自动继续下一 segment。")
     else:
         lines.append("")
-        lines.append("输入「继续」以执行下一 segment。")
+        lines.append("请发一条新消息（如「继续」）以开始下一轮工具预算。")
     return "\n".join(lines)
 
 
@@ -769,10 +770,47 @@ def ensure_task_paused_text(text: str, *, next_open_task: str | None = None) -> 
 def format_total_cap_message(*, total_tool_rounds: int, total_max: int) -> str:
     """Message when PARENT_EXECUTE_TOTAL_MAX is reached (T-705)."""
     return (
-        f"本条用户消息已达 execute 总安全顶（{total_max} 轮工具调用，已用 {total_tool_rounds} 轮）。\n\n"
+        f"本条用户消息的工具预算已用尽（上限 {total_max} 轮，已用 {total_tool_rounds} 轮）。\n\n"
         "已完成部分：见上文 tool 结果。\n\n"
-        "建议：输入「继续」开新轮对话续做，或缩小任务范围后重试。"
+        "请发一条新消息（如「继续」）以开始下一轮工具预算，或缩小任务范围后重试。"
     )
+
+
+def format_tool_interrupt_notice(
+    kind: str,
+    *,
+    tool_label: str = "",
+) -> str:
+    """User/LLM-facing copy when a tool was cancelled, timed out, or confirm rejected."""
+    label = (tool_label or "工具").strip() or "工具"
+    if kind == "confirm_rejected":
+        return (
+            f"{label}确认被拒绝或超时（不是工具回合上限）。"
+            "若仍要执行，请再发消息并在确认框点「接受」；"
+            "前端依赖损坏请优先 `run_evolved` → `repair_node_modules`，"
+            "勿手写 `rmdir`/`npm install` 拆两步。"
+        )
+    if kind == "timeout":
+        return (
+            f"{label}因回合墙钟超时被系统自动停止"
+            "（不是你点了「停止」，也不是工具回合上限）。"
+            "工具执行期间墙钟会暂停；若仍触发，请再发「继续」。"
+            "前端依赖请用 `repair_node_modules` 一次搞定，勿拆成 rmdir + npm install。"
+        )
+    return (
+        f"{label}执行被停止（不是工具回合上限）。"
+        "若你点了「停止」才会中断；长任务请等待完成或确认框点接受。"
+        "若要重试请再发「继续」。前端依赖优先 `repair_node_modules`。"
+    )
+
+
+def format_tool_interrupt_kernel_message(
+    kind: str,
+    *,
+    tool_label: str = "",
+) -> str:
+    """Inject into transcript so the model does not invent a budget-cap story."""
+    return f"[内核] {format_tool_interrupt_notice(kind, tool_label=tool_label)}"
 
 
 def _project_shell_bound(session: Session) -> bool:
@@ -1802,8 +1840,13 @@ def _demo() -> None:
     assert "已完成部分" in pause_msg
     assert "继续" in pause_msg
     total_msg = format_total_cap_message(total_tool_rounds=50, total_max=50)
-    assert "总安全顶" in total_msg
-    print("[PASS] T-705: segment pause + total cap messages")
+    assert "工具预算已用尽" in total_msg
+    cancel_msg = format_tool_interrupt_notice("cancelled", tool_label="run_command")
+    assert "不是工具回合上限" in cancel_msg
+    timeout_msg = format_tool_interrupt_notice("timeout", tool_label="run_command")
+    assert "墙钟" in timeout_msg
+    assert "不是你点了" in timeout_msg
+    print("[PASS] T-705: segment pause + total cap + interrupt notices")
 
     assert detect_scaffold_tool_turn("build a parser tool for evolve")
     assert not detect_scaffold_tool_turn("what tools are available?")

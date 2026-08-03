@@ -1,9 +1,9 @@
 # 上下文换线设计（CONTEXT-SWITCH）
 
-> 版本 **0.3.1** · 2026-07-30  
+> 版本 **0.3.2** · 2026-08-03  
 > **状态**：**M0+M1+M2 已实现**（T-1902～T-1907）  
 > **壳合并后**：前端不再 DOM 切壳；「跨壳」语义退化为 **会话线标签 / 项目绑定 / 新会话**。`ui.route` 硬切已退役；`active_shell` 仍可出现在 meta。  
-> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [DESKTOP.md](./DESKTOP.md) §0 · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · BUG-020
+> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [DESKTOP.md](./DESKTOP.md) §0 · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · BUG-020 · [PROJECT-THREADS.md](./PROJECT-THREADS.md)
 
 ---
 
@@ -238,6 +238,8 @@ Prompt（project / 通用 core）须写明：
 - 用 LLM 直接改 `data/state.json`  
 - 取消工具 confirm / 计划确认（本设计不替代它们）
 
+**同项目多归档线 /「新开线」**：不在本文件展开；见 [PROJECT-THREADS.md](./PROJECT-THREADS.md)（保留项目绑定的砍线；与 `session.new` 产品名对齐）。
+
 ---
 
 ## 9. 开放问题（实现前可再钉）
@@ -258,3 +260,5 @@ Prompt（project / 通用 core）须写明：
 | 0.1.1 | 2026-07-19 | M0 落地：`propose_context_switch` · WS 卡 · 写盘门闩 · `项目 新建` session_replaced · `新项目` 别名 |
 | 0.2.0 | 2026-07-19 | M1：`shell.switch` + 全局换线 overlay；确认后同步外壳 |
 | 0.3.0 | 2026-07-19 | M2：`session.new` 同壳新会话（current/grow/daily/project） |
+| 0.3.1 | 2026-07-30 | 壳合并后措辞：DOM 切壳退役；X8 / 动机表对齐 unified |
+| 0.3.2 | 2026-08-03 | §8 指针：同项目「新开线」见 [PROJECT-THREADS.md](./PROJECT-THREADS.md) |

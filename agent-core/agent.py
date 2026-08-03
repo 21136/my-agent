@@ -19,6 +19,8 @@ if str(_AGENT_CORE) not in sys.path:
 
 from loader import (
     format_session_evolved_catalog,
+    format_tool_interrupt_kernel_message,
+    format_tool_interrupt_notice,
     format_tool_loop_user_message,
     session_evolved_allowlist,
 )
@@ -114,12 +116,13 @@ def parent_execute_total_max() -> int:
 def auto_continue_enabled(*, active_shell: str = "") -> bool:
     """Whether execute may auto-start the next segment in the same turn (T-705).
 
-    Phase 20 / TASK-STOP S4: project shell always pauses at segment/task boundary;
-    grow/daily still honor ``MY_AGENT_AUTO_CONTINUE`` (default on).
+    Phase 20 / TASK-STOP S4: project shell always pauses at segment/task boundary.
+    grow/daily honor ``MY_AGENT_AUTO_CONTINUE`` (default **off**): each user message
+    gets a fresh tool budget; send another message (e.g. 「继续」) for the next segment.
     """
     if (active_shell or "").strip() == "project":
         return False
-    return os.environ.get("MY_AGENT_AUTO_CONTINUE", "1").strip() not in {"0", "false", "no"}
+    return os.environ.get("MY_AGENT_AUTO_CONTINUE", "0").strip() not in {"0", "false", "no"}
 
 
 def is_delivery_complete(text: str) -> bool:
@@ -1004,6 +1007,33 @@ class Agent:
                 }
                 self.session.append_message(tool_message)
 
+                interrupt_kind = _tool_interrupt_kind(result)
+                if interrupt_kind and self.cancel_event.is_set():
+                    # Wall-clock auto-stop also surfaces as tool "cancelled".
+                    fr = self._interrupt_finish_reason()
+                    if fr == "timeout":
+                        interrupt_kind = "timeout"
+                if interrupt_kind:
+                    label = _tool_interrupt_label(result, tool_name)
+                    notice = format_tool_interrupt_notice(
+                        interrupt_kind, tool_label=label
+                    )
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": notice,
+                        }
+                    )
+                    self.session.append_message(
+                        {
+                            "role": "user",
+                            "content": format_tool_interrupt_kernel_message(
+                                interrupt_kind, tool_label=label
+                            ),
+                        }
+                    )
+
                 # G14: circuit just opened → inject kernel nudge once per open.
                 opened_fp = getattr(self.executor.session, "circuit_just_opened", "") or ""
                 if opened_fp:
@@ -1083,8 +1113,19 @@ class Agent:
                         )
 
             if self.cancel_event.is_set():
+                notice = ""
+                if tool_rounds > 0:
+                    kind = self._interrupt_finish_reason()
+                    if kind not in {"timeout", "cancelled"}:
+                        kind = "cancelled"
+                    notice = format_tool_interrupt_notice(
+                        kind, tool_label="本回合工具"
+                    )
+                    self.session.append_message(
+                        {"role": "assistant", "content": notice}
+                    )
                 return ToolLoopSegmentResult(
-                    final_text="",
+                    final_text=notice,
                     tool_rounds=tool_rounds,
                     finish_reason=self._interrupt_finish_reason(),
                     exceeded=False,
@@ -1195,6 +1236,8 @@ class Agent:
 
             if loop_result.finish_reason in {"cancelled", "timeout"}:
                 finish_reason = loop_result.finish_reason
+                if loop_result.final_text:
+                    final_text = loop_result.final_text
                 break
 
             if loop_result.final_text:
@@ -1485,7 +1528,7 @@ class Agent:
         if loop_result.finish_reason in {"cancelled", "timeout"}:
             self.session.save()
             return TurnResult(
-                assistant_text="",
+                assistant_text=loop_result.final_text or "",
                 tool_rounds=loop_result.tool_rounds,
                 finish_reason=loop_result.finish_reason,
                 subagent_used=bool(spawn_explore_flag),
@@ -1598,6 +1641,30 @@ def _is_retryable(result: ToolResult) -> bool:
         # only retry if there's a close match available
         return bool(details.get("available_tools"))
     return False
+
+
+def _tool_interrupt_kind(result: ToolResult) -> str | None:
+    """Return confirm_rejected / cancelled when the failure is a user interrupt."""
+    if result.ok or not result.error:
+        return None
+    if result.error.code == ToolErrorCode.CONFIRM_REJECTED:
+        return "confirm_rejected"
+    msg = (result.error.message or "").lower()
+    if "cancelled" in msg or "canceled" in msg:
+        return "cancelled"
+    return None
+
+
+def _tool_interrupt_label(result: ToolResult, tool_name: str) -> str:
+    details = getattr(result.error, "details", None) or {}
+    evolved = details.get("tool_name")
+    if isinstance(evolved, str) and evolved.strip():
+        return evolved.strip()
+    if isinstance(result.data, dict):
+        inner = result.data.get("tool_name")
+        if isinstance(inner, str) and inner.strip():
+            return inner.strip()
+    return (tool_name or "工具").strip() or "工具"
 
 
 def _repair_json_arguments(raw: str) -> str:
@@ -2315,8 +2382,10 @@ def _demo_t705(paths: AgentPaths) -> None:
     """T-705: mock large execute spans 2 segments with write_evolved progress."""
     prev_segment = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX")
     prev_total = os.environ.get("PARENT_EXECUTE_TOTAL_MAX")
+    prev_auto = os.environ.get("MY_AGENT_AUTO_CONTINUE")
     os.environ["PARENT_EXECUTE_SEGMENT_MAX"] = "2"
     os.environ["PARENT_EXECUTE_TOTAL_MAX"] = "10"
+    os.environ["MY_AGENT_AUTO_CONTINUE"] = "1"
 
     try:
         session_dir = paths.data / "sessions" / "_agent_t705"
@@ -2438,6 +2507,10 @@ def _demo_t705(paths: AgentPaths) -> None:
             os.environ.pop("PARENT_EXECUTE_TOTAL_MAX", None)
         else:
             os.environ["PARENT_EXECUTE_TOTAL_MAX"] = prev_total
+        if prev_auto is None:
+            os.environ.pop("MY_AGENT_AUTO_CONTINUE", None)
+        else:
+            os.environ["MY_AGENT_AUTO_CONTINUE"] = prev_auto
 
 
 def _demo_t704(paths: AgentPaths) -> None:

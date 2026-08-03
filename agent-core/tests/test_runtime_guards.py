@@ -87,8 +87,30 @@ class TurnWatchdogTests(unittest.TestCase):
         time.sleep(0.05)
         watchdog.note_progress_event("assistant.delta")
         time.sleep(0.08)
+        watchdog.note_progress_event("assistant.delta")
+        time.sleep(0.08)
         watchdog.end()
         self.assertFalse(cancel.is_set())
+
+    def test_wall_pauses_during_tool_execution(self) -> None:
+        cancel = threading.Event()
+        notices: list[str] = []
+        watchdog = TurnWatchdog(
+            cancel_event=cancel,
+            on_auto_timeout=notices.append,
+            wall_sec=0.12,
+            stall_sec=0,
+        )
+        watchdog.begin()
+        watchdog.pause_wall()
+        time.sleep(0.25)
+        self.assertFalse(cancel.is_set())
+        watchdog.resume_wall()
+        time.sleep(0.25)
+        watchdog.end()
+        self.assertTrue(cancel.is_set())
+        self.assertEqual(watchdog.resolve_finish_reason(), "timeout")
+        self.assertEqual(len(notices), 1)
 
     def test_wall_clock_does_not_reset_on_touch(self) -> None:
         cancel = threading.Event()

@@ -70,7 +70,11 @@ def stall_watchdog_sec() -> float:
 
 @dataclass
 class TurnWatchdog:
-    """Wall-clock + optional stall watchdog for one user turn (segment does not reset wall)."""
+    """Wall-clock + optional stall watchdog for one user turn (segment does not reset wall).
+
+    Wall clock pauses while a tool is running (tool.start → tool.end): long installs
+    must not burn the turn budget, or users see auto-stop mid-npm-install.
+    """
 
     cancel_event: threading.Event
     on_auto_timeout: Callable[[str], None]
@@ -82,6 +86,8 @@ class TurnWatchdog:
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _wall_paused_at: float | None = field(default=None, init=False)
+    _wall_pause_depth: int = field(default=0, init=False)
 
     def begin(self) -> None:
         now = time.monotonic()
@@ -89,6 +95,8 @@ class TurnWatchdog:
         self._last_progress_at = now
         with self._lock:
             self._cancel_reason = None
+            self._wall_paused_at = None
+            self._wall_pause_depth = 0
         self._stop.clear()
         if self._thread is not None and self._thread.is_alive():
             return
@@ -101,6 +109,9 @@ class TurnWatchdog:
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
         self._thread = None
+        with self._lock:
+            self._wall_paused_at = None
+            self._wall_pause_depth = 0
 
     def touch_progress(self) -> None:
         self._last_progress_at = time.monotonic()
@@ -108,6 +119,25 @@ class TurnWatchdog:
     def note_progress_event(self, event_type: str) -> None:
         if event_type in PROGRESS_EVENT_TYPES:
             self.touch_progress()
+
+    def pause_wall(self) -> None:
+        """Pause wall while an evolved/builtin tool is executing."""
+        with self._lock:
+            self._wall_pause_depth += 1
+            if self._wall_pause_depth == 1:
+                self._wall_paused_at = time.monotonic()
+
+    def resume_wall(self) -> None:
+        """Resume wall after tool.end (nested starts supported)."""
+        with self._lock:
+            if self._wall_pause_depth <= 0:
+                return
+            self._wall_pause_depth -= 1
+            if self._wall_pause_depth == 0 and self._wall_paused_at is not None:
+                paused_for = time.monotonic() - self._wall_paused_at
+                self._started_at += paused_for
+                self._last_progress_at = time.monotonic()
+                self._wall_paused_at = None
 
     def request_user_cancel(self) -> None:
         with self._lock:
@@ -141,7 +171,13 @@ class TurnWatchdog:
             if self.cancel_event.is_set():
                 return
             now = time.monotonic()
-            if self.wall_sec > 0 and now - self._started_at >= self.wall_sec:
+            with self._lock:
+                wall_paused = self._wall_paused_at is not None
+                started_at = self._started_at
+            if wall_paused:
+                time.sleep(0.05)
+                continue
+            if self.wall_sec > 0 and now - started_at >= self.wall_sec:
                 self._trigger_auto_timeout("回合已超过墙钟限制，已自动停止")
                 return
             if self.stall_sec > 0 and now - self._last_progress_at >= self.stall_sec:

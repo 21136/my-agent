@@ -175,14 +175,14 @@
 | **P4** | 磁盘三件套 = **抗压缩真源**；未决以 `TASKS.md` 为准 |
 | **P5** | `meta.json` 扩展：`active_shell` · `project_root` · `project_id` · `project_plan_status` |
 | **P6** | project 壳 **硬拒绝** `write_evolve`；沉淀须显式切 grow |
-| **P7** | **一会话一项目（A）**：换项目 → `新会话` 或 `项目 切换` |
+| **P7** | **一活线一项目（A）**：同时仅一条活线绑该项目；换项目 → `项目 切换`；同项目污染 → **新开线**（归档旧线可回看）· [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
 | **P8** | **M0 用 7b**：仅 project 壳注入 `prompts/project.md`，**不**注册 `project` 主题 |
 | **P9** | `project_plan_status`：`draft` \| `confirmed` \| `plan_dirty` |
 | **P10** | **未 `confirmed` 禁止**写 `project_root` 下非三件套、禁止 `run_python` |
 | **P11** | 开工前 **计划确认**：桌面 **计划确认卡**；CLI **`项目 确认`**（等价） |
 | **P12** | 顶栏 `n/m` **仅**在 `confirmed` 后；否则显示「计划待确认」等（§8.2） |
 | **P13** | **一次大确认**开工；改范围/验收/增删 **Phase** → `plan_dirty` + **mini-confirm** |
-| **P14** | **新建项目** → 建议 **新会话**；**打开已有** → 可续接原 `conversation_id` |
+| **P14** | **新建项目** → 建议 **新会话/新开线**；**打开已有** → 续接该项目**活线**；同项目可另开线见 [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
 | **P15** | `patch_file` **允许**，仅限 `project_root` 内 |
 | **P16** | 说「写斗地主」等 → **换线提案** + confirm「新建/切换项目？」→ 再 `项目 新建`/切换；**不可自动开工**；总设计见 [CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) |
 | **P17** | project 壳仍追加 **`coding` 主题**（`run_tests` / `patch_file` 等） |
@@ -318,7 +318,7 @@ workspace/
 
 ### 4.4 会话策略（P7 / P14 / 壳隔离 T-1116）
 
-**一会话一项目**（项目壳内）：每个 `workspace/<id>/` 在 `project_sessions` 中绑定至多一个 `conversation_id`；切换项目 = 切换专用会话。
+**一活线一项目**（项目壳内）：每个 `workspace/<id>/` 在 `project_sessions` 中绑定**当前活线** `conversation_id`（同时至多一条）；切换项目 = 切换到目标项目的活线。同项目可 **新开线**：旧活线进入 `project_thread_archive`，仅回看；设计见 [PROJECT-THREADS.md](./PROJECT-THREADS.md)（Phase 36）。
 
 **一线一壳**（桌面）：`grow` / `daily` / `project` 各维护独立会话指针；**切壳 = 换 backend 会话**，聊天区 `session.history` 替换，不混上下文。
 
@@ -333,17 +333,21 @@ workspace/
   "project_sessions": {
     "doudizhu": "20260711-8a22b88f",
     "todo-app": "20260712-def012"
+  },
+  "project_thread_archive": {
+    "doudizhu": ["20260710-oldline01"]
   }
 }
 ```
 
-实现：`shell_switch.py`（壳切换）· `project_switch.py`（项目切换）。
+实现：`shell_switch.py`（壳切换）· `project_switch.py`（项目切换）· Phase 36 起归档索引。
 
 | 操作 | 会话 |
 |------|------|
 | 桌面切到 **生长/日用** | 加载 `shell_sessions[grow\|daily]`；无则新建；**不**带 `project_id` |
-| 桌面切到 **项目** | 加载 `project_sessions[last_project_id]`（或最近项目） |
+| 桌面切到 **项目** | 加载 `project_sessions[last_project_id]`（或最近项目）**活线** |
 | `项目 切换` | 同 M3；仅 project 壳内 |
+| `项目 新开线` / UI「新开线」 | 同项目新 `conversation_id`；旧线入档；history 清空；可跳过交接 |
 | 跨壳查别项目对话 | **不**自动注入；`project_catalog` → `read_file data/sessions/<id>/messages.jsonl`（非当前会话 **confirm**） |
 | 跨壳查项目代码/进度 | `read_file workspace/<id>/…`（无 confirm） |
 
@@ -534,7 +538,7 @@ workspace/
 
 ## 12. 非目标
 
-内置 IDE、每项目自动 git、多项目并行 agent、替代 `新会话`、host 替代 workspace。
+内置 IDE、每项目自动 git、多项目并行 agent、同项目多活线并行执行、host 替代 workspace。同项目多归档线见 [PROJECT-THREADS.md](./PROJECT-THREADS.md)（不替代跨项目切换）。
 
 ---
 
@@ -548,3 +552,4 @@ workspace/
 | 0.2.2 | 2026-07-14 | §8.4 切换后事件源：`session.memory` ← `context` · `session.history` ← `session`；BUG-019 |
 | 0.2.3 | 2026-07-14 | §4.1 draft 出计划：三件套可在确认前由助手填写；提及 PROJECT/TASKS/MAP 走 `plan` intent |
 | 0.2.4 | 2026-07-19 | **P20** 指针：[TASK-STOP.md](./TASK-STOP.md) v0.2.0；§3.2 / §10 每 task 一停 |
+| 0.2.5 | 2026-08-03 | P7/P14/§4.4：一活线一项目 + `project_thread_archive` 指针；详 [PROJECT-THREADS.md](./PROJECT-THREADS.md) |

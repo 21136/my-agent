@@ -267,7 +267,7 @@ class TurnCancelTests(unittest.TestCase):
                 result = agent.run_turn("执行一次目录读取", spawn_explore=False)
 
             self.assertEqual(result.finish_reason, "cancelled")
-            self.assertEqual(result.assistant_text, "")
+            self.assertIn("不是工具回合上限", result.assistant_text)
             self.assertFalse(result.tool_loop_exceeded)
             self.assertEqual(llm.calls, 1)
         finally:

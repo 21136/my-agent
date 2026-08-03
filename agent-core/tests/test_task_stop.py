@@ -41,6 +41,11 @@ class TaskStopAutoContinueTests(unittest.TestCase):
         with patch.dict(os.environ, {"MY_AGENT_AUTO_CONTINUE": "1"}, clear=False):
             self.assertFalse(auto_continue_enabled(active_shell="project"))
 
+    def test_grow_shell_default_is_off(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "MY_AGENT_AUTO_CONTINUE"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertFalse(auto_continue_enabled(active_shell="grow"))
+
     def test_grow_shell_respects_env_on(self) -> None:
         with patch.dict(os.environ, {"MY_AGENT_AUTO_CONTINUE": "1"}, clear=False):
             self.assertTrue(auto_continue_enabled(active_shell="grow"))

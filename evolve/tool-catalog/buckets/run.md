@@ -33,7 +33,7 @@
 - **一次性命令**（build/test/install/脚本）：主用 **`run_command`**（[SHELL-CHANNEL.md](../../../docs/SHELL-CHANNEL.md)）。
 - **长驻 / 后台**：优先 `run_service`；或 `run_command` + `background:true`（Phase 31 D1 升格，返回 `name` + 日志尾）。
 - 测前端：目标目录已有 `node_modules` 时**不要先 install**；直接 `npm run build` / `test`（除非需重装）。
-- **依赖损坏 / 半截 `node_modules`**：点名 `repair_node_modules`（working_dir=前端目录）；勿反复 `npm run dev`。`run_command` 对 install/rmdir 已有长超时，但专用工具删目录更稳（shutil + 权限重试）。
+- **依赖损坏 / 半截 `node_modules`**：点名 `repair_node_modules`（working_dir=前端目录）；**禁止**手写 `rmdir`/`Remove-Item` + 另一次 `npm install`。勿反复 `npm run dev`。专用工具删目录更稳（shutil + 权限重试），一次确认即可。
 - 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。
 - **长驻服务**（监听端口、不退出）：用 **`run_service`** 或 `run_command` background；不要用无 background 的 `run_command` 起不退出进程。详见 [RUN-SERVICE.md](../../../docs/RUN-SERVICE.md)。
 - **执行可见性**：同意工具后桌面会显示运行卡与耗时；项目侧栏 **Services** 可刷新登记服务/日志尾（[EXEC-OBSERVABILITY.md](../../../docs/EXEC-OBSERVABILITY.md)）。

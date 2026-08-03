@@ -254,6 +254,10 @@ class WsBridge:
         if event_type in {"tool.start", "tool.end", "tool.progress"}:
             if self.turn_watchdog is not None and event_type in {"tool.start", "tool.end"}:
                 self.turn_watchdog.note_progress_event(event_type)
+                if event_type == "tool.start":
+                    self.turn_watchdog.pause_wall()
+                else:
+                    self.turn_watchdog.resume_wall()
             self.emit({"type": event_type, **payload})
             return
         if event_type == "turn.evidence":

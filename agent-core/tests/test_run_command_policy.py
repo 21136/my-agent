@@ -10,7 +10,12 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from run_command_policy import classify_run_command, run_command_requires_confirm, working_dir_under_project
+from run_command_policy import (
+    classify_run_command,
+    is_node_modules_wipe_command,
+    run_command_requires_confirm,
+    working_dir_under_project,
+)
 
 
 class RunCommandPolicyTests(unittest.TestCase):
@@ -47,6 +52,20 @@ class RunCommandPolicyTests(unittest.TestCase):
         )
         self.assertTrue(needs)
         self.assertEqual(reason, "background")
+
+    def test_node_modules_wipe_detection(self) -> None:
+        self.assertTrue(
+            is_node_modules_wipe_command(
+                r'cmd /c "rmdir /s /q D:\my-agent\workspace\huiyi\frontend\node_modules"'
+            )
+        )
+        self.assertTrue(
+            is_node_modules_wipe_command("Remove-Item -Recurse -Force node_modules")
+        )
+        self.assertFalse(is_node_modules_wipe_command("npm install"))
+        self.assertFalse(
+            is_node_modules_wipe_command('cmd /c "if exist node_modules (echo EXISTS)"')
+        )
 
 
 if __name__ == "__main__":

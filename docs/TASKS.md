@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Cursor 对齐路线图**（[CURSOR-ALIGN.md](./CURSOR-ALIGN.md)）；Phase 28 M0+M1 done；Phase 27 M1 done；Phase 24 剩余项；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 36 项目多会话线**（[PROJECT-THREADS.md](./PROJECT-THREADS.md) · M0 done）；Phase 35 G14 done；Cursor 对齐 [CURSOR-ALIGN.md](./CURSOR-ALIGN.md)；已解冻 · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1204,6 +1204,25 @@ python turn_intent.py    # 分类用例无回归
 | T-3504 | D1：废止剧本 + 本地执行硬化设计 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) v0.6+ | T-3503 | 已签字 | **done** |
 | T-3505 | M3a：关剧本 nudge + run_command 长超时 | exec_reliability · run_command · IT-163/164 | T-3504 | 无外部 Agent 依赖 | **done** |
 | T-3506 | M3b：repair_node_modules 显式工具 | evolve/tools/common/repair_node_modules · IT-165 | T-3505 | 点名调用，非剧本触发 | **done** |
+
+---
+
+## Phase 36 — 项目多会话线（一活线 · 砍线 · 回看）
+
+> 设计：[PROJECT-THREADS.md](./PROJECT-THREADS.md) **v0.1.0** · **状态：M0 设计定稿**  
+> 触发：长项目会话上下文污染；用户要「同时一条活线、污染砍线、旧线回看、交接可选可问」。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 [PROJECT-THREADS.md](./PROJECT-THREADS.md) §7.1（S-44 语义扩展 · S-20/S-43 回归 · IT-17 · DOC-05）
+- [x] 回归 / 新增：**S-170/S-171** · **IT-170/IT-171**；回归 `test_project_switch` · `test_cross_session_read` · `test_shell_session_ownership` · S-09/S-20/S-44
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-3600 | 设计文档 + MAP/TASKS/P7 挂钩 | `PROJECT-THREADS.md` · PROJECT-MODE · 本表 | thinking T1～T7 | DOC-04 齐全；T1～T7 可读 | **done** |
+| T-3601 | M1：`project_thread_archive` + 新开线 apply | `project_switch` / state · IT-170/171 | T-3600 | 砍线空 history；绑定保留；旧 id 入档 | pending |
+| T-3602 | M2：桌面「新开线」+ 历史线回看 | unified UI · S-170/171 | T-3601 | 回看不改活线 | pending |
+| T-3603 | M3：交接引导（跳过优先） | prompt / 可选提示 | T-3602 | 无静默摘要；只读旧线 + 按用户口径生成 | pending |
 
 ---
 

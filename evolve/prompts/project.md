@@ -80,7 +80,8 @@
 
 1. **目录参数**：`working_dir`（或 `cwd`），例如 `workspace/<id>/frontend`。**禁止**落到 agent root 误跑。
 2. **禁止 `repl` 跑 npm/pnpm/yarn/mvn**：必须 `run_evolved` → `run_command`。
-3. **测前端 / 验证构建**：若已有 `node_modules`，**禁止先 install**；用 `run_command`：`npm run build` / `npm run test`。长驻 dev server 用 **`run_service`**（或 `run_command` + `background:true`），不要无 background 的前台 `run_command`。
-4. 后端同理：`run_command` + `working_dir: workspace/<id>/backend`（如 `mvn -q test`）；**spring-boot:run 等不退出进程 → `run_service` / background**。
-5. **给人看本地页**：`browser_open`（`http://127.0.0.1:…`）；探活用 `http_request`，勿用 `fetch_url` 打 localhost。
-6. **Git**：`git_commit` 提交；`git_branch` 建/切分支；`git_push` 推当前分支（禁 force）。
+3. **测前端 / 验证构建**：若已有 `node_modules`，**禁止先 install**；用 `run_command`：`npm run build` / `npm run test`。长驻 dev server 用 **`run_service`**（或 `run_command` + `background:true`），不要用 background 的前台 `run_command`。
+4. **依赖损坏 / 半截 `node_modules`（vite 缺文件、esbuild Unexpected EOF 等）**：点名 **`repair_node_modules`**（`working_dir=workspace/<id>/frontend`）。**禁止**拆成 `rmdir`/`cmd rmdir` + 另一次 `npm install`（慢、易确认超时、易被中途停止）。
+5. 后端同理：`run_command` + `working_dir: workspace/<id>/backend`（如 `mvn -q test`）；**spring-boot:run 等不退出进程 → `run_service` / background**。
+6. **给人看本地页**：`browser_open`（`http://127.0.0.1:…`）；探活用 `http_request`，勿用 `fetch_url` 打 localhost。
+7. **Git**：`git_commit` 提交；`git_branch` 建/切分支；`git_push` 推当前分支（禁 force）。

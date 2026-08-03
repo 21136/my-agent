@@ -306,6 +306,40 @@ def _demo_tool_name_from_run_command(inner: dict[str, Any]) -> str | None:
     return match.group(1) if match else None
 
 
+
+def _validate_run_command_dep_repair_guard(
+    outer_arguments: dict[str, Any],
+) -> ToolResult | None:
+    """Reject hand-rolled node_modules wipe; steer to repair_node_modules."""
+    evolved = outer_arguments.get("tool_name")
+    if not isinstance(evolved, str) or evolved.strip() != "run_command":
+        return None
+    inner = _merged_evolved_arguments(outer_arguments, "run_command")
+    command = inner.get("command") if isinstance(inner.get("command"), str) else ""
+    from run_command_policy import is_node_modules_wipe_command
+
+    if not is_node_modules_wipe_command(command):
+        return None
+    return tool_fail(
+        "run_evolved",
+        ToolErrorCode.VALIDATION_ERROR,
+        (
+            "禁止用 run_command 手写删除 node_modules（rmdir/Remove-Item 等）。"
+            "请改用 run_evolved → repair_node_modules（working_dir=前端目录），"
+            "一次确认完成删除+重装，避免墙钟/确认超时误杀。"
+        ),
+        details={
+            "guard_type": "node_modules_wipe",
+            "hint": "repair_node_modules",
+            "retry": True,
+            "expected": {
+                "tool_name": "repair_node_modules",
+                "working_dir": "workspace/<id>/frontend",
+            },
+        },
+    )
+
+
 def _validate_run_python_scaffold_guard(
     session: ExecutorSession,
     outer_arguments: dict[str, Any],
@@ -381,6 +415,10 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
         if exit_code == 0:
             return f"[guard] demo probe · {tool_name}：通过（exit 0）"
         return f"[guard] demo probe · {tool_name}：失败（exit {exit_code}）"
+    if guard_type == "node_modules_wipe":
+        return (
+            "[guard] 勿手写删 node_modules；请用 repair_node_modules（一次确认删+装）"
+        )
     if guard_type == "run_python_demo_rejected":
         tool_name = fields.get("tool_name", "?")
         return f"[guard] 已拒调 run_python demo · {tool_name}（本 segment 已有自动 demo 结果）"
@@ -1558,6 +1596,11 @@ class ToolExecutor:
             inline_error = _inline_body_guard(evolved.name, arguments)
             if inline_error is not None:
                 return inline_error
+
+        if evolved.name == "run_command":
+            wipe_error = _validate_run_command_dep_repair_guard(arguments)
+            if wipe_error is not None:
+                return wipe_error
 
         if evolved.name in {"run_python", "run_command"}:
             demo_error = _validate_run_python_scaffold_guard(self.session, arguments)

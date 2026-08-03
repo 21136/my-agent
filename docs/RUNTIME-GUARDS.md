@@ -15,7 +15,7 @@
 | **G2** | 与 Phase 14（confirm 诚实）、Phase 15（Stop）正交；本 Phase 管 **硬顶、拒调、自动收尾** |
 | **G3** | Phase 15 defer 的 T-1410～T-1412 迁入本 Phase（见 §5） |
 | **G4** | **M0 先不死**：LLM timeout 正常收口、turn 墙钟、可选 stall、子进程 cancel、`turn.end` 必达 |
-| **G5** | `TURN_WALL_SEC=900`，覆盖一条用户消息的完整 turn（含 explore/checker/所有 segment），**segment 不重置墙钟** |
+| **G5** | `TURN_WALL_SEC=900`，覆盖一条用户消息的完整 turn（含 explore/checker/所有 segment），**segment 不重置墙钟**；**工具执行中（tool.start→tool.end）暂停墙钟**，避免 `npm install` / 删 `node_modules` 等长任务被误杀 |
 | **G6** | `STALL_WATCHDOG_SEC=0` 默认关闭；启用建议 `180`。`reasoning.delta` **不算进度**，否则无法识别“只思考不行动” |
 | **G7** | 用户 Stop、stall、墙钟均复用同一 cancel 通道；**先触发者生效一次**。用户 Stop=`cancelled`，自动超时=`timeout` |
 | **G8** | 子进程取消集中在 `run_evolved.execute_evolved_tool` 外层：`Popen` → `terminate` → 等 3s → `kill`；Windows 进程树终止 defer |
@@ -84,7 +84,7 @@ Phase 17 checker（另文）  →  做完之后查对不对（可选第二次 De
 |------|----------|----------|------|
 | 单次 LLM | 已有 `LLM_TIMEOUT_SEC` 120 | `llm_client` | 保持 |
 | 单次 confirm | 已有 `CONFIRM_TIMEOUT_SEC` 90 | `server.confirm_fn` | 保持 |
-| **回合墙钟** `TURN_WALL_SEC` | **900** | `_run_line` / agent | 整条 user turn；segment 不重置；到点 `finish_reason=timeout` |
+| **回合墙钟** `TURN_WALL_SEC` | **900** | `_run_line` / agent | 整条 user turn；segment 不重置；**tool 执行期间暂停**；到点 `finish_reason=timeout` |
 | **stall 看门狗** `STALL_WATCHDOG_SEC` | **0（关闭）** | `WsBridge` / agent | opt-in 建议 180；距上次有效进度超时 → cancel |
 | 桌面 cancel 兜底 | **45s** | `chat-state.ts` | 已实现；仅恢复 UI，不声称 sidecar 已停止 |
 | **Task 一停（project）** | 草案 | Phase 20 · [TASK-STOP.md](./TASK-STOP.md) | 每 `TASKS` 条目完成即停；**不**用拉长墙钟替代；L2 墙钟仍保留 |

@@ -122,3 +122,19 @@ def run_command_requires_confirm(
     if not in_project:
         return True, "outside_project"
     return True, f"other:{kind}"
+
+
+def is_node_modules_wipe_command(command: str) -> bool:
+    """True when command deletes a node_modules tree (prefer repair_node_modules)."""
+    text = (command or "").strip()
+    if not text:
+        return False
+    normalized = text.replace("\\", "/")
+    if "node_modules" not in normalized.lower():
+        return False
+    return bool(
+        re.search(
+            r"(?is)rmdir\s+/s|rd\s+/s|Remove-Item\b|\brm\s+-[a-z]*r|\bdel\s+/[sf]",
+            text,
+        )
+    )
