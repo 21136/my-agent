@@ -59,6 +59,7 @@ flowchart TB
 | 角色 | 工具 | 预算 | 持久化 |
 |------|------|------|--------|
 | **explore 子代理** | read/list/grep/web/fetch | 默认 **8** 轮 / 次 | 仅摘要进父会话；子 messages **不落** `messages.jsonl` |
+| **plan 子代理**（Phase 39 · 设计） | plan tools + patch 提案 | 默认 **3** 轮 | 摘要 + 侧栏采纳卡；见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
 | **父代理（ask）** | 同上（**无** run_evolved） | **≤5**（`PARENT_SHORT_MAX`） | 正常 `messages.jsonl` |
 | **父代理（agent）** | 同上 + run_evolved | 每 segment **50**；可多 segment；总顶 **50**（T-907） | 每 segment 追加消息 |
 

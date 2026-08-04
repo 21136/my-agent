@@ -164,7 +164,8 @@ class PlanPartnerTests(unittest.TestCase):
             before.count("- [ ]"),
         )
 
-    def test_optimize_moves_open_task_out_of_done_phase(self) -> None:
+    def test_optimize_proposes_patch_without_write(self) -> None:
+        """IT-181/M6: LLM TASKS patch is gated — file unchanged until accept."""
         import json as json_mod
         from unittest.mock import MagicMock
 
@@ -176,17 +177,39 @@ class PlanPartnerTests(unittest.TestCase):
             "- [x] Done module item with enough text\n"
             "- [ ] Next service item with enough text\n"
         )
-        lines = self.tasks.read_text(encoding="utf-8").splitlines()
-        db_line = next(i for i, L in enumerate(lines) if "Configure database" in L)
+        before = self.tasks.read_text(encoding="utf-8")
+        old_block = (
+            "## Phase 1 — scaffold\n"
+            "- [x] Done scaffold item with enough text\n"
+            "- [ ] Configure database connection verify\n"
+        )
+        new_block = (
+            "## Phase 1 — scaffold\n"
+            "- [x] Done scaffold item with enough text\n"
+        )
+        insert_old = (
+            "## Phase 4 — work\n"
+            "- [x] Done module item with enough text\n"
+            "- [ ] Next service item with enough text\n"
+        )
+        insert_new = (
+            "## Phase 4 — work\n"
+            "- [x] Done module item with enough text\n"
+            "- [ ] Configure database connection verify\n"
+            "- [ ] Next service item with enough text\n"
+        )
 
         fake_resp = MagicMock()
         fake_resp.content = json_mod.dumps(
             {
                 "operations": [
                     {
-                        "kind": "move",
-                        "line": db_line,
-                        "phase": "Phase 4 — work",
+                        "kind": "patch",
+                        "path": "TASKS.md",
+                        "replacements": [
+                            {"old": old_block, "new": new_block},
+                            {"old": insert_old, "new": insert_new},
+                        ],
                         "reason": "open task stuck in completed early phase",
                     }
                 ]
@@ -199,15 +222,23 @@ class PlanPartnerTests(unittest.TestCase):
         self.agent._llm = fake_llm
 
         summary = self.agent.reason_about_intent("优化下计划")
-        self.assertIn("移到", summary)
+        self.assertIn("提案", summary)
+        self.assertIn("待采纳", summary)
+        self.assertEqual(self.tasks.read_text(encoding="utf-8"), before)
+
+        state = self.agent.build_state()
+        patches = [
+            s
+            for s in (state.get("suggestions") or [])
+            if isinstance(s, dict) and s.get("action") == "apply_patch"
+        ]
+        self.assertTrue(patches, state.get("suggestions"))
+        result = self.agent.accept_suggestion(patches[0]["id"])
+        self.assertTrue(result.get("ok"))
         text = self.tasks.read_text(encoding="utf-8")
         phase1, _, rest = text.partition("## Phase 4")
         self.assertNotIn("Configure database", phase1)
         self.assertIn("Configure database", rest)
-        fake_llm.chat.assert_called()
-        sys_msg = fake_llm.chat.call_args.args[0][0]["content"]
-        self.assertIn("Plan Agent", sys_msg)
-        self.assertIn("只执行", sys_msg)
 
     def test_mutate_utterance_does_not_dump_as_task(self) -> None:
         """Plan-channel: reorder/skip phrasing without LLM must not become a Phase line."""
@@ -222,14 +253,24 @@ class PlanPartnerTests(unittest.TestCase):
         self.assertIn("不会把原话写进 TASKS", summary)
         self.assertNotIn("把部署提前", self.tasks.read_text(encoding="utf-8"))
 
-    def test_bare_task_title_still_adds(self) -> None:
+    def test_bare_task_title_proposes_not_writes(self) -> None:
         self._write_tasks(
             "## Phase 1\n"
             "- [ ] Real open task with enough text here\n"
         )
+        before = self.tasks.read_text(encoding="utf-8")
         self.assertTrue(looks_like_new_task_utterance("写登录页校验"))
         summary = self.agent._plan_channel_fallback("写登录页校验")
-        self.assertIn("已添加", summary)
+        self.assertIn("提案", summary)
+        self.assertEqual(self.tasks.read_text(encoding="utf-8"), before)
+        state = self.agent.build_state()
+        adds = [
+            s
+            for s in (state.get("suggestions") or [])
+            if isinstance(s, dict) and s.get("action") == "add_task"
+        ]
+        self.assertTrue(adds)
+        self.agent.accept_suggestion(adds[0]["id"])
         self.assertIn("写登录页校验", self.tasks.read_text(encoding="utf-8"))
 
     def test_add_honors_new_phase_title(self) -> None:
@@ -295,6 +336,35 @@ class PlanPartnerTests(unittest.TestCase):
         phase1_block = text.split("## Phase 4")[0]
         self.assertNotIn("配置数据库连接", phase1_block)
 
+    def test_judgment_reply_without_patch(self) -> None:
+        """Ask「合理吗」→ reply only, no gated write."""
+        import json as json_mod
+        from unittest.mock import MagicMock
+
+        map_path = project_dir(self.paths, self.pid) / "MAP.md"
+        map_path.write_text("# m\n\n## Phase 6 修复记录\n", encoding="utf-8")
+        before = map_path.read_text(encoding="utf-8")
+        fake_resp = MagicMock()
+        fake_resp.content = json_mod.dumps(
+            {
+                "reply": "不合理：MAP 不是修复流水账，Phase 应只在 TASKS。",
+                "operations": [],
+            },
+            ensure_ascii=False,
+        )
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = fake_resp
+        fake_llm._plan_model = "test"
+        self.agent._llm = fake_llm
+
+        summary = self.agent.reason_about_intent("phase6 写在 map 合理吗")
+        self.assertIn("不合理", summary)
+        self.assertEqual(map_path.read_text(encoding="utf-8"), before)
+        self.assertEqual(len(self.agent._pending_gated), 0)
+        self.assertTrue(
+            any("不合理" in n for n in (self.agent.build_state().get("partner_notices") or []))
+        )
+
     def test_partner_notices_on_plan_state(self) -> None:
         from unittest.mock import MagicMock
 
@@ -349,6 +419,9 @@ class PlanPartnerTests(unittest.TestCase):
         self.assertIn("夹心", _PLAN_SYSTEM)
         self.assertIn("跳段", _PLAN_SYSTEM)
         self.assertIn("并行模块", _PLAN_SYSTEM)
+        self.assertIn("reply", _PLAN_SYSTEM)
+        self.assertIn("修复流水账", _PLAN_SYSTEM)
+        self.assertIn("operations 必须 []", _PLAN_SYSTEM)
 
     def test_progress_brief_flags_jump_and_empty(self) -> None:
         from plan_agent import _plan_progress_brief
@@ -404,8 +477,13 @@ class PlanPartnerTests(unittest.TestCase):
             "T-011 Required material Entity + Mapper + XML done",
         )
         text = self.tasks.read_text(encoding="utf-8")
-        self.assertIn("- [x] T-011", text)
+        self.assertNotIn("T-011", text)
         self.assertIn("- [ ] T-012", text)
+        archive = (project_dir(self.paths, self.pid) / "TASKS.archive.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("T-011", archive)
+        self.assertIn("closed:done", archive)
 
     def test_resolve_by_task_text_ignores_stale_line(self) -> None:
         from project_mode import resolve_progress_task_line

@@ -213,6 +213,17 @@ def dispatch_project_message(
         updated, events = perform_project_switch(session, paths, message)
         return {"_session": updated, "_events": events}
 
+    if msg_type == "project.thread.new":
+        updated, events = perform_project_thread_new(session, paths, message)
+        return {"_session": updated, "_events": events}
+
+    if msg_type == "project.threads":
+        from project_switch import build_project_threads_payload
+
+        project_id = message.get("project_id")
+        pid = project_id.strip() if isinstance(project_id, str) and project_id.strip() else None
+        return build_project_threads_payload(paths, session, project_id=pid)
+
     if msg_type == "plan.response":
         request_id = message.get("request_id")
         choice = message.get("choice")
@@ -404,39 +415,97 @@ def dispatch_doc_message(
     raise ProjectApiError(f"unknown doc message type: {msg_type}")
 
 
-def dispatch_task_add(
+def dispatch_plan_user_message(
     session: Session,
     paths: AgentPaths,
     message: dict[str, Any],
 ) -> dict[str, Any]:
-    """Handle project.task.add — route through PlanAgent LLM; feedback on sidebar."""
-    _project_pid(session)
-    pid = session.meta.project_id.strip()
-    description = str(message.get("description", "")).strip()
+    """Handle project.plan.message — compat API (Phase 39 · routes via Plan subagent).
 
-    if not description:
-        raise ProjectApiError("project.task.add requires description")
+    Does **not** append to main session messages.jsonl; emits plan.subagent.* + state.
+    """
+    _project_pid(session)
+    text = str(message.get("text") or message.get("description") or "").strip()
+    if not text:
+        raise ProjectApiError("project.plan.message requires text")
 
     agent = _plan_agent(session, paths)
     if agent is None:
         raise ProjectApiError("PlanAgent not available for current session")
 
+    include_last = bool(message.get("include_last_user"))
+    include_n = 1 if include_last else 0
+
+    from subagent import SubagentRunner
+
+    preview = text if len(text) <= 120 else text[:117] + "…"
+    events: list[dict[str, Any]] = [
+        {"type": "plan.subagent.start", "task_preview": preview},
+    ]
+
     try:
-        summary = agent.reason_about_intent(description)
+        runner = SubagentRunner(paths=paths)
+        result = runner.run_plan(
+            text,
+            session=session,
+            include_recent_user_lines=include_n,
+        )
     except Exception as exc:
         agent.set_partner_notices(f"计划搭档出错：{exc}")
-        summary = str(exc)
+        events.append(
+            {
+                "type": "plan.subagent.done",
+                "summary": str(exc),
+                "proposal_count": 0,
+                "ok": False,
+            }
+        )
+        events.extend([project_state_payload(session, paths), agent.build_state(session)])
+        return {"_events": events}
 
-    # V7: partner reply lives in project.plan.state.partner_notices (sidebar),
-    # not as main-chat bubbles — those felt like "no reaction" while waiting on LLM.
-    events: list[dict[str, Any]] = [
-        project_state_payload(session, paths),
-        agent.build_state(session),
-    ]
-    if summary and not agent._last_partner_notices:
-        agent.set_partner_notices(summary)
-        events[-1] = agent.build_state(session)
+    events.append(
+        {
+            "type": "plan.subagent.done",
+            "summary": result.summary,
+            "proposal_count": len(result.proposal_ids),
+            "proposal_ids": list(result.proposal_ids),
+            "adopt_pending": result.adopt_pending,
+            "ok": True,
+        }
+    )
+    events.append({"type": "assistant.done", "text": result.summary})
+    events.extend([project_state_payload(session, paths), agent.build_state(session)])
     return {"_events": events}
+
+
+def dispatch_task_add(
+    session: Session,
+    paths: AgentPaths,
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    """Handle project.task.add — legacy alias for Plan channel (compat)."""
+    return dispatch_plan_user_message(
+        session,
+        paths,
+        {
+            "type": "project.plan.message",
+            "text": str(message.get("description", "")).strip(),
+        },
+    )
+
+
+def _clear_plan_chat_events(
+    paths: AgentPaths,
+    project_id: str,
+    session: Session | None = None,
+) -> list[dict[str, Any]]:
+    from plan_agent import clear_plan_chat_on_enter
+
+    agent = clear_plan_chat_on_enter(paths, project_id)
+    events: list[dict[str, Any]] = [{"type": "project.plan.transcript.clear"}]
+    if session is not None:
+        events.append(agent.build_state(session))
+    return events
 
 
 def _dispatch_plan_message(
@@ -555,9 +624,10 @@ def _dispatch_plan_message(
             return result
 
         if msg_type == "project.plan.classify":
-            # Deprecated — Plan Agent no longer does chat interception.
-            # User messages go to main Agent via chat; sidebar quick-add is Plan Agent input.
             return {"type": "project.plan.classify.done", "decision": "forward"}
+
+        if msg_type == "project.plan.message":
+            return dispatch_plan_user_message(session, paths, message)
 
     except ProjectModeError as exc:
         return {"type": "error", "message": str(exc)}
@@ -576,11 +646,13 @@ def perform_project_open(
         updated, msg = open_project_on_session(paths, session, project_id)
     except ProjectModeError as exc:
         raise ProjectApiError(str(exc)) from exc
-    return updated, [
+    events: list[dict[str, Any]] = [
         {"type": "notice", "text": msg},
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
+    events.extend(_clear_plan_chat_events(paths, project_id, updated))
+    return updated, events
 
 
 def perform_project_switch(
@@ -626,6 +698,51 @@ def perform_project_switch(
             "project_id": plan.project_id,
             "session_id": updated.conversation_id,
             "action": plan.action,
+            "message": msg,
+            "session_replaced": session_replaced,
+        },
+        project_state_payload(updated, paths),
+        session_banner_event(updated),
+    ]
+    if session_replaced:
+        from context import session_memory_event
+        from session import session_history_event
+
+        events.append(session_memory_event(updated))
+        events.append(session_history_event(updated))
+        events.extend(corruption_notice_events(updated))
+    events.append({"type": "notice", "text": msg})
+    # C6 / S-192 — entering target project clears Plan chat memory
+    events.extend(_clear_plan_chat_events(paths, plan.project_id, updated))
+    return updated, events
+
+
+def perform_project_thread_new(
+    session: Session,
+    paths: AgentPaths,
+    message: dict[str, Any] | None = None,
+) -> tuple[Session, list[dict[str, Any]]]:
+    from project_switch import start_new_project_thread
+
+    message = message or {}
+    project_id = message.get("project_id")
+    pid = project_id.strip() if isinstance(project_id, str) and project_id.strip() else None
+    request_id = message.get("request_id")
+    rid = request_id.strip() if isinstance(request_id, str) and request_id.strip() else str(uuid.uuid4())
+
+    try:
+        updated, msg = start_new_project_thread(paths, session, project_id=pid)
+    except ProjectModeError as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+    session_replaced = updated.conversation_id != session.conversation_id
+    events: list[dict[str, Any]] = [
+        {
+            "type": "project.thread.new.done",
+            "request_id": rid,
+            "project_id": updated.meta.project_id,
+            "session_id": updated.conversation_id,
+            "previous_session_id": session.conversation_id,
             "message": msg,
             "session_replaced": session_replaced,
         },

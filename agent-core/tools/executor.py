@@ -28,6 +28,7 @@ from tools.builtin import (
     fetch_url,
     grep,
     list_dir,
+    plan_partner,
     propose_context_switch,
     read_file,
     run_evolved,
@@ -52,6 +53,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "fetch_url": fetch_url.run,
     "run_evolved": run_evolved.run,
     "propose_context_switch": propose_context_switch.run,
+    "plan_partner": plan_partner.run,
 }
 
 # Preview prefix: WsBridge waits on confirm queue without emitting confirm.request.
@@ -108,6 +110,7 @@ class ExecutorSession:
     last_failure_class: str = ""
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
+    plan_partner_calls: int = 0
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -584,14 +587,28 @@ def _validate_project_mode_call(
     )
     if reason is None:
         return None
+    code = ToolErrorCode.VALIDATION_ERROR
+    details: dict[str, Any] = {
+        "active_shell": session.active_shell,
+        "project_plan_status": session.project_plan_status or "draft",
+    }
+    from project_mode import PLAN_DOMAIN_WRITE_BLOCK_MSG, main_agent_plan_domain_write_block
+
+    if (
+        main_agent_plan_domain_write_block(
+            project_root=session.project_root,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        == PLAN_DOMAIN_WRITE_BLOCK_MSG
+    ):
+        code = ToolErrorCode.PERMISSION_DENIED
+        details["plan_domain_gate"] = True
     return tool_fail(
         tool_name,
-        ToolErrorCode.VALIDATION_ERROR,
+        code,
         reason,
-        details={
-            "active_shell": session.active_shell,
-            "project_plan_status": session.project_plan_status or "draft",
-        },
+        details=details,
     )
 
 
@@ -891,6 +908,7 @@ class ToolExecutor:
         self.session.postcondition_claim_blocked = False
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
+        self.session.plan_partner_calls = 0
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
@@ -1139,6 +1157,9 @@ class ToolExecutor:
 
         if name == "propose_context_switch":
             return self._run_propose_context_switch(args, started=started)
+
+        if name == "plan_partner":
+            return self._run_plan_partner(args, started=started)
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
@@ -1467,6 +1488,174 @@ class ToolExecutor:
         self._log_tool_call(name, arguments, result, confirm=confirm_decision, started=started)
         return result
 
+    def _run_plan_partner(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        """Spawn Plan subagent (Phase 39 · PLAN-SUBAGENT §4.1)."""
+        from session import Session
+        from subagent import SubagentRunner, plan_partner_max_per_turn
+
+        name = "plan_partner"
+        task = str(arguments.get("task") or "").strip()
+        if not task:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "task is required",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        pid = (self.session.project_id or "").strip()
+        if not pid and self.session.project_root.strip():
+            from project_mode import project_id_from_root
+
+            pid = project_id_from_root(self.session.project_root) or ""
+        if not pid:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "plan_partner requires a bound project; open or create a project first",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        cap = plan_partner_max_per_turn()
+        if self.session.plan_partner_calls >= cap:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                f"plan_partner 每回合最多 {cap} 次",
+                duration_ms=_elapsed_ms(started),
+                details={"plan_partner_limit": cap},
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        include_raw = arguments.get("include_recent_user_lines", 2)
+        try:
+            include_n = int(include_raw) if include_raw is not None else 2
+        except (TypeError, ValueError):
+            include_n = 2
+        include_n = max(0, min(include_n, 5))
+
+        if self.session.session_dir is None:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "no active session directory",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        paths = self.registry.agent_paths
+        session = Session.load(paths, self.session.session_dir.name)
+        preview = task if len(task) <= 120 else task[:117] + "…"
+
+        call_id = str(uuid.uuid4())
+        self._emit_event(
+            "plan.subagent.start",
+            {"task_preview": preview, "call_id": call_id},
+        )
+        self._emit_event(
+            "tool.start",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "summary": preview,
+                "arguments": {"task": preview, "include_recent_user_lines": include_n},
+            },
+        )
+
+        try:
+            runner = SubagentRunner(paths=paths, evolve_log=self.evolve_log)
+            sub_result = runner.run_plan(
+                task,
+                session=session,
+                include_recent_user_lines=include_n,
+                confirm_fn=self.confirm_fn,
+                cancel_event=self.cancel_event,
+            )
+        except Exception as exc:
+            result = tool_fail(
+                name,
+                "execution_error",
+                f"plan subagent failed: {exc}",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._emit_event(
+                "plan.subagent.done",
+                {
+                    "summary": result.error.message if result.error else str(exc),
+                    "proposal_count": 0,
+                    "ok": False,
+                    "call_id": call_id,
+                },
+            )
+            self._emit_event(
+                "tool.end",
+                {
+                    "tool": name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "summary": _tool_result_summary(result),
+                },
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        self.session.plan_partner_calls += 1
+
+        from project_api import project_state_payload
+        from plan_agent import get_plan_agent
+
+        agent = get_plan_agent(paths, pid)
+        state_events: list[dict[str, Any]] = [
+            project_state_payload(session, paths),
+            agent.build_state(session),
+        ]
+        for payload in state_events:
+            self._emit_event(payload.get("type", "project.state"), payload)
+
+        done_payload = {
+            "summary": sub_result.summary,
+            "proposal_count": len(sub_result.proposal_ids),
+            "proposal_ids": list(sub_result.proposal_ids),
+            "adopt_pending": sub_result.adopt_pending,
+            "ok": True,
+            "call_id": call_id,
+        }
+        self._emit_event("plan.subagent.done", done_payload)
+
+        result = tool_ok(
+            name,
+            {
+                "summary": sub_result.summary,
+                "proposal_ids": list(sub_result.proposal_ids),
+                "adopt_pending": sub_result.adopt_pending,
+                "partner_notices": list(sub_result.partner_notices),
+                "truncated": sub_result.truncated,
+            },
+            duration_ms=_elapsed_ms(started),
+        )
+        self._emit_event(
+            "tool.end",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "ok": True,
+                "summary": _tool_result_summary(result),
+            },
+        )
+        self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+        return result
+
     def validate(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult | None:
         """Return a failed ToolResult when the call is invalid; otherwise None."""
         self.session.refresh_bound_project_meta()
@@ -1505,6 +1694,28 @@ class ToolExecutor:
                 "run_evolved is disabled in ask mode (只聊); say 动手 to enable writes",
                 details={"turn_mode": "ask"},
             )
+
+        if name == "plan_partner":
+            task = arguments.get("task")
+            if not isinstance(task, str) or not task.strip():
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "task is required",
+                    details={"retry": True},
+                )
+            pid = (self.session.project_id or "").strip()
+            if not pid and self.session.project_root.strip():
+                from project_mode import project_id_from_root
+
+                pid = project_id_from_root(self.session.project_root) or ""
+            if not pid:
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "plan_partner requires a bound project",
+                )
+            return None
 
         if name != "run_evolved":
             return None

@@ -2,7 +2,7 @@
 
 > 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 36 项目多会话线**（[PROJECT-THREADS.md](./PROJECT-THREADS.md) · M0 done）；Phase 35 G14 done；Cursor 对齐 [CURSOR-ALIGN.md](./CURSOR-ALIGN.md)；已解冻 · [DOC-04](./TASKS.md)  
+> **当前 Phase**：**Phase 39 Plan 幕后子代理 done**（[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)）；Phase 38 superseded · Phase 37 done · [DOC-04](./TASKS.md)
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer`  
@@ -1047,14 +1047,14 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 24 — 进度硬闸门（Progress Gate）
 
-> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.1.0**  
-> 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证。  
-> 产品选择：**无本回合对口工具成功证据不可勾**；人只审规则/身份异常卡；工具失败走找 bug，无强制勾选。
+> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.2.0**  
+> 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证；**T-017 后证据门拒勾仍口头「继续」收口**。  
+> 产品选择：**无本回合对口工具成功证据不可勾**；人只审规则/身份异常卡；工具失败走找 bug，无强制勾选；**完成通知 Plan = `report_progress` 成功（G8/G9）**。
 
 ### DOC-04 准入（提案自检）
 
 - [x] 影响矩阵行：见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §5.1（执行门 / report_progress / 侧栏异常卡 / overlay；grow 不变）
-- [x] 回归 ID：**S-70～S-74** · **IT-70～IT-73**（同文档 §5.2）；既有一停 / armed 身份回归 IT-73
+- [x] 回归 ID：**S-70～S-75** · **IT-70～IT-73**（同文档 §5.2）；既有一停 / armed 身份回归 IT-73
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
@@ -1066,6 +1066,8 @@ python turn_intent.py    # 分类用例无回归
 | T-2406 | 异常卡（规则/身份）无强勾 | Plan/侧栏 notices | T-2404 | 仅规则冲突可人审；失败无强制勾入口 | todo |
 | T-2407 | overlay / project.md 一句对齐 | loader · evolve/prompts | T-2404 | 文案含「无对口证据不可勾」 | todo |
 | T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | todo |
+| T-2409 | G8/G9 设计落盘 | `PROGRESS-GATE.md` v0.2.0 · SIDEBAR · 本表 | T-2405 | G8/G9 可读；DOC-04 扩 S-75 | **done** |
+| T-2410 | G9 提示词 / 可选 kernel 注记 | `project.md` · overlay ·（可选）拒勾后 notice | T-2409 | 拒勾后禁止「本项已完成·继续」收口 | **done**（prompt）；kernel 注记 pending |
 
 **完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒。
 
@@ -1220,9 +1222,104 @@ python turn_intent.py    # 分类用例无回归
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
 | T-3600 | 设计文档 + MAP/TASKS/P7 挂钩 | `PROJECT-THREADS.md` · PROJECT-MODE · 本表 | thinking T1～T7 | DOC-04 齐全；T1～T7 可读 | **done** |
-| T-3601 | M1：`project_thread_archive` + 新开线 apply | `project_switch` / state · IT-170/171 | T-3600 | 砍线空 history；绑定保留；旧 id 入档 | pending |
-| T-3602 | M2：桌面「新开线」+ 历史线回看 | unified UI · S-170/171 | T-3601 | 回看不改活线 | pending |
-| T-3603 | M3：交接引导（跳过优先） | prompt / 可选提示 | T-3602 | 无静默摘要；只读旧线 + 按用户口径生成 | pending |
+| T-3601 | M1：`project_thread_archive` + 新开线 apply | `project_switch` / state · IT-170/171 | T-3600 | 砍线空 history；绑定保留；旧 id 入档 | **done** |
+| T-3602 | M2：桌面「新开线」+ 历史线回看 | unified UI · S-170/171 | T-3601 | 回看不改活线 | **done** |
+| T-3603 | M3：交接引导（跳过优先） | prompt / 可选提示 | T-3602 | 无静默摘要；只读旧线 + 按用户口径生成 | **done** |
+
+---
+
+## Phase 37 — 计划域架构（角色多文件 · 唯一队列 · 注入切片）
+
+> 设计：[PLAN-ARCH.md](./PLAN-ARCH.md) **v0.4.1** · **状态：M1～M3 · M5 · M6 done · M4 defer**  
+> 触发：单文件扛全场 / 队列膨胀污染提示词 / 口头完成绕过 Plan；要硬结构而非再加长 prompt。  
+> 产品选择：**多文件按角色拆**；**唯一执行队列** `TASKS.md`；归档默认不注入；主 Agent 对队列只走 `report_progress`。  
+> **Q1～Q3 已签**：提案不落盘（除勾选）· `TASKS.archive.md` · 关闭理由 `done|wontfix|duplicate|moved`。  
+> **A7 / M5 已落地**：侧栏常驻 = 当前任务 + 待拍板提案；完整计划 = 覆盖面板（`plan`）。  
+> **A8/A9/Q4 · M6 已落地**：Plan 对 TASKS/MAP/PROJECT/ENV 走 **读写 patch 提案** + 侧栏 **diff 采纳**；废止默认行号 LLM ops。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 [PLAN-ARCH.md](./PLAN-ARCH.md) §8.1（project 计划门 · Plan/侧栏 · Progress Gate；grow/host 无；**M6 扩 Plan 提案形态**）
+- [x] 回归 / 新增：**S-180/S-181/S-182** · **IT-180/IT-181**；M6 增 **S-183/S-184 · IT-182/IT-183**；回归 Progress Gate IT-70～73 · S-07/S-08
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-3700 | 设计文档 + MAP/TASKS 挂钩 | `PLAN-ARCH.md` · 本表 | Phase 24 G8/G9 · thinking | A0～A6 可读；DOC-04 齐全 | **done** |
+| T-3701 | 开放问题 Q1～Q3 签字 | `PLAN-ARCH.md` → v0.2.0 | T-3700 | 已决无「默认倾向」阻塞 M1 | **done** |
+| T-3702 | M1：注入切片（开放项 only） | loader / overlay · IT-180 | T-3701 | 归档不进默认提示词 | **done** |
+| T-3703 | M2：增删改落盘门（对齐 Q1） | Plan / add_tasks · IT-181 | T-3701 | 无接受不落盘 | **done** |
+| T-3704 | M3：归档搬迁 + 关闭理由 + 指针约定 | archive · 模板/prompt | T-3702 | 勾选进 archive；S-180 | **done** |
+| T-3705 | M4（可选）：bugs 晋升队列侧栏动作 | desktop / Plan | T-3704 | 手工；可 defer | defer |
+| T-3706 | A7 设计落盘 + M5 侧栏瘦身 | `PLAN-ARCH` v0.3.2 · SIDEBAR 指针 · UI | T-3704 | 侧栏无整份 TASKS；完整计划进覆盖面板；S-182 | **done** |
+| T-3707 | M6 设计：读写提案 + diff 采纳卡 | `PLAN-ARCH` v0.4.0 · SIDEBAR 指针 · 本表 | T-3706 · thinking | A8/A9/Q4 可读；S-183/184 · IT-182/183 准入 | **done** |
+| T-3708 | M6 代码：patch 提案协议 + 应用 | `plan_patch` / `plan_agent` · IT-182/183 | T-3707 | 无效行号不进卡；采纳前不落盘 | **done** |
+| T-3709 | M6 UI：建议卡渲染 diff 片段 | `project-panel` · S-183/184 | T-3708 | patch 卡展示 diff；整文件替换预览禁止 | **done** |
+| T-3710 | M6：废止默认行号 LLM ops 路径 | Plan system / `_apply_plan_operations` | T-3708 | 无 `move line N` 可点坏卡 | **done** |
+
+**完成标志（M0）**：架构可读；与 SIDEBAR / Progress Gate / 一停边界清晰。  
+**完成标志（M1）**：默认注入不含归档；S-180 / IT-180。  
+**完成标志（M2）**：add/改文案须门；无限加项被落盘门拦住。  
+**完成标志（M5）**：侧栏主面 = 当前 + 提案；完整计划不挤占常驻栏。  
+**完成标志（M6 设计）**：A8/A9/Q4 入 PLAN-ARCH；谈 MAP 不走行号 move 的设计断言可读（T-3707）。  
+**完成标志（M6 代码）**：patch 提案 + diff 卡 + 废止默认行号 LLM ops；S-183/184 · IT-182/183。
+
+---
+
+## Phase 38 — Plan 主输入双通道 + 自动路由
+
+> 设计：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.11 / §15.11.1** · [PLAN-ARCH.md](./PLAN-ARCH.md) **v0.5.1 A10/A11/A12**  
+> **状态：T-3800～T-3805 done（含自动路由 M4）**  
+> 触发：Plan 长文挤侧栏；要主区切换；怕 Plan 灌主聊天乱改计划；**后补**：单一输入 + 自动识别改计划交 Plan。  
+> 产品选择：主输入 **自动路由** Plan（可 Alt 强制主 Agent）；Plan 独立气泡；侧栏只留决策面；Plan 线与主线隔离、进项目清空；查跑同权、计划域四件套须门。  
+> **修订** Phase 22 **V1/V7**；§15.11 **C1/C8**。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 §15.11 / PLAN-ARCH §8.1（unified 主输入·侧栏·Plan 运行时·主 Agent transcript；grow/host 无）
+- [x] 回归 / 新增：**S-190/S-191/S-192/S-193** · **IT-190/IT-191/IT-192** · **IT-71′**；回归 S-182 · IT-71 · Progress Gate
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-3800 | 设计文档 + MAP/TASKS 挂钩 | SIDEBAR §15.11 · PLAN-ARCH v0.5.0→v0.5.1 · 本表 | Phase 37 M6 · 用户决议 | A10/A11/A12 · C1～C9 可读；DOC-04 齐 | **done** |
+| T-3801 | M1 UI：Plan 气泡样式 + composer 占位提示 | `unified/index` · css · `plan-intent.ts` | T-3800 | S-190/191 | **done** |
+| T-3802 | M1：侧栏 Plan 输入降级/移除 | `project-panel` | T-3801 | 侧栏无长回复堆；采纳卡仍在 | **done** |
+| T-3803 | M2：Plan transcript 隔离 + 进项目清空 | plan_agent / session · IT-190 · S-192 | T-3800 | 不灌主 messages；进项目 Plan 线空 | **done** |
+| T-3804 | M3：Plan 查跑同权；计划域写须门 | tools / executor · IT-191 | T-3803 | 读跑可用；四件套无采纳不落盘 | **done** |
+| T-3805 | M4：主输入 **自动路由** Plan（§15.11.1 C9） | `plan_agent` · `project_api` · `server` · `plan-intent.ts` | T-3801,T-3803 | S-193 · IT-192；Alt 强制主 Agent | **done** |
+
+**完成标志（M0）**：§15.11 + A10/A11 可读；V1/V7 修订可见。  
+**完成标志（M1）**：Plan 气泡可辨；S-190/191。  
+**完成标志（M2）**：上下文隔离 + 清空；IT-190 · S-192。  
+**完成标志（M3）**：查跑同权 + 计划域须门；IT-191。  
+**完成标志（M4）**：单一主输入自动分流；S-193 · IT-192。
+
+---
+
+## Phase 39 — Plan 幕后子代理（单入口）
+
+> 设计：[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) **v0.1.0 B0～B7** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.12**  
+> **状态：M0～M5 + M6 done**  
+> 触发：一周体验——双 Agent 双通道难用；对齐 Cursor/Copilot/Devin「一个聊天 + 幕后规划」。  
+> **废止**：Phase 38 双通道 / 关键词 auto-route / Plan 独立气泡（M2 删代码）。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：见 PLAN-SUBAGENT §7.1（unified 主聊·侧栏·Plan 子代理·executor·WS）
+- [x] 回归 / 新增：**S-200/S-201/S-202** · **IT-200/IT-201/IT-202**；回归 S-183/184 · Progress Gate · IT-71
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-3900 | 设计文档 + MAP/TASKS/SIDEBAR §15.12 | `PLAN-SUBAGENT.md` · 本表 | Phase 38 体验反馈 | B0～B7 可读；DOC-04 齐 | **done** |
+| T-3901 | M1：`SubagentRunner.run_plan` + `plan_partner` | `subagent.py` · `plan_agent.py` · executor | T-3900 | IT-200；summary + 提案 | **done** |
+| T-3902 | M2：删 auto-route / 双气泡 / plan-intent.ts | `server.py` · `project_api` · `unified/index` | T-3901 | IT-201 · S-200 | **done** |
+| T-3903 | M3：计划域四件套写拒 + project 提示词 | `executor` · `evolve/prompts/project.md` | T-3901 | IT-202 · S-202 | **done** |
+| T-3904 | M4：plan 过程卡 UI + WS 事件 | `unified` · `ws.ts` | T-3902 | S-201 | **done** |
+| T-3905 | M5（可选）：内核 LLM 预 spawn | `plan_agent` classify · `agent.py` | T-3901 | 自然语言规划可触发 | **done** |
+| T-3906 | M6：测试 + Phase 38 测迁移 | `test_plan_subagent.py` 等 | T-3902～3904 | S-200～202 · IT-200～202 | **done** |
+
+**完成标志（M0）**：PLAN-SUBAGENT + §15.12 可读；Phase 38 标 superseded。  
+**完成标志（M1～M4）**：单聊 + `plan_partner` + 采纳卡 + 写拒。  
+**完成标志（M6）**：huiyi「补文档/规划」不再走主 Agent 直写 MAP。
 
 ---
 

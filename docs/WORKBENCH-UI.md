@@ -1,6 +1,6 @@
 # 项目工作台界面重设计（WORKBENCH-UI）
 
-> 版本 **0.2.0** · 2026-08-02 · **状态：M0 done**（Q1～Q3 已按默认签字）  
+> 版本 **0.2.1** · 2026-08-03 · **状态：M0 done**（Q1～Q3 已按默认签字）  
 > 触发：huiyi 联调体验差 + 反窄化结论——产品初衷是**写项目工具**，聊天顺带；多壳/绑工具骨架与初衷拧着。  
 > 关联：[DESKTOP.md](./DESKTOP.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · **总路线** [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) **Track G / Phase 34**
 
@@ -31,7 +31,7 @@
 | Cursor 感 | 本工作台 |
 |-----------|----------|
 | 打开就是干活 | 打开就是**某个项目**（或「选项目」空态） |
-| Agent 在侧/底，不挡主线 | **聊天是执行通道**；侧栏是任务/服务/证据 |
+| Agent 在侧/底，不挡主线 | **聊天默认占主列**；计划 **审阅 / 完整 TASKS** 临时占主列（见 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）；侧栏仅短卡入口 |
 | 不切「模式」才能用工具 | **无壳选择器**；无「先进 project 才有工具」 |
 | 改文件有着落 | 路径 → 项目账本；侧栏能回看 |
 
@@ -66,6 +66,7 @@
 | **M0** | 启动进工作台；空态；侧栏默认展开 | **done** |
 | **M1** | 顶栏项目/会话切换打磨；路径写入 → 静默挂账 | todo |
 | **M2** | 文档与 DESKTOP §0 同步；可深藏 pet | todo |
+| **M3** | 计划审阅主列（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) PRU-M0） | todo |
 
 ### 手工冒烟（S-340）
 
@@ -82,3 +83,4 @@
 |------|------|------|
 | 0.1.0 | 2026-08-02 | 初稿 |
 | 0.2.0 | 2026-08-02 | Q1～Q3 已决；M0 实现 |
+| 0.2.1 | 2026-08-03 | 主输入 **自动路由** Plan（§15.11.1）；Alt+发送强制主 Agent；见 [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) |

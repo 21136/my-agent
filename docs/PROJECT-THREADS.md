@@ -1,7 +1,7 @@
 # 项目多会话线（PROJECT-THREADS）
 
 > 版本 **0.1.0** · 2026-08-03  
-> **状态**：**设计定稿（文档先行）** · Phase 36 · 未实现  
+> **状态**：**M1–M3 已实现**（T-3601～T-3603）  
 > 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) §4.4 · [CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) · [STABILIZATION.md](./STABILIZATION.md) §3.1 · [DESKTOP.md](./DESKTOP.md)
 
 ---

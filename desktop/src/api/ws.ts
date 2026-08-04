@@ -170,10 +170,23 @@ export type ServerEvent =
       warnings: string[];
       auto_fix_actions: string[];
       partner_notices?: string[];
+      plan_transcript_len?: number;
       change_log: PlanChangeItem[];
     }
   | { type: "project.plan.confirm_changes.done" }
   | { type: "project.plan.classify.done"; decision: "handle" | "forward" | "split" }
+  | { type: "project.plan.bubble"; role: "user" | "assistant"; text: string }
+  | { type: "project.plan.transcript.clear" }
+  | { type: "plan.subagent.start"; task_preview: string; call_id?: string }
+  | {
+      type: "plan.subagent.done";
+      summary: string;
+      proposal_count: number;
+      proposal_ids?: string[];
+      adopt_pending?: boolean;
+      ok?: boolean;
+      call_id?: string;
+    }
   // project.doc.* events
   | {
       type: "project.doc.list.done";
@@ -217,6 +230,29 @@ export type ServerEvent =
       project_id: string;
       session_id: string;
       action: string;
+      message: string;
+      session_replaced: boolean;
+    }
+  | {
+      type: "project.threads";
+      project_id: string | null;
+      active_session_id: string | null;
+      archived_session_ids: string[];
+      threads: Array<{
+        session_id: string;
+        title: string;
+        preview?: string;
+        updated_at?: string;
+        archived: boolean;
+      }>;
+      is_active: boolean;
+    }
+  | {
+      type: "project.thread.new.done";
+      request_id: string;
+      project_id: string | null;
+      session_id: string;
+      previous_session_id: string;
       message: string;
       session_replaced: boolean;
     }
@@ -432,7 +468,11 @@ export class AgentWsClient {
     this.ws.send(JSON.stringify(payload));
   }
 
-  sendMessage(text: string, attachmentIds?: string[]): void {
+  sendMessage(
+    text: string,
+    attachmentIds?: string[],
+    opts?: { forceAgent?: boolean; forcePlan?: boolean; autoRoutePlan?: boolean },
+  ): void {
     const payload: Record<string, unknown> = {
       type: "user.message",
       text,
@@ -440,6 +480,9 @@ export class AgentWsClient {
     if (attachmentIds?.length) {
       payload.attachments = attachmentIds;
     }
+    if (opts?.forceAgent) payload.force_agent = true;
+    if (opts?.forcePlan) payload.force_plan = true;
+    if (opts?.autoRoutePlan === false) payload.auto_route_plan = false;
     this.send(payload);
   }
 
@@ -574,6 +617,15 @@ export class AgentWsClient {
     this.send({ type: "project.task.add", description, phase: phase ?? "" });
   }
 
+  /** @deprecated Phase 39 — use main composer + plan_partner; compat only */
+  sendPlanChannelMessage(text: string, opts?: { includeLastUser?: boolean }): void {
+    this.send({
+      type: "project.plan.message",
+      text,
+      include_last_user: Boolean(opts?.includeLastUser),
+    });
+  }
+
   undoLastPlanOp(): void {
     this.send({ type: "project.plan.undo" });
   }
@@ -603,6 +655,20 @@ export class AgentWsClient {
       project_id: projectId,
       confirm: Boolean(options?.confirm),
       request_id: options?.requestId,
+    });
+  }
+
+  listProjectThreads(projectId?: string): void {
+    this.send({
+      type: "project.threads",
+      ...(projectId ? { project_id: projectId } : {}),
+    });
+  }
+
+  newProjectThread(projectId?: string): void {
+    this.send({
+      type: "project.thread.new",
+      ...(projectId ? { project_id: projectId } : {}),
     });
   }
 

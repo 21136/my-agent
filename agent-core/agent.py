@@ -235,6 +235,11 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "ALWAYS call this BEFORE writing files under a different workspace/<id>/ "
         "or before evolve writes from a non-grow shell. Requires user confirm/reject."
     ),
+    "plan_partner": (
+        "Invoke plan subagent for TASKS/MAP/PROJECT/ENV changes. "
+        "Returns summary; patch proposals appear in sidebar for adopt. "
+        "Do NOT use write_text/patch_file on plan-domain files — use this tool instead."
+    ),
 }
 
 _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
@@ -421,6 +426,24 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "required": ["action", "target"],
         "additionalProperties": False,
     },
+    "plan_partner": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "What to plan or change in plan domain (TASKS/MAP/PROJECT/ENV)",
+            },
+            "include_recent_user_lines": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5,
+                "default": 2,
+                "description": "Optional recent main-chat user lines for context (default 2)",
+            },
+        },
+        "required": ["task"],
+        "additionalProperties": False,
+    },
 }
 
 
@@ -447,7 +470,7 @@ def build_builtin_tool_definition(name: str) -> dict[str, Any]:
 
 
 def build_builtin_tools(*, registry: ToolRegistry | None = None) -> list[dict[str, Any]]:
-    """Return exactly the 6 builtin tools for LLM chat (no flat evolved)."""
+    """Return builtin tools for LLM chat (no flat evolved)."""
     reg = registry or ToolRegistry.load()
     registry_names = tuple(tool.name for tool in reg.builtins())
     if registry_names != BUILTIN_TOOL_NAMES:
@@ -466,6 +489,9 @@ def build_llm_tools(
     tools = build_builtin_tools(registry=registry)
     if session.meta.turn_mode == "ask":
         tools = [item for item in tools if item["function"]["name"] != "run_evolved"]
+    pid = (session.meta.project_id or "").strip()
+    if not pid:
+        tools = [item for item in tools if item["function"]["name"] != "plan_partner"]
     return tools
 
 
@@ -1374,7 +1400,86 @@ class Agent:
             )
         return updated, "task_paused"
 
-    def run_turn(self, user_text: str, *, spawn_explore: bool | None = None) -> TurnResult:
+    def _maybe_pre_spawn_plan(
+        self,
+        user_text: str,
+        *,
+        force_skip: bool = False,
+    ) -> Any | None:
+        """Kernel pre-spawn Plan subagent when LLM classifies plan-domain intent (T-3905)."""
+        if force_skip:
+            return None
+        pid = (self.session.meta.project_id or "").strip()
+        if not pid:
+            return None
+        if self.session.meta.turn_mode != "agent":
+            return None
+
+        from plan_agent import classify_plan_spawn_intent, get_plan_agent
+
+        decision = classify_plan_spawn_intent(user_text, llm=self.llm)
+        if not decision.spawn:
+            return None
+
+        from subagent import SubagentRunner
+
+        preview = user_text if len(user_text) <= 120 else user_text[:117] + "…"
+        self._emit_turn_event({"type": "plan.subagent.start", "task_preview": preview})
+
+        try:
+            runner = SubagentRunner(
+                paths=self.session.paths,
+                evolve_log=EvolveLog.for_agent(self.session.paths),
+            )
+            result = runner.run_plan(
+                user_text,
+                session=self.session,
+                include_recent_user_lines=2,
+            )
+        except Exception as exc:
+            self._emit_turn_event(
+                {
+                    "type": "plan.subagent.done",
+                    "summary": str(exc),
+                    "proposal_count": 0,
+                    "ok": False,
+                }
+            )
+            return None
+
+        self._emit_turn_event(
+            {
+                "type": "plan.subagent.done",
+                "summary": result.summary,
+                "proposal_count": len(result.proposal_ids),
+                "proposal_ids": list(result.proposal_ids),
+                "adopt_pending": result.adopt_pending,
+                "ok": True,
+            }
+        )
+
+        from project_api import project_state_payload
+
+        agent = get_plan_agent(self.session.paths, pid)
+        for payload in (
+            project_state_payload(self.session, self.session.paths),
+            agent.build_state(self.session),
+        ):
+            self._emit_turn_event(payload)
+
+        self.executor.session.plan_partner_calls = min(
+            self.executor.session.plan_partner_calls + 1,
+            99,
+        )
+        return result
+
+    def run_turn(
+        self,
+        user_text: str,
+        *,
+        spawn_explore: bool | None = None,
+        force_skip_plan_spawn: bool = False,
+    ) -> TurnResult:
         """Append user message, optional explore subagent, then parent tool loop."""
         prepare_session_for_s4(self.session)
         # Sync shell/root onto executor BEFORE allowlist so F1 can see project binding.
@@ -1421,6 +1526,18 @@ class Agent:
         self.executor.begin_turn()
 
         subagent_tool_rounds = 0
+        overlay_parts: list[str] = []
+
+        plan_result = self._maybe_pre_spawn_plan(
+            user_text,
+            force_skip=force_skip_plan_spawn,
+        )
+        if plan_result is not None:
+            from subagent import format_subagent_overlay
+
+            overlay_parts.append(format_subagent_overlay(plan_result))
+            subagent_tool_rounds += plan_result.tool_rounds
+
         spawn_explore_flag = spawn_explore
         if intent == "recall":
             spawn_explore_flag = False
@@ -1441,7 +1558,7 @@ class Agent:
                     "level": "warn",
                     "text": (
                         "[项目] 计划未确认：写源码与 run_python 暂不可用；"
-                        "可先编辑 PROJECT.md / MAP.md / TASKS.md，完成后点「确认开工」。"
+                        "计划域改动请用 plan_partner，完成后点「确认开工」。"
                     ),
                 }
             )
@@ -1458,8 +1575,11 @@ class Agent:
                 llm=self.llm,
                 confirm_fn=self.executor.confirm_fn,
             )
-            self.session.subagent_overlay = format_subagent_overlay(explore_result)
-            subagent_tool_rounds = explore_result.tool_rounds
+            overlay_parts.append(format_subagent_overlay(explore_result))
+            subagent_tool_rounds += explore_result.tool_rounds
+
+        self.session.subagent_overlay = "\n\n".join(overlay_parts) if overlay_parts else None
+        subagent_used = bool(overlay_parts)
 
         tools = build_llm_tools(self.session, registry=self.executor.registry)
         # project / coding sessions always use the 1M-context model
@@ -1484,14 +1604,14 @@ class Agent:
                 loop_result=loop_result,
                 loop_max=loop_max,
                 intent=intent,
-                spawn_explore_flag=bool(spawn_explore_flag),
+                spawn_explore_flag=subagent_used,
                 subagent_tool_rounds=subagent_tool_rounds,
             )
 
         if self.session.meta.turn_mode == "agent":
             return self._run_execute_segments(
                 intent=intent,
-                subagent_used=bool(spawn_explore_flag),
+                subagent_used=subagent_used,
                 subagent_tool_rounds=subagent_tool_rounds,
                 tools=tools,
                 model=model,
@@ -1511,7 +1631,7 @@ class Agent:
             loop_result=loop_result,
             loop_max=loop_max,
             intent=intent,
-            spawn_explore_flag=bool(spawn_explore_flag),
+            spawn_explore_flag=subagent_used,
             subagent_tool_rounds=subagent_tool_rounds,
         )
 
@@ -1787,7 +1907,7 @@ def _demo_tools() -> None:
     registry = ToolRegistry.load()
     tools = build_builtin_tools(registry=registry)
 
-    assert len(tools) == 7, len(tools)
+    assert len(tools) == 8, len(tools)
     print(f"[PASS] build_builtin_tools returns {len(tools)} tools")
 
     names = [item["function"]["name"] for item in tools]

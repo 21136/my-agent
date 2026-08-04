@@ -88,6 +88,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         confirm=True,
         dry_run_supported=False,
     ),
+    BuiltinTool(
+        "plan_partner",
+        "Invoke plan subagent for TASKS/MAP/PROJECT/ENV changes (sidebar adopt)",
+        confirm=False,
+        dry_run_supported=False,
+    ),
 )
 
 

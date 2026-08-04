@@ -537,6 +537,11 @@
 
 /* Phase 27 — sidebar Services */
 .sidebar-services {
+  flex: 0 1 auto;
+  max-height: 36%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 0.45rem 0.65rem 0.35rem;
   border-bottom: 1px solid var(--ma-border);
   font-size: 0.8rem;
@@ -556,6 +561,15 @@
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+  max-height: 9.5rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.15rem;
+}
+.sidebar-evidence-more {
+  font-size: 0.7rem;
+  color: var(--ma-text-muted);
+  padding: 0.1rem 0 0.2rem;
 }
 .sidebar-evidence-row {
   font-size: 0.74rem;
@@ -677,7 +691,55 @@
 .unified-confirm {
   margin: 0.75rem 0;
 }
-.unified-confirm.resolved { opacity: 0.55; }
+.unified-confirm.resolved { opacity: 0.72; }
+.unified-confirm.is-compact {
+  margin: 0.35rem 0;
+  padding: 0.35rem 0.55rem;
+  opacity: 0.85;
+}
+.unified-confirm-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.82rem;
+  color: var(--ma-text-muted);
+  user-select: none;
+}
+.unified-confirm-summary::-webkit-details-marker { display: none; }
+.unified-confirm-summary::marker { content: ""; }
+.unified-confirm-summary-main {
+  color: var(--ma-text);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.unified-confirm-summary-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ma-mono);
+  font-size: 0.75rem;
+}
+.unified-confirm-summary-toggle {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--ma-accent);
+}
+.unified-confirm.is-compact[open] .unified-confirm-summary-toggle::after {
+  content: " ▲";
+}
+.unified-confirm.is-compact:not([open]) .unified-confirm-summary-toggle::after {
+  content: " ▼";
+}
+.unified-confirm.is-compact .unified-confirm-preview {
+  margin: 0.45rem 0 0.15rem;
+  max-height: 10rem;
+  overflow: auto;
+  font-size: 0.78rem;
+}
 
 .unified-confirm-preview {
   font-family: var(--ma-mono);
@@ -693,6 +755,7 @@
 
 .unified-composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   background: color-mix(in srgb, var(--ma-surface) 82%, transparent);
@@ -703,6 +766,31 @@
     box-shadow 0.45s ease;
 }
 .unified-composer.disabled { opacity: 0.55; }
+
+.unified-channel-toggle {
+  display: flex;
+  gap: 0.2rem;
+  width: 100%;
+  order: -1;
+}
+.unified-channel-btn {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--ma-border);
+  background: transparent;
+  color: var(--ma-text-muted);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.unified-channel-btn.is-active {
+  border-color: var(--ma-accent);
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-accent) 12%, transparent);
+}
+.unified-composer.is-plan-channel {
+  border-top-color: color-mix(in srgb, var(--ma-accent) 55%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));
+}
 
 .unified-input {
   flex: 1;
@@ -719,6 +807,32 @@
 .unified-input:focus {
   outline: 2px solid var(--ma-focus);
   outline-offset: 1px;
+}
+
+/* Phase 39 — Plan subagent process card */
+.unified-plan-subagent {
+  border-left: 3px solid color-mix(in srgb, var(--ma-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));
+  padding: 0.55rem 0.75rem;
+  margin: 0.35rem 0;
+  border-radius: 2px;
+}
+.unified-plan-subagent-title {
+  font-size: 0.72rem;
+  color: var(--ma-accent);
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.unified-plan-subagent-body {
+  font-size: 0.85rem;
+  color: var(--ma-text-muted);
+  white-space: pre-wrap;
+}
+.sidebar-plan-channel-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--ma-text-muted);
+  opacity: 0.9;
 }
 
 /* ================================================================
@@ -825,10 +939,41 @@
 
 /* ---- task flow (main view) ---- */
 .sidebar-task-flow {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 8rem;
   overflow-y: auto;
   overflow-x: hidden;
   padding-bottom: 0.5rem;
+}
+
+/* A7 decision surface (slim home) */
+.sidebar-decision {
+  padding: 0.55rem 0.75rem 0.35rem;
+}
+.sidebar-decision-progress {
+  font-size: 0.72rem;
+  color: var(--ma-text-muted);
+  margin-bottom: 0.45rem;
+}
+.sidebar-decision-current {
+  padding: 0.45rem 0.55rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ma-accent) 10%, transparent);
+  border-left: 3px solid var(--ma-accent);
+}
+.sidebar-decision-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ma-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+}
+.sidebar-decision-text {
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ma-text);
 }
 
 /* phase header */
@@ -983,6 +1128,38 @@
 .sidebar-change-banner-actions {
   display: flex;
   gap: 0.4rem;
+}
+
+.thread-archive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.85rem;
+  border-bottom: 1px solid color-mix(in srgb, #d4a000 35%, var(--ma-border));
+  background: color-mix(in srgb, #d4a000 8%, var(--ma-surface));
+  font-size: 0.82rem;
+}
+.thread-archive-banner.hidden {
+  display: none;
+}
+.thread-archive-banner-text {
+  color: var(--ma-text-muted);
+}
+
+.overlay-threads-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+.overlay-thread-tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.68rem;
+  color: var(--ma-text-muted);
+  background: color-mix(in srgb, var(--ma-text-muted) 12%, transparent);
 }
 
 /* ---- bottom icon bar ---- */

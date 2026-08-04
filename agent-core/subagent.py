@@ -25,7 +25,7 @@ from tools.registry import ToolManifestError, ToolRegistry, parse_tool_manifest
 from tools.schema import to_json
 from turn_intent import classify_turn, should_spawn_explore
 
-SubagentKind = Literal["explore", "checker"]
+SubagentKind = Literal["explore", "checker", "plan"]
 CheckerKind = Literal["evolve_tool_scaffold"]
 CheckStatus = Literal["pass", "fail", "warn"]
 Verdict = Literal["pass", "fail", "warn"]
@@ -47,7 +47,9 @@ CHECKER_TOOL_NAMES: tuple[str, ...] = (
 _DEFAULT_EXPLORE_MAX = 8
 _DEFAULT_CHECKER_MAX = 5
 _DEFAULT_SUMMARY_MAX = 4000
+_DEFAULT_PLAN_SUMMARY_MAX = 2000
 _DEFAULT_CHECKER_SUMMARY_MAX = 3000
+_PLAN_PARTNER_MAX_PER_TURN = 2
 _CAP_SUMMARY_PROMPT = "请根据已读内容输出摘要（含已读路径与结论）。"
 _CHECKER_CLOSE_PROMPT = (
     "请输出验收结论。末行必须是 CHECKER_VERDICT: pass|fail|warn。"
@@ -80,6 +82,24 @@ def subagent_summary_max_chars() -> int:
     except ValueError:
         value = _DEFAULT_SUMMARY_MAX
     return max(256, value)
+
+
+def plan_subagent_summary_max_chars() -> int:
+    raw = os.environ.get("PLAN_SUBAGENT_SUMMARY_MAX_CHARS", str(_DEFAULT_PLAN_SUMMARY_MAX))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_PLAN_SUMMARY_MAX
+    return max(256, value)
+
+
+def plan_partner_max_per_turn() -> int:
+    raw = os.environ.get("PLAN_PARTNER_MAX_PER_TURN", str(_PLAN_PARTNER_MAX_PER_TURN))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _PLAN_PARTNER_MAX_PER_TURN
+    return max(1, value)
 
 
 def checker_summary_max_chars() -> int:
@@ -226,6 +246,9 @@ class SubagentResult:
     verdict: Verdict | None = None
     checklist: tuple[ChecklistItem, ...] | None = None
     tool_name: str | None = None
+    proposal_ids: tuple[str, ...] = ()
+    partner_notices: tuple[str, ...] = ()
+    adopt_pending: bool = False
 
 
 def merge_checklist_verdict(checklist: list[ChecklistItem]) -> Verdict:
@@ -386,6 +409,20 @@ def format_checklist_lines(checklist: tuple[ChecklistItem, ...] | list[Checklist
 
 def format_subagent_overlay(result: SubagentResult) -> str:
     """Inject into parent system overlay (ORCHESTRATION §4.3 / CHECKER §3)."""
+    if result.kind == "plan":
+        lines = [
+            "[子代理摘要 · plan]",
+            f"任务: {result.task}",
+            f"结论: {result.summary}",
+        ]
+        if result.proposal_ids:
+            lines.append(f"提案: {len(result.proposal_ids)} 条待侧栏采纳")
+        if result.adopt_pending:
+            lines.append("（侧栏采纳后才落盘；向用户简短说明并提醒采纳/忽略）")
+        if result.truncated:
+            lines.append("（摘要已截断）")
+        return "\n".join(lines)
+
     if result.kind == "checker":
         verdict = (result.verdict or "fail").upper()
         lines = [
@@ -863,6 +900,83 @@ class SubagentRunner:
                 conversation_id=session.conversation_id,
                 verdict=result.verdict,
                 tool_name=result.tool_name,
+            )
+
+        return result
+
+    def run_plan(
+        self,
+        task: str,
+        *,
+        session: Session,
+        include_recent_user_lines: int = 2,
+        confirm_fn: Any | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> SubagentResult:
+        """Plan subagent: PlanAgent.reason_about_intent in isolated context (Phase 39 B1/B3)."""
+        del confirm_fn  # Plan tools use auto-approve inside PlanAgent
+        _raise_if_cancelled(cancel_event)
+
+        task_text = task.strip()
+        if not task_text:
+            raise ValueError("plan task is empty")
+
+        project_id = (getattr(session.meta, "project_id", None) or "").strip()
+        if not project_id:
+            raise ValueError("plan_partner requires a bound project_id")
+
+        from plan_agent import get_plan_agent
+
+        agent = get_plan_agent(self.paths, project_id)
+
+        last_user_hint: str | None = None
+        n = max(0, min(int(include_recent_user_lines or 0), 5))
+        if n > 0:
+            lines: list[str] = []
+            for msg in reversed(list(getattr(session, "messages", []) or [])):
+                if not isinstance(msg, dict) or msg.get("role") != "user":
+                    continue
+                text = str(msg.get("content") or "").strip()
+                if text:
+                    lines.append(text)
+                if len(lines) >= n:
+                    break
+            if lines:
+                lines.reverse()
+                last_user_hint = "\n".join(lines)
+
+        summary_raw = agent.reason_about_intent(
+            task_text,
+            include_last_user=last_user_hint,
+        )
+        proposal_ids = tuple(sorted(agent._pending_gated.keys()))
+        notices = tuple(agent._last_partner_notices or ())
+        adopt_pending = bool(proposal_ids)
+
+        summary, truncated = truncate_summary(
+            summary_raw,
+            max_chars=plan_subagent_summary_max_chars(),
+        )
+
+        result = SubagentResult(
+            kind="plan",
+            summary=summary,
+            paths_cited=[],
+            tool_rounds=1,
+            truncated=truncated,
+            task=task_text,
+            proposal_ids=proposal_ids,
+            partner_notices=notices,
+            adopt_pending=adopt_pending,
+        )
+
+        if self.evolve_log is not None:
+            self.evolve_log.log_subagent_run(
+                kind=result.kind,
+                tool_rounds=result.tool_rounds,
+                truncated=result.truncated,
+                paths_cited=result.paths_cited,
+                conversation_id=session.conversation_id,
             )
 
         return result

@@ -2,7 +2,7 @@
 
 > 版本 **0.3.2** · 2026-07-30  
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E10 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · `TASKS.md` Phase 11/20/**21** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · `TASKS.md` Phase 11/20/**21**/37 · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
 ---
 
@@ -244,18 +244,23 @@ workspace/
   <project-id>/       # 如 doudizhu
     PROJECT.md
     MAP.md
-    TASKS.md
+    TASKS.md            # 执行队列（仅开放项 · 见 PLAN-ARCH）
+    TASKS.archive.md    # 可选 · 已关闭归档（Phase 37 M3）
+    bugs/               # 可选 · 缺陷/议题长文
     …                   # 源码（confirmed 后才可写）
 ```
+
+角色与写权限见 [PLAN-ARCH.md](./PLAN-ARCH.md)（A1～A5）：叙事进 `bugs/` / `PROJECT` / `MAP`，不往 `TASKS.md` 倒全场信息。
 
 ### 3.2 纪律
 
 1. **无三件套不出计划** — 先 `PROJECT.md` + `TASKS.md`（`MAP.md` 可后补）。
 2. **计划须用户确认（§4）** — 未 `confirmed` 不写代码、不 `run_python`。
-3. **小步完成标 `[x]`** — 同轮更新 `TASKS.md`。
-4. **续做 / 压缩后** — 必须先 `read_file` `TASKS.md`。
-5. **交付** — 全 `[x]` + 验收通过 → 才允许「交付完成」。
+3. **小步完成标 `[x]`** — 经 `report_progress` + Progress Gate（禁止主 Agent 直写勾选）。
+4. **续做 / 压缩后** — 必须先 `read_file` `TASKS.md`（开放队列）；归档默认不充当「下一步」真源。
+5. **交付** — 开放项清零 + 验收通过 → 才允许「交付完成」。
 6. **每 task 一停（P20 · Phase 20）** — 标完当前 `[x]` 后必须停，等用户「继续」再开下一项；见 [TASK-STOP.md](./TASK-STOP.md) v0.2.0。
+7. **计划域角色（P37）** — 长叙述 / 已关闭项不进默认注入；见 [PLAN-ARCH.md](./PLAN-ARCH.md)。
 
 ### 3.3 与 digest
 

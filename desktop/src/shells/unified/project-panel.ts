@@ -25,7 +25,7 @@ export interface TaskSnapshot {
   lineTexts: Map<number, string>;
 }
 
-export type OverlayPanel = "docs" | "verify" | "projects" | "tasks" | null;
+export type OverlayPanel = "plan" | "docs" | "verify" | "projects" | "threads" | null;
 
 // ---- existing types (compat) ----
 
@@ -50,6 +50,14 @@ export interface ProjectListItem {
   tasksTotal: number;
   sessionId: string | null;
   isCurrent: boolean;
+}
+
+export interface ProjectThreadItem {
+  sessionId: string;
+  title: string;
+  preview: string;
+  updatedAt: string;
+  archived: boolean;
 }
 
 export interface VerifyResult {
@@ -126,6 +134,11 @@ export interface ProjectPanelState {
   turnCircuitOpen: string[];
   turnPlaybookId: string;
   turnFailureClass: string;
+  // Phase 36 — project threads (live + archive)
+  activeSessionId: string;
+  threads: ProjectThreadItem[];
+  threadsLoading: boolean;
+  currentSessionId: string;
 }
 
 export interface ProjectPanelCallbacks {
@@ -136,6 +149,9 @@ export interface ProjectPanelCallbacks {
   onPlanEdit: () => void;
   onRefreshProjects: () => void;
   onRunVerify: () => void;
+  onNewThread: () => void;
+  onOpenThread: (sessionId: string) => void;
+  onReturnActiveThread: () => void;
 }
 
 // ---- helpers ----
@@ -180,10 +196,28 @@ function renderSuggestionCards(suggestions: PlanSuggestion[]): string {
   const actionable = suggestions.filter((s) => Boolean(s.action));
   if (actionable.length === 0) return "";
   const cards = actionable.map((s) => {
-    const acceptLabel = s.action === "drop_task" ? "删除" : "采纳";
+    const acceptLabel =
+      s.action === "drop_task"
+        ? "删除"
+        : s.risk === "gate" ||
+            s.action === "add_task" ||
+            s.action === "move_task" ||
+            s.action === "apply_patch"
+          ? "采纳写入"
+          : "采纳";
+    const diffRaw =
+      s.payload && typeof s.payload.diff === "string" ? s.payload.diff.trim() : "";
+    const pathRaw =
+      s.payload && typeof s.payload.path === "string" ? s.payload.path.trim() : "";
+    const diffBlock = diffRaw
+      ? `<pre class="sidebar-suggestion-diff" style="margin:0.25rem 0 0.4rem;padding:0.35rem 0.45rem;max-height:9rem;overflow:auto;font-size:0.68rem;line-height:1.35;white-space:pre-wrap;word-break:break-word;background:color-mix(in srgb, var(--ma-text) 6%, var(--ma-surface));border:1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);border-radius:4px;">${
+          pathRaw ? escapeHtml(pathRaw) + "\n" : ""
+        }${escapeHtml(diffRaw)}</pre>`
+      : "";
     return `<div class="sidebar-suggestion-card" style="padding:0.35rem 0;border-bottom:1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);">
       <div style="font-size:0.78rem;font-weight:600;color:var(--ma-text);">${escapeHtml(s.title)}</div>
-      <div style="font-size:0.74rem;color:var(--ma-text-muted);margin:0.15rem 0 0.35rem;line-height:1.35;">${escapeHtml(s.body)}</div>
+      <div style="font-size:0.74rem;color:var(--ma-text-muted);margin:0.15rem 0 0.2rem;line-height:1.35;">${escapeHtml(s.body)}</div>
+      ${diffBlock}
       <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
         <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">${acceptLabel}</button>
         <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">忽略</button>
@@ -197,10 +231,15 @@ function renderSuggestionCards(suggestions: PlanSuggestion[]): string {
 }
 
 function renderPartnerNotices(notices: string[], busy: boolean): string {
+  // C3 / S-191: sidebar keeps short operational lines only — not Plan long-chat host.
   const lines = notices
     .map((n) => n.trim())
     .filter(Boolean)
-    .map((n) => `<div style="font-size:0.78rem;opacity:0.92;margin-top:0.2rem">${escapeHtml(n)}</div>`)
+    .slice(0, 3)
+    .map((n) => {
+      const short = n.length > 140 ? `${n.slice(0, 137)}…` : n;
+      return `<div style="font-size:0.78rem;opacity:0.92;margin-top:0.2rem">${escapeHtml(short)}</div>`;
+    })
     .join("");
   const title = busy ? "计划搭档 · 思考中…" : "计划搭档";
   return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
@@ -221,11 +260,45 @@ function renderAutoFixNotice(notices: string[]): string {
 }
 
 function renderNextStepChip(state: ProjectPanelState): string {
-  if (!state.projectId || !state.nextTask) return "";
-  return `<div class="sidebar-next-step" style="padding:0.4rem 0.75rem;font-size:0.78rem;border-bottom:1px solid var(--ma-border);background:color-mix(in srgb, var(--ma-accent) 5%, var(--ma-surface));">
-    <span style="color:var(--ma-text-muted);">下一步</span>
-    <span style="margin-left:0.4rem;color:var(--ma-text);font-weight:560;">${escapeHtml(state.nextTask)}</span>
-  </div>`;
+  // A7: current task lives in decision surface; chip redundant.
+  void state;
+  return "";
+}
+
+function renderDecisionSurface(state: ProjectPanelState): string {
+  const currentTask =
+    (state.turnArmedText || "").trim() ||
+    (state.nextTask || "").trim() ||
+    state.taskPhases
+      .flatMap((p) => p.tasks)
+      .find((t) => t.status === "current" && !t.done)?.text ||
+    "";
+  const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
+  const progress =
+    state.tasksTotal > 0
+      ? `${state.tasksDone}/${state.tasksTotal} 完成 · ${openCount} 开放`
+      : state.projectId
+        ? "尚无任务"
+        : "未绑定项目";
+
+  let html = `<div class="sidebar-decision">`;
+  html += `<div class="sidebar-decision-progress">${escapeHtml(progress)}</div>`;
+  if (currentTask) {
+    html += `<div class="sidebar-decision-current">
+      <div class="sidebar-decision-label">当前</div>
+      <div class="sidebar-decision-text">${escapeHtml(currentTask)}</div>
+    </div>`;
+  } else if (state.projectId) {
+    html += `<p class="overlay-empty" style="padding:0.5rem 0;">暂无开放任务</p>`;
+  } else {
+    html += `<p class="overlay-empty" style="padding:0.5rem 0;">未绑定项目 · 使用「项目 新建」</p>`;
+  }
+  if (state.projectId) {
+    html += `<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看完整计划</button>`;
+    html += `<p class="sidebar-plan-channel-hint">改计划会在主输入自动交给计划搭档（看「你 · 计划」气泡）</p>`;
+  }
+  html += `</div>`;
+  return html;
 }
 
 function planStatusLabel(state: ProjectPanelState): string {
@@ -363,24 +436,26 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
     return `<p class="overlay-empty">TASKS.md 将显示在这里</p>`;
   }
 
-  let html = "";
+  // A7 overlay: open items only (done items live in archive)
+  let html = `<p class="overlay-empty" style="padding:0.25rem 0 0.5rem;font-size:0.72rem;">完整开放队列 · 勾选/右键可操作</p>`;
+  let anyOpen = false;
   for (const phase of state.taskPhases) {
+    const openTasks = phase.tasks.filter((t) => !t.done);
+    if (!openTasks.length) continue;
+    anyOpen = true;
     html += `<div class="task-phase-header">${escapeHtml(phase.title)}</div>`;
-    for (const task of phase.tasks) {
+    for (const task of openTasks) {
       const cls = ["task-item"];
-      if (task.status === "done") cls.push("is-done");
-      else if (task.status === "current") cls.push("is-current");
+      if (task.status === "current") cls.push("is-current");
       else if (task.status === "new") cls.push("is-new");
       else if (task.status === "skipped") cls.push("is-skipped");
-      else if (task.status === "removed") cls.push("is-removed");
 
-      // Highlight mode: mark changed lines for "查看变更"
       if (highlightLines && highlightLines.has(task.line)) {
         cls.push("is-highlighted");
       }
 
       html += `<label class="${cls.join(" ")}" data-line="${task.line}">
-        <input type="checkbox" class="task-checkbox" data-line="${task.line}"${task.done ? " checked" : ""}>
+        <input type="checkbox" class="task-checkbox" data-line="${task.line}">
         <span class="task-text">${escapeHtml(task.text)}</span>
       </label>`;
 
@@ -395,10 +470,9 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
       }
     }
   }
-  // Quick-add input at bottom of task flow
-  html += `<div style="display:flex;gap:0.3rem;padding:0.5rem 0.75rem;border-top:1px solid var(--ma-border);margin-top:0.25rem;">
-    <input type="text" class="overlay-search-input" id="sidebar-quick-add-input" placeholder="对计划说话…" value="${escapeHtml(state.quickAddText)}" style="margin-bottom:0;font-size:0.8rem;" title="侧栏整条给计划搭档：加任务 / 优化 / 暂缓…；反馈为建议卡与短告知">
-  </div>`;
+  if (!anyOpen) {
+    html = `<p class="overlay-empty">暂无开放任务（已完成项在 TASKS.archive.md）</p>`;
+  }
 
   return html;
 }
@@ -512,14 +586,57 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
   return html;
 }
 
+function renderThreadsOverlay(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return `<p class="overlay-empty">未绑定项目</p>`;
+  }
+
+  let html = `<div class="overlay-threads-actions">
+    <button type="button" class="unified-btn unified-btn-accent" id="overlay-new-thread-btn">新开线</button>
+    <button type="button" class="unified-btn" data-action="refresh-threads">刷新</button>
+  </div>`;
+
+  if (state.threadsLoading) {
+    html += `<p class="overlay-empty">加载中…</p>`;
+    return html;
+  }
+
+  if (!state.threads.length) {
+    html += `<p class="overlay-empty">暂无会话线记录</p>`;
+    return html;
+  }
+
+  for (const item of state.threads) {
+    const isLive = item.sessionId === state.activeSessionId;
+    const isCurrent = item.sessionId === state.currentSessionId;
+    const label = isLive ? "活线" : "归档";
+    const meta = item.preview || item.sessionId;
+    html += `<button type="button" class="overlay-project-item overlay-thread-item${isCurrent ? " is-current" : ""}" data-thread-id="${escapeHtml(item.sessionId)}"${isCurrent ? " disabled" : ""}>
+      <span class="overlay-project-item-name">${escapeHtml(item.title)} <span class="overlay-thread-tag">${label}</span></span>
+      <span class="overlay-project-item-meta">${escapeHtml(meta)}</span>
+    </button>`;
+  }
+
+  return html;
+}
+
 function renderOverlayBody(state: ProjectPanelState): string {
   switch (state.overlayPanel) {
+    case "plan":
+      return renderTaskFlow(
+        state,
+        state.highlightChanges && state.highlightedLines.size > 0
+          ? state.highlightedLines
+          : null,
+      );
     case "docs":
       return renderDocsOverlay(state);
     case "verify":
       return renderVerifyOverlay(state);
     case "projects":
       return renderProjectsOverlay(state);
+    case "threads":
+      return renderThreadsOverlay(state);
     default:
       return "";
   }
@@ -527,9 +644,11 @@ function renderOverlayBody(state: ProjectPanelState): string {
 
 function overlayTitle(panel: OverlayPanel): string {
   switch (panel) {
+    case "plan": return "完整计划";
     case "docs": return "文档";
     case "verify": return "验收";
     case "projects": return "我的项目";
+    case "threads": return "会话线";
     default: return "";
   }
 }
@@ -743,6 +862,28 @@ export function applyProjectListEvent(
   }));
 }
 
+export function applyProjectThreadsEvent(
+  state: ProjectPanelState,
+  event: Extract<ServerEvent, { type: "project.threads" }>,
+): void {
+  state.threadsLoading = false;
+  state.activeSessionId = event.active_session_id || "";
+  state.threads = (event.threads || []).map((item) => ({
+    sessionId: item.session_id,
+    title: item.title || item.session_id,
+    preview: item.preview || "",
+    updatedAt: item.updated_at || "",
+    archived: Boolean(item.archived),
+  }));
+}
+
+export function isViewingArchivedThread(state: ProjectPanelState): boolean {
+  if (!state.projectId || !state.activeSessionId || !state.currentSessionId) {
+    return false;
+  }
+  return state.currentSessionId !== state.activeSessionId;
+}
+
 // ---- element refs (matches new DOM) ----
 
 export function setupProjectPanel(container: HTMLElement): {
@@ -868,19 +1009,28 @@ function renderServicesPanel(state: ProjectPanelState): string {
           [state.turnArmedId, state.turnArmedText].filter(Boolean).join(" · "),
         )}</div>`
       : "";
+  const EVIDENCE_CAP = 12;
+  const totalEvidence = state.turnEvidence.length;
+  const hiddenCount = Math.max(0, totalEvidence - EVIDENCE_CAP);
+  const visibleEvidence =
+    hiddenCount > 0 ? state.turnEvidence.slice(-EVIDENCE_CAP) : state.turnEvidence;
   const evidenceRows =
-    state.turnEvidence.length === 0
+    totalEvidence === 0
       ? `<div class="sidebar-services-empty">本回合尚无工具证据</div>`
-      : state.turnEvidence
+      : `${
+          hiddenCount > 0
+            ? `<div class="sidebar-evidence-more">更早 ${hiddenCount} 条已折叠</div>`
+            : ""
+        }${visibleEvidence
           .map((e) => {
             const mark = e.ok ? "✓" : "✗";
             const cls = e.ok ? "ok" : "fail";
             return `<div class="sidebar-evidence-row is-${cls}"><span>${mark}</span> ${escapeHtml(e.tool)}</div>`;
           })
-          .join("");
+          .join("")}`;
   const reliability = renderReliabilityStrip(state);
   const evidenceBlock = `<div class="sidebar-turn-evidence">
-      <div class="sidebar-services-header"><span>本回合</span></div>
+      <div class="sidebar-services-header"><span>本回合${totalEvidence > 0 ? ` · ${totalEvidence}` : ""}</span></div>
       ${armed}
       <div class="sidebar-evidence-list">${evidenceRows}</div>
       ${reliability}
@@ -955,24 +1105,30 @@ export function renderProjectSidebar(
   els.servicesPanel.innerHTML = renderServicesPanel(state);
 
   // --- banner area: single priority chain ---
-  // Priority: undo > partner reply/busy > external > suggestions > auto_fix > …
+  // Priority: undo > partner busy > actionable suggestions > partner notices >
+  //           external > auto_fix > …
+  // Actionable cards must beat partner notices (V3): gated proposals set both,
+  // and notice text saying「点采纳」without buttons is a dead end.
   let bannerHtml = "";
+  const actionableSuggestions = state.suggestions.filter((s) => Boolean(s.action));
 
   if (state.undoDescription) {
     bannerHtml = `<div class="sidebar-undo-toast">
       <span>${escapeHtml(state.undoDescription)}</span>
       <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
     </div>`;
-  } else if (state.partnerBusy || (state.partnerNotices && state.partnerNotices.length > 0)) {
-    bannerHtml = renderPartnerNotices(state.partnerNotices || [], Boolean(state.partnerBusy));
+  } else if (state.partnerBusy) {
+    bannerHtml = renderPartnerNotices(state.partnerNotices || [], true);
+  } else if (actionableSuggestions.length > 0) {
+    bannerHtml = renderSuggestionCards(state.suggestions);
+  } else if (state.partnerNotices && state.partnerNotices.length > 0) {
+    bannerHtml = renderPartnerNotices(state.partnerNotices, false);
   } else if (state.externalChanges) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到外部修改</div>
       <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
       <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
     </div>`;
-  } else if (state.suggestions.length > 0) {
-    bannerHtml = renderSuggestionCards(state.suggestions);
   } else if (state.autoFixNotices.length > 0) {
     bannerHtml = renderAutoFixNotice(state.autoFixNotices);
   } else if (state.detectedProject && !state.projectId) {
@@ -1012,11 +1168,8 @@ export function renderProjectSidebar(
     els.changeBanner.innerHTML = "";
   }
 
-  // task flow (main view) + next-step chip (V6)
-  els.taskFlow.innerHTML = renderNextStepChip(state) + renderTaskFlow(
-    state,
-    state.highlightChanges && state.highlightedLines.size > 0 ? state.highlightedLines : null,
-  );
+  // A7 decision surface (main) — full TASKS only in plan overlay
+  els.taskFlow.innerHTML = renderDecisionSurface(state);
 
   // icon bar: verify only visible in confirmed
   const verifyBtn = els.iconBar.querySelector<HTMLElement>("#icon-btn-verify");
@@ -1027,6 +1180,12 @@ export function renderProjectSidebar(
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");
   if (projectBadge) {
     projectBadge.textContent = String(state.projects.length);
+  }
+  const threadBadge = els.iconBar.querySelector<HTMLElement>("#thread-count-badge");
+  if (threadBadge) {
+    const archivedCount = state.threads.filter((t) => t.archived).length;
+    threadBadge.textContent = String(archivedCount);
+    threadBadge.classList.toggle("hidden", archivedCount === 0);
   }
   // degradation indicator
   const degradeDot = els.iconBar.querySelector<HTMLElement>("#sidebar-degrade-dot");
@@ -1045,8 +1204,11 @@ export function renderProjectSidebar(
   }
   // active icon
   for (const btn of els.iconBar.querySelectorAll<HTMLButtonElement>(".sidebar-icon-btn")) {
-    const panel = btn.dataset.panel as OverlayPanel;
-    btn.classList.toggle("is-active", panel === "tasks" && !state.overlayPanel);
+    const panel = btn.dataset.panel as OverlayPanel | "tasks" | undefined;
+    const active =
+      (panel === "tasks" && !state.overlayPanel) ||
+      (panel !== "tasks" && panel === state.overlayPanel);
+    btn.classList.toggle("is-active", Boolean(active));
   }
 
   // overlay panel

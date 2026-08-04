@@ -67,35 +67,44 @@ class UndoEntry:
     reverse_data: dict  # params for the reverse operation
 
 
-_PLAN_SYSTEM = """你是侧栏 **Plan Agent（计划搭档）**，拥有本项目 TASKS.md 的编排权。
-用户在侧栏输入的每一句都是对你说的。系统**只执行**你返回的 JSON，不会事后改挂 Phase。
+_PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划搭档」通道的对话伙伴。
+先理解用户要什么，再决定是否改文件或查跑工具。系统只解析你返回的 JSON；**计划域四件套采纳前不会写盘**。
+你 **看不到** 主 Agent 聊天全文；只吃本通道来回 + 计划域文件真源。
+
+## 文档角色（先按这个判断「合不合理」）
+- **MAP.md**：目录、入口、模块/文件指针、「现在卡在哪」。**不是**执行 Phase，**不是**修复流水账。
+- **TASKS.md**：唯一执行队列（开放可勾项）。Phase 只出现在这里（或归档）。
+- **PROJECT.md**：目标/非目标/约束。
+- **ENV.md**：环境与端口约定。
+- **bugs/**：缺陷与修复长文；MAP/TASKS 里最多留一行指针。
 
 ## 输出
-只输出 JSON：{"operations":[ ... ]}
-字段：kind(add|move|drop|skip|split|reorder)、phase、description、line(0-indexed)、direction(up|down)、reason。
+只输出一个 JSON 对象：
+{"reply":"给用户看的中文（可空）","operations":[ ... ],"tool_calls":[ ... ]}
 
-## 意图分流（先分清用户要什么）
-- 「加一个 / 新增 …」→ add（不要把整句口令当标题）
-- 「提前 / 推后 / 挪到 / 放到」→ move 或 reorder，禁止再 add 一条同名任务
-- 「暂缓 / 先不做 / 跳过」→ skip（不是勾完成，也不是删）
-- 「删除 / 不要了」→ drop
-- 「拆分」→ split
-- 「优化 / 整理 / 检查 / 太乱」→ 审顺序与结构；若进度摘要里有 ⚠ 异常信号，必须处理（move/drop/skip/add 测试等），**禁止**空 operations 假装没事
-- 不要把「优化下计划」「需要加测试」等**元口令**写成任务标题
+operations 里每条：
+- kind: **patch** | **add**
+- path: patch 时必填，且只能是 TASKS.md|MAP.md|PROJECT.md|ENV.md
+- replacements: patch 时 [{ "old": "文件中唯一原文片段", "new": "替换后" }]
+- phase / description: 仅 kind=add
+- reason: 短理由
 
-## 顺序（看摘要里的 ⚠，再对照全文 [x]/[ ]）
-- **夹心**：靠前 Phase 仍有 [ ]，后面 Phase 已大量 [x] → 通常 move 到当前前沿或独立基建 Phase
-- **跳段**：靠前 Phase 仍大量 [ ]，后面 Phase 却已开始 [x] → 调整顺序或暂缓偷跑项
-- **下一项被拽歪**：全局第一个 [ ] 不是当前应做的工作 → move/reorder 纠正
-- 中途发现的前置（如对接数据库）：按**执行顺序**挂当前前沿或新基建段，勿只因语义像脚手架就塞回已收尾的早期 Phase
+tool_calls（可选，查/跑同权；结果只进本通道）：
+- {"name":"read_file"|"list_dir"|"grep"|"web_search"|"fetch_url"|"run_command", "arguments":{...}}
+- **禁止** 用 write_text 等直写 TASKS/MAP/PROJECT/ENV（须 operations 提案）
 
-## 内容与结构
-- 完全重复 → 不必再 add（系统也会自动清极高相似重复）
-- 并行模块脚手架（医师 Entity vs 医保 Entity）**不是**重复，勿合并
-- 过粗可 split；无意义碎片可 drop/merge（用 drop+add）
-- 空 Phase：补任务或去掉空段（drop 不适用标题时，可 add 占位或在 reason 说明）
-- 模块做完缺「本阶段测试/联调」→ 可 add 测试任务
-- 挂哪一段、是否新建 Phase，由你决定；无改动且摘要无 ⚠ 时才返回 {"operations":[]}
+## 意图分流（先分清）
+- 「合不合理 / 该不该 / 为什么 / 是不是」→ **先 reply 讲清楚**；用户没明确要求改文件时 **operations 必须 []**
+- 「把…改掉 / 整理 / 挪走 / 删掉 Phase 字样」→ reply 可一句 + operations 出 patch
+- 「加一个 / 新增任务」→ add 或 TASKS patch
+- 「优化 / 夹心 / 跳段」→ 看进度摘要 ⚠；需要改队列再 patch TASKS；并行模块脚手架不是重复
+- 需要读仓库其它文件 / 跑命令才能答 → 先 tool_calls，operations 可 []
+
+## 硬规则
+- **禁止** move|drop|skip|split|reorder 与任何 line 行号字段
+- 禁止因为用户只是在问，就强行 patch「意思一下」
+- MAP 里出现「Phase N 修复记录」→ 角色上 **不合理**；reply 应说明：修复叙述归 bugs/，MAP 只留结构指针；只有用户要改时才 patch
+- old 必须在文件中恰好出现一次；无改动时 operations=[]
 """
 
 
@@ -111,6 +120,123 @@ _PLAN_ADD_PREFIX_RE = re.compile(
     r"^(加(一)?个|新增|添加(一)?(个|条)?任务|记一?条)[:：\s]*",
     re.IGNORECASE,
 )
+_LEGACY_LINE_OPS = frozenset({"move", "rephase", "drop", "skip", "split", "reorder"})
+
+# §15.6 / auto-route: main composer → Plan when intent is plan-domain (uncertain → agent).
+_PLAN_DOMAIN_HINT_RE = re.compile(
+    r"(TASKS\.md|MAP\.md|PROJECT\.md|ENV\.md|任务(清单|列表)?|计划(表|域)?|"
+    r"Phase\s*\d|T-\d{3,})",
+    re.IGNORECASE,
+)
+_PLAN_JUDGE_HINT_RE = re.compile(
+    r"(合不合理|该不该|是不是|要不要|合理吗|为什么.*(计划|任务|phase))",
+    re.IGNORECASE,
+)
+_AGENT_EXEC_HINT_RE = re.compile(
+    r"(编译|运行|报错|异常|stack|trace|bug|fix|实现|写代码|联调|"
+    r"mvn|npm|gradle|\.java|\.vue|\.ts|controller|mapper|sql)",
+    re.IGNORECASE,
+)
+
+
+def classify_user_plan_intent(text: str) -> Literal["plan", "agent"]:
+    """Legacy keyword router (Phase 38 · deprecated for intercept; tests/compat only)."""
+    t = (text or "").strip()
+    if not t:
+        return "agent"
+    if _AGENT_EXEC_HINT_RE.search(t) and not _PLAN_DOMAIN_HINT_RE.search(t):
+        if not looks_like_plan_meta_command(t):
+            return "agent"
+    if looks_like_plan_meta_command(t):
+        return "plan"
+    if _PLAN_ADD_PREFIX_RE.match(t):
+        return "plan"
+    if _PLAN_JUDGE_HINT_RE.search(t):
+        return "plan"
+    if _PLAN_DOMAIN_HINT_RE.search(t) and _PLAN_MUTATE_RE.search(t):
+        return "plan"
+    if re.match(r"^-\s*\[[ xX]?\]", t):
+        return "plan"
+    return "agent"
+
+
+@dataclass(frozen=True, slots=True)
+class PlanSpawnDecision:
+    spawn: bool
+    reason: str
+
+
+_PLAN_SPAWN_CLASSIFY_PROMPT = """你是 Plan 子代理触发分类器（Phase 39 · 仅分类，不执行）。
+
+判断用户本条消息是否**需要先**整理计划域（TASKS.md / MAP.md / PROJECT.md / ENV.md）。
+
+spawn=true 示例：
+- 规划/补文档/排任务/优化任务清单
+- 问计划是否合理、Phase 该不该调整
+- 新增任务描述（无具体写代码）
+
+spawn=false 示例：
+- 写代码、修 bug、编译运行、联调
+- 「继续」「下一项」等执行续作
+- 纯闲聊、回顾上文
+
+只输出一个 JSON 对象：{"spawn": true|false, "reason": "简短中文"}"""
+
+
+def _parse_plan_spawn_json(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{[^{}]*\"spawn\"[^{}]*\}", text, flags=re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def classify_plan_spawn_intent(text: str, *, llm: Any) -> PlanSpawnDecision:
+    """LLM classify for kernel pre-spawn (PLAN-SUBAGENT §4.3 · T-3905)."""
+    import os
+
+    from project_mode import is_project_continue_utterance
+
+    t = (text or "").strip()
+    if not t:
+        return PlanSpawnDecision(False, "empty")
+    if os.environ.get("PLAN_SPAWN_CLASSIFY", "1").strip().lower() in {"0", "false", "no"}:
+        return PlanSpawnDecision(False, "disabled")
+    if is_project_continue_utterance(t):
+        return PlanSpawnDecision(False, "continue")
+
+    model = os.environ.get("PLAN_SPAWN_MODEL", "").strip() or getattr(
+        llm, "_plan_model", None
+    ) or os.environ.get("PLAN_AGENT_MODEL", "deepseek-v4-flash")
+
+    try:
+        response = llm.chat(
+            [
+                {"role": "system", "content": _PLAN_SPAWN_CLASSIFY_PROMPT},
+                {"role": "user", "content": t},
+            ],
+            model=model,
+            temperature=0.0,
+        )
+        data = _parse_plan_spawn_json(response.content or "")
+        spawn = bool(data.get("spawn"))
+        reason = str(data.get("reason") or "").strip() or ("plan_domain" if spawn else "not_plan")
+        return PlanSpawnDecision(spawn, reason)
+    except Exception as exc:
+        return PlanSpawnDecision(False, f"classify_failed:{exc}")
 
 
 def looks_like_plan_meta_command(text: str) -> bool:
@@ -244,23 +370,76 @@ def _plan_progress_brief(tasks_text: str) -> str:
 
 
 def _format_tasks_with_line_numbers(tasks_text: str) -> str:
-    lines = tasks_text.splitlines()
-    return "\n".join(f"{i}|{line}" for i, line in enumerate(lines))
+    """Numbered open-queue slice for Plan LLM (PLAN-ARCH M1 · IT-180)."""
+    from project_mode import format_tasks_open_slice_numbered
+
+    return format_tasks_open_slice_numbered(tasks_text)
 
 
-def _build_plan_prompt(tasks_text: str, user_intent: str) -> str:
-    """Context for Plan LLM — progress + numbered TASKS; no routing hints."""
+def _clip_doc(text: str, *, limit: int = 6000) -> str:
+    t = text or ""
+    if len(t) <= limit:
+        return t
+    return t[: limit - 20] + "\n\n…(截断)…\n"
+
+
+def _build_plan_prompt(
+    tasks_text: str,
+    user_intent: str,
+    *,
+    map_text: str = "",
+    project_text: str = "",
+    env_text: str = "",
+    plan_transcript: list[dict[str, str]] | None = None,
+    tool_results: list[str] | None = None,
+) -> str:
+    """Context for Plan LLM — Plan 本线 + 计划域文件真源（不灌主聊天）。"""
     brief = _plan_progress_brief(tasks_text)
     numbered = _format_tasks_with_line_numbers(tasks_text)
-    return f"""## 进度摘要（先看异常信号 ⚠）
+    prior = ""
+    if plan_transcript:
+        lines: list[str] = []
+        # Exclude the latest user turn (passed as user_intent).
+        hist = list(plan_transcript)
+        if hist and hist[-1].get("role") == "user" and hist[-1].get("content") == user_intent:
+            hist = hist[:-1]
+        for item in hist[-12:]:
+            role = item.get("role") or ""
+            content = (item.get("content") or "").strip()
+            if not content:
+                continue
+            label = "用户" if role == "user" else "计划搭档" if role == "assistant" else role
+            lines.append(f"{label}: {content}")
+        if lines:
+            prior = "## 本通道先前来回（不含主 Agent 聊天）\n\n" + "\n".join(lines) + "\n\n"
+    tools_block = ""
+    if tool_results:
+        tools_block = (
+            "## 本轮工具结果（仅 Plan 线）\n\n"
+            + "\n\n".join(tool_results[-6:])
+            + "\n\n"
+        )
+    return f"""{prior}## 进度摘要（先看异常信号 ⚠）
 
 {brief}
 
-## TASKS.md（行号|内容；[x]=完成 [ ]=未完成）
+## TASKS.md 开放队列切片（只读参考；改文件请用 patch replacements）
 
 {numbered}
 
-## 用户说
+## MAP.md（可 patch）
+
+{_clip_doc(map_text) or "（无）"}
+
+## PROJECT.md（可 patch）
+
+{_clip_doc(project_text, limit=2500) or "（无）"}
+
+## ENV.md（可 patch）
+
+{_clip_doc(env_text, limit=2000) or "（无）"}
+
+{tools_block}## 用户说
 
 {user_intent}
 """
@@ -301,19 +480,48 @@ class PlanAgent:
     _suggestions: list[dict[str, Any]] = field(default_factory=list)
     _last_suggestions: dict[str, dict[str, Any]] = field(default_factory=dict)
     _ignored_suggestion_ids: set[str] = field(default_factory=set)
+    # PLAN-ARCH Q1/M2: add/move/drop/… parked until human accept_suggestion
+    _pending_gated: dict[str, dict[str, Any]] = field(default_factory=dict)
     _last_progress_time: float = 0.0  # time.time() of last report_progress call
     _last_partner_notices: list[str] = field(default_factory=list, repr=False)
+    # Phase 38 · A11/C4–C6 — in-memory Plan channel only (never messages.jsonl)
+    _plan_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
         self._load_state()
 
     def set_partner_notices(self, summary: str | list[str]) -> None:
-        """Sidebar-visible Plan Agent reply (V7 — not main-chat bubbles)."""
+        """Short sidebar operational notices (C3 — not Plan long-chat host)."""
         if isinstance(summary, list):
             lines = [str(x).strip() for x in summary if str(x).strip()]
         else:
             lines = [ln.strip() for ln in str(summary).splitlines() if ln.strip()]
-        self._last_partner_notices = lines[:12]
+        # Keep sidebar short; long reply lives on plan transcript / main-area bubbles.
+        short: list[str] = []
+        for ln in lines[:6]:
+            short.append(ln if len(ln) <= 160 else ln[:157] + "…")
+        self._last_partner_notices = short
+
+    def clear_plan_transcript(self) -> None:
+        """C6: enter/switch project → wipe Plan chat memory; keep disk plan files."""
+        self._plan_transcript = []
+        self._last_partner_notices = []
+
+    def append_plan_turn(self, role: str, content: str) -> None:
+        text = str(content or "").strip()
+        if not text:
+            return
+        self._plan_transcript.append({"role": str(role), "content": text})
+        # Soft cap — memory only
+        if len(self._plan_transcript) > 40:
+            self._plan_transcript = self._plan_transcript[-40:]
+
+    def plan_transcript_snapshot(self) -> list[dict[str, str]]:
+        return [dict(x) for x in self._plan_transcript]
+
+    def build_context_messages_for_audit(self) -> list[dict[str, str]]:
+        """IT-190 helper: what Plan would send — never includes main chat jsonl."""
+        return self.plan_transcript_snapshot()
 
     # ---- persistence ----
 
@@ -335,6 +543,13 @@ class PlanAgent:
             ignored = data.get("ignored_suggestion_ids", [])
             if isinstance(ignored, list):
                 self._ignored_suggestion_ids = {str(x) for x in ignored if x}
+            pending = data.get("pending_gated", {})
+            if isinstance(pending, dict):
+                self._pending_gated = {
+                    str(k): v
+                    for k, v in pending.items()
+                    if isinstance(v, dict) and v.get("id")
+                }
             for entry in data.get("change_log", []):
                 self._change_log.append(PlanChange(
                     id=entry.get("id", ""),
@@ -353,6 +568,11 @@ class PlanAgent:
             "fingerprint": self._last_fingerprint,
             "change_counter": self._change_counter,
             "ignored_suggestion_ids": sorted(self._ignored_suggestion_ids)[-200:],
+            "pending_gated": {
+                sid: sug
+                for sid, sug in list(self._pending_gated.items())[-50:]
+                if isinstance(sug, dict)
+            },
             "change_log": [
                 {
                     "id": c.id,
@@ -497,19 +717,40 @@ class PlanAgent:
         # Capture pre-state for undo
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         task_text = f"line {line}"
+        open_line = ""
         if tasks_path.is_file():
             fls = tasks_path.read_text(encoding="utf-8").splitlines()
             if 0 <= line < len(fls):
                 import re
                 m = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", fls[line])
-                if m: task_text = m.group(1).strip()
+                if m:
+                    task_text = m.group(1).strip()
+                    open_line = f"- [ ] {task_text}"
 
         result = toggle_task_line(self.paths, self.project_id, line, done)
-        label = "已勾选" if done else "已取消勾选"
+        if done:
+            # Archived+removed — undo re-inserts open checkbox at original index
+            undo = UndoEntry(
+                description=f"已勾选并归档「{task_text[:30]}」",
+                reverse_kind="insert",
+                reverse_data={
+                    "position": line,
+                    "content": open_line or f"- [ ] {task_text}",
+                },
+            )
+            return self._mutate_and_check(
+                result,
+                "toggle",
+                f"line {line}",
+                reason="toggle+archive",
+                line=line,
+                undo=undo,
+            )
+        label = "已取消勾选"
         undo = UndoEntry(
             description=f"{label}「{task_text[:30]}」",
             reverse_kind="toggle",
-            reverse_data={"line": line, "done": not done},
+            reverse_data={"line": line, "done": True},
         )
         return self._mutate_and_check(result, "toggle", f"line {line}",
                                        reason="toggle", line=line, undo=undo)
@@ -638,16 +879,38 @@ class PlanAgent:
         sid = str(suggestion_id or "").strip()
         if not sid:
             raise ProjectModeError("ignore_suggestion requires suggestion_id")
+        self._mark_suggestion_resolved(sid)
+
+    def _mark_suggestion_resolved(self, sid: str) -> None:
+        """Drop pending gate + clear stale「点采纳」notices when queue empties."""
+        self._pending_gated.pop(sid, None)
         self._ignored_suggestion_ids.add(sid)
+        if not self._pending_gated:
+            self._last_partner_notices = []
         self._save_state()
+
+    def park_gated_suggestion(self, sug: dict[str, Any]) -> dict[str, Any]:
+        """Park a mutating plan change until human accept (PLAN-ARCH Q1)."""
+        sid = str(sug.get("id") or "").strip()
+        if not sid:
+            raise ProjectModeError("park_gated_suggestion requires id")
+        if sid in self._ignored_suggestion_ids:
+            return sug
+        sug = dict(sug)
+        sug["risk"] = sug.get("risk") or "gate"
+        self._pending_gated[sid] = sug
+        self._last_suggestions[sid] = sug
+        self._save_state()
+        return sug
 
     def accept_suggestion(self, suggestion_id: str) -> dict[str, Any]:
         """Apply a previously emitted suggestion via its action/payload."""
         sid = str(suggestion_id or "").strip()
-        sug = self._last_suggestions.get(sid)
+        sug = self._last_suggestions.get(sid) or self._pending_gated.get(sid)
         if sug is None:
             # UI may hold cards across sidecar restart; rebuild actionable catalog.
             rebuilt = {s["id"]: s for s in self.quality_suggestions() if s.get("id")}
+            rebuilt.update(self._pending_gated)
             self._last_suggestions = rebuilt
             sug = rebuilt.get(sid)
         if sug is None:
@@ -657,13 +920,111 @@ class PlanAgent:
         if not action:
             raise ProjectModeError(f"suggestion is not actionable: {sid}")
 
+        if action == "apply_patch":
+            from plan_patch import apply_plan_patch
+
+            rel = str(payload.get("path") or "").strip()
+            reps = payload.get("replacements")
+            if not isinstance(reps, list):
+                raise ProjectModeError("apply_patch requires replacements[]")
+            base_hash = payload.get("base_hash")
+            try:
+                result = apply_plan_patch(
+                    self.paths,
+                    self.project_id,
+                    relpath=rel,
+                    replacements=reps,
+                    base_hash=str(base_hash) if base_hash else None,
+                )
+            except ProjectModeError as exc:
+                self._mark_suggestion_resolved(sid)
+                self.set_partner_notices(f"已撤回无效提案：{exc}")
+                return {
+                    "ok": False,
+                    "summary": f"已撤回无效提案：{exc}",
+                    "_next_task": self.next_task_text(),
+                }
+            self._record_change(
+                "external" if rel != "TASKS.md" else "add",
+                f"patch {rel}",
+                reason=f"accepted file_patch: {sug.get('title', '')}"[:120],
+            )
+            self._mark_suggestion_resolved(sid)
+            diff_snip = str(result.get("diff") or "").strip()
+            if len(diff_snip) > 400:
+                diff_snip = diff_snip[:400] + "\n…"
+            summary = f"已写入 {rel}"
+            if diff_snip:
+                summary = f"{summary}\n{diff_snip}"
+            self.set_partner_notices(summary)
+            return {
+                **result,
+                "summary": summary,
+                "_next_task": self.next_task_text(),
+            }
+
+        if action == "add_task":
+            from project_mode import add_task_to_tasks_md
+
+            desc = str(payload.get("description") or "").strip()
+            if not desc:
+                raise ProjectModeError("add_task suggestion missing description")
+            phase_title = str(payload.get("phase") or "").strip() or self._default_add_phase()
+            result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
+            new_line = result.get("line", -1)
+            landed = result.get("phase") or phase_title
+            self._record_change(
+                "add",
+                desc,
+                reason=f"accepted gated add: {sug.get('kind', '')}",
+                line=new_line if isinstance(new_line, int) else None,
+            )
+            self.push_undo(
+                description=f"已添加「{desc[:30]}」",
+                reverse_kind="drop",
+                reverse_data={"line": new_line},
+            )
+            self._mark_suggestion_resolved(sid)
+            return {
+                "ok": True,
+                "phase": landed,
+                "description": desc,
+                "line": new_line,
+                "_next_task": self.next_task_text(),
+            }
+
         if action == "drop_task":
             line = payload.get("line")
             if not isinstance(line, int) or line < 0:
                 raise ProjectModeError("drop_task suggestion missing line")
             result = self.drop_task(line)
-            self._ignored_suggestion_ids.add(sid)
-            self._save_state()
+            self._mark_suggestion_resolved(sid)
+            return result
+
+        if action == "move_task":
+            from project_mode import move_task_to_phase
+
+            line = payload.get("line")
+            phase = str(payload.get("phase") or "").strip()
+            if not isinstance(line, int) or line < 0 or not phase:
+                raise ProjectModeError("move_task suggestion missing line/phase")
+            result = move_task_to_phase(self.paths, self.project_id, line, phase)
+            self._record_change(
+                "reorder",
+                str(result.get("description") or ""),
+                reason="accepted gated move",
+                line=result.get("line") if isinstance(result.get("line"), int) else None,
+            )
+            self._mark_suggestion_resolved(sid)
+            return {**result, "ok": True, "_next_task": self.next_task_text()}
+
+        if action == "reorder_task":
+            line = payload.get("line")
+            direction = str(payload.get("direction") or "up")
+            if not isinstance(line, int) or line < 0 or direction not in {"up", "down"}:
+                raise ProjectModeError("reorder_task suggestion missing line/direction")
+            result = self.reorder_task(line, direction)
+            self._mark_suggestion_resolved(sid)
             return result
 
         if action == "split_task":
@@ -671,8 +1032,7 @@ class PlanAgent:
             if not isinstance(line, int) or line < 0:
                 raise ProjectModeError("split_task suggestion missing line")
             summary = self.split_task(line)
-            self._ignored_suggestion_ids.add(sid)
-            self._save_state()
+            self._mark_suggestion_resolved(sid)
             return {"ok": True, "summary": summary, "_next_task": self.next_task_text()}
 
         if action == "skip_task":
@@ -680,17 +1040,29 @@ class PlanAgent:
             if not isinstance(line, int) or line < 0:
                 raise ProjectModeError("skip_task suggestion missing line")
             result = self.skip_task(line)
-            self._ignored_suggestion_ids.add(sid)
-            self._save_state()
+            self._mark_suggestion_resolved(sid)
             return result
 
         if action == "confirm_changes":
             self.confirm_plan()
-            self._ignored_suggestion_ids.add(sid)
-            self._save_state()
+            self._mark_suggestion_resolved(sid)
             return {"ok": True, "_next_task": self.next_task_text()}
 
         raise ProjectModeError(f"unsupported suggestion action: {action}")
+
+    def _default_add_phase(self) -> str:
+        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
+        phase_title = "Phase 1"
+        current_phase = ""
+        for line in tasks_text.splitlines():
+            if line.strip().startswith("## "):
+                current_phase = line.strip().lstrip("#").strip()
+                if phase_title == "Phase 1" and current_phase:
+                    phase_title = current_phase
+            if "- [ ]" in line and current_phase:
+                return current_phase
+        return phase_title or "Phase 1"
 
     def auto_fix(self) -> list[str]:
         """Run auto-fix on TASKS.md. Returns list of actions taken.
@@ -838,39 +1210,29 @@ class PlanAgent:
     # ---- LLM reasoning ----
 
     def _fallback_add_task(self, text: str, extra: str = "") -> str:
-        """Add text as a single task to the first phase with undone tasks."""
-        from project_mode import add_task_to_tasks_md
-
+        """Propose adding text as a task (PLAN-ARCH Q1 — no auto write)."""
         desc = strip_add_prefix(text)
-        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
-        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
-
-        # Pick first phase that has undone tasks, or first phase overall
-        phase_title = "Phase 1"
-        current_phase = ""
-        for line in tasks_text.splitlines():
-            if line.strip().startswith("## "):
-                current_phase = line.strip().lstrip("#").strip()
-                if not phase_title or phase_title == "Phase 1":
-                    phase_title = current_phase
-            if "- [ ]" in line and current_phase:
-                phase_title = current_phase  # use the phase that still has work
-                break
-
-        try:
-            result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
-            new_line = result.get("line", -1)
-            self._record_change("add", desc, reason="plan-channel add")
-            self.push_undo(
-                description=f"已添加「{desc[:30]}」",
-                reverse_kind="drop",
-                reverse_data={"line": new_line},
-            )
-            self._save_state()
-            prefix = f"{extra}。已添加到 {phase_title}：" if extra else f"已添加到 {phase_title}："
-            return prefix + desc[:60]
-        except Exception as exc:
-            return f"添加失败：{exc}"
+        phase_title = self._default_add_phase()
+        key = f"fb-add-{abs(hash(f'{phase_title}|{desc}')) % 10_000_000:x}"
+        sug = self._suggestion(
+            kind="add_task",
+            title="新增任务（待采纳）",
+            body=f"建议加入 {phase_title}：{desc[:80]}",
+            key=key,
+            risk="gate",
+            action="add_task",
+            payload={
+                "phase": phase_title,
+                "description": desc,
+                "source": "fallback",
+            },
+        )
+        self.park_gated_suggestion(sug)
+        prefix = f"{extra}。" if extra else ""
+        return (
+            f"{prefix}已提案新增到 {phase_title}（未写盘）：{desc[:60]}。"
+            "点侧栏「采纳」才会写入 TASKS.md。"
+        )
 
     def _plan_channel_fallback(self, text: str, extra: str = "") -> str:
         """L2兜底 only — LLM 不可用 / 解析失败时。正常路径应已走 LLM。"""
@@ -1052,11 +1414,13 @@ class PlanAgent:
         return "\n".join(lines)
 
     @staticmethod
-    def _parse_operations_json(raw: str) -> tuple[list[dict[str, Any]], bool]:
-        """Return (operations, parsed_ok). parsed_ok True even when operations is empty."""
+    def _parse_operations_json(
+        raw: str,
+    ) -> tuple[list[dict[str, Any]], bool, str, list[dict[str, Any]]]:
+        """Return (operations, parsed_ok, reply, tool_calls)."""
         text = (raw or "").strip()
         if not text:
-            return [], False
+            return [], False, "", []
         if "```" in text:
             lines = text.splitlines()
             json_lines: list[str] = []
@@ -1073,165 +1437,288 @@ class PlanAgent:
         try:
             result = json.loads(text)
         except (json.JSONDecodeError, AttributeError):
-            return [], False
+            return [], False, "", []
         if isinstance(result, dict):
             ops = result.get("operations", [])
-            return (ops if isinstance(ops, list) else []), True
+            reply = str(result.get("reply") or result.get("notice") or "").strip()
+            tool_calls = result.get("tool_calls") or result.get("tools") or []
+            if not isinstance(tool_calls, list):
+                tool_calls = []
+            clean_tools = [t for t in tool_calls if isinstance(t, dict) and t.get("name")]
+            return (ops if isinstance(ops, list) else []), True, reply, clean_tools
         if isinstance(result, list):
-            return result, True
-        return [], False
+            return result, True, "", []
+        return [], False, "", []
 
     def _apply_plan_operations(self, operations: list[Any], *, reason_prefix: str) -> list[str]:
-        """Apply LLM plan ops. Process move/drop from high line numbers first."""
-        from project_mode import add_task_to_tasks_md, move_task_to_phase
+        """Park mutating LLM ops as gated suggestions (PLAN-ARCH Q1 / M6).
+
+        Default channel = file_patch (A8). Legacy line ops are rejected (IT-183).
+        Does **not** write plan files until accept_suggestion.
+        """
+        from plan_patch import build_patch_preview
 
         applied: list[str] = []
         ops = [op for op in operations if isinstance(op, dict)]
 
-        def _line_key(op: dict[str, Any]) -> int:
-            line = op.get("line", -1)
-            return line if isinstance(line, int) else -1
-
-        # Higher lines first so earlier indices stay stable within one batch.
-        ordered = sorted(
-            ops,
-            key=lambda op: (
-                0 if op.get("kind") in {"move", "drop"} else 1,
-                -_line_key(op),
-            ),
-        )
-
-        for op in ordered:
-            kind = op.get("kind", "")
+        for op in ops:
+            kind = str(op.get("kind", "") or "").strip().lower()
             try:
-                if kind == "add":
+                if kind in _LEGACY_LINE_OPS:
+                    applied.append(
+                        f"已拒绝过时操作 {kind}（请改用 patch；行号 move/drop 已废止）"
+                    )
+                    continue
+
+                if kind == "patch":
+                    path = str(op.get("path") or "").strip()
+                    reps = op.get("replacements")
+                    if not path or not isinstance(reps, list) or not reps:
+                        applied.append("跳过无效 patch（需要 path + replacements）")
+                        continue
+                    try:
+                        preview = build_patch_preview(
+                            self.paths,
+                            self.project_id,
+                            relpath=path,
+                            replacements=reps,
+                            base_hash=str(op.get("base_hash") or "") or None,
+                        )
+                    except ProjectModeError as exc:
+                        applied.append(f"跳过无效 patch（{exc}）")
+                        continue
+                    key = (
+                        f"patch-{preview['path']}-"
+                        f"{abs(hash(preview['diff'])) % 10_000_000:x}"
+                    )
+                    reason = str(op.get("reason") or "")[:120]
+                    sug = self._suggestion(
+                        kind="file_patch",
+                        title=f"改 {preview['path']}（待采纳）",
+                        body=reason or f"{reason_prefix} 提议修改 {preview['path']}",
+                        key=key,
+                        risk="gate",
+                        action="apply_patch",
+                        payload={
+                            "path": preview["path"],
+                            "base_hash": preview["base_hash"],
+                            "replacements": reps,
+                            "diff": preview["diff"],
+                            "source": "plan_llm",
+                            "reason": reason,
+                        },
+                    )
+                    self.park_gated_suggestion(sug)
+                    applied.append(
+                        f"提案 patch {preview['path']}（待采纳）"
+                        + (f"：{reason[:40]}" if reason else "")
+                    )
+
+                elif kind == "add":
                     phase = op.get("phase", "")
                     desc = op.get("description", "")
                     if not desc:
                         continue
                     phase_title = str(phase).strip() if phase else ""
                     if not phase_title:
-                        continue
-                    result = add_task_to_tasks_md(self.paths, self.project_id, phase_title, desc)
-                    new_line = result.get("line", -1)
-                    landed = result.get("phase") or phase_title
-                    self._record_change(
-                        "add",
-                        desc,
-                        reason=f"{reason_prefix}: {op.get('reason', '')}"[:120],
+                        phase_title = self._default_add_phase()
+                    desc_s = str(desc).strip()
+                    key = f"llm-add-{abs(hash(f'{phase_title}|{desc_s}')) % 10_000_000:x}"
+                    sug = self._suggestion(
+                        kind="add_task",
+                        title="新增任务（待采纳）",
+                        body=f"{reason_prefix} 建议加入 {phase_title}：{desc_s[:80]}",
+                        key=key,
+                        risk="gate",
+                        action="add_task",
+                        payload={
+                            "phase": phase_title,
+                            "description": desc_s,
+                            "source": "plan_llm",
+                            "reason": str(op.get("reason") or "")[:120],
+                        },
                     )
-                    self.push_undo(
-                        description=f"已添加「{desc[:30]}」",
-                        reverse_kind="drop",
-                        reverse_data={"line": new_line},
-                    )
-                    applied.append(f"+ {landed}: {desc}")
+                    self.park_gated_suggestion(sug)
+                    applied.append(f"提案 + {phase_title}: {desc_s[:50]}（待采纳）")
 
-                elif kind in {"move", "rephase"}:
-                    line = op.get("line", -1)
-                    phase = str(op.get("phase", "") or "").strip()
-                    if not isinstance(line, int) or line < 0 or not phase:
-                        continue
-                    result = move_task_to_phase(self.paths, self.project_id, line, phase)
-                    desc = str(result.get("description") or "")
-                    landed = str(result.get("phase") or phase)
-                    self._record_change(
-                        "reorder",
-                        desc,
-                        reason=f"{reason_prefix}: {op.get('reason', 'move')}"[:120],
-                        line=result.get("line"),
-                    )
-                    applied.append(f"→ 移到 {landed}: {desc[:50]}")
-
-                elif kind == "drop":
-                    line = op.get("line", -1)
-                    if isinstance(line, int) and line >= 0:
-                        self.drop_task(line)
-                        applied.append(f"× 已删除行 {line}")
-
-                elif kind == "skip":
-                    line = op.get("line", -1)
-                    if isinstance(line, int) and line >= 0:
-                        self.skip_task(line)
-                        applied.append(f"~ 行 {line} 已暂缓")
-
-                elif kind == "split":
-                    line = op.get("line", -1)
-                    subtasks = op.get("description", [])
-                    if isinstance(subtasks, list) and isinstance(line, int) and line >= 0:
-                        self.toggle_task(line, True)
-                        for sub in subtasks:
-                            self._record_change("add", str(sub), reason=f"split of line {line}")
-                        applied.append(f"⇅ 行 {line} 拆分为 {len(subtasks)} 项")
-
-                elif kind == "reorder":
-                    line = op.get("line", -1)
-                    direction = str(op.get("direction") or op.get("description") or "up")
-                    if isinstance(line, int) and line >= 0 and direction in {"up", "down"}:
-                        self.reorder_task(line, direction)
-                        applied.append(f"↕ 行 {line} {direction}")
+                else:
+                    applied.append(f"跳过未知操作 kind={kind or '∅'}")
 
             except Exception:
                 continue
 
         return applied
 
-    def reason_about_intent(self, text: str) -> str:
-        """LLM-first plan channel. Local heuristics only when LLM/parse fails (兜底)."""
+    def _execute_plan_tool_calls(self, tool_calls: list[dict[str, Any]]) -> list[str]:
+        """T-3804: run allowed query/run tools; domain writes stay gated."""
+        from plan_tools import execute_plan_tool
+
+        results: list[str] = []
+        for call in tool_calls[:4]:
+            name = str(call.get("name") or "").strip()
+            args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            if not args and isinstance(call.get("args"), dict):
+                args = call["args"]
+            try:
+                tr = execute_plan_tool(self.paths, self.project_id, name, args)
+            except Exception as exc:
+                results.append(f"{name} → error: {exc}")
+                continue
+            if tr.ok:
+                payload = ""
+                try:
+                    payload = json.dumps(tr.data, ensure_ascii=False)[:4000]
+                except Exception:
+                    payload = str(tr.data)[:4000]
+                results.append(f"{name} → ok: {payload}")
+            else:
+                err = tr.error.message if tr.error else "failed"
+                results.append(f"{name} → fail: {err}")
+        return results
+
+    def _finalize_plan_reply(self, out: str, *, sidebar_short: str | None = None) -> str:
+        """Record assistant turn on Plan transcript; short sidebar notice only."""
+        text = (out or "").strip()
+        if text:
+            self.append_plan_turn("assistant", text)
+        notice = sidebar_short
+        if notice is None:
+            if self._pending_gated:
+                notice = (
+                    f"已出提案（{len(self._pending_gated)} 条待侧栏采纳）；"
+                    "长回复见主区计划气泡。"
+                )
+            elif text:
+                first = text.splitlines()[0]
+                notice = first if len(first) <= 120 else first[:117] + "…"
+            else:
+                notice = ""
+        if notice:
+            self.set_partner_notices(notice)
+        else:
+            self._last_partner_notices = []
+        return text
+
+    def reason_about_intent(
+        self,
+        text: str,
+        *,
+        include_last_user: str | None = None,
+        record_user: bool = True,
+    ) -> str:
+        """LLM-first plan channel. Local heuristics only when LLM/parse fails (兜底).
+
+        Context = Plan 本线 + 计划域文件（C5）；不灌主聊天 messages.jsonl。
+        """
+        user_text = (text or "").strip()
+        if record_user and user_text:
+            self.append_plan_turn("user", user_text)
+        # Optional one-shot hint from main chat (default off / C5)
+        extra_hint = (include_last_user or "").strip()
+        intent_for_prompt = user_text
+        if extra_hint:
+            intent_for_prompt = (
+                f"{user_text}\n\n（可选参考·主聊上一句，默认应忽略过时信息）\n{extra_hint}"
+            )
+
         try:
             llm = self._ensure_llm()
         except Exception as exc:
-            out = self._plan_channel_fallback(text, extra=f"LLM 不可用（{exc}）")
-            self.set_partner_notices(out)
-            return out
+            out = self._plan_channel_fallback(user_text, extra=f"LLM 不可用（{exc}）")
+            return self._finalize_plan_reply(out)
 
         # Exact-dup cleanup is a silent safety net, not a substitute for LLM judgment.
         pre_actions = self.auto_fix()
 
-        tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
+        root = project_dir(self.paths, self.project_id)
+        tasks_path = root / "TASKS.md"
         tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
+        map_text = (root / "MAP.md").read_text(encoding="utf-8") if (root / "MAP.md").is_file() else ""
+        project_text = (
+            (root / "PROJECT.md").read_text(encoding="utf-8")
+            if (root / "PROJECT.md").is_file()
+            else ""
+        )
+        env_text = (root / "ENV.md").read_text(encoding="utf-8") if (root / "ENV.md").is_file() else ""
 
-        try:
+        tool_result_blocks: list[str] = []
+
+        def _one_llm_call() -> tuple[list[dict[str, Any]], bool, str, list[dict[str, Any]]]:
             response = llm.chat(
                 [
                     {"role": "system", "content": _PLAN_SYSTEM},
-                    {"role": "user", "content": _build_plan_prompt(tasks_text, text)},
+                    {
+                        "role": "user",
+                        "content": _build_plan_prompt(
+                            tasks_text,
+                            intent_for_prompt,
+                            map_text=map_text,
+                            project_text=project_text,
+                            env_text=env_text,
+                            plan_transcript=self._plan_transcript,
+                            tool_results=tool_result_blocks or None,
+                        ),
+                    },
                 ],
                 model=getattr(llm, "_plan_model", "deepseek-v4-flash"),
                 temperature=0.0,
             )
+            raw = response.content or ""
+            return self._parse_operations_json(raw)
+
+        try:
+            operations, parsed_ok, reply, tool_calls = _one_llm_call()
         except Exception as exc:
             self._degradation_level = "L2"
-            out = self._plan_channel_fallback(text, extra=f"LLM 调用失败（{exc}）")
-            self.set_partner_notices(out)
-            return out
+            out = self._plan_channel_fallback(user_text, extra=f"LLM 调用失败（{exc}）")
+            return self._finalize_plan_reply(out)
 
-        raw = response.content or ""
-        operations, parsed_ok = self._parse_operations_json(raw)
+        # One tool round then re-ask (T-3804 查跑同权)
+        if parsed_ok and tool_calls and not operations:
+            tool_result_blocks.extend(self._execute_plan_tool_calls(tool_calls))
+            try:
+                operations, parsed_ok, reply, tool_calls2 = _one_llm_call()
+                if tool_calls2 and not operations and not reply:
+                    # Avoid infinite tool loops — surface tool output.
+                    reply = "已根据工具结果整理；如需改计划请明确说改哪份文件。"
+            except Exception as exc:
+                out = self._plan_channel_fallback(user_text, extra=f"工具后 LLM 失败（{exc}）")
+                return self._finalize_plan_reply(out)
+
         if not parsed_ok:
-            out = self._plan_channel_fallback(text, extra="LLM 返回无法解析")
-            self.set_partner_notices(out)
-            return out
+            out = self._plan_channel_fallback(user_text, extra="LLM 返回无法解析")
+            return self._finalize_plan_reply(out)
         if not operations:
+            if reply:
+                lines = list(pre_actions)
+                if tool_result_blocks:
+                    lines.append("（已查跑）" + "；".join(tool_result_blocks[:2])[:200])
+                lines.append(reply)
+                out = "\n".join(lines)
+                return self._finalize_plan_reply(out)
             prefix = "\n".join(pre_actions) if pre_actions else ""
-            out = self._llm_noop_summary(text, prefix=prefix)
-            self.set_partner_notices(out)
-            return out
+            out = self._llm_noop_summary(user_text, prefix=prefix)
+            return self._finalize_plan_reply(out)
 
         applied = list(pre_actions)
+        if reply:
+            applied.append(reply)
         applied.extend(self._apply_plan_operations(operations, reason_prefix="LLM"))
         self._save_state()
         for action in self.auto_fix():
             applied.append(action)
 
         if not applied:
-            out = self._llm_noop_summary(text)
-            self.set_partner_notices(out)
-            return out
+            out = self._llm_noop_summary(user_text)
+            return self._finalize_plan_reply(out)
 
+        if self._pending_gated:
+            applied.append(
+                f"以上为提案（{len(self._pending_gated)} 条待侧栏采纳）；"
+                "未写盘，点「采纳」才落盘。"
+            )
         out = "\n".join(applied)
-        self.set_partner_notices(out)
-        return out
+        return self._finalize_plan_reply(out)
 
     # ---- state payload ----
 
@@ -1267,6 +1754,16 @@ class PlanAgent:
 
         # Always auto_fix first so suggestion line numbers match post-fix file
         auto_fix_actions = self.auto_fix()
+        try:
+            from project_mode import migrate_closed_sections_to_archive
+
+            migrated = migrate_closed_sections_to_archive(self.paths, self.project_id)
+            if migrated:
+                auto_fix_actions = list(auto_fix_actions) + [
+                    f"已将 {migrated} 条「已关闭」区任务迁入 TASKS.archive.md"
+                ]
+        except Exception:
+            pass
         if auto_fix_actions and tasks_path.is_file():
             current_tasks = tasks_path.read_text(encoding="utf-8")
             self._last_tasks_snapshot = current_tasks
@@ -1305,7 +1802,34 @@ class PlanAgent:
                 self._suggestions.append(stale)
 
         self._suggestions.extend(self.quality_suggestions())
-        self._last_suggestions = {s["id"]: s for s in self._suggestions}
+        # Merge gated proposals (PLAN-ARCH Q1) — survive across build_state rebuilds
+        # M6: drop legacy line-number LLM cards left in state.json
+        _legacy_actions = {
+            "move_task",
+            "drop_task",
+            "skip_task",
+            "reorder_task",
+        }
+        pruned_legacy = False
+        for sid, sug in list(self._pending_gated.items()):
+            if sid in self._ignored_suggestion_ids:
+                self._pending_gated.pop(sid, None)
+                continue
+            action = str(sug.get("action") or "")
+            if action in _legacy_actions and str(
+                (sug.get("payload") or {}).get("source") or ""
+            ) == "plan_llm":
+                self._pending_gated.pop(sid, None)
+                self._ignored_suggestion_ids.add(sid)
+                pruned_legacy = True
+                continue
+            if not any(s.get("id") == sid for s in self._suggestions):
+                self._suggestions.append(sug)
+        self._last_suggestions = {s["id"]: s for s in self._suggestions if s.get("id")}
+        for sid, sug in self._pending_gated.items():
+            self._last_suggestions[sid] = sug
+        if pruned_legacy:
+            self._save_state()
 
         return {
             "type": "project.plan.state",
@@ -1328,6 +1852,7 @@ class PlanAgent:
             "warnings": [],  # actionable items live in suggestions (Phase 22)
             "auto_fix_actions": auto_fix_actions,
             "partner_notices": list(self._last_partner_notices),
+            "plan_transcript_len": len(self._plan_transcript),
             "change_log": [
                 {
                     "id": c.id,
@@ -1435,3 +1960,10 @@ def get_plan_agent(paths: AgentPaths, project_id: str) -> PlanAgent:
 def drop_plan_agent(project_id: str) -> None:
     pid = normalize_project_id(project_id)
     _agents.pop(pid, None)
+
+
+def clear_plan_chat_on_enter(paths: AgentPaths, project_id: str) -> PlanAgent:
+    """C6 / S-192: entering or switching to a project clears Plan transcript."""
+    agent = get_plan_agent(paths, project_id)
+    agent.clear_plan_transcript()
+    return agent

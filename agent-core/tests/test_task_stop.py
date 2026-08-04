@@ -235,7 +235,9 @@ class TaskStopHardGateTests(unittest.TestCase):
         result = executor.run("run_evolved", args)
         self.assertTrue(result.ok, result.error)
         text = (project_dir(self.paths, self.pid) / "TASKS.md").read_text(encoding="utf-8")
-        self.assertIn("- [x] T-001 skeleton Entity write", text)
+        archive = (project_dir(self.paths, self.pid) / "TASKS.archive.md").read_text(encoding="utf-8")
+        self.assertIn("T-001", archive)
+        self.assertNotIn("T-001", text)
         self.assertIn("- [ ] T-002 engine Service", text)
 
     def test_block_reason_unit(self) -> None:
@@ -282,12 +284,15 @@ class TaskStopHardGateTests(unittest.TestCase):
         details = result_src.error.details or {}
         self.assertEqual(details.get("guard_type"), "task_stop")
 
-        # MAP still allowed
+        # MAP writes blocked by Phase 39 B5 (plan_partner required)
         result_map = executor.run(
             "run_evolved",
             self._write_args("MAP.md", "# map\nupdated\n"),
         )
-        self.assertTrue(result_map.ok, result_map.error)
+        self.assertFalse(result_map.ok)
+        assert result_map.error is not None
+        self.assertEqual(result_map.error.code, ToolErrorCode.PERMISSION_DENIED)
+        self.assertTrue((result_map.error.details or {}).get("plan_domain_gate"))
 
     def test_new_turn_clears_arm_and_allows_write(self) -> None:
         executor = self._executor()

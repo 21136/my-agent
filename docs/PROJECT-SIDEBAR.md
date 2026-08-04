@@ -2,10 +2,13 @@
 
 > 状态：**implemented**（本地 ahead）+ **§15.10 / Phase 22 可见计划搭档 done**（2026-07-31）  
 > 日期：2026-07-29（设计）· 2026-07-30（文档对齐）· 2026-07-31（可见搭档决议 + 实施）  
+> **计划域写权限 / 多文件角色**：见 [PLAN-ARCH.md](./PLAN-ARCH.md)（Phase 37）  
+> **A7（2026-08-03）· M5 done**：侧栏常驻 = 当前任务 + 待拍板提案；完整计划 → 覆盖面板。  
+> **A8/A9/Q4（2026-08-03）· M6 done**：Plan 提案 = 文件 patch + 侧栏 diff 采纳。  
+> **§15.12（2026-08-03）· Phase 39 done**：**废止 §15.11 双通道**；用户只跟主 Agent 说话；Plan = **幕后子代理** + 侧栏短卡入口 + **主列审阅面**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）+ 主聊过程卡。见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)。
 > **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
-> **§15.10**：侧栏建议卡 / 低风险 auto_fix / 下一步芯片 — **done**（T-2202～T-2207）。  
-> 最后一轮讨论：Plan Agent 架构 + 消息路由 + **可见计划搭档（侧栏动作，非聊天刷屏）**  
-> 代码锚点：`agent-core/plan_agent.py` · `desktop/src/shells/unified/project-panel.ts`
+> **§15.10**：侧栏建议卡 / 低风险 auto_fix — **done**（T-2202～T-2207）。  
+> 代码锚点：`agent-core/plan_agent.py` · `desktop/src/shells/unified/project-panel.ts` · `desktop/src/shells/unified/index.ts`
 
 ---
 
@@ -35,7 +38,9 @@
     15.7 [撤销机制](#157-撤销机制)
     15.8 [plan_dirty 确认粒度](#158-plan_dirty-确认粒度)
     15.9 [外部 TASKS.md 修改](#159-外部-tasksmd-修改)
-    15.10 [可见计划搭档](#1510-可见计划搭档已决--2026-07-31--done)（**done** · Phase 22）
+    15.10 [可见计划搭档](#1510-可见计划搭档已决--2026-07-31--done)（**done** · Phase 22；**V1/V7 见 §15.11 修订**）
+    15.11 [主输入双通道](#1511-主输入双通道已决--2026-08-03--设计已签)（**superseded** · Phase 38 → **§15.12**）
+    15.12 [Plan 幕后子代理](#1512-plan-幕后子代理已决--2026-08-03--phase-39)（**设计已签** · Phase 39）
 
 ---
 
@@ -73,9 +78,12 @@
 
 三个原则，和上一版"5 个可折叠抽屉"的设计彻底分道扬镳：
 
-### 2.1 侧边栏是任务流的实时投影，不是项目设置面板
+### 2.1 侧边栏是「当下决策面」，不是整份计划浏览器
 
-侧边栏**始终展示任务流**。地图、验收、项目列表不是"折叠在下面的抽屉"，而是**覆盖式面板**——用时滑出，用完即走。
+> **修订（A7 · 2026-08-03）**：废止「始终展示完整任务流长卷」。详见 [PLAN-ARCH.md](./PLAN-ARCH.md) §0 A7 · §5.3。
+
+侧边栏**常驻**：当前/armed 任务、待采纳提案卡、一停/短告知。  
+地图、验收、**完整 TASKS**、项目列表 = **覆盖式面板**——用时滑出，用完即走。
 
 ### 2.2 Plan Agent 拥有计划领域
 
@@ -193,11 +201,13 @@ Agent 做任务过程中，计划会变——拆分、新增、重排、跳过�
 
 ### 4.4 对主 Agent 透明
 
-主 Agent 不感知 Plan Agent 的存在。它只做两件事：
-- 做完 task → 报告给 Plan Agent
-- 收到问题 → 从 Plan Agent 获取"下一步做什么"
+主 Agent 不感知 Plan Agent 的「人格」存在。它只做两件事：
+- 做完 task → 报告给 Plan Agent（**唯一通道**：`report_progress` · [PROGRESS-GATE.md](./PROGRESS-GATE.md) **G8**）
+- 收到问题 → 从 Plan Agent 获取「下一步做什么」
 
-主 Agent 不知道"搜索功能"是用户中途插进来的——对它来说，"下一步"永远从 Plan Agent 那取。
+主 Agent 不知道「搜索功能」是用户中途插进来的——对它来说，「下一步」永远从 Plan Agent 那取。
+
+**禁止**：产物已改完却因证据门失败，改用聊天旁白「✅ 完成 · 回复继续」假装计划已更新（**G9**）。侧栏未勾 = 未完成。
 
 ---
 
@@ -262,7 +272,9 @@ Agent 做任务过程中，计划会变——拆分、新增、重排、跳过�
 
 ---
 
-## 6. 侧边栏 UI：任务流主视图
+## 6. 侧边栏 UI：当下决策面（A7）
+
+> **M5**：主栏不再渲染整份 TASKS 长卷；下方 ASCII 为历史示意。现行主栏 = 进度 + 当前任务 +「查看完整计划」+ 快捷输入；完整开放队列在 `overlayPanel=plan`。
 
 ### 6.1 整体布局
 
@@ -305,16 +317,15 @@ Agent 做任务过程中，计划会变——拆分、新增、重排、跳过�
 
 ### 6.2 视图切换器（底部图标行）
 
-侧边栏只有一个主视图——任务流。地图、验收、项目列表是**覆盖面板**，点击底部图标后侧边栏内容水平推出：
+侧边栏主视图 = **当下决策面**（A7）。完整计划、地图、验收、项目列表是**覆盖面板**，点击底部图标后侧边栏内容水平推出：
 
 ```
 底部：
-  [◎ 任务]  [◇ 地图]  [✓ 验收]  [☰ 项目 (3)]
+  [◎ 当下]  [☰ 完整计划]  [📄 文档]  [✓ 验收]  [会话线]  [▢ 项目]
 
-任务视图：始终显示
-地图视图：点击 ◇ → 侧边栏内容滑出 MAP 面板，顶部有 ← 返回按钮
-验收视图：点击 ✓ → 验收面板滑出
-项目视图：点击 ☰ → 项目列表滑出，包含搜索 + 切换功能
+当下：进度 + 当前任务 + 提案卡入口
+完整计划：点击 ☰ → 开放队列覆盖面板（勾选/右键）
+其余：同前 · 顶部 ← 返回回到当下
 ```
 
 ### 6.3 任务行样式
@@ -846,24 +857,24 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 | ID | 决议 |
 |----|------|
-| **V1** | 搭档**只活在左侧栏**（不在主聊天开第二对话） |
+| **V1** | ~~搭档只活在左侧栏~~ → **§15.11 / §15.11.1 修订**：Plan 可在主输入 **自动路由**；侧栏不再承担长回复 |
 | **V2** | 不靠「署名旁白」证明存在；靠**动作常在眼前**：拆分 / 暂缓 / 确认变更 / 建议卡 |
 | **V3** | 质检（原「项目反馈器」）**必须进 Plan Agent 决策环**：警告 → 结构化建议 → 侧栏可点；禁止只展示不可操作的纯文案（suggestions 未渲染洞一并修） |
 | **V4** | **低风险可自动修**：如完全重复 task 行删除（`auto_fix` 已有同类）；修完用侧栏短告知（可撤销若已有 undo） |
 | **V5** | **非低风险只建议**：建议拆分、Phase 过长、任务过短等 → 建议卡 [采纳] [忽略]。**不做**模糊「疑似重复」（并行脚手架会误伤） |
 | **V6** | 没事可点时：侧栏默认露出**当前下一步** + 行上右键/悬浮动作入口；不刷空话 |
-| **V7** | 侧栏输入框 = **Plan Agent 专用通道**（非「加任务框」）；反馈仅 **建议卡 + 短 notice**，不开第二套对话气泡；主聊天仍给主 Agent |
-| **V8** | **LLM 优先、规则只兜底**：侧栏每句先交给 Plan LLM 自由决策（统一短 system + 进度/行号上下文）；本地关键词 / `auto_fix` 精确去重 / L2 加任务仅在 LLM 不可用或解析失败时介入 |
-| **V9** | 进度摘要含 **⚠ 异常信号**（夹心 / 跳段 / 空 Phase / 下一项被拽回）；system 覆盖意图分流与常见结构问题；有 ⚠ 时优化禁止空 `operations` 装没事；仍由 LLM 决定挂靠，代码不改挂 |
+| **V7** | ~~侧栏输入框 = Plan 专用通道~~ → **§15.11.1 修订**：主输入 **自动路由** Plan；侧栏 Plan 输入 **已移除**；采纳卡仍在 |
+| **V8** | **LLM 优先、规则只兜底**：Plan 通道每句先交给 Plan LLM；本地关键词 / `auto_fix` / L2 仅兜底 |
+| **V9** | 进度摘要含 **⚠ 异常信号**；有 ⚠ 时优化禁止空 `operations` 装没事 |
 
 #### 非目标
 
 | 非目标 | 理由 |
 |--------|------|
-| 主聊天里 Plan Agent 旁白 | V1；费 token |
+| ~~主聊天里 Plan Agent 旁白~~ | **§15.11 修订**：允许 **独立样式** 的 Plan 气泡；仍禁止伪装成主 Agent 旁白 |
 | 代码硬改 LLM 选的 Phase | V8；系统照做 operations |
-| 每条警告都调 LLM | 建议卡仍规则优先；侧栏**用户话**走 LLM |
-| 新开第二 WebSocket / 第二会话 | 复用现有 `project.plan.*` |
+| 每条警告都调 LLM | 建议卡仍规则优先；Plan 通道用户话走 LLM |
+| 新开第二 WebSocket / 第二会话 | 复用现有 `project.plan.*` / unified |
 
 #### 影响矩阵（DOC-04）
 
@@ -886,15 +897,17 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 #### 建议卡形状（协议草案 · 动手可微调）
 
+> **M6 起**（[PLAN-ARCH.md](./PLAN-ARCH.md) §4.1）：默认 `kind=file_patch` / `action=apply_patch`，`payload` 含 `path` + **diff 片段**；侧栏只渲染 hunk，不渲染整文件。下列结构化 `action` 为 Phase 22 遗留；实现 M6 后以 patch 为主，质检类可逐步收成 patch 生成器。
+
 ```json
 {
   "id": "sug-…",
-  "kind": "merge_dup | split | skip | confirm_changes | …",
+  "kind": "file_patch | merge_dup | split | skip | confirm_changes | …",
   "title": "短句",
   "body": "可选说明",
-  "risk": "low | suggest",
-  "action": "merge_tasks | split_task | skip_task | …",
-  "payload": { "…": "调用既有 plan handler 所需字段" }
+  "risk": "low | suggest | gate",
+  "action": "apply_patch | merge_tasks | split_task | skip_task | …",
+  "payload": { "path": "MAP.md", "diff": "…", "…": "或旧版 plan handler 字段" }
 }
 ```
 
@@ -925,6 +938,154 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 - **文档**：本 § + TASKS Phase 22 + MAP/UX-POLISH 指针 → **done**
 - **代码**：T-2202～T-2207 → **done**（2026-07-31）
+
+### 15.11 主输入双通道（已决 · 2026-08-03 · **设计已签**）
+
+> **状态**：**设计已签 · 代码已落地** · 跟踪 **[Phase 38](./TASKS.md)**（T-3800～T-3805 **done**）  
+> **⚠ superseded by [§15.12](#1512-plan-幕后子代理已决--2026-08-03--phase-39)**（Phase 39 将删除双通道代码）。下文保留作迁移对照。  
+> **触发**：Plan 判断/说明在窄侧栏堆长文；用户要主区输入切换，且怕 Plan **听太多主聊天**乱改计划。  
+> **2026-08-03 实现修订**：用户反馈「不想来回切 Agent」→ **§15.11.1 自动路由**（单一主输入 + 计划气泡可辨）。  
+> **修订**：§15.10 **V1 / V7**；本 § **C1 / C8**（见下表删除线）；A7 侧栏决策面 **保留**。
+
+#### 已决
+
+| ID | 决议 |
+|----|------|
+| **C1** | ~~主区输入框支持切换 **主 Agent** / **计划搭档**（默认主 Agent）~~ → **§15.11.1 修订**：主区 **单一输入**；计划域意图 **自动路由** Plan；**Alt+发送** 强制主 Agent |
+| **C2** | Plan **长回复**画在主聊天区，但用 **独立气泡样式**（标签/底色区分）；**不是**伪装成主 Agent 旁白 |
+| **C3** | 侧栏仍是 **决策面**：当前/armed 任务、待采纳 diff 卡、一停/短异常；**不**再承担 Plan 长文聊天卷 |
+| **C4** | **两条 transcript**：Plan 线只续 Plan 来回；主 Agent 线与 Plan 线 **互不回灌** |
+| **C5** | Plan 默认上下文 = **Plan 本线来回** + 计划域文件真源（TASKS/MAP/PROJECT/ENV 切片）。**不灌**主聊天工具流水/长回复。可选「带上刚才用户那一句」默认 **关**（宁可少听，勿听太多） |
+| **C6** | Plan 对话记忆：**每次进入/切换到该项目时清空**；只留磁盘三件套+ENV 真源。不跨会话持久 Plan 聊 |
+| **C7** | **工具**：Plan **查/跑**与主 Agent **同权**；写 **TASKS.md / MAP.md / PROJECT.md / ENV.md** 仍须 **提案 + 采纳**（继承 Q1/A8/A9）。业务代码 / `bugs/` 可与主同权（实现期可再收） |
+| **C8** | ~~侧栏「对计划说话」输入框：实现期 **移除或降为可选快捷**；权威入口 = 主输入切换~~ → **§15.11.1 修订**：侧栏输入 **已移除**；权威入口 = **主输入自动路由**（`project.plan.message` / 兼容 `project.task.add`） |
+| **C9** | **自动路由**（§15.11.1）：绑定项目且 **无附件** 时，`user.message` 经 `classify_user_plan_intent` 判为计划域 → **不启动主 Agent turn**；主区仍显示 **「你 · 计划」** 气泡以便辨认 |
+
+#### 非目标
+
+| 非目标 | 理由 |
+|--------|------|
+| Plan 吃全量主聊天 transcript | 用户明确怕乱改计划（C5） |
+| Plan 无人值守直写计划域四件套 | Q1 / C7 |
+| 第二 WebSocket / 第二浏览器会话 | 复用 unified；后端分通道即可 |
+| 取消侧栏采纳卡 | A7 / A9 仍要拍板面 |
+
+#### 影响矩阵（DOC-04）
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| unified 主输入 / 气泡 | **自动路由** Plan；Plan 气泡样式；Alt+发送强制主 Agent | P1 · S-190/191/193 |
+| 侧栏 | 弱化/移除 Plan 专用输入；长 notice 不再堆侧栏 | P1 · S-182 仍绿 |
+| Plan Agent 运行时 | 独立 transcript；进项目清空；工具查跑同权 + 计划域须门 | P0/P1 · IT-190/191 |
+| 主 Agent turn | 不因 Plan 气泡污染主 transcript | IT-71 升级断言 |
+| grow / host | **无** | — |
+
+#### 回归 / 新增 ID
+
+| ID | 断言（摘要） |
+|----|----------------|
+| **S-190** | 计划域话术经主输入发送 **不进主 Agent turn**（自动路由或显式 `project.plan.message`） |
+| **S-191** | Plan 回复为主区独立样式气泡；侧栏无同等长文堆叠 |
+| **S-192** | 进项目后 Plan 线为空；仅文件真源仍在 |
+| **S-193** | 自动路由时主区出现 **「你 · 计划」** 标签；用户可辨认已交 Plan |
+| **IT-190** | Plan 请求上下文不含主聊天 messages.jsonl 全文 |
+| **IT-191** | Plan 写 TASKS/MAP/PROJECT/ENV 无采纳不落盘；查/跑工具可用 |
+| **IT-71′** | 主 Agent 下一轮 prompt 不含 Plan 气泡正文（除非用户转发） |
+| **IT-192** | `classify_user_plan_intent` + `try_auto_route_user_to_plan`；`force_agent` 绕过；路由不写 `messages.jsonl` |
+
+#### 实施分期（文档先行）
+
+| 里程碑 | 内容 | 状态 |
+|--------|------|------|
+| **M0** | 本 § + PLAN-ARCH A10/A11/A12 + TASKS Phase 38 | **done**（设计） |
+| **M1** | UI：Plan 气泡 + 侧栏输入降级（初版含通道切换） | **done** |
+| **M2** | 后端：Plan transcript 隔离 / 进项目清空 / 上下文组装（C4～C6） | **done** |
+| **M3** | Plan 工具：查跑同权；计划域写仍须门（C7） | **done** |
+| **M4** | **自动路由**（C9 · §15.11.1）：单一主输入；规则分流；Alt 强制主 Agent | **done**（T-3805） |
+
+#### 15.11.1 主输入自动路由（实现修订 · 2026-08-03）
+
+> **动机**：双通道切换增加认知负担；用户希望 **一个输入框**，改计划时 **自动** 交 Plan，且能从气泡样式判断「是否已交给计划搭档」。  
+> **与 C1～C8 关系**：不推翻隔离/须门/双 transcript；只改 **入口 UX**（切换 → 自动分流）。
+
+**行为**
+
+| 条件 | 结果 |
+|------|------|
+| 已绑定项目 · 无附件 · 话术判为 **plan** | `user.message` → `try_auto_route_user_to_plan` → Plan LLM；主区 **plan-user / plan-assistant** 气泡；**不** `run_turn` |
+| 话术判为 **agent** 或 **不确定** | 正常主 Agent turn（§15.6：**不确定 → 主 Agent**） |
+| **Alt + 发送** | `force_agent: true` → 即使像改计划也走主 Agent |
+| 有附件 | 始终主 Agent（Plan 通道不支持附件同发） |
+| 显式 `project.plan.message` / `project.task.add` | 始终 Plan（兼容侧栏/自动化） |
+
+**规则引擎**（`plan_agent.classify_user_plan_intent` · 前端镜像 `desktop/src/plan-intent.ts`）
+
+| 倾向 Plan | 倾向主 Agent |
+|-----------|----------------|
+| 「优化/整理/检查计划」类 meta（`looks_like_plan_meta_command`） | 含编译/实现/`.java`/`.vue`/`mvn`/`npm` 等执行信号且无计划域词 |
+| 「加个任务：…」等 add 前缀 | `force_agent` / 有附件 |
+| 「合不合理 / 该不该」等评判计划 | 其余不确定话术 |
+| TASKS/MAP/Phase/T-xxx + 重排/删除/暂缓等 mutate 词 | |
+| `- [ ]` 行首（勾选行编辑意图） | |
+
+**协议**
+
+| 方向 | 类型 | 说明 |
+|------|------|------|
+| 客户端 → 服务端 | `user.message` + 可选 `force_agent` / `force_plan` / `auto_route_plan: false` | 默认服务端自动判 |
+| 服务端 → 客户端 | `project.plan.auto_routed` | CLI/parity：把误推的 user 气泡纠正为 plan-user |
+| 服务端 → 客户端 | `project.plan.bubble` | Plan 来回正文 |
+| 查询 | `project.plan.classify` | 返回 `handle` \| `forward`（与规则一致） |
+
+**代码锚点**
+
+| 层 | 路径 |
+|----|------|
+| 分类 | `agent-core/plan_agent.py` · `classify_user_plan_intent` |
+| 路由 | `agent-core/project_api.py` · `try_auto_route_user_to_plan` |
+| WS 拦截 | `agent-core/server.py` · `user.message` 在 `_run_line` 前 |
+| 前端 | `desktop/src/plan-intent.ts` · `desktop/src/shells/unified/index.ts` |
+| 测试 | `agent-core/tests/test_plan_channel.py` |
+
+**手工验收（S-193）**
+
+1. 绑定 huiyi（或任意项目），主输入发：`优化下任务`  
+2. 主区应出现 **「你 · 计划」** + **「计划搭档」** 气泡；**无**主 Agent「思考中…/run_evolved」过程卡  
+3. 侧栏可出现采纳卡；TASKS/MAP **无采纳不落盘**  
+4. 再发：`实现 CityController 的 CRUD` → 应走主 Agent 过程卡  
+5. **Alt+发送** 对 (1) 同类话术 → 强制主 Agent
+
+### 15.12 Plan 幕后子代理（已决 · 2026-08-03 · **Phase 39**）
+
+> **状态**：**设计已签 · 待实现** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906  
+> **动机**：一周体验——§15.11 双通道 + 关键词路由仍难用；对齐 Cursor/Copilot「**一个聊天** + 幕后规划」。  
+> **废止**：§15.11 C1/C4/C6/C9、Plan 独立气泡、auto-route、`plan-intent.ts`。
+
+#### 已决（摘要 · 全文见 PLAN-SUBAGENT B0～B7）
+
+| ID | 决议 |
+|----|------|
+| **B0** | **唯一用户通道** = 主 composer → 主 Agent；无平行 Plan 聊天气泡 |
+| **B1** | Plan = **子代理** `kind: plan`（`subagent.py` + `PlanAgent`） |
+| **B2** | 主 Agent 工具 **`plan_partner`**；可选内核 LLM 预 spawn（非关键词） |
+| **B3** | 产出：**短摘要**（主聊）+ **采纳卡**（侧栏）；子代理全文不进主 transcript |
+| **B5** | 主 Agent **禁止**直写 TASKS/MAP/PROJECT/ENV |
+| **B6** | UI：**过程卡**「计划搭档…」+ 侧栏采纳（非第二套气泡） |
+
+#### 用户可见流程
+
+1. 用户在主输入说任意话（「先补文档」「规划蔡岭模块」「继续写 T-020」）
+2. 主 Agent turn；若需改计划域 → 调 `plan_partner`（或内核预 spawn）
+3. 主区：**助手**回复 + **过程卡**；侧栏：**patch 采纳卡**
+4. 用户 **采纳** 后 TASKS/MAP 落盘；写代码仍走 `run_evolved` + `report_progress`
+
+#### 手工验收（S-200～S-202）
+
+| ID | 步骤 |
+|----|------|
+| **S-200** | 发任意话 → 仅 **用户/助手** 气泡；**无**「你·计划」 |
+| **S-201** | 「规划 Phase 7 蔡岭模块」→ 过程卡 + 侧栏 ≥1 采纳卡 |
+| **S-202** | 主 Agent 直写 MAP **被拒**；`plan_partner` + 采纳后 MAP 变更 |
 
 ### 15.5 渐进实施路径
 
@@ -958,7 +1119,7 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 | 拆分 task | Haiku | 需理解 task 语义，但推理量小 |
 | 新增 task | Haiku | 需理解项目上下文 |
 | 依赖关系检查 | Haiku | 需理解 task 间的逻辑依赖 |
-| 消息路由判断 | 规则引擎（关键词） | 不确定时降级为"透传给主 Agent" |
+| 消息路由判断 | 规则引擎（关键词） | **§15.11.1**：`classify_user_plan_intent`；不确定时降级为「透传给主 Agent」；前后端规则镜像 |
 
 不引入 Sonnet——拆分和新增 task 的逻辑足够简单，Haiku 能胜任。如果实践发现 Haiku 拆分质量差，后续可升级。
 

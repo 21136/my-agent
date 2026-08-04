@@ -3,7 +3,7 @@
 > 版本 **0.2.0** · 2026-07-19  
 > **状态**：**设计已决 · M0+M1 已实现**（T-2003～T-2007；M2=T-2008 defer）  
 > 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) T-705 · [MODE-BUDGET.md](./MODE-BUDGET.md) · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) · [TURN-CONTROL.md](./TURN-CONTROL.md)  
-> **延伸（Phase 24）**：勾选证据硬闸见 [PROGRESS-GATE.md](./PROGRESS-GATE.md)（一停扩禁同 turn 再 report_progress）。
+> **延伸（Phase 24）**：勾选证据硬闸见 [PROGRESS-GATE.md](./PROGRESS-GATE.md)（一停扩禁同 turn 再 report_progress；**G8/G9**：完成旁白仅在 toggle 成功后允许）。
 > 触发：project 壳「开始编码」一轮内写 POM / 多文件 / 反复 `mvn_exec` / 等人确认，撞上 `TURN_WALL_SEC=900` 墙钟后「回合已超过墙钟限制，已自动停止」
 
 ---

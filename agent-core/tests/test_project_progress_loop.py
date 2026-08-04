@@ -100,8 +100,12 @@ class ProjectAllowlistTests(unittest.TestCase):
             "run_evolved",
             {"tool_name": "report_progress", "arguments": {"summary": "x"}},
         )
-        self.assertIsNone(err, err)
         self.assertIn("report_progress", executor.session.allowed_evolved or set())
+        # Admission ok even if evidence gate fires (no real project TASKS in this fixture).
+        if err is not None:
+            msg = err.error.message if err.error else str(err)
+            self.assertIn("progress_gate", msg)
+            self.assertNotIn("不在本会话清单", msg)
 
     def test_run_turn_source_keeps_project_shell(self) -> None:
         src = inspect.getsource(Agent.run_turn)
@@ -159,7 +163,10 @@ class ReportProgressInjectTests(unittest.TestCase):
         self.pid = normalize_project_id(self.project_id)
         tasks = project_dir(self.paths, self.pid) / "TASKS.md"
         # line 2 = first checkbox when header + blank + item
-        tasks.write_text("# tasks\n\n- [ ] T-001 skeleton\n- [ ] T-002 engine\n", encoding="utf-8")
+        tasks.write_text(
+            "# tasks\n\n- [ ] T-001 skeleton Entity write\n- [ ] T-002 engine Service\n",
+            encoding="utf-8",
+        )
 
     def test_inject_project_id_and_arm_stop(self) -> None:
         import os
@@ -185,6 +192,19 @@ class ReportProgressInjectTests(unittest.TestCase):
         executor.session.project_plan_status = "confirmed"
         executor.begin_turn()
 
+        written = executor.run(
+            "run_evolved",
+            {
+                "tool_name": "write_text",
+                "arguments": {
+                    "path": f"workspace/{self.pid}/src/Skeleton.java",
+                    "content": "class Skeleton {}",
+                    "on_conflict": "overwrite",
+                },
+            },
+        )
+        self.assertTrue(written.ok, written.error)
+
         result = executor.run(
             "run_evolved",
             {
@@ -197,7 +217,12 @@ class ReportProgressInjectTests(unittest.TestCase):
         )
         self.assertTrue(result.ok, result.error)
         text = (project_dir(self.paths, self.pid) / "TASKS.md").read_text(encoding="utf-8")
-        self.assertIn("- [x] T-001 skeleton", text)
+        self.assertNotIn("T-001 skeleton Entity write", text)
+        archive = (project_dir(self.paths, self.pid) / "TASKS.archive.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("T-001 skeleton Entity write", archive)
+        self.assertIn("closed:done", archive)
         self.assertTrue(executor.session.task_stop_armed)
 
         blocked = executor.run(

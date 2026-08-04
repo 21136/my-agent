@@ -192,7 +192,12 @@ class ProgressGateExecutorTests(unittest.TestCase):
         )
         self.assertTrue(reported.ok, reported.error)
         text = (project_dir(self.paths, self.pid) / "TASKS.md").read_text(encoding="utf-8")
-        self.assertIn("- [x] T-001", text)
+        self.assertNotIn("T-001", text)
+        archive = (project_dir(self.paths, self.pid) / "TASKS.archive.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("T-001", archive)
+        self.assertIn("closed:done", archive)
 
     def test_it72_second_report_blocked(self) -> None:
         executor = self._executor()

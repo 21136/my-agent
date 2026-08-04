@@ -4,6 +4,7 @@ export type ChatBlock =
   | { kind: "user"; text: string; turnIndex: number }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
+  | { kind: "plan-subagent"; status: "running" | "proposals_ready"; taskPreview?: string; summary?: string; proposalCount?: number; turnIndex: number }
   | { kind: "notice"; text: string }
   | {
       kind: "process";
@@ -98,6 +99,14 @@ export interface ChatSession {
   resetTurnActivity(): void;
   isWorking(): boolean;
   pushUserMessage(text: string): number;
+  pushPlanSubagentCard(
+    status: "running" | "proposals_ready",
+    opts?: { taskPreview?: string; summary?: string; proposalCount?: number },
+  ): number;
+  updatePlanSubagentCard(
+    status: "proposals_ready",
+    opts?: { summary?: string; proposalCount?: number },
+  ): void;
   toggleProcessCollapsed(turnKey: string): void;
   /** C3: optimistic resolve + only accept current requestId. Returns false if ignored. */
   submitConfirm(requestId: string, choice: "y" | "n" | "a"): boolean;
@@ -324,6 +333,43 @@ export function createChatSession(
     model.blocks.push({ kind: "user", text, turnIndex });
     notify();
     return turnIndex;
+  }
+
+  function pushPlanSubagentCard(
+    status: "running" | "proposals_ready",
+    opts?: { taskPreview?: string; summary?: string; proposalCount?: number },
+  ): number {
+    const turnIndex = beginTurn();
+    model.blocks.push({
+      kind: "plan-subagent",
+      status,
+      taskPreview: opts?.taskPreview,
+      summary: opts?.summary,
+      proposalCount: opts?.proposalCount,
+      turnIndex,
+    });
+    notify();
+    return turnIndex;
+  }
+
+  function updatePlanSubagentCard(
+    status: "running" | "proposals_ready",
+    opts?: { summary?: string; proposalCount?: number },
+  ): void {
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind === "plan-subagent" && block.status === "running") {
+        model.blocks[i] = {
+          ...block,
+          status,
+          summary: opts?.summary ?? block.summary,
+          proposalCount: opts?.proposalCount ?? block.proposalCount,
+        };
+        notify();
+        return;
+      }
+    }
+    pushPlanSubagentCard(status, opts);
   }
 
   function ensureStreamingAssistant(): ChatBlock & { kind: "assistant-streaming" } {
@@ -640,6 +686,8 @@ export function createChatSession(
     resetTurnActivity,
     isWorking,
     pushUserMessage,
+    pushPlanSubagentCard,
+    updatePlanSubagentCard,
     toggleProcessCollapsed,
     submitConfirm,
     requestCancel,

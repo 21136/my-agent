@@ -1,10 +1,11 @@
 # 进度硬闸门（Progress Gate）
 
-> 版本 **0.1.0** · 2026-08-01  
-> **状态**：**设计已决 · M0 实施中**（Phase 24 · T-2402～T-2405 落地）  
-> 关联：[TASK-STOP.md](./TASK-STOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md)  
+> 版本 **0.2.0** · 2026-08-03  
+> **状态**：**设计已决 · M0 实施中**（Phase 24 · T-2402～T-2405 落地；**G8/G9 文档先行**）  
+> 关联：[TASK-STOP.md](./TASK-STOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [PLAN-ARCH.md](./PLAN-ARCH.md)  
 > 触发：huiyi（`20260730-27fd72d2`）T-014 之后——拒确认仍勾验收、同 turn 连勾、口头「上次编译过」当凭证。  
-> 决议来源：2026-08-01 反窄化（硬闸门 + 可审产物；人只审异常卡）。
+> 延伸触发：huiyi T-017（2026-08-03）——证据门 `unknown` 拒勾后，主 Agent **口头「✅ 完成 · 回复继续」**绕过 Plan / 侧栏。  
+> 决议来源：2026-08-01 反窄化（硬闸门 + 可审产物）；2026-08-03 闭环纪律（完成 = `report_progress` 成功）。
 
 ---
 
@@ -20,6 +21,8 @@
 | **G5** | 一停扩展：`report_progress` **成功勾选后**，同 turn **禁止再次** `report_progress`（与禁写下一产物对称） |
 | **G6** | 可审产物：每次拒绝/异常落 **结构化卡**（侧栏 `partner_notices` / suggestions），含任务身份、缺何种证据、最近工具失败摘要 |
 | **G7** | 与已落地的 **armed_task_id / task_text 注入** 叠加：勾选身份以本轮武装为准；证据门在身份门之后 |
+| **G8** | **完成通知 Plan = `report_progress`**。主 Agent **不**另开「告诉 Plan Agent」聊天通道；**不**直写 `TASKS.md`。侧栏 `[x]` / 下一任务文案 **只**在 `report_progress` **成功 toggle** 后更新 |
+| **G9** | **`report_progress` 被拒（含 `evidence_kind=unknown`）≠ 任务完成**。禁止用「✅ 完成 / 本项已完成 / 回复『继续』开始下一项」收口。须同 turn：**补对口证据**，或经 Plan（`add_tasks` / 改文案 / 侧栏）把任务改到可归类证据类，或 **停并写清 blocker**。用户「继续」**仅**在上一任务已 `[x]` 且一停之后 |
 
 ### 非目标（本 Phase）
 
@@ -29,6 +32,7 @@
 | 人点「强制完成」绕过证据 | 与 G3/G4 冲突 |
 | 会话历史里的旧 BUILD SUCCESS 当凭证 | 证据保质期 = **本回合**（G1） |
 | 用 LLM 自由裁定「算不算做完」 | 对口表 + 工具 `ok` 为硬条件；LLM 只解释失败 |
+| 主 Agent ↔ Plan Agent 新聊天协议 | G8：复用既有 `report_progress`（见 [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §4） |
 
 ---
 
@@ -68,17 +72,33 @@ begin_turn：武装 armed_task_id / armed_task_text（已有）
     │                              ├─ 证据门 G1/G2 通过 ──► toggle [x]
     │                              │                         ──► 一停（写码 + 禁再 report）
     │                              └─ 证据不足 ──► 拒绝勾选 + 异常卡（缺证据说明）
-    │                                              主 Agent 须修/重跑，禁止强勾
+    │                                              主 Agent 须修/重跑/改任务归类（G9）
+    │                                              **禁止**口头「✅ 完成 · 回复继续」
     │
     └─ 对口工具失败 / 用户拒确认 ──► 不进勾选；主 Agent 找 bug
                                    （不给人「强制勾选」按钮）
+```
+
+**闭环收口（G8）**：
+
+```text
+产物做完
+    │
+    ▼
+report_progress  ──成功 toggle──► Plan Agent 更新 TASKS / 侧栏
+    │                              │
+    │                              ▼
+    │                         一停文案：「本项已完成。回复『继续』…」
+    │
+    └─ 失败 / unknown ──► 同 turn 修证据或改任务，或停写 blocker
+                          （不得假装完成）
 ```
 
 **异常卡（人审）仅当例如：**
 
 - 对口表把文案任务判成必须 `mvn_exec`
 - 武装身份与 `report_progress` 解析冲突且无法自动归并
-- 任务标题无法映射任何证据类（需 Plan 改写任务或补规则）
+- 任务标题无法映射任何证据类（需 Plan 改写任务或补规则）——**此时走改文案 / 补 `[evidence:…]`，不是口头勾选**
 
 ---
 
@@ -113,6 +133,7 @@ begin_turn：武装 armed_task_id / armed_task_text（已有）
 |------|------|
 | 身份可解析 + 证据满足 | `toggle` `[x]`；返回 `ok`；武装一停（含禁再报） |
 | 身份可解析 + 证据不足 | **不** toggle；`ok: false` 或 `ok: true` 但 `toggled: false` + 明确 error/code；发异常卡「缺对口证据」 |
+| `evidence_kind=unknown` | **不** toggle；异常卡要求 **改任务文案** 或补证据类标签；主 Agent **禁止**完成旁白（G9） |
 | 工具失败后仍来报 | 同上；文案引导修 bug，不提供强制勾 |
 | 同 turn 第二次 report | 硬拒（G5），与 task-stop 一致 |
 
@@ -135,8 +156,9 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 | **Phase 20 一停** | 保留；**扩展**为勾选后禁再 `report_progress` |
 | **Phase 21 清单/注入** | 保留 |
 | **armed 身份**（已实现 · 待合入文档） | G7：身份门在前，本设计为证据门 |
-| **Plan Agent / 建议卡** | 复用侧栏卡通道承载 G6；**不**把工具失败做成「点一下就勾上」 |
+| **Plan Agent / 建议卡** | 复用侧栏卡通道承载 G6；**不**把工具失败做成「点一下就勾上」；**G8**：主→Plan 的完成通道只有 `report_progress` |
 | **confirm 拒绝** | = 无成功证据；走找 bug，不勾选 |
+| **Task 一停文案** | 「本项已完成。回复『继续』…」**仅**在 toggle 成功后允许（G9）；Gate 拒勾后不得套用 |
 
 ---
 
@@ -149,7 +171,7 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 | 执行门 | `executor`：turn 证据账本；`report_progress` 证据校验；一停扩禁再报 |
 | 进度工具 | `evolve/tools/project/report_progress` 返回码/警告语义 |
 | Plan / 侧栏 | 异常卡结构（缺证据 / 规则冲突）；**无**强制勾选动作 |
-| 提示 | `format_project_overlay` / `project.md` 一句：无对口证据不可勾 |
+| 提示 | `format_project_overlay` / `project.md`：无对口证据不可勾；**拒勾后禁止口头完成旁白**（G8/G9） |
 | project_mode | 证据类分类纯函数（可放此处便于单测） |
 | grow/daily | **不变**（仅 project 进度闭环） |
 
@@ -162,6 +184,7 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 | **S-72** | `mvn` confirm 拒绝后 `report_progress` → **不**勾测试/编译类 |
 | **S-73** | 勾选成功后同 turn 再 `report_progress` → 硬拒 |
 | **S-74** | write 成功不得勾 `compile`/`test`/`build_fe` 类 |
+| **S-75** | `report_progress` 拒勾（unknown / 缺证据）后助手回复 **不含**「本项已完成 · 回复继续」冒充收口 |
 | **IT-70** | 证据类分类表单测 |
 | **IT-71** | 证据门拒绝时 TASKS 行保持 `[ ]` |
 | **IT-72** | 一停后第二次 `report_progress` 被拒 |
@@ -175,12 +198,13 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 
 建议顺序：
 
-1. 文档签字（本文 v0.1.0）— **本步**  
-2. 证据账本 + 分类纯函数 + IT-70  
-3. `report_progress` 接线拒绝路径 + IT-71  
-4. 一停扩禁再报 + IT-72  
+1. 文档签字（本文 v0.1.0）— **已做**  
+2. 证据账本 + 分类纯函数 + IT-70 — **已做**  
+3. `report_progress` 接线拒绝路径 + IT-71 — **已做**  
+4. 一停扩禁再报 + IT-72 — **已做**  
 5. 异常卡（规则/身份）+ 桌面可见（若已有 partner_notices 则复用）  
-6. S-70～S-74 手工/半自动 smoke 记入 stabilization-log 或等价  
+6. **G8/G9**：`project.md` / overlay 硬文案；拒勾后禁止「继续」收口（T-2409～）  
+7. S-70～S-75 手工/半自动 smoke 记入 stabilization-log 或等价  
 
 ---
 
@@ -191,6 +215,7 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 | Q1 | `verify_db` 初版接受哪些 evolved 工具名？ | 先列白名单；未知则 unknown→异常卡 |
 | Q2 | 一条任务同时像 write 又像 test？ | 标题含「测试/验收/编译/构建」优先非 write |
 | Q3 | 证据不足时 `report_progress` 的 HTTP/工具 `ok` 字段？ | 偏好 **明确失败**（`ok: false` + code），避免模型以为已勾 |
+| Q4 | Gate 拒勾后内核是否注入短 system 注记禁止完成旁白？ | 倾向 **是**（一句 kernel notice），与 G9 对齐；实施期再钉 |
 
 ---
 
@@ -199,3 +224,4 @@ turn_evidence: list[{ tool, evolved_name?, ok, exit/code?, paths?, ts }]
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1.0 | 2026-08-01 | 初稿：G0–G7；huiyi 动机；DOC-04；Phase 24 挂钩 |
+| 0.2.0 | 2026-08-03 | G8/G9：完成=report_progress 成功；拒勾禁止口头「继续」收口；闭环图 |

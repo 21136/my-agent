@@ -23,12 +23,24 @@ VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
 PROJECT_ARTIFACTS = frozenset({"PROJECT.md", "MAP.md", "TASKS.md"})
+PLAN_DOMAIN_FILES = frozenset({"TASKS.md", "MAP.md", "PROJECT.md", "ENV.md"})
+PLAN_DOMAIN_WRITE_BLOCK_MSG = (
+    "计划域文件须通过 plan_partner 提案 + 侧栏采纳；"
+    "或使用 report_progress 勾选已完成任务。"
+)
+TASKS_ARCHIVE_NAME = "TASKS.archive.md"
+TASKS_INJECTION_OPEN_CAP = 20
+CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
 _TEMPLATE_DIRNAME = "_template"
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
+_CLOSED_SECTION_TITLE_RE = re.compile(
+    r"^(?:[\d.]+\s*)?(已关闭|归档|archive|closed|archives)\b",
+    re.IGNORECASE,
+)
 _ACCEPT_CMD_RE = re.compile(r"命令[：:]\s*`([^`]+)`", re.IGNORECASE)
 _ACCEPT_EXIT_RE = re.compile(r"退出码\s*(\d+)", re.IGNORECASE)
 _PYTHON_SCRIPT_RE = re.compile(r"python(?:3)?\s+([^\s`]+\.py)", re.IGNORECASE)
@@ -126,8 +138,12 @@ def create_project(paths: AgentPaths, project_id: str) -> Path:
         raise ProjectModeError(f"project already exists: workspace/{pid}")
     src = ensure_template(paths)
     dest.mkdir(parents=True, exist_ok=True)
-    for name in PROJECT_ARTIFACTS:
-        shutil.copy2(src / name, dest / name)
+    for name in (*PROJECT_ARTIFACTS, TASKS_ARCHIVE_NAME):
+        src_file = src / name
+        if src_file.is_file():
+            shutil.copy2(src_file, dest / name)
+        elif name in PROJECT_ARTIFACTS:
+            (dest / name).write_text(f"# {pid} · {name}\n", encoding="utf-8")
     try:
         from project_env import ensure_project_env
 
@@ -141,16 +157,224 @@ def read_task_stats(tasks_path: Path) -> TaskStats:
     if not tasks_path.is_file():
         return TaskStats(done=0, total=0)
     text = tasks_path.read_text(encoding="utf-8")
-    done = len(_TASK_DONE_RE.findall(text))
-    open_count = len(_TASK_OPEN_RE.findall(text))
+    # Open / legacy [x] only outside closed sections (PLAN-ARCH)
+    open_count = 0
+    legacy_done = 0
+    for _i, line in iter_tasks_lines_skipping_closed(text):
+        if _TASK_OPEN_RE.match(line):
+            open_count += 1
+        elif _TASK_DONE_RE.match(line):
+            legacy_done += 1
+    archive_done = count_archive_entries(
+        tasks_path.parent / TASKS_ARCHIVE_NAME,
+        reason="done",
+    )
+    done = legacy_done + archive_done
     return TaskStats(done=done, total=done + open_count)
+
+
+def normalize_close_reason(reason: str) -> str:
+    key = (reason or "").strip().lower().replace("-", "").replace("_", "")
+    mapping = {
+        "done": "done",
+        "wontfix": "wontfix",
+        "wont": "wontfix",
+        "duplicate": "duplicate",
+        "dup": "duplicate",
+        "moved": "moved",
+        "move": "moved",
+    }
+    # also accept closed:done style
+    raw = (reason or "").strip().lower()
+    if raw.startswith("closed:"):
+        raw = raw.split(":", 1)[1].strip()
+    if raw in CLOSE_REASONS:
+        return raw
+    if key in mapping:
+        return mapping[key]
+    raise ProjectModeError(
+        f"invalid close reason {reason!r}; expected one of {sorted(CLOSE_REASONS)}"
+    )
+
+
+def format_archive_entry(
+    *,
+    body: str,
+    reason: str,
+    phase: str = "",
+    source: str = "",
+    closed_at: str | None = None,
+) -> str:
+    reason_n = normalize_close_reason(reason)
+    ts = closed_at or utc_now_iso()
+    parts = [f"- {body.strip()}", f"closed:{reason_n}", ts]
+    if phase.strip():
+        parts.append(f"phase:{phase.strip()}")
+    if source.strip():
+        parts.append(f"src:{source.strip()[:40]}")
+    return " · ".join(parts)
+
+
+def count_archive_entries(archive_path: Path, *, reason: str | None = None) -> int:
+    if not archive_path.is_file():
+        return 0
+    try:
+        text = archive_path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+    n = 0
+    want = f"closed:{reason}" if reason else None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        if want is None:
+            if "closed:" in stripped:
+                n += 1
+        elif want in stripped:
+            n += 1
+    return n
+
+
+def append_tasks_archive(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    body: str,
+    reason: str,
+    phase: str = "",
+    source: str = "",
+) -> Path:
+    """Append one closed task to TASKS.archive.md (create file if needed)."""
+    root = project_dir(paths, project_id)
+    archive_path = root / TASKS_ARCHIVE_NAME
+    entry = format_archive_entry(body=body, reason=reason, phase=phase, source=source)
+    if archive_path.is_file():
+        existing = archive_path.read_text(encoding="utf-8")
+        if not existing.endswith("\n"):
+            existing += "\n"
+        archive_path.write_text(existing + entry + "\n", encoding="utf-8")
+    else:
+        header = (
+            f"# {project_id} · 任务归档\n\n"
+            "> 只追加。默认不注入 LLM（PLAN-ARCH Q2）。"
+            "关闭理由：done / wontfix / duplicate / moved。\n\n"
+        )
+        archive_path.write_text(header + entry + "\n", encoding="utf-8")
+    return archive_path
+
+
+def _phase_for_line(file_lines: list[str], line: int) -> str:
+    current = ""
+    for i in range(0, min(line + 1, len(file_lines))):
+        stripped = file_lines[i].strip()
+        if stripped.startswith("## "):
+            current = stripped.lstrip("#").strip()
+    return current
+
+
+def archive_and_remove_task_line(
+    paths: AgentPaths,
+    project_id: str,
+    line: int,
+    *,
+    reason: str,
+    source: str = "",
+) -> dict[str, Any]:
+    """Remove a checkbox line from TASKS.md and append to TASKS.archive.md."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    if line < 0 or line >= len(file_lines):
+        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
+    target = file_lines[line]
+    if not (_TASK_OPEN_RE.match(target) or _TASK_DONE_RE.match(target)):
+        raise ProjectModeError(f"line {line} is not a task checkbox")
+    m = _TASK_CHECKBOX_RE.match(target)
+    body = m.group(1).strip() if m else target.strip()
+    phase = _phase_for_line(file_lines, line)
+    reason_n = normalize_close_reason(reason)
+    append_tasks_archive(
+        paths,
+        project_id,
+        body=body,
+        reason=reason_n,
+        phase=phase,
+        source=source,
+    )
+    file_lines.pop(line)
+    content = "\n".join(file_lines)
+    if not content.endswith("\n"):
+        content += "\n"
+    tasks_path.write_text(content, encoding="utf-8")
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.archive.done",
+        "line": line,
+        "body": body,
+        "phase": phase,
+        "reason": reason_n,
+        "removed": target.strip(),
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+        "open_line": f"- [ ] {body}",
+    }
+
+
+def migrate_closed_sections_to_archive(paths: AgentPaths, project_id: str) -> int:
+    """Move ## 已关闭 / Archive section tasks into TASKS.archive.md."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        return 0
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    keep: list[str] = []
+    moved = 0
+    in_closed = False
+    current_phase = ""
+    for line in file_lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            title = stripped.lstrip("#").strip()
+            if is_closed_section_title(title):
+                in_closed = True
+                current_phase = title
+                continue  # drop closed header
+            in_closed = False
+            current_phase = title
+            keep.append(line)
+            continue
+        if in_closed:
+            if _TASK_OPEN_RE.match(line) or _TASK_DONE_RE.match(line):
+                m = _TASK_CHECKBOX_RE.match(line)
+                body = m.group(1).strip() if m else line.strip()
+                reason = "done" if _TASK_DONE_RE.match(line) else "wontfix"
+                append_tasks_archive(
+                    paths,
+                    project_id,
+                    body=body,
+                    reason=reason,
+                    phase=current_phase,
+                    source="migrate_closed",
+                )
+                moved += 1
+            # skip non-task lines inside closed section too
+            continue
+        keep.append(line)
+    if moved:
+        content = "\n".join(keep)
+        if not content.endswith("\n"):
+            content += "\n"
+        tasks_path.write_text(content, encoding="utf-8")
+    return moved
 
 
 def build_project_goal(*, project_root: str, plan_status: str) -> str:
     return "\n".join(
         [
             f"项目根：{project_root}",
-            f"进度真源：{project_root}/TASKS.md",
+            f"进度真源：{project_root}/TASKS.md（开放队列）",
+            f"归档：{project_root}/TASKS.archive.md",
             f"地图：{project_root}/MAP.md",
             f"计划状态：{plan_status or 'draft'}",
         ]
@@ -227,7 +451,38 @@ def is_project_artifact_path(path: str, project_root: str) -> bool:
 
 def is_project_tasks_path(path: str, project_root: str) -> bool:
     rel = project_path_rel(path, project_root)
-    return rel == "TASKS.md"
+    return rel in {"TASKS.md", TASKS_ARCHIVE_NAME}
+
+
+def is_plan_domain_path(path: str, project_root: str) -> bool:
+    """True when path targets a plan-domain basename under project root (Phase 39 B5)."""
+    rel = project_path_rel(path, project_root)
+    if rel is None or not rel or "/" in rel:
+        return False
+    return rel in PLAN_DOMAIN_FILES or rel == TASKS_ARCHIVE_NAME
+
+
+def main_agent_plan_domain_write_block(
+    *,
+    project_root: str,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> str | None:
+    """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly."""
+    root = project_root.strip()
+    if not root or tool_name != "run_evolved":
+        return None
+    evolved = arguments.get("tool_name")
+    evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+    if evolved_name in _WRITE_TOOLS:
+        for path in extract_run_evolved_paths(tool_name, arguments):
+            if path and (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
+                return PLAN_DOMAIN_WRITE_BLOCK_MSG
+    if evolved_name == "patch_file":
+        for path in extract_run_evolved_paths(tool_name, arguments):
+            if path and is_plan_domain_path(path, root):
+                return PLAN_DOMAIN_WRITE_BLOCK_MSG
+    return None
 
 
 _CONTINUE_UTTERANCE_RE = re.compile(
@@ -255,7 +510,7 @@ def is_project_continue_utterance(text: str) -> bool:
 
 
 def first_open_task_line(tasks_text: str) -> str | None:
-    for line in tasks_text.splitlines():
+    for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
         if _TASK_OPEN_RE.match(line):
             return line.strip()
     return None
@@ -263,13 +518,221 @@ def first_open_task_line(tasks_text: str) -> str | None:
 
 def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
     """Return (line_idx, body, tid) for the first open checkbox, else (None, None, None)."""
-    for i, line in enumerate(tasks_text.splitlines()):
+    for i, line in iter_tasks_lines_skipping_closed(tasks_text):
         if not _TASK_OPEN_RE.match(line):
             continue
         m = _TASK_CHECKBOX_RE.match(line)
         body = m.group(1).strip() if m else line.strip()
         return i, body, extract_task_id(body)
     return None, None, None
+
+
+def is_closed_section_title(title: str) -> bool:
+    """True for PLAN-ARCH closed/archive section headers (LLM-invisible)."""
+    key = (title or "").strip()
+    if not key:
+        return False
+    return bool(_CLOSED_SECTION_TITLE_RE.match(key))
+
+
+def is_tasks_archive_filename(name: str) -> bool:
+    return Path(str(name or "")).name.replace("\\", "/") == TASKS_ARCHIVE_NAME
+
+
+def iter_tasks_lines_skipping_closed(tasks_text: str) -> list[tuple[int, str]]:
+    """Yield (original_line_index, line) skipping closed/archive sections."""
+    out: list[tuple[int, str]] = []
+    in_closed = False
+    for i, line in enumerate((tasks_text or "").splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            title = stripped.lstrip("#").strip()
+            in_closed = is_closed_section_title(title)
+            if in_closed:
+                continue
+        if in_closed:
+            continue
+        out.append((i, line))
+    return out
+
+
+def _phase_title_at(lines: list[tuple[int, str]], pos: int) -> str | None:
+    current: str | None = None
+    for j in range(0, pos + 1):
+        stripped = lines[j][1].strip()
+        if stripped.startswith("## "):
+            current = stripped.lstrip("#").strip()
+    return current
+
+
+def select_open_task_indices_for_injection(
+    tasks_text: str,
+    *,
+    open_cap: int = TASKS_INJECTION_OPEN_CAP,
+) -> list[int]:
+    """Original line indices of open checkboxes to inject (active phase first)."""
+    visible = iter_tasks_lines_skipping_closed(tasks_text)
+    if not visible:
+        return []
+    active = active_phase_title_from_lines([ln for _, ln in visible])
+    active_idxs: list[int] = []
+    other_idxs: list[int] = []
+    for vis_i, (orig_i, line) in enumerate(visible):
+        if not _TASK_OPEN_RE.match(line):
+            continue
+        phase = _phase_title_at(visible, vis_i)
+        if active and phase and phase.lower() == active.lower():
+            active_idxs.append(orig_i)
+        else:
+            other_idxs.append(orig_i)
+    ordered = active_idxs + other_idxs
+    cap = max(0, int(open_cap))
+    return ordered[:cap] if cap else []
+
+
+def build_tasks_injection_slice(
+    tasks_text: str,
+    *,
+    open_cap: int = TASKS_INJECTION_OPEN_CAP,
+) -> str:
+    """Open-queue markdown for LLM injection (PLAN-ARCH A3 · M1).
+
+    Excludes closed sections and ``[x]`` lines. Caps open checkboxes.
+    Never includes ``TASKS.archive.md`` (caller must not concatenate it).
+    """
+    selected = set(select_open_task_indices_for_injection(tasks_text, open_cap=open_cap))
+    visible = iter_tasks_lines_skipping_closed(tasks_text)
+    if not visible:
+        return ""
+
+    # done counts per phase (visible only) for omit notes
+    done_by_phase: dict[str, int] = {}
+    open_by_phase: dict[str, int] = {}
+    for vis_i, (_orig_i, line) in enumerate(visible):
+        phase = _phase_title_at(visible, vis_i) or ""
+        if _TASK_DONE_RE.match(line):
+            done_by_phase[phase] = done_by_phase.get(phase, 0) + 1
+        elif _TASK_OPEN_RE.match(line):
+            open_by_phase[phase] = open_by_phase.get(phase, 0) + 1
+
+    out: list[str] = []
+    emitted_phase: set[str] = set()
+    omitted_open = max(0, sum(open_by_phase.values()) - len(selected))
+
+    for vis_i, (orig_i, line) in enumerate(visible):
+        stripped = line.strip()
+        if stripped.startswith("# ") and not stripped.startswith("## "):
+            out.append(stripped)
+            continue
+        if stripped.startswith("## "):
+            title = stripped.lstrip("#").strip()
+            # Emit phase header only when we will show opens under it
+            will_show = any(
+                oi in selected
+                and (_phase_title_at(visible, vi) or "") == title
+                for vi, (oi, _) in enumerate(visible)
+            )
+            if will_show and title not in emitted_phase:
+                out.append(f"## {title}")
+                emitted_phase.add(title)
+                done_n = done_by_phase.get(title, 0)
+                if done_n:
+                    out.append(f"（本 Phase {done_n} 条已完成已省略）")
+            continue
+        if orig_i in selected:
+            phase = _phase_title_at(visible, vis_i) or ""
+            if phase and phase not in emitted_phase:
+                out.append(f"## {phase}")
+                emitted_phase.add(phase)
+                done_n = done_by_phase.get(phase, 0)
+                if done_n:
+                    out.append(f"（本 Phase {done_n} 条已完成已省略）")
+            out.append(line.rstrip())
+
+    if omitted_open:
+        out.append(f"（另有 {omitted_open} 条开放项未注入 · cap={open_cap}）")
+    out.append(
+        "（注入切片：不含 [x] / 不含已关闭区 / 不含 TASKS.archive.md；"
+        "全文以磁盘为准，按需 read_file）"
+    )
+    return "\n".join(out).strip()
+
+
+def format_tasks_open_slice_numbered(
+    tasks_text: str,
+    *,
+    open_cap: int = TASKS_INJECTION_OPEN_CAP,
+) -> str:
+    """Plan-Agent view: original line numbers for open items + phase headers only."""
+    selected = set(select_open_task_indices_for_injection(tasks_text, open_cap=open_cap))
+    visible = iter_tasks_lines_skipping_closed(tasks_text)
+    if not visible:
+        return "（无开放项）"
+
+    done_by_phase: dict[str, int] = {}
+    for vis_i, (_orig_i, line) in enumerate(visible):
+        if _TASK_DONE_RE.match(line):
+            phase = _phase_title_at(visible, vis_i) or ""
+            done_by_phase[phase] = done_by_phase.get(phase, 0) + 1
+
+    out: list[str] = []
+    emitted_phase: set[str] = set()
+    for vis_i, (orig_i, line) in enumerate(visible):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            title = stripped.lstrip("#").strip()
+            will_show = any(
+                oi in selected
+                and (_phase_title_at(visible, vi) or "") == title
+                for vi, (oi, _) in enumerate(visible)
+            )
+            if will_show and title not in emitted_phase:
+                out.append(f"{orig_i}|{line.rstrip()}")
+                emitted_phase.add(title)
+                done_n = done_by_phase.get(title, 0)
+                if done_n:
+                    out.append(f"#|（本 Phase {done_n} 条 [x] 已省略）")
+            continue
+        if orig_i in selected:
+            phase = _phase_title_at(visible, vis_i) or ""
+            if phase and phase not in emitted_phase:
+                # synthetic: find header line index
+                header_i = None
+                for back in range(vis_i, -1, -1):
+                    if visible[back][1].strip().startswith("## "):
+                        header_i = visible[back][0]
+                        break
+                if header_i is not None:
+                    out.append(f"{header_i}|## {phase}")
+                else:
+                    out.append(f"#|## {phase}")
+                emitted_phase.add(phase)
+                done_n = done_by_phase.get(phase, 0)
+                if done_n:
+                    out.append(f"#|（本 Phase {done_n} 条 [x] 已省略）")
+            out.append(f"{orig_i}|{line.rstrip()}")
+
+    if not selected:
+        return "（无开放项；已关闭区与 [x] 未注入）"
+    out.append(
+        "#|（注入切片：行号=原 TASKS.md；不含已关闭区 / TASKS.archive.md）"
+    )
+    return "\n".join(out)
+
+
+def read_tasks_text_for_injection(tasks_path: Path | None) -> str:
+    """Read TASKS.md only — never TASKS.archive.md (PLAN-ARCH Q2 / IT-180)."""
+    if tasks_path is None:
+        return ""
+    path = Path(tasks_path)
+    if is_tasks_archive_filename(path.name):
+        return ""
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def task_stop_block_reason(
@@ -350,24 +813,19 @@ def project_mode_block_reason(
     if not root:
         return None
 
+    plan_domain_block = main_agent_plan_domain_write_block(
+        project_root=root,
+        tool_name=tool_name,
+        arguments=arguments,
+    )
+    if plan_domain_block:
+        return plan_domain_block
+
     if plan_allows_code_writes(plan_status):
         if tool_name == "run_evolved" and evolved_name == "patch_file":
             for path in extract_run_evolved_paths(tool_name, arguments):
                 if path and not is_under_project_root(path, project_root):
                     return f"patch_file 仅限项目目录内：{project_root}"
-
-        # Block direct writes to TASKS.md — must use report_progress
-        if tool_name == "run_evolved" and evolved_name in _WRITE_TOOLS:
-            for path in extract_run_evolved_paths(tool_name, arguments):
-                if path and is_project_tasks_path(path, project_root):
-                    return (
-                        "不要直接写 TASKS.md。已完成一条任务后，请调用 "
-                        "run_evolved(tool_name=\"report_progress\", arguments={"
-                        "project_id: \"<项目id>\", summary: \"<做了什么>\", "
-                        "task_line: <勾选的行号>, subtasks: [<实际拆出的子任务>], "
-                        "add_tasks: [<新发现的任务>]})。"
-                        "项目管理器会自动更新 TASKS.md 并检查质量。"
-                    )
 
         return None
 
@@ -404,6 +862,7 @@ def format_project_overlay(
     continue_turn: bool = False,
     next_open_task: str | None = None,
     armed_task_id: str | None = None,
+    open_tasks_slice: str | None = None,
 ) -> str:
     lines = [
         "[项目模式 · project]",
@@ -435,6 +894,14 @@ def format_project_overlay(
                 "report_progress: 勾选须本回合对口工具成功证据；"
                 "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
             )
+        slice_text = (open_tasks_slice or "").strip()
+        if slice_text:
+            lines.append("open_queue:")
+            lines.append(slice_text)
+        lines.append(
+            "plan_inject: 默认只注入开放队列切片；"
+            "不含 [x]、已关闭区、TASKS.archive.md"
+        )
     if continue_turn and plan_status == "confirmed":
         lines.append(
             "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
@@ -754,7 +1221,19 @@ def resolve_progress_task_line(
 
 
 def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) -> dict[str, Any]:
-    """Toggle a single checkbox line in TASKS.md. Returns {type, line, done, tasks_done, tasks_total}."""
+    """Toggle a checkbox. When marking done, archive+remove (PLAN-ARCH M3)."""
+    if done:
+        result = archive_and_remove_task_line(
+            paths,
+            project_id,
+            line,
+            reason="done",
+            source="toggle",
+        )
+        result["type"] = "project.task.toggle.done"
+        result["done"] = True
+        return result
+
     tasks_path = project_dir(paths, project_id) / "TASKS.md"
     if not tasks_path.is_file():
         raise ProjectModeError(f"TASKS.md not found for project {project_id}")
@@ -764,13 +1243,9 @@ def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) 
         raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
 
     target = file_lines[line]
-    if done:
-        new_line = _TASK_OPEN_RE.sub("- [x] ", target, count=1)
-    else:
-        new_line = _TASK_DONE_RE.sub("- [ ] ", target, count=1)
-
+    new_line = _TASK_DONE_RE.sub("- [ ] ", target, count=1)
     if new_line == target:
-        raise ProjectModeError(f"line {line} is not a task checkbox")
+        raise ProjectModeError(f"line {line} is not a completed task checkbox")
 
     file_lines[line] = new_line
     content = "\n".join(file_lines)
@@ -782,7 +1257,7 @@ def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) 
     return {
         "type": "project.task.toggle.done",
         "line": line,
-        "done": done,
+        "done": False,
         "tasks_done": stats.done,
         "tasks_total": stats.total,
     }
@@ -852,33 +1327,24 @@ def reorder_task_line(paths: AgentPaths, project_id: str, line: int, direction: 
     }
 
 
-def drop_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, Any]:
-    """Remove a task line from TASKS.md."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
-
-    if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
-        raise ProjectModeError(f"line {line} is not a task checkbox")
-
-    removed = file_lines.pop(line)
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.drop.done",
-        "line": line,
-        "removed": removed.strip(),
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
+def drop_task_line(
+    paths: AgentPaths,
+    project_id: str,
+    line: int,
+    *,
+    reason: str = "wontfix",
+    source: str = "drop",
+) -> dict[str, Any]:
+    """Archive (default wontfix) then remove a task line from TASKS.md."""
+    result = archive_and_remove_task_line(
+        paths,
+        project_id,
+        line,
+        reason=reason,
+        source=source,
+    )
+    result["type"] = "project.task.drop.done"
+    return result
 
 
 def skip_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, Any]:
@@ -1024,10 +1490,15 @@ def phase_open_and_done_counts(file_lines: list[str], phase_title: str) -> tuple
 def active_phase_title_from_lines(file_lines: list[str]) -> str | None:
     """Phase that contains the first open checkbox (current work frontier)."""
     current: str | None = None
+    in_closed = False
     for line in file_lines:
         if line.strip().startswith("## "):
             current = line.strip().lstrip("#").strip()
-        elif _TASK_OPEN_RE.match(line) and current:
+            in_closed = is_closed_section_title(current)
+            continue
+        if in_closed:
+            continue
+        if _TASK_OPEN_RE.match(line) and current:
             return current
     return None
 
@@ -1282,8 +1753,8 @@ def _demo() -> None:
             "arguments": {"path": f"{root}/TASKS.md", "content": "x"},
         },
     )
-    assert reason2 is None
-    print("[PASS] plan gate allows TASKS.md")
+    assert reason2 and "plan_partner" in reason2
+    print("[PASS] plan domain write block (B5) rejects TASKS.md")
 
     reason_grow = project_mode_block_reason(
         active_shell="grow",

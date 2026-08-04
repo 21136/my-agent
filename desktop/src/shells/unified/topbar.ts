@@ -13,6 +13,7 @@ export interface TopbarState {
 export type TopbarHandlers = {
   onNewChat?: () => void;
   onNewProject?: () => void;
+  onNewThread?: () => void;
   onOpenSessions?: () => void;
   onOpenProposals?: () => void;
 };
@@ -24,11 +25,13 @@ export function renderTopbar(
   onNewSession?: () => void,
   onOpenSessions?: () => void,
   onNewProject?: () => void,
+  onNewThread?: () => void,
 ): void {
   // Backward-compatible: onNewSession = 普通对话 +
   const handlers: TopbarHandlers = {
     onNewChat: onNewSession,
     onNewProject,
+    onNewThread,
     onOpenSessions,
     onOpenProposals,
   };
@@ -60,12 +63,15 @@ export function renderTopbarV2(
   const newProjectBtn = handlers.onNewProject
     ? `<button type="button" class="unified-btn" id="unified-new-project" title="新建项目">+ 项目</button>`
     : "";
+  const newThreadBtn = handlers.onNewThread && state.projectLabel
+    ? `<button type="button" class="unified-btn" id="unified-new-thread" title="同项目新开线（归档当前聊天）">+ 新开线</button>`
+    : "";
   const sessionsBtn = handlers.onOpenSessions
     ? `<button type="button" class="unified-btn" id="unified-open-sessions" title="最近会话">${state.sessionCount ? `会话 (${state.sessionCount})` : "会话"}</button>`
     : "";
   const meta = [project, intent, checker, memory].filter(Boolean).join(" · ");
   const metaText = meta || `<span class="unified-topbar-muted">当前无待处理</span>`;
-  const leading = `${newChatBtn}${newProjectBtn}${sessionsBtn}`;
+  const leading = `${newChatBtn}${newThreadBtn}${newProjectBtn}${sessionsBtn}`;
 
   if (!proposal) {
     container.innerHTML = `
@@ -85,6 +91,7 @@ export function renderTopbarV2(
   }
 
   container.querySelector<HTMLButtonElement>("#unified-new-chat")?.addEventListener("click", () => handlers.onNewChat?.());
+  container.querySelector<HTMLButtonElement>("#unified-new-thread")?.addEventListener("click", () => handlers.onNewThread?.());
   container.querySelector<HTMLButtonElement>("#unified-new-project")?.addEventListener("click", () => handlers.onNewProject?.());
   container.querySelector<HTMLButtonElement>("#unified-open-sessions")?.addEventListener("click", () => handlers.onOpenSessions?.());
 }

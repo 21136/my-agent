@@ -1025,12 +1025,14 @@ def build_system_prompt(
 
         if session.meta.active_shell == "project" and session.meta.project_root:
             from project_mode import (
+                build_tasks_injection_slice,
                 extract_task_id,
                 first_open_task_line,
                 format_project_overlay,
                 is_project_continue_utterance,
                 project_dir,
                 read_task_stats,
+                read_tasks_text_for_injection,
             )
 
             tasks_path = (
@@ -1039,11 +1041,7 @@ def build_system_prompt(
                 else None
             )
             stats = read_task_stats(tasks_path) if tasks_path is not None else None
-            tasks_text = (
-                tasks_path.read_text(encoding="utf-8")
-                if tasks_path is not None and tasks_path.is_file()
-                else ""
-            )
+            tasks_text = read_tasks_text_for_injection(tasks_path)
             last_user = ""
             for msg in reversed(session.messages):
                 if msg.get("role") == "user" and isinstance(msg.get("content"), str):
@@ -1051,6 +1049,11 @@ def build_system_prompt(
                     break
             continue_turn = is_project_continue_utterance(last_user)
             next_open = first_open_task_line(tasks_text)
+            open_slice = (
+                build_tasks_injection_slice(tasks_text)
+                if (session.meta.project_plan_status or "draft") == "confirmed"
+                else ""
+            )
             sections.append(
                 (
                     "project_prompt",
@@ -1068,6 +1071,7 @@ def build_system_prompt(
                         continue_turn=continue_turn,
                         next_open_task=next_open,
                         armed_task_id=extract_task_id(next_open or ""),
+                        open_tasks_slice=open_slice or None,
                     ),
                 )
             )

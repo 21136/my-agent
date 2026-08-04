@@ -16,6 +16,7 @@ from project_mode import ProjectModeError, normalize_project_id, project_dir
 from session import Session, build_seed_message, create_new, sessions_root, write_last_conversation_id
 
 PROJECT_SESSIONS_KEY = "project_sessions"
+PROJECT_THREAD_ARCHIVE_KEY = "project_thread_archive"
 SwitchAction = Literal["noop", "bind_current", "load_session", "new_session"]
 
 
@@ -56,6 +57,42 @@ def read_project_sessions(paths: AgentPaths) -> dict[str, str]:
         if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip():
             out[key.strip()] = value.strip()
     return out
+
+
+def read_project_thread_archive(paths: AgentPaths) -> dict[str, list[str]]:
+    raw = _read_state_payload(paths).get(PROJECT_THREAD_ARCHIVE_KEY, {})
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            continue
+        if not isinstance(value, list):
+            continue
+        ids = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        if ids:
+            out[key.strip()] = ids
+    return out
+
+
+def archive_project_thread(
+    paths: AgentPaths,
+    project_id: str,
+    conversation_id: str,
+) -> None:
+    pid = normalize_project_id(project_id)
+    cid = conversation_id.strip()
+    if not cid:
+        return
+    payload = _read_state_payload(paths)
+    archive = read_project_thread_archive(paths)
+    entries = list(archive.get(pid, []))
+    if cid in entries:
+        entries.remove(cid)
+    entries.insert(0, cid)
+    archive[pid] = entries
+    payload[PROJECT_THREAD_ARCHIVE_KEY] = archive
+    _write_state_payload(paths, payload)
 
 
 def record_project_session(paths: AgentPaths, project_id: str, conversation_id: str) -> None:
@@ -228,6 +265,121 @@ def execute_project_switch(
         return fresh, plan.message
 
     raise ProjectModeError(f"unknown switch action: {plan.action}")
+
+
+def _inherit_project_meta(fresh: Session, previous: Session, project_id: str) -> None:
+    from project_cli import bind_project_session
+
+    plan_status = previous.meta.project_plan_status or "draft"
+    bind_project_session(fresh, project_id, plan_status=plan_status)
+    if previous.meta.project_plan_confirmed_at:
+        fresh.meta.project_plan_confirmed_at = previous.meta.project_plan_confirmed_at
+    fresh.meta.project_phase_fingerprint = previous.meta.project_phase_fingerprint
+    fresh.meta.project_doc_fingerprint = previous.meta.project_doc_fingerprint
+
+
+def start_new_project_thread(
+    paths: AgentPaths,
+    session: Session,
+    *,
+    project_id: str | None = None,
+) -> tuple[Session, str]:
+    """Same project: archive current live line and start a blank bound session."""
+    pid = normalize_project_id(project_id or session.meta.project_id or "")
+    if not pid:
+        raise ProjectModeError("当前未绑定项目；请先用「项目 打开」或「项目 切换」")
+
+    current_pid = (session.meta.project_id or "").strip()
+    if current_pid and current_pid != pid:
+        raise ProjectModeError(
+            f"当前会话绑定项目 {current_pid}；请先切换到 {pid} 再新开线"
+        )
+
+    dest = project_dir(paths, pid)
+    if not (dest / "TASKS.md").is_file():
+        raise ProjectModeError(f"project missing TASKS.md: workspace/{pid}")
+
+    mapped = lookup_project_session(paths, pid)
+    old_cid = session.conversation_id
+    if mapped and mapped != old_cid:
+        raise ProjectModeError(
+            f"当前不是项目 {pid} 的活线（活线为 {mapped}）；请先切回活线再新开线"
+        )
+
+    fresh = create_new(paths)
+    _inherit_project_meta(fresh, session, pid)
+    fresh.save()
+
+    if old_cid:
+        archive_project_thread(paths, pid, old_cid)
+
+    record_project_session(paths, pid, fresh.conversation_id)
+    write_last_conversation_id(paths, fresh.conversation_id)
+
+    try:
+        from shell_switch import record_shell_session
+
+        if session.meta.active_shell == "project":
+            record_shell_session(paths, "project", fresh.conversation_id)
+    except Exception:
+        pass
+
+    try:
+        from project_env import ensure_project_env
+
+        ensure_project_env(paths, pid)
+    except Exception:
+        pass
+
+    return (
+        fresh,
+        f"已为项目 {pid} 新开线（{fresh.conversation_id}）；"
+        f"上一线 {old_cid} 已归档，可回看",
+    )
+
+
+def build_project_threads_payload(
+    paths: AgentPaths,
+    session: Session,
+    *,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    from session import list_session_summaries
+
+    pid = normalize_project_id(project_id or session.meta.project_id or "")
+    archive = read_project_thread_archive(paths).get(pid, [])
+    active = lookup_project_session(paths, pid)
+    summaries = {
+        item["session_id"]: item
+        for item in list_session_summaries(paths, limit=200, include_internal=True)
+        if isinstance(item.get("session_id"), str)
+    }
+
+    def _thread_item(sid: str, *, archived: bool) -> dict[str, Any]:
+        summary = summaries.get(sid, {})
+        return {
+            "session_id": sid,
+            "title": summary.get("title") or sid,
+            "preview": summary.get("preview") or "",
+            "updated_at": summary.get("updated_at") or "",
+            "archived": archived,
+        }
+
+    threads: list[dict[str, Any]] = []
+    if active:
+        threads.append(_thread_item(active, archived=False))
+    for sid in archive:
+        if sid != active:
+            threads.append(_thread_item(sid, archived=True))
+
+    return {
+        "type": "project.threads",
+        "project_id": pid or None,
+        "active_session_id": active,
+        "archived_session_ids": list(archive),
+        "threads": threads,
+        "is_active": session.conversation_id == active if active else False,
+    }
 
 
 def switch_to_project(

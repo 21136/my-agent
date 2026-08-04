@@ -60,33 +60,75 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
                 "resolve_note": resolve_note,
             }
 
-    # 2. Add subtasks discovered during execution
+    # 2. Propose subtasks / discovered tasks (PLAN-ARCH Q1 — no auto write)
+    proposed: list[str] = []
     for desc in subtasks:
         if isinstance(desc, str) and desc.strip():
-            agent._record_change("add", desc.strip(), reason=f"subtask of: {summary[:60]}")
+            d = desc.strip()
+            key = f"rp-sub-{abs(hash(d)) % 10_000_000:x}"
+            sug = agent._suggestion(
+                kind="add_task",
+                title="子任务（待采纳）",
+                body=f"主 Agent 建议子任务：{d[:80]}",
+                key=key,
+                risk="gate",
+                action="add_task",
+                payload={
+                    "phase": "",
+                    "description": d,
+                    "source": "report_progress_subtask",
+                },
+            )
+            agent.park_gated_suggestion(sug)
+            proposed.append(d)
 
-    # 3. Add newly discovered tasks
     for desc in add_tasks:
         if isinstance(desc, str) and desc.strip():
-            agent._record_change("add", desc.strip(), reason=f"discovered: {summary[:60]}")
+            d = desc.strip()
+            key = f"rp-add-{abs(hash(d)) % 10_000_000:x}"
+            sug = agent._suggestion(
+                kind="add_task",
+                title="新增任务（待采纳）",
+                body=f"主 Agent 建议添加：{d[:80]}",
+                key=key,
+                risk="gate",
+                action="add_task",
+                payload={
+                    "phase": "",
+                    "description": d,
+                    "source": "report_progress_add",
+                },
+            )
+            agent.park_gated_suggestion(sug)
+            proposed.append(d)
 
-    # 4. Skip tasks
+    # 3. Skip tasks — also gated via suggestion when from report_progress
     for line in skip_tasks:
         if isinstance(line, int) and line >= 0:
-            try:
-                agent.skip_task(line)
-            except Exception:
-                pass
+            sug = agent._suggestion(
+                kind="skip_task",
+                title="暂缓任务（待采纳）",
+                body=f"主 Agent 建议暂缓行 {line}",
+                key=f"rp-skip-{line}",
+                risk="gate",
+                action="skip_task",
+                payload={"line": line, "source": "report_progress"},
+            )
+            agent.park_gated_suggestion(sug)
 
-    # 5. Run quality checks
+    # 4. Run quality checks
     warnings = agent.quality_check()
     if resolve_note:
         warnings = list(warnings) + [resolve_note]
+    if proposed:
+        warnings = list(warnings) + [
+            f"已提案 {len(proposed)} 条新增（未写盘）；侧栏点「采纳」才写入 TASKS.md"
+        ]
 
-    # 6. Get next task
+    # 5. Get next task
     next_task = agent.next_task_text()
 
-    # 7. Save state
+    # 6. Save state
     agent._save_state()
 
     return {
@@ -98,6 +140,8 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
         "warnings": warnings,
         "resolved_line": resolved_line,
         "resolve_note": resolve_note,
+        "proposed_adds": proposed,
+        "pending_gated": len(agent._pending_gated),
     }
 
 

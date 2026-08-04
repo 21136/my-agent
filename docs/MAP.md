@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-03** · **新会话请先读本文 + `TASKS.md`**  
 > 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase 36 **项目多会话线**（设计 [PROJECT-THREADS.md](./PROJECT-THREADS.md) · M0）；Phase 35 G14 done；Phase 34 工作台可交错。
+> **当前焦点**：Phase 39 **Plan 幕后子代理（单入口）**（**done** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906）。
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -44,19 +44,22 @@
 | **Phase 21** | **项目进度闭环**（report_progress 清单 / draft 壳 / 一停武装） | **done**（[PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) fixed） |
 | **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
 | **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
-| **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md)） |
+| **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md) v0.2.0 · G8/G9） |
 | **Phase 25** | **托管长驻服务**（`run_service`） | **M0 done**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
 | **Phase 26** | **项目开发工具补齐**（HTTP / 启停 / 端口 / Git / SQLite / pip） | **done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) v0.4.0；IT-80～86） |
 | **Phase 27** | **执行可观测**（聊天过程 + 侧栏服务/进度） | **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)；IT-90～93） |
 | **Phase 28** | **通用执行通道**（`run_command` + 归档分域 `*_exec`） | **M0+M1 done**（[SHELL-CHANNEL.md](./SHELL-CHANNEL.md) v0.3.0；IT-100～103；M2→Phase 29） |
 | **Phase 29～34** | **对齐 Cursor 剩余面** | **29～33** · **34 M0** done（[CURSOR-ALIGN.md](./CURSOR-ALIGN.md)）；G M1/M2 待做 |
 | **Phase 35** | **执行可靠性**（后置条件 · 熔断 · 本地执行硬化） | **done**（[EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · G14 · M0–M3） |
-| **Phase 36** | **项目多会话线**（一活线 · 砍线归档 · 可选交接） | **M0 设计**（[PROJECT-THREADS.md](./PROJECT-THREADS.md)；T-3600） |
+| **Phase 36** | **项目多会话线**（一活线 · 砍线归档 · 可选交接） | **done**（[PROJECT-THREADS.md](./PROJECT-THREADS.md)；T-3600～3603） |
+| **Phase 37** | **计划域架构**（角色多文件 · 唯一队列 · 写权限 · 注入切片 · **读写提案**） | **M1～M3 · M5 · M6 done**（[PLAN-ARCH.md](./PLAN-ARCH.md) v0.5.1；T-3700～3710；M4 defer） |
+| **Phase 38** | **Plan 主输入双通道 + 自动路由**（独立气泡 · 上下文隔离 · 查跑同权） | **superseded**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.11 → **§15.12**；由 Phase 39 废止） |
+| **Phase 39** | **Plan 幕后子代理**（单入口 · `plan_partner` · 侧栏采纳 · 计划域写拒） | **done**（[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
 | **UX-POLISH** | 统一壳手感打磨（UX-001～020 + 第五～七轮） | **进行中**（[UX-POLISH.md](./UX-POLISH.md)） |
-| **Plan Agent / 侧栏** | 任务流 + Plan Agent 拥有 TASKS | **done（本地 ahead）**；可见搭档见 **Phase 22 / §15.10**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)） |
+| **Plan Agent / 侧栏** | 决策面 + 采纳卡；**幕后子代理**（Phase 39 done） | Phase 22 done · Phase 39 done |
 
 ### 2.1 解冻说明（T-1890-09 / T-1890-10）
 
@@ -66,7 +69,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一焦点** | Phase 36 项目多会话线（M1 起实现）；huiyi 污染线可先用现有「新会话」权宜，正式能力见 PROJECT-THREADS |
+| **下一焦点** | UX-POLISH 等 |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
 
@@ -153,6 +156,7 @@ my-agent/
 │   ├── TOOL-RETRY.md           # 参数自修正（已实施）
 │   ├── UX-POLISH.md            # 体验打磨（进行中）
 │   ├── PROJECT-SIDEBAR.md      # Plan Agent + 任务流侧栏
+│   ├── PLAN-ARCH.md            # 计划域架构（角色文件 · 写权限 · 注入）
 │   ├── PROJECT-MODE.md         # 项目模式（三件套 / 计划门）
 │   ├── BUGS.md                 # 运行时缺陷索引
 │   └── …                       # RUNTIME / MEMORY / EVOLVE / STABILIZATION / …

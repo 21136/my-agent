@@ -32,7 +32,7 @@ from project_mode import (
 from router import TopicRoutingError, apply_confirmed_topics, registered_topic_ids
 from session import Session, utc_now_iso
 
-ProjectCommandKind = Literal["list", "new", "open", "switch", "confirm", "status", "verify"]
+ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "confirm", "status", "verify"]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
@@ -144,6 +144,10 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 切换 <id>")
         return ParsedProjectCommand(kind="switch", project_id=tokens[1])
+    if verb in {"新开线", "new-thread", "newthread", "thread"}:
+        if len(tokens) >= 2:
+            return ParsedProjectCommand(kind="new_thread", project_id=tokens[1])
+        return ParsedProjectCommand(kind="new_thread")
     if verb in {"确认", "confirm"}:
         return ParsedProjectCommand(kind="confirm")
     if verb in {"状态", "status"}:
@@ -152,7 +156,7 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="verify")
 
     raise ProjectCommandError(
-        "未知项目命令；可用：列表 | 新建 <id> | 打开 <id> | 切换 <id> | 确认 | 验收 | 状态"
+        "未知项目命令；可用：列表 | 新建 <id> | 打开 <id> | 切换 <id> | 新开线 | 确认 | 验收 | 状态"
         "（口语也可「新项目 <id>」）"
     )
 
@@ -245,7 +249,12 @@ def run_project_command(
     output_fn: OutputFn,
 ) -> ProjectCommandResult:
     """Run one project command."""
-    from project_switch import lookup_project_session, open_project_on_session, switch_to_project
+    from project_switch import (
+        lookup_project_session,
+        open_project_on_session,
+        start_new_project_thread,
+        switch_to_project,
+    )
 
     if command.kind == "list":
         items = list_projects(paths)
@@ -306,6 +315,19 @@ def run_project_command(
         output_fn(message)
         if updated.conversation_id == session.conversation_id:
             return ProjectCommandResult(meta_changed=True)
+        return ProjectCommandResult(meta_changed=True, session=updated)
+
+    if command.kind == "new_thread":
+        try:
+            updated, message = start_new_project_thread(
+                paths,
+                session,
+                project_id=command.project_id,
+            )
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        output_fn(message)
         return ProjectCommandResult(meta_changed=True, session=updated)
 
     if command.kind == "confirm":
