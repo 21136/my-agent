@@ -1,11 +1,12 @@
 # 任务清单（TASKS）
 
-> 版本 0.1.0 · 2026-07-09 · 细分到每个 task，**先文档评审再动手**  
-> **新会话**：先读 [MAP.md](./MAP.md) 了解目录与当前进度。  
-> **当前 Phase**：**Phase 39 Plan 幕后子代理 done**（[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)）；Phase 38 superseded · Phase 37 done · [DOC-04](./TASKS.md)
+> 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
+> **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
+> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 42** M0 done（T-4213/S-421 手工）· WORKBENCH M1/M2 · Phase 43～45 M0 done  
+> Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
-**图例**：`状态` = `todo` | `doc` | `done` | `defer`  
+**图例**：`状态` = `todo` | `doc` | `done` | `defer` | **`superseded`** | **`cancelled`** | **`wontfix`**  
 **依赖**：必须先完成的 task id
 
 ## done 定义（DOC-03 · [STABILIZATION.md](./STABILIZATION.md) §9.2）
@@ -31,6 +32,26 @@
 - [ ] 回归哪些 **S-xx smoke / IT-xx 自动化** ID（既有 ID 或新增 ID）
 
 **缺省 = 评审驳回**。Phase 18 **已解冻**（T-1890-10）；新功能 Phase 按上表准入。
+
+---
+
+## 债务瘦身（DOC-05 · 2026-08-04）
+
+> **落盘**：与 [MAP.md](./MAP.md) §2.2 同步。壳合并（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）+ Phase 39 单入口后，下列条目**不再作为开放技术债**；勿在新 Phase 提案中重复引用。
+
+| ID / 范围 | 原意 | 新状态 | 说明 |
+|-----------|------|--------|------|
+| **T-904h** | Shell `govern` | **cancelled** | 治理在聊天流 + `my-agent review`；无独立壳 |
+| **T-904i6** | constellation IPC 清理 | **cancelled** | 星图方案已否决；残留 CSS/类名属低优清理，非功能债 |
+| **T-901 / T-605 / T-606** | Skill 自动生成 / 加载 / 路由 | **wontfix** | M1 不做 skill（[LAYERS.md](./LAYERS.md)） |
+| **T-902 / T-903 / T-906** | 多 LLM / SQLite·向量 / 自动 venv | **wontfix** | Phase 9 远期；单人场景默认不做 |
+| **T-602** | suspect 与 executor 深集成 | **superseded** | 由 T-602c `failure_streak` + suspect 落盘覆盖 |
+| **Phase 38** 全系 | Plan 双通道 / 自动路由 / 独立气泡 | **superseded** | Phase 39 · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
+| **`ui.route` / 自动切壳** | activity_router → 桌面切壳 | **superseded** | 前端已移除；`pet-route.ts` stub deprecated |
+| **STABILIZATION §3.1** 四壳行 | grow↔daily 隔离 · govern · ui.route | **superseded** | 见 [STABILIZATION.md](./STABILIZATION.md) §3.0 |
+| **T-1830-01～08**（部分） | `ui.route` · refresh · 流式序等 | **superseded** | IT-X 中与四壳绑定的用例作废；其余仍 defer 维护 |
+
+**仍算真债（勿误删）**：Phase 24 **T-2408** S-70～74 · WORKBENCH M1/M2 · 后端 `active_shell` 收敛 · Phase 42 **T-4213/S-421** · Phase 44 **T-4408** S-441 · evolve_log 轮转。
 
 ---
 
@@ -380,14 +401,14 @@ exit 0；含 `[PASS] T-503:`；`loader.py` 含 `[PASS] T-502:`。详见 [MAP.md]
 | T-601 | `ReviewCollector` + `my-agent review` | `agent-core/governance/` | T-110,T-301 | never-used / suspect / soft≥3词；`ReviewReport` v1.0 | done |
 | T-601a | `--format cli\|json\|markdown` + `-o` | `ReviewRenderer` | T-601 | JSON 可被 jq 解析 | done |
 | T-601b | **可选** evolved `governance_review` tool | `evolve/tools/common/` | T-601,T-502 | `run_evolved` 返回同 schema | defer |
-| T-602 | suspect：`feedback_negative` 聚合 + 写 `status` | executor / session | T-203 | 3 次否定 → suspect；tool 拒绝执行；见 RUNTIME §10 | defer |
+| T-602 | suspect：`feedback_negative` 聚合 + 写 `status` | executor / session | T-203 | 3 次否定 → suspect；tool 拒绝执行；见 RUNTIME §10 | superseded |
 | T-602a | M3：`entity_used` + `pending_feedback` | loader / executor | T-305 | L2：仅 `read_file`→`evolve/memories/**`；L3+ 见 GOVERNANCE §3 | done |
 | T-602b | M4：exit 问句 + `feedback_*` | `session.py` / `main.py` | T-602a | `MY_AGENT_FEEDBACK_ON_EXIT=1`；y/n/skip | done |
 | T-602c | `failure_streak` 聚合 + `marked_suspect` | `governance/suspect.py` | T-602b | 与 GOVERNANCE §6 一致 | done |
 | T-603 | `my-agent audit`（LLM 兜底） | `agent-core/governance/audit.py` | T-601 | `llm_findings[]`；不自动改文件 | done |
 | T-604 | Git 回滚习惯写入 README | `README.md` + `governance/git_hints.py` | T-006 | accept / review 后提示 commit | done |
-| T-605 | **可选** 显式加载 SKILL.md | `loader.py` 扩展 | T-502,T-503 | 用户说「用 xxx skill」才注入 | defer |
-| T-606 | **可选** 自动 skill 路由 | `router.py` | T-605 | M4+，非 MVP | defer |
+| T-605 | **可选** 显式加载 SKILL.md | `loader.py` 扩展 | T-502,T-503 | 用户说「用 xxx skill」才注入 | wontfix |
+| T-606 | **可选** 自动 skill 路由 | `router.py` | T-605 | M4+，非 MVP | wontfix |
 
 **T-601 手工验收**（`agent-core/` 下）：
 
@@ -694,8 +715,8 @@ y
 | **T-904i7** | 全窗 `app-frame` + app-chrome busy 染色 | T-904i3 | 顶栏与壳同步 | **done** |
 | **T-904i8** | grow 整壳沉浸 busy（玻璃子层） | T-904i7 | 与 daily 机制对齐 | **done** |
 | **T-904i9** | Electron 隐藏系统菜单栏 | T-904f | Win/Linux 无 File/Help | **done** |
-| T-904i6 | 清理 constellation IPC / 旧文件（可选） | T-904i2 | 减债务 | defer |
-| T-904h | Shell `govern` | — | review 阶段 | defer | defer |
+| T-904i6 | 清理 constellation IPC / 旧文件（可选） | T-904i2 | 减债务 | cancelled |
+| T-904h | Shell `govern` | — | review 阶段 | cancelled |
 
 **2026-07-11 联调修复**（无新 task id）：BUG-001～006，见 [`docs/BUGS.md`](./BUGS.md) — confirm WS 解耦、Vite/Electron 生命周期、流式错误解析、`tool_calls` 历史 repair、`_tool_result_summary`、`TURN_LOCK` 死锁。
 
@@ -722,15 +743,15 @@ python turn_intent.py    # 分类用例无回归
 
 设计全文：[MODE-BUDGET.md](./MODE-BUDGET.md)。
 
-**Phase 9 推迟（与桌面无关）**
+**Phase 9 推迟（与桌面无关 · 2026-08-04 复核）**
 
-| ID | 任务 | 原因 |
-|----|------|------|
-| T-901 | Skill proposal 自动生成 | 等 tool 稳定后再说 |
-| T-902 | 多 LLM adapter | 单人无收益 |
-| T-903 | SQLite / 向量检索 | 文件量级不够 |
-| T-905 | 进程沙箱 | 确认流够用 |
-| T-906 | 自动安装 Python 依赖 | 你手工 venv |
+| ID | 任务 | 状态 | 原因 |
+|----|------|------|------|
+| T-901 | Skill proposal 自动生成 | **wontfix** | M1 不做 skill |
+| T-902 | 多 LLM adapter | **wontfix** | 单人无收益 |
+| T-903 | SQLite / 向量检索 | **wontfix** | 文件量级不够 |
+| T-905 | 进程沙箱 | defer | 确认流够用 |
+| T-906 | 自动安装 Python 依赖 | **wontfix** | 手工 venv 可接受 |
 
 ---
 
@@ -811,7 +832,7 @@ python turn_intent.py    # 分类用例无回归
 |----|------|--------|------|------|
 | T-pet-i3 | 历史附件回放 | `shells/pet/index.ts` · `user-message.ts` | T-1207 | **done** |
 | T-pet-i2 | recall 扩窗 + 高亮 + 状态栏 | `shells/pet/index.ts` | T-905 | **done** |
-| T-pet-i1 | `ui.route` A/B 档 + govern→grow 接引 | `shells/pet/pet-route.ts` · `pet/index.ts` | T-906 | **done** |
+| T-pet-i1 | ~~`ui.route` A/B 档 + govern→grow 接引~~ | `shells/pet/pet-route.ts` · `pet/index.ts` | T-906 | **superseded**（ui.route 已移除；stub 待删） |
 | T-pet-i4 | 展开态拖放（= daily；吸收 T-1208） | `shells/pet/index.ts` | T-1206 | **done** |
 | T-pet-i4b | 收起态拖到光球自动展开 | `shells/pet/` · `electron/main.ts` | T-pet-i4 | defer · M2 |
 | T-pet-i5 | 光球拖拽 + 位置持久化 | `pet-main.ts` · `data/state.json` | M0 | defer · M2 |
@@ -1047,8 +1068,8 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 24 — 进度硬闸门（Progress Gate）
 
-> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.2.0**  
-> 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证；**T-017 后证据门拒勾仍口头「继续」收口**。  
+> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.3.0**  
+> 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证；**T-017 后证据门拒勾仍口头「继续」收口**；**Phase 7 口语标题 unknown 死锁（2026-08-04 · v0.3.0 修复）**。  
 > 产品选择：**无本回合对口工具成功证据不可勾**；人只审规则/身份异常卡；工具失败走找 bug，无强制勾选；**完成通知 Plan = `report_progress` 成功（G8/G9）**。
 
 ### DOC-04 准入（提案自检）
@@ -1060,16 +1081,17 @@ python turn_intent.py    # 分类用例无回归
 |----|------|--------|------|------|------|
 | T-2401 | 设计文档 + MAP/TASKS 挂钩 | `PROGRESS-GATE.md` v0.1.0 · 本表 | — | G0～G7 可勾选；DOC-04 齐全 | **done** |
 | T-2402 | 本回合证据账本（executor） | `executor.py` turn_evidence | T-2401 | 工具 ok/失败可查询；跨 turn 清空 | **done** |
-| T-2403 | 证据类分类纯函数 | `project_mode.py`（或邻接模块）+ IT-70 | T-2401 | 标题→write/compile/test/build_fe/verify_db/unknown | **done** |
+| T-2403 | 证据类分类纯函数 | `progress_gate.py` + IT-70 | T-2401 | 标题→write/compile/test/build_fe/verify_db/unknown | **done** |
 | T-2404 | report_progress 证据门 | `report_progress` + 内核校验 + IT-71 | T-2402,T-2403 | 无对口本回合证据 → 不 toggle | **done** |
 | T-2405 | 一停扩展：禁同 turn 再 report | task-stop + IT-72 | T-2404 | 第二次 report_progress 硬拒 | **done** |
-| T-2406 | 异常卡（规则/身份）无强勾 | Plan/侧栏 notices | T-2404 | 仅规则冲突可人审；失败无强制勾入口 | todo |
-| T-2407 | overlay / project.md 一句对齐 | loader · evolve/prompts | T-2404 | 文案含「无对口证据不可勾」 | todo |
+| T-2406 | 异常卡（规则/身份）无强勾 | Plan/侧栏 `gate_notice` | T-2404 | 仅规则冲突可人审；失败无强制勾入口 | **done** |
+| T-2407 | overlay / project.md 一句对齐 | loader · evolve/prompts | T-2404 | 文案含「无对口证据不可勾」 | **done** |
 | T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | todo |
 | T-2409 | G8/G9 设计落盘 | `PROGRESS-GATE.md` v0.2.0 · SIDEBAR · 本表 | T-2405 | G8/G9 可读；DOC-04 扩 S-75 | **done** |
 | T-2410 | G9 提示词 / 可选 kernel 注记 | `project.md` · overlay ·（可选）拒勾后 notice | T-2409 | 拒勾后禁止「本项已完成·继续」收口 | **done**（prompt）；kernel 注记 pending |
+| T-2411 | 口语 write 信号 + `[evidence:…]` 标签 | `progress_gate.py` · IT-70 · `PROGRESS-GATE.md` v0.3.0 | T-2403 | Phase 7 口语标题归 write；标签覆盖启发式；联调测试行仍归 test | **done** |
 
-**完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒。
+**完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒；口语写码标题不再永久 `unknown`。
 
 ---
 
@@ -1198,7 +1220,11 @@ python turn_intent.py    # 分类用例无回归
 | T-3101 | Phase 31 D1：background 升格 | `run_command` → `run_service` · IT-130 | T-2901 | dry_run 预览；escalate+stop；永远确认 | **done** |
 | T-3201 | Phase 32 E：git_branch + git_push | coding tools · IT-140/141 | T-2901 | list 免确认；create/switch/push 确认；禁 force | **done** |
 | T-3301 | Phase 33 F1：browser_open | common tool · IT-150 | T-2901 | loopback 免确认；外网确认；禁非 http(s) | **done** |
-| T-34xx | Phase 34：Track G 工作台 | WORKBENCH-UI | T-2901 + Q1～Q3 | 另开细表 | **M0 done** |
+| T-34xx | Phase 34：Track G 工作台 | [WORKBENCH-UI.md](./WORKBENCH-UI.md) | T-2901 + Q1～Q4 | M0 done；M1 见下 | **M0 done** |
+| T-3410 | 空态「先聊聊」按钮 `#empty-free-chat` | `desktop/src/shells/unified/` | WORKBENCH-UI Q4 | 无项目可见；`新会话` | **done** |
+| T-3411 | grow 无绑会话解锁 composer | `updateWorkbenchEmpty` · `allowSend` | T-3410 | IT-341 | **done** |
+| T-3412 | 无项目时隐藏顶栏「+ 对话」 | `topbar.ts` | T-3410 | 不与空态抢入口 | **done** |
+| T-3413 | 冒烟 S-341 | 手工 / 可选 E2E | T-3411～3412 | WORKBENCH-UI §4 五条 | todo |
 | T-3500 | Phase 35：执行可靠性设计 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · G14 | — | D0 签字 | **done** |
 | T-3501 | M0：后置条件成功声明门 + 熔断 | agent / executor · IT-160/161 | T-3500 | 假「已启动」改写；同指纹×3 熔断 | **done** |
 | T-3502 | M1：失败分型 + 剧本 nudge | exec_reliability · IT-162 | T-3501 | A–F 日志；P-npm/P-sql/P-port | **done** |
@@ -1265,10 +1291,10 @@ python turn_intent.py    # 分类用例无回归
 
 ---
 
-## Phase 38 — Plan 主输入双通道 + 自动路由
+## Phase 38 — Plan 主输入双通道 + 自动路由（**superseded · Phase 39**）
 
 > 设计：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.11 / §15.11.1** · [PLAN-ARCH.md](./PLAN-ARCH.md) **v0.5.1 A10/A11/A12**  
-> **状态：T-3800～T-3805 done（含自动路由 M4）**  
+> **状态：T-3800～T-3805 曾 done；整 Phase 由 Phase 39 废止**（勿再排期或回归双通道）  
 > 触发：Plan 长文挤侧栏；要主区切换；怕 Plan 灌主聊天乱改计划；**后补**：单一输入 + 自动识别改计划交 Plan。  
 > 产品选择：主输入 **自动路由** Plan（可 Alt 强制主 Agent）；Plan 独立气泡；侧栏只留决策面；Plan 线与主线隔离、进项目清空；查跑同权、计划域四件套须门。  
 > **修订** Phase 22 **V1/V7**；§15.11 **C1/C8**。
@@ -1320,6 +1346,221 @@ python turn_intent.py    # 分类用例无回归
 **完成标志（M0）**：PLAN-SUBAGENT + §15.12 可读；Phase 38 标 superseded。  
 **完成标志（M1～M4）**：单聊 + `plan_partner` + 采纳卡 + 写拒。  
 **完成标志（M6）**：huiyi「补文档/规划」不再走主 Agent 直写 MAP。
+
+---
+
+## Phase 40 — 采纳控件对齐（Affordance）
+
+> 设计：[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) **§10 v0.2.0** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.13** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) **v0.1.1** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)  
+> **状态：M0 文档 done · P0/P1 done · P2 defer**  
+> 触发：huiyi 截图——主聊「点采纳」，侧栏「已写入…+diff」无按钮。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| unified 侧栏 banner / 短卡 | 待采纳 vs 已写入视觉与按钮 | P0 |
+| unified 过程卡 / 主列审阅 | CTA 文案；可选自动打开 | P1/P2 |
+| `plan_agent` partner_notices | 采纳后一行、无 diff | P0 |
+| `evolve/prompts/project.md` · PLAN-SUBAGENT §3.3 | 禁口述按钮名 | P1 |
+| WS 协议 / plan_partner 工具契约 | **不改**（无新消息类型） | — |
+
+- [x] 回归 / 新增：**S-AFF-01/02/03** · **IT-AFF-01**；回归 S-PRU-01/02 · S-201 · S-183/184
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4000 | 设计文档 + MAP/TASKS/SIDEBAR §15.13 + BUG-022 | PLAN-REVIEW-UI §10 · 本表 | 用户截图反馈 | A1～A6 可读；DOC-04 齐 | **done** |
+| T-4001 | P0：已写入 notice 去 diff + 待采纳短卡必露「查看」 | `plan_agent.py` · `project-panel.ts` | T-4000 | S-AFF-01/02 · IT-AFF-01 | **done** |
+| T-4002 | P1：提示词 + 过程卡 CTA 文案 | `evolve/prompts/project.md` · chat-state / index | T-4000 | S-AFF-01/03；主聊无「点采纳」口播 | **done** |
+| T-4003 | 测试：IT-AFF-01 + 前端/手工清单 | `test_plan_*` 或新测 | T-4001 | IT-AFF-01 绿；S-AFF 可勾 | **done** |
+| T-4004 | P2（可选）：自动打开审阅偏好 | `index.ts` · 偏好存储 | T-4001 | 默认关；开则提案到达进 plan_review | defer |
+
+**完成标志（M0）**：§10 / §15.13 / BUG-022 / 本表可读。  
+**完成标志（P0+P1）**：截图类死胡同不再复现；S-AFF-01～03 · IT-AFF-01。
+
+---
+
+## Phase 41 — Agent Harness 对齐
+
+> 设计：[AGENT-HARNESS.md](./AGENT-HARNESS.md) v0.1.0  
+> **状态：M0 文档 done · P1+P2+P4+P5 done · P3 → Phase 42 J**  
+> 触发：同一 API 下失败次数远多于 Cursor；用户要求文档先行、**从低优先级改起**。
+
+### DOC-04 准入（提案自检）
+
+- [x] 影响矩阵行：
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| LLM tools 列表 | +3 proxy（`run_command` · `write_text` · `patch_file`） | P1 |
+| executor 路由 | proxy → `run_evolved` | P1 |
+| agent segment max | project shell 15 | P2 |
+| messages.jsonl / tool 回灌 | 失败截断 | P4 |
+| execute segment 止损 | 段内失败预算 | P5 |
+| confirm / 熔断 | 不变（P1 透传） | — |
+
+- [x] 回归 / 新增：**IT-410** · **IT-411** · **IT-412** · **IT-413** · **S-410**
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4100 | 设计文档 + MAP/TASKS | `AGENT-HARNESS.md` · 本表 | 用户讨论 | P1～P5 可读；DOC-04 齐 | **done** |
+| T-4101 | P1：扁平原语 proxy | `tool_proxies.py` · agent · executor · INDEX/loader | T-4100 | IT-410a/b/c | **done** |
+| T-4102 | P2：project segment max 15 | `agent.parent_execute_segment_max` · AGENT-HARNESS §4 | T-4100 | IT-411；**不改** catalog/core | **done** |
+| T-4103 | P3：规划/执行模型分拆 | → **Phase 42 J** · [LLM-ROUTING.md](./LLM-ROUTING.md) · T-4201～4203 | T-4100 | T-4202 | **→42-J** |
+| T-4104 | P4：失败 tool 结果截断 | `maybe_spill` 扩失败 · agent 写 tool 前 | T-4100 | IT-412 · S-410；**不改** catalog | **done** |
+| T-4105 | P5：段内失败预算 + guard notice 收口 | `exec_reliability` · agent · `server` | T-4100 | IT-413；内核注入非 core.txt | **done** |
+
+**完成标志（P1）**：IT-410 绿；LLM 可直接调 `run_command` 无 `tool_name` 嵌套。
+
+---
+
+## Phase 42 — Cursor 差距收口（H / I / J）
+
+> 设计：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) v0.1.0 · [LLM-ROUTING.md](./LLM-ROUTING.md) v0.1.0  
+> **状态：doc done · 实现待签「开始吧」**  
+> 触发：写码确认摩擦 · 大仓找文件 · Harness P3 模型路由（**不新增 `*_exec`**）。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 CURSOR-GAP-NEXT §5）：
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| confirm 管线（写路径） | Track H · `write_policy.py` | P1 |
+| builtin / agent tools | Track I · 第 7 builtin `glob_file_search` | P1 |
+| LLM 调用 / session meta | Track J · `llm_routing.py` | P1 |
+| system overlay / core / INDEX | Track I **必改** · Track H **脚注** · Track J **不动** | P1（I）/ P2（H） |
+| Progress Gate / WRITE-SCOPE | H 不绕过；I 只读 | P0 回归 |
+
+- [x] 回归预留：**IT-421～424** · **IT-430～432** · **IT-440～441** · **S-421** · **S-430** · **S-440**
+
+**推荐实现顺序**：**H → J → I(M0)**。
+
+### Track J — 模型路由
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4201 | J 轨文档 + MAP/TASKS 挂钩 | `LLM-ROUTING.md` · 本表 | 用户选题 | DOC-04 可读 | **doc** |
+| T-4202 | M0：`llm_routing.py` + agent/plan 接线 | `resolve_model_for(role)` | T-4201 | IT-440/441 | **done** |
+| T-4203 | M1：桌面双模型设置（可选） | meta `execution_model` / `planning_model` | T-4202 | S-440 | defer |
+
+> T-4103（AGENT-HARNESS P3）**迁入本轨**；真源 = [LLM-ROUTING.md](./LLM-ROUTING.md)。
+
+### Track H — 写操作分层确认
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4210 | H 轨文档 + CONFIRM-PIPELINE 指针 | CURSOR-GAP-NEXT §2 | 用户选题 | 可读 | **doc** |
+| T-4211 | `write_policy.py` + 单测 | 纯函数 + IT-421～424 | T-4210 | IT-421～424 | **done** |
+| T-4212 | executor + confirm 预览 reason | 对齐 `run_command_policy` | T-4211 | IT-424 | **done** |
+| T-4213 | 手工验收 | S-421 | T-4212 | 3 patch 无连点 | todo |
+| T-4214 | M1：project 内新建文件免确认（可选） | H-Q1 签字后 | T-4213 | — | defer |
+| T-4215 | H 轨提示词（INDEX 脚注；**core 不动**） | CURSOR-GAP-NEXT §2.11 | T-4212 | grep 无长段免确认教程 | **done** |
+
+### Track I — 代码发现（Glob → 语义）
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4220 | I 轨文档 + TOOLS §7 草约 | CURSOR-GAP-NEXT §3 | 用户选题 | 可读 | **doc** |
+| T-4221 | M0：`glob_file_search` builtin | `builtin/glob_file_search.py` | T-4220 | IT-430/431 | **done** |
+| T-4222 | agent 第 7 builtin + loader | `build_llm_tools` | T-4221 | IT-430 | **done** |
+| T-4223 | INDEX + loader hints + 可选 `discover.md` | TOOL-CATALOG | T-4222 | E 层可读 | **done** |
+| T-4224 | M1：尊重 `.gitignore` | 与 rg 对齐 | T-4221 | IT-432 | **done** |
+| T-4225 | M2：语义搜设计签字 | `CODEBASE-SEARCH.md`（待建） | 用户重开 | — | defer |
+| T-4226 | I 轨 `core.txt`（边界表 · discipline · ask · 7 builtins） | §3.7 | T-4222 | grep 含 `glob_file_search` | **done** |
+
+**完成标志（M0）**：H + J + I(M0) 绿；S-421 / S-440 / S-430 可选手工。
+
+---
+
+## Phase 43 — 项目配方脚手架（PROJECT-RECIPES）
+
+> 设计：[PROJECT-RECIPES.md](./PROJECT-RECIPES.md) v0.1.0  
+> **状态：doc done · 实现待签「开始吧」**  
+> 触发：从零建项目无配方；`scaffold_demo` 仅为 write_evolve 演示名。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 PROJECT-RECIPES §11）：
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| evolved / registry | `scaffold_project` | P1 |
+| `create_project` / WS | 可选 `template` | P1 |
+| confirm / write_policy | 整次脚手架 confirm；模板批量写 | P0 回归 |
+| Progress Gate | 末步 evidence 元数据 | P1 |
+| `project_env` | `write_env_md` 步骤 | P2 |
+
+- [x] 回归预留：**IT-431～435** · **S-431**
+
+**推荐顺序**：**43 M0（spring-vue）→ 44 M0 → 43 M1/M2**。
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4300 | 设计文档 + MAP/TASKS | `PROJECT-RECIPES.md` · 本表 | 用户盘点 | DOC-04 可读 | **doc** |
+| T-4301 | `evolve/scaffolds/` 布局 + manifest 解析 | README + `scaffold_recipes.py` | T-4300 | IT-433 | **done** |
+| T-4302 | `scaffold_project` evolved 工具 | `evolve/tools/project/scaffold_project/` | T-4301 | IT-431/432/434 | **done** |
+| T-4303 | **spring-vue** 配方 + 模板 | `evolve/scaffolds/spring-vue/` | T-4302 | IT-432 · S-431 | **done** |
+| T-4304 | `create_project` + `template` 挂钩 | `project_mode` · `context_switch` | T-4303 | IT-435 | **done** |
+| T-4305 | **fastapi-vue** 配方 | `evolve/scaffolds/fastapi-vue/` | T-4304 | S-431 | **done** |
+| T-4306 | `phase: deploy` 模板（spring-vue） | `deploy/*.tpl` | T-4303 | S-431 | **done** |
+
+---
+
+## Phase 44 — 项目结构化验证（PROJECT-VERIFY）
+
+> 设计：[PROJECT-VERIFY.md](./PROJECT-VERIFY.md) v0.1.0  
+> **状态：M0+M1 done**（T-4400～4407 · T-4408 S-441 todo）  
+> 触发：`run_tests` 非用户项目；测试失败缺 file:line 结构；不做黑盒 auto-patch。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 PROJECT-VERIFY §10）：
+
+| 面 | 影响 | 档位 |
+|----|------|------|
+| evolved | `run_project_tests` | P1 |
+| `progress_gate.py` | `_TEST_EVIDENCE_TOOLS` | P0 |
+| agent failure spill | 结构化 failures | P1 |
+| exec_reliability | 新熔断指纹 | P1 回归 |
+| INDEX / project bucket | 与 `run_tests` 区分 | P1 |
+
+- [x] 回归预留：**IT-441～445** · **S-441**
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4400 | 设计文档 + MAP/TASKS | `PROJECT-VERIFY.md` · 本表 | 用户盘点 | DOC-04 可读 | **doc** |
+| T-4401 | `run_project_tests` + pytest 解析 | `project_verify.py` + evolved | T-4400 | IT-441/445 | **done** |
+| T-4402 | mvn surefire 解析 | `project_verify.py` | T-4401 | IT-442 | **done** |
+| T-4403 | Progress Gate 对口 | `progress_gate.py` | T-4401 | IT-443/444 | **done** |
+| T-4404 | failure spill 结构化 | `project_verify.py` · `run_evolved` · `executor` | T-4401 | IT-441 | **done** |
+| T-4405 | INDEX + `project.md` 区分文案 | TOOL-CATALOG | T-4401 | grep 无混用 | **done** |
+| T-4406 | jest/vitest 解析 | parser | T-4402 | IT-441 | **done** |
+| T-4407 | checker `project_test_fail` | `subagent.py` · `main.py` | T-4404 | IT-441 · `test_project_quality` | **done** |
+| T-4408 | 手工验收 | S-441 | T-4403,T-4404 | 失败→patch→重测→勾选 | todo |
+
+---
+
+## Phase 45 — 项目质量与数据面（PROJECT-QUALITY）
+
+> 设计：[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) v0.1.0  
+> **状态：M0 done**（T-4500～4503 · S-451 手工 todo）  
+> 触发：迁移状态 / lint 聚合 / 部署走配方 deploy。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 PROJECT-QUALITY §6）
+
+- [x] 回归预留：**IT-451～452** · **S-451**
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4500 | 设计文档 + MAP/TASKS | `PROJECT-QUALITY.md` · 本表 | 用户盘点 | DOC-04 可读 | **doc** |
+| T-4501 | ENV.md `quality.commands`（E11） | PROJECT-MODE §0f · `project_env.py` | T-4500 | 文档 + 刷新保留 | **done** |
+| T-4502 | `db_migrate_status` | evolved 工具 | T-4500 · 43 M0 | IT-451 | **done** |
+| T-4503 | `run_quality` + ruff/eslint | evolved 工具 | T-4501 | IT-452 | **done** |
 
 ---
 

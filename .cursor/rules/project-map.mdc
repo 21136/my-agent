@@ -7,18 +7,25 @@ alwaysApply: true
 
 **新会话先读** [`docs/MAP.md`](../../docs/MAP.md)（含 **§2.1**）与 [`docs/TASKS.md`](../../docs/TASKS.md)。稳定化：[STABILIZATION.md](../../docs/STABILIZATION.md) **v1.1.0 · 已解冻**。
 
-## 当前代码状态（2026-08-03）
+## 当前代码状态（2026-08-04）
 
 - **Phase 1～21**：基线 **done**（18 解冻；19 换线门；20 一停门；21 进度闭环 / BUG-021）。
 - **Phase 22**：**done** — 可见计划搭档（侧栏建议卡 · 低风险 auto_fix · 禁主聊旁白）；[PROJECT-SIDEBAR.md](../../docs/PROJECT-SIDEBAR.md) §15.10 · [TASKS.md](../../docs/TASKS.md) T-2201～T-2207。
 - **Phase 23**：**done** — 工具目录 INDEX（取消主题硬锁 · 每轮只注入短目录 · Mp/Mq/Mr）；[TOOL-CATALOG.md](../../docs/TOOL-CATALOG.md) · T-2301～T-2361。
 - **Phase 38**：**superseded** — 双通道已由 Phase 39 废止。
 - **Phase 39**：**done** — Plan **幕后子代理**（单入口 · `plan_partner`）；[PLAN-SUBAGENT.md](../../docs/PLAN-SUBAGENT.md) · T-3900～T-3906。
+- **Phase 40**：**P0/P1 done** — 采纳控件对齐；[PLAN-REVIEW-UI.md](../../docs/PLAN-REVIEW-UI.md) §10 · T-4000～T-4003。
+- **Phase 41**：**P1+P2+P4+P5 done** — 扁平原语 · 项目 segment 15 · 失败 spill · 段内失败预算；[AGENT-HARNESS.md](../../docs/AGENT-HARNESS.md)；P3 → Phase 42 J。
+- **Phase 42**：**M0 done** — write_policy · glob_file_search · llm_routing；[CURSOR-GAP-NEXT.md](../../docs/CURSOR-GAP-NEXT.md) · T-4202 · T-4211～4215 · T-4221～4226（T-4213/S-421 手工 todo）。
+- **Phase 43**：**M0+M1 done** — 项目配方脚手架（spring-vue · fastapi-vue · deploy）；[PROJECT-RECIPES.md](../../docs/PROJECT-RECIPES.md) · T-4300～4306。
+- **Phase 44**：**M0+M1 done** — 结构化项目测试 + failure spill + checker；[PROJECT-VERIFY.md](../../docs/PROJECT-VERIFY.md) · T-4400～4407（T-4408 S-441 todo）。
+- **Phase 45**：**M0 done** — `db_migrate_status` · `run_quality` · ENV E11；[PROJECT-QUALITY.md](../../docs/PROJECT-QUALITY.md) · T-4500～4503。
 - **壳合并**：**done（前端）** — 唯一聊天壳 `desktop/src/shells/unified/`（perspective: `default` | `project` | `night`）；`pet` 独立窗；旧 `grow`/`daily`/`project`/`govern` 目录已删。设计见 [SHELL-CONSOLIDATION.md](../../docs/SHELL-CONSOLIDATION.md)。后端仍用 `active_shell` / `shell_sessions` 作**会话线标签**（非 DOM 切壳）。
 - **WRITE-SCOPE**：**done** — `resolve_under_agent_for_write` + deny-list；evolved 写路径默认 agent root。[WRITE-SCOPE.md](../../docs/WRITE-SCOPE.md)。
 - **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
-- **UX-POLISH**：**进行中** — UX-001～020 多数完成；第五～七轮见 [UX-POLISH.md](../../docs/UX-POLISH.md)。
-- **Plan Agent / 侧栏**：**Phase 39 done** — 幕后子代理 `plan_partner` + 过程卡；废止 Phase 38 双通道。
+- **UX-POLISH**：**进行中** — UX-001～023；第八轮 UX-021 done · 第九轮 UX-022 done · 第十轮 UX-023（工具行折叠）done。
+- **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
+- **下一焦点**：Phase 24 **T-2408** · **WORKBENCH M1（Q4 先聊聊 · T-3410～3413）** · Phase 42 **T-4213** S-421 · Phase 44 **T-4408** S-441（见 MAP §2.2 废止债）。
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。
@@ -28,8 +35,10 @@ alwaysApply: true
 - 拖放：[FILES-DROP.md](../../docs/FILES-DROP.md)（挂载点 = unified / pet）。
 - Host 托管区：[HOST-SCOPE.md](../../docs/HOST-SCOPE.md)。
 - `tool.toml` 字段：`allow_approve_all`（旧名 `workspace_only` 仍可读）；session `a` = 本会话 agent root 均允许。
-- **项目 ENV.md**（E1–E6 done）：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md) §0c；**E7–E10 构建硬约束 done**（§0d）。
+- **项目 ENV.md**（E1–E6 done）：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md) §0c；**E7–E11 done**（§0d 构建约束 · §0c E11 质量命令）。
 - **Phase 21 项目进度闭环**：**done** — [PROJECT-MODE.md](../../docs/PROJECT-MODE.md) §0e · [BUG-021](../../docs/bugs/2026-07-30-project-progress-deadlock.md) fixed。
+- **Phase 24 进度硬闸门**：**M0 核心 done · M1 收尾** — [PROGRESS-GATE.md](../../docs/PROGRESS-GATE.md) v0.3.0（T-2406～2408 todo；口语 write + `[evidence:…]` 已落地）。
+- **废止债**：四壳 / govern / Skill / ui.route 等勿再排期 — [MAP.md](../../docs/MAP.md) §2.2 · [TASKS.md](../../docs/TASKS.md) DOC-05。
 
 ## 导入约定
 

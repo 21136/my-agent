@@ -1,0 +1,36 @@
+[tool]
+name = "run_quality"
+description = "按项目 ENV.md quality.commands 顺序跑 lint/类型检查，解析 ruff/eslint violations。须在 ENV.md 手写配置（E11）。"
+version = "1.0.0"
+status = "active"
+topics = ["project", "coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+[schema.input.properties.working_dir]
+type = "string"
+description = "项目根目录（默认 agent 根）；用于定位 ENV.md"
+[schema.input.properties.only]
+type = "array"
+items = { type = "string" }
+description = "只跑指定 quality.commands id 子集"
+[schema.input.properties.fail_fast]
+type = "boolean"
+description = "首条失败即停（默认 true）"
+[schema.input.properties.dry_run]
+type = "boolean"
+[schema.input.properties.timeout_sec]
+type = "integer"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 600

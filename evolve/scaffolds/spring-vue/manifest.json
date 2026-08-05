@@ -1,0 +1,64 @@
+{
+  "id": "spring-vue",
+  "version": "1.0.0",
+  "description": "Spring Boot + Vue 3 monorepo skeleton (Maven backend + Vite frontend)",
+  "variables": {
+    "project_name": {
+      "required": true,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "package_manager": {
+      "default": "npm",
+      "enum": ["npm", "pnpm", "yarn"]
+    }
+  },
+  "phases": {
+    "init": {
+      "steps": [
+        {
+          "id": "layout",
+          "kind": "template_tree",
+          "source": "templates",
+          "target": "."
+        },
+        {
+          "id": "env",
+          "kind": "write_env_md"
+        },
+        {
+          "id": "npm_install",
+          "kind": "npm_exec",
+          "args": ["install"],
+          "working_dir": "frontend",
+          "optional": true
+        },
+        {
+          "id": "verify_compile",
+          "kind": "mvn_exec",
+          "goals": ["-q", "-DskipTests", "compile"],
+          "working_dir": "backend",
+          "evidence": "compile",
+          "optional": true
+        },
+        {
+          "id": "verify_frontend_build",
+          "kind": "npm_exec",
+          "args": ["run", "build"],
+          "working_dir": "frontend",
+          "evidence": "build_fe",
+          "optional": true
+        }
+      ]
+    },
+    "deploy": {
+      "steps": [
+        {
+          "id": "deploy_files",
+          "kind": "template_tree",
+          "source": "deploy",
+          "target": "."
+        }
+      ]
+    }
+  }
+}

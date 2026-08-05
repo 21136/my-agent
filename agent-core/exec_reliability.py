@@ -42,6 +42,12 @@ EXEC_CIRCUIT_NUDGE_MESSAGE = (
     "[内核] 同类失败已熔断：请换策略或停下来说明根因，勿重复同一命令。"
 )
 
+EXEC_SEGMENT_FAILURE_NUDGE_MESSAGE = (
+    "[内核] 本段已多次失败：请停下说明根因或换策略，勿继续盲试。"
+)
+
+_DEFAULT_SEGMENT_FAILURE_BUDGET = 3
+
 _CALL_FP_KEYS: tuple[str, ...] = (
     "command",
     "cmd",
@@ -147,6 +153,37 @@ def circuit_threshold() -> int:
     except ValueError:
         value = _DEFAULT_CIRCUIT_THRESHOLD
     return max(2, value)
+
+
+def segment_failure_budget() -> int:
+    """Max countable failures per execute segment (AGENT-HARNESS P5)."""
+    raw = os.environ.get(
+        "MY_AGENT_SEGMENT_FAILURE_BUDGET",
+        str(_DEFAULT_SEGMENT_FAILURE_BUDGET),
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_SEGMENT_FAILURE_BUDGET
+
+
+def record_segment_failure(session: Any) -> bool:
+    """Bump segment-wide failure count. Return True if budget just reached."""
+    count = int(getattr(session, "segment_failure_count", 0) or 0) + 1
+    session.segment_failure_count = count
+    if count >= segment_failure_budget() and not getattr(
+        session, "segment_failure_budget_hit", False
+    ):
+        session.segment_failure_budget_hit = True
+        session.segment_failure_budget_just_hit = True
+        return True
+    return False
+
+
+def clear_segment_failure_budget(session: Any) -> None:
+    session.segment_failure_count = 0
+    session.segment_failure_budget_hit = False
+    session.segment_failure_budget_just_hit = False
 
 
 def claims_service_success(text: str) -> bool:
@@ -470,6 +507,7 @@ def clear_circuit_state(session: Any) -> None:
     else:
         session.playbook_nudged = set()
     session.pending_playbook_id = ""
+    clear_segment_failure_budget(session)
     # Keep last_* for sidebar until begin_turn; clear segment-local soft flags only if present.
     # service_postcondition / claim_blocked / last_* reset in begin_turn.
 

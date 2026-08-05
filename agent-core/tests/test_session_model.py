@@ -57,9 +57,9 @@ class SessionModelPickerTests(unittest.TestCase):
         session.set_llm_model("deepseek-v4-pro")
         banner = session_banner_event(session)
         self.assertEqual(banner["llm_model"], DEFAULT_MODEL_CODING)
-        self.assertEqual(banner["llm_model_label"], "Pro")
+        self.assertEqual(banner["llm_model_label"], "DeepSeek Pro")
         self.assertTrue(banner["llm_model_override"])
-        self.assertEqual(llm_model_label(DEFAULT_MODEL), "Flash")
+        self.assertEqual(llm_model_label(DEFAULT_MODEL), "DeepSeek Flash")
 
 
 if __name__ == "__main__":

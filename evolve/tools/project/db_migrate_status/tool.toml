@@ -1,0 +1,33 @@
+[tool]
+name = "db_migrate_status"
+description = "只读检查项目迁移状态（alembic current/heads 或 prisma migrate status）。写迁移仍用 run_command + confirm。"
+version = "1.0.0"
+status = "active"
+topics = ["project", "coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["working_dir"]
+[schema.input.properties.working_dir]
+type = "string"
+description = "项目目录，相对 agent 根"
+[schema.input.properties.backend]
+type = "string"
+description = "auto | alembic | prisma（默认 auto）"
+[schema.input.properties.dry_run]
+type = "boolean"
+[schema.input.properties.timeout_sec]
+type = "integer"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 180

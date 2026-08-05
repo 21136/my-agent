@@ -24,8 +24,10 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths
 from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
+from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
     fetch_url,
+    glob_file_search,
     grep,
     list_dir,
     plan_partner,
@@ -49,6 +51,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "read_file": read_file.run,
     "list_dir": list_dir.run,
     "grep": grep.run,
+    "glob_file_search": glob_file_search.run,
     "web_search": web_search.run,
     "fetch_url": fetch_url.run,
     "run_evolved": run_evolved.run,
@@ -105,12 +108,17 @@ class ExecutorSession:
     circuit_just_opened: str = ""
     playbook_nudged: set[str] = field(default_factory=set)
     pending_playbook_id: str = ""
+    # AGENT-HARNESS P5 — segment-wide failure budget (fingerprint-agnostic)
+    segment_failure_count: int = 0
+    segment_failure_budget_hit: bool = False
+    segment_failure_budget_just_hit: bool = False
     # G14 M2 — sidebar reliability snapshot
     last_playbook_id: str = ""
     last_failure_class: str = ""
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
     plan_partner_calls: int = 0
+    progress_gate_notice: str = ""
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -439,11 +447,8 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
         fp = fields.get("fingerprint", "")
         return f"[guard] 同类失败×{fields.get('count', '?')} 已熔断（{fp}）"
     if guard_type == "exec_failure_class":
-        cls = fields.get("failure_class", "?")
-        pb = fields.get("playbook_id")
-        if pb:
-            return f"[guard] 失败分型 {cls} · 剧本 {pb}"
-        return f"[guard] 失败分型 {cls}"
+        # AGENT-HARNESS P5: still logged + sidebar failure_class; no chat spam.
+        return None
     if guard_type == "exec_playbook":
         return f"[guard] 剧本建议 · {fields.get('playbook_id', '?')}"
     message = fields.get("message")
@@ -706,13 +711,20 @@ def _validate_project_repl_build_bypass(
     )
 
 
+def _is_progress_gate_validation_error(result: ToolResult) -> bool:
+    if not result.error or not isinstance(result.error.details, dict):
+        return False
+    guard = str(result.error.details.get("guard_type") or "")
+    return guard in {"progress_gate_evidence", "progress_gate_repeat"}
+
+
 def _validate_task_stop_write(
     session: ExecutorSession,
     tool_name: str,
     arguments: dict[str, Any],
 ) -> ToolResult | None:
     """Phase 20 M1 + Phase 24 G5: after [x], block next-task writes and re-report."""
-    from progress_gate import report_progress_repeat_block_reason
+    from progress_gate import build_progress_gate_notice, report_progress_repeat_block_reason
     from project_mode import task_stop_block_reason
 
     repeat = report_progress_repeat_block_reason(
@@ -722,6 +734,12 @@ def _validate_task_stop_write(
         arguments=arguments,
     )
     if repeat is not None:
+        session.progress_gate_notice = build_progress_gate_notice(
+            armed_task_id=session.armed_task_id or "",
+            armed_task_text=session.armed_task_text or "",
+            reason=repeat,
+            turn_evidence=list(session.turn_evidence or []),
+        )
         return tool_fail(
             tool_name,
             ToolErrorCode.VALIDATION_ERROR,
@@ -764,7 +782,7 @@ def _validate_progress_gate_evidence(
     evolved = arguments.get("tool_name")
     if not isinstance(evolved, str) or evolved.strip() != "report_progress":
         return None
-    from progress_gate import report_progress_evidence_block_reason
+    from progress_gate import build_progress_gate_notice, report_progress_evidence_block_reason
 
     reason = report_progress_evidence_block_reason(
         active_shell=session.active_shell,
@@ -773,6 +791,12 @@ def _validate_progress_gate_evidence(
     )
     if reason is None:
         return None
+    session.progress_gate_notice = build_progress_gate_notice(
+        armed_task_id=session.armed_task_id or "",
+        armed_task_text=session.armed_task_text or "",
+        reason=reason,
+        turn_evidence=list(session.turn_evidence or []),
+    )
     return tool_fail(
         tool_name,
         ToolErrorCode.VALIDATION_ERROR,
@@ -909,6 +933,7 @@ class ToolExecutor:
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
         self.session.plan_partner_calls = 0
+        self.session.progress_gate_notice = ""
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
@@ -955,12 +980,14 @@ class ToolExecutor:
                 text = text[:61] + "…"
             short_fps.append(text)
 
+        gate_notice = (self.session.progress_gate_notice or "").strip() or None
         self._emit_event(
             "turn.evidence",
             {
                 "armed_task_id": (self.session.armed_task_id or "").strip() or None,
                 "armed_task_text": (self.session.armed_task_text or "").strip() or None,
                 "items": items,
+                "gate_notice": gate_notice,
                 "reliability": {
                     "postcondition": postcondition,
                     "circuit_open": short_fps,
@@ -1131,6 +1158,7 @@ class ToolExecutor:
         started = time.perf_counter()
         name = tool_name.strip()
         args = dict(arguments or {})
+        name, args = rewrite_proxy_tool_call(name, args)
 
         if self.cancel_event is not None and self.cancel_event.is_set():
             canceled = tool_fail(
@@ -1147,6 +1175,8 @@ class ToolExecutor:
         error = self.validate(name, args)
         if error is not None:
             self._maybe_log_validation_guard(error)
+            if _is_progress_gate_validation_error(error):
+                self._emit_turn_evidence()
             self._log_tool_call(name, args, error, confirm=confirm_decision, started=started)
             return error
 
@@ -1240,6 +1270,7 @@ class ToolExecutor:
             queue_playbook_nudge,
             record_circuit_failure,
             record_circuit_success,
+            record_segment_failure,
         )
 
         insight = classify_failure(result)
@@ -1276,6 +1307,7 @@ class ToolExecutor:
             if result.ok and insight.failure_class == "A":
                 record_circuit_success(self.session)
             return
+        record_segment_failure(self.session)
         opened = record_circuit_failure(self.session, fp)
         if opened:
             self._record_guard_event(
@@ -1344,6 +1376,11 @@ class ToolExecutor:
                 project_id=(
                     str(arguments["project_id"])
                     if isinstance(arguments.get("project_id"), str)
+                    else None
+                ),
+                template=(
+                    str(arguments["template"])
+                    if isinstance(arguments.get("template"), str)
                     else None
                 ),
             )
@@ -2132,6 +2169,22 @@ class ToolExecutor:
             if not needs:
                 return False
             return True
+        # write_text / patch_file (Phase 42 H): layered confirm in project shell.
+        if evolved is not None and evolved.name in {"write_text", "patch_file"}:
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")) or bool(arguments.get("dry_run")):
+                return False
+            needs, _reason = resolve_write_confirm(
+                evolved_name=evolved.name,
+                arguments=arguments,
+                session=self.session,
+                agent_paths=self.registry.agent_paths,
+            )
+            if not needs:
+                return False
+            return True
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:
@@ -2159,7 +2212,14 @@ class ToolExecutor:
         arguments: dict[str, Any],
         evolved: EvolvedTool | None,
     ) -> str:
-        preview = build_confirm_preview(tool_name, arguments, evolved=evolved)
+        preview = build_confirm_preview(
+            tool_name,
+            arguments,
+            evolved=evolved,
+            project_root=self.session.project_root or "",
+            active_shell=self.session.active_shell or "",
+            agent_paths=self.registry.agent_paths,
+        )
         allow_approve_all = (
             evolved is not None
             and evolved.policy.allow_approve_all
@@ -2312,31 +2372,106 @@ def maybe_spill_result(
     session_dir: Path | None,
     agent_paths: AgentPaths,
 ) -> ToolResult:
-    """When serialized ``data`` exceeds spill threshold, write full text and return preview."""
-    if not result.ok or result.data is None:
+    """When serialized payload exceeds spill threshold, write full text and return preview.
+
+    Success: spill oversized ``data`` (TOOLS.md §6.4).
+    Failure: spill entire result envelope when too large for LLM diet (AGENT-HARNESS P4).
+    """
+    threshold = spill_threshold_chars()
+    preview_limit = preview_chars()
+
+    if result.ok:
+        if result.data is None:
+            return result
+        serialized = serialize_tool_data(result.data)
+        if len(serialized) <= threshold:
+            return result
+        output_path = _write_spill_file(serialized, session_dir=session_dir, agent_paths=agent_paths)
+        return tool_ok(
+            result.tool,
+            {"preview": serialized[:preview_limit]},
+            truncated=True,
+            duration_ms=result.duration_ms,
+            output_path=output_path,
+        )
+
+    # Failure path — spill full envelope (not just data).
+    full = to_json(result)
+    compact_preview = _compact_tool_failure_preview(result)
+    if len(full) <= threshold:
+        if compact_preview and result.error and isinstance(result.error.details, dict):
+            details = dict(result.error.details)
+            details["failure_summary"] = details.get("failure_summary") or compact_preview
+            err = result.error
+            return tool_fail(
+                result.tool,
+                err.code,
+                err.message,
+                duration_ms=result.duration_ms,
+                details=details,
+                truncated=result.truncated,
+                output_path=result.output_path,
+            )
         return result
 
-    serialized = serialize_tool_data(result.data)
-    if len(serialized) <= spill_threshold_chars():
-        return result
-
-    preview = serialized[: preview_chars()]
-    output_path: str | None = None
-
-    if session_dir is not None:
-        output_dir = session_dir / _TOOL_OUTPUTS_DIR
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / f"{uuid.uuid4().hex}.txt"
-        output_file.write_text(serialized, encoding="utf-8")
-        output_path = agent_paths.to_agent_relative(output_file)
-
-    return tool_ok(
+    output_path = _write_spill_file(full, session_dir=session_dir, agent_paths=agent_paths)
+    err = result.error
+    code = err.code if err is not None else "execution_error"
+    message = (err.message if err is not None else "tool failed") or "tool failed"
+    if len(message) > 500:
+        message = message[:499] + "…"
+    preview_body = compact_preview if compact_preview else full[:preview_limit]
+    details: dict[str, Any] = {
+        "preview": preview_body,
+        "spilled": True,
+    }
+    if output_path:
+        details["hint"] = f"Full tool result: read_file {output_path}"
+    return tool_fail(
         result.tool,
-        {"preview": preview},
-        truncated=True,
+        code,
+        message,
         duration_ms=result.duration_ms,
+        details=details,
+        truncated=True,
         output_path=output_path,
     )
+
+
+def _compact_tool_failure_preview(result: ToolResult) -> str | None:
+    """Structured preview for run_project_tests failures (Phase 44 T-4404)."""
+    if result.ok:
+        return None
+    payloads: list[dict[str, Any]] = []
+    if isinstance(result.data, dict):
+        payloads.append(result.data)
+    if result.error and isinstance(result.error.details, dict):
+        payloads.append(result.error.details)
+    try:
+        from project_verify import compact_test_failure_preview
+    except ImportError:
+        return None
+    for payload in payloads:
+        if payload.get("tool_name") == "run_project_tests" or payload.get("failures"):
+            preview = compact_test_failure_preview(payload)
+            if preview:
+                return preview
+    return None
+
+
+def _write_spill_file(
+    text: str,
+    *,
+    session_dir: Path | None,
+    agent_paths: AgentPaths,
+) -> str | None:
+    if session_dir is None:
+        return None
+    output_dir = session_dir / _TOOL_OUTPUTS_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f"{uuid.uuid4().hex}.txt"
+    output_file.write_text(text, encoding="utf-8")
+    return agent_paths.to_agent_relative(output_file)
 
 
 def _tool_event_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -2381,6 +2516,11 @@ def _tool_event_summary(
 
 def _tool_result_summary(result: ToolResult) -> str:
     data = result.data if isinstance(result.data, dict) else {}
+    if not result.ok and result.error and isinstance(result.error.details, dict):
+        summary = result.error.details.get("failure_summary")
+        if isinstance(summary, str) and summary.strip():
+            first = summary.strip().splitlines()[0]
+            return first[:120] + ("…" if len(first) > 120 else "")
     # Prefer structured run_service failure / not-ready hints (Phase 27 IT-91).
     if isinstance(data.get("warning"), str) and data["warning"].strip():
         text = data["warning"].strip()
@@ -2485,11 +2625,45 @@ def _arguments_use_host_scope(arguments: dict[str, Any]) -> bool:
     return False
 
 
+def resolve_write_confirm(
+    *,
+    evolved_name: str,
+    arguments: dict[str, Any],
+    session: ExecutorSession,
+    agent_paths: AgentPaths,
+) -> tuple[bool, str]:
+    """Layered confirm for write_text / patch_file (Phase 42 Track H)."""
+    from tools.builtin import run_evolved as _run_evolved_mod
+    from write_policy import write_requires_confirm
+
+    inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+    path = inner.get("path") if isinstance(inner.get("path"), str) else ""
+    on_conflict = inner.get("on_conflict") if isinstance(inner.get("on_conflict"), str) else "skip"
+    file_exists: bool | None = None
+    if evolved_name == "write_text" and path.strip():
+        try:
+            resolved = agent_paths.resolve_under_agent_for_write(path.strip(), must_exist=False)
+            file_exists = resolved.is_file()
+        except Exception:
+            file_exists = None
+    return write_requires_confirm(
+        tool=evolved_name,  # type: ignore[arg-type]
+        path=path,
+        project_root=session.project_root or "",
+        active_shell=session.active_shell or "",
+        on_conflict=on_conflict,
+        file_exists=file_exists,
+    )
+
+
 def build_confirm_preview(
     tool_name: str,
     arguments: dict[str, Any],
     *,
     evolved: EvolvedTool | None = None,
+    project_root: str = "",
+    active_shell: str = "",
+    agent_paths: AgentPaths | None = None,
 ) -> str:
     """Human-readable preview shown before confirm."""
     lines = [f"Tool: {tool_name}"]
@@ -2517,6 +2691,25 @@ def build_confirm_preview(
 
                     cmd = inner.get("command") if isinstance(inner.get("command"), str) else ""
                     lines.append(f"Command class: {classify_run_command(cmd)}")
+                except Exception:
+                    pass
+            if (
+                evolved.name in {"write_text", "patch_file"}
+                and isinstance(inner, dict)
+                and agent_paths is not None
+            ):
+                try:
+                    session = ExecutorSession(
+                        project_root=project_root,
+                        active_shell=active_shell,
+                    )
+                    _needs, reason = resolve_write_confirm(
+                        evolved_name=evolved.name,
+                        arguments=arguments,
+                        session=session,
+                        agent_paths=agent_paths,
+                    )
+                    lines.append(f"Write policy: {reason}")
                 except Exception:
                     pass
             if evolved.name == "browser_open" and isinstance(inner, dict):

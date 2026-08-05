@@ -192,7 +192,18 @@ def ensure_project_env(paths: AgentPaths, project_id: str) -> Path:
         except OSError:
             pass
     tools = detect_host_tools()
-    env_path.write_text(render_env_md(tools=tools, prefer=prefer), encoding="utf-8")
+    body = render_env_md(tools=tools, prefer=prefer)
+    if env_path.is_file():
+        try:
+            existing = env_path.read_text(encoding="utf-8")
+            if "quality:" in existing:
+                q_start = existing.find("quality:")
+                quality_tail = existing[q_start:].strip()
+                if quality_tail:
+                    body = body.rstrip() + "\n\n" + quality_tail + "\n"
+        except OSError:
+            pass
+    env_path.write_text(body, encoding="utf-8")
     return env_path
 
 

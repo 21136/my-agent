@@ -69,6 +69,20 @@
 > **含义**：稳定化要「看见」的每一面。未列入矩阵的功能，默认 **不在放行范围内**，或标 defer。  
 > **档位**：`P0` 阻塞放行 · `P1` 放行前尽量绿 · `P2` 可记 backlog · `defer` 明确不做。
 
+### 3.0 壳合并后废止（DOC-05 · 2026-08-04）
+
+> 前端已 **unified + pet 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）。下列矩阵行保留作 **Phase 18 历史验收记录**，**勿**再作为新 Phase 回归或技术债排期依据。现行验收见 [MAP.md](./MAP.md) §2.2 · [TASKS.md](./TASKS.md) DOC-05。
+
+| 废止面 | 原 §3 引用 | 替代 |
+|--------|------------|------|
+| grow ↔ daily / project **DOM 切壳** | §3.1 S-10 · S-16 · S-13「daily 壳」 | `unified` perspective（default / project / night） |
+| **`ui.route` / activity_router 切壳** | §3.2 IT-08 · S-45 | 已移除；主题仍可由 `infer_topic_scope` 追加 |
+| **`govern` 壳** | §3.1 S-47 · T-904h | **cancelled** — 聊天 + `my-agent review` |
+| **四壳 confirm 分壳** | §3.1 S-23「daily/pet confirm」 | unified + pet 共用 `chat-state` |
+| **pet↔grow 串线（STD-001）** | BUG-020 | **fixed**；现行为 workbench ↔ pet + `shell_sessions` 标签 |
+
+**仍有效（措辞需更新）**：project 生命周期 S-06～S-09（UI = unified `perspective=project`）· confirm/Stop S-04/S-05 · host/evolve/checker §3.4～3.5 · 数据韧性 §3.9。
+
 ### 3.1 壳与会话线
 
 | 面 | 档 | 验收 | 说明 |
@@ -626,4 +640,5 @@ python -m unittest discover -s tests -p "test_*.py" -v   # 全量（可选）
 | **1.0.7** | 2026-07-18 | **T-1808-bug-06**：§10 开放项逐条勾选；**M2-H 完结** |
 | **1.0.8** | 2026-07-18 | **T-1890-07**：文首状态 **done**；§11 勾选 T-1890-01～06 已满足项；末两行（TASKS 全表 · 用户签字）留给 T-1890-08～10 |
 | **1.0.9** | 2026-07-18 | **T-1890-08**：§11 TASKS 行勾选；`TASKS.md` Epic 对齐；M2-I（T-1830）整批 defer |
+| **1.1.1** | 2026-08-04 | **DOC-05**：§3.0 壳合并后废止矩阵行；与 MAP/TASKS 债务瘦身同步 |
 | **1.1.0** | 2026-07-18 | **T-1890-10**：用户签字解冻；§11 全勾；**可恢复 feature Phase** |

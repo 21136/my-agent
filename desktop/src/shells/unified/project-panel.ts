@@ -1,6 +1,8 @@
 import type { AgentWsClient, PlanChangeItem, PlanSuggestion, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
 import { renderMarkdown } from "../../markdown";
 import { escapeHtml } from "../chat-state";
+import type { MainFocus } from "./plan-review";
+import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 
 export type { PlanSuggestion, ServiceListItem };
 
@@ -129,6 +131,7 @@ export interface ProjectPanelState {
   turnArmedId: string;
   turnArmedText: string;
   turnEvidence: Array<{ tool: string; ok: boolean }>;
+  turnGateNotice: string;
   // G14 M2 — exec reliability strip
   turnPostcondition: string;
   turnCircuitOpen: string[];
@@ -139,6 +142,8 @@ export interface ProjectPanelState {
   threads: ProjectThreadItem[];
   threadsLoading: boolean;
   currentSessionId: string;
+  mainFocus: MainFocus;
+  reviewFocusId: string | null;
 }
 
 export interface ProjectPanelCallbacks {
@@ -192,48 +197,43 @@ function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
   return out;
 }
 
-function renderSuggestionCards(suggestions: PlanSuggestion[]): string {
+function renderSuggestionCards(suggestions: PlanSuggestion[], reviewFocusId: string | null): string {
   const actionable = suggestions.filter((s) => Boolean(s.action));
   if (actionable.length === 0) return "";
   const cards = actionable.map((s) => {
-    const acceptLabel =
-      s.action === "drop_task"
-        ? "删除"
-        : s.risk === "gate" ||
-            s.action === "add_task" ||
-            s.action === "move_task" ||
-            s.action === "apply_patch"
-          ? "采纳写入"
-          : "采纳";
+    const acceptLbl = acceptLabel(s);
     const diffRaw =
       s.payload && typeof s.payload.diff === "string" ? s.payload.diff.trim() : "";
-    const pathRaw =
-      s.payload && typeof s.payload.path === "string" ? s.payload.path.trim() : "";
-    const diffBlock = diffRaw
-      ? `<pre class="sidebar-suggestion-diff" style="margin:0.25rem 0 0.4rem;padding:0.35rem 0.45rem;max-height:9rem;overflow:auto;font-size:0.68rem;line-height:1.35;white-space:pre-wrap;word-break:break-word;background:color-mix(in srgb, var(--ma-text) 6%, var(--ma-surface));border:1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);border-radius:4px;">${
-          pathRaw ? escapeHtml(pathRaw) + "\n" : ""
-        }${escapeHtml(diffRaw)}</pre>`
+    const stats = diffRaw ? diffStats(diffRaw) : "";
+    const statsLine = stats
+      ? `<div class="sidebar-suggestion-stats">${escapeHtml(stats)}</div>`
       : "";
-    return `<div class="sidebar-suggestion-card" style="padding:0.35rem 0;border-bottom:1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);">
-      <div style="font-size:0.78rem;font-weight:600;color:var(--ma-text);">${escapeHtml(s.title)}</div>
-      <div style="font-size:0.74rem;color:var(--ma-text-muted);margin:0.15rem 0 0.2rem;line-height:1.35;">${escapeHtml(s.body)}</div>
-      ${diffBlock}
-      <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
-        <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">${acceptLabel}</button>
-        <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}" style="font-size:0.72rem;padding:0.15rem 0.45rem;">忽略</button>
+    const summary = truncateSummary(s.body, 80);
+    const focused = reviewFocusId === s.id ? " is-review-focus" : "";
+    return `<div class="sidebar-suggestion-card${focused}" data-suggestion-id="${escapeHtml(s.id)}">
+      <div class="sidebar-suggestion-title">${escapeHtml(s.title)}</div>
+      <div class="sidebar-suggestion-body">${escapeHtml(summary)}</div>
+      ${statsLine}
+      <div class="sidebar-suggestion-actions">
+        <button type="button" class="unified-btn" data-action="review-suggestion" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
+        <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}">${escapeHtml(acceptLbl)}</button>
+        <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}">忽略</button>
       </div>
     </div>`;
   }).join("");
-  return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
-    <div class="sidebar-change-banner-title">计划搭档</div>
+  return `<div class="sidebar-change-banner sidebar-suggestions-banner">
+    <div class="sidebar-change-banner-title">待采纳 · ${actionable.length}</div>
     ${cards}
   </div>`;
 }
 
 function renderPartnerNotices(notices: string[], busy: boolean): string {
+  if (!busy && isAdoptedPartnerNotice(notices)) {
+    return renderAdoptedNotice(notices);
+  }
   // C3 / S-191: sidebar keeps short operational lines only — not Plan long-chat host.
   const lines = notices
-    .map((n) => n.trim())
+    .map((n) => normalizePartnerNoticeLine(n))
     .filter(Boolean)
     .slice(0, 3)
     .map((n) => {
@@ -245,6 +245,34 @@ function renderPartnerNotices(notices: string[], busy: boolean): string {
   return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
     <div class="sidebar-change-banner-title">${title}</div>
     ${lines || (busy ? `<div style="font-size:0.78rem;opacity:0.7;margin-top:0.2rem">正在理解你的话…</div>` : "")}
+  </div>`;
+}
+
+function normalizePartnerNoticeLine(text: string): string {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  for (const ln of lines) {
+    if (ln.startsWith("@@")) continue;
+    if (ln.length >= 2 && ln[0] === "-" && ln[1] === " ") continue;
+    if (ln.length >= 2 && ln[0] === "+" && ln[1] === " ") continue;
+    return ln;
+  }
+  return lines[0] ?? "";
+}
+
+function isAdoptedPartnerNotice(notices: string[]): boolean {
+  const head = normalizePartnerNoticeLine(notices[0] ?? "");
+  if (!head) return false;
+  if (/待审阅|待采纳|待侧栏/.test(head)) return false;
+  return /^(已采纳写入|已写入|已从归档恢复)/.test(head);
+}
+
+function renderAdoptedNotice(notices: string[]): string {
+  const line = normalizePartnerNoticeLine(notices[0] ?? "");
+  const short = line.length > 120 ? `${line.slice(0, 117)}…` : line;
+  return `<div class="sidebar-change-banner sidebar-adopted-banner" style="border-color:#3d8b5a;background:color-mix(in srgb, #3d8b5a 8%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">已采纳写入</div>
+    <div style="font-size:0.78rem;margin-top:0.2rem">${escapeHtml(short)}</div>
+    <button type="button" class="unified-btn" data-action="dismiss-partner-notice" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
   </div>`;
 }
 
@@ -477,6 +505,13 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
   return html;
 }
 
+export function renderPlanTaskFlow(
+  state: ProjectPanelState,
+  highlightLines: Set<number> | null = null,
+): string {
+  return renderTaskFlow(state, highlightLines);
+}
+
 // ---- overlay panel rendering ----
 
 function renderDocsOverlay(state: ProjectPanelState): string {
@@ -623,12 +658,7 @@ function renderThreadsOverlay(state: ProjectPanelState): string {
 function renderOverlayBody(state: ProjectPanelState): string {
   switch (state.overlayPanel) {
     case "plan":
-      return renderTaskFlow(
-        state,
-        state.highlightChanges && state.highlightedLines.size > 0
-          ? state.highlightedLines
-          : null,
-      );
+      return `<p class="overlay-empty">完整计划已在主区打开。点主区「← 返回聊天」关闭。</p>`;
     case "docs":
       return renderDocsOverlay(state);
     case "verify":
@@ -712,9 +742,10 @@ function renderChangeBanner(state: ProjectPanelState): string {
   if (needsPlanDirtyBanner) {
     if (state.planBannerCollapsed) {
       const pendingCount = state.planChangeLog.length;
-      return `<div class="sidebar-change-banner">
+      return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
         <span style="color:#d4a000">⚠ 计划已变更${pendingCount > 0 ? ` (${pendingCount} 项)` : ""}</span>
-        <button type="button" class="unified-btn" data-action="expand-banner" style="margin-left:0.5rem;font-size:0.72rem;">查看</button>
+        <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-changes" style="margin-left:0.35rem;font-size:0.72rem;">确认变更</button>
+        <button type="button" class="unified-btn" data-action="expand-banner" style="margin-left:0.25rem;font-size:0.72rem;">查看</button>
       </div>`;
     }
 
@@ -1029,10 +1060,15 @@ function renderServicesPanel(state: ProjectPanelState): string {
           })
           .join("")}`;
   const reliability = renderReliabilityStrip(state);
+  const gateNotice = (state.turnGateNotice || "").trim();
+  const gateBlock = gateNotice
+    ? `<div class="sidebar-gate-notice" style="margin-top:0.35rem;padding:0.35rem 0.45rem;border-left:3px solid #c45c26;font-size:0.76rem;line-height:1.35;white-space:pre-wrap;">${escapeHtml(gateNotice)}</div>`
+    : "";
   const evidenceBlock = `<div class="sidebar-turn-evidence">
       <div class="sidebar-services-header"><span>本回合${totalEvidence > 0 ? ` · ${totalEvidence}` : ""}</span></div>
       ${armed}
       <div class="sidebar-evidence-list">${evidenceRows}</div>
+      ${gateBlock}
       ${reliability}
     </div>`;
 
@@ -1120,7 +1156,7 @@ export function renderProjectSidebar(
   } else if (state.partnerBusy) {
     bannerHtml = renderPartnerNotices(state.partnerNotices || [], true);
   } else if (actionableSuggestions.length > 0) {
-    bannerHtml = renderSuggestionCards(state.suggestions);
+    bannerHtml = renderSuggestionCards(state.suggestions, state.reviewFocusId);
   } else if (state.partnerNotices && state.partnerNotices.length > 0) {
     bannerHtml = renderPartnerNotices(state.partnerNotices, false);
   } else if (state.externalChanges) {
@@ -1206,8 +1242,9 @@ export function renderProjectSidebar(
   for (const btn of els.iconBar.querySelectorAll<HTMLButtonElement>(".sidebar-icon-btn")) {
     const panel = btn.dataset.panel as OverlayPanel | "tasks" | undefined;
     const active =
-      (panel === "tasks" && !state.overlayPanel) ||
-      (panel !== "tasks" && panel === state.overlayPanel);
+      (panel === "tasks" && !state.overlayPanel && state.mainFocus === "chat") ||
+      (panel === "plan" && state.mainFocus === "plan_full") ||
+      (panel !== "tasks" && panel !== "plan" && panel === state.overlayPanel);
     btn.classList.toggle("is-active", Boolean(active));
   }
 

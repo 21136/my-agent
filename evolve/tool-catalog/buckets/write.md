@@ -1,6 +1,7 @@
 # 写文件（write）
 
-> L1 · Phase 23 M4 · Phase 30 收敛。调用：`run_evolved` · `tool_name=<名>`（须 `active`）。
+> L1 · Phase 23 M4 · Phase 30 收敛。  
+> **调用**：`write_text` / `patch_file` 扁平原语（优先）；或 `run_evolved` · `tool_name=<名>`。
 
 | 工具 | 作用 |
 |------|------|
@@ -21,3 +22,4 @@
 - 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。
 - 大段正文优先 staging + 短路径，避免超长 JSON。
 - **不要**为「追加一行」再造分域工具；用 `patch_file`。
+- **项目绑定**下：`patch_file` 与覆盖已有文件的 `write_text` 由执行器 `write_policy` 分层免确认（仍受 WRITE-SCOPE / 计划门约束）；见 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md) §11。

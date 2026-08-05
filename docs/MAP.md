@@ -1,8 +1,9 @@
 # my-agent 项目地图（MAP）
 
-> 版本 **2026-08-03** · **新会话请先读本文 + `TASKS.md`**  
-> 代码 **Phase 1～23 done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase 39 **Plan 幕后子代理（单入口）**（**done** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906）。
+> 版本 **2026-08-04** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
+> 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
+> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 42** 实现（H→J→I）· **Phase 43～45 M0 done** · WORKBENCH M1/M2 · UX 待评估项。  
+> UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
 ---
@@ -44,7 +45,7 @@
 | **Phase 21** | **项目进度闭环**（report_progress 清单 / draft 壳 / 一停武装） | **done**（[PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) fixed） |
 | **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
 | **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
-| **Phase 24** | **进度硬闸门**（Progress Gate） | **doc / 实施中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md) v0.2.0 · G8/G9） |
+| **Phase 24** | **进度硬闸门**（Progress Gate） | **M0 核心 done · M1 收尾中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md) v0.3.0 · T-2406～2408 todo） |
 | **Phase 25** | **托管长驻服务**（`run_service`） | **M0 done**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
 | **Phase 26** | **项目开发工具补齐**（HTTP / 启停 / 端口 / Git / SQLite / pip） | **done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) v0.4.0；IT-80～86） |
 | **Phase 27** | **执行可观测**（聊天过程 + 侧栏服务/进度） | **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)；IT-90～93） |
@@ -55,11 +56,17 @@
 | **Phase 37** | **计划域架构**（角色多文件 · 唯一队列 · 写权限 · 注入切片 · **读写提案**） | **M1～M3 · M5 · M6 done**（[PLAN-ARCH.md](./PLAN-ARCH.md) v0.5.1；T-3700～3710；M4 defer） |
 | **Phase 38** | **Plan 主输入双通道 + 自动路由**（独立气泡 · 上下文隔离 · 查跑同权） | **superseded**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.11 → **§15.12**；由 Phase 39 废止） |
 | **Phase 39** | **Plan 幕后子代理**（单入口 · `plan_partner` · 侧栏采纳 · 计划域写拒） | **done**（[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906） |
+| **Phase 40** | **采纳控件对齐**（禁口述按钮 · 待采纳≠已写入 · 过程卡 CTA） | **P0/P1 done**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · T-4000～T-4003） |
+| **Phase 41** | **Agent Harness 对齐**（扁平原语 · 失败止损 · 低→高） | **P1+P2+P4+P5 done**（[AGENT-HARNESS.md](./AGENT-HARNESS.md)；P3 → Phase 42 J） |
+| **Phase 42** | **Cursor 差距收口**（写确认分层 · Glob · 模型路由） | **M0 done**（[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · T-4202 · T-4211～4215 · T-4221～4226） |
+| **Phase 43** | **项目配方脚手架**（`scaffold_project` · `evolve/scaffolds/`） | **M0+M1 done**（[PROJECT-RECIPES.md](./PROJECT-RECIPES.md) · T-4300～4306） |
+| **Phase 44** | **项目结构化验证**（`run_project_tests` · 失败 file:line） | **M0+M1 done**（[PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · T-4400～4407；T-4408 S-441 todo） |
+| **Phase 45** | **项目质量与数据面**（迁移状态 · `run_quality` · deploy 配方） | **M0 done**（[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · T-4500～4503） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
-| **UX-POLISH** | 统一壳手感打磨（UX-001～020 + 第五～七轮） | **进行中**（[UX-POLISH.md](./UX-POLISH.md)） |
-| **Plan Agent / 侧栏** | 决策面 + 采纳卡；**幕后子代理**（Phase 39 done） | Phase 22 done · Phase 39 done |
+| **UX-POLISH** | 统一壳手感打磨（UX-001～022 + 第五～九轮） | **进行中**（[UX-POLISH.md](./UX-POLISH.md) · [output-format.md](./output-format.md)） |
+| **Plan Agent / 侧栏** | 决策面 + 采纳卡；幕后子代理；**控件对齐（Phase 40）** | Phase 22/39 done · Phase 40 设计已签 |
 
 ### 2.1 解冻说明（T-1890-09 / T-1890-10）
 
@@ -68,10 +75,24 @@
 | **现状** | Phase 18 放行全齐；**T-1890-10 已签字**（2026-07-18） |
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
-| **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）仍 defer |
-| **下一焦点** | UX-POLISH 等 |
+| **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）部分条目已 **废止**（见 §2.2） |
+| **下一焦点** | Phase 24 收尾 · **Phase 42 H→J→I(M0)** · **Phase 43 M0 → 44 M0** · WORKBENCH M1/M2 |
 
-**远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。可选债：`T-601b` / `T-605` skill / `T-804`。
+**远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。**仍开放的可选债**：`T-601b` governance tool · `T-804` 外挂扩展 · `T-4103` 模型路由。
+
+### 2.2 废止债项（DOC-05 · 壳合并 / Plan 单入口 · 2026-08-04）
+
+> **勿再排期**。完整表见 [TASKS.md](./TASKS.md) **DOC-05**。新会话若以「grow 切 daily」「govern 壳」「双 Plan 通道」「Skill 系」为债，先查本表。
+
+| 类别 | 代表 task / 文档 | 状态 | 替代 / 说明 |
+|------|------------------|------|-------------|
+| **四壳 DOM** | `shells/grow\|daily\|project\|govern` · T-904h govern | **cancelled** | `unified` perspective + `pet`；[DESKTOP.md](./DESKTOP.md) §0 |
+| **自动切壳** | `ui.route` · `activity_router` 切壳 · T-pet-i1 路由 | **superseded** | 前端不消费；生产仅 `infer_topic_scope` + `apply_route_topics` |
+| **Plan 双通道** | Phase 38 · `plan-intent` · Plan 独立气泡 | **superseded** | Phase 39 `plan_partner` · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
+| **Skill 系** | T-605/T-606 · Phase 9 T-901 | **wontfix** | M1 不做 skill；CLI `my-agent review` / audit 已够 |
+| **远期低收益** | T-902 多 LLM · T-903 SQLite/向量 · T-906 自动 venv | **wontfix** | 单人本地 agent；按需再开 Phase |
+| **日用壳独立目录** | [DAILY-SHELL.md](./DAILY-SHELL.md) · T-904i6 星图清理 | **superseded** | `perspective=night` + `skins/starfield/` |
+| **稳定化矩阵（四壳）** | STABILIZATION §3.1 grow↔daily · S-10/S-16 · `ui.route` IT-08 | **superseded** | 验收改 unified/workbench；见 [STABILIZATION.md](./STABILIZATION.md) §3.0 |
 
 ---
 
@@ -155,7 +176,10 @@ my-agent/
 │   ├── WRITE-SCOPE.md          # 写范围放开（已实施）
 │   ├── TOOL-RETRY.md           # 参数自修正（已实施）
 │   ├── UX-POLISH.md            # 体验打磨（进行中）
+│   ├── output-format.md        # 主聊 assistant 正文格式（OUTPUT-FORMAT）
 │   ├── PROJECT-SIDEBAR.md      # Plan Agent + 任务流侧栏
+│   ├── PLAN-REVIEW-UI.md       # 主列审阅 + Affordance（§10 / Phase 40）
+│   ├── PLAN-SUBAGENT.md        # Plan 幕后子代理（Phase 39）
 │   ├── PLAN-ARCH.md            # 计划域架构（角色文件 · 写权限 · 注入）
 │   ├── PROJECT-MODE.md         # 项目模式（三件套 / 计划门）
 │   ├── BUGS.md                 # 运行时缺陷索引

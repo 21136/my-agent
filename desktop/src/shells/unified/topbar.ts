@@ -57,8 +57,8 @@ export function renderTopbarV2(
   const checker = state.checkerLabel
     ? `<span class="unified-topbar-muted">${escapeHtml(state.checkerLabel)}</span>`
     : "";
-  const newChatBtn = handlers.onNewChat
-    ? `<button type="button" class="unified-btn" id="unified-new-chat" title="普通对话">+ 对话</button>`
+  const newChatBtn = handlers.onNewChat && state.projectLabel
+    ? `<button type="button" class="unified-btn" id="unified-new-chat" title="挂起项目，开普通对话（可 write_evolve）">+ 对话</button>`
     : "";
   const newProjectBtn = handlers.onNewProject
     ? `<button type="button" class="unified-btn" id="unified-new-project" title="新建项目">+ 项目</button>`

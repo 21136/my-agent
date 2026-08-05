@@ -17,7 +17,7 @@
 |------|------|
 | **Builtin 封顶 6 个** | 长期不随使用增长 |
 | **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `tools/common/`（**磁盘组织**；非调用门禁） |
-| **执行唯一口** | 所有 evolved 仅经 `run_evolved` 调用 |
+| **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
 
 本阶段 **不涉及** skill 自动路由、proposal 自动生成脚本。
@@ -47,6 +47,7 @@
 | `read_file` | 读文本文件（有大小上限） | 否 | 否 |
 | `list_dir` | 列目录（可递归一层） | 否 | 否 |
 | `grep` | 在路径下搜**本地**文件内容 | 否 | 否 |
+| `glob_file_search` | 按 glob 列文件（Phase 42 · **待实现**） | 否 | 否 |
 | `web_search` | **上网**搜索（query → 标题/链接/摘要） | 否 | 否 |
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
@@ -56,10 +57,21 @@ Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
 ### 3.1 观察 vs 执行
 
 ```text
-本地观察：read_file · list_dir · grep
+本地观察：read_file · list_dir · grep · glob_file_search（Phase 42）
 网络观察：web_search · fetch_url
-动手执行：run_evolved → evolve/tools/*
+动手执行：run_command · write_text · patch_file（扁平原语，Phase 41）
+            或 run_evolved → 其它 evolve/tools/*
 ```
+
+### 3.1a 扁平原语 proxy（Phase 41 · AGENT-HARNESS P1）
+
+| name | 路由 | 说明 |
+|------|------|------|
+| `run_command` | `run_evolved` → `run_command` | 与 manifest 一致；**优先**于嵌套 `run_evolved` |
+| `write_text` | `run_evolved` → `write_text` | 整文件写入 |
+| `patch_file` | `run_evolved` → `patch_file` | 行号/锚点补丁 |
+
+实现：`agent-core/tool_proxies.py`；**封顶 3 个**；ask 模式与 `run_evolved` 一并隐藏。
 
 `grep` ≠ `web_search`：前者搜磁盘，后者搜互联网；**不可合并**。
 
@@ -219,6 +231,8 @@ Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。
 
 适用于 **Builtin 与 evolved**；阈值 env：`TOOL_OUTPUT_SPILL_CHARS`（默认 8000）、`TOOL_OUTPUT_PREVIEW_CHARS`（默认 2000）。
 
+**失败结果（Phase 41 P4）**：`ok=false` 时若整段 envelope 超阈值，同样 spill；回灌 LLM 的 `error.details` 仅含 `preview` + `hint`（`read_file <output_path>`），避免 stderr 墙污染上下文。
+
 ### 6.5 `run_evolved` 参数
 
 ```json
@@ -268,6 +282,20 @@ Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。
 | 参数 | `pattern`, `path`, `glob?`, `ignore_case?`, `max_results?`（默认 50） |
 | 实现 | 优先 `rg`；无则 Python 回退 |
 | 返回 | `{ matches: [{ path, line, text }], truncated }` |
+
+### 7.3.1 `glob_file_search`（Phase 42 · 草案）
+
+> 真源：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) §3 · TASKS **T-4221**  
+> **状态**：设计已签 · 第 **7** 个 builtin · M0 实现待开工
+
+| 项 | 值 |
+|----|-----|
+| 参数 | `pattern`（glob，如 `**/*.py`）, `path`（默认 `.`）, `max_results?`（默认 200，硬顶 1000）, `ignore_case?` |
+| 实现倾向 | 优先 `rg --files -g`；回退 `pathlib` + fnmatch |
+| 返回 | `{ paths: string[], truncated: bool }` |
+| confirm | **否**（只读，与 grep 同级） |
+| M1 | 尊重 `.gitignore` / 跳过 `node_modules`（IT-432） |
+| M2 defer | 语义搜 → 独立 `CODEBASE-SEARCH.md` |
 
 ### 7.4 `web_search`
 
@@ -513,7 +541,7 @@ evolve/
 
 | # | 议题 | 决议 |
 |---|------|------|
-| 1 | Builtin 数量与名单 | **6 个**：read/list/grep/web_search/fetch_url/run_evolved |
+| 1 | Builtin 数量与名单 | **6 个**（Phase 42 → **7**：+`glob_file_search`）：read/list/grep/web_search/fetch_url/run_evolved |
 | 2 | Evolved 暴露 | **仅** `run_evolved`；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
 | 3 | 主题索引 | 统一 **`evolve/_index.toml`**（驱动 prompt/memory；工具执行解绑） |
 | 4 | 跨主题工具 | **`tools/common/`** 仍为目录约定；active 均可调 |

@@ -131,7 +131,12 @@ def ensure_template(paths: AgentPaths) -> Path:
     return target
 
 
-def create_project(paths: AgentPaths, project_id: str) -> Path:
+def create_project(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    template: str | None = None,
+) -> Path:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
     if dest.exists() and any(dest.iterdir()):
@@ -150,6 +155,15 @@ def create_project(paths: AgentPaths, project_id: str) -> Path:
         ensure_project_env(paths, pid)
     except Exception:
         pass
+    template_id = (template or "").strip()
+    if template_id:
+        from scaffold_recipes import run_scaffold_after_create
+
+        result = run_scaffold_after_create(paths, pid, template_id)
+        if not result.get("ok"):
+            failed = result.get("failed_step") or "unknown"
+            err = result.get("error") or f"scaffold step {failed} failed"
+            raise ProjectModeError(f"scaffold {template_id!r} failed: {err}")
     return dest
 
 
@@ -234,6 +248,188 @@ def count_archive_entries(archive_path: Path, *, reason: str | None = None) -> i
         elif want in stripped:
             n += 1
     return n
+
+
+def normalize_archive_task_body(body: str) -> str:
+    """Strip checkbox prefix from archive body text."""
+    raw = (body or "").strip()
+    m = _TASK_CHECKBOX_RE.match(raw)
+    if m:
+        return m.group(1).strip()
+    if raw.startswith("- "):
+        return raw[2:].strip()
+    return raw
+
+
+def parse_archive_entry_line(line: str) -> dict[str, str] | None:
+    """Parse one TASKS.archive.md bullet into body + metadata."""
+    stripped = line.strip()
+    if not stripped.startswith("- "):
+        return None
+    content = stripped[2:]
+    parts = [p.strip() for p in content.split(" · ") if p.strip()]
+    if not parts:
+        return None
+    body = normalize_archive_task_body(parts[0])
+    meta: dict[str, str] = {"body": body, "raw": stripped}
+    for part in parts[1:]:
+        if ":" not in part:
+            continue
+        key, val = part.split(":", 1)
+        key = key.strip().lower()
+        val = val.strip()
+        if key == "closed":
+            meta["reason"] = val
+        elif key == "phase":
+            meta["phase"] = val
+        elif key == "src":
+            meta["source"] = val
+        else:
+            meta[key] = val
+    return meta
+
+
+def list_archive_entries(archive_path: Path) -> list[dict[str, str]]:
+    if not archive_path.is_file():
+        return []
+    out: list[dict[str, str]] = []
+    for line in archive_path.read_text(encoding="utf-8").splitlines():
+        entry = parse_archive_entry_line(line)
+        if entry:
+            out.append(entry)
+    return out
+
+
+def format_archive_tail_for_prompt(archive_path: Path, *, limit: int = 12) -> str:
+    """Recent archive lines for Plan LLM (not injected into main agent)."""
+    entries = list_archive_entries(archive_path)
+    if not entries:
+        return ""
+    tail = entries[-max(1, limit) :]
+    lines = [
+        "## TASKS.archive.md 最近归档（误勾/误完成可 kind=restore 提案恢复）",
+        "",
+    ]
+    for entry in tail:
+        phase = entry.get("phase") or "（无 phase）"
+        reason = entry.get("reason") or "done"
+        lines.append(f"- {entry['body']} · closed:{reason} · phase:{phase}")
+    return "\n".join(lines) + "\n\n"
+
+
+def match_archive_entries(
+    entries: list[dict[str, str]],
+    *,
+    phase_substring: str | None = None,
+    body_substrings: list[str] | None = None,
+    task_ids: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Filter archive entries for restore proposals."""
+    if not entries:
+        return []
+    phase_key = (phase_substring or "").strip().casefold()
+    bodies = [b.strip().casefold() for b in (body_substrings or []) if b and b.strip()]
+    ids = [t.strip().upper() for t in (task_ids or []) if t and t.strip()]
+    matched: list[dict[str, str]] = []
+    for entry in entries:
+        body = entry.get("body") or ""
+        body_cf = body.casefold()
+        phase_cf = (entry.get("phase") or "").casefold()
+        if ids and not any(tid in body.upper() for tid in ids):
+            continue
+        if bodies and not any(sub in body_cf for sub in bodies):
+            continue
+        if phase_key and phase_key not in phase_cf and phase_key not in body_cf:
+            continue
+        matched.append(entry)
+    return matched
+
+
+def preview_restore_archived_tasks(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    phase_substring: str | None = None,
+    body_substrings: list[str] | None = None,
+    task_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Dry-run restore — returns matched entries without writing."""
+    archive_path = project_dir(paths, project_id) / TASKS_ARCHIVE_NAME
+    entries = list_archive_entries(archive_path)
+    matched = match_archive_entries(
+        entries,
+        phase_substring=phase_substring,
+        body_substrings=body_substrings,
+        task_ids=task_ids,
+    )
+    return {
+        "matched": matched,
+        "count": len(matched),
+        "bodies": [e["body"] for e in matched],
+        "phases": sorted({e.get("phase") or "" for e in matched if e.get("phase")}),
+    }
+
+
+def restore_archived_tasks(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    phase_substring: str | None = None,
+    body_substrings: list[str] | None = None,
+    task_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Move matched archive entries back into TASKS.md as open checkboxes."""
+    root = project_dir(paths, project_id)
+    archive_path = root / TASKS_ARCHIVE_NAME
+    tasks_path = root / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
+    if not archive_path.is_file():
+        raise ProjectModeError("TASKS.archive.md not found")
+
+    entries = list_archive_entries(archive_path)
+    matched = match_archive_entries(
+        entries,
+        phase_substring=phase_substring,
+        body_substrings=body_substrings,
+        task_ids=task_ids,
+    )
+    if not matched:
+        raise ProjectModeError("no matching archive entries to restore")
+
+    matched_raws = {e["raw"] for e in matched}
+    keep_lines: list[str] = []
+    for line in archive_path.read_text(encoding="utf-8").splitlines():
+        entry = parse_archive_entry_line(line)
+        if entry and entry["raw"] in matched_raws:
+            continue
+        keep_lines.append(line)
+    archive_out = "\n".join(keep_lines)
+    if archive_out and not archive_out.endswith("\n"):
+        archive_out += "\n"
+    archive_path.write_text(archive_out, encoding="utf-8")
+
+    restored_lines: list[int] = []
+    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    default_phase = active_phase_title_from_lines(file_lines) or "Phase 1"
+    for entry in matched:
+        body = entry.get("body") or ""
+        phase_title = (entry.get("phase") or "").strip() or default_phase
+        if not body:
+            continue
+        result = add_task_to_tasks_md(paths, project_id, phase_title, body)
+        line_n = result.get("line")
+        if isinstance(line_n, int):
+            restored_lines.append(line_n)
+
+    stats = read_task_stats(tasks_path)
+    return {
+        "type": "project.task.restore.done",
+        "restored": [e["body"] for e in matched],
+        "lines": restored_lines,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
 
 
 def append_tasks_archive(
@@ -803,7 +999,11 @@ def project_mode_block_reason(
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
-        return "project 模式禁止 write_evolve；请切换到 grow 壳沉淀能力"
+        return (
+            "项目窗口禁止 write_evolve（养 agent 与做产物分离）。"
+            "请点顶栏「+ 对话」开普通对话后再造工具，"
+            "或由助手 propose_context_switch(action=session.new, target=current)。"
+        )
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "git_clone":
         inner = arguments.get("arguments")
@@ -891,7 +1091,7 @@ def format_project_overlay(
         if armed:
             lines.append(f"armed_task_id: {armed}")
             lines.append(
-                "report_progress: 勾选须本回合对口工具成功证据；"
+                "report_progress: 无对口证据不可勾选；须本回合对口工具成功；"
                 "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
             )
         slice_text = (open_tasks_slice or "").strip()

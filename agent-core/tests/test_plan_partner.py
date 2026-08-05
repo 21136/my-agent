@@ -422,6 +422,10 @@ class PlanPartnerTests(unittest.TestCase):
         self.assertIn("reply", _PLAN_SYSTEM)
         self.assertIn("修复流水账", _PLAN_SYSTEM)
         self.assertIn("operations 必须 []", _PLAN_SYSTEM)
+        self.assertIn("kind=restore", _PLAN_SYSTEM)
+        self.assertIn("任务不见了", _PLAN_SYSTEM)
+        self.assertIn("禁止", _PLAN_SYSTEM)
+        self.assertIn("TASKS.archive.md", _PLAN_SYSTEM)
 
     def test_progress_brief_flags_jump_and_empty(self) -> None:
         from plan_agent import _plan_progress_brief

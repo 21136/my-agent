@@ -1,16 +1,15 @@
 import "./app-chrome.css";
-import type { AgentWsClient } from "./api/ws";
+import type { AgentWsClient, LlmModelListItem } from "./api/ws";
 import {
   readTheme,
   writeTheme,
   type ThemeId,
 } from "./settings";
 
-export type SessionModelId = "deepseek-v4-flash" | "deepseek-v4-pro";
-
 export type AppChromeHandlers = {
   onSwitchToCli: () => Promise<void>;
   onOpenSettings?: () => void;
+  onOpenModelKeys?: () => void;
   client?: AgentWsClient;
 };
 
@@ -19,13 +18,47 @@ export type AppChromeApi = {
   setModel: (model: string) => void;
 };
 
-const MODEL_FLASH: SessionModelId = "deepseek-v4-flash";
-const MODEL_PRO: SessionModelId = "deepseek-v4-pro";
+const FALLBACK_MODEL_ID = "deepseek-v4-flash";
 
-function normalizeModelSelectValue(model: string | undefined): SessionModelId {
-  const key = (model || "").trim().toLowerCase();
-  if (key.includes("pro")) return MODEL_PRO;
-  return MODEL_FLASH;
+function pickModelId(model: string | undefined, models: LlmModelListItem[]): string {
+  const key = (model || "").trim();
+  if (!key) {
+    return models[0]?.id ?? FALLBACK_MODEL_ID;
+  }
+  const exact = models.find((item) => item.id === key);
+  if (exact) return exact.id;
+  const lowered = key.toLowerCase();
+  const fuzzy = models.find(
+    (item) =>
+      item.id.toLowerCase() === lowered ||
+      item.name.toLowerCase() === lowered ||
+      item.tier.toLowerCase() === lowered,
+  );
+  return fuzzy?.id ?? models[0]?.id ?? key;
+}
+
+function formatModelOptionLabel(item: LlmModelListItem): string {
+  const keySuffix = item.configured ? "" : " (未配置 key)";
+  const vendor = item.vendor.trim();
+  const showVendor =
+    vendor &&
+    !item.name.toLowerCase().includes(vendor.toLowerCase());
+  const label = showVendor ? `${item.name} · ${vendor}` : item.name;
+  return `${label}${keySuffix}`;
+}
+
+function renderModelOptions(models: LlmModelListItem[], booting: boolean): string {
+  if (booting) {
+    return `<option value="${FALLBACK_MODEL_ID}">加载中…</option>`;
+  }
+  if (!models.length) {
+    return `<option value="${FALLBACK_MODEL_ID}">Flash</option>`;
+  }
+  return models
+    .map((item) => {
+      return `<option value="${item.id}">${formatModelOptionLabel(item)}</option>`;
+    })
+    .join("");
 }
 
 export function mountAppChrome(
@@ -33,6 +66,8 @@ export function mountAppChrome(
   handlers: AppChromeHandlers,
 ): AppChromeApi {
   const theme = readTheme();
+  let knownModels: LlmModelListItem[] = [];
+  let modelsBooting = true;
 
   root.innerHTML = `
     <header class="app-chrome">
@@ -47,12 +82,12 @@ export function mountAppChrome(
       <div class="app-chrome-group">
         <span class="app-chrome-label">模型</span>
         <select id="chrome-model" aria-label="模型">
-          <option value="${MODEL_FLASH}">Flash</option>
-          <option value="${MODEL_PRO}">Pro</option>
+          <option value="${FALLBACK_MODEL_ID}">Flash</option>
         </select>
       </div>
       <span class="app-chrome-spacer"></span>
       <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
+      ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-btn" id="chrome-model-keys">模型密钥</button>' : ""}
       ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-btn" id="chrome-settings">托管区</button>' : ""}
       <button type="button" class="app-chrome-btn" id="chrome-pet">伴侣窗</button>
       <button type="button" class="app-chrome-btn" id="chrome-cli">改用终端 (CLI)</button>
@@ -70,6 +105,19 @@ export function mountAppChrome(
   let routeTimer: number | null = null;
   let syncingModel = false;
 
+  const applyModelCatalog = (models: LlmModelListItem[], selectedId?: string) => {
+    knownModels = models;
+    modelsBooting = false;
+    modelSelect.disabled = false;
+    const nextId = pickModelId(selectedId ?? modelSelect.value, models);
+    modelSelect.innerHTML = renderModelOptions(models, false);
+    modelSelect.value = pickModelId(nextId, models);
+    const selected = models.find((item) => item.id === modelSelect.value);
+    modelSelect.title = selected
+      ? `切换主 Agent 模型（${selected.name} · ${selected.max_input_tokens.toLocaleString()} ctx）`
+      : "切换主 Agent 模型";
+  };
+
   themeSelect.addEventListener("change", () => {
     const next = themeSelect.value as ThemeId;
     writeTheme(next);
@@ -77,7 +125,7 @@ export function mountAppChrome(
 
   modelSelect.addEventListener("change", () => {
     if (syncingModel) return;
-    const next = normalizeModelSelectValue(modelSelect.value);
+    const next = pickModelId(modelSelect.value, knownModels);
     modelSelect.value = next;
     handlers.client?.setSessionModel(next);
   });
@@ -98,16 +146,39 @@ export function mountAppChrome(
     handlers.onOpenSettings?.();
   });
 
+  const modelKeysBtn = root.querySelector<HTMLButtonElement>("#chrome-model-keys");
+  modelKeysBtn?.addEventListener("click", () => {
+    handlers.onOpenModelKeys?.();
+  });
+
+  const unsubModels = handlers.client?.onEvent((event) => {
+    if (event.type !== "session.models") return;
+    applyModelCatalog(event.models);
+  });
+
   const unsubBanner = handlers.client?.onEvent((event) => {
     if (event.type !== "session.banner") return;
     syncingModel = true;
-    modelSelect.value = normalizeModelSelectValue(event.llm_model);
+    if (knownModels.length) {
+      modelSelect.value = pickModelId(event.llm_model, knownModels);
+    } else {
+      modelSelect.value = event.llm_model || FALLBACK_MODEL_ID;
+    }
     syncingModel = false;
   });
 
+  void unsubModels;
   void unsubBanner;
 
-  modelSelect.title = "切换主 Agent 模型（Flash 128k / Pro 1M）";
+  modelSelect.innerHTML = renderModelOptions([], true);
+  modelSelect.disabled = true;
+  modelSelect.title = "正在加载模型列表…";
+
+  handlers.client?.listModels();
+  window.setTimeout(() => {
+    if (!modelsBooting) return;
+    handlers.client?.listModels();
+  }, 3000);
 
   return {
     showRouteNotice(text: string, onUndo?: () => void): void {
@@ -140,7 +211,7 @@ export function mountAppChrome(
     },
     setModel(model: string): void {
       syncingModel = true;
-      modelSelect.value = normalizeModelSelectValue(model);
+      modelSelect.value = pickModelId(model, knownModels);
       syncingModel = false;
     },
   };

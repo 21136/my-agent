@@ -1,7 +1,7 @@
 # 项目模式设计（PROJECT-MODE）
 
 > 版本 **0.3.2** · 2026-07-30  
-> **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E10 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
+> **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
 > 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · `TASKS.md` Phase 11/20/**21**/37 · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
 ---
@@ -28,6 +28,34 @@
 | **E4** | **不**每轮注入 system；`npm_exec`/`mvn_exec` **自动读** ENV 解析路径与 package_manager |
 | **E5** | LLM 只需关心 `prefer`（pnpm / JDK17）；可用 `read_file` 查看/改偏好 |
 | **E6** | 实现：`agent-core/project_env.py`；挂钩 `create_project` / `execute_project_switch` / `context_switch` 项目创建 |
+
+### E11 · 质量命令（已决 · done · 2026-08-04）
+
+> 设计：[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) §3 · Phase 45 · `run_quality` evolved 工具。
+
+| ID | 决议 | 状态 |
+|----|------|------|
+| **E11** | `ENV.md` 可选 `quality.commands`（`id` + `cmd` 数组 + 可选 `cwd`）；`ensure_project_env` **刷新 tools 时保留** 已有 `quality:` 块 | **done** |
+
+示例：
+
+```yaml
+quality:
+  commands:
+    - id: ruff
+      cmd: ["python", "-m", "ruff", "check", "."]
+      cwd: backend
+    - id: eslint
+      cmd: ["npm", "run", "lint"]
+      cwd: frontend
+```
+
+| 非目标 | 理由 |
+|--------|------|
+| 自动探测 ruff/eslint | 项目差异大；须手写 `quality.commands` |
+| 迁移写操作封装 | 仍走 `run_command` + confirm；只读见 `db_migrate_status` |
+
+实施锚点：`agent-core/project_quality.py` · `evolve/tools/project/run_quality/` · `project_env.py` · `tests/test_project_quality.py`。
 
 ---
 
@@ -75,7 +103,7 @@
 
 ## 0e. 项目进度闭环补强（已决 · done · 2026-07-31）
 
-> **后续**：勾选证据硬闸（本回合对口成功才可 [x]）见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) · Phase 24。
+> **后续**：勾选证据硬闸（本回合对口成功才可 [x]）见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) · Phase 24（**v0.3.0**：口语 write + `[evidence:…]` 标签）。
 
 > 触发：huiyi（`20260730-27fd72d2`）助手完成工作后称「`report_progress` 不在清单」；用户质疑「工具缺失？」。  
 > 证据：2026-07-30 隔离环境门禁模拟（见 [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
@@ -226,6 +254,8 @@ govern   → 治理（review / audit）
 | 典型工具 | `write_evolve`、`patch_file`（仓内） | `write_text`、`run_python`、`patch_file`（**仅项目内**） |
 | 成功标准 | registry / proposal 合并 | **`TASKS` 全 `[x]` + `PROJECT` 验收** |
 | 默认禁止 | — | **`write_evolve`** |
+
+**桌面（unified 工作台）**：项目绑定会话内仍禁 `write_evolve`（P6）。进入 grow 的路径见 [WORKBENCH-UI.md](./WORKBENCH-UI.md) **Q4**：无项目空态 **「先聊聊」**；已绑项目时顶栏 **「+ 对话」** 挂起项目后开 grow。
 
 ### 2.2 daily 与 project
 

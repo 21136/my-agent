@@ -244,8 +244,26 @@ python server.py --demo
 
 ---
 
-## 11. 版本历史
+## 11. 后续：写操作分层确认（Phase 42 Track H）
+
+> **状态**：设计已签 · 实现待 [T-4211](./TASKS.md)  
+> 真源：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) §2 · `write_policy.py`（拟建，镜像 `run_command_policy.py`）
+
+| 现状 | Phase 42 目标 |
+|------|----------------|
+| `run_command` 在 project 内对 build/test/readonly **分层免确认**（Phase 29 A2） | `write_text` / `patch_file`（含 proxy）**对称分层** |
+| 每文件写操作弹 confirm 卡 | project 内 patch / 覆盖已有文件 → **跳过 confirm**（仍走 WRITE-SCOPE · 计划门 · Progress Gate） |
+| session `a` 可批过 write_text | **保留**；与分层 **叠加取最宽** |
+
+**仍确认**：project 外 · 敏感路径（`TASKS.md`/`MAP.md`/`ENV.md` · `.env` 等）· `write_evolve` · host 写。
+
+桌面 confirm 预览须展示 `Write policy: skip:…` 类理由（对齐 run_command 行）。
+
+---
+
+## 12. 版本历史
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
 | 0.1.0 | 2026-07-13 | 初稿：BUG-008 事件；C1–C10；Phase 14 任务 |
+| 0.1.2 | 2026-08-04 | §11：Phase 42 Track H 写确认分层指针 |

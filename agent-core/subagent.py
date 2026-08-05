@@ -26,13 +26,14 @@ from tools.schema import to_json
 from turn_intent import classify_turn, should_spawn_explore
 
 SubagentKind = Literal["explore", "checker", "plan"]
-CheckerKind = Literal["evolve_tool_scaffold"]
+CheckerKind = Literal["evolve_tool_scaffold", "project_test_fail"]
 CheckStatus = Literal["pass", "fail", "warn"]
 Verdict = Literal["pass", "fail", "warn"]
 
 EXPLORE_TOOL_NAMES: tuple[str, ...] = (
     "read_file",
     "list_dir",
+    "glob_file_search",
     "grep",
     "web_search",
     "fetch_url",
@@ -41,6 +42,7 @@ EXPLORE_TOOL_NAMES: tuple[str, ...] = (
 CHECKER_TOOL_NAMES: tuple[str, ...] = (
     "read_file",
     "list_dir",
+    "glob_file_search",
     "grep",
 )
 
@@ -111,9 +113,18 @@ def checker_summary_max_chars() -> int:
     return max(256, value)
 
 
-def resolve_checker_model(session_model: str) -> str:
-    override = os.environ.get("CHECKER_MODEL", "").strip()
-    return override or session_model
+def resolve_checker_model(session_model: str, meta: Any | None = None) -> str:
+    from llm_routing import resolve_model_id_for_role
+    from session import SessionMeta
+
+    session_meta = meta if isinstance(meta, SessionMeta) else SessionMeta(llm_model=session_model)
+    if isinstance(meta, SessionMeta) and session_model and not session_meta.llm_model:
+        session_meta = SessionMeta(
+            llm_model=session_model,
+            execution_model=session_meta.execution_model,
+            planning_model=session_meta.planning_model,
+        )
+    return resolve_model_id_for_role("checker", session_meta)
 
 
 def checker_task_from_demo_record(
@@ -191,6 +202,9 @@ def parse_checker_command(line: str) -> CheckerTask | None:
     stripped = line.strip()
     if not stripped:
         return None
+    test_task = _parse_project_test_checker_command(stripped)
+    if test_task is not None:
+        return test_task
     lower = stripped.casefold()
     tool_name: str | None = None
     reference_tool: str | None = None
@@ -217,6 +231,25 @@ def parse_checker_command(line: str) -> CheckerTask | None:
     return CheckerTask(tool_name=tool_name, reference_tool=reference_tool or None)
 
 
+def _parse_project_test_checker_command(stripped: str) -> CheckerTask | None:
+    """验收测试 workspace/foo/backend — project test-fail checker (Phase 44 T-4407)."""
+    lower = stripped.casefold()
+    for prefix in ("验收测试", "check tests", "check test"):
+        if lower.startswith(prefix):
+            rest = stripped[len(prefix) :].strip()
+            if not rest:
+                return None
+            working_dir = rest.split()[0].strip()
+            if not working_dir:
+                return None
+            return CheckerTask(
+                kind="project_test_fail",
+                tool_name="run_project_tests",
+                working_dir=working_dir,
+            )
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class ChecklistItem:
     id: str
@@ -233,6 +266,8 @@ class CheckerTask:
     reference_tool: str | None = None
     demo_result: dict[str, Any] | None = None
     user_checklist: tuple[str, ...] | None = None
+    working_dir: str | None = None
+    test_result: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +302,8 @@ def build_hard_checklist(
     registry: ToolRegistry | None = None,
 ) -> list[ChecklistItem]:
     """Deterministic scaffold checks before LLM semantic audit (T-1611)."""
+    if task.kind == "project_test_fail":
+        return _build_test_fail_hard_checklist(task)
     reg = registry or ToolRegistry.load(paths)
     name = task.tool_name.strip()
     items: list[ChecklistItem] = []
@@ -396,6 +433,39 @@ def build_hard_checklist(
     return items
 
 
+def _build_test_fail_hard_checklist(task: CheckerTask) -> list[ChecklistItem]:
+    result = dict(task.test_result or {})
+    wd = (task.working_dir or "").strip()
+    if not result:
+        return [
+            ChecklistItem(
+                "test_run",
+                "fail",
+                "run_project_tests did not run",
+                wd,
+            )
+        ]
+    if result.get("ok"):
+        return [
+            ChecklistItem(
+                "test_run",
+                "pass",
+                "all tests passed",
+                str(result.get("command") or wd)[:200],
+            )
+        ]
+    failures = result.get("failures") if isinstance(result.get("failures"), list) else []
+    summary = str(result.get("failure_summary") or result.get("error") or "tests failed")
+    return [
+        ChecklistItem(
+            "test_run",
+            "fail",
+            f"{len(failures)} failure(s): {summary.splitlines()[0][:120]}",
+            wd,
+        )
+    ]
+
+
 def format_checklist_lines(checklist: tuple[ChecklistItem, ...] | list[ChecklistItem]) -> list[str]:
     lines: list[str] = []
     for item in checklist:
@@ -416,9 +486,9 @@ def format_subagent_overlay(result: SubagentResult) -> str:
             f"结论: {result.summary}",
         ]
         if result.proposal_ids:
-            lines.append(f"提案: {len(result.proposal_ids)} 条待侧栏采纳")
+            lines.append(f"提案: {len(result.proposal_ids)} 条待审阅")
         if result.adopt_pending:
-            lines.append("（侧栏采纳后才落盘；向用户简短说明并提醒采纳/忽略）")
+            lines.append("（审阅后才落盘；向用户简短说明内容，禁止口述「点采纳」等按钮名）")
         if result.truncated:
             lines.append("（摘要已截断）")
         return "\n".join(lines)
@@ -470,7 +540,7 @@ def _explore_system_prompt() -> str:
     return "\n".join(
         [
             "你是 my-agent 的 **explore 子代理**（只读调研）。",
-            "可用工具：read_file、list_dir、grep、web_search、fetch_url。",
+            "可用工具：read_file、list_dir、glob_file_search、grep、web_search、fetch_url。",
             "**禁止** run_evolved 或任何写入。",
             "读完必要文件后，用自然语言输出摘要：已读路径、关键发现、给父代理的行动建议。",
             "父代理将收到你的摘要，不应重复读取相同文件。",
@@ -478,20 +548,61 @@ def _explore_system_prompt() -> str:
     )
 
 
-def _checker_system_prompt() -> str:
-    return "\n".join(
-        [
-            "你是 my-agent 的 **checker 子代理**（只读验收 / 监工）。",
-            "可用工具：read_file、list_dir、grep。",
-            "**禁止** run_evolved、web_search、fetch_url 或任何写入。",
-            "内核已注入 demo probe 硬事实；你负责对照 tool.toml / main.py 做结构与语义审计。",
-            "若提供 reference_tool，仅核对任务要求的关键字段/行为；纯风格差异最多 warn。",
-            "输出末行必须是：CHECKER_VERDICT: pass|fail|warn",
-        ]
-    )
+def _checker_system_prompt(*, kind: CheckerKind = "evolve_tool_scaffold") -> str:
+    lines = [
+        "你是 my-agent 的 **checker 子代理**（只读验收 / 监工）。",
+        "可用工具：read_file、list_dir、glob_file_search、grep。",
+        "**禁止** run_evolved、web_search、fetch_url 或任何写入。",
+        "输出末行必须是：CHECKER_VERDICT: pass|fail|warn",
+    ]
+    if kind == "project_test_fail":
+        lines.extend(
+            [
+                "任务：分析 run_project_tests 的结构化 failures，给出修复建议。",
+                "禁止声称已 patch 或已修改文件；只读审计 + 建议。",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "内核已注入 demo probe 硬事实；你负责对照 tool.toml / main.py 做结构与语义审计。",
+                "若提供 reference_tool，仅核对任务要求的关键字段/行为；纯风格差异最多 warn。",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def _format_checker_user_message(task: CheckerTask, hard_checklist: list[ChecklistItem]) -> str:
+    if task.kind == "project_test_fail":
+        lines = [
+            "验收项目测试失败（project_test_fail）",
+            f"working_dir: {task.working_dir or ''}",
+        ]
+        if task.test_result:
+            payload = dict(task.test_result)
+            blob = json.dumps(payload, ensure_ascii=False)
+            if len(blob) > 3500:
+                payload = {
+                    k: payload[k]
+                    for k in (
+                        "ok",
+                        "suite",
+                        "command",
+                        "exit_code",
+                        "failure_summary",
+                        "failures",
+                        "error",
+                    )
+                    if k in payload
+                }
+            lines.append("test_result:")
+            lines.append(json.dumps(payload, ensure_ascii=False, indent=2))
+        lines.append("hard_checklist (内核预检，不可推翻 fail):")
+        lines.extend(format_checklist_lines(hard_checklist))
+        lines.append(
+            "请 read_file 失败位置附近代码，给出修复建议。末行 CHECKER_VERDICT: pass|fail|warn"
+        )
+        return "\n".join(lines)
     lines = [
         f"验收 evolved 工具: {task.tool_name}",
         f"目录: {task.tool_dir or f'evolve/tools/common/{task.tool_name}/'}",
@@ -576,7 +687,7 @@ def merge_checker_results(
 
 def _extract_paths_from_arguments(tool_name: str, arguments: dict[str, Any]) -> list[str]:
     paths: list[str] = []
-    if tool_name in {"read_file", "list_dir", "grep"}:
+    if tool_name in {"read_file", "list_dir", "glob_file_search", "grep"}:
         raw = arguments.get("path")
         if isinstance(raw, str) and raw.strip():
             paths.append(raw.strip())
@@ -658,7 +769,9 @@ class SubagentRunner:
         _bind_llm_cancel(llm, cancel_event)
 
         tools = build_explore_tools(registry=registry)
-        model = session.meta.llm_model or resolve_session_model(session.meta.topics)
+        from llm_routing import resolve_model_id_for_role
+
+        model = resolve_model_id_for_role("explore", session.meta)
 
         working: list[dict[str, Any]] = [
             {"role": "system", "content": _explore_system_prompt()},
@@ -758,11 +871,11 @@ class SubagentRunner:
         cancel_event: threading.Event | None = None,
     ) -> SubagentResult:
         tool_name = task.tool_name.strip()
-        if not tool_name:
+        if task.kind != "project_test_fail" and not tool_name:
             raise ValueError("checker tool_name is empty")
 
         registry = ToolRegistry.load(self.paths)
-        evolved = registry.get_evolved(tool_name)
+        evolved = registry.get_evolved(tool_name) if tool_name else None
         tool_dir = task.tool_dir.strip()
         if evolved is not None:
             tool_dir = tool_dir or evolved.relative_dir
@@ -771,11 +884,13 @@ class SubagentRunner:
 
         resolved_task = CheckerTask(
             kind=task.kind,
-            tool_name=tool_name,
+            tool_name=tool_name or "run_project_tests",
             tool_dir=tool_dir,
             reference_tool=task.reference_tool,
             demo_result=task.demo_result,
             user_checklist=task.user_checklist,
+            working_dir=task.working_dir,
+            test_result=task.test_result,
         )
 
         hard_checklist = build_hard_checklist(resolved_task, paths=self.paths, registry=registry)
@@ -793,12 +908,13 @@ class SubagentRunner:
         _bind_llm_cancel(llm, cancel_event)
 
         tools = build_checker_tools(registry=registry)
-        session_model = session.meta.llm_model or resolve_session_model(session.meta.topics)
-        model = resolve_checker_model(session_model)
+        from llm_routing import resolve_model_id_for_role
+
+        model = resolve_model_id_for_role("checker", session.meta)
 
         user_content = _format_checker_user_message(resolved_task, hard_checklist)
         working: list[dict[str, Any]] = [
-            {"role": "system", "content": _checker_system_prompt()},
+            {"role": "system", "content": _checker_system_prompt(kind=resolved_task.kind)},
             {"role": "user", "content": user_content},
         ]
 
@@ -925,9 +1041,11 @@ class SubagentRunner:
         if not project_id:
             raise ValueError("plan_partner requires a bound project_id")
 
+        from llm_routing import resolve_model_id_for_role
         from plan_agent import get_plan_agent
 
         agent = get_plan_agent(self.paths, project_id)
+        agent.configure_planning_model(resolve_model_id_for_role("plan_partner", session.meta))
 
         last_user_hint: str | None = None
         n = max(0, min(int(include_recent_user_lines or 0), 5))

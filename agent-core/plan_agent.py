@@ -35,7 +35,7 @@ from project_mode import (
     skip_task_line,
     toggle_task_line,
 )
-from session import Session
+from session import Session, SessionMeta
 
 ChangeKind = Literal["add", "drop", "skip", "reorder", "toggle", "confirm", "external"]
 
@@ -74,6 +74,7 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 ## 文档角色（先按这个判断「合不合理」）
 - **MAP.md**：目录、入口、模块/文件指针、「现在卡在哪」。**不是**执行 Phase，**不是**修复流水账。
 - **TASKS.md**：唯一执行队列（开放可勾项）。Phase 只出现在这里（或归档）。
+- **TASKS.archive.md**：已完成/关闭项；侧栏勾选 = 完成并归档。误勾后用 restore，不要当「删了」去 add 重写。
 - **PROJECT.md**：目标/非目标/约束。
 - **ENV.md**：环境与端口约定。
 - **bugs/**：缺陷与修复长文；MAP/TASKS 里最多留一行指针。
@@ -83,22 +84,33 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 {"reply":"给用户看的中文（可空）","operations":[ ... ],"tool_calls":[ ... ]}
 
 operations 里每条：
-- kind: **patch** | **add**
+- kind: **patch** | **add** | **restore**
 - path: patch 时必填，且只能是 TASKS.md|MAP.md|PROJECT.md|ENV.md
 - replacements: patch 时 [{ "old": "文件中唯一原文片段", "new": "替换后" }]
 - phase / description: 仅 kind=add
+- phase / task_ids / bodies: 仅 kind=restore（从归档恢复为开放 [ ]）
 - reason: 短理由
 
-tool_calls（可选，查/跑同权；结果只进本通道）：
+restore 示例：
+{"kind":"restore","phase":"Phase 7","task_ids":["T-020","T-021"],"reason":"误勾选归档"}
+
+tool_calls（可选；结果只进本通道）：
 - {"name":"read_file"|"list_dir"|"grep"|"web_search"|"fetch_url"|"run_command", "arguments":{...}}
-- **禁止** 用 write_text 等直写 TASKS/MAP/PROJECT/ENV（须 operations 提案）
+- **禁止** write_text 等直写 TASKS/MAP/PROJECT/ENV（须 operations 提案）
+- **禁止** 对 TASKS.md / TASKS.archive.md 再 read_file（开放队列与归档切片已在下方 user prompt）；除非读其它业务代码路径
 
 ## 意图分流（先分清）
 - 「合不合理 / 该不该 / 为什么 / 是不是」→ **先 reply 讲清楚**；用户没明确要求改文件时 **operations 必须 []**
 - 「把…改掉 / 整理 / 挪走 / 删掉 Phase 字样」→ reply 可一句 + operations 出 patch
 - 「加一个 / 新增任务」→ add 或 TASKS patch
+- 「恢复 / 找回 / 误勾 / 不见了」→ 看归档切片；优先 kind=restore（phase 或 task_ids），**禁止**用 add 重写已归档文案
 - 「优化 / 夹心 / 跳段」→ 看进度摘要 ⚠；需要改队列再 patch TASKS；并行模块脚手架不是重复
 - 需要读仓库其它文件 / 跑命令才能答 → 先 tool_calls，operations 可 []
+
+## 「任务不见了」决策
+1. 开放队列空 + 归档有匹配项 → restore（不要宣布项目已完成）
+2. MAP 有任务表、TASKS 无开放项 → 按 MAP 文案 restore / patch，不要凭空编
+3. 进度摘要出现「可能误归档」⚠ → 优先 restore
 
 ## 硬规则
 - **禁止** move|drop|skip|split|reorder 与任何 line 行号字段
@@ -118,6 +130,10 @@ _PLAN_MUTATE_RE = re.compile(
 )
 _PLAN_ADD_PREFIX_RE = re.compile(
     r"^(加(一)?个|新增|添加(一)?(个|条)?任务|记一?条)[:：\s]*",
+    re.IGNORECASE,
+)
+_PLAN_RESTORE_RE = re.compile(
+    r"(恢复|找回|误勾|误点|撤销归档|还原|取消完成|搞不见|不见了|误归档|restore)",
     re.IGNORECASE,
 )
 _LEGACY_LINE_OPS = frozenset({"move", "rephase", "drop", "skip", "split", "reorder"})
@@ -174,6 +190,7 @@ spawn=true 示例：
 - 规划/补文档/排任务/优化任务清单
 - 问计划是否合理、Phase 该不该调整
 - 新增任务描述（无具体写代码）
+- 任务不见了、误勾、从归档恢复 Phase / T-xxx
 
 spawn=false 示例：
 - 写代码、修 bug、编译运行、联调
@@ -204,7 +221,12 @@ def _parse_plan_spawn_json(raw: str) -> dict[str, Any]:
     return {}
 
 
-def classify_plan_spawn_intent(text: str, *, llm: Any) -> PlanSpawnDecision:
+def classify_plan_spawn_intent(
+    text: str,
+    *,
+    llm: Any,
+    meta: SessionMeta | None = None,
+) -> PlanSpawnDecision:
     """LLM classify for kernel pre-spawn (PLAN-SUBAGENT §4.3 · T-3905)."""
     import os
 
@@ -218,9 +240,9 @@ def classify_plan_spawn_intent(text: str, *, llm: Any) -> PlanSpawnDecision:
     if is_project_continue_utterance(t):
         return PlanSpawnDecision(False, "continue")
 
-    model = os.environ.get("PLAN_SPAWN_MODEL", "").strip() or getattr(
-        llm, "_plan_model", None
-    ) or os.environ.get("PLAN_AGENT_MODEL", "deepseek-v4-flash")
+    from llm_routing import resolve_model_id_for_role
+
+    model = resolve_model_id_for_role("topic_routing", meta or SessionMeta())
 
     try:
         response = llm.chat(
@@ -270,7 +292,14 @@ def strip_add_prefix(text: str) -> str:
     return _PLAN_ADD_PREFIX_RE.sub("", t).strip() or t
 
 
-def _plan_progress_brief(tasks_text: str) -> str:
+def looks_like_restore_request(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_PLAN_RESTORE_RE.search(t))
+
+
+def _plan_progress_brief(tasks_text: str, *, archive_tail: str = "") -> str:
     """Compact progress + explicit anomaly signals for Plan LLM."""
     from project_mode import (
         active_phase_title_from_lines,
@@ -366,6 +395,19 @@ def _plan_progress_brief(tasks_text: str) -> str:
         rows.extend(f"  {a}" for a in uniq)
     else:
         rows.append("- 异常信号: （无）")
+
+    open_total = sum(o for _, o, _ in phase_stats)
+    if open_total == 0 and archive_tail.strip():
+        empty_phases = [t for t, o, d in phase_stats if o == 0 and d == 0]
+        for ep in empty_phases:
+            key = ep.split("—")[0].strip() if "—" in ep else ep[:24]
+            if key and key.casefold() in archive_tail.casefold():
+                rows.append(
+                    f"- 异常信号: ⚠ 可能误归档——「{ep}」在 TASKS 无开放项，"
+                    "但归档里有相关任务；可说「恢复」或用 kind=restore"
+                )
+                break
+
     return "\n".join(rows)
 
 
@@ -390,11 +432,12 @@ def _build_plan_prompt(
     map_text: str = "",
     project_text: str = "",
     env_text: str = "",
+    archive_tail: str = "",
     plan_transcript: list[dict[str, str]] | None = None,
     tool_results: list[str] | None = None,
 ) -> str:
     """Context for Plan LLM — Plan 本线 + 计划域文件真源（不灌主聊天）。"""
-    brief = _plan_progress_brief(tasks_text)
+    brief = _plan_progress_brief(tasks_text, archive_tail=archive_tail)
     numbered = _format_tasks_with_line_numbers(tasks_text)
     prior = ""
     if plan_transcript:
@@ -439,7 +482,7 @@ def _build_plan_prompt(
 
 {_clip_doc(env_text, limit=2000) or "（无）"}
 
-{tools_block}## 用户说
+{archive_tail or ""}{tools_block}## 用户说
 
 {user_intent}
 """
@@ -486,6 +529,13 @@ class PlanAgent:
     _last_partner_notices: list[str] = field(default_factory=list, repr=False)
     # Phase 38 · A11/C4–C6 — in-memory Plan channel only (never messages.jsonl)
     _plan_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
+    _planning_model_id: str = field(default="", repr=False)
+
+    def configure_planning_model(self, model_id: str) -> None:
+        """Set planning model for this run (Phase 42 · plan_partner role)."""
+        self._planning_model_id = (model_id or "").strip()
+        if self._llm is not None:
+            self._llm._plan_model = self._planning_model_id
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -496,11 +546,34 @@ class PlanAgent:
             lines = [str(x).strip() for x in summary if str(x).strip()]
         else:
             lines = [ln.strip() for ln in str(summary).splitlines() if ln.strip()]
+        lines = self._sanitize_partner_notice_lines(lines)
         # Keep sidebar short; long reply lives on plan transcript / main-area bubbles.
         short: list[str] = []
         for ln in lines[:6]:
             short.append(ln if len(ln) <= 160 else ln[:157] + "…")
         self._last_partner_notices = short
+
+    @staticmethod
+    def _sanitize_partner_notice_lines(lines: list[str]) -> list[str]:
+        """Strip diff hunks from sidebar notices (Phase 40 / BUG-022)."""
+        out: list[str] = []
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("@@"):
+                continue
+            if len(s) >= 2 and s[0] in "+-" and s[1] in " +-":
+                continue
+            out.append(s)
+        return out
+
+    @staticmethod
+    def _adopted_write_notice(rel: str, *, detail: str = "") -> str:
+        path = str(rel or "").strip() or "计划文件"
+        base = f"已采纳写入 {path}"
+        extra = str(detail or "").strip()
+        return f"{base}（{extra}）" if extra else base
 
     def clear_plan_transcript(self) -> None:
         """C6: enter/switch project → wipe Plan chat memory; keep disk plan files."""
@@ -950,16 +1023,11 @@ class PlanAgent:
                 reason=f"accepted file_patch: {sug.get('title', '')}"[:120],
             )
             self._mark_suggestion_resolved(sid)
-            diff_snip = str(result.get("diff") or "").strip()
-            if len(diff_snip) > 400:
-                diff_snip = diff_snip[:400] + "\n…"
-            summary = f"已写入 {rel}"
-            if diff_snip:
-                summary = f"{summary}\n{diff_snip}"
-            self.set_partner_notices(summary)
+            notice = self._adopted_write_notice(rel)
+            self.set_partner_notices(notice)
             return {
                 **result,
-                "summary": summary,
+                "summary": notice,
                 "_next_task": self.next_task_text(),
             }
 
@@ -990,6 +1058,48 @@ class PlanAgent:
                 "phase": landed,
                 "description": desc,
                 "line": new_line,
+                "_next_task": self.next_task_text(),
+            }
+
+        if action == "restore_archive":
+            from project_mode import restore_archived_tasks
+
+            phase_sub = str(payload.get("phase") or payload.get("phase_substring") or "").strip() or None
+            bodies = payload.get("bodies")
+            body_subs = (
+                [str(b) for b in bodies if str(b).strip()]
+                if isinstance(bodies, list)
+                else None
+            )
+            task_ids = payload.get("task_ids")
+            ids = (
+                [str(t) for t in task_ids if str(t).strip()]
+                if isinstance(task_ids, list)
+                else None
+            )
+            result = restore_archived_tasks(
+                self.paths,
+                self.project_id,
+                phase_substring=phase_sub,
+                body_substrings=body_subs,
+                task_ids=ids,
+            )
+            restored = result.get("restored") or []
+            self._record_change(
+                "add",
+                f"restore {len(restored)} tasks",
+                reason=f"accepted restore: {sug.get('title', '')}"[:120],
+            )
+            self._mark_suggestion_resolved(sid)
+            notice = self._adopted_write_notice(
+                "TASKS.md",
+                detail=f"已恢复 {len(restored)} 条任务",
+            )
+            self.set_partner_notices(notice)
+            return {
+                **result,
+                "ok": True,
+                "summary": notice,
                 "_next_task": self.next_task_text(),
             }
 
@@ -1231,13 +1341,19 @@ class PlanAgent:
         prefix = f"{extra}。" if extra else ""
         return (
             f"{prefix}已提案新增到 {phase_title}（未写盘）：{desc[:60]}。"
-            "点侧栏「采纳」才会写入 TASKS.md。"
+            "审阅面或侧栏「查看」后可写入 TASKS.md。"
         )
 
     def _plan_channel_fallback(self, text: str, extra: str = "") -> str:
         """L2兜底 only — LLM 不可用 / 解析失败时。正常路径应已走 LLM。"""
         if looks_like_plan_meta_command(text):
             return self._handle_meta_plan_command(text)
+        if looks_like_restore_request(text):
+            restored = self._handle_restore_request(text)
+            if restored:
+                if extra:
+                    return f"{extra}。{restored}"
+                return restored
         if looks_like_new_task_utterance(text):
             return self._fallback_add_task(text, extra=extra)
         msg = (
@@ -1262,15 +1378,20 @@ class PlanAgent:
             lines.append(prefix)
         lines.append(f"计划搭档已处理：未改 TASKS。未把「{label}」写成任务。")
         if suggestions:
-            lines.append(f"另有 {len(suggestions)} 条建议卡可点「采纳」。")
+            lines.append(f"另有 {len(suggestions)} 条建议待审阅。")
         return "\n".join(lines)
 
     def _ensure_llm(self):
         if self._llm is not None:
             return self._llm
-        from llm_client import LLMClient, DEFAULT_MODEL
-        import os
-        model = os.environ.get("PLAN_AGENT_MODEL", DEFAULT_MODEL)
+        from llm_client import LLMClient
+        from llm_routing import resolve_model_id_for_role
+        from session import SessionMeta
+
+        if self._planning_model_id:
+            model = self._planning_model_id
+        else:
+            model = resolve_model_id_for_role("plan_partner", SessionMeta())
         try:
             self._llm = LLMClient()
         except Exception:
@@ -1391,6 +1512,73 @@ class PlanAgent:
         self._save_state()
         return f"{extra}。已标记完成并添加续做任务：「{desc}」"
 
+    def _extract_restore_hints(self, text: str) -> dict[str, Any]:
+        t = (text or "").strip()
+        phase_sub: str | None = None
+        m = re.search(r"phase\s*(\d+)", t, re.IGNORECASE)
+        if m:
+            phase_sub = f"phase {m.group(1)}"
+        elif "蔡岭" in t:
+            phase_sub = "蔡岭"
+        task_ids = sorted(set(re.findall(r"\bT-\d{3,}\b", t, re.IGNORECASE)))
+        return {"phase_substring": phase_sub, "task_ids": task_ids or None}
+
+    def _park_restore_suggestion(
+        self,
+        *,
+        preview: dict[str, Any],
+        reason_prefix: str,
+        phase_substring: str | None = None,
+        task_ids: list[str] | None = None,
+    ) -> str:
+        bodies = preview.get("bodies") or []
+        count = int(preview.get("count") or 0)
+        key = f"restore-{abs(hash('|'.join(bodies))) % 10_000_000:x}"
+        label = phase_substring or (", ".join(task_ids) if task_ids else "匹配项")
+        sug = self._suggestion(
+            kind="restore_archive",
+            title=f"从归档恢复 {count} 条任务（待采纳）",
+            body=f"{reason_prefix} 恢复 {label}：{'; '.join(str(b)[:40] for b in bodies[:4])}",
+            key=key,
+            risk="gate",
+            action="restore_archive",
+            payload={
+                "phase": phase_substring or "",
+                "phase_substring": phase_substring or "",
+                "task_ids": task_ids,
+                "bodies": bodies,
+                "source": "plan_restore",
+            },
+        )
+        self.park_gated_suggestion(sug)
+        return (
+            f"提案从归档恢复 {count} 条任务到 TASKS.md（待审阅）："
+            + "；".join(str(b)[:50] for b in bodies[:6])
+            + ("…" if len(bodies) > 6 else "")
+        )
+
+    def _handle_restore_request(self, text: str) -> str | None:
+        from project_mode import preview_restore_archived_tasks
+
+        hints = self._extract_restore_hints(text)
+        preview = preview_restore_archived_tasks(
+            self.paths,
+            self.project_id,
+            phase_substring=hints.get("phase_substring"),
+            task_ids=hints.get("task_ids"),
+        )
+        if not preview.get("count"):
+            return (
+                "归档里没有匹配的任务可恢复。"
+                "请指定 Phase（如 Phase 7）或任务号（如 T-020）。"
+            )
+        return self._park_restore_suggestion(
+            preview=preview,
+            reason_prefix="误归档恢复",
+            phase_substring=hints.get("phase_substring"),
+            task_ids=hints.get("task_ids"),
+        )
+
     def _handle_meta_plan_command(self, text: str) -> str:
         """Local-only兜底 when LLM unavailable (auto_fix + suggestion cards)."""
         actions = self.auto_fix()
@@ -1403,8 +1591,8 @@ class PlanAgent:
         lines: list[str] = list(actions)
         if suggestions:
             lines.append(
-                f"计划搭档已检查：{len(suggestions)} 条可执行建议（点「采纳」才会改 TASKS；"
-                f"「忽略」= 本会话不再提示）。未把「{label}」写成任务。"
+                f"计划搭档已检查：{len(suggestions)} 条建议待审阅。"
+                f"未把「{label}」写成任务。"
             )
         else:
             lines.append(
@@ -1541,6 +1729,40 @@ class PlanAgent:
                     self.park_gated_suggestion(sug)
                     applied.append(f"提案 + {phase_title}: {desc_s[:50]}（待采纳）")
 
+                elif kind == "restore":
+                    from project_mode import preview_restore_archived_tasks
+
+                    phase_sub = str(op.get("phase") or op.get("phase_substring") or "").strip() or None
+                    bodies_raw = op.get("bodies")
+                    body_subs = (
+                        [str(b) for b in bodies_raw if str(b).strip()]
+                        if isinstance(bodies_raw, list)
+                        else None
+                    )
+                    ids_raw = op.get("task_ids")
+                    task_ids = (
+                        [str(t) for t in ids_raw if str(t).strip()]
+                        if isinstance(ids_raw, list)
+                        else None
+                    )
+                    preview = preview_restore_archived_tasks(
+                        self.paths,
+                        self.project_id,
+                        phase_substring=phase_sub,
+                        body_substrings=body_subs,
+                        task_ids=task_ids,
+                    )
+                    if not preview.get("count"):
+                        applied.append("跳过 restore（归档无匹配项）")
+                        continue
+                    msg = self._park_restore_suggestion(
+                        preview=preview,
+                        reason_prefix=reason_prefix,
+                        phase_substring=phase_sub,
+                        task_ids=task_ids,
+                    )
+                    applied.append(msg)
+
                 else:
                     applied.append(f"跳过未知操作 kind={kind or '∅'}")
 
@@ -1584,10 +1806,7 @@ class PlanAgent:
         notice = sidebar_short
         if notice is None:
             if self._pending_gated:
-                notice = (
-                    f"已出提案（{len(self._pending_gated)} 条待侧栏采纳）；"
-                    "长回复见主区计划气泡。"
-                )
+                notice = ""
             elif text:
                 first = text.splitlines()[0]
                 notice = first if len(first) <= 120 else first[:117] + "…"
@@ -1640,6 +1859,9 @@ class PlanAgent:
             else ""
         )
         env_text = (root / "ENV.md").read_text(encoding="utf-8") if (root / "ENV.md").is_file() else ""
+        from project_mode import TASKS_ARCHIVE_NAME, format_archive_tail_for_prompt
+
+        archive_tail = format_archive_tail_for_prompt(root / TASKS_ARCHIVE_NAME)
 
         tool_result_blocks: list[str] = []
 
@@ -1655,6 +1877,7 @@ class PlanAgent:
                             map_text=map_text,
                             project_text=project_text,
                             env_text=env_text,
+                            archive_tail=archive_tail,
                             plan_transcript=self._plan_transcript,
                             tool_results=tool_result_blocks or None,
                         ),
@@ -1714,8 +1937,8 @@ class PlanAgent:
 
         if self._pending_gated:
             applied.append(
-                f"以上为提案（{len(self._pending_gated)} 条待侧栏采纳）；"
-                "未写盘，点「采纳」才落盘。"
+                f"以上为提案（{len(self._pending_gated)} 条待审阅）；"
+                "未写盘，审阅后可写入。"
             )
         out = "\n".join(applied)
         return self._finalize_plan_reply(out)

@@ -31,6 +31,7 @@
 | 2026-07-14 | [BUG-019](./bugs/2026-07-14-project-switch-import.md) | 项目切换蓝条 `cannot import name 'session_memory_event' from 'session'` | `project_api.py` 错从 `session` 导入 `session_memory_event` | **fixed** |
 | 2026-07-18 | [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) | grow Q&A 后 `shell_sessions.daily` 被写成 grow 会话（串线） | `park_session` × `activity_router` / `agent.py`（STD-001） | **fixed** |
 | 2026-07-30 | [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) | 确认后无法勾选 TASKS：`report_progress` 不在清单 + 直写被拦 + 一停不武装 | allowlist scope≠coding · `agent.run_turn` draft→grow · task_stop 武装面 | **fixed** |
+| 2026-08-04 | [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md) | 主聊「点采纳」；侧栏「已写入…+diff」无按钮 | 提示词口播 + partner_notices 贴 diff + PRU 话术滞后 | **fixed**（Phase 40 P0/P1） |
 
 ---
 
@@ -56,7 +57,9 @@
 | `README.md` 属于 evolved 工具脚手架，不能经 write_text`（在 workspace 项目里） | BUG-018 | 已修；`workspace/**/README.md` 可正常 `write_text` |
 | `cannot import name 'session_memory_event' from 'session'`（切项目时） | BUG-019 | 已修；重启 `start-desktop.bat` 后侧栏切换应正常灌 `session.history` |
 | 助手说「report_progress 不在清单」/ 不能勾 TASKS；或提议新造该工具 | BUG-021 | **已修**；重启 sidecar；须用 `report_progress` 勾选，勿直写 TASKS |
-| 拒确认/测试未跑仍勾验收；同 turn 连勾多项 | — | **设计中** [PROGRESS-GATE.md](./PROGRESS-GATE.md) Phase 24；现网仍可能发生 |
+| 主聊说「点采纳」，侧栏只有「已写入…」+diff、无按钮 | BUG-022 | **设计已签** [PLAN-REVIEW-UI §10](./PLAN-REVIEW-UI.md)；绕行：点过程卡「待采纳」或侧栏「查看」（若可见）；代码修 Phase 40 |
+| 本回合已写文件仍拒勾；`evidence_kind=unknown`；反复撞 `plan_partner` | （分类器过严 · v0.3.0 已修） | 重启 sidecar；口语写码标题现归 `write`；纯确认类可加 `[evidence:write]`；见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §1.3 |
+| 拒确认/测试未跑仍勾验收；同 turn 连勾多项 | — | Phase 24 **M0 核心已落地**；收尾 T-2406～2408 · [PROGRESS-GATE.md](./PROGRESS-GATE.md) |
 
 **改代码后务必**：关掉托盘/Electron → 重新 `start-desktop.bat`（Python sidecar + Vite 均加载新逻辑）。
 

@@ -61,6 +61,43 @@ class ClassifyEvidenceKindTests(unittest.TestCase):
     def test_unknown(self) -> None:
         self.assertEqual(classify_task_evidence_kind("随便想想明天做什么"), "unknown")
 
+    def test_write_colloquial_phase7_style(self) -> None:
+        """口语化写码任务须归 write（huiyi T-020/022/024 死锁）。"""
+        self.assertEqual(
+            classify_task_evidence_kind("T-020 写 SysMenu 菜单列表接口"),
+            "write",
+        )
+        self.assertEqual(classify_task_evidence_kind("T-022 写 City 新增删除"), "write")
+        self.assertEqual(classify_task_evidence_kind("T-024 写 SaleSite 全 CRUD"), "write")
+        self.assertEqual(
+            classify_task_evidence_kind("T-021 改 Layout.vue 动态路由"),
+            "write",
+        )
+
+    def test_explicit_evidence_tag(self) -> None:
+        self.assertEqual(
+            classify_task_evidence_kind("确认目录结构完整 [evidence:write]"),
+            "write",
+        )
+        self.assertEqual(
+            classify_task_evidence_kind("随便想想 [evidence:compile]"),
+            "compile",
+        )
+        # Tag wins over conflicting colloquial signals
+        self.assertEqual(
+            classify_task_evidence_kind("写一堆接口但其实要编译 [evidence:compile]"),
+            "compile",
+        )
+
+    def test_colloquial_does_not_override_test_phase(self) -> None:
+        """「接口」出现在联调测试行时仍归 test，不被 write 口语规则抢走。"""
+        self.assertEqual(
+            classify_task_evidence_kind(
+                "Phase 4 测试：对必备材料模块进行后端接口与前端联调测试"
+            ),
+            "test",
+        )
+
 
 class EvidenceMatchTests(unittest.TestCase):
     def test_write_needs_write_tool(self) -> None:
@@ -255,6 +292,51 @@ class ProgressGateExecutorTests(unittest.TestCase):
             arguments={"tool_name": "report_progress", "arguments": {}},
         )
         self.assertIsNotNone(reason)
+
+    def test_it2406_gate_notice_on_blocked_report(self) -> None:
+        """T-2406: progress gate rejection emits structured gate_notice (no force-check)."""
+        from tools.executor import ExecutorSession, ToolExecutor
+        from tools.registry import ToolRegistry
+        from tests.isolation_helpers import temporary_agent_paths
+
+        with temporary_agent_paths(copy_tool_dirs=("project/report_progress",)) as paths:
+            proj = paths.workspace / "gate-demo"
+            proj.mkdir(parents=True)
+            (proj / "TASKS.md").write_text(
+                "- [ ] T-001 Phase 1 测试：模块联调测试\n",
+                encoding="utf-8",
+            )
+            registry = ToolRegistry.load(paths)
+            events: list[tuple[str, dict]] = []
+
+            def capture(event_type: str, payload: dict) -> None:
+                events.append((event_type, payload))
+
+            executor = ToolExecutor(
+                registry=registry,
+                session=ExecutorSession(
+                    allowed_evolved={"report_progress"},
+                    project_root="workspace/gate-demo",
+                    project_id="gate-demo",
+                    active_shell="project",
+                ),
+                on_event=capture,
+            )
+            executor.begin_turn()
+            blocked = executor.run(
+                "run_evolved",
+                {
+                    "tool_name": "report_progress",
+                    "arguments": {"summary": "done"},
+                },
+            )
+            self.assertFalse(blocked.ok)
+            evidence = [p for t, p in events if t == "turn.evidence"]
+            self.assertTrue(evidence)
+            notice = (evidence[-1].get("gate_notice") or "").strip()
+            self.assertIn("进度闸门", notice)
+            self.assertIn("证据类", notice)
+            self.assertIn("无强制勾选", notice)
 
 
 if __name__ == "__main__":

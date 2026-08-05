@@ -79,6 +79,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool("read_file", "Read a text file under agent root or host:<id>/… paths (use list_dir to discover host ids)", confirm=False, dry_run_supported=False),
     BuiltinTool("list_dir", "List directory entries under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
     BuiltinTool("grep", "Search local file contents under agent root or host:<id>/… paths", confirm=False, dry_run_supported=False),
+    BuiltinTool(
+        "glob_file_search",
+        "Find files by glob pattern under agent root or host:<id>/… paths (name/path discovery, not content search)",
+        confirm=False,
+        dry_run_supported=False,
+    ),
     BuiltinTool("web_search", "Search the web for links and snippets", confirm=False, dry_run_supported=False),
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),

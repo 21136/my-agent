@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 from plan_agent import drop_plan_agent, get_plan_agent
 from plan_patch import apply_plan_patch, apply_replacements, build_patch_preview
-from project_mode import ProjectModeError, create_project, normalize_project_id, project_dir
+from project_mode import ProjectModeError, create_project, normalize_project_id, project_dir, snapshot_plan_fingerprints, sync_plan_dirty_if_structure_changed
 
 from tests.isolation_helpers import make_temp_agent_paths
 
@@ -65,6 +65,117 @@ class PlanArchPatchTests(unittest.TestCase):
         text = self.map.read_text(encoding="utf-8")
         self.assertIn("## 修复记录（原 Phase 6）", text)
         self.assertNotIn("## Phase 6 修复记录", text)
+
+    def test_it_aff_01_accept_notice_no_diff(self) -> None:
+        """IT-AFF-01: adopted partner_notices are one line, no diff hunks."""
+        self.tasks.write_text(
+            "## Phase 1\n- [ ] old task\n",
+            encoding="utf-8",
+        )
+        preview = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="TASKS.md",
+            replacements=[{"old": "old task", "new": "new task"}],
+        )
+        sug = self.agent._suggestion(
+            kind="file_patch",
+            title="改 TASKS.md（待采纳）",
+            body="rename task",
+            key="tasks-aff",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "TASKS.md",
+                "base_hash": preview["base_hash"],
+                "replacements": [{"old": "old task", "new": "new task"}],
+                "diff": preview["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug)
+        self.agent.accept_suggestion(sug["id"])
+        state = self.agent.build_state()
+        notices = state.get("partner_notices") or []
+        self.assertTrue(notices)
+        joined = "\n".join(notices)
+        self.assertIn("已采纳写入", joined)
+        self.assertNotIn("@@", joined)
+        self.assertNotIn("\n-", joined)
+
+    def test_adopt_clears_plan_dirty(self) -> None:
+        """After human adopt, session plan_dirty should clear (Phase 40)."""
+        from project_api import dispatch_project_message
+        from session import create_new
+
+        session = create_new(self.paths, conversation_id=f"aff-{secrets.token_hex(3)}")
+        session.meta.project_id = self.pid
+        session.meta.project_root = f"workspace/{self.pid}"
+        session.meta.active_shell = "project"
+        session.meta.project_plan_status = "confirmed"
+        snapshot_plan_fingerprints(session, self.paths, self.pid)
+        session.save()
+
+        self.tasks.write_text("## Phase 1\n- [ ] old task\n", encoding="utf-8")
+        preview = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="TASKS.md",
+            replacements=[{"old": "old task", "new": "new task"}],
+        )
+        sug = self.agent._suggestion(
+            kind="file_patch",
+            title="改 TASKS.md（待采纳）",
+            body="rename",
+            key="dirty-aff",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "TASKS.md",
+                "base_hash": preview["base_hash"],
+                "replacements": [{"old": "old task", "new": "new task"}],
+                "diff": preview["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug)
+        sync_plan_dirty_if_structure_changed(session, self.paths)
+        self.assertEqual(session.meta.project_plan_status, "plan_dirty")
+
+        dispatch_project_message(
+            session,
+            self.paths,
+            {
+                "type": "project.plan.accept_suggestion",
+                "suggestion_id": sug["id"],
+            },
+        )
+        self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertFalse(self.agent.check_plan_dirty())
+
+    def test_maybe_clear_stale_plan_dirty_on_load(self) -> None:
+        from project_api import maybe_clear_stale_plan_dirty
+        from session import create_new
+
+        session = create_new(self.paths, conversation_id=f"stale-{secrets.token_hex(3)}")
+        session.meta.project_id = self.pid
+        session.meta.project_root = f"workspace/{self.pid}"
+        session.meta.active_shell = "project"
+        session.meta.project_plan_status = "confirmed"
+        session.meta.project_plan_confirmed_at = "2026-08-04T00:00:00Z"
+        snapshot_plan_fingerprints(session, self.paths, self.pid)
+        session.save()
+
+        self.tasks.write_text(
+            "## Phase 1\n- [ ] task\n\n## Phase 8 — new phase\n",
+            encoding="utf-8",
+        )
+        sync_plan_dirty_if_structure_changed(session, self.paths)
+        self.assertEqual(session.meta.project_plan_status, "plan_dirty")
+        self.assertEqual(len(self.agent._pending_gated), 0)
+
+        cleared = maybe_clear_stale_plan_dirty(session, self.paths, self.agent)
+        self.assertTrue(cleared)
+        self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertFalse(self.agent.check_plan_dirty())
 
     def test_it182_stale_base_hash_rejects(self) -> None:
         self.map.write_text("# a\n", encoding="utf-8")

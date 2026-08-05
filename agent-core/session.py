@@ -58,6 +58,8 @@ class SessionMeta:
     topics: list[str] = field(default_factory=list)
     llm_model: str = ""
     llm_model_override: bool = False
+    execution_model: str = ""
+    planning_model: str = ""
     updated_at: str = ""
     phase: SessionPhase = "S1"
     workspace_evolved_approved: bool = False
@@ -66,6 +68,7 @@ class SessionMeta:
     evolve_offer_pending: bool = False
     evolve_offer_used: bool = False
     turn_mode: TurnMode = DEFAULT_TURN_MODE
+    reasoning_effort: str = "high"  # "low" | "high" | "max"; REASONING-EFFORT.md
     active_shell: ShellId = DEFAULT_ACTIVE_SHELL
     project_root: str = ""
     project_id: str = ""
@@ -79,6 +82,8 @@ class SessionMeta:
             "topics": list(self.topics),
             "llm_model": self.llm_model,
             "llm_model_override": self.llm_model_override,
+            "execution_model": self.execution_model,
+            "planning_model": self.planning_model,
             "updated_at": self.updated_at,
             "phase": self.phase,
             "workspace_evolved_approved": self.workspace_evolved_approved,
@@ -87,6 +92,7 @@ class SessionMeta:
             "evolve_offer_pending": self.evolve_offer_pending,
             "evolve_offer_used": self.evolve_offer_used,
             "turn_mode": self.turn_mode,
+            "reasoning_effort": self.reasoning_effort,
             "active_shell": self.active_shell,
             "project_root": self.project_root,
             "project_id": self.project_id,
@@ -114,6 +120,13 @@ class SessionMeta:
             llm_model = ""
 
         llm_model_override = bool(payload.get("llm_model_override", False))
+
+        execution_model = payload.get("execution_model", "")
+        if not isinstance(execution_model, str):
+            execution_model = ""
+        planning_model = payload.get("planning_model", "")
+        if not isinstance(planning_model, str):
+            planning_model = ""
 
         updated_at = payload.get("updated_at", "")
         if not isinstance(updated_at, str):
@@ -152,6 +165,8 @@ class SessionMeta:
             topics=topics,
             llm_model=llm_model,
             llm_model_override=llm_model_override,
+            execution_model=execution_model.strip(),
+            planning_model=planning_model.strip(),
             updated_at=updated_at,
             phase=phase,
             workspace_evolved_approved=bool(payload.get("workspace_evolved_approved", False)),
@@ -160,6 +175,9 @@ class SessionMeta:
             evolve_offer_pending=bool(payload.get("evolve_offer_pending", False)),
             evolve_offer_used=bool(payload.get("evolve_offer_used", False)),
             turn_mode=normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE)),
+            reasoning_effort=normalize_reasoning_effort(
+                payload.get("reasoning_effort", "high")
+            ),
             active_shell=active_shell,
             project_root=project_root.strip(),
             project_id=project_id.strip(),
@@ -235,7 +253,7 @@ class Session:
         canonical = normalize_session_model(model)
         if canonical is None:
             raise SessionError(
-                f"unsupported llm model: {model!r} (use deepseek-v4-flash or deepseek-v4-pro)"
+                f"unsupported llm model: {model!r} (pick a model from session.models)"
             )
         self.meta.llm_model = canonical
         self.meta.llm_model_override = override
@@ -343,6 +361,36 @@ def turn_mode_label(mode: TurnMode) -> str:
     return "动手 (full tools including run_evolved)"
 
 
+REASONING_EFFORT_LEVELS = ("low", "high", "max")
+
+
+def normalize_reasoning_effort(raw: Any) -> str:
+    """Validate and normalize reasoning_effort value; fallback to ``"high"``."""
+    if isinstance(raw, str) and raw.casefold() in REASONING_EFFORT_LEVELS:
+        return raw.lower()
+    return "high"
+
+
+def parse_reasoning_effort_command(line: str) -> str | None:
+    """Parse REPL effort switch: 推理强度 <level> / effort <level>."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    lower = stripped.casefold()
+    for level in REASONING_EFFORT_LEVELS:
+        if lower in {f"effort {level}", f"推理强度 {level}", f"强度 {level}"}:
+            return level
+    return None
+
+
+def reasoning_effort_label(level: str) -> str:
+    return {
+        "low": "低推理，省 token",
+        "high": "默认推理",
+        "max": "最高推理强度",
+    }.get(level, "")
+
+
 def session_banner_event(session: Session) -> dict[str, Any]:
     from llm_client import llm_model_label, resolve_session_model
 
@@ -354,6 +402,8 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         "topics": list(session.meta.topics),
         "turn_mode": session.meta.turn_mode,
         "turn_mode_label": turn_mode_label(session.meta.turn_mode),
+        "reasoning_effort": session.meta.reasoning_effort,
+        "reasoning_effort_label": reasoning_effort_label(session.meta.reasoning_effort),
         "llm_model": model,
         "llm_model_label": llm_model_label(model),
         "llm_model_override": bool(session.meta.llm_model_override),

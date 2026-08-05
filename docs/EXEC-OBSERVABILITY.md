@@ -1,6 +1,6 @@
 # 执行可观测（EXEC-OBSERVABILITY）
 
-> 版本 **0.2.0** · 2026-08-02 · **状态：M1 done**  
+> 版本 **0.2.1** · 2026-08-04 · **状态：M1 done**（呈现细节交叉 [DESKTOP.md](./DESKTOP.md) §3.2.2 / UX-021）  
 > Phase **27** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [UX-POLISH.md](./UX-POLISH.md)
 
 ## 0. 为什么开这个 Phase
@@ -23,7 +23,7 @@ huiyi 联调中用户确认 `mvn_exec spring-boot:run` 后，聊天只剩「已�
 ### 1.2 非目标（本 Phase）
 
 - 完整嵌入式终端 / xterm 仿真
-- 把 reasoning 全文默认展开（可折叠即可）
+- 把 reasoning 全文默认展开（可折叠即可；**呈现细则见 [DESKTOP.md](./DESKTOP.md) §3.2.2 D-T1～D-T6 / UX-021**）
 - 远程遥测、多机编排
 - 重做确认管线协议（只增强呈现与增量事件）
 
@@ -86,7 +86,7 @@ M0 最低：即使没有 progress 事件，也要有 **RunningCard + 秒表 + en
 当 `run_evolved` · `run_service`/`dev_start` 且 action∈{start,restart}：
 
 - RunningCard 副标题显示 `name` / port
-- end 时若 `ready=false`：默认展开 `logs_tail`（截断）
+- end 时若 `ready=false`：卡片附带 `logs_tail`（截断）；**默认合上**，用户点开（与 [UX-POLISH](./UX-POLISH.md) UX-021 配套；避免失败墙淹没思考标题）。历史 M0 曾「默认展开」——以本句为准。
 - 提示文案（一次）：「长驻日志在 data/services/…；侧栏可刷新」
 
 提示词 / catalog：继续禁止用 `mvn_exec`/`npm_exec` 跑 `*:run` / `dev`（与 Phase 25/26 一致）。
@@ -182,6 +182,7 @@ T-2701 文档 · T-2702 D1～D3 确认 · T-2703 聊天 RunningCard · T-2704 �
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.2.1 | 2026-08-04 | §4.2 `logs_tail` 默认合上（对齐 UX-021）；§1.2 交叉引用 DESKTOP D-T* |
 | 0.1.0 | 2026-08-02 | 初稿：聊天+侧栏双面；M0/M1；DOC-04；默认 D1–D3 |
 | 0.1.1 | 2026-08-02 | D1～D3 **已决**；开 M0 |
 | 0.1.2 | 2026-08-02 | M0：**RunningCard** + 确认文案；WS `services.list`/`logs`；侧栏 Services；IT-90/92 |

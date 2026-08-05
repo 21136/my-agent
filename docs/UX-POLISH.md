@@ -1,8 +1,8 @@
 # 体验打磨记录（UX-POLISH）
 
-> 版本 **0.2.0** · 2026-07-30  
-> 状态：`in-progress` — 壳合并后持续打磨；UX-001～020 多数 ✅；第五轮滚动/流式缓解已落地；第六轮工具审视 P0 已落地；第七轮会话下拉进行中  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [TOOL-RETRY.md](./TOOL-RETRY.md)
+> 版本 **0.2.1** · 2026-08-04  
+> 状态：`in-progress` — 壳合并后持续打磨；UX-001～022 多数 ✅；**第八轮 UX-021** · **第九轮 UX-022** done；第五～七轮见下文  
+> 关联：[DESKTOP.md](./DESKTOP.md) · [output-format.md](./output-format.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [TOOL-RETRY.md](./TOOL-RETRY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)
 
 ---
 
@@ -72,6 +72,61 @@
 |----|------|------|------|--------|------|
 | UX-019 | 不知道上下文还剩多少 | 聊天长了自动压缩但没感知，突然被裁掉前面的内容 | 状态栏加 token 指示器 `12k / 128k tokens`。超过 85% 变黄，超过 95% 变红 | `unified/index.ts` + `session.py`（`session.banner` 加 usage 字段） | ✅ 2026-07-29 |
 | UX-020 | 找不到之前的对话 | 只能 CLI `ls data/sessions/` 找 session 目录 | 顶栏加会话下拉，列出最近 10 个 session + 当前标记。选了续接历史 | 后端加 `session.list` API + `unified/index.ts` | ✅ 2026-07-29 |
+
+---
+
+## 2c. 第八轮 · 思考块对齐 Cursor（**已决 · 待实施** · 2026-08-04）
+
+> 设计真源：[DESKTOP.md](./DESKTOP.md) **§3.2.2** D-T1～D-T6。  
+> 触发：项目启动类长回合工具连败时，reasoning 全文堆在过程块底部，被失败 RunningCard / 默认展开的日志尾挡住；点「收起」只藏思考、留下失败墙。
+
+### P0
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|----|------|------|------|--------|------|
+| UX-021 | 思考被工具失败淹没 / 一大坨 | 工具卡在上、reasoning 全文在下；`collapsed` 只藏 `.unified-process-lines`；失败 `logs_tail` 常 `open` | **Cursor 式**：思考独立折叠；流式展开 → 段末收成 `思考 · Ns`；**进行中标题钉过程区顶**；工具卡在下；**回合结束**随过程块「展开可看」；「收起」须连工具卡一起藏 | `unified/index.ts` · `unified.css` · `chat-state.ts` | ✅ 2026-08-04 |
+
+### 验收（实施时）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-021a | 有 `reasoning.delta` 的回合，随后多次失败工具 | 过程区顶可见 `思考 · Ns`（或展开中的思考）；工具卡在其下 |
+| S-UX-021b | 点过程「收起」（进行中或结束后） | 工具卡与过程行隐藏；结束后整块含思考标题进入「展开可看」 |
+| S-UX-021c | 点思考标题展开 | 可见该轮 reasoning **全文**（非截断丢失） |
+| S-UX-021d | `assistant.done` 后 | 过程块默认折叠；不钉在历史流顶上刷屏 |
+
+### 配套（同轮可顺手，非阻塞 UX-021）
+
+| 项 | 说明 |
+|----|------|
+| 失败日志 | 保持 [EXEC-OBSERVABILITY](./EXEC-OBSERVABILITY.md)「`ready=false` 可展开 logs_tail」；**默认 `open` 改为默认合上**（最新一条失败可默认开），避免与思考抢视口 |
+| `[guard] 失败分型` notice | 仍可进聊天；密集时考虑折叠进过程行（另开条目，不挡 UX-021） |
+
+### 讨论记录
+
+| 日期 | 内容 |
+|------|------|
+| 2026-08-04 | 用户：思考要时刻可见且别一大坨 → 曾倾向矮窗滚全文 → 改为 **照搬 Cursor accordion**；进行中标题钉过程区顶；结束后跟过程块收起。UX-021 **已实施**。 |
+
+---
+
+## 2d. 第九轮 · 主聊正文格式（**已决** · 2026-08-04）
+
+> 真源：[output-format.md](./output-format.md) · 内核 `agent-core/prompts/core.txt` §Style。
+
+| # | 内容 | 状态 |
+|---|------|------|
+| UX-022 | 收窄 OUTPUT-FORMAT：主聊 assistant 正文；禁止 `## 思考` 与内部字段；操作类「做了什么 + 去哪看」；计划域仍走采纳卡 | ✅ 文档 + core.txt |
+
+---
+
+## 2e. 第十轮 · A 层工具行折叠（**已决** · 2026-08-04）
+
+> 真源：[DESKTOP.md](./DESKTOP.md) §3.2.2 **D-T7**。
+
+| # | 内容 | 状态 |
+|---|------|------|
+| UX-023 | 同过程块工具行 **> 6** 时，更早条目折叠为「更早 N 个工具」；最新 6 条始终可见；展开态按 turn 记忆 | ✅ `unified/index.ts` + CSS |
 
 ---
 

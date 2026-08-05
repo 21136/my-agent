@@ -118,6 +118,8 @@ def tool_fail(
     *,
     duration_ms: int = 0,
     details: dict[str, Any] | None = None,
+    truncated: bool = False,
+    output_path: str | None = None,
 ) -> ToolResult:
     """Build a failed tool result (ok=false, data=null)."""
     if duration_ms < 0:
@@ -126,10 +128,10 @@ def tool_fail(
         ok=False,
         tool=tool,
         data=None,
-        truncated=False,
+        truncated=truncated,
         error=ToolError(code=code, message=message, details=details),
         duration_ms=duration_ms,
-        output_path=None,
+        output_path=output_path,
     )
 
 

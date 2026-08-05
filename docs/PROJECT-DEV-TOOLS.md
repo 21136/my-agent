@@ -42,6 +42,9 @@
 | **P2** | `pip_install` 出 suspect | Python 项目别扭 | 评审后 active 或文档声明替代 | **M2** |
 | **→ P28** | 通用 shell（有边界） | 分域 `*_exec` 膨胀 | [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) | Phase 28 |
 | **defer** | 多语言专属构建器 / 浏览器自动化 | 扩大攻击面 | 不做 | — |
+| **→ P43** | 从零项目脚手架 | 无配方、LLM 即兴搭仓 | [PROJECT-RECIPES.md](./PROJECT-RECIPES.md) · `scaffold_project` | Phase 43 |
+| **→ P44** | 项目测试结构化输出 | 失败缺 file:line | [PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · `run_project_tests` | Phase 44 |
+| **→ P45** | 迁移状态 / lint 聚合 | `db_query` 仅 SQLite 只读 | [PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · `db_migrate_status` · `run_quality` | Phase 45 M0 |
 
 ---
 

@@ -122,7 +122,7 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
         warnings = list(warnings) + [resolve_note]
     if proposed:
         warnings = list(warnings) + [
-            f"已提案 {len(proposed)} 条新增（未写盘）；侧栏点「采纳」才写入 TASKS.md"
+            f"已提案 {len(proposed)} 条新增（未写盘）；审阅后才写入 TASKS.md"
         ]
 
     # 5. Get next task

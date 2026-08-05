@@ -30,10 +30,11 @@ from project_mode import (
     read_project_doc,
     read_task_stats,
     run_acceptance_check,
+    snapshot_plan_fingerprints,
     sync_plan_dirty_if_structure_changed,
 )
 from plan_agent import PlanAgent, get_plan_agent
-from session import Session, corruption_notice_events, session_banner_event
+from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
 
 EmitFn = Callable[[dict[str, Any]], None]
 
@@ -43,6 +44,35 @@ _PROJECT_SUMMARY_MAX = 1200
 
 class ProjectApiError(Exception):
     """Invalid project WS message."""
+
+
+def _ack_human_plan_adopt(session: Session, paths: AgentPaths, agent: PlanAgent) -> None:
+    """Snap fingerprints after human adopt/confirm so plan_dirty clears (Phase 40)."""
+    pid = (session.meta.project_id or "").strip()
+    if not pid:
+        return
+    agent.confirm_plan()
+    snapshot_plan_fingerprints(session, paths, pid)
+    if session.meta.project_plan_status == "plan_dirty":
+        session.meta.project_plan_status = "confirmed"
+    session.meta.updated_at = utc_now_iso()
+    session.save()
+
+
+def maybe_clear_stale_plan_dirty(session: Session, paths: AgentPaths, agent: PlanAgent) -> bool:
+    """Clear persisted plan_dirty when disk already matches and nothing waits for adopt.
+
+    Restart does not wipe session meta — users who already confirmed once can get stuck
+    on plan_dirty after Phase titles change on disk (e.g. Phase 7 待实现 → 全部完成).
+    """
+    if session.meta.project_plan_status != "plan_dirty":
+        return False
+    if not (session.meta.project_plan_confirmed_at or "").strip():
+        return False
+    if agent._pending_gated:
+        return False
+    _ack_human_plan_adopt(session, paths, agent)
+    return True
 
 
 def _project_summary(project_md: str) -> str:
@@ -141,6 +171,9 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
 
 def emit_project_session_bundle(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
     """Emit banner + project.state when a project is bound."""
+    agent = _plan_agent(session, paths)
+    if agent is not None:
+        maybe_clear_stale_plan_dirty(session, paths, agent)
     emit(session_banner_event(session))
     if session.meta.project_id and session.meta.active_shell == "project":
         emit(project_state_payload(session, paths))
@@ -551,7 +584,7 @@ def _dispatch_plan_message(
             return _plan_task_result(agent, session, paths, result)
 
         if msg_type == "project.plan.confirm_changes":
-            agent.confirm_plan()
+            _ack_human_plan_adopt(session, paths, agent)
             return {
                 "_events": [
                     {"type": "project.plan.confirm_changes.done"},
@@ -593,6 +626,8 @@ def _dispatch_plan_message(
             if not sid:
                 raise ProjectApiError("project.plan.accept_suggestion requires suggestion_id")
             result = agent.accept_suggestion(sid)
+            if isinstance(result, dict) and result.get("ok") is not False:
+                _ack_human_plan_adopt(session, paths, agent)
             events: list[dict[str, Any]] = [
                 project_state_payload(session, paths),
                 agent.build_state(session),

@@ -1,0 +1,49 @@
+{
+  "id": "fastapi-vue",
+  "version": "1.0.0",
+  "description": "FastAPI + Vue 3 monorepo skeleton (pip backend + Vite frontend)",
+  "variables": {
+    "project_name": {
+      "required": true,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    }
+  },
+  "phases": {
+    "init": {
+      "steps": [
+        {
+          "id": "layout",
+          "kind": "template_tree",
+          "source": "templates",
+          "target": "."
+        },
+        {
+          "id": "env",
+          "kind": "write_env_md"
+        },
+        {
+          "id": "pip_install",
+          "kind": "run_command",
+          "command": "python -m pip install -r requirements.txt",
+          "working_dir": "backend",
+          "optional": true
+        },
+        {
+          "id": "npm_install",
+          "kind": "npm_exec",
+          "args": ["install"],
+          "working_dir": "frontend",
+          "optional": true
+        },
+        {
+          "id": "verify_pytest",
+          "kind": "run_command",
+          "command": "python -m pytest -q",
+          "working_dir": "backend",
+          "evidence": "test",
+          "optional": true
+        }
+      ]
+    }
+  }
+}

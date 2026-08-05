@@ -1,3 +1,22 @@
+export type LlmModelListItem = {
+  id: string;
+  name: string;
+  vendor: string;
+  tier: string;
+  max_input_tokens: number;
+  supports_tool_call: boolean;
+  configured: boolean;
+};
+
+export type LlmKeySlot = {
+  env: string;
+  label: string;
+  models: string[];
+  configured: boolean;
+  masked: string | null;
+  source: "env" | "file" | null;
+};
+
 export type ServerEvent =
   | {
       type: "session.banner";
@@ -14,7 +33,21 @@ export type ServerEvent =
       project_plan_label?: string;
       project_tasks_done?: number;
       project_tasks_total?: number;
+      llm_model?: string;
+      llm_model_label?: string;
+      llm_model_override?: boolean;
     }
+  | {
+      type: "session.models";
+      models: LlmModelListItem[];
+      default_flash_id: string;
+      default_pro_id: string;
+    }
+  | {
+      type: "llm_keys.state";
+      keys: LlmKeySlot[];
+    }
+  | { type: "llm_keys.updated" }
   | {
       type: "session.history";
       items: Array<{ role: "user" | "assistant"; text: string }>;
@@ -30,6 +63,7 @@ export type ServerEvent =
       token_limit?: number;
     }
   | { type: "turn.start"; intent: string; intent_label: string }
+  | { type: "llm.pending" }
   | { type: "turn.notice"; level?: "info" | "warn"; text: string }
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
   | { type: "turn.end"; ok: boolean; finish_reason: string }
@@ -64,6 +98,7 @@ export type ServerEvent =
       armed_task_id?: string | null;
       armed_task_text?: string | null;
       items: Array<{ tool: string; ok: boolean }>;
+      gate_notice?: string | null;
       reliability?: {
         postcondition?: "ok" | "fail" | "none" | "blocked" | string;
         circuit_open?: string[];
@@ -548,6 +583,26 @@ export class AgentWsClient {
     this.send({ type: "session.refresh" });
   }
 
+  setSessionModel(model: string): void {
+    this.send({ type: "session.set_model", model });
+  }
+
+  listModels(): void {
+    this.send({ type: "session.models" });
+  }
+
+  listLlmKeys(): void {
+    this.send({ type: "llm_keys.list" });
+  }
+
+  setLlmKey(env: string, value: string): void {
+    this.send({ type: "llm_keys.set", env, value });
+  }
+
+  clearLlmKey(env: string): void {
+    this.send({ type: "llm_keys.clear", env });
+  }
+
   refreshProject(): void {
     this.send({ type: "project.state" });
   }
@@ -734,6 +789,15 @@ export async function createWsClient(): Promise<AgentWsClient> {
     throw new Error("Python sidecar not ready");
   }
   const client = new AgentWsClient(sidecar.host, sidecar.port);
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      await client.connect();
+      return client;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
   await client.connect();
   return client;
 }

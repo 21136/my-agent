@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import atexit
 import json
+import logging
 import os
 import queue
 import sys
@@ -31,13 +32,14 @@ from evolve import (
 )
 from llm_client import LLMError  # noqa: F401
 from llm_client import StreamHandlers
-from context import session_memory_event
+from context import session_memory_event, validate_llm_model_switch
+from llm_models import models_list_event
 from main import ConversationRepl, ReplConfig
 from paths import AgentPaths
-from sidecar_logging import configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
+from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, create_new, emit_corruption_notices, list_session_summaries, resume_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, SessionError, create_new, emit_corruption_notices, list_session_summaries, resume_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
 try:
@@ -281,11 +283,18 @@ class WsBridge:
             "session.history",
             "session.memory",
             "project.state",
+            "project.plan.state",
+            "plan.subagent.start",
+            "plan.subagent.done",
             "notice",
         }:
             self.emit({"type": event_type, **payload})
             return
-        self.emit({"type": "notice", "text": f"{event_type}: {json.dumps(payload, ensure_ascii=False)}"})
+        logging.getLogger(SIDECAR_LOGGER_NAME).debug(
+            "unhandled executor event %s: %s",
+            event_type,
+            json.dumps(payload, ensure_ascii=False),
+        )
 
     def try_route_input(self, text: str) -> bool:
         if self._awaiting_input.is_set():
@@ -336,6 +345,7 @@ class WsBridge:
 
     def emit_session_state(self, session: Session) -> None:
         self.emit(_session_banner_payload(session))
+        self.emit(models_list_event(self.paths))
         self.emit(session_memory_event(session))
         self.emit(session_history_event(session))
         self.emit(_proposals_payload(self.paths))
@@ -704,6 +714,29 @@ class WsSessionHandler:
             bridge.emit_session_state(repl.session)
             return
 
+        if msg_type == "session.set_model":
+            model_raw = message.get("model")
+            if not isinstance(model_raw, str) or not model_raw.strip():
+                emit_error(bridge, "session.set_model requires model")
+                return
+            if bridge._turn_busy.is_set():
+                emit_error(bridge, "回合进行中，结束后再切换模型")
+                return
+            try:
+                canonical = validate_llm_model_switch(repl.session, model_raw.strip())
+                repl.session.set_llm_model(canonical)
+                repl.session.save()
+            except SessionError as exc:
+                emit_error(bridge, str(exc))
+                return
+            bridge.emit_session_state(repl.session)
+            bridge.emit({"type": "notice", "text": f"已切换模型：{repl.session.meta.llm_model}"})
+            return
+
+        if msg_type == "session.models":
+            bridge.emit(models_list_event(self.paths))
+            return
+
         if msg_type == "proposal.accept":
             proposal_id = message.get("proposal_id")
             if not isinstance(proposal_id, str):
@@ -740,6 +773,10 @@ class WsSessionHandler:
 
         if isinstance(msg_type, str) and msg_type.startswith("host_scope."):
             await self._dispatch_host_scope(message, bridge)
+            return
+
+        if isinstance(msg_type, str) and msg_type.startswith("llm_keys."):
+            await self._dispatch_llm_keys(message, bridge)
             return
 
         if isinstance(msg_type, str) and msg_type.startswith("services."):
@@ -857,6 +894,25 @@ class WsSessionHandler:
             )
             bridge.emit(payload)
         except HostScopeConfigError as exc:
+            emit_error(bridge, str(exc))
+
+    async def _dispatch_llm_keys(
+        self,
+        message: dict[str, Any],
+        bridge: WsBridge,
+    ) -> None:
+        from llm_models_api import dispatch_llm_keys_message
+        from llm_secrets import LlmSecretsError
+
+        try:
+            payloads = await asyncio.to_thread(
+                dispatch_llm_keys_message,
+                self.paths,
+                message,
+            )
+            for payload in payloads:
+                bridge.emit(payload)
+        except LlmSecretsError as exc:
             emit_error(bridge, str(exc))
 
     async def _dispatch_services(

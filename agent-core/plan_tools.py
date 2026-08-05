@@ -15,7 +15,7 @@ from tools.schema import ToolErrorCode, ToolResult, tool_fail
 
 # Builtins Plan may call with the same rights as the main agent.
 PLAN_QUERY_TOOLS = frozenset(
-    {"read_file", "list_dir", "grep", "web_search", "fetch_url"}
+    {"read_file", "list_dir", "glob_file_search", "grep", "web_search", "fetch_url"}
 )
 # Evolved shell — same as main; results stay on Plan transcript (caller responsibility).
 PLAN_RUN_TOOLS = frozenset({"run_command"})
@@ -125,13 +125,62 @@ def execute_plan_tool(
         )
 
     if kind == "query":
-        return _run_builtin(paths, name, args)
+        return _run_builtin(paths, name, args, project_id=project_id)
 
     # run + non-domain write: go through ToolExecutor (auto-approve for Plan channel)
     return _run_via_executor(paths, name, args, confirm_fn=confirm_fn)
 
 
-def _run_builtin(paths: AgentPaths, name: str, args: dict[str, Any]) -> ToolResult:
+_PLAN_QUERY_BASENAMES = frozenset(PLAN_PATCH_ALLOWLIST) | frozenset({"TASKS.archive.md"})
+
+
+def _resolve_plan_query_path(
+    paths: AgentPaths,
+    project_id: str,
+    path_arg: str,
+) -> str:
+    """Map bare TASKS.md / MAP.md / TASKS.archive.md to workspace/{project_id}/."""
+    raw = str(path_arg or "").strip()
+    if not raw or not (project_id or "").strip():
+        return raw
+    norm = raw.replace("\\", "/")
+    name = Path(norm).name
+    if name not in _PLAN_QUERY_BASENAMES:
+        return raw
+    pid = project_id.strip()
+    prefix = f"workspace/{pid}/"
+    if norm.startswith(prefix) or norm == f"workspace/{pid}":
+        return raw
+    candidate = project_dir(paths, pid) / name
+    if candidate.is_file():
+        return paths.to_agent_relative(candidate)
+    # Prefer project path even when missing — clearer errors than agent-root miss
+    return prefix + name
+
+
+def _coerce_plan_tool_args(
+    paths: AgentPaths,
+    project_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    if tool_name not in PLAN_QUERY_TOOLS:
+        return args
+    out = dict(args)
+    for key in ("path", "root", "directory"):
+        val = out.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = _resolve_plan_query_path(paths, project_id, val)
+    return out
+
+
+def _run_builtin(
+    paths: AgentPaths,
+    name: str,
+    args: dict[str, Any],
+    *,
+    project_id: str = "",
+) -> ToolResult:
     from tools.builtin import fetch_url, grep, list_dir, read_file, web_search
 
     runners = {
@@ -144,7 +193,8 @@ def _run_builtin(paths: AgentPaths, name: str, args: dict[str, Any]) -> ToolResu
     runner = runners.get(name)
     if runner is None:
         return tool_fail(name, ToolErrorCode.TOOL_NOT_FOUND, f"unknown query tool: {name}")
-    return runner(args, paths=paths)
+    coerced = _coerce_plan_tool_args(paths, project_id, name, args)
+    return runner(coerced, paths=paths)
 
 
 def _run_via_executor(

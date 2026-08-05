@@ -1,8 +1,9 @@
 # Plan 幕后子代理（PLAN-SUBAGENT）
 
-> 版本 **0.1.0** · 2026-08-03 · **状态：M1～M6 已实现**  
+> 版本 **0.1.1** · 2026-08-04 · **状态：M1～M6 已实现**  
 > **Phase 39** · 跟踪 [TASKS.md](./TASKS.md) T-3900～T-3906  
-> 关联：[PLAN-ARCH.md](./PLAN-ARCH.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.12 · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md)
+> **Affordance（Phase 40）**：主聊禁口述按钮名；控件对齐见 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)  
+> 关联：[PLAN-ARCH.md](./PLAN-ARCH.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.12–15.13 · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md)
 
 ---
 
@@ -57,7 +58,7 @@
 | **B4** | Plan 子上下文 = **本次 task 说明** + 计划域文件真源切片 + **可选**主聊最近 N 条用户句（默认 **2**，可关）；**不**灌主聊工具流水 |
 | **B5** | 主 Agent system：**禁止** `write_text`/`patch_file` 落盘计划域四件套；须 `plan_partner` 或人改文件 |
 | **B6** | UI：主区显示 **过程卡**「计划搭档 · 调研中…/已提案」；侧栏 **采纳卡** 与 Phase 22/37 一致 |
-| **B7** | `report_progress` **仅**用于「本回合已有对口代码证据」的勾任务；**禁止**用来 `add_tasks` 纯规划 |
+| **B7** | `report_progress` **仅**用于「本回合已有对口代码证据」的勾任务；**禁止**用来 `add_tasks` 纯规划。口语写码标题（「写 X 接口」）通常归 **write** 证据类；仍 `unknown` 时经 `plan_partner` 加 **`[evidence:…]`** 或改文案（见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §3.2） |
 
 ---
 
@@ -113,7 +114,9 @@ Plan 子代理 **可**调用与 `PlanAgent` 相同的 plan tools（查/跑）；
 1. 改 `TASKS.md` / `MAP.md` / `PROJECT.md` / `ENV.md` → **必须** `plan_partner`，**不得** `write_text` / `patch_file` 直写。
 2. 代码任务做完 → `report_progress`（带证据）；**不得**用 `report_progress` 仅添加规划行。
 3. 用户说「规划 / 补文档 / 排任务」→ 先 `plan_partner`，再视采纳结果决定是否写代码。
-4. `plan_partner` 返回后：向用户 **简短说明** 提案内容，提醒在侧栏 **采纳/忽略**。
+4. `plan_partner` 返回后：向用户 **简短说明** 提案改了什么（文件/意图即可）。  
+   **禁止**口述按钮名或路径教唆（如「记得点采纳」「去侧栏点采纳/忽略」）。  
+   拍板入口由 **过程卡**（`proposals_ready`）与侧栏 **「查看」/主列审阅** 承担——见 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 A1/A5 · Phase 40。
 
 ---
 
@@ -279,3 +282,4 @@ Plan 子代理内部走既有 patch 提案路径，**不**直写磁盘。
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | **0.1.0** | 2026-08-03 | 初稿：用户决议 Option C；废止 Phase 38 双通道 UX；子代理对齐 ORCHESTRATION |
+| **0.1.1** | 2026-08-04 | §3.3.4 修订：禁主聊口述「点采纳」；对齐 PLAN-REVIEW-UI §10 / Phase 40 |

@@ -1,9 +1,9 @@
 # 对齐 Cursor 剩余面（CURSOR-ALIGN）
 
-> 版本 **0.2.0** · 2026-08-02 · **状态：§6 已签；Phase 29 Track A+B done**  
+> 版本 **0.6.0** · 2026-08-04 · **状态：Track A～G 主体 done；后续见 Phase 42**  
 > 用户：「对齐 Cursor 还缺的都做，先列文档」  
 > 基线：Phase 28 [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) **M0+M1 done**（`run_command` + 归档 `mvn_exec`/`npm_exec`/`jshell_exec`）  
-> 关联：[WORKBENCH-UI.md](./WORKBENCH-UI.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [GIT-VENDOR.md](./GIT-VENDOR.md) · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) · [UX-POLISH.md](./UX-POLISH.md)
+> 关联：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [WORKBENCH-UI.md](./WORKBENCH-UI.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [GIT-VENDOR.md](./GIT-VENDOR.md) · [RUNTIME-GUARDS.md](./RUNTIME-GUARDS.md) · [UX-POLISH.md](./UX-POLISH.md)
 
 ---
 
@@ -18,7 +18,7 @@ my-agent 工具筋（读改 + 通用命令 + 长驻）已立；本清单收齐 *
 
 | Cursor 感 | my-agent | 状态 |
 |-----------|----------|------|
-| 读 / 列 / 搜 | builtin `read_file` · `list_dir` · `grep` | done |
+| 读 / 列 / 搜 | builtin `read_file` · `list_dir` · `grep` · `glob_file_search`（Phase 42） | done / **42-I** |
 | 写 / 补丁 | `write_text` · `append_text` · `patch_file` | done（可再收敛，见 Track C） |
 | 通用终端（一次性） | `run_command` | Phase 28 M0+M1 |
 | 长驻进程 | `run_service` + 侧栏 Services | Phase 25～27 |
@@ -228,15 +228,15 @@ C2 留作后续若模型仍乱调再开。
 
 ### 4.G 工作台 UI（Phase 34）
 
-**文档已有**：[WORKBENCH-UI.md](./WORKBENCH-UI.md) v0.1.0（入口 / 侧栏加速器 / 能力不绑壳）。
+**文档已有**：[WORKBENCH-UI.md](./WORKBENCH-UI.md) **v0.3.0**（入口 / 侧栏加速器 / Q4 空态「先聊聊」）。
 
 **本清单补强**
 
 - 与 Track A 联动：免确认时 UI 仍显示「已执行（策略放行）」短条，避免黑盒。  
 - 与 Phase 27 对齐：RunningCard / Services 保留。  
-- 仍须拍板 WORKBENCH **Q1～Q3**（pet / night / 无项目空态）。
+- WORKBENCH **Q1～Q4** 已签（Q4 = 空态「先聊聊」→ grow 无绑；实现 T-3410～3413）。
 
-**里程碑**：沿 WORKBENCH-UI §4（D0→M2）。
+**里程碑**：沿 WORKBENCH-UI §4（M0 done · **M1 = Q4 待实现** · M2）。
 
 ---
 
@@ -289,3 +289,18 @@ C2 留作后续若模型仍乱调再开。
 | 0.3.0 | 2026-08-02 | Phase 31 D1 done（IT-130）；下一焦点 Phase 32 E |
 | 0.4.0 | 2026-08-02 | Phase 32 E done（IT-140/141）；下一焦点 Phase 33 F |
 | 0.5.0 | 2026-08-02 | Phase 33 F1 done（IT-150）；下一焦点 Phase 34 G M1/M2 |
+| 0.6.0 | 2026-08-04 | Track A～G 主体 done；**Phase 42** 承接写确认分层 · Glob · 模型路由 → [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) |
+
+---
+
+## 8. 后续：Phase 42（2026-08-04）
+
+CURSOR-ALIGN 七轨解决 **「能跑」**；[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) 收 **写确认分层（H）** · **Glob/语义搜（I）** · **模型路由（J）**。
+
+| 轨 | 对标缺口 | 任务段 |
+|----|----------|--------|
+| H | `write_text`/`patch_file` 未像 `run_command` 分层免确认 | T-4210～4214 |
+| I | 大仓按名找文件（M0 Glob；M2 语义 defer） | T-4220～4225 |
+| J | Harness P3：规划 pro / 执行 flash | T-4201～4203 · [LLM-ROUTING.md](./LLM-ROUTING.md) |
+
+**推荐顺序**：H → J → I(M0)。签字清单见 CURSOR-GAP-NEXT §6。

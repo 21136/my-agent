@@ -6,8 +6,9 @@
 > **A7（2026-08-03）· M5 done**：侧栏常驻 = 当前任务 + 待拍板提案；完整计划 → 覆盖面板。  
 > **A8/A9/Q4（2026-08-03）· M6 done**：Plan 提案 = 文件 patch + 侧栏 diff 采纳。  
 > **§15.12（2026-08-03）· Phase 39 done**：**废止 §15.11 双通道**；用户只跟主 Agent 说话；Plan = **幕后子代理** + 侧栏短卡入口 + **主列审阅面**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）+ 主聊过程卡。见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)。
-> **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
-> **§15.10**：侧栏建议卡 / 低风险 auto_fix — **done**（T-2202～T-2207）。  
+> **§15.13（2026-08-04）· Phase 40 设计已签**：采纳 **控件对齐**（禁口述「点采纳」；待采纳 ≠ 已写入）— [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)。
+> **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。
+> **§15.10**：侧栏建议卡 / 低风险 auto_fix — **done**（T-2202～T-2207）。
 > 代码锚点：`agent-core/plan_agent.py` · `desktop/src/shells/unified/project-panel.ts` · `desktop/src/shells/unified/index.ts`
 
 ---
@@ -41,6 +42,7 @@
     15.10 [可见计划搭档](#1510-可见计划搭档已决--2026-07-31--done)（**done** · Phase 22；**V1/V7 见 §15.11 修订**）
     15.11 [主输入双通道](#1511-主输入双通道已决--2026-08-03--设计已签)（**superseded** · Phase 38 → **§15.12**）
     15.12 [Plan 幕后子代理](#1512-plan-幕后子代理已决--2026-08-03--phase-39)（**设计已签** · Phase 39）
+    15.13 [采纳控件对齐](#1513-采纳控件对齐已决--2026-08-04--phase-40)（**设计已签** · Phase 40 · 代码待做）
 
 ---
 
@@ -1086,6 +1088,26 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 | **S-200** | 发任意话 → 仅 **用户/助手** 气泡；**无**「你·计划」 |
 | **S-201** | 「规划 Phase 7 蔡岭模块」→ 过程卡 + 侧栏 ≥1 采纳卡 |
 | **S-202** | 主 Agent 直写 MAP **被拒**；`plan_partner` + 采纳后 MAP 变更 |
+
+### 15.13 采纳控件对齐（已决 · 2026-08-04 · **Phase 40**）
+
+> **状态**：**设计已签 · 代码待做** · 全文 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) **§10** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md) · T-4000～T-4004  
+> **动机**：主聊口述「点采纳」，侧栏却是无按钮的「已写入…+diff」——控件与话术错位。
+
+#### 已决（摘要）
+
+| ID | 决议 |
+|----|------|
+| **A1** | 有待拍板时 UI 必露可点控件；**禁**主聊口播按钮名 |
+| **A2** | 待采纳 ≠ 已写入（标题/色/有无按钮） |
+| **A3** | 采纳后 notice 一行、**无** diff |
+| **A4** | 侧栏短卡：「待采纳 · N」+「查看」必有 |
+| **A5** | 过程卡 `proposals_ready` = CTA |
+| **A6** | 自动打开审阅默认关（可选 P2） |
+
+#### 手工验收
+
+S-AFF-01～03 · IT-AFF-01（见 PLAN-REVIEW-UI §10.4）。
 
 ### 15.5 渐进实施路径
 

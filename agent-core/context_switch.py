@@ -41,6 +41,7 @@ class ContextSwitchProposal:
     reason: str = ""
     request_id: str = ""
     project_id: str | None = None
+    template: str | None = None
 
 
 class ContextSwitchError(Exception):
@@ -63,6 +64,7 @@ def normalize_proposal(
     reason: str = "",
     request_id: str | None = None,
     project_id: str | None = None,
+    template: str | None = None,
 ) -> ContextSwitchProposal:
     act = _normalize_action(action)
     rid = (request_id or "").strip() or str(uuid.uuid4())
@@ -82,12 +84,14 @@ def normalize_proposal(
         )
 
     pid_target = normalize_project_id(target)
+    template_id = (template or "").strip() or None
     return ContextSwitchProposal(
         action=act,
         target=pid_target,
         reason=reason_text,
         request_id=rid,
         project_id=None,
+        template=template_id,
     )
 
 
@@ -100,6 +104,8 @@ def build_context_switch_request(
     display_target = proposal.target
     if proposal.action == "project.create":
         side_effects.append(f"创建 workspace/{proposal.target}/ 三件套（若不存在）")
+        if proposal.template:
+            side_effects.append(f"运行配方 scaffold {proposal.template}（phase=init）")
         side_effects.append("新建专用会话并切换到 project 壳")
         side_effects.append("聊天区将替换为新会话历史")
         title = f"新建项目 · {proposal.target}"
@@ -137,7 +143,12 @@ def apply_context_switch(
 ) -> tuple[Session, str]:
     """Apply confirmed proposal. Returns (possibly new) session + message."""
     if proposal.action == "project.create":
-        return _apply_project_create(paths, session, proposal.target)
+        return _apply_project_create(
+            paths,
+            session,
+            proposal.target,
+            template=proposal.template,
+        )
     if proposal.action == "project.switch":
         return _apply_project_switch(paths, session, proposal.target)
     if proposal.action == "session.new":
@@ -170,9 +181,14 @@ def _apply_session_new(
 def _inject_seed(fresh: Session, previous: Session, reason: str) -> None:
     """Write a seed message so the new session's agent remembers the previous context."""
     goal = previous.goal.strip()
+    prev_pid = (previous.meta.project_id or "").strip()
     hint = ""
+    if prev_pid:
+        hint = "普通对话中可使用 write_evolve 沉淀工具；完成后可从会话列表回到项目。"
     if reason and "工具" in reason:
-        hint = "新会话已重新加载 evolved 工具清单，之前创建的工具现已可用。"
+        hint = "新会话已重新加载 evolved 工具清单，之前创建的工具现已可用。" + (
+            f" {hint}" if hint else ""
+        )
     seed = build_seed_message(
         previous_session_id=previous.conversation_id,
         previous_goal=goal,
@@ -187,12 +203,14 @@ def _apply_project_create(
     paths: AgentPaths,
     session: Session,
     project_id: str,
+    *,
+    template: str | None = None,
 ) -> tuple[Session, str]:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
     created = False
     try:
-        create_project(paths, pid)
+        create_project(paths, pid, template=template)
         created = True
     except ProjectModeError as exc:
         if "already exists" not in str(exc):

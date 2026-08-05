@@ -1,3 +1,22 @@
+## [Unreleased]
+
+### 文档
+
+- **AGENT-HARNESS / Phase 41**：同一 API 下失败多的 harness 对齐路线（P1～P5；低→高实施）；见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)
+- **OUTPUT-FORMAT / UX-022**：主聊 assistant 正文格式（禁止假思考、内部字段泄露）；见 [output-format.md](./output-format.md) · `core.txt` §Style
+- **DESKTOP §3.2.2 / UX-023**：过程块工具行 >6 折叠「更早 N 个」（**2026-08-04**）；不引入聊天 sticky
+- **DESKTOP §3.2.2 / UX-021**：思考块对齐 Cursor Thought accordion（**2026-08-04 已实施**）
+- **EXEC-OBSERVABILITY**：失败 `logs_tail` 改为默认合上（配合 UX-021）
+
+### 代码
+
+- **Phase 41 P1**：扁平原语 proxy — `run_command` · `write_text` · `patch_file`（`tool_proxies.py` · IT-410）
+- **Phase 41 P2**：项目模式 `parent_execute_segment_max` 默认 15（IT-411）
+- **Phase 41 P4**：失败 tool 结果 spill（与成功对称 · IT-412）
+- **Phase 41 P5**：段内失败预算（默认 3）+ 静默 `[guard] 失败分型` 主聊 notice（IT-413）
+
+---
+
 ## [0.3.0] - 2026-07-30
 
 ### 架构（壳合并 · 未完全合入 remote）

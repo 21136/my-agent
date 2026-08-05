@@ -16,7 +16,7 @@
 1. 先调用 builtin **`propose_context_switch`**：
    - `action=project.create|project.switch`，`target=<project-id>`
    - 或 `action=session.new`，`target=current`（同线空白会话；项目窗保留当前项目绑定）
-   - 若须切换会话线标签：`action=shell.switch`（后端仍可能用 `grow`/`daily`/`project` 作**会话线 id**，对用户说话时用「普通窗口 / 项目窗口」，不要推销已删除的多壳 UI）
+   - 或 `action=session.new`，`target=current`（挂起当前项目、开普通对话造工具；**不要**再用已废止的 `shell.switch`）
 2. **等用户确认/拒绝**；确认前禁止写目标项目目录 / 禁止在项目窗 `write_evolve`。
 3. 拒绝后留在当前线；确认后会话可能已切换，再继续。
 
@@ -28,8 +28,9 @@
 
 1. 改 `TASKS.md` / `MAP.md` / `PROJECT.md` / `ENV.md` → **必须** `plan_partner`，**不得** `write_text` / `patch_file` 直写。
 2. 代码任务做完 → `report_progress`（带证据）；**不得**用 `report_progress` 仅添加纯规划行。
-3. 用户说「规划 / 补文档 / 排任务」→ 先 `plan_partner`，再视侧栏采纳结果决定是否写代码。
-4. `plan_partner` 返回后：向用户 **简短说明** 提案内容，提醒在侧栏 **采纳/忽略**。
+3. 用户说「规划 / 补文档 / 排任务」→ 先 `plan_partner`，再视审阅结果决定是否写代码。
+4. `plan_partner` 返回后：向用户 **简短说明** 提案改了什么（文件/意图即可）。  
+   **禁止**口述按钮名或路径教唆（如「记得点采纳」「去侧栏点采纳/忽略」）。拍板入口由 **过程卡** 与侧栏 **「查看」/主列审阅** 承担。
 
 ## 计划确认门（硬）
 
@@ -54,7 +55,7 @@
    - `subtasks`（可选）：如果做了子步骤但 TASKS.md 没列出来，填上
    - `add_tasks`（可选）：如果执行中发现计划遗漏了任务，填上
    - 项目管理器会勾选并**归档**到 `TASKS.archive.md`（`closed:done`），检查质量、返回下一个开放任务。
-   - **`report_progress` 被拒（缺证据 / `evidence_kind=unknown`）≠ 完成**：禁止改口「✅ 完成 · 回复继续」。须补对口工具证据，或改任务文案使其可归类，或停写 **blocker** 等用户指示。
+   - **`report_progress` 被拒（缺证据 / `evidence_kind=unknown`）≠ 完成**：禁止改口「✅ 完成 · 回复继续」。须补对口工具证据；或经 `plan_partner` 加 **`[evidence:…]`** 标签 / 改任务文案；或停写 **blocker** 等用户指示。
 3. **改 Phase / 范围 / 验收** → 文档更新后状态为 `plan_dirty`，须用户再确认。
 4. **仅增删 task、不改 Phase** → 通过 `report_progress` 的 `add_tasks` / `skip_tasks`（提案，侧栏采纳后才落盘）。
 5. **交付**：`TASKS.md` 无 `- [ ]` 且 `PROJECT.md` 验收命令跑通后，才可写「交付完成」。
@@ -74,7 +75,7 @@
 6. 用户说「做完 T1 和 T2」→ 做完 T1 仍一停，等「继续」再做 T2。
 7. 用户「继续 / 下一 task / 下一项 / 开始下一项 / 开始编码」→ 新 turn，取当时第一条未勾为当前 task。
 8. 未完成（编译失败、确认超时、**进度门拒勾**等）**不要**假标 `[x]`，也**不要**口头假完成；说明 blocker 后停，等用户指示。
-9. 粒度：一条 task ≈ **5～15 分钟**可独立验收的小交付（如「Maven 骨架可 compile」），勿写成「整个产品」。任务标题应能映射证据类（write/compile/test/…）；若常被判 `unknown`，先改文案再动手。
+9. 粒度：一条 task ≈ **5～15 分钟**可独立验收的小交付（如「Maven 骨架可 compile」），勿写成「整个产品」。任务标题应能映射证据类（write/compile/test/…）；口语「写 X 接口」「改 Layout.vue」通常归 **write**；纯确认/调研若需勾选，加行内标签如 **`[evidence:write]`**（见 [PROGRESS-GATE.md](../../docs/PROGRESS-GATE.md) §3.2）。
 
 ## 路径
 

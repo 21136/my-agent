@@ -12,6 +12,13 @@ export type ChatBlock =
       reasoning: string;
       collapsed: boolean;
       turnKey: string;
+      /** UX-021 — Cursor-style thinking accordion */
+      reasoningPhase?: "idle" | "streaming" | "pinned";
+      reasoningUserOpen?: boolean;
+      reasoningStartedAt?: number;
+      reasoningPinnedAt?: number;
+      /** Waiting for LLM before first reasoning/tool in a segment */
+      llmPending?: boolean;
       /** Phase 27 M0 — per-call running cards */
       tools?: Array<{
         callId: string;
@@ -108,6 +115,7 @@ export interface ChatSession {
     opts?: { summary?: string; proposalCount?: number },
   ): void;
   toggleProcessCollapsed(turnKey: string): void;
+  toggleThinkingOpen(turnKey: string): void;
   /** C3: optimistic resolve + only accept current requestId. Returns false if ignored. */
   submitConfirm(requestId: string, choice: "y" | "n" | "a"): boolean;
   /** Phase 15: debounce Stop and optimistically resolve a pending confirm. */
@@ -165,6 +173,46 @@ export function formatToolElapsed(ms: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}m${String(s).padStart(2, "0")}s`;
+}
+
+/** UX-021 — thinking accordion title elapsed label. */
+export function formatThinkingElapsedSec(block: {
+  reasoningPhase?: "idle" | "streaming" | "pinned";
+  reasoningStartedAt?: number;
+  reasoningPinnedAt?: number;
+}): number {
+  const start = block.reasoningStartedAt;
+  if (!start) return 0;
+  const end =
+    block.reasoningPhase === "streaming"
+      ? Date.now()
+      : (block.reasoningPinnedAt ?? Date.now());
+  return Math.max(1, Math.round((end - start) / 1000));
+}
+
+export function thinkingTitleLabel(block: {
+  reasoning: string;
+  reasoningPhase?: "idle" | "streaming" | "pinned";
+  reasoningStartedAt?: number;
+  reasoningPinnedAt?: number;
+}): string {
+  if (!block.reasoning.trim()) return "";
+  if (block.reasoningPhase === "streaming") {
+    const sec = formatThinkingElapsedSec(block);
+    return sec > 0 ? `思考中…（${sec}s）` : "思考中…";
+  }
+  const sec = formatThinkingElapsedSec(block);
+  return `思考 · ${sec}s`;
+}
+
+export function isThinkingBodyOpen(block: {
+  reasoning: string;
+  reasoningPhase?: "idle" | "streaming" | "pinned";
+  reasoningUserOpen?: boolean;
+}): boolean {
+  if (!block.reasoning.trim()) return false;
+  if (block.reasoningPhase === "streaming") return true;
+  return Boolean(block.reasoningUserOpen);
 }
 
 export function isConfirmInProgressLabel(label: string | undefined): boolean {
@@ -405,6 +453,8 @@ export function createChatSession(
       reasoning: "",
       collapsed: false,
       turnKey: model.currentTurnKey,
+      reasoningPhase: "idle",
+      reasoningUserOpen: false,
       tools: [],
     };
     model.blocks.push(block);
@@ -420,12 +470,51 @@ export function createChatSession(
     }
   }
 
+  function clearLlmPending(proc: ChatBlock & { kind: "process" }): void {
+    proc.llmPending = false;
+  }
+
+  function markLlmPending(proc: ChatBlock & { kind: "process" }): void {
+    proc.llmPending = true;
+  }
+
+  function pinReasoning(proc: ChatBlock & { kind: "process" }): void {
+    if (!proc.reasoning.trim() && proc.reasoningPhase !== "streaming") return;
+    if (proc.reasoningPhase === "streaming") {
+      proc.reasoningPhase = "pinned";
+      proc.reasoningPinnedAt = Date.now();
+      proc.reasoningUserOpen = false;
+    }
+  }
+
+  function appendReasoning(proc: ChatBlock & { kind: "process" }, text: string): void {
+    if (!text) return;
+    if (!proc.reasoningStartedAt) {
+      proc.reasoningStartedAt = Date.now();
+    }
+    if (proc.reasoningPhase === "pinned") {
+      proc.reasoningPhase = "streaming";
+      proc.reasoningUserOpen = true;
+    } else if (proc.reasoningPhase === "idle") {
+      proc.reasoningPhase = "streaming";
+    }
+    proc.reasoning += text;
+  }
+
   function toggleProcessCollapsed(turnKey: string): void {
     const block = model.blocks.find((b) => b.kind === "process" && b.turnKey === turnKey);
     if (block?.kind === "process") {
       block.collapsed = !block.collapsed;
       notify();
     }
+  }
+
+  function toggleThinkingOpen(turnKey: string): void {
+    const block = model.blocks.find((b) => b.kind === "process" && b.turnKey === turnKey);
+    if (block?.kind !== "process" || !block.reasoning.trim()) return;
+    if (block.reasoningPhase === "streaming") return;
+    block.reasoningUserOpen = !block.reasoningUserOpen;
+    notify();
   }
 
   function handleEvent(event: ServerEvent): void {
@@ -455,7 +544,16 @@ export function createChatSession(
       }
       case "turn.start":
         beginTurnActivity();
+        if (options.showProcess) {
+          markLlmPending(ensureProcessBlock());
+        }
         hooks.onTurnStart?.(event, currentTurnIndex());
+        notify();
+        break;
+      case "llm.pending":
+        if (options.showProcess) {
+          markLlmPending(ensureProcessBlock());
+        }
         notify();
         break;
       case "turn.end":
@@ -471,6 +569,9 @@ export function createChatSession(
           // insert a visible notice so the chat shows cancellation was processed
           const label = event.finish_reason === "timeout" ? "回合超时已停止" : "回合已停止";
           model.blocks.push({ kind: "notice", text: label });
+        }
+        if (options.showProcess) {
+          collapseCurrentProcess();
         }
         finalizeInProgressConfirms(event.finish_reason === "cancelled" ? "已取消" : "已完成执行");
         resetTurnActivity();
@@ -497,6 +598,8 @@ export function createChatSession(
         model._toolTimers.set(event.call_id, Date.now());
         if (options.showProcess) {
           const proc = ensureProcessBlock();
+          pinReasoning(proc);
+          clearLlmPending(proc);
           if (!proc.tools) proc.tools = [];
           proc.tools.push({
             callId: event.call_id,
@@ -505,7 +608,6 @@ export function createChatSession(
             status: "running",
             startedAt: Date.now(),
           });
-          proc.lines.push(`· ${event.tool}  ${event.summary}`);
         }
         hooks.onToolStart?.(currentTurnIndex());
         notify();
@@ -516,10 +618,7 @@ export function createChatSession(
           const startTime = model._toolTimers.get(event.call_id);
           const now = Date.now();
           const started = startTime ?? now;
-          const ms = now - started;
-          const dur = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
           const proc = ensureProcessBlock();
-          proc.lines.push(`  ${event.ok ? "✓" : "✗"} ${event.tool} (${dur})`);
           if (!proc.tools) proc.tools = [];
           let card = proc.tools.find((t) => t.callId === event.call_id);
           if (!card) {
@@ -571,11 +670,21 @@ export function createChatSession(
       case "reasoning.delta":
         if (options.showProcess) {
           const proc = ensureProcessBlock();
-          proc.reasoning += event.text;
+          clearLlmPending(proc);
+          appendReasoning(proc, event.text);
         }
         notify();
         break;
       case "assistant.delta": {
+        if (options.showProcess) {
+          const proc = model.blocks.find(
+            (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
+          );
+          if (proc?.kind === "process") {
+            clearLlmPending(proc);
+            pinReasoning(proc);
+          }
+        }
         const streaming = ensureStreamingAssistant();
         streaming.text += event.text;
         model.assistantBuffer = streaming.text;
@@ -584,6 +693,12 @@ export function createChatSession(
       }
       case "assistant.done": {
         if (options.showProcess) {
+          const proc = model.blocks.find(
+            (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
+          );
+          if (proc?.kind === "process") {
+            pinReasoning(proc);
+          }
           collapseCurrentProcess();
         }
         const finalText = event.text.trim();
@@ -689,6 +804,7 @@ export function createChatSession(
     pushPlanSubagentCard,
     updatePlanSubagentCard,
     toggleProcessCollapsed,
+    toggleThinkingOpen,
     submitConfirm,
     requestCancel,
     handleEvent,

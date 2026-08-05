@@ -1,3 +1,7 @@
+# 根目录一次性调试脚本 / 临时文件（移入 _trash/ 清理）
+/_*
+!/_trash/
+
 # 本地状态与运行时（RUNTIME / MAP：data 默认不进 Git）
 data/
 agent-core/data/

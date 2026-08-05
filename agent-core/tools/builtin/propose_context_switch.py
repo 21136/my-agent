@@ -29,6 +29,9 @@ def run(arguments: dict[str, Any], **_kwargs: Any) -> ToolResult:
             action=str(arguments.get("action", "")),
             target=str(arguments.get("target", "")),
             reason=str(arguments.get("reason", "") or ""),
+            template=(
+                str(arguments["template"]) if isinstance(arguments.get("template"), str) else None
+            ),
         )
     except (ContextSwitchError, Exception) as exc:
         from project_mode import ProjectModeError

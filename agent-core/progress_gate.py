@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 EvidenceKind = Literal["write", "compile", "test", "build_fe", "verify_db", "unknown"]
@@ -10,11 +11,31 @@ _WRITE_EVIDENCE_TOOLS = frozenset(
     {"write_text", "append_text", "patch_file", "copy_move", "write_evolve"}
 )
 _COMPILE_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_command"})
-_TEST_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_tests", "npm_exec", "run_command"})
+_TEST_EVIDENCE_TOOLS = frozenset(
+    {"mvn_exec", "run_tests", "run_project_tests", "npm_exec", "run_command"}
+)
 _BUILD_FE_EVIDENCE_TOOLS = frozenset({"npm_exec", "run_command"})
 _VERIFY_DB_EVIDENCE_TOOLS = frozenset(
     {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request", "db_query", "run_command"}
 )
+
+_EVIDENCE_TAG_RE = re.compile(
+    r"\[evidence:\s*(write|compile|test|build_fe|verify_db)\s*\]",
+    re.IGNORECASE,
+)
+
+_KNOWN_KINDS = frozenset({"write", "compile", "test", "build_fe", "verify_db"})
+
+
+def _explicit_evidence_tag(task_text: str) -> EvidenceKind | None:
+    """TASKS row tag `[evidence:write]` etc. — highest priority (PROGRESS-GATE §3.2)."""
+    m = _EVIDENCE_TAG_RE.search(task_text)
+    if not m:
+        return None
+    kind = m.group(1).strip().lower()
+    if kind in _KNOWN_KINDS:
+        return kind  # type: ignore[return-value]
+    return None
 
 
 def classify_task_evidence_kind(task_text: str | None) -> EvidenceKind:
@@ -22,6 +43,11 @@ def classify_task_evidence_kind(task_text: str | None) -> EvidenceKind:
     raw = (task_text or "").strip()
     if not raw:
         return "unknown"
+
+    tagged = _explicit_evidence_tag(raw)
+    if tagged is not None:
+        return tagged
+
     lower = raw.lower()
 
     # Explicit test /验收 phase lines (Chinese + Phase N 测试)
@@ -45,6 +71,7 @@ def classify_task_evidence_kind(task_text: str | None) -> EvidenceKind:
     ):
         return "verify_db"
 
+    # Layer / file signals (original table)
     write_hits = (
         "Entity",
         "Mapper",
@@ -60,6 +87,21 @@ def classify_task_evidence_kind(task_text: str | None) -> EvidenceKind:
     if any(s in raw or s.lower() in lower for s in write_hits):
         return "write"
     if any(s in lower for s in ("entity", "mapper", "service", "controller")):
+        return "write"
+
+    # Colloquial coding-task signals (huiyi Phase 7: 「写 SysMenu 菜单列表接口」)
+    # Keep after specialized kinds so 「…接口…联调测试」 still → test.
+    write_colloquial = (
+        "写",
+        "接口",
+        "CRUD",
+        "crud",
+        "新增",
+        "删除",
+        "改 ",
+        "路由",
+    )
+    if any(s in raw for s in write_colloquial) or "crud" in lower:
         return "write"
 
     return "unknown"
@@ -97,7 +139,7 @@ def evidence_satisfies(
         hit = names & _TEST_EVIDENCE_TOOLS
         if hit:
             return True, f"test evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合测试/编译成功证据（run_command/mvn_exec/run_tests/npm_exec）"
+        return False, "缺少本回合测试成功证据（run_project_tests/mvn_exec/npm_exec/run_command 等）"
     if kind == "build_fe":
         hit = names & _BUILD_FE_EVIDENCE_TOOLS
         if hit:
@@ -144,6 +186,41 @@ def report_progress_evidence_block_reason(
         f" 任务证据类={kind}；{note}。"
         " 请先跑通对口工具或修 bug，勿口头上报。"
     )
+
+
+def build_progress_gate_notice(
+    *,
+    armed_task_id: str,
+    armed_task_text: str,
+    reason: str,
+    turn_evidence: list[dict[str, Any]],
+) -> str:
+    """G6: structured sidebar notice when report_progress is blocked (no force-check)."""
+    kind = classify_task_evidence_kind(armed_task_text)
+    lines = [
+        "进度闸门：禁止勾选",
+        f"任务：{(armed_task_id or '').strip() or '—'}",
+    ]
+    task_preview = (armed_task_text or "").strip()
+    if task_preview:
+        short = task_preview if len(task_preview) <= 72 else task_preview[:69] + "…"
+        lines.append(f"文案：{short}")
+    lines.append(f"证据类：{kind}")
+    core = (reason or "").strip()
+    if core.startswith("[progress_gate]"):
+        core = core[len("[progress_gate]") :].strip()
+    if core:
+        lines.append(core)
+    failed = [
+        _tool_name_from_entry(e)
+        for e in turn_evidence
+        if not e.get("ok") and _tool_name_from_entry(e)
+    ]
+    if failed:
+        tail = ", ".join(failed[-3:])
+        lines.append(f"本回合失败工具：{tail}")
+    lines.append("须先跑通对口工具；侧栏无强制勾选入口。")
+    return "\n".join(lines)
 
 
 def report_progress_repeat_block_reason(

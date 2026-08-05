@@ -40,6 +40,7 @@ from paths import AgentPaths
 from session import ANCHOR_HEADER, Session, SessionMeta, build_anchor_message, utc_now_iso
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.logging import EvolveLog, read_events
+from tool_proxies import PROXY_EVOLVED_TOOL_NAMES, build_proxy_tool_definitions
 from tools.registry import BUILTIN_TOOLS, ToolRegistry
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, to_json
 
@@ -63,6 +64,7 @@ TURN_DRIFT_NOTICE = (
 )
 _DEFAULT_PARENT_SHORT_MAX = 5
 _DEFAULT_EXECUTE_SEGMENT_MAX = 50
+_DEFAULT_PROJECT_EXECUTE_SEGMENT_MAX = 15  # AGENT-HARNESS P2 · T-4102
 _DEFAULT_EXECUTE_TOTAL_MAX = 50
 
 _CHECKLIST_PROGRESS_RE = re.compile(
@@ -95,13 +97,21 @@ def parent_short_max() -> int:
     return max(1, value)
 
 
-def parent_execute_segment_max() -> int:
-    raw = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX", str(_DEFAULT_EXECUTE_SEGMENT_MAX))
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_EXECUTE_SEGMENT_MAX
-    return max(1, value)
+def parent_execute_segment_max(*, active_shell: str = "") -> int:
+    """Per-segment tool budget (AGENT-HARNESS P2).
+
+    ``active_shell=project`` defaults to 15; other shells default to 50.
+    Explicit ``PARENT_EXECUTE_SEGMENT_MAX`` always overrides (tests / ops).
+    """
+    if "PARENT_EXECUTE_SEGMENT_MAX" in os.environ:
+        raw = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX", "")
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    if (active_shell or "").strip() == "project":
+        return _DEFAULT_PROJECT_EXECUTE_SEGMENT_MAX
+    return _DEFAULT_EXECUTE_SEGMENT_MAX
 
 
 def parent_execute_total_max() -> int:
@@ -208,6 +218,10 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "Search local file contents under agent root by regex pattern. "
         "Prefer ripgrep when available."
     ),
+    "glob_file_search": (
+        "Find files by glob pattern (e.g. '**/*.py', '**/test_*.ts') under a directory. "
+        "Use before read_file when you need paths by name; use grep for content search."
+    ),
     "web_search": (
         "Search the web for links and snippets. "
         "Use fetch_url when full page text is needed."
@@ -227,20 +241,25 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     ),
     "propose_context_switch": (
         "Propose switching conversation context: new/switch workspace project, "
-        "switch desktop shell (grow/daily/project), or start a fresh session on the "
-        "current shell (session.new). "
-        "Use when the user wants a NEW project, another project, a different shell "
-        "(e.g. leave project to grow for write_evolve), or a clean chat on this shell "
-        "('新话题'/'新开一局' without changing shell). "
+        "or start a fresh ordinary chat (session.new). "
+        "Use when the user wants a NEW project, another project, "
+        "to leave project for write_evolve / tool scaffolding, "
+        "or a clean chat ('新话题'/'新开一局'). "
+        "From a project-bound session, session.new parks the project and opens grow "
+        "(unbound) chat where write_evolve is allowed. "
         "ALWAYS call this BEFORE writing files under a different workspace/<id>/ "
-        "or before evolve writes from a non-grow shell. Requires user confirm/reject."
+        "or before evolve writes from project shell. Requires user confirm/reject."
     ),
     "plan_partner": (
-        "Invoke plan subagent for TASKS/MAP/PROJECT/ENV changes. "
-        "Returns summary; patch proposals appear in sidebar for adopt. "
-        "Do NOT use write_text/patch_file on plan-domain files — use this tool instead."
+        "Invoke plan subagent for TASKS/MAP/PROJECT/ENV (and archive restore). "
+        "Returns summary; proposals appear in sidebar — user must adopt before write. "
+        "Do NOT write_text/patch_file plan-domain files. "
+        "User says 任务不见了 / 误勾 / 恢复 Phase N / restore T-xxx → call this with "
+        "task like「从归档恢复 Phase N 的 T-020…」; sidebar checkbox = done+archive, "
+        "not delete; only restore via this tool."
     ),
 }
+
 
 _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
     "read_file": {
@@ -297,6 +316,32 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["pattern", "path"],
+        "additionalProperties": False,
+    },
+    "glob_file_search": {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern (e.g. '**/*.py')",
+            },
+            "path": {
+                "type": "string",
+                "description": "Search root relative to agent root (default '.')",
+                "default": ".",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum file paths to return (default 200, cap 1000)",
+                "default": 200,
+            },
+            "ignore_case": {
+                "type": "boolean",
+                "description": "Case-insensitive glob match (default false)",
+                "default": False,
+            },
+        },
+        "required": ["pattern"],
         "additionalProperties": False,
     },
     "web_search": {
@@ -393,34 +438,36 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                 "enum": [
                     "project.create",
                     "project.switch",
-                    "shell.switch",
                     "session.new",
                 ],
                 "description": (
                     "project.create = new workspace project + dedicated session; "
                     "project.switch = switch to an existing project session; "
-                    "shell.switch = switch grow/daily/project/govern shell line; "
-                    "session.new = blank ordinary chat (parks project session if any; does not open a second project line)"
+                    "session.new = blank ordinary chat (active_shell=grow; parks project "
+                    "session if any — use before write_evolve from project window)"
                 ),
             },
             "target": {
                 "type": "string",
                 "description": (
                     "For project.*: project id (lowercase). "
-                    "For shell.switch: grow | daily | project | govern. "
-                    "For session.new: current | grow | daily | project | govern "
-                    "(must match the current shell line)"
+                    "For session.new: current (only value after shell consolidation)"
                 ),
             },
             "project_id": {
                 "type": "string",
-                "description": (
-                    "Optional; shell.switch→project or session.new on project: workspace project id"
-                ),
+                "description": "Optional; reserved for future project-scoped session.new",
             },
             "reason": {
                 "type": "string",
                 "description": "Short reason shown on the confirm card",
+            },
+            "template": {
+                "type": "string",
+                "description": (
+                    "project.create only: recipe id under evolve/scaffolds/ "
+                    "(e.g. spring-vue). Runs scaffold_project phase=init after create."
+                ),
             },
         },
         "required": ["action", "target"],
@@ -431,7 +478,10 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "properties": {
             "task": {
                 "type": "string",
-                "description": "What to plan or change in plan domain (TASKS/MAP/PROJECT/ENV)",
+                "description": (
+                    "What to change in plan domain (TASKS/MAP/PROJECT/ENV), "
+                    "or restore from archive e.g. 「从归档恢复 Phase 7 的 T-020～T-025」"
+                ),
             },
             "include_recent_user_lines": {
                 "type": "integer",
@@ -487,8 +537,10 @@ def build_llm_tools(
 ) -> list[dict[str, Any]]:
     """Builtin tools exposed to the LLM for this turn (T-702: ask omits run_evolved)."""
     tools = build_builtin_tools(registry=registry)
+    tools.extend(build_proxy_tool_definitions())
     if session.meta.turn_mode == "ask":
-        tools = [item for item in tools if item["function"]["name"] != "run_evolved"]
+        blocked = {"run_evolved", *PROXY_EVOLVED_TOOL_NAMES}
+        tools = [item for item in tools if item["function"]["name"] not in blocked]
     pid = (session.meta.project_id or "").strip()
     if not pid:
         tools = [item for item in tools if item["function"]["name"] != "plan_partner"]
@@ -794,7 +846,9 @@ class Agent:
         if intent == "recall":
             return 1
         if self.session.meta.turn_mode == "agent":
-            return parent_execute_segment_max()
+            return parent_execute_segment_max(
+                active_shell=self.session.meta.active_shell,
+            )
         return min(self.tool_loop_max, parent_short_max())
 
     def _run_parent_tool_loop(
@@ -890,11 +944,15 @@ class Agent:
                 recall_injected = True
 
             try:
+                if getattr(self.executor.session, "segment_failure_budget_hit", False):
+                    tools_payload = None
+                self._emit_turn_event({"type": "llm.pending"})
                 response = self.llm.chat(
                     [{"role": "system", "content": system}, *working],
                     model=model,
                     tools=tools_payload,
                     temperature=MAIN_LOOP_TEMPERATURE,
+                    reasoning_effort=self.session.meta.reasoning_effort,
                     stream=self.stream_handlers,
                 )
             except LLMCancelledError:
@@ -1013,6 +1071,8 @@ class Agent:
                 "content": response.content,
                 "tool_calls": response.tool_calls,
             }
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
             self.session.append_message(assistant_msg)
 
             for tool_call in response.tool_calls:
@@ -1076,6 +1136,24 @@ class Agent:
                             "text": "同类失败已熔断，请换策略或停下说明。",
                         }
                     )
+
+                # AGENT-HARNESS P5: segment failure budget → stop tools, ask for text close.
+                if getattr(self.executor.session, "segment_failure_budget_just_hit", False):
+                    from exec_reliability import EXEC_SEGMENT_FAILURE_NUDGE_MESSAGE
+
+                    self.executor.session.segment_failure_budget_just_hit = False
+                    self.session.append_message(
+                        {"role": "user", "content": EXEC_SEGMENT_FAILURE_NUDGE_MESSAGE}
+                    )
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": "本段失败次数已达上限，请说明根因或换策略。",
+                        }
+                    )
+                    tools_payload = None
+                    break
 
                 # —— retry on recoverable validation errors (TOOL-RETRY) ——
                 if (
@@ -1218,7 +1296,9 @@ class Agent:
             format_total_cap_message,
         )
 
-        segment_max = parent_execute_segment_max()
+        segment_max = parent_execute_segment_max(
+            active_shell=self.session.meta.active_shell,
+        )
         total_max = parent_execute_total_max()
         auto_continue = auto_continue_enabled(
             active_shell=self.session.meta.active_shell,
@@ -1417,7 +1497,7 @@ class Agent:
 
         from plan_agent import classify_plan_spawn_intent, get_plan_agent
 
-        decision = classify_plan_spawn_intent(user_text, llm=self.llm)
+        decision = classify_plan_spawn_intent(user_text, llm=self.llm, meta=self.session.meta)
         if not decision.spawn:
             return None
 
@@ -1582,12 +1662,9 @@ class Agent:
         subagent_used = bool(overlay_parts)
 
         tools = build_llm_tools(self.session, registry=self.executor.registry)
-        # project / coding sessions always use the 1M-context model
-        has_project = bool(self.session.meta.project_root and self.session.meta.project_root.strip())
-        topics = list(self.session.meta.topics)
-        if has_project and "coding" not in topics:
-            topics.append("coding")
-        model = self.session.meta.llm_model or resolve_session_model(topics)
+        from llm_routing import resolve_model_id_for_role
+
+        model = resolve_model_id_for_role("main_turn", self.session.meta)
 
         if intent == "recall":
             tools = []
@@ -1890,6 +1967,7 @@ class _MockLLM:
         model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         stream: StreamHandlers | None = None,
     ) -> LLMResponse:
         if not self.responses:
@@ -2354,7 +2432,7 @@ def _demo_t702(paths: AgentPaths) -> None:
     ask_tools = build_llm_tools(session)
     ask_names = [item["function"]["name"] for item in ask_tools]
     assert "run_evolved" not in ask_names
-    assert len(ask_names) == 6
+    assert len(ask_names) == 7
     print("[PASS] T-702: ask mode LLM tools exclude run_evolved")
 
     agent = Agent.create(session, confirm_fn=lambda _p, _a: "y")
@@ -2893,6 +2971,7 @@ def _demo_t905(paths: AgentPaths) -> None:
             model: str | None = None,
             tools: list[dict[str, Any]] | None = None,
             temperature: float = 0.0,
+            reasoning_effort: str | None = None,
             stream: StreamHandlers | None = None,
         ) -> LLMResponse:
             self.tools_seen.append(tools)
@@ -2901,6 +2980,7 @@ def _demo_t905(paths: AgentPaths) -> None:
                 model=model,
                 tools=tools,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 stream=stream,
             )
 

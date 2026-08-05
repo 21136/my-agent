@@ -1,0 +1,49 @@
+[tool]
+name = "scaffold_project"
+description = "按 evolve/scaffolds/<recipe>/ 配方初始化或部署项目目录（模板渲染 + 可选 mvn/npm 验收）。recipe 例：spring-vue。整次执行须 confirm。"
+version = "1.0.0"
+status = "active"
+topics = ["project", "coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["recipe", "target_dir"]
+[schema.input.properties.recipe]
+type = "string"
+description = "配方 id（见 evolve/scaffolds/README.md）"
+[schema.input.properties.target_dir]
+type = "string"
+description = "目标目录，相对 agent 根（通常 workspace/<project_id>/）"
+[schema.input.properties.phase]
+type = "string"
+description = "init | deploy（默认 init）"
+[schema.input.properties.variables]
+type = "object"
+description = "覆盖 manifest 变量（如 project_name）"
+[schema.input.properties.dry_run]
+type = "boolean"
+description = "只列出将执行的步骤，不写盘不跑命令"
+[schema.input.properties.stop_on_error]
+type = "boolean"
+description = "某步失败时停止（默认 true）"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean" }
+recipe = { type = "string" }
+phase = { type = "string" }
+target_dir = { type = "string" }
+steps_run = { type = "array" }
+failed_step = { type = "string" }
+evidence_hints = { type = "array", items = { type = "string" } }
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 1800

@@ -72,7 +72,9 @@ from session import (
     TurnMode,
     build_seed_message,
     create_new,
+    parse_reasoning_effort_command,
     parse_turn_mode_command,
+    reasoning_effort_label,
     resume_or_create,
     turn_mode_label,
     utc_now_iso,
@@ -233,6 +235,11 @@ class ConversationRepl:
         mode_cmd = parse_turn_mode_command(stripped)
         if mode_cmd is not None:
             self._handle_turn_mode_command(mode_cmd)
+            return "continue"
+
+        effort_cmd = parse_reasoning_effort_command(stripped)
+        if effort_cmd is not None:
+            self._handle_reasoning_effort_command(effort_cmd)
             return "continue"
 
         if lower == "proposals" or lower.startswith("proposals "):
@@ -527,28 +534,46 @@ class ConversationRepl:
         self.output_fn(overlay)
 
     def _handle_checker_command(self, task: CheckerTask) -> None:
-        """Run Phase 16 demo probe + checker subagent only (T-1612)."""
-        tool_name = task.tool_name.strip()
-        demo_result = self.agent.executor.run_scaffold_demo_probe(tool_name)
-        if demo_result.get("attempted"):
-            exit_code = demo_result.get("exit_code")
+        """Run Phase 16 demo probe + checker subagent, or project test-fail checker."""
+        if task.kind == "project_test_fail":
+            working_dir = (task.working_dir or "").strip()
+            if not working_dir:
+                self.output_fn("error: 验收测试需要路径，例如：验收测试 workspace/my-app/backend")
+                return
+            from project_verify import run_project_tests
+
+            test_result = run_project_tests(self.paths, working_dir=working_dir)
             self.output_fn(
-                f"[内核] demo probe: {tool_name} exit_code={exit_code}"
+                f"[内核] run_project_tests: ok={test_result.get('ok')} "
+                f"failures={len(test_result.get('failures') or [])}"
+            )
+            resolved = CheckerTask(
+                kind="project_test_fail",
+                tool_name="run_project_tests",
+                working_dir=working_dir,
+                test_result=test_result,
             )
         else:
-            reason = demo_result.get("skipped_reason", "not attempted")
-            self.output_fn(f"[内核] demo probe skipped: {reason}")
-
+            tool_name = task.tool_name.strip()
+            demo_result = self.agent.executor.run_scaffold_demo_probe(tool_name)
+            if demo_result.get("attempted"):
+                exit_code = demo_result.get("exit_code")
+                self.output_fn(
+                    f"[内核] demo probe: {tool_name} exit_code={exit_code}"
+                )
+            else:
+                reason = demo_result.get("skipped_reason", "not attempted")
+                self.output_fn(f"[内核] demo probe skipped: {reason}")
+            resolved = CheckerTask(
+                tool_name=tool_name,
+                tool_dir=task.tool_dir,
+                reference_tool=task.reference_tool,
+                demo_result=demo_result,
+                user_checklist=task.user_checklist,
+            )
         runner = SubagentRunner(
             paths=self.paths,
             evolve_log=EvolveLog.for_agent(self.paths),
-        )
-        resolved = CheckerTask(
-            tool_name=tool_name,
-            tool_dir=task.tool_dir,
-            reference_tool=task.reference_tool,
-            demo_result=demo_result,
-            user_checklist=task.user_checklist,
         )
         try:
             result = runner.run_checker(
@@ -597,6 +622,15 @@ class ConversationRepl:
         self.session.save()
         self._rebind_agent()
         self.output_fn(f"turn_mode: {mode} — {turn_mode_label(mode)}")
+
+    def _handle_reasoning_effort_command(self, level: str) -> None:
+        """Switch reasoning effort level (REASONING-EFFORT.md)."""
+        if self.session.meta.reasoning_effort == level:
+            self.output_fn(f"effort already: {level} ({reasoning_effort_label(level)})")
+            return
+        self.session.meta.reasoning_effort = level
+        self.session.save()
+        self.output_fn(f"effort: {level} — {reasoning_effort_label(level)}")
 
     def _maybe_review_proposals(
         self,
@@ -704,7 +738,8 @@ class ConversationRepl:
         goal = self.session.goal.strip() or "(unset)"
         self.output_fn(
             f"--- session {self.session.conversation_id} | goal: {goal} | "
-            f"topics: {topics} | mode: {self.session.meta.turn_mode} ---"
+            f"topics: {topics} | mode: {self.session.meta.turn_mode} | "
+            f"effort: {self.session.meta.reasoning_effort} ---"
         )
         self._print_corruption_notices()
 

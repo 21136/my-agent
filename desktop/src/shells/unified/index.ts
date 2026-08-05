@@ -3,12 +3,13 @@ import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import { renderMarkdown } from "../../markdown";
 import { formatUserMessageHtml } from "../../user-message";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
+import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, isThinkingBodyOpen, thinkingTitleLabel, type ChatBlock } from "../chat-state";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
   setupProjectPanel,
   renderProjectSidebar,
+  renderPlanTaskFlow,
   applyProjectStateEvent,
   applyProjectListEvent,
   applyProjectPlanState,
@@ -20,11 +21,20 @@ import {
   type ProjectPanelCallbacks,
   type TaskItem,
 } from "./project-panel";
+import {
+  actionableSuggestions,
+  clampReviewIndex,
+  renderPlanFullHeader,
+  renderPlanReviewPanel,
+  type MainFocus,
+} from "./plan-review";
 import "./unified.css";
 
 export type Perspective = "default" | "project" | "night";
 
 const FOCUS_TURNS = 2;
+/** Process A-layer: show only the latest N tool lines; earlier ones fold (UX-023). */
+const PROCESS_TOOL_LINES_CAP = 6;
 const RECALL_TURNS = 3;
 
 function isRecallIntent(intent: string, intentLabel: string): boolean {
@@ -167,6 +177,7 @@ export function mountUnifiedShell(
     turnArmedId: "",
     turnArmedText: "",
     turnEvidence: [],
+    turnGateNotice: "",
     turnPostcondition: "none",
     turnCircuitOpen: [],
     turnPlaybookId: "",
@@ -175,7 +186,11 @@ export function mountUnifiedShell(
     threads: [],
     threadsLoading: false,
     currentSessionId: "",
+    mainFocus: "chat",
+    reviewFocusId: null,
   };
+
+  let planReviewIndex = 0;
 
   let statusText = "连接中…";
   let cancelledStatusTimer: number | null = null;
@@ -185,6 +200,8 @@ export function mountUnifiedShell(
   let thinkingTimer: number | null = null;
   let renderThrottleTimer: number | null = null;
   let renderedPrints: string[] = [];
+  /** turnKey → user expanded the folded early tool list (UX-023). */
+  const toolsListExpanded = new Set<string>();
   // night perspective state
   let recallHighlightTurns = new Set<number>();
   let focusObserver: IntersectionObserver | null = null;
@@ -349,9 +366,14 @@ export function mountUnifiedShell(
               <button type="button" class="unified-btn unified-btn-accent" id="empty-new-project">新建项目</button>
               <button type="button" class="unified-btn" id="empty-pick-project">我的项目</button>
             </div>
+            <button type="button" class="workbench-empty-free-chat" id="empty-free-chat">先聊聊</button>
           </div>
         </div>
-        <main class="unified-chat" id="unified-chat"></main>
+        <div class="unified-stage" id="unified-stage">
+          <main class="unified-chat" id="unified-chat"></main>
+          <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="计划审阅"></section>
+          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
+        </div>
         <div class="unified-status" id="unified-status"></div>
         <div class="unified-token-bar hidden" id="unified-token-bar"></div>
         <footer class="unified-composer" id="unified-composer">
@@ -361,6 +383,7 @@ export function mountUnifiedShell(
         </footer>
       </div>
       <div class="unified-confirm-glass hidden" id="unified-confirm-glass" role="dialog" aria-modal="true"></div>
+      <div class="unified-confirm-glass hidden" id="workbench-dialog" role="dialog" aria-modal="true"></div>
     </div>
   `;
 
@@ -370,15 +393,19 @@ export function mountUnifiedShell(
   const topbarEl = root.querySelector<HTMLElement>("#unified-topbar")!;
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
+  const planReviewEl = root.querySelector<HTMLElement>("#unified-plan-review")!;
+  const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
+  const emptyFreeChatBtn = root.querySelector<HTMLButtonElement>("#empty-free-chat")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
   const stopBtn = root.querySelector<HTMLButtonElement>("#unified-stop")!;
   const sendBtn = root.querySelector<HTMLButtonElement>("#unified-send")!;
   const confirmGlass = root.querySelector<HTMLElement>("#unified-confirm-glass")!;
+  const workbenchDialogEl = root.querySelector<HTMLElement>("#workbench-dialog")!;
   const tokenBar = root.querySelector<HTMLElement>("#unified-token-bar")!;
   const threadArchiveBannerEl = root.querySelector<HTMLElement>("#thread-archive-banner")!;
   const threadReturnActiveBtn = root.querySelector<HTMLButtonElement>("#thread-return-active")!;
@@ -443,9 +470,25 @@ export function mountUnifiedShell(
     if (!isNaN(w)) saveSidebarWidth(w);
   });
 
+  // Q4: grow 无绑项目会话（空态「先聊聊」或恢复的无项目会话）
+  let freeChatActive = false;
+
+  function isWorkbenchChatAllowed(): boolean {
+    if (isViewingArchivedThread(projectState)) return false;
+    return Boolean(projectState.projectId) || freeChatActive;
+  }
+
+  function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
+    freeChatActive = !hasProject && Boolean(sessionId);
+  }
+
   function updatePlaceholder(): void {
     if (isViewingArchivedThread(projectState)) {
       input.placeholder = "归档线只读回看；点顶栏「回到活线」继续工作";
+      return;
+    }
+    if (freeChatActive && !projectState.projectId) {
+      input.placeholder = "普通对话：可问答或造工具；写项目代码请先新建/选择项目";
       return;
     }
     if (!projectState.projectId) {
@@ -464,11 +507,12 @@ export function mountUnifiedShell(
   }
 
   function updateWorkbenchEmpty(): void {
-    const empty = !projectState.projectId;
-    workbenchEmptyEl.hidden = !empty;
-    chatEl.classList.toggle("is-empty-gated", empty);
-    composer.classList.toggle("is-empty-gated", empty);
+    const showEmpty = !projectState.projectId && !freeChatActive;
+    workbenchEmptyEl.hidden = !showEmpty;
+    chatEl.classList.toggle("is-empty-gated", showEmpty);
+    composer.classList.toggle("is-empty-gated", showEmpty);
     updatePlaceholder();
+    composerWire.syncSendEnabled();
   }
 
   // ---- file drop + composer ----
@@ -493,7 +537,7 @@ export function mountUnifiedShell(
     chat,
     fileDrop,
     onStatus: (text) => setStatus(text),
-    allowSend: () => Boolean(projectState.projectId) && !isViewingArchivedThread(projectState),
+    allowSend: () => isWorkbenchChatAllowed(),
     beforeSend: () => {
       topbarState.intentLabel = "";
       setStatus("发送中…");
@@ -574,7 +618,7 @@ export function mountUnifiedShell(
     }
   }
 
-  function handleNewThread(): void {
+  async function handleNewThread(): Promise<void> {
     if (chat.isWorking()) {
       setStatus("助手执行中，请稍后再新开线");
       return;
@@ -583,7 +627,7 @@ export function mountUnifiedShell(
       setStatus("请先打开项目");
       return;
     }
-    const ok = window.confirm(
+    const ok = await showWorkbenchConfirm(
       "将为当前项目新开一条会话线（聊天区清空）；当前活线将归档，可在侧栏「会话线」回看。继续？",
     );
     if (!ok) return;
@@ -608,15 +652,141 @@ export function mountUnifiedShell(
     }
   }
 
+  // ---- workbench dialog (Electron does not support window.prompt/confirm) ----
+  type WorkbenchDialogState =
+    | { kind: "prompt"; title: string; value: string; resolve: (value: string | null) => void }
+    | { kind: "confirm"; title: string; resolve: (value: boolean) => void };
+
+  let workbenchDialogState: WorkbenchDialogState | null = null;
+
+  function closeWorkbenchDialog(): void {
+    workbenchDialogState = null;
+    workbenchDialogEl.classList.add("hidden");
+    workbenchDialogEl.innerHTML = "";
+  }
+
+  function renderWorkbenchDialog(): void {
+    if (!workbenchDialogState) {
+      closeWorkbenchDialog();
+      return;
+    }
+    workbenchDialogEl.classList.remove("hidden");
+    if (workbenchDialogState.kind === "confirm") {
+      workbenchDialogEl.innerHTML = `
+        <div class="unified-confirm-glass-card" role="document">
+          <div class="unified-confirm-glass-title">${escapeHtml(workbenchDialogState.title)}</div>
+          <div class="unified-confirm-glass-actions">
+            <button type="button" class="unified-btn unified-btn-accent" id="workbench-dialog-ok">确定</button>
+            <button type="button" class="unified-btn" id="workbench-dialog-cancel">取消</button>
+          </div>
+        </div>
+      `;
+      return;
+    }
+    workbenchDialogEl.innerHTML = `
+      <div class="unified-confirm-glass-card" role="document">
+        <div class="unified-confirm-glass-title">${escapeHtml(workbenchDialogState.title)}</div>
+        <input
+          type="text"
+          class="workbench-dialog-input"
+          id="workbench-dialog-input"
+          value="${escapeHtml(workbenchDialogState.value)}"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div class="unified-confirm-glass-actions">
+          <button type="button" class="unified-btn unified-btn-accent" id="workbench-dialog-ok">确定</button>
+          <button type="button" class="unified-btn" id="workbench-dialog-cancel">取消</button>
+        </div>
+      </div>
+    `;
+    const inputEl = workbenchDialogEl.querySelector<HTMLInputElement>("#workbench-dialog-input");
+    inputEl?.focus();
+    inputEl?.select();
+  }
+
+  function showWorkbenchPrompt(title: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      workbenchDialogState = { kind: "prompt", title, value: "", resolve };
+      renderWorkbenchDialog();
+    });
+  }
+
+  function showWorkbenchConfirm(title: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      workbenchDialogState = { kind: "confirm", title, resolve };
+      renderWorkbenchDialog();
+    });
+  }
+
+  workbenchDialogEl.addEventListener("click", (ev) => {
+    if (!workbenchDialogState) return;
+    const target = ev.target as HTMLElement;
+    if (target.id === "workbench-dialog-cancel") {
+      const state = workbenchDialogState;
+      closeWorkbenchDialog();
+      if (state.kind === "confirm") state.resolve(false);
+      else state.resolve(null);
+      return;
+    }
+    if (target.id !== "workbench-dialog-ok") return;
+    const state = workbenchDialogState;
+    if (state.kind === "confirm") {
+      closeWorkbenchDialog();
+      state.resolve(true);
+      return;
+    }
+    const inputEl = workbenchDialogEl.querySelector<HTMLInputElement>("#workbench-dialog-input");
+    const value = inputEl?.value ?? "";
+    closeWorkbenchDialog();
+    state.resolve(value);
+  });
+
+  workbenchDialogEl.addEventListener("keydown", (ev) => {
+    if (!workbenchDialogState) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      const state = workbenchDialogState;
+      closeWorkbenchDialog();
+      if (state.kind === "confirm") state.resolve(false);
+      else state.resolve(null);
+      return;
+    }
+    if (ev.key !== "Enter" || workbenchDialogState.kind !== "prompt") return;
+    ev.preventDefault();
+    const state = workbenchDialogState;
+    const inputEl = workbenchDialogEl.querySelector<HTMLInputElement>("#workbench-dialog-input");
+    const value = inputEl?.value ?? "";
+    closeWorkbenchDialog();
+    state.resolve(value);
+  });
+
   // ---- new chat / new project (UX-POLISH §7.6) ----
-  function handleNewChat(): void {
+  async function handleFreeChat(): Promise<void> {
+    if (chat.isWorking()) {
+      setStatus("助手执行中，请稍后再开对话");
+      return;
+    }
+    if (freeChatActive && !projectState.projectId) {
+      input.focus();
+      return;
+    }
+    try {
+      client.sendCommand("新会话");
+      setStatus("普通对话…");
+    } catch (err) {
+      setStatus(`开对话失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleNewChat(): Promise<void> {
     if (chat.isWorking()) {
       setStatus("助手执行中，请稍后再开新对话");
       return;
     }
     if (projectState.projectId) {
-      const ok = window.confirm(
-        "将挂起当前项目会话并打开普通对话（不是同项目新开线；新开线请点「+ 新开线」）。继续？",
+      const ok = await showWorkbenchConfirm(
+        "将挂起当前项目会话并打开普通对话（可在此用 write_evolve 造工具；不是同项目新开线）。继续？",
       );
       if (!ok) return;
     }
@@ -628,16 +798,16 @@ export function mountUnifiedShell(
     }
   }
 
-  function handleNewProject(): void {
+  async function handleNewProject(): Promise<void> {
     if (chat.isWorking()) {
       setStatus("助手执行中，请稍后再新建项目");
       return;
     }
     if (projectState.projectId) {
-      const ok = window.confirm("离开当前项目去建新项目？");
+      const ok = await showWorkbenchConfirm("离开当前项目去建新项目？");
       if (!ok) return;
     }
-    const raw = window.prompt("新项目 id（字母数字与连字符）:");
+    const raw = await showWorkbenchPrompt("新项目 id（字母数字与连字符）:");
     if (raw === null) return;
     const id = raw.trim();
     if (!id) {
@@ -808,6 +978,7 @@ export function mountUnifiedShell(
         setStatus("助手执行中，请稍后再切换项目");
         return;
       }
+      closePlanMainFocus();
       projectState.switchInProgress = true;
       projectState.pendingPickerId = target;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -903,6 +1074,7 @@ export function mountUnifiedShell(
         setStatus("助手执行中，请稍后再切换会话线");
         return;
       }
+      closePlanMainFocus();
       try {
         client.openSession(sid);
         setStatus(`打开会话线 ${sid}…`);
@@ -919,6 +1091,182 @@ export function mountUnifiedShell(
 
   threadReturnActiveBtn.addEventListener("click", () => {
     projectCallbacks.onReturnActiveThread();
+  });
+
+  function getActionableQueue() {
+    return actionableSuggestions(projectState.suggestions);
+  }
+
+  function setMainFocus(focus: MainFocus): void {
+    projectState.mainFocus = focus;
+    if (focus === "chat") {
+      projectState.reviewFocusId = null;
+    }
+    syncMainFocusView();
+  }
+
+  function syncMainFocusView(): void {
+    const focus = projectState.mainFocus;
+    shellEl.dataset.mainFocus = focus;
+    chatEl.classList.toggle("hidden", focus !== "chat");
+    planReviewEl.classList.toggle("hidden", focus !== "plan_review");
+    planFullEl.classList.toggle("hidden", focus !== "plan_full");
+    if (focus === "plan_review") {
+      renderPlanReviewPane();
+    } else if (focus === "plan_full") {
+      renderPlanFullPane();
+    }
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function renderPlanReviewPane(): void {
+    const queue = getActionableQueue();
+    planReviewIndex = clampReviewIndex(planReviewIndex, queue.length);
+    projectState.reviewFocusId = queue[planReviewIndex]?.id ?? null;
+    planReviewEl.innerHTML = renderPlanReviewPanel({
+      suggestions: projectState.suggestions,
+      reviewIndex: planReviewIndex,
+    });
+  }
+
+  function renderPlanFullPane(): void {
+    const highlight =
+      projectState.highlightChanges && projectState.highlightedLines.size > 0
+        ? projectState.highlightedLines
+        : null;
+    planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
+  }
+
+  function openPlanReview(suggestionId?: string): void {
+    const queue = getActionableQueue();
+    if (!queue.length) {
+      setStatus("暂无待采纳提案");
+      return;
+    }
+    let index = 0;
+    if (suggestionId) {
+      const found = queue.findIndex((s) => s.id === suggestionId);
+      if (found >= 0) index = found;
+    }
+    planReviewIndex = index;
+    projectState.reviewFocusId = queue[index]?.id ?? null;
+    projectState.overlayPanel = null;
+    setMainFocus("plan_review");
+  }
+
+  function openPlanFull(): void {
+    projectState.overlayPanel = null;
+    setMainFocus("plan_full");
+  }
+
+  function closePlanMainFocus(): void {
+    setMainFocus("chat");
+  }
+
+  function afterSuggestionQueueChanged(): void {
+    const queue = getActionableQueue();
+    if (!queue.length) {
+      if (projectState.mainFocus === "plan_review") {
+        closePlanMainFocus();
+        setStatus("计划提案已处理完");
+      }
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    planReviewIndex = clampReviewIndex(planReviewIndex, queue.length);
+    projectState.reviewFocusId = queue[planReviewIndex]?.id ?? null;
+    if (projectState.mainFocus === "plan_review") {
+      renderPlanReviewPane();
+    }
+    if (projectState.mainFocus === "plan_full") {
+      renderPlanFullPane();
+    }
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function acceptSuggestionById(sid: string): void {
+    projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
+    if (!projectState.suggestions.some((s) => Boolean(s.action))) {
+      projectState.partnerNotices = [];
+    }
+    try {
+      client.acceptPlanSuggestion(sid);
+    } catch {
+      /* ignore */
+    }
+    afterSuggestionQueueChanged();
+  }
+
+  function ignoreSuggestionById(sid: string): void {
+    projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
+    if (!projectState.suggestions.some((s) => Boolean(s.action))) {
+      projectState.partnerNotices = [];
+    }
+    try {
+      client.ignorePlanSuggestion(sid);
+    } catch {
+      /* ignore */
+    }
+    afterSuggestionQueueChanged();
+  }
+
+  function handlePlanReviewAction(action: string, target: HTMLElement): void {
+    switch (action) {
+      case "back":
+        closePlanMainFocus();
+        return;
+      case "open-full":
+        openPlanFull();
+        return;
+      case "accept": {
+        const sid = target.dataset.suggestionId;
+        if (sid) acceptSuggestionById(sid);
+        return;
+      }
+      case "ignore": {
+        const sid = target.dataset.suggestionId;
+        if (sid) ignoreSuggestionById(sid);
+        return;
+      }
+      case "prev":
+        if (planReviewIndex > 0) {
+          planReviewIndex -= 1;
+          renderPlanReviewPane();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
+        return;
+      case "next": {
+        const queue = getActionableQueue();
+        if (planReviewIndex < queue.length - 1) {
+          planReviewIndex += 1;
+          renderPlanReviewPane();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  planReviewEl.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-plan-review-action]");
+    if (!btn?.dataset.planReviewAction) return;
+    handlePlanReviewAction(btn.dataset.planReviewAction, btn);
+  });
+
+  planFullEl.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-plan-review-action]");
+    if (!btn?.dataset.planReviewAction) return;
+    handlePlanReviewAction(btn.dataset.planReviewAction, btn);
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (projectState.mainFocus === "chat") return;
+    if (document.activeElement === input) return;
+    ev.preventDefault();
+    closePlanMainFocus();
   });
 
   function refreshServices(): void {
@@ -940,54 +1288,114 @@ export function mountUnifiedShell(
     return turnIndex >= chat.currentTurnIndex() - (FOCUS_TURNS - 1);
   }
 
-  function renderToolCards(
+  function truncateToolHint(text: string, max = 72): string {
+    const oneLine = text.replace(/\s+/g, " ").trim();
+    if (oneLine.length <= max) return oneLine;
+    return `${oneLine.slice(0, max - 1)}…`;
+  }
+
+  /** One-line tool rows (DESKTOP §3.2.2 A 层); fold older rows when many (UX-023). */
+  function renderCompactToolLines(
     tools: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>,
+    turnKey: string,
   ): string {
     if (!tools.length) return "";
     const now = Date.now();
-    const cards = tools.map((t) => {
+
+    function renderOne(
+      t: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>[number],
+    ): string {
       const running = t.status === "running";
       const elapsedMs = running ? now - t.startedAt : (t.endedAt ?? now) - t.startedAt;
-      const statusLabel =
-        t.status === "running"
-          ? `运行中… ${formatToolElapsed(elapsedMs)}`
-          : t.status === "ok"
-            ? `完成 · ${formatToolElapsed(elapsedMs)}`
-            : `失败 · ${formatToolElapsed(elapsedMs)}`;
-      const endBit =
-        t.endSummary && !running
-          ? `<div class="unified-tool-end">${escapeHtml(t.endSummary)}</div>`
-          : "";
+      const mark = running ? "·" : t.status === "ok" ? "✓" : "✗";
+      const elapsedLabel = running
+        ? `运行中… ${formatToolElapsed(elapsedMs)}`
+        : formatToolElapsed(elapsedMs);
       const progressBit =
         running && t.progressText
-          ? `<div class="unified-tool-progress">${escapeHtml(t.progressText)}</div>`
+          ? ` · ${escapeHtml(truncateToolHint(t.progressText, 48))}`
+          : "";
+      const failHint =
+        !running && t.status === "fail" && t.endSummary
+          ? ` · ${escapeHtml(truncateToolHint(t.endSummary, 48))}`
           : "";
       const logsBit =
-        t.logsTail && !running
-          ? `<details class="unified-tool-logs" open>
-              <summary>日志尾</summary>
-              <pre>${escapeHtml(t.logsTail)}</pre>
-            </details>`
+        !running && t.status === "fail" && t.logsTail
+          ? `<details class="unified-tool-logs-inline"><summary>日志</summary><pre>${escapeHtml(t.logsTail)}</pre></details>`
           : "";
-      return `<div class="unified-tool-card is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
-        <div class="unified-tool-title">${escapeHtml(t.tool)}</div>
-        <div class="unified-tool-summary">${escapeHtml(t.summary)}</div>
-        <div class="unified-tool-status"><span class="unified-tool-elapsed">${escapeHtml(statusLabel)}</span></div>
-        ${progressBit}
-        ${endBit}
-        ${logsBit}
+      return `<div class="unified-process-line unified-tool-line is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
+        <span class="unified-tool-mark">${mark}</span>
+        <span class="unified-tool-name">${escapeHtml(t.tool)}</span>
+        <span class="unified-tool-hint">${escapeHtml(truncateToolHint(t.summary))}</span>
+        <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${failHint}${logsBit}
       </div>`;
-    });
-    return `<div class="unified-tool-cards">${cards.join("")}</div>`;
+    }
+
+    const hiddenCount = Math.max(0, tools.length - PROCESS_TOOL_LINES_CAP);
+    const hidden = hiddenCount > 0 ? tools.slice(0, hiddenCount) : [];
+    const visible = hiddenCount > 0 ? tools.slice(hiddenCount) : tools;
+    const failHidden = hidden.filter((t) => t.status === "fail").length;
+    const foldOpen = toolsListExpanded.has(turnKey);
+    const foldBit =
+      hidden.length > 0
+        ? `<details class="unified-tool-fold" data-tools-fold="${escapeHtml(turnKey)}"${foldOpen ? " open" : ""}>
+            <summary>更早 ${hidden.length} 个工具${failHidden > 0 ? ` · ${failHidden} 失败` : ""}</summary>
+            <div class="unified-tool-fold-body">${hidden.map(renderOne).join("")}</div>
+          </details>`
+        : "";
+    return `<div class="unified-tool-lines">${foldBit}${visible.map(renderOne).join("")}</div>`;
+  }
+
+  function renderThinkingAccordion(block: Extract<ChatBlock, { kind: "process" }>): string {
+    const waiting = Boolean(block.llmPending) && !block.reasoning.trim();
+    if (!block.reasoning.trim() && !waiting) return "";
+    if (waiting) {
+      return `<div class="unified-thinking is-waiting is-streaming" data-turn="${escapeHtml(block.turnKey)}">
+        <div class="unified-thinking-summary is-static" aria-expanded="true">思考中…</div>
+      </div>`;
+    }
+    const open = isThinkingBodyOpen(block);
+    const streaming = block.reasoningPhase === "streaming";
+    const title = thinkingTitleLabel(block);
+    const openCls = open ? " is-open" : "";
+    const streamCls = streaming ? " is-streaming" : " is-pinned";
+    const body = open
+      ? `<div class="unified-thinking-body">${escapeHtml(block.reasoning)}</div>`
+      : "";
+    return `<div class="unified-thinking${streamCls}${openCls}" data-turn="${escapeHtml(block.turnKey)}">
+      <button type="button" class="unified-thinking-summary" data-thinking-toggle="${escapeHtml(block.turnKey)}" aria-expanded="${open ? "true" : "false"}">${escapeHtml(title)}</button>
+      ${body}
+    </div>`;
   }
 
   function tickRunningToolElapsed(): void {
     const now = Date.now();
-    chatEl.querySelectorAll<HTMLElement>(".unified-tool-card.is-running").forEach((el) => {
+    chatEl.querySelectorAll<HTMLElement>(".unified-tool-line.is-running").forEach((el) => {
       const started = Number(el.dataset.startedAt || "0");
       if (!started) return;
       const span = el.querySelector<HTMLElement>(".unified-tool-elapsed");
       if (span) span.textContent = `运行中… ${formatToolElapsed(now - started)}`;
+    });
+  }
+
+  function tickStreamingThinking(): void {
+    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming").forEach((el) => {
+      const turnKey = el.dataset.turn;
+      if (!turnKey) return;
+      const block = chat.model.blocks.find(
+        (b) => b.kind === "process" && b.turnKey === turnKey,
+      );
+      if (block?.kind !== "process") return;
+      const summary = el.querySelector<HTMLElement>(".unified-thinking-summary");
+      if (summary) summary.textContent = thinkingTitleLabel(block);
+      const body = el.querySelector<HTMLElement>(".unified-thinking-body");
+      if (body) body.scrollTop = body.scrollHeight;
+    });
+  }
+
+  function scrollStreamingThinkingBodies(): void {
+    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming .unified-thinking-body").forEach((body) => {
+      body.scrollTop = body.scrollHeight;
     });
   }
 
@@ -996,21 +1404,18 @@ export function mountUnifiedShell(
     const hasRunning = chat.model.blocks.some(
       (b) => b.kind === "process" && b.tools?.some((t) => t.status === "running"),
     );
-    if (hasRunning && toolElapsedTimer === null) {
-      toolElapsedTimer = window.setInterval(tickRunningToolElapsed, 1000);
-    } else if (!hasRunning && toolElapsedTimer !== null) {
+    const hasStreamingThinking = chat.model.blocks.some(
+      (b) => b.kind === "process" && (b.reasoningPhase === "streaming" || b.llmPending),
+    );
+    if ((hasRunning || hasStreamingThinking) && toolElapsedTimer === null) {
+      toolElapsedTimer = window.setInterval(() => {
+        tickRunningToolElapsed();
+        tickStreamingThinking();
+      }, 1000);
+    } else if (!hasRunning && !hasStreamingThinking && toolElapsedTimer !== null) {
       window.clearInterval(toolElapsedTimer);
       toolElapsedTimer = null;
     }
-  }
-
-  function confirmPreviewHint(preview: string): string {
-    const lines = preview.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const evolved = lines.find((l) => /^Evolved:\s*/i.test(l));
-    if (evolved) return evolved.replace(/^Evolved:\s*/i, "").slice(0, 48);
-    const tool = lines.find((l) => /^Tool:\s*/i.test(l));
-    if (tool) return tool.replace(/^Tool:\s*/i, "").slice(0, 48);
-    return lines[0]?.slice(0, 48) ?? "";
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -1030,15 +1435,22 @@ export function mountUnifiedShell(
         block.status === "running"
           ? "计划搭档 · 调研中…"
           : block.proposalCount && block.proposalCount > 0
-            ? `计划搭档 · ${block.proposalCount} 条提案待采纳`
+            ? `计划搭档 · ${block.proposalCount} 条待审阅`
             : "计划搭档 · 已整理";
       const detail =
         block.status === "running"
           ? escapeHtml(block.taskPreview || "正在整理计划域…")
           : escapeHtml(block.summary || block.taskPreview || "");
-      return `<article class="unified-plan-subagent" data-turn-index="${block.turnIndex}" data-status="${block.status}">
+      const ready = block.status === "proposals_ready" && (block.proposalCount ?? 0) > 0;
+      const hint = ready
+        ? `<div class="unified-plan-subagent-hint">打开审阅</div>`
+        : "";
+      const interactive = ready ? " is-clickable" : "";
+      const role = ready ? ' role="button" tabindex="0"' : "";
+      return `<article class="unified-plan-subagent${interactive}" data-turn-index="${block.turnIndex}" data-status="${block.status}"${role}>
         <div class="unified-plan-subagent-title">${escapeHtml(title)}</div>
         <div class="unified-plan-subagent-body">${detail}</div>
+        ${hint}
       </article>`;
     }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
@@ -1059,16 +1471,9 @@ export function mountUnifiedShell(
     // night perspective: skip process and confirm blocks (use overlay instead)
     if (block.kind === "process") {
       if (perspective === "night") return "";
-      const lines = block.lines.map((l) => `<div class="unified-process-line">${escapeHtml(l)}</div>`).join("");
-      const reasoning = block.reasoning
-        ? `<div class="unified-process-reasoning">${escapeHtml(block.reasoning)}</div>`
-        : "";
-      const toolsHtml = renderToolCards(block.tools ?? []);
-      const title = block.tools?.some((t) => t.status === "running")
-        ? "执行中…"
-        : block.reasoning
-          ? "思考中…"
-          : "过程";
+      const thinkingHtml = renderThinkingAccordion(block);
+      const toolsHtml = renderCompactToolLines(block.tools ?? [], block.turnKey);
+      const title = block.tools?.some((t) => t.status === "running") ? "执行中…" : "过程";
       const toggle = block.collapsed ? "展开" : "收起";
       return `
         <div class="unified-process ${block.collapsed ? "collapsed" : ""}" data-turn="${block.turnKey}">
@@ -1076,8 +1481,10 @@ export function mountUnifiedShell(
             <span>${title}</span>
             <button type="button" class="unified-btn" data-process-toggle="${block.turnKey}">${toggle}</button>
           </div>
-          ${toolsHtml}
-          <div class="unified-process-lines">${reasoning}${lines}</div>
+          <div class="unified-process-body">
+            ${thinkingHtml}
+            ${toolsHtml}
+          </div>
         </div>`;
     }
     if (block.kind === "confirm") {
@@ -1090,20 +1497,8 @@ export function mountUnifiedShell(
           ? "is-running"
           : "resolved is-compact"
         : "";
-      // Done/skipped/expired: one-line card; params behind <details>.
-      if (isTerminal) {
-        const status = block.resolved || "已完成";
-        const hint = confirmPreviewHint(block.preview);
-        return `
-        <details class="unified-surface unified-confirm ${resolvedCls}">
-          <summary class="unified-confirm-summary">
-            <span class="unified-confirm-summary-main">工具确认 · ${escapeHtml(status)}</span>
-            ${hint ? `<span class="unified-confirm-summary-hint">${escapeHtml(hint)}</span>` : ""}
-            <span class="unified-confirm-summary-toggle">参数</span>
-          </summary>
-          <pre class="unified-confirm-preview">${escapeHtml(block.preview)}</pre>
-        </details>`;
-      }
+      // Resolved confirms are already reflected in the process tool lines (DESKTOP §3.2.2).
+      if (isTerminal) return "";
       const resolved = block.resolved
         ? `<div class="text-muted unified-confirm-status">${escapeHtml(block.resolved)}</div>`
         : `
@@ -1174,7 +1569,7 @@ export function mountUnifiedShell(
       case "notice":
         return `N:${block.text.length}`;
       case "process":
-        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${(block.tools ?? [])
+        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${block.reasoningPhase ?? "idle"}:${block.reasoningUserOpen ? 1 : 0}:${block.llmPending ? 1 : 0}:${(block.tools ?? [])
           .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}:${t.progressText ?? ""}:${(t.logsTail ?? "").length}`)
           .join(",")}`;
       case "confirm":
@@ -1188,6 +1583,22 @@ export function mountUnifiedShell(
       btn.addEventListener("click", () => {
         const turnKey = btn.dataset.processToggle;
         if (turnKey) chat.toggleProcessCollapsed(turnKey);
+      });
+    });
+    container.querySelectorAll<HTMLButtonElement>("[data-thinking-toggle]:not([data-thinking-bound])").forEach((btn) => {
+      btn.dataset.thinkingBound = "1";
+      btn.addEventListener("click", () => {
+        const turnKey = btn.dataset.thinkingToggle;
+        if (turnKey) chat.toggleThinkingOpen(turnKey);
+      });
+    });
+    container.querySelectorAll<HTMLDetailsElement>("[data-tools-fold]:not([data-tools-fold-bound])").forEach((el) => {
+      el.dataset.toolsFoldBound = "1";
+      el.addEventListener("toggle", () => {
+        const turnKey = el.dataset.toolsFold;
+        if (!turnKey) return;
+        if (el.open) toolsListExpanded.add(turnKey);
+        else toolsListExpanded.delete(turnKey);
       });
     });
   }
@@ -1338,14 +1749,22 @@ export function mountUnifiedShell(
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    scrollStreamingThinkingBodies();
     syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
+      scrollStreamingThinkingBodies();
       syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
   }
+
+  chatEl.addEventListener("click", (ev) => {
+    const card = (ev.target as HTMLElement).closest<HTMLElement>(".unified-plan-subagent.is-clickable");
+    if (!card || card.dataset.status !== "proposals_ready") return;
+    openPlanReview();
+  });
 
   function renderConfirmGlass(): void {
     if (perspective !== "night") {
@@ -1582,6 +2001,10 @@ export function mountUnifiedShell(
       projectState.projectSearchQuery = "";
       projectState.currentDocPath = "";
       projectState.currentDocContent = "";
+      if (panel === "plan") {
+        openPlanFull();
+        return;
+      }
       projectState.overlayPanel = panel as OverlayPanel;
       // Auto-fetch docs list when entering docs panel
       if (panel === "docs") {
@@ -1631,8 +2054,7 @@ export function mountUnifiedShell(
   projectEls.taskFlow.addEventListener("click", (ev) => {
     const openPlan = (ev.target as HTMLElement).closest<HTMLElement>("[data-action='open-full-plan']");
     if (!openPlan) return;
-    projectState.overlayPanel = "plan";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    openPlanFull();
   });
 
   // Overlay: project search + list + switch confirm + verify
@@ -1773,12 +2195,12 @@ export function mountUnifiedShell(
       case "toggle-highlight":
         projectState.highlightChanges = !projectState.highlightChanges;
         if (projectState.highlightChanges) {
-          projectState.overlayPanel = "plan";
+          openPlanFull();
         }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.highlightChanges) {
           requestAnimationFrame(() => {
-            const first = projectEls.overlayBody.querySelector<HTMLElement>(".is-highlighted");
+            const first = planFullEl.querySelector<HTMLElement>(".is-highlighted");
             first?.scrollIntoView({ behavior: "smooth", block: "center" });
           });
         }
@@ -1827,31 +2249,25 @@ export function mountUnifiedShell(
         return;
       case "accept-suggestion": {
         const sid = btn.dataset.suggestionId;
-        if (sid) {
-          // Optimistic: drop card so banner doesn't flash stale「点采纳」notice.
-          projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
-          if (!projectState.suggestions.some((s) => Boolean(s.action))) {
-            projectState.partnerNotices = [];
-          }
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-          try { client.acceptPlanSuggestion(sid); } catch { /* ignore */ }
-        }
+        if (sid) acceptSuggestionById(sid);
+        return;
+      }
+      case "review-suggestion": {
+        const sid = btn.dataset.suggestionId;
+        openPlanReview(sid);
         return;
       }
       case "ignore-suggestion": {
         const sid = btn.dataset.suggestionId;
-        if (sid) {
-          projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
-          if (!projectState.suggestions.some((s) => Boolean(s.action))) {
-            projectState.partnerNotices = [];
-          }
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-          try { client.ignorePlanSuggestion(sid); } catch { /* ignore */ }
-        }
+        if (sid) ignoreSuggestionById(sid);
         return;
       }
       case "dismiss-auto-fix":
         projectState.autoFixNotices = [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-partner-notice":
+        projectState.partnerNotices = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
@@ -1919,6 +2335,7 @@ export function mountUnifiedShell(
   };
   projectEls.taskFlow.addEventListener("click", onTaskCheckboxClick);
   projectEls.overlayBody.addEventListener("click", onTaskCheckboxClick);
+  planFullEl.addEventListener("click", onTaskCheckboxClick);
 
   // ---- context menu ----
   let contextMenuEl: HTMLElement | null = null;
@@ -2084,10 +2501,12 @@ export function mountUnifiedShell(
           projectState.tasksTotal = event.project_tasks_total ?? projectState.tasksTotal;
           const plan = event.project_plan_label ?? "计划待确认";
           topbarState.projectLabel = `项目 · ${event.project_id} · ${plan}`;
+          syncFreeChatFromSession(true, event.session_id);
           setPerspective("project", "session");
         } else {
           projectState.projectId = "";
           topbarState.projectLabel = "";
+          syncFreeChatFromSession(false, event.session_id);
           setPerspective("project", "session");
         }
         updatePlaceholder();
@@ -2121,8 +2540,12 @@ export function mountUnifiedShell(
 
       case "project.state":
         applyProjectStateEvent(projectState, event);
+        if (projectState.projectId) {
+          freeChatActive = false;
+        }
         if (!perspectiveLocked) setPerspective("project", "session");
         updatePlaceholder();
+        updateWorkbenchEmpty();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
@@ -2137,6 +2560,11 @@ export function mountUnifiedShell(
         projectState.partnerBusy = false;
         if (!perspectiveLocked) setPerspective("project", "session");
         updatePlaceholder();
+        if (projectState.mainFocus === "plan_review") {
+          renderPlanReviewPane();
+        } else if (projectState.mainFocus === "plan_full") {
+          renderPlanFullPane();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
@@ -2245,6 +2673,8 @@ export function mountUnifiedShell(
         projectState.turnArmedId = event.armed_task_id || "";
         projectState.turnArmedText = event.armed_task_text || "";
         projectState.turnEvidence = Array.isArray(event.items) ? event.items : [];
+        projectState.turnGateNotice =
+          typeof event.gate_notice === "string" ? event.gate_notice : "";
         {
           const rel = event.reliability;
           projectState.turnPostcondition =
@@ -2278,6 +2708,9 @@ export function mountUnifiedShell(
         projectState.switchOverlay = null;
         projectState.pendingPickerId = "";
         projectState.projectId = event.project_id;
+        if (event.project_id) {
+          freeChatActive = false;
+        }
         if (event.session_replaced) {
           client.refreshSession();
         }
@@ -2354,6 +2787,10 @@ export function mountUnifiedShell(
         break;
 
       case "project.plan.confirm_changes.done":
+        projectState.planBannerCollapsed = true;
+        projectState.changesLevel = null;
+        client.refreshProject();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.list.done":
@@ -2397,6 +2834,13 @@ export function mountUnifiedShell(
       case "tool.start":
         chat.handleEvent(event);
         setStatus(`· ${event.tool}`);
+        break;
+
+      case "llm.pending":
+        chat.handleEvent(event);
+        if (!chat.model.cancelRequested) {
+          setStatus("思考中…");
+        }
         break;
 
       case "tool.progress":
@@ -2513,6 +2957,9 @@ export function mountUnifiedShell(
     } catch {
       /* ignore */
     }
+  });
+  emptyFreeChatBtn.addEventListener("click", () => {
+    void handleFreeChat();
   });
   setPerspective("project", "auto");
   updateWorkbenchEmpty();

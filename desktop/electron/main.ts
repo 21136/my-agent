@@ -26,6 +26,11 @@ const PET_EXPANDED = { width: 340, height: 480 };
 const PET_MARGIN = 16;
 const SHOW_SHORTCUT = "CommandOrControl+Shift+M";
 const DEFAULT_WS_PORT = Number(process.env.MY_AGENT_WS_PORT ?? "8765") || 8765;
+/** Cold Python import on first launch can exceed 30s on Windows. */
+const SIDECAR_READY_TIMEOUT_MS =
+  Number(process.env.MY_AGENT_SIDECAR_READY_MS ?? "90000") || 90000;
+const PORT_PROBE_TIMEOUT_MS = Number(process.env.MY_AGENT_PORT_PROBE_MS ?? "2500") || 2500;
+const PORT_WAIT_MS = Number(process.env.MY_AGENT_PORT_WAIT_MS ?? "20000") || 20000;
 /** Dev only: vite.config.ts treats this as user quit and shuts down `npm run dev`. */
 const DEV_USER_QUIT_CODE = 100;
 
@@ -46,6 +51,10 @@ let quitInProgress = false;
 let sidecarRestarting = false;
 let sidecarOwned = false;
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isPortOpen(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.connect({ host, port });
@@ -53,11 +62,26 @@ function isPortOpen(host: string, port: number): Promise<boolean> {
       socket.destroy();
       resolve(open);
     };
-    socket.setTimeout(800);
+    socket.setTimeout(PORT_PROBE_TIMEOUT_MS);
     socket.once("connect", () => finish(true));
     socket.once("timeout", () => finish(false));
     socket.once("error", () => finish(false));
   });
+}
+
+async function waitForPortOpen(
+  host: string,
+  port: number,
+  deadlineMs = PORT_WAIT_MS,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    if (await isPortOpen(host, port)) {
+      return true;
+    }
+    await sleep(500);
+  }
+  return false;
 }
 
 // Windows dev: reduce native GPU crashes (exit code 0xC0000005) when tray + Chromium init.
@@ -182,7 +206,7 @@ function startSidecar(takeover = false): Promise<SidecarStartResult> {
         settled = true;
         reject(new Error("sidecar ready timeout"));
       }
-    }, 30_000);
+    }, SIDECAR_READY_TIMEOUT_MS);
 
     const handlePayload = (payload: Record<string, unknown>) => {
       if (payload.error === "lock_conflict") {
@@ -267,7 +291,7 @@ function startSidecar(takeover = false): Promise<SidecarStartResult> {
 }
 
 async function ensureSidecar(): Promise<void> {
-  if (!sidecarOwned && (await isPortOpen("127.0.0.1", DEFAULT_WS_PORT))) {
+  if (!sidecarOwned && (await waitForPortOpen("127.0.0.1", DEFAULT_WS_PORT))) {
     console.log(`[sidecar] reusing listener on 127.0.0.1:${DEFAULT_WS_PORT}`);
     sidecarInfo = { host: "127.0.0.1", port: DEFAULT_WS_PORT };
     setPreferredUi("electron");

@@ -265,7 +265,7 @@ def validate_llm_model_switch(session: Session, raw_model: str) -> str:
     canonical = normalize_session_model(raw_model)
     if canonical is None:
         raise SessionError(
-            f"unsupported llm model: {raw_model!r} (use deepseek-v4-flash or deepseek-v4-pro)"
+            f"unsupported llm model: {raw_model!r} (pick a model from session.models)"
         )
 
     target_limit = resolve_context_limit(canonical)

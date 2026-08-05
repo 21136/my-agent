@@ -3,6 +3,7 @@ import type { AgentWsClient } from "./api/ws";
 import { mountAppChrome } from "./app-chrome";
 import { createWsClient } from "./api/ws";
 import { mountHostSettings } from "./host-settings";
+import { mountModelSettings } from "./model-settings";
 import { mountShell } from "./shell-router";
 import { mountContextSwitchOverlay } from "./context-switch-overlay";
 import { applyTheme } from "./settings";
@@ -55,6 +56,7 @@ async function boot(): Promise<void> {
     shellRoot.appendChild(host);
 
     const hostSettings = mountHostSettings(client);
+    const modelSettings = mountModelSettings(client);
 
     mountAppChrome(chromeRoot, {
       client: client!,
@@ -66,6 +68,9 @@ async function boot(): Promise<void> {
       },
       onOpenSettings: () => {
         hostSettings.openSettings();
+      },
+      onOpenModelKeys: () => {
+        modelSettings.openSettings();
       },
     });
 

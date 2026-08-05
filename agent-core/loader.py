@@ -447,10 +447,19 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
             f"tool_budget: ask — 每轮 ≤{short_max} 轮，run_evolved 已禁用（T-907）"
         )
     else:
-        segment_max = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX", "50")
+        from agent import parent_execute_segment_max
+
+        segment_max = parent_execute_segment_max(
+            active_shell=session.meta.active_shell,
+        )
         lines.append("turn_mode: agent — 动手：含 run_evolved 写 workspace / evolve。")
         lines.append(
-            f"tool_budget: agent — 每 segment ≤{segment_max} 轮，可自动续跑（T-907）"
+            f"tool_budget: agent — 每 segment ≤{segment_max} 轮"
+            + (
+                "（项目模式）"
+                if (session.meta.active_shell or "").strip() == "project"
+                else "，可自动续跑（T-907）"
+            )
         )
     if session.scaffold_tool_turn:
         lines.append(
@@ -670,9 +679,11 @@ def format_capability_hints(
     lines = [
         "[能力提示]",
         "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
-        "执行面：凡 status=active 均可 `run_evolved`（不因主题拒调）。",
-        "- 只读：read_file · list_dir · grep（本地）；web_search · fetch_url（网络）",
-        "- 写/改：run_evolved → write_text（新建）/ patch_file（改已有）/ copy_move / move_to_trash；先试 dry_run",
+        "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file` 优先扁平原语，"
+        "其余 evolved 经 `run_evolved`。",
+        "- 只读：read_file · list_dir · glob_file_search · grep（本地）；web_search · fetch_url（网络）",
+        "- 写/改：write_text（新建）/ patch_file（改已有）；或 run_evolved → copy_move / move_to_trash；先试 dry_run",
+        "- 执行：run_command（一次性 shell）；长驻 run_evolved → run_service 或 run_command background:true",
         "- 查项目/跨会话：run_evolved → project_catalog；再 read_file data/sessions/<id>/messages.jsonl"
         "（读**其他**会话须 confirm）",
         "- 造新工具：run_evolved → write_evolve（细则见 buckets/evolve.md；scaffold 回合另有短提示）",

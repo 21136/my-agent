@@ -1,6 +1,7 @@
 # 执行构建（run）
 
-> L1 · Phase 23 M4 · Phase 28 更新。调用：`run_evolved` · `tool_name=<名>`（须 `active`）。
+> L1 · Phase 23 M4 · Phase 28 更新。  
+> **调用**：`run_command` 扁平原语（优先）；或 `run_evolved` · `tool_name=run_command`。
 
 | 工具 | 作用 |
 |------|------|

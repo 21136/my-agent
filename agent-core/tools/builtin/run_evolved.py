@@ -157,7 +157,15 @@ def run(
 
     if inner.get("ok") is False:
         message = str(inner.get("error") or inner.get("message") or "evolved tool failed")
-        return _fail(message, ToolErrorCode.VALIDATION_ERROR, started, tool_name=tool.name, details=inner)
+        details = dict(inner)
+        if tool.name == "run_project_tests":
+            from project_verify import enrich_test_failure_payload
+
+            details = enrich_test_failure_payload(details)
+            summary = details.get("failure_summary")
+            if isinstance(summary, str) and summary.strip():
+                message = summary.strip().splitlines()[0][:500]
+        return _fail(message, ToolErrorCode.VALIDATION_ERROR, started, tool_name=tool.name, details=details)
 
     data = {"tool_name": tool.name}
     for key, value in inner.items():

@@ -30,7 +30,14 @@ _REQUIRED = {
         "db_query",
     ),
     "organize.md": ("sort_by_extension", "rename_batch", "dedupe_by_name"),
-    "project.md": ("report_progress", "project_catalog"),
+    "project.md": (
+        "report_progress",
+        "project_catalog",
+        "scaffold_project",
+        "run_project_tests",
+        "db_migrate_status",
+        "run_quality",
+    ),
     "evolve.md": ("write_evolve", "git_clone"),
 }
 

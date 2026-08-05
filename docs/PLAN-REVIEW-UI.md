@@ -1,9 +1,10 @@
 # 计划审阅主列（PLAN-REVIEW-UI）
 
-> 版本 **0.1.0** · 2026-08-04 · **状态：设计已签（交互稿）**  
+> 版本 **0.2.0** · 2026-08-04 · **状态：PRU-M0 done · Affordance 设计已签（Phase 40 · 代码待做）**  
 > 触发：Phase 39 单入口后，采纳 diff 挤在左窄栏（`max-height: 9rem`），完整计划看不清；对标 Cursor Plan Mode「计划开在主区、聊天在边上」。  
 > 原则（用户确认）：**一个输入 · 默认聊天主列 · 审计划时主列让给计划**。  
-> 关联：[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §6/§7 · [WORKBENCH-UI.md](./WORKBENCH-UI.md)
+> **0.2.0**：主聊口述「点采纳」与侧栏无按钮 /「已写入」告知撞脸 → **控件自解释**（§10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)）。  
+> 关联：[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §6/§7/§15.13 · [WORKBENCH-UI.md](./WORKBENCH-UI.md) · [TASKS.md](./TASKS.md) Phase 40
 
 ---
 
@@ -17,6 +18,8 @@
 | P4 | **主输入始终唯一**；审计划时仍可打字（改计划话术走 `plan_partner`） |
 | P5 | Phase 39 后端不变：`plan_partner` · `project.plan.state` · 采纳 API 复用 |
 | P6 | M0 **纯前端**；无新 WS 类型 |
+| P7 | **控件自解释**：有待拍板动作时，UI 必须露出可点控件；**禁止**依赖主 Agent 口述按钮名（§10） |
+| P8 | **待采纳 ≠ 已写入**：采纳后告知不得再贴 diff、不得长得像提案卡（§10） |
 
 ---
 
@@ -189,3 +192,54 @@ stateDiagram-v2
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1.0 | 2026-08-04 | 初稿：状态机 + 组件图 + M0 范围 |
+| **0.2.0** | 2026-08-04 | **§10 Affordance**：P7/P8；待采纳 vs 已写入；禁口述按钮；Phase 40 |
+
+---
+
+## 10. 控件对齐（Affordance · Phase 40 · **设计已签**）
+
+> **触发（2026-08-04）**：huiyi 会话截图——主聊写「记得点「采纳」」；侧栏却是「计划存档 / 已写入 TASKS.md」+ diff，**看不见「采纳」按钮**。用户判定为设计失误。  
+> **已有洞注记**：`project-panel.ts` banner 链注释已写「notice 说点采纳、无按钮 = dead end」——须收口，不能只靠注释。  
+> **跟踪**：[BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md) · [TASKS.md](./TASKS.md) Phase 40 · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.13
+
+### 10.1 根因（三层叠）
+
+| # | 层 | 现象 |
+|---|-----|------|
+| 1 | **提示词** | [PLAN-SUBAGENT](./PLAN-SUBAGENT.md) §3.3 / `evolve/prompts/project.md` 要求「提醒侧栏采纳/忽略」→ 模型口述按钮名，不校验 UI 是否露出该控件 |
+| 2 | **采纳后告知** | `plan_agent` accept 后 `partner_notices = "已写入 {path}\\n{diff}"` → 侧栏长得像提案，但 **无按钮** |
+| 3 | **空间迁移滞后** | PRU-M0 已把主采纳动作放到主列；话术仍停在「侧栏点采纳」；过程卡 CTA 未成为唯一指路 |
+
+### 10.2 已决（A1～A6）
+
+| ID | 决议 |
+|----|------|
+| **A1** | **控件自解释**：有待拍板提案时，侧栏或主列必须露出可点控件（至少「查看」；主列「采纳/忽略」）。**禁止**把「点采纳」当作主聊必说口播 |
+| **A2** | **待采纳 ≠ 已写入**：两态标题、色、是否含操作钮必须一眼可分；禁止「已写入」卡仍贴完整/半截 diff |
+| **A3** | **采纳后告知**：一行短文案（如「已采纳写入 TASKS.md」）+「关闭」；`partner_notices` **不得**嵌入 diff hunk |
+| **A4** | **侧栏短卡（待采纳）**：标题区固定「待采纳 · N」；每条 = 标题 + 一行摘要 + 可选 `+n −m`；按钮 **「查看」必有**；「采纳」「忽略」可作快捷，主路径仍是主列审阅 |
+| **A5** | **过程卡 = CTA**：`proposals_ready` 文案用「打开审阅 / N 条待采纳」；点击进 `plan_review`。主 Agent 只简述提案内容，**不口述按钮名** |
+| **A6** | **自动打开审阅**：默认仍 **关**（沿用 §2.2.3）；用户偏好「有新提案时自动打开」属 PRU-M2 / Phase 40 可选，不阻塞 A1～A5 |
+
+### 10.3 实施优先级
+
+| 优先级 | 内容 | 主要落点 |
+|--------|------|----------|
+| **P0** | 待采纳卡可见；已写入告知去 diff、换皮；banner 优先级保证 actionable > notice（已有意图须测死） | `project-panel.ts` · `plan_agent.py`（notice 形状） |
+| **P1** | 改提示词纪律：禁「点采纳 / 侧栏采纳」口播；过程卡文案对齐 A5 | `evolve/prompts/project.md` · PLAN-SUBAGENT §3.3 · `chat-state` / 过程卡 |
+| **P2** | 可选：自动打开 `plan_review`；顶栏 `plan_dirty`「确认开工」与「待采纳」文案去重 | `index.ts` · 偏好 |
+
+### 10.4 验收（S-AFF / IT-AFF）
+
+| ID | 步骤 | 预期 |
+|----|------|------|
+| **S-AFF-01** | `plan_partner` 产出 ≥1 条待采纳 | 侧栏见「待采纳 · N」+「查看」；主聊过程卡可点；主聊 **无**「记得点采纳」类口播（允许简述内容） |
+| **S-AFF-02** | 点「采纳」落盘后 | 侧栏若有告知，仅为「已采纳写入 …」类一行 + 关闭；**无** `@@` diff；与待采纳卡视觉不同 |
+| **S-AFF-03** | 仅有 `partner_notices`、队列为空 | 不得出现「点采纳」文案（前端 notice 或主聊模板） |
+| **IT-AFF-01** | accept `apply_patch` 后 `partner_notices` | 单行、无 diff；suggestions 队列为空 |
+
+### 10.5 非目标（本 Phase）
+
+- 取消侧栏快捷「采纳」（A4 仍允许）
+- 恢复双通道 / Plan 独立气泡
+- 用 LLM 动态生成按钮标签（标签固定中文，代码写死）

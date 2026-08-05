@@ -18,11 +18,25 @@ _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from llm_models import (
+    DEFAULT_FLASH_ID,
+    DEFAULT_PRO_ID,
+    ModelEntry,
+    get_registry,
+)
 from tools.http_client import make_httpx_client
 
+_REASONING_EFFORT_LEVELS = frozenset({"low", "high", "max"})
+
+
+def _normalize_reasoning_effort(raw: str | None) -> str:
+    if raw is not None and raw.strip().casefold() in _REASONING_EFFORT_LEVELS:
+        return raw.strip().lower()
+    return "high"
+
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_MODEL_CODING = "deepseek-v4-pro"
+DEFAULT_MODEL = DEFAULT_FLASH_ID
+DEFAULT_MODEL_CODING = DEFAULT_PRO_ID
 DEFAULT_TIMEOUT_SEC = 120.0
 FLASH_CONTEXT_LIMIT = 128_000
 PRO_CONTEXT_LIMIT = 1_000_000
@@ -64,6 +78,7 @@ class LLMConfig:
     model_coding: str
     timeout_sec: float
     context_limit_override: int | None
+    reasoning_effort: str = "high"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +102,49 @@ class StreamHandlers:
     on_reasoning_delta: Callable[[str], None] | None = None
 
 
+def _extract_reasoning_text(payload: dict[str, Any]) -> str | None:
+    """Normalize provider-specific reasoning fields to plain text."""
+    for key in ("reasoning_content", "reasoning", "thinking"):
+        raw = payload.get(key)
+        if isinstance(raw, str) and raw:
+            return raw
+        if isinstance(raw, dict):
+            nested = raw.get("content") or raw.get("text")
+            if isinstance(nested, str) and nested:
+                return nested
+    return None
+
+
+def _append_reasoning_stream(
+    parts: list[str],
+    handlers: StreamHandlers,
+    text: str,
+) -> None:
+    if not text:
+        return
+    parts.append(text)
+    if handlers.on_reasoning_delta is not None:
+        handlers.on_reasoning_delta(text)
+
+
+def _append_reasoning_full_if_new(
+    parts: list[str],
+    handlers: StreamHandlers,
+    full_text: str,
+) -> None:
+    """Some providers attach the full reasoning trace on ``message`` not ``delta``."""
+    if not full_text:
+        return
+    joined = "".join(parts)
+    if full_text.startswith(joined):
+        tail = full_text[len(joined) :]
+        if tail:
+            _append_reasoning_stream(parts, handlers, tail)
+        return
+    if full_text not in joined:
+        _append_reasoning_stream(parts, handlers, full_text)
+
+
 def load_config() -> LLMConfig:
     """Load provider settings from environment (RUNTIME.md §6.1)."""
     raw_limit = os.environ.get("LLM_CONTEXT_LIMIT")
@@ -102,62 +160,51 @@ def load_config() -> LLMConfig:
         model_coding=os.environ.get("LLM_MODEL_CODING", DEFAULT_MODEL_CODING),
         timeout_sec=float(raw_timeout),
         context_limit_override=context_limit_override,
+        reasoning_effort=_normalize_reasoning_effort(
+            os.environ.get("LLM_REASONING_EFFORT")
+        ),
     )
 
 
 def resolve_session_model(topics: list[str], *, config: LLMConfig | None = None) -> str:
-    """Pick session model: coding topic → pro, else flash (§6.1)."""
-    cfg = config or load_config()
+    """Pick session model: coding topic → pro tier default, else flash (§6.1)."""
+    registry = get_registry()
     if "coding" in topics:
-        return cfg.model_coding
-    return cfg.model
+        return registry.default_pro_id
+    return registry.default_flash_id
 
 
 def normalize_session_model(raw: str, *, config: LLMConfig | None = None) -> str | None:
-    """Map UI/alias strings to configured flash or pro ids; None if unknown."""
-    cfg = config or load_config()
-    key = raw.strip().casefold().replace("_", "-")
-    if not key:
+    """Map UI/alias strings to registry model ids; None if unknown."""
+    entry = get_registry().resolve(raw)
+    if entry is None:
         return None
-    flash_keys = {
-        cfg.model.casefold(),
-        "flash",
-        "v4-flash",
-        "deepseek-v4-flash",
-        DEFAULT_MODEL.casefold(),
-    }
-    pro_keys = {
-        cfg.model_coding.casefold(),
-        "pro",
-        "v4-pro",
-        "deepseek-v4-pro",
-        DEFAULT_MODEL_CODING.casefold(),
-    }
-    if key in flash_keys:
-        return cfg.model
-    if key in pro_keys:
-        return cfg.model_coding
-    return None
+    return entry.id
+
+
+def resolve_model_entry(model: str) -> ModelEntry | None:
+    """Resolve a session / chat model id to a registry entry."""
+    return get_registry().resolve(model)
 
 
 def llm_model_label(model: str, *, config: LLMConfig | None = None) -> str:
     """Short UI label for session banner / chrome."""
-    cfg = config or load_config()
-    normalized = normalize_session_model(model, config=cfg)
-    if normalized == cfg.model_coding:
-        return "Pro"
-    if normalized == cfg.model:
-        return "Flash"
+    entry = get_registry().resolve(model)
+    if entry is not None:
+        return entry.name
     if "pro" in model.casefold():
         return "Pro"
     return "Flash"
 
 
 def resolve_context_limit(model: str, *, config: LLMConfig | None = None) -> int:
-    """Context token ceiling for *model* (§6.1 flash 128k / pro 1M)."""
+    """Context token ceiling for *model* (registry max_input_tokens)."""
     cfg = config or load_config()
     if cfg.context_limit_override is not None:
         return cfg.context_limit_override
+    entry = get_registry().resolve(model)
+    if entry is not None:
+        return entry.max_input_tokens
     if model == cfg.model_coding:
         return PRO_CONTEXT_LIMIT
     return FLASH_CONTEXT_LIMIT
@@ -203,29 +250,43 @@ class LLMClient:
         model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.0,
+        reasoning_effort: str | None = None,
         response_format: dict[str, Any] | None = None,
         stream: StreamHandlers | None = None,
     ) -> LLMResponse:
         """POST ``/v1/chat/completions``; streams deltas when ``stream`` handlers are set."""
         self._raise_if_cancelled()
-        if not self.config.api_key:
-            raise LLMMissingApiKeyError("LLM_API_KEY is not set")
+        registry = get_registry()
+        model_ref = model or registry.default_flash_id
+        entry = registry.resolve(model_ref)
+        if entry is None:
+            raise LLMApiError(f"unsupported llm model: {model_ref!r}", status_code=400)
 
-        resolved_model = model or self.config.model
+        api_key = entry.resolve_api_key()
+        if not api_key:
+            env_hint = entry.api_key_env or "LLM_API_KEY"
+            raise LLMMissingApiKeyError(f"API key not set for model {entry.id} (set {env_hint})")
+
+        resolved_model = entry.provider_model
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
             "stream": stream is not None,
         }
-        if tools:
+        if tools and entry.supports_tool_call:
             payload["tools"] = tools
         if response_format is not None:
             payload["response_format"] = response_format
+        if reasoning_effort is not None:
+            payload["thinking"] = {
+                "type": "enabled",
+                "reasoning_effort": reasoning_effort,
+            }
 
-        url = f"{self.config.base_url}/v1/chat/completions"
+        url = entry.chat_completions_url()
         headers = {
-            "Authorization": f"Bearer {self.config.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
@@ -237,8 +298,11 @@ class LLMClient:
                     if stream is None:
                         response = client.post(url, headers=headers, json=payload)
                         self._raise_if_cancelled()
-                        return self._parse_http_response(response, fallback_model=resolved_model)
-                    return self._chat_stream(client, url, headers, payload, stream, resolved_model)
+                        return self._parse_http_response(
+                            response,
+                            fallback_model=entry.id,
+                        )
+                    return self._chat_stream(client, url, headers, payload, stream, entry.id)
                 finally:
                     with self._active_response_lock:
                         if self._active_client is client:
@@ -323,9 +387,7 @@ def _parse_completion(data: dict[str, Any], *, fallback_model: str) -> LLMRespon
     if content is not None and not isinstance(content, str):
         content = str(content)
 
-    reasoning_content = message.get("reasoning_content")
-    if reasoning_content is not None and not isinstance(reasoning_content, str):
-        reasoning_content = str(reasoning_content)
+    reasoning_content = _extract_reasoning_text(message)
 
     usage = data.get("usage")
     if usage is not None and not isinstance(usage, dict):
@@ -399,13 +461,17 @@ def _consume_sse_stream(
 
         delta = choice.get("delta")
         if not isinstance(delta, dict):
-            continue
+            delta = {}
 
-        reasoning_delta = delta.get("reasoning_content")
-        if isinstance(reasoning_delta, str) and reasoning_delta:
-            reasoning_parts.append(reasoning_delta)
-            if handlers.on_reasoning_delta is not None:
-                handlers.on_reasoning_delta(reasoning_delta)
+        reasoning_delta = _extract_reasoning_text(delta)
+        if reasoning_delta:
+            _append_reasoning_stream(reasoning_parts, handlers, reasoning_delta)
+
+        message = choice.get("message")
+        if isinstance(message, dict):
+            reasoning_message = _extract_reasoning_text(message)
+            if reasoning_message:
+                _append_reasoning_full_if_new(reasoning_parts, handlers, reasoning_message)
 
         content_delta = delta.get("content")
         if isinstance(content_delta, str) and content_delta:
@@ -632,6 +698,19 @@ def _demo() -> None:
     assert deltas == ["hel", "lo"]
     assert reasoning == ["think ", "more"]
     print("[PASS] _consume_sse_stream: content + reasoning deltas")
+
+    message_only = _consume_sse_stream(
+        _FakeStreamResponse(
+            [
+                'data: {"choices":[{"message":{"reasoning_content":"full trace"},"index":0}]}',
+                "data: [DONE]",
+            ]
+        ),
+        handlers=StreamHandlers(on_reasoning_delta=reasoning.append),
+        fallback_model=cfg.model,
+    )
+    assert message_only.reasoning_content == "full trace"
+    print("[PASS] _consume_sse_stream: message.reasoning_content fallback")
 
     tool_events: list[str] = []
     tool_streamed = _consume_sse_stream(

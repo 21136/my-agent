@@ -1,0 +1,41 @@
+[tool]
+name = "run_project_tests"
+description = "在绑定项目目录跑测试并解析失败为 file:line 结构（pytest/jest/mvn）。与 run_tests（my-agent 自有验收）不同。Progress Gate test 证据对口工具。"
+version = "1.0.0"
+status = "active"
+topics = ["project", "coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["working_dir"]
+[schema.input.properties.working_dir]
+type = "string"
+description = "项目内目录，相对 agent 根（如 workspace/my-app/backend）"
+[schema.input.properties.suite]
+type = "string"
+description = "auto | pytest | jest | vitest | mvn | npm_test（默认 auto）"
+[schema.input.properties.extra_args]
+type = "array"
+items = { type = "string" }
+description = "追加 CLI 参数"
+[schema.input.properties.timeout_sec]
+type = "integer"
+description = "超时秒数（默认 600，上限 1800）"
+[schema.input.properties.max_failures]
+type = "integer"
+description = "最多返回失败条数（默认 20）"
+[schema.input.properties.dry_run]
+type = "boolean"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = false
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 1800

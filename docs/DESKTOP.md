@@ -1,6 +1,6 @@
 # Electron 桌面壳设计（DESKTOP）
 
-> 版本 **0.4.0** · 2026-07-30  
+> 版本 **0.4.2** · 2026-08-04  
 > 状态：`doc` — **当前 UI 真源 = `shells/unified/`**（perspective: default | project | night）+ **`shells/pet/`**；旧 grow/daily/project/govern **已删除**。历史章节保留作设计溯源，标 **deprecated**。  
 > 关联：[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
 
@@ -176,7 +176,7 @@ desktop/src/skins/
 
 协议层仍发 `confirm.response` + `y|n|a` + `request_id`（§5.1）；仅 **呈现** 改为点击。
 
-#### 3.2.2 过程可见 · 思考展示（**已定：要，两层**）
+#### 3.2.2 过程可见 · 思考展示（**已定：要，两层** · B 层对齐 Cursor · 2026-08-04）
 
 空等整段回复会显得闷；桌面壳在 **同一轮助手回复区域** 内展示 **过程**，仍不是仪表盘。
 
@@ -187,39 +187,64 @@ desktop/src/skins/
 | **A 运行过程** | 调了啥工具、segment 续跑 | **`tool.start`/`tool.end`**、`notice`（`explore.progress` **未实现** · 规划） | **M0/M1 必做** |
 | **B 模型推理** | 模型思考链（若 API 有） | 流式 `reasoning_content` / reasoner 模型 | **M1+**，有则显示 |
 
-**对话区示意（P 色系）**：
+##### B 层呈现（**已决 · 照搬 Cursor Thought accordion**）
+
+触发：huiyi 长回合工具连败时，过程块把 **全文 reasoning 堆成一大坨**，再被 RunningCard / 失败日志顶出视口——「思考」名义上有、实际看不见。
+
+| 决议 | 说明 |
+|------|------|
+| **D-T1** | **对齐 Cursor**：思考为过程区内的 **独立折叠块**（非永久矮窗常显全文） |
+| **D-T2** | **流式中**：思考块 **展开**，跟 `reasoning.delta`；标题可用「思考中…」 |
+| **D-T3** | **本段思考结束**（见下「收起时机」）→ 收成 **一行标题**（如 `思考 · Ns` / 对标 Cursor `Thought for Ns`）；点开可看 **全文** |
+| **D-T4** | **本轮进行中**：已收起的思考 **标题钉在过程区最顶**，A 层工具卡 / 日志 **永远在其下**，不得把标题顶出过程区 |
+| **D-T5** | **`assistant.done` / 回合结束**：思考标题 **随整块过程** 一起收进「展开可看」；历史轮默认折叠（与下表「结束后」一致） |
+| **D-T6** | **非目标（保留）**：聊天区吸顶 sticky、固定 4～5 行矮窗滚全文、仪表盘式图标墙 |
+| **D-T7** | **A 层工具行折叠（UX-023）**：同过程块工具数 **> 6** 时，更早条目收进 `更早 N 个工具`；默认合上；最新 6 条（含运行中）始终可见；侧栏本回合证据仍完整 |
+
+**收起时机（本段思考 → 一行标题）**：
+
+1. 出现下一次 `tool.start`（思考段被工具打断），或  
+2. 开始 `assistant.delta`（进入正式回答），或  
+3. `assistant.done` / `turn.end`（整轮收口，再叠加 D-T5）
+
+同一轮若再次出现 `reasoning.delta`：可 **重新展开** 同一思考块续写，或开新折叠段（实现选一；M0 允许单块累加全文 + 再次展开）。
+
+**对话区示意（进行中 · 思考已收成标题）**：
 
 ```text
-│ 你                                                              │
-│ 帮我在 workflow 下加一个按日期归档的 tool                         │
-│                                                                 │
 │ 助手                                                              │
-│ ┌─ 过程 ─ text-muted · 略小字号 ─────────────────── [收起 ▾] ┐ │
-│ │ 思考中…                                                       │ │  ← 仅 B 层有内容时显示标题
-│ │ 需要先看清现有 workflow 工具再决定 patch 路径…                  │ │  ← reasoning.delta 流式
-│ │ · list_dir  evolve/tools/workflow/                            │ │  ← A 层：等宽 · 开头
-│ │ · read_file  evolve/tools/workflow/archive_by_date/tool.toml  │ │
-│ │ · explore  子代理 3/8 轮…                                     │ │
+│ ┌─ 过程 ──────────────────────────────────────────── [收起 ▾] ┐ │
+│ │ ▾ 思考 · 12s                                          ← 钉顶 │ │
+│ │ ▸ 更早 8 个工具                                       ← D-T7 │ │
+│ │ · patch_file  …                                      ← 最近 │ │
+│ │ · ✗ …                                                         │ │
 │ └───────────────────────────────────────────────────────────────┘ │
-│                                                                 │
-│ 好，我看了现有工具结构，建议新增 archive_by_date…（assistant 流式）│
+│ （正式回答流式…）                                                 │
 ```
+
+流式思考中则标题下展开正文；点标题可切换展开/收起（**进行中**用户手动展开后，新 `tool.start` 仍可按 D-T3 收成一行——与 Cursor 已知「手动展开又被收」不同；**本产品已决：工具打断时允许自动收成标题，全文仍在折叠内**）。
 
 | 规则 | 说明 |
 |------|------|
 | **过程块位置** | 紧挨在该轮 **正式回答之上**；历史轮次过程 **默认折叠**，可点开 |
-| **进行中** | 过程块 **展开**；行首 `思考中…` 或 `· tool_name` 用 `text-muted`；B 层无则 **不显示**「思考中」假文案 |
-| **结束后** | 正式回答 `assistant.delta` 流式出现在过程块 **下方**；过程块 **自动收起**（用户可再点 `[展开]` 查看） |
-| **样式** | 过程块 `surface` 浅底或仅左边线 + `text-muted`；**无** Cursor 式大卡片、无图标墙 |
+| **进行中** | 过程块 **展开**；**B 层标题钉顶**（D-T4）；其下为 A 层工具行/卡；B 层无内容则 **不显示**假「思考中」 |
+| **结束后** | 正式回答在过程块 **下方**；过程块（含思考标题）**自动收起**（D-T5）；用户可再 `[展开]` |
+| **DOM 顺序** | `思考折叠块` → `工具卡/行` →（可选）其它过程行；**禁止**工具卡排在思考之上 |
+| **「收起」语义** | 收起过程块时须 **同时隐藏 A 层工具卡与过程行**；不得只藏 reasoning 正文却留下失败墙（现状 bug，实施时修） |
+| **样式** | 过程块 `surface` 浅底或左边线 + `text-muted`；思考块用 **折叠标题行**，不对齐 Cursor 仪表盘大卡/图标墙 |
 | **与 confirm** | 过程块只记录 **已发生** 的 tool；**待 confirm** 的 tool 用 §3.2.1 按钮块，不重复进过程列表 |
 
-**内核改动（预期）**：
+**实施落点（UX-021 · 2026-08-04）**：`desktop/src/shells/unified/index.ts` · `unified.css` · `chat-state.ts`。
 
-- `llm_client`：支持 `stream: true`；若 message 含 `reasoning_content`，发 `reasoning.delta`（T-904b）。
+**内核改动（已有 / 预期）**：
+
+- `llm_client`：支持 `stream: true`；若 message 含 `reasoning_content`，发 `reasoning.delta`（T-904b · **已有**）。
 - `agent.run_turn` / `server.py`：A 层过程由 **`tool.start`/`tool.end`** 驱动（**无**独立 `activity.line` emit；见 §5.2）。
 - `messages.jsonl`：**默认仍只存** 最终 assistant 与 tool 消息；过程流 **可选** 不落盘（省体积），或落 `meta` 调试开关。
 
 **设置（草案）**：`显示思考过程` 默认 **开**；关则仅流式正式回答 + confirm。过程块结束后 **自动收起**（**已定**）。
+
+**主聊正文格式**：assistant 气泡不写假思考、不泄露内部字段；见 [output-format.md](./output-format.md)。
 
 #### 3.2.3 运行态渐变（**已定 · 2026-07-12 · 全窗 v2**）
 
@@ -1049,6 +1074,8 @@ Electron 用 Windows **浅/深系统背景**；my-agent 只定制 **顶栏一条
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **0.4.2** | 2026-08-04 | §3.2.2 **D-T7 / UX-023**：工具行 >6 折叠「更早 N 个」；保留思考钉顶，不引入 sticky |
+| **0.4.1** | 2026-08-04 | §3.2.2 **B 层对齐 Cursor Thought accordion**（D-T1～D-T6）；进行中标题钉顶；结束后随过程块收起；UX-021 |
 | 0.1.0-draft | 2026-07-10 | 初稿：动机、布局、架构、协议草案、里程碑、开放问题 |
 | 0.1.1-draft | 2026-07-10 | 视觉改为纯文字四方向；布局去三栏；反 Cursor 约束 |
 | 0.1.2-draft | 2026-07-11 | 个人使用：去信息展示；A 续写 / B 唤出 / C REPL / D 缩小壳 |

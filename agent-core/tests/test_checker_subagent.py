@@ -286,7 +286,10 @@ class CheckerRunnerTests(unittest.TestCase):
 
     def test_checker_tools_subset(self) -> None:
         names = [t["function"]["name"] for t in build_checker_tools()]
-        self.assertEqual(names, ["read_file", "list_dir", "grep"])
+        self.assertEqual(
+            names,
+            ["read_file", "list_dir", "glob_file_search", "grep"],
+        )
 
     def test_cancel_event_aborts(self) -> None:
         cancel = threading.Event()
