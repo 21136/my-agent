@@ -60,6 +60,8 @@ A–F 分型可继续写入 `evolve_log` / 侧栏 `failure_class`，供人看。
 | **B–E** | 依赖/缺表/鉴权/进程死 | 否 | 计熔断；换招由**模型或用户**决定 |
 | **F** | 取消/超时 | 否 | 停 |
 
+**例外（BUG-024 · T-4242）**：同 segment 内 **`inline_write_max` 重复 ≥N（默认 2）** → 停 tool + staging 内核；第 2 次起 **不再** TOOL-RETRY inline。见 §3.6。
+
 ### 3.2 后置条件（保留 · M0）
 
 起服成功话术须本回合 `run_service` **ready + alive**（等）；否则改写 + notice。  
@@ -69,6 +71,16 @@ A–F 分型可继续写入 `evolve_log` / 侧栏 `failure_class`，供人看。
 
 同 execute segment、同 call 指纹连续 ≥ N（默认 3）→ 内核熔断提示 + 禁止同招。  
 解除：新用户消息 / 新 segment。
+
+### 3.6 重复 inline 写入 guard（BUG-024 · fixed）
+
+| 项 | 说明 |
+|----|------|
+| 问题 | `validation_error` + `inline_write_max` 为 A 类 → 不计 P5/G14 → guard 连刷 |
+| 规则 | streak ≥ `MY_AGENT_INLINE_WRITE_GUARD_MAX`（默认 **2**）→ `inline_write_guard_blocked` → agent 停 tool |
+| 内核 | `EXEC_INLINE_WRITE_NUDGE_MESSAGE`（staging 路径，非 core.txt） |
+| 重置 | `begin_turn` / 新 user 消息 |
+| 文档 | [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) · IT-98 |
 
 ### 3.4 剧本库 — **废止（D1 · 2026-08-02）**
 

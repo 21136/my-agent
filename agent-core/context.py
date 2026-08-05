@@ -8,6 +8,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Protocol
 
 _AGENT_CORE = Path(__file__).resolve().parent
@@ -30,6 +31,10 @@ _INTERRUPTED_TOOL_MESSAGE = to_json(
 DEFAULT_COMPACT_RATIO = 0.85
 DEFAULT_KEEP_TURNS = 8
 DEFAULT_DIGEST_MAX_CHARS = 8000
+DEFAULT_SUMMARIZE_TIMEOUT_SEC = 180.0
+DEFAULT_PAYLOAD_TRIM_RATIO = 0.70
+DEFAULT_TOOL_PAYLOAD_MAX_CHARS = 4000
+_TOOL_PAYLOAD_TRUNC_SUFFIX = "\n…[tool output truncated for context payload]"
 FIRST_COMPACT_USER_MESSAGE = (
     "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
 )
@@ -52,6 +57,7 @@ class SummarizeClient(Protocol):
         model: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.0,
+        timeout_sec: float | None = None,
     ) -> LLMResponse: ...
 
 
@@ -80,6 +86,74 @@ def load_context_config() -> ContextConfig:
         keep_turns=int(keep_raw),
         digest_max_chars=int(digest_raw),
     )
+
+
+def summarize_timeout_sec() -> float:
+    raw = os.environ.get("CONTEXT_SUMMARIZE_TIMEOUT_SEC", str(int(DEFAULT_SUMMARIZE_TIMEOUT_SEC)))
+    try:
+        value = float(raw)
+    except ValueError:
+        value = DEFAULT_SUMMARIZE_TIMEOUT_SEC
+    return max(1.0, value)
+
+
+def payload_trim_threshold_tokens(model: str, *, config: ContextConfig | None = None) -> int:
+    cfg = config or load_context_config()
+    limit = resolve_context_limit(model)
+    raw = os.environ.get("CONTEXT_PAYLOAD_TRIM_RATIO", str(DEFAULT_PAYLOAD_TRIM_RATIO))
+    try:
+        ratio = float(raw)
+    except ValueError:
+        ratio = DEFAULT_PAYLOAD_TRIM_RATIO
+    return int(limit * ratio)
+
+
+def trim_tool_payloads_for_llm(
+    messages: list[dict[str, Any]],
+    *,
+    max_chars: int = DEFAULT_TOOL_PAYLOAD_MAX_CHARS,
+) -> tuple[list[dict[str, Any]], int]:
+    """Shorten oversized tool bodies for LLM payload only (disk log unchanged)."""
+    trimmed_count = 0
+    out: list[dict[str, Any]] = []
+    reserve = len(_TOOL_PAYLOAD_TRUNC_SUFFIX)
+    cap = max(1, max_chars - reserve)
+    for message in messages:
+        if message.get("role") != "tool":
+            out.append(message)
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or len(content) <= max_chars:
+            out.append(message)
+            continue
+        trimmed_count += 1
+        out.append(
+            {
+                **message,
+                "content": content[:cap] + _TOOL_PAYLOAD_TRUNC_SUFFIX,
+            }
+        )
+    return out, trimmed_count
+
+
+def build_llm_messages_with_optional_trim(
+    session: Session,
+    system_prompt: str,
+    model: str,
+    *,
+    force_trim: bool = False,
+    config: ContextConfig | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Build payload; trim tool bodies when still above post-compact threshold."""
+    messages = build_llm_messages(session)
+    tokens = estimate_context_tokens(system_prompt, messages)
+    threshold = payload_trim_threshold_tokens(model, config=config)
+    if not force_trim and tokens < threshold:
+        return messages, False
+    trimmed, count = trim_tool_payloads_for_llm(messages)
+    if count == 0:
+        return messages, False
+    return trimmed, True
 
 
 def estimate_text_tokens(text: str) -> int:
@@ -352,6 +426,7 @@ def summarize_messages_for_digest(
     llm: SummarizeClient,
     *,
     config: ContextConfig | None = None,
+    timeout_sec: float | None = None,
 ) -> str:
     cfg = config or load_context_config()
     transcript = format_messages_for_digest(messages)
@@ -364,11 +439,13 @@ def summarize_messages_for_digest(
         project_hint=_project_digest_hint(session),
     )
     model = session.meta.llm_model or resolve_session_model(session.meta.topics)
+    effective_timeout = summarize_timeout_sec() if timeout_sec is None else timeout_sec
     response = llm.chat(
         [{"role": "user", "content": prompt}],
         model=model,
         tools=None,
         temperature=0.0,
+        timeout_sec=effective_timeout,
     )
     body = (response.content or "").strip()
     if not body:
@@ -395,6 +472,8 @@ def compact_context(
     force: bool = False,
     system_prompt: str | None = None,
     config: ContextConfig | None = None,
+    on_summarize_begin: Callable[[], None] | None = None,
+    on_summarize_end: Callable[[], None] | None = None,
 ) -> CompactResult:
     """Compress earlier turns into digest.md; messages.jsonl on disk stays完整."""
     cfg = config or load_context_config()
@@ -424,7 +503,13 @@ def compact_context(
             message="无需压缩：没有可摘要的历史消息。",
         )
 
-    digest_body = summarize_messages_for_digest(session, to_digest, llm, config=cfg)
+    if on_summarize_begin is not None:
+        on_summarize_begin()
+    try:
+        digest_body = summarize_messages_for_digest(session, to_digest, llm, config=cfg)
+    finally:
+        if on_summarize_end is not None:
+            on_summarize_end()
     section_number = append_digest_section(session, digest_body)
     session.meta.compact_before_index = split_index
     session.save()
@@ -472,6 +557,8 @@ def maybe_auto_compact(
     llm: SummarizeClient,
     *,
     config: ContextConfig | None = None,
+    on_summarize_begin: Callable[[], None] | None = None,
+    on_summarize_end: Callable[[], None] | None = None,
 ) -> CompactResult | None:
     """Run compact when §8.1 auto threshold is met; returns result or None."""
     cfg = config or load_context_config()
@@ -483,6 +570,8 @@ def maybe_auto_compact(
         force=True,
         system_prompt=system_prompt,
         config=cfg,
+        on_summarize_begin=on_summarize_begin,
+        on_summarize_end=on_summarize_end,
     )
     return result if result.compacted else None
 

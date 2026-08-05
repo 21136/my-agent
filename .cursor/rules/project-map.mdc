@@ -15,21 +15,23 @@ alwaysApply: true
 - **Phase 38**：**superseded** — 双通道已由 Phase 39 废止。
 - **Phase 39**：**done** — Plan **幕后子代理**（单入口 · `plan_partner`）；[PLAN-SUBAGENT.md](../../docs/PLAN-SUBAGENT.md) · T-3900～T-3906。
 - **Phase 40**：**P0/P1 done** — 采纳控件对齐；[PLAN-REVIEW-UI.md](../../docs/PLAN-REVIEW-UI.md) §10 · T-4000～T-4003。
-- **Phase 41**：**P1+P2+P4+P5 done** — 扁平原语 · 项目 segment 15 · 失败 spill · 段内失败预算；[AGENT-HARNESS.md](../../docs/AGENT-HARNESS.md)；P3 → Phase 42 J。
+- **Phase 41**：**P1+P2+P4+P5 done** — 扁平原语 · 项目 segment 15 · 失败 spill · 段内失败预算 · **BUG-024 fixed**（inline guard streak · T-4242）；[AGENT-HARNESS.md](../../docs/AGENT-HARNESS.md) §7.5；P3 → Phase 42 J。
+- **BUG-025**：**fixed** — `write_utf8_text` LF 规范化 · IT-99 · S-99 views normalize；[bugs/2026-08-05-patch-file-crlf-corruption.md](../../docs/bugs/2026-08-05-patch-file-crlf-corruption.md) · T-4252～4255。
 - **Phase 42**：**M0 done** — write_policy · glob_file_search · llm_routing；[CURSOR-GAP-NEXT.md](../../docs/CURSOR-GAP-NEXT.md) · T-4202 · T-4211～4215 · T-4221～4226（T-4213/S-421 手工 todo）。
 - **Phase 43**：**M0+M1 done** — 项目配方脚手架（spring-vue · fastapi-vue · deploy）；[PROJECT-RECIPES.md](../../docs/PROJECT-RECIPES.md) · T-4300～4306。
 - **Phase 44**：**M0+M1 done** — 结构化项目测试 + failure spill + checker；[PROJECT-VERIFY.md](../../docs/PROJECT-VERIFY.md) · T-4400～4407（T-4408 S-441 todo）。
 - **Phase 45**：**M0 done** — `db_migrate_status` · `run_quality` · ENV E11；[PROJECT-QUALITY.md](../../docs/PROJECT-QUALITY.md) · T-4500～4503。
+- **Phase 46**：**M1 done** — 工具工坊提示词（外置 subagent · 非 project 注入 · defer 四维映射）；[TOOL-WORKSHOP-PROMPTS.md](../../docs/TOOL-WORKSHOP-PROMPTS.md) · T-4601～4603（T-4604 S-461 todo）。
 - **壳合并**：**done（前端）** — 唯一聊天壳 `desktop/src/shells/unified/`（perspective: `default` | `project` | `night`）；`pet` 独立窗；旧 `grow`/`daily`/`project`/`govern` 目录已删。设计见 [SHELL-CONSOLIDATION.md](../../docs/SHELL-CONSOLIDATION.md)。后端仍用 `active_shell` / `shell_sessions` 作**会话线标签**（非 DOM 切壳）。
 - **WRITE-SCOPE**：**done** — `resolve_under_agent_for_write` + deny-list；evolved 写路径默认 agent root。[WRITE-SCOPE.md](../../docs/WRITE-SCOPE.md)。
 - **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
-- **UX-POLISH**：**进行中** — UX-001～023；第八轮 UX-021 done · 第九轮 UX-022 done · 第十轮 UX-023（工具行折叠）done。
+- **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** 单项目态势侧栏（§6.2.2 · 文档已签 · M0 待实施）；UX-021～023 done。
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
-- **下一焦点**：Phase 24 **T-2408** · **WORKBENCH M1（Q4 先聊聊 · T-3410～3413）** · Phase 42 **T-4213** S-421 · Phase 44 **T-4408** S-441（见 MAP §2.2 废止债）。
+- **下一焦点**：Phase 24 **T-2408** · **Phase 46 T-4604** S-461 · WORKBENCH M1（Q4 先聊聊 · T-3410～3413）· Phase 42 **T-4213** S-421 · Phase 44 **T-4408** S-441（见 MAP §2.2 废止债）。
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。
-- 缺陷索引：[BUGS.md](../../docs/BUGS.md)；确认管线 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md)。
+- 缺陷索引：[BUGS.md](../../docs/BUGS.md)；**BUG-025 fixed** · **BUG-024 fixed** · **BUG-023 fixed**；确认管线 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md)。
 - 桌面协议与形态：[DESKTOP.md](../../docs/DESKTOP.md)（以 **unified** 为准；历史 grow/daily 章节标 deprecated）。
 - 项目模式：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md)（UI = unified project perspective）。
 - 拖放：[FILES-DROP.md](../../docs/FILES-DROP.md)（挂载点 = unified / pet）。

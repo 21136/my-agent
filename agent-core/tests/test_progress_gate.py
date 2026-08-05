@@ -128,6 +128,24 @@ class EvidenceMatchTests(unittest.TestCase):
         )
         self.assertFalse(ok)
 
+    def test_legacy_archived_names_map_to_current_tools(self) -> None:
+        """Old turn evidence with archived tool names still satisfies gate."""
+        ok_compile, _ = evidence_satisfies(
+            "compile",
+            [make_evidence_entry(tool_name="run_evolved", evolved_name="mvn_exec", ok=True)],
+        )
+        self.assertTrue(ok_compile)
+        ok_build, _ = evidence_satisfies(
+            "build_fe",
+            [make_evidence_entry(tool_name="run_evolved", evolved_name="npm_exec", ok=True)],
+        )
+        self.assertTrue(ok_build)
+        ok_write, _ = evidence_satisfies(
+            "write",
+            [make_evidence_entry(tool_name="run_evolved", evolved_name="append_text", ok=True)],
+        )
+        self.assertTrue(ok_write)
+
 
 class ProgressGateExecutorTests(unittest.TestCase):
     """IT-71 / IT-72"""

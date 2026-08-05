@@ -40,7 +40,8 @@
 
 以上工具 **`workspace_only=false`**：每次 `run_evolved` 须 confirm（无本会话 `a` 免确认）。
 
-**新建 coding/data 等目录下的工具**：在**普通窗口** `run_evolved` → `write_evolve`；细则先 `read_file evolve/tool-catalog/buckets/evolve.md`。
+**新建 evolved 工具**：仅在 **非项目绑定** 会话（grow / 先聊聊）；system 已含 `[tool_workshop]`；语法见 `buckets/evolve.md`。
+**项目绑定会话**禁止 `write_evolve`（见 PROJECT-MODE P6）。
 
 ## 路径与工具
 
@@ -54,6 +55,12 @@
 动手只用 **6 Builtin + `run_evolved`**；读记忆正文用 `read_file evolve/memories/...`。
 
 **common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
+
+**写盘纪律（BUG-025）**：
+
+- 整页/多行源文件（如 `.vue`）**>6KB** 或接近 8KB：禁止 inline `content`；`write_text` → `workspace/_staging/<name>` → 再 `content_workspace_path`。
+- `patch_file`：**优先 `find` 唯一锚点**做小改；**禁止** `start_line`+`end_line` 用一行替换多行块（empty slot、dialog、import 等）——易把骨架插进 `<el-table>`；多行块用 staging 整文件或精确 find 跨度。
+- 批量改多个同构页面：先改 **1 个** 并 `npm run build` 通过，再复制模式。
 
 ## 与本仓库记忆
 

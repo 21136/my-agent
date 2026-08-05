@@ -5,9 +5,23 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 _INVALID_STDIN = {"ok": False, "error": "stdin must be a JSON object"}
+
+
+def normalize_newlines(text: str) -> str:
+    """Collapse CR/LF variants to LF (BUG-025)."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def write_utf8_text(path: Path, content: str) -> None:
+    """Write UTF-8 text without platform newline translation (BUG-025)."""
+    normalized = normalize_newlines(content)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(normalized)
 
 
 def ensure_utf8_stdio() -> None:

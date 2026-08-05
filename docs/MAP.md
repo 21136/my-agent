@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-04** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 42** 实现（H→J→I）· **Phase 43～45 M0 done** · WORKBENCH M1/M2 · UX 待评估项。  
+> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 42** 实现（H→J→I）· **Phase 43～45 M0 done** · **Phase 46 M1 done**（T-4604 S-461 todo）· WORKBENCH M1/M2 · UX 待评估项。  
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -62,6 +62,7 @@
 | **Phase 43** | **项目配方脚手架**（`scaffold_project` · `evolve/scaffolds/`） | **M0+M1 done**（[PROJECT-RECIPES.md](./PROJECT-RECIPES.md) · T-4300～4306） |
 | **Phase 44** | **项目结构化验证**（`run_project_tests` · 失败 file:line） | **M0+M1 done**（[PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · T-4400～4407；T-4408 S-441 todo） |
 | **Phase 45** | **项目质量与数据面**（迁移状态 · `run_quality` · deploy 配方） | **M0 done**（[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · T-4500～4503） |
+| **Phase 46** | **工具工坊提示词**（外置 subagent prompt · 非 project 注入 · defer 四维映射） | **M1 done**（[TOOL-WORKSHOP-PROMPTS.md](./TOOL-WORKSHOP-PROMPTS.md) · T-4601～4603 · T-4604 S-461 todo） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
@@ -749,6 +750,12 @@ python main.py          # 交互输入 `压缩` 或 `summarize`
 ```
 
 压缩后检查：`data/sessions/<id>/digest.md` 有新节；`meta.json` 的 `compact_before_index` 前移；`messages.jsonl` 仍含完整历史（可用 `read_file` / `grep` 检索）。
+
+**已知缺口（BUG-023 · fixed）**：自动压缩后下一跳主 LLM 可能 `LLMTimeoutError` — 已 pause 摘要墙钟 · 独立摘要超时 · post-compact trim · LLM 超时 notice（不改 reasoning effort）。见 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · T-2092～2094。
+
+**已知缺口（BUG-024 · fixed）**：同 segment 重复 `inline_write_max`（8192 guard）连刷 — streak ≥2 停 tool + staging 内核（`MY_AGENT_INLINE_WRITE_GUARD_MAX`）。见 [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) · T-4242～4243 · IT-98。
+
+**已知缺口（BUG-025 · fixed）**：`patch_file` find 在 Windows CRLF 上增殖 `\r` — 已 `write_utf8_text` 规范化（T-4252～4253）；huiyi views 已 S-99 normalize。见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) · IT-99。
 
 ### 9.14 T-209 `prompts/core.txt`（内核规则）
 

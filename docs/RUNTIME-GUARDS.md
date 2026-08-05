@@ -25,6 +25,9 @@
 | **G12** | Checker 见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md)：本 Phase **执法并产出硬事实**，checker **独立审计** |
 | **G13** | **空头动作声明门**：agent 模式正文匹配「正在/接下来/我来/建表…」且 **无 tool_calls** → 注入内核 nudge **一次**并继续回合；ask/recall 不触发 |
 | **G14** | **执行可靠性**（后置条件 + 熔断；**剧本自动 nudge 废止中** · 见 [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) §3.4/M3）— 管「假成功 / 同招空转」，修好环境靠本地长任务能力 |
+| **G15** | **Context 摘要 LLM 占 turn 墙钟**（BUG-023 · **fixed** T-2092）：自动/手动 `compact_context` 的 digest 摘要 **`pause_wall`** + 独立 `CONTEXT_SUMMARIZE_TIMEOUT_SEC`；见 [RUNTIME.md](./RUNTIME.md) §8.4 |
+| **G16** | **重复 inline_write_max 停 tool**（BUG-024 · **fixed** T-4242）：同 segment streak ≥2 → 停 tool + staging 内核；见 [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) §3.6 |
+| **G17** | **文本写盘换行一致性**（BUG-025 · **fixed** T-4252～4253）：`patch_file` / `write_text` 经 `write_utf8_text` LF 规范化；见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) |
 
 ---
 

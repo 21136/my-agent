@@ -110,13 +110,12 @@ def _truncate(text: str, limit: int = _MAX_OUTPUT_CHARS) -> tuple[str, bool]:
 
 
 def _coalesce_working_dir(payload: dict[str, Any]) -> str:
-    working = payload.get("working_dir", "")
-    if isinstance(working, str) and working.strip():
-        return working.strip()
-    cwd = payload.get("cwd", "")
-    if isinstance(cwd, str) and cwd.strip():
-        return cwd.strip()
-    return ""
+    core = _agent_root() / "agent-core"
+    if str(core) not in sys.path:
+        sys.path.insert(0, str(core))
+    from project_npm_guard import coalesce_working_dir
+
+    return coalesce_working_dir(payload)
 
 
 def _resolve_cwd(paths, PathOutOfBoundsError, path_arg: str) -> Path:
@@ -286,6 +285,21 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": f"working_dir out of bounds: {exc}"}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
+
+    force_install = bool(payload.get("force_install", False))
+    core = _agent_root() / "agent-core"
+    if str(core) not in sys.path:
+        sys.path.insert(0, str(core))
+    from project_npm_guard import redundant_npm_install_error
+
+    install_err = redundant_npm_install_error(cwd, command, force_install=force_install)
+    if install_err:
+        return {
+            "ok": False,
+            "error": install_err,
+            "cwd": paths.to_agent_relative(cwd) if cwd != paths.agent_root else ".",
+            "hint": "working_dir 示例: workspace/<id>/frontend",
+        }
 
     env_extra, env_err = _filter_env(payload.get("env"))
     if env_err:

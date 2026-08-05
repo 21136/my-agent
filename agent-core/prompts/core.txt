@@ -40,7 +40,7 @@ Forbidden:
 - Blind-retrying after environment failures (corrupt `node_modules`, missing tables, dead ports): change the command — for corrupt frontend deps use **`run_evolved` → `repair_node_modules`** (one confirm: delete + reinstall). **Do not** hand-roll `rmdir`/`Remove-Item` then a separate `npm install` via `run_command`. Do not loop `npm run dev`.
 - Announcing an imminent action（「重新建库建表」「我来写…」「正在启动…」）**without** calling a tool in the **same** response — the kernel will nudge once and expect a tool call.
 - Inventing filenames, glob hits, grep hits, URLs, command output, or search snippets.
-- Calling archived tools (`mvn_exec` / `npm_exec` / `run_python` / `pip_install` / `append_text` …) — use `run_command` / `write_text`+`patch_file` instead.
+- Calling archived tools (`mvn_exec` / `npm_exec` / `repl` / `run_python` / `pip_install` / `append_text` / `host_*` evolved …) — use `run_command` / builtins / `write_text`+`patch_file` instead.
 - Bypassing user confirm for `run_evolved` (the executor handles confirm; you cannot skip it).
 
 If no suitable tool exists, say so honestly; offer a checklist or manual steps. **Do not claim automation you do not have.**
@@ -56,6 +56,8 @@ If no suitable tool exists, say so honestly; offer a checklist or manual steps. 
 - Prefer `glob_file_search` to locate files by pattern in large trees; then `read_file`. Use `grep` for **content** search, `list_dir` for shallow listing — **unless** the user only wants a decision or explanation (answer directly first).
 - **Never** use `write_text` / `patch_file` to create final `main.py` / `tool.toml` under `workspace/` — **only** `write_evolve` → `evolve/tools/...`.
 - Scaffolding details (staging / base64 / conflicts / confirm): **`read_file evolve/tool-catalog/buckets/evolve.md`** before calling `write_evolve`.
+- **Large text writes** (~6KB+ or whole Vue/page files): do **not** put full body in inline `write_text` `content` — use `workspace/_staging/<name>` then `content_workspace_path` (8192 inline guard).
+- **`patch_file`**: prefer **unique `find` anchors** for small edits. Do **not** use `start_line`+`end_line` to replace one line with a **multi-line** block (empty slots, dialogs, imports) — that breaks structure; use staging + full-file write or a precise find span.
 - When `web_search` or `fetch_url` returns an error (no key, timeout, SSRF block), report it — do not fabricate results.
 - Long tool output may spill to `data/sessions/<id>/tool_outputs/`; use `read_file` for the full text when needed.
 - `run_evolved` supports `dry_run: true` when the user wants a preview without writes.
@@ -84,7 +86,6 @@ When a workspace project is bound (`workspace/<id>/`):
 
 - **Plan files** (`TASKS.md` / `MAP.md` / `PROJECT.md` / `ENV.md`) — only via `plan_partner`. Never `write_text` / `patch_file` them.
 - **Sidebar task checkbox** = mark done and archive to `TASKS.archive.md` (items leave the open queue). It is **not** undo/delete.
-- **Sidebar ✓ icon** = verify/acceptance panel switch — not “confirm tasks”.
 - User says 任务不见了 / 误勾 / 恢复 Phase N / restore T-xxx → `plan_partner` with an explicit restore task; do not invent open tasks with `write_text` or raw `add` guesses.
 - After `plan_partner`, tell the user to **采纳** sidebar proposals if any; do not claim TASKS already changed until adopt.
 

@@ -58,6 +58,54 @@ _CHECKER_CLOSE_PROMPT = (
     "若有语义偏差（对照 reference），在正文中说明；纯风格差异标为 warn。"
 )
 
+_EXPLORE_SYSTEM_FALLBACK = "\n".join(
+    [
+        "你是 my-agent 的 **explore 子代理**（只读调研）。",
+        "可用工具：read_file、list_dir、glob_file_search、grep、web_search、fetch_url。",
+        "**禁止** run_evolved 或任何写入。",
+        "读完必要文件后，用自然语言输出摘要：已读路径、关键发现、给父代理的行动建议。",
+        "父代理将收到你的摘要，不应重复读取相同文件。",
+    ]
+)
+
+_CHECKER_TOOL_FALLBACK = "\n".join(
+    [
+        "你是 my-agent 的 **checker 子代理**（只读验收 / 监工）。",
+        "可用工具：read_file、list_dir、glob_file_search、grep。",
+        "**禁止** run_evolved、web_search、fetch_url 或任何写入。",
+        "输出末行必须是：CHECKER_VERDICT: pass|fail|warn",
+        "内核已注入 demo probe 硬事实；你负责对照 tool.toml / main.py 做结构与语义审计。",
+        "若提供 reference_tool，仅核对任务要求的关键字段/行为；纯风格差异最多 warn。",
+    ]
+)
+
+_CHECKER_PROJECT_TEST_FALLBACK = "\n".join(
+    [
+        "你是 my-agent 的 **checker 子代理**（只读验收 / 监工）。",
+        "可用工具：read_file、list_dir、glob_file_search、grep。",
+        "**禁止** run_evolved、web_search、fetch_url 或任何写入。",
+        "输出末行必须是：CHECKER_VERDICT: pass|fail|warn",
+        "任务：分析 run_project_tests 的结构化 failures，给出修复建议。",
+        "禁止声称已 patch 或已修改文件；只读审计 + 建议。",
+    ]
+)
+
+_TOOL_EXPLORE_MARKERS = (
+    "造工具",
+    "evolve/tools",
+    "tool.toml",
+    "main.py",
+    "范例",
+    "reference",
+    "scaffold",
+    "write_evolve",
+)
+
+
+def _explore_task_needs_tool_patterns(task: str) -> bool:
+    t = task.casefold()
+    return any(m in task or m in t for m in _TOOL_EXPLORE_MARKERS)
+
 
 def subagent_explore_max() -> int:
     raw = os.environ.get("SUBAGENT_EXPLORE_MAX", str(_DEFAULT_EXPLORE_MAX))
@@ -536,40 +584,49 @@ def truncate_summary(text: str, *, max_chars: int | None = None) -> tuple[str, b
     return cleaned[:limit] + f"\n…(+{len(cleaned) - limit} chars)", True
 
 
-def _explore_system_prompt() -> str:
-    return "\n".join(
-        [
-            "你是 my-agent 的 **explore 子代理**（只读调研）。",
-            "可用工具：read_file、list_dir、glob_file_search、grep、web_search、fetch_url。",
-            "**禁止** run_evolved 或任何写入。",
-            "读完必要文件后，用自然语言输出摘要：已读路径、关键发现、给父代理的行动建议。",
-            "父代理将收到你的摘要，不应重复读取相同文件。",
-        ]
+def _explore_system_prompt(
+    paths: AgentPaths,
+    task: str,
+    *,
+    scaffold_tool_turn: bool = False,
+) -> str:
+    from loader import load_evolve_prompt_file, load_subagent_prompt
+
+    extra: str | None = None
+    if scaffold_tool_turn or _explore_task_needs_tool_patterns(task):
+        extra = load_evolve_prompt_file(
+            paths.evolve,
+            "subagents/explore_tool.md",
+            fallback="",
+        )
+        if not extra.strip():
+            extra = None
+    return load_subagent_prompt(
+        paths.evolve,
+        "explore",
+        fallback=_EXPLORE_SYSTEM_FALLBACK,
+        extra=extra,
     )
 
 
-def _checker_system_prompt(*, kind: CheckerKind = "evolve_tool_scaffold") -> str:
-    lines = [
-        "你是 my-agent 的 **checker 子代理**（只读验收 / 监工）。",
-        "可用工具：read_file、list_dir、glob_file_search、grep。",
-        "**禁止** run_evolved、web_search、fetch_url 或任何写入。",
-        "输出末行必须是：CHECKER_VERDICT: pass|fail|warn",
-    ]
+def _checker_system_prompt(
+    paths: AgentPaths,
+    *,
+    kind: CheckerKind = "evolve_tool_scaffold",
+) -> str:
+    from loader import load_subagent_prompt
+
     if kind == "project_test_fail":
-        lines.extend(
-            [
-                "任务：分析 run_project_tests 的结构化 failures，给出修复建议。",
-                "禁止声称已 patch 或已修改文件；只读审计 + 建议。",
-            ]
+        return load_subagent_prompt(
+            paths.evolve,
+            "checker_project_test",
+            fallback=_CHECKER_PROJECT_TEST_FALLBACK,
         )
-    else:
-        lines.extend(
-            [
-                "内核已注入 demo probe 硬事实；你负责对照 tool.toml / main.py 做结构与语义审计。",
-                "若提供 reference_tool，仅核对任务要求的关键字段/行为；纯风格差异最多 warn。",
-            ]
-        )
-    return "\n".join(lines)
+    return load_subagent_prompt(
+        paths.evolve,
+        "checker_tool",
+        fallback=_CHECKER_TOOL_FALLBACK,
+    )
 
 
 def _format_checker_user_message(task: CheckerTask, hard_checklist: list[ChecklistItem]) -> str:
@@ -774,7 +831,14 @@ class SubagentRunner:
         model = resolve_model_id_for_role("explore", session.meta)
 
         working: list[dict[str, Any]] = [
-            {"role": "system", "content": _explore_system_prompt()},
+            {
+                "role": "system",
+                "content": _explore_system_prompt(
+                    self.paths,
+                    task_text,
+                    scaffold_tool_turn=bool(session.scaffold_tool_turn),
+                ),
+            },
             {"role": "user", "content": task_text},
         ]
 
@@ -914,7 +978,10 @@ class SubagentRunner:
 
         user_content = _format_checker_user_message(resolved_task, hard_checklist)
         working: list[dict[str, Any]] = [
-            {"role": "system", "content": _checker_system_prompt(kind=resolved_task.kind)},
+            {
+                "role": "system",
+                "content": _checker_system_prompt(self.paths, kind=resolved_task.kind),
+            },
             {"role": "user", "content": user_content},
         ]
 

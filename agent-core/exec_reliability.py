@@ -46,6 +46,16 @@ EXEC_SEGMENT_FAILURE_NUDGE_MESSAGE = (
     "[内核] 本段已多次失败：请停下说明根因或换策略，勿继续盲试。"
 )
 
+_DEFAULT_INLINE_WRITE_GUARD_MAX = 2
+
+EXEC_INLINE_WRITE_NUDGE_MESSAGE = (
+    "[内核] 内联正文已两次超过 WRITE_INLINE_MAX_CHARS（8192）。\n"
+    "禁止再用 write_text 的 content/content_base64 写大文件。\n"
+    "请：write_text → workspace/_staging/<name>（仅 staging 小文件）→ "
+    "再 run_evolved write_text 带 content_workspace_path。\n"
+    "或改用 patch_file 小范围修改。本段请先文字说明再让用户继续。"
+)
+
 _DEFAULT_SEGMENT_FAILURE_BUDGET = 3
 
 _CALL_FP_KEYS: tuple[str, ...] = (
@@ -184,6 +194,42 @@ def clear_segment_failure_budget(session: Any) -> None:
     session.segment_failure_count = 0
     session.segment_failure_budget_hit = False
     session.segment_failure_budget_just_hit = False
+
+
+def inline_write_guard_max() -> int:
+    """Repeat inline_write_max guard threshold per execute segment (BUG-024)."""
+    raw = os.environ.get(
+        "MY_AGENT_INLINE_WRITE_GUARD_MAX",
+        str(_DEFAULT_INLINE_WRITE_GUARD_MAX),
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_INLINE_WRITE_GUARD_MAX
+
+
+def record_inline_write_guard_failure(session: Any) -> bool:
+    """Bump inline_write_max streak. Return True if block threshold just reached."""
+    streak = int(getattr(session, "inline_write_guard_streak", 0) or 0) + 1
+    session.inline_write_guard_streak = streak
+    if streak >= inline_write_guard_max() and not getattr(
+        session, "inline_write_guard_blocked", False
+    ):
+        session.inline_write_guard_blocked = True
+        session.inline_write_guard_just_blocked = True
+        return True
+    return False
+
+
+def clear_inline_write_guard_streak(session: Any) -> None:
+    """Reset streak after a successful staging/small write (same segment)."""
+    session.inline_write_guard_streak = 0
+
+
+def clear_inline_write_guard(session: Any) -> None:
+    session.inline_write_guard_streak = 0
+    session.inline_write_guard_blocked = False
+    session.inline_write_guard_just_blocked = False
 
 
 def claims_service_success(text: str) -> bool:
@@ -508,6 +554,7 @@ def clear_circuit_state(session: Any) -> None:
         session.playbook_nudged = set()
     session.pending_playbook_id = ""
     clear_segment_failure_budget(session)
+    clear_inline_write_guard(session)
     # Keep last_* for sidebar until begin_turn; clear segment-local soft flags only if present.
     # service_postcondition / claim_blocked / last_* reset in begin_turn.
 

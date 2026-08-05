@@ -10,6 +10,8 @@
 | `flatten_dir` | 打平嵌套目录 |
 | `archive_by_date` | 按日期归档到子目录 |
 
+`study_note` 已 **archived** → 用 `write_text` 写笔记文件。
+
 ## 注意
 
 - 写前先 `list_dir` / `dry_run`（若支持）；大目录操作须 confirm。

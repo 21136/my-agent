@@ -16,7 +16,7 @@ Format (YAML subset)::
 
 Rules:
 - On project create / open / switch: refresh ``tools`` from the host; keep ``prefer``.
-- ``npm_exec`` / ``mvn_exec`` read this file near the working dir (walk up to project root).
+- ``run_command`` / ``run_project_tests`` read ``ENV.md`` near the working dir (walk up to project root).
 - Not injected into system every turn — tools consume paths; LLM may ``read_file`` for prefer.
 """
 

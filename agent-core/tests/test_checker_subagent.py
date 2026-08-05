@@ -424,5 +424,104 @@ class AutoCheckerSpawnTests(unittest.TestCase):
         self.assertEqual(session.messages[-1]["content"], final_text)
 
 
+class ExternalSubagentPromptTests(unittest.TestCase):
+    """IT-462 — evolve/subagents/*.md with inline fallback."""
+
+    def setUp(self) -> None:
+        self.paths = make_temp_agent_paths(self, copy_tool_dirs=("common/write_text",))
+        session_dir = self.paths.data / "sessions" / "_checker_ext"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        self.session = Session(
+            conversation_id="_checker_ext",
+            session_dir=session_dir,
+            goal="external prompt test",
+            meta=SessionMeta(
+                topics=["coding"],
+                llm_model="deepseek-v4-flash",
+                updated_at=utc_now_iso(),
+                phase="S4",
+            ),
+            messages=[],
+            paths=self.paths,
+        )
+        self.session.save()
+
+    def test_checker_loads_external_prompt(self) -> None:
+        marker = "UNIQUE_CHECKER_MARKER_462"
+        sub_dir = self.paths.evolve / "subagents"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        (sub_dir / "checker_tool.md").write_text(
+            f"你是 checker。\n{marker}\nCHECKER_VERDICT: pass",
+            encoding="utf-8",
+        )
+
+        captured: list[str] = []
+
+        class CaptureLLM:
+            def chat(self, messages, **_k) -> LLMResponse:
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        captured.append(str(msg.get("content") or ""))
+                return LLMResponse(
+                    model="mock",
+                    content=f"ok\nCHECKER_VERDICT: pass",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=None,
+                    raw={},
+                )
+
+        runner = SubagentRunner(paths=self.paths)
+        result = runner.run_checker(
+            CheckerTask(
+                tool_name="write_text",
+                demo_result={"attempted": True, "exit_code": 0},
+            ),
+            session=self.session,
+            llm=CaptureLLM(),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        self.assertEqual(result.verdict, "pass")
+        self.assertTrue(captured)
+        self.assertIn(marker, captured[0])
+
+    def test_checker_fallback_when_missing_file(self) -> None:
+        sub_dir = self.paths.evolve / "subagents"
+        if sub_dir.is_dir():
+            for child in sub_dir.iterdir():
+                child.unlink()
+
+        captured: list[str] = []
+
+        class CaptureLLM:
+            def chat(self, messages, **_k) -> LLMResponse:
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        captured.append(str(msg.get("content") or ""))
+                return LLMResponse(
+                    model="mock",
+                    content="CHECKER_VERDICT: pass",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=None,
+                    raw={},
+                )
+
+        runner = SubagentRunner(paths=self.paths)
+        result = runner.run_checker(
+            CheckerTask(
+                tool_name="write_text",
+                demo_result={"attempted": True, "exit_code": 0},
+            ),
+            session=self.session,
+            llm=CaptureLLM(),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        self.assertEqual(result.verdict, "pass")
+        self.assertTrue(captured)
+        self.assertIn("checker 子代理", captured[0])
+        self.assertIn("CHECKER_VERDICT", captured[0])
+
+
 if __name__ == "__main__":
     unittest.main()

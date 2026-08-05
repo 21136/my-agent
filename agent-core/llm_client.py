@@ -253,9 +253,11 @@ class LLMClient:
         reasoning_effort: str | None = None,
         response_format: dict[str, Any] | None = None,
         stream: StreamHandlers | None = None,
+        timeout_sec: float | None = None,
     ) -> LLMResponse:
         """POST ``/v1/chat/completions``; streams deltas when ``stream`` handlers are set."""
         self._raise_if_cancelled()
+        effective_timeout = self.config.timeout_sec if timeout_sec is None else timeout_sec
         registry = get_registry()
         model_ref = model or registry.default_flash_id
         entry = registry.resolve(model_ref)
@@ -291,7 +293,7 @@ class LLMClient:
         }
 
         try:
-            with make_httpx_client(timeout=self.config.timeout_sec) as client:
+            with make_httpx_client(timeout=effective_timeout) as client:
                 with self._active_response_lock:
                     self._active_client = client
                 try:
@@ -310,7 +312,7 @@ class LLMClient:
         except httpx.TimeoutException as exc:
             self._raise_if_cancelled()
             raise LLMTimeoutError(
-                f"LLM request timed out after {self.config.timeout_sec}s"
+                f"LLM request timed out after {effective_timeout}s"
             ) from exc
         except httpx.HTTPError as exc:
             self._raise_if_cancelled()

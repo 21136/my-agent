@@ -405,6 +405,20 @@ if len(body) > INLINE_MAX and not has_workspace_path(arguments):
 
 `reasoning.delta` **不计进度**，避免无限 reasoning 掩盖 stall。慢 pro 模型存在误杀风险，因此默认关闭，由用户显式启用；完整语义见 RUNTIME-GUARDS G5～G7。
 
+### 9.3 `finish_reason=timeout` 分型（BUG-023 · 待 T-2093）
+
+当前桌面凡 `finish_reason=timeout` 均显示 **「回合超时已停止」**，以下来源**未区分**：
+
+| 来源 | sidecar 典型 notice | agent `finish_reason` |
+|------|----------------------|------------------------|
+| **LLM 请求** | （现状无专用 notice） | `LLMTimeoutError` → `timeout` |
+| **回合墙钟** | 「回合已超过墙钟限制，已自动停止」 | watchdog → `timeout` |
+| **stall 看门狗** | 「回合超时无响应，已自动停止」 | watchdog → `timeout` |
+
+**已决（T-2093）**：`LLMTimeoutError` 须先发 `turn.notice`（含秒数）；桌面可继续用「回合超时已停止」作 `turn.end` 收口，或细分为「LLM 请求超时」— 以 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) §6 R4 为准。
+
+**与压缩叠加**：自动压缩后的第一次主 LLM 超时，用户体感为「刚压缩就卡死」— 根因在摘要+主 LLM 串行占满 120s，见 RUNTIME §8.4。
+
 ---
 
 ## 10. 验证

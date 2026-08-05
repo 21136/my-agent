@@ -24,14 +24,14 @@
 
 所有 evolved 写工具硬编码 `resolve_under_workspace()`——只能写入 `workspace/`，不能碰 agent root 下其他目录。
 
-例如要 agent 帮忙在 `agent-core/` 里改一段 Python 代码、在 `evolve/` 里修一个 prompt、在 `desktop/src/` 里改一个 TypeScript 文件——这些路径 `read_file`/`grep` 都能读，但 `write_text`/`append_text` 写不了。
+例如要 agent 帮忙在 `agent-core/` 里改一段 Python 代码、在 `evolve/` 里修一个 prompt、在 `desktop/src/` 里改一个 TypeScript 文件——这些路径 `read_file`/`grep` 都能读；**WRITE-SCOPE done 后**可用 `write_text`/`patch_file` 等写 agent root（deny-list 除外）。
 
-**这不是安全措施，是绊脚石。** 安全应该靠 deny-list 精确拦截少数危险路径（`.git/`、`.env`、`node_modules/`），而不是把所有非 workspace 的路径一竿子打死。
+### 1.2 受影响工具（历史盘点 · 2026-07）
 
-### 1.2 受影响工具（17 个）
+> **现状（T-4310）**：下表为改版前快照。`append_text`/`npm_exec`/`mvn_exec`/`repl` 等已 **archived**（`main.py` 已删）；执行面统一 **`run_command`**。见 [ARCHIVED-TOOLS.md](./ARCHIVED-TOOLS.md)。
 
-| 类别 | 工具 | 当前 |
-|------|------|------|
+| 类别 | 工具（历史） | 改版前 |
+|------|-------------|--------|
 | **写文件** | `write_text` `append_text` `copy_move` `move_to_trash` | 只能写 `workspace/` |
 | **执行** | `run_python` `npm_exec` `mvn_exec` `jshell_exec` `git_clone` `pip_install` `repl` | 只能在 `workspace/` 内操作 |
 | **整理** | `flatten_dir` `dedupe_by_name` `archive_by_date` `study_note` | 只能操作 `workspace/` 内的目录 |
@@ -110,22 +110,23 @@ def is_path_denied_for_write(rel_path: str) -> bool:
 
 ### 3.2 各工具 main.py 改动（一行改一个）
 
+> **T-4310**：~~删除线~~ 工具已 archived，`main.py` 已移除。
+
 | 工具 | 当前 | 改后 |
 |------|------|------|
 | `write_text/main.py:58` | `resolve_under_workspace(path_arg)` | `resolve_under_agent_for_write(path_arg)` |
-| `append_text/main.py:54` | 同上 | 同上 |
+| ~~`append_text/main.py`~~ | 同上 | archived → `patch_file` / `write_text` |
 | `copy_move/main.py:106-107` | `resolve_under_workspace(source)` / `(dest)` | 同上 |
 | `move_to_trash/main.py:72-73` | `resolve_under_workspace(path)` / `(trash)` | 同上 |
 | `flatten_dir/main.py:94` | 同上 | 同上 |
 | `dedupe_by_name/main.py:67` | 同上 | 同上 |
 | `archive_by_date/main.py:78` | 同上 | 同上 |
-| `study_note/main.py:110-111` | 同上 | 同上 |
-| `run_python/main.py:47` | `resolve_under_workspace(text)` | `resolve_under_agent(text)` |
+| ~~`study_note/main.py`~~ | 同上 | archived |
+| ~~`run_python/main.py`~~ | `resolve_under_workspace(text)` | archived → `run_command` |
 | `git_clone/main.py:144` | 同上 | 同上 |
-| `npm_exec/main.py:60` | 同上 | 同上 |
-| `mvn_exec/main.py:60` | 同上 | 同上 |
+| ~~`npm_exec` / `mvn_exec` main.py~~ | 同上 | archived → `run_command` |
 | `csv_head/main.py:98` | 同上 | `resolve_under_agent` |
-| `ws_probe_tool/main.py:39` | 同上 | `resolve_under_agent` |
+| ~~`ws_probe_tool/main.py`~~ | 同上 | archived → `read_file` |
 
 ### 3.3 Confirm 流调整
 
@@ -188,21 +189,19 @@ def is_path_denied_for_write(rel_path: str) -> bool:
 cd D:\my-agent\agent-core
 python paths.py                     # deny-list 验收
 python ..\evolve\tools\common\write_text\main.py demo
-python ..\evolve\tools\common\append_text\main.py demo
 python ..\evolve\tools\common\copy_move\main.py demo
 python ..\evolve\tools\common\move_to_trash\main.py demo
 python ..\evolve\tools\workflow\flatten_dir\main.py demo
 python ..\evolve\tools\workflow\dedupe_by_name\main.py demo
 python ..\evolve\tools\workflow\archive_by_date\main.py demo
-python ..\evolve\tools\workflow\study_note\main.py demo
-python ..\evolve\tools\common\run_python\main.py demo
 python ..\evolve\tools\common\git_clone\main.py demo
-python ..\evolve\tools\common\npm_exec\main.py demo
+python ..\evolve\tools\common\run_command\main.py demo
 python ..\evolve\tools\data\csv_head\main.py demo
-python ..\evolve\tools\data\ws_probe_tool\main.py demo
 python tools/registry.py
 python agent.py
 ```
+
+> Archived 工具（`append_text`/`npm_exec`/`study_note`/`ws_probe_tool` 等）已无 `main.py`；勿再跑其 demo。见 [ARCHIVED-TOOLS.md](./ARCHIVED-TOOLS.md)。
 
 ### 6.2 手工验收
 

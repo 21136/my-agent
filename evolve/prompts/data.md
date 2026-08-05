@@ -19,6 +19,8 @@
 |------|------|
 | `csv_head` | 预览 CSV 前 N 行（含表头），列名、总行数、推断列类型 |
 
+`ws_probe_tool` 已 **archived** → `read_file` + JSON 解析。
+
 ## 新建 data 工具
 
 1. 确认会话含 **data** 主题（`换主题` 或 S3 确认）。

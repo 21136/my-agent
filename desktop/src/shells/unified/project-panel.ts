@@ -27,7 +27,7 @@ export interface TaskSnapshot {
   lineTexts: Map<number, string>;
 }
 
-export type OverlayPanel = "plan" | "docs" | "verify" | "projects" | "threads" | null;
+export type OverlayPanel = "plan" | "docs" | "projects" | "threads" | null;
 
 // ---- existing types (compat) ----
 
@@ -62,11 +62,6 @@ export interface ProjectThreadItem {
   archived: boolean;
 }
 
-export interface VerifyResult {
-  passed: boolean;
-  text: string;
-}
-
 export interface ProjectPanelState {
   projectId: string;
   planStatus: string;
@@ -75,15 +70,11 @@ export interface ProjectPanelState {
   tasksDone: number;
   tasksTotal: number;
   tasksAllDone: boolean;
-  acceptanceCommand: string;
-  canVerify: boolean;
   planOverlay: PlanOverlayData | null;
   projects: ProjectListItem[];
   switchOverlay: SwitchOverlayData | null;
   switchInProgress: boolean;
   pendingPickerId: string;
-  verifyResult: VerifyResult | null;
-  verifyRunning: boolean;
   // new fields
   overlayPanel: OverlayPanel;
   taskPhases: TaskPhase[];
@@ -144,6 +135,11 @@ export interface ProjectPanelState {
   currentSessionId: string;
   mainFocus: MainFocus;
   reviewFocusId: string | null;
+  // UX-026 — sidebar body / adopt feedback
+  servicesCollapsed: boolean;
+  suggestionAdoptFlash: string | null;
+  adoptedFooterMessage: string | null;
+  turnInProgress: boolean;
 }
 
 export interface ProjectPanelCallbacks {
@@ -153,7 +149,6 @@ export interface ProjectPanelCallbacks {
   onPlanConfirm: () => void;
   onPlanEdit: () => void;
   onRefreshProjects: () => void;
-  onRunVerify: () => void;
   onNewThread: () => void;
   onOpenThread: (sessionId: string) => void;
   onReturnActiveThread: () => void;
@@ -197,33 +192,91 @@ function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
   return out;
 }
 
-function renderSuggestionCards(suggestions: PlanSuggestion[], reviewFocusId: string | null): string {
-  const actionable = suggestions.filter((s) => Boolean(s.action));
-  if (actionable.length === 0) return "";
-  const cards = actionable.map((s) => {
-    const acceptLbl = acceptLabel(s);
-    const diffRaw =
-      s.payload && typeof s.payload.diff === "string" ? s.payload.diff.trim() : "";
-    const stats = diffRaw ? diffStats(diffRaw) : "";
-    const statsLine = stats
-      ? `<div class="sidebar-suggestion-stats">${escapeHtml(stats)}</div>`
-      : "";
-    const summary = truncateSummary(s.body, 80);
-    const focused = reviewFocusId === s.id ? " is-review-focus" : "";
-    return `<div class="sidebar-suggestion-card${focused}" data-suggestion-id="${escapeHtml(s.id)}">
-      <div class="sidebar-suggestion-title">${escapeHtml(s.title)}</div>
-      <div class="sidebar-suggestion-body">${escapeHtml(summary)}</div>
-      ${statsLine}
-      <div class="sidebar-suggestion-actions">
-        <button type="button" class="unified-btn" data-action="review-suggestion" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
-        <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}">${escapeHtml(acceptLbl)}</button>
-        <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}">忽略</button>
+function renderTopSuggestionCard(s: PlanSuggestion, reviewFocusId: string | null): string {
+  const acceptLbl = acceptLabel(s);
+  const diffRaw =
+    s.payload && typeof s.payload.diff === "string" ? s.payload.diff.trim() : "";
+  const stats = diffRaw ? diffStats(diffRaw) : "";
+  const statsLine = stats
+    ? `<div class="sidebar-suggestion-stats">${escapeHtml(stats)}</div>`
+    : "";
+  const summary = truncateSummary(s.body, 80);
+  const focused = reviewFocusId === s.id ? " is-review-focus" : "";
+  return `<div class="sidebar-suggestion-card is-top${focused}" data-suggestion-id="${escapeHtml(s.id)}">
+    <div class="sidebar-suggestion-title">${escapeHtml(s.title)}</div>
+    <div class="sidebar-suggestion-body">${escapeHtml(summary)}</div>
+    ${statsLine}
+    <div class="sidebar-suggestion-actions">
+      <button type="button" class="unified-btn" data-action="review-suggestion" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
+      <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}">${escapeHtml(acceptLbl)}</button>
+      <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}">忽略</button>
+    </div>
+  </div>`;
+}
+
+/** UX-026 SP-9 — stacked proposals in sidebar body (top card + peek layers). */
+function renderSuggestionStack(state: ProjectPanelState): string {
+  if (state.suggestionAdoptFlash) {
+    return `<div class="sidebar-suggestion-stack is-adopt-flash">
+      <div class="sidebar-suggestion-stack-flash">
+        <div class="sidebar-suggestion-stack-flash-title">已采纳写入</div>
+        <div class="sidebar-suggestion-stack-flash-body">${escapeHtml(state.suggestionAdoptFlash)}</div>
       </div>
     </div>`;
-  }).join("");
-  return `<div class="sidebar-change-banner sidebar-suggestions-banner">
-    <div class="sidebar-change-banner-title">待采纳 · ${actionable.length}</div>
-    ${cards}
+  }
+
+  const actionable = state.suggestions.filter((s) => Boolean(s.action));
+  if (actionable.length === 0) return "";
+
+  const peek2 = actionable.length > 2
+    ? `<div class="sidebar-suggestion-peek is-2" aria-hidden="true"></div>`
+    : "";
+  const peek1 = actionable.length > 1
+    ? `<div class="sidebar-suggestion-peek is-1" aria-hidden="true"></div>`
+    : "";
+
+  return `<div class="sidebar-suggestion-stack">
+    <div class="sidebar-suggestion-stack-title">待采纳 · ${actionable.length}</div>
+    <div class="sidebar-suggestion-stack-deck">
+      ${peek2}
+      ${peek1}
+      ${renderTopSuggestionCard(actionable[0], state.reviewFocusId)}
+    </div>
+  </div>`;
+}
+
+function renderTurnSummary(state: ProjectPanelState): string {
+  const total = state.turnEvidence.length;
+  const fails = state.turnEvidence.filter((e) => !e.ok).length;
+  const ok = total - fails;
+  let detail: string;
+  if (state.turnInProgress && total === 0) {
+    detail = "进行中";
+  } else if (total === 0) {
+    detail = "尚无工具";
+  } else if (state.turnInProgress) {
+    detail = `进行中 · 已 ${total} 工具`;
+  } else if (fails > 0) {
+    detail = `${total} 工具 · ${ok} 成功 · ${fails} 失败`;
+  } else {
+    detail = `${total} 工具 · 全部成功`;
+  }
+  const gateHint = (state.turnGateNotice || "").trim()
+    ? " · 有门禁提示"
+    : "";
+  return `<button type="button" class="sidebar-turn-summary" data-action="jump-turn-process">
+    <span class="sidebar-turn-summary-chevron">${state.turnInProgress ? "▾" : "▸"}</span>
+    <span class="sidebar-turn-summary-text">本回合 · ${escapeHtml(detail)}${escapeHtml(gateHint)}</span>
+    <span class="sidebar-turn-summary-jump" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function renderAdoptedFooterBanner(message: string): string {
+  const short = message.length > 120 ? `${message.slice(0, 117)}…` : message;
+  return `<div class="sidebar-change-banner sidebar-adopted-banner">
+    <div class="sidebar-change-banner-title">已采纳写入</div>
+    <div class="sidebar-adopted-banner-body">${escapeHtml(short)}</div>
+    <button type="button" class="unified-btn" data-action="dismiss-partner-notice">关闭</button>
   </div>`;
 }
 
@@ -268,12 +321,7 @@ function isAdoptedPartnerNotice(notices: string[]): boolean {
 
 function renderAdoptedNotice(notices: string[]): string {
   const line = normalizePartnerNoticeLine(notices[0] ?? "");
-  const short = line.length > 120 ? `${line.slice(0, 117)}…` : line;
-  return `<div class="sidebar-change-banner sidebar-adopted-banner" style="border-color:#3d8b5a;background:color-mix(in srgb, #3d8b5a 8%, var(--ma-surface));">
-    <div class="sidebar-change-banner-title">已采纳写入</div>
-    <div style="font-size:0.78rem;margin-top:0.2rem">${escapeHtml(short)}</div>
-    <button type="button" class="unified-btn" data-action="dismiss-partner-notice" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
-  </div>`;
+  return renderAdoptedFooterBanner(line);
 }
 
 function renderAutoFixNotice(notices: string[]): string {
@@ -301,16 +349,7 @@ function renderDecisionSurface(state: ProjectPanelState): string {
       .flatMap((p) => p.tasks)
       .find((t) => t.status === "current" && !t.done)?.text ||
     "";
-  const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
-  const progress =
-    state.tasksTotal > 0
-      ? `${state.tasksDone}/${state.tasksTotal} 完成 · ${openCount} 开放`
-      : state.projectId
-        ? "尚无任务"
-        : "未绑定项目";
-
   let html = `<div class="sidebar-decision">`;
-  html += `<div class="sidebar-decision-progress">${escapeHtml(progress)}</div>`;
   if (currentTask) {
     html += `<div class="sidebar-decision-current">
       <div class="sidebar-decision-label">当前</div>
@@ -323,9 +362,10 @@ function renderDecisionSurface(state: ProjectPanelState): string {
   }
   if (state.projectId) {
     html += `<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看完整计划</button>`;
-    html += `<p class="sidebar-plan-channel-hint">改计划会在主输入自动交给计划搭档（看「你 · 计划」气泡）</p>`;
   }
   html += `</div>`;
+  html += renderSuggestionStack(state);
+  html += renderTurnSummary(state);
   return html;
 }
 
@@ -333,7 +373,7 @@ function planStatusLabel(state: ProjectPanelState): string {
   if (state.planStatus === "confirmed") {
     if (state.tasksAllDone && state.tasksTotal > 0) return "全部完成";
     const open = Math.max(0, state.tasksTotal - state.tasksDone);
-    return `${open}/${state.tasksTotal} 未完成`;
+    return `还有 ${open} 条开放`;
   }
   if (state.planStatus === "plan_dirty") return "计划已变更 · 待确认";
   return "计划待确认";
@@ -556,25 +596,6 @@ function renderDocsOverlay(state: ProjectPanelState): string {
   return html;
 }
 
-function renderVerifyOverlay(state: ProjectPanelState): string {
-  if (!state.acceptanceCommand && !state.verifyResult) {
-    return `<p class="overlay-empty">计划确认后，验收命令将显示在这里</p>`;
-  }
-
-  let html = "";
-  if (state.acceptanceCommand) {
-    html += `<div class="overlay-verify-command">${escapeHtml(state.acceptanceCommand)}</div>`;
-    html += `<button type="button" class="unified-btn unified-btn-accent" id="overlay-verify-run"${!state.canVerify || state.verifyRunning ? " disabled" : ""}>${state.verifyRunning ? "运行中…" : "运行验收"}</button>`;
-  }
-
-  if (state.verifyResult) {
-    const cls = state.verifyResult.passed ? "is-pass" : "is-fail";
-    html += `<pre class="overlay-verify-result ${cls}">${escapeHtml(state.verifyResult.text)}</pre>`;
-  }
-
-  return html;
-}
-
 function renderProjectsOverlay(state: ProjectPanelState): string {
   // If switch confirm target is set, show confirm instead of list
   if (state.switchConfirmTarget) {
@@ -661,8 +682,6 @@ function renderOverlayBody(state: ProjectPanelState): string {
       return `<p class="overlay-empty">完整计划已在主区打开。点主区「← 返回聊天」关闭。</p>`;
     case "docs":
       return renderDocsOverlay(state);
-    case "verify":
-      return renderVerifyOverlay(state);
     case "projects":
       return renderProjectsOverlay(state);
     case "threads":
@@ -676,7 +695,6 @@ function overlayTitle(panel: OverlayPanel): string {
   switch (panel) {
     case "plan": return "完整计划";
     case "docs": return "文档";
-    case "verify": return "验收";
     case "projects": return "我的项目";
     case "threads": return "会话线";
     default: return "";
@@ -789,8 +807,6 @@ export function applyProjectStateEvent(
   state.tasksDone = event.tasks_done ?? 0;
   state.tasksTotal = event.tasks_total ?? 0;
   state.tasksAllDone = Boolean(event.tasks_all_done);
-  state.acceptanceCommand = event.acceptance_command ?? "";
-  state.canVerify = Boolean(event.can_verify);
 
   // Diff old vs new to detect changes
   const oldPhases = state.taskPhases.length > 0 ? state.taskPhases : null;
@@ -848,6 +864,9 @@ export function applyProjectPlanState(
   state.changesLevel = event.changes_level ?? null;
   state.externalChanges = event.external_changes ?? false;
   state.suggestions = normalizeSuggestions(event.suggestions ?? []);
+  if (state.suggestions.some((s) => Boolean(s.action))) {
+    state.adoptedFooterMessage = null;
+  }
   state.autoFixNotices = event.auto_fix_actions ?? [];
   state.partnerNotices = event.partner_notices ?? [];
   state.partnerBusy = false;
@@ -945,10 +964,6 @@ export function setupProjectPanel(container: HTMLElement): {
   sidebarTabs: HTMLElement;
   tasksPanel: HTMLElement;
   mapPanel: HTMLElement;
-  verifyCard: HTMLElement;
-  verifyCommand: HTMLElement;
-  verifyRunBtn: HTMLButtonElement;
-  verifyResultEl: HTMLElement;
   pickerList: HTMLElement;
 } {
   const el = (id: string) => container.querySelector<HTMLElement>(`#${id}`)!;
@@ -982,95 +997,23 @@ export function setupProjectPanel(container: HTMLElement): {
     sidebarTabs: el("project-sidebar-tabs"),
     tasksPanel: el("project-panel-tasks"),
     mapPanel: el("project-panel-map"),
-    verifyCard: el("project-verify-card"),
-    verifyCommand: el("project-verify-command"),
-    verifyRunBtn: el("project-verify-run") as HTMLButtonElement,
-    verifyResultEl: el("project-verify-result"),
     pickerList: el("project-picker-list"),
   };
 }
 
 // ---- Phase 27 services panel ----
 
-function renderReliabilityStrip(state: ProjectPanelState): string {
-  const pc = (state.turnPostcondition || "none").trim() || "none";
-  const pcLabel =
-    pc === "ok"
-      ? "后置条件 · 已满足"
-      : pc === "fail"
-        ? "后置条件 · 未满足"
-        : pc === "blocked"
-          ? "后置条件 · 声明已拦截"
-          : "后置条件 · 未检测";
-  const pcCls =
-    pc === "ok" ? "ok" : pc === "fail" || pc === "blocked" ? "fail" : "none";
-  const circuit =
-    state.turnCircuitOpen.length > 0
-      ? state.turnCircuitOpen.map((fp) => escapeHtml(fp)).join("<br>")
-      : "无";
-  const circuitCls = state.turnCircuitOpen.length > 0 ? "fail" : "none";
-  const failCls = state.turnFailureClass
-    ? escapeHtml(state.turnFailureClass)
-    : "";
-  // Hide strip when nothing interesting.
-  if (
-    pc === "none" &&
-    state.turnCircuitOpen.length === 0 &&
-    !state.turnFailureClass
-  ) {
-    return "";
-  }
-  const failRow = failCls
-    ? `<div class="sidebar-reliability-row is-warn">分型：类 ${failCls}</div>`
-    : "";
-  return `<div class="sidebar-reliability">
-      <div class="sidebar-services-header"><span>可靠性</span></div>
-      <div class="sidebar-reliability-row is-${pcCls}">${pcLabel}</div>
-      <div class="sidebar-reliability-row is-${circuitCls}">熔断：${
-        state.turnCircuitOpen.length > 0 ? `<span class="sidebar-reliability-fps">${circuit}</span>` : "无"
-      }</div>
-      ${failRow}
-    </div>`;
-}
-
 function renderServicesPanel(state: ProjectPanelState): string {
-  const armed =
-    state.turnArmedId || state.turnArmedText
-      ? `<div class="sidebar-turn-armed">武装：${escapeHtml(
-          [state.turnArmedId, state.turnArmedText].filter(Boolean).join(" · "),
-        )}</div>`
-      : "";
-  const EVIDENCE_CAP = 12;
-  const totalEvidence = state.turnEvidence.length;
-  const hiddenCount = Math.max(0, totalEvidence - EVIDENCE_CAP);
-  const visibleEvidence =
-    hiddenCount > 0 ? state.turnEvidence.slice(-EVIDENCE_CAP) : state.turnEvidence;
-  const evidenceRows =
-    totalEvidence === 0
-      ? `<div class="sidebar-services-empty">本回合尚无工具证据</div>`
-      : `${
-          hiddenCount > 0
-            ? `<div class="sidebar-evidence-more">更早 ${hiddenCount} 条已折叠</div>`
-            : ""
-        }${visibleEvidence
-          .map((e) => {
-            const mark = e.ok ? "✓" : "✗";
-            const cls = e.ok ? "ok" : "fail";
-            return `<div class="sidebar-evidence-row is-${cls}"><span>${mark}</span> ${escapeHtml(e.tool)}</div>`;
-          })
-          .join("")}`;
-  const reliability = renderReliabilityStrip(state);
-  const gateNotice = (state.turnGateNotice || "").trim();
-  const gateBlock = gateNotice
-    ? `<div class="sidebar-gate-notice" style="margin-top:0.35rem;padding:0.35rem 0.45rem;border-left:3px solid #c45c26;font-size:0.76rem;line-height:1.35;white-space:pre-wrap;">${escapeHtml(gateNotice)}</div>`
-    : "";
-  const evidenceBlock = `<div class="sidebar-turn-evidence">
-      <div class="sidebar-services-header"><span>本回合${totalEvidence > 0 ? ` · ${totalEvidence}` : ""}</span></div>
-      ${armed}
-      <div class="sidebar-evidence-list">${evidenceRows}</div>
-      ${gateBlock}
-      ${reliability}
-    </div>`;
+  const stopped = state.services.filter((s) => !s.alive).length;
+  const running = state.services.length - stopped;
+  const summary =
+    state.services.length === 0
+      ? state.servicesLoading
+        ? "加载中…"
+        : "暂无登记"
+      : running > 0
+        ? `${running} 个运行中 · ${stopped} 已停止`
+        : `${stopped} 个已停止`;
 
   const rows =
     state.services.length === 0
@@ -1105,14 +1048,22 @@ function renderServicesPanel(state: ProjectPanelState): string {
       : state.servicesLogName
         ? `<div class="sidebar-services-empty">（无日志）</div>`
         : "";
-  return `${evidenceBlock}
-    <div class="sidebar-services-header">
-      <span>Services</span>
-      <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
-    </div>
-    ${err}
-    <div class="sidebar-services-list">${rows}</div>
-    ${log}`;
+  const collapsed = state.servicesCollapsed;
+  const chevron = collapsed ? "▸" : "▾";
+  const bodyCls = collapsed ? "sidebar-services-body is-collapsed" : "sidebar-services-body";
+  return `<button type="button" class="sidebar-services-toggle" data-action="toggle-services">
+      <span class="sidebar-services-toggle-chevron">${chevron}</span>
+      <span>服务 · ${escapeHtml(summary)}</span>
+    </button>
+    <div class="${bodyCls}">
+      <div class="sidebar-services-header">
+        <span>Services</span>
+        <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
+      </div>
+      ${err}
+      <div class="sidebar-services-list">${rows}</div>
+      ${log}
+    </div>`;
 }
 
 // ---- main render ----
@@ -1140,13 +1091,12 @@ export function renderProjectSidebar(
   // Phase 27 — Services panel (always in project sidebar)
   els.servicesPanel.innerHTML = renderServicesPanel(state);
 
-  // --- banner area: single priority chain ---
-  // Priority: undo > partner busy > actionable suggestions > partner notices >
+  // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---
+  // Priority: undo > partner busy > partner notices (non-adopted) > adopted footer >
   //           external > auto_fix > …
-  // Actionable cards must beat partner notices (V3): gated proposals set both,
-  // and notice text saying「点采纳」without buttons is a dead end.
   let bannerHtml = "";
   const actionableSuggestions = state.suggestions.filter((s) => Boolean(s.action));
+  const hasAdoptFlash = Boolean(state.suggestionAdoptFlash);
 
   if (state.undoDescription) {
     bannerHtml = `<div class="sidebar-undo-toast">
@@ -1155,9 +1105,17 @@ export function renderProjectSidebar(
     </div>`;
   } else if (state.partnerBusy) {
     bannerHtml = renderPartnerNotices(state.partnerNotices || [], true);
-  } else if (actionableSuggestions.length > 0) {
-    bannerHtml = renderSuggestionCards(state.suggestions, state.reviewFocusId);
-  } else if (state.partnerNotices && state.partnerNotices.length > 0) {
+  } else if (state.adoptedFooterMessage && actionableSuggestions.length === 0 && !hasAdoptFlash) {
+    bannerHtml = renderAdoptedFooterBanner(state.adoptedFooterMessage);
+  } else if (
+    state.partnerNotices &&
+    state.partnerNotices.length > 0 &&
+    actionableSuggestions.length === 0 &&
+    !hasAdoptFlash &&
+    isAdoptedPartnerNotice(state.partnerNotices)
+  ) {
+    bannerHtml = renderAdoptedNotice(state.partnerNotices);
+  } else if (state.partnerNotices && state.partnerNotices.length > 0 && !isAdoptedPartnerNotice(state.partnerNotices)) {
     bannerHtml = renderPartnerNotices(state.partnerNotices, false);
   } else if (state.externalChanges) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
@@ -1207,11 +1165,6 @@ export function renderProjectSidebar(
   // A7 decision surface (main) — full TASKS only in plan overlay
   els.taskFlow.innerHTML = renderDecisionSurface(state);
 
-  // icon bar: verify only visible in confirmed
-  const verifyBtn = els.iconBar.querySelector<HTMLElement>("#icon-btn-verify");
-  if (verifyBtn) {
-    verifyBtn.style.display = state.planStatus === "confirmed" ? "" : "none";
-  }
   // project count badge
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");
   if (projectBadge) {
@@ -1268,18 +1221,15 @@ function updateCompatElements(
   state: ProjectPanelState,
   callbacks: ProjectPanelCallbacks,
 ): void {
-  // Plan card (hidden, used by planOverlay logic in index.ts)
+  // UX-024: compat plan card stays hidden — A7 uses change-banner + header meta only.
+  els.planCard.classList.add("hidden");
   if (state.planOverlay && state.planStatus !== "confirmed") {
-    els.planCard.classList.remove("hidden");
     els.planTitle.textContent = state.planOverlay.title;
     els.planPreview.textContent = state.planOverlay.tasksPreview || state.planOverlay.summary;
   } else if (state.planStatus === "draft" || state.planStatus === "plan_dirty") {
-    els.planCard.classList.remove("hidden");
     els.planTitle.textContent =
       state.planStatus === "plan_dirty" ? "计划已变更 · 请确认" : "计划待确认";
     els.planPreview.textContent = state.tasksMarkdown.slice(0, 1200) || "（等待助手生成 TASKS.md）";
-  } else {
-    els.planCard.classList.add("hidden");
   }
 
   // Switch card (hidden, used by switchOverlay logic in index.ts)
@@ -1291,9 +1241,6 @@ function updateCompatElements(
     els.switchCard.classList.add("hidden");
     els.switchMessage.textContent = "";
   }
-
-  // Verify card (hidden, overlay handles this now)
-  els.verifyCard.classList.add("hidden");
 
   // Markdown panels (hidden, task flow + overlay handle these)
   els.tasksPanel.classList.add("hidden");

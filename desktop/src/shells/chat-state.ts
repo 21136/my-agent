@@ -566,8 +566,18 @@ export function createChatSession(
               ),
           );
           model.assistantBuffer = "";
-          // insert a visible notice so the chat shows cancellation was processed
-          const label = event.finish_reason === "timeout" ? "回合超时已停止" : "回合已停止";
+          const hadLlmTimeoutNotice = model.blocks.some(
+            (block) =>
+              block.kind === "notice" &&
+              typeof block.text === "string" &&
+              block.text.includes("LLM 请求超时"),
+          );
+          const label =
+            event.finish_reason === "timeout"
+              ? hadLlmTimeoutNotice
+                ? "LLM 请求超时已停止"
+                : "回合超时已停止"
+              : "回合已停止";
           model.blocks.push({ kind: "notice", text: label });
         }
         if (options.showProcess) {

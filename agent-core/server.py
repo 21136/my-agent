@@ -382,6 +382,16 @@ def _patch_repl(repl: ConversationRepl, bridge: WsBridge) -> None:
     repl.agent.on_turn_event = bridge.emit
     repl.agent.bind_cancel_event(bridge.cancel_event)
     repl.agent.bind_cancel_finish_reason(bridge.resolve_cancel_finish_reason)
+
+    def _turn_wall_pause() -> None:
+        if bridge.turn_watchdog is not None:
+            bridge.turn_watchdog.pause_wall()
+
+    def _turn_wall_resume() -> None:
+        if bridge.turn_watchdog is not None:
+            bridge.turn_watchdog.resume_wall()
+
+    repl.agent.bind_turn_wall_hooks(_turn_wall_pause, _turn_wall_resume)
     bridge._cancel_turn = repl.agent.request_cancel
 
     original_rebind = repl._rebind_agent
@@ -395,6 +405,16 @@ def _patch_repl(repl: ConversationRepl, bridge: WsBridge) -> None:
         repl.agent.on_turn_event = bridge.emit
         repl.agent.bind_cancel_event(bridge.cancel_event)
         repl.agent.bind_cancel_finish_reason(bridge.resolve_cancel_finish_reason)
+
+        def _turn_wall_pause() -> None:
+            if bridge.turn_watchdog is not None:
+                bridge.turn_watchdog.pause_wall()
+
+        def _turn_wall_resume() -> None:
+            if bridge.turn_watchdog is not None:
+                bridge.turn_watchdog.resume_wall()
+
+        repl.agent.bind_turn_wall_hooks(_turn_wall_pause, _turn_wall_resume)
         bridge._cancel_turn = repl.agent.request_cancel
 
     repl._rebind_agent = rebind  # type: ignore[method-assign]

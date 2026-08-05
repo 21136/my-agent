@@ -42,7 +42,7 @@
 ### 1.1 现象（huiyi 末段）
 
 1. T-014：`armed` / 身份解析纠了过期 `task_line` → **勾对**（身份门有效）。
-2. Phase 4 测试：`mvn_exec` **confirm_rejected** → 仍用「上次编译过」`report_progress` → **勾上**。
+2. Phase 4 测试：`run_command` **confirm_rejected** → 仍用「上次编译过」`report_progress` → **勾上**（历史会话若证据名为 `mvn_exec` 仍可通过别名映射）。
 3. **同 turn** 再报「数据库」→ 一停只挡写码，**不挡再勾**。
 4. Phase 5：再次拒 `mvn` → 双发 `report_progress` → 越界/错行后仍宣称 22/22；前端构建未跑通却 `[x]`。
 
@@ -104,7 +104,7 @@ report_progress  ──成功 toggle──► Plan Agent 更新 TASKS / 侧栏
 
 **异常卡（人审）仅当例如：**
 
-- 对口表把文案任务判成必须 `mvn_exec`
+- 对口表把文案任务判成必须 `run_command` 编译
 - 武装身份与 `report_progress` 解析冲突且无法自动归并
 - 任务标题无法映射任何证据类（需 Plan 改写任务或补规则）——**此时走改文案 / 补 `[evidence:…]`，不是口头勾选**
 
@@ -135,10 +135,10 @@ report_progress  ──成功 toggle──► Plan Agent 更新 TASKS / 侧栏
 | 证据类 | 典型标题信号 | 接受的成功证据（示例） |
 |--------|--------------|------------------------|
 | **write** | Entity / Mapper / Service / Controller / 页面 / `.vue` / `.java`；口语：写 / 接口 / CRUD / 新增 / 删除 / 路由 | 本回合对该任务相关路径的 `write_text` / `patch_file` 等 **ok** |
-| **compile** | 编译 / `mvn` / 后端可编译 | 本回合 `mvn_exec`（或等价）**ok** 且退出码成功 |
-| **test** | 测试 / 联调测试 / 验收测试（非纯文案） | 本回合测试/编译命令 **ok**；不得用纯 write 代替 |
-| **build_fe** | 前端可构建 / `npm` build | 本回合 `npm_exec`（build/相关）**ok** |
-| **verify_db** | 数据库连接 / 联通 | 本回合可验证连通的命令/脚本 **ok**（具体工具名实施时钉死） |
+| **compile** | 编译 / `mvn` / 后端可编译 | 本回合 **`run_command`**（如 `mvn -q compile`）**ok** |
+| **test** | 测试 / 联调测试 / 验收测试（非纯文案） | 本回合 **`run_project_tests`** / **`run_tests`** / **`run_command`** **ok** |
+| **build_fe** | 前端可构建 / `npm` build | 本回合 **`run_command`**（如 `npm run build`）**ok** |
+| **verify_db** | 数据库连接 / 联通 | 本回合 **`db_query`** / **`http_request`** / **`run_command`** **ok** |
 | **unknown** | 无法归类（如纯确认、调研、无动作文案） | **不自动勾** → 加 **`[evidence:…]`** 标签或经 Plan 改文案 |
 
 > **标签示例**：`- [ ] T-002 确认目录结构完整 [evidence:write]`（确认类若需勾选，须显式标证据类）。  

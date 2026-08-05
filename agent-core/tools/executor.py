@@ -112,6 +112,10 @@ class ExecutorSession:
     segment_failure_count: int = 0
     segment_failure_budget_hit: bool = False
     segment_failure_budget_just_hit: bool = False
+    # BUG-024 — repeat inline_write_max guard streak (independent of P5 / G14)
+    inline_write_guard_streak: int = 0
+    inline_write_guard_blocked: bool = False
+    inline_write_guard_just_blocked: bool = False
     # G14 M2 — sidebar reliability snapshot
     last_playbook_id: str = ""
     last_failure_class: str = ""
@@ -658,7 +662,7 @@ def _validate_foreign_project_write(
     return None
 
 
-# PROJECT-MODE §0d E8: block repl bypass of npm_exec / mvn_exec in project mode
+# PROJECT-MODE §0d E8: block archived repl bypass of package managers in project mode
 _REPL_BUILD_BYPASS_RE = re.compile(
     r"(?is)"
     r"\b(?:npm|pnpm|yarn|mvn|gradlew?)\b"
@@ -923,6 +927,9 @@ class ToolExecutor:
 
     def begin_turn(self) -> None:
         """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
+        from exec_reliability import clear_inline_write_guard
+
+        clear_inline_write_guard(self.session)
         self.session.task_stop_armed = False
         self.session.task_done_baseline = None
         self.session.armed_task_id = ""
@@ -1275,6 +1282,8 @@ class ToolExecutor:
 
         insight = classify_failure(result)
         countable = is_circuit_countable_failure(result)
+        if result.ok:
+            self._maybe_clear_inline_write_guard_streak(tool_name, arguments)
         self._maybe_update_service_postcondition(tool_name, arguments, result, insight)
 
         if insight.failure_class not in {"A"} or countable:
@@ -2039,7 +2048,46 @@ class ToolExecutor:
         guard_type = error.error.details.get("guard_type")
         if not isinstance(guard_type, str) or not guard_type:
             return
+        if guard_type == "inline_write_max":
+            from exec_reliability import inline_write_guard_max, record_inline_write_guard_failure
+
+            record_inline_write_guard_failure(self.session)
+            if (
+                int(getattr(self.session, "inline_write_guard_streak", 0) or 0)
+                >= inline_write_guard_max()
+            ):
+                error.error.details["retry"] = False
         self._record_guard_event(guard_type, error)
+
+    def _maybe_clear_inline_write_guard_streak(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """BUG-024 IT-98b: successful write clears repeat-inline streak."""
+        if tool_name != "run_evolved":
+            return
+        evolved = arguments.get("tool_name")
+        if not isinstance(evolved, str):
+            return
+        if evolved not in {"write_text", "append_text", "write_evolve"}:
+            return
+        inner = _merged_evolved_arguments(arguments, evolved)
+        sources: list[dict[str, Any]] = []
+        if isinstance(inner, dict) and inner:
+            sources.append(inner)
+        if evolved == "write_evolve":
+            sources.append(arguments)
+        for source in sources:
+            if _has_workspace_path(source):
+                from exec_reliability import clear_inline_write_guard_streak
+
+                clear_inline_write_guard_streak(self.session)
+                return
+        if evolved in _INLINE_WRITE_TOOLS:
+            from exec_reliability import clear_inline_write_guard_streak
+
+            clear_inline_write_guard_streak(self.session)
 
     def _cross_session_read_target(self, path_arg: str) -> str | None:
         if self.session.session_dir is None:

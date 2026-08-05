@@ -37,7 +37,6 @@ _WORKFLOW_TOOL_NAMES = frozenset(
         "flatten_dir",
         "dedupe_by_name",
         "archive_by_date",
-        "study_note",
     }
 )
 _GROW_EXECUTE_MARKERS = (

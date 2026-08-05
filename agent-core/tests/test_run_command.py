@@ -339,6 +339,32 @@ class RunCommandIT103Tests(unittest.TestCase):
                 self.assertIn("不可执行", msg)
             self.assertEqual(confirms, [])
 
+    def test_repl_archived_not_in_active_allowlist(self) -> None:
+        """IT-437: archived repl not callable via run_evolved."""
+        with temporary_agent_paths(copy_tool_dirs=("common/repl", "common/run_command")) as paths:
+            registry = ToolRegistry.load(paths)
+            repl = registry.get_evolved("repl")
+            self.assertIsNotNone(repl)
+            assert repl is not None
+            self.assertEqual(repl.status, "archived")
+
+            active = {t.name for t in registry.evolved() if t.status == "active"}
+            self.assertIn("run_command", active)
+            self.assertNotIn("repl", active)
+
+            executor = ToolExecutor(
+                registry=registry,
+                session=ExecutorSession(allowed_evolved={"repl", "run_command"}),
+                confirm_fn=lambda _p, _a: "y",
+            )
+            result = executor.run(
+                "run_evolved",
+                {"tool_name": "repl", "arguments": {"code": "print(1)"}},
+            )
+            self.assertFalse(result.ok)
+            msg = (result.error.message if result.error else "") or ""
+            self.assertIn("不可执行", msg)
+
 
 class RunCommandLongTimeoutIT164Tests(unittest.TestCase):
     """IT-164: npm install / rmdir node_modules use long timeout tier."""

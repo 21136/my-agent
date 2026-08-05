@@ -98,12 +98,12 @@ run_project_tests(working_dir, suite)
 |-------|------------|----------|
 | `auto` | `pom.xml` → mvn；`package.json` scripts.test → npm；`pytest.ini`/`pyproject.toml` → pytest | 首匹配 |
 | `pytest` | — | `python -m pytest -q --tb=short` |
-| `jest` | — | `npm test -- --ci`（经 `npm_exec` + ENV） |
+| `jest` | — | `npm test -- --ci`（经 `run_command` + ENV） |
 | `vitest` | — | `npm run test -- --run` |
 | `mvn` | — | `mvn -q test` |
 | `npm_test` | — | `npm test` |
 
-实现应 **复用** `npm_exec` / `mvn_exec` / `run_command` 内部执行器，避免第三套 subprocess。
+实现经 **`run_command`** 执行套件命令（T-4309）；不再直载 archived `npm_exec`/`mvn_exec` `main.py`。
 
 ### 3.2 解析器（M0 范围）
 

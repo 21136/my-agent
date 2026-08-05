@@ -45,11 +45,33 @@ def test_run_tool_main_exits_on_failure() -> None:
     assert parsed["error"] == "失败"
 
 
-def test_repl_unicode_output_via_subprocess() -> None:
-    script = _ROOT / "evolve" / "tools" / "common" / "repl" / "main.py"
+def test_unicode_tool_protocol_via_subprocess(tmp_path: Path) -> None:
+    """End-to-end stdin JSON → stdout JSON (replaces archived repl probe)."""
+    tool_dir = tmp_path / "unicode_probe"
+    tool_dir.mkdir()
+    probe = tool_dir / "main.py"
+    probe.write_text(
+        f"""import sys
+from pathlib import Path
+
+core = Path({str(_AGENT_CORE)!r})
+if str(core) not in sys.path:
+    sys.path.insert(0, str(core))
+from evolve_tool_io import run_tool_main
+
+
+def run(payload: dict) -> dict:
+    return {{"ok": True, "stdout": "你好"}}
+
+
+if __name__ == "__main__":
+    run_tool_main(run)
+""",
+        encoding="utf-8",
+    )
     proc = subprocess.run(
-        [sys.executable, str(script)],
-        input=json.dumps({"code": "print('你好')", "reset": True}),
+        [sys.executable, str(probe)],
+        input=json.dumps({"dry_run": True}),
         capture_output=True,
         text=True,
         encoding="utf-8",

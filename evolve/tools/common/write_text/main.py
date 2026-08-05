@@ -77,7 +77,9 @@ def run_write(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        from evolve_tool_io import write_utf8_text
+
+        write_utf8_text(target, content)
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
 

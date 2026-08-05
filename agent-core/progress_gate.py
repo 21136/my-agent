@@ -8,16 +8,27 @@ from typing import Any, Literal
 EvidenceKind = Literal["write", "compile", "test", "build_fe", "verify_db", "unknown"]
 
 _WRITE_EVIDENCE_TOOLS = frozenset(
-    {"write_text", "append_text", "patch_file", "copy_move", "write_evolve"}
+    {"write_text", "patch_file", "copy_move", "write_evolve"}
 )
-_COMPILE_EVIDENCE_TOOLS = frozenset({"mvn_exec", "run_command"})
+_COMPILE_EVIDENCE_TOOLS = frozenset({"run_command"})
 _TEST_EVIDENCE_TOOLS = frozenset(
-    {"mvn_exec", "run_tests", "run_project_tests", "npm_exec", "run_command"}
+    {"run_tests", "run_project_tests", "run_command"}
 )
-_BUILD_FE_EVIDENCE_TOOLS = frozenset({"npm_exec", "run_command"})
+_BUILD_FE_EVIDENCE_TOOLS = frozenset({"run_command"})
 _VERIFY_DB_EVIDENCE_TOOLS = frozenset(
-    {"run_python", "repl", "jshell_exec", "mvn_exec", "http_request", "db_query", "run_command"}
+    {"http_request", "db_query", "run_command"}
 )
+
+# Old sessions may still record archived tool names as evidence; map to current tools.
+_LEGACY_EVIDENCE_ALIASES: dict[str, str] = {
+    "append_text": "write_text",
+    "mvn_exec": "run_command",
+    "npm_exec": "run_command",
+    "repl": "run_command",
+    "run_python": "run_command",
+    "jshell_exec": "run_command",
+    "pip_install": "run_command",
+}
 
 _EVIDENCE_TAG_RE = re.compile(
     r"\[evidence:\s*(write|compile|test|build_fe|verify_db)\s*\]",
@@ -112,13 +123,27 @@ def _tool_name_from_entry(entry: dict[str, Any]) -> str:
     return str(evolved).strip()
 
 
+def _evidence_tool_names(turn_evidence: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for entry in turn_evidence:
+        if not entry.get("ok"):
+            continue
+        name = _tool_name_from_entry(entry)
+        if not name:
+            continue
+        names.add(name)
+        legacy = _LEGACY_EVIDENCE_ALIASES.get(name)
+        if legacy:
+            names.add(legacy)
+    return names
+
+
 def evidence_satisfies(
     kind: EvidenceKind,
     turn_evidence: list[dict[str, Any]],
 ) -> tuple[bool, str]:
     """Whether this-turn successful tools cover *kind* (G1/G2)."""
-    ok_entries = [e for e in turn_evidence if e.get("ok")]
-    names = {_tool_name_from_entry(e) for e in ok_entries}
+    names = _evidence_tool_names(turn_evidence)
 
     if kind == "unknown":
         return (
@@ -134,22 +159,22 @@ def evidence_satisfies(
         hit = names & _COMPILE_EVIDENCE_TOOLS
         if hit:
             return True, f"compile evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合编译成功证据（run_command/mvn_exec）"
+        return False, "缺少本回合编译成功证据（run_command）"
     if kind == "test":
         hit = names & _TEST_EVIDENCE_TOOLS
         if hit:
             return True, f"test evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合测试成功证据（run_project_tests/mvn_exec/npm_exec/run_command 等）"
+        return False, "缺少本回合测试成功证据（run_project_tests/run_tests/run_command）"
     if kind == "build_fe":
         hit = names & _BUILD_FE_EVIDENCE_TOOLS
         if hit:
             return True, f"build_fe evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合前端构建成功证据（run_command/npm_exec）"
+        return False, "缺少本回合前端构建成功证据（run_command）"
     if kind == "verify_db":
         hit = names & _VERIFY_DB_EVIDENCE_TOOLS
         if hit:
             return True, f"verify_db evidence via {sorted(hit)[0]}"
-        return False, "缺少本回合数据库核验成功证据（run_command/run_python/repl/…）"
+        return False, "缺少本回合数据库核验成功证据（run_command/db_query/http_request）"
     return False, f"unknown evidence kind: {kind}"
 
 

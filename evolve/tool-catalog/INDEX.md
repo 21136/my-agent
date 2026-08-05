@@ -14,4 +14,5 @@
 | 进化 | `write_evolve`、克隆进 tools | `buckets/evolve.md` |
 
 权限与路径门禁（confirm、WRITE-SCOPE、项目计划门）仍由执行器强制；本索引不替代它们。  
-项目绑定下部分写操作 confirm 由 `write_policy` 分层（见 `docs/CONFIRM-PIPELINE.md` §11）。
+项目绑定下部分写操作 confirm 由 `write_policy` 分层（见 `docs/CONFIRM-PIPELINE.md` §11）。  
+**已归档工具**（不可 `run_evolved`）：见 `docs/ARCHIVED-TOOLS.md` · 各 bucket 的「已归档」表。

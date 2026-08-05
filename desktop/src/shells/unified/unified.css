@@ -680,16 +680,42 @@
   border-left: 3px solid var(--ma-accent);
 }
 
-/* Phase 27 — sidebar Services */
+/* Phase 27 — sidebar Services (UX-026: collapsed by default) */
 .sidebar-services {
-  flex: 0 1 auto;
-  max-height: 36%;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 0.45rem 0.65rem 0.35rem;
-  border-bottom: 1px solid var(--ma-border);
+  overflow: hidden;
+  padding: 0 0.65rem 0.45rem;
+  border-top: 1px solid var(--ma-border);
   font-size: 0.8rem;
+}
+.sidebar-services-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.1rem;
+  border: none;
+  background: transparent;
+  color: var(--ma-text-muted);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-services-toggle:hover {
+  color: var(--ma-text);
+}
+.sidebar-services-toggle-chevron {
+  flex-shrink: 0;
+  width: 0.85rem;
+}
+.sidebar-services-body.is-collapsed {
+  display: none;
+}
+.sidebar-services-body:not(.is-collapsed) .sidebar-services-list {
+  max-height: 9rem;
+  overflow-y: auto;
 }
 .sidebar-turn-evidence {
   margin-bottom: 0.55rem;
@@ -988,6 +1014,118 @@
 .sidebar-suggestions-banner {
   border-color: var(--ma-accent);
   background: color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));
+}
+
+/* UX-026 SP-9 — suggestion stack in sidebar body */
+.sidebar-suggestion-stack {
+  margin: 0.35rem 0.75rem 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 35%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));
+}
+.sidebar-suggestion-stack-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--ma-text);
+}
+.sidebar-suggestion-stack-deck {
+  position: relative;
+  padding-bottom: 0.35rem;
+}
+.sidebar-suggestion-peek {
+  position: absolute;
+  left: 0.45rem;
+  right: 0.45rem;
+  height: 0.45rem;
+  border-radius: 0 0 5px 5px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 25%, transparent);
+  border-top: none;
+  background: color-mix(in srgb, var(--ma-accent) 4%, var(--ma-surface));
+  pointer-events: none;
+}
+.sidebar-suggestion-peek.is-1 {
+  bottom: 0.15rem;
+  z-index: 1;
+}
+.sidebar-suggestion-peek.is-2 {
+  bottom: 0;
+  left: 0.9rem;
+  right: 0.9rem;
+  z-index: 0;
+  opacity: 0.85;
+}
+.sidebar-suggestion-stack.is-adopt-flash {
+  border-color: #3d8b5a;
+  background: color-mix(in srgb, #3d8b5a 10%, var(--ma-surface));
+}
+.sidebar-suggestion-stack-flash-title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #2d6b45;
+  margin-bottom: 0.2rem;
+}
+.sidebar-suggestion-stack-flash-body {
+  font-size: 0.74rem;
+  color: var(--ma-text);
+  line-height: 1.35;
+}
+
+.sidebar-turn-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: calc(100% - 1.5rem);
+  margin: 0 0.75rem 0.45rem;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 85%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ma-bg) 55%, var(--ma-surface));
+  color: var(--ma-text-muted);
+  font-size: 0.76rem;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-turn-summary:hover {
+  color: var(--ma-text);
+  border-color: var(--ma-accent);
+}
+.sidebar-turn-summary-chevron {
+  flex-shrink: 0;
+  width: 0.85rem;
+}
+.sidebar-turn-summary-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-turn-summary-jump {
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+
+.sidebar-adopted-banner {
+  border-color: #3d8b5a;
+  background: color-mix(in srgb, #3d8b5a 8%, var(--ma-surface));
+}
+.sidebar-adopted-banner-body {
+  font-size: 0.78rem;
+  margin: 0.15rem 0 0.35rem;
+  line-height: 1.35;
+}
+.sidebar-adopted-banner .unified-btn {
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+}
+
+.sidebar-suggestion-card.is-top {
+  position: relative;
+  z-index: 2;
+  padding: 0.35rem 0.15rem 0.1rem;
+  border-bottom: none;
 }
 .sidebar-suggestion-card {
   padding: 0.35rem 0;
@@ -1401,6 +1539,14 @@
 }
 
 /* ---- change banner ---- */
+.sidebar-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .sidebar-change-banner {
   flex-shrink: 0;
   margin: 0 0.5rem 0.5rem;
@@ -1458,10 +1604,13 @@
 }
 
 /* ---- bottom icon bar ---- */
+.sidebar-footer .sidebar-icon-bar {
+  border-top: 1px solid var(--ma-border);
+}
+
 .sidebar-icon-bar {
   display: flex;
   flex-shrink: 0;
-  border-top: 1px solid var(--ma-border);
 }
 .sidebar-icon-btn {
   flex: 1;
@@ -1643,34 +1792,6 @@
 .overlay-switch-confirm-actions {
   display: flex;
   gap: 0.4rem;
-}
-
-/* overlay: verify */
-.overlay-verify-command {
-  font-family: var(--ma-mono);
-  font-size: 0.78rem;
-  background: var(--ma-bg);
-  padding: 0.4rem;
-  margin: 0.35rem 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  border-radius: 3px;
-}
-.overlay-verify-result {
-  margin-top: 0.5rem;
-  padding: 0.5rem;
-  border-radius: 3px;
-  font-family: var(--ma-mono);
-  font-size: 0.78rem;
-  white-space: pre-wrap;
-}
-.overlay-verify-result.is-pass {
-  background: color-mix(in srgb, #16a34a 12%, var(--ma-bg));
-  color: #16a34a;
-}
-.overlay-verify-result.is-fail {
-  background: color-mix(in srgb, #dc2626 12%, var(--ma-bg));
-  color: #dc2626;
 }
 
 /* overlay: doc items */

@@ -245,11 +245,22 @@ P1 教训：**多数项不必改 `core.txt`**。先对号入座再写代码。
 
 **IT-413** — 3 次不同命令 countable 失败 → 第 4 次 tool 调用前停段；messages 含内核 nudge。
 
+### 7.5 P5 补洞 — 重复 `inline_write_max`（BUG-024 · T-4241～4243）
+
+> **2026-08-05 done**（BUG-024 · T-4242）。P5 故意不把 A 类 schema 计入预算；**`inline_write_max` 连刷 ≥2** 停 tool + staging 内核。
+
+| 项 | 已决 |
+|----|------|
+| 计数 | 同 segment · `guard_type=inline_write_max`；默认 **≥2** 触发（`MY_AGENT_INLINE_WRITE_GUARD_MAX`） |
+| 动作 | 停 tool + 内核 staging 文案 + `turn.notice`（仿 P5，**不**走 G14 指纹） |
+| 第 1 次 | 保留 guard notice + TOOL-RETRY |
+| 详情 | [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) |
+
 ---
 
 ## 8. 与 EXEC-RELIABILITY 关系
 
-- G14 熔断 / 分型 **保留**；P5 补「段内总失败」盲区。
+- G14 熔断 / 分型 **保留**；P5 补「段内总失败」盲区；**BUG-024** 补 A 类 `inline_write_max` 重复（§7.5 · EXEC §3.6）。
 - P4 减少失败输出污染导致的**次生**失败。
 - P1 减少 **参数嵌套类** 失败（A 类 / schema）。
 - `exec_failure_class` UI notice：建议 **P5 同 PR** 改为仅侧栏 + evolve_log（§7.2 · 非 P5 前置）。

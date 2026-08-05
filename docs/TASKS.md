@@ -2,7 +2,7 @@
 
 > 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 42** M0 done（T-4213/S-421 手工）· WORKBENCH M1/M2 · Phase 43～45 M0 done  
+> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 42** M0 done（T-4213/S-421 手工）· WORKBENCH M1/M2 · Phase 43～45 M0 done · **Phase 46 D0 doc**  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -108,6 +108,10 @@
 | T-206 | `agent.py` 主循环 + tool 内循环（≤10） | `agent-core/agent.py` | T-202,T-108 | 锚定块 + messages.jsonl；`python agent.py` | done |
 | T-207 | `main.py` REPL + 命令 | `agent-core/main.py` | T-206 | 新会话/换主题/压缩/exit；`--record`；`python main.py --demo` | done |
 | T-208 | `context.py` digest 压缩 | `context.py` | T-206 | 85% 自动 + `压缩` 手动；K=8；digest≤8k；messages.jsonl 不截断 | done |
+| T-2091 | BUG-023 设计落盘 | `bugs/2026-08-05-compact-turn-llm-timeout.md` · RUNTIME §8.4 · RG G15 | T-208,T-1513 | R1～R7 可读 | **done** |
+| T-2092 | compact 摘要 pause wall + 独立超时 + 可 cancel | `context.py` · `agent.py` · `runtime_guards.py` | T-2091 | IT-95 | **done** |
+| T-2093 | LLMTimeout 专用 notice + 桌面 timeout 分型 | `agent.py` · `chat-state.ts` · TURN-CONTROL §9.3 | T-2091,T-1519 | IT-96 | **done** |
+| T-2094 | 压缩后二级 payload 策略（P1） | `context.py` · `loader.py` | T-2092 | IT-97 · S-75 | **done** |
 | T-209 | `agent-core/prompts/core.txt` | `prompts/core.txt` | T-204 | 身份、边界、禁止假装执行 | done |
 | T-210 | `start.bat` | 根目录 | T-207 | 双击进 CLI | done |
 
@@ -1402,6 +1406,8 @@ python turn_intent.py    # 分类用例无回归
 | confirm / 熔断 | 不变（P1 透传） | — |
 
 - [x] 回归 / 新增：**IT-410** · **IT-411** · **IT-412** · **IT-413** · **S-410**
+- [x] 回归 / 新增：**IT-98** · **S-98**（BUG-024 · T-4243）
+- [x] 回归 / 新增：**IT-99** · **S-99**（BUG-025 · T-4254）
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
@@ -1411,6 +1417,14 @@ python turn_intent.py    # 分类用例无回归
 | T-4103 | P3：规划/执行模型分拆 | → **Phase 42 J** · [LLM-ROUTING.md](./LLM-ROUTING.md) · T-4201～4203 | T-4100 | T-4202 | **→42-J** |
 | T-4104 | P4：失败 tool 结果截断 | `maybe_spill` 扩失败 · agent 写 tool 前 | T-4100 | IT-412 · S-410；**不改** catalog | **done** |
 | T-4105 | P5：段内失败预算 + guard notice 收口 | `exec_reliability` · agent · `server` | T-4100 | IT-413；内核注入非 core.txt | **done** |
+| T-4241 | BUG-024 设计落盘（inline_write_max 重复≥2 停 tool） | `bugs/2026-08-05-inline-write-repeat-guard-loop.md` · AGENT-HARNESS §7.5 | T-4105 | R1～R4 可读 | **done** |
+| T-4242 | inline_write guard streak + 停 tool + staging 内核 | `exec_reliability.py` · `executor.py` · `agent.py` | T-4241 | IT-98a/98b | **done** |
+| T-4243 | IT-98 + S-98 留痕 | `tests/test_inline_write_guard_loop.py` | T-4242 | 自动化 pass | **done** |
+| T-4251 | BUG-025 设计落盘（patch_file CRLF 增殖 · read/write 放大） | `bugs/2026-08-05-patch-file-crlf-corruption.md` · TOOLS · RUNTIME-GUARDS G17 | T-4243 | R1～R5 可读 | **done** |
+| T-4252 | `patch_file` find 写盘 `newline=""` / normalize | `evolve/tools/coding/patch_file/main.py` · `evolve_tool_io.py` | T-4251 | IT-99a | **done** |
+| T-4253 | `write_text` 写前换行规范化 | `evolve/tools/common/write_text/main.py` · `evolve_tool_io.py` | T-4251 | IT-99b | **done** |
+| T-4254 | IT-99 + S-99 留痕 | `tests/test_patch_file_crlf.py` · `tests/test_evolve_tool_io_newlines.py` | T-4252 · T-4253 | IT-99a/b/c | **done** |
+| T-4255 | harness：Vue 大文件 staging · 禁 line_range 多行块（M1） | `core.txt` · `evolve/prompts/coding.md` · `evolve/prompts/project.md` · `tool-catalog/buckets/write.md` | T-4251 | 提示可读 | **done** |
 
 **完成标志（P1）**：IT-410 绿；LLM 可直接调 `run_command` 无 `tool_name` 嵌套。
 
@@ -1506,6 +1520,11 @@ python turn_intent.py    # 分类用例无回归
 | T-4304 | `create_project` + `template` 挂钩 | `project_mode` · `context_switch` | T-4303 | IT-435 | **done** |
 | T-4305 | **fastapi-vue** 配方 | `evolve/scaffolds/fastapi-vue/` | T-4304 | S-431 | **done** |
 | T-4306 | `phase: deploy` 模板（spring-vue） | `deploy/*.tpl` | T-4303 | S-431 | **done** |
+| T-4307 | 配方弃用 archived exec（`run_command` only） | manifest · `scaffold_recipes.py` · PROJECT-RECIPES §4.2 | T-4303,T-4305 | IT-436 | **done** |
+| T-4308 | `repl` 归档 + 目录/文档对齐 | `repl/tool.toml` · run bucket · SHELL-CHANNEL · PROJECT-MODE E8 | T-4307 | IT-437 | **done** |
+| T-4309 | `project_verify` 弃直载 exec + 引用图 | `project_verify.py` · `ARCHIVED-TOOLS.md` · `activity_router` | T-4307 | `test_project_verify` · IT-437 | **done** |
+| T-4310 | archived 磁盘瘦身 | 删 `main.py` · README · guard 迁 agent-core | T-4309 | IT-103/437/120/86 · registry load | **done** |
+| T-4311 | 文档 + Progress Gate 别名清理 | WRITE-SCOPE · TOOLS · PROGRESS-GATE · `progress_gate.py` | T-4310 | `test_progress_gate` | **done** |
 
 ---
 
@@ -1561,6 +1580,28 @@ python turn_intent.py    # 分类用例无回归
 | T-4501 | ENV.md `quality.commands`（E11） | PROJECT-MODE §0f · `project_env.py` | T-4500 | 文档 + 刷新保留 | **done** |
 | T-4502 | `db_migrate_status` | evolved 工具 | T-4500 · 43 M0 | IT-451 | **done** |
 | T-4503 | `run_quality` + ruff/eslint | evolved 工具 | T-4501 | IT-452 | **done** |
+
+---
+
+## Phase 46 — 工具工坊提示词（TOOL-WORKSHOP-PROMPTS）
+
+> 设计：[TOOL-WORKSHOP-PROMPTS.md](./TOOL-WORKSHOP-PROMPTS.md) v0.3.0  
+> **状态：M1 done**（T-4601～4603 · IT-461～463）· T-4604 S-461 todo  
+> 触发：造工具质量 · explore/checker prompt 外置 · 非 project 会话注入工坊短块 · defer 四维映射与 status 硬闸。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 TOOL-WORKSHOP-PROMPTS §9.1）
+
+- [x] 回归预留：**IT-461～463** · **S-461** · 复用 S-35 · S-36～38
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4600 | 设计文档 + MAP/TASKS | `TOOL-WORKSHOP-PROMPTS.md` · 本表 | 用户/DeepSeek 共识 | DOC-04 可读 | **doc** |
+| T-4601 | 外置 subagent prompts | `evolve/subagents/*.md` · `subagent.py` | T-4600 | IT-462 | **done** |
+| T-4602 | 工坊短块 + loader 注入 | `evolve/prompts/tool_workshop.md` · `loader.py` | T-4600 | IT-461 · IT-463 | **done** |
+| T-4603 | topic 裁剪（coding 等） | `evolve/prompts/coding.md` | T-4602 | IT-463 | **done** |
+| T-4604 | 手工 smoke | S-461 | T-4601,T-4602 | 先聊聊 → 造工具 → 验收 | todo |
 
 ---
 

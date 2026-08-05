@@ -16,6 +16,16 @@ from project_mode import normalize_project_id
 
 _LOG_EXCERPT_LIMIT = 2000
 _VALID_PHASES = frozenset({"init", "deploy"})
+_DEPRECATED_STEP_KINDS: dict[str, str] = {
+    "npm_exec": (
+        "removed (tool archived); use kind: run_command with a full shell command "
+        "(e.g. npm install, npm run build)"
+    ),
+    "mvn_exec": (
+        "removed (tool archived); use kind: run_command with a full shell command "
+        "(e.g. mvn -q -DskipTests compile)"
+    ),
+}
 _VAR_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _TEMPLATE_VAR_RE = re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
 
@@ -322,32 +332,11 @@ def _exec_step(
         }
         return _invoke_evolved_tool(paths, "tools/common/run_command/main.py", "run_command", payload)
 
-    if kind == "npm_exec":
-        args = step.get("args") or step.get("subcommand")
-        if isinstance(args, str):
-            args = [args]
-        if not isinstance(args, list) or not args:
-            return {"ok": False, "error": "npm_exec requires args array"}
-        payload = {
-            "args": [str(a) for a in args],
-            "working_dir": wd_rel,
-            "dry_run": dry_run,
-            "force_install": bool(step.get("force_install", True)),
+    if kind in _DEPRECATED_STEP_KINDS:
+        return {
+            "ok": False,
+            "error": f"step kind {kind!r} is {_DEPRECATED_STEP_KINDS[kind]}",
         }
-        return _invoke_evolved_tool(paths, "tools/common/npm_exec/main.py", "npm_exec", payload)
-
-    if kind == "mvn_exec":
-        args = step.get("args") or step.get("goals")
-        if isinstance(args, str):
-            args = [args]
-        if not isinstance(args, list) or not args:
-            return {"ok": False, "error": "mvn_exec requires args/goals array"}
-        payload = {
-            "args": [str(a) for a in args],
-            "working_dir": wd_rel,
-            "dry_run": dry_run,
-        }
-        return _invoke_evolved_tool(paths, "tools/common/mvn_exec/main.py", "mvn_exec", payload)
 
     return {"ok": False, "error": f"unsupported step kind: {kind}"}
 

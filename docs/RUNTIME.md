@@ -466,6 +466,8 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 | `CONTEXT_COMPACT_RATIO` | `0.85` | 自动压缩触发比例 |
 | `CONTEXT_KEEP_TURNS` | `8` | 保留最近完整 **轮次**（1 轮 ≈ user + assistant 含 tool） |
 | `CONTEXT_DIGEST_MAX_CHARS` | `8000` | 单次摘要写入上限（字符） |
+| `CONTEXT_SUMMARIZE_TIMEOUT_SEC` | `180` | digest 摘要 LLM 独立超时（BUG-023 · T-2092） |
+| `CONTEXT_PAYLOAD_TRIM_RATIO` | `0.70` | 压缩后仍过大时截短 tool payload 的阈值比例（T-2094） |
 
 ### 8.2 压缩步骤
 
@@ -496,6 +498,20 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 | **新会话** | 你要彻底换目标/清空现场 |
 
 用户说「记住」→ 走 proposal（§9），与压缩独立。
+
+### 8.4 与回合超时 / 墙钟的交互（已知缺口 · BUG-023）
+
+> **2026-08-05** · [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · 修复任务 T-2092～T-2094
+
+| 项 | 现状 | 目标（已决） |
+|----|------|--------------|
+| 摘要 LLM | ~~在 tool 循环内同步调用；**不**暂停 `TURN_WALL_SEC`~~ | **done（T-2092）** — 摘要期间 `pause_wall` |
+| 摘要超时 | ~~共用 `LLM_TIMEOUT_SEC`（120s）~~ | **done（T-2092）** — `CONTEXT_SUMMARIZE_TIMEOUT_SEC` 默认 180s |
+| 压缩后 payload | `KEEP_TURNS=8` 按轮数；tool 正文可仍很大 | **done（T-2094）** — ≥70% 时截短 tool payload（不改磁盘） |
+| 压缩后主 LLM | 仍 `reasoning_effort=high` + 120s 整请求超时 | **done（T-2093）** — 专用 notice；**不**静默改 effort（R6 废止） |
+| UI | 凡 `finish_reason=timeout` →「回合超时已停止」 | **done（T-2093）** — 区分「LLM 请求超时已停止」 |
+
+**产品说明**：Token 指示器显示的是**当前**待发 payload；达 85% 触发压缩时可能已接近上限，压缩后指示器会下降，**不**表示「未触顶故不应压缩」。
 
 ---
 

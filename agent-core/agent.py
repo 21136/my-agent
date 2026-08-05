@@ -604,6 +604,8 @@ class Agent:
     on_turn_event: Any | None = field(default=None, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _cancel_finish_reason_fn: Callable[[], str | None] | None = field(default=None, repr=False)
+    _pause_turn_wall: Callable[[], None] | None = field(default=None, repr=False)
+    _resume_turn_wall: Callable[[], None] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         setter = getattr(self.llm, "set_cancel_event", None)
@@ -620,6 +622,24 @@ class Agent:
 
     def bind_cancel_finish_reason(self, resolver: Callable[[], str | None]) -> None:
         self._cancel_finish_reason_fn = resolver
+
+    def bind_turn_wall_hooks(
+        self,
+        pause: Callable[[], None] | None,
+        resume: Callable[[], None] | None,
+    ) -> None:
+        self._pause_turn_wall = pause
+        self._resume_turn_wall = resume
+
+    def _compact_summarize_wall_begin(self) -> None:
+        pause = self._pause_turn_wall
+        if callable(pause):
+            pause()
+
+    def _compact_summarize_wall_end(self) -> None:
+        resume = self._resume_turn_wall
+        if callable(resume):
+            resume()
 
     def _interrupt_finish_reason(self) -> str:
         if self.cancel_event.is_set():
@@ -864,12 +884,14 @@ class Agent:
         from context import (
             FIRST_COMPACT_USER_MESSAGE,
             build_llm_messages,
+            build_llm_messages_with_optional_trim,
             load_context_config,
             maybe_auto_compact,
             session_memory_event,
             should_auto_compact,
         )
         from loader import build_system_prompt
+        from llm_client import load_config
 
         tool_rounds = 0
         segment_retried = False
@@ -916,7 +938,13 @@ class Agent:
                         "text": "正在压缩对话摘要…",
                     }
                 )
-            compact_result = maybe_auto_compact(self.session, system, self.llm)
+            compact_result = maybe_auto_compact(
+                self.session,
+                system,
+                self.llm,
+                on_summarize_begin=self._compact_summarize_wall_begin,
+                on_summarize_end=self._compact_summarize_wall_end,
+            )
             if compact_result and compact_result.compacted:
                 self._emit_turn_event(
                     {
@@ -935,7 +963,23 @@ class Agent:
                         }
                     )
                 self._emit_turn_event(session_memory_event(self.session))
-            working = build_llm_messages(self.session)
+            if compact_result and compact_result.compacted:
+                working, trimmed = build_llm_messages_with_optional_trim(
+                    self.session,
+                    system,
+                    model,
+                    force_trim=True,
+                )
+                if trimmed:
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "info",
+                            "text": "压缩后上下文仍较大，已截短 tool 输出以便续聊。",
+                        }
+                    )
+            else:
+                working = build_llm_messages(self.session)
 
             if recall_soft_reminder and not recall_injected:
                 self.session.append_message(
@@ -944,7 +988,9 @@ class Agent:
                 recall_injected = True
 
             try:
-                if getattr(self.executor.session, "segment_failure_budget_hit", False):
+                if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
+                    self.executor.session, "inline_write_guard_blocked", False
+                ):
                     tools_payload = None
                 self._emit_turn_event({"type": "llm.pending"})
                 response = self.llm.chat(
@@ -984,7 +1030,7 @@ class Agent:
                 return ToolLoopSegmentResult(
                     final_text="",
                     tool_rounds=tool_rounds,
-                    finish_reason="timeout",
+                    finish_reason="error",
                     exceeded=False,
                     had_progress=segment_messages_show_progress(
                         self.session.messages,
@@ -994,6 +1040,14 @@ class Agent:
                     action_announce_nudge_injected=action_nudge_injected,
                 )
             except LLMTimeoutError:
+                timeout_sec = int(load_config().timeout_sec)
+                self._emit_turn_event(
+                    {
+                        "type": "turn.notice",
+                        "level": "warn",
+                        "text": f"LLM 请求超时（{timeout_sec}s），本回合已停止。",
+                    }
+                )
                 return ToolLoopSegmentResult(
                     final_text="",
                     tool_rounds=tool_rounds,
@@ -1150,6 +1204,27 @@ class Agent:
                             "type": "turn.notice",
                             "level": "warn",
                             "text": "本段失败次数已达上限，请说明根因或换策略。",
+                        }
+                    )
+                    tools_payload = None
+                    break
+
+                # BUG-024: repeat inline_write_max → stop tools, force staging path.
+                if getattr(self.executor.session, "inline_write_guard_just_blocked", False):
+                    from exec_reliability import EXEC_INLINE_WRITE_NUDGE_MESSAGE
+
+                    self.executor.session.inline_write_guard_just_blocked = False
+                    self.session.append_message(
+                        {"role": "user", "content": EXEC_INLINE_WRITE_NUDGE_MESSAGE}
+                    )
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": (
+                                "内联写入多次超限，已停止工具；"
+                                "请改用 _staging + content_workspace_path"
+                            ),
                         }
                     )
                     tools_payload = None

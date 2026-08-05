@@ -133,7 +133,7 @@ LLM
 | `mvn_exec` | **archived** | → `run_command` |
 | `npm_exec` | **archived** | → `run_command` |
 | `jshell_exec` | **archived** | 原 suspect |
-| `repl` | **suspect** | 出执行面；粘性会话另议 |
+| `repl` | **archived** | → `run_command`（T-4308 · IT-437） |
 | `pip_install` | active（晚半拍） | 仍可用 |
 | `run_python` | active（M1.5） | scaffold guard 仍依赖 |
 

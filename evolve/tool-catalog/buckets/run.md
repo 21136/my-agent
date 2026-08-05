@@ -27,7 +27,7 @@
 |------|------|
 | `mvn_exec` / `npm_exec` / `jshell_exec` | **`run_command`** |
 | `run_python` / `pip_install` | **`run_command`**（`python …` / `python -m pip install …`） |
-| `repl` | status=`suspect`（出执行面）；一次性表达式用 `run_command` |
+| `repl` | **archived** | → **`run_command`**（一次性 shell）；粘性 REPL 会话不再维护 |
 
 ## 注意
 

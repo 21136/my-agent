@@ -1,7 +1,7 @@
 # 体验打磨记录（UX-POLISH）
 
-> 版本 **0.2.1** · 2026-08-04  
-> 状态：`in-progress` — 壳合并后持续打磨；UX-001～022 多数 ✅；**第八轮 UX-021** · **第九轮 UX-022** done；第五～七轮见下文  
+> 版本 **0.2.4** · 2026-08-05  
+> 状态：`in-progress` — 壳合并后持续打磨；UX-001～025 多数 ✅；**第十三轮 UX-026** 文档已签 · 待实施；第五～十二轮见下文  
 > 关联：[DESKTOP.md](./DESKTOP.md) · [output-format.md](./output-format.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [TOOL-RETRY.md](./TOOL-RETRY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)
 
 ---
@@ -130,6 +130,74 @@
 
 ---
 
+## 2f. 第十一轮 · 侧栏底栏钉死 + 旧计划卡退役（**已决** · 2026-08-05）
+
+> 真源：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §6.2 · [DESKTOP.md](./DESKTOP.md)（项目侧栏脚注）。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-024 | draft 时「计划待确认」把底栏图标顶上去 | `#project-plan-card`（壳合并 compat 节点）在 `plan_status=draft` 时被 `updateCompatElements` 取消 `hidden`，插在 **图标栏下方** 占高；`sidebar-icon-bar` 无 `margin-top:auto`，底栏不钉视口 | **A**：compat 计划卡 **永不展示**（仅保留 DOM 供 `planConfirmBtn` 等事件绑定）；计划确认只走 `sidebar-change-banner` + header meta。**B**：`sidebar-footer` 包裹 change-banner + icon-bar，`margin-top:auto` 钉底 | `project-panel.ts` · `unified/index.ts` · `unified.css` | ✅ 2026-08-05 |
+
+### 验收（S-UX-024）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-024a | 绑定项目且 `plan_status=draft`、尚无 TASKS.md | 图标栏贴侧栏底；**不出现**「等待助手生成 TASKS.md」旧卡 |
+| S-UX-024b | `plan_overlay` + 待确认 | change-banner 在图标栏**上方**、同属 footer；图标栏仍在视口底 |
+| S-UX-024c | 侧栏 services 列表较长 | 中间 task-flow / services 滚动；footer 不被顶出视口 |
+
+---
+
+## 2g. 第十二轮 · 载入会话落底（**已决** · 2026-08-05）
+
+> 真源：[DESKTOP.md](./DESKTOP.md) §3（聊天区滚动）。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-025 | 打开项目 / 切换会话后停在聊天顶部 | `session.history` 全量 `innerHTML` 后只调 `scrollToBottomIfNear()`（距底 <50px 才滚）；载入时 `scrollTop=0` 不满足 | 接 `onHistoryLoaded`：`renderedPrints=[]` + `rAF` 强制 `scrollTop=scrollHeight`；流式阶段仍用 `scrollToBottomIfNear` 不抢用户上翻 | `unified/index.ts` | ✅ 2026-08-05 |
+
+### 验收（S-UX-025）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-025a | 顶栏或侧栏打开一条有多轮消息的会话 | 载入完成后视口在**最新**消息，无需手动下翻 |
+| S-UX-025b | 切换项目会话线 | 同上 |
+| S-UX-025c | 流式回复中用户手动滚到上方看历史 | 不强行拉回底部（`scrollToBottomIfNear` 仍生效） |
+
+---
+
+## 2h. 第十三轮 · 单项目态势侧栏（**已决 · 待实施** · 2026-08-05）
+
+> 真源：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§6.2.2**（SP-1～SP-10）。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-026 | 侧栏像「工具终端」：本回合证据列表、Services 常开、进度双轨、任务文案重复 | 本回合 `read_file`/`glob` 行占半屏；`12/89 未完成` 与 `77/89 完成 · 12 开放` 并存；当前任务与武装/本回合重复 | **单项目态势侧栏**：只展示当前项目；**当前**卡为 C 位；本回合 **一行摘要** 点跳主聊；Services **默认折叠**；进度 **一种说法**；待采纳 **堆叠** + 采纳 **闪绿** | `project-panel.ts` · `unified.css` · `index.ts` | ✅ M0 |
+
+### 验收（S-UX-026）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-026a | 绑定项目且有开放任务 | 侧栏见 **当前** 卡 + 一种进度文案；**无**本回合工具明细列表 |
+| S-UX-026b | 点击「本回合 · N 工具」摘要 | 主聊滚至对应回合并展开过程块 |
+| S-UX-026c | 默认进入侧栏 | Services **折叠**为一行；展开后列表不撑满半屏 |
+| S-UX-026d | 切换项目（▢ overlay 或 ▾，M1） | 侧栏整栏换为新项目态势；侧栏**无**多项目树 |
+| S-UX-026e | draft 待确认 | 待拍板槽显示；**无**图标栏下 compat 计划卡（与 S-UX-024a 一致） |
+| S-UX-026f | `plan_partner` 产出 **≥3** 条待采纳 | 侧栏 **体**内见 **「待采纳 · 3」** 堆叠；**仅 1 张顶卡**完整 + 按钮；其余 peek；采纳顶卡后下一张顶上 |
+| S-UX-026g | 采纳 **最后一条**（队列将空） | 堆叠位绿闪 ~1.5s 后，**脚区**出现「已采纳写入 …」+ 关闭；堆叠区消失 |
+| S-UX-026h | 采纳顶卡且 **仍有下一张** | **堆叠同槽** ~1.5s 绿闪「已采纳写入 …」（无按钮）；**无**脚区绿条；随后下一张升为顶卡 |
+| S-UX-026i | 忽略顶卡 | **无**绿闪；顶卡直接切换为下一张（或堆叠消失） |
+
+### 实施分期
+
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| M0 | 本回合摘要、进度单轨、Services 折叠、去掉 plan-channel 常驻 hint、待采纳堆叠（SP-9）、采纳堆叠位闪绿（SP-10） | **done** |
+| M1 | 项目 `▾` 最近项、待拍板/当前层级 CSS | todo |
+| M2 | 执行中 pulse、顶栏/侧栏头去重 | todo |
+
+---
+
 ## 3. 已完成
 
 | # | 日期 | 内容 |
@@ -145,6 +213,8 @@
 | 2026-07-29 | UX-009: 发送后状态栏反馈 "发送中…" |
 | 2026-07-29 | UX-010: 思考中计时（每秒更新 "思考中…（Ns）"） |
 | 2026-07-29 | UX-011: 工具耗时显示（process 块 ✓/✗ + ms/s） |
+| 2026-08-05 | UX-024: 侧栏 footer 钉底；退役可见 `#project-plan-card`（draft 不再顶起图标栏） |
+| 2026-08-05 | UX-025: `session.history` 载入后强制滚到聊天底部 |
 
 ---
 

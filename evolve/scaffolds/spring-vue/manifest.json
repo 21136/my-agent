@@ -1,6 +1,6 @@
 {
   "id": "spring-vue",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Spring Boot + Vue 3 monorepo skeleton (Maven backend + Vite frontend)",
   "variables": {
     "project_name": {
@@ -27,23 +27,23 @@
         },
         {
           "id": "npm_install",
-          "kind": "npm_exec",
-          "args": ["install"],
+          "kind": "run_command",
+          "command": "npm install",
           "working_dir": "frontend",
           "optional": true
         },
         {
           "id": "verify_compile",
-          "kind": "mvn_exec",
-          "goals": ["-q", "-DskipTests", "compile"],
+          "kind": "run_command",
+          "command": "mvn -q -DskipTests compile",
           "working_dir": "backend",
           "evidence": "compile",
           "optional": true
         },
         {
           "id": "verify_frontend_build",
-          "kind": "npm_exec",
-          "args": ["run", "build"],
+          "kind": "run_command",
+          "command": "npm run build",
           "working_dir": "frontend",
           "evidence": "build_fe",
           "optional": true

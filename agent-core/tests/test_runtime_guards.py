@@ -197,6 +197,12 @@ class LlmTimeoutChainTests(unittest.TestCase):
         self.assertEqual(result.finish_reason, "timeout")
         self.assertEqual(result.assistant_text, "")
         self.assertFalse(any(event.get("type") == "error" for event in self.events))
+        notices = [
+            event.get("text", "")
+            for event in self.events
+            if event.get("type") == "turn.notice"
+        ]
+        self.assertTrue(any("LLM 请求超时" in text for text in notices))
         self.assertTrue(session_dir.is_dir())
 
     def test_run_line_emits_turn_end_with_timeout_reason(self) -> None:

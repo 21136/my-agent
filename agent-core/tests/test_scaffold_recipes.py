@@ -163,6 +163,54 @@ class ScaffoldRecipeTests(unittest.TestCase):
         with self.assertRaises(ScaffoldRecipeError):
             render_template_text("{{missing}}", {})
 
+    def test_it436_manifests_use_run_command_not_archived_exec(self) -> None:
+        """IT-436: recipe manifests must not reference archived npm_exec/mvn_exec kinds."""
+        live = AgentPaths.discover()
+        banned = frozenset({"npm_exec", "mvn_exec"})
+        for recipe_id in ("spring-vue", "fastapi-vue"):
+            manifest = load_recipe_manifest(live, recipe_id)
+            for phase in ("init", "deploy"):
+                for step in manifest.phase_steps(phase):
+                    kind = str(step.get("kind") or "")
+                    self.assertNotIn(
+                        kind,
+                        banned,
+                        f"{recipe_id} phase {phase} step {step.get('id')!r} uses {kind!r}",
+                    )
+                    if kind == "run_command":
+                        self.assertTrue(
+                            str(step.get("command") or "").strip(),
+                            f"{recipe_id} run_command step missing command",
+                        )
+
+    def test_it436_deprecated_step_kind_rejected(self) -> None:
+        with temporary_agent_paths() as paths:
+            _copy_spring_vue(paths)
+            manifest_path = paths.evolve / "scaffolds" / "spring-vue" / "manifest.json"
+            import json
+
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            steps = raw["phases"]["init"]["steps"]
+            steps.append(
+                {
+                    "id": "bad_npm",
+                    "kind": "npm_exec",
+                    "args": ["install"],
+                    "working_dir": "frontend",
+                }
+            )
+            manifest_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            result = run_scaffold_project(
+                paths,
+                recipe="spring-vue",
+                target_dir="workspace/bad-recipe",
+                dry_run=True,
+                stop_on_error=False,
+            )
+            bad = next(s for s in result["steps_run"] if s["id"] == "bad_npm")
+            self.assertFalse(bad.get("ok"))
+            self.assertIn("archived", str(bad.get("error") or "").casefold())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -417,7 +417,6 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 | 工具 | 目录 | 作用 |
 |------|------|------|
 | `write_text` | `tools/common/write_text/` | 写 workspace；无此工具则 LLM 只能读不能改 |
-| `append_text` | `tools/common/append_text/` | 向 workspace 文本文件追加内容（T-505） |
 | `copy_move` | `tools/common/copy_move/` | workspace 内复制/移动文件或目录（T-505） |
 | `move_to_trash` | `tools/common/move_to_trash/` | 移入 `_trash/` 软删除（T-505） |
 | `write_evolve` | `tools/common/write_evolve/` | 向 `evolve/tools/<scope>/<name>/` 写 `tool.toml` / `main.py`（T-508；进化落地） |
@@ -443,6 +442,8 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 | `git_snapshot` | `tools/coding/git_snapshot/` | 只读 git status + diff --stat |
 | `patch_file` | `tools/coding/patch_file/` | 行号/锚点文本补丁（agent 根；**仅改已有文件**） |
 
+> **换行（BUG-025 · fixed T-4252）**：find / line_range 落盘经 `write_utf8_text`（LF 规范化 · 无平台换行翻译）。大文件仍优先 `_staging` + `content_workspace_path`（8192 内联上限）。详见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md)。
+
 **data**（T-805，用户扩展主题）：
 
 | 工具 | 目录 | 作用 |
@@ -453,7 +454,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 | 区域 | 可用工具 | 说明 |
 |------|----------|------|
-| **agent root 内**（非 deny-list） | `write_text` / `append_text` / `copy_move` / `move_to_trash` / 多数 workflow·exec | `resolve_under_agent_for_write`；`allow_approve_all=true` 可 session `a` |
+| **agent root 内**（非 deny-list） | `write_text` / `patch_file` / `copy_move` / `move_to_trash` / `run_command` 等 active 工具 | `resolve_under_agent_for_write`；`allow_approve_all=true` 可 session `a` |
 | **deny-list** | — | `.git/`、`data/sessions/`、`.env`、`node_modules/`、`__pycache__/` 等硬拒 |
 | `evolve/tools/<scope>/<name>/` | **`write_evolve`** · **`git_clone`**（`target=evolve_tools`） | `write_evolve` 仅三件套；均 **无 `a`** |
 | `agent-core/`、`docs/` 等已有文件 | `patch_file`（及通用写工具） | `patch_file` 不能创建新路径 |
@@ -462,20 +463,31 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 详见 [WRITE-SCOPE.md](./WRITE-SCOPE.md)。
 
-### 8.2 项目构建工具（PROJECT-MODE §0d）
+### 8.2 项目构建（PROJECT-MODE §0d · T-4310 后）
 
-| 工具 | 目录参数 | 备注 |
-|------|----------|------|
-| `npm_exec` | **`working_dir`**（可用别名 `cwd`） | 读 `ENV.md` 的 package_manager；已有 `node_modules` 时默认拒 `install`（`force_install` 可覆盖） |
-| `mvn_exec` | **`working_dir`**（可用别名 `cwd`） | 读 `ENV.md` 的 `tools.mvn` |
+| 工具 | 参数 | 备注 |
+|------|------|------|
+| **`run_command`** | **`command`** + **`working_dir`**（可用别名 `cwd`） | 跑 `npm`/`mvn`/`python` 等；读 `ENV.md` 时 working_dir 指向 `workspace/<id>/…` |
+| **`repair_node_modules`** | **`working_dir`** | 依赖损坏时显式重装（勿手写删 `node_modules`） |
+| **`run_project_tests`** | **`working_dir`** · `suite` | 结构化测试 + Progress Gate `test` 证据 |
 
-示例（项目内前端）：
+示例（项目内前端 build）：
 
 ```json
-{ "tool_name": "npm_exec", "arguments": { "working_dir": "workspace/<id>/frontend", "args": ["run", "build"] } }
+{
+  "tool_name": "run_command",
+  "arguments": {
+    "working_dir": "workspace/<id>/frontend",
+    "command": "npm run build"
+  }
+}
 ```
 
-项目模式下 **禁止** 用 `repl` 跑 `npm`/`pnpm`/`yarn`/`mvn`/`gradle`（executor 硬拒）。详见 [PROJECT-MODE.md](./PROJECT-MODE.md) §0d。
+已有 `node_modules` 时默认拒 `npm install`（E9 · `force_install:true` 可覆盖）。详见 `agent-core/project_npm_guard.py`。
+
+`npm_exec` / `mvn_exec` / `repl` 等已 **archived** — 见 [ARCHIVED-TOOLS.md](./ARCHIVED-TOOLS.md)。
+
+项目模式下 **禁止** 用 archived `repl` 跑包管理（executor E8 硬拒；须 `run_command`）。详见 [PROJECT-MODE.md](./PROJECT-MODE.md) §0d。
 
 **进化新工具闭环**：`记住`（可选 `tool_suggestion`）→ **`write_evolve` 先 `main.py` 再 `tool.toml`**（`status: active` 时 `write_evolve` 校验 `main.py` 已存在）→ **`tool.toml` 写盘前经 `parse_tool_manifest` 预检**（非法清单拒绝写入，避免 `ToolRegistry.load()` 启动失败）→ 成功写入 `tool.toml` 后**同会话内自动重载 registry**（新 `active` 工具立即可 `run_evolved`）。`registry` 仅对 `active`/`staged` 要求 entry script；`draft` 可仅有清单。多行或含 `"` 的正文优先 **`content_base64`**（UTF-8 标准 base64），避免 `tool_calls` JSON 转义失败；造工具时 **`on_conflict: overwrite`**。写完后建议 `git diff` + commit。
 
@@ -529,7 +541,6 @@ evolve/
 └── tools/
     ├── common/
     │   ├── write_text/
-    │   ├── append_text/
     │   ├── copy_move/
     │   └── move_to_trash/
     └── <topic>/<name>/

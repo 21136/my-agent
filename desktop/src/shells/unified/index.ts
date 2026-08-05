@@ -131,15 +131,11 @@ export function mountUnifiedShell(
     tasksDone: 0,
     tasksTotal: 0,
     tasksAllDone: false,
-    acceptanceCommand: "",
-    canVerify: false,
     planOverlay: null,
     projects: [],
     switchOverlay: null,
     switchInProgress: false,
     pendingPickerId: "",
-    verifyResult: null,
-    verifyRunning: false,
     overlayPanel: null,
     taskPhases: [],
     planBannerCollapsed: true,
@@ -188,9 +184,14 @@ export function mountUnifiedShell(
     currentSessionId: "",
     mainFocus: "chat",
     reviewFocusId: null,
+    servicesCollapsed: true,
+    suggestionAdoptFlash: null,
+    adoptedFooterMessage: null,
+    turnInProgress: false,
   };
 
-  let planReviewIndex = 0;
+  let suggestionAdoptFlashTimerId: number | null = null;
+  const ADOPT_FLASH_MS = 1500;
 
   let statusText = "连接中…";
   let cancelledStatusTimer: number | null = null;
@@ -223,6 +224,10 @@ export function mountUnifiedShell(
         renderChat();
         renderConfirmGlass();
         syncWorkingVisual();
+      },
+      onHistoryLoaded: () => {
+        renderedPrints = [];
+        scrollChatToBottom();
       },
       onTurnStart: (event) => {
         topbarState.intentLabel = event.intent_label;
@@ -316,23 +321,24 @@ export function mountUnifiedShell(
             <div class="sidebar-progress-bar-fill" id="sidebar-progress-fill" style="width:0%"></div>
           </div>
         </div>
-        <div class="sidebar-services" id="sidebar-services"></div>
         <div class="sidebar-task-flow" id="sidebar-task-flow"></div>
-        <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
-        <div class="sidebar-icon-bar" id="sidebar-icon-bar">
-          <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon">◎</span></button>
-          <button type="button" class="sidebar-icon-btn" data-panel="plan" title="完整计划"><span class="sidebar-icon">☰</span></button>
-          <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon">📄</span></button>
-          <button type="button" class="sidebar-icon-btn" data-panel="verify" title="验收" id="icon-btn-verify"><span class="sidebar-icon">✓</span></button>
-          <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
-            <span class="sidebar-icon">⎇</span>
-            <span class="sidebar-icon-badge" id="thread-count-badge">0</span>
-          </button>
-          <button type="button" class="sidebar-icon-btn" data-panel="projects" title="我的项目" id="icon-btn-projects">
-            <span class="sidebar-icon">▢</span>
-            <span class="sidebar-icon-badge" id="project-count-badge">0</span>
-          </button>
-          <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
+        <div class="sidebar-services" id="sidebar-services"></div>
+        <div class="sidebar-footer" id="sidebar-footer">
+          <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
+          <div class="sidebar-icon-bar" id="sidebar-icon-bar">
+            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon">◎</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="完整计划"><span class="sidebar-icon">☰</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon">📄</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
+              <span class="sidebar-icon">⎇</span>
+              <span class="sidebar-icon-badge" id="thread-count-badge">0</span>
+            </button>
+            <button type="button" class="sidebar-icon-btn" data-panel="projects" title="我的项目" id="icon-btn-projects">
+              <span class="sidebar-icon">▢</span>
+              <span class="sidebar-icon-badge" id="project-count-badge">0</span>
+            </button>
+            <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
+          </div>
         </div>
         <div class="sidebar-overlay hidden" id="sidebar-overlay">
           <div class="sidebar-overlay-header">
@@ -349,7 +355,6 @@ export function mountUnifiedShell(
         <div class="hidden" id="project-sidebar-tabs"></div>
         <div class="hidden" id="project-panel-tasks"></div>
         <div class="hidden" id="project-panel-map"></div>
-        <div class="hidden" id="project-verify-card"><div id="project-verify-title"></div><pre id="project-verify-command"></pre><button id="project-verify-run"></button><pre id="project-verify-result"></pre></div>
       </aside>
       <div class="unified-main">
         <header class="unified-topbar" id="unified-topbar"></header>
@@ -547,6 +552,7 @@ export function mountUnifiedShell(
   // ---- visual sync ----
   function syncWorkingVisual(): void {
     const working = chat.isWorking();
+    projectState.turnInProgress = working;
     shellEl.classList.toggle("is-working", working);
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
@@ -1050,20 +1056,6 @@ export function mountUnifiedShell(
         setStatus(`刷新失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    onRunVerify: () => {
-      if (!projectState.canVerify || projectState.verifyRunning) return;
-      projectState.verifyRunning = true;
-      projectState.verifyResult = null;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      setStatus("运行验收…");
-      try {
-        client.runProjectVerify();
-      } catch (err) {
-        projectState.verifyRunning = false;
-        setStatus(`验收失败：${err instanceof Error ? err.message : String(err)}`);
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      }
-    },
     onNewThread: () => {
       handleNewThread();
     },
@@ -1184,9 +1176,38 @@ export function mountUnifiedShell(
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
 
+  function clearAdoptFlashTimer(): void {
+    if (suggestionAdoptFlashTimerId !== null) {
+      window.clearTimeout(suggestionAdoptFlashTimerId);
+      suggestionAdoptFlashTimerId = null;
+    }
+  }
+
+  function finishAdoptFlash(showFooter: boolean): void {
+    const msg = projectState.suggestionAdoptFlash;
+    projectState.suggestionAdoptFlash = null;
+    clearAdoptFlashTimer();
+    if (showFooter && msg) {
+      projectState.adoptedFooterMessage = msg;
+    }
+    afterSuggestionQueueChanged();
+  }
+
+  function startAdoptFlash(message: string, showFooterAfter: boolean): void {
+    clearAdoptFlashTimer();
+    projectState.suggestionAdoptFlash = message;
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    suggestionAdoptFlashTimerId = window.setTimeout(() => {
+      finishAdoptFlash(showFooterAfter);
+    }, ADOPT_FLASH_MS);
+  }
+
   function acceptSuggestionById(sid: string): void {
-    projectState.suggestions = projectState.suggestions.filter((s) => s.id !== sid);
-    if (!projectState.suggestions.some((s) => Boolean(s.action))) {
+    if (projectState.suggestionAdoptFlash) return;
+    const remaining = projectState.suggestions.filter((s) => s.id !== sid);
+    const moreAfter = remaining.some((s) => Boolean(s.action));
+    projectState.suggestions = remaining;
+    if (!moreAfter) {
       projectState.partnerNotices = [];
     }
     try {
@@ -1194,7 +1215,7 @@ export function mountUnifiedShell(
     } catch {
       /* ignore */
     }
-    afterSuggestionQueueChanged();
+    startAdoptFlash("已采纳写入 TASKS.md", !moreAfter);
   }
 
   function ignoreSuggestionById(sid: string): void {
@@ -1208,6 +1229,23 @@ export function mountUnifiedShell(
       /* ignore */
     }
     afterSuggestionQueueChanged();
+  }
+
+  function jumpToCurrentTurnProcess(): void {
+    const blocks = chat.model.blocks;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind !== "process") continue;
+      if (block.collapsed) {
+        chat.toggleProcessCollapsed(block.turnKey);
+      }
+      requestAnimationFrame(() => {
+        const el = chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${block.turnKey}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    scrollChatToBottom();
   }
 
   function handlePlanReviewAction(action: string, target: HTMLElement): void {
@@ -1608,6 +1646,13 @@ export function mountUnifiedShell(
     if (distFromBottom < 50) {
       chatEl.scrollTop = chatEl.scrollHeight;
     }
+  }
+
+  /** UX-025: after session.history — always land on latest messages. */
+  function scrollChatToBottom(): void {
+    requestAnimationFrame(() => {
+      chatEl.scrollTop = chatEl.scrollHeight;
+    });
   }
 
   function doRender(): void {
@@ -2022,6 +2067,11 @@ export function mountUnifiedShell(
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
+    if (action === "toggle-services") {
+      projectState.servicesCollapsed = !projectState.servicesCollapsed;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
     if (action === "services-refresh") {
       refreshServices();
       return;
@@ -2050,14 +2100,39 @@ export function mountUnifiedShell(
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   });
 
-  // Decision surface: open full plan overlay
+  // Decision surface: plan overlay + suggestion stack + turn summary
   projectEls.taskFlow.addEventListener("click", (ev) => {
-    const openPlan = (ev.target as HTMLElement).closest<HTMLElement>("[data-action='open-full-plan']");
-    if (!openPlan) return;
-    openPlanFull();
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (btn?.dataset.action) {
+      switch (btn.dataset.action) {
+        case "open-full-plan":
+          openPlanFull();
+          return;
+        case "jump-turn-process":
+          jumpToCurrentTurnProcess();
+          return;
+        case "accept-suggestion": {
+          const sid = btn.dataset.suggestionId;
+          if (sid) acceptSuggestionById(sid);
+          return;
+        }
+        case "review-suggestion": {
+          const sid = btn.dataset.suggestionId;
+          openPlanReview(sid);
+          return;
+        }
+        case "ignore-suggestion": {
+          const sid = btn.dataset.suggestionId;
+          if (sid) ignoreSuggestionById(sid);
+          return;
+        }
+        default:
+          break;
+      }
+    }
   });
 
-  // Overlay: project search + list + switch confirm + verify
+  // Overlay: project search + list + switch confirm
   projectEls.overlayBody.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement;
 
@@ -2129,12 +2204,6 @@ export function mountUnifiedShell(
         projectState.newDocName = "";
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
       }
-      return;
-    }
-
-    // Verify run button
-    if (target.closest("#overlay-verify-run")) {
-      projectCallbacks.onRunVerify();
       return;
     }
   });
@@ -2268,6 +2337,7 @@ export function mountUnifiedShell(
         return;
       case "dismiss-partner-notice":
         projectState.partnerNotices = [];
+        projectState.adoptedFooterMessage = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
@@ -2486,7 +2556,6 @@ export function mountUnifiedShell(
   projectEls.switchCancelBtn.addEventListener("click", () => projectCallbacks.onProjectSwitchCancel());
   projectEls.planConfirmBtn.addEventListener("click", () => { void projectCallbacks.onPlanConfirm(); });
   projectEls.planEditBtn.addEventListener("click", () => { void projectCallbacks.onPlanEdit(); });
-  projectEls.verifyRunBtn.addEventListener("click", () => projectCallbacks.onRunVerify());
 
   // ---- server events ----
   const off = client.onEvent((event: ServerEvent) => {
@@ -2756,25 +2825,6 @@ export function mountUnifiedShell(
         client.refreshProject();
         break;
 
-      case "project.verify.done": {
-        projectState.verifyRunning = false;
-        const passed = Boolean(event.passed);
-        const lines = [
-          passed ? "验收通过" : "验收未通过",
-          event.exit_code !== undefined
-            ? `退出码 ${event.exit_code}（期望 ${event.expected_exit_code ?? 0}）`
-            : "",
-          event.error ? `错误：${event.error}` : "",
-          event.stdout ? `stdout:\n${event.stdout}` : "",
-          event.stderr ? `stderr:\n${event.stderr}` : "",
-        ].filter(Boolean);
-        projectState.verifyResult = { passed, text: lines.join("\n\n") };
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        setStatus(passed ? "验收通过" : "验收未通过");
-        client.refreshProject();
-        break;
-      }
-
       case "project.task.toggle.error":
         // Rollback optimistic toggle
         projectState.taskPhases = parseTasksMarkdown(projectState.tasksMarkdown);
@@ -2902,11 +2952,6 @@ export function mountUnifiedShell(
         break;
 
       case "error":
-        if (projectState.verifyRunning) {
-          projectState.verifyRunning = false;
-          projectState.verifyResult = { passed: false, text: event.message };
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        }
         if (projectState.servicesLoading) {
           projectState.servicesLoading = false;
           projectState.servicesError = event.message;

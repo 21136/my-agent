@@ -1,6 +1,6 @@
 [tool]
 name = "run_service"
-description = """托管长驻进程（dev server / spring-boot:run 等）。勿用 mvn_exec/npm_exec/repl 跑会挂起的服务——它们有超时并会杀子进程。
+description = """托管长驻进程（dev server / spring-boot:run 等）。勿用 `run_command` 前台跑会挂起的命令（有超时）；本工具或 `run_command` + `background:true`。
 
 actions:
 - start — 后台启动；可选 ready_regex / ready_port 等到就绪再返回

@@ -2,18 +2,28 @@
 
 ### 文档
 
+- **BUG-025 fixed**：`patch_file` / `write_text` LF 规范化（`write_utf8_text`）· huiyi views S-99 normalize；见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) · T-4252～4255 · IT-99
+- **BUG-024 fixed**：重复 `inline_write_max` ≥2 → 停 tool + staging 内核（`MY_AGENT_INLINE_WRITE_GUARD_MAX`）；见 [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) · T-4242～4243 · IT-98
+- **BUG-023**：自动压缩后主循环 LLM 超时（「思考中…」→「回合超时已停止」）— 根因 · 规避 · R1～R7；见 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · RUNTIME §8.4 · RUNTIME-GUARDS G15 · T-2091～2094
 - **AGENT-HARNESS / Phase 41**：同一 API 下失败多的 harness 对齐路线（P1～P5；低→高实施）；见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)
 - **OUTPUT-FORMAT / UX-022**：主聊 assistant 正文格式（禁止假思考、内部字段泄露）；见 [output-format.md](./output-format.md) · `core.txt` §Style
 - **DESKTOP §3.2.2 / UX-023**：过程块工具行 >6 折叠「更早 N 个」（**2026-08-04**）；不引入聊天 sticky
+- **PROJECT-SIDEBAR §6.2.1 / UX-024**：侧栏 footer 钉底；退役可见 `#project-plan-card`（**2026-08-05**）
+- **DESKTOP / UX-025**：`session.history` 载入后聊天区强制落底（**2026-08-05**）
+- **UX-026 M0**（2026-08-05）：单项目态势侧栏 — 进度单轨、本回合一行摘要跳主聊、Services 默认折叠、待采纳体区堆叠、采纳闪绿 + 脚区末条反馈
 - **DESKTOP §3.2.2 / UX-021**：思考块对齐 Cursor Thought accordion（**2026-08-04 已实施**）
 - **EXEC-OBSERVABILITY**：失败 `logs_tail` 改为默认合上（配合 UX-021）
 
 ### 代码
 
+- **BUG-025 / T-4252～4255**：`evolve_tool_io.normalize_newlines` + `write_utf8_text`；`patch_file` find/line_range · `write_text` 落盘；IT-99 · huiyi `views/*.vue` S-99 normalize；提示词 `core.txt` · `coding.md` · `project.md` · `buckets/write.md`
+- **BUG-023 / T-2092～2094**：压缩摘要 `pause_wall` + `CONTEXT_SUMMARIZE_TIMEOUT_SEC=180`；post-compact tool payload 截短；`LLMTimeoutError` 专用 notice；桌面「LLM 请求超时已停止」（不静默改 reasoning effort）
 - **Phase 41 P1**：扁平原语 proxy — `run_command` · `write_text` · `patch_file`（`tool_proxies.py` · IT-410）
 - **Phase 41 P2**：项目模式 `parent_execute_segment_max` 默认 15（IT-411）
 - **Phase 41 P4**：失败 tool 结果 spill（与成功对称 · IT-412）
 - **Phase 41 P5**：段内失败预算（默认 3）+ 静默 `[guard] 失败分型` 主聊 notice（IT-413）
+- **UX-024**：侧栏 `sidebar-footer` 钉底；`#project-plan-card` compat 不再展示（draft 不顶起图标栏）
+- **UX-025**：`onHistoryLoaded` 后强制滚到聊天底部（打开/切换会话不再停在顶部）
 
 ---
 

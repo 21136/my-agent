@@ -508,6 +508,66 @@ def load_safety_prompt(evolve_dir: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+SUBAGENT_PROMPTS_DIR = Path("subagents")
+TOOL_WORKSHOP_REL = Path("prompts") / "tool_workshop.md"
+
+_TOOL_WORKSHOP_FALLBACK = """# 工具工坊（Tool Workshop）
+
+你在工具工坊会话：沉淀可复用、够广的 evolved 工具。
+先查 evolve/tool-catalog/INDEX.md 能否用现有工具覆盖；能则不新建。
+写文件只用 write_evolve（先 main.py 再 tool.toml，status=draft）；细则见 buckets/evolve.md。
+验收：验收 <name>；PASS 后改 active + INDEX。"""
+
+
+def load_evolve_prompt_file(evolve_dir: Path, relative: str, *, fallback: str) -> str:
+    path = evolve_dir / relative
+    if path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except OSError:
+            pass
+    return fallback
+
+
+def load_subagent_prompt(
+    evolve_dir: Path,
+    name: str,
+    *,
+    fallback: str,
+    extra: str | None = None,
+) -> str:
+    base = load_evolve_prompt_file(
+        evolve_dir, f"subagents/{name}.md", fallback=fallback
+    )
+    if extra:
+        return f"{base}\n\n---\n\n{extra}"
+    return base
+
+
+def is_project_bound(session: Session) -> bool:
+    """True when session has both project_id and project_root (TOOL-WORKSHOP §4.1)."""
+    pid = (session.meta.project_id or "").strip()
+    if not pid:
+        return False
+    root = (session.meta.project_root or "").strip()
+    if not root:
+        return False
+    return True
+
+
+def is_workshop_eligible(session: Session) -> bool:
+    """Non-project-bound sessions receive tool_workshop overlay (W3)."""
+    return not is_project_bound(session)
+
+
+def load_tool_workshop_prompt(evolve_dir: Path) -> str:
+    return load_evolve_prompt_file(
+        evolve_dir, str(TOOL_WORKSHOP_REL).replace("\\", "/"), fallback=_TOOL_WORKSHOP_FALLBACK
+    )
+
+
 def load_topic_prompt(
     evolve_dir: Path,
     topic_id: str,
@@ -680,7 +740,7 @@ def format_capability_hints(
         "[能力提示]",
         "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
         "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file` 优先扁平原语，"
-        "其余 evolved 经 `run_evolved`。",
+        "其余 evolved 经 `run_evolved`（`status=archived` 不可调，见 docs/ARCHIVED-TOOLS.md）。",
         "- 只读：read_file · list_dir · glob_file_search · grep（本地）；web_search · fetch_url（网络）",
         "- 写/改：write_text（新建）/ patch_file（改已有）；或 run_evolved → copy_move / move_to_trash；先试 dry_run",
         "- 执行：run_command（一次性 shell）；长驻 run_evolved → run_service 或 run_command background:true",
@@ -1016,6 +1076,9 @@ def build_system_prompt(
             evolve_dir, session.meta.topics, index=topic_index
         ):
             sections.append((f"topic_prompt:{topic_id}", prompt_text))
+
+        if is_workshop_eligible(session):
+            sections.append(("tool_workshop", load_tool_workshop_prompt(evolve_dir)))
 
         sections.append(
             (

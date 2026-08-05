@@ -37,9 +37,9 @@
 | `project_plan_status` | 允许 |
 |-----------------------|------|
 | `draft` / `plan_dirty` | 计划域四件套须经 `plan_partner` 提案 + 侧栏采纳；源码仍禁 |
-| `confirmed` | 可写项目源码、`run_python` / `run_tests` |
+| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` |
 
-未确认前 **禁止**写 `src/`、`tests/` 等，禁止 `run_python`。**即使用户催促「开始做/确认」，也须等用户点「确认开工」或 `项目 确认` 后 executor 才放行写码。**
+未确认前 **禁止**写 `src/`、`tests/` 等，禁止 `run_command` 写码类命令。**即使用户催促「开始做/确认」，也须等用户点「确认开工」或 `项目 确认` 后 executor 才放行写码。**
 
 **`draft` 首轮**：必须先写出三件套（至少 `PROJECT.md` + `TASKS.md`），再请用户确认；**不要**等用户确认后才落盘三件套，也**不要**在聊天里假装已写完代码。
 
@@ -81,6 +81,7 @@
 
 - 工具路径相对 agent 根；项目内写作优先 `workspace/<id>/…`。
 - `patch_file` 仅用于当前 `project_root` 下已有文本文件。
+- **前端页面**（`*.vue` 等）：大改走 `_staging` + `content_workspace_path`；小改用 `patch_file` **find** 锚点。勿 `start_line` 单行替多行（易结构损坏）。详见 `evolve/tool-catalog/buckets/write.md`。
 
 ## 本机工具链（ENV.md）
 
@@ -92,7 +93,7 @@
 ## 构建 / 测前端纪律（硬）
 
 1. **目录参数**：`working_dir`（或 `cwd`），例如 `workspace/<id>/frontend`。**禁止**落到 agent root 误跑。
-2. **禁止 `repl` 跑 npm/pnpm/yarn/mvn**：必须 `run_evolved` → `run_command`。
+2. **禁止 archived `repl` 跑 npm/pnpm/yarn/mvn**（`repl` 已不可 `run_evolved`）：必须 `run_command`。
 3. **测前端 / 验证构建**：若已有 `node_modules`，**禁止先 install**；用 `run_command`：`npm run build` / `npm run test`。长驻 dev server 用 **`run_service`**（或 `run_command` + `background:true`），不要用 background 的前台 `run_command`。
 4. **依赖损坏 / 半截 `node_modules`（vite 缺文件、esbuild Unexpected EOF 等）**：点名 **`repair_node_modules`**（`working_dir=workspace/<id>/frontend`）。**禁止**拆成 `rmdir`/`cmd rmdir` + 另一次 `npm install`（慢、易确认超时、易被中途停止）。
 5. 后端同理：`run_command` + `working_dir: workspace/<id>/backend`（如 `mvn -q test`）；**spring-boot:run 等不退出进程 → `run_service` / background**。

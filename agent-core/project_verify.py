@@ -403,27 +403,16 @@ def run_project_tests(
 
     started = time.perf_counter()
     result: dict[str, Any]
+    exec_wd_rel = paths.to_agent_relative(exec_cwd)
 
-    if argv[0] in {"npm", "pnpm", "yarn"} or (len(argv) > 1 and argv[0] == "npm"):
-        npm_args = argv[1:] if argv[0] == "npm" else argv
+    if argv[0] in {"npm", "pnpm", "yarn", "mvn"}:
         result = _invoke_evolved(
             paths,
-            "tools/common/npm_exec/main.py",
-            "npm_exec",
+            "tools/common/run_command/main.py",
+            "run_command",
             {
-                "args": npm_args,
-                "working_dir": wd_rel,
-                "timeout_sec": min(max(1, timeout_sec), _MAX_TIMEOUT),
-            },
-        )
-    elif argv[0] == "mvn":
-        result = _invoke_evolved(
-            paths,
-            "tools/common/mvn_exec/main.py",
-            "mvn_exec",
-            {
-                "args": argv[1:],
-                "working_dir": paths.to_agent_relative(exec_cwd),
+                "command": command_str,
+                "working_dir": exec_wd_rel,
                 "timeout_sec": min(max(1, timeout_sec), _MAX_TIMEOUT),
             },
         )

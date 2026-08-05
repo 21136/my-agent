@@ -49,8 +49,9 @@ def _read_text_lines(target: Path) -> list[str]:
 
 
 def _write_text_lines(target: Path, lines: list[str]) -> None:
-    with target.open("w", encoding="utf-8", newline="") as handle:
-        handle.writelines(lines)
+    from evolve_tool_io import write_utf8_text
+
+    write_utf8_text(target, "".join(lines))
 
 
 def _apply_find_patch(text: str, find: str, replacement: str) -> tuple[str, int]:
@@ -144,7 +145,9 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
         if has_range:
             _write_text_lines(target, new_lines)
         else:
-            target.write_text(new_text, encoding="utf-8")
+            from evolve_tool_io import write_utf8_text
+
+            write_utf8_text(target, new_text)
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -231,6 +234,26 @@ def _demo() -> None:
     assert anchor.ok and "GAMMA" in target.read_text(encoding="utf-8")
     print("[PASS] find patch")
 
+    crlf_path = paths.workspace / "_patch_crlf_demo.txt"
+    crlf_path.write_bytes(b"line1\r\nline2\r\n")
+    crlf_rel = "workspace/_patch_crlf_demo.txt"
+    for i in range(2):
+        step = run(
+            {
+                "tool_name": "patch_file",
+                "arguments": {
+                    "path": crlf_rel,
+                    "find": f"line{i + 1}",
+                    "replacement": f"LINE{i + 1}",
+                },
+                "dry_run": False,
+            },
+            registry=registry,
+        )
+        assert step.ok
+        assert b"\r\r" not in crlf_path.read_bytes()
+    print("[PASS] find patch on CRLF does not multiply carriage returns")
+
     dup = run(
         {
             "tool_name": "patch_file",
@@ -243,6 +266,7 @@ def _demo() -> None:
     print("[PASS] non-unique find rejected")
 
     target.unlink(missing_ok=True)
+    crlf_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

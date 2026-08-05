@@ -68,7 +68,7 @@ quality:
 | ID | 决议 | 状态 |
 |----|------|------|
 | **E7** | `npm_exec` / `mvn_exec`：接受别名 **`cwd` → `working_dir`**（两者都有时以 `working_dir` 为准） | **done** |
-| **E8** | **项目模式下禁止用 `repl` 跑包管理/构建**（检测 code 中的 `npm`/`pnpm`/`yarn`/`mvn`/`gradle` 等）：executor 硬拒，错误提示改走 `npm_exec` / `mvn_exec` + `working_dir` | **done** |
+| **E8** | **项目模式下禁止用 `repl` 跑包管理/构建**（检测 code 中的 `npm`/`pnpm`/`yarn`/`mvn`/`gradle` 等）：executor 硬拒，错误提示改走 **`run_command`** + `working_dir`（`repl` 已 archived） | **done** |
 | **E9** | `project.md` + `npm_exec` 硬拒：已有 `node_modules` 时默认拒 `install`（需 `force_install: true`）；纪律写明先 `run build`/`test` | **done** |
 | **E10** | `npm_exec`/`mvn_exec` 的 tool.toml + TOOLS：主参数 `working_dir`；文档说明 `cwd` 仅为别名 | **done** |
 
@@ -85,7 +85,7 @@ quality:
 | 场景 | 预期 |
 |------|------|
 | `npm_exec` 传 `cwd` 不传 `working_dir` | 等价于 `working_dir`，或明确错误「请用 working_dir」 |
-| 项目会话 `repl` 里 `subprocess…npm install` | `ok:false`，提示改用 `npm_exec` |
+| 项目会话 `repl` 里 `subprocess…npm install` | `ok:false`，提示改用 **`run_command`**（`repl` 已 archived） |
 | `workspace/<id>/frontend/node_modules` 已存在仍先 install | `npm_exec` `ok:false`，提示改 `run build` 或 `force_install` |
 | 正确 `npm_exec` + `working_dir` | 继续读 ENV.md 选二进制（E4） |
 
@@ -93,7 +93,7 @@ quality:
 
 | 层 | 文件 |
 |----|------|
-| evolved | `evolve/tools/common/npm_exec/main.py` · `mvn_exec/main.py` · 各自 `tool.toml` |
+| evolved | `agent-core/project_npm_guard.py` · `run_command` · E8 `executor.py` |
 | 硬门 | `agent-core/tools/executor.py` → `_validate_project_repl_build_bypass` |
 | 提示 | `evolve/prompts/project.md` |
 | 文档 | 本 § · [TOOLS.md](./TOOLS.md) §8.2 · [UX-POLISH.md](./UX-POLISH.md) 记录 |

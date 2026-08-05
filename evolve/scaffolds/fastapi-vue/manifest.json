@@ -1,6 +1,6 @@
 {
   "id": "fastapi-vue",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "FastAPI + Vue 3 monorepo skeleton (pip backend + Vite frontend)",
   "variables": {
     "project_name": {
@@ -30,8 +30,8 @@
         },
         {
           "id": "npm_install",
-          "kind": "npm_exec",
-          "args": ["install"],
+          "kind": "run_command",
+          "command": "npm install",
           "working_dir": "frontend",
           "optional": true
         },

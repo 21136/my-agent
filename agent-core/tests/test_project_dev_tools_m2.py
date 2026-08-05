@@ -12,6 +12,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from pip_install_policy import validate_pip_install_payload
 from tests.isolation_helpers import temporary_agent_paths
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
@@ -112,35 +113,49 @@ class DbQueryTests(unittest.TestCase):
 class PipInstallTests(unittest.TestCase):
     def test_it86_archived_module_still_validates(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/pip_install",)) as paths:
-            main_py = paths.evolve / "tools" / "common" / "pip_install" / "main.py"
-            mod = _load_mod(main_py, "pip_install_m2")
-            mod._agent_root = lambda: paths.agent_root  # type: ignore[method-assign]
-
             registry = ToolRegistry.load(paths)
             tool = registry.get_evolved("pip_install")
             self.assertIsNotNone(tool)
             self.assertEqual(tool.status, "archived")
 
-            dry = mod.run_pip_install({"packages": ["httpx"], "dry_run": True})
-            self.assertTrue(dry.get("ok"), dry)
-            self.assertTrue(dry.get("dry_run"))
-            self.assertIn("pip", " ".join(dry.get("command") or []))
+            def resolve_req(text: str) -> Path:
+                norm = text.strip().replace("\\", "/").lstrip("/")
+                return paths.resolve_under_agent(norm, must_exist=True)
 
-            bad = mod.run_pip_install({"packages": ["httpx; rm -rf /"]})
-            self.assertFalse(bad.get("ok"))
+            dry_cmd, dry_err = validate_pip_install_payload(
+                {"packages": ["httpx"], "dry_run": True},
+                resolve_requirements=resolve_req,
+            )
+            self.assertIsNone(dry_err)
+            assert dry_cmd is not None
+            self.assertIn("pip", " ".join(dry_cmd))
 
-            flag = mod.run_pip_install({"packages": ["--user"]})
-            self.assertFalse(flag.get("ok"))
+            _, bad_err = validate_pip_install_payload(
+                {"packages": ["httpx; rm -rf /"]},
+                resolve_requirements=resolve_req,
+            )
+            self.assertIsNotNone(bad_err)
 
-            missing = mod.run_pip_install({"requirements": "workspace/no-such-req.txt"})
-            self.assertFalse(missing.get("ok"))
+            _, flag_err = validate_pip_install_payload(
+                {"packages": ["--user"]},
+                resolve_requirements=resolve_req,
+            )
+            self.assertIsNotNone(flag_err)
+
+            _, missing_err = validate_pip_install_payload(
+                {"requirements": "workspace/no-such-req.txt"},
+                resolve_requirements=resolve_req,
+            )
+            self.assertIsNotNone(missing_err)
 
             req = paths.workspace / "requirements.txt"
             req.write_text("httpx==0.0.0\n", encoding="utf-8")
-            dry_req = mod.run_pip_install(
-                {"requirements": "workspace/requirements.txt", "dry_run": True}
+            req_cmd, req_err = validate_pip_install_payload(
+                {"requirements": "workspace/requirements.txt", "dry_run": True},
+                resolve_requirements=resolve_req,
             )
-            self.assertTrue(dry_req.get("ok"), dry_req)
+            self.assertIsNone(req_err)
+            assert req_cmd is not None
 
             # Archived: executor rejects even with allowlist + confirm.
             confirms: list[str] = []

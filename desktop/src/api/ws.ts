@@ -697,10 +697,6 @@ export class AgentWsClient {
     this.send({ type: "project.plan.ignore_suggestion", suggestion_id: suggestionId });
   }
 
-  runProjectVerify(): void {
-    this.send({ type: "project.verify" });
-  }
-
   switchProject(
     projectId: string,
     options?: { confirm?: boolean; requestId?: string },
