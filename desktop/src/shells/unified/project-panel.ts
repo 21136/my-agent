@@ -139,7 +139,12 @@ export interface ProjectPanelState {
   servicesCollapsed: boolean;
   suggestionAdoptFlash: string | null;
   adoptedFooterMessage: string | null;
+  adoptPendingId: string | null;
   turnInProgress: boolean;
+  deliveryProfile: string;
+  reviewVerdict: string | null;
+  reviewBlockersCount: number;
+  reviewProgressBlocked: boolean;
 }
 
 export interface ProjectPanelCallbacks {
@@ -192,8 +197,13 @@ function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
   return out;
 }
 
-function renderTopSuggestionCard(s: PlanSuggestion, reviewFocusId: string | null): string {
-  const acceptLbl = acceptLabel(s);
+function renderTopSuggestionCard(
+  s: PlanSuggestion,
+  reviewFocusId: string | null,
+  adoptPendingId: string | null,
+): string {
+  const isPending = adoptPendingId === s.id;
+  const acceptLbl = isPending ? "采纳中…" : acceptLabel(s);
   const diffRaw =
     s.payload && typeof s.payload.diff === "string" ? s.payload.diff.trim() : "";
   const stats = diffRaw ? diffStats(diffRaw) : "";
@@ -208,7 +218,7 @@ function renderTopSuggestionCard(s: PlanSuggestion, reviewFocusId: string | null
     ${statsLine}
     <div class="sidebar-suggestion-actions">
       <button type="button" class="unified-btn" data-action="review-suggestion" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
-      <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}">${escapeHtml(acceptLbl)}</button>
+      <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}"${isPending ? " disabled" : ""}>${escapeHtml(acceptLbl)}</button>
       <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}">忽略</button>
     </div>
   </div>`;
@@ -240,7 +250,7 @@ function renderSuggestionStack(state: ProjectPanelState): string {
     <div class="sidebar-suggestion-stack-deck">
       ${peek2}
       ${peek1}
-      ${renderTopSuggestionCard(actionable[0], state.reviewFocusId)}
+      ${renderTopSuggestionCard(actionable[0], state.reviewFocusId, state.adoptPendingId)}
     </div>
   </div>`;
 }
@@ -360,6 +370,24 @@ function renderDecisionSurface(state: ProjectPanelState): string {
   } else {
     html += `<p class="overlay-empty" style="padding:0.5rem 0;">未绑定项目 · 使用「项目 新建」</p>`;
   }
+  if (state.projectId && state.reviewVerdict) {
+    const verdict = state.reviewVerdict.toUpperCase();
+    const blockers =
+      state.reviewBlockersCount > 0
+        ? ` · ${state.reviewBlockersCount} blockers`
+        : "";
+    html += `<button type="button" class="sidebar-review-line" data-action="jump-review-summary">
+      <span class="sidebar-decision-label">审查</span>
+      <span class="sidebar-review-line-text">${escapeHtml(verdict)}${escapeHtml(blockers)}</span>
+    </button>`;
+  }
+  if (state.projectId && state.deliveryProfile) {
+    const profileLabel = state.deliveryProfile === "ritual" ? "ritual（严格）" : "solo（宽松）";
+    html += `<div class="sidebar-profile-line">
+      <span class="sidebar-decision-label">profile</span>
+      <span>${escapeHtml(profileLabel)}</span>
+    </div>`;
+  }
   if (state.projectId) {
     html += `<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看完整计划</button>`;
   }
@@ -367,6 +395,16 @@ function renderDecisionSurface(state: ProjectPanelState): string {
   html += renderSuggestionStack(state);
   html += renderTurnSummary(state);
   return html;
+}
+
+function renderReviewProgressBanner(state: ProjectPanelState): string {
+  if (!state.reviewProgressBlocked) return "";
+  const count = state.reviewBlockersCount > 0 ? ` · ${state.reviewBlockersCount} 项阻塞` : "";
+  return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">交付审查未通过</div>
+    <div class="sidebar-change-banner-changes">审查 verdict=fail${escapeHtml(count)}；ritual 模式下暂不可勾选 TASKS。请先修复 blocker 或重新审查。</div>
+    <button type="button" class="unified-btn" data-action="jump-review-summary" style="font-size:0.72rem;">查看审查摘要</button>
+  </div>`;
 }
 
 function planStatusLabel(state: ProjectPanelState): string {
@@ -807,6 +845,10 @@ export function applyProjectStateEvent(
   state.tasksDone = event.tasks_done ?? 0;
   state.tasksTotal = event.tasks_total ?? 0;
   state.tasksAllDone = Boolean(event.tasks_all_done);
+  state.deliveryProfile = event.delivery_profile ?? "solo";
+  state.reviewVerdict = event.review_verdict ?? null;
+  state.reviewBlockersCount = event.review_blockers_count ?? 0;
+  state.reviewProgressBlocked = Boolean(event.review_progress_blocked);
 
   // Diff old vs new to detect changes
   const oldPhases = state.taskPhases.length > 0 ? state.taskPhases : null;
@@ -1125,6 +1167,8 @@ export function renderProjectSidebar(
     </div>`;
   } else if (state.autoFixNotices.length > 0) {
     bannerHtml = renderAutoFixNotice(state.autoFixNotices);
+  } else if (state.reviewProgressBlocked) {
+    bannerHtml = renderReviewProgressBanner(state);
   } else if (state.detectedProject && !state.projectId) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到项目目录</div>

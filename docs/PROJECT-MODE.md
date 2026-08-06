@@ -1,7 +1,8 @@
 # 项目模式设计（PROJECT-MODE）
 
-> 版本 **0.3.2** · 2026-07-30  
+> 版本 **0.3.3** · 2026-08-06  
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
+> **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
 > 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · `TASKS.md` Phase 11/20/**21**/37 · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
 ---
@@ -190,6 +191,36 @@ quality:
 | **P8** 不注册 project 主题 | **维持**；F1 用壳态并入 scope，不引入主题 id |
 | **P17** 追加 coding | **维持** |
 | **P20** / TASK-STOP | F3 修复「勾选路径」后一停门重新有效；直写 TASKS 仍禁 |
+
+---
+
+## 0f. 本地交付模型（已决 · 2026-08-06）
+
+> 完整规格：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · 审查子代理：[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md)
+
+### 产品边界
+
+| ID | 决议 |
+|----|------|
+| **F1** | **本地-only**：agent root + `workspace/<id>/` 为交付载体；**非目标** Codex Cloud 式云沙箱与自动开 PR |
+| **F2** | **交付真源（栈-C）**：磁盘落盘 + 终端 build/test；项目外/敏感写才必经 Accept；**不是**任务归档 alone |
+| **F3** | **默认 `solo` profile** |
+| **F4** | 里程碑 **suggestion only**（LOCAL-DELIVERY-MODEL §5 · T-4714～4718） |
+| **F5** | **栈-D 服从栈-C** |
+
+### 与 Cursor / Claude / Codex
+
+对齐 **栈-B / 栈-C**（harness · Accept · 审批档位 · 终端真源）；差异化 **栈-D**（TASKS · 配方 · 里程碑 suggestion）。**不**抄 Codex Cloud 自动 PR。逐家映射与冲突消歧见 [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **§6.1～6.6**。
+
+### 实现锚点（里程碑提醒 · T-4714～4718 done）
+
+| 层 | 文件 |
+|----|------|
+| 检测 | `evaluate_milestone_after_archive` · `phase_open_count_visible` · `archive_done_count_for_phase` |
+| 提醒主载体 | `plan_agent._emit_milestone_review_if_needed` · `_suggestion(kind=milestone_review)` |
+| 去重 | `workspace/<id>/.plan-agent/state.json` · `milestone_review_reminders` · `phase_key` |
+| overlay | `milestone_review_suggested: <phase_key>` · `format_project_overlay` / `loader` |
+| 规格 | [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) §5.9 |
 
 ---
 

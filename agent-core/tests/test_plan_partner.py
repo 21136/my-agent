@@ -385,32 +385,49 @@ class PlanPartnerTests(unittest.TestCase):
         self.assertTrue(any("未改" in n or "未把" in n for n in state["partner_notices"]))
 
     def test_progress_brief_marks_complete_phases(self) -> None:
+        from pathlib import Path
+        import tempfile
+
         from plan_agent import _plan_progress_brief
 
+        archive = Path(tempfile.mkdtemp()) / "TASKS.archive.md"
+        archive.write_text(
+            "- Done one with enough text · closed:done · phase:Phase 1 — scaffold\n"
+            "- Partial done with enough text · closed:done · phase:Phase 4 — work\n",
+            encoding="utf-8",
+        )
         brief = _plan_progress_brief(
             "## Phase 1 — scaffold\n"
-            "- [x] Done one with enough text\n"
             "## Phase 4 — work\n"
-            "- [x] Partial done with enough text\n"
-            "- [ ] Open one with enough text\n"
+            "- [ ] Open one with enough text\n",
+            archive_path=archive,
         )
         self.assertIn("已完成", brief)
         self.assertIn("进行中", brief)
         self.assertIn("Phase 4", brief)
         self.assertIn("当前前沿 Phase: Phase 4", brief)
+        self.assertNotIn("空 Phase", brief)
 
     def test_progress_brief_flags_sandwich(self) -> None:
+        from pathlib import Path
+        import tempfile
+
         from plan_agent import _PLAN_SYSTEM, _plan_progress_brief
 
+        archive = Path(tempfile.mkdtemp()) / "TASKS.archive.md"
+        archive.write_text(
+            "- Done scaffold A with enough text · closed:done · phase:Phase 1 — scaffold\n"
+            "- Done scaffold B with enough text · closed:done · phase:Phase 1 — scaffold\n"
+            "- Done module item with enough text · closed:done · phase:Phase 2 — module\n",
+            encoding="utf-8",
+        )
         brief = _plan_progress_brief(
             "## Phase 1 — scaffold\n"
-            "- [x] Done scaffold A with enough text\n"
-            "- [x] Done scaffold B with enough text\n"
             "- [ ] Configure database connection verify\n"
             "## Phase 2 — module\n"
-            "- [x] Done module item with enough text\n"
             "## Phase 4 — later\n"
-            "- [ ] Next service item with enough text\n"
+            "- [ ] Next service item with enough text\n",
+            archive_path=archive,
         )
         self.assertIn("夹心", brief)
         self.assertIn("下一项被拽回", brief)
@@ -428,15 +445,23 @@ class PlanPartnerTests(unittest.TestCase):
         self.assertIn("TASKS.archive.md", _PLAN_SYSTEM)
 
     def test_progress_brief_flags_jump_and_empty(self) -> None:
+        from pathlib import Path
+        import tempfile
+
         from plan_agent import _plan_progress_brief
 
+        archive = Path(tempfile.mkdtemp()) / "TASKS.archive.md"
+        archive.write_text(
+            "- Stolen start with enough text · closed:done · phase:Phase 3 — late\n",
+            encoding="utf-8",
+        )
         brief = _plan_progress_brief(
             "## Phase 1 — early\n"
             "- [ ] Open A with enough text here\n"
             "- [ ] Open B with enough text here\n"
             "## Phase 2 — empty\n"
-            "## Phase 3 — late\n"
-            "- [x] Stolen start with enough text\n"
+            "## Phase 3 — late\n",
+            archive_path=archive,
         )
         self.assertIn("跳段", brief)
         self.assertIn("空 Phase", brief)

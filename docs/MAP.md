@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-04** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 42** 实现（H→J→I）· **Phase 43～45 M0 done** · **Phase 46 M1 done**（T-4604 S-461 todo）· WORKBENCH M1/M2 · UX 待评估项。  
+> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 47** S-470 · **Phase 48**（BUG-026/027）· **Phase 49** 子代理预算 · Phase 42 T-4213 · Phase 46 T-4604 · WORKBENCH M1/M2 · UX 待评估项。  
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -63,6 +63,11 @@
 | **Phase 44** | **项目结构化验证**（`run_project_tests` · 失败 file:line） | **M0+M1 done**（[PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · T-4400～4407；T-4408 S-441 todo） |
 | **Phase 45** | **项目质量与数据面**（迁移状态 · `run_quality` · deploy 配方） | **M0 done**（[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · T-4500～4503） |
 | **Phase 46** | **工具工坊提示词**（外置 subagent prompt · 非 project 注入 · defer 四维映射） | **M1 done**（[TOOL-WORKSHOP-PROMPTS.md](./TOOL-WORKSHOP-PROMPTS.md) · T-4601～4603 · T-4604 S-461 todo） |
+| **Phase 47** | **交付审查**（`deliverable_review` · `solo`/`ritual` profile · prompt registry） | **代码 done**（[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · T-4701～4712 · S-470 todo） |
+| **Phase 47+** | **本地交付模型**（栈-A/B/C/D · 源-L · LDM-1～9 · 里程碑） | **done**（[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **v0.3.3** · T-4714～4719 · T-4719 `_plan_progress_brief` archive 计完成度禁 `done_n` · S-472 手工 todo） |
+| **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **partial fixed**（T-4801～4803·4802·4810·4811 · IT-4804·4813 · S-480/S-481 手工） |
+| **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
+| **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
 | **WRITE-SCOPE** | 写操作扩到 agent root + deny-list | **done**（[WRITE-SCOPE.md](./WRITE-SCOPE.md)） |
 | **TOOL-RETRY** | 工具参数错误自修正一次 | **done**（[TOOL-RETRY.md](./TOOL-RETRY.md)） |
@@ -77,7 +82,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）部分条目已 **废止**（见 §2.2） |
-| **下一焦点** | Phase 24 收尾 · **Phase 42 H→J→I(M0)** · **Phase 43 M0 → 44 M0** · WORKBENCH M1/M2 |
+| **下一焦点** | Phase 24 收尾 · **Phase 47 S-470** · **Phase 48**（BUG-026/027）· **Phase 49** T-4901～4910 · Phase 42 T-4213 · Phase 46 T-4604 |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。**仍开放的可选债**：`T-601b` governance tool · `T-804` 外挂扩展 · `T-4103` 模型路由。
 
@@ -360,12 +365,17 @@ flowchart TD
 | `TURN_STALL_SEC` | 无 WS 事件自动停止（P1 defer） | `180` |
 | `WRITE_INLINE_MAX_CHARS` | 内联写入上限（Phase 16 T-1511 · [TURN-CONTROL.md](./TURN-CONTROL.md) §9.1） | `8192` |
 | `AUTO_DEMO_ON_WRITE_EVOLVE` | grow scaffold 写完 `tool.toml` 后自动 demo（T-1520） | `1` |
-| `SUBAGENT_CHECKER_MAX` | checker 子代理 tool 轮次上限（Phase 17） | `5` |
-| `CHECKER_SUMMARY_MAX_CHARS` | checker 摘要注入父 overlay 上限 | `3000` |
+| `SUBAGENT_CHECKER_MAX` | checker 子代理 tool 轮次上限 | `10` |
+| `CHECKER_SUMMARY_MAX_CHARS` | checker 摘要注入父 overlay 上限 | `3500` |
 | `CHECKER_AUTO_ON_SCAFFOLD` | grow scaffold 后自动 checker（M1 T-1620） | `0`（设 `1` 开启） |
 | `CHECKER_MODEL` | checker 模型覆盖（空=跟 session） | 空 |
 | `LLM_CONTEXT_LIMIT` | context 上限（可选覆盖） | flash `128000` / pro `1000000` |
-| `SUBAGENT_EXPLORE_MAX` | explore 子代理 tool 轮次上限 | `8` |
+| `SUBAGENT_EXPLORE_MAX` | explore 子代理 tool 轮次上限 | `16` |
+| `REVIEW_SUBAGENT_MAX_ROUNDS` | deliverable_review tool 轮 | `16` |
+| `PLAN_SUBAGENT_TOOL_ROUNDS` | plan_partner 查跑 loop | `4` |
+| `SUBAGENT_HARD_CAP` | 单次子代理绝对 tool 轮顶 | `32` |
+| `EXPLORE_BUILTIN_MAX_PER_TURN` | 父调 explore 每回合次数 | `2` |
+| `EXPLORE_CONTINUE_MAX_PER_TURN` | explore 满 cap 后每用户消息续跑次数 | `1` |
 | `SUBAGENT_SUMMARY_MAX_CHARS` | 子代理摘要注入父 overlay 上限 | `4000` |
 | `MY_AGENT_AUTO_EXPLORE` | execute/research 自动 spawn explore | `1`（`0` 关闭） |
 | `PARENT_SHORT_MAX` | **`turn_mode=ask`** 父循环 tool 轮次上限（T-907 后） | `5` |

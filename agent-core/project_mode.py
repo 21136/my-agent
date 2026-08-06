@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -19,6 +20,9 @@ from paths import AgentPaths
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
+ProjectDeliveryProfile = Literal["solo", "ritual"]
+DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
+VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
 VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
@@ -518,6 +522,133 @@ def archive_and_remove_task_line(
     }
 
 
+MILESTONE_PROJECT_COMPLETE_KEY = "project:complete"
+
+
+def phase_open_count_visible(
+    tasks_lines: list[str],
+    phase_title: str,
+    *,
+    exact: bool = True,
+) -> int:
+    """Count open checkboxes under *phase_title* (visible lines only).
+
+    Uses ``iter_tasks_lines_skipping_closed``. When *exact* is True (default),
+    the phase header must match *phase_title* exactly — not substring.
+    """
+    if not phase_title.strip():
+        return 0
+    visible = iter_tasks_lines_skipping_closed("\n".join(tasks_lines))
+    if not visible:
+        return 0
+    open_n = 0
+    for vis_i, (_orig_i, line) in enumerate(visible):
+        phase = _phase_title_at(visible, vis_i) or ""
+        if exact:
+            if phase != phase_title:
+                continue
+        elif phase_title.casefold() not in phase.casefold():
+            continue
+        if _TASK_OPEN_RE.match(line):
+            open_n += 1
+    return open_n
+
+
+def archive_done_count_for_phase(archive_path: Path, phase_title: str) -> int:
+    """Count archive entries with exact *phase* match and ``closed:done``."""
+    if not phase_title.strip():
+        return 0
+    n = 0
+    for entry in list_archive_entries(archive_path):
+        if entry.get("phase") != phase_title:
+            continue
+        if (entry.get("reason") or "done") != "done":
+            continue
+        n += 1
+    return n
+
+
+def phase_key_for_title(file_lines: list[str], phase_title: str) -> str:
+    """Stable milestone dedup key (LOCAL-DELIVERY-MODEL §5.6).
+
+    Prefer 1-based index among ``## `` headers → ``phase:N``; else
+    ``title:<sha1[:12]>`` of the casefolded title.
+    """
+    title = (phase_title or "").strip()
+    if not title:
+        digest = hashlib.sha1(b"").hexdigest()[:12]
+        return f"title:{digest}"
+    for idx, (_line_i, header) in enumerate(iter_phase_headers(file_lines), start=1):
+        if header == title:
+            return f"phase:{idx}"
+    digest = hashlib.sha1(title.casefold().encode("utf-8")).hexdigest()[:12]
+    return f"title:{digest}"
+
+
+def evaluate_milestone_after_archive(
+    *,
+    tasks_path: Path,
+    archive_path: Path,
+    phase: str,
+    reminded_phase_keys: frozenset[str] | set[str] | None = None,
+    dismissed_phase_keys: frozenset[str] | set[str] | None = None,
+) -> dict[str, Any]:
+    """Post-archive M1/M2 snapshot (LOCAL-DELIVERY-MODEL §5.3–5.4 · T-4714).
+
+  Does **not** spawn ``deliverable_review`` or write suggestions — callers
+  (``plan_agent.report_progress`` · T-4715) decide whether to remind.
+    """
+    reminded = frozenset(reminded_phase_keys or ())
+    dismissed = frozenset(dismissed_phase_keys or ())
+    file_lines = (
+        tasks_path.read_text(encoding="utf-8").splitlines()
+        if tasks_path.is_file()
+        else []
+    )
+    phase_title = (phase or "").strip()
+    open_after = phase_open_count_visible(file_lines, phase_title, exact=True)
+    archive_done = archive_done_count_for_phase(archive_path, phase_title)
+    stats = read_task_stats(tasks_path)
+
+    m1 = open_after == 0 and archive_done > 0
+    m2 = stats.total == stats.done and stats.done > 0
+
+    phase_key = phase_key_for_title(file_lines, phase_title) if phase_title else ""
+    blocked = phase_key in reminded or phase_key in dismissed
+    project_blocked = (
+        MILESTONE_PROJECT_COMPLETE_KEY in reminded
+        or MILESTONE_PROJECT_COMPLETE_KEY in dismissed
+    )
+
+    should_remind_m1 = m1 and bool(phase_key) and not blocked
+    should_remind_m2 = m2 and not project_blocked
+    should_remind = should_remind_m1 or should_remind_m2
+    if should_remind_m1 and should_remind_m2:
+        remind_scope = "phase_and_project"
+    elif should_remind_m2:
+        remind_scope = "project"
+    elif should_remind_m1:
+        remind_scope = "phase"
+    else:
+        remind_scope = ""
+
+    return {
+        "phase": phase_title,
+        "phase_key": phase_key,
+        "open_after": open_after,
+        "archive_done": archive_done,
+        "m1": m1,
+        "m2": m2,
+        "should_remind_m1": should_remind_m1,
+        "should_remind_m2": should_remind_m2,
+        "should_remind": should_remind,
+        "remind_scope": remind_scope,
+        "tasks_open": stats.open_count,
+        "tasks_done": stats.done,
+        "tasks_total": stats.total,
+    }
+
+
 def migrate_closed_sections_to_archive(paths: AgentPaths, project_id: str) -> int:
     """Move ## 已关闭 / Archive section tasks into TASKS.archive.md."""
     tasks_path = project_dir(paths, project_id) / "TASKS.md"
@@ -931,6 +1062,36 @@ def read_tasks_text_for_injection(tasks_path: Path | None) -> str:
         return ""
 
 
+def normalize_delivery_profile(value: Any) -> ProjectDeliveryProfile:
+    """Map CLI/meta values to solo|ritual (Phase 47 · DELIVERABLE-REVIEW §6)."""
+    raw = str(value or "").strip().casefold()
+    if raw in {"ritual", "strict", "严格"}:
+        return "ritual"
+    if raw in {"solo", "宽松", "relaxed"}:
+        return "solo"
+    if raw in VALID_PROJECT_DELIVERY_PROFILES:
+        return raw  # type: ignore[return-value]
+    return DEFAULT_PROJECT_DELIVERY_PROFILE
+
+
+def get_delivery_profile(meta: Any) -> ProjectDeliveryProfile:
+    return normalize_delivery_profile(getattr(meta, "project_delivery_profile", "solo"))
+
+
+def ritual_task_stop_enabled(meta: Any) -> bool:
+    return get_delivery_profile(meta) == "ritual"
+
+
+def set_delivery_profile(session: Any, mode: str) -> ProjectDeliveryProfile:
+    """Persist delivery profile on session meta."""
+    profile = normalize_delivery_profile(mode)
+    session.meta.project_delivery_profile = profile
+    from session import utc_now_iso
+
+    session.meta.updated_at = utc_now_iso()
+    return profile
+
+
 def task_stop_block_reason(
     *,
     active_shell: str,
@@ -938,8 +1099,11 @@ def task_stop_block_reason(
     task_stop_armed: bool,
     tool_name: str,
     arguments: dict[str, object],
+    delivery_profile: str = "ritual",
 ) -> str | None:
     """Block product writes after a TASKS checkbox was completed this turn (S5/S10)."""
+    if normalize_delivery_profile(delivery_profile) == "solo":
+        return None
     if not task_stop_armed or active_shell != "project":
         return None
     root = project_root.strip()
@@ -1053,6 +1217,54 @@ def project_mode_block_reason(
     return None
 
 
+def phase_key_from_milestone_suggestion(sug: dict[str, Any]) -> str:
+    """Extract stable ``phase_key`` from a milestone_review suggestion card."""
+    payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+    phase_key = str(payload.get("phase_key") or "").strip()
+    if phase_key:
+        return phase_key
+    sid = str(sug.get("id") or "")
+    prefix = "sug-milestone_review-"
+    if sid.startswith(prefix):
+        return sid[len(prefix) :].strip()
+    return ""
+
+
+def read_milestone_review_overlay_key(
+    paths: AgentPaths,
+    project_id: str,
+) -> str | None:
+    """Read active milestone ``phase_key`` from plan ``state.json`` (T-4717 · M-R6)."""
+    pid = normalize_project_id(project_id)
+    state_path = project_dir(paths, pid) / ".plan-agent" / "state.json"
+    if not state_path.is_file():
+        return None
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    reminders = data.get("milestone_review_reminders")
+    if not isinstance(reminders, dict):
+        return None
+    active = reminders.get("active_suggestions")
+    if not isinstance(active, dict):
+        return None
+    ignored = {
+        str(x)
+        for x in (data.get("ignored_suggestion_ids") or [])
+        if str(x).strip()
+    }
+    for sid, sug in active.items():
+        if sid in ignored or not isinstance(sug, dict):
+            continue
+        if sug.get("kind") != "milestone_review":
+            continue
+        key = phase_key_from_milestone_suggestion(sug)
+        if key:
+            return key
+    return None
+
+
 def format_project_overlay(
     *,
     project_root: str,
@@ -1063,25 +1275,35 @@ def format_project_overlay(
     next_open_task: str | None = None,
     armed_task_id: str | None = None,
     open_tasks_slice: str | None = None,
+    delivery_profile: str = DEFAULT_PROJECT_DELIVERY_PROFILE,
+    milestone_review_suggested: str | None = None,
 ) -> str:
+    profile = normalize_delivery_profile(delivery_profile)
     lines = [
         "[项目模式 · project]",
         f"project_root: {project_root}",
         f"project_id: {project_id}",
         f"project_plan_status: {plan_status or 'draft'}",
+        f"project_delivery_profile: {profile}",
     ]
     if plan_status != "confirmed":
         lines.append(
             "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
         )
     else:
-        lines.append(
-            "plan_gate: 已确认 — 可写项目内代码；"
-            "用 report_progress 勾选，禁止直写 TASKS.md"
-        )
-        lines.append(
-            "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
-        )
+        lines.append("plan_gate: 已确认 — 可写项目内代码")
+        if profile == "solo":
+            lines.append(
+                "delivery: 完成以构建/测试为准；TASKS 为视图；"
+                "验收口语可 spawn deliverable_review"
+            )
+        else:
+            lines.append(
+                "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
+            )
+            lines.append(
+                "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
+            )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
     if plan_status == "confirmed":
@@ -1090,10 +1312,11 @@ def format_project_overlay(
         armed = (armed_task_id or "").strip() or extract_task_id(next_open_task or "")
         if armed:
             lines.append(f"armed_task_id: {armed}")
-            lines.append(
-                "report_progress: 无对口证据不可勾选；须本回合对口工具成功；"
-                "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
-            )
+            if profile == "ritual":
+                lines.append(
+                    "report_progress: 无对口证据不可勾选；须本回合对口工具成功；"
+                    "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
+                )
         slice_text = (open_tasks_slice or "").strip()
         if slice_text:
             lines.append("open_queue:")
@@ -1103,17 +1326,48 @@ def format_project_overlay(
             "不含 [x]、已关闭区、TASKS.archive.md"
         )
     if continue_turn and plan_status == "confirmed":
-        lines.append(
-            "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
-        )
+        if profile == "solo":
+            lines.append(
+                "continue_turn: solo — 用户本条消息视为继续；按指令或开放队列推进"
+            )
+        else:
+            lines.append(
+                "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
+            )
+    milestone_key = (milestone_review_suggested or "").strip()
+    if milestone_key:
+        lines.append(f"milestone_review_suggested: {milestone_key}")
     return "\n".join(lines)
 
 
-def load_project_prompt(evolve_dir: Path) -> str:
-    path = evolve_dir / "prompts" / "project.md"
-    if not path.is_file():
-        return "[project.md missing at evolve/prompts/project.md]"
-    return path.read_text(encoding="utf-8").strip()
+def load_project_prompt(
+    evolve_dir: Path,
+    *,
+    profile: str = DEFAULT_PROJECT_DELIVERY_PROFILE,
+) -> str:
+    """Assemble project-boundaries + delivery profile prompt (Phase 47 T-4706)."""
+    prompts_dir = evolve_dir / "prompts"
+    parts: list[str] = []
+    entry = prompts_dir / "project.md"
+    if entry.is_file():
+        parts.append(entry.read_text(encoding="utf-8").strip())
+    boundaries = prompts_dir / "project-boundaries.md"
+    if boundaries.is_file():
+        parts.append(boundaries.read_text(encoding="utf-8").strip())
+    delivery_name = (
+        "project-delivery-ritual.md"
+        if normalize_delivery_profile(profile) == "ritual"
+        else "project-delivery-solo.md"
+    )
+    delivery = prompts_dir / delivery_name
+    if delivery.is_file():
+        parts.append(delivery.read_text(encoding="utf-8").strip())
+    elif not parts:
+        legacy = prompts_dir / "project.md"
+        if legacy.is_file():
+            return legacy.read_text(encoding="utf-8").strip()
+        return "[project prompts missing at evolve/prompts/]"
+    return "\n\n".join(parts)
 
 
 def phase_fingerprint_from_text(text: str) -> str:

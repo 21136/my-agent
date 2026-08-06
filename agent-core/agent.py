@@ -258,6 +258,17 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "task like「从归档恢复 Phase N 的 T-020…」; sidebar checkbox = done+archive, "
         "not delete; only restore via this tool."
     ),
+    "deliverable_review": (
+        "Spawn read-only deliverable review subagent for the bound project. "
+        "Parent should run build/tests first when possible; pass results in facts. "
+        "Use when user asks for acceptance, what's missing, deliverability, or "
+        "doc/code drift (e.g. 脱节, 你看看是否对齐)."
+    ),
+    "explore": (
+        "Spawn read-only explore subagent with an explicit task string (paths and "
+        "checkpoints). Parent must write scope, e.g. 只读 workspace/huiyi/src. "
+        "Not for doc/code drift — use deliverable_review instead."
+    ),
 }
 
 
@@ -494,6 +505,61 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "required": ["task"],
         "additionalProperties": False,
     },
+    "deliverable_review": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "User intent or focus, e.g. 验收 huiyi / Phase 7 是否完成",
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["full", "phase", "files"],
+                "default": "full",
+            },
+            "phase_hint": {
+                "type": "string",
+                "description": "When scope=phase, e.g. Phase 7",
+            },
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "When scope=files, relative to project_root",
+            },
+            "facts": {
+                "type": "object",
+                "description": "Parent-supplied L1 results; subagent must not re-run heavy commands",
+            },
+            "max_rounds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32,
+                "description": "Optional tool-round budget for review subagent (default SUBAGENT cap)",
+            },
+        },
+        "required": ["task"],
+        "additionalProperties": False,
+    },
+    "explore": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": (
+                    "Read-only investigation scope written by parent agent, "
+                    "e.g. 只读 workspace/huiyi，列出 src 下路由文件"
+                ),
+            },
+            "max_rounds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32,
+                "description": "Optional tool-round budget for explore subagent (default SUBAGENT cap)",
+            },
+        },
+        "required": ["task"],
+        "additionalProperties": False,
+    },
 }
 
 
@@ -543,7 +609,8 @@ def build_llm_tools(
         tools = [item for item in tools if item["function"]["name"] not in blocked]
     pid = (session.meta.project_id or "").strip()
     if not pid:
-        tools = [item for item in tools if item["function"]["name"] != "plan_partner"]
+        blocked_project = {"plan_partner", "deliverable_review"}
+        tools = [item for item in tools if item["function"]["name"] not in blocked_project]
     return tools
 
 
@@ -693,12 +760,17 @@ class Agent:
         )
 
     def _sync_turn_mode(self) -> None:
+        from project_mode import get_delivery_profile
+
         self.executor.session.turn_mode = self.session.meta.turn_mode
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
         self.executor.session.active_shell = self.session.meta.active_shell
         self.executor.session.project_root = self.session.meta.project_root
         self.executor.session.project_id = self.session.meta.project_id
         self.executor.session.project_plan_status = self.session.meta.project_plan_status
+        self.executor.session.project_delivery_profile = get_delivery_profile(
+            self.session.meta
+        )
 
     def _emit_turn_event(self, event: dict[str, Any]) -> None:
         handler = self.on_turn_event
@@ -1140,12 +1212,48 @@ class Agent:
                 else:
                     result = self.executor.run(tool_name, arguments)
 
+                if tool_name in {"deliverable_review", "explore"} and result.ok:
+                    pending = getattr(self.executor.session, "subagent_overlay_pending", None)
+                    if pending:
+                        existing = (self.session.subagent_overlay or "").strip()
+                        self.session.subagent_overlay = (
+                            f"{existing}\n\n{pending}" if existing else pending
+                        )
+                        self.executor.session.subagent_overlay_pending = None
+                if tool_name == "deliverable_review" and result.ok:
+                    data = result.data if isinstance(result.data, dict) else {}
+                    verdict = str(data.get("verdict") or "").strip() or None
+                    if verdict:
+                        self.session.last_review_verdict = verdict
+                    blockers = int(
+                        getattr(self.executor.session, "last_review_blockers_count", 0) or 0
+                    )
+                    self.session.last_review_blockers_count = blockers
+
                 tool_message = {
                     "role": "tool",
                     "tool_call_id": tool_call.get("id", ""),
                     "content": to_json(result),
                 }
                 self.session.append_message(tool_message)
+
+                if not result.ok:
+                    from progress_gate import (
+                        is_progress_gate_tool_error,
+                        PROGRESS_GATE_G9_KERNEL_MESSAGE,
+                    )
+
+                    if is_progress_gate_tool_error(result):
+                        self.session.append_message(
+                            {"role": "user", "content": PROGRESS_GATE_G9_KERNEL_MESSAGE}
+                        )
+                        self._emit_turn_event(
+                            {
+                                "type": "turn.notice",
+                                "level": "warn",
+                                "text": "进度闸门拒勾：禁止口头完成收口。",
+                            }
+                        )
 
                 interrupt_kind = _tool_interrupt_kind(result)
                 if interrupt_kind and self.cancel_event.is_set():
@@ -1517,6 +1625,10 @@ class Agent:
         """Mark turn as task_paused when project checkbox was completed (T-2006)."""
         if not self.executor.session.task_stop_armed:
             return final_text, finish_reason
+        from project_mode import get_delivery_profile, ritual_task_stop_enabled
+
+        if not ritual_task_stop_enabled(self.session.meta):
+            return final_text, finish_reason
         if self.session.meta.active_shell != "project":
             return final_text, finish_reason
         if finish_reason in {
@@ -1540,7 +1652,11 @@ class Agent:
             if tasks_path.is_file():
                 next_task = first_open_task_line(tasks_path.read_text(encoding="utf-8"))
 
-        updated = ensure_task_paused_text(final_text or "", next_open_task=next_task)
+        updated = ensure_task_paused_text(
+            final_text or "",
+            next_open_task=next_task,
+            delivery_profile=get_delivery_profile(self.session.meta),
+        )
         if updated != (final_text or ""):
             if final_text:
                 self._patch_last_assistant_message(updated)
@@ -1650,7 +1766,7 @@ class Agent:
         self.session.append_message({"role": "user", "content": user_text})
 
         from loader import detect_scaffold_tool_turn
-        from turn_intent import classify_turn, intent_label, should_spawn_explore
+        from turn_intent import classify_turn, intent_label, should_spawn_explore_for_turn
 
         intent = classify_turn(user_text)
         self.session.turn_intent = intent
@@ -1697,7 +1813,11 @@ class Agent:
         if intent == "recall":
             spawn_explore_flag = False
         elif spawn_explore_flag is None:
-            spawn_explore_flag = should_spawn_explore(user_text)
+            spawn_explore_flag = should_spawn_explore_for_turn(
+                user_text,
+                project_id=self.session.meta.project_id,
+                active_shell=self.session.meta.active_shell,
+            )
 
         self._emit_turn_event(
             {
@@ -1718,20 +1838,52 @@ class Agent:
                 }
             )
         if spawn_explore_flag:
+            from explore_scope import build_kernel_auto_explore_task
             from subagent import SubagentRunner, format_subagent_overlay
 
-            runner = SubagentRunner(
-                paths=self.session.paths,
-                evolve_log=EvolveLog.for_agent(self.session.paths),
-            )
-            explore_result = runner.run_explore(
-                user_text,
-                session=self.session,
-                llm=self.llm,
-                confirm_fn=self.executor.confirm_fn,
-            )
-            overlay_parts.append(format_subagent_overlay(explore_result))
-            subagent_tool_rounds += explore_result.tool_rounds
+            try:
+                runner = SubagentRunner(
+                    paths=self.session.paths,
+                    evolve_log=EvolveLog.for_agent(self.session.paths),
+                )
+                explore_task = build_kernel_auto_explore_task(
+                    user_text,
+                    project_id=self.session.meta.project_id or "",
+                    active_shell=self.session.meta.active_shell or "",
+                    scaffold_tool_turn=bool(self.session.scaffold_tool_turn),
+                )
+                explore_result, did_continue = runner.run_explore_with_continue(
+                    explore_task,
+                    session=self.session,
+                    llm=self.llm,
+                    confirm_fn=self.executor.confirm_fn,
+                    continue_already_used=self.executor.session.explore_continue_used,
+                )
+            except LLMError as exc:
+                self._emit_turn_event(
+                    {
+                        "type": "turn.notice",
+                        "level": "warn",
+                        "text": (
+                            "[内核] explore 子代理调用失败，主 Agent 直接续查"
+                            f"（{exc}）"
+                        ),
+                    }
+                )
+            else:
+                if explore_result.hit_cap:
+                    notice = (
+                        "[内核] explore 已达本轮上限"
+                        + ("，已续跑一轮；" if did_continue else "；")
+                        + "主 Agent 续查…"
+                    )
+                    self._emit_turn_event(
+                        {"type": "turn.notice", "level": "info", "text": notice}
+                    )
+                if did_continue:
+                    self.executor.session.explore_continue_used = True
+                overlay_parts.append(format_subagent_overlay(explore_result))
+                subagent_tool_rounds += explore_result.tool_rounds
 
         self.session.subagent_overlay = "\n\n".join(overlay_parts) if overlay_parts else None
         subagent_used = bool(overlay_parts)

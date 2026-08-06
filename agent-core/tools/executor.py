@@ -26,6 +26,8 @@ from paths import AgentPaths
 from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
 from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
+    deliverable_review,
+    explore,
     fetch_url,
     glob_file_search,
     grep,
@@ -57,6 +59,8 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "run_evolved": run_evolved.run,
     "propose_context_switch": propose_context_switch.run,
     "plan_partner": plan_partner.run,
+    "deliverable_review": deliverable_review.run,
+    "explore": explore.run,
 }
 
 # Preview prefix: WsBridge waits on confirm queue without emitting confirm.request.
@@ -94,9 +98,11 @@ class ExecutorSession:
     project_root: str = ""
     project_id: str = ""
     project_plan_status: str = ""
+    project_delivery_profile: str = "solo"
     in_execute_segment: bool = False
     segment_scaffold_tools: dict[str, ScaffoldDemoRecord] = field(default_factory=dict)
     task_stop_armed: bool = False
+    report_progress_done_this_turn: bool = False
     task_done_baseline: int | None = None
     armed_task_id: str = ""
     armed_task_text: str = ""
@@ -122,6 +128,12 @@ class ExecutorSession:
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
     plan_partner_calls: int = 0
+    deliverable_review_calls: int = 0
+    explore_builtin_calls: int = 0
+    explore_continue_used: bool = False
+    subagent_overlay_pending: str | None = None
+    last_review_verdict: str | None = None
+    last_review_blockers_count: int = 0
     progress_gate_notice: str = ""
 
     @classmethod
@@ -131,6 +143,7 @@ class ExecutorSession:
         project_root = ""
         project_id = ""
         project_plan_status = ""
+        project_delivery_profile = "solo"
         if session_dir is not None:
             meta_path = session_dir / _META_FILENAME
             if meta_path.is_file():
@@ -144,6 +157,11 @@ class ExecutorSession:
                     project_root = str(payload.get("project_root", "") or "").strip()
                     project_id = str(payload.get("project_id", "") or "").strip()
                     project_plan_status = str(payload.get("project_plan_status", "") or "")
+                    from project_mode import normalize_delivery_profile
+
+                    project_delivery_profile = normalize_delivery_profile(
+                        payload.get("project_delivery_profile", "solo")
+                    )
         return cls(
             session_dir=session_dir,
             workspace_evolved_approved=approved,
@@ -152,6 +170,7 @@ class ExecutorSession:
             project_root=project_root,
             project_id=project_id,
             project_plan_status=project_plan_status,
+            project_delivery_profile=project_delivery_profile,
         )
 
     def refresh_bound_project_meta(self) -> None:
@@ -171,6 +190,11 @@ class ExecutorSession:
         self.project_root = str(payload.get("project_root", "") or "").strip()
         self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
+        from project_mode import normalize_delivery_profile
+
+        self.project_delivery_profile = normalize_delivery_profile(
+            payload.get("project_delivery_profile", "solo")
+        )
 
 
 _TOOL_SCAFFOLD_FILENAMES = frozenset({"main.py", "tool.toml", "README.md"})
@@ -716,10 +740,9 @@ def _validate_project_repl_build_bypass(
 
 
 def _is_progress_gate_validation_error(result: ToolResult) -> bool:
-    if not result.error or not isinstance(result.error.details, dict):
-        return False
-    guard = str(result.error.details.get("guard_type") or "")
-    return guard in {"progress_gate_evidence", "progress_gate_repeat"}
+    from progress_gate import is_progress_gate_tool_error
+
+    return is_progress_gate_tool_error(result)
 
 
 def _validate_task_stop_write(
@@ -734,6 +757,7 @@ def _validate_task_stop_write(
     repeat = report_progress_repeat_block_reason(
         active_shell=session.active_shell,
         task_stop_armed=session.task_stop_armed,
+        report_progress_done_this_turn=session.report_progress_done_this_turn,
         tool_name=tool_name,
         arguments=arguments,
     )
@@ -751,6 +775,7 @@ def _validate_task_stop_write(
             details={
                 "guard_type": "progress_gate_repeat",
                 "active_shell": session.active_shell,
+                "retry": False,
             },
         )
 
@@ -760,6 +785,7 @@ def _validate_task_stop_write(
         task_stop_armed=session.task_stop_armed,
         tool_name=tool_name,
         arguments=arguments,
+        delivery_profile=session.project_delivery_profile,
     )
     if reason is None:
         return None
@@ -786,12 +812,42 @@ def _validate_progress_gate_evidence(
     evolved = arguments.get("tool_name")
     if not isinstance(evolved, str) or evolved.strip() != "report_progress":
         return None
-    from progress_gate import build_progress_gate_notice, report_progress_evidence_block_reason
+    from progress_gate import (
+        build_progress_gate_notice,
+        report_progress_evidence_block_reason,
+        report_progress_review_block_reason,
+    )
+
+    review_reason = report_progress_review_block_reason(
+        active_shell=session.active_shell,
+        delivery_profile=session.project_delivery_profile,
+        last_review_verdict=getattr(session, "last_review_verdict", None),
+        last_review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+    )
+    if review_reason is not None:
+        session.progress_gate_notice = build_progress_gate_notice(
+            armed_task_id=session.armed_task_id or "",
+            armed_task_text=session.armed_task_text or "",
+            reason=review_reason,
+            turn_evidence=list(session.turn_evidence or []),
+        )
+        return tool_fail(
+            tool_name,
+            ToolErrorCode.VALIDATION_ERROR,
+            review_reason,
+            details={
+                "guard_type": "progress_gate_review",
+                "active_shell": session.active_shell,
+                "last_review_verdict": getattr(session, "last_review_verdict", None),
+                "retry": False,
+            },
+        )
 
     reason = report_progress_evidence_block_reason(
         active_shell=session.active_shell,
         armed_task_text=session.armed_task_text or "",
         turn_evidence=list(session.turn_evidence or []),
+        delivery_profile=session.project_delivery_profile,
     )
     if reason is None:
         return None
@@ -810,6 +866,7 @@ def _validate_progress_gate_evidence(
             "armed_task_id": session.armed_task_id,
             "armed_task_text": session.armed_task_text,
             "evidence_count": len(session.turn_evidence or []),
+            "retry": False,
         },
     )
 
@@ -931,6 +988,7 @@ class ToolExecutor:
 
         clear_inline_write_guard(self.session)
         self.session.task_stop_armed = False
+        self.session.report_progress_done_this_turn = False
         self.session.task_done_baseline = None
         self.session.armed_task_id = ""
         self.session.armed_task_text = ""
@@ -940,6 +998,10 @@ class ToolExecutor:
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
         self.session.plan_partner_calls = 0
+        self.session.deliverable_review_calls = 0
+        self.session.explore_builtin_calls = 0
+        self.session.explore_continue_used = False
+        self.session.subagent_overlay_pending = None
         self.session.progress_gate_notice = ""
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
@@ -1197,6 +1259,12 @@ class ToolExecutor:
 
         if name == "plan_partner":
             return self._run_plan_partner(args, started=started)
+
+        if name == "deliverable_review":
+            return self._run_deliverable_review(args, started=started)
+
+        if name == "explore":
+            return self._run_explore_builtin(args, started=started)
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
@@ -1702,6 +1770,364 @@ class ToolExecutor:
         self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
         return result
 
+    def _run_deliverable_review(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        """Spawn deliverable review subagent (Phase 47 · DELIVERABLE-REVIEW §4)."""
+        from session import Session
+        from subagent import SubagentRunner, deliverable_review_max_per_turn
+
+        name = "deliverable_review"
+        task = str(arguments.get("task") or "").strip()
+        if not task:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "task is required",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        pid = (self.session.project_id or "").strip()
+        if not pid and self.session.project_root.strip():
+            from project_mode import project_id_from_root
+
+            pid = project_id_from_root(self.session.project_root) or ""
+        if not pid:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "deliverable_review requires a bound project",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        scope = str(arguments.get("scope") or "full").strip() or "full"
+        if scope not in {"full", "phase", "files"}:
+            scope = "full"
+        phase_hint = str(arguments.get("phase_hint") or "").strip()
+        paths_raw = arguments.get("paths")
+        paths: list[str] = []
+        if isinstance(paths_raw, list):
+            paths = [str(p).strip() for p in paths_raw if str(p).strip()]
+        if scope == "files" and not paths:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "paths required when scope=files",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+        if scope == "phase" and not phase_hint:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "phase_hint required when scope=phase",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        facts_raw = arguments.get("facts")
+        facts: dict[str, Any] = facts_raw if isinstance(facts_raw, dict) else {}
+
+        from subagent import parse_max_rounds_argument
+
+        try:
+            max_rounds = parse_max_rounds_argument(arguments.get("max_rounds"))
+        except ValueError as exc:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                str(exc),
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        cap = deliverable_review_max_per_turn()
+        if self.session.deliverable_review_calls >= cap:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                f"deliverable_review 每回合最多 {cap} 次",
+                duration_ms=_elapsed_ms(started),
+                details={"deliverable_review_limit": cap},
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        if self.session.session_dir is None:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "no active session directory",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        paths_agent = self.registry.agent_paths
+        session = Session.load(paths_agent, self.session.session_dir.name)
+        preview = task if len(task) <= 120 else task[:117] + "…"
+        call_id = str(uuid.uuid4())
+        self._emit_event(
+            "review.subagent.start",
+            {"task_preview": preview, "call_id": call_id},
+        )
+        self._emit_event(
+            "tool.start",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "summary": preview,
+                "arguments": {"task": preview, "scope": scope},
+            },
+        )
+
+        try:
+            runner = SubagentRunner(paths=paths_agent, evolve_log=self.evolve_log)
+            sub_result = runner.run_deliverable_review(
+                task,
+                session=session,
+                scope=scope,
+                phase_hint=phase_hint,
+                paths=paths,
+                facts=facts,
+                max_rounds=max_rounds,
+                cancel_event=self.cancel_event,
+            )
+        except Exception as exc:
+            result = tool_fail(
+                name,
+                "execution_error",
+                f"deliverable review subagent failed: {exc}",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._emit_event(
+                "review.subagent.done",
+                {
+                    "summary": result.error.message if result.error else str(exc),
+                    "verdict": None,
+                    "ok": False,
+                    "call_id": call_id,
+                },
+            )
+            self._emit_event(
+                "tool.end",
+                {
+                    "tool": name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "summary": _tool_result_summary(result),
+                },
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        self.session.deliverable_review_calls += 1
+        verdict = sub_result.verdict or "warn"
+        from subagent import (
+            count_review_blockers,
+            format_subagent_overlay,
+            review_summary_preview,
+        )
+
+        self.session.subagent_overlay_pending = format_subagent_overlay(sub_result)
+        blockers_count = count_review_blockers(sub_result.summary, verdict=verdict)
+        self.session.last_review_verdict = verdict
+        self.session.last_review_blockers_count = blockers_count
+        session.last_review_verdict = verdict
+        session.last_review_blockers_count = blockers_count
+        if verdict in {"pass", "warn"}:
+            from plan_agent import get_plan_agent
+
+            get_plan_agent(paths_agent, pid).clear_milestone_reminded_on_review(verdict)
+        done_payload = {
+            "summary": sub_result.summary,
+            "summary_preview": review_summary_preview(sub_result.summary),
+            "verdict": verdict,
+            "blockers_count": blockers_count,
+            "ok": True,
+            "call_id": call_id,
+            "paths_cited": list(sub_result.paths_cited),
+        }
+        self._emit_event("review.subagent.done", done_payload)
+
+        from project_api import project_state_payload
+
+        self._emit_event("project.state", project_state_payload(session, paths_agent))
+
+        result = tool_ok(
+            name,
+            {
+                "summary": sub_result.summary,
+                "verdict": verdict,
+                "paths_cited": list(sub_result.paths_cited),
+                "truncated": sub_result.truncated,
+            },
+            duration_ms=_elapsed_ms(started),
+        )
+        self._emit_event(
+            "tool.end",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "ok": True,
+                "summary": _tool_result_summary(result),
+            },
+        )
+        self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+        return result
+
+    def _run_explore_builtin(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        """Parent-invoked read-only explore subagent (Phase 48 · T-4802)."""
+        from session import Session
+        from subagent import SubagentRunner, explore_builtin_max_per_turn, format_subagent_overlay
+
+        name = "explore"
+        task = str(arguments.get("task") or "").strip()
+        if not task:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "task is required",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        from subagent import parse_max_rounds_argument
+
+        try:
+            max_rounds = parse_max_rounds_argument(arguments.get("max_rounds"))
+        except ValueError as exc:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                str(exc),
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        cap = explore_builtin_max_per_turn()
+        if self.session.explore_builtin_calls >= cap:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                f"explore 每回合最多 {cap} 次",
+                duration_ms=_elapsed_ms(started),
+                details={"explore_limit": cap},
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        if self.session.session_dir is None:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "no active session directory",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        paths_agent = self.registry.agent_paths
+        session = Session.load(paths_agent, self.session.session_dir.name)
+        preview = task if len(task) <= 120 else task[:117] + "…"
+        call_id = str(uuid.uuid4())
+        self._emit_event(
+            "tool.start",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "summary": preview,
+                "arguments": {"task": preview},
+            },
+        )
+
+        try:
+            from llm_client import LLMClient
+
+            runner = SubagentRunner(paths=paths_agent, evolve_log=self.evolve_log)
+            sub_result, did_continue = runner.run_explore_with_continue(
+                task,
+                session=session,
+                llm=LLMClient(),
+                confirm_fn=self.confirm_fn,
+                cancel_event=self.cancel_event,
+                max_rounds=max_rounds,
+                continue_already_used=self.session.explore_continue_used,
+            )
+            if did_continue:
+                self.session.explore_continue_used = True
+            if sub_result.hit_cap:
+                self._emit_event(
+                    "turn.notice",
+                    {
+                        "level": "info",
+                        "text": (
+                            "[内核] explore 已达本轮上限"
+                            + ("，已续跑一轮；" if did_continue else "；")
+                            + "主 Agent 续查…"
+                        ),
+                    },
+                )
+        except Exception as exc:
+            result = tool_fail(
+                name,
+                "execution_error",
+                f"explore subagent failed: {exc}",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._emit_event(
+                "tool.end",
+                {
+                    "tool": name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "summary": _tool_result_summary(result),
+                },
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        self.session.explore_builtin_calls += 1
+        self.session.subagent_overlay_pending = format_subagent_overlay(sub_result)
+        result = tool_ok(
+            name,
+            {
+                "summary": sub_result.summary,
+                "paths_cited": list(sub_result.paths_cited),
+                "truncated": sub_result.truncated,
+                "tool_rounds": sub_result.tool_rounds,
+            },
+            duration_ms=_elapsed_ms(started),
+        )
+        self._emit_event(
+            "tool.end",
+            {
+                "tool": name,
+                "call_id": call_id,
+                "ok": True,
+                "summary": _tool_result_summary(result),
+            },
+        )
+        self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+        return result
+
     def validate(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult | None:
         """Return a failed ToolResult when the call is invalid; otherwise None."""
         self.session.refresh_bound_project_meta()
@@ -1760,6 +2186,70 @@ class ToolExecutor:
                     name,
                     ToolErrorCode.VALIDATION_ERROR,
                     "plan_partner requires a bound project",
+                )
+            return None
+
+        if name == "deliverable_review":
+            task = arguments.get("task")
+            if not isinstance(task, str) or not task.strip():
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "task is required",
+                    details={"retry": True},
+                )
+            pid = (self.session.project_id or "").strip()
+            if not pid and self.session.project_root.strip():
+                from project_mode import project_id_from_root
+
+                pid = project_id_from_root(self.session.project_root) or ""
+            if not pid:
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "deliverable_review requires a bound project",
+                )
+            scope = str(arguments.get("scope") or "full").strip() or "full"
+            if scope == "files":
+                paths_raw = arguments.get("paths")
+                if not isinstance(paths_raw, list) or not any(
+                    str(p).strip() for p in paths_raw
+                ):
+                    return tool_fail(
+                        name,
+                        ToolErrorCode.VALIDATION_ERROR,
+                        "paths required when scope=files",
+                    )
+                root = self.session.project_root.strip()
+                if root:
+                    from project_mode import is_under_project_root
+
+                    for raw_path in paths_raw:
+                        path = str(raw_path).strip()
+                        if path and not is_under_project_root(path, root):
+                            return tool_fail(
+                                name,
+                                ToolErrorCode.VALIDATION_ERROR,
+                                f"path must be under project_root: {path}",
+                            )
+            if scope == "phase":
+                phase_hint = str(arguments.get("phase_hint") or "").strip()
+                if not phase_hint:
+                    return tool_fail(
+                        name,
+                        ToolErrorCode.VALIDATION_ERROR,
+                        "phase_hint required when scope=phase",
+                    )
+            return None
+
+        if name == "explore":
+            task = arguments.get("task")
+            if not isinstance(task, str) or not task.strip():
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "task is required",
+                    details={"retry": True},
                 )
             return None
 
@@ -1942,6 +2432,8 @@ class ToolExecutor:
         if armed_text:
             inner["task_text"] = armed_text
 
+        inner["delivery_profile"] = self.session.project_delivery_profile
+
         arguments["arguments"] = inner
 
     def _record_turn_evidence(
@@ -1987,14 +2479,23 @@ class ToolExecutor:
         """Arm task-stop after TASKS.md done-count increases (Phase 20 M1 / §0e F3)."""
         if not result.ok or self.session.task_stop_armed:
             return
-        if self.session.active_shell != "project" or not self.session.project_root.strip():
-            return
         if tool_name != "run_evolved":
             return
         evolved_name = arguments.get("tool_name")
         if not isinstance(evolved_name, str):
             return
         evolved_name = evolved_name.strip()
+
+        via_report = evolved_name == "report_progress"
+        if via_report:
+            self.session.report_progress_done_this_turn = True
+
+        from project_mode import normalize_delivery_profile
+
+        if normalize_delivery_profile(self.session.project_delivery_profile) == "solo":
+            return
+        if self.session.active_shell != "project" or not self.session.project_root.strip():
+            return
 
         from project_mode import (
             extract_run_evolved_paths,
@@ -2003,7 +2504,6 @@ class ToolExecutor:
             read_task_stats,
         )
 
-        via_report = evolved_name == "report_progress"
         via_write = evolved_name in _WORKSPACE_WRITE_TOOLS
         if not via_report and not via_write:
             return

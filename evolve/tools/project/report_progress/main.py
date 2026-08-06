@@ -49,9 +49,10 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
     )
 
     # 1. Toggle the completed task (identity-stable: T-xxx beats stale line)
+    toggle_result: dict[str, Any] | None = None
     if isinstance(resolved_line, int) and resolved_line >= 0:
         try:
-            agent.toggle_task(resolved_line, True)
+            toggle_result = agent.toggle_task(resolved_line, True)
         except Exception as exc:
             return {
                 "ok": False,
@@ -59,6 +60,13 @@ def run(args: dict[str, Any]) -> dict[str, Any]:
                 "resolved_line": resolved_line,
                 "resolve_note": resolve_note,
             }
+    if toggle_result:
+        from project_mode import normalize_delivery_profile
+
+        profile = normalize_delivery_profile(args.get("delivery_profile") or "solo")
+        agent._emit_milestone_review_if_needed(
+            toggle_result, delivery_profile=profile
+        )
 
     # 2. Propose subtasks / discovered tasks (PLAN-ARCH Q1 — no auto write)
     proposed: list[str] = []

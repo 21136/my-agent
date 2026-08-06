@@ -1912,6 +1912,19 @@ Phase 18 已解冻（STABILIZATION v1.1.0）。
 
 ---
 
+### 2026-08-06 · Phase 24 Progress Gate smoke（**T-2408**）
+
+- **结果**：**S-70～S-74 pass**（自动化代理 · 无新 BUG）
+- **方式**：`pytest agent-core/tests/test_progress_gate.py::SmokeS70ToS74Tests -v`
+- **S-70** pass — `test_s70_write_evidence_allows_checkbox`（对口 write → `report_progress` ok）
+- **S-71** pass — `test_s71_no_evidence_rejects`（无本回合证据 → 拒勾 · TASKS 仍 `[ ]`）
+- **S-72** pass — `test_s72_failed_command_evidence_blocks_test`（confirm 拒 / run_command 失败 ≠ 测试证据）
+- **S-73** pass — `test_s73_second_report_hard_reject`（勾选后同 turn 再报硬拒）
+- **S-74** pass — `test_s74_write_cannot_satisfy_compile_test_build_fe`（write 不得勾 compile/test/build_fe）
+- **备注**：S-75（G9 拒勾后禁口头收口）由 **T-2410** `test_it2410_kernel_notice_injected_on_blocked_report` 覆盖
+
+---
+
 ## 模板（单次详记）
 
 ```markdown

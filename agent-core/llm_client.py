@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -330,10 +331,7 @@ class LLMClient:
                 status_code=response.status_code,
             )
 
-        data = response.json()
-        if not isinstance(data, dict):
-            raise LLMApiError("invalid JSON response from provider", status_code=200)
-
+        data = _load_response_json(response)
         return _parse_completion(data, fallback_model=fallback_model)
 
     def _chat_stream(
@@ -365,6 +363,50 @@ class LLMClient:
                 with self._active_response_lock:
                     if self._active_response is response:
                         self._active_response = None
+
+
+_PROVIDER_JSON_ERROR_RE = re.compile(
+    r"^Expecting (?:value|property name enclosed in double quotes):",
+    re.IGNORECASE,
+)
+
+
+def _load_response_json(response: httpx.Response) -> dict[str, Any]:
+    """Parse HTTP body as JSON; raise LLMApiError on empty or invalid payloads."""
+    text = _response_text(response).strip()
+    if not text:
+        raise LLMApiError(
+            "provider returned empty response body",
+            status_code=response.status_code,
+        )
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        preview = text[:240].replace("\n", " ")
+        raise LLMApiError(
+            f"provider returned non-JSON body (HTTP {response.status_code}): {preview}",
+            status_code=response.status_code,
+        ) from exc
+    if not isinstance(data, dict):
+        raise LLMApiError(
+            "invalid JSON response from provider",
+            status_code=response.status_code,
+        )
+    return data
+
+
+def _raise_if_provider_error_content(content: str | None) -> None:
+    """Reject completions that echo provider-side JSON parse failures."""
+    if not content:
+        return
+    stripped = content.strip()
+    if not stripped:
+        return
+    if _PROVIDER_JSON_ERROR_RE.match(stripped):
+        raise LLMApiError(
+            f"provider returned error text instead of a completion: {stripped[:200]}",
+            status_code=200,
+        )
 
 
 def _parse_completion(data: dict[str, Any], *, fallback_model: str) -> LLMResponse:
@@ -402,6 +444,8 @@ def _parse_completion(data: dict[str, Any], *, fallback_model: str) -> LLMRespon
     model = data.get("model")
     if not isinstance(model, str) or not model.strip():
         model = fallback_model
+
+    _raise_if_provider_error_content(content)
 
     return LLMResponse(
         model=model,
@@ -491,6 +535,7 @@ def _consume_sse_stream(
     assembled_tool_calls = [tool_calls[idx] for idx in sorted(tool_calls)]
     content = "".join(content_parts) or None
     reasoning_content = "".join(reasoning_parts) or None
+    _raise_if_provider_error_content(content)
     return LLMResponse(
         model=model,
         content=content,
@@ -668,6 +713,52 @@ def _demo() -> None:
     assert parsed.finish_reason == "tool_calls"
     assert parsed.usage is not None and parsed.usage["total_tokens"] == 15
     print("[PASS] _parse_completion extracts content, tool_calls, usage")
+
+    # Empty / invalid HTTP bodies → LLMApiError (not raw JSONDecodeError)
+    class _FakeResponse:
+        def __init__(self, *, status_code: int, body: str) -> None:
+            self.status_code = status_code
+            self._body = body.encode("utf-8")
+
+        def read(self) -> bytes:
+            return self._body
+
+        @property
+        def text(self) -> str:
+            return self._body.decode("utf-8")
+
+    client_for_parse = LLMClient(cfg)
+    try:
+        client_for_parse._parse_http_response(
+            _FakeResponse(status_code=200, body=""),
+            fallback_model=cfg.model,
+        )
+        print("[FAIL] expected LLMApiError on empty body")
+        raise SystemExit(1)
+    except LLMApiError as exc:
+        assert "empty response body" in str(exc)
+        print("[PASS] empty provider body raises LLMApiError")
+
+    try:
+        _parse_completion(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Expecting value: line 1 column 1 (char 0)",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            fallback_model=cfg.model,
+        )
+        print("[FAIL] expected LLMApiError on provider error content")
+        raise SystemExit(1)
+    except LLMApiError as exc:
+        assert "error text instead of a completion" in str(exc)
+        print("[PASS] provider JSON error text rejected in completion")
 
     # Streaming SSE assembly (offline)
     class _FakeStreamResponse:

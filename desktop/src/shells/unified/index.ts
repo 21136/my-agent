@@ -23,6 +23,7 @@ import {
 } from "./project-panel";
 import {
   actionableSuggestions,
+  adoptPathFromSuggestion,
   clampReviewIndex,
   renderPlanFullHeader,
   renderPlanReviewPanel,
@@ -187,11 +188,19 @@ export function mountUnifiedShell(
     servicesCollapsed: true,
     suggestionAdoptFlash: null,
     adoptedFooterMessage: null,
+    adoptPendingId: null,
     turnInProgress: false,
+    deliveryProfile: "solo",
+    reviewVerdict: null,
+    reviewBlockersCount: 0,
+    reviewProgressBlocked: false,
   };
 
   let suggestionAdoptFlashTimerId: number | null = null;
+  let pendingAdoptAcceptTimeoutId: number | null = null;
+  let pendingAdoptAccept: { sid: string; path: string } | null = null;
   const ADOPT_FLASH_MS = 1500;
+  const ADOPT_PENDING_MS = 30000;
 
   let statusText = "连接中…";
   let cancelledStatusTimer: number | null = null;
@@ -1118,6 +1127,7 @@ export function mountUnifiedShell(
     planReviewEl.innerHTML = renderPlanReviewPanel({
       suggestions: projectState.suggestions,
       reviewIndex: planReviewIndex,
+      adoptPendingId: projectState.adoptPendingId,
     });
   }
 
@@ -1183,6 +1193,41 @@ export function mountUnifiedShell(
     }
   }
 
+  function clearPendingAdoptTimeout(): void {
+    if (pendingAdoptAcceptTimeoutId !== null) {
+      window.clearTimeout(pendingAdoptAcceptTimeoutId);
+      pendingAdoptAcceptTimeoutId = null;
+    }
+  }
+
+  function clearPendingAdopt(): void {
+    pendingAdoptAccept = null;
+    projectState.adoptPendingId = null;
+    clearPendingAdoptTimeout();
+  }
+
+  function resolvePendingAdopt(): void {
+    if (!pendingAdoptAccept) return;
+    const { sid, path } = pendingAdoptAccept;
+    if (projectState.suggestions.some((s) => s.id === sid)) return;
+
+    const notices = projectState.partnerNotices.join("\n");
+    clearPendingAdopt();
+
+    if (/已撤回|无效提案/i.test(notices)) {
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      if (projectState.mainFocus === "plan_review") {
+        renderPlanReviewPane();
+      }
+      return;
+    }
+
+    const match = notices.match(/已采纳写入\s+(\S+)/);
+    const adoptPath = match?.[1] || path;
+    const moreAfter = projectState.suggestions.some((s) => Boolean(s.action));
+    startAdoptFlash(`已采纳写入 ${adoptPath}`, !moreAfter);
+  }
+
   function finishAdoptFlash(showFooter: boolean): void {
     const msg = projectState.suggestionAdoptFlash;
     projectState.suggestionAdoptFlash = null;
@@ -1203,19 +1248,34 @@ export function mountUnifiedShell(
   }
 
   function acceptSuggestionById(sid: string): void {
-    if (projectState.suggestionAdoptFlash) return;
-    const remaining = projectState.suggestions.filter((s) => s.id !== sid);
-    const moreAfter = remaining.some((s) => Boolean(s.action));
-    projectState.suggestions = remaining;
-    if (!moreAfter) {
-      projectState.partnerNotices = [];
-    }
+    if (projectState.suggestionAdoptFlash || pendingAdoptAccept) return;
+    const sug = projectState.suggestions.find((s) => s.id === sid);
+    if (!sug?.action) return;
+
+    const path = adoptPathFromSuggestion(sug);
+    pendingAdoptAccept = { sid, path };
+    projectState.adoptPendingId = sid;
+    clearPendingAdoptTimeout();
+    pendingAdoptAcceptTimeoutId = window.setTimeout(() => {
+      if (pendingAdoptAccept?.sid !== sid) return;
+      clearPendingAdopt();
+      setStatus("采纳请求超时，请重试");
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      if (projectState.mainFocus === "plan_review") {
+        renderPlanReviewPane();
+      }
+    }, ADOPT_PENDING_MS);
+
     try {
       client.acceptPlanSuggestion(sid);
     } catch {
-      /* ignore */
+      clearPendingAdopt();
+      return;
     }
-    startAdoptFlash("已采纳写入 TASKS.md", !moreAfter);
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    if (projectState.mainFocus === "plan_review") {
+      renderPlanReviewPane();
+    }
   }
 
   function ignoreSuggestionById(sid: string): void {
@@ -1241,6 +1301,22 @@ export function mountUnifiedShell(
       }
       requestAnimationFrame(() => {
         const el = chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${block.turnKey}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    scrollChatToBottom();
+  }
+
+  function jumpToReviewSummary(): void {
+    const blocks = chat.model.blocks;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind !== "review-subagent") continue;
+      requestAnimationFrame(() => {
+        const el = chatEl.querySelector<HTMLElement>(
+          `.unified-plan-subagent[data-turn-index="${block.turnIndex}"]`,
+        );
         el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
       return;
@@ -1491,6 +1567,28 @@ export function mountUnifiedShell(
         ${hint}
       </article>`;
     }
+    if (block.kind === "review-subagent") {
+      const verdictLabel =
+        block.verdict && block.status === "done"
+          ? ` · ${String(block.verdict).toUpperCase()}`
+          : "";
+      const blockers =
+        block.status === "done" && (block.blockersCount ?? 0) > 0
+          ? ` · ${block.blockersCount} 项阻塞`
+          : "";
+      const title =
+        block.status === "running"
+          ? "交付审查 · 进行中…"
+          : `交付审查 · 完成${verdictLabel}${blockers}`;
+      const detail =
+        block.status === "running"
+          ? escapeHtml(block.taskPreview || "正在审查交付物…")
+          : escapeHtml(block.summary || block.taskPreview || "");
+      return `<article class="unified-plan-subagent" data-turn-index="${block.turnIndex}" data-status="${block.status}">
+        <div class="unified-plan-subagent-title">${escapeHtml(title)}</div>
+        <div class="unified-plan-subagent-body">${detail}</div>
+      </article>`;
+    }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
       let cls = "unified-turn unified-turn-assistant";
       if (perspective === "night") {
@@ -1600,6 +1698,8 @@ export function mountUnifiedShell(
         return `U${block.turnIndex}:${block.text.length}`;
       case "plan-subagent":
         return `PS${block.turnIndex}:${block.status}:${block.proposalCount ?? 0}`;
+      case "review-subagent":
+        return `RS${block.turnIndex}:${block.status}:${block.verdict ?? ""}`;
       case "assistant":
         return `A${block.turnIndex}:${block.text.length}`;
       case "assistant-streaming":
@@ -2111,6 +2211,9 @@ export function mountUnifiedShell(
         case "jump-turn-process":
           jumpToCurrentTurnProcess();
           return;
+        case "jump-review-summary":
+          jumpToReviewSummary();
+          return;
         case "accept-suggestion": {
           const sid = btn.dataset.suggestionId;
           if (sid) acceptSuggestionById(sid);
@@ -2343,6 +2446,9 @@ export function mountUnifiedShell(
       case "dismiss-warnings":
         projectState.planWarnings = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "jump-review-summary":
+        jumpToReviewSummary();
         return;
       case "expand-banner":
         projectState.planBannerCollapsed = false;
@@ -2626,6 +2732,7 @@ export function mountUnifiedShell(
 
       case "project.plan.state":
         applyProjectPlanState(projectState, event);
+        resolvePendingAdopt();
         projectState.partnerBusy = false;
         if (!perspectiveLocked) setPerspective("project", "session");
         updatePlaceholder();
@@ -2677,6 +2784,27 @@ export function mountUnifiedShell(
           summary: event.summary,
           proposalCount: event.proposal_count,
         });
+        setStatus("就绪");
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "review.subagent.start":
+        chat.pushReviewSubagentCard("running", { taskPreview: event.task_preview });
+        setStatus("交付审查中…");
+        break;
+
+      case "review.subagent.done":
+        chat.updateReviewSubagentCard("done", {
+          summary: event.summary_preview || event.summary,
+          verdict: event.verdict ?? undefined,
+          blockersCount: event.blockers_count,
+        });
+        if (event.verdict) {
+          projectState.reviewVerdict = event.verdict;
+        }
+        if (typeof event.blockers_count === "number") {
+          projectState.reviewBlockersCount = event.blockers_count;
+        }
         setStatus("就绪");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;

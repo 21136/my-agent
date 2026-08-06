@@ -100,6 +100,18 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         confirm=False,
         dry_run_supported=False,
     ),
+    BuiltinTool(
+        "deliverable_review",
+        "Spawn read-only deliverable review subagent for bound project",
+        confirm=False,
+        dry_run_supported=False,
+    ),
+    BuiltinTool(
+        "explore",
+        "Parent-invoked read-only explore subagent; task must state paths/scope",
+        confirm=False,
+        dry_run_supported=False,
+    ),
 )
 
 
@@ -380,7 +392,7 @@ def _require_positive_int(table: dict[str, Any], key: str, *, manifest_path: Pat
 def _demo() -> None:
     paths = AgentPaths.discover()
     registry = ToolRegistry.load(paths)
-    assert len(registry.builtins()) == 7
+    assert len(registry.builtins()) == len(BUILTIN_TOOLS)
     print(f"[PASS] builtins: {[tool.name for tool in registry.builtins()]}")
     print(f"[PASS] live evolved scan: {len(registry.evolved())} tool(s)")
 

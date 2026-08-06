@@ -24,7 +24,11 @@ if str(_AGENT_CORE) not in sys.path:
 from paths import AgentPaths
 from project_mode import (
     ProjectModeError,
+    TASKS_ARCHIVE_NAME,
+    MILESTONE_PROJECT_COMPLETE_KEY,
     drop_task_line,
+    evaluate_milestone_after_archive,
+    normalize_delivery_profile,
     normalize_project_id,
     phase_fingerprint_from_text,
     plan_allows_code_writes,
@@ -299,12 +303,20 @@ def looks_like_restore_request(text: str) -> bool:
     return bool(_PLAN_RESTORE_RE.search(t))
 
 
-def _plan_progress_brief(tasks_text: str, *, archive_tail: str = "") -> str:
+def _plan_progress_brief(
+    tasks_text: str,
+    *,
+    archive_path: "Path | None" = None,
+    archive_tail: str = "",
+) -> str:
     """Compact progress + explicit anomaly signals for Plan LLM."""
+    from pathlib import Path
+
     from project_mode import (
         active_phase_title_from_lines,
+        archive_done_count_for_phase,
         iter_phase_headers,
-        phase_open_and_done_counts,
+        phase_open_count_visible,
     )
 
     lines = tasks_text.splitlines()
@@ -312,20 +324,27 @@ def _plan_progress_brief(tasks_text: str, *, archive_tail: str = "") -> str:
     if not headers:
         return "（尚无 Phase）"
 
+    archive = archive_path if isinstance(archive_path, Path) else None
+    if archive is not None and not archive.is_file():
+        archive = None
+
     rows: list[str] = []
     phase_stats: list[tuple[str, int, int]] = []
     for _, title in headers:
-        open_n, done_n = phase_open_and_done_counts(lines, title)
-        phase_stats.append((title, open_n, done_n))
-        if open_n == 0 and done_n > 0:
+        open_n = phase_open_count_visible(lines, title)
+        archived_done = (
+            archive_done_count_for_phase(archive, title) if archive is not None else 0
+        )
+        phase_stats.append((title, open_n, archived_done))
+        if open_n == 0 and archived_done > 0:
             status = "已完成"
-        elif open_n > 0 and done_n == 0:
+        elif open_n > 0 and archived_done == 0:
             status = "未开始"
         elif open_n > 0:
             status = "进行中"
         else:
             status = "空"
-        rows.append(f"- {title}: {done_n} done / {open_n} open · {status}")
+        rows.append(f"- {title}: {archived_done} archived-done / {open_n} open · {status}")
 
     active = active_phase_title_from_lines(lines)
     next_open = None
@@ -342,11 +361,11 @@ def _plan_progress_brief(tasks_text: str, *, archive_tail: str = "") -> str:
     )
 
     alerts: list[str] = []
-    for i, (title, open_n, done_n) in enumerate(phase_stats):
+    for i, (title, open_n, archived_done) in enumerate(phase_stats):
         later_done = any(d > 0 for _, _, d in phase_stats[i + 1 :])
         if not later_done or open_n <= 0:
             continue
-        if done_n > 0:
+        if archived_done > 0:
             alerts.append(
                 f"⚠ 夹心：「{title}」仍有 {open_n} 条未完成，但后续 Phase 已有完成项"
                 "——优化时应 move（或说明为何不挪），禁止空操作装没事"
@@ -356,16 +375,16 @@ def _plan_progress_brief(tasks_text: str, *, archive_tail: str = "") -> str:
                 f"⚠ 跳段：「{title}」仍有 {open_n} 条未开始/未完成，"
                 "但后续 Phase 已开始勾选——检查是否偷跑"
             )
-    # Empty phases
-    for title, open_n, done_n in phase_stats:
-        if open_n == 0 and done_n == 0:
+    # Empty phases (no open and no archive evidence)
+    for title, open_n, archived_done in phase_stats:
+        if open_n == 0 and archived_done == 0:
             alerts.append(f"⚠ 空 Phase：「{title}」下没有任务")
     # Next item dragged back into mostly-done early phase
     if next_open and active:
-        for title, open_n, done_n in phase_stats:
+        for title, open_n, archived_done in phase_stats:
             if title != active:
                 continue
-            if done_n >= 2 and open_n >= 1:
+            if archived_done >= 2 and open_n >= 1:
                 later_done = False
                 saw = False
                 for t, _o, d in phase_stats:
@@ -433,11 +452,14 @@ def _build_plan_prompt(
     project_text: str = "",
     env_text: str = "",
     archive_tail: str = "",
+    archive_path: "Path | None" = None,
     plan_transcript: list[dict[str, str]] | None = None,
     tool_results: list[str] | None = None,
 ) -> str:
     """Context for Plan LLM — Plan 本线 + 计划域文件真源（不灌主聊天）。"""
-    brief = _plan_progress_brief(tasks_text, archive_tail=archive_tail)
+    brief = _plan_progress_brief(
+        tasks_text, archive_path=archive_path, archive_tail=archive_tail
+    )
     numbered = _format_tasks_with_line_numbers(tasks_text)
     prior = ""
     if plan_transcript:
@@ -527,6 +549,12 @@ class PlanAgent:
     _pending_gated: dict[str, dict[str, Any]] = field(default_factory=dict)
     _last_progress_time: float = 0.0  # time.time() of last report_progress call
     _last_partner_notices: list[str] = field(default_factory=list, repr=False)
+    # T-4714/4715 · milestone review suggestion dedup (plan state.json, not session)
+    _milestone_reminded_phase_keys: set[str] = field(default_factory=set, repr=False)
+    _milestone_dismissed_phase_keys: set[str] = field(default_factory=set, repr=False)
+    _active_milestone_suggestions: dict[str, dict[str, Any]] = field(
+        default_factory=dict, repr=False
+    )
     # Phase 38 · A11/C4–C6 — in-memory Plan channel only (never messages.jsonl)
     _plan_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
     _planning_model_id: str = field(default="", repr=False)
@@ -632,6 +660,25 @@ class PlanAgent:
                     time=entry.get("time", ""),
                     line=entry.get("line"),
                 ))
+            reminders = data.get("milestone_review_reminders")
+            if isinstance(reminders, dict):
+                reminded = reminders.get("reminded_phase_keys")
+                dismissed = reminders.get("dismissed_phase_keys")
+                if isinstance(reminded, list):
+                    self._milestone_reminded_phase_keys = {
+                        str(x) for x in reminded if str(x).strip()
+                    }
+                if isinstance(dismissed, list):
+                    self._milestone_dismissed_phase_keys = {
+                        str(x) for x in dismissed if str(x).strip()
+                    }
+                active = reminders.get("active_suggestions")
+                if isinstance(active, dict):
+                    self._active_milestone_suggestions = {
+                        str(k): v
+                        for k, v in active.items()
+                        if isinstance(v, dict) and v.get("id")
+                    }
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -657,6 +704,15 @@ class PlanAgent:
                 }
                 for c in self._change_log[-200:]  # cap at 200 entries
             ],
+            "milestone_review_reminders": {
+                "reminded_phase_keys": sorted(self._milestone_reminded_phase_keys),
+                "dismissed_phase_keys": sorted(self._milestone_dismissed_phase_keys),
+                "active_suggestions": {
+                    k: v
+                    for k, v in list(self._active_milestone_suggestions.items())[-20:]
+                    if isinstance(v, dict)
+                },
+            },
         }
         self._state_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         # Update snapshot for external change detection
@@ -928,6 +984,100 @@ class PlanAgent:
             "payload": payload or {},
         }
 
+    @staticmethod
+    def _format_milestone_review_body(
+        ev: dict[str, Any],
+        *,
+        delivery_profile: str = "solo",
+    ) -> str:
+        phase = str(ev.get("phase") or "").strip() or "本 Phase"
+        lines = [
+            f"[里程碑] {phase} 开放任务已归档。",
+            "建议：① git_commit 快照 ② build/test ③ 口语「验收」（只读 review，不挡写码）。",
+        ]
+        if ev.get("m2") or ev.get("should_remind_m2"):
+            lines.append("全项目开放队列已空；收尾前建议 review + commit。")
+        if normalize_delivery_profile(delivery_profile) == "ritual":
+            lines.append(
+                "ritual：建议先 deliverable_review，fail 时会挡 report_progress。"
+            )
+        return "\n".join(lines)
+
+    def _emit_milestone_review_if_needed(
+        self,
+        toggle_result: dict[str, Any],
+        *,
+        delivery_profile: str = "solo",
+    ) -> dict[str, Any] | None:
+        """Post-archive milestone suggestion (LOCAL-DELIVERY-MODEL §5 · T-4715).
+
+        Does **not** spawn ``deliverable_review`` (M-R1).
+        """
+        if not toggle_result.get("done"):
+            return None
+        phase = str(toggle_result.get("phase") or "").strip()
+        if not phase:
+            return None
+
+        root = project_dir(self.paths, self.project_id)
+        ev = evaluate_milestone_after_archive(
+            tasks_path=root / "TASKS.md",
+            archive_path=root / TASKS_ARCHIVE_NAME,
+            phase=phase,
+            reminded_phase_keys=self._milestone_reminded_phase_keys,
+            dismissed_phase_keys=self._milestone_dismissed_phase_keys,
+        )
+        if not ev.get("should_remind"):
+            return None
+
+        phase_key = str(ev.get("phase_key") or "").strip()
+        body = self._format_milestone_review_body(
+            ev, delivery_profile=delivery_profile
+        )
+        sug = self._suggestion(
+            kind="milestone_review",
+            title="里程碑验收建议",
+            body=body,
+            key=phase_key or "project",
+            risk="suggest",
+            payload={
+                "phase": phase,
+                "phase_key": phase_key,
+                "remind_scope": ev.get("remind_scope") or "",
+                "m1": bool(ev.get("m1")),
+                "m2": bool(ev.get("m2")),
+            },
+        )
+        sid = str(sug.get("id") or "")
+        if sid:
+            self._active_milestone_suggestions[sid] = sug
+            self._last_suggestions[sid] = sug
+            self._ignored_suggestion_ids.discard(sid)
+
+        if ev.get("should_remind_m1") and phase_key:
+            self._milestone_reminded_phase_keys.add(phase_key)
+        if ev.get("should_remind_m2"):
+            self._milestone_reminded_phase_keys.add(MILESTONE_PROJECT_COMPLETE_KEY)
+
+        notice = body.split("\n", 1)[0]
+        self.set_partner_notices(notice)
+        self._save_state()
+        return sug
+
+    def milestone_review_overlay_key(self) -> str | None:
+        """Active milestone ``phase_key`` for project overlay (T-4717 · M-R6)."""
+        for sid, sug in self._active_milestone_suggestions.items():
+            if sid in self._ignored_suggestion_ids:
+                continue
+            if sug.get("kind") != "milestone_review":
+                continue
+            from project_mode import phase_key_from_milestone_suggestion
+
+            key = phase_key_from_milestone_suggestion(sug)
+            if key:
+                return key
+        return None
+
     def quality_suggestions(self) -> list[dict[str, Any]]:
         """Structured actionable suggestions (Phase 22 / §15.10 V3).
 
@@ -952,7 +1102,56 @@ class PlanAgent:
         sid = str(suggestion_id or "").strip()
         if not sid:
             raise ProjectModeError("ignore_suggestion requires suggestion_id")
+        sug = (
+            self._last_suggestions.get(sid)
+            or self._active_milestone_suggestions.get(sid)
+            or self._pending_gated.get(sid)
+        )
+        if isinstance(sug, dict) and sug.get("kind") == "milestone_review":
+            self._dismiss_milestone_review_suggestion(sug)
         self._mark_suggestion_resolved(sid)
+
+    @staticmethod
+    def _milestone_phase_key_from_suggestion(sug: dict[str, Any]) -> str:
+        from project_mode import phase_key_from_milestone_suggestion
+
+        return phase_key_from_milestone_suggestion(sug)
+
+    def _dismiss_milestone_review_suggestion(self, sug: dict[str, Any]) -> None:
+        """Permanent dismiss for a milestone card (LOCAL-DELIVERY-MODEL §5.6 · IT-477)."""
+        phase_key = self._milestone_phase_key_from_suggestion(sug)
+        if phase_key:
+            self._milestone_dismissed_phase_keys.add(phase_key)
+        payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+        if payload.get("m2") or payload.get("remind_scope") in {
+            "project",
+            "phase_and_project",
+        }:
+            self._milestone_dismissed_phase_keys.add(MILESTONE_PROJECT_COMPLETE_KEY)
+        sid = str(sug.get("id") or "")
+        if sid:
+            self._active_milestone_suggestions.pop(sid, None)
+        self._save_state()
+
+    def clear_milestone_reminded_on_review(self, verdict: str | None) -> bool:
+        """Clear reminded keys after deliverable_review pass/warn (M-R4 · IT-476-5)."""
+        key = (verdict or "").strip().lower()
+        if key not in {"pass", "warn"}:
+            return False
+        changed = False
+        if self._milestone_reminded_phase_keys:
+            self._milestone_reminded_phase_keys.clear()
+            changed = True
+        removed: list[str] = []
+        for sid, active in list(self._active_milestone_suggestions.items()):
+            if active.get("kind") == "milestone_review":
+                self._active_milestone_suggestions.pop(sid, None)
+                self._ignored_suggestion_ids.discard(sid)
+                removed.append(sid)
+                changed = True
+        if changed:
+            self._save_state()
+        return changed
 
     def _mark_suggestion_resolved(self, sid: str) -> None:
         """Drop pending gate + clear stale「点采纳」notices when queue empties."""
@@ -975,6 +1174,53 @@ class PlanAgent:
         self._last_suggestions[sid] = sug
         self._save_state()
         return sug
+
+    def _rebase_pending_patch_suggestions_for_path(self, adopted_path: str) -> list[str]:
+        """BUG-026 A2 (T-4812): refresh base_hash for other pending patches on same path."""
+        from plan_patch import build_patch_preview
+
+        path = str(adopted_path or "").strip()
+        if not path:
+            return []
+
+        withdrawn: list[str] = []
+        changed = False
+        for other_sid, other_sug in list(self._pending_gated.items()):
+            if other_sug.get("action") != "apply_patch":
+                continue
+            payload = other_sug.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("path") or "").strip() != path:
+                continue
+            reps = payload.get("replacements")
+            if not isinstance(reps, list) or not reps:
+                continue
+            try:
+                new_preview = build_patch_preview(
+                    self.paths,
+                    self.project_id,
+                    relpath=path,
+                    replacements=reps,
+                    base_hash=None,
+                )
+            except ProjectModeError as exc:
+                self._mark_suggestion_resolved(other_sid)
+                withdrawn.append(f"已撤回无效提案：{exc}")
+                continue
+
+            updated = dict(other_sug)
+            updated_payload = dict(payload)
+            updated_payload["base_hash"] = new_preview["base_hash"]
+            updated_payload["diff"] = new_preview["diff"]
+            updated["payload"] = updated_payload
+            self._pending_gated[other_sid] = updated
+            self._last_suggestions[other_sid] = updated
+            changed = True
+
+        if changed:
+            self._save_state()
+        return withdrawn
 
     def accept_suggestion(self, suggestion_id: str) -> dict[str, Any]:
         """Apply a previously emitted suggestion via its action/payload."""
@@ -1023,7 +1269,10 @@ class PlanAgent:
                 reason=f"accepted file_patch: {sug.get('title', '')}"[:120],
             )
             self._mark_suggestion_resolved(sid)
+            rebase_withdrawn = self._rebase_pending_patch_suggestions_for_path(rel)
             notice = self._adopted_write_notice(rel)
+            if rebase_withdrawn:
+                notice = "\n".join([notice, *rebase_withdrawn])
             self.set_partner_notices(notice)
             return {
                 **result,
@@ -1638,6 +1887,42 @@ class PlanAgent:
             return result, True, "", []
         return [], False, "", []
 
+    def _park_file_patch_suggestion(
+        self,
+        *,
+        preview: dict[str, Any],
+        replacements: list[dict[str, Any]],
+        reason_prefix: str,
+        reason: str = "",
+    ) -> str:
+        """Park one gated file_patch suggestion (PLAN-ARCH M6)."""
+        key = (
+            f"patch-{preview['path']}-"
+            f"{abs(hash(preview['diff'])) % 10_000_000:x}"
+        )
+        reason = (reason or "").strip()
+        sug = self._suggestion(
+            kind="file_patch",
+            title=f"改 {preview['path']}（待采纳）",
+            body=reason or f"{reason_prefix} 提议修改 {preview['path']}",
+            key=key,
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": preview["path"],
+                "base_hash": preview["base_hash"],
+                "replacements": replacements,
+                "diff": preview["diff"],
+                "source": "plan_llm",
+                "reason": reason[:120],
+            },
+        )
+        self.park_gated_suggestion(sug)
+        return (
+            f"提案 patch {preview['path']}（待采纳）"
+            + (f"：{reason[:40]}" if reason else "")
+        )
+
     def _apply_plan_operations(self, operations: list[Any], *, reason_prefix: str) -> list[str]:
         """Park mutating LLM ops as gated suggestions (PLAN-ARCH Q1 / M6).
 
@@ -1649,7 +1934,47 @@ class PlanAgent:
         applied: list[str] = []
         ops = [op for op in operations if isinstance(op, dict)]
 
+        patch_groups: dict[str, tuple[list[dict[str, Any]], list[str]]] = {}
+        deferred_ops: list[dict[str, Any]] = []
+
         for op in ops:
+            kind = str(op.get("kind", "") or "").strip().lower()
+            if kind != "patch":
+                deferred_ops.append(op)
+                continue
+            path = str(op.get("path") or "").strip()
+            reps = op.get("replacements")
+            if not path or not isinstance(reps, list) or not reps:
+                applied.append("跳过无效 patch（需要 path + replacements）")
+                continue
+            merged, reasons = patch_groups.setdefault(path, ([], []))
+            merged.extend(reps)
+            reason = str(op.get("reason") or "").strip()
+            if reason:
+                reasons.append(reason)
+
+        for path, (all_reps, reasons) in patch_groups.items():
+            try:
+                preview = build_patch_preview(
+                    self.paths,
+                    self.project_id,
+                    relpath=path,
+                    replacements=all_reps,
+                )
+            except ProjectModeError as exc:
+                applied.append(f"跳过无效 patch（{exc}）")
+                continue
+            combined_reason = "; ".join(reasons)[:120]
+            applied.append(
+                self._park_file_patch_suggestion(
+                    preview=preview,
+                    replacements=all_reps,
+                    reason_prefix=reason_prefix,
+                    reason=combined_reason,
+                )
+            )
+
+        for op in deferred_ops:
             kind = str(op.get("kind", "") or "").strip().lower()
             try:
                 if kind in _LEGACY_LINE_OPS:
@@ -1658,51 +1983,7 @@ class PlanAgent:
                     )
                     continue
 
-                if kind == "patch":
-                    path = str(op.get("path") or "").strip()
-                    reps = op.get("replacements")
-                    if not path or not isinstance(reps, list) or not reps:
-                        applied.append("跳过无效 patch（需要 path + replacements）")
-                        continue
-                    try:
-                        preview = build_patch_preview(
-                            self.paths,
-                            self.project_id,
-                            relpath=path,
-                            replacements=reps,
-                            base_hash=str(op.get("base_hash") or "") or None,
-                        )
-                    except ProjectModeError as exc:
-                        applied.append(f"跳过无效 patch（{exc}）")
-                        continue
-                    key = (
-                        f"patch-{preview['path']}-"
-                        f"{abs(hash(preview['diff'])) % 10_000_000:x}"
-                    )
-                    reason = str(op.get("reason") or "")[:120]
-                    sug = self._suggestion(
-                        kind="file_patch",
-                        title=f"改 {preview['path']}（待采纳）",
-                        body=reason or f"{reason_prefix} 提议修改 {preview['path']}",
-                        key=key,
-                        risk="gate",
-                        action="apply_patch",
-                        payload={
-                            "path": preview["path"],
-                            "base_hash": preview["base_hash"],
-                            "replacements": reps,
-                            "diff": preview["diff"],
-                            "source": "plan_llm",
-                            "reason": reason,
-                        },
-                    )
-                    self.park_gated_suggestion(sug)
-                    applied.append(
-                        f"提案 patch {preview['path']}（待采纳）"
-                        + (f"：{reason[:40]}" if reason else "")
-                    )
-
-                elif kind == "add":
+                if kind == "add":
                     phase = op.get("phase", "")
                     desc = op.get("description", "")
                     if not desc:
@@ -1861,7 +2142,8 @@ class PlanAgent:
         env_text = (root / "ENV.md").read_text(encoding="utf-8") if (root / "ENV.md").is_file() else ""
         from project_mode import TASKS_ARCHIVE_NAME, format_archive_tail_for_prompt
 
-        archive_tail = format_archive_tail_for_prompt(root / TASKS_ARCHIVE_NAME)
+        archive_path = root / TASKS_ARCHIVE_NAME
+        archive_tail = format_archive_tail_for_prompt(archive_path)
 
         tool_result_blocks: list[str] = []
 
@@ -1878,6 +2160,7 @@ class PlanAgent:
                             project_text=project_text,
                             env_text=env_text,
                             archive_tail=archive_tail,
+                            archive_path=archive_path,
                             plan_transcript=self._plan_transcript,
                             tool_results=tool_result_blocks or None,
                         ),
@@ -1896,14 +2179,19 @@ class PlanAgent:
             out = self._plan_channel_fallback(user_text, extra=f"LLM 调用失败（{exc}）")
             return self._finalize_plan_reply(out)
 
-        # One tool round then re-ask (T-3804 查跑同权)
-        if parsed_ok and tool_calls and not operations:
+        from subagent import plan_subagent_tool_rounds
+
+        tool_round_cap = plan_subagent_tool_rounds()
+        for _round_index in range(tool_round_cap):
+            if not parsed_ok:
+                break
+            if operations or reply:
+                break
+            if not tool_calls:
+                break
             tool_result_blocks.extend(self._execute_plan_tool_calls(tool_calls))
             try:
-                operations, parsed_ok, reply, tool_calls2 = _one_llm_call()
-                if tool_calls2 and not operations and not reply:
-                    # Avoid infinite tool loops — surface tool output.
-                    reply = "已根据工具结果整理；如需改计划请明确说改哪份文件。"
+                operations, parsed_ok, reply, tool_calls = _one_llm_call()
             except Exception as exc:
                 out = self._plan_channel_fallback(user_text, extra=f"工具后 LLM 失败（{exc}）")
                 return self._finalize_plan_reply(out)
@@ -1970,8 +2258,15 @@ class PlanAgent:
         current_tasks = artifacts.get("TASKS.md", "")
         external_changes = False
         if self._last_tasks_snapshot and current_tasks != self._last_tasks_snapshot:
-            external_changes = True
-            self._record_change("external", "(外部修改)", reason="TASKS.md changed outside PlanAgent")
+            from project_mode import get_delivery_profile
+
+            if session is not None and get_delivery_profile(session.meta) == "solo":
+                external_changes = False
+            else:
+                external_changes = True
+                self._record_change(
+                    "external", "(外部修改)", reason="TASKS.md changed outside PlanAgent"
+                )
         # Always update snapshot after checking
         self._last_tasks_snapshot = current_tasks
 
@@ -2025,6 +2320,11 @@ class PlanAgent:
                 self._suggestions.append(stale)
 
         self._suggestions.extend(self.quality_suggestions())
+        for sug in self._active_milestone_suggestions.values():
+            sid = str(sug.get("id") or "")
+            if sid and sid not in self._ignored_suggestion_ids:
+                if not any(s.get("id") == sid for s in self._suggestions):
+                    self._suggestions.append(sug)
         # Merge gated proposals (PLAN-ARCH Q1) — survive across build_state rebuilds
         # M6: drop legacy line-number LLM cards left in state.json
         _legacy_actions = {
@@ -2091,9 +2391,17 @@ class PlanAgent:
 
     # ---- report progress from main agent ----
 
-    def report_progress(self, task_line: int | None, summary: str) -> dict[str, Any]:
+    def report_progress(
+        self,
+        task_line: int | None,
+        summary: str,
+        *,
+        delivery_profile: str | None = None,
+    ) -> dict[str, Any]:
         """Main agent reports completing a task. Verify with file output check."""
         import time as _time
+
+        profile = normalize_delivery_profile(delivery_profile or "solo")
 
         # Verify: check if any files were modified under project dir since last report
         verification_note = ""
@@ -2126,12 +2434,17 @@ class PlanAgent:
             task_line=task_line if isinstance(task_line, int) else None,
             summary=summary,
         )
+        toggle_result: dict[str, Any] | None = None
         if isinstance(resolved_line, int) and resolved_line >= 0:
             try:
-                self.toggle_task(resolved_line, True)
+                toggle_result = self.toggle_task(resolved_line, True)
             except Exception:
                 # Fall through to change log so UI still sees the report attempt.
                 pass
+        if toggle_result:
+            self._emit_milestone_review_if_needed(
+                toggle_result, delivery_profile=profile
+            )
         self._record_change(
             "toggle" if resolved_line is not None else "add",
             summary,

@@ -44,6 +44,10 @@ VALID_SHELLS = frozenset({"grow", "daily", "govern", "project", "unified"})
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
+ProjectDeliveryProfile = Literal["solo", "ritual"]
+DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
+VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
+
 ANCHOR_HEADER = "[本次会议上下文]"
 
 
@@ -76,6 +80,7 @@ class SessionMeta:
     project_plan_confirmed_at: str = ""
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
+    project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +105,7 @@ class SessionMeta:
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
+            "project_delivery_profile": self.project_delivery_profile,
         }
 
     @classmethod
@@ -161,6 +167,15 @@ class SessionMeta:
         if not isinstance(doc_fp, str):
             doc_fp = ""
 
+        profile_raw = payload.get(
+            "project_delivery_profile", DEFAULT_PROJECT_DELIVERY_PROFILE
+        )
+        project_delivery_profile: ProjectDeliveryProfile = (
+            profile_raw
+            if profile_raw in VALID_PROJECT_DELIVERY_PROFILES
+            else DEFAULT_PROJECT_DELIVERY_PROFILE
+        )
+
         return cls(
             topics=topics,
             llm_model=llm_model,
@@ -185,6 +200,7 @@ class SessionMeta:
             project_plan_confirmed_at=confirmed_at,
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
+            project_delivery_profile=project_delivery_profile,
         )
 
 
@@ -199,6 +215,8 @@ class Session:
     messages: list[dict[str, Any]]
     paths: AgentPaths
     subagent_overlay: str | None = field(default=None, compare=False, repr=False)
+    last_review_verdict: str | None = field(default=None, compare=False, repr=False)
+    last_review_blockers_count: int = field(default=0, compare=False, repr=False)
     turn_intent: str | None = field(default=None, compare=False, repr=False)
     scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)

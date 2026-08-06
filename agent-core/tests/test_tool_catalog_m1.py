@@ -11,7 +11,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from loader import session_evolved_allowlist, session_evolved_tools
+from loader import session_evolved_allowlist
 from session import create_new
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
@@ -44,9 +44,6 @@ class ToolCatalogM1Tests(unittest.TestCase):
         self.assertIn("patch_file", allow)
         self.assertIn("sort_by_extension", allow)
         self.assertIn("write_text", allow)
-        # Catalog overlay may still be topic-narrow until M3
-        listed = {t.name for t in session_evolved_tools(session, registry=self.registry)}
-        self.assertIn("write_text", listed)
 
     def test_s82_suspect_not_in_allowlist(self) -> None:
         active = {

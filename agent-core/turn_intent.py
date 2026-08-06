@@ -195,6 +195,17 @@ def classify_turn(user_text: str) -> TurnIntent:
     return "qa"
 
 
+def project_explore_autospawn_disabled(
+    *,
+    project_id: str = "",
+    active_shell: str = "",
+) -> bool:
+    """Phase 48 / BUG-027: bound project shell must not kernel-auto explore."""
+    pid = (project_id or "").strip()
+    shell = (active_shell or "").strip()
+    return bool(pid) and shell == "project"
+
+
 def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
     """Whether kernel runs explore subagent before parent loop (ORCHESTRATION §4.2, §8)."""
     if explicit:
@@ -209,6 +220,19 @@ def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
     if any(marker in text for marker in _SPAWN_MARKERS):
         return True
     return any(marker in lower for marker in _PATH_MARKERS)
+
+
+def should_spawn_explore_for_turn(
+    user_text: str,
+    *,
+    project_id: str = "",
+    active_shell: str = "",
+    explicit: bool = False,
+) -> bool:
+    """Auto explore gate including project-mode disable (AGENT-PARENT-ORCHESTRATION P1)."""
+    if project_explore_autospawn_disabled(project_id=project_id, active_shell=active_shell):
+        return False
+    return should_spawn_explore(user_text, explicit=explicit)
 
 
 def spawn_explore_for_intent(intent: TurnIntent) -> bool:
@@ -263,6 +287,21 @@ def _demo() -> None:
     os.environ.pop("MY_AGENT_AUTO_EXPLORE", None)
     assert should_spawn_explore("按 run_demo 造 bar")
     print("[PASS] MY_AGENT_AUTO_EXPLORE=0 disables auto spawn")
+
+    assert project_explore_autospawn_disabled(project_id="huiyi", active_shell="project")
+    assert not project_explore_autospawn_disabled(project_id="huiyi", active_shell="grow")
+    assert not project_explore_autospawn_disabled(project_id="", active_shell="project")
+    assert not should_spawn_explore_for_turn(
+        "文档和代码脱节了，你看看",
+        project_id="huiyi",
+        active_shell="project",
+    )
+    assert should_spawn_explore_for_turn(
+        "按 run_demo 模式造 bar 工具",
+        project_id="",
+        active_shell="grow",
+    )
+    print("[PASS] IT-4801: project shell disables auto explore")
 
 
 if __name__ == "__main__":

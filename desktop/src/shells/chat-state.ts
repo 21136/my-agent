@@ -5,6 +5,7 @@ export type ChatBlock =
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
   | { kind: "plan-subagent"; status: "running" | "proposals_ready"; taskPreview?: string; summary?: string; proposalCount?: number; turnIndex: number }
+  | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
   | { kind: "notice"; text: string }
   | {
       kind: "process";
@@ -420,6 +421,50 @@ export function createChatSession(
     pushPlanSubagentCard(status, opts);
   }
 
+  function pushReviewSubagentCard(
+    status: "running" | "done",
+    opts?: {
+      taskPreview?: string;
+      summary?: string;
+      verdict?: string;
+      blockersCount?: number;
+    },
+  ): number {
+    const turnIndex = beginTurn();
+    model.blocks.push({
+      kind: "review-subagent",
+      status,
+      taskPreview: opts?.taskPreview,
+      summary: opts?.summary,
+      verdict: opts?.verdict,
+      blockersCount: opts?.blockersCount,
+      turnIndex,
+    });
+    notify();
+    return turnIndex;
+  }
+
+  function updateReviewSubagentCard(
+    status: "done",
+    opts?: { summary?: string; verdict?: string; blockersCount?: number },
+  ): void {
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind === "review-subagent" && block.status === "running") {
+        model.blocks[i] = {
+          ...block,
+          status,
+          summary: opts?.summary ?? block.summary,
+          verdict: opts?.verdict ?? block.verdict,
+          blockersCount: opts?.blockersCount ?? block.blockersCount,
+        };
+        notify();
+        return;
+      }
+    }
+    pushReviewSubagentCard(status, opts);
+  }
+
   function ensureStreamingAssistant(): ChatBlock & { kind: "assistant-streaming" } {
     const turnIndex = currentTurnIndex();
     const last = model.blocks[model.blocks.length - 1];
@@ -813,6 +858,8 @@ export function createChatSession(
     pushUserMessage,
     pushPlanSubagentCard,
     updatePlanSubagentCard,
+    pushReviewSubagentCard,
+    updateReviewSubagentCard,
     toggleProcessCollapsed,
     toggleThinkingOpen,
     submitConfirm,

@@ -32,7 +32,7 @@ from project_mode import (
 from router import TopicRoutingError, apply_confirmed_topics, registered_topic_ids
 from session import Session, utc_now_iso
 
-ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "confirm", "status", "verify"]
+ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "confirm", "status", "verify", "discipline"]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
@@ -69,6 +69,77 @@ _SHORT_PLAN_CONFIRM = frozenset(
     }
 )
 
+_PROJECT_VERBS = frozenset(
+    {
+        "列表",
+        "list",
+        "新建",
+        "new",
+        "create",
+        "打开",
+        "open",
+        "切换",
+        "switch",
+        "新开线",
+        "new-thread",
+        "newthread",
+        "thread",
+        "确认",
+        "confirm",
+        "状态",
+        "status",
+        "验收",
+        "verify",
+        "纪律",
+        "discipline",
+        "profile",
+    }
+)
+
+_NATURAL_LANGUAGE_STARTERS = (
+    "现在",
+    "已经",
+    "还是",
+    "感觉",
+    "觉得",
+    "可能",
+    "应该",
+    "还没",
+    "不能",
+    "不太",
+    "离",
+    "这",
+    "那",
+    "我们",
+    "你们",
+    "其实",
+    "但是",
+    "不过",
+    "所以",
+    "如果",
+    "虽然",
+)
+
+
+def _looks_like_project_natural_language(token: str) -> bool:
+    """True when payload after 「项目」 is conversational, not a CLI verb."""
+    text = (token or "").strip()
+    if not text:
+        return False
+    if len(text) > 12:
+        return True
+    if any(ch in text for ch in "，。！？、；：,.!?;:"):
+        return True
+    return any(text.startswith(prefix) for prefix in _NATURAL_LANGUAGE_STARTERS)
+
+
+def _plausible_project_id_token(text: str) -> bool:
+    try:
+        normalize_project_id(text)
+    except ProjectModeError:
+        return False
+    return True
+
 
 def try_short_plan_confirm(session: Session, text: str, output_fn: OutputFn) -> bool:
     """Map bare 「确认」/「开工」 to 项目 确认 when plan gate is open."""
@@ -99,14 +170,15 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
     for prefix in ("新项目", "new project"):
         if stripped.casefold().startswith(prefix.casefold()):
             rest = stripped[len(prefix) :].strip()
-            if rest:
-                try:
-                    tokens = shlex.split(rest, posix=False)
-                except ValueError as exc:
-                    raise ProjectCommandError(f"invalid project command: {exc}") from exc
-                if tokens:
-                    return ParsedProjectCommand(kind="new", project_id=tokens[0])
-            raise ProjectCommandError("新项目 <id>")
+            if not rest:
+                return None
+            try:
+                tokens = shlex.split(rest, posix=False)
+            except ValueError as exc:
+                raise ProjectCommandError(f"invalid project command: {exc}") from exc
+            if tokens and _plausible_project_id_token(tokens[0]):
+                return ParsedProjectCommand(kind="new", project_id=tokens[0])
+            return None
 
     lowered = stripped.casefold()
     prefix_len: int | None = None
@@ -154,11 +226,16 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="status")
     if verb in {"验收", "verify"}:
         return ParsedProjectCommand(kind="verify")
+    if verb in {"纪律", "discipline", "profile"}:
+        if len(tokens) < 2:
+            raise ProjectCommandError("项目 纪律 solo|ritual|strict|宽松")
+        return ParsedProjectCommand(kind="discipline", project_id=tokens[1])
 
-    raise ProjectCommandError(
-        "未知项目命令；可用：列表 | 新建 <id> | 打开 <id> | 切换 <id> | 新开线 | 确认 | 验收 | 状态"
-        "（口语也可「新项目 <id>」）"
-    )
+    if verb not in _PROJECT_VERBS and _looks_like_project_natural_language(tokens[0]):
+        return None
+
+    # Unknown verb: pass through to main chat instead of blocking the turn.
+    return None
 
 
 def _ensure_coding_topic(session: Session) -> None:
@@ -182,7 +259,12 @@ def bind_project_session(
     plan_status: str = "draft",
 ) -> str:
     pid = normalize_project_id(project_id)
+    prev_pid = (session.meta.project_id or "").strip()
     root = project_root_rel(pid)
+    if pid != prev_pid:
+        from project_mode import DEFAULT_PROJECT_DELIVERY_PROFILE
+
+        session.meta.project_delivery_profile = DEFAULT_PROJECT_DELIVERY_PROFILE
     session.meta.active_shell = "project"
     session.meta.project_id = pid
     session.meta.project_root = root
@@ -234,6 +316,7 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         f"项目：{pid}",
         f"根目录：{root}",
         f"计划：{status}",
+        f"纪律：{session.meta.project_delivery_profile or 'solo'}",
         f"任务：{stats.done}/{stats.total} 已完成，{stats.open_count} 未勾",
     ]
     if not plan_allows_code_writes(status):
@@ -343,6 +426,16 @@ def run_project_command(
     if command.kind == "status":
         output_fn(format_project_status(session, paths))
         return ProjectCommandResult()
+
+    if command.kind == "discipline":
+        from project_mode import normalize_delivery_profile, set_delivery_profile
+
+        assert command.project_id is not None
+        profile = set_delivery_profile(session, command.project_id)
+        session.save()
+        label = "严格（ritual）" if profile == "ritual" else "宽松（solo）"
+        output_fn(f"项目交付纪律已设为 {profile}（{label}）。")
+        return ProjectCommandResult(meta_changed=True)
 
     if command.kind == "verify":
         pid = (session.meta.project_id or "").strip()

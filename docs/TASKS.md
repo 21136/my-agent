@@ -2,7 +2,7 @@
 
 > 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 42** M0 done（T-4213/S-421 手工）· WORKBENCH M1/M2 · Phase 43～45 M0 done · **Phase 46 D0 doc**  
+> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 47** S-470 · **Phase 48** S-480/S-481 · **Phase 49** S-4910 · **Phase 50** doc 已签待编码 · Phase 42 T-4213  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -1090,9 +1090,9 @@ python turn_intent.py    # 分类用例无回归
 | T-2405 | 一停扩展：禁同 turn 再 report | task-stop + IT-72 | T-2404 | 第二次 report_progress 硬拒 | **done** |
 | T-2406 | 异常卡（规则/身份）无强勾 | Plan/侧栏 `gate_notice` | T-2404 | 仅规则冲突可人审；失败无强制勾入口 | **done** |
 | T-2407 | overlay / project.md 一句对齐 | loader · evolve/prompts | T-2404 | 文案含「无对口证据不可勾」 | **done** |
-| T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | todo |
+| T-2408 | Smoke S-70～S-74 + 记录 | stabilization-log 或等价 | T-2405 | 四条场景 pass 留痕 | **done** |
 | T-2409 | G8/G9 设计落盘 | `PROGRESS-GATE.md` v0.2.0 · SIDEBAR · 本表 | T-2405 | G8/G9 可读；DOC-04 扩 S-75 | **done** |
-| T-2410 | G9 提示词 / 可选 kernel 注记 | `project.md` · overlay ·（可选）拒勾后 notice | T-2409 | 拒勾后禁止「本项已完成·继续」收口 | **done**（prompt）；kernel 注记 pending |
+| T-2410 | G9 提示词 / 可选 kernel 注记 | `project.md` · overlay ·（可选）拒勾后 notice | T-2409 | 拒勾后禁止「本项已完成·继续」收口 | **done** |
 | T-2411 | 口语 write 信号 + `[evidence:…]` 标签 | `progress_gate.py` · IT-70 · `PROGRESS-GATE.md` v0.3.0 | T-2403 | Phase 7 口语标题归 write；标签覆盖启发式；联调测试行仍归 test | **done** |
 
 **完成标志**：G1～G5 硬门单测绿；huiyi 类「拒 mvn 仍勾测试」不可复现；同 turn 双 report 硬拒；口语写码标题不再永久 `unknown`。
@@ -1602,6 +1602,134 @@ python turn_intent.py    # 分类用例无回归
 | T-4602 | 工坊短块 + loader 注入 | `evolve/prompts/tool_workshop.md` · `loader.py` | T-4600 | IT-461 · IT-463 | **done** |
 | T-4603 | topic 裁剪（coding 等） | `evolve/prompts/coding.md` | T-4602 | IT-463 | **done** |
 | T-4604 | 手工 smoke | S-461 | T-4601,T-4602 | 先聊聊 → 造工具 → 验收 | todo |
+
+---
+
+## Phase 47 — 交付审查 + delivery profile（DELIVERABLE-REVIEW）
+
+> 设计：[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) v0.3.0 · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) v0.3.0  
+> **状态：代码已落地（未 commit）** · S-470/S-471 手工 todo · **里程碑提醒 T-4714～4719 done** · ritual 闸门 S2+S6 done  
+> 触发：huiyi「和 Agent 博弈」— `solo`/`ritual` profile · `deliverable_review` 子代理 · prompt registry 清账。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（见 DELIVERABLE-REVIEW §11.1）
+
+- [x] 回归预留：**IT-471～475** · **S-470** · **S-471**
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4700 | 设计 + PROMPT-REGISTRY | docs | — | 评审 | **doc** |
+| T-4701～4711 | 见 DELIVERABLE-REVIEW §11.2 | agent-core · evolve · desktop | T-4700 | IT-471～475 | **done**（代码） |
+| T-4712 | ritual `fail` 挡 `report_progress` + 侧栏 review 态势 | progress_gate · desktop | T-4705 | IT-472 · S-470 | **done**（代码） |
+| T-4713 | 手工 huiyi S-470；ritual S-471 | log | T-4712 | S-470,471 | todo |
+| T-4714 | `evaluate_milestone_after_archive` + `phase_open_count_visible` + `archive_done_count_for_phase` | project_mode.py | LOCAL-DELIVERY-MODEL §5.3 | IT-476 | **done** |
+| T-4715 | `report_progress` → suggestion + `_save_state` | plan_agent | T-4714 | IT-476 | **done** |
+| T-4716 | `state.json` `milestone_review_reminders` + `phase_key` | plan_agent | T-4714 | IT-477 | **done** |
+| T-4717 | overlay `milestone_review_suggested` | project_mode | T-4715 | IT-476 | **done** |
+| T-4718 | LOCAL-DELIVERY-MODEL 文档 | docs | 评审 | **doc** | **done** |
+| T-4719 | `_plan_progress_brief` 用 archive 计完成度（禁 `done_n`） | plan_agent.py | LOCAL-DELIVERY-MODEL §5.1 | test_plan_partner | **done** |
+| S-472 | 手工：Phase 勾满 → notice → 口语验收 → review | log | T-4715～4717 | S-472 | todo |
+
+---
+
+## Phase 48 — 薄父编排 + 计划采纳队列（AGENT-PARENT · PLAN-ADOPT）
+
+> 设计：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) v0.1.0 · [bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md](./bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md) · [bugs/2026-08-06-explore-auto-spawn-wrong-scope.md](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md)  
+> **状态：设计已签 · 实现 todo**  
+> 触发：BUG-027（自动 explore 误 scope）· BUG-026（同文件多 patch base_hash）。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（编排 · 计划采纳 · 项目模式口语）
+
+- [x] 回归预留：**IT-4801～4803** · **IT-4810～4811** · **IT-4804** · **IT-4813** · S-480 · S-481（手工）
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4800 | 薄父编排设计落盘 | `AGENT-PARENT-ORCHESTRATION.md` | — | 评审 | **doc** |
+| T-4801 | 项目模式禁 `should_spawn_explore` | `turn_intent.py` · `agent.py` | T-4800 | IT-4801 | **done** |
+| T-4802 | `explore` 父调 builtin（对齐 review） | builtin · executor · agent | T-4801 | IT-4802 | **done** |
+| T-4803 | project prompt 口语→`deliverable_review` | evolve/prompts | T-4800 | IT-4803 | **done** |
+| T-4804 | 手工 huiyi「文档脱节」不读 TOOLS.md | log | T-4801～4803 | S-480 · IT-4804 | todo（手工） |
+| T-4810 | 同 path 多 patch 提案时合并为一条 `replacements[]` + 一张侧栏卡 | `plan_agent._apply_plan_operations` | BUG-026 doc §6.1 | IT-4810 | **done** |
+| T-4811 | 采纳等 WS 确认；闪绿文案用 `payload.path`；失败不乐观 | `desktop/.../index.ts` `acceptSuggestionById` | BUG-026 doc §5 | IT-4811 | **done** |
+| T-4812 | 采纳后 rebase 同 path 其余 pending 的 `base_hash`（可选） | `plan_agent.accept_suggestion` | BUG-026 doc §6.2 | IT-4810 | **done** |
+| T-4813 | 手工 5 条含重复 path 全采纳 | log | T-4810,4811 | S-481 · IT-4813 | todo（手工） |
+
+#### T-4804 / T-4813 手工验收（桌面）
+
+**环境**：重启 `start-desktop.bat` · 绑定 **huiyi** · `delivery_profile=solo`。
+
+**S-480**（BUG-027）
+
+1. 主聊：`文档和代码可能脱节了，你看看`
+2. **通过**：无回合初「先只读 explore」；过程区**不**读 `docs/TOOLS.md`；主 Agent 宜调 `deliverable_review`（或父写 task 的 `explore` 且路径在 `workspace/huiyi`）
+
+**S-481**（BUG-026）
+
+1. `plan_partner` 一次改 TASKS + MAP 两处 + PROJECT 两处
+2. 侧栏应 **3 张卡**（每文件 1 张），非 5 张
+3. 逐张采纳：闪绿文案为真实文件名（如 `MAP.md`），**无** `base_hash mismatch` 撤回
+
+---
+
+## Phase 49 — 子代理预算（SUBAGENT-BUDGET）
+
+> 设计：[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) v0.1.1  
+> **状态：M0 代码 done · S-4910 手工 todo**  
+> 触发：explore 8 轮 / review 6 轮撞 cap、主 Agent 仍可用 15 轮补读；用户：**子代理读盘权利应 ≥ 父 Agent**。
+
+### DOC-04 准入
+
+- [x] 影响矩阵行（子代理 · Agent Harness 预算 · 编排 overlay）
+- [x] 回归预留：**IT-4901～4906** · **S-490**（手工）
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-4900 | 子代理预算设计落盘 | `SUBAGENT-BUDGET.md` | — | 评审 | **doc** |
+| T-4901 | 提高 explore/review/checker 默认 cap | `subagent.py` | T-4900 | IT-4901～4903 | **done** |
+| T-4902 | `explore`/`deliverable_review` 透传 `max_rounds` | builtin · executor · agent schema | T-4901 | IT-4905 | **done** |
+| T-4903 | 撞 cap 硬兜底 `_synthesize_cap_summary` | `subagent.py` | T-4901 | IT-4902 | **done** |
+| T-4904 | plan 工具 loop 4 轮 + 摘要 3500 | `plan_agent.py` · `subagent.py` | T-4900 | IT-4904 | **done** |
+| T-4905 | 父调 explore/review 每轮默认 2 次 | `subagent.py` · executor | T-4901 | IT-4906 | **done** |
+| T-4906 | 修订薄父 / DELIVERABLE-REVIEW 预算列 | 文档 | T-4900 | 评审 | **done** |
+| T-4907 | checker 按 kind 分档 cap（可选） | `subagent.py` | T-4901 | IT-4903b | defer |
+| T-4910 | 手工 huiyi 对账不撞 8 轮墙 | log | T-4901～4905 | S-490 | todo（手工） |
+
+#### S-490 手工验收
+
+**环境**：`start-desktop.bat` · 绑定 **huiyi** · `delivery_profile=solo` · T-4901 合并后或 `REVIEW_SUBAGENT_MAX_ROUNDS=16`。
+
+1. 主聊：`文档和代码可能脱节了，你看看`
+2. **通过**：`deliverable_review` 过程卡；满 cap 时 overlay **非空**且含 `workspace/huiyi` 路径；主 Agent 无需连读 10+ 文件才能作答
+
+---
+
+## Phase 50 — Explore 作用域分轨（EXPLORE-SCOPE-RAILS）
+
+> 设计：[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) v0.1.0  
+> **状态：M0 代码 done · S-500/S-501 手工 todo**  
+> 触发：明确 general / project 双轨；**保留**普通对话内核 auto explore；BUG-027 仅项目轨。
+
+### DOC-04 准入
+
+- [x] 矩阵行（explore scope · 普通/项目轨 · auto spawn 策略）
+- [x] 预留：**IT-5001～5004** · **S-500** · **S-501**
+
+| ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
+|----|------|--------|------|------|------|
+| T-5000 | 作用域分轨设计落盘 | `EXPLORE-SCOPE-RAILS.md` | — | 评审 | **doc** |
+| T-5001 | auto spawn task 模板（general / grow） | `explore_scope.py` · `agent.py` | T-5000 | IT-5001 | **done** |
+| T-5002 | explore 满 cap 续跑（每消息 ≤1 次） | `subagent.py` · `agent.py` · executor | T-5000 | IT-5002 | **done** |
+| T-5003 | loader truncated / 满 cap 父补读纪律 | `loader.py` | T-5000 | IT-5003 | **done** |
+| T-5004 | 过程卡/notice 文案（满 cap ≠ 失败） | `agent.py` · executor `turn.notice` | T-5002 | S-500 | **done** |
+| T-5005 | 同步 AGENT-PARENT / BUG-027 范围 | 文档 | T-5000 | 评审 | **done** |
+| T-5010 | 手工 S-500 general + S-501 project | log | T-5001 | S-500 · S-501 | todo（手工） |
+
+#### S-500 / S-501
+
+见 [EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) §7。
 
 ---
 

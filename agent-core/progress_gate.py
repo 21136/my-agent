@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Literal
 
 EvidenceKind = Literal["write", "compile", "test", "build_fe", "verify_db", "unknown"]
+
+PROGRESS_GATE_GUARD_TYPES = frozenset(
+    {"progress_gate_evidence", "progress_gate_repeat", "progress_gate_review"}
+)
+
+PROGRESS_GATE_G9_KERNEL_MESSAGE = (
+    "[内核] report_progress 被拒：本项未完成、TASKS 未勾选。"
+    "禁止用「本项已完成 / ✅完成 / 回复「继续」开始下一项」收口。"
+    "须补本回合对口工具证据；或经 plan_partner 改任务文案 / 加 [evidence:…]；"
+    "或停写 blocker 等用户指示。"
+)
 
 _WRITE_EVIDENCE_TOOLS = frozenset(
     {"write_text", "patch_file", "copy_move", "write_evolve"}
@@ -193,15 +205,88 @@ def make_evidence_entry(
     }
 
 
+def _turn_has_l1_failure(turn_evidence: list[dict[str, Any]]) -> bool:
+    """True when this turn has failed compile/test-class tools (solo hard reject)."""
+    l1_tools = _TEST_EVIDENCE_TOOLS | _COMPILE_EVIDENCE_TOOLS | frozenset(
+        {"run_project_tests", "verify_build"}
+    )
+    for entry in turn_evidence:
+        if entry.get("ok"):
+            continue
+        name = _tool_name_from_entry(entry)
+        if name in l1_tools:
+            return True
+    return False
+
+
+def ritual_review_blocks_progress_enabled() -> bool:
+    """Phase 47 · DELIVERABLE-REVIEW §4.3 optional ritual hard gate."""
+    raw = os.environ.get("RITUAL_REVIEW_BLOCKS_PROGRESS", "").strip().casefold()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def review_progress_blocked_flag(
+    *,
+    delivery_profile: str,
+    last_review_verdict: str | None,
+    last_review_blockers_count: int = 0,
+) -> bool:
+    if not ritual_review_blocks_progress_enabled():
+        return False
+    profile = (delivery_profile or "solo").strip().casefold()
+    if profile != "ritual":
+        return False
+    verdict = (last_review_verdict or "").strip().casefold()
+    if verdict != "fail":
+        return False
+    return int(last_review_blockers_count or 0) > 0
+
+
+def report_progress_review_block_reason(
+    *,
+    active_shell: str,
+    delivery_profile: str,
+    last_review_verdict: str | None,
+    last_review_blockers_count: int = 0,
+) -> str | None:
+    """Block report_progress when ritual review found P0 blockers (env-gated)."""
+    if active_shell != "project":
+        return None
+    if not review_progress_blocked_flag(
+        delivery_profile=delivery_profile,
+        last_review_verdict=last_review_verdict,
+        last_review_blockers_count=last_review_blockers_count,
+    ):
+        return None
+    count = int(last_review_blockers_count or 0)
+    blocker_note = f"{count} 项阻塞" if count > 0 else "P0 阻塞"
+    return (
+        "[progress_gate] 交付审查 verdict=fail 且存在 "
+        f"{blocker_note}，禁止勾选进度。"
+        "请先修复 blockers 或重新运行 deliverable_review。"
+    )
+
+
 def report_progress_evidence_block_reason(
     *,
     active_shell: str,
     armed_task_text: str,
     turn_evidence: list[dict[str, Any]],
+    delivery_profile: str = "solo",
 ) -> str | None:
     """G1/G2: block report_progress when this-turn matched evidence is missing."""
     if active_shell != "project":
         return None
+    profile = (delivery_profile or "solo").strip().casefold()
+    if profile == "solo":
+        if _turn_has_l1_failure(turn_evidence):
+            return (
+                "[progress_gate] 本回合编译/测试失败，禁止勾选。"
+                " 请先修通 L1 或说明 blocker。"
+            )
+        kind = classify_task_evidence_kind(armed_task_text)
+        if kind == "unknown":
+            return None
     kind = classify_task_evidence_kind(armed_task_text)
     ok, note = evidence_satisfies(kind, turn_evidence)
     if ok:
@@ -252,11 +337,14 @@ def report_progress_repeat_block_reason(
     *,
     active_shell: str,
     task_stop_armed: bool,
+    report_progress_done_this_turn: bool = False,
     tool_name: str,
     arguments: dict[str, object],
 ) -> str | None:
     """G5: after a successful checkbox this turn, ban another report_progress."""
-    if not task_stop_armed or active_shell != "project":
+    if active_shell != "project":
+        return None
+    if not task_stop_armed and not report_progress_done_this_turn:
         return None
     if tool_name != "run_evolved":
         return None
@@ -267,3 +355,14 @@ def report_progress_repeat_block_reason(
         "[progress_gate] 本轮已完成一条 TASKS 勾选；"
         "禁止再次 report_progress。请结束回合，用户「继续」后再报下一项。"
     )
+
+
+def is_progress_gate_tool_error(result: Any) -> bool:
+    """True when executor blocked report_progress (evidence / repeat / review)."""
+    err = getattr(result, "error", None)
+    if err is None:
+        return False
+    details = getattr(err, "details", None)
+    if not isinstance(details, dict):
+        return False
+    return str(details.get("guard_type") or "") in PROGRESS_GATE_GUARD_TYPES

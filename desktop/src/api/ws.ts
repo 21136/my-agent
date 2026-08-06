@@ -144,6 +144,10 @@ export type ServerEvent =
       acceptance_command: string | null;
       acceptance_expected_exit: number | null;
       can_verify: boolean;
+      delivery_profile?: string;
+      review_verdict?: string | null;
+      review_blockers_count?: number;
+      review_progress_blocked?: boolean;
     }
   | {
       type: "project.list";
@@ -221,6 +225,17 @@ export type ServerEvent =
       adopt_pending?: boolean;
       ok?: boolean;
       call_id?: string;
+    }
+  | { type: "review.subagent.start"; task_preview: string; call_id?: string }
+  | {
+      type: "review.subagent.done";
+      summary?: string;
+      summary_preview?: string;
+      verdict?: string | null;
+      blockers_count?: number;
+      ok?: boolean;
+      call_id?: string;
+      paths_cited?: string[];
     }
   // project.doc.* events
   | {

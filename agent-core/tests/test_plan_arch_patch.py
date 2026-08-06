@@ -272,6 +272,249 @@ class PlanArchPatchTests(unittest.TestCase):
         with self.assertRaises(ProjectModeError):
             apply_replacements("aa aa", [{"old": "aa", "new": "b"}])
 
+    def test_it4810_same_path_patches_merge_to_one_card(self) -> None:
+        """BUG-026: two patch ops on MAP.md → one suggestion; single accept applies both."""
+        self.map.write_text(
+            "# m\n\n## Section A\n\n## Section B\n",
+            encoding="utf-8",
+        )
+        before = self.map.read_text(encoding="utf-8")
+        fake_resp = MagicMock()
+        fake_resp.content = json.dumps(
+            {
+                "operations": [
+                    {
+                        "kind": "patch",
+                        "path": "MAP.md",
+                        "replacements": [{"old": "## Section A", "new": "## Part A"}],
+                        "reason": "rename A",
+                    },
+                    {
+                        "kind": "patch",
+                        "path": "MAP.md",
+                        "replacements": [{"old": "## Section B", "new": "## Part B"}],
+                        "reason": "rename B",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = fake_resp
+        fake_llm._plan_model = "test"
+        self.agent._llm = fake_llm
+
+        summary = self.agent.reason_about_intent("map 两处标题都要改")
+        self.assertIn("提案", summary)
+        self.assertEqual(self.map.read_text(encoding="utf-8"), before)
+
+        state = self.agent.build_state()
+        patches = [
+            s
+            for s in (state.get("suggestions") or [])
+            if isinstance(s, dict) and s.get("action") == "apply_patch"
+        ]
+        self.assertEqual(len(patches), 1)
+        payload = patches[0].get("payload") or {}
+        self.assertEqual(payload.get("path"), "MAP.md")
+        reps = payload.get("replacements")
+        self.assertIsInstance(reps, list)
+        self.assertEqual(len(reps), 2)
+
+        result = self.agent.accept_suggestion(patches[0]["id"])
+        self.assertTrue(result.get("ok"))
+        text = self.map.read_text(encoding="utf-8")
+        self.assertIn("## Part A", text)
+        self.assertIn("## Part B", text)
+        self.assertNotIn("## Section A", text)
+        self.assertNotIn("## Section B", text)
+
+    def test_it4813_multi_file_patches_all_accept(self) -> None:
+        """S-481 proxy: TASKS + MAP×2 + PROJECT×2 → 3 cards, sequential accept OK."""
+        self.tasks.write_text("## P\n- [ ] old task\n", encoding="utf-8")
+        self.map.write_text("# m\n\n## A\n\n## B\n", encoding="utf-8")
+        (self.root / "PROJECT.md").write_text("# p\n\n## X\n", encoding="utf-8")
+        fake_resp = MagicMock()
+        fake_resp.content = json.dumps(
+            {
+                "operations": [
+                    {
+                        "kind": "patch",
+                        "path": "TASKS.md",
+                        "replacements": [{"old": "old task", "new": "new task"}],
+                    },
+                    {
+                        "kind": "patch",
+                        "path": "MAP.md",
+                        "replacements": [{"old": "## A", "new": "## A1"}],
+                    },
+                    {
+                        "kind": "patch",
+                        "path": "MAP.md",
+                        "replacements": [{"old": "## B", "new": "## B1"}],
+                    },
+                    {
+                        "kind": "patch",
+                        "path": "PROJECT.md",
+                        "replacements": [{"old": "## X", "new": "## X1"}],
+                    },
+                    {
+                        "kind": "patch",
+                        "path": "PROJECT.md",
+                        "replacements": [{"old": "## X1", "new": "## X2"}],
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = fake_resp
+        fake_llm._plan_model = "test"
+        self.agent._llm = fake_llm
+
+        self.agent.reason_about_intent("sync all plan files")
+        state = self.agent.build_state()
+        patches = [
+            s
+            for s in (state.get("suggestions") or [])
+            if isinstance(s, dict) and s.get("action") == "apply_patch"
+        ]
+        self.assertEqual(len(patches), 3)
+        paths_seen = {p.get("payload", {}).get("path") for p in patches}
+        self.assertEqual(paths_seen, {"TASKS.md", "MAP.md", "PROJECT.md"})
+
+        for sug in patches:
+            result = self.agent.accept_suggestion(sug["id"])
+            self.assertTrue(result.get("ok"), msg=result.get("summary"))
+
+        self.assertIn("new task", self.tasks.read_text(encoding="utf-8"))
+        map_text = self.map.read_text(encoding="utf-8")
+        self.assertIn("## A1", map_text)
+        self.assertIn("## B1", map_text)
+        self.assertIn("## X2", (self.root / "PROJECT.md").read_text(encoding="utf-8"))
+
+    def test_it4812_rebase_pending_same_path_after_accept(self) -> None:
+        """BUG-026 A2: adopt first card rebases second card base_hash; sequential accept OK."""
+        self.map.write_text(
+            "# m\n\n## Section A\n\n## Section B\n",
+            encoding="utf-8",
+        )
+        preview_a = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section A", "new": "## Part A"}],
+        )
+        preview_b = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section B", "new": "## Part B"}],
+        )
+        self.assertEqual(preview_a["base_hash"], preview_b["base_hash"])
+
+        sug_a = self.agent._suggestion(
+            kind="file_patch",
+            title="改 MAP.md A（待采纳）",
+            body="rename A",
+            key="map-a",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview_a["base_hash"],
+                "replacements": [{"old": "## Section A", "new": "## Part A"}],
+                "diff": preview_a["diff"],
+            },
+        )
+        sug_b = self.agent._suggestion(
+            kind="file_patch",
+            title="改 MAP.md B（待采纳）",
+            body="rename B",
+            key="map-b",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview_b["base_hash"],
+                "replacements": [{"old": "## Section B", "new": "## Part B"}],
+                "diff": preview_b["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug_a)
+        self.agent.park_gated_suggestion(sug_b)
+
+        result = self.agent.accept_suggestion(sug_a["id"])
+        self.assertTrue(result.get("ok"))
+        self.assertIn(sug_b["id"], self.agent._pending_gated)
+
+        rebased_payload = self.agent._pending_gated[sug_b["id"]].get("payload") or {}
+        current_preview = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section B", "new": "## Part B"}],
+        )
+        self.assertEqual(rebased_payload.get("base_hash"), current_preview["base_hash"])
+        self.assertNotEqual(rebased_payload.get("base_hash"), preview_b["base_hash"])
+
+        result_b = self.agent.accept_suggestion(sug_b["id"])
+        self.assertTrue(result_b.get("ok"))
+        text = self.map.read_text(encoding="utf-8")
+        self.assertIn("## Part A", text)
+        self.assertIn("## Part B", text)
+
+    def test_it4812_rebase_withdraws_stale_patch(self) -> None:
+        """BUG-026 A2: after adopt, conflicting pending patch is auto-withdrawn."""
+        self.map.write_text("# m\n\n## Section A\n\n## Section B\n", encoding="utf-8")
+        preview_a = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section A", "new": "## Part A"}],
+        )
+        preview_conflict = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section A", "new": "## Gone"}],
+        )
+        sug_a = self.agent._suggestion(
+            kind="file_patch",
+            title="改 MAP.md A",
+            body="rename A",
+            key="map-a2",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview_a["base_hash"],
+                "replacements": [{"old": "## Section A", "new": "## Part A"}],
+                "diff": preview_a["diff"],
+            },
+        )
+        sug_conflict = self.agent._suggestion(
+            kind="file_patch",
+            title="改 MAP.md conflict",
+            body="also rename A",
+            key="map-c",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview_conflict["base_hash"],
+                "replacements": [{"old": "## Section A", "new": "## Gone"}],
+                "diff": preview_conflict["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug_a)
+        self.agent.park_gated_suggestion(sug_conflict)
+
+        result = self.agent.accept_suggestion(sug_a["id"])
+        self.assertTrue(result.get("ok"))
+        self.assertNotIn(sug_conflict["id"], self.agent._pending_gated)
+        self.assertIn("已撤回无效提案", result.get("summary") or "")
+
 
 if __name__ == "__main__":
     unittest.main()

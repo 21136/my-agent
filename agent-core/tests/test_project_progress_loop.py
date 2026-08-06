@@ -121,6 +121,7 @@ class OverlayCopyTests(unittest.TestCase):
             project_root="workspace/x",
             project_id="x",
             plan_status="confirmed",
+            delivery_profile="ritual",
         )
         self.assertIn("report_progress", overlay)
         self.assertIn("禁止直写 TASKS.md", overlay)
@@ -160,6 +161,8 @@ class ReportProgressInjectTests(unittest.TestCase):
             parse_project_command("项目 确认"),
             output_fn=lambda _l: None,
         )
+        self.session.meta.project_delivery_profile = "ritual"
+        self.session.save()
         self.pid = normalize_project_id(self.project_id)
         tasks = project_dir(self.paths, self.pid) / "TASKS.md"
         # line 2 = first checkbox when header + blank + item

@@ -385,12 +385,27 @@ def format_memory_index(entries: list[MemoryIndexEntry]) -> str:
 
 
 def format_builtin_summary() -> str:
+    core_names = {
+        "read_file",
+        "list_dir",
+        "grep",
+        "glob_file_search",
+        "web_search",
+        "fetch_url",
+        "run_evolved",
+    }
     lines = [
         "[Builtin 工具]",
-        "恒为 7 个 function；evolved 工具经 run_evolved 调用，见本会话清单：",
+        "恒为 11 个 function（核心 7 + 编排 4）；evolved 经 run_evolved，见工具索引：",
+        "核心：",
     ]
     for tool in BUILTIN_TOOLS:
-        lines.append(f"- {tool.name}: {tool.description}")
+        if tool.name in core_names:
+            lines.append(f"- {tool.name}: {tool.description}")
+    lines.append("编排：")
+    for tool in BUILTIN_TOOLS:
+        if tool.name not in core_names:
+            lines.append(f"- {tool.name}: {tool.description}")
     return "\n".join(lines)
 
 
@@ -471,10 +486,25 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
                 "subagent: checker — 验收报告已注入；勿自动修复文件；"
                 "verdict≠pass 时勿宣称「已验收/沉淀完成」。"
             )
-        else:
+        elif "[子代理摘要 · deliverable_review]" in session.subagent_overlay:
             lines.append(
-                "subagent: used — 已注入 explore 摘要；父循环勿对「已读」路径再 read/grep（除非摘要 truncated）。"
+                "subagent: review — 交付审查已注入；按 verdict 行动，勿要求用户点验收按钮。"
             )
+        elif "[子代理摘要 · plan]" in session.subagent_overlay:
+            lines.append(
+                "subagent: plan — 计划提案已注入；向用户说明要点，勿口述按钮名。"
+            )
+        else:
+            overlay = (session.subagent_overlay or "").strip()
+            if "已达 explore 上限" in overlay or "摘要已截断" in overlay:
+                lines.append(
+                    "subagent: explore — 已满 cap 或摘要截断；父可补读关键文件，"
+                    "勿重复 overlay「已读」路径。"
+                )
+            else:
+                lines.append(
+                    "subagent: used — 已注入 explore 摘要；父循环勿对「已读」路径再 read/grep（除非摘要 truncated）。"
+                )
     elif session.turn_intent == "recall":
         lines.append(
             "turn_intent: recall — 根据上文直接回顾；父循环不调工具（T-905）。"
@@ -785,12 +815,12 @@ def format_tool_loop_user_message(
         f"{segment_note}，已执行 {tool_rounds} 轮），未能得到最终文字回复，且本段无可见进展。\n\n"
         "每条用户消息都会重新计算工具预算；若任务未完成，请发新消息（如「继续」）再试。\n\n"
         "常见原因：\n"
-        "1. 任务需要的能力尚无对应 evolved 工具\n"
-        "2. 需要其他主题的工具（例如 workflow 的 sort_by_extension）但未确认该主题\n"
-        "3. 在反复观察（read_file / grep / list_dir）而未收敛到结论\n\n"
-        f"本会话可用 evolved：{tools_label}\n"
-        f"当前主题：{topic_label}\n\n"
-        "建议：简化问题后重试；或输入「主题 workflow」等确认合适主题；"
+        "1. 任务需要的能力尚无对应 evolved 工具（或工具 status 非 active）\n"
+        "2. 在反复观察（read_file / grep / list_dir / glob_file_search）而未收敛到结论\n"
+        "3. 子代理/编排 builtin 预算用尽，或 segment 内无可见进展\n\n"
+        f"本会话可用 evolved（凡 active）：{tools_label}\n"
+        f"当前主题（管 prompt/memory，不管工具锁）：{topic_label}\n\n"
+        "建议：简化问题后重试；查阅 evolve/tool-catalog/INDEX.md 或对应 buckets；"
         "若长期缺工具，可说「记住」提交 tool 建议。"
     )
 
@@ -827,8 +857,17 @@ def format_task_paused_notice(*, next_open_task: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def ensure_task_paused_text(text: str, *, next_open_task: str | None = None) -> str:
+def ensure_task_paused_text(
+    text: str,
+    *,
+    next_open_task: str | None = None,
+    delivery_profile: str = "solo",
+) -> str:
     """Append pause notice if missing from assistant text."""
+    from project_mode import normalize_delivery_profile
+
+    if normalize_delivery_profile(delivery_profile) == "solo":
+        return (text or "").rstrip()
     body = (text or "").rstrip()
     if "回复「继续」" in body or "回复『继续』" in body or "本项已完成" in body:
         return body
@@ -882,36 +921,6 @@ def format_tool_interrupt_kernel_message(
 ) -> str:
     """Inject into transcript so the model does not invent a budget-cap story."""
     return f"[内核] {format_tool_interrupt_notice(kind, tool_label=tool_label)}"
-
-
-def _project_shell_bound(session: Session) -> bool:
-    """True when session is on project shell or still bound to a project_root (§0e F1)."""
-    if (session.meta.active_shell or "").strip() == "project":
-        return True
-    return bool((session.meta.project_root or "").strip())
-
-
-def session_evolved_tools(
-    session: Session,
-    *,
-    registry: ToolRegistry | None = None,
-):
-    """Active evolved tools listed in catalog overlay (topics + project-scope when bound).
-
-    Phase 23 M1: **execution** allowlist is separate — see ``session_evolved_allowlist``.
-    Catalog still topic-filtered until M3 swaps in INDEX.
-    """
-    from tools.registry import EvolvedTool
-
-    reg = registry or ToolRegistry.load(session.paths)
-    by_name: dict[str, EvolvedTool] = {
-        tool.name: tool for tool in reg.session_evolved(session.meta.topics)
-    }
-    if _project_shell_bound(session):
-        for tool in reg.evolved():
-            if tool.status == "active" and tool.scope == "project":
-                by_name.setdefault(tool.name, tool)
-    return tuple(by_name[name] for name in sorted(by_name))
 
 
 def session_evolved_allowlist(
@@ -1030,10 +1039,10 @@ def format_evolved_catalog_overlay(
     return "\n\n".join(parts)
 
 
-def load_project_prompt(evolve_dir: Path) -> str:
+def load_project_prompt(evolve_dir: Path, *, profile: str = "solo") -> str:
     from project_mode import load_project_prompt as _load
 
-    return _load(evolve_dir)
+    return _load(evolve_dir, profile=profile)
 
 
 def load_digest(session: Session) -> str | None:
@@ -1103,11 +1112,15 @@ def build_system_prompt(
                 extract_task_id,
                 first_open_task_line,
                 format_project_overlay,
+                get_delivery_profile,
                 is_project_continue_utterance,
                 project_dir,
+                read_milestone_review_overlay_key,
                 read_task_stats,
                 read_tasks_text_for_injection,
             )
+
+            profile = get_delivery_profile(session.meta)
 
             tasks_path = (
                 project_dir(session.paths, session.meta.project_id) / "TASKS.md"
@@ -1128,25 +1141,50 @@ def build_system_prompt(
                 if (session.meta.project_plan_status or "draft") == "confirmed"
                 else ""
             )
+            milestone_key: str | None = None
+            if session.meta.project_id:
+                from plan_agent import get_plan_agent
+
+                try:
+                    milestone_key = get_plan_agent(
+                        session.paths, session.meta.project_id
+                    ).milestone_review_overlay_key()
+                except Exception:
+                    milestone_key = None
+                if not milestone_key:
+                    milestone_key = read_milestone_review_overlay_key(
+                        session.paths, session.meta.project_id
+                    )
             sections.append(
                 (
                     "project_prompt",
-                    load_project_prompt(evolve_dir),
+                    load_project_prompt(evolve_dir, profile=profile),
                 )
             )
+            overlay = format_project_overlay(
+                project_root=session.meta.project_root,
+                project_id=session.meta.project_id,
+                plan_status=session.meta.project_plan_status or "draft",
+                task_stats=stats,
+                continue_turn=continue_turn,
+                next_open_task=next_open,
+                armed_task_id=extract_task_id(next_open or ""),
+                open_tasks_slice=open_slice or None,
+                delivery_profile=profile,
+                milestone_review_suggested=milestone_key,
+            )
+            digest_text = load_digest(session) or ""
+            if profile == "solo" and digest_text and (
+                "report_progress" in digest_text and "必须" in digest_text
+            ):
+                overlay += (
+                    "\ndigest_profile_note: solo — 忽略 digest 中与一停/"
+                    "强制 report_progress 冲突的旧叙述"
+                )
             sections.append(
                 (
                     "project_mode",
-                    format_project_overlay(
-                        project_root=session.meta.project_root,
-                        project_id=session.meta.project_id,
-                        plan_status=session.meta.project_plan_status or "draft",
-                        task_stats=stats,
-                        continue_turn=continue_turn,
-                        next_open_task=next_open,
-                        armed_task_id=extract_task_id(next_open or ""),
-                        open_tasks_slice=open_slice or None,
-                    ),
+                    overlay,
                 )
             )
 

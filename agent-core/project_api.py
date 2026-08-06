@@ -85,6 +85,9 @@ def _project_summary(project_md: str) -> str:
 
 
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
+    from project_mode import get_delivery_profile
+    from progress_gate import review_progress_blocked_flag
+
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
     plan_status = session.meta.project_plan_status or "draft"
@@ -115,6 +118,14 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
+        "delivery_profile": get_delivery_profile(session.meta),
+        "review_verdict": getattr(session, "last_review_verdict", None),
+        "review_blockers_count": int(getattr(session, "last_review_blockers_count", 0) or 0),
+        "review_progress_blocked": review_progress_blocked_flag(
+            delivery_profile=get_delivery_profile(session.meta),
+            last_review_verdict=getattr(session, "last_review_verdict", None),
+            last_review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+        ),
     }
 
 
@@ -652,9 +663,12 @@ def _dispatch_plan_message(
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")
             summary = str(message.get("summary", ""))
+            from project_mode import get_delivery_profile
+
             result = agent.report_progress(
                 task_line if isinstance(task_line, int) else None,
                 summary,
+                delivery_profile=get_delivery_profile(session.meta),
             )
             return result
 

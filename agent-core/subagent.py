@@ -25,7 +25,7 @@ from tools.registry import ToolManifestError, ToolRegistry, parse_tool_manifest
 from tools.schema import to_json
 from turn_intent import classify_turn, should_spawn_explore
 
-SubagentKind = Literal["explore", "checker", "plan"]
+SubagentKind = Literal["explore", "checker", "plan", "review"]
 CheckerKind = Literal["evolve_tool_scaffold", "project_test_fail"]
 CheckStatus = Literal["pass", "fail", "warn"]
 Verdict = Literal["pass", "fail", "warn"]
@@ -46,12 +46,21 @@ CHECKER_TOOL_NAMES: tuple[str, ...] = (
     "grep",
 )
 
-_DEFAULT_EXPLORE_MAX = 8
-_DEFAULT_CHECKER_MAX = 5
+REVIEW_TOOL_NAMES: tuple[str, ...] = CHECKER_TOOL_NAMES
+
+_DEFAULT_EXPLORE_MAX = 16
+_DEFAULT_CHECKER_MAX = 10
+_DEFAULT_REVIEW_MAX = 16
 _DEFAULT_SUMMARY_MAX = 4000
-_DEFAULT_PLAN_SUMMARY_MAX = 2000
-_DEFAULT_CHECKER_SUMMARY_MAX = 3000
+_DEFAULT_REVIEW_SUMMARY_MAX = 4000
+_DEFAULT_PLAN_SUMMARY_MAX = 3500
+_DEFAULT_CHECKER_SUMMARY_MAX = 3500
+_DEFAULT_PLAN_TOOL_ROUNDS = 4
+_DEFAULT_SUBAGENT_HARD_CAP = 32
 _PLAN_PARTNER_MAX_PER_TURN = 2
+_DELIVERABLE_REVIEW_MAX_PER_TURN = 2
+_EXPLORE_BUILTIN_MAX_PER_TURN = 2
+_EXPLORE_CONTINUE_MAX_PER_TURN = 1
 _CAP_SUMMARY_PROMPT = "请根据已读内容输出摘要（含已读路径与结论）。"
 _CHECKER_CLOSE_PROMPT = (
     "请输出验收结论。末行必须是 CHECKER_VERDICT: pass|fail|warn。"
@@ -88,6 +97,20 @@ _CHECKER_PROJECT_TEST_FALLBACK = "\n".join(
         "任务：分析 run_project_tests 的结构化 failures，给出修复建议。",
         "禁止声称已 patch 或已修改文件；只读审计 + 建议。",
     ]
+)
+
+_REVIEW_DELIVERABLE_FALLBACK = "\n".join(
+    [
+        "你是 my-agent 的 **deliverable_review 子代理**（只读交付审查）。",
+        "可用工具：read_file、list_dir、glob_file_search、grep。",
+        "**禁止** run_evolved 或任何写入；不要跑重 shell 命令。",
+        "输出末行必须是：REVIEW_VERDICT: pass|warn|fail",
+        "facts 由父 Agent 注入；无 facts 时明确写未验证项。",
+    ]
+)
+
+_REVIEW_CLOSE_PROMPT = (
+    "请输出交付审查结论。末行必须是 REVIEW_VERDICT: pass|warn|fail。"
 )
 
 _TOOL_EXPLORE_MARKERS = (
@@ -150,6 +173,85 @@ def plan_partner_max_per_turn() -> int:
     except ValueError:
         value = _PLAN_PARTNER_MAX_PER_TURN
     return max(1, value)
+
+
+def deliverable_review_max_per_turn() -> int:
+    raw = os.environ.get(
+        "DELIVERABLE_REVIEW_MAX_PER_TURN", str(_DELIVERABLE_REVIEW_MAX_PER_TURN)
+    )
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DELIVERABLE_REVIEW_MAX_PER_TURN
+    return max(1, value)
+
+
+def explore_continue_max_per_turn() -> int:
+    raw = os.environ.get(
+        "EXPLORE_CONTINUE_MAX_PER_TURN", str(_EXPLORE_CONTINUE_MAX_PER_TURN)
+    )
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _EXPLORE_CONTINUE_MAX_PER_TURN
+    return max(0, value)
+
+
+def explore_builtin_max_per_turn() -> int:
+    raw = os.environ.get("EXPLORE_BUILTIN_MAX_PER_TURN", str(_EXPLORE_BUILTIN_MAX_PER_TURN))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _EXPLORE_BUILTIN_MAX_PER_TURN
+    return max(1, value)
+
+
+def plan_subagent_tool_rounds() -> int:
+    raw = os.environ.get("PLAN_SUBAGENT_TOOL_ROUNDS", str(_DEFAULT_PLAN_TOOL_ROUNDS))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_PLAN_TOOL_ROUNDS
+    return max(1, value)
+
+
+def subagent_hard_cap() -> int:
+    raw = os.environ.get("SUBAGENT_HARD_CAP", str(_DEFAULT_SUBAGENT_HARD_CAP))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_SUBAGENT_HARD_CAP
+    return max(1, value)
+
+
+def resolve_subagent_max_rounds(requested: int | None, *, default: int) -> int:
+    """Clamp subagent tool rounds to [1, SUBAGENT_HARD_CAP] (Phase 49)."""
+    base = default if requested is None else requested
+    try:
+        value = int(base)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(value, subagent_hard_cap()))
+
+
+def review_subagent_max_rounds() -> int:
+    raw = os.environ.get("REVIEW_SUBAGENT_MAX_ROUNDS", str(_DEFAULT_REVIEW_MAX))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_REVIEW_MAX
+    return max(1, value)
+
+
+def review_subagent_summary_max_chars() -> int:
+    raw = os.environ.get(
+        "REVIEW_SUBAGENT_SUMMARY_MAX_CHARS", str(_DEFAULT_REVIEW_SUMMARY_MAX)
+    )
+    try:
+        value = int(raw)
+    except ValueError:
+        value = _DEFAULT_REVIEW_SUMMARY_MAX
+    return max(256, value)
 
 
 def checker_summary_max_chars() -> int:
@@ -224,6 +326,28 @@ def build_checker_tools(*, registry: ToolRegistry | None = None) -> list[dict[st
         if reg.get_builtin(name) is None:
             raise RuntimeError(f"missing checker builtin: {name!r}")
     return [build_builtin_tool_definition(name) for name in CHECKER_TOOL_NAMES]
+
+
+def build_review_tools(*, registry: ToolRegistry | None = None) -> list[dict[str, Any]]:
+    """Read-only builtin subset for deliverable_review subagent."""
+    reg = registry or ToolRegistry.load()
+    for name in REVIEW_TOOL_NAMES:
+        if reg.get_builtin(name) is None:
+            raise RuntimeError(f"missing review builtin: {name!r}")
+    return [build_builtin_tool_definition(name) for name in REVIEW_TOOL_NAMES]
+
+
+def parse_max_rounds_argument(raw: Any) -> int | None:
+    """Optional max_rounds from parent builtin arguments (Phase 49)."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_rounds must be an integer") from exc
+    if value < 1:
+        raise ValueError("max_rounds must be >= 1")
+    return value
 
 
 classify_turn_intent = classify_turn
@@ -332,6 +456,8 @@ class SubagentResult:
     proposal_ids: tuple[str, ...] = ()
     partner_notices: tuple[str, ...] = ()
     adopt_pending: bool = False
+    hit_cap: bool = False
+    explore_continued: bool = False
 
 
 def merge_checklist_verdict(checklist: list[ChecklistItem]) -> Verdict:
@@ -558,13 +684,35 @@ def format_subagent_overlay(result: SubagentResult) -> str:
         lines.append(f"（checker 已用 {result.tool_rounds}/{cap} 轮）")
         return "\n".join(lines)
 
+    if result.kind == "review":
+        verdict = (result.verdict or "warn").upper()
+        lines = [
+            "[子代理摘要 · deliverable_review]",
+            f"任务: {result.task}",
+            f"verdict: {verdict}",
+            f"结论: {result.summary}",
+        ]
+        paths_line = ", ".join(result.paths_cited) if result.paths_cited else "(none)"
+        lines.append(f"已读: {paths_line}")
+        lines.append("父循环：根据 review 建议行动；勿要求用户点击侧栏验收按钮。")
+        cap = review_subagent_max_rounds()
+        lines.append(f"（review 已用 {result.tool_rounds}/{cap} 轮）")
+        if result.truncated:
+            lines.append("（摘要已截断）")
+        return "\n".join(lines)
+
     paths_line = ", ".join(result.paths_cited) if result.paths_cited else "(none)"
     cap_note = ""
     if result.truncated:
-        cap_note = "（摘要已截断；父代理可补读关键文件）"
-    rounds_note = f"子代理已用 {result.tool_rounds}/{subagent_explore_max()} 轮"
-    if result.tool_rounds >= subagent_explore_max():
+        cap_note = "（摘要已截断；父代理可补读未列路径）"
+    cap_used = result.tool_rounds
+    cap_limit = subagent_explore_max()
+    rounds_note = f"子代理已用 {cap_used}/{cap_limit} 轮"
+    if result.hit_cap:
         rounds_note += "；已达 explore 上限"
+        if result.explore_continued:
+            rounds_note += "（已续跑一轮）"
+        rounds_note += " — 主 Agent 可续查"
     return "\n".join(
         [
             "[子代理摘要 · explore]",
@@ -627,6 +775,97 @@ def _checker_system_prompt(
         "checker_tool",
         fallback=_CHECKER_TOOL_FALLBACK,
     )
+
+
+def _review_system_prompt(paths: AgentPaths) -> str:
+    from loader import load_subagent_prompt
+
+    return load_subagent_prompt(
+        paths.evolve,
+        "review_deliverable",
+        fallback=_REVIEW_DELIVERABLE_FALLBACK,
+    )
+
+
+def _parse_review_verdict_from_text(text: str) -> Verdict | None:
+    match = re.search(r"REVIEW_VERDICT:\s*(pass|warn|fail)\b", text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    value = match.group(1).strip().lower()
+    if value in {"pass", "warn", "fail"}:
+        return value  # type: ignore[return-value]
+    return None
+
+
+def count_review_blockers(summary: str, *, verdict: str | None = None) -> int:
+    """Heuristic P0/blocker count for review.subagent.done payloads."""
+    count = 0
+    for line in summary.splitlines():
+        if re.search(r"\bP0\b|\bblockers?\b", line, re.IGNORECASE):
+            count += 1
+    if count:
+        return count
+    if (verdict or "").strip().casefold() == "fail":
+        return 1
+    return 0
+
+
+def review_summary_preview(summary: str, *, max_chars: int = 160) -> str:
+    cleaned = (summary or "").strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1] + "…"
+
+
+def _format_review_user_message(
+    *,
+    task: str,
+    scope: str,
+    phase_hint: str,
+    paths: list[str],
+    facts: dict[str, Any],
+    plan_slice: str,
+) -> str:
+    lines = [
+        f"交付审查任务: {task}",
+        f"scope: {scope}",
+    ]
+    if phase_hint:
+        lines.append(f"phase_hint: {phase_hint}")
+    if paths:
+        lines.append("paths:")
+        lines.extend(f"  - {p}" for p in paths)
+    if facts:
+        blob = json.dumps(facts, ensure_ascii=False, indent=2)
+        if len(blob) > 4000:
+            blob = blob[:4000] + "\n…(truncated)"
+        lines.append("facts (父 Agent 注入，优先采信):")
+        lines.append(blob)
+    if plan_slice.strip():
+        lines.append("plan_slice (验收段 + 开放队列标题，≤4k):")
+        lines.append(plan_slice.strip())
+    lines.append(_REVIEW_CLOSE_PROMPT)
+    return "\n".join(lines)
+
+
+def _build_review_plan_slice(paths: AgentPaths, project_id: str) -> str:
+    from project_mode import build_tasks_injection_slice, read_project_artifacts
+
+    artifacts = read_project_artifacts(paths, project_id)
+    parts: list[str] = []
+    project_md = artifacts.get("PROJECT.md", "")
+    if project_md:
+        marker = "## 验收标准"
+        idx = project_md.find(marker)
+        if idx >= 0:
+            parts.append(project_md[idx : idx + 2000])
+    tasks = artifacts.get("TASKS.md", "")
+    if tasks:
+        open_slice = build_tasks_injection_slice(tasks)
+        if open_slice:
+            parts.append(open_slice[:2000])
+    combined = "\n\n".join(parts)
+    return combined[:4000]
 
 
 def _format_checker_user_message(task: CheckerTask, hard_checklist: list[ChecklistItem]) -> str:
@@ -778,6 +1017,135 @@ def _collect_paths_cited(working_messages: list[dict[str, Any]]) -> list[str]:
     return ordered
 
 
+def _tool_result_snippet(content: str, *, max_len: int = 120) -> str | None:
+    raw = (content or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw[:max_len]
+    if not isinstance(payload, dict):
+        return str(payload)[:max_len]
+    if payload.get("ok") is False:
+        err = payload.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or "").strip()
+            if msg:
+                return f"error: {msg[:max_len]}"
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("path", "file", "cwd", "root"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()[:max_len]
+    return raw[:max_len]
+
+
+def synthesize_cap_summary(
+    working_messages: list[dict[str, Any]],
+    *,
+    kind: SubagentKind,
+    cap: int,
+    tool_rounds: int,
+) -> str:
+    """Hard fallback when LLM cap-summary fails (Phase 49 · T-4903)."""
+    paths = _collect_paths_cited(working_messages)
+    snippets: list[str] = []
+    for msg in working_messages:
+        if msg.get("role") != "tool":
+            continue
+        snippet = _tool_result_snippet(str(msg.get("content") or ""))
+        if snippet and snippet not in snippets:
+            snippets.append(snippet)
+        if len(snippets) >= 8:
+            break
+
+    kind_label = {
+        "explore": "explore",
+        "review": "deliverable_review",
+        "checker": "checker",
+        "plan": "plan",
+    }.get(kind, str(kind))
+    lines = [
+        f"（{kind_label} 已用满 {tool_rounds}/{cap} 轮；以下为硬兜底摘要）",
+    ]
+    if paths:
+        joined = "、".join(paths[:30])
+        if len(paths) > 30:
+            joined += f" …等 {len(paths)} 项"
+        lines.append(f"已读路径：{joined}")
+    if snippets:
+        lines.append("要点：" + "；".join(snippets[:8]))
+    else:
+        lines.append("要点：已执行只读工具但未产出文字结论；父代理可补读关键路径。")
+    return "\n".join(lines)
+
+
+def _finalize_subagent_summary_on_cap(
+    *,
+    working: list[dict[str, Any]],
+    llm: ChatClient,
+    model: str,
+    temperature: float,
+    close_prompt: str,
+    kind: SubagentKind,
+    cap: int,
+    tool_rounds: int,
+    cancel_event: threading.Event | None,
+    empty_label: str,
+) -> str:
+    _raise_if_cancelled(cancel_event)
+    working.append({"role": "user", "content": close_prompt})
+    summary_response = llm.chat(working, model=model, tools=None, temperature=temperature)
+    final_text = (summary_response.content or "").strip()
+    if final_text:
+        working.append({"role": "assistant", "content": final_text})
+        return final_text
+
+    synthesized = synthesize_cap_summary(
+        working,
+        kind=kind,
+        cap=cap,
+        tool_rounds=tool_rounds,
+    )
+    if synthesized.strip():
+        return synthesized
+
+    paths = _collect_paths_cited(working)
+    if paths:
+        return (
+            f"{empty_label} 已用满 {tool_rounds}/{cap} 轮；"
+            f"已读：{', '.join(paths[:40])}"
+        )
+    return f"{empty_label} 已用满 {tool_rounds}/{cap} 轮。"
+
+
+def merge_explore_results(first: SubagentResult, second: SubagentResult) -> SubagentResult:
+    """Merge primary + continue explore runs (Phase 50 · T-5002)."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    for path in list(first.paths_cited) + list(second.paths_cited):
+        if path not in seen:
+            seen.add(path)
+            paths.append(path)
+    summary = first.summary.strip()
+    extra = second.summary.strip()
+    if extra:
+        summary = f"{summary}\n\n【续跑补充】\n{extra}" if summary else extra
+    merged_summary, was_truncated = truncate_summary(summary)
+    return SubagentResult(
+        kind="explore",
+        summary=merged_summary,
+        paths_cited=paths,
+        tool_rounds=first.tool_rounds + second.tool_rounds,
+        truncated=first.truncated or second.truncated or was_truncated,
+        task=first.task,
+        hit_cap=second.hit_cap,
+        explore_continued=True,
+    )
+
+
 def _bind_llm_cancel(llm: ChatClient, cancel_event: threading.Event | None) -> None:
     if cancel_event is None:
         return
@@ -812,7 +1180,7 @@ class SubagentRunner:
         if not task_text:
             raise ValueError("explore task is empty")
 
-        cap = max_rounds if max_rounds is not None else subagent_explore_max()
+        cap = resolve_subagent_max_rounds(max_rounds, default=subagent_explore_max())
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor.create(
             paths=self.paths,
@@ -891,15 +1259,26 @@ class SubagentRunner:
             hit_cap = True
 
         if hit_cap and not final_text:
-            _raise_if_cancelled(cancel_event)
-            working.append({"role": "user", "content": _CAP_SUMMARY_PROMPT})
-            summary_response = llm.chat(working, model=model, tools=None, temperature=0.2)
-            final_text = (summary_response.content or "").strip()
-            if final_text:
-                working.append({"role": "assistant", "content": final_text})
+            final_text = _finalize_subagent_summary_on_cap(
+                working=working,
+                llm=llm,
+                model=model,
+                temperature=0.2,
+                close_prompt=_CAP_SUMMARY_PROMPT,
+                kind="explore",
+                cap=cap,
+                tool_rounds=tool_rounds,
+                cancel_event=cancel_event,
+                empty_label="（explore 未产出文字摘要）",
+            )
 
         if not final_text:
-            final_text = "（子代理未产出文字摘要）"
+            final_text = synthesize_cap_summary(
+                working,
+                kind="explore",
+                cap=cap,
+                tool_rounds=tool_rounds,
+            )
 
         paths_cited = _collect_paths_cited(working)
         summary, truncated = truncate_summary(final_text)
@@ -911,6 +1290,7 @@ class SubagentRunner:
             tool_rounds=tool_rounds,
             truncated=truncated,
             task=task_text,
+            hit_cap=hit_cap,
         )
 
         if self.evolve_log is not None:
@@ -923,6 +1303,48 @@ class SubagentRunner:
             )
 
         return result
+
+    def run_explore_with_continue(
+        self,
+        task: str,
+        *,
+        session: Session,
+        llm: ChatClient,
+        max_rounds: int | None = None,
+        confirm_fn: Any | None = None,
+        cancel_event: threading.Event | None = None,
+        allow_continue: bool = True,
+        continue_already_used: bool = False,
+    ) -> tuple[SubagentResult, bool]:
+        """Run explore; optionally one continue pass if cap hit (Phase 50)."""
+        from explore_scope import build_explore_continue_task
+
+        result = self.run_explore(
+            task,
+            session=session,
+            llm=llm,
+            max_rounds=max_rounds,
+            confirm_fn=confirm_fn,
+            cancel_event=cancel_event,
+        )
+        if (
+            not allow_continue
+            or continue_already_used
+            or explore_continue_max_per_turn() < 1
+            or not result.hit_cap
+        ):
+            return result, False
+
+        continue_task = build_explore_continue_task(result.task, result.paths_cited)
+        continued = self.run_explore(
+            continue_task,
+            session=session,
+            llm=llm,
+            max_rounds=max_rounds,
+            confirm_fn=confirm_fn,
+            cancel_event=cancel_event,
+        )
+        return merge_explore_results(result, continued), True
 
     def run_checker(
         self,
@@ -958,7 +1380,7 @@ class SubagentRunner:
         )
 
         hard_checklist = build_hard_checklist(resolved_task, paths=self.paths, registry=registry)
-        cap = max_rounds if max_rounds is not None else subagent_checker_max()
+        cap = resolve_subagent_max_rounds(max_rounds, default=subagent_checker_max())
 
         executor = ToolExecutor.create(
             paths=self.paths,
@@ -1043,13 +1465,26 @@ class SubagentRunner:
             hit_cap = True
 
         if hit_cap and not final_text:
-            _raise_if_cancelled(cancel_event)
-            working.append({"role": "user", "content": _CHECKER_CLOSE_PROMPT})
-            summary_response = llm.chat(working, model=model, tools=None, temperature=0.1)
-            final_text = (summary_response.content or "").strip()
+            final_text = _finalize_subagent_summary_on_cap(
+                working=working,
+                llm=llm,
+                model=model,
+                temperature=0.1,
+                close_prompt=_CHECKER_CLOSE_PROMPT,
+                kind="checker",
+                cap=cap,
+                tool_rounds=tool_rounds,
+                cancel_event=cancel_event,
+                empty_label="（checker 未产出文字报告）",
+            )
 
         if not final_text:
-            final_text = "（checker 未产出文字报告）"
+            final_text = synthesize_cap_summary(
+                working,
+                kind="checker",
+                cap=cap,
+                tool_rounds=tool_rounds,
+            )
 
         paths_cited = _collect_paths_cited(working)
         semantic_items = _parse_semantic_checklist_from_text(final_text)
@@ -1162,6 +1597,176 @@ class SubagentRunner:
                 truncated=result.truncated,
                 paths_cited=result.paths_cited,
                 conversation_id=session.conversation_id,
+            )
+
+        return result
+
+    def run_deliverable_review(
+        self,
+        task: str,
+        *,
+        session: Session,
+        scope: str = "full",
+        phase_hint: str = "",
+        paths: list[str] | None = None,
+        facts: dict[str, Any] | None = None,
+        llm: ChatClient | None = None,
+        max_rounds: int | None = None,
+        confirm_fn: Any | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> SubagentResult:
+        """Deliverable review subagent (Phase 47 · read-only, facts-first)."""
+        task_text = task.strip()
+        if not task_text:
+            raise ValueError("deliverable_review task is empty")
+
+        project_id = (getattr(session.meta, "project_id", None) or "").strip()
+        if not project_id:
+            raise ValueError("deliverable_review requires project_id")
+
+        cap = resolve_subagent_max_rounds(max_rounds, default=review_subagent_max_rounds())
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor.create(
+            paths=self.paths,
+            session_dir=None,
+            allowed_evolved=set(),
+            confirm_fn=confirm_fn,
+            evolve_log=self.evolve_log,
+        )
+        from project_mode import project_root_rel
+
+        executor.session.active_shell = "project"
+        executor.session.project_id = project_id
+        executor.session.project_root = (
+            (getattr(session.meta, "project_root", None) or "").strip()
+            or project_root_rel(project_id)
+        )
+        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.cancel_event = cancel_event
+
+        if llm is None:
+            from llm_client import LLMClient
+
+            llm = LLMClient()
+
+        from llm_routing import resolve_model_id_for_role
+
+        model = resolve_model_id_for_role("deliverable_review", session.meta)
+        _bind_llm_cancel(llm, cancel_event)
+
+        plan_slice = _build_review_plan_slice(self.paths, project_id)
+        user_message = _format_review_user_message(
+            task=task_text,
+            scope=(scope or "full").strip() or "full",
+            phase_hint=(phase_hint or "").strip(),
+            paths=list(paths or []),
+            facts=dict(facts or {}),
+            plan_slice=plan_slice,
+        )
+        tools = build_review_tools(registry=registry)
+        working: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": _review_system_prompt(self.paths),
+            },
+            {"role": "user", "content": user_message},
+        ]
+
+        tool_rounds = 0
+        final_text = ""
+        hit_cap = False
+
+        for round_index in range(cap):
+            _raise_if_cancelled(cancel_event)
+            response = llm.chat(
+                working,
+                model=model,
+                tools=tools,
+                temperature=0.2,
+            )
+            if not response.tool_calls:
+                final_text = (response.content or "").strip()
+                if final_text:
+                    working.append({"role": "assistant", "content": final_text})
+                break
+
+            tool_rounds += 1
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": response.tool_calls,
+            }
+            working.append(assistant_msg)
+
+            for tool_call in response.tool_calls:
+                _raise_if_cancelled(cancel_event)
+                try:
+                    tool_name, arguments = _parse_tool_call(tool_call)
+                except ToolCallArgumentError as exc:
+                    result = _tool_result_for_argument_error(exc)
+                else:
+                    result = executor.run(tool_name, arguments)
+                working.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", ""),
+                        "content": to_json(result),
+                    }
+                )
+
+            if round_index == cap - 1:
+                hit_cap = True
+        else:
+            hit_cap = True
+
+        if hit_cap and not final_text:
+            final_text = _finalize_subagent_summary_on_cap(
+                working=working,
+                llm=llm,
+                model=model,
+                temperature=0.2,
+                close_prompt=_REVIEW_CLOSE_PROMPT,
+                kind="review",
+                cap=cap,
+                tool_rounds=tool_rounds,
+                cancel_event=cancel_event,
+                empty_label="（交付审查未产出文字摘要）",
+            )
+
+        if not final_text:
+            final_text = synthesize_cap_summary(
+                working,
+                kind="review",
+                cap=cap,
+                tool_rounds=tool_rounds,
+            )
+
+        llm_verdict = _parse_review_verdict_from_text(final_text)
+        verdict: Verdict = llm_verdict or "warn"
+        paths_cited = _collect_paths_cited(working)
+        summary, truncated = truncate_summary(
+            final_text,
+            max_chars=review_subagent_summary_max_chars(),
+        )
+
+        result = SubagentResult(
+            kind="review",
+            summary=summary,
+            paths_cited=paths_cited,
+            tool_rounds=tool_rounds,
+            truncated=truncated,
+            task=task_text,
+            verdict=verdict,
+        )
+
+        if self.evolve_log is not None:
+            self.evolve_log.log_subagent_run(
+                kind=result.kind,
+                tool_rounds=result.tool_rounds,
+                truncated=result.truncated,
+                paths_cited=result.paths_cited,
+                conversation_id=session.conversation_id,
+                verdict=result.verdict,
             )
 
         return result

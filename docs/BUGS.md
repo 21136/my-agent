@@ -35,6 +35,8 @@
 | 2026-08-05 | [BUG-023](./bugs/2026-08-05-compact-turn-llm-timeout.md) | 自动压缩后「思考中…」→「回合超时已停止」 | `agent.py` compact × `LLM_TIMEOUT_SEC` · 墙钟未 pause 摘要 | **fixed**（T-2092～2094） |
 | 2026-08-05 | [BUG-024](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) | 8192 guard 连刷 · 段内 3 次预算不触发 | A 类 validation 不计 P5 · TOOL-RETRY 无限重试 inline | **fixed**（T-4242～4243 · IT-98） |
 | 2026-08-05 | [BUG-025](./bugs/2026-08-05-patch-file-crlf-corruption.md) | 「文件又乱了」连刷 · `\r\r\r\n` 增殖 · Vue 结构损坏 | `patch_file` find 写盘 · `read_file`→`write_text` 放大 · line_range 误插 | **fixed**（T-4252～4254 · IT-99 · S-99 views normalize） |
+| 2026-08-06 | [BUG-026](./bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md) | 同文件多条 patch 第二条起「base_hash mismatch」撤回；前端先闪「已采纳」 | 同轮多提案共享 hash · 首条采纳改盘 · `acceptSuggestionById` 乐观 UI | **partial**（T-4810+4811 done · IT-4813 · S-481 手工 todo） |
+| 2026-08-06 | [BUG-027](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) | 项目模式「你看看」→ explore 读 `docs/TOOLS.md` 非 workspace | `should_spawn_explore` 自动 spawn · task=用户原话 | **partial**（T-4801～4803+4802 done · IT-4804 · S-480 手工 todo） |
 
 ---
 
@@ -66,6 +68,8 @@
 | 自动压缩完成后长时间「思考中…」，最后「回合超时已停止」 | BUG-023 | **已修**（T-2092～2094）；仍慢时可 **停止→继续** 或空闲时「压缩」/「新会话」 |
 | `[guard] 内联写入超过 8192` 连刷多条 · 不换 staging · 不停 tool | BUG-024 | **fixed**（≥2 停 tool + staging 内核 · T-4242） |
 | 助手反复「文件又乱了 / 重写整个 xxx.vue」；`find anchor not found`；磁盘 `\r\r\r\n` | BUG-025 | **fixed**（T-4252～4254 · IT-99）；大 Vue 仍建议 staging |
+| 侧栏多条 MAP/PROJECT patch；采纳第二条起「base_hash mismatch」撤回 | BUG-026 | **partial fixed**（合并提案+前端等确认）；S-481 桌面复验 |
+| 项目里「文档脱节你看看」→ explore 读内核 TOOLS.md | BUG-027 | **partial fixed**（禁 auto explore+prompt）；S-480 桌面复验 |
 
 **改代码后务必**：关掉托盘/Electron → 重新 `start-desktop.bat`（Python sidecar + Vite 均加载新逻辑）。
 

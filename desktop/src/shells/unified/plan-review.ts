@@ -26,6 +26,15 @@ export function acceptLabel(s: PlanSuggestion): string {
   return "采纳";
 }
 
+/** Plan patch path for adopt flash (BUG-026 / T-4811). */
+export function adoptPathFromSuggestion(s: PlanSuggestion): string {
+  const path =
+    s.payload && typeof s.payload.path === "string" ? s.payload.path.trim() : "";
+  if (path) return path;
+  const m = s.title.match(/改\s+(\S+)/);
+  return m?.[1] ?? "计划文件";
+}
+
 export function truncateSummary(text: string, max = 80): string {
   const t = text.trim();
   if (t.length <= max) return t;
@@ -47,6 +56,7 @@ export function clampReviewIndex(index: number, total: number): number {
 export function renderPlanReviewPanel(opts: {
   suggestions: PlanSuggestion[];
   reviewIndex: number;
+  adoptPendingId?: string | null;
 }): string {
   const queue = actionableSuggestions(opts.suggestions);
   const index = clampReviewIndex(opts.reviewIndex, queue.length);
@@ -73,6 +83,8 @@ export function renderPlanReviewPanel(opts: {
   const statsBadge = stats
     ? `<span class="unified-plan-review-stats">${escapeHtml(stats)}</span>`
     : "";
+  const isPending = opts.adoptPendingId === item.id;
+  const acceptBtnLabel = isPending ? "采纳中…" : acceptLabel(item);
 
   return `<div class="unified-plan-review-inner">
     <header class="unified-plan-review-header">
@@ -88,7 +100,7 @@ export function renderPlanReviewPanel(opts: {
     </div>
     <div class="unified-plan-review-body">${diffBlock}</div>
     <footer class="unified-plan-review-actions">
-      <button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="accept" data-suggestion-id="${escapeHtml(item.id)}">${escapeHtml(acceptLabel(item))}</button>
+      <button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="accept" data-suggestion-id="${escapeHtml(item.id)}"${isPending ? " disabled" : ""}>${escapeHtml(acceptBtnLabel)}</button>
       <button type="button" class="unified-btn" data-plan-review-action="ignore" data-suggestion-id="${escapeHtml(item.id)}">忽略</button>
       <button type="button" class="unified-btn" data-plan-review-action="prev"${index <= 0 ? " disabled" : ""}>上一条</button>
       <button type="button" class="unified-btn" data-plan-review-action="next"${index >= queue.length - 1 ? " disabled" : ""}>下一条</button>

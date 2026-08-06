@@ -63,7 +63,10 @@ class TaskStopAutoContinueTests(unittest.TestCase):
         self.assertIn("继续", text)
 
         prompt = (
-            Path(__file__).resolve().parents[2] / "evolve" / "prompts" / "project.md"
+            Path(__file__).resolve().parents[2]
+            / "evolve"
+            / "prompts"
+            / "project-delivery-ritual.md"
         )
         ptext = prompt.read_text(encoding="utf-8")
         self.assertIn("Task 一停门", ptext)
@@ -96,6 +99,7 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
             plan_status="confirmed",
             continue_turn=True,
             next_open_task="- [ ] next one",
+            delivery_profile="ritual",
         )
         self.assertIn("continue_turn", overlay)
         self.assertIn("current_task: - [ ] next one", overlay)
@@ -110,6 +114,7 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
             continue_turn=False,
             next_open_task="- [ ] T-012 Service work",
             armed_task_id="T-012",
+            delivery_profile="ritual",
         )
         self.assertIn("current_task:", overlay2)
         self.assertIn("armed_task_id: T-012", overlay2)
@@ -119,7 +124,7 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
         notice = format_task_paused_notice(next_open_task="- [ ] T-2")
         self.assertIn("本项已完成", notice)
         self.assertIn("T-2", notice)
-        self.assertIn("继续", ensure_task_paused_text("已写完骨架"))
+        self.assertIn("继续", ensure_task_paused_text("已写完骨架", delivery_profile="ritual"))
 
 
 class TaskStopHardGateTests(unittest.TestCase):
@@ -156,6 +161,8 @@ class TaskStopHardGateTests(unittest.TestCase):
             parse_project_command("项目 确认"),
             output_fn=lambda _l: None,
         )
+        self.session.meta.project_delivery_profile = "ritual"
+        self.session.save()
         self.pid = normalize_project_id(self.project_id)
         self.root = f"workspace/{self.pid}"
         tasks = project_dir(self.paths, self.pid) / "TASKS.md"
@@ -183,6 +190,7 @@ class TaskStopHardGateTests(unittest.TestCase):
         executor.session.project_root = self.root
         executor.session.project_id = self.pid
         executor.session.project_plan_status = "confirmed"
+        executor.session.project_delivery_profile = "ritual"
         executor.session.allowed_evolved = allow
         executor.begin_turn()
         return executor
@@ -318,6 +326,7 @@ class TaskStopHardGateTests(unittest.TestCase):
         session.meta.active_shell = "project"
         session.meta.project_root = self.root
         session.meta.project_id = self.pid
+        session.meta.project_delivery_profile = "ritual"
         agent = Agent.create(session, llm=MagicMock(), confirm_fn=lambda _p, _a: "y")
         agent.executor.session.task_stop_armed = True
         agent.executor.session.active_shell = "project"

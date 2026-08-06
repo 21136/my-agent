@@ -193,6 +193,7 @@ stateDiagram-v2
 |------|------|------|
 | 0.1.0 | 2026-08-04 | 初稿：状态机 + 组件图 + M0 范围 |
 | **0.2.0** | 2026-08-04 | **§10 Affordance**：P7/P8；待采纳 vs 已写入；禁口述按钮；Phase 40 |
+| **0.3.0** | 2026-08-06 | **§11 采纳队列**：BUG-026 base_hash · 乐观 UI；Phase 48 |
 
 ---
 
@@ -243,3 +244,51 @@ stateDiagram-v2
 - 取消侧栏快捷「采纳」（A4 仍允许）
 - 恢复双通道 / Plan 独立气泡
 - 用 LLM 动态生成按钮标签（标签固定中文，代码写死）
+
+---
+
+## 11. 采纳队列与 base_hash（Phase 48 · **BUG-026 open**）
+
+> **完整技术说明**：[bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md](./bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md)（数据模型 · hash 时序 · WS 流 · 修复伪代码）  
+> **触发（2026-08-06）**：huiyi `plan_partner` 一次出 5 条提案（TASKS + MAP×2 + PROJECT×2）；第二条 MAP/PROJECT 起 `base_hash mismatch`。
+
+### 11.1 问题摘要
+
+计划域 patch 采用 **乐观并发控制**：每条提案在生成时快照 `content_hash` 前 16 位为 `payload.base_hash`；采纳时磁盘须未变（[PLAN-ARCH](./PLAN-ARCH.md) M6 · IT-182）。
+
+**缺口**：`plan_agent._apply_plan_operations` 对 LLM 返回的 **每个** `patch` op 各建一张侧栏卡；同文件多 op 共享 **同一** 提案时刻 hash。用户顺序采纳第一张后磁盘变化 → 第二张必失败。
+
+**叠加**：`index.ts` `acceptSuggestionById` 在 WS 返回前删卡并闪「已采纳写入 **TASKS.md**」（文件名写死），造成「成功→撤回」双重误导。
+
+### 11.2 根因表
+
+| # | 层 | 文件 | 说明 |
+|---|-----|------|------|
+| 1 | 提案 | `plan_agent.py` `_apply_plan_operations` | 每 op 独立 `build_patch_preview` + `park_gated_suggestion` |
+| 2 | 校验 | `plan_patch.py` `build_patch_preview` | `base_hash != current_hash` → `ProjectModeError` |
+| 3 | 采纳失败 | `plan_agent.py` `accept_suggestion` | 捕获异常 → `_mark_suggestion_resolved` + `已撤回无效提案` |
+| 4 | 乐观 UI | `index.ts` L1209–1222 | 先删卡、先闪绿、文案写死 TASKS.md |
+| 5 | WS | `project_api.py` L635–654 | `ok:false` 时仍推 state；前端已删卡 |
+
+### 11.3 已决修复（T-4810～4813）
+
+| ID | 方案 | 优先级 | 落点 |
+|----|------|--------|------|
+| **A1** | 同 `path` 多 op **合并**为一张卡 + 一条 `replacements[]` | P0 | `plan_agent._apply_plan_operations` |
+| **A2** | 采纳后 **rebase** 同 path 其余 pending 的 hash | P1 defer | `plan_agent.accept_suggestion` |
+| **B1** | 等服务端确认后再闪绿；文案用 `payload.path` | P0 | `index.ts` `acceptSuggestionById` |
+| **B2** | `ok:false` toast，可选恢复卡 | P1 | `index.ts` + WS handler |
+
+### 11.4 临时绕行
+
+- 每个文件 **只采纳第一条** patch。  
+- 采纳一批后请主 Agent **按当前磁盘重提案**。  
+- 采纳过程中勿手改 TASKS/MAP/PROJECT。
+
+### 11.5 验收
+
+| ID | 预期 |
+|----|------|
+| IT-4810 | 同轮 2× MAP patch → 1 卡或双卡均可采纳 |
+| IT-4811 | 失败时不先闪「已采纳」 |
+| S-481 | huiyi 5 条含重复 path 全流程无 mismatch |

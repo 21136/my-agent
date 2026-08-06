@@ -1,6 +1,6 @@
 # 工具系统设计（TOOLS）
 
-> 版本 **0.3.1** · 2026-07-31 · 与 `MEMORY.md`（双索引）配套  
+> 版本 **0.3.2** · 2026-08-06 · 与 `MEMORY.md`（双索引）配套  
 > **工具发现 / 执行面（Phase 23）**：[TOOL-CATALOG.md](./TOOL-CATALOG.md) — **取消主题硬锁**；每轮注入 INDEX，细则读桶  
 > **现行写入边界**：[WRITE-SCOPE.md](./WRITE-SCOPE.md)；参数自修正：[TOOL-RETRY.md](./TOOL-RETRY.md)  
 > M1a 设计文档演进；实现以代码 + 上述文档为准
@@ -15,8 +15,8 @@
 
 | 约束 | 说明 |
 |------|------|
-| **Builtin 封顶 6 个** | 长期不随使用增长 |
-| **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `tools/common/`（**磁盘组织**；非调用门禁） |
+| **Builtin 分两类共 11 个** | **核心 7**（观察/执行口）+ **编排 4**（子代理/上下文）；核心长期不随使用增长 |
+| **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `evolve/tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
 
@@ -34,30 +34,42 @@
 | **可 dry-run** | evolved 支持 `dry_run: true` |
 | **路径相对 agent 根** | 禁止写死盘符 |
 | **结果结构化** | 统一 JSON 返回 |
-| **主题与记忆共用索引** | `evolve/_index.toml` 一处维护 |
+| **主题与记忆共用索引** | `evolve/_index.core.toml` + `evolve/_index.user.toml` 合并（见 [EXTENSIONS.md](./EXTENSIONS.md)）；**与**工具目录 `evolve/tool-catalog/INDEX.md` **并存**——前者管 prompt/memory，后者管工具发现；system 每轮**两者都注入** |
 
 ---
 
-## 3. Builtin（固定 6 个，不分主题）
+## 3. Builtin（11 个 function，不分主题）
 
-**始终**暴露给 LLM；任何 session 都可用。不按主题过滤。
+**始终**暴露给 LLM；任何 session 都可用。不按主题过滤。分两类：
+
+### 3.0 核心 7 个（观察 / 执行口）
 
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
 | `read_file` | 读文本文件（有大小上限） | 否 | 否 |
 | `list_dir` | 列目录（可递归一层） | 否 | 否 |
 | `grep` | 在路径下搜**本地**文件内容 | 否 | 否 |
-| `glob_file_search` | 按 glob 列文件（Phase 42 · **待实现**） | 否 | 否 |
+| `glob_file_search` | 按 glob 列文件（Phase 42 · **done**） | 否 | 否 |
 | `web_search` | **上网**搜索（query → 标题/链接/摘要） | 否 | 否 |
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
 
-Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
+### 3.0a 编排 4 个（子代理 / 上下文）
+
+| name | 作用 | confirm | dry-run |
+|------|------|---------|---------|
+| `propose_context_switch` | 提议切换 project/shell 上下文 | **是** | 否 |
+| `plan_partner` | 计划子代理（TASKS/MAP/PROJECT/ENV · 侧栏采纳） | 否 | 否 |
+| `deliverable_review` | 只读交付物审查子代理（绑定项目） | 否 | 否 |
+| `explore` | 只读 explore 子代理（须显式 task/scope） | 否 | 否 |
+
+Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。注册表见 `tools/registry.py` 的 `BUILTIN_TOOLS`。
 
 ### 3.1 观察 vs 执行
 
 ```text
-本地观察：read_file · list_dir · grep · glob_file_search（Phase 42）
+本地观察：read_file · list_dir · grep · glob_file_search
+编排：propose_context_switch · plan_partner · deliverable_review · explore
 网络观察：web_search · fetch_url
 动手执行：run_command · write_text · patch_file（扁平原语，Phase 41）
             或 run_evolved → 其它 evolve/tools/*
@@ -91,9 +103,12 @@ Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
 
 ```text
 evolve/
-├── _index.toml              # 主题：prompt + memory + tool_dirs
+├── _index.core.toml         # 主题索引（core）
+├── _index.user.toml         # 主题索引（user 扩展）
+├── tool-catalog/
+│   └── INDEX.md             # 工具目录 L0（与主题索引并存注入 system）
 ├── tools/
-│   ├── common/              # 跨主题；每个 session 都列入 LLM 清单
+│   ├── common/              # 跨主题；active 均可调（Phase 23 起非调用门禁）
 │   │   ├── write_text/
 │   │   ├── append_text/     # T-505
 │   │   ├── copy_move/
@@ -110,8 +125,8 @@ evolve/
 
 | 路径 | 含义 |
 |------|------|
-| `tools/common/<name>/` | 跨主题必备（`write_text`、`append_text`、`copy_move`、`move_to_trash` 等）；目录约定 |
-| `tools/<topic>/<name>/` | 按主题文件夹放置；**Phase 23 起不再**「仅确认该 topic 才可调用」 |
+| `evolve/tools/common/<name>/` | 跨主题必备（`write_text`、`append_text`、`copy_move`、`move_to_trash` 等）；目录约定 |
+| `evolve/tools/<topic>/<name>/` | 按主题文件夹放置；**Phase 23 起不再**「仅确认该 topic 才可调用」 |
 
 由你在放入前 **审阅源码**；内核不自动生成。`status: active` 才可通过 `run_evolved` 调用（CLI 调试可跑任意 status，见 §7）。`suspect` / `archived` 不进执行面。
 
@@ -127,13 +142,15 @@ memory_dirs = ["memories/coding"]
 tool_dirs = ["tools/coding"]
 ```
 
-`tools/common/` **不**写在 topic 里；加载规则写死：**永远并入本会话 evolved 清单**。
+`evolve/tools/common/` **不**写在 topic 的 `tool_dirs` 里；磁盘组织约定，**执行面**凡 `status=active` 均可调（见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)）。
+
+**双索引注入（Phase 23）**：`build_system_prompt` 同时注入 `[主题索引]`（来自 `_index.*.toml`）与 `[工具索引]`（来自 `tool-catalog/INDEX.md` + 能力提示）。主题确认仍管 prompt/memory，**不管** evolved 执行门禁。
 
 ### 4.3 会话内 LLM 可见的 evolved 导引（Phase 23）
 
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
-Builtin 恒为 6 个 function；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
+Builtin 恒为 **11** 个 function（核心 7 + 编排 4）；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
 
 - **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
 - **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
@@ -199,7 +216,7 @@ timeout_sec = 60
 
 ```text
 用户输入
-    → LLM 选 Builtin（6 个之一）或 run_evolved
+    → LLM 选 Builtin（11 个之一）或 run_evolved / 扁平原语 proxy
     → ToolExecutor.validate（schema、路径、策略）
     → run_evolved：tool_name 须在「本会话清单」或 CLI 显式指定
     → 若 confirm：预览，等待 y/n/a（§6.3）
@@ -283,19 +300,18 @@ Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。
 | 实现 | 优先 `rg`；无则 Python 回退 |
 | 返回 | `{ matches: [{ path, line, text }], truncated }` |
 
-### 7.3.1 `glob_file_search`（Phase 42 · 草案）
+### 7.3.1 `glob_file_search`（Phase 42 · **done**）
 
-> 真源：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) §3 · TASKS **T-4221**  
-> **状态**：设计已签 · 第 **7** 个 builtin · M0 实现待开工
+> 真源：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) §3 · TASKS **T-4221** · 实现 `agent-core/tools/builtin/glob_file_search.py`
 
 | 项 | 值 |
 |----|-----|
 | 参数 | `pattern`（glob，如 `**/*.py`）, `path`（默认 `.`）, `max_results?`（默认 200，硬顶 1000）, `ignore_case?` |
-| 实现倾向 | 优先 `rg --files -g`；回退 `pathlib` + fnmatch |
+| 实现 | 优先 `rg --files -g`；回退 `pathlib` + fnmatch |
 | 返回 | `{ paths: string[], truncated: bool }` |
 | confirm | **否**（只读，与 grep 同级） |
-| M1 | 尊重 `.gitignore` / 跳过 `node_modules`（IT-432） |
-| M2 defer | 语义搜 → 独立 `CODEBASE-SEARCH.md` |
+| gitignore | 尊重 `.gitignore`；跳过 `node_modules` 等（IT-432） |
+| defer | 语义搜 → 独立 `CODEBASE-SEARCH.md` |
 
 ### 7.4 `web_search`
 
@@ -416,31 +432,31 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 | 工具 | 目录 | 作用 |
 |------|------|------|
-| `write_text` | `tools/common/write_text/` | 写 workspace；无此工具则 LLM 只能读不能改 |
-| `copy_move` | `tools/common/copy_move/` | workspace 内复制/移动文件或目录（T-505） |
-| `move_to_trash` | `tools/common/move_to_trash/` | 移入 `_trash/` 软删除（T-505） |
-| `write_evolve` | `tools/common/write_evolve/` | 向 `evolve/tools/<scope>/<name>/` 写 `tool.toml` / `main.py`（T-508；进化落地） |
-| `git_clone` | `tools/common/git_clone/` | 浅克隆 https 公开仓到 `workspace/` 或 `evolve/tools/`（T-1115） |
-| `project_catalog` | `tools/common/project_catalog/` | 项目列表 + session_id + 跨壳查阅指引（T-1117） |
+| `write_text` | `evolve/tools/common/write_text/` | 写 workspace；无此工具则 LLM 只能读不能改 |
+| `copy_move` | `evolve/tools/common/copy_move/` | workspace 内复制/移动文件或目录（T-505） |
+| `move_to_trash` | `evolve/tools/common/move_to_trash/` | 移入 `_trash/` 软删除（T-505） |
+| `write_evolve` | `evolve/tools/common/write_evolve/` | 向 `evolve/tools/<scope>/<name>/` 写 `tool.toml` / `main.py`（T-508；进化落地） |
+| `git_clone` | `evolve/tools/common/git_clone/` | 浅克隆 https 公开仓到 `workspace/` 或 `evolve/tools/`（T-1115） |
+| `project_catalog` | `evolve/tools/common/project_catalog/` | 项目列表 + session_id + 跨壳查阅指引（T-1117） |
 
 主题专用种子（workflow，T-506）：
 
 | 工具 | 目录 | 作用 |
 |------|------|------|
-| `sort_by_extension` | `tools/workflow/sort_by_extension/` | 按扩展名分子文件夹（T-502） |
-| `rename_batch` | `tools/workflow/rename_batch/` | 批量重命名顶层文件 |
-| `flatten_dir` | `tools/workflow/flatten_dir/` | 子目录文件提升到顶层 |
-| `dedupe_by_name` | `tools/workflow/dedupe_by_name/` | 按文件名报告重复（只读） |
-| `archive_by_date` | `tools/workflow/archive_by_date/` | 按日期归档到 `YYYY-MM/` |
+| `sort_by_extension` | `evolve/tools/workflow/sort_by_extension/` | 按扩展名分子文件夹（T-502） |
+| `rename_batch` | `evolve/tools/workflow/rename_batch/` | 批量重命名顶层文件 |
+| `flatten_dir` | `evolve/tools/workflow/flatten_dir/` | 子目录文件提升到顶层 |
+| `dedupe_by_name` | `evolve/tools/workflow/dedupe_by_name/` | 按文件名报告重复（只读） |
+| `archive_by_date` | `evolve/tools/workflow/archive_by_date/` | 按日期归档到 `YYYY-MM/` |
 
 **coding**（T-507）：
 
 | 工具 | 目录 | 作用 |
 |------|------|------|
-| `run_demo` | `tools/coding/run_demo/` | 运行 `agent-core/` 下 Python 验收脚本 |
-| `run_tests` | `tools/coding/run_tests/` | 按 suite 批量跑 demo（quick / core / governance / evolve / all） |
-| `git_snapshot` | `tools/coding/git_snapshot/` | 只读 git status + diff --stat |
-| `patch_file` | `tools/coding/patch_file/` | 行号/锚点文本补丁（agent 根；**仅改已有文件**） |
+| `run_demo` | `evolve/tools/coding/run_demo/` | 运行 `agent-core/` 下 Python 验收脚本 |
+| `run_tests` | `evolve/tools/coding/run_tests/` | 按 suite 批量跑 demo（quick / core / governance / evolve / all） |
+| `git_snapshot` | `evolve/tools/coding/git_snapshot/` | 只读 git status + diff --stat |
+| `patch_file` | `evolve/tools/coding/patch_file/` | 行号/锚点文本补丁（agent 根；**仅改已有文件**） |
 
 > **换行（BUG-025 · fixed T-4252）**：find / line_range 落盘经 `write_utf8_text`（LF 规范化 · 无平台换行翻译）。大文件仍优先 `_staging` + `content_workspace_path`（8192 内联上限）。详见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md)。
 
@@ -448,7 +464,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 | 工具 | 目录 | 作用 |
 |------|------|------|
-| `csv_head` | `tools/data/csv_head/` | 预览 CSV 前 N 行、列类型推断、总行数 |
+| `csv_head` | `evolve/tools/data/csv_head/` | 预览 CSV 前 N 行、列类型推断、总行数 |
 
 ### 8.1 写入边界（WRITE-SCOPE · 2026-07-30）
 
@@ -525,19 +541,27 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 ```text
 agent-core/tools/
-├── registry.py       # 扫描 evolve/tools/**；合并 6 builtin
+├── registry.py       # 扫描 evolve/tools/**；合并 11 builtin
 ├── executor.py
 ├── builtin/
 │   ├── read_file.py
 │   ├── list_dir.py
 │   ├── grep.py
+│   ├── glob_file_search.py
 │   ├── web_search.py
 │   ├── fetch_url.py
-│   └── run_evolved.py
+│   ├── run_evolved.py
+│   ├── propose_context_switch.py
+│   ├── plan_partner.py
+│   ├── deliverable_review.py
+│   └── explore.py
 └── schema.py
 
 evolve/
-├── _index.toml
+├── _index.core.toml
+├── _index.user.toml
+├── tool-catalog/
+│   └── INDEX.md
 └── tools/
     ├── common/
     │   ├── write_text/
@@ -552,10 +576,10 @@ evolve/
 
 | # | 议题 | 决议 |
 |---|------|------|
-| 1 | Builtin 数量与名单 | **6 个**（Phase 42 → **7**：+`glob_file_search`）：read/list/grep/web_search/fetch_url/run_evolved |
-| 2 | Evolved 暴露 | **仅** `run_evolved`；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
-| 3 | 主题索引 | 统一 **`evolve/_index.toml`**（驱动 prompt/memory；工具执行解绑） |
-| 4 | 跨主题工具 | **`tools/common/`** 仍为目录约定；active 均可调 |
+| 1 | Builtin 数量与名单 | **11 个**：核心 7（read/list/grep/glob/web/fetch/run_evolved）+ 编排 4（context_switch/plan_partner/deliverable_review/explore） |
+| 2 | Evolved 暴露 | **仅** `run_evolved`（+ Phase 41 扁平原语）；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
+| 3 | 主题索引 | **`evolve/_index.core.toml` + `_index.user.toml`**（驱动 prompt/memory）；工具目录 = **`tool-catalog/INDEX.md`**（两者并存注入） |
+| 4 | 跨主题工具 | **`evolve/tools/common/`** 仍为目录约定；active 均可调 |
 | 5 | 本地搜 vs 上网搜 | **分开**；`grep` 与 `web_search` 并存 |
 | 6 | confirm 交互 | `y/n`；`a` 仅 **allow_approve_all evolved** 本会话免确认（agent root） |
 | 7 | `web_search` 后端 | 默认 **DeepSeek**（Anthropic 子调用 + `LLM_API_KEY`）；可选 `brave`；§7.4 schema 不变 |
@@ -566,9 +590,9 @@ evolve/
 
 ## 14. 验收（TOOLS 设计阶段）
 
-- [ ] 6 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）
+- [ ] 核心 7 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；编排 4 与子代理文档一致
 - [ ] Evolved 主题目录 + common 规则清楚
-- [ ] 与 `evolve/_index.toml`、MEMORY 主题路由一致
+- [ ] 与 `evolve/_index.*.toml`、`tool-catalog/INDEX.md`、MEMORY 主题路由一致
 - [ ] `run_evolved` + 会话清单可实现
 - [ ] M1 **不做** skill
 
@@ -581,6 +605,6 @@ evolve/
 | 文档 | 内容 |
 |------|------|
 | [TOOL-CATALOG.md](./TOOL-CATALOG.md) | Phase 23：INDEX / 桶 / 取消主题硬锁 |
-| [MEMORY.md](./MEMORY.md) | 主题路由、三件套、`_index.toml` |
+| [MEMORY.md](./MEMORY.md) | 主题路由、三件套、`_index.core.toml` / `_index.user.toml` |
 | [TASKS.md](./TASKS.md) | 实施 task |
 | [PROJECT.md](./PROJECT.md) | 总览 |

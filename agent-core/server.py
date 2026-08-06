@@ -286,6 +286,8 @@ class WsBridge:
             "project.plan.state",
             "plan.subagent.start",
             "plan.subagent.done",
+            "review.subagent.start",
+            "review.subagent.done",
             "notice",
         }:
             self.emit({"type": event_type, **payload})

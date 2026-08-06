@@ -307,7 +307,7 @@ T-704  可选收尾
 | 1 | 子代理是否用 pro 模型 | 默认与父会话相同；coding 主题已是 pro |
 | 2 | 以后要不要 `execute` 子代理 | defer；MVP 父代理直接 write_evolved |
 | 3 | 子代理摘要进不进 digest | **否**；仅当前 turn overlay |
-| 4 | 自动 explore 是否太激进 | 可 `MY_AGENT_AUTO_EXPLORE=0`，仅 `探索` 命令 |
+| 4 | 自动 explore 是否太激进 | **项目模式**：Phase 48 禁内核预 spawn，仅父调；全局 kill：`MY_AGENT_AUTO_EXPLORE=0`；见 [AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) · [BUG-027](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) |
 
 ---
 

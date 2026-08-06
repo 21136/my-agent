@@ -323,6 +323,10 @@ class ConversationRepl:
             self.last_turn_finish_reason = None
             self.output_fn(f"llm error: {exc}")
             return "continue"
+        except json.JSONDecodeError as exc:
+            self.last_turn_finish_reason = None
+            self.output_fn(f"llm error: invalid provider JSON: {exc}")
+            return "continue"
 
         for notice in result.notices:
             self.output_fn(notice)

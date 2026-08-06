@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 import sys
 import unittest
@@ -14,7 +15,9 @@ if str(_AGENT_CORE) not in sys.path:
 from progress_gate import (
     classify_task_evidence_kind,
     evidence_satisfies,
+    is_progress_gate_tool_error,
     make_evidence_entry,
+    PROGRESS_GATE_G9_KERNEL_MESSAGE,
     report_progress_evidence_block_reason,
     report_progress_repeat_block_reason,
 )
@@ -23,6 +26,7 @@ from project_mode import normalize_project_id, project_dir
 from session import create_new
 from tools.executor import ToolExecutor
 from tools.registry import ToolRegistry
+from tools.schema import tool_fail
 
 from tests.isolation_helpers import make_temp_agent_paths
 
@@ -180,6 +184,8 @@ class ProgressGateExecutorTests(unittest.TestCase):
             parse_project_command("项目 确认"),
             output_fn=lambda _l: None,
         )
+        self.session.meta.project_delivery_profile = "ritual"
+        self.session.save()
         self.pid = normalize_project_id(self.project_id)
         tasks = project_dir(self.paths, self.pid) / "TASKS.md"
         tasks.write_text(
@@ -205,6 +211,7 @@ class ProgressGateExecutorTests(unittest.TestCase):
         executor.session.project_root = f"workspace/{self.pid}"
         executor.session.project_id = self.pid
         executor.session.project_plan_status = "confirmed"
+        executor.session.project_delivery_profile = "ritual"
         executor.session.allowed_evolved = allow
         executor.begin_turn()
         return executor
@@ -310,6 +317,14 @@ class ProgressGateExecutorTests(unittest.TestCase):
             arguments={"tool_name": "report_progress", "arguments": {}},
         )
         self.assertIsNotNone(reason)
+        solo_reason = report_progress_repeat_block_reason(
+            active_shell="project",
+            task_stop_armed=False,
+            report_progress_done_this_turn=True,
+            tool_name="run_evolved",
+            arguments={"tool_name": "report_progress", "arguments": {}},
+        )
+        self.assertIsNotNone(solo_reason)
 
     def test_it2406_gate_notice_on_blocked_report(self) -> None:
         """T-2406: progress gate rejection emits structured gate_notice (no force-check)."""
@@ -355,6 +370,177 @@ class ProgressGateExecutorTests(unittest.TestCase):
             self.assertIn("进度闸门", notice)
             self.assertIn("证据类", notice)
             self.assertIn("无强制勾选", notice)
+
+
+class SmokeS70ToS74Tests(ProgressGateExecutorTests):
+    """T-2408: automated smoke proxies for PROGRESS-GATE §5.2 S-70～S-74."""
+
+    def test_s70_write_evidence_allows_checkbox(self) -> None:
+        """S-70: this-turn matched write success → report_progress ok."""
+        self.test_it71_allow_after_write()
+
+    def test_s71_no_evidence_rejects(self) -> None:
+        """S-71: no this-turn evidence → report_progress blocked, TASKS stays open."""
+        self.test_it71_reject_report_without_evidence()
+
+    def test_s72_failed_command_evidence_blocks_test(self) -> None:
+        """S-72: confirm-rejected mvn/run_command (ok=false) ≠ test evidence."""
+        failed_cmd = [
+            make_evidence_entry(
+                tool_name="run_evolved",
+                evolved_name="run_command",
+                ok=False,
+            )
+        ]
+        ritual_reason = report_progress_evidence_block_reason(
+            active_shell="project",
+            armed_task_text="Phase 1 测试：模块联调测试",
+            turn_evidence=failed_cmd,
+            delivery_profile="ritual",
+        )
+        self.assertIsNotNone(ritual_reason)
+        self.assertIn("test", ritual_reason or "")
+
+        solo_reason = report_progress_evidence_block_reason(
+            active_shell="project",
+            armed_task_text="Phase 1 测试：模块联调测试",
+            turn_evidence=failed_cmd,
+            delivery_profile="solo",
+        )
+        self.assertIsNotNone(solo_reason)
+        self.assertIn("禁止勾选", solo_reason or "")
+
+    def test_s73_second_report_hard_reject(self) -> None:
+        """S-73: after successful toggle, second report_progress hard-rejected."""
+        self.test_it72_second_report_blocked()
+
+    def test_s74_write_cannot_satisfy_compile_test_build_fe(self) -> None:
+        """S-74: write success does not satisfy compile / test / build_fe tasks."""
+        write_ok = [
+            make_evidence_entry(
+                tool_name="run_evolved", evolved_name="write_text", ok=True
+            )
+        ]
+        cases = [
+            ("Maven compile 骨架可编译", "compile"),
+            ("Phase 1 测试：模块联调测试", "test"),
+            ("前端可构建通过", "build_fe"),
+        ]
+        for title, kind in cases:
+            reason = report_progress_evidence_block_reason(
+                active_shell="project",
+                armed_task_text=title,
+                turn_evidence=write_ok,
+            )
+            self.assertIsNotNone(reason, msg=title)
+            self.assertIn(kind, (reason or ""))
+
+
+class ProgressGateG9KernelTests(unittest.TestCase):
+    """T-2410 · G9 kernel notice after report_progress blocked."""
+
+    def test_is_progress_gate_tool_error(self) -> None:
+        blocked = tool_fail(
+            "run_evolved",
+            "validation_error",
+            "[progress_gate] no evidence",
+            details={"guard_type": "progress_gate_evidence"},
+        )
+        self.assertTrue(is_progress_gate_tool_error(blocked))
+        other = tool_fail(
+            "run_evolved",
+            "validation_error",
+            "bad args",
+            details={"guard_type": "task_stop"},
+        )
+        self.assertFalse(is_progress_gate_tool_error(other))
+
+    def test_it2410_kernel_notice_injected_on_blocked_report(self) -> None:
+        from unittest.mock import MagicMock
+
+        from agent import Agent
+        from llm_client import LLMResponse
+        from tests.isolation_helpers import temporary_agent_paths
+        from tools.executor import ExecutorSession, ToolExecutor
+
+        with temporary_agent_paths(copy_tool_dirs=("project/report_progress",)) as paths:
+            proj = paths.workspace / "g9-demo"
+            proj.mkdir(parents=True)
+            (proj / "TASKS.md").write_text(
+                "- [ ] T-001 Phase 1 测试：模块联调测试\n",
+                encoding="utf-8",
+            )
+            session = create_new(paths, conversation_id="_it2410_g9")
+            session.meta.turn_mode = "agent"
+            session.meta.active_shell = "project"
+            session.save()
+
+            registry = ToolRegistry.load(paths)
+            executor = ToolExecutor(
+                registry=registry,
+                session=ExecutorSession(
+                    session_dir=session.session_dir,
+                    allowed_evolved={"report_progress"},
+                    project_root="workspace/g9-demo",
+                    project_id="g9-demo",
+                    active_shell="project",
+                    armed_task_text="- [ ] T-001 Phase 1 测试：模块联调测试",
+                ),
+            )
+            responses = [
+                LLMResponse(
+                    model="mock",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "rp1",
+                            "type": "function",
+                            "function": {
+                                "name": "run_evolved",
+                                "arguments": json.dumps(
+                                    {
+                                        "tool_name": "report_progress",
+                                        "arguments": {"summary": "done"},
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                    usage=None,
+                    raw={},
+                ),
+                LLMResponse(
+                    model="mock",
+                    content="缺测试证据，已停。",
+                    tool_calls=[],
+                    finish_reason="stop",
+                    usage=None,
+                    raw={},
+                ),
+            ]
+            mock_llm = MagicMock()
+            mock_llm.chat.side_effect = responses
+
+            agent = Agent(session=session, executor=executor, llm=mock_llm)
+            agent._run_parent_tool_loop(
+                max_rounds=5,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "run_evolved"},
+                    }
+                ],
+                model="test",
+                segment_start_index=len(session.messages),
+            )
+
+            user_blob = "\n".join(
+                str(m.get("content", ""))
+                for m in session.messages
+                if m.get("role") == "user"
+            )
+            self.assertIn(PROGRESS_GATE_G9_KERNEL_MESSAGE, user_blob)
 
 
 if __name__ == "__main__":

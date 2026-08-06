@@ -1408,6 +1408,33 @@
   line-height: 1.35;
   color: var(--ma-text);
 }
+.sidebar-review-line {
+  display: block;
+  width: 100%;
+  margin-top: 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid color-mix(in srgb, #d4a000 35%, var(--ma-border));
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, #d4a000 5%, var(--ma-surface));
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-review-line:hover {
+  background: color-mix(in srgb, #d4a000 10%, var(--ma-surface));
+}
+.sidebar-review-line-text {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ma-text);
+}
+.sidebar-profile-line {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  margin-top: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--ma-text-muted);
+}
 
 /* phase header */
 .task-phase-header {
