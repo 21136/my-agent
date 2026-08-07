@@ -99,12 +99,60 @@ class WritePolicyTests(unittest.TestCase):
         self.assertFalse(needs)
         self.assertEqual(reason, "skip:project_overwrite")
 
-    def test_write_new_file_confirms(self) -> None:
+    def test_write_new_file_skips_in_project(self) -> None:
         needs, reason = self._confirm(
             tool="write_text",
             path="workspace/demo/new.py",
             on_conflict="overwrite",
             file_exists=False,
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:project_new_file")
+
+    def test_write_new_file_confirms_without_project_binding(self) -> None:
+        needs, reason = write_requires_confirm(
+            tool="write_text",
+            path="workspace/demo/new.py",
+            project_root="",
+            active_shell="grow",
+            on_conflict="overwrite",
+            file_exists=False,
+        )
+        self.assertTrue(needs)
+        self.assertEqual(reason, "confirm:no_project_binding")
+
+    def test_it4214_traversal_outside_project_confirms(self) -> None:
+        needs, reason = self._confirm(
+            tool="write_text",
+            path="workspace/demo/../agent-core/foo.py",
+            file_exists=False,
+        )
+        self.assertTrue(needs)
+        self.assertEqual(reason, "confirm:outside_project")
+
+    def test_it4214_sensitive_new_file_confirms(self) -> None:
+        needs, reason = self._confirm(
+            tool="write_text",
+            path="workspace/demo/.env",
+            file_exists=False,
+        )
+        self.assertTrue(needs)
+        self.assertEqual(reason, "confirm:sensitive")
+
+    def test_it4214_plan_domain_new_file_confirms(self) -> None:
+        needs, reason = self._confirm(
+            tool="write_text",
+            path="workspace/demo/TASKS.md",
+            file_exists=False,
+        )
+        self.assertTrue(needs)
+        self.assertEqual(reason, "confirm:plan_domain")
+
+    def test_it4214_unknown_exists_confirms(self) -> None:
+        needs, reason = self._confirm(
+            tool="write_text",
+            path="workspace/demo/new.py",
+            file_exists=None,
         )
         self.assertTrue(needs)
         self.assertEqual(reason, "confirm:new_file")
@@ -242,6 +290,62 @@ class WritePolicyExecutorTests(unittest.TestCase):
             )
             self.assertEqual(direct, proxied)
             self.assertFalse(proxied)
+
+    def test_it4214_executor_new_file_skips(self) -> None:
+        with temporary_agent_paths(
+            copy_tool_dirs=("common/write_text", "coding/patch_file"),
+        ) as paths:
+            (paths.workspace / "demo" / "src").mkdir(parents=True)
+            executor = self._executor(paths)
+            self.assertFalse(
+                self._needs(
+                    executor,
+                    "write_text",
+                    {
+                        "path": "workspace/demo/src/NewService.java",
+                        "content": "public class NewService {}\n",
+                        "on_conflict": "overwrite",
+                    },
+                )
+            )
+
+    def test_it4214_executor_overwrite_existing_still_skips(self) -> None:
+        with temporary_agent_paths(
+            copy_tool_dirs=("common/write_text", "coding/patch_file"),
+        ) as paths:
+            target = paths.workspace / "demo" / "src" / "main.py"
+            target.parent.mkdir(parents=True)
+            target.write_text("old\n", encoding="utf-8")
+            executor = self._executor(paths)
+            self.assertFalse(
+                self._needs(
+                    executor,
+                    "write_text",
+                    {
+                        "path": "workspace/demo/src/main.py",
+                        "content": "new\n",
+                        "on_conflict": "overwrite",
+                    },
+                )
+            )
+
+    def test_it4214_executor_traversal_confirms(self) -> None:
+        with temporary_agent_paths(
+            copy_tool_dirs=("common/write_text", "coding/patch_file"),
+        ) as paths:
+            (paths.workspace / "demo").mkdir(parents=True)
+            executor = self._executor(paths)
+            self.assertTrue(
+                self._needs(
+                    executor,
+                    "write_text",
+                    {
+                        "path": "workspace/demo/../outside.py",
+                        "content": "x\n",
+                        "on_conflict": "overwrite",
+                    },
+                )
+            )
 
     def test_confirm_preview_shows_write_policy(self) -> None:
         with temporary_agent_paths(

@@ -51,3 +51,5 @@ M1 起本工具亦支持 `port_status` / `kill_port`。
 
 - **IT-75**：start → ready → logs → stop（`tests/test_run_service.py`）
 - **IT-76**：status/list 不 confirm；start 需 confirm
+
+编排纪律（同回合 `wait`、少发「继续」）：见 [ASYNC-ORCHESTRATION.md](./ASYNC-ORCHESTRATION.md) · Pack 6 · **S-560 pass**（2026-08-07）。

@@ -26,8 +26,12 @@ from project_mode import (
     ProjectModeError,
     TASKS_ARCHIVE_NAME,
     MILESTONE_PROJECT_COMPLETE_KEY,
+    build_suggestion_phase_key_map,
     drop_task_line,
     evaluate_milestone_after_archive,
+    migrate_active_milestone_suggestion_keys,
+    migrate_milestone_phase_key_set,
+    milestone_phase_keys_for_persist,
     normalize_delivery_profile,
     normalize_project_id,
     phase_fingerprint_from_text,
@@ -679,8 +683,45 @@ class PlanAgent:
                         for k, v in active.items()
                         if isinstance(v, dict) and v.get("id")
                     }
+            if self._migrate_milestone_phase_keys():
+                self._save_state()
         except (OSError, json.JSONDecodeError):
             pass
+
+    def _migrate_milestone_phase_keys(self) -> bool:
+        """IT-541/542 · legacy ``phase:N`` / ``title:hash`` → ``phase_id`` on load."""
+        root = project_dir(self.paths, self.project_id)
+        tasks_path = root / "TASKS.md"
+        archive_path = root / TASKS_ARCHIVE_NAME
+        hint_map = build_suggestion_phase_key_map(self._active_milestone_suggestions)
+        reminded, r1 = migrate_milestone_phase_key_set(
+            self._milestone_reminded_phase_keys,
+            self.paths,
+            self.project_id,
+            tasks_path=tasks_path,
+            archive_path=archive_path,
+            suggestion_phase_by_key=hint_map,
+        )
+        dismissed, r2 = migrate_milestone_phase_key_set(
+            self._milestone_dismissed_phase_keys,
+            self.paths,
+            self.project_id,
+            tasks_path=tasks_path,
+            archive_path=archive_path,
+            suggestion_phase_by_key=hint_map,
+        )
+        self._milestone_reminded_phase_keys = reminded
+        self._milestone_dismissed_phase_keys = dismissed
+        active, r3 = migrate_active_milestone_suggestion_keys(
+            self._active_milestone_suggestions,
+            self.paths,
+            self.project_id,
+            tasks_path=tasks_path,
+            archive_path=archive_path,
+            suggestion_phase_by_key=hint_map,
+        )
+        self._active_milestone_suggestions = active
+        return r1 or r2 or r3
 
     def _save_state(self) -> None:
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -705,8 +746,12 @@ class PlanAgent:
                 for c in self._change_log[-200:]  # cap at 200 entries
             ],
             "milestone_review_reminders": {
-                "reminded_phase_keys": sorted(self._milestone_reminded_phase_keys),
-                "dismissed_phase_keys": sorted(self._milestone_dismissed_phase_keys),
+                "reminded_phase_keys": milestone_phase_keys_for_persist(
+                    self._milestone_reminded_phase_keys
+                ),
+                "dismissed_phase_keys": milestone_phase_keys_for_persist(
+                    self._milestone_dismissed_phase_keys
+                ),
                 "active_suggestions": {
                     k: v
                     for k, v in list(self._active_milestone_suggestions.items())[-20:]
@@ -1024,6 +1069,8 @@ class PlanAgent:
             tasks_path=root / "TASKS.md",
             archive_path=root / TASKS_ARCHIVE_NAME,
             phase=phase,
+            project_id=self.project_id,
+            paths=self.paths,
             reminded_phase_keys=self._milestone_reminded_phase_keys,
             dismissed_phase_keys=self._milestone_dismissed_phase_keys,
         )
@@ -1152,6 +1199,67 @@ class PlanAgent:
         if changed:
             self._save_state()
         return changed
+
+    def emit_bug_promote_from_review(
+        self,
+        summary: str,
+        *,
+        source: str = "deliverable_review",
+        delivery_profile: str = "solo",
+        verdict: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Emit gated bug_promote cards from review/checker blockers (T-5403 · BQ-1)."""
+        from subagent import extract_review_blocker_items
+
+        from project_mode import resolve_bug_promote_phase
+
+        profile = normalize_delivery_profile(delivery_profile)
+        blockers = extract_review_blocker_items(summary, verdict=verdict)
+        if not blockers:
+            return []
+
+        phase_title = resolve_bug_promote_phase(self.paths, self.project_id)
+        emitted: list[dict[str, Any]] = []
+        for blk in blockers:
+            severity = str(blk.get("severity") or "P1").strip().upper()
+            if profile == "ritual" and severity not in {"P0", "P1"}:
+                continue
+            title = str(blk.get("title") or "缺陷").strip()[:120] or "缺陷"
+            detail = str(blk.get("detail") or title).strip()[:500] or title
+            desc = f"[{severity}] {title}"
+            if detail.casefold() != title.casefold():
+                desc = f"{desc} — {detail}"
+            import hashlib
+
+            key = hashlib.sha1(
+                f"{source}|{title}".casefold().encode("utf-8")
+            ).hexdigest()[:12]
+            sid = f"sug-bug_promote-{key}"
+            if sid in self._ignored_suggestion_ids or sid in self._pending_gated:
+                continue
+            sug = self._suggestion(
+                kind="bug_promote",
+                title=f"缺陷晋升 · {title[:40]}",
+                body=detail,
+                key=key,
+                risk="gate",
+                action="add_task",
+                payload={
+                    "title": title,
+                    "detail": detail,
+                    "source": source,
+                    "severity": severity,
+                    "phase": phase_title,
+                    "description": desc[:500],
+                },
+            )
+            self.park_gated_suggestion(sug)
+            emitted.append(sug)
+        if emitted:
+            self.set_partner_notices(
+                f"审查发现 {len(emitted)} 项可晋升 TASKS；侧栏「采纳进 TASKS」。"
+            )
+        return emitted
 
     def _mark_suggestion_resolved(self, sid: str) -> None:
         """Drop pending gate + clear stale「点采纳」notices when queue empties."""

@@ -799,15 +799,78 @@ def _parse_review_verdict_from_text(text: str) -> Verdict | None:
 
 def count_review_blockers(summary: str, *, verdict: str | None = None) -> int:
     """Heuristic P0/blocker count for review.subagent.done payloads."""
-    count = 0
-    for line in summary.splitlines():
-        if re.search(r"\bP0\b|\bblockers?\b", line, re.IGNORECASE):
-            count += 1
-    if count:
-        return count
+    items = extract_review_blocker_items(summary, verdict=verdict)
+    if items:
+        return len(items)
     if (verdict or "").strip().casefold() == "fail":
         return 1
     return 0
+
+
+_BLOCKER_LINE_RE = re.compile(
+    r"^(?:[-*•]\s*)?(?:(P[0-3])|blockers?)\s*[：:]\s*(.+)$",
+    re.IGNORECASE,
+)
+_VERDICT_LINE_RE = re.compile(r"(?:REVIEW|CHECKER)_VERDICT\s*:", re.IGNORECASE)
+
+
+def normalize_blocker_severity(token: str | None) -> str:
+    raw = (token or "P1").strip().upper()
+    if len(raw) == 2 and raw.startswith("P") and raw[1].isdigit():
+        return raw
+    return "P1"
+
+
+def extract_review_blocker_items(
+    summary: str,
+    *,
+    verdict: str | None = None,
+) -> list[dict[str, str]]:
+    """Parse blocker lines from deliverable_review / checker summaries (T-5403)."""
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for line in (summary or "").splitlines():
+        stripped = line.strip()
+        if not stripped or _VERDICT_LINE_RE.search(stripped):
+            continue
+        m = _BLOCKER_LINE_RE.match(stripped)
+        if not m:
+            continue
+        severity = normalize_blocker_severity(m.group(1))
+        rest = (m.group(2) or "").strip()
+        if not rest:
+            continue
+        title = rest
+        detail = rest
+        for sep in (" — ", " - ", " – "):
+            if sep in rest:
+                title, detail = rest.split(sep, 1)
+                break
+        title = title.strip()[:120] or "缺陷"
+        detail = detail.strip()[:500] or title
+        norm = title.casefold()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        items.append({"title": title, "detail": detail, "severity": severity})
+    if items:
+        return items
+    if (verdict or "").strip().casefold() != "fail":
+        return []
+    for line in (summary or "").splitlines():
+        stripped = line.strip()
+        if not stripped or _VERDICT_LINE_RE.search(stripped):
+            continue
+        if stripped.startswith("#"):
+            continue
+        return [
+            {
+                "title": stripped[:120],
+                "detail": stripped[:500],
+                "severity": "P1",
+            }
+        ]
+    return []
 
 
 def review_summary_preview(summary: str, *, max_chars: int = 160) -> str:

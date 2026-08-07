@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-04** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：Phase **24** 收尾（T-2406～2408）· **Phase 47** S-470 · **Phase 48**（BUG-026/027）· **Phase 49** 子代理预算 · Phase 42 T-4213 · Phase 46 T-4604 · WORKBENCH M1/M2 · UX 待评估项。  
+> **当前焦点**：**Pack 1/2/4/5** — [ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md)（51 收口 → 52 路由 → 54 phase_key → 55 语义搜）  
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -64,8 +64,9 @@
 | **Phase 45** | **项目质量与数据面**（迁移状态 · `run_quality` · deploy 配方） | **M0 done**（[PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · T-4500～4503） |
 | **Phase 46** | **工具工坊提示词**（外置 subagent prompt · 非 project 注入 · defer 四维映射） | **M1 done**（[TOOL-WORKSHOP-PROMPTS.md](./TOOL-WORKSHOP-PROMPTS.md) · T-4601～4603 · T-4604 S-461 todo） |
 | **Phase 47** | **交付审查**（`deliverable_review` · `solo`/`ritual` profile · prompt registry） | **代码 done**（[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · T-4701～4712 · S-470 todo） |
-| **Phase 47+** | **本地交付模型**（栈-A/B/C/D · 源-L · LDM-1～9 · 里程碑） | **done**（[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **v0.3.3** · T-4714～4719 · T-4719 `_plan_progress_brief` archive 计完成度禁 `done_n` · S-472 手工 todo） |
-| **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **partial fixed**（T-4801～4803·4802·4810·4811 · IT-4804·4813 · S-480/S-481 手工） |
+| **Phase 47+** | **本地交付模型**（栈-A/B/C/D · 源-L · LDM-1～9 · 里程碑） | **done**（[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **v0.3.3** · T-4714～4719 · **S-472 done**） |
+| **Phase 51～55** | **Pack 1/2/4/5**（收口 · 路由 · phase_key · 语义搜） | **设计已签 · 待评审**（[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md)） |
+| **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
 | **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |
 | **壳合并** | 五壳 → **unified + pet** | **done**（前端；[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)） |
@@ -82,7 +83,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）部分条目已 **废止**（见 §2.2） |
-| **下一焦点** | Phase 24 收尾 · **Phase 47 S-470** · **Phase 48**（BUG-026/027）· **Phase 49** T-4901～4910 · Phase 42 T-4213 · Phase 46 T-4604 |
+| **下一焦点** | **Pack 4/5** [ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md) v0.2.2 · **Pack 1/2/6 M0 done** → **54 T-5401** → 55 |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。**仍开放的可选债**：`T-601b` governance tool · `T-804` 外挂扩展 · `T-4103` 模型路由。
 

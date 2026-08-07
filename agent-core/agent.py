@@ -59,6 +59,11 @@ ACTION_ANNOUNCE_NUDGE_MESSAGE = (
     "[内核] 你刚宣布了具体操作但本回合未调用工具。"
     "请立刻用工具执行；若只需说明或提问，请改写为不含「正在/接下来/我来/建表…」的纯文字。"
 )
+ORCH_DEFER_NUDGE_MESSAGE = (
+    "[内核] 口头「等 N 秒再查 / 稍后再起」不能结束本回合。"
+    "请立刻调用 run_service（wait / logs / status 或带 ready_timeout 的 blocking start），"
+    "在同一回合内完成起服链；勿让用户再发「继续」。"
+)
 TURN_DRIFT_NOTICE = (
     "[提醒] 这类问题可以直接根据上文回答；若仍在查文件，可回复「别查了直接说」。"
 )
@@ -83,6 +88,20 @@ _ACTION_ANNOUNCE_RE = re.compile(
     r"|先(?:去)?(?:建|写|跑|修|启|导入|执行)"
     r"|I(?:'ll| will)\s+(?:now\s+)?(?:create|write|run|fix|start|build|import)"
     r"|Let me\s+(?:create|write|run|fix|start|build|import)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Verbal deferral without run_service wait (Pack 6 · T-5602 / G13 extension).
+_ORCH_DEFER_RE = re.compile(
+    r"(?:"
+    r"等\s*\d+\s*(?:～|~|-)?\s*\d*\s*秒"
+    r"|\d+\s*秒(?:钟)?\s*后.*?(?:查|看|检查|起|启动|日志)"
+    r"|稍后再(?:起|查|看|检查|启动)"
+    r"|启动中[，,].*稍后"
+    r"|(?:我)?先(?:去)?(?:查|看|检查)一下再(?:告诉|说|起)"
+    r"|\bwait\s+\d+\s*(?:seconds?|secs?)\b"
+    r"|\b(?:in|after)\s+\d+\s*(?:seconds?|secs?)\b.*?\b(?:check|inspect|look|logs?)\b"
     r")",
     re.IGNORECASE,
 )
@@ -153,6 +172,22 @@ def announces_pending_action(text: str) -> bool:
     return _ACTION_ANNOUNCE_RE.search(text) is not None
 
 
+def announces_orchestration_defer(text: str) -> bool:
+    """True when assistant verbally defers service checks to later (Pack 6 · IT-560)."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return _ORCH_DEFER_RE.search(text) is not None
+
+
+def pending_action_nudge_message(text: str) -> str | None:
+    """Nudge body for no-tool assistant text, or None if no gate applies."""
+    if announces_orchestration_defer(text):
+        return ORCH_DEFER_NUDGE_MESSAGE
+    if announces_pending_action(text):
+        return ACTION_ANNOUNCE_NUDGE_MESSAGE
+    return None
+
+
 def apply_scaffold_completion_gate(text: str, verdict: str | None) -> str:
     """Strip scaffold completion claims when checker verdict is not pass (T-1623)."""
     if verdict == "pass" or not claims_scaffold_complete(text):
@@ -221,6 +256,10 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     "glob_file_search": (
         "Find files by glob pattern (e.g. '**/*.py', '**/test_*.ts') under a directory. "
         "Use before read_file when you need paths by name; use grep for content search."
+    ),
+    "codebase_search": (
+        "Semantic/BM25 search for code chunks in the bound project. "
+        "Use for 'where is X implemented' before glob/grep on large trees."
     ),
     "web_search": (
         "Search the web for links and snippets. "
@@ -353,6 +392,31 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["pattern"],
+        "additionalProperties": False,
+    },
+    "codebase_search": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural-language or keyword query (e.g. 'JWT login validation')",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Max hits to return (default 5, cap 8)",
+                "default": 5,
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "Optional path prefix under project_root to narrow hits",
+            },
+            "force_refresh": {
+                "type": "boolean",
+                "description": "Rebuild index before search (default false)",
+                "default": False,
+            },
+        },
+        "required": ["query"],
         "additionalProperties": False,
     },
     "web_search": {
@@ -886,6 +950,23 @@ class Agent:
         checker_verdict = result.verdict
         checker_tool_rounds = result.tool_rounds
 
+        if checker_verdict == "fail" and (self.session.project_id or "").strip():
+            try:
+                from plan_agent import get_plan_agent
+                from project_mode import get_delivery_profile
+
+                get_plan_agent(
+                    self.session.paths,
+                    self.session.project_id,
+                ).emit_bug_promote_from_review(
+                    result.summary,
+                    source="checker",
+                    delivery_profile=get_delivery_profile(self.session.meta),
+                    verdict=checker_verdict,
+                )
+            except Exception:
+                pass
+
         if final_text:
             gated = apply_scaffold_completion_gate(final_text, checker_verdict)
             if gated != final_text:
@@ -1152,12 +1233,12 @@ class Agent:
             if not response.tool_calls:
                 final_text = (response.content or "").strip()
                 # Agent mode: announced side-effect without tools → nudge once, continue.
+                nudge_message = pending_action_nudge_message(final_text)
                 if (
-                    final_text
+                    nudge_message
                     and tools_payload
                     and not recall_soft_reminder
                     and self.session.meta.turn_mode == "agent"
-                    and announces_pending_action(final_text)
                     and not action_nudge_injected
                     and max_rounds > 1
                 ):
@@ -1165,21 +1246,31 @@ class Agent:
                         {"role": "assistant", "content": final_text}
                     )
                     self.session.append_message(
-                        {"role": "user", "content": ACTION_ANNOUNCE_NUDGE_MESSAGE}
+                        {"role": "user", "content": nudge_message}
                     )
                     action_nudge_injected = True
+                    guard_type = (
+                        "orchestration_defer_no_tools"
+                        if announces_orchestration_defer(final_text)
+                        else "action_announce_no_tools"
+                    )
+                    notice = (
+                        "检测到口头延期起服，已要求本回合调用 run_service wait/logs。"
+                        if guard_type == "orchestration_defer_no_tools"
+                        else "检测到空头动作声明，已要求本回合调用工具。"
+                    )
                     self._emit_turn_event(
                         {
                             "type": "turn.notice",
                             "level": "warn",
-                            "text": "检测到空头动作声明，已要求本回合调用工具。",
+                            "text": notice,
                         }
                     )
                     try:
                         log = self.executor.evolve_log
                         if log is not None:
                             log.log_guard_event(
-                                guard_type="action_announce_no_tools",
+                                guard_type=guard_type,
                                 conversation_id=self.session.conversation_id,
                                 preview=final_text[:240],
                             )

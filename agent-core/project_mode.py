@@ -221,6 +221,7 @@ def format_archive_entry(
     reason: str,
     phase: str = "",
     source: str = "",
+    phase_id: str = "",
     closed_at: str | None = None,
 ) -> str:
     reason_n = normalize_close_reason(reason)
@@ -228,6 +229,8 @@ def format_archive_entry(
     parts = [f"- {body.strip()}", f"closed:{reason_n}", ts]
     if phase.strip():
         parts.append(f"phase:{phase.strip()}")
+    if phase_id.strip():
+        parts.append(f"phase_id:{phase_id.strip()}")
     if source.strip():
         parts.append(f"src:{source.strip()[:40]}")
     return " · ".join(parts)
@@ -448,7 +451,21 @@ def append_tasks_archive(
     """Append one closed task to TASKS.archive.md (create file if needed)."""
     root = project_dir(paths, project_id)
     archive_path = root / TASKS_ARCHIVE_NAME
-    entry = format_archive_entry(body=body, reason=reason, phase=phase, source=source)
+    phase_id = ""
+    if phase.strip():
+        phase_id = resolve_or_assign_phase_id(
+            paths,
+            project_id,
+            phase,
+            archive_path=archive_path,
+        )
+    entry = format_archive_entry(
+        body=body,
+        reason=reason,
+        phase=phase,
+        source=source,
+        phase_id=phase_id,
+    )
     if archive_path.is_file():
         existing = archive_path.read_text(encoding="utf-8")
         if not existing.endswith("\n"):
@@ -523,6 +540,333 @@ def archive_and_remove_task_line(
 
 
 MILESTONE_PROJECT_COMPLETE_KEY = "project:complete"
+PHASE_ID_KEY_PREFIX = "phase_id:"
+_PHASE_REGISTRY_NAME = "phase_registry.json"
+_ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def normalize_phase_title(title: str) -> str:
+    """Casefold + strip + collapse whitespace (MILESTONE-PHASE-KEY §3)."""
+    return re.sub(r"\s+", " ", (title or "").strip()).casefold()
+
+
+def phase_registry_path(paths: AgentPaths, project_id: str) -> Path:
+    return project_dir(paths, project_id) / ".plan-agent" / _PHASE_REGISTRY_NAME
+
+
+def load_phase_registry(registry_path: Path) -> dict[str, str]:
+    if not registry_path.is_file():
+        return {}
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v}
+
+
+def save_phase_registry(registry_path: Path, registry: dict[str, str]) -> None:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        json.dumps(dict(sorted(registry.items())), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def utc_today_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+def compute_phase_stable_id(
+    phase_title: str,
+    project_id: str,
+    first_archive_date: str,
+) -> str:
+    norm = normalize_phase_title(phase_title)
+    payload = f"{norm}|{project_id}|{first_archive_date}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def phase_id_from_archive(archive_path: Path, phase_title: str) -> str:
+    title_norm = normalize_phase_title(phase_title)
+    for entry in list_archive_entries(archive_path):
+        if normalize_phase_title(entry.get("phase") or "") != title_norm:
+            continue
+        pid = (entry.get("phase_id") or "").strip()
+        if pid:
+            return pid
+    return ""
+
+
+def first_archive_date_from_archive(archive_path: Path, phase_title: str) -> str | None:
+    title_norm = normalize_phase_title(phase_title)
+    earliest: str | None = None
+    for entry in list_archive_entries(archive_path):
+        if normalize_phase_title(entry.get("phase") or "") != title_norm:
+            continue
+        raw = entry.get("raw") or ""
+        for part in (p.strip() for p in raw.split(" · ")):
+            if part.startswith(("closed:", "phase:", "src:", "phase_id:")):
+                continue
+            if _ISO_DATE_PREFIX_RE.match(part):
+                date_part = part[:10]
+                if earliest is None or date_part < earliest:
+                    earliest = date_part
+                break
+    return earliest
+
+
+def resolve_or_assign_phase_id(
+    paths: AgentPaths,
+    project_id: str,
+    phase_title: str,
+    *,
+    archive_path: Path | None = None,
+) -> str:
+    """Return 12-char stable_id; create registry + archive mapping on first use."""
+    title = (phase_title or "").strip()
+    if not title:
+        return ""
+    reg_path = phase_registry_path(paths, project_id)
+    registry = load_phase_registry(reg_path)
+    if title in registry:
+        return registry[title]
+    ap = archive_path or (project_dir(paths, project_id) / TASKS_ARCHIVE_NAME)
+    existing = phase_id_from_archive(ap, title)
+    if existing:
+        registry[title] = existing
+        save_phase_registry(reg_path, registry)
+        return existing
+    first_date = first_archive_date_from_archive(ap, title) or utc_today_iso()
+    stable_id = compute_phase_stable_id(title, project_id, first_date)
+    registry[title] = stable_id
+    save_phase_registry(reg_path, registry)
+    return stable_id
+
+
+def format_phase_key(stable_id: str) -> str:
+    return f"{PHASE_ID_KEY_PREFIX}{stable_id}"
+
+
+_PHASE_KEY_LEGACY_INDEX_RE = re.compile(r"^phase:(\d+)$")
+_PHASE_KEY_LEGACY_TITLE_RE = re.compile(r"^title:([a-f0-9]{12})$")
+
+
+def is_persisted_milestone_phase_key(key: str) -> bool:
+    """Keys written by ``_save_state`` after T-5402 migration."""
+    k = (key or "").strip()
+    if not k:
+        return False
+    if k == MILESTONE_PROJECT_COMPLETE_KEY:
+        return True
+    return k.startswith(PHASE_ID_KEY_PREFIX)
+
+
+def _phase_title_sha1_prefix(title: str) -> str:
+    return hashlib.sha1(normalize_phase_title(title).encode("utf-8")).hexdigest()[:12]
+
+
+def unique_archive_phase_titles(archive_path: Path) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in list_archive_entries(archive_path):
+        phase = (entry.get("phase") or "").strip()
+        if not phase:
+            continue
+        norm = normalize_phase_title(phase)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(phase)
+    return out
+
+
+def build_suggestion_phase_key_map(
+    active_suggestions: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """Map legacy ``phase_key`` → phase title from milestone suggestion payloads."""
+    out: dict[str, str] = {}
+    for sug in active_suggestions.values():
+        if not isinstance(sug, dict) or sug.get("kind") != "milestone_review":
+            continue
+        payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+        phase_key = str(payload.get("phase_key") or "").strip()
+        phase = str(payload.get("phase") or "").strip()
+        if phase_key and phase:
+            out[phase_key] = phase
+    return out
+
+
+def phase_title_for_legacy_phase_key(
+    legacy_key: str,
+    *,
+    tasks_lines: list[str],
+    archive_path: Path,
+    suggestion_phase_by_key: dict[str, str] | None = None,
+) -> str | None:
+    m = _PHASE_KEY_LEGACY_INDEX_RE.match((legacy_key or "").strip())
+    if not m:
+        return None
+    idx = int(m.group(1))
+    hints = suggestion_phase_by_key or {}
+    if legacy_key in hints:
+        return hints[legacy_key]
+    headers = [title for _line_i, title in iter_phase_headers(tasks_lines)]
+    if 1 <= idx <= len(headers):
+        return headers[idx - 1]
+    archive_phases = unique_archive_phase_titles(archive_path)
+    if 1 <= idx <= len(archive_phases):
+        return archive_phases[idx - 1]
+    return None
+
+
+def phase_title_for_legacy_title_key(
+    legacy_key: str,
+    *,
+    tasks_lines: list[str],
+    archive_path: Path,
+) -> str | None:
+    m = _PHASE_KEY_LEGACY_TITLE_RE.match((legacy_key or "").strip())
+    if not m:
+        return None
+    want = m.group(1)
+    for _line_i, title in iter_phase_headers(tasks_lines):
+        if _phase_title_sha1_prefix(title) == want:
+            return title
+    for title in unique_archive_phase_titles(archive_path):
+        if _phase_title_sha1_prefix(title) == want:
+            return title
+    return None
+
+
+def migrate_legacy_milestone_phase_key(
+    legacy_key: str,
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    tasks_path: Path,
+    archive_path: Path,
+    suggestion_phase_by_key: dict[str, str] | None = None,
+) -> str | None:
+    """Map ``phase:N`` / ``title:hash`` → ``phase_id:<stable>`` via archive (T-5402)."""
+    key = (legacy_key or "").strip()
+    if not key or is_persisted_milestone_phase_key(key):
+        return None
+    tasks_lines = (
+        tasks_path.read_text(encoding="utf-8").splitlines()
+        if tasks_path.is_file()
+        else []
+    )
+    title: str | None = None
+    if _PHASE_KEY_LEGACY_INDEX_RE.match(key):
+        title = phase_title_for_legacy_phase_key(
+            key,
+            tasks_lines=tasks_lines,
+            archive_path=archive_path,
+            suggestion_phase_by_key=suggestion_phase_by_key,
+        )
+    elif _PHASE_KEY_LEGACY_TITLE_RE.match(key):
+        title = phase_title_for_legacy_title_key(
+            key,
+            tasks_lines=tasks_lines,
+            archive_path=archive_path,
+        )
+    if not title:
+        return None
+    stable_id = phase_id_from_archive(archive_path, title)
+    if not stable_id:
+        stable_id = resolve_or_assign_phase_id(
+            paths,
+            project_id,
+            title,
+            archive_path=archive_path,
+        )
+    if not stable_id:
+        return None
+    return format_phase_key(stable_id)
+
+
+def migrate_milestone_phase_key_set(
+    keys: set[str] | frozenset[str],
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    tasks_path: Path,
+    archive_path: Path,
+    suggestion_phase_by_key: dict[str, str] | None = None,
+) -> tuple[set[str], bool]:
+    """Add ``phase_id`` equivalents for legacy keys; keep originals in memory (PK-4)."""
+    out = {str(k).strip() for k in keys if str(k).strip()}
+    changed = False
+    for key in list(out):
+        if is_persisted_milestone_phase_key(key):
+            continue
+        new_key = migrate_legacy_milestone_phase_key(
+            key,
+            paths,
+            project_id,
+            tasks_path=tasks_path,
+            archive_path=archive_path,
+            suggestion_phase_by_key=suggestion_phase_by_key,
+        )
+        if new_key and new_key not in out:
+            out.add(new_key)
+            changed = True
+    return out, changed
+
+
+def milestone_phase_keys_for_persist(keys: set[str] | frozenset[str]) -> list[str]:
+    """Drop superseded legacy keys when canonical ``phase_id`` keys exist (T-5402)."""
+    normalized = {str(k).strip() for k in keys if str(k).strip()}
+    canonical = {k for k in normalized if is_persisted_milestone_phase_key(k)}
+    legacy = normalized - canonical
+    if not legacy:
+        return sorted(canonical)
+    has_phase_id = any(k.startswith(PHASE_ID_KEY_PREFIX) for k in canonical)
+    if has_phase_id:
+        legacy = {
+            k
+            for k in legacy
+            if not (
+                _PHASE_KEY_LEGACY_INDEX_RE.match(k)
+                or _PHASE_KEY_LEGACY_TITLE_RE.match(k)
+            )
+        }
+    return sorted(canonical | legacy)
+
+
+def migrate_active_milestone_suggestion_keys(
+    active_suggestions: dict[str, dict[str, Any]],
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    tasks_path: Path,
+    archive_path: Path,
+    suggestion_phase_by_key: dict[str, str] | None = None,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    changed = False
+    for sug in active_suggestions.values():
+        if not isinstance(sug, dict):
+            continue
+        payload = sug.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        old_key = str(payload.get("phase_key") or "").strip()
+        if not old_key or is_persisted_milestone_phase_key(old_key):
+            continue
+        new_key = migrate_legacy_milestone_phase_key(
+            old_key,
+            paths,
+            project_id,
+            tasks_path=tasks_path,
+            archive_path=archive_path,
+            suggestion_phase_by_key=suggestion_phase_by_key,
+        )
+        if new_key:
+            payload["phase_key"] = new_key
+            changed = True
+    return active_suggestions, changed
 
 
 def phase_open_count_visible(
@@ -568,16 +912,31 @@ def archive_done_count_for_phase(archive_path: Path, phase_title: str) -> int:
     return n
 
 
-def phase_key_for_title(file_lines: list[str], phase_title: str) -> str:
-    """Stable milestone dedup key (LOCAL-DELIVERY-MODEL §5.6).
+def phase_key_for_title(
+    file_lines: list[str],
+    phase_title: str,
+    *,
+    paths: AgentPaths | None = None,
+    project_id: str = "",
+    archive_path: Path | None = None,
+) -> str:
+    """Stable milestone dedup key (MILESTONE-PHASE-KEY v2 · T-5401).
 
-    Prefer 1-based index among ``## `` headers → ``phase:N``; else
-    ``title:<sha1[:12]>`` of the casefolded title.
+    Prefer ``phase_registry.json`` / archive ``phase_id`` → ``phase_id:<stable>``;
+    else 1-based ``## `` index → ``phase:N``; else ``title:<sha1[:12]>``.
     """
     title = (phase_title or "").strip()
     if not title:
         digest = hashlib.sha1(b"").hexdigest()[:12]
         return f"title:{digest}"
+    if paths and project_id:
+        registry = load_phase_registry(phase_registry_path(paths, project_id))
+        stable_id = (registry.get(title) or "").strip()
+        if not stable_id:
+            ap = archive_path or (project_dir(paths, project_id) / TASKS_ARCHIVE_NAME)
+            stable_id = phase_id_from_archive(ap, title)
+        if stable_id:
+            return format_phase_key(stable_id)
     for idx, (_line_i, header) in enumerate(iter_phase_headers(file_lines), start=1):
         if header == title:
             return f"phase:{idx}"
@@ -590,6 +949,8 @@ def evaluate_milestone_after_archive(
     tasks_path: Path,
     archive_path: Path,
     phase: str,
+    project_id: str = "",
+    paths: AgentPaths | None = None,
     reminded_phase_keys: frozenset[str] | set[str] | None = None,
     dismissed_phase_keys: frozenset[str] | set[str] | None = None,
 ) -> dict[str, Any]:
@@ -613,7 +974,17 @@ def evaluate_milestone_after_archive(
     m1 = open_after == 0 and archive_done > 0
     m2 = stats.total == stats.done and stats.done > 0
 
-    phase_key = phase_key_for_title(file_lines, phase_title) if phase_title else ""
+    phase_key = (
+        phase_key_for_title(
+            file_lines,
+            phase_title,
+            paths=paths,
+            project_id=project_id,
+            archive_path=archive_path,
+        )
+        if phase_title
+        else ""
+    )
     blocked = phase_key in reminded or phase_key in dismissed
     project_blocked = (
         MILESTONE_PROJECT_COMPLETE_KEY in reminded
@@ -1297,12 +1668,20 @@ def format_project_overlay(
                 "delivery: 完成以构建/测试为准；TASKS 为视图；"
                 "验收口语可 spawn deliverable_review"
             )
+            lines.append(
+                "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
+                "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+            )
         else:
             lines.append(
                 "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
             )
             lines.append(
                 "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
+            )
+            lines.append(
+                "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
+                "仅 report_progress 成功勾选后 Task 一停"
             )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
@@ -1905,6 +2284,32 @@ def iter_phase_headers(file_lines: list[str]) -> list[tuple[int, str]]:
         if line.strip().startswith("## "):
             out.append((i, line.strip().lstrip("#").strip()))
     return out
+
+
+def resolve_bug_promote_phase(paths: AgentPaths, project_id: str) -> str:
+    """Target phase for bug_promote adopt (MILESTONE-PHASE-KEY BQ-4 · T-5403)."""
+    tasks_path = project_dir(paths, project_id) / "TASKS.md"
+    if not tasks_path.is_file():
+        return "Phase 1"
+    lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("## "):
+            continue
+        title = stripped.lstrip("#").strip()
+        if normalize_phase_title(title) == "bugs":
+            return title
+    current_phase = ""
+    fallback_phase = "Phase 1"
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current_phase = stripped.lstrip("#").strip()
+            if fallback_phase == "Phase 1" and current_phase:
+                fallback_phase = current_phase
+        elif _TASK_OPEN_RE.match(line) and current_phase:
+            return current_phase
+    return current_phase or fallback_phase
 
 
 def find_phase_title(file_lines: list[str], needle: str) -> str | None:

@@ -14,6 +14,7 @@ export function actionableSuggestions(suggestions: PlanSuggestion[]): PlanSugges
 }
 
 export function acceptLabel(s: PlanSuggestion): string {
+  if (s.kind === "bug_promote") return "采纳进 TASKS";
   if (s.action === "drop_task") return "删除";
   if (
     s.risk === "gate" ||

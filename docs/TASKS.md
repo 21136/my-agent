@@ -2,7 +2,7 @@
 
 > 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：Phase **24** T-2408 收尾 · **Phase 47** S-470 · **Phase 48** S-480/S-481 · **Phase 49** S-4910 · **Phase 50** doc 已签待编码 · Phase 42 T-4213  
+> **当前焦点**：**Pack 1/2/4/5/6 M0 done** — ROADMAP-PACK-1245 收口；另排 S-441/461/490/500  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -51,7 +51,7 @@
 | **STABILIZATION §3.1** 四壳行 | grow↔daily 隔离 · govern · ui.route | **superseded** | 见 [STABILIZATION.md](./STABILIZATION.md) §3.0 |
 | **T-1830-01～08**（部分） | `ui.route` · refresh · 流式序等 | **superseded** | IT-X 中与四壳绑定的用例作废；其余仍 defer 维护 |
 
-**仍算真债（勿误删）**：Phase 24 **T-2408** S-70～74 · WORKBENCH M1/M2 · 后端 `active_shell` 收敛 · Phase 42 **T-4213/S-421** · Phase 44 **T-4408** S-441 · evolve_log 轮转。
+**仍算真债（勿误删）**：Phase 24 **T-2408** S-70～74 · WORKBENCH M1/M2 · 后端 `active_shell` 收敛 · Phase 44 **T-4408** S-441 · evolve_log 轮转。
 
 ---
 
@@ -1279,7 +1279,7 @@ python turn_intent.py    # 分类用例无回归
 | T-3702 | M1：注入切片（开放项 only） | loader / overlay · IT-180 | T-3701 | 归档不进默认提示词 | **done** |
 | T-3703 | M2：增删改落盘门（对齐 Q1） | Plan / add_tasks · IT-181 | T-3701 | 无接受不落盘 | **done** |
 | T-3704 | M3：归档搬迁 + 关闭理由 + 指针约定 | archive · 模板/prompt | T-3702 | 勾选进 archive；S-180 | **done** |
-| T-3705 | M4（可选）：bugs 晋升队列侧栏动作 | desktop / Plan | T-3704 | 手工；可 defer | defer |
+| T-3705 | M4：bugs 晋升队列侧栏动作 | → **T-5403**（Pack 4） | T-3704 | S-542 · IT-543 | **done** |
 | T-3706 | A7 设计落盘 + M5 侧栏瘦身 | `PLAN-ARCH` v0.3.2 · SIDEBAR 指针 · UI | T-3704 | 侧栏无整份 TASKS；完整计划进覆盖面板；S-182 | **done** |
 | T-3707 | M6 设计：读写提案 + diff 采纳卡 | `PLAN-ARCH` v0.4.0 · SIDEBAR 指针 · 本表 | T-3706 · thinking | A8/A9/Q4 可读；S-183/184 · IT-182/183 准入 | **done** |
 | T-3708 | M6 代码：patch 提案协议 + 应用 | `plan_patch` / `plan_agent` · IT-182/183 | T-3707 | 无效行号不进卡；采纳前不落盘 | **done** |
@@ -1469,8 +1469,8 @@ python turn_intent.py    # 分类用例无回归
 | T-4210 | H 轨文档 + CONFIRM-PIPELINE 指针 | CURSOR-GAP-NEXT §2 | 用户选题 | 可读 | **doc** |
 | T-4211 | `write_policy.py` + 单测 | 纯函数 + IT-421～424 | T-4210 | IT-421～424 | **done** |
 | T-4212 | executor + confirm 预览 reason | 对齐 `run_command_policy` | T-4211 | IT-424 | **done** |
-| T-4213 | 手工验收 | S-421 | T-4212 | 3 patch 无连点 | todo |
-| T-4214 | M1：project 内新建文件免确认（可选） | H-Q1 签字后 | T-4213 | — | defer |
+| T-4213 | 手工验收 | S-421 | T-4212 | 3 patch 无连点 | **done** |
+| T-4214 | M1：project 内新建文件免确认（Pack 2 · =T-5202） | H-Q1 签字后 | T-4213 | IT-4214 · S-421 | **done** |
 | T-4215 | H 轨提示词（INDEX 脚注；**core 不动**） | CURSOR-GAP-NEXT §2.11 | T-4212 | grep 无长段免确认教程 | **done** |
 
 ### Track I — 代码发现（Glob → 语义）
@@ -1482,7 +1482,7 @@ python turn_intent.py    # 分类用例无回归
 | T-4222 | agent 第 7 builtin + loader | `build_llm_tools` | T-4221 | IT-430 | **done** |
 | T-4223 | INDEX + loader hints + 可选 `discover.md` | TOOL-CATALOG | T-4222 | E 层可读 | **done** |
 | T-4224 | M1：尊重 `.gitignore` | 与 rg 对齐 | T-4221 | IT-432 | **done** |
-| T-4225 | M2：语义搜设计签字 | `CODEBASE-SEARCH.md`（待建） | 用户重开 | — | defer |
+| T-4225 | M2：语义搜设计签字 | → **T-5500** [CODEBASE-SEARCH.md](./CODEBASE-SEARCH.md) | 用户重开 | Pack 5 | **→55 doc** |
 | T-4226 | I 轨 `core.txt`（边界表 · discipline · ask · 7 builtins） | §3.7 | T-4222 | grep 含 `glob_file_search` | **done** |
 
 **完成标志（M0）**：H + J + I(M0) 绿；S-421 / S-440 / S-430 可选手工。
@@ -1629,7 +1629,7 @@ python turn_intent.py    # 分类用例无回归
 | T-4717 | overlay `milestone_review_suggested` | project_mode | T-4715 | IT-476 | **done** |
 | T-4718 | LOCAL-DELIVERY-MODEL 文档 | docs | 评审 | **doc** | **done** |
 | T-4719 | `_plan_progress_brief` 用 archive 计完成度（禁 `done_n`） | plan_agent.py | LOCAL-DELIVERY-MODEL §5.1 | test_plan_partner | **done** |
-| S-472 | 手工：Phase 勾满 → notice → 口语验收 → review | log | T-4715～4717 | S-472 | todo |
+| S-472 | 手工：Phase 勾满 → notice → 口语验收 → review | log | T-4715～4717 | S-472 | **done** |
 
 ---
 
@@ -1651,11 +1651,11 @@ python turn_intent.py    # 分类用例无回归
 | T-4801 | 项目模式禁 `should_spawn_explore` | `turn_intent.py` · `agent.py` | T-4800 | IT-4801 | **done** |
 | T-4802 | `explore` 父调 builtin（对齐 review） | builtin · executor · agent | T-4801 | IT-4802 | **done** |
 | T-4803 | project prompt 口语→`deliverable_review` | evolve/prompts | T-4800 | IT-4803 | **done** |
-| T-4804 | 手工 huiyi「文档脱节」不读 TOOLS.md | log | T-4801～4803 | S-480 · IT-4804 | todo（手工） |
+| T-4804 | 手工 huiyi「文档脱节」不读 TOOLS.md | log | T-4801～4803 | S-480 · IT-4804 | **done** |
 | T-4810 | 同 path 多 patch 提案时合并为一条 `replacements[]` + 一张侧栏卡 | `plan_agent._apply_plan_operations` | BUG-026 doc §6.1 | IT-4810 | **done** |
 | T-4811 | 采纳等 WS 确认；闪绿文案用 `payload.path`；失败不乐观 | `desktop/.../index.ts` `acceptSuggestionById` | BUG-026 doc §5 | IT-4811 | **done** |
 | T-4812 | 采纳后 rebase 同 path 其余 pending 的 `base_hash`（可选） | `plan_agent.accept_suggestion` | BUG-026 doc §6.2 | IT-4810 | **done** |
-| T-4813 | 手工 5 条含重复 path 全采纳 | log | T-4810,4811 | S-481 · IT-4813 | todo（手工） |
+| T-4813 | 手工 5 条含重复 path 全采纳 | log | T-4810,4811 | S-481 · IT-4813 | **done** |
 
 #### T-4804 / T-4813 手工验收（桌面）
 
@@ -1730,6 +1730,81 @@ python turn_intent.py    # 分类用例无回归
 #### S-500 / S-501
 
 见 [EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) §7。
+
+---
+
+## Phase 51～56 — Pack 1/2/4/5/6 路线图
+
+> 设计：[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md) v0.2.2 · **状态：Fable5 评审已签 · 部分代码已落地**  
+> 用户选型：包 **1** 收口 · **2** 日用体感 · **6** 异步编排 · **4** 计划域 · **5** 大仓语义搜（不含 Pack 3 UX）
+
+### DOC-04 准入
+
+- [x] 影响矩阵行见 ROADMAP §8
+- [x] 回归 ID：S-472/480/481 · S-70～75 · IT-440/441 · S-421 · **IT-4214** · IT-560/561 · S-560 · IT-540～**543** · IT-550 · **IT-551/551b/552** · IT-553 · S-550
+
+### Phase 51 — Pack 1 · 收口（STABILIZE）
+
+> 子文档：[STABILIZATION-PACK1.md](./STABILIZATION-PACK1.md)
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5100 | Pack 1 设计 | STABILIZATION-PACK1.md | 评审 | **doc** |
+| S-472 | 里程碑全链 smoke | log | LDM §5 | **done** |
+| S-480 | BUG-027 桌面复验 | log | IT-4804 | **done** |
+| S-481 | BUG-026 桌面复验 | log | IT-4813 | **done** |
+| T-2408 | Progress Gate S-70～75 留痕 | stabilization-log | PROGRESS-GATE §5.2 | **done**（Phase 24 · pytest 自动化） |
+| T-2410-kernel | G9 拒勾后 kernel 注记（= Phase 24 T-2410） | progress_gate · agent | S-75 · IT-2410 | **done** |
+
+### Phase 52 — Pack 2 · 日用体感（DAILY）
+
+> 子文档：[LLM-ROUTING.md](./LLM-ROUTING.md) · Track H/J
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5200 | Pack 2 评审挂钩 | ROADMAP §4 | doc | **doc** |
+| T-5201 | **= T-4202** · `llm_routing` M0 | agent-core | IT-440/441 | **done**（= Phase 42-J T-4202） |
+| T-5202 | **= T-4214** · 新建文件免确认 | write_policy | S-421 · **IT-4214** | **done** |
+| S-421 | 手工：项目写码新建文件无连点确认 | log | IT-4214 | **done** |
+| T-5203 | **= T-4203** · 桌面双模型（可选） | desktop | S-440 | defer |
+
+### Phase 54 — Pack 4 · 计划域（PLAN-DOMAIN）
+
+> 子文档：[MILESTONE-PHASE-KEY.md](./MILESTONE-PHASE-KEY.md)
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5400 | phase_key v2 设计签字 | MILESTONE-PHASE-KEY.md | 评审 | **doc** |
+| T-5401 | `phase_id` 稳定主键 + archive 字段 | project_mode.py | IT-540 | **done** |
+| T-5402 | plan state 兼容迁移 + dismissed 映射 | plan_agent | IT-541 · **IT-542** · IT-476/477 回归 | **done** |
+| T-5403 | **= T-3705** · bugs 晋升侧栏 | desktop · plan_agent | S-542 · IT-543 | **done** |
+
+### Phase 55 — Pack 5 · 语义搜（DISCOVER）
+
+> 子文档：[CODEBASE-SEARCH.md](./CODEBASE-SEARCH.md)
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5500 | 语义搜设计签字 | CODEBASE-SEARCH.md | 评审 | **doc** |
+| T-5501 | M0：deny/gitignore + BM25 index + `codebase_search` | agent-core | IT-550/551/**551b**/552/553 | **done** |
+| T-5502 | M1：增量 refresh · embedding A opt-in | codebase_index.py | IT-553 回归 | **done** |
+| T-5503 | M2：本地 embedding / BM25-only | config | — | defer |
+| S-550 | 手工 huiyi 语义定位 | log | CODEBASE-SEARCH §6 | **done** |
+
+### Phase 56 — Pack 6 · 异步编排续跑（ORCHESTRATE）
+
+> 子文档：[ASYNC-ORCHESTRATION.md](./ASYNC-ORCHESTRATION.md)
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5600 | Pack 6 设计 | ASYNC-ORCHESTRATION.md | 评审 | **doc** |
+| T-5601 | M0：起服 wait 纪律 · prompt/INDEX | evolve prompts | grep | **done** |
+| T-5602 | M0：G13 扩展 · 口头延期 nudge（中英） | agent.py | IT-560 | **done** |
+| T-5603 | M0：起服链 vs Task 一停 · segment cap | loader · project_mode | IT-561 | **done** |
+| S-560 | M0：多服务起服一轮完成 · 无「继续」 | stabilization-log | ASYNC-ORCH §4.1 | **done** |
+| T-5604 | M1：deferred wake 续回合 | server · session | IT-562 | defer |
+| T-5605 | M1：桌面 wake notice + Cancel | desktop | S-563 | defer |
+| T-5606 | M1：env `MY_AGENT_ORCH_WAKE_*` | config | — | defer |
 
 ---
 

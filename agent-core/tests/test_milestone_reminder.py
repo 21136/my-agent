@@ -9,11 +9,13 @@ from unittest.mock import patch
 from plan_agent import drop_plan_agent, get_plan_agent
 from project_mode import (
     TASKS_ARCHIVE_NAME,
+    PHASE_ID_KEY_PREFIX,
     add_task_to_tasks_md,
     archive_and_remove_task_line,
     archive_done_count_for_phase,
     create_project,
     evaluate_milestone_after_archive,
+    list_archive_entries,
     normalize_project_id,
     phase_key_for_title,
     phase_open_count_visible,
@@ -22,6 +24,23 @@ from project_mode import (
 )
 
 from tests.isolation_helpers import make_temp_agent_paths
+
+
+def _phase_id_key(
+    paths,
+    pid: str,
+    tasks_path,
+    phase_title: str,
+) -> str:
+    archive = tasks_path.parent / TASKS_ARCHIVE_NAME
+    lines = tasks_path.read_text(encoding="utf-8").splitlines()
+    return phase_key_for_title(
+        lines,
+        phase_title,
+        paths=paths,
+        project_id=pid,
+        archive_path=archive,
+    )
 
 
 class MilestoneHelperTests(unittest.TestCase):
@@ -101,6 +120,8 @@ class MilestoneEvaluateTests(unittest.TestCase):
             tasks_path=self.tasks,
             archive_path=self.archive,
             phase=phase,
+            project_id=self.pid,
+            paths=self.paths,
             **kwargs,
         )
 
@@ -153,7 +174,7 @@ class MilestoneEvaluateTests(unittest.TestCase):
         )
         toggle_task_line(self.paths, self.pid, 1, True)
         toggle_task_line(self.paths, self.pid, 1, True)
-        phase_key = phase_key_for_title(self.tasks.read_text(encoding="utf-8").splitlines(), "Phase A")
+        phase_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
         ev = self._eval("Phase A", reminded_phase_keys=frozenset({phase_key}))
         self.assertTrue(ev["m1"])
         self.assertFalse(ev["m2"])
@@ -176,7 +197,9 @@ class MilestoneEvaluateTests(unittest.TestCase):
         self.assertTrue(
             any(s.get("kind") == "milestone_review" for s in state.get("suggestions", []))
         )
-        self.assertIn("phase:1", agent._milestone_reminded_phase_keys)
+        phase_a_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
+        self.assertIn(phase_a_key, agent._milestone_reminded_phase_keys)
+        self.assertTrue(phase_a_key.startswith(PHASE_ID_KEY_PREFIX))
         agent.clear_milestone_reminded_on_review("pass")
         self.assertEqual(len(agent._milestone_reminded_phase_keys), 0)
         add_task_to_tasks_md(
@@ -284,7 +307,8 @@ class ReportProgressMilestoneTests(unittest.TestCase):
 
         data = json.loads(state_path.read_text(encoding="utf-8"))
         reminders = data.get("milestone_review_reminders") or {}
-        self.assertIn("phase:1", reminders.get("reminded_phase_keys", []))
+        reminded = reminders.get("reminded_phase_keys", [])
+        self.assertTrue(any(k.startswith(PHASE_ID_KEY_PREFIX) for k in reminded))
         self.assertTrue(reminders.get("active_suggestions"))
 
 
@@ -323,7 +347,8 @@ class MilestoneReminderStateTests(unittest.TestCase):
             s for s in state["suggestions"] if s.get("kind") == "milestone_review"
         )
         self.agent.ignore_suggestion(milestone["id"])
-        self.assertIn("phase:1", self.agent._milestone_dismissed_phase_keys)
+        phase_a_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
+        self.assertIn(phase_a_key, self.agent._milestone_dismissed_phase_keys)
         add_task_to_tasks_md(
             self.paths,
             self.pid,
@@ -337,10 +362,13 @@ class MilestoneReminderStateTests(unittest.TestCase):
         )
         self.assertNotIn("milestone_review", self._suggestion_kinds(state2))
 
-    def test_phase_key_stable_when_phase_title_renamed(self) -> None:
+    def test_phase_rename_assigns_new_phase_id_without_pk7(self) -> None:
+        """PK-7 defer: renamed title is a new phase_id (may re-remind)."""
         self._archive_phase_a()
+        phase_a_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
+        self.assertTrue(phase_a_key.startswith(PHASE_ID_KEY_PREFIX))
         reminded_before = set(self.agent._milestone_reminded_phase_keys)
-        self.assertIn("phase:1", reminded_before)
+        self.assertIn(phase_a_key, reminded_before)
         text = self.tasks.read_text(encoding="utf-8")
         self.tasks.write_text(
             text.replace("## Phase A", "## Phase Alpha", 1),
@@ -357,20 +385,20 @@ class MilestoneReminderStateTests(unittest.TestCase):
         self.agent.report_progress(
             line_new, "T-005 renamed phase task with enough text done"
         )
-        self.assertEqual(self.agent._milestone_reminded_phase_keys, reminded_before)
+        phase_alpha_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase Alpha")
+        self.assertNotEqual(phase_a_key, phase_alpha_key)
+        self.assertIn(phase_alpha_key, self.agent._milestone_reminded_phase_keys)
         ev = evaluate_milestone_after_archive(
             tasks_path=self.tasks,
             archive_path=self.root / TASKS_ARCHIVE_NAME,
             phase="Phase Alpha",
+            project_id=self.pid,
+            paths=self.paths,
             reminded_phase_keys=self.agent._milestone_reminded_phase_keys,
             dismissed_phase_keys=self.agent._milestone_dismissed_phase_keys,
         )
         self.assertTrue(ev["m1"])
         self.assertFalse(ev["should_remind"])
-        self.assertEqual(
-            phase_key_for_title(lines, "Phase Alpha"),
-            "phase:1",
-        )
 
     @patch("subagent.SubagentRunner.run_deliverable_review")
     def test_deliverable_review_pass_clears_reminded_via_executor(
@@ -382,7 +410,8 @@ class MilestoneReminderStateTests(unittest.TestCase):
         from tools.registry import ToolRegistry
 
         self._archive_phase_a()
-        self.assertIn("phase:1", self.agent._milestone_reminded_phase_keys)
+        phase_a_key = _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
+        self.assertIn(phase_a_key, self.agent._milestone_reminded_phase_keys)
         mock_run_review.return_value = SubagentResult(
             kind="review",
             summary="Looks good.\nREVIEW_VERDICT: pass",
@@ -467,10 +496,11 @@ class MilestoneOverlayTests(unittest.TestCase):
         )
         self.agent.report_progress(1, "T-001 first task with enough text done")
         self.agent.report_progress(1, "T-002 second task with enough text done")
-        self.assertEqual(self.agent.milestone_review_overlay_key(), "phase:1")
+        overlay_key = self.agent.milestone_review_overlay_key()
+        self.assertTrue(overlay_key and overlay_key.startswith(PHASE_ID_KEY_PREFIX))
         self.assertEqual(
             read_milestone_review_overlay_key(self.paths, self.pid),
-            "phase:1",
+            overlay_key,
         )
 
     def test_overlay_key_cleared_after_review_pass(self) -> None:
@@ -478,7 +508,8 @@ class MilestoneOverlayTests(unittest.TestCase):
 
         self._write("## Phase A\n- [ ] T-001 only task with enough text\n")
         self.agent.report_progress(1, "T-001 only task with enough text done")
-        self.assertEqual(self.agent.milestone_review_overlay_key(), "phase:1")
+        overlay_key = self.agent.milestone_review_overlay_key()
+        self.assertTrue(overlay_key and overlay_key.startswith(PHASE_ID_KEY_PREFIX))
         self.agent.clear_milestone_reminded_on_review("pass")
         self.assertIsNone(self.agent.milestone_review_overlay_key())
         self.assertIsNone(read_milestone_review_overlay_key(self.paths, self.pid))
@@ -489,13 +520,271 @@ class MilestoneOverlayTests(unittest.TestCase):
 
         self._write("## Phase A\n- [ ] T-001 only task with enough text\n")
         self.agent.report_progress(1, "T-001 only task with enough text done")
+        overlay_key = self.agent.milestone_review_overlay_key()
         session = create_new(self.paths)
         session.meta.active_shell = "project"
         session.meta.project_id = self.pid
         session.meta.project_root = f"workspace/{self.pid}"
         session.meta.project_plan_status = "confirmed"
         loaded = build_system_prompt(session, paths=self.paths)
-        self.assertIn("milestone_review_suggested: phase:1", loaded.prompt)
+        self.assertIn(f"milestone_review_suggested: {overlay_key}", loaded.prompt)
+
+
+class MilestonePhaseIdTests(unittest.TestCase):
+    """IT-540 · phase_id stable key survives header reorder (T-5401)."""
+
+    def setUp(self) -> None:
+        self.paths = make_temp_agent_paths(self)
+        self.pid = normalize_project_id(f"pk-{secrets.token_hex(3)}")
+        create_project(self.paths, self.pid)
+        drop_plan_agent(self.pid)
+        self.agent = get_plan_agent(self.paths, self.pid)
+        self.root = project_dir(self.paths, self.pid)
+        self.tasks = self.root / "TASKS.md"
+        self.archive = self.root / TASKS_ARCHIVE_NAME
+
+    def _write(self, body: str) -> None:
+        self.tasks.write_text(body.rstrip() + "\n", encoding="utf-8")
+
+    def _phase_key(self, phase_title: str) -> str:
+        return _phase_id_key(self.paths, self.pid, self.tasks, phase_title)
+
+    def _suggestion_kinds(self, state: dict) -> list[str]:
+        return [str(s.get("kind")) for s in state.get("suggestions", [])]
+
+    def test_archive_writes_phase_id_field(self) -> None:
+        self._write("## Phase A\n- [ ] T-001 only task with enough text\n")
+        archive_and_remove_task_line(self.paths, self.pid, 1, reason="done")
+        text = self.archive.read_text(encoding="utf-8")
+        self.assertIn("phase_id:", text)
+        entries = list_archive_entries(self.archive)
+        self.assertTrue(entries[0].get("phase_id"))
+
+    def test_it540_insert_phase_header_no_duplicate_remind(self) -> None:
+        self._write(
+            "## Phase A\n"
+            "- [ ] T-001 first task with enough text\n"
+            "- [ ] T-002 second task with enough text\n"
+        )
+        self.agent.report_progress(1, "T-001 first task with enough text done")
+        state = self.agent.report_progress(1, "T-002 second task with enough text done")
+        self.assertIn("milestone_review", self._suggestion_kinds(state))
+        phase_a_key = self._phase_key("Phase A")
+        self.assertTrue(phase_a_key.startswith(PHASE_ID_KEY_PREFIX))
+        self.assertIn(phase_a_key, self.agent._milestone_reminded_phase_keys)
+
+        text = self.tasks.read_text(encoding="utf-8")
+        self.tasks.write_text(
+            "## Phase Z\n- [ ] T-099 placeholder task with enough text\n\n" + text,
+            encoding="utf-8",
+        )
+        self.assertEqual(self._phase_key("Phase A"), phase_a_key)
+
+        add_task_to_tasks_md(
+            self.paths,
+            self.pid,
+            "Phase A",
+            "T-004 follow-up task with enough text",
+        )
+        lines = self.tasks.read_text(encoding="utf-8").splitlines()
+        line_new = next(i for i, ln in enumerate(lines) if "T-004" in ln)
+        reminded_before = set(self.agent._milestone_reminded_phase_keys)
+        self.agent.report_progress(
+            line_new, "T-004 follow-up task with enough text done"
+        )
+        self.assertEqual(self.agent._milestone_reminded_phase_keys, reminded_before)
+        ev = evaluate_milestone_after_archive(
+            tasks_path=self.tasks,
+            archive_path=self.archive,
+            phase="Phase A",
+            project_id=self.pid,
+            paths=self.paths,
+            reminded_phase_keys=self.agent._milestone_reminded_phase_keys,
+            dismissed_phase_keys=self.agent._milestone_dismissed_phase_keys,
+        )
+        self.assertTrue(ev["m1"])
+        self.assertFalse(ev["should_remind_m1"])
+        self.assertFalse(ev["should_remind"])
+
+    def test_it540_dismiss_phase_id_blocks_permanently(self) -> None:
+        self._write(
+            "## Phase A\n"
+            "- [ ] T-001 first task with enough text\n"
+            "- [ ] T-002 second task with enough text\n"
+        )
+        self.agent.report_progress(1, "T-001 first task with enough text done")
+        state = self.agent.report_progress(1, "T-002 second task with enough text done")
+        milestone = next(
+            s for s in state["suggestions"] if s.get("kind") == "milestone_review"
+        )
+        phase_a_key = self._phase_key("Phase A")
+        self.agent.ignore_suggestion(milestone["id"])
+        self.assertIn(phase_a_key, self.agent._milestone_dismissed_phase_keys)
+
+        text = self.tasks.read_text(encoding="utf-8")
+        self.tasks.write_text(
+            "## Phase Z\n- [ ] T-099 placeholder task with enough text\n\n" + text,
+            encoding="utf-8",
+        )
+        add_task_to_tasks_md(
+            self.paths,
+            self.pid,
+            "Phase A",
+            "T-004 follow-up task with enough text",
+        )
+        lines = self.tasks.read_text(encoding="utf-8").splitlines()
+        line_new = next(i for i, ln in enumerate(lines) if "T-004" in ln)
+        state2 = self.agent.report_progress(
+            line_new, "T-004 follow-up task with enough text done"
+        )
+        self.assertNotIn("milestone_review", self._suggestion_kinds(state2))
+
+
+class MilestonePhaseKeyMigrationTests(unittest.TestCase):
+    """IT-541/542 · legacy plan state migration (T-5402)."""
+
+    def setUp(self) -> None:
+        import json
+
+        self._json = json
+        self.paths = make_temp_agent_paths(self)
+        self.pid = normalize_project_id(f"mig-{secrets.token_hex(3)}")
+        create_project(self.paths, self.pid)
+        drop_plan_agent(self.pid)
+        self.root = project_dir(self.paths, self.pid)
+        self.tasks = self.root / "TASKS.md"
+        self.archive = self.root / TASKS_ARCHIVE_NAME
+
+    def _write_tasks(self, body: str) -> None:
+        self.tasks.write_text(body.rstrip() + "\n", encoding="utf-8")
+
+    def _seed_legacy_state(
+        self,
+        *,
+        reminded: list[str] | None = None,
+        dismissed: list[str] | None = None,
+    ) -> None:
+        state_dir = self.root / ".plan-agent"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "fingerprint": "",
+            "change_counter": 0,
+            "ignored_suggestion_ids": [],
+            "pending_gated": {},
+            "change_log": [],
+            "milestone_review_reminders": {
+                "reminded_phase_keys": reminded or [],
+                "dismissed_phase_keys": dismissed or [],
+                "active_suggestions": {},
+            },
+        }
+        (state_dir / "state.json").write_text(
+            self._json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _archive_phase_b(self) -> str:
+        self._write_tasks(
+            "## Phase A\n"
+            "- [ ] T-001 first task with enough text\n"
+            "## Phase B\n"
+            "- [ ] T-002 second task with enough text\n"
+            "- [ ] T-003 third task with enough text\n"
+        )
+        archive_and_remove_task_line(self.paths, self.pid, 3, reason="done")
+        archive_and_remove_task_line(self.paths, self.pid, 3, reason="done")
+        return _phase_id_key(self.paths, self.pid, self.tasks, "Phase B")
+
+    def _archive_phase_a(self) -> str:
+        self._write_tasks(
+            "## Phase A\n"
+            "- [ ] T-001 first task with enough text\n"
+            "- [ ] T-002 second task with enough text\n"
+        )
+        archive_and_remove_task_line(self.paths, self.pid, 1, reason="done")
+        archive_and_remove_task_line(self.paths, self.pid, 1, reason="done")
+        return _phase_id_key(self.paths, self.pid, self.tasks, "Phase A")
+
+    def test_it541_legacy_reminded_migrates_on_load(self) -> None:
+        phase_b_key = self._archive_phase_b()
+        self._seed_legacy_state(reminded=["phase:2"])
+        drop_plan_agent(self.pid)
+        agent = get_plan_agent(self.paths, self.pid)
+        self.assertIn(phase_b_key, agent._milestone_reminded_phase_keys)
+
+        persisted = self._json.loads(
+            (self.root / ".plan-agent" / "state.json").read_text(encoding="utf-8")
+        )
+        reminded = persisted["milestone_review_reminders"]["reminded_phase_keys"]
+        self.assertIn(phase_b_key, reminded)
+        self.assertNotIn("phase:2", reminded)
+
+        add_task_to_tasks_md(
+            self.paths,
+            self.pid,
+            "Phase B",
+            "T-004 follow-up task with enough text",
+        )
+        lines = self.tasks.read_text(encoding="utf-8").splitlines()
+        line_new = next(i for i, ln in enumerate(lines) if "T-004" in ln)
+        reminded_before = set(agent._milestone_reminded_phase_keys)
+        agent.report_progress(line_new, "T-004 follow-up task with enough text done")
+        self.assertEqual(agent._milestone_reminded_phase_keys, reminded_before)
+        ev = evaluate_milestone_after_archive(
+            tasks_path=self.tasks,
+            archive_path=self.archive,
+            phase="Phase B",
+            project_id=self.pid,
+            paths=self.paths,
+            reminded_phase_keys=agent._milestone_reminded_phase_keys,
+            dismissed_phase_keys=agent._milestone_dismissed_phase_keys,
+        )
+        self.assertTrue(ev["m1"])
+        self.assertFalse(ev["should_remind"])
+
+    def test_it542_legacy_dismissed_migrates_on_load(self) -> None:
+        phase_a_key = self._archive_phase_a()
+        self._seed_legacy_state(dismissed=["phase:1"])
+        drop_plan_agent(self.pid)
+        agent = get_plan_agent(self.paths, self.pid)
+        self.assertIn(phase_a_key, agent._milestone_dismissed_phase_keys)
+
+        persisted = self._json.loads(
+            (self.root / ".plan-agent" / "state.json").read_text(encoding="utf-8")
+        )
+        dismissed = persisted["milestone_review_reminders"]["dismissed_phase_keys"]
+        self.assertIn(phase_a_key, dismissed)
+        self.assertNotIn("phase:1", dismissed)
+
+        text = self.tasks.read_text(encoding="utf-8")
+        self.tasks.write_text(
+            "## Phase Z\n- [ ] T-099 placeholder task with enough text\n\n" + text,
+            encoding="utf-8",
+        )
+        add_task_to_tasks_md(
+            self.paths,
+            self.pid,
+            "Phase A",
+            "T-005 follow-up task with enough text",
+        )
+        lines = self.tasks.read_text(encoding="utf-8").splitlines()
+        line_new = next(i for i, ln in enumerate(lines) if "T-005" in ln)
+        state = agent.report_progress(
+            line_new, "T-005 follow-up task with enough text done"
+        )
+        kinds = [str(s.get("kind")) for s in state.get("suggestions", [])]
+        self.assertNotIn("milestone_review", kinds)
+        ev = evaluate_milestone_after_archive(
+            tasks_path=self.tasks,
+            archive_path=self.archive,
+            phase="Phase A",
+            project_id=self.pid,
+            paths=self.paths,
+            reminded_phase_keys=agent._milestone_reminded_phase_keys,
+            dismissed_phase_keys=agent._milestone_dismissed_phase_keys,
+        )
+        self.assertTrue(ev["m1"])
+        self.assertFalse(ev["should_remind"])
 
 
 if __name__ == "__main__":

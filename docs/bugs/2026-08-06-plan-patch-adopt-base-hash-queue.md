@@ -1,6 +1,6 @@
 # BUG-026：同文件多条 patch 采纳第二条起 base_hash mismatch
 
-> **状态**：partial fixed（T-4810 · T-4811 · IT-4813 · S-481 手工 todo）  
+> **状态**：**fixed**（T-4810 · T-4811 · IT-4813 · **S-481 pass** 2026-08-07）  
 > **严重度**：P1（计划域采纳流不可用/误导）  
 > **设计**：[PLAN-REVIEW-UI.md](../PLAN-REVIEW-UI.md) §11 · [PLAN-ARCH.md](../PLAN-ARCH.md) M6 · A8/A9  
 > **关联 Phase**：48 · T-4810～T-4813  
@@ -290,3 +290,4 @@ def test_it4810_same_path_patches_merged_or_sequential_ok():
 |------|------|
 | 2026-08-06 | 初稿 |
 | 2026-08-06 | v2：数据模型 · hash 时序图 · WS 序列 · 合并/rebase 伪代码 · IT-182 关系 · 代码行号 |
+| 2026-08-07 | S-481 桌面复验 pass → **fixed** |

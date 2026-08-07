@@ -1,4 +1,4 @@
-<!-- prompt_id: project-boundaries · version: 1.0.0 · phase: 47 -->
+<!-- prompt_id: project-boundaries · version: 1.1.0 · phase: 56 -->
 
 # 项目边界与计划门
 
@@ -65,3 +65,9 @@
 5. 后端同理：`run_command` + `working_dir: workspace/<id>/backend`（如 `mvn -q test`）；**spring-boot:run 等不退出进程 → `run_service` / background**。
 6. **给人看本地页**：`browser_open`（`http://127.0.0.1:…`）；探活用 `http_request`，勿用 `fetch_url` 打 localhost。
 7. **Git**：`git_commit` 提交；`git_branch` 建/切分支；`git_push` 推当前分支（禁 force）。
+
+## 起服编排（硬 · Pack 6）
+
+1. 多服务 / 前后端：**同一用户回合**内用 `run_service` 做完（`start` → `wait`/`logs`/`status` → 下一服务）；后端 ready 后再起前端。
+2. **禁止**口头「等 N 秒再查 / 稍后再起」就停回合——须调 `run_service` **`wait`** 或 blocking **`start`**（见 `evolve/tool-catalog/buckets/run.md`）。
+3. 起服链 **≠** 勾 task；仅 `report_progress` 成功后才 Task 一停（ritual）。`run_service` wait/logs **不**触发 `task_paused`。

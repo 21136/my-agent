@@ -98,6 +98,17 @@ current_task = TASKS.md 中自上而下第一条 `- [ ] …`
 
 `workspace/_template/TASKS.md` 与 project prompt 应提示：**一条 task ≈ 一次可独立验收的小交付**。
 
+### 2.5 与起服编排正交（Pack 6 · T-5603）
+
+| 场景 | Task 一停？ | 说明 |
+|------|-------------|------|
+| `run_service` start / wait / logs / status | **否** | 起服子步骤 **≠** `TASKS` 条目完成 |
+| `report_progress` 成功勾选当前 task `[x]` | **是**（ritual） | 唯一产品级 task 完成信号；solo 不驱动一停 |
+| segment 工具预算用尽（`segment_cap_pause`） | **否** | 与 `task_paused` 不同；project 壳 **不** auto-continue，用户可发「继续」续 segment |
+| 同回合多服务 `wait` 链 | **否** | 见 [ASYNC-ORCHESTRATION.md](./ASYNC-ORCHESTRATION.md)；**不**因起服链触发 `task_paused` |
+
+**硬规则**：`_maybe_arm_task_stop` 仅在 `report_progress` 成功或 **写 TASKS.md** 导致 done 计数上升时武装；`run_service` 读写 **不**武装。
+
 ---
 
 ## 3. 流程

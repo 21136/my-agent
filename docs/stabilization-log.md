@@ -1925,6 +1925,58 @@ Phase 18 已解冻（STABILIZATION v1.1.0）。
 
 ---
 
+## 2026-08-07 · S-472 milestone chain
+
+- session: `20260806-c7f6c8db`（`data/state.json` · project_sessions.huiyi）
+- project: `huiyi`
+- phase: 用户选定 Phase（≥2 条开放任务）
+- result: **pass**
+- notes: 用户真机确认与 LDM §5 / STABILIZATION-PACK1 §2 预期一致。第 1 条 `report_progress` 归档无 `milestone_review` suggestion；该 Phase 最后 1 条归档后出现 suggestion + `partner_notices` 一行；无自动 `deliverable_review` spawn；口语「验收」后可执行 advisory review；dismiss 同 `phase_key` 后不再提醒（IT-477 语义）。M1 判据非 `done_n`（LDM §5.3）。profile=solo · unified · perspective=project。
+
+---
+
+## 2026-08-07 · S-480 BUG-027 doc drift
+
+- session: `20260806-c7f6c8db`（`data/state.json` · project_sessions.huiyi）
+- project: `huiyi`
+- result: **pass**
+- notes: 用户真机确认与 STABILIZATION-PACK1 §3 / BUG-027 §7 预期一致。主聊「文档和代码可能脱节了，你看看」：无回合初内核自动 explore；过程区未读 `agent-core` / `docs/TOOLS.md`；宜走 `deliverable_review` 或 explore 仅限 `workspace/huiyi/`。profile=solo · unified · perspective=project。
+
+---
+
+## 2026-08-07 · S-481 BUG-026 patch adopt
+
+- session: `20260806-c7f6c8db`（`data/state.json` · project_sessions.huiyi）
+- project: `huiyi`
+- result: **pass**
+- notes: 用户真机确认与 STABILIZATION-PACK1 §4 / BUG-026 §10 预期一致。`plan_partner` 一次提案改 TASKS + MAP + PROJECT（≥3 文件）；侧栏每文件 1 张卡（非碎卡）；逐张采纳闪绿文案为真实文件名；无 `base_hash mismatch` 乐观撤回。profile=solo · unified · perspective=project。
+
+**Pack 1 收口**：S-472/480/481 全 pass · BUG-026/027 → **fixed**。
+
+---
+
+## 2026-08-07 · S-421 project new-file write (Pack 2)
+
+- session: `20260806-c7f6c8db`（`data/state.json` · project_sessions.huiyi）
+- project: `huiyi`
+- result: **pass**
+- notes: 用户真机：huiyi 加「日志审计」功能、Agent 批量 `write_text` 新建项目内源码文件时**不再连点确认**，与 T-5202 / IT-4214 预期一致。profile=solo · unified · perspective=project · sidecar 已重启加载 `write_policy`。
+
+**Pack 2 收口（M0）**：T-5201/5202 done · S-421 pass · T-5203 defer。
+
+---
+
+## 2026-08-07 · S-560 multi-service orchestration (Pack 6)
+
+- session: `20260806-c7f6c8db`（`data/state.json` · project_sessions.huiyi）
+- project: `huiyi`
+- result: **pass**
+- notes: 用户真机确认与 ASYNC-ORCHESTRATION §4.1 预期一致。一句起 gateway + 多微服务 + 前端：过程区出现 `run_service` wait/logs 或 blocking start（非纯口头等待）；用户**未**发送「继续」即完成整链；话术无未拦截假成功（G14）。profile=solo · unified · perspective=project · T-5601～5603 已落地。
+
+**Pack 6 收口（M0）**：T-5601/5602/5603 done · S-560 pass · T-5604～5606 defer。
+
+---
+
 ## 模板（单次详记）
 
 ```markdown

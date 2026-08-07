@@ -85,6 +85,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         confirm=False,
         dry_run_supported=False,
     ),
+    BuiltinTool(
+        "codebase_search",
+        "Semantic/BM25 search for code chunks under bound project_root (read-only)",
+        confirm=False,
+        dry_run_supported=False,
+    ),
     BuiltinTool("web_search", "Search the web for links and snippets", confirm=False, dry_run_supported=False),
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),

@@ -44,3 +44,9 @@
 - **提交 / 分支 / 推送**：`git_commit`（add+commit）；`git_branch`（list/create/switch）；`git_push`（当前分支，禁 force，须确认）。
 - **SQLite**：`db_query`；远程库不在本工具范围。
 - **装 Python 包**：`run_command` → `python -m pip install …`（须确认）。
+
+## 多服务起服编排（Pack 6 · ASYNC-ORCHESTRATION）
+
+- 用户一句要起 **多个** 长驻服务（如 gateway + 各微服务 + 前端）：**同一回合**内用 `run_service` 工具链做完——`start`（可 `ready_port` / `ready_regex` / `ready_timeout_sec`）→ `wait` / `logs` / `status` → 下一服务；前端须在后端 **ready** 后再 `start`。
+- **禁止**仅用口头「等 N 秒我再查日志 / 稍后再起前端」就结束回合；须在本回合调 `run_service` **`wait`** 或 blocking **`start`**，勿把等待留给用户发「继续」。
+- 起服子步骤 **≠** 任务完成；**Task 一停**仅 `report_progress` 成功勾选当前 task 后触发（详见 [ASYNC-ORCHESTRATION.md](../../../docs/ASYNC-ORCHESTRATION.md)）。

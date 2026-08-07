@@ -1,6 +1,6 @@
 # BUG-027：项目模式下自动 explore 误读 agent 根目录
 
-> **状态**：partial fixed（T-4801～4803 · T-4802 · IT-4804 · S-480 手工 todo）  
+> **状态**：**fixed**（T-4801～4803 · T-4802 · IT-4804 · **S-480 pass** 2026-08-07）  
 > **严重度**：P1（**仅项目轨** · 交付审查/对账场景误导主 Agent）  
 > **范围**：`project_id` 非空且 `active_shell=project`。**不**包含普通对话未绑项目时对 `docs/TOOLS.md` 的对账（见 [EXPLORE-SCOPE-RAILS.md](../EXPLORE-SCOPE-RAILS.md) S1/S2）。  
 > **设计**：[AGENT-PARENT-ORCHESTRATION.md](../AGENT-PARENT-ORCHESTRATION.md) v0.4.0 · [EXPLORE-SCOPE-RAILS.md](../EXPLORE-SCOPE-RAILS.md)  
@@ -185,3 +185,4 @@ workspace_path = paths.resolve_under_workspace(stripped, must_exist=False)
 |------|------|
 | 2026-08-06 | 初稿 |
 | 2026-08-06 | v2：复现表 · 五层根因 · 日志特征 · 绕行表 · 代码索引 |
+| 2026-08-07 | S-480 桌面复验 pass → **fixed** |

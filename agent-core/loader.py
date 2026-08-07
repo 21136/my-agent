@@ -390,13 +390,14 @@ def format_builtin_summary() -> str:
         "list_dir",
         "grep",
         "glob_file_search",
+        "codebase_search",
         "web_search",
         "fetch_url",
         "run_evolved",
     }
     lines = [
         "[Builtin 工具]",
-        "恒为 11 个 function（核心 7 + 编排 4）；evolved 经 run_evolved，见工具索引：",
+        "恒为 12 个 function（核心 8 + 编排 4）；evolved 经 run_evolved，见工具索引：",
         "核心：",
     ]
     for tool in BUILTIN_TOOLS:

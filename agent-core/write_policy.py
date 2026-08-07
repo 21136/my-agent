@@ -36,6 +36,9 @@ def path_under_project(path: str, project_root: str) -> bool:
         return False
     if rel.lower().startswith("host:"):
         return False
+    parts = rel.split("/")
+    if ".." in parts:
+        return False
     return rel == root or rel.startswith(root + "/")
 
 
@@ -100,6 +103,8 @@ def write_requires_confirm(
         conflict = (on_conflict or "skip").strip().lower()
         if file_exists is True and conflict == "overwrite":
             return False, "skip:project_overwrite"
+        if file_exists is False:
+            return False, "skip:project_new_file"
         return True, "confirm:new_file"
 
     return True, "confirm:other"

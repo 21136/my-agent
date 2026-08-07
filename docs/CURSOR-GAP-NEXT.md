@@ -159,8 +159,8 @@ def write_requires_confirm(
 | T-4210 | 本文 H 轨 + CONFIRM-PIPELINE 指针 | doc |
 | T-4211 | `write_policy.py` + IT-421～424 | todo |
 | T-4212 | executor + confirm 预览 reason | todo |
-| T-4213 | S-421 手工 | todo |
-| T-4214 | M1：新建文件免确认（可选，签字后） | defer |
+| T-4213 | S-421 手工 | **done** |
+| T-4214 | M1：新建文件免确认（Pack 2 · =T-5202） | **done** |
 
 ### 2.11 提示词（F/E · H 轨）
 

@@ -30,6 +30,7 @@ from tools.builtin import (
     explore,
     fetch_url,
     glob_file_search,
+    codebase_search,
     grep,
     list_dir,
     plan_partner,
@@ -54,6 +55,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "list_dir": list_dir.run,
     "grep": grep.run,
     "glob_file_search": glob_file_search.run,
+    "codebase_search": codebase_search.run,
     "web_search": web_search.run,
     "fetch_url": fetch_url.run,
     "run_evolved": run_evolved.run,
@@ -1266,6 +1268,9 @@ class ToolExecutor:
         if name == "explore":
             return self._run_explore_builtin(args, started=started)
 
+        if name == "codebase_search":
+            return self._run_codebase_search(args, started=started)
+
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
             confirm_decision = self._ask_confirm(name, args, evolved_target)
@@ -1949,6 +1954,16 @@ class ToolExecutor:
             from plan_agent import get_plan_agent
 
             get_plan_agent(paths_agent, pid).clear_milestone_reminded_on_review(verdict)
+        elif verdict == "fail" or blockers_count > 0:
+            from plan_agent import get_plan_agent
+            from project_mode import get_delivery_profile
+
+            get_plan_agent(paths_agent, pid).emit_bug_promote_from_review(
+                sub_result.summary,
+                source="deliverable_review",
+                delivery_profile=get_delivery_profile(session.meta),
+                verdict=verdict,
+            )
         done_payload = {
             "summary": sub_result.summary,
             "summary_preview": review_summary_preview(sub_result.summary),
@@ -1982,6 +1997,30 @@ class ToolExecutor:
                 "ok": True,
                 "summary": _tool_result_summary(result),
             },
+        )
+        self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+        return result
+
+    def _run_codebase_search(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        """Semantic/BM25 codebase search scoped to project_root (Pack 5 · T-5501)."""
+        from tools.builtin import codebase_search
+
+        name = "codebase_search"
+        pid = (self.session.project_id or "").strip()
+        if not pid and self.session.project_root.strip():
+            from project_mode import project_id_from_root
+
+            pid = project_id_from_root(self.session.project_root) or ""
+        result = codebase_search.run(
+            arguments,
+            paths=self.registry.agent_paths,
+            project_root=self.session.project_root,
+            project_id=pid,
         )
         self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
         return result

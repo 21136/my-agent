@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,23 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
+
+/** Dev: keep Chromium/session cache on local disk (USB/removable roots cause lock storms). */
+const LOCAL_DEV_ROOT = path.join(
+  process.env.LOCALAPPDATA || process.env.TEMP || os.tmpdir(),
+  "my-agent-desktop",
+);
+if (!app.isPackaged) {
+  const userData = path.join(LOCAL_DEV_ROOT, "userData");
+  mkdirSync(userData, { recursive: true });
+  app.setPath("userData", userData);
+  app.setPath("sessionData", path.join(LOCAL_DEV_ROOT, "session-data"));
+  app.commandLine.appendSwitch(
+    "disk-cache-dir",
+    path.join(LOCAL_DEV_ROOT, "disk-cache"),
+  );
+}
+
 const APP_ICON = path.join(AGENT_ROOT, "desktop", "build", "icon.png");
 const STATE_PATH = path.join(AGENT_ROOT, "data", "state.json");
 const CONSTELLATION_PATH = path.join(AGENT_ROOT, "data", "constellation.json");

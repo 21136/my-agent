@@ -1,6 +1,6 @@
 # LLM 模型路由（LLM-ROUTING）
 
-> 版本 **0.1.0** · 2026-08-04 · **状态：文档已签 · 实现待 T-4202**  
+> 版本 **0.1.1** · 2026-08-07 · **状态：T-4202 done（Phase 42-J · IT-440/441）**  
 > Phase **42 Track J** · 承接 [AGENT-HARNESS.md](./AGENT-HARNESS.md) **P3 defer**（T-4103）  
 > 关联：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [llm_models.py](../agent-core/llm_models.py) · [llm_client.py](../agent-core/llm_client.py) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)
 
@@ -138,11 +138,11 @@ P4/P5 解决「失败饮食」；P3 解决「**哪一步值得用强模型**」�
 
 ## 8. 里程碑
 
-| ID | 内容 | 验收 |
-|----|------|------|
-| T-4201 | 本文 + TASKS/MAP 挂钩 | DOC-04 可读 |
-| T-4202 | M0：`llm_routing.py` + agent/plan 接线 | IT-440/441 |
-| T-4203 | M1：桌面双模型设置（可选） | S-440 |
+| ID | 内容 | 验收 | 状态 |
+|----|------|------|------|
+| T-4201 | 本文 + TASKS/MAP 挂钩 | DOC-04 可读 | **doc** |
+| T-4202 | M0：`llm_routing.py` + agent/plan 接线 | IT-440/441 | **done** |
+| T-4203 | M1：桌面双模型设置（可选） | S-440 | defer |
 
 ---
 
@@ -151,3 +151,4 @@ P4/P5 解决「失败饮食」；P3 解决「**哪一步值得用强模型**」�
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1.0 | 2026-08-04 | 初稿：自 AGENT-HARNESS P3 拆出；J0～J6 + 路由表 + IT-440 |
+| 0.1.1 | 2026-08-07 | T-4202 标 **done**；§8 里程碑表补状态列 |
