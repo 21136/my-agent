@@ -409,25 +409,44 @@ L1 由 `agent-busy.ts` 在 `setAgentBusy(busy, shell)` + `setActiveShell(shell)`
 | `govern` | 更晚 | 开始周期性 review |
 | `repl` | 任意 | 需要 CLI 等价图形时 |
 
-### 3.8 入口：Electron 默认 · 可切 CLI（**已定**）
+### 3.8 入口：Electron 默认 · CLI 备用 · Terminal 第三线（**已定 · Phase 57**）
 
 | 项 | 约定 |
 |----|------|
-| **默认** | 双击 `start-desktop.bat` = **Electron + grow**；运行中可 **最小化**，托盘/快捷键可唤回 |
-| **CLI** | `start.bat` 或托盘 **「改用终端 (CLI)」**；与 REPL 行为一致 |
-| **切换** | 随时可切；**切换 = 换界面，不是两开对讲** |
-| **并存** | **不建议** Electron 与 CLI 同时对同一 `session` 发消息；后开者提示先关另一侧或「接管会话」 |
-| **关窗** | 伴侶 / 工作台点 **X** = **缩托盘**（sidecar 常驻）；托盘 **退出** = 杀 sidecar（2026-07-12 pet M0） |
+| **默认（Desktop）** | 双击 `start-desktop.bat` = **Electron + unified 壳**；`meta.harness=desktop` |
+| **CLI（遗留 REPL）** | `start.bat` 或托盘 **「改用终端 (CLI)」**；`harness=desktop` · 含 `项目 …` / 计划门 |
+| **Terminal（狂野 cwd）** | 先 `cd` 进仓库 → **`start-terminal.bat`** 或 `my-agent terminal`；`harness=terminal` · **无** `project_id` · 见 [TERMINAL-MODE.md](./TERMINAL-MODE.md) |
+| **切换** | **换界面 = exit 结束当前 UI → 在另一入口重启**；**禁止**中途「接管会话」或跨 harness 续接同一 `conversation_id`（TM-3/4/9） |
+| **并存** | **禁止** 两 UI 同时占活锁；后开者 **硬拒** 并提示先 `exit` 另一侧（**无** `--takeover`） |
+| **关窗** | 工作台点 **X** = **缩托盘**（sidecar 常驻）；托盘 **退出** = 杀 sidecar |
 
-**切换到 CLI（草案）**：
+**三条产品线对照**（详表见 [TERMINAL-MODE.md](./TERMINAL-MODE.md) §3）：
+
+| 维度 | Desktop | Terminal | `start.bat`（CLI） |
+|------|---------|----------|-------------------|
+| harness | `desktop` | `terminal` | `desktop`（遗留） |
+| 工作区 | `project_id` / 侧栏 | **effective root = cwd 树** | agent root + 项目命令 |
+| 续接 | `last_conversation_id` / `project_sessions` | `terminal_last_session` | 同 desktop |
+| 会话列表 | `session.list`（**隐藏** terminal 会话 · TM-18） | 不出现在桌面下拉 | — |
+
+**切换到 CLI（`start.bat`）**：
 
 1. 托盘 / 菜单 → **改用终端 (CLI)**
-2. Electron 释放会话锁（§4.5）→ 用系统终端启动 `agent-core/main.py`（工作目录 = agent 根）
-3. Electron **缩到托盘并停 sidecar**（窗口仍驻留，可托盘/快捷键再打开；与 **关窗退出** 不同）
+2. Electron **释放** `interface.lock` → 系统终端启动 `start.bat`（工作目录 = agent 根）
+3. Electron **缩托盘并停 sidecar**（窗口可托盘唤回）
 
-**从 CLI 回到 Electron**：关终端 REPL 或 `exit` 后开桌面；若 CLI 仍占锁，Electron 启动时提示 **「终端正在占用会话，是否让桌面接管？」**
+**从 CLI 回到 Electron**：终端 REPL `exit` 释放锁 → 再开桌面。若 CLI 仍占锁，Electron 启动 **硬拒**（文案见 `interface_lock.py` · **无接管选项**）。
 
-**持久化**：`data/state.json` 增加 `preferred_ui: "electron" | "cli"`，默认 **`electron`**（仅记录偏好，不阻止手动 `start.bat`）。
+**Terminal 入口（Claude 式）**：
+
+1. `cd` 到目标仓库（或任意目录，按 R1～R4 解析 scope）
+2. 仓库根或 PATH 下执行 **`start-terminal.bat`**（**不** `cd` 到 agent 根）
+3. Banner：`Terminal · <cwd> · exit 结束`；**Ctrl+C** = `turn.cancel`（长回合协作取消）
+4. **exit** 释放锁；`新会话` 新建 `harness=terminal` id，cwd 不变
+
+**废止（TM-9）**：Electron ↔ CLI **「接管会话」**；desktop 进程 **不得** resume `harness=terminal` 的 `conversation_id`（反之亦然）。
+
+**持久化**：`data/state.json` 的 `preferred_ui` 仍可为 `electron` | `cli`（Terminal 不写此偏好）。
 
 **`my-agent tool run`**：与界面无关，随时可用（T-112）。
 
@@ -647,22 +666,26 @@ CLI `main.py` **不**写此文件（仅 Electron / `server.py` sidecar）。
 - 工作区路径由 sidecar 的 `AgentPaths` 解析，UI 只展示不任意拼接。
 - **待定**：是否要做本地 token（防其他进程连同一端口）。
 
-### 4.6 会话锁（Electron ↔ CLI）
+### 4.6 会话锁（Electron ↔ CLI ↔ Terminal）
 
 避免 `messages.jsonl` 双写（§3.8）：
 
 ```text
-data/sessions/.interface.lock   # { "ui": "electron"|"cli", "pid": N, "since": ISO }
+data/sessions/.interface.lock   # { "ui": "electron"|"cli"|"terminal", "pid": N, "since": ISO }
 ```
 
 | 场景 | 行为 |
 |------|------|
-| Electron 启动 | 无锁或 stale → `ui=electron`；活锁 `cli` → 提示是否 **接管** |
-| CLI `main.py` | 无锁或 stale → `ui=cli`；活锁 `electron` → 提示；可选 `--takeover` |
-| **改用终端** | Electron 释放锁 → 启 CLI → **隐藏窗口**并 **停 sidecar**（进程可驻留托盘） |
+| Electron 启动 | 无锁或 stale → `ui=electron`；活锁 `cli` / `terminal` → **硬拒**（提示先 exit 另一侧） |
+| CLI `start.bat` | 无锁或 stale → `ui=cli`；活锁 `electron` / `terminal` → **硬拒** |
+| **Terminal** `my-agent terminal` | 无锁或 stale → `ui=terminal`；活锁 `electron` / `cli` / `terminal` → **硬拒** |
+| **改用终端 (CLI)** | Electron 释放锁 → 启 `start.bat` → 隐藏窗口并停 sidecar |
 | stale | pid 已死 → 可抢锁 |
+| **接管** | **废止**（TM-9）：`--takeover` 与 UI「接管会话」均 **无效** |
 
-**M0**：仅打印警告；**M1**（T-904i）：硬锁 + 接管确认。
+**跨 harness**：锁与 harness **独立**——desktop 会话与 terminal 会话可有不同 `conversation_id` 同时存在，但 **同一时刻仅一个 UI** 占锁。`session.open` / resume 路径校验 `meta.harness`（见 [TERMINAL-MODE.md](./TERMINAL-MODE.md) §4.5）。
+
+**M1**（T-904i）：硬锁已落地；Terminal 为第三档（TM-19）。
 
 ---
 
@@ -678,7 +701,7 @@ data/sessions/.interface.lock   # { "ui": "electron"|"cli", "pid": N, "since": I
 | `command` | 结构化命令（托盘/菜单/程序化；与 `user.message` 元命令等价） | `新会话`、`压缩` 等 |
 | `confirm.response` | `y` / `n` / `a` + `request_id` | `executor` confirm；**UI 由按钮映射，用户不输入字母** |
 | `turn.cancel` | 打断当前 in-flight 回合（**Phase 15**） | `WsBridge.request_cancel` · 见 [TURN-CONTROL.md](./TURN-CONTROL.md) |
-| `session.list` | 拉会话列表 | `data/sessions/*` |
+| `session.list` | 拉会话列表（**仅 `harness=desktop`** · TM-18） | `data/sessions/*` |
 | `session.open` | 切换 session id | `resume_or_create` 变体 |
 | `session.refresh` | 重推会话状态 + `ui.route`（grow 挂载 / 重连） | `emit_session_state` + `compute_session_route` |
 | `session.set_model` | 切换会话模型 `deepseek-v4-flash` / `deepseek-v4-pro`；忙时拒绝；Pro→Flash 超 Flash×85% 拒绝（须先压缩/新会话） | `validate_llm_model_switch` + `Session.set_llm_model` + banner |
@@ -1103,3 +1126,4 @@ Electron 用 Windows **浅/深系统背景**；my-agent 只定制 **顶栏一条
 | **0.3.11-draft** | 2026-07-18 | **DOC-08 / T-1824-02**：§3.8.1 Windows CLI UTF-8 策略（`start.bat` · S-50） |
 | **0.3.12-draft** | 2026-07-18 | **T-1824-03**：`startSidecar` 强制 PYTHON UTF-8；§4.4 / §3.8.1 对齐 |
 | **0.3.13-draft** | 2026-07-18 | **DOC-01 / T-1806-doc-01**：§3.3.6 pet→daily 映射表；§3.9.2 三线注 pet 复用 daily |
+| **0.3.14-draft** | 2026-08-07 | **Phase 57 / T-5707**：§3.8 三入口 + Terminal；§4.6 `ui=terminal` · 废止接管；`session.list` 过滤 terminal |

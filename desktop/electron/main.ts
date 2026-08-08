@@ -203,13 +203,16 @@ function buildTray(): void {
   tray.on("double-click", () => void openWorkbenchWindow());
 }
 
-function startSidecar(takeover = false): Promise<SidecarStartResult> {
+function lockUiLabel(ui: string): string {
+  if (ui === "cli") return "CLI REPL";
+  if (ui === "terminal") return "Terminal 狂野模式";
+  return "Electron 桌面";
+}
+
+function startSidecar(): Promise<SidecarStartResult> {
   return new Promise((resolve, reject) => {
     const script = path.join(AGENT_ROOT, "agent-core", "server.py");
     const args = [script, "--port", String(DEFAULT_WS_PORT)];
-    if (takeover) {
-      args.push("--takeover");
-    }
     sidecar = spawn(pythonCommand(), args, {
       cwd: AGENT_ROOT,
       stdio: ["ignore", "pipe", "pipe"],
@@ -316,25 +319,21 @@ async function ensureSidecar(): Promise<void> {
     return;
   }
 
-  let result = await startSidecar(false);
+  let result = await startSidecar();
   if (!result.ok && result.lockConflict) {
-    const uiLabel = result.lockConflict.ui === "cli" ? "终端 REPL" : "Electron 桌面";
-    const { response } = await dialog.showMessageBox({
+    const uiLabel = lockUiLabel(result.lockConflict.ui);
+    await dialog.showMessageBox({
       type: "warning",
       title: "会话被占用",
       message: `${uiLabel} 正在占用会话 (pid ${result.lockConflict.pid})`,
-      detail: "是否让桌面壳接管会话？接管后终端将无法继续写入同一 session。",
-      buttons: ["接管会话", "退出"],
+      detail: "请先关闭占用中的界面后再启动桌面（不支持接管会话 · TM-9）。",
+      buttons: ["退出"],
       defaultId: 0,
-      cancelId: 1,
+      cancelId: 0,
     });
-    if (response !== 0) {
-      quitting = true;
-      finalizeAppExit();
-      return;
-    }
-    stopSidecar();
-    result = await startSidecar(true);
+    quitting = true;
+    finalizeAppExit();
+    return;
   }
   if (!result.ok) {
     throw new Error(result.message ?? "Failed to start Python sidecar");

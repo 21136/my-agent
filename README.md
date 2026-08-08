@@ -5,15 +5,16 @@
 **稳定化**：Phase 18 已解冻（[STABILIZATION.md](docs/STABILIZATION.md))  
 **进度真源**：[docs/MAP.md](docs/MAP.md) §2 + [docs/TASKS.md](docs/TASKS.md)（勿以本 README 判断代码现状）
 
-**当前摘要（2026-08-07）**
+**当前摘要（2026-08-08）**
 
 | 项 | 说明 |
 |----|------|
 | **产品定位** | 单机项目工作台（[LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3） |
 | **默认入口** | `start-desktop.bat` → unified 壳（`desktop/src/shells/unified/`） |
+| **Terminal** | `start-terminal.bat` → Claude 式 cwd agent（[TERMINAL-MODE](docs/TERMINAL-MODE.md) v0.2.0） |
 | **Builtin** | 12 个（`read_file` · `grep` · `glob_file_search` · **`codebase_search`** · `run_evolved` · 子代理等） |
 | **路线图** | [ROADMAP-PACK-1245](docs/ROADMAP-PACK-1245.md) **Pack 1/2/4/5/6 M0 done** |
-| **另排** | S-441/461/490/500 手工 smoke；T-5503/T-5604 等 defer |
+| **另排** | S-572 Terminal smoke；S-441/461/490/500 手工 smoke |
 
 ---
 
@@ -25,6 +26,9 @@ pip install -r requirements.txt
 
 # CLI 对话 REPL（Windows 请用 start.bat 强制 UTF-8，见 docs/DESKTOP.md §3.8.1）
 .\start.bat
+
+# Terminal 狂野模式（先 cd 进仓库，Claude 式 cwd agent）
+.\start-terminal.bat
 
 # 桌面壳（默认入口；首次自动 npm install）
 .\start-desktop.bat
@@ -96,6 +100,7 @@ CLI 在 accept / review / audit 结束时会打印简短 Git 提示（`governanc
 | [docs/PROJECT-MODE.md](docs/PROJECT-MODE.md) | 项目模式 · ENV |
 | [docs/SHELL-CHANNEL.md](docs/SHELL-CHANNEL.md) | `run_command` 执行面 |
 | [docs/TOOLS.md](docs/TOOLS.md) | Builtin + evolved 工具 |
+| [docs/TERMINAL-MODE.md](docs/TERMINAL-MODE.md) | **Terminal 狂野模式**（与 Desktop 会话分离 · `start-terminal`） |
 | [docs/STABILIZATION.md](docs/STABILIZATION.md) | 稳定化 · smoke · Gate |
 | [docs/ARCHIVED-TOOLS.md](docs/ARCHIVED-TOOLS.md) | 已归档 evolved 工具 |
 

@@ -101,6 +101,11 @@ class ExecutorSession:
     project_id: str = ""
     project_plan_status: str = ""
     project_delivery_profile: str = "solo"
+    harness: str = "desktop"
+    terminal_scope_kind: str = ""
+    terminal_cwd: str = ""
+    terminal_foreign_root: str = ""
+    terminal_host_id: str = ""
     in_execute_segment: bool = False
     segment_scaffold_tools: dict[str, ScaffoldDemoRecord] = field(default_factory=dict)
     task_stop_armed: bool = False
@@ -146,6 +151,11 @@ class ExecutorSession:
         project_id = ""
         project_plan_status = ""
         project_delivery_profile = "solo"
+        harness = "desktop"
+        terminal_scope_kind = ""
+        terminal_cwd = ""
+        terminal_foreign_root = ""
+        terminal_host_id = ""
         if session_dir is not None:
             meta_path = session_dir / _META_FILENAME
             if meta_path.is_file():
@@ -164,6 +174,19 @@ class ExecutorSession:
                     project_delivery_profile = normalize_delivery_profile(
                         payload.get("project_delivery_profile", "solo")
                     )
+                    from session import normalize_harness, normalize_terminal_path_field
+
+                    harness = normalize_harness(payload.get("harness", "desktop"))
+                    terminal_scope_kind = str(
+                        payload.get("terminal_scope_kind", "") or ""
+                    ).strip()
+                    terminal_cwd = normalize_terminal_path_field(
+                        payload.get("terminal_cwd", "")
+                    )
+                    terminal_foreign_root = normalize_terminal_path_field(
+                        payload.get("terminal_foreign_root", ""), relative=False
+                    )
+                    terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
         return cls(
             session_dir=session_dir,
             workspace_evolved_approved=approved,
@@ -173,6 +196,11 @@ class ExecutorSession:
             project_id=project_id,
             project_plan_status=project_plan_status,
             project_delivery_profile=project_delivery_profile,
+            harness=harness,
+            terminal_scope_kind=terminal_scope_kind,
+            terminal_cwd=terminal_cwd,
+            terminal_foreign_root=terminal_foreign_root,
+            terminal_host_id=terminal_host_id,
         )
 
     def refresh_bound_project_meta(self) -> None:
@@ -197,6 +225,32 @@ class ExecutorSession:
         self.project_delivery_profile = normalize_delivery_profile(
             payload.get("project_delivery_profile", "solo")
         )
+        from session import normalize_harness, normalize_terminal_path_field
+
+        self.harness = normalize_harness(payload.get("harness", "desktop"))
+        self.terminal_scope_kind = str(payload.get("terminal_scope_kind", "") or "").strip()
+        self.terminal_cwd = normalize_terminal_path_field(payload.get("terminal_cwd", ""))
+        self.terminal_foreign_root = normalize_terminal_path_field(
+            payload.get("terminal_foreign_root", ""), relative=False
+        )
+        self.terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
+
+
+def _executor_session_meta(session: ExecutorSession):
+    """Rebuild SessionMeta fragment for terminal scope helpers."""
+    from session import SessionMeta
+
+    return SessionMeta(
+        harness=session.harness,  # type: ignore[arg-type]
+        terminal_scope_kind=session.terminal_scope_kind or "",  # type: ignore[arg-type]
+        terminal_cwd=session.terminal_cwd,
+        terminal_foreign_root=session.terminal_foreign_root,
+        terminal_host_id=session.terminal_host_id,
+    )
+
+
+def _is_terminal_executor_session(session: ExecutorSession) -> bool:
+    return session.harness == "terminal"
 
 
 _TOOL_SCAFFOLD_FILENAMES = frozenset({"main.py", "tool.toml", "README.md"})
@@ -745,6 +799,35 @@ def _is_progress_gate_validation_error(result: ToolResult) -> bool:
     from progress_gate import is_progress_gate_tool_error
 
     return is_progress_gate_tool_error(result)
+
+
+def _validate_terminal_host_write(
+    session: ExecutorSession,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    agent_paths: AgentPaths,
+) -> ToolResult | None:
+    if not _is_terminal_executor_session(session):
+        return None
+    evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
+    evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+    from terminal_scope import terminal_host_write_block_reason
+
+    reason = terminal_host_write_block_reason(
+        _executor_session_meta(session),
+        agent_paths,
+        tool_name=tool_name,
+        evolved_name=evolved_name,
+    )
+    if reason is None:
+        return None
+    return tool_fail(
+        tool_name,
+        ToolErrorCode.PERMISSION_DENIED,
+        reason,
+        details={"guard_type": "terminal_host_readonly", "retry": False},
+    )
 
 
 def _validate_task_stop_write(
@@ -2011,15 +2094,25 @@ class ToolExecutor:
         from tools.builtin import codebase_search
 
         name = "codebase_search"
-        pid = (self.session.project_id or "").strip()
-        if not pid and self.session.project_root.strip():
-            from project_mode import project_id_from_root
+        if _is_terminal_executor_session(self.session):
+            from terminal_scope import terminal_codebase_search_root
 
-            pid = project_id_from_root(self.session.project_root) or ""
+            project_root = terminal_codebase_search_root(
+                _executor_session_meta(self.session),
+                self.registry.agent_paths,
+            )
+            pid = ""
+        else:
+            pid = (self.session.project_id or "").strip()
+            project_root = self.session.project_root
+            if not pid and project_root.strip():
+                from project_mode import project_id_from_root
+
+                pid = project_id_from_root(project_root) or ""
         result = codebase_search.run(
             arguments,
             paths=self.registry.agent_paths,
-            project_root=self.session.project_root,
+            project_root=project_root,
             project_id=pid,
         )
         self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
@@ -2393,6 +2486,17 @@ class ToolExecutor:
             if demo_error is not None:
                 return demo_error
 
+        if _is_terminal_executor_session(self.session):
+            host_block = _validate_terminal_host_write(
+                self.session,
+                name,
+                arguments,
+                agent_paths=self.registry.agent_paths,
+            )
+            if host_block is not None:
+                return host_block
+            return None
+
         project_error = _validate_project_mode_call(self.session, name, arguments)
         if project_error is not None:
             return project_error
@@ -2747,6 +2851,17 @@ class ToolExecutor:
                 if isinstance(raw, str) and raw.strip():
                     working = raw.strip()
                     break
+            if _is_terminal_executor_session(self.session):
+                from terminal_scope import terminal_run_command_requires_confirm
+
+                needs, _reason = terminal_run_command_requires_confirm(
+                    working_dir=working,
+                    meta=_executor_session_meta(self.session),
+                    agent_paths=self.registry.agent_paths,
+                )
+                if not needs:
+                    return False
+                return True
             needs, _reason = run_command_requires_confirm(
                 command=command,
                 working_dir=working,
@@ -3224,6 +3339,18 @@ def resolve_write_confirm(
     from write_policy import write_requires_confirm
 
     inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+    if _is_terminal_executor_session(session):
+        from terminal_scope import terminal_write_requires_confirm
+
+        path = inner.get("path") if isinstance(inner.get("path"), str) else ""
+        dry_run = bool(inner.get("dry_run")) or bool(arguments.get("dry_run"))
+        return terminal_write_requires_confirm(
+            tool=evolved_name,
+            path=path,
+            meta=_executor_session_meta(session),
+            agent_paths=agent_paths,
+            dry_run=dry_run,
+        )
     path = inner.get("path") if isinstance(inner.get("path"), str) else ""
     on_conflict = inner.get("on_conflict") if isinstance(inner.get("on_conflict"), str) else "skip"
     file_exists: bool | None = None

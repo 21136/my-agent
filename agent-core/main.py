@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import signal
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,6 +114,64 @@ _SUMMARY_MAX_CHARS = 200
 class ReplConfig:
     record_on_exit: RecordMode = "off"
     show_record_warning: bool = False
+
+
+class ReplTurnCancelGuard:
+    """Map Ctrl+C to ``agent.request_cancel()`` during an in-flight REPL turn (T-5706)."""
+
+    def __init__(self, repl: ConversationRepl) -> None:
+        self._repl = repl
+        self._turn_busy = False
+        self._installed = False
+        self._previous_handler: Any = None
+
+    @property
+    def turn_busy(self) -> bool:
+        return self._turn_busy
+
+    def install(self) -> None:
+        if self._installed:
+            return
+        self._previous_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, self._handle_sigint)
+        self._installed = True
+
+    def uninstall(self) -> None:
+        if not self._installed:
+            return
+        if self._previous_handler is not None:
+            signal.signal(signal.SIGINT, self._previous_handler)
+        self._installed = False
+        self._previous_handler = None
+
+    def begin_turn(self) -> None:
+        self._turn_busy = True
+        self._repl.agent.cancel_event.clear()
+
+    def end_turn(self) -> None:
+        self._turn_busy = False
+
+    def request_cancel(self) -> bool:
+        """Equivalent to desktop ``turn.cancel`` while a REPL turn is active."""
+        if not self._turn_busy:
+            return False
+        self._repl.agent.request_cancel()
+        return True
+
+    def _handle_sigint(self, signum: int, frame: Any) -> None:
+        if self._turn_busy:
+            self.request_cancel()
+            self._repl.output_fn("\n(cancelling turn…)")
+            return
+        previous = self._previous_handler
+        if previous is signal.SIG_DFL:
+            raise KeyboardInterrupt
+        if previous is signal.SIG_IGN:
+            return
+        if callable(previous):
+            previous(signum, frame)
+            return
+        raise KeyboardInterrupt
 
 
 @dataclass
@@ -792,7 +852,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--takeover",
         action="store_true",
-        help="Take over session from Electron desktop when interface lock is held",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--demo", action="store_true", help="Run scripted acceptance checks")
     return parser
@@ -857,6 +917,7 @@ def make_confirm_fn(
     input_fn: InputFn,
     *,
     checkpoint_gate: CheckpointGate | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> Callable[[str, bool], str]:
     gate = checkpoint_gate or CheckpointGate()
 
@@ -876,6 +937,10 @@ def make_confirm_fn(
                 prompt = "Confirm [y]es / [n]o? "
                 valid = {"y", "n"}
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                gate.on_keyboard_interrupt()
+                output_fn("\n(cancelled)")
+                return "n"
             try:
                 raw = input_fn(prompt)
             except KeyboardInterrupt:
@@ -904,7 +969,13 @@ def main(argv: list[str] | None = None) -> int:
 
     lock_guard = InterfaceLockGuard(paths, "cli")
     try:
-        lock_guard.acquire(takeover=args.takeover)
+        if args.takeover:
+            print(
+                "error: --takeover is disabled (TM-9); exit the other UI first.",
+                file=sys.stderr,
+            )
+            return 1
+        lock_guard.acquire(takeover=False)
     except InterfaceLockError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

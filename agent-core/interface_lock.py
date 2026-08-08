@@ -19,7 +19,7 @@ if str(_AGENT_CORE) not in sys.path:
 from paths import AgentPaths
 from session import sessions_root, utc_now_iso
 
-InterfaceUi = Literal["electron", "cli"]
+InterfaceUi = Literal["electron", "cli", "terminal"]
 _LOCK_FILENAME = ".interface.lock"
 
 
@@ -66,7 +66,7 @@ def read_lock(paths: AgentPaths) -> InterfaceLock | None:
     ui = payload.get("ui")
     pid = payload.get("pid")
     since = payload.get("since")
-    if ui not in {"electron", "cli"}:
+    if ui not in {"electron", "cli", "terminal"}:
         return None
     try:
         pid_int = int(pid)
@@ -132,20 +132,31 @@ def acquire_lock(
     *,
     takeover: bool = False,
 ) -> AcquireResult:
-    """Acquire or refuse the interface lock."""
+    """Acquire or refuse the interface lock.
+
+    TM-9 / TM-19: *takeover* is ignored — live locks are never stolen.
+    """
+    _ = takeover
     existing = read_lock(paths)
     if existing is not None and not is_stale(existing):
         if existing.pid == os.getpid() and existing.ui == ui:
             return AcquireResult(status=AcquireStatus.ACQUIRED, lock=existing)
-        if not takeover:
-            return AcquireResult(status=AcquireStatus.CONFLICT, holder=existing)
+        return AcquireResult(status=AcquireStatus.CONFLICT, holder=existing)
     record = write_lock(paths, ui)
     return AcquireResult(status=AcquireStatus.ACQUIRED, lock=record)
 
 
+def _ui_label(ui: InterfaceUi) -> str:
+    return {
+        "electron": "Electron 桌面",
+        "cli": "CLI REPL",
+        "terminal": "Terminal 狂野模式",
+    }[ui]
+
+
 def format_holder_message(holder: InterfaceLock, *, requesting_ui: InterfaceUi) -> str:
-    ui_label = "Electron 桌面" if holder.ui == "electron" else "终端 REPL"
-    req_label = "Electron 桌面" if requesting_ui == "electron" else "终端 REPL"
+    ui_label = _ui_label(holder.ui)
+    req_label = _ui_label(requesting_ui)
     since = holder.since or "(unknown)"
     return (
         f"{req_label} 无法启动：{ui_label} 正在占用会话 "
@@ -154,9 +165,11 @@ def format_holder_message(holder: InterfaceLock, *, requesting_ui: InterfaceUi) 
 
 
 def format_takeover_hint(requesting_ui: InterfaceUi) -> str:
+    if requesting_ui == "terminal":
+        return "请关闭占用中的界面后重试（Terminal 不支持接管）。"
     if requesting_ui == "cli":
-        return "关闭桌面壳，或运行: python agent-core/main.py --takeover"
-    return "关闭终端 REPL，或让桌面重新启动并选择「接管会话」。"
+        return "请先 exit 终端 REPL / Terminal，再启动本入口（不支持接管会话 · TM-9）。"
+    return "请先 exit 终端 REPL / Terminal，再启动桌面（不支持接管会话 · TM-9）。"
 
 
 def prompt_takeover(holder: InterfaceLock, *, requesting_ui: InterfaceUi) -> bool:
@@ -177,6 +190,11 @@ def ensure_interface_lock(
     interactive_takeover: bool = True,
 ) -> InterfaceLock:
     """Acquire lock or raise :class:`InterfaceLockError`."""
+    if takeover:
+        raise InterfaceLockError(
+            "interface lock takeover is disabled (TM-9); exit the other UI first"
+        )
+
     result = acquire_lock(paths, ui, takeover=False)
     if result.status == AcquireStatus.ACQUIRED and result.lock is not None:
         return result.lock
@@ -184,15 +202,6 @@ def ensure_interface_lock(
     holder = result.holder
     if holder is None:
         raise InterfaceLockError("interface lock conflict (unknown holder)")
-
-    if takeover:
-        if interactive_takeover and sys.stdin.isatty():
-            if not prompt_takeover(holder, requesting_ui=ui):
-                raise InterfaceLockError("takeover declined")
-        taken = acquire_lock(paths, ui, takeover=True)
-        if taken.lock is None:
-            raise InterfaceLockError("failed to take over interface lock")
-        return taken.lock
 
     message = format_holder_message(holder, requesting_ui=ui)
     hint = format_takeover_hint(ui)
@@ -256,10 +265,10 @@ def _demo() -> int:
         print("[PASS] T-904i: electron blocked by live cli lock")
 
         taken = acquire_lock(paths, "electron", takeover=True)
-        assert taken.status == AcquireStatus.ACQUIRED
-        print("[PASS] T-904i: takeover overwrites lock")
+        assert taken.status == AcquireStatus.CONFLICT
+        print("[PASS] T-5704: takeover cannot steal live lock (TM-9)")
 
-        assert release_lock(paths, ui="electron")
+        assert release_lock(paths, ui="cli")
         assert read_lock(paths) is None
         print("[PASS] T-904i: release lock")
 

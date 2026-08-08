@@ -142,13 +142,16 @@ def parent_execute_total_max() -> int:
     return max(1, value)
 
 
-def auto_continue_enabled(*, active_shell: str = "") -> bool:
+def auto_continue_enabled(*, active_shell: str = "", harness: str = "") -> bool:
     """Whether execute may auto-start the next segment in the same turn (T-705).
 
     Phase 20 / TASK-STOP S4: project shell always pauses at segment/task boundary.
+    Terminal harness (TM-16): no segment_cap_pause — always continue within total cap.
     grow/daily honor ``MY_AGENT_AUTO_CONTINUE`` (default **off**): each user message
     gets a fresh tool budget; send another message (e.g. 「继续」) for the next segment.
     """
+    if (harness or "").strip() == "terminal":
+        return True
     if (active_shell or "").strip() == "project":
         return False
     return os.environ.get("MY_AGENT_AUTO_CONTINUE", "0").strip() not in {"0", "false", "no"}
@@ -825,6 +828,7 @@ class Agent:
 
     def _sync_turn_mode(self) -> None:
         from project_mode import get_delivery_profile
+        from session import normalize_harness, normalize_terminal_path_field
 
         self.executor.session.turn_mode = self.session.meta.turn_mode
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
@@ -835,6 +839,20 @@ class Agent:
         self.executor.session.project_delivery_profile = get_delivery_profile(
             self.session.meta
         )
+        self.executor.session.harness = normalize_harness(self.session.meta.harness)
+        self.executor.session.terminal_scope_kind = str(
+            self.session.meta.terminal_scope_kind or ""
+        ).strip()
+        self.executor.session.terminal_cwd = normalize_terminal_path_field(
+            self.session.meta.terminal_cwd
+        )
+        self.executor.session.terminal_foreign_root = normalize_terminal_path_field(
+            self.session.meta.terminal_foreign_root,
+            relative=False,
+        )
+        self.executor.session.terminal_host_id = str(
+            self.session.meta.terminal_host_id or ""
+        ).strip()
 
     def _emit_turn_event(self, event: dict[str, Any]) -> None:
         handler = self.on_turn_event
@@ -982,6 +1000,10 @@ class Agent:
         finish_reason: str | None,
     ) -> str:
         """G14: rewrite '已启动/可访问' claims when run_service postcondition unmet."""
+        from session import is_terminal_harness
+
+        if is_terminal_harness(self.session.meta):
+            return final_text
         if finish_reason in {"cancelled", "timeout", "context_switched"}:
             return final_text
         if not final_text:
@@ -1576,6 +1598,7 @@ class Agent:
         total_max = parent_execute_total_max()
         auto_continue = auto_continue_enabled(
             active_shell=self.session.meta.active_shell,
+            harness=self.session.meta.harness,
         )
 
         total_tool_rounds = 0
@@ -1714,6 +1737,10 @@ class Agent:
         finish_reason: str | None,
     ) -> tuple[str, str | None]:
         """Mark turn as task_paused when project checkbox was completed (T-2006)."""
+        from session import is_terminal_harness
+
+        if is_terminal_harness(self.session.meta):
+            return final_text, finish_reason
         if not self.executor.session.task_stop_armed:
             return final_text, finish_reason
         from project_mode import get_delivery_profile, ritual_task_stop_enabled
@@ -1874,8 +1901,10 @@ class Agent:
             topics_to_add = ()
 
         from project_mode import project_plan_gate_open
+        from session import is_terminal_harness
 
-        if project_plan_gate_open(self.session.meta):
+        terminal = is_terminal_harness(self.session.meta)
+        if project_plan_gate_open(self.session.meta) and not terminal:
             # Keep active_shell=project during draft (PROJECT-MODE §0e F2).
             # activity_router already routes plan-gate turns to project.
             topics_to_add = topics_to_add or ("coding",)
@@ -1917,7 +1946,7 @@ class Agent:
                 "intent_label": intent_label(intent, spawn_explore=bool(spawn_explore_flag)),
             }
         )
-        if project_plan_gate_open(self.session.meta) and intent == "execute":
+        if project_plan_gate_open(self.session.meta) and intent == "execute" and not terminal:
             self._emit_turn_event(
                 {
                     "type": "turn.notice",

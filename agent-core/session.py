@@ -28,6 +28,7 @@ DIGEST_FILENAME = "digest.md"
 TOOL_OUTPUTS_DIRNAME = "tool_outputs"
 STATE_FILENAME = "state.json"
 STATE_LAST_SESSION_KEY = "last_conversation_id"
+STATE_TERMINAL_LAST_SESSION_KEY = "terminal_last_session"
 
 VALID_PHASES = frozenset({"S1", "S2", "S3", "S4"})
 SessionPhase = Literal["S1", "S2", "S3", "S4"]
@@ -48,11 +49,63 @@ ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
 
+HarnessKind = Literal["desktop", "terminal"]
+DEFAULT_HARNESS: HarnessKind = "desktop"
+VALID_HARNESSES = frozenset({"desktop", "terminal"})
+
+TerminalScopeKind = Literal["agent", "host", "foreign"]
+VALID_TERMINAL_SCOPE_KINDS = frozenset({"agent", "host", "foreign"})
+
 ANCHOR_HEADER = "[本次会议上下文]"
 
 
 class SessionError(Exception):
     """Invalid session operation."""
+
+
+class HarnessMismatchError(SessionError):
+    """TM-4: session harness does not match entry harness."""
+
+    def __init__(
+        self,
+        conversation_id: str,
+        *,
+        session_harness: HarnessKind,
+        entry_harness: HarnessKind,
+    ) -> None:
+        self.conversation_id = conversation_id
+        self.session_harness = session_harness
+        self.entry_harness = entry_harness
+        super().__init__(
+            format_harness_mismatch_message(
+                conversation_id,
+                session_harness=session_harness,
+                entry_harness=entry_harness,
+            )
+        )
+
+
+def format_harness_mismatch_message(
+    conversation_id: str,
+    *,
+    session_harness: HarnessKind,
+    entry_harness: HarnessKind,
+) -> str:
+    """Readable TM-4 rejection copy."""
+    if entry_harness == "desktop" and session_harness == "terminal":
+        return (
+            f"会话 {conversation_id} 为 Terminal 会话，桌面入口不可续接。"
+            "请先 exit Terminal，再在桌面续接 desktop 会话。"
+        )
+    if entry_harness == "terminal" and session_harness == "desktop":
+        return (
+            f"会话 {conversation_id} 为 Desktop 会话，Terminal 入口不可续接。"
+            "请使用 my-agent terminal 续接 Terminal 会话或新建。"
+        )
+    return (
+        f"会话 {conversation_id} harness 不匹配："
+        f"meta={session_harness!r}，入口={entry_harness!r}"
+    )
 
 
 @dataclass
@@ -81,6 +134,11 @@ class SessionMeta:
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
+    harness: HarnessKind = DEFAULT_HARNESS
+    terminal_scope_kind: TerminalScopeKind | Literal[""] = ""
+    terminal_cwd: str = ""
+    terminal_foreign_root: str = ""
+    terminal_host_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +164,11 @@ class SessionMeta:
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
+            "harness": self.harness,
+            "terminal_scope_kind": self.terminal_scope_kind,
+            "terminal_cwd": self.terminal_cwd,
+            "terminal_foreign_root": self.terminal_foreign_root,
+            "terminal_host_id": self.terminal_host_id,
         }
 
     @classmethod
@@ -176,6 +239,23 @@ class SessionMeta:
             else DEFAULT_PROJECT_DELIVERY_PROFILE
         )
 
+        harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
+        terminal_scope_kind = normalize_terminal_scope_kind(
+            payload.get("terminal_scope_kind", "")
+        )
+        terminal_cwd = normalize_terminal_path_field(payload.get("terminal_cwd", ""))
+        terminal_foreign_root = normalize_terminal_path_field(
+            payload.get("terminal_foreign_root", ""), relative=False
+        )
+        terminal_host_id = payload.get("terminal_host_id", "")
+        if not isinstance(terminal_host_id, str):
+            terminal_host_id = ""
+        terminal_host_id = terminal_host_id.strip()
+
+        turn_mode = normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE))
+        if harness == "terminal":
+            turn_mode = "agent"
+
         return cls(
             topics=topics,
             llm_model=llm_model,
@@ -189,7 +269,7 @@ class SessionMeta:
             compact_before_index=int(payload.get("compact_before_index", 0) or 0),
             evolve_offer_pending=bool(payload.get("evolve_offer_pending", False)),
             evolve_offer_used=bool(payload.get("evolve_offer_used", False)),
-            turn_mode=normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE)),
+            turn_mode=turn_mode,
             reasoning_effort=normalize_reasoning_effort(
                 payload.get("reasoning_effort", "high")
             ),
@@ -201,6 +281,11 @@ class SessionMeta:
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,
+            harness=harness,
+            terminal_scope_kind=terminal_scope_kind,
+            terminal_cwd=terminal_cwd,
+            terminal_foreign_root=terminal_foreign_root,
+            terminal_host_id=terminal_host_id,
         )
 
 
@@ -278,6 +363,10 @@ class Session:
         return canonical
 
     def set_turn_mode(self, mode: TurnMode) -> None:
+        if is_terminal_harness(self.meta):
+            raise SessionError(
+                "terminal harness does not support turn_mode changes (TM-23)"
+            )
         self.meta.turn_mode = normalize_turn_mode(mode)
 
     def append_message(self, message: dict[str, Any], *, persist: bool = True) -> None:
@@ -294,7 +383,10 @@ class Session:
         _write_meta(self.meta_path, self.meta)
         _write_messages_snapshot(self.messages_path, self.messages)
         if not is_internal_session_id(self.conversation_id):
-            write_last_conversation_id(self.paths, self.conversation_id)
+            if is_terminal_harness(self.meta):
+                write_terminal_last_session_id(self.paths, self.conversation_id)
+            else:
+                write_last_conversation_id(self.paths, self.conversation_id)
 
     def refresh_pending_feedback_from_disk(self) -> None:
         """Reload ``pending_feedback`` from disk (executor may update meta.json directly)."""
@@ -350,6 +442,60 @@ class Session:
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def normalize_harness(value: Any) -> HarnessKind:
+    if isinstance(value, str):
+        lowered = value.strip().casefold()
+        if lowered in VALID_HARNESSES:
+            return lowered  # type: ignore[return-value]
+    return DEFAULT_HARNESS
+
+
+def normalize_terminal_scope_kind(value: Any) -> TerminalScopeKind | Literal[""]:
+    if isinstance(value, str):
+        lowered = value.strip().casefold()
+        if lowered in VALID_TERMINAL_SCOPE_KINDS:
+            return lowered  # type: ignore[return-value]
+    return ""
+
+
+def normalize_terminal_path_field(value: Any, *, relative: bool = True) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    if not relative:
+        return text.rstrip("/")
+    return text.strip("/") if text not in {"", "/"} else ""
+
+
+def is_terminal_harness(meta: SessionMeta) -> bool:
+    return meta.harness == "terminal"
+
+
+def enforce_terminal_meta_invariants(meta: SessionMeta) -> None:
+    """TM-23: terminal sessions always persist ``turn_mode=agent``."""
+    if is_terminal_harness(meta):
+        meta.turn_mode = "agent"
+
+
+def assert_harness_immutable(
+    existing_payload: dict[str, Any] | None,
+    meta: SessionMeta,
+) -> None:
+    """TM-2: ``meta.harness`` is set at creation and cannot change."""
+    if not existing_payload:
+        return
+    raw = existing_payload.get("harness")
+    if not isinstance(raw, str) or not raw.strip():
+        return
+    existing = normalize_harness(raw)
+    if meta.harness != existing:
+        raise SessionError(
+            f"harness is immutable: {existing!r} → {meta.harness!r} not allowed"
+        )
 
 
 def normalize_turn_mode(value: Any) -> TurnMode:
@@ -560,6 +706,7 @@ def list_session_summaries(
         updated_at = ""
         project_id = ""
         meta_path = entry / META_FILENAME
+        harness = DEFAULT_HARNESS
         if meta_path.is_file():
             try:
                 payload = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -568,8 +715,11 @@ def list_session_summaries(
                     raw_pid = payload.get("project_id", "")
                     if isinstance(raw_pid, str):
                         project_id = raw_pid.strip()
+                    harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
             except (OSError, json.JSONDecodeError):
                 pass
+        if harness == "terminal":
+            continue
         goal_path = entry / GOAL_FILENAME
         if goal_path.is_file():
             try:
@@ -620,12 +770,32 @@ def list_session_summaries(
     return merged[:limit]
 
 
+def _harness_for_session_dir(session_dir: Path) -> HarnessKind:
+    meta_path = session_dir / META_FILENAME
+    if not meta_path.is_file():
+        return DEFAULT_HARNESS
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_HARNESS
+    if not isinstance(payload, dict):
+        return DEFAULT_HARNESS
+    return normalize_harness(payload.get("harness", DEFAULT_HARNESS))
+
+
 def find_latest_session_id(
     paths: AgentPaths,
     *,
     include_internal: bool = False,
+    harness: HarnessKind | None = None,
 ) -> str | None:
     candidates = list_session_ids(paths, include_internal=include_internal)
+    if harness is not None:
+        candidates = [
+            conversation_id
+            for conversation_id in candidates
+            if _harness_for_session_dir(sessions_root(paths) / conversation_id) == harness
+        ]
     if not candidates:
         return None
 
@@ -664,6 +834,28 @@ def read_last_conversation_id(paths: AgentPaths) -> str | None:
     return conversation_id
 
 
+def assert_session_harness(session: Session, expected: HarnessKind) -> None:
+    """TM-4: entry harness must match persisted session harness."""
+    if session.meta.harness != expected:
+        raise HarnessMismatchError(
+            session.conversation_id,
+            session_harness=session.meta.harness,
+            entry_harness=expected,
+        )
+
+
+def load_session_for_harness(
+    paths: AgentPaths,
+    conversation_id: str,
+    *,
+    expected: HarnessKind,
+) -> Session:
+    """Load session and enforce harness match (TM-4)."""
+    session = Session.load(paths, conversation_id)
+    assert_session_harness(session, expected)
+    return session
+
+
 def write_last_conversation_id(paths: AgentPaths, conversation_id: str) -> None:
     from paths import read_agent_state_payload, write_agent_state_payload
 
@@ -672,10 +864,39 @@ def write_last_conversation_id(paths: AgentPaths, conversation_id: str) -> None:
     write_agent_state_payload(paths, payload)
 
 
+def read_terminal_last_session_id(paths: AgentPaths) -> str | None:
+    from paths import read_agent_state_payload
+
+    payload = read_agent_state_payload(paths)
+    raw = payload.get(STATE_TERMINAL_LAST_SESSION_KEY)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    conversation_id = raw.strip()
+    if is_internal_session_id(conversation_id):
+        return None
+    session_dir = sessions_root(paths) / conversation_id
+    if not session_dir.is_dir():
+        return None
+    return conversation_id
+
+
+def write_terminal_last_session_id(paths: AgentPaths, conversation_id: str) -> None:
+    from paths import read_agent_state_payload, write_agent_state_payload
+
+    payload = read_agent_state_payload(paths)
+    payload[STATE_TERMINAL_LAST_SESSION_KEY] = conversation_id
+    write_agent_state_payload(paths, payload)
+
+
 def create_new(
     paths: AgentPaths,
     *,
     conversation_id: str | None = None,
+    harness: HarnessKind = DEFAULT_HARNESS,
+    terminal_scope_kind: TerminalScopeKind | Literal[""] = "",
+    terminal_cwd: str = "",
+    terminal_foreign_root: str = "",
+    terminal_host_id: str = "",
 ) -> Session:
     """Start a fresh session (``新会话``); empty goal/topics; phase S4 (direct chat)."""
     cid = conversation_id or generate_conversation_id()
@@ -696,13 +917,27 @@ def create_new(
             except (OSError, json.JSONDecodeError):
                 pass
 
+    harness_kind = normalize_harness(harness)
+    scope_kind = normalize_terminal_scope_kind(terminal_scope_kind)
+    if harness_kind == "terminal" and not scope_kind:
+        raise SessionError("terminal session requires terminal_scope_kind")
+
     meta = SessionMeta(
         topics=[],
         llm_model=resolve_session_model([]),
         updated_at=utc_now_iso(),
         phase="S4",
         workspace_evolved_approved=workspace_approved,
+        harness=harness_kind,
+        terminal_scope_kind=scope_kind,
+        terminal_cwd=normalize_terminal_path_field(terminal_cwd),
+        terminal_foreign_root=normalize_terminal_path_field(
+            terminal_foreign_root, relative=False
+        ),
+        terminal_host_id=terminal_host_id.strip(),
+        turn_mode="agent" if harness_kind == "terminal" else DEFAULT_TURN_MODE,
     )
+    enforce_terminal_meta_invariants(meta)
     session = Session(
         conversation_id=cid,
         session_dir=session_dir,
@@ -715,21 +950,78 @@ def create_new(
     return session
 
 
-def resume_latest(paths: AgentPaths) -> Session:
-    """Resume the most recent session, or create one if none exist."""
-    conversation_id = find_latest_session_id(paths)
+def create_terminal_session(
+    paths: AgentPaths,
+    *,
+    conversation_id: str | None = None,
+    terminal_scope_kind: TerminalScopeKind,
+    terminal_cwd: str = "",
+    terminal_foreign_root: str = "",
+    terminal_host_id: str = "",
+) -> Session:
+    """Create a Terminal harness session (TERMINAL-MODE §4.1)."""
+    return create_new(
+        paths,
+        conversation_id=conversation_id,
+        harness="terminal",
+        terminal_scope_kind=terminal_scope_kind,
+        terminal_cwd=terminal_cwd,
+        terminal_foreign_root=terminal_foreign_root,
+        terminal_host_id=terminal_host_id,
+    )
+
+
+def resume_terminal_session(
+    paths: AgentPaths,
+    scope: "TerminalScopeFields",
+) -> Session:
+    """Resume ``terminal_last_session`` when harness=terminal, else create (TM-15)."""
+    from terminal_scope import TerminalScopeFields, scope_fields_to_session_kwargs
+
+    if not isinstance(scope, TerminalScopeFields):
+        raise SessionError("resume_terminal_session requires TerminalScopeFields")
+
+    conversation_id = read_terminal_last_session_id(paths)
+    if conversation_id is not None:
+        try:
+            return load_session_for_harness(paths, conversation_id, expected="terminal")
+        except HarnessMismatchError:
+            pass
+        except SessionError:
+            pass
+    return create_terminal_session(paths, **scope_fields_to_session_kwargs(scope))
+
+
+def resume_desktop_latest(paths: AgentPaths) -> Session:
+    """Resume the most recent desktop harness session, or create one."""
+    conversation_id = find_latest_session_id(paths, harness="desktop")
     if conversation_id is None:
         return create_new(paths)
-    return Session.load(paths, conversation_id)
+    return load_session_for_harness(paths, conversation_id, expected="desktop")
 
 
-def resume_or_create(paths: AgentPaths | None = None) -> Session:
-    """Default CLI startup: prefer ``state.json`` pointer, else latest session."""
+def resume_latest(paths: AgentPaths) -> Session:
+    """Resume the most recent session, or create one if none exist."""
+    return resume_desktop_latest(paths)
+
+
+def resume_desktop_or_create(paths: AgentPaths | None = None) -> Session:
+    """Desktop/CLI entry: prefer ``last_conversation_id`` when harness=desktop."""
     agent_paths = paths or AgentPaths.discover()
     conversation_id = read_last_conversation_id(agent_paths)
     if conversation_id is not None and not is_internal_session_id(conversation_id):
-        return Session.load(agent_paths, conversation_id)
-    return resume_latest(agent_paths)
+        try:
+            return load_session_for_harness(agent_paths, conversation_id, expected="desktop")
+        except HarnessMismatchError:
+            pass
+        except SessionError:
+            pass
+    return resume_desktop_latest(agent_paths)
+
+
+def resume_or_create(paths: AgentPaths | None = None) -> Session:
+    """Default desktop/CLI startup (harness=desktop only)."""
+    return resume_desktop_or_create(paths)
 
 
 def build_anchor_message(session: Session) -> dict[str, str]:
@@ -861,13 +1153,17 @@ def _read_meta(
 
 def _write_meta(meta_path: Path, meta: SessionMeta) -> None:
     payload: dict[str, Any] = {}
+    existing: dict[str, Any] | None = None
     if meta_path.is_file():
         try:
             loaded = json.loads(meta_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 payload = loaded
+                existing = loaded
         except (OSError, json.JSONDecodeError):
             payload = {}
+    assert_harness_immutable(existing, meta)
+    enforce_terminal_meta_invariants(meta)
     payload.update(meta.to_dict())
     meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

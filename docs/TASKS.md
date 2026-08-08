@@ -2,7 +2,7 @@
 
 > 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Pack 1/2/4/5/6 M0 done** — ROADMAP-PACK-1245 收口；另排 S-441/461/490/500  
+> **当前焦点**：**Phase 57** — S-570/571/572 手工 smoke（T-5710 **done** · TERMINAL-MODE **v0.2.0**）  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -1805,6 +1805,36 @@ python turn_intent.py    # 分类用例无回归
 | T-5604 | M1：deferred wake 续回合 | server · session | IT-562 | defer |
 | T-5605 | M1：桌面 wake notice + Cancel | desktop | S-563 | defer |
 | T-5606 | M1：env `MY_AGENT_ORCH_WAKE_*` | config | — | defer |
+
+### Phase 57 — Terminal 狂野模式（TERMINAL）
+
+> 子文档：[TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.1.5 已封板** · 与 Desktop **会话分离** · **禁止切换/接管** · exit 后另入口重启  
+> **实施纪律**：**一动一停** — 每会话只做一个 task id；做完测试 + 更新本文状态后 **停**，等用户说「继续」
+
+#### DOC-04 准入
+
+- [x] 矩阵行见 TERMINAL-MODE §8
+- [x] 回归 ID：IT-570～**576** · S-570 · S-571
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5700 | 设计签字 | TERMINAL-MODE.md | 评审 | **doc** |
+| T-5701 | `SessionMeta.harness` + scope 字段 | session.py | IT-570 | **done** |
+| T-5702 | `my-agent terminal` + `start-terminal.bat` + `terminal_last_session` | main.py · cli_terminal.py · bat | IT-571 | **done** |
+| T-5708 | `terminal_scope.py` · R1～R4 · R3 提示 | terminal_scope.py | IT-575/576 | **done** |
+| T-5703 | executor/agent terminal 门控 + effective root | executor.py · agent.py | IT-572/573 | **done** |
+| T-5704 | 废止跨 harness 接管 · resume 硬拒 | interface_lock.py · server.py · desktop | IT-571 | **done** |
+| T-5705 | `prompts/terminal.txt` + loader | prompts · loader | — | **done** |
+| T-5706 | Ctrl+C → `turn.cancel` | main.py · cli_terminal.py | IT-574 | **done** |
+| T-5707 | DESKTOP / CLI-PARITY 文档更新 | docs | — | **done** |
+| S-570 | 手工：R1 agent 内狂野链 | log | TERMINAL §8 | todo |
+| S-571 | 手工：R3-[1] agent 外仅本次 | log | TERMINAL §8 | todo |
+| T-5710 | M1：Terminal TUI（§6.4 总览） | TERMINAL-MODE §6.4 | IT-577～579 | **done** |
+| T-5710a | Rich Transcript + 工具块 | terminal_ui.py · cli_terminal.py | IT-577 | **done** |
+| T-5710b | Welcome + StatusBar | terminal_ui.py | IT-578 | **done** |
+| T-5710c | `/clear` `/compact` + plain 降级 | terminal_ui.py · cli_terminal.py | IT-579 | **done** |
+| T-5710d | Bottom 布局 · Welcome mascot · Markdown · 复制/焦点 | terminal_app.py · terminal_ui.py · welcome_mascot* | test_terminal_* | **done** |
+| S-572 | 手工：WT 全屏 TUI smoke | log | TERMINAL §6.5 | todo |
 
 ---
 

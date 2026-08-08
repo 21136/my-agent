@@ -39,7 +39,7 @@ from paths import AgentPaths
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, SessionError, create_new, emit_corruption_notices, list_session_summaries, resume_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
 try:
@@ -500,7 +500,7 @@ class WsSessionHandler:
             loop.call_soon_threadsafe(outbox.put_nowait, event)
 
         bridge = WsBridge(emit=emit, paths=self.paths)
-        session = resume_or_create(self.paths)
+        session = resume_desktop_or_create(self.paths)
         repl = _build_repl(session, self.paths, bridge)
 
         sender_task = asyncio.create_task(self._sender(websocket, outbox))
@@ -723,12 +723,16 @@ class WsSessionHandler:
                 emit_error(bridge, "session.open requires session_id")
                 return
             try:
-                repl.session = Session.load(self.paths, session_id.strip())
+                repl.session = load_session_for_harness(
+                    self.paths,
+                    session_id.strip(),
+                    expected="desktop",
+                )
                 repl._rebind_agent()
                 bridge.emit_session_state(repl.session)
                 emit_corruption_notices(bridge.emit, repl.session)
                 _emit_session_list(bridge, self.paths)
-            except Exception as exc:
+            except (SessionError, HarnessMismatchError) as exc:
                 emit_error(bridge, str(exc))
             return
 
@@ -971,23 +975,27 @@ async def run_server(host: str, port: int, *, takeover: bool = False) -> int:
         lock_conflict_payload,
     )
 
+    if takeover:
+        print(
+            json.dumps(
+                {
+                    "ready": False,
+                    "error": "takeover_disabled",
+                    "message": "interface lock takeover is disabled (TM-9)",
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        return 2
+
     lock_guard = InterfaceLockGuard(paths, "electron")
     result = acquire_lock(paths, "electron", takeover=False)
     if result.status == AcquireStatus.CONFLICT and result.holder is not None:
-        if not takeover:
-            print(json.dumps(lock_conflict_payload(result.holder), ensure_ascii=False), flush=True)
-            return 2
-        try:
-            lock_guard.acquire(takeover=True, interactive_takeover=False)
-        except InterfaceLockError as exc:
-            print(
-                json.dumps({"ready": False, "error": "lock_conflict", "message": str(exc)}),
-                flush=True,
-            )
-            return 2
-    else:
-        lock_guard._held = True
-        atexit.register(lock_guard.release)
+        print(json.dumps(lock_conflict_payload(result.holder), ensure_ascii=False), flush=True)
+        return 2
+    lock_guard._held = True
+    atexit.register(lock_guard.release)
 
     handler = WsSessionHandler(paths)
 

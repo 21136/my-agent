@@ -29,6 +29,7 @@ from tools.registry import BUILTIN_TOOLS, ToolRegistry
 
 SECTION_SEPARATOR = "\n---\n"
 CORE_REL = Path("prompts") / "core.txt"
+TERMINAL_REL = Path("prompts") / "terminal.txt"
 INDEX_LEGACY_REL = Path("_index.toml")
 INDEX_CORE_REL = Path("_index.core.toml")
 INDEX_USER_REL = Path("_index.user.toml")
@@ -107,6 +108,18 @@ def load_core_text(*, agent_core_dir: Path | None = None) -> str:
     path = core_prompt_path(agent_core_dir)
     if not path.is_file():
         return "[core.txt missing — implement T-209]"
+    return path.read_text(encoding="utf-8").strip()
+
+
+def terminal_prompt_path(agent_core_dir: Path | None = None) -> Path:
+    base = agent_core_dir or _AGENT_CORE
+    return base / TERMINAL_REL
+
+
+def load_terminal_text(*, agent_core_dir: Path | None = None) -> str:
+    path = terminal_prompt_path(agent_core_dir)
+    if not path.is_file():
+        return "[terminal.txt missing — implement T-5705]"
     return path.read_text(encoding="utf-8").strip()
 
 
@@ -435,6 +448,7 @@ def format_session_overlay(session: Session) -> str:
     return "\n".join(
         [
             "[本次会议]",
+            f"harness: {session.meta.harness}",
             f"conversation_id: {session.conversation_id}",
             f"goal: {goal}",
             f"topics: {topics}",
@@ -446,37 +460,85 @@ def format_session_overlay(session: Session) -> str:
     )
 
 
+def format_terminal_scope_overlay(session: Session) -> str:
+    """Terminal harness scope block (TERMINAL-MODE §4.2 · T-5705)."""
+    from session import is_terminal_harness
+    from terminal_scope import TerminalScopeError, resolve_terminal_effective_root
+
+    if not is_terminal_harness(session.meta):
+        return ""
+    kind = session.meta.terminal_scope_kind or "(unset)"
+    lines = [
+        "[Terminal scope]",
+        "harness: terminal",
+        f"terminal_scope_kind: {kind}",
+        "turn_mode: agent (fixed · TM-23)",
+    ]
+    try:
+        root = resolve_terminal_effective_root(session.meta, session.paths)
+        lines.append(f"effective_root: {root.resolve().as_posix()}")
+    except TerminalScopeError as exc:
+        lines.append(f"effective_root: (unresolved — {exc})")
+    if kind == "agent":
+        lines.append(f"terminal_cwd: {session.meta.terminal_cwd or '.'}")
+    elif kind == "host":
+        lines.append(f"terminal_host_id: {session.meta.terminal_host_id or '(unset)'}")
+        if session.meta.terminal_cwd:
+            lines.append(f"terminal_cwd: {session.meta.terminal_cwd}")
+    elif kind == "foreign":
+        lines.append(
+            f"terminal_foreign_root: {session.meta.terminal_foreign_root or '(unset)'}"
+        )
+    lines.extend(
+        [
+            "wild_mode: inside effective_root → write/run skip confirm; outside → confirm.",
+            "no_plan_gate: no project_id; TASKS/MAP/docs may be write_text directly (TM-17).",
+            "no_segment_cap: auto-continue segments within total cap (TM-16).",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def format_turn_discipline_overlay(session: Session) -> str | None:
     """Per-turn overlay hints for T-701 (complements core.txt Turn discipline)."""
     if session.meta.phase != "S4":
         return None
-    lines = [
-        "[轮次纪律 · turn]",
-        "qa/plan：先文字答；execute：有子代理摘要则直接 write_evolved，勿重复读范例。",
-    ]
-    if session.meta.turn_mode == "ask":
-        short_max = os.environ.get("PARENT_SHORT_MAX", "5")
-        lines.append(
-            "turn_mode: ask — 只聊：read/list/grep/web/fetch + `探索` 可用；run_evolved 已禁用。说 `动手` 切换。"
-        )
-        lines.append(
-            f"tool_budget: ask — 每轮 ≤{short_max} 轮，run_evolved 已禁用（T-907）"
-        )
-    else:
-        from agent import parent_execute_segment_max
+    from session import is_terminal_harness
 
-        segment_max = parent_execute_segment_max(
-            active_shell=session.meta.active_shell,
-        )
-        lines.append("turn_mode: agent — 动手：含 run_evolved 写 workspace / evolve。")
-        lines.append(
-            f"tool_budget: agent — 每 segment ≤{segment_max} 轮"
-            + (
-                "（项目模式）"
-                if (session.meta.active_shell or "").strip() == "project"
-                else "，可自动续跑（T-907）"
+    if is_terminal_harness(session.meta):
+        lines = [
+            "[轮次纪律 · terminal]",
+            "harness: terminal — fixed agent; no 只聊/动手; no project plan gate or task_paused.",
+            "tool_budget: terminal — no segment cap pause; auto-continue within total cap (TM-16).",
+        ]
+    else:
+        lines = [
+            "[轮次纪律 · turn]",
+            "qa/plan：先文字答；execute：有子代理摘要则直接 write_evolved，勿重复读范例。",
+        ]
+        if session.meta.turn_mode == "ask":
+            short_max = os.environ.get("PARENT_SHORT_MAX", "5")
+            lines.append(
+                "turn_mode: ask — 只聊：read/list/grep/web/fetch + `探索` 可用；run_evolved 已禁用。说 `动手` 切换。"
             )
-        )
+            lines.append(
+                f"tool_budget: ask — 每轮 ≤{short_max} 轮，run_evolved 已禁用（T-907）"
+            )
+        else:
+            from agent import parent_execute_segment_max
+
+            segment_max = parent_execute_segment_max(
+                active_shell=session.meta.active_shell,
+            )
+            lines.append("turn_mode: agent — 动手：含 run_evolved 写 workspace / evolve。")
+            lines.append(
+                f"tool_budget: agent — 每 segment ≤{segment_max} 轮"
+                + (
+                    "（项目模式）"
+                    if (session.meta.active_shell or "").strip() == "project"
+                    else "，可自动续跑（T-907）"
+                )
+            )
     if session.scaffold_tool_turn:
         lines.append(
             "scaffold_tool: yes — 本轮创建 evolved 工具：禁 write_text 写脚手架文件名；可暂存 _staging.toml；只用 write_evolve（顶层 path+content_base64）。"
@@ -1066,9 +1128,18 @@ def build_system_prompt(
     reg = registry or ToolRegistry.load(agent_paths)
     evolve_dir = agent_paths.evolve
     topic_index = load_topic_index(evolve_dir)
+    from session import is_terminal_harness
+
+    terminal = is_terminal_harness(session.meta)
+    core_section = "terminal" if terminal else "core"
+    core_text = (
+        load_terminal_text(agent_core_dir=agent_core_dir)
+        if terminal
+        else load_core_text(agent_core_dir=agent_core_dir)
+    )
 
     sections: list[tuple[str, str]] = [
-        ("core", load_core_text(agent_core_dir=agent_core_dir)),
+        (core_section, core_text),
         ("topic_index", format_topic_index(topic_index)),
         ("memory_index", format_memory_index(scan_memory_index(evolve_dir))),
         ("builtin_summary", format_builtin_summary()),
@@ -1077,6 +1148,10 @@ def build_system_prompt(
 
     if include_overlay:
         sections.append(("session", format_session_overlay(session)))
+        if terminal:
+            scope_overlay = format_terminal_scope_overlay(session)
+            if scope_overlay:
+                sections.append(("terminal_scope", scope_overlay))
         turn_discipline = format_turn_discipline_overlay(session)
         if turn_discipline:
             sections.append(("turn_discipline", turn_discipline))
@@ -1087,7 +1162,7 @@ def build_system_prompt(
         ):
             sections.append((f"topic_prompt:{topic_id}", prompt_text))
 
-        if is_workshop_eligible(session):
+        if is_workshop_eligible(session) and not terminal:
             sections.append(("tool_workshop", load_tool_workshop_prompt(evolve_dir)))
 
         sections.append(
@@ -1107,7 +1182,7 @@ def build_system_prompt(
         if session.subagent_overlay:
             sections.append(("subagent_summary", session.subagent_overlay.strip()))
 
-        if session.meta.active_shell == "project" and session.meta.project_root:
+        if session.meta.active_shell == "project" and session.meta.project_root and not terminal:
             from project_mode import (
                 build_tasks_injection_slice,
                 extract_task_id,

@@ -1,6 +1,6 @@
 # CLI ↔ 桌面元命令 Parity（DOC-02 / IT-38）
 
-> 版本 **0.3.2** · 2026-07-18 · **定稿**（DOC-02 / T-1806-doc-02）  
+> 版本 **0.3.3** · 2026-08-07 · **定稿**（DOC-02 / T-1806-doc-02 · **T-5707 Terminal 绕行**）  
 > Phase 18 · [STABILIZATION.md](./STABILIZATION.md) §8 · 审计 **T-1808-01～05**（全集 · 桌面等价 · 绕行 · IT-38 · IT-11）  
 > 父清单：[STABILIZATION-TASKS.md](./STABILIZATION-TASKS.md) M1-H · M2-G
 
@@ -23,11 +23,13 @@
 
 | 项 | 说明 |
 |----|------|
-| **真源** | `agent-core/main.py` · `ConversationRepl.handle_line`（约 L193–330） |
+| **Desktop / CLI 真源** | `agent-core/main.py` · `ConversationRepl.handle_line`（约 L193–330） |
+| **Terminal 真源** | `agent-core/cli_terminal.py` · `TerminalRepl.handle_line`（**无** `项目 …` · 固定 `agent`） |
 | **桌面入口** | sidecar `server.py`：`user.message.text` 与 `command.name` 均送入 `handle_line`（IT-11 / T-1808-05） |
-| **本表** | 凡在 `handle_line` 内**先于** `agent.run_turn` 拦截的行，均计为元命令 |
+| **本表 §1** | 凡在 **Desktop/CLI** `handle_line` 内**先于** `agent.run_turn` 拦截的行，均计为元命令 |
+| **§7** | Terminal harness **绕行**（非 §1 子集；见 [TERMINAL-MODE.md](./TERMINAL-MODE.md)） |
 | **不含** | 纯自然语言回合（fallthrough → `agent.run_turn`）；见 §3 · §4 |
-| **绕行文案** | §6（T-1808-03）；N/A 与易混项须有可读说明，禁止静默不支持 |
+| **绕行文案** | §6（T-1808-03）；Terminal 专用 §7；N/A 与易混项须有可读说明，禁止静默不支持 |
 
 ### 桌面等价列说明（T-1808-02）
 
@@ -162,12 +164,12 @@ CLI 启动横幅（`main.py` L168）与上表一致。
 
 未命中 §1 的行进入 `agent.run_turn`：工具调用、confirm 卡、流式 `turn.*` 等由 Agent 回合管线处理。
 
-| 机制 | CLI | 桌面 WS | 侧栏 / UI | Parity |
-|------|-----|---------|-----------|--------|
-| 工具 confirm | stdin `y/n` | `confirm.response` | 各壳确认卡（grow 块内 / daily 玻璃 / pet 气泡） | **等价不同径** |
-| 回合取消 | — | `turn.cancel` | Stop 按钮 | **N/A** | §6.1 |
-| 主题注册 / S2 交互 | `input_fn` 多轮 | `user.message`（`try_route_input` 入队） | 聊天框 | **同路径** | §6.3 |
-| 退出归档 | `exit --record` / `--full` | — | 托盘退出杀 sidecar；**不**走 `exit` 元命令 | **N/A** | §6.1 |
+| 机制 | CLI (`start.bat`) | Terminal (`start-terminal.bat`) | 桌面 WS | Parity |
+|------|-------------------|----------------------------------|---------|--------|
+| 工具 confirm | stdin `y/n` | stdin `y/n`（effective root 内常免 confirm） | `confirm.response` | **等价不同径** |
+| 回合取消 | `Ctrl+C` 仅取消**输入行**；无可靠 Stop | **`Ctrl+C` → `turn.cancel`**（协作取消长回合 · T-5706） | `turn.cancel` · Stop | **混合** | §6.1 · §7 |
+| 主题注册 / S2 交互 | `input_fn` 多轮 | 同左（`压缩` 走父类） | `user.message`（`try_route_input` 入队） | **同路径** | §6.3 |
+| 退出归档 | `exit --record` / `--full` | `exit` only（无 `--record` 档） | — | **N/A** | §6.1 |
 
 ---
 
@@ -202,8 +204,12 @@ CLI 启动横幅（`main.py` L168）与上表一致。
 |----|--------|----------|--------|
 | **M01 退出** | 桌面聊天 | 发 `exit` / `quit` 不会退出应用（走普通回合或无效） | 托盘 **退出** 或关闭窗口；助手忙时会先确认（见 `DESKTOP.md` §4.4.2） |
 | **M01 退出归档** | 桌面 | 无 `exit --record` / `exit --full` 等价 | 会话已落在 `data/sessions/`；若需导出 `data/conversations/*.json`，在终端运行 `start.bat`，输入 `exit --record` 或 `exit --full` |
-| **回合取消** | CLI (`start.bat`) | 无 `turn.cancel` / Stop | 等待回合结束；或 `Ctrl+C` 取消**当前输入行**（不保证中止已发出的 LLM 请求）。要可靠停止请用**桌面 Stop** |
-| **外壳切换** | CLI | 无 `shell.switch` 元命令 | 开桌面，顶栏 **外壳** 下拉选 grow / 日用 / 项目 / 治理；或 `项目 切换 <id>` / 侧栏点项目（项目壳） |
+| **回合取消** | CLI (`start.bat`) | 无 `turn.cancel` / Stop | 等待回合结束；`Ctrl+C` 取消**当前输入行**（不保证中止 LLM）。要可靠停止请用**桌面 Stop** |
+| **回合取消** | **Terminal** | 无 Stop 按钮 | **`Ctrl+C`** 中止当前回合（等同 `turn.cancel`）；空闲时 `Ctrl+C` 仅取消输入行 |
+| **外壳切换** | CLI | 无 `shell.switch` 元命令 | 开桌面，顶栏 **外壳** 下拉；或 `项目 切换 <id>` |
+| **Terminal 项目命令** | Terminal | 发 `项目 …` | 打印「Terminal 不支持项目命令」；用 cwd 狂野模式直接改代码（见 §7） |
+| **Desktop 开 Terminal 会话** | 桌面 | `session.list` 不显示 terminal 会话 | 在目标目录 `cd` 后运行 `start-terminal.bat`；**不能**在桌面里 resume terminal id |
+| **跨 harness 续接** | 任意 | 不能 desktop 入口打开 terminal 会话 id（反之亦然） | **exit** 当前 UI → 在正确入口 **新开或续接同 harness** |
 | **续接历史 UI** | CLI | 无 `session.history` 事件 | 启动 REPL 自动 `resume_or_create`；查 `data/sessions/<id>/messages.jsonl` |
 
 **桌面 · 聊天里误发 `exit`（建议 notice 文案）**：
@@ -212,10 +218,23 @@ CLI 启动横幅（`main.py` L168）与上表一致。
 「exit」只在终端 CLI 里结束会话。要退出桌面：托盘 → 退出，或直接关窗。
 ```
 
-**CLI · 想中止长回合（建议终端提示）**：
+**CLI · 想中止长回合（`start.bat` · 建议终端提示）**：
 
 ```text
 CLI 没有 Stop。请等待回合结束，或改用桌面点 Stop。Ctrl+C 仅取消当前输入行。
+```
+
+**Terminal · 中止长回合（`start-terminal.bat`）**：
+
+```text
+长回合中按 Ctrl+C 即可停止（等同 turn.cancel）。若仅在 you> 等待输入，Ctrl+C 只取消当前行。
+```
+
+**Desktop · 锁被 Terminal 占用**：
+
+```text
+Terminal 狂野模式正在占用会话锁。请在该 Terminal 窗口输入 exit 结束，再启动桌面。
+（不支持接管会话。）
 ```
 
 ### 6.2 Parity = 等价不同径（易混）
@@ -277,12 +296,63 @@ CLI 没有 Stop。请等待回合结束，或改用桌面点 Stop。Ctrl+C 仅�
 
 ### 6.5 DOC-02 定稿自检（T-1806-doc-02）
 
-- [x] 文首版本与变更记录均为 **0.3.2**（与 [STABILIZATION.md](./STABILIZATION.md) §8 引用一致）  
+- [x] 文首版本与变更记录均为 **0.3.3**（Terminal 绕行 · T-5707）  
 - [x] §0 勾选 T-1808-01～05 全部 **done**  
 - [x] §1 主表 17 族与 `handle_line` 分支顺序一致（见文首流程图）  
 - [x] IT-38 最小集（M04 `新会话` · M05 `压缩` · M14 `项目 新建`）仍在 §1  
 - [x] IT-11 约定（`command` 总刷新 / `user.message` 条件刷新）仍在「范围」节  
 - [x] 与 STABILIZATION §8 能力行无冲突（新会话/项目/只聊动手/托管/验收/confirm/Stop）
+
+---
+
+## 7. Terminal harness 绕行（Phase 57 · T-5707）
+
+> **真源**：[TERMINAL-MODE.md](./TERMINAL-MODE.md) v0.2.0 · `cli_terminal.py`  
+> **入口**：`start-terminal.bat` 或 `my-agent terminal [path?]`（**保留当前 shell cwd**）
+
+### 7.1 与 Desktop/CLI 的差异（用户可见）
+
+| 能力 | Desktop / `start.bat` | Terminal |
+|------|----------------------|----------|
+| harness | `desktop` | `terminal`（终身不可变） |
+| `项目 …` / 计划门 / 侧栏采纳 | 有 | **无**（发则提示不支持） |
+| `只聊` / `动手` | 有 | **无**（固定 `agent`；发则提示「Terminal 仅 agent 模式」） |
+| 工作区 | `project_id` · 侧栏 | **effective root** = 启动 cwd 树（R1～R4） |
+| 写 confirm | 桌面确认卡 / CLI `y/n` | effective root **内免 confirm**（狂野） |
+| 续接指针 | `last_conversation_id` / `project_sessions` | `terminal_last_session` |
+| 会话列表（桌面） | 可见 | **隐藏**（TM-18） |
+| Stop | Stop 按钮 | **Ctrl+C** |
+| interface.lock `ui` | `electron` / `cli` | `terminal`（与另两档 **互斥、无 takeover**） |
+
+### 7.2 Terminal 仍支持的元命令
+
+| 命令 | 行为 |
+|------|------|
+| `exit` | 保存会话 · 释放锁 · 结束进程 |
+| `新会话` / `new` | 新建 `harness=terminal` id；**cwd 不变** |
+| `压缩` / `compact` | 同 Desktop CLI（父类 `handle_line`） |
+| `托管目录 …` | 同 CLI（共用 `host_scope.json`） |
+| 自然语言 | `agent.run_turn`（无 plan gate · 无 segment cap） |
+
+### 7.3 建议绕行文案
+
+**在 Terminal 里误发 `项目 新建 foo`**：
+
+```text
+Terminal 不支持项目命令。你已在当前目录狂野模式；直接描述要改的文件或让我跑测试即可。
+```
+
+**在桌面里找 Terminal 会话**：
+
+```text
+Terminal 会话不会出现在桌面会话列表。请在目标仓库目录打开终端，运行 start-terminal.bat。
+```
+
+**想从 Desktop 项目模式切到 Terminal 狂野**：
+
+```text
+请 exit 桌面或 CLI，cd 到仓库目录，再运行 start-terminal.bat。不能保留当前聊天线程切换 harness。
+```
 
 ---
 
@@ -296,3 +366,4 @@ CLI 没有 Stop。请等待回合结束，或改用桌面点 Stop。Ctrl+C 仅�
 | 0.3.1 | 2026-07-17 | T-1808-04：IT-38 → `tests.test_cli_desktop_parity`（文档漂移 + handle_line / WS） |
 | 0.3.2 | 2026-07-17 | T-1808-05 / IT-11：`command` vs `user.message` 约定 + 测试 |
 | **0.3.2** | **2026-07-18** | **DOC-02 / T-1806-doc-02 定稿**：文首版本对齐；§0 / §6.5 定稿自检；与 STABILIZATION §8 一致 |
+| **0.3.3** | **2026-08-07** | **T-5707**：§7 Terminal harness 绕行；§3 回合取消三分；§6.1 废止接管 · Terminal `Ctrl+C` |

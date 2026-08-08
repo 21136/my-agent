@@ -37,6 +37,7 @@
 | 2026-08-05 | [BUG-025](./bugs/2026-08-05-patch-file-crlf-corruption.md) | 「文件又乱了」连刷 · `\r\r\r\n` 增殖 · Vue 结构损坏 | `patch_file` find 写盘 · `read_file`→`write_text` 放大 · line_range 误插 | **fixed**（T-4252～4254 · IT-99 · S-99 views normalize） |
 | 2026-08-06 | [BUG-026](./bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md) | 同文件多条 patch 第二条起「base_hash mismatch」撤回；前端先闪「已采纳」 | 同轮多提案共享 hash · 首条采纳改盘 · `acceptSuggestionById` 乐观 UI | **fixed**（T-4810+4811 · IT-4813 · **S-481 pass** 2026-08-07） |
 | 2026-08-06 | [BUG-027](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) | 项目模式「你看看」→ explore 读 `docs/TOOLS.md` 非 workspace | `should_spawn_explore` 自动 spawn · task=用户原话 | **fixed**（T-4801～4803+4802 · IT-4804 · **S-480 pass** 2026-08-07） |
+| 2026-08-08 | [BUG-028](./bugs/2026-08-08-terminal-bottom-tui-stale-render.md) | Terminal 答案半截、无法滚/选/复制 | worker 改 Buffer 竞态 · scroll 算法 · win32 鼠标 | **fixed**（待 S-572 手工） |
 
 ---
 

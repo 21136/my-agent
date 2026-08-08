@@ -119,6 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_cmd.set_defaults(handler=_cmd_audit)
 
+    terminal_cmd = sub.add_parser("terminal", help="Terminal harness REPL (cwd-scoped)")
+    terminal_cmd.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Working directory (default: shell cwd)",
+    )
+    terminal_cmd.set_defaults(handler=_cmd_terminal)
+
     return parser
 
 
@@ -194,6 +203,15 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     from governance.audit import run_audit_from_namespace
 
     return run_audit_from_namespace(args)
+
+
+def _cmd_terminal(args: argparse.Namespace) -> int:
+    from cli_terminal import main as terminal_main
+
+    argv: list[str] = []
+    if args.path:
+        argv.append(args.path)
+    return terminal_main(argv)
 
 
 def _parse_json_arg(raw: str) -> dict[str, Any]:
