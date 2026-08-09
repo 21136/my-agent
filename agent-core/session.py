@@ -125,7 +125,7 @@ class SessionMeta:
     evolve_offer_pending: bool = False
     evolve_offer_used: bool = False
     turn_mode: TurnMode = DEFAULT_TURN_MODE
-    reasoning_effort: str = "high"  # "low" | "high" | "max"; REASONING-EFFORT.md
+    reasoning_effort: str = "medium"  # low | medium | high | max
     active_shell: ShellId = DEFAULT_ACTIVE_SHELL
     project_root: str = ""
     project_id: str = ""
@@ -271,7 +271,7 @@ class SessionMeta:
             evolve_offer_used=bool(payload.get("evolve_offer_used", False)),
             turn_mode=turn_mode,
             reasoning_effort=normalize_reasoning_effort(
-                payload.get("reasoning_effort", "high")
+                payload.get("reasoning_effort", "medium")
             ),
             active_shell=active_shell,
             project_root=project_root.strip(),
@@ -412,9 +412,9 @@ class Session:
             session_dir / MESSAGES_FILENAME,
             skipped_lines=skipped_lines,
         )
-        from context import repair_orphaned_tool_calls
+        from context import repair_tool_messages
 
-        repaired = repair_orphaned_tool_calls(messages)
+        repaired = repair_tool_messages(messages)
         if repaired != messages:
             _write_messages_snapshot(session_dir / MESSAGES_FILENAME, repaired)
             messages = repaired
@@ -525,14 +525,14 @@ def turn_mode_label(mode: TurnMode) -> str:
     return "动手 (full tools including run_evolved)"
 
 
-REASONING_EFFORT_LEVELS = ("low", "high", "max")
+REASONING_EFFORT_LEVELS = ("low", "medium", "high", "max")
 
 
 def normalize_reasoning_effort(raw: Any) -> str:
-    """Validate and normalize reasoning_effort value; fallback to ``"high"``."""
+    """Validate and normalize reasoning_effort value; fallback to ``"medium"``."""
     if isinstance(raw, str) and raw.casefold() in REASONING_EFFORT_LEVELS:
         return raw.lower()
-    return "high"
+    return "medium"
 
 
 def parse_reasoning_effort_command(line: str) -> str | None:
@@ -550,7 +550,8 @@ def parse_reasoning_effort_command(line: str) -> str | None:
 def reasoning_effort_label(level: str) -> str:
     return {
         "low": "低推理，省 token",
-        "high": "默认推理",
+        "medium": "中等推理（默认）",
+        "high": "高推理",
         "max": "最高推理强度",
     }.get(level, "")
 

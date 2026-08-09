@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -279,6 +280,130 @@ def repair_orphaned_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str,
     return repaired
 
 
+def _repair_json_arguments(text: str) -> str:
+    """Best-effort fix for common model JSON mistakes in tool arguments."""
+    if not text:
+        return text
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    if text.startswith("{") and "'" in text and '"' not in text:
+        text = re.sub(r"'([^']*)'", r'"\1"', text)
+    return text
+
+
+def _normalize_tool_call_arguments(raw: Any) -> str:
+    """Ensure tool_call.function.arguments is a JSON object encoded as a string."""
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False)
+    if not isinstance(raw, str):
+        raw = "{}" if raw is None else str(raw)
+    text = raw.strip() or "{}"
+    for candidate in (text, _repair_json_arguments(text)):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return json.dumps(parsed, ensure_ascii=False)
+    return "{}"
+
+
+def repair_malformed_tool_call_arguments(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize assistant tool_call argument strings for strict OpenAI-compatible APIs."""
+    if not messages:
+        return []
+
+    repaired: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") != "assistant":
+            repaired.append(message)
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            repaired.append(message)
+            continue
+
+        new_tool_calls: list[dict[str, Any]] = []
+        changed = False
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                new_tool_calls.append(tool_call)
+                continue
+            tool_copy = dict(tool_call)
+            function = tool_call.get("function")
+            if isinstance(function, dict):
+                function_copy = dict(function)
+                normalized = _normalize_tool_call_arguments(function.get("arguments"))
+                if normalized != function.get("arguments"):
+                    function_copy["arguments"] = normalized
+                    changed = True
+                tool_copy["function"] = function_copy
+            new_tool_calls.append(tool_copy)
+
+        if changed:
+            message_copy = dict(message)
+            message_copy["tool_calls"] = new_tool_calls
+            repaired.append(message_copy)
+        else:
+            repaired.append(message)
+
+    return repaired
+
+
+def repair_stray_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop tool messages that are not a reply to the current assistant tool_calls block.
+
+    DeepSeek/OpenAI reject payloads where a ``tool`` message is not preceded by a
+    matching assistant ``tool_calls`` entry (e.g. late tool result after a final
+    assistant text line).
+    """
+    if not messages:
+        return []
+
+    repaired: list[dict[str, Any]] = []
+    pending_ids: set[str] | None = None
+
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                pending_ids = {
+                    call_id
+                    for tool_call in tool_calls
+                    if isinstance(tool_call, dict)
+                    for call_id in [tool_call.get("id")]
+                    if isinstance(call_id, str) and call_id
+                }
+            else:
+                pending_ids = None
+            repaired.append(message)
+            continue
+
+        if role == "tool":
+            call_id = message.get("tool_call_id")
+            if (
+                pending_ids
+                and isinstance(call_id, str)
+                and call_id in pending_ids
+            ):
+                repaired.append(message)
+                pending_ids.discard(call_id)
+                if not pending_ids:
+                    pending_ids = None
+            continue
+
+        pending_ids = None
+        repaired.append(message)
+
+    return repaired
+
+
+def repair_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize tool-call pairing and argument encoding for OpenAI-compatible chat APIs."""
+    messages = repair_malformed_tool_call_arguments(messages)
+    return repair_stray_tool_messages(repair_orphaned_tool_calls(messages))
+
+
 def build_llm_messages(session: Session) -> list[dict[str, Any]]:
     """Messages for LLM payload: anchor + post-digest history (disk keeps full log)."""
     messages = session.messages
@@ -290,11 +415,11 @@ def build_llm_messages(session: Session) -> list[dict[str, Any]]:
         anchor = messages[0]
         tail = messages[start:]
         if start <= 1 and not tail:
-            return repair_orphaned_tool_calls([anchor])
+            return repair_tool_messages([anchor])
         if start <= 1:
-            return repair_orphaned_tool_calls([anchor, *tail])
-        return repair_orphaned_tool_calls([anchor, *messages[start:]])
-    return repair_orphaned_tool_calls(messages[start:])
+            return repair_tool_messages([anchor, *tail])
+        return repair_tool_messages([anchor, *messages[start:]])
+    return repair_tool_messages(messages[start:])
 
 
 def should_auto_compact(

@@ -27,13 +27,45 @@ from llm_models import (
 )
 from tools.http_client import make_httpx_client
 
-_REASONING_EFFORT_LEVELS = frozenset({"low", "high", "max"})
+_REASONING_EFFORT_LEVELS = frozenset({"low", "medium", "high", "max"})
+_DEEPSEEK_REASONING_EFFORT_LEVELS = frozenset({"low", "high", "max"})
 
 
 def _normalize_reasoning_effort(raw: str | None) -> str:
     if raw is not None and raw.strip().casefold() in _REASONING_EFFORT_LEVELS:
         return raw.strip().lower()
-    return "high"
+    return "medium"
+
+
+def _api_reasoning_effort(effort: str, vendor: str) -> str:
+    """Map session effort to provider-supported API values."""
+    vendor_key = vendor.casefold()
+    if vendor_key in {"deepseek", "sophnet"}:
+        if effort == "medium":
+            return "high"
+        if effort in _DEEPSEEK_REASONING_EFFORT_LEVELS:
+            return effort
+        return "high"
+    return effort
+
+
+def _apply_reasoning_effort_to_payload(
+    payload: dict[str, Any],
+    effort: str,
+    vendor: str,
+) -> None:
+    """Attach provider-specific reasoning controls to a chat completion payload."""
+    vendor_key = vendor.casefold()
+    resolved = _api_reasoning_effort(effort, vendor)
+    if vendor_key in {"deepseek", "sophnet"}:
+        payload["thinking"] = {
+            "type": "enabled",
+            "reasoning_effort": resolved,
+        }
+        return
+    if vendor_key == "0x567":
+        # OpenAI-compatible gateway: top-level reasoning_effort, not DeepSeek ``thinking``.
+        payload["reasoning_effort"] = resolved
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = DEFAULT_FLASH_ID
@@ -79,7 +111,7 @@ class LLMConfig:
     model_coding: str
     timeout_sec: float
     context_limit_override: int | None
-    reasoning_effort: str = "high"
+    reasoning_effort: str = "medium"
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,10 +314,11 @@ class LLMClient:
         if response_format is not None:
             payload["response_format"] = response_format
         if reasoning_effort is not None:
-            payload["thinking"] = {
-                "type": "enabled",
-                "reasoning_effort": reasoning_effort,
-            }
+            _apply_reasoning_effort_to_payload(
+                payload,
+                reasoning_effort,
+                entry.vendor,
+            )
 
         url = entry.chat_completions_url()
         headers = {

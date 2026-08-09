@@ -13,7 +13,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from context import build_llm_messages, repair_orphaned_tool_calls
+from context import build_llm_messages, repair_orphaned_tool_calls, repair_tool_messages
 from paths import AgentPaths
 from session import Session, create_new
 
@@ -87,6 +87,52 @@ class RepairOrphanedToolCallsTests(unittest.TestCase):
 
     def test_empty_messages_returns_empty_list(self) -> None:
         self.assertEqual(repair_orphaned_tool_calls([]), [])
+
+    def test_drops_stray_tool_after_final_assistant(self) -> None:
+        broken = [
+            {
+                "role": "assistant",
+                "content": "calling",
+                "tool_calls": [
+                    {
+                        "id": "call_ok",
+                        "type": "function",
+                        "function": {"name": "grep", "arguments": "{}"},
+                    }
+                ],
+            },
+            _tool_reply("call_ok"),
+            {"role": "assistant", "content": "done"},
+            _tool_reply("call_late"),
+            {"role": "user", "content": "?"},
+        ]
+        fixed = repair_tool_messages(broken)
+        roles = [m["role"] for m in fixed]
+        self.assertEqual(roles, ["assistant", "tool", "assistant", "user"])
+        self.assertEqual(fixed[1]["tool_call_id"], "call_ok")
+
+    def test_repairs_invalid_tool_call_arguments(self) -> None:
+        broken_args = (
+            '{"arguments": {"action":"logs","name":"svc","tail_lines":"4}, '
+            '"tool_name": "run_service"}'
+        )
+        broken = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {"name": "run_evolved", "arguments": broken_args},
+                    }
+                ],
+            },
+            _tool_reply("call_bad", content='{"ok": false}'),
+        ]
+        fixed = repair_tool_messages(broken)
+        args = fixed[0]["tool_calls"][0]["function"]["arguments"]
+        self.assertEqual(json.loads(args), {})
 
 
 class BuildLlmMessagesRepairTests(unittest.TestCase):

@@ -409,8 +409,8 @@ flash · D:/…/huiyi · agent · ● idle
 | `turn.start` | StatusBar → `working`；Transcript 新回合分隔 |
 | `turn.notice` | 黄/灰 **Notice** 条（`level=warn` 高亮） |
 | `turn.end` | StatusBar → `idle`；`finish_reason=cancelled` 显示 `(stopped)` |
-| `assistant.delta` | bottom：缓冲至 `assistant.done` 后 **Rich 格式化** 整块写入；`MY_AGENT_TERMINAL_MARKDOWN=0` 时流式纯文本 |
-| `assistant.done` | 输出 `◆ 打工仔` 标题 + 格式化正文块 |
+| `assistant.delta` | bottom：**流式纯文本**（`◆` 标题 + raw body）；`MY_AGENT_TERMINAL_MARKDOWN=0` 时同样流式、不替换 |
+| `assistant.done` | `MARKDOWN=1` 时用格式化块 **替换** 流式区间；无 delta 时整块写入 `◆ 打工仔` + 正文 |
 | `reasoning.delta` | **默认开**（`MY_AGENT_TERMINAL_REASONING=1`）：`╭─ 思考` 框内流式 |
 | `tool.start` / `tool.end` | **默认关**（`MY_AGENT_TERMINAL_TOOL_PANELS=0`）；`1` 时 Rich Panel |
 | `confirm.request` | 内联 **Confirm** 条（y/n；与 stdin 仍兼容） |
@@ -509,7 +509,7 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 | **Ctrl+Insert** / **Ctrl+Shift+Insert** | 复制选中内容到系统剪贴板 |
 | **Esc**（transcript 聚焦时） | 取消选中并回到输入框 |
 | **直接打字**（transcript 聚焦时） | 自动回到输入框并插入字符 |
-| **滚轮 / ↑↓ / PgUp·PgDn**（transcript；输入框时也可用 PgUp/PgDn） | 翻阅历史；新输出默认 **跟到底**；手动滚动后暂停跟尾，发送下一条消息后恢复 |
+| **滚轮 / ↑↓ / PgUp·PgDn**（transcript；输入框时也可用 PgUp/PgDn） | 翻阅历史（**输出中也可上滑**）；新输出默认 **跟到底**；手动上滑暂停跟尾，滑回底部或发送下一条消息后恢复 |
 | **Ctrl+C**（无选区 · 回合中） | 取消当前回合（不退出 Terminal） |
 | **`/clear`** | 清空 transcript + **重新挂载 Welcome** |
 | **`新会话`** | 新 session id；cwd 不变；重新挂载 Welcome |
@@ -527,10 +527,11 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 
 **格式化管线**（assistant）：
 
-1. 流式 `assistant.delta` 在 bottom 布局下 **缓冲**（不逐字刷 markdown）
-2. `assistant.done` 时调用 `format_terminal_assistant_block` → `format_terminal_assistant_text`
+1. 流式 `assistant.delta`：**先写** `◆` 标题 + raw markdown 正文（可见边出边长）
+2. `assistant.done` 且 `MY_AGENT_TERMINAL_MARKDOWN=1`：flush 后 **替换** 流式区间为 `format_terminal_assistant_block` → `format_terminal_assistant_text`
 3. 优先 **Rich `Markdown`**（对标 [Aider](https://github.com/Aider-AI/aider)）；异常时回退 regex + Unicode 代码框
 4. transcript 为 `prompt_toolkit` 纯文本 `TextArea`（**无 ANSI 颜色**）；框线与层级靠 Unicode
+5. 大块 finalize 替换时：用户已上滑（`follow=False`）**不抢滚动**；跟尾时替换后贴底
 
 **Terminal 专属 agent 行为**：跳过桌面 G14 服务后置条件提醒（`agent.py` terminal harness 分支）。
 
@@ -542,8 +543,9 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 | 选中后如何复制 | 有选区时 **Ctrl+C** / `c-insert` / `c-s-insert` → `_copy_to_system_clipboard`（Windows `clip`） |
 | Enter 误提交 transcript | `c-m` 绑定加 `input_focused` 过滤，仅底栏输入可提交 |
 | 新输出把滚动位置顶乱 | `_transcript_follow_tail` + `_invalidate_preserve_scroll` |
-| 答案半截 / 须再提问才刷完 | worker 经 **`loop.call_soon_threadsafe`** 改 Buffer（3.x 无 `call_from_executor`） |
-| 方向键/滚轮滑到一半卡住 | `wrap_lines` 下 Window **跟光标**；滚动改为移动 cursor 行，勿只改 `vertical_scroll` |
+| 答案半截 / 须再提问才刷完 | worker 经 **`loop.call_soon_threadsafe`** 改 Buffer；回合结束 **`end_turn_output`** flush 残留流式块，**仍在跟尾时**才贴底 |
+| 方向键/滚轮滑到一半卡住 | `wrap_lines` 下 Window **跟光标**；滚动改为移动 cursor 行；**流式中也可上滑**（上滑暂停跟尾，滑回底部自动恢复） |
+| 流式输出卡顿 | token 合批：`_schedule_raw_flush` 延迟 50ms 合并突发 chunk，一次 Document 重建；`refresh_interval=0.1` 保持及时重绘；finalize 替换时 pinned scroll 由 `_restore_browse_scroll` 保持 |
 | Windows 无法选中/复制 | bottom 默认关 `mouse_support`；`Ctrl+O` 复制全文；或 `LAYOUT=scroll` 用 WT 原生选区 |
 
 #### 6.5.5 布局降级

@@ -110,6 +110,8 @@ class ModelRegistry:
         agent_paths = paths or AgentPaths.discover()
         user_path = agent_paths.data / "llm_models.json"
         user_models: list[dict[str, Any]] = []
+        json_default_flash: str | None = None
+        json_default_pro: str | None = None
         if user_path.is_file():
             try:
                 payload = json.loads(user_path.read_text(encoding="utf-8"))
@@ -119,9 +121,21 @@ class ModelRegistry:
                 raw_models = payload.get("models", [])
                 if isinstance(raw_models, list):
                     user_models = [item for item in raw_models if isinstance(item, dict)]
+                json_default_flash = _optional_str(
+                    payload.get("defaultFlashId", payload.get("default_flash_id"))
+                )
+                json_default_pro = _optional_str(
+                    payload.get("defaultProId", payload.get("default_pro_id"))
+                )
         entries = _merge_model_entries(_builtin_models(), user_models)
-        default_flash = _env_default_id("LLM_MODEL", DEFAULT_FLASH_ID)
-        default_pro = _env_default_id("LLM_MODEL_CODING", DEFAULT_PRO_ID)
+        default_flash = _env_default_id(
+            "LLM_MODEL",
+            json_default_flash or DEFAULT_FLASH_ID,
+        )
+        default_pro = _env_default_id(
+            "LLM_MODEL_CODING",
+            json_default_pro or DEFAULT_PRO_ID,
+        )
         alias_map = _build_alias_map(entries, default_flash, default_pro)
         if default_flash not in {entry.id for entry in entries}:
             default_flash = DEFAULT_FLASH_ID
@@ -168,10 +182,25 @@ def _env_default_id(env_name: str, fallback: str) -> str:
     return fallback
 
 
+def _optional_str(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _builtin_models() -> list[ModelEntry]:
     deepseek_base = os.environ.get("LLM_BASE_URL", "https://api.deepseek.com").rstrip("/")
     if deepseek_base.endswith(CHAT_COMPLETIONS_SUFFIX):
         deepseek_base = deepseek_base[:-len(CHAT_COMPLETIONS_SUFFIX)]
+    ox567_base = os.environ.get("OX567_BASE_URL", "https://api-cdn.0x567.com").rstrip("/")
+    if ox567_base.endswith(CHAT_COMPLETIONS_SUFFIX):
+        ox567_base = ox567_base[:-len(CHAT_COMPLETIONS_SUFFIX)]
+    ox567_pro_model = (
+        os.environ.get("OX567_MODEL_PRO")
+        or os.environ.get("OX567_MODEL")
+        or "gpt-5.4"
+    ).strip()
+    ox567_flash_model = os.environ.get("OX567_MODEL_FLASH", "gpt-5.6-luna").strip()
     return [
         ModelEntry(
             id=DEFAULT_FLASH_ID,
@@ -216,6 +245,29 @@ def _builtin_models() -> list[ModelEntry]:
             max_input_tokens=1_000_000,
             tier="pro",
             aliases=("sophnet-pro"),
+        ),
+        ModelEntry(
+            id="0x567-pro",
+            name="0x567 GPT-5.4 (1M)",
+            vendor="0x567",
+            base_url=ox567_base,
+            provider_model=ox567_pro_model,
+            api_key_env="OX567_API_KEY",
+            max_input_tokens=1_000_000,
+            max_output_tokens=65_536,
+            tier="pro",
+            aliases=("0x567", "567-pro", "567"),
+        ),
+        ModelEntry(
+            id="0x567-flash",
+            name="0x567 Luna",
+            vendor="0x567",
+            base_url=ox567_base,
+            provider_model=ox567_flash_model,
+            api_key_env="OX567_API_KEY",
+            max_input_tokens=372_000,
+            tier="flash",
+            aliases=("567-flash", "luna"),
         ),
     ]
 

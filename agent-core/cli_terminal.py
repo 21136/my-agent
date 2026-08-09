@@ -58,7 +58,7 @@ from terminal_ui import (
     welcome_enabled,
 )
 from terminal_prompt import TerminalPromptSession, prompt_toolkit_enabled
-from terminal_app import BottomPinnedTerminal, bottom_layout_enabled
+from terminal_app import BottomPinnedTerminal, bottom_layout_enabled, make_bottom_confirm_input_fn
 
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
@@ -114,6 +114,8 @@ class TerminalRepl(ConversationRepl):
             console = TerminalConsole.create(
                 write=bottom.write,
                 stream_write=bottom.append_transcript_raw,
+                stream_begin=bottom.begin_assistant_stream,
+                stream_finalize=bottom.finalize_assistant_stream,
                 kind="plain",
                 session=session,
                 paths=paths,
@@ -123,6 +125,7 @@ class TerminalRepl(ConversationRepl):
             repl._bottom_terminal = bottom
             repl.terminal_console = console
             repl.output_fn = console.output_fn
+            repl.input_fn = make_bottom_confirm_input_fn(bottom)
         else:
             console = TerminalConsole.create(
                 write=repl.output_fn,
@@ -232,12 +235,16 @@ class TerminalRepl(ConversationRepl):
 
             def _set_status(status: str) -> None:
                 previous_set_status(status)
-                if status == "idle":
-                    bottom.flush_pending()
-                bottom.request_redraw()
+                if status == "working":
+                    bottom.begin_turn_output()
+                elif status == "idle":
+                    bottom.end_turn_output()
+                else:
+                    bottom.request_redraw()
 
             console.set_status = _set_status  # type: ignore[method-assign]
             console.sink.status_listener = console.set_status
+            console.set_status_change_listener(bottom.request_redraw)
 
         bottom.set_submit_handler(on_submit)
         bottom.set_cancel_handler(on_cancel)
@@ -311,8 +318,6 @@ class TerminalRepl(ConversationRepl):
         finally:
             if guard is not None:
                 guard.end_turn()
-            if console is not None:
-                console.end_turn(finish_reason=finish_reason, ok=ok)
 
     def handle_line(self, line: str) -> ReplOutcome:
         stripped = line.strip()
@@ -385,18 +390,26 @@ class TerminalRepl(ConversationRepl):
         except ToolLoopExceededError as exc:
             self.last_turn_finish_reason = None
             self.output_fn(f"error: {exc}")
+            if self.terminal_console is not None:
+                self.terminal_console.end_turn(finish_reason="error", ok=False)
             return "continue"
         except LLMCancelledError:
             self.last_turn_finish_reason = "cancelled"
             self.output_fn("(cancelled)")
+            if self.terminal_console is not None:
+                self.terminal_console.end_turn(finish_reason="cancelled", ok=False)
             return "continue"
         except LLMError as exc:
             self.last_turn_finish_reason = None
             self.output_fn(f"llm error: {exc}")
+            if self.terminal_console is not None:
+                self.terminal_console.end_turn(finish_reason="error", ok=False)
             return "continue"
         except json.JSONDecodeError as exc:
             self.last_turn_finish_reason = None
             self.output_fn(f"llm error: invalid provider JSON: {exc}")
+            if self.terminal_console is not None:
+                self.terminal_console.end_turn(finish_reason="error", ok=False)
             return "continue"
 
         for notice in result.notices:
@@ -408,6 +421,11 @@ class TerminalRepl(ConversationRepl):
                 self.output_fn(result.assistant_text)
         elif self.assistant_output_fn is not None:
             self.assistant_output_fn("")
+        if self.terminal_console is not None:
+            self.terminal_console.end_turn(
+                finish_reason=self.last_turn_finish_reason,
+                ok=True,
+            )
         return "continue"
 
     def start_new_session(self) -> None:

@@ -417,6 +417,8 @@ class StatusBarContent:
     root_short: str
     session_suffix: str
     status: str
+    active_tool: str = ""
+    activity_detail: str = ""
 
 
 def welcome_session_suffix(session_id: str) -> str:
@@ -445,6 +447,31 @@ def welcome_status_label(status: str) -> str:
         "working": "思考中",
         "cancelled": "已停止",
     }.get(status, status)
+
+
+def format_activity_status(
+    status: str,
+    *,
+    active_tool: str = "",
+    activity_detail: str = "",
+) -> str:
+    """Status line text: prefer running tool name over generic '思考中'."""
+    tool = active_tool.strip()
+    detail = activity_detail.strip()
+    if tool:
+        label = tool if len(tool) <= 36 else f"{tool[:34]}…"
+        if detail:
+            short = detail if len(detail) <= 24 else f"{detail[:22]}…"
+            return f"{label} · {short}"
+        return label
+    return welcome_status_label(status)
+
+
+def _activity_tool_label(tool: str, summary: str) -> str:
+    summary_text = summary.strip()
+    if summary_text:
+        return summary_text
+    return tool.strip() or "tool"
 
 
 def terminal_user_name() -> str:
@@ -736,6 +763,8 @@ def build_status_bar(
     session: Any,
     paths: Any,
     status: str = "idle",
+    active_tool: str = "",
+    activity_detail: str = "",
 ) -> StatusBarContent:
     meta = session.meta
     effective_root = resolve_effective_root_abs(meta, paths)
@@ -750,11 +779,17 @@ def build_status_bar(
         root_short=root_short,
         session_suffix=suffix,
         status=status,
+        active_tool=active_tool,
+        activity_detail=activity_detail,
     )
 
 
 def format_status_bar_line(bar: StatusBarContent) -> str:
-    status = welcome_status_label(bar.status)
+    status = format_activity_status(
+        bar.status,
+        active_tool=bar.active_tool,
+        activity_detail=bar.activity_detail,
+    )
     dot = welcome_status_dot(bar.status)
     return f"{bar.llm_model}  ·  {bar.root_short}  ·  {dot} {status}"
 
@@ -1010,18 +1045,22 @@ class PlainTerminalBackend(TerminalBackend):
         *,
         write: OutputFn,
         stream_write: Callable[[str], None] | None = None,
+        stream_begin: Callable[[str], None] | None = None,
+        stream_finalize: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(write=write)
         self._stream_write = stream_write or self._stdout_stream_write
+        self._stream_begin = stream_begin
+        self._stream_finalize = stream_finalize
         self._assistant_open = False
         self._reasoning_open = False
         self._assistant_buffer = ""
 
-    def _buffered_assistant_output(self) -> bool:
-        return (
-            self._stream_write is not self._stdout_stream_write
-            and terminal_transcript_format_enabled()
-        )
+    def _uses_custom_stream(self) -> bool:
+        return self._stream_write is not self._stdout_stream_write
+
+    def _should_finalize_format(self) -> bool:
+        return self._uses_custom_stream() and terminal_transcript_format_enabled()
 
     @staticmethod
     def _stdout_stream_write(text: str) -> None:
@@ -1061,38 +1100,39 @@ class PlainTerminalBackend(TerminalBackend):
     def render_assistant_delta(self, text: str) -> None:
         if not text:
             return
-        if self._buffered_assistant_output():
-            self._assistant_buffer += text
-            self._assistant_open = True
-            return
+        self._assistant_buffer += text
         if not self._assistant_open:
             self._assistant_open = True
-            self._stream_write("  ")
+            if self._should_finalize_format() and self._stream_begin is not None:
+                header = f"◆ {terminal_assistant_name()}\n\n"
+                self._stream_begin(header)
+            else:
+                self._stream_write("  ")
         self._stream_write(text)
 
     def render_assistant_done(self, text: str) -> None:
-        if self._buffered_assistant_output():
-            body = self._assistant_buffer
-            self._assistant_buffer = ""
+        body = self._assistant_buffer
+        self._assistant_buffer = ""
+        if text.strip():
+            if not body.strip() or len(text.strip()) >= len(body.strip()):
+                body = text
+        if self._assistant_open and self._should_finalize_format():
             self._assistant_open = False
-            if text.strip():
-                if not body.strip() or len(text.strip()) >= len(body.strip()):
-                    body = text
-            if body.strip():
+            if body.strip() and self._stream_finalize is not None:
                 block = format_terminal_assistant_block(body)
                 if block:
-                    self._write(block)
-                    self._write("")
+                    self._stream_finalize(block)
             return
         if self._assistant_open:
             self._stream_write("\n")
             self._assistant_open = False
             return
-        if text:
+        if body.strip() or text.strip():
+            final = body.strip() or text.strip()
             payload = (
-                format_terminal_assistant_block(text)
+                format_terminal_assistant_block(final)
                 if terminal_transcript_format_enabled()
-                else text
+                else final
             )
             self._write(payload)
             self._write("")
@@ -1416,7 +1456,11 @@ class RichTerminalBackend(TerminalBackend):
         left.append(bar.llm_model, style="dim")
         left.append("  ·  ", style="bright_black")
         left.append(bar.root_short, style="cyan dim")
-        status = welcome_status_label(bar.status)
+        status = format_activity_status(
+            bar.status,
+            active_tool=bar.active_tool,
+            activity_detail=bar.activity_detail,
+        )
         dot = welcome_status_dot(bar.status)
         status_style = {
             "working": "yellow",
@@ -1448,11 +1492,18 @@ def build_terminal_backend(
     kind: str | None = None,
     console: Any | None = None,
     stream_write: Callable[[str], None] | None = None,
+    stream_begin: Callable[[str], None] | None = None,
+    stream_finalize: Callable[[str], None] | None = None,
 ) -> TerminalBackend:
     resolved = kind or resolve_terminal_backend_kind()
     if resolved == "rich":
         return RichTerminalBackend(write=write, console=console)
-    return PlainTerminalBackend(write=write, stream_write=stream_write)
+    return PlainTerminalBackend(
+        write=write,
+        stream_write=stream_write,
+        stream_begin=stream_begin,
+        stream_finalize=stream_finalize,
+    )
 
 
 @dataclass
@@ -1463,6 +1514,10 @@ class TerminalEventSink:
     state: TranscriptState = field(default_factory=TranscriptState)
     _pending_user_text: str = ""
     status_listener: Callable[[str], None] | None = field(default=None, repr=False)
+    _console: Any | None = field(default=None, repr=False)
+
+    def bind_console(self, console: Any) -> None:
+        self._console = console
 
     def __post_init__(self) -> None:
         self.state.backend_kind = self.backend.kind
@@ -1493,6 +1548,8 @@ class TerminalEventSink:
             reason = str(finish_reason) if finish_reason else None
             if self.status_listener is not None:
                 self.status_listener("idle")
+            if self._console is not None:
+                self._console.clear_activity()
             rendered = self.backend.render_turn_end(reason)
             if rendered:
                 self.state.record_line(rendered)
@@ -1536,6 +1593,18 @@ class TerminalEventSink:
             return
 
     def on_executor_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if event_type == "tool.start":
+            if self._console is not None:
+                tool = str(payload.get("tool", "tool"))
+                summary = str(payload.get("summary", ""))
+                self._console.note_tool_start(tool, summary)
+        elif event_type == "tool.progress":
+            if self._console is not None:
+                text = str(payload.get("text", ""))
+                self._console.note_tool_progress(text)
+        elif event_type == "tool.end":
+            if self._console is not None:
+                self._console.note_tool_end()
         if event_type in {"tool.start", "tool.end", "tool.progress"}:
             self.emit({"type": event_type, **payload})
             return
@@ -1584,7 +1653,10 @@ class TerminalConsole:
     paths: Any | None = field(default=None, repr=False)
     scope_fields: TerminalScopeFields | None = field(default=None, repr=False)
     _status: str = "idle"
+    _active_tool: str = ""
+    _activity_detail: str = ""
     _footer_active: bool = False
+    _status_change_listener: Callable[[], None] | None = field(default=None, repr=False)
 
     @classmethod
     def create(
@@ -1592,6 +1664,8 @@ class TerminalConsole:
         *,
         write: OutputFn | None = None,
         stream_write: Callable[[str], None] | None = None,
+        stream_begin: Callable[[str], None] | None = None,
+        stream_finalize: Callable[[str], None] | None = None,
         kind: str | None = None,
         console: Any | None = None,
         session: Any | None = None,
@@ -1612,6 +1686,8 @@ class TerminalConsole:
             kind=kind,
             console=console,
             stream_write=stream_write,
+            stream_begin=stream_begin,
+            stream_finalize=stream_finalize,
         )
         terminal = cls(
             sink=TerminalEventSink(backend=backend),
@@ -1622,6 +1698,7 @@ class TerminalConsole:
             scope_fields=scope_fields,
         )
         terminal.sink.status_listener = terminal.set_status
+        terminal.sink.bind_console(terminal)
         return terminal
 
     @property
@@ -1681,6 +1758,53 @@ class TerminalConsole:
         if status in {"idle", "working", "cancelled"}:
             self._status = status
 
+    def set_status_change_listener(self, listener: Callable[[], None] | None) -> None:
+        self._status_change_listener = listener
+
+    def _notify_status_change(self) -> None:
+        if self._status_change_listener is not None:
+            self._status_change_listener()
+        self.refresh_status_bar()
+
+    def note_tool_start(self, tool: str, summary: str) -> None:
+        self._active_tool = _activity_tool_label(tool, summary)
+        self._activity_detail = ""
+        self._notify_status_change()
+
+    def note_tool_progress(self, text: str) -> None:
+        stripped = text.strip()
+        if not stripped:
+            return
+        self._activity_detail = stripped
+        self._notify_status_change()
+
+    def note_tool_end(self) -> None:
+        if not self._active_tool and not self._activity_detail:
+            return
+        self._active_tool = ""
+        self._activity_detail = ""
+        self._notify_status_change()
+
+    def set_activity(self, label: str, detail: str = "") -> None:
+        self._active_tool = label.strip()
+        self._activity_detail = detail.strip()
+        self._notify_status_change()
+
+    def clear_activity(self) -> None:
+        if not self._active_tool and not self._activity_detail:
+            return
+        self._active_tool = ""
+        self._activity_detail = ""
+        self._notify_status_change()
+
+    @property
+    def active_tool(self) -> str:
+        return self._active_tool
+
+    @property
+    def activity_detail(self) -> str:
+        return self._activity_detail
+
     def _current_status_bar(self) -> StatusBarContent | None:
         if self.session is None or self.paths is None:
             return None
@@ -1688,6 +1812,8 @@ class TerminalConsole:
             session=self.session,
             paths=self.paths,
             status=self._status,
+            active_tool=self._active_tool,
+            activity_detail=self._activity_detail,
         )
 
     def begin_prompt_cycle(self) -> StatusBarContent | None:

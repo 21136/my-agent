@@ -86,9 +86,9 @@ class TerminalPromptSession:
 
         from terminal_ui import (
             build_status_bar,
+            format_activity_status,
             prompt_model_short,
             welcome_status_dot,
-            welcome_status_label,
         )
 
         if self._console.session is None or self._console.paths is None:
@@ -97,10 +97,16 @@ class TerminalPromptSession:
             session=self._console.session,
             paths=self._console.paths,
             status=self._console.status,
+            active_tool=self._console.active_tool,
+            activity_detail=self._console.activity_detail,
         )
         model = prompt_model_short(bar.llm_model)
         dot = welcome_status_dot(bar.status)
-        status = welcome_status_label(bar.status)
+        status = format_activity_status(
+            bar.status,
+            active_tool=bar.active_tool,
+            activity_detail=bar.activity_detail,
+        )
         dot_class = {
             "idle": "class:bottom-toolbar.dot-green",
             "working": "class:bottom-toolbar.dot-yellow",

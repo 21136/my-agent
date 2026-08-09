@@ -33,6 +33,28 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertEqual(pro.api_key_env, "SOPHNET_API_KEY")
         self.assertEqual(flash.api_key_env, "SOPHNET_API_KEY")
 
+    def test_builtin_includes_0x567(self) -> None:
+        registry = get_registry()
+        pro = registry.get("0x567-pro")
+        self.assertIsNotNone(pro)
+        assert pro is not None
+        self.assertEqual(pro.max_input_tokens, 1_000_000)
+        self.assertEqual(
+            pro.chat_completions_url(),
+            "https://api-cdn.0x567.com/v1/chat/completions",
+        )
+        self.assertEqual(pro.api_key_env, "OX567_API_KEY")
+        self.assertEqual(pro.provider_model, "gpt-5.4")
+        flash = registry.get("0x567-flash")
+        self.assertIsNotNone(flash)
+        assert flash is not None
+        self.assertEqual(flash.provider_model, "gpt-5.6-luna")
+        self.assertEqual(flash.max_input_tokens, 372_000)
+        resolved = registry.resolve("0x567")
+        self.assertIsNotNone(resolved)
+        assert resolved is not None
+        self.assertEqual(resolved.id, "0x567-pro")
+
     def test_user_json_overrides_model(self) -> None:
         paths = make_temp_agent_paths(self)
         paths.data.mkdir(parents=True, exist_ok=True)
@@ -92,6 +114,23 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertIsNotNone(entry)
         assert entry is not None
         self.assertEqual(entry.max_input_tokens, 4096)
+
+    def test_user_json_default_model_ids(self) -> None:
+        paths = make_temp_agent_paths(self)
+        paths.data.mkdir(parents=True, exist_ok=True)
+        (paths.data / "llm_models.json").write_text(
+            json.dumps(
+                {
+                    "defaultFlashId": "0x567-flash",
+                    "defaultProId": "0x567-pro",
+                    "models": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry = ModelRegistry.load(paths)
+        self.assertEqual(registry.default_flash_id, "0x567-flash")
+        self.assertEqual(registry.default_pro_id, "0x567-pro")
 
 
 if __name__ == "__main__":

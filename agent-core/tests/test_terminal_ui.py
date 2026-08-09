@@ -63,19 +63,54 @@ class TerminalTranscriptFormatTests(unittest.TestCase):
         self.assertIn("print(1)", out)
         self.assertIn("╭", out)
 
-    def test_buffered_assistant_writes_formatted_block(self) -> None:
+    def test_assistant_streams_then_formats_on_done(self) -> None:
         lines: list[str] = []
         streamed: list[str] = []
-        backend = PlainTerminalBackend(write=lines.append, stream_write=streamed.append)
+        finalized: list[str] = []
+
+        def begin(header: str) -> None:
+            streamed.append(header)
+
+        def finalize(block: str) -> None:
+            finalized.append(block)
+            lines.append(block)
+
+        backend = PlainTerminalBackend(
+            write=lines.append,
+            stream_write=lambda t: streamed.append(t),
+            stream_begin=begin,
+            stream_finalize=finalize,
+        )
         sink = TerminalEventSink(backend=backend)
         sink.emit({"type": "assistant.delta", "text": "## Hi\n**ok**"})
+        combined_stream = "".join(streamed)
+        self.assertIn("## Hi", combined_stream)
+        self.assertIn("◆", combined_stream)
         sink.emit({"type": "assistant.done", "text": ""})
-        self.assertEqual("".join(streamed), "")
-        combined = "\n".join(lines)
+        self.assertEqual(len(finalized), 1)
+        combined = finalized[0]
         self.assertIn("Hi", combined)
         self.assertIn("ok", combined)
         self.assertIn("◆", combined)
         self.assertNotIn("**", combined)
+
+    def test_assistant_done_without_deltas_still_writes_block(self) -> None:
+        lines: list[str] = []
+        streamed: list[str] = []
+        backend = PlainTerminalBackend(
+            write=lines.append,
+            stream_write=streamed.append,
+            stream_begin=lambda h: streamed.append(h),
+            stream_finalize=lambda b: lines.append(b),
+        )
+        sink = TerminalEventSink(backend=backend)
+        sink.emit({"type": "assistant.done", "text": "## Title\n\n**bold**"})
+        combined = "\n".join(lines)
+        self.assertIn("Title", combined)
+        self.assertIn("bold", combined)
+        self.assertIn("◆", combined)
+        self.assertNotIn("**", combined)
+        self.assertEqual("".join(streamed), "")
 
 
 class TerminalToolPanelTests(unittest.TestCase):
@@ -373,6 +408,32 @@ class TerminalWelcomeStatusBarTests(unittest.TestCase):
         self.assertEqual(console._status, "working")
         console.sink.emit({"type": "turn.end", "ok": True, "finish_reason": "completed"})
         self.assertEqual(console._status, "idle")
+
+    def test_tool_start_updates_status_bar_activity(self) -> None:
+        from terminal_ui import format_activity_status
+
+        console = TerminalConsole.create(kind="plain")
+        console.sink.on_executor_event(
+            "tool.start",
+            {"tool": "run_evolved", "call_id": "c1", "summary": "run_command"},
+        )
+        self.assertEqual(console.active_tool, "run_command")
+        self.assertEqual(
+            format_activity_status("working", active_tool="run_command"),
+            "run_command",
+        )
+
+        console.sink.on_executor_event(
+            "tool.progress",
+            {"call_id": "c1", "text": "仍在执行… 15s"},
+        )
+        self.assertIn("15s", console.activity_detail)
+
+        console.sink.on_executor_event(
+            "tool.end",
+            {"tool": "run_evolved", "call_id": "c1", "ok": True, "summary": "ok"},
+        )
+        self.assertEqual(console.active_tool, "")
 
     def test_rich_welcome_renders_scope_and_workspace(self) -> None:
         from session import create_terminal_session

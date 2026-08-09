@@ -93,6 +93,16 @@ def _rule_window() -> Any:
     return Window(height=1, char="─", style="class:separator")
 
 
+def make_bottom_confirm_input_fn(bottom: BottomPinnedTerminal) -> Callable[[str], str]:
+    """Route tool confirm prompts to the bottom TUI instead of blocking stdin."""
+
+    def confirm_input(prompt: str) -> str:
+        allow_all = "a]llow" in prompt.casefold()
+        return bottom.prompt_confirm(allow_approve_all=allow_all)
+
+    return confirm_input
+
+
 class BottomPinnedTerminal:
     """Full-screen UI — Claude-style thin rules + bottom-pinned input (no Frame)."""
 
@@ -130,12 +140,23 @@ class BottomPinnedTerminal:
         self._picker_index = 0
         self._picker_current = ""
         self._picker_queue: queue.Queue[Any] = queue.Queue(maxsize=1)
+        self._confirm_active = False
+        self._confirm_allow_all = False
+        self._confirm_queue: queue.Queue[str] = queue.Queue(maxsize=1)
         self._welcome_visible = False
         self._welcome_panel: Any | None = None
         self._welcome_compact = False
         self._transcript_follow_tail = True
+        # While a turn is streaming, never pause auto-tail — otherwise new text
+        # lands below the viewport and looks like a "half answer" until the next
+        # keypress/submit (which re-enables follow).
+        self._force_follow = False
+        # User browse position (vertical_scroll) — restored across transcript appends.
+        self._transcript_pinned_scroll: int | None = None
         self._pending_raw = ""
         self._raw_flush_scheduled = False
+        self._assistant_replace_start: int | None = None
+        self._deferred_ui: list[Callable[[], None]] = []
         self._on_cancel_callback: Callable[[], bool] | None = None
         self._mouse_support = mouse_support_enabled()
 
@@ -149,13 +170,26 @@ class BottomPinnedTerminal:
             stripped = text.strip()
             if not stripped:
                 return
+            if self._confirm_active:
+                choice = self._normalize_confirm_choice(stripped, self._confirm_allow_all)
+                if choice is None:
+                    self.write(
+                        "请输入 "
+                        + ("y / n / a" if self._confirm_allow_all else "y / n")
+                    )
+                    return
+                self._input.reset()
+                self._finish_confirm(choice)
+                return
             self._transcript_follow_tail = True
+            self._transcript_pinned_scroll = None
             self._input.reset()
             self._focus_input()
             threading.Thread(target=self._on_submit, args=(stripped,), daemon=True).start()
 
         picker_active = Condition(lambda: self._picker_active)
-        picker_idle = Condition(lambda: not self._picker_active)
+        confirm_active = Condition(lambda: self._confirm_active)
+        picker_idle = Condition(lambda: not self._picker_active and not self._confirm_active)
         welcome_full_active = Condition(
             lambda: self._welcome_visible and not self._welcome_compact
         )
@@ -166,6 +200,8 @@ class BottomPinnedTerminal:
         def _line_prefix(line_number: int, wrap_count: int) -> Any:
             from prompt_toolkit.formatted_text import FormattedText
 
+            if self._confirm_active and line_number == 0 and wrap_count == 0:
+                return FormattedText([("class:prompt", "? ")])
             if line_number == 0 and wrap_count == 0:
                 return FormattedText([("class:prompt", "> ")])
             return FormattedText([("class:prompt", "  ")])
@@ -178,7 +214,12 @@ class BottomPinnedTerminal:
             get_line_prefix=_line_prefix,
         )
         self._input_window = input_window
-        bindings = self._build_submit_bindings(_submit, picker_active, picker_idle)
+        bindings = self._build_submit_bindings(
+            _submit,
+            picker_active,
+            confirm_active,
+            picker_idle,
+        )
         welcome_full_window = Window(
             content=FormattedTextControl(self._welcome_formatted),
             height=Dimension(min=16, preferred=18, max=20),
@@ -198,6 +239,13 @@ class BottomPinnedTerminal:
             wrap_lines=False,
             style="class:picker",
         )
+        confirm_window = Window(
+            content=FormattedTextControl(self._confirm_formatted),
+            height=Dimension(min=2, preferred=3, max=4),
+            dont_extend_height=True,
+            wrap_lines=False,
+            style="class:picker",
+        )
         status_window = Window(
             content=FormattedTextControl(self._toolbar),
             height=1,
@@ -209,6 +257,7 @@ class BottomPinnedTerminal:
                 ConditionalContainer(welcome_compact_window, filter=welcome_compact_active),
                 self._transcript,
                 ConditionalContainer(picker_window, filter=picker_active),
+                ConditionalContainer(confirm_window, filter=confirm_active),
                 _rule_window(),
                 input_window,
                 _rule_window(),
@@ -253,7 +302,7 @@ class BottomPinnedTerminal:
             key_bindings=bindings,
             refresh_interval=0.1,
             mouse_support=self._mouse_support,
-            enable_page_navigation_bindings=True,
+            enable_page_navigation_bindings=False,
         )
         self._on_submit_callback: Callable[[str], None] | None = None
 
@@ -272,11 +321,14 @@ class BottomPinnedTerminal:
 
         prompt_toolkit 3.x has no ``call_from_executor`` — use
         ``loop.call_soon_threadsafe`` (see ``shortcuts/dialogs.py`` log_text).
-        Mutating Buffer from the agent worker races the renderer and leaves the
-        transcript half-painted until the next keypress.
+
+        Never mutate the Buffer from the agent worker thread: if the loop is
+        briefly unavailable while the app is running, defer until the next
+        successful schedule / invalidate.
         """
         app = getattr(self, "_app", None)
-        if app is not None and getattr(app, "is_running", False) is True:
+        running = bool(app is not None and getattr(app, "is_running", False) is True)
+        if running:
             loop = getattr(app, "loop", None)
             if loop is not None and not loop.is_closed():
                 try:
@@ -284,31 +336,137 @@ class BottomPinnedTerminal:
                     return
                 except Exception:
                     pass
+            with self._lock:
+                self._deferred_ui.append(callback)
+            return
+        # App not started yet (welcome mount) — safe to run inline.
         callback()
 
-    def _scroll_transcript(self, delta_lines: int) -> None:
-        """Move the transcript cursor (drives Window scroll with wrap_lines).
+    def _drain_deferred_ui(self) -> None:
+        lock = getattr(self, "_lock", None)
+        if lock is None:
+            pending = list(getattr(self, "_deferred_ui", []) or [])
+            self._deferred_ui = []
+        else:
+            with lock:
+                pending = list(getattr(self, "_deferred_ui", []) or [])
+                self._deferred_ui = []
+        for callback in pending:
+            try:
+                callback()
+            except Exception:
+                pass
 
-        With ``wrap_lines=True``, prompt_toolkit's Window keeps the *cursor line*
-        visible and treats ``vertical_scroll`` as a document line index. Tweaking
-        ``vertical_scroll`` alone is overwritten on the next redraw — that is why
-        scrolling stopped halfway while content remained above.
+    def begin_turn_output(self) -> None:
+        """Call when a turn starts streaming — resume auto-tail + shrink welcome.
+
+        The user may still scroll up mid-stream (that pauses follow); appends
+        keep flowing into the buffer either way.
         """
-        self._transcript_follow_tail = False
+
+        def _do() -> None:
+            self._drain_deferred_ui()
+            self._flush_pending_raw_locked()
+            self._assistant_replace_start = None
+            self._transcript_follow_tail = True
+            self._transcript_pinned_scroll = None
+            if self._welcome_visible and not self._welcome_compact:
+                self._welcome_compact = True
+            self._invalidate_now()
+
+        self._schedule_ui(_do)
+
+    def end_turn_output(self) -> None:
+        """Call when a turn goes idle — flush stream; snap to end only if following."""
+
+        def _do() -> None:
+            self._drain_deferred_ui()
+            self._flush_pending_raw_locked()
+            if self._transcript_follow_tail:
+                from prompt_toolkit.document import Document
+
+                with self._transcript_edit() as buf:
+                    buf.document = Document(
+                        text=buf.text, cursor_position=len(buf.text)
+                    )
+                self._transcript_pinned_scroll = None
+            self._sync_welcome_compact()
+            self._invalidate_now()
+
+        self._schedule_ui(_do)
+
+    def _following_tail(self) -> bool:
+        return bool(getattr(self, "_transcript_follow_tail", True))
+
+    def _restore_browse_scroll(self) -> None:
+        """Re-apply pinned scroll after layout (mutate/invalidate resets viewport)."""
+        if self._following_tail():
+            return
+        pinned = getattr(self, "_transcript_pinned_scroll", None)
+        if pinned is None:
+            return
+        win = self._transcript.window
+        info = getattr(win, "render_info", None)
+        if info is None:
+            return
+        max_scroll = max(0, int(info.content_height) - int(info.window_height))
+        win.vertical_scroll = max(0, min(max_scroll, int(pinned)))
+
+    def _scroll_transcript(self, delta_lines: int) -> None:
+        """Scroll the transcript viewport (input can stay focused).
+
+        With ``wrap_lines=True``, moving only the buffer cursor does not always
+        change ``Window.vertical_scroll`` while another control is focused.
+        Adjust ``vertical_scroll`` directly and pin it while follow-tail is off.
+        """
+        if delta_lines == 0:
+            return
+
+        win = self._transcript.window
         buf = self._transcript.buffer
         from prompt_toolkit.document import Document
 
         doc = buf.document
         if doc.line_count <= 0:
             return
-        new_row = max(0, min(doc.line_count - 1, doc.cursor_position_row + delta_lines))
-        new_index = doc.translate_row_col_to_index(new_row, 0)
-        with self._transcript_edit():
-            buf.document = Document(text=doc.text, cursor_position=new_index)
-        try:
-            self._app.invalidate()
-        except Exception:
-            pass
+
+        info = getattr(win, "render_info", None)
+        if info is not None:
+            content_h = int(info.content_height)
+            view_h = max(1, int(info.window_height))
+            max_scroll = max(0, content_h - view_h)
+            current = int(win.vertical_scroll)
+            new_scroll = max(0, min(max_scroll, current + delta_lines))
+            win.vertical_scroll = new_scroll
+
+            if new_scroll >= max_scroll:
+                self._transcript_follow_tail = True
+                self._transcript_pinned_scroll = None
+                cursor_idx = len(doc.text)
+            else:
+                self._transcript_follow_tail = False
+                self._transcript_pinned_scroll = new_scroll
+                anchor_row = max(0, min(doc.line_count - 1, new_scroll))
+                cursor_idx = doc.translate_row_col_to_index(anchor_row, 0)
+
+            with self._transcript_edit():
+                buf.document = Document(text=doc.text, cursor_position=cursor_idx)
+        else:
+            # Before the first layout pass (unit tests) — cursor-only fallback.
+            self._transcript_follow_tail = False
+            new_row = max(
+                0, min(doc.line_count - 1, doc.cursor_position_row + delta_lines)
+            )
+            if new_row >= doc.line_count - 1:
+                self._transcript_follow_tail = True
+                self._transcript_pinned_scroll = None
+            else:
+                self._transcript_pinned_scroll = None
+            new_index = doc.translate_row_col_to_index(new_row, 0)
+            with self._transcript_edit():
+                buf.document = Document(text=doc.text, cursor_position=new_index)
+
+        self._invalidate_now()
 
     def _page_transcript(self, direction: int) -> None:
         """Page transcript up (-1) or down (+1) by roughly one viewport of lines."""
@@ -387,6 +545,7 @@ class BottomPinnedTerminal:
         self,
         on_submit: Callable[[str], None],
         picker_active: Any,
+        confirm_active: Any,
         picker_idle: Any,
     ) -> Any:
         from prompt_toolkit.filters import Condition, has_selection
@@ -451,6 +610,23 @@ class BottomPinnedTerminal:
         def _picker_esc(event: Any) -> None:
             self._finish_picker(_PICKER_CANCEL)
 
+        @bindings.add("y", filter=confirm_active, eager=True)
+        def _confirm_y(event: Any) -> None:
+            self._finish_confirm("y")
+
+        @bindings.add("n", filter=confirm_active, eager=True)
+        def _confirm_n(event: Any) -> None:
+            self._finish_confirm("n")
+
+        @bindings.add("a", filter=confirm_active, eager=True)
+        def _confirm_a(event: Any) -> None:
+            if self._confirm_allow_all:
+                self._finish_confirm("a")
+
+        @bindings.add("c-m", filter=confirm_active & input_focused, eager=True)
+        def _confirm_enter(event: Any) -> None:
+            on_submit(event.current_buffer.text)
+
         @bindings.add("c-m", filter=picker_idle & input_focused)
         def _enter(event: Any) -> None:
             buf = event.current_buffer
@@ -473,6 +649,9 @@ class BottomPinnedTerminal:
         def _interrupt(event: Any) -> None:
             if self._picker_active:
                 self._finish_picker(_PICKER_CANCEL)
+                return
+            if self._confirm_active:
+                self._finish_confirm("n")
                 return
             # Prefer copy when transcript has a selection (Windows muscle memory).
             buf = self._transcript.buffer
@@ -592,6 +771,79 @@ class BottomPinnedTerminal:
         if self._on_submit_callback is not None:
             self._on_submit_callback(text)
 
+    def _confirm_formatted(self) -> Any:
+        from prompt_toolkit.formatted_text import FormattedText
+
+        lines = [
+            ("class:picker.hint", "工具确认  ·  底栏输入 y / n 后 Enter，或直接按 Y / N"),
+        ]
+        if self._confirm_allow_all:
+            lines.append(("", "\n"))
+            lines.append(("class:picker.hint", "a = 本会话允许 workspace evolved"))
+        return FormattedText(lines + [("", "\n")])
+
+    @staticmethod
+    def _normalize_confirm_choice(raw: str, allow_approve_all: bool) -> str | None:
+        choice = raw.strip().casefold()
+        if choice in {"y", "yes"}:
+            return "y"
+        if choice in {"n", "no"}:
+            return "n"
+        if allow_approve_all and choice in {"a", "all"}:
+            return "a"
+        return None
+
+    def _finish_confirm(self, choice: str) -> None:
+        if not self._confirm_active:
+            return
+        self._confirm_active = False
+        try:
+            self._confirm_queue.put_nowait(choice)
+        except queue.Full:
+            try:
+                self._confirm_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._confirm_queue.put_nowait(choice)
+            except queue.Full:
+                pass
+        self._invalidate()
+
+    def prompt_confirm(self, *, allow_approve_all: bool) -> str:
+        """Block caller thread until the user confirms a tool (bottom TUI)."""
+        while True:
+            try:
+                self._confirm_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._confirm_allow_all = allow_approve_all
+        self._confirm_active = True
+        previous_status = getattr(self._console, "status", "working")
+
+        def _arm() -> None:
+            self._input.reset()
+            self._focus_input()
+            if hasattr(self._console, "set_activity"):
+                self._console.set_activity("待确认", "y / n")
+            elif hasattr(self._console, "set_status"):
+                self._console.set_status("idle")
+            self._invalidate_now()
+
+        self._schedule_ui(_arm)
+        choice = self._confirm_queue.get()
+        self._confirm_active = False
+
+        def _restore() -> None:
+            if hasattr(self._console, "clear_activity"):
+                self._console.clear_activity()
+            if hasattr(self._console, "set_status"):
+                self._console.set_status(previous_status)
+            self._invalidate_now()
+
+        self._schedule_ui(_restore)
+        return choice
+
     def _picker_formatted(self) -> Any:
         from prompt_toolkit.formatted_text import FormattedText
 
@@ -660,9 +912,9 @@ class BottomPinnedTerminal:
 
         from terminal_ui import (
             build_status_bar,
+            format_activity_status,
             prompt_model_short,
             welcome_status_dot,
-            welcome_status_label,
         )
 
         if self._console.session is None or self._console.paths is None:
@@ -671,10 +923,16 @@ class BottomPinnedTerminal:
             session=self._console.session,
             paths=self._console.paths,
             status=self._console.status,
+            active_tool=self._console.active_tool,
+            activity_detail=self._console.activity_detail,
         )
         model = prompt_model_short(bar.llm_model)
         dot = welcome_status_dot(bar.status)
-        status = welcome_status_label(bar.status)
+        status = format_activity_status(
+            bar.status,
+            active_tool=bar.active_tool,
+            activity_detail=bar.activity_detail,
+        )
         dot_class = {
             "idle": "class:status.dot-green",
             "working": "class:status.dot-yellow",
@@ -731,7 +989,7 @@ class BottomPinnedTerminal:
         with self._transcript_edit() as buf:
             mutator(buf)
             text = buf.text
-            if getattr(self, "_transcript_follow_tail", True):
+            if self._following_tail():
                 buf.document = Document(text=text, cursor_position=len(text))
             else:
                 # Keep the user's browse cursor — Window scroll follows it.
@@ -746,24 +1004,36 @@ class BottomPinnedTerminal:
             return
 
         def _do() -> None:
-            with self._lock:
-                def _append(buf: Any) -> None:
-                    current = buf.text
-                    if current and not current.endswith("\n"):
-                        current += "\n"
-                    buf.text = current + payload + "\n"
+            self._drain_deferred_ui()
 
-                self._mutate_transcript(_append)
-                self._sync_welcome_compact()
+            def _append(buf: Any) -> None:
+                current = buf.text
+                if current and not current.endswith("\n"):
+                    current += "\n"
+                buf.text = current + payload + "\n"
+
+            self._mutate_transcript(_append)
+            self._sync_welcome_compact()
             self._invalidate_now()
 
         self._schedule_ui(_do)
 
     def _invalidate_now(self) -> None:
+        self._drain_deferred_ui()
+        app = getattr(self, "_app", None)
         try:
-            self._app.invalidate()
+            if app is None:
+                return
+            app.invalidate()
+            pinned = getattr(self, "_transcript_pinned_scroll", None)
+            if pinned is not None and not self._following_tail():
+                loop = getattr(app, "loop", None)
+                if loop is not None and not loop.is_closed():
+                    loop.call_soon(self._restore_browse_scroll)
+                    return
         except Exception:
             pass
+        self._restore_browse_scroll()
 
     def _invalidate(self) -> None:
         self._schedule_ui(self._invalidate_now)
@@ -774,12 +1044,77 @@ class BottomPinnedTerminal:
 
     def set_transcript(self, text: str) -> None:
         def _do() -> None:
-            with self._lock:
-                self._mutate_transcript(lambda buf: setattr(buf, "text", text) or None)
-                self._sync_welcome_compact()
+            self._drain_deferred_ui()
+            self._mutate_transcript(lambda buf: setattr(buf, "text", text) or None)
+            self._sync_welcome_compact()
             self._invalidate_now()
 
         self._schedule_ui(_do)
+
+    def begin_assistant_stream(self, header: str) -> None:
+        """Record stream start offset and write a coarse header before raw deltas."""
+
+        def _do() -> None:
+            self._drain_deferred_ui()
+            self._flush_pending_raw_locked()
+            self._assistant_replace_start = len(self._transcript.buffer.text)
+            plain = self._plain_text(header)
+            if plain:
+                self._mutate_transcript(lambda buf: setattr(buf, "text", buf.text + plain))
+            self._sync_welcome_compact()
+            self._invalidate_now()
+
+        self._schedule_ui(_do)
+
+    def finalize_assistant_stream(self, formatted_block: str) -> None:
+        """Replace the coarse stream span with a formatted assistant block."""
+
+        def _do() -> None:
+            self._drain_deferred_ui()
+            self._flush_pending_raw_locked()
+            start = self._assistant_replace_start
+            self._assistant_replace_start = None
+            block = self._plain_text(formatted_block).rstrip("\n")
+            if not block:
+                self._invalidate_now()
+                return
+            if start is None:
+                self._mutate_transcript(
+                    lambda buf: setattr(buf, "text", buf.text + block + "\n")
+                )
+            else:
+                end = len(self._transcript.buffer.text)
+                self._replace_transcript_span_locked(start, end, block + "\n")
+            self._sync_welcome_compact()
+            self._invalidate_now()
+
+        self._schedule_ui(_do)
+
+    def replace_transcript_span(self, start: int, end: int, new_text: str) -> None:
+        """UI-thread safe. Replace ``[start:end)``; preserve browse scroll when not following."""
+
+        def _do() -> None:
+            self._drain_deferred_ui()
+            self._flush_pending_raw_locked()
+            self._replace_transcript_span_locked(start, end, new_text)
+            self._sync_welcome_compact()
+            self._invalidate_now()
+
+        self._schedule_ui(_do)
+
+    def _replace_transcript_span_locked(self, start: int, end: int, new_text: str) -> None:
+        text = self._transcript.buffer.text
+        start_clamped = max(0, min(start, len(text)))
+        end_clamped = max(start_clamped, min(end, len(text)))
+        if start_clamped >= end_clamped and not new_text:
+            return
+        replacement = self._plain_text(new_text)
+        new_full = text[:start_clamped] + replacement + text[end_clamped:]
+
+        def _replace(buf: Any) -> None:
+            buf.text = new_full
+
+        self._mutate_transcript(_replace)
 
     def append_transcript_block(self, block: str) -> None:
         block = self._plain_text(block).strip()
@@ -787,22 +1122,27 @@ class BottomPinnedTerminal:
             return
 
         def _do() -> None:
-            with self._lock:
+            self._drain_deferred_ui()
 
-                def _append(buf: Any) -> None:
-                    current = buf.text
-                    if current:
-                        current = current.rstrip("\n") + "\n\n"
-                    buf.text = current + block + "\n"
+            def _append(buf: Any) -> None:
+                current = buf.text
+                if current:
+                    current = current.rstrip("\n") + "\n\n"
+                buf.text = current + block + "\n"
 
-                self._mutate_transcript(_append)
-                self._sync_welcome_compact()
+            self._mutate_transcript(_append)
+            self._sync_welcome_compact()
             self._invalidate_now()
 
         self._schedule_ui(_do)
 
     def append_transcript_raw(self, text: str) -> None:
-        """Append inline stream chunks (reasoning / assistant deltas) without forcing newlines."""
+        """Append inline stream chunks (reasoning / assistant deltas) without forcing newlines.
+
+        Chunks are coalesced: while a flush is pending, later chunks merge into
+        ``_pending_raw`` so a fast stream costs one Document rebuild per UI tick
+        instead of one per token (that per-token rebuild was the stutter).
+        """
         if not text:
             return
         plain = self._plain_text(text)
@@ -811,18 +1151,36 @@ class BottomPinnedTerminal:
             if self._raw_flush_scheduled:
                 return
             self._raw_flush_scheduled = True
-        self._schedule_ui(self._flush_pending_raw)
+        self._schedule_raw_flush()
 
-    def _flush_pending_raw(self) -> None:
+    def _schedule_raw_flush(self) -> None:
+        """Flush after a short delay so bursts of tokens land in one repaint."""
+        app = getattr(self, "_app", None)
+        if app is not None and getattr(app, "is_running", False) is True:
+            loop = getattr(app, "loop", None)
+            if loop is not None and not loop.is_closed():
+                try:
+                    loop.call_soon_threadsafe(
+                        lambda: loop.call_later(0.05, self._flush_pending_raw)
+                    )
+                    return
+                except Exception:
+                    pass
+        self._flush_pending_raw()
+
+    def _flush_pending_raw_locked(self) -> None:
         with self._lock:
             chunk = self._pending_raw
             self._pending_raw = ""
             self._raw_flush_scheduled = False
         if not chunk:
             return
-        with self._lock:
-            self._mutate_transcript(lambda buf: setattr(buf, "text", buf.text + chunk))
-            self._sync_welcome_compact()
+        self._mutate_transcript(lambda buf: setattr(buf, "text", buf.text + chunk))
+        self._sync_welcome_compact()
+
+    def _flush_pending_raw(self) -> None:
+        self._drain_deferred_ui()
+        self._flush_pending_raw_locked()
         self._invalidate_now()
 
     def flush_pending(self) -> None:
@@ -843,6 +1201,8 @@ class BottomPinnedTerminal:
         self._stop = True
         if self._picker_active:
             self._finish_picker(_PICKER_CANCEL)
+        if self._confirm_active:
+            self._finish_confirm("n")
 
         def _exit() -> None:
             try:
