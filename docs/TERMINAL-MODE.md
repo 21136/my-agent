@@ -58,6 +58,11 @@ my-agent terminal                 # 无参数 = 就用这个 cwd
 | **TM-21** | **路径相对 cwd（8A）**：`terminal [path]` 相对 **当前 shell cwd**；绝对路径原样 |
 | **TM-22** | **R3-[2] 全登记（9A）**：选 `[2]` 走现有 host 登记（id / label / write），成功后 R2 进入 |
 | **TM-23** | **Q1-A · 固定 agent**：`turn_mode` **恒为 `agent`**；banner **无** `只聊`/`动手`；输入 `只聊`/`动手`/`ask` → 提示「Terminal 仅 agent 模式」；M1 defer `plan` / `/btw` |
+| **TM-24** | **全自动 Plan-and-Execute**：复杂执行任务由内核自动判断；无需用户切换或批准，先规划、后执行 |
+| **TM-25** | **Plan Artifact + phase 锁**：计划外置为可恢复状态；`planning → executing → validating → done`，执行阶段不得因用户文本或计划内容再次自动进入 planning |
+| **TM-26** | **强规划 / 原模型执行**：planning 与 bounded replan 使用 `plan_partner` 路由（默认 Pro）+ `reasoning_effort=max`；executing 恢复本会话 `llm_model` 与原推理强度 |
+| **TM-27** | **按步骤执行**：每次只执行当前 step；step 完成后验证并推进 `current_step`，不得把整份大计划当成单个写码任务 |
+| **TM-28** | **有限恢复**：每个 goal 最多 1 次自动初始 plan、每个 step 最多 2 次局部 retry、最多 1 次 bounded replan；超限必须停并报告，不得循环烧模型 |
 | **TM-8** | 同一磁盘目录可被 desktop 会话与 terminal 会话 **同时打开**（不同 `conversation_id`）；**无** `project_sessions` 绑定 |
 | **TM-9** | **废止** DESKTOP §3.8「CLI ↔ Electron 接管同一 session」 |
 | **TM-10** | **禁止 project_id 模型**：不读写 `meta.project_id` · `project_root` · `active_shell=project` · `project_sessions`；**不提供** `项目 …` 元命令 |
@@ -291,6 +296,100 @@ Claude **没有** my-agent 的 `turn_mode=ask|agent` 二元开关：
 
 **M1 defer**：`plan` 权限档 · `/btw` 式旁路问答。
 
+### 5.5 TM-24～TM-28 · 全自动 Plan-and-Execute（已决方向，代码待做）
+
+Terminal 不提供需要用户手动切换的常驻 `plan` 权限档；对复杂任务采用**全自动两阶段编排**。这是一次 `run_turn` 内的内核状态机，不改变 `meta.turn_mode`（TM-23 仍恒为 `agent`）。
+
+#### 5.5.1 自动判定
+
+`should_auto_plan_turn(user_text, session_state)` 只对潜在多步执行任务返回 true：
+
+- 新功能、多文件改动、架构调整、重构、模块/接口级实现；
+- 用户明确要求先设计、规划、拆步骤；
+- 当前 goal 没有仍有效的 `terminal_plan`。
+
+以下情况跳过自动 plan，直接使用会话原模型执行：
+
+- 明确的单文件/单点小修；
+- 用户明确说「直接改」「别计划」；
+- `qa`、`recall`、纯 research；
+- 当前 goal 已处于 `executing`，用户说「继续」「下一步」「按方案做」。
+
+自动判定必须是**确定性路由**（规则或受约束分类器），不能让普通执行模型通过自然语言自行递归触发 plan。
+
+#### 5.5.2 阶段状态机
+
+```text
+idle
+  └─(复杂 execute)→ planning
+        └─(plan artifact valid)→ executing
+              └─(step verified)→ executing[current_step + 1]
+                    └─(all steps verified)→ done
+              └─(step failure, retry budget exhausted)→ replanning
+                    └─(bounded replan valid)→ executing[remaining steps]
+```
+
+- `planning`：使用 `plan_partner` 角色模型（默认 Pro）与 `max` 推理；允许读、搜、必要的只读探查，禁止源码写入。
+- `executing`：自动切回 `meta.llm_model` 和用户原先的 `meta.reasoning_effort`；cwd 内继续使用 Terminal 狂野写权限。
+- `validating`：执行测试、lint、静态检查或工具后置条件；验证失败先 retry 当前 step，不立即全量重规划。
+- `replanning`：仅接收失败证据、已完成结果和剩余 steps；只修订剩余计划，不从零覆盖已完成步骤。
+
+Plan 阶段结束后**不等待用户点击**。内核发出 notice 后立即进入 executing；Stop 在 planning 阶段则不写源码，Stop 在 executing 阶段则保存 artifact 供下次续作。
+
+#### 5.5.3 Plan Artifact
+
+计划不得只存在于 assistant 长文本中。应保存为会话受保护状态（推荐 `data/sessions/<id>/terminal-plan.json`，或等价 session guard 管理的文件）：
+
+```json
+{
+  "goal_fingerprint": "…",
+  "phase": "planning|executing|validating|replanning|done",
+  "steps": [
+    {
+      "id": "step-1",
+      "title": "…",
+      "scope": ["relative/path"],
+      "depends_on": [],
+      "verify": ["…"],
+      "status": "pending|running|passed|failed"
+    }
+  ],
+  "current_step": 0,
+  "retry_count": 0,
+  "replan_count": 0,
+  "created_at": "…",
+  "updated_at": "…"
+}
+```
+
+要求：
+
+- `goal_fingerprint` 匹配时，已有 `phase=executing` 的 goal **禁止再次 auto-plan**；
+- 计划应优先拆成 **3～7 个可验证 steps**；超过 8 个时先由 planner 分阶段，不允许 executor 一口吞；
+- plan artifact 是执行状态，不是计划域四件套，不接入 Desktop `project_id`、采纳队列或 LDM；
+- 计划正文可展示给用户，但不能被下一轮 `classify_turn` 当成新的用户意图。
+
+#### 5.5.4 自动恢复与硬上限
+
+| 预算 | 默认值 | 超限行为 |
+|------|--------|----------|
+| 每个 goal 的自动初始 plan | 1 | 直接执行已有 artifact，或停并报告 |
+| 单 step retry | 2 | 进入 bounded replan |
+| 每个 goal 的 bounded replan | 1 | 停止自动写码，报告失败证据与建议 |
+| agent 图/回合总循环 | 沿用现有 loop cap | 触发既有 stop/timeout，不递归开 planner |
+
+只有以下事件允许进入 `replanning`：当前 step 的验证失败、工具/环境产生与计划冲突的硬证据、用户明确要求「重新规划」。用户普通的「继续」不算 replan 事件。
+
+#### 5.5.5 模型与成本可见性
+
+- plan/replan：`resolve_model_id_for_role("plan_partner", meta)`；默认 Pro，可由既有 role override 配置；
+- execute：`resolve_model_id_for_role("main_turn", meta)`；不修改用户持久化模型选择；
+- plan/replan 强制 `reasoning_effort=max`，execute 恢复 plan 前的值；
+- TUI 至少显示：`auto-plan · Pro · max`、`execute · <session model> · <effort>`、当前 step 与 replan 计数；
+- 每次自动 plan 产生一次明确 notice，避免用户误以为模型无故换档。
+
+该方案借鉴 Claude Code 的 plan 权限边界、Cursor 的可审阅 plan artifact、OpenHands 的 planning/execution 分离，以及 Plan-and-Execute 的 current-step / bounded-replan 模式；**不**复制它们的人工 approve UX。
+
 ## 6. 入口与 UX（M0 / M1）
 
 ### M0（Claude 式启动）
@@ -348,7 +447,7 @@ my-agent terminal path/to/other-dir
 | NG1 | 不做 Electron / WebView Terminal |
 | NG2 | 不抄 Claude **官方**商标与品牌 mascot（自有「打工仔」像素图 OK） |
 | NG3 | M1 **不改** harness / scope / 门控 / `terminal.txt` 语义 |
-| NG4 | M1 **不做** `plan` 权限档 · `/btw`（仍 defer TM-Q1 M1） |
+| NG4 | M1 **不做**手动 `plan` 权限档 · `/btw`；自动 Plan-and-Execute 另列 TM-24～TM-28 |
 | NG5 | M1 **不替换** `start.bat`（desktop harness CLI 保持 M0 文本） |
 
 #### 6.4.2 参考布局（线框 · **默认 bottom**）
