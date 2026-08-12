@@ -2,7 +2,7 @@
 
 > 版本 **2026-08-04** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 57** — S-570/571/572 手工 smoke · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.2.0**（Bottom TUI 已落地）  
+> **当前焦点**：**Phase 57** — Ink **阶段 1**（T-5720b）· [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6.2  
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -66,7 +66,7 @@
 | **Phase 47** | **交付审查**（`deliverable_review` · `solo`/`ritual` profile · prompt registry） | **代码 done**（[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · T-4701～4712 · S-470 todo） |
 | **Phase 47+** | **本地交付模型**（栈-A/B/C/D · 源-L · LDM-1～9 · 里程碑） | **done**（[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **v0.3.3** · T-4714～4719 · **S-472 done**） |
 | **Phase 51～55** | **Pack 1/2/4/5/6**（收口 · 路由 · phase_key · 语义搜 · 编排） | **M0 done**（[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md)） |
-| **Phase 57** | **Terminal 狂野模式**（harness 分离 · cwd · Bottom TUI） | **M0+M1 done**（[TERMINAL-MODE.md](./TERMINAL-MODE.md) v0.2.0 · T-5710d · S-572 todo） |
+| **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5**） | **legacy M1 done · Ink 阶段 0 done**（TERMINAL v0.3.2 · 阶段 1 todo） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
 | **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |

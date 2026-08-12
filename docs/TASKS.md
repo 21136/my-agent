@@ -2,7 +2,7 @@
 
 > 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Phase 57** — S-570/571/572 手工 smoke（T-5710 **done** · TERMINAL-MODE **v0.2.0**）  
+> **当前焦点**：**Phase 57 · Ink 阶段 3** — T-5722 M1 交互闭环 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6.2  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -1808,13 +1808,13 @@ python turn_intent.py    # 分类用例无回归
 
 ### Phase 57 — Terminal 狂野模式（TERMINAL）
 
-> 子文档：[TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.1.5 已封板** · 与 Desktop **会话分离** · **禁止切换/接管** · exit 后另入口重启  
+> 子文档：[TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2**（§6.6.2 编码分期） · 与 Desktop **会话分离** · **禁止切换/接管** · exit 后另入口重启  
 > **实施纪律**：**一动一停** — 每会话只做一个 task id；做完测试 + 更新本文状态后 **停**，等用户说「继续」
 
 #### DOC-04 准入
 
 - [x] 矩阵行见 TERMINAL-MODE §8
-- [x] 回归 ID：IT-570～**576** · S-570 · S-571
+- [x] 回归 ID：IT-570～**576** · IT-590～594（Ink）· S-570 · S-571 · S-574
 
 | ID | 任务 | 交付物 | 验收 | 状态 |
 |----|------|--------|------|------|
@@ -1834,7 +1834,19 @@ python turn_intent.py    # 分类用例无回归
 | T-5710b | Welcome + StatusBar | terminal_ui.py | IT-578 | **done** |
 | T-5710c | `/clear` `/compact` + plain 降级 | terminal_ui.py · cli_terminal.py | IT-579 | **done** |
 | T-5710d | Bottom 布局 · Welcome mascot · Markdown · 复制/焦点 | terminal_app.py · terminal_ui.py · welcome_mascot* | test_terminal_* | **done** |
-| S-572 | 手工：WT 全屏 TUI smoke | log | TERMINAL §6.5 | todo |
+| T-5711 | Transcript 语义着色（Lexer · §6.4.9） | — | — | **superseded** → T-5720 |
+| T-5711b | Transcript inline span | — | — | **superseded** → T-5720 |
+| T-5720 | Terminal Ink 脚手架 · `tokens.ts` · 静态 demo | `terminal-ui/` · demo.tsx | IT-590 · S-574 | **阶段 0 done** |
+| T-5720b | JSONL 协议 · event reducer · fixtures | terminal-ui/reduce | IT-590b | **阶段 1 done** |
+| T-5721 | 方案 B 块组件（User/Thinking/Assistant/Notice/Status/Welcome） | terminal-ui/theme · blocks | IT-591 | **阶段 0 done** |
+| T-5722 M0 | Python → Ink 单向 pipe · spawn · `legacy` 开关 | terminal_ink_bridge.py · cli_terminal.py | IT-592 | **阶段 2 done** |
+| T-5722 M1 | Ink → Python 输入 · confirm · `/clear` | cli.tsx · repl.tsx | IT-592b | **阶段 3 done** |
+| T-5723 | `marked` + `chat-state` 子集 reducer | packages/chat-blocks 或 terminal-ui/reduce | IT-593 | **阶段 4 done** — IT-593 通过 |
+| T-5724 | 60fps P0+P1（throttle · 热区 · 虚拟列表） | terminal-ui/perf | IT-594 · S-575 | **阶段 5 done** — IT-594 通过 |
+| T-5725 | 行级 diff（P2 · 可选） | terminal-ui/perf | defer | **阶段 6 defer** |
+| S-572 | 手工：WT 全屏 TUI smoke（legacy prompt_toolkit） | log | TERMINAL §6.5 | todo |
+| S-573 | 手工：对照 preview HTML 配色（legacy Lexer 路线） | log | TERMINAL §6.4.9 | **superseded** → S-574 |
+| S-574 | 手工：`npm run demo` Ink 配色 smoke | log | TERMINAL §6.6 | todo |
 
 ---
 

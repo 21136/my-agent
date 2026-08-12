@@ -239,6 +239,7 @@ export function mountUnifiedShell(
         scrollChatToBottom();
       },
       onTurnStart: (event) => {
+        resetTurnCacheStats();
         topbarState.intentLabel = event.intent_label;
         topbarState.checkerLabel = "";
         if (perspective === "night" && isRecallIntent(event.intent, event.intent_label)) {
@@ -424,6 +425,25 @@ export function mountUnifiedShell(
   const threadArchiveBannerEl = root.querySelector<HTMLElement>("#thread-archive-banner")!;
   const threadReturnActiveBtn = root.querySelector<HTMLButtonElement>("#thread-return-active")!;
 
+  let turnCachePromptTotal = 0;
+  let turnCacheCachedTotal = 0;
+  let lastLlmCacheRatio: number | undefined;
+  let lastTokenUsage: number | undefined;
+  let lastTokenLimit: number | undefined;
+
+  function resetTurnCacheStats(): void {
+    turnCachePromptTotal = 0;
+    turnCacheCachedTotal = 0;
+    lastLlmCacheRatio = undefined;
+  }
+
+  function recordLlmUsage(promptTokens: number, cachedTokens: number, cacheRatio: number): void {
+    turnCachePromptTotal += promptTokens;
+    turnCacheCachedTotal += cachedTokens;
+    lastLlmCacheRatio = cacheRatio;
+    updateTokenBar(lastTokenUsage, lastTokenLimit);
+  }
+
   // project panel elements (only used in project perspective)
   const projectEls = setupProjectPanel(root);
 
@@ -608,19 +628,42 @@ export function mountUnifiedShell(
   }
 
   function updateTokenBar(usage: number | undefined, limit: number | undefined): void {
+    lastTokenUsage = usage;
+    lastTokenLimit = limit;
     if (usage === undefined || limit === undefined || limit <= 0) {
-      tokenBar.classList.add("hidden");
-      return;
+      if (lastLlmCacheRatio === undefined && turnCachePromptTotal <= 0) {
+        tokenBar.classList.add("hidden");
+        return;
+      }
     }
     tokenBar.classList.remove("hidden");
-    const ratio = usage / limit;
+    const ratio = usage !== undefined && limit !== undefined && limit > 0 ? usage / limit : 0;
     let cls = "unified-token-bar";
-    if (ratio >= 0.95) cls += " unified-token-red";
-    else if (ratio >= 0.85) cls += " unified-token-yellow";
-    const usageK = Math.round(usage / 1000);
-    const limitK = Math.round(limit / 1000);
+    if (limit !== undefined && limit > 0) {
+      if (ratio >= 0.95) cls += " unified-token-red";
+      else if (ratio >= 0.85) cls += " unified-token-yellow";
+    }
+    const parts: string[] = [];
+    if (usage !== undefined && limit !== undefined && limit > 0) {
+      const usageK = Math.round(usage / 1000);
+      const limitK = Math.round(limit / 1000);
+      parts.push(`${usageK}k / ${limitK}k tokens`);
+    }
+    const turnRatio =
+      turnCachePromptTotal > 0 ? turnCacheCachedTotal / turnCachePromptTotal : undefined;
+    if (turnRatio !== undefined && turnCachePromptTotal > 0) {
+      parts.push(`回合缓存 ${Math.round(turnRatio * 100)}%`);
+      if (turnRatio >= 0.5) cls += " unified-token-cache-good";
+    } else if (lastLlmCacheRatio !== undefined) {
+      parts.push(`缓存 ${Math.round(lastLlmCacheRatio * 100)}%`);
+      if (lastLlmCacheRatio >= 0.5) cls += " unified-token-cache-good";
+    }
     tokenBar.className = cls;
-    tokenBar.textContent = `${usageK}k / ${limitK}k tokens`;
+    tokenBar.textContent = parts.join(" · ");
+    tokenBar.title =
+      turnRatio !== undefined
+        ? `本回合 LLM 累计：${turnCacheCachedTotal} / ${turnCachePromptTotal} prompt tokens 来自缓存`
+        : "最近一次 LLM 调用的 prompt 缓存命中率";
   }
 
   function setComposerEnabled(enabled: boolean): void {
@@ -2707,6 +2750,10 @@ export function mountUnifiedShell(
         topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
         renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
         updateTokenBar(event.token_usage, event.token_limit);
+        break;
+
+      case "llm.usage":
+        recordLlmUsage(event.prompt_tokens, event.cached_tokens, event.cache_ratio);
         break;
 
       case "evolve.proposals":

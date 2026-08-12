@@ -91,12 +91,44 @@ class MemoryIndexEntry:
     path: str
 
 
+_DYNAMIC_SYSTEM_SECTIONS = frozenset(
+    {
+        "session",
+        "terminal_scope",
+        "turn_discipline",
+        "scaffold_tool",
+        "evolve_escalation",
+        "subagent_summary",
+        "project_mode",
+        "digest",
+    }
+)
+
+
+def is_dynamic_system_section(name: str) -> bool:
+    """True for per-turn / per-loop overlays that should not share a cache block."""
+    return name in _DYNAMIC_SYSTEM_SECTIONS
+
+
+def combine_system_prompt_parts(static: str, dynamic: str) -> str:
+    """Join cache-split parts (static first) for providers without explicit markers."""
+    static_text = static.strip()
+    dynamic_text = dynamic.strip()
+    if static_text and dynamic_text:
+        return f"{static_text}{SECTION_SEPARATOR}{dynamic_text}"
+    return static_text or dynamic_text
+
+
 @dataclass(frozen=True, slots=True)
 class LoadedSystem:
     """Assembled system prompt with traceable section order."""
 
     prompt: str
     section_names: tuple[str, ...]
+    static_prompt: str
+    dynamic_prompt: str
+    static_section_names: tuple[str, ...]
+    dynamic_section_names: tuple[str, ...]
 
 
 def core_prompt_path(agent_core_dir: Path | None = None) -> Path:
@@ -1270,9 +1302,17 @@ def build_system_prompt(
 
     non_empty = [(name, text.strip()) for name, text in sections if text.strip()]
     prompt = SECTION_SEPARATOR.join(text for _, text in non_empty)
+    static_pairs = [(name, text) for name, text in non_empty if not is_dynamic_system_section(name)]
+    dynamic_pairs = [(name, text) for name, text in non_empty if is_dynamic_system_section(name)]
+    static_prompt = SECTION_SEPARATOR.join(text for _, text in static_pairs)
+    dynamic_prompt = SECTION_SEPARATOR.join(text for _, text in dynamic_pairs)
     return LoadedSystem(
         prompt=prompt,
         section_names=tuple(name for name, _ in non_empty),
+        static_prompt=static_prompt,
+        dynamic_prompt=dynamic_prompt,
+        static_section_names=tuple(name for name, _ in static_pairs),
+        dynamic_section_names=tuple(name for name, _ in dynamic_pairs),
     )
 
 

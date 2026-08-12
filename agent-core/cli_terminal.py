@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -16,7 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
 from agent import Agent, LLMError, ToolLoopExceededError
 from boundaries import UserLineKind, classify_user_line
 from host_scope_cli import HostScopeCommandError, parse_host_scope_command, run_host_scope_command
-from interface_lock import InterfaceLockError, InterfaceLockGuard
+from interface_lock import InterfaceLockError, InterfaceLockGuard, read_lock
 from llm_client import LLMCancelledError
 from main import (
     ConversationRepl,
@@ -47,6 +48,8 @@ from terminal_scope import (
     scope_fields_from_meta,
     scope_fields_to_session_kwargs,
 )
+from typing import Any
+
 from terminal_ui import (
     TERMINAL_COMMANDS_LINE,
     TerminalConsole,
@@ -59,6 +62,14 @@ from terminal_ui import (
 )
 from terminal_prompt import TerminalPromptSession, prompt_toolkit_enabled
 from terminal_app import BottomPinnedTerminal, bottom_layout_enabled, make_bottom_confirm_input_fn
+from terminal_ink_bridge import (
+    TerminalInkBridge,
+    TerminalInkConsole,
+    InkCancelRequest,
+    InkConfirmResponse,
+    InkInputLine,
+    ink_ui_enabled,
+)
 
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
@@ -67,15 +78,27 @@ _TURN_MODE_NOTICE = "Terminal 仅 agent 模式"
 _PROJECT_NOTICE = "Terminal 不支持项目命令。"
 
 
+def _ink_allowed_on_platform() -> bool:
+    """Ink is default on all platforms; set ``MY_AGENT_TERMINAL_INK_WINDOWS=0`` to force legacy on Windows."""
+    if os.name != "nt":
+        return True
+    raw = os.environ.get("MY_AGENT_TERMINAL_INK_WINDOWS", "1").strip().casefold()
+    return raw not in {"0", "false", "no", "off"}
+
+
 @dataclass
 class TerminalRepl(ConversationRepl):
     scope_fields: TerminalScopeFields = field(
         default_factory=lambda: TerminalScopeFields(terminal_scope_kind="agent", terminal_cwd=".")
     )
     _turn_cancel_guard: ReplTurnCancelGuard | None = field(default=None, repr=False)
-    terminal_console: TerminalConsole | None = field(default=None, repr=False)
+    terminal_console: TerminalConsole | TerminalInkConsole | None = field(default=None, repr=False)
     _prompt_session: TerminalPromptSession | None = field(default=None, repr=False)
     _bottom_terminal: BottomPinnedTerminal | None = field(default=None, repr=False)
+    _ink_bridge: TerminalInkBridge | None = field(default=None, repr=False)
+    _ink_pending_confirm: tuple[str, Callable[[str], None]] | None = field(default=None, repr=False)
+    _ink_confirm_allow_all: bool = field(default=False, repr=False)
+    _tty_reader: Any | None = field(default=None, repr=False)
     _uses_builtin_input: bool = field(default=True, repr=False)
 
     @classmethod
@@ -98,12 +121,55 @@ class TerminalRepl(ConversationRepl):
         repl.scope_fields = scope_fields
         repl._turn_cancel_guard = ReplTurnCancelGuard(repl)
         repl._uses_builtin_input = input_fn is None
-        use_bottom = (
+        use_ink = (
+            repl._uses_builtin_input
+            and ink_ui_enabled(paths=paths)
+            and _ink_allowed_on_platform()
+        )
+        if not use_ink and repl._uses_builtin_input and os.name == "nt":
+            if os.environ.get("MY_AGENT_TERMINAL_INK_WINDOWS", "1").strip().casefold() in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }:
+                print(
+                    "提示: MY_AGENT_TERMINAL_INK_WINDOWS=0，已使用兼容输入模式（legacy）。",
+                    file=sys.stderr,
+                )
+            elif not ink_ui_enabled(paths=paths):
+                print(
+                    "提示: Ink UI 不可用（需 terminal-ui 已 build）；已回退 legacy。",
+                    file=sys.stderr,
+                )
+        if use_ink:
+            try:
+                bridge = TerminalInkBridge.start(paths)
+            except (FileNotFoundError, RuntimeError) as exc:
+                print(f"warn: Ink UI unavailable ({exc}); falling back to legacy", file=sys.stderr)
+                use_ink = False
+        if use_ink:
+            console = TerminalInkConsole.create(
+                bridge=bridge,
+                session=session,
+                paths=paths,
+                scope_fields=scope_fields,
+            )
+            bridge.emit_session_init(
+                session=session,
+                scope_fields=scope_fields,
+                resume=True,
+            )
+            repl._ink_bridge = bridge
+            repl._tty_reader = None
+            repl.terminal_console = console
+            repl.output_fn = console.output_fn
+            repl.input_fn = lambda _prompt: ""
+        elif (
             repl._uses_builtin_input
             and prompt_toolkit_enabled()
             and bottom_layout_enabled()
-        )
-        if use_bottom:
+        ):
             scaffold = TerminalConsole.create(
                 write=None,
                 session=session,
@@ -153,12 +219,76 @@ class TerminalRepl(ConversationRepl):
         if guard is not None:
             guard.install()
         try:
+            if self._ink_bridge is not None:
+                return self._run_ink_layout_loop()
+            if self._bottom_terminal is not None:
+                return self._run_bottom_layout_loop()
             return self._run_terminal_loop()
         finally:
             if guard is not None:
                 guard.uninstall()
+            if self._ink_bridge is not None:
+                self._ink_bridge.close()
+                self._ink_bridge = None
+            if self._tty_reader is not None:
+                try:
+                    self._tty_reader.close()
+                except OSError:
+                    pass
+                self._tty_reader = None
+
+    def _run_ink_layout_loop(self) -> int:
+        """Consume interactive JSONL messages from Ink and run terminal commands."""
+        self._log_session_start()
+        self._print_corruption_notices()
+        bridge = self._ink_bridge
+        if bridge is None:
+            return self._run_terminal_loop_legacy()
+
+        while not self._stop:
+            try:
+                message = bridge.next_input()
+            except KeyboardInterrupt:
+                self._checkpoint_gate.on_keyboard_interrupt()
+                self._stop = True
+                break
+            if message is None:
+                self._exit_session(record_mode="off")
+                break
+            if isinstance(message, InkInputLine):
+                line = message.text.rstrip("\r\n")
+                if line.strip() and self.handle_line(line) == "stop":
+                    break
+            elif isinstance(message, InkConfirmResponse):
+                self._deliver_ink_confirm(message)
+            elif isinstance(message, InkCancelRequest):
+                guard = self._turn_cancel_guard
+                if guard is not None and guard.request_cancel():
+                    self.output_fn("(cancelling turn…)")
+
+        if not self._stop:
+            self._exit_session(record_mode="off")
+        return 0
+
+    def _deliver_ink_confirm(self, message: InkConfirmResponse) -> None:
+        bridge = self._ink_bridge
+        pending = getattr(self, "_ink_pending_confirm", None)
+        if bridge is None or pending is None:
+            return
+        request_id, resolver = pending
+        if message.request_id != request_id:
+            return
+        choice = message.choice
+        if choice == "a" and not getattr(self, "_ink_confirm_allow_all", False):
+            choice = "n"
+        self._ink_pending_confirm = None
+        resolver(choice)
+        bridge.emit_confirm_done(request_id=request_id, choice=choice)
 
     def _run_terminal_loop(self) -> int:
+        return self._run_terminal_loop_legacy()
+
+    def _run_terminal_loop_legacy(self) -> int:
         self._log_session_start()
         if self._bottom_terminal is not None:
             return self._run_bottom_layout_loop()
@@ -284,12 +414,19 @@ class TerminalRepl(ConversationRepl):
             checkpoint_gate=self._checkpoint_gate,
             cancel_event=self.agent.cancel_event,
         )
+        if self._ink_bridge is not None:
+            self.agent.executor.confirm_fn = self._ink_bridge_confirm
         if self.terminal_console is not None:
             self.terminal_console.wire_repl(self)
         else:
             self._wire_turn_events()
 
-    def _wire_turn_events(self) -> None:
+    def _ink_bridge_confirm(self, preview: str, allow_approve_all: bool) -> str:
+        bridge = self._ink_bridge
+        if bridge is None:
+            return "n"
+        return bridge.confirm_fn(preview, allow_approve_all)
+
         if self.terminal_console is not None:
             return
         super()._wire_turn_events()
@@ -339,6 +476,8 @@ class TerminalRepl(ConversationRepl):
                 if self.terminal_console is not None:
                     self.terminal_console.sink.state.clear()
                 self._mount_bottom_welcome(self._bottom_terminal)
+            elif self._ink_bridge is not None and isinstance(self.terminal_console, TerminalInkConsole):
+                self.terminal_console.clear_transcript()
             elif self.terminal_console is not None:
                 self.terminal_console.clear_transcript()
             else:
@@ -643,6 +782,13 @@ def main(argv: list[str] | None = None) -> int:
         lock_guard.acquire(takeover=False, interactive_takeover=False)
     except InterfaceLockError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        holder = read_lock(paths)
+        if holder is not None and holder.ui == "terminal":
+            print(
+                "hint: 若已关掉 Terminal 仍提示占用，结束残留 python.exe 后删除 "
+                "data/sessions/.interface.lock 再启动。",
+                file=sys.stderr,
+            )
         return 1
 
     try:

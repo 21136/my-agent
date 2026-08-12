@@ -3,8 +3,8 @@ id: project-my-agent
 topics: [coding]
 status: active
 summary: my-agent 个人进化 agent，Python 3.12，建设顺序先 tool 后 skill
-use_count: 2
-last_used_at: "2026-07-11T11:26:29.708229Z"
+use_count: 3
+last_used_at: "2026-08-09T00:41:37.678013Z"
 ---
 
 ## 背景

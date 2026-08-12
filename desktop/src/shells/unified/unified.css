@@ -1301,6 +1301,9 @@
   color: #d43030;
   font-weight: 600;
 }
+.unified-token-bar.unified-token-cache-good {
+  color: #1a8f4c;
+}
 
 /* ================================================================
    Project sidebar — new task-flow design

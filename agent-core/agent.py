@@ -1066,7 +1066,12 @@ class Agent:
             should_auto_compact,
         )
         from loader import build_system_prompt
-        from llm_client import load_config
+        from llm_client import (
+            build_chat_messages,
+            llm_usage_event,
+            load_config,
+            resolve_model_entry,
+        )
 
         tool_rounds = 0
         segment_retried = False
@@ -1076,6 +1081,17 @@ class Agent:
         recall_injected = False
         action_nudge_injected = False
         tools_payload: list[dict[str, Any]] | None = tools if tools else None
+
+        loaded_system = build_system_prompt(self.session)
+        static_system = loaded_system.static_prompt
+        dynamic_system = loaded_system.dynamic_prompt
+        model_entry = resolve_model_entry(model)
+        vendor = model_entry.vendor if model_entry is not None else ""
+
+        def _refresh_dynamic_system() -> None:
+            nonlocal loaded_system, dynamic_system
+            loaded_system = build_system_prompt(self.session)
+            dynamic_system = loaded_system.dynamic_prompt
 
         for _ in range(max_rounds):
             if self.cancel_event.is_set():
@@ -1091,7 +1107,7 @@ class Agent:
                     qa_soft_reminder_injected=reminder_injected,
                     action_announce_nudge_injected=action_nudge_injected,
                 )
-            system = build_system_prompt(self.session).prompt
+            full_system = loaded_system.prompt
             if self.cancel_event.is_set():
                 return ToolLoopSegmentResult(
                     final_text="",
@@ -1105,7 +1121,7 @@ class Agent:
                     qa_soft_reminder_injected=reminder_injected,
                     action_announce_nudge_injected=action_nudge_injected,
                 )
-            if should_auto_compact(system, self.session, model=model):
+            if should_auto_compact(full_system, self.session, model=model):
                 self._emit_turn_event(
                     {
                         "type": "turn.notice",
@@ -1115,7 +1131,7 @@ class Agent:
                 )
             compact_result = maybe_auto_compact(
                 self.session,
-                system,
+                full_system,
                 self.llm,
                 on_summarize_begin=self._compact_summarize_wall_begin,
                 on_summarize_end=self._compact_summarize_wall_end,
@@ -1138,10 +1154,12 @@ class Agent:
                         }
                     )
                 self._emit_turn_event(session_memory_event(self.session))
+                _refresh_dynamic_system()
+                full_system = loaded_system.prompt
             if compact_result and compact_result.compacted:
                 working, trimmed = build_llm_messages_with_optional_trim(
                     self.session,
-                    system,
+                    full_system,
                     model,
                     force_trim=True,
                 )
@@ -1169,13 +1187,22 @@ class Agent:
                     tools_payload = None
                 self._emit_turn_event({"type": "llm.pending"})
                 response = self.llm.chat(
-                    [{"role": "system", "content": system}, *working],
+                    build_chat_messages(
+                        working,
+                        system_prompt=full_system,
+                        static_system=static_system,
+                        dynamic_system=dynamic_system,
+                        vendor=vendor,
+                    ),
                     model=model,
                     tools=tools_payload,
                     temperature=MAIN_LOOP_TEMPERATURE,
                     reasoning_effort=self.session.meta.reasoning_effort,
                     stream=self.stream_handlers,
                 )
+                usage_event = llm_usage_event(response.usage)
+                if usage_event is not None:
+                    self._emit_turn_event(usage_event)
             except LLMCancelledError:
                 return ToolLoopSegmentResult(
                     final_text="",
@@ -1314,6 +1341,7 @@ class Agent:
                 assistant_msg["reasoning_content"] = response.reasoning_content
             self.session.append_message(assistant_msg)
 
+            dynamic_dirty = False
             for tool_call in response.tool_calls:
                 if self.cancel_event.is_set():
                     break
@@ -1333,6 +1361,7 @@ class Agent:
                             f"{existing}\n\n{pending}" if existing else pending
                         )
                         self.executor.session.subagent_overlay_pending = None
+                        dynamic_dirty = True
                 if tool_name == "deliverable_review" and result.ok:
                     data = result.data if isinstance(result.data, dict) else {}
                     verdict = str(data.get("verdict") or "").strip() or None
@@ -1498,6 +1527,9 @@ class Agent:
                             ),
                         )
                         self._sync_turn_mode()
+                        loaded_system = build_system_prompt(self.session)
+                        static_system = loaded_system.static_prompt
+                        dynamic_system = loaded_system.dynamic_prompt
                         # M0: do not continue the tool loop on the old session.
                         notice = str(result.data.get("message") or "已切换上下文")
                         self.session.append_message(
@@ -1511,6 +1543,9 @@ class Agent:
                             exceeded=False,
                             had_progress=True,
                         )
+
+            if dynamic_dirty:
+                _refresh_dynamic_system()
 
             if self.cancel_event.is_set():
                 notice = ""

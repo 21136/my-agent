@@ -1,0 +1,11 @@
+{"type":"session.init","model":"flash","root":"/workspace/demo"}
+{"type":"user.message","text":"hello"}
+{"type":"turn.start"}
+{"type":"reasoning.delta","text":"hm"}
+{"type":"reasoning.delta","text":"…"}
+{"type":"assistant.delta","text":"Hi "}
+{"type":"assistant.delta","text":"there"}
+{"type":"assistant.done","text":""}
+{"type":"tool.active","name":"read_file"}
+{"type":"tool.clear"}
+{"type":"status.working","active":false}

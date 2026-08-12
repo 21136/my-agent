@@ -477,6 +477,20 @@ class BottomPinnedTerminal:
             page = 1
         self._scroll_transcript(direction * page)
 
+    def _wheel_delta_lines(self) -> int:
+        """Lines to move per mouse wheel notch / ScrollUp/ScrollDown key."""
+        raw = os.environ.get("MY_AGENT_TERMINAL_WHEEL_LINES", "").strip()
+        if raw.isdigit():
+            return max(1, int(raw))
+
+        win = self._transcript.window
+        info = getattr(win, "render_info", None)
+        if info is not None:
+            view_h = max(1, int(info.window_height))
+            # ~1/3 viewport per notch — feels closer to native terminal scroll.
+            return max(6, view_h // 3)
+        return 6
+
     def _attach_transcript_scroll_guard(self) -> None:
         """Pause auto-tail when the user scrolls the transcript via mouse."""
         from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
@@ -485,14 +499,15 @@ class BottomPinnedTerminal:
         previous = win._mouse_handler
 
         def _mouse_handler(mouse_event: MouseEvent) -> Any:
-            if mouse_event.event_type in {
-                MouseEventType.SCROLL_UP,
-                MouseEventType.SCROLL_DOWN,
-                MouseEventType.MOUSE_DOWN,
-            }:
+            if mouse_event.event_type == MouseEventType.SCROLL_UP:
+                self._scroll_transcript(-self._wheel_delta_lines())
+                return None
+            if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+                self._scroll_transcript(self._wheel_delta_lines())
+                return None
+            if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
                 self._transcript_follow_tail = False
-            result = previous(mouse_event)
-            return result
+            return previous(mouse_event)
 
         win._mouse_handler = _mouse_handler  # type: ignore[method-assign]
 
@@ -702,11 +717,11 @@ class BottomPinnedTerminal:
         # focused input — bind them globally so transcript still scrolls.
         @bindings.add(Keys.ScrollUp, filter=picker_idle, eager=True)
         def _wheel_up(event: Any) -> None:
-            self._scroll_transcript(-3)
+            self._scroll_transcript(-self._wheel_delta_lines())
 
         @bindings.add(Keys.ScrollDown, filter=picker_idle, eager=True)
         def _wheel_down(event: Any) -> None:
-            self._scroll_transcript(3)
+            self._scroll_transcript(self._wheel_delta_lines())
 
         @bindings.add("up", filter=transcript_focused, eager=True)
         def _transcript_up(event: Any) -> None:
@@ -718,11 +733,11 @@ class BottomPinnedTerminal:
 
         @bindings.add("c-up", filter=picker_idle, eager=True)
         def _transcript_c_up(event: Any) -> None:
-            self._scroll_transcript(-3)
+            self._scroll_transcript(-self._wheel_delta_lines())
 
         @bindings.add("c-down", filter=picker_idle, eager=True)
         def _transcript_c_down(event: Any) -> None:
-            self._scroll_transcript(3)
+            self._scroll_transcript(self._wheel_delta_lines())
 
         @bindings.add("pageup", filter=picker_idle, eager=True)
         def _transcript_pageup(event: Any) -> None:

@@ -8,6 +8,7 @@
 | `rename_batch` | 批量重命名（模式/映射） |
 | `dedupe_by_name` | 同名去重（保留策略可配） |
 | `flatten_dir` | 打平嵌套目录 |
+| `extract_archive` | 解压 zip/7z 等（默认 Bandizip；fallback PowerShell/Python） |
 | `archive_by_date` | 按日期归档到子目录 |
 
 `study_note` 已 **archived** → 用 `write_text` 写笔记文件。

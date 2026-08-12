@@ -220,6 +220,77 @@ def resolve_model_entry(model: str) -> ModelEntry | None:
     return get_registry().resolve(model)
 
 
+def vendor_supports_system_prompt_cache(vendor: str) -> bool:
+    """Return whether a provider accepts explicit system prompt cache markers."""
+    return False
+
+
+def as_cached_system_message(prompt: str) -> dict[str, Any]:
+    """Build an OpenAI-compatible system message."""
+    return {"role": "system", "content": prompt}
+
+
+def build_chat_messages(
+    messages: list[dict[str, Any]],
+    *,
+    system_prompt: str,
+    static_system: str,
+    dynamic_system: str,
+    vendor: str,
+) -> list[dict[str, Any]]:
+    """Assemble provider-compatible chat messages with optional cache splitting."""
+    if not vendor_supports_system_prompt_cache(vendor):
+        return ([{"role": "system", "content": system_prompt}] if system_prompt else []) + list(messages)
+
+    assembled: list[dict[str, Any]] = []
+    if static_system:
+        assembled.append(as_cached_system_message(static_system))
+    if dynamic_system:
+        assembled.append({"role": "system", "content": dynamic_system})
+    if not assembled and system_prompt:
+        assembled.append(as_cached_system_message(system_prompt))
+    assembled.extend(messages)
+    return assembled
+
+
+def cached_prompt_tokens(usage: dict[str, Any] | None) -> int:
+    """Extract provider cache-read token usage from a completion usage object."""
+    if not isinstance(usage, dict):
+        return 0
+    direct = usage.get("cache_read_input_tokens")
+    if isinstance(direct, (int, float)):
+        return int(direct)
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        cached = details.get("cached_tokens")
+        if isinstance(cached, (int, float)):
+            return int(cached)
+    return 0
+
+
+def llm_usage_event(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize provider token usage for the terminal and desktop event streams."""
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("prompt_tokens")
+    if not isinstance(prompt_tokens, (int, float)):
+        return None
+    completion_tokens = usage.get("completion_tokens")
+    event: dict[str, Any] = {
+        "type": "llm.usage",
+        "prompt_tokens": int(prompt_tokens),
+        "cached_tokens": cached_prompt_tokens(usage),
+    }
+    if isinstance(completion_tokens, (int, float)):
+        event["completion_tokens"] = int(completion_tokens)
+    event["cache_ratio"] = (
+        event["cached_tokens"] / event["prompt_tokens"]
+        if event["prompt_tokens"]
+        else 0.0
+    )
+    return event
+
+
 def llm_model_label(model: str, *, config: LLMConfig | None = None) -> str:
     """Short UI label for session banner / chrome."""
     entry = get_registry().resolve(model)

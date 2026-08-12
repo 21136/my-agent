@@ -34,7 +34,7 @@ alwaysApply: true
 - **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
 - **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** 单项目态势侧栏（§6.2.2 · 文档已签 · M0 待实施）；UX-021～023 done。
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
-- **Phase 57**：**M0+M1 done** · **Bottom TUI 已落地** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.2.0 §6.5 · T-5710d done · **BUG-028 fixed** · S-572 手工待做
+- **Phase 57**：**legacy M1 done** · **Ink 阶段 0 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6.2 · **阶段 1** T-5720b 待做
 - **下一焦点**：S-572 Terminal Bottom TUI 手工 smoke
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；Terminal：`start-terminal.bat`；CLI 备用 `start.bat`。
