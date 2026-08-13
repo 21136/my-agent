@@ -1,6 +1,6 @@
 # Terminal 模式（TERMINAL-MODE）
 
-> 版本 **0.2.1** · 2026-08-13 · **状态：M0 done · M1 done · Bottom TUI 已落地 · TM-24 M0 已实施**  
+> 版本 **0.3.2** · 2026-08-13 · **状态：legacy Bottom TUI done · Ink UI 阶段 0～5 done · TM-24～28 M0 done · T-5733 M1 done**  
 > **读者**：产品负责人、实现者  
 > 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [CLI-DESKTOP-PARITY.md](./CLI-DESKTOP-PARITY.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [REASONING-EFFORT.md](./REASONING-EFFORT.md)
 
@@ -709,26 +709,142 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 | 流式格式化（边生成边渲染 MD） | defer；当前 done 时整块渲染 |
 | S-572 手工 smoke | Welcome · 对话 · 复制 · `/model` · Ctrl+C |
 
+### 6.6 Ink TUI（T-5720～5724 · T-5733～5734）
+
+> **版本** 0.3.2 · 2026-08-13 · **状态：阶段 0～5 done · 默认入口**  
+> **代码真源**：`terminal-ui/` · `terminal_ink_bridge.py` · `cli_terminal.py`  
+> **原则**：与 legacy Bottom TUI **同一 agent 事件管线**；仅渲染层换为 Ink + React；默认 `MY_AGENT_TERMINAL_UI=ink`。
+
+#### 6.6.1 分期与验收
+
+| 阶段 | Task | 交付 | 验收 | 状态 |
+|------|------|------|------|------|
+| 0 | T-5720 · T-5721 | `terminal-ui/` 脚手架 · tokens · 块组件 · `npm run demo` | IT-590 · IT-591 · S-574 | **done** |
+| 1 | T-5720b | JSONL 协议 · `reduce/events.ts` · fixtures | IT-590b | **done** |
+| 2 | T-5722 M0 | Python → Ink 单向 pipe · spawn · `legacy` 回退 | IT-592 | **done** |
+| 3 | T-5722 M1 | Ink → Python 输入 · confirm · `/clear` | IT-592b | **done** |
+| 4 | T-5723 | `marked` 子集 · `chat-state` reducer | IT-593 | **done** |
+| 5 | T-5724 | throttle · 虚拟列表 · 热区预算 | IT-594 · S-575 | **done** |
+| 6 | T-5725 | 行级 diff | defer | **defer** |
+| — | T-5733 | auto-plan / execute / step / replan 状态展示 | IT-603～605 · S-576 | **M1 done**（S-576 手工待做） |
+| — | T-5734 | live pane 隔离 · rAF 合批 · thinking UX · ephemeral notice | IT-607～608 | **done** |
+
+**版本识别**：Ink Welcome 标题行显示 **`v0.3.2`**（`WelcomeCompact.tsx`）。若看到 **`v0.2.1`**，说明 Ink 子进程启动失败，已回退 legacy `prompt_toolkit` Bottom TUI。
+
+#### 6.6.2 桥接与启动
+
+```text
+cli_terminal.py
+  └─ terminal_ink_bridge.spawn_ink_child()
+        ├─ resolve_cli_entry()  →  tsx + src/cli.tsx（默认）
+        │                         或 MY_AGENT_TERMINAL_USE_DIST=1 → dist/cli.js
+        ├─ stdin  ← JSONL agent events
+        ├─ stdout → JSONL user input / confirm / cancel
+        └─ stderr → 继承 TTY（Ink 渲染依赖 stderr；禁止 PIPE）
+```
+
+| 项 | 行为 |
+|----|------|
+| 默认 UI | `MY_AGENT_TERMINAL_UI=ink`（`start-terminal.bat` 已设） |
+| 回退 legacy | `MY_AGENT_TERMINAL_UI=legacy` 或 Ink 入口不可用 |
+| 源码优先 | 默认 `tsx` 跑 `terminal-ui/src/cli.tsx`，避免 stale `dist/` |
+| 依赖自检 | `start-terminal.bat` 缺 `tsx` 时自动 `npm install` |
+| file-sentinel | 启动时后台 `tools/file-sentinel/start-sentinel.ps1`（防零字节截断） |
+
+#### 6.6.3 渲染架构（独立 pane）
+
+Ink 主布局 `repl/TerminalLayout.tsx` 将输出拆为**独立重绘路径**，避免 `reasoning.delta` 触发整页 `setState`：
+
+```text
+TerminalLayout
+├── WelcomePane          # 静态欢迎卡
+├── TranscriptPane       # 已提交块（虚拟列表）
+├── LiveThinkingPane     # reasoning.delta 叠加层（rAF 合批）
+├── LiveAssistantPane    # assistant.delta 叠加层（rAF 合批）
+├── ComposerPane         # 底栏输入
+└── StatusPane           # 工具名 · plan 段 · 耗时
+```
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| 状态拆分 | `cli.tsx` | `session` / `chrome` / `blocks` 分域更新 |
+| Live buffer | `hooks/use-live-stream.ts` | 通用 rAF 合批缓冲 |
+| Reasoning | `hooks/use-live-reasoning.ts` | `reasoning.delta` 专用 |
+| 帧调度 | `perf/schedule-frame.ts` | `requestAnimationFrame` 节流 |
+| 提交块 | `repl/committed-blocks.ts` | 剥离 live overlay · ephemeral notice 过滤 |
+
+#### 6.6.4 Thinking / Assistant 流式 UX
+
+| 元素 | 流式中 | 结束后 |
+|------|--------|--------|
+| **Thinking** | 思考框显示**完整** reasoning 正文 | `assistant.delta` 或回合结束 → **折叠为一行**摘要 |
+| **工具** | **不出现在**思考框；仅 `StatusPane` 显示 `activeTool` + 耗时 | — |
+| **Assistant** | `LiveAssistantPane` 边出边长；`marked` 子集渲染 | `assistant.done` 写入 transcript 块 |
+| **性能** | delta **不进** `blocks` reducer；rAF 每帧最多 flush 一次 | finalize 后移入虚拟列表 |
+
+#### 6.6.5 Auto-plan TUI（T-5733）
+
+| 事件 | TUI 行为 |
+|------|----------|
+| `turn.notice` · `[Terminal] auto-plan 判定 · …` | notice 块；**5s 后自动隐藏**（`ephemeral`） |
+| `turn.notice` · `[Terminal] auto-plan 规划中…` | 同上 |
+| `plan.state` | `StatusPane` 显示 `auto-plan · <model> · <effort>` 或 `step N/M · execute` |
+| `activity.update` | 仅状态栏（模型等待 / `run_command · 仍在执行…`） |
+| planning 阶段 | `trailingThinkingActive()` 为真时保留思考栏占位（即使 notice 清空空 thinking） |
+
+Ink 模式 notice **仅**走 `turn.notice` 事件流（不重复 `output_fn` 文本）。
+
+#### 6.6.6 环境变量（Ink）
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MY_AGENT_TERMINAL_UI` | `ink` | `legacy` / `plain` / `rich` → prompt_toolkit 或 plain |
+| `MY_AGENT_TERMINAL_USE_DIST` | — | `1` 强制用 `terminal-ui/dist/` 编译包 |
+| `MY_AGENT_TERMINAL_INK_WINDOWS` | `1` | `0` 在 Windows 上禁用 Ink |
+| `TERMINAL_PLAN_CLASSIFY` | `1` | `0` 关闭 auto-plan 受约束分类器（见 §5.5.1） |
+
+legacy Bottom TUI 另有 §6.5.3 的 `MY_AGENT_TERMINAL_MARKDOWN` 等变量；Ink 路径以 `terminal-ui` reducer 为准。
+
+#### 6.6.7 DOC-04 增补（Ink）
+
+| 面 | 档位 | ID |
+|----|------|-----|
+| JSONL reducer 块序 | P0 | IT-590b |
+| Ink spawn / legacy 回退 | P0 | IT-592 |
+| 双向输入 confirm | P1 | IT-592b |
+| Markdown 子集 + chat-state | P1 | IT-593 |
+| throttle + 虚拟列表 | P1 | IT-594 |
+| plan 状态栏 | P1 | IT-603 |
+| notice 清空空 thinking | P2 | IT-604 |
+| activity 仅状态栏 | P2 | IT-605 |
+| thinking 折叠 | P2 | IT-607 |
+| ephemeral auto-plan notice | P2 | IT-608 |
+| 手工：Ink 配色 demo | P1 | **S-574** |
+| 手工：Ink 全链路 smoke | P1 | **S-576** |
+
 ---
 
 ## 7. 实现落点
 
 | 模块 | 文件 | 状态 |
 |------|------|------|
-| 设计 | 本文 | **v0.2.0** |
+| 设计 | 本文 | **v0.3.2** |
 | meta | `session.py` | `harness` · scope 字段 |
 | scope 解析 | `terminal_scope.py` | R1～R4 · R3 提示 |
-| 入口 | `main.py` · `cli_terminal.py` | `terminal` 子命令 |
-| 启动脚本 | `start-terminal.bat` | WT 自动重开 |
+| 入口 | `main.py` · `cli_terminal.py` | `terminal` 子命令 · Ink/legacy 分支 |
+| 启动脚本 | `start-terminal.bat` | WT 重开 · npm install · file-sentinel |
 | 续接守卫 | `session.py` · `interface_lock.py` | harness 校验；`ui=terminal` |
-| 门控 | `tools/executor.py` · `agent.py` | terminal 分支 · 跳过 G14 提醒 |
-| prompt | `prompts/terminal.txt` · `loader.py` | 短 system |
-| **Bottom TUI** | `terminal_app.py` | `BottomPinnedTerminal` |
-| **TUI 渲染** | `terminal_ui.py` | Welcome · 格式化 · EventSink |
-| **Mascot** | `welcome_mascot*.py` · `scripts/gen_welcome_mascot_data.py` | Welcome 右侧像素图 |
-| Prompt 工具 | `terminal_prompt.py` · `terminal_picker.py` | 输入行 · `/model` |
+| 门控 | `tools/executor.py` · `agent.py` | terminal 分支 · plan phase 禁写 · 跳过 G14 |
+| **Plan-and-Execute** | `terminal_plan.py` · `subagent.py` · `file_guard.py` | TM-24～28 · artifact I/O |
+| prompt | `prompts/terminal.txt` · `terminal-planner.txt` · `loader.py` | execute / planner system |
+| **Ink 桥接** | `terminal_ink_bridge.py` | JSONL pipe · source-first entry |
+| **Ink UI** | `terminal-ui/src/` | cli · repl panes · reduce · perf |
+| **legacy Bottom TUI** | `terminal_app.py` · `terminal_ui.py` | `MY_AGENT_TERMINAL_UI=legacy` |
+| **Mascot** | `welcome_mascot*.py` · `scripts/gen_welcome_mascot_data.py` | legacy Welcome 像素图 |
+| Prompt 工具 | `terminal_prompt.py` · `terminal_picker.py` | legacy 输入行 · `/model` |
+| file-sentinel | `tools/file-sentinel/` | 零字节截断监控 |
 | 桌面 | `DESKTOP.md` · `electron/main.ts` | resume 拒 terminal 会话 |
-| 测试 | `tests/test_terminal_*.py` · `test_welcome_greeting.py` | IT-570～579 |
+| 测试 | `tests/test_terminal_*.py` · `terminal-ui/tests/` | IT-570～608 |
 
 ---
 
@@ -811,7 +927,17 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 | T-5710b | Welcome + StatusBar | **done** |
 | T-5710c | `/clear` `/compact` + plain 降级 | **done** |
 | T-5710d | Bottom 布局 · Welcome mascot · Markdown 格式化 · 复制/焦点 | **done** |
-| S-572 | 手工：WT 全屏 TUI smoke | todo |
+| T-5720～5721 | Ink 脚手架 · 块组件 | **done** |
+| T-5720b | JSONL reducer | **done** |
+| T-5722 | Ink 桥接双向 pipe | **done** |
+| T-5723 | Markdown 子集 | **done** |
+| T-5724 | 60fps 虚拟列表 | **done** |
+| T-5730～5732 | auto Plan-and-Execute | **done** |
+| T-5733 | plan TUI 状态展示 | **done** |
+| T-5734 | live pane 隔离 · rAF · thinking UX | **done** |
+| S-572 | 手工：legacy WT 全屏 TUI smoke | todo |
+| S-574 | 手工：Ink demo 配色 | todo |
+| S-576 | 手工：Ink 全链路 + auto-plan smoke | todo |
 
 ---
 
@@ -850,6 +976,10 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 | 0.1.5 | 2026-08-07 | **TM-Q1 关闭 · Q1-A**：固定 `agent` · 无 `只聊`/`动手` |
 | 0.1.6 | 2026-08-07 | **T-5710 设计签**：§6.4 Terminal TUI（Claude Code 式）· IT-577～579 · S-572 |
 | 0.2.0 | 2026-08-08 | **T-5710d 落地**：§6.5 Bottom TUI · Rich Markdown 输出 · Welcome mascot · 复制/焦点 · 环境变量表更新 |
+| 0.2.1 | 2026-08-12 | **TM-24～28**：§5.5 全自动 Plan-and-Execute · `terminal_plan.py` |
+| 0.3.0 | 2026-08-12 | **T-5720～5724**：§6.6 Ink TUI 阶段 0～5 · JSONL 桥接 · 虚拟列表 |
+| 0.3.1 | 2026-08-13 | **T-5733**：auto-plan TUI 状态栏 · `plan.state` reducer |
+| 0.3.2 | 2026-08-13 | **T-5734**：live pane 隔离 · rAF 合批 · thinking 折叠 · ephemeral notice · bridge source-first |
 
 ---
 
@@ -857,25 +987,22 @@ cd D:\my-agent\workspace\huiyi    # 你的仓库
 
 **纪律**：一动一停 · 每轮 **一个** task · 跑测试 · 更新 `TASKS.md` / 本文 §9 · **不要** git commit（除非用户明确要求）
 
-**建议顺序**：T-5701 → … → T-5707 → S-570/571 → **T-5710a → 5710b → 5710c** → S-572
+**当前建议**：S-576 Ink 全链路手工 smoke · S-574 配色 · legacy S-572
 
 ### 粘贴给 Cursor 的开场（复制下方整段）
 
 ```text
-Phase 57 Terminal 实现。设计真源：docs/TERMINAL-MODE.md v0.1.5（已封板，勿改产品决议）。
+Phase 57 Terminal Ink 收尾。设计真源：docs/TERMINAL-MODE.md v0.3.2（§6.6 Ink · §5.5 auto-plan）。
 
 纪律：
-- 一动一停：本轮只做 T-5701
-- 先读 TERMINAL-MODE.md §2 TM 系列 + §4 meta + §7 落点
-- 实现 SessionMeta.harness + terminal_scope_kind / terminal_cwd / terminal_foreign_root / terminal_host_id
-- 创建/保存/加载；历史无 harness → desktop；terminal 强制 turn_mode=agent（TM-23）
-- 补 tests/test_terminal_harness.py 覆盖 IT-570
-- 跑 pytest 相关用例
-- 更新 docs/TASKS.md T-5701 → done、TERMINAL-MODE §9
-- 不要 git commit
-- 做完停，等我「继续」再开 T-5708
+- 一动一停：本轮只做 S-576（或用户指定的单个 task）
+- 先读 TERMINAL-MODE.md §6.6 + §5.5
+- start-terminal.bat 应显示 Welcome v0.3.2（非 v0.2.1 legacy）
+- 验证：流式 reasoning 流畅 · thinking 结束后折叠 · auto-plan notice 5s 消失 · status bar 工具/plan 段
+- 跑 terminal-ui npm test + agent-core pytest test_terminal_*
+- 更新 docs/TASKS.md / TERMINAL-MODE §9
+- 不要 git commit（除非用户明确要求）
+- 做完停，等我「继续」
 
-不要顺手做 T-5702/5703/入口/executor。
+不要顺手改 TM 产品决议或 Desktop harness 语义。
 ```
-
-后续轮次把 `T-5701` 换成下一项即可（见 §9 任务表）。

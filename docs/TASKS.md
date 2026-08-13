@@ -1,8 +1,8 @@
 # 任务清单（TASKS）
 
-> 版本 0.1.1 · 2026-08-04 · 细分到每个 task，**先文档评审再动手**  
+> 版本 0.1.2 · 2026-08-13 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Phase 57 · Ink 阶段 3** — T-5722 M1 交互闭环 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6.2  
+> **当前焦点**：**Phase 57** — Ink **阶段 0～5 + T-5730～5734 done** · 下一手工 **S-576** · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -1814,7 +1814,7 @@ python turn_intent.py    # 分类用例无回归
 #### DOC-04 准入
 
 - [x] 矩阵行见 TERMINAL-MODE §8
-- [x] 回归 ID：IT-570～**576** · IT-590～594（Ink）· S-570 · S-571 · S-574
+- [x] 回归 ID：IT-570～**576** · IT-590～594 · IT-603～608（Ink）· S-570 · S-571 · S-574
 
 | ID | 任务 | 交付物 | 验收 | 状态 |
 |----|------|--------|------|------|
@@ -1848,6 +1848,7 @@ python turn_intent.py    # 分类用例无回归
 | **T-5731** | M0：Plan Artifact 持久化、session-guard 接入、current-step 续作 | terminal_plan.py · file_guard.py | IT-599 | **M0 done**（合入 T-5730） |
 | **T-5732** | M0：planning 禁写、execute 自动切回原模型/effort、bounded replan | executor.py · agent.py · prompts/terminal.txt | IT-600～602 | **M0 done** |
 | **T-5733** | M1：Terminal TUI 自动 plan / execute / step / replan 状态展示 | terminal_ui.py · terminal_ink_bridge.py · terminal-ui/ | IT-603～605 · S-576 | **M1 done**（S-576 手工 smoke 待做） |
+| **T-5734** | M1：Ink live pane 隔离 · rAF 合批 · thinking 折叠 · ephemeral auto-plan notice | terminal-ui/repl · hooks · perf/schedule-frame.ts | IT-607～608 | **done** |
 | S-572 | 手工：WT 全屏 TUI smoke（legacy prompt_toolkit） | log | TERMINAL §6.5 | todo |
 | S-573 | 手工：对照 preview HTML 配色（legacy Lexer 路线） | log | TERMINAL §6.4.9 | **superseded** → S-574 |
 | S-574 | 手工：`npm run demo` Ink 配色 smoke | log | TERMINAL §6.6 | todo |
