@@ -3,7 +3,7 @@
 ### 文档
 
 - **TERMINAL-MODE v0.3.2**：§6.6 Ink TUI 完整落盘（阶段 0～5 · live pane · rAF · thinking UX · ephemeral notice · bridge 启动）；§5.5 auto plan-execute；§7 实现表更新
-- **MAP / TASKS**：Phase 57 进度同步 · T-5734 · IT-607～608
+- **README**：三条产品线 · Ink Terminal v0.3.2 · 仓库结构 · bootstrap 更新
 - **BUG-025 fixed**：`patch_file` / `write_text` LF 规范化（`write_utf8_text`）· huiyi views S-99 normalize；见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) · T-4252～4255 · IT-99
 - **BUG-024 fixed**：重复 `inline_write_max` ≥2 → 停 tool + staging 内核（`MY_AGENT_INLINE_WRITE_GUARD_MAX`）；见 [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) · T-4242～4243 · IT-98
 - **BUG-023**：自动压缩后主循环 LLM 超时（「思考中…」→「回合超时已停止」）— 根因 · 规避 · R1～R7；见 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · RUNTIME §8.4 · RUNTIME-GUARDS G15 · T-2091～2094
