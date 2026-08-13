@@ -9,23 +9,23 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from agent import ChatClient, ToolCallArgumentError, _parse_tool_call, _tool_result_for_argument_error, build_builtin_tool_definition
-from llm_client import LLMCancelledError, LLMResponse, load_config, resolve_session_model
+from llm_client import LLMCancelledError, LLMResponse, StreamHandlers, load_config, resolve_session_model
 from paths import AgentPaths
 from session import Session, SessionMeta, utc_now_iso
-from tools.executor import ToolExecutor
+from tools.executor import EventFn, ToolExecutor
 from tools.logging import EvolveLog
 from tools.registry import ToolManifestError, ToolRegistry, parse_tool_manifest
 from tools.schema import to_json
 from turn_intent import classify_turn, should_spawn_explore
 
-SubagentKind = Literal["explore", "checker", "plan", "review"]
+SubagentKind = Literal["explore", "checker", "plan", "review", "terminal_plan"]
 CheckerKind = Literal["evolve_tool_scaffold", "project_test_fail"]
 CheckStatus = Literal["pass", "fail", "warn"]
 Verdict = Literal["pass", "fail", "warn"]
@@ -213,6 +213,15 @@ def plan_subagent_tool_rounds() -> int:
     except ValueError:
         value = _DEFAULT_PLAN_TOOL_ROUNDS
     return max(1, value)
+
+
+def terminal_plan_subagent_max_rounds() -> int:
+    raw = os.environ.get("TERMINAL_PLAN_SUBAGENT_MAX", "8")
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 8
+    return max(1, min(value, subagent_hard_cap()))
 
 
 def subagent_hard_cap() -> int:
@@ -787,6 +796,14 @@ def _review_system_prompt(paths: AgentPaths) -> str:
     )
 
 
+def _terminal_planner_system_prompt(paths: AgentPaths, session: Session) -> str:
+    from loader import format_terminal_scope_overlay, load_terminal_planner_text
+
+    base = load_terminal_planner_text()
+    scope = format_terminal_scope_overlay(session)
+    return f"{base}\n\n## Session scope\n\n{scope}"
+
+
 def _parse_review_verdict_from_text(text: str) -> Verdict | None:
     match = re.search(r"REVIEW_VERDICT:\s*(pass|warn|fail)\b", text, flags=re.IGNORECASE)
     if not match:
@@ -1157,10 +1174,17 @@ def _finalize_subagent_summary_on_cap(
     tool_rounds: int,
     cancel_event: threading.Event | None,
     empty_label: str,
+    reasoning_effort: str | None = None,
 ) -> str:
     _raise_if_cancelled(cancel_event)
     working.append({"role": "user", "content": close_prompt})
-    summary_response = llm.chat(working, model=model, tools=None, temperature=temperature)
+    summary_response = llm.chat(
+        working,
+        model=model,
+        tools=None,
+        temperature=temperature,
+        reasoning_effort=reasoning_effort,
+    )
     final_text = (summary_response.content or "").strip()
     if final_text:
         working.append({"role": "assistant", "content": final_text})
@@ -1656,6 +1680,170 @@ class SubagentRunner:
         if self.evolve_log is not None:
             self.evolve_log.log_subagent_run(
                 kind=result.kind,
+                tool_rounds=result.tool_rounds,
+                truncated=result.truncated,
+                paths_cited=result.paths_cited,
+                conversation_id=session.conversation_id,
+            )
+
+        return result
+
+    def run_terminal_plan(
+        self,
+        task: str,
+        *,
+        session: Session,
+        llm: ChatClient,
+        replan: bool = False,
+        failure_context: str = "",
+        plan_model: str = "",
+        reasoning_effort: str = "",
+        stream: StreamHandlers | None = None,
+        on_executor_event: EventFn | None = None,
+        on_activity: Callable[[str], None] | None = None,
+        max_rounds: int | None = None,
+        confirm_fn: Any | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> SubagentResult:
+        """Read-only Terminal planner (TM-26 · no project_id)."""
+        task_text = task.strip()
+        if not task_text:
+            raise ValueError("terminal plan task is empty")
+
+        cap = resolve_subagent_max_rounds(
+            max_rounds,
+            default=terminal_plan_subagent_max_rounds(),
+        )
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor.create(
+            paths=self.paths,
+            session_dir=None,
+            allowed_evolved=set(),
+            confirm_fn=confirm_fn,
+            evolve_log=self.evolve_log,
+            on_event=on_executor_event,
+        )
+        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.session.harness = session.meta.harness
+        executor.session.terminal_scope_kind = str(session.meta.terminal_scope_kind or "")
+        executor.session.terminal_cwd = session.meta.terminal_cwd
+        executor.session.terminal_foreign_root = session.meta.terminal_foreign_root
+        executor.session.terminal_host_id = session.meta.terminal_host_id
+        executor.session.terminal_plan_phase = "replanning" if replan else "planning"
+        executor.cancel_event = cancel_event
+        _bind_llm_cancel(llm, cancel_event)
+
+        tools = build_explore_tools(registry=registry)
+        from llm_routing import resolve_model_id_for_role
+
+        model = (plan_model or "").strip() or resolve_model_id_for_role(
+            "plan_partner", session.meta
+        )
+        effort = (reasoning_effort or "").strip() or "max"
+        user_content = task_text
+        if replan and failure_context.strip():
+            user_content = (
+                f"{task_text}\n\n[失败证据]\n{failure_context.strip()}\n\n"
+                "请仅输出剩余步骤的 JSON。"
+            )
+
+        working: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": _terminal_planner_system_prompt(self.paths, session),
+            },
+            {"role": "user", "content": user_content},
+        ]
+
+        tool_rounds = 0
+        final_text = ""
+        hit_cap = False
+
+        if on_activity is not None:
+            on_activity("规划模型思考中…")
+
+        for round_index in range(cap):
+            _raise_if_cancelled(cancel_event)
+            if on_activity is not None:
+                on_activity(
+                    "规划模型思考中…"
+                    if cap == 1
+                    else f"规划模型思考中… (第 {round_index + 1}/{cap} 轮)"
+                )
+            response = llm.chat(
+                working,
+                model=model,
+                tools=tools,
+                temperature=0.2,
+                reasoning_effort=effort,
+                stream=stream,
+            )
+
+            if not response.tool_calls:
+                final_text = (response.content or "").strip()
+                if final_text:
+                    working.append({"role": "assistant", "content": final_text})
+                break
+
+            tool_rounds += 1
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": response.content,
+                "tool_calls": response.tool_calls,
+            }
+            working.append(assistant_msg)
+
+            for tool_call in response.tool_calls:
+                _raise_if_cancelled(cancel_event)
+                try:
+                    tool_name, arguments = _parse_tool_call(tool_call)
+                except ToolCallArgumentError as exc:
+                    result = _tool_result_for_argument_error(exc)
+                else:
+                    result = executor.run(tool_name, arguments)
+                working.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", ""),
+                        "content": to_json(result),
+                    }
+                )
+
+            if round_index == cap - 1:
+                hit_cap = True
+        else:
+            hit_cap = True
+
+        if hit_cap and not final_text:
+            final_text = _finalize_subagent_summary_on_cap(
+                working=working,
+                llm=llm,
+                model=model,
+                temperature=0.2,
+                close_prompt="请输出最终 JSON 计划（仅 JSON 对象）。",
+                kind="terminal_plan",
+                cap=cap,
+                tool_rounds=tool_rounds,
+                cancel_event=cancel_event,
+                empty_label="（terminal planner 未产出 JSON）",
+                reasoning_effort="max",
+            )
+
+        paths_cited = _collect_paths_cited(working)
+        summary, truncated = truncate_summary(final_text, max_chars=plan_subagent_summary_max_chars())
+
+        result = SubagentResult(
+            kind="terminal_plan",
+            summary=summary,
+            paths_cited=paths_cited,
+            tool_rounds=tool_rounds,
+            truncated=truncated,
+            task=task_text,
+        )
+
+        if self.evolve_log is not None:
+            self.evolve_log.log_subagent_run(
+                kind="terminal_plan",
                 tool_rounds=result.tool_rounds,
                 truncated=result.truncated,
                 paths_cited=result.paths_cited,

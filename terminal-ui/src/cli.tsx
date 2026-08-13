@@ -24,6 +24,31 @@ import {
   transcriptRowBudget,
 } from './perf/virtual-list.js';
 import {useMouseWheelScroll} from './input/use-mouse-wheel-scroll.js';
+import {useLiveReasoning} from './hooks/use-live-reasoning.js';
+import {useLiveStream} from './hooks/use-live-stream.js';
+import type {TerminalBlock} from './types.js';
+import type {TerminalChrome, TerminalSession} from './repl/TerminalLayout.js';
+
+const STRUCTURAL_EVENT_TYPES = new Set([
+  'turn.start',
+  'user.message',
+  'notice',
+  'assistant.done',
+  'transcript.clear',
+]);
+
+const CHROME_EVENT_TYPES = new Set([
+  'tool.active',
+  'tool.clear',
+  'tool.progress',
+  'activity.update',
+  'status.working',
+  'plan.state',
+  'confirm.request',
+  'confirm.done',
+]);
+
+const SESSION_EVENT_TYPES = new Set(['session.init']);
 
 function loadFixture(path: string): TerminalEvent[] {
   return parseTerminalJsonl(readFileSync(path, 'utf8'));
@@ -39,10 +64,29 @@ function send(message: Record<string, unknown>) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function sessionFromState(state: TerminalUiState): TerminalSession {
+  return {
+    greet: state.greet,
+    greetSub: state.greetSub,
+    model: state.model,
+    root: state.root,
+    mascotLines: state.mascotLines,
+    mascotLabel: state.mascotLabel,
+  };
+}
+
+function chromeFromState(state: TerminalUiState): TerminalChrome {
+  return {
+    working: state.working,
+    activeTool: state.activeTool,
+    activeToolStartedAt: state.activeToolStartedAt,
+    planStatus: state.planStatus,
+    confirm: state.confirm,
+  };
+}
+
 type InkPipeAppProps = {
-  /** Python agent events (preferred — keeps process.stdin as the interactive TTY). */
   eventPort?: number;
-  /** Legacy: JSONL events on stdin pipe (stdin cannot be used for keyboard). */
   eventsOnStdin?: boolean;
 };
 
@@ -70,9 +114,7 @@ function useEventStream(
       const socket = net.createConnection({host: '127.0.0.1', port: eventPort});
       socket.setEncoding('utf8');
       socket.on('data', consume);
-      socket.on('error', () => {
-        // Keep Ink alive; Python owns the event server lifecycle.
-      });
+      socket.on('error', () => {});
       return () => {
         socket.removeListener('data', consume);
         socket.destroy();
@@ -92,32 +134,127 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
   const rows = Math.max(process.stderr.rows ?? 0, stdout.rows ?? 0, 24);
   const columns = Math.max(process.stderr.columns ?? 0, stdout.columns ?? 0, 80);
   const reducerRef = useRef(createEventReducer());
-  const [ui, setUi] = useState<TerminalUiState>(() => createInitialState());
+  const confirmRef = useRef<TerminalUiState['confirm'] | undefined>(undefined);
+
+  const [session, setSession] = useState<TerminalSession>(() => sessionFromState(createInitialState()));
+  const [chrome, setChrome] = useState<TerminalChrome>(() => chromeFromState(createInitialState()));
+  const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [inputText, setInputText] = useState('');
   const [scrollUpRows, setScrollUpRows] = useState(0);
-  const confirmRef = useRef<TerminalUiState['confirm'] | undefined>(undefined);
-  const welcomeCompact = ui.blocks.length > 0;
+
+  const {
+    text: liveReasoningText,
+    append: appendLiveReasoning,
+    flushToReducer: flushLiveReasoning,
+    reset: resetLiveReasoning,
+  } = useLiveReasoning();
+  const {
+    text: liveAssistantText,
+    append: appendLiveAssistant,
+    flushToReducer: flushLiveAssistant,
+    reset: resetLiveAssistant,
+  } = useLiveStream('assistant.delta');
+
+  const welcomeCompact = blocks.length > 0;
   const transcriptRows = transcriptRowBudget(rows, welcomeCompact);
   const maxScrollUp = useMemo(
-    () => maxTranscriptScrollUp(ui.blocks, transcriptRows, columns),
-    [ui.blocks, transcriptRows, columns],
+    () => maxTranscriptScrollUp(blocks, transcriptRows, columns),
+    [blocks, transcriptRows, columns],
   );
-  const publishUi = useMemo(
-    () => throttle((next: TerminalUiState) => setUi({...next}), 16),
+
+  const assistantLiveRef = useRef(false);
+
+  const publishChrome = useMemo(
+    () => throttle((next: TerminalChrome) => setChrome({...next}), 16),
     [],
   );
 
-  const applyEvents = useMemo(
-    () =>
-      throttle((events: TerminalEvent[]) => {
-        const reducer = reducerRef.current;
-        for (const event of events) reducer.reduce(event);
-        const next = reducer.getState();
-        confirmRef.current = next.confirm;
-        publishUi(next);
-      }, 16),
-    [publishUi],
+  const syncSession = useCallback((state: TerminalUiState) => {
+    setSession(sessionFromState(state));
+  }, []);
+
+  const flushLiveStreams = useCallback(
+    (reducer: ReturnType<typeof createEventReducer>) => {
+      flushLiveReasoning(reducer);
+      flushLiveAssistant(reducer);
+    },
+    [flushLiveAssistant, flushLiveReasoning],
   );
+
+  const applyCommittedEvents = useCallback(
+    (events: TerminalEvent[]) => {
+      if (events.length === 0) return;
+      const reducer = reducerRef.current;
+      flushLiveStreams(reducer);
+      let structural = false;
+      let chromeChanged = false;
+      let sessionChanged = false;
+
+      for (const event of events) {
+        if (event.type === 'turn.start') {
+          resetLiveReasoning();
+          resetLiveAssistant();
+          assistantLiveRef.current = false;
+        }
+        reducer.reduce(event);
+        if (STRUCTURAL_EVENT_TYPES.has(event.type)) structural = true;
+        if (CHROME_EVENT_TYPES.has(event.type)) chromeChanged = true;
+        if (SESSION_EVENT_TYPES.has(event.type)) sessionChanged = true;
+      }
+
+      const next = reducer.getState();
+      confirmRef.current = next.confirm;
+      if (sessionChanged) syncSession(next);
+      if (structural) setBlocks([...next.blocks]);
+      if (chromeChanged) publishChrome(chromeFromState(next));
+      if (structural && !chromeChanged) {
+        // Structural events like assistant.done also flip working state.
+        publishChrome(chromeFromState(next));
+      }
+    },
+    [
+      flushLiveStreams,
+      publishChrome,
+      resetLiveAssistant,
+      resetLiveReasoning,
+      syncSession,
+    ],
+  );
+
+  const applyEvents = useCallback(
+    (events: TerminalEvent[]) => {
+      const committed: TerminalEvent[] = [];
+      for (const event of events) {
+        if (event.type === 'reasoning.delta') {
+          appendLiveReasoning(typeof event.text === 'string' ? event.text : '');
+          continue;
+        }
+        if (event.type === 'assistant.delta') {
+          const text = typeof event.text === 'string' ? event.text : '';
+          const reducer = reducerRef.current;
+          if (!assistantLiveRef.current) {
+            assistantLiveRef.current = true;
+            flushLiveReasoning(reducer);
+            reducer.reduce({type: 'assistant.delta', text: ''});
+            setBlocks([...reducer.getState().blocks]);
+          }
+          appendLiveAssistant(text);
+          continue;
+        }
+        committed.push(event);
+      }
+      if (committed.length > 0) applyCommittedEvents(committed);
+    },
+    [appendLiveAssistant, appendLiveReasoning, applyCommittedEvents, flushLiveReasoning],
+  );
+
+  useEffect(() => {
+    return () => {
+      const reducer = reducerRef.current;
+      flushLiveStreams(reducer);
+      setBlocks([...reducer.getState().blocks]);
+    };
+  }, [flushLiveStreams]);
 
   useEventStream(eventPort, eventsOnStdin, applyEvents);
 
@@ -183,34 +320,35 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
         send({type: 'turn.cancel'});
       }
       setInputText(result.action.type === 'submit' ? '' : result.state.text);
-      publishUi(reducerRef.current.getState());
     },
     {isActive: inputActive},
   );
 
   useEffect(
     () => () => {
-      publishUi.cancel();
-      applyEvents.cancel();
+      publishChrome.cancel();
     },
-    [publishUi, applyEvents],
+    [publishChrome],
   );
 
   return (
     <Repl
       height={rows}
       columns={columns}
-      greet={ui.greet}
-      greetSub={ui.greetSub}
-      model={ui.model}
-      root={ui.root}
-      mascotLines={ui.mascotLines}
-      mascotLabel={ui.mascotLabel}
-      blocks={ui.blocks}
-      activeTool={ui.activeTool}
-      activeToolStartedAt={ui.activeToolStartedAt}
-      working={ui.working}
-      confirm={ui.confirm}
+      greet={session.greet}
+      greetSub={session.greetSub}
+      model={session.model}
+      root={session.root}
+      mascotLines={session.mascotLines}
+      mascotLabel={session.mascotLabel}
+      blocks={blocks}
+      liveReasoningText={liveReasoningText}
+      liveAssistantText={liveAssistantText}
+      activeTool={chrome.activeTool}
+      activeToolStartedAt={chrome.activeToolStartedAt}
+      planStatus={chrome.planStatus}
+      working={chrome.working}
+      confirm={chrome.confirm}
       input={inputText}
       scrollUpRows={scrollUpRows}
     />
@@ -238,6 +376,7 @@ if (fixtureArg) {
       blocks={ui.blocks}
       activeTool={ui.activeTool}
       activeToolStartedAt={ui.activeToolStartedAt}
+      planStatus={ui.planStatus}
       working={ui.working}
     />,
   );

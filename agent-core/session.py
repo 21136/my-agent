@@ -338,8 +338,15 @@ class Session:
 
     def persist_goal(self) -> None:
         """Write ``goal.md`` only (MEMORY §6.1)."""
+        from file_guard import atomic_write_text
+
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        self.goal_path.write_text(self.goal, encoding="utf-8")
+        atomic_write_text(
+            self.goal_path,
+            self.goal,
+            agent_root=self.paths.agent_root,
+            allow_truncate_to_empty=True,
+        )
 
     def set_topics(self, topics: list[str], *, phase: SessionPhase | None = None) -> None:
         cleaned = [topic.strip() for topic in topics if topic.strip()]
@@ -380,8 +387,11 @@ class Session:
         self.tool_outputs_dir.mkdir(parents=True, exist_ok=True)
         self.meta.updated_at = utc_now_iso()
         self.persist_goal()
-        _write_meta(self.meta_path, self.meta)
-        _write_messages_snapshot(self.messages_path, self.messages)
+        _write_meta(self.meta_path, self.meta, agent_root=self.paths.agent_root)
+        _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
+        from file_guard import backup_session_files
+
+        backup_session_files(self.session_dir, self.paths.agent_root)
         if not is_internal_session_id(self.conversation_id):
             if is_terminal_harness(self.meta):
                 write_terminal_last_session_id(self.paths, self.conversation_id)
@@ -416,7 +426,11 @@ class Session:
 
         repaired = repair_tool_messages(messages)
         if repaired != messages:
-            _write_messages_snapshot(session_dir / MESSAGES_FILENAME, repaired)
+            _write_messages_snapshot(
+                session_dir / MESSAGES_FILENAME,
+                repaired,
+                agent_root=paths.agent_root,
+            )
             messages = repaired
         notices: list[str] = []
         for kind in meta_issues:
@@ -1119,7 +1133,7 @@ def prompt_and_set_goal(
     session.set_goal(goal)
     session.persist_goal()
     session.meta.updated_at = utc_now_iso()
-    _write_meta(session.meta_path, session.meta)
+    _write_meta(session.meta_path, session.meta, agent_root=session.paths.agent_root)
     return goal
 
 
@@ -1152,7 +1166,7 @@ def _read_meta(
     return SessionMeta.from_dict(payload)
 
 
-def _write_meta(meta_path: Path, meta: SessionMeta) -> None:
+def _write_meta(meta_path: Path, meta: SessionMeta, *, agent_root: Path | None = None) -> None:
     payload: dict[str, Any] = {}
     existing: dict[str, Any] | None = None
     if meta_path.is_file():
@@ -1166,7 +1180,13 @@ def _write_meta(meta_path: Path, meta: SessionMeta) -> None:
     assert_harness_immutable(existing, meta)
     enforce_terminal_meta_invariants(meta)
     payload.update(meta.to_dict())
-    meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from file_guard import atomic_write_text
+
+    atomic_write_text(
+        meta_path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        agent_root=agent_root,
+    )
 
 
 def format_meta_corruption_notice(kind: str) -> str:
@@ -1236,12 +1256,19 @@ def _read_messages(
     return messages
 
 
-def _write_messages_snapshot(messages_path: Path, messages: list[dict[str, Any]]) -> None:
+def _write_messages_snapshot(
+    messages_path: Path,
+    messages: list[dict[str, Any]],
+    *,
+    agent_root: Path | None = None,
+) -> None:
     lines = [json.dumps(message, ensure_ascii=False) for message in messages]
     content = "\n".join(lines)
     if content:
         content += "\n"
-    messages_path.write_text(content, encoding="utf-8")
+    from file_guard import atomic_write_text
+
+    atomic_write_text(messages_path, content, agent_root=agent_root)
 
 
 def _demo() -> None:

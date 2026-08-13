@@ -854,6 +854,38 @@ class Agent:
             self.session.meta.terminal_host_id or ""
         ).strip()
 
+    def _set_terminal_plan_phase(self, phase: str) -> None:
+        self.executor.session.terminal_plan_phase = (phase or "").strip()
+
+    def _emit_terminal_plan_state(
+        self,
+        *,
+        mode: str,
+        model: str = "",
+        effort: str = "",
+        step: int = 0,
+        total: int = 0,
+        retry: int = 0,
+        replan: int = 0,
+        title: str = "",
+        degraded: bool = False,
+    ) -> None:
+        from terminal_plan import terminal_plan_state_event
+
+        payload = terminal_plan_state_event(
+            mode=mode,
+            model=model,
+            effort=effort,
+            step=step,
+            total=total,
+            retry=retry,
+            replan=replan,
+            title=title,
+        )
+        if degraded:
+            payload["degraded"] = True
+        self._emit_turn_event(payload)
+
     def _emit_turn_event(self, event: dict[str, Any]) -> None:
         handler = self.on_turn_event
         if handler is not None:
@@ -1824,6 +1856,514 @@ class Agent:
             )
         return updated, "task_paused"
 
+    def _run_terminal_plan_execute_turn(
+        self,
+        user_text: str,
+        *,
+        intent: str,
+    ) -> TurnResult:
+        """Terminal auto Plan-and-Execute (TM-24～28 · T-5730 · 一动一停)."""
+        from terminal_plan import (
+            clear_artifact,
+            auto_plan_gate_rules,
+            goal_fingerprint,
+            is_explicit_replan_turn,
+            load_artifact,
+            replan_max,
+            resolve_auto_plan_turn,
+            save_artifact,
+            should_resume_step_execution,
+        )
+
+        self._emit_turn_event(
+            {
+                "type": "turn.start",
+                "intent": intent,
+                "intent_label": "Terminal Plan-and-Execute",
+            }
+        )
+
+        notices: list[str] = []
+        fp = goal_fingerprint(self.session)
+        artifact = load_artifact(self.session)
+        if artifact is not None and artifact.goal_fingerprint != fp:
+            clear_artifact(self.session)
+            artifact = None
+
+        def _notice(text: str, *, level: str = "info") -> None:
+            notices.append(text)
+            self._emit_turn_event({"type": "turn.notice", "level": level, "text": text})
+
+        def _stopped(text: str) -> TurnResult:
+            if artifact is not None:
+                artifact.phase = "stopped"
+                save_artifact(self.session, artifact)
+            _notice(text, level="warn")
+            self.session.save()
+            self._set_terminal_plan_phase("")
+            return TurnResult(
+                assistant_text=text,
+                tool_rounds=0,
+                finish_reason="terminal_plan_stopped",
+                turn_intent=intent,
+                notices=notices,
+            )
+
+        if is_explicit_replan_turn(user_text):
+            if artifact is None:
+                return _stopped("无有效 terminal-plan，无法重新规划。")
+            if not artifact.can_replan():
+                return _stopped(
+                    f"bounded replan 已用尽（上限 {replan_max()} 次）。"
+                )
+            artifact = self._terminal_run_replan(user_text, artifact, notices)
+            if artifact is None:
+                return _stopped("重新规划失败，已停止自动执行。")
+
+        gate = auto_plan_gate_rules(user_text, self.session, intent, artifact)
+        if gate == "classify":
+            self._emit_terminal_activity("判定是否需要 auto-plan…")
+        plan_gate = resolve_auto_plan_turn(
+            user_text,
+            self.session,
+            intent,
+            artifact,
+            llm=self.llm,
+        )
+        if plan_gate.needs_plan:
+            if plan_gate.source == "classifier" and plan_gate.reason:
+                _notice(
+                    f"[Terminal] auto-plan 判定 · {plan_gate.reason}",
+                    level="info",
+                )
+            artifact = self._terminal_run_initial_plan(user_text, notices)
+            if artifact is None:
+                _notice("自动规划失败，回退为直接执行。", level="warn")
+                return self._run_terminal_direct_execute(intent=intent, notices=notices)
+        elif not should_resume_step_execution(artifact):
+            return self._run_terminal_direct_execute(intent=intent, notices=notices)
+
+        assert artifact is not None
+        return self._terminal_run_one_step(user_text, artifact, intent=intent, notices=notices)
+
+    def _run_terminal_direct_execute(
+        self,
+        *,
+        intent: str,
+        notices: list[str] | None = None,
+    ) -> TurnResult:
+        """Fallback: normal execute segments without plan artifact."""
+        from llm_routing import resolve_model_id_for_role
+
+        tools = build_llm_tools(self.session, registry=self.executor.registry)
+        model = resolve_model_id_for_role("main_turn", self.session.meta)
+        result = self._run_execute_segments(
+            intent=intent,
+            subagent_used=False,
+            subagent_tool_rounds=0,
+            tools=tools,
+            model=model,
+        )
+        if notices:
+            result.notices = [*notices, *result.notices]
+        return result
+
+    def _emit_terminal_activity(self, text: str) -> None:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return
+        self._emit_turn_event({"type": "activity.update", "text": cleaned})
+
+    def _terminal_run_initial_plan(
+        self,
+        user_text: str,
+        notices: list[str],
+    ) -> Any | None:
+        from llm_routing import resolve_model_id_for_role
+        from subagent import SubagentRunner
+        from terminal_plan import (
+            artifact_from_planner_payload,
+            extract_json_object,
+            format_plan_notice,
+            format_planning_notice,
+            goal_fingerprint,
+            resolve_terminal_planning_profile,
+            save_artifact,
+        )
+        from tools.logging import EvolveLog
+
+        profile = resolve_terminal_planning_profile(self.session)
+        self._set_terminal_plan_phase("planning")
+        self._emit_terminal_plan_state(
+            mode="planning",
+            model=profile.model_id,
+            effort=profile.reasoning_effort,
+            degraded=profile.degraded,
+        )
+        planning_text = format_planning_notice(
+            model_label=profile.model_id,
+            effort=profile.reasoning_effort,
+            degraded=profile.degraded,
+        )
+        self._emit_turn_event({"type": "turn.notice", "level": "info", "text": planning_text})
+        try:
+            runner = SubagentRunner(
+                paths=self.session.paths,
+                evolve_log=EvolveLog.for_agent(self.session.paths),
+            )
+            result = runner.run_terminal_plan(
+                user_text,
+                session=self.session,
+                llm=self.llm,
+                plan_model=profile.model_id,
+                reasoning_effort=profile.reasoning_effort,
+                stream=self.stream_handlers,
+                on_executor_event=self.executor.on_event,
+                on_activity=self._emit_terminal_activity,
+                cancel_event=self.cancel_event,
+            )
+            payload = extract_json_object(result.summary)
+            artifact = artifact_from_planner_payload(
+                payload,
+                goal_fp=goal_fingerprint(self.session),
+                summary=str(payload.get("summary") or result.summary),
+            )
+            save_artifact(self.session, artifact)
+            _text = format_plan_notice(
+                model_label=profile.model_id,
+                effort=profile.reasoning_effort,
+                step_count=len(artifact.steps),
+                degraded=profile.degraded,
+            )
+            notices.append(_text)
+            self._emit_turn_event({"type": "turn.notice", "level": "info", "text": _text})
+            self._emit_terminal_plan_state(
+                mode="executing",
+                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                effort=self.session.meta.reasoning_effort,
+                step=1,
+                total=len(artifact.steps),
+            )
+            return artifact
+        except Exception as exc:
+            notices.append(f"[Terminal] auto-plan 失败：{exc}")
+            self._emit_turn_event(
+                {
+                    "type": "turn.notice",
+                    "level": "warn",
+                    "text": notices[-1],
+                }
+            )
+            return None
+        finally:
+            self._set_terminal_plan_phase("")
+
+    def _terminal_run_replan(
+        self,
+        user_text: str,
+        artifact: Any,
+        notices: list[str],
+    ) -> Any | None:
+        from llm_routing import resolve_model_id_for_role
+        from subagent import SubagentRunner
+        from terminal_plan import (
+            extract_json_object,
+            format_plan_notice,
+            format_planning_notice,
+            merge_replan_payload,
+            resolve_terminal_planning_profile,
+            save_artifact,
+        )
+        from tools.logging import EvolveLog
+
+        profile = resolve_terminal_planning_profile(self.session)
+        self._set_terminal_plan_phase("replanning")
+        self._emit_terminal_plan_state(
+            mode="replanning",
+            model=profile.model_id,
+            effort=profile.reasoning_effort,
+            replan=artifact.replan_count + 1,
+            step=artifact.current_step + 1,
+            total=len(artifact.steps),
+            degraded=profile.degraded,
+        )
+        planning_text = format_planning_notice(
+            model_label=profile.model_id,
+            effort=profile.reasoning_effort,
+            replan=True,
+            degraded=profile.degraded,
+        )
+        self._emit_turn_event({"type": "turn.notice", "level": "info", "text": planning_text})
+        step = artifact.current()
+        failure = ""
+        if step is not None:
+            failure = f"step={step.id} title={step.title!r} retries={artifact.retry_count}"
+        try:
+            runner = SubagentRunner(
+                paths=self.session.paths,
+                evolve_log=EvolveLog.for_agent(self.session.paths),
+            )
+            result = runner.run_terminal_plan(
+                user_text,
+                session=self.session,
+                llm=self.llm,
+                replan=True,
+                failure_context=failure,
+                plan_model=profile.model_id,
+                reasoning_effort=profile.reasoning_effort,
+                stream=self.stream_handlers,
+                on_executor_event=self.executor.on_event,
+                on_activity=self._emit_terminal_activity,
+                cancel_event=self.cancel_event,
+            )
+            payload = extract_json_object(result.summary)
+            artifact = merge_replan_payload(artifact, payload)
+            save_artifact(self.session, artifact)
+            _text = format_plan_notice(
+                model_label=profile.model_id,
+                effort=profile.reasoning_effort,
+                step_count=len(artifact.steps) - artifact.current_step,
+                replan=True,
+                degraded=profile.degraded,
+            )
+            notices.append(_text)
+            self._emit_turn_event({"type": "turn.notice", "level": "info", "text": _text})
+            self._emit_terminal_plan_state(
+                mode="executing",
+                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                effort=self.session.meta.reasoning_effort,
+                step=artifact.current_step + 1,
+                total=len(artifact.steps),
+                replan=artifact.replan_count,
+            )
+            return artifact
+        except Exception as exc:
+            notices.append(f"[Terminal] bounded replan 失败：{exc}")
+            self._emit_turn_event(
+                {"type": "turn.notice", "level": "warn", "text": notices[-1]}
+            )
+            return None
+        finally:
+            self._set_terminal_plan_phase("")
+
+    def _terminal_run_one_step(
+        self,
+        user_text: str,
+        artifact: Any,
+        *,
+        intent: str,
+        notices: list[str],
+    ) -> TurnResult:
+        from context import session_memory_event
+        from llm_routing import resolve_model_id_for_role
+        from terminal_plan import (
+            format_step_done_notice,
+            format_step_overlay,
+            run_step_verification,
+            save_artifact,
+            step_retry_max,
+            terminal_step_tool_max,
+        )
+
+        step = artifact.current()
+        if step is None:
+            artifact.phase = "done"
+            save_artifact(self.session, artifact)
+            self.session.save()
+            self._set_terminal_plan_phase("")
+            self._emit_terminal_plan_state(mode="done")
+            text = "[Terminal] 计划已全部完成。"
+            notices.append(text)
+            return TurnResult(
+                assistant_text=text,
+                tool_rounds=0,
+                finish_reason="terminal_plan_done",
+                turn_intent=intent,
+                notices=notices,
+            )
+
+        exec_model = resolve_model_id_for_role("main_turn", self.session.meta)
+        exec_effort = self.session.meta.reasoning_effort
+        self._emit_terminal_plan_state(
+            mode="executing",
+            model=exec_model,
+            effort=exec_effort,
+            step=artifact.current_step + 1,
+            total=len(artifact.steps),
+            retry=artifact.retry_count,
+            replan=artifact.replan_count,
+            title=step.title,
+        )
+        self._emit_turn_event(
+            {
+                "type": "turn.notice",
+                "level": "info",
+                "text": (
+                    f"[Terminal] execute · {exec_model} · {exec_effort} · "
+                    f"step {artifact.current_step + 1}/{len(artifact.steps)}"
+                ),
+            }
+        )
+
+        step.status = "running"
+        artifact.phase = "executing"
+        save_artifact(self.session, artifact)
+
+        self._set_terminal_plan_phase("executing")
+        self.session.subagent_overlay = format_step_overlay(artifact, user_text=user_text)
+        tools = build_llm_tools(self.session, registry=self.executor.registry)
+        segment_start_index = len(self.session.messages)
+
+        try:
+            loop_result = self._run_parent_tool_loop(
+                max_rounds=terminal_step_tool_max(),
+                tools=tools,
+                model=exec_model,
+                segment_start_index=segment_start_index,
+            )
+        finally:
+            self._set_terminal_plan_phase("")
+            self.session.subagent_overlay = None
+
+        if loop_result.finish_reason in {"cancelled", "timeout"}:
+            self.session.save()
+            return TurnResult(
+                assistant_text=loop_result.final_text or "",
+                tool_rounds=loop_result.tool_rounds,
+                finish_reason=loop_result.finish_reason,
+                turn_intent=intent,
+                total_tool_rounds=loop_result.tool_rounds,
+                notices=notices,
+            )
+
+        artifact.phase = "validating"
+        save_artifact(self.session, artifact)
+        self._emit_terminal_plan_state(
+            mode="validating",
+            model=exec_model,
+            effort=exec_effort,
+            step=artifact.current_step + 1,
+            total=len(artifact.steps),
+            retry=artifact.retry_count,
+            replan=artifact.replan_count,
+            title=step.title,
+        )
+        ok, verify_err = run_step_verification(self.executor, step)
+
+        if ok:
+            step.status = "passed"
+            artifact.retry_count = 0
+            done_text = format_step_done_notice(artifact, passed=True)
+            artifact.current_step += 1
+            if artifact.current_step >= len(artifact.steps):
+                artifact.phase = "done"
+            else:
+                artifact.phase = "executing"
+            save_artifact(self.session, artifact)
+            if artifact.phase == "done":
+                self._emit_terminal_plan_state(mode="done")
+            else:
+                self._emit_terminal_plan_state(
+                    mode="executing",
+                    model=exec_model,
+                    effort=exec_effort,
+                    step=artifact.current_step + 1,
+                    total=len(artifact.steps),
+                    replan=artifact.replan_count,
+                )
+            if loop_result.final_text:
+                assistant_text = loop_result.final_text.rstrip() + "\n\n" + done_text
+                self._patch_last_assistant_message(assistant_text)
+            else:
+                assistant_text = done_text
+                self.session.append_message({"role": "assistant", "content": assistant_text})
+            notices.append(done_text)
+            self._emit_turn_event({"type": "turn.notice", "level": "info", "text": done_text})
+            self.session.save()
+            self._emit_turn_event(session_memory_event(self.session))
+            return TurnResult(
+                assistant_text=assistant_text,
+                tool_rounds=loop_result.tool_rounds,
+                finish_reason="terminal_plan_step_done",
+                turn_intent=intent,
+                total_tool_rounds=loop_result.tool_rounds,
+                notices=notices,
+            )
+
+        step.status = "failed"
+        artifact.retry_count += 1
+        fail_detail = verify_err or "step verification failed"
+        if artifact.can_retry_step():
+            artifact.phase = "executing"
+            save_artifact(self.session, artifact)
+            retry_text = (
+                f"[Terminal] 步骤验证失败（{fail_detail}）。"
+                f"重试 {artifact.retry_count}/{step_retry_max()} · 回复「继续」重试本步。"
+            )
+            notices.append(retry_text)
+            self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": retry_text})
+            self._emit_terminal_plan_state(
+                mode="executing",
+                model=exec_model,
+                effort=exec_effort,
+                step=artifact.current_step + 1,
+                total=len(artifact.steps),
+                retry=artifact.retry_count,
+                replan=artifact.replan_count,
+                title=step.title,
+            )
+            assistant_text = (loop_result.final_text or "").rstrip()
+            if assistant_text:
+                assistant_text = assistant_text + "\n\n" + retry_text
+                self.session.append_message({"role": "assistant", "content": assistant_text})
+            else:
+                assistant_text = retry_text
+                self.session.append_message({"role": "assistant", "content": assistant_text})
+            self.session.save()
+            return TurnResult(
+                assistant_text=assistant_text,
+                tool_rounds=loop_result.tool_rounds,
+                finish_reason="terminal_plan_step_retry",
+                turn_intent=intent,
+                total_tool_rounds=loop_result.tool_rounds,
+                notices=notices,
+            )
+
+        if artifact.can_replan():
+            replanned = self._terminal_run_replan(user_text, artifact, notices)
+            if replanned is not None:
+                return self._terminal_run_one_step(
+                    user_text,
+                    replanned,
+                    intent=intent,
+                    notices=notices,
+                )
+
+        artifact.phase = "stopped"
+        save_artifact(self.session, artifact)
+        self._emit_terminal_plan_state(mode="stopped")
+        stop_text = (
+            f"[Terminal] 步骤失败且恢复预算已用尽：{fail_detail}。"
+            "请人工介入或显式「重新规划」。"
+        )
+        notices.append(stop_text)
+        self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": stop_text})
+        assistant_text = (loop_result.final_text or "").rstrip()
+        if assistant_text:
+            assistant_text = assistant_text + "\n\n" + stop_text
+        else:
+            assistant_text = stop_text
+        self.session.append_message({"role": "assistant", "content": assistant_text})
+        self.session.save()
+        return TurnResult(
+            assistant_text=assistant_text,
+            tool_rounds=loop_result.tool_rounds,
+            finish_reason="terminal_plan_stopped",
+            turn_intent=intent,
+            total_tool_rounds=loop_result.tool_rounds,
+            notices=notices,
+        )
+
     def _maybe_pre_spawn_plan(
         self,
         user_text: str,
@@ -1845,6 +2385,7 @@ class Agent:
         if not decision.spawn:
             return None
 
+        from llm_routing import resolve_model_id_for_role
         from subagent import SubagentRunner
 
         preview = user_text if len(user_text) <= 120 else user_text[:117] + "…"
@@ -1951,6 +2492,13 @@ class Agent:
         self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()
 
+        from terminal_plan import load_artifact, should_handle_terminal_plan_turn
+
+        if terminal and intent == "execute":
+            artifact = load_artifact(self.session)
+            if should_handle_terminal_plan_turn(user_text, self.session, intent, artifact):
+                return self._run_terminal_plan_execute_turn(user_text, intent=intent)
+
         subagent_tool_rounds = 0
         overlay_parts: list[str] = []
 
@@ -1994,6 +2542,7 @@ class Agent:
             )
         if spawn_explore_flag:
             from explore_scope import build_kernel_auto_explore_task
+            from llm_routing import resolve_model_id_for_role
             from subagent import SubagentRunner, format_subagent_overlay
 
             try:

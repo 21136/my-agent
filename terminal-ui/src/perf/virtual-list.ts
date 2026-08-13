@@ -1,6 +1,7 @@
 import type {TerminalBlock} from '../types.js';
 import {
   expandWrappedLines,
+  formatStreamingThinkingLines,
   formatThinkingLines,
   stripInlineMarkdown,
   wrapLineCount,
@@ -82,8 +83,16 @@ export function estimateBlockRows(block: TerminalBlock, columns: number): number
     case 'user':
       return expandWrappedLines(`❯ ${block.text}`, columns, USER_PREFIX_COLS).length;
     case 'thinking': {
-      const lines = formatThinkingLines(block.text, columns);
-      return 2 + Math.max(lines.length, 1);
+      if (block.collapsed) {
+        return 3;
+      }
+      const {lines, clippedTop} = formatStreamingThinkingLines(
+        block.text,
+        columns,
+        MAX_THINKING_DISPLAY_LINES,
+      );
+      const bodyRows = Math.max(lines.length, 1);
+      return 2 + bodyRows + (clippedTop ? 1 : 0);
     }
     case 'assistant':
     case 'assistant_streaming':

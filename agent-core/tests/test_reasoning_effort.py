@@ -31,6 +31,9 @@ class ReasoningEffortTests(unittest.TestCase):
     def test_0x567_passes_medium(self) -> None:
         self.assertEqual(_api_reasoning_effort("medium", "0x567"), "medium")
 
+    def test_0x567_maps_max_to_high(self) -> None:
+        self.assertEqual(_api_reasoning_effort("max", "0x567"), "high")
+
     def test_0x567_uses_top_level_reasoning_effort(self) -> None:
         payload: dict[str, object] = {"model": "gpt-5.6-luna"}
         _apply_reasoning_effort_to_payload(payload, "medium", "0x567")

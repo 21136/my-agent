@@ -869,12 +869,23 @@ class BottomPinnedTerminal:
         if self._picker_current:
             fragments.append(("class:picker.hint", f"当前 {self._picker_current}"))
             fragments.append(("", "\n"))
+        from llm_client import format_context_tokens_short
+        from llm_models import get_registry
+
+        registry = get_registry()
         for i, entry in enumerate(self._picker_models):
             selected = i == self._picker_index
             prefix = "› " if selected else "  "
             tier = str(getattr(entry, "tier", "")).upper()
             name = str(getattr(entry, "name", entry.id))
-            body = f"{prefix}{name}  ({entry.id} · {tier})"
+            resolved = registry.get(entry.id)
+            ctx = (
+                format_context_tokens_short(resolved.max_input_tokens)
+                if resolved is not None
+                else ""
+            )
+            ctx_suffix = f" · {ctx} ctx" if ctx else ""
+            body = f"{prefix}{name}  ({entry.id} · {tier}{ctx_suffix})"
             style = "class:picker.selected" if selected else "class:picker.item"
             fragments.append((style, body))
             fragments.append(("", "\n"))
@@ -925,6 +936,7 @@ class BottomPinnedTerminal:
     def _toolbar(self) -> Any:
         from prompt_toolkit.formatted_text import FormattedText
 
+        from llm_client import format_context_tokens_short
         from terminal_ui import (
             build_status_bar,
             format_activity_status,
@@ -940,6 +952,7 @@ class BottomPinnedTerminal:
             status=self._console.status,
             active_tool=self._console.active_tool,
             activity_detail=self._console.activity_detail,
+            token_usage=self._console._token_usage,
         )
         model = prompt_model_short(bar.llm_model)
         dot = welcome_status_dot(bar.status)
@@ -958,11 +971,31 @@ class BottomPinnedTerminal:
             "working": "class:status.state-working",
             "cancelled": "class:status.state-cancelled",
         }.get(bar.status, "class:status.state-idle")
-        return FormattedText(
+        fragments: list[tuple[str, str]] = [
+            ("class:status.model", model),
+            ("class:status.sep", " · "),
+            ("class:status.root", bar.root_short),
+        ]
+        if bar.token_usage is not None and bar.token_limit is not None and bar.token_limit > 0:
+            fragments.extend(
+                [
+                    ("class:status.sep", " · "),
+                    (
+                        "class:status.label",
+                        f"{format_context_tokens_short(bar.token_usage)}/"
+                        f"{format_context_tokens_short(bar.token_limit)}",
+                    ),
+                ]
+            )
+        elif bar.token_limit is not None and bar.token_limit > 0:
+            fragments.extend(
+                [
+                    ("class:status.sep", " · "),
+                    ("class:status.label", f"{format_context_tokens_short(bar.token_limit)} ctx"),
+                ]
+            )
+        fragments.extend(
             [
-                ("class:status.model", model),
-                ("class:status.sep", " · "),
-                ("class:status.root", bar.root_short),
                 ("class:status.sep", " · "),
                 ("class:status.label", "agent"),
                 ("class:status.sep", " · "),
@@ -970,6 +1003,7 @@ class BottomPinnedTerminal:
                 (state_class, f" {status}"),
             ]
         )
+        return FormattedText(fragments)
 
     @staticmethod
     def _plain_text(text: str) -> str:

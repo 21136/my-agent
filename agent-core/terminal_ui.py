@@ -294,6 +294,7 @@ def parse_terminal_model_command(line: str) -> str | None:
 
 
 def format_terminal_models_list(paths: Any, *, current_model: str) -> list[str]:
+    from llm_client import format_context_tokens_short
     from llm_models import get_registry
 
     registry = get_registry(paths)
@@ -302,7 +303,8 @@ def format_terminal_models_list(paths: Any, *, current_model: str) -> list[str]:
     for entry in registry.models:
         marker = "→" if entry.id == current else " "
         tier = entry.tier.upper()
-        lines.append(f"  {marker} {entry.id}  ({entry.name} · {tier})")
+        ctx = format_context_tokens_short(entry.max_input_tokens)
+        lines.append(f"  {marker} {entry.id}  ({entry.name} · {tier} · {ctx} ctx)")
     lines.append("用法: /model（↑↓ 选择）| /model flash | /model pro")
     return lines
 
@@ -419,6 +421,9 @@ class StatusBarContent:
     status: str
     active_tool: str = ""
     activity_detail: str = ""
+    token_usage: int | None = None
+    token_limit: int | None = None
+    plan_status: str = ""
 
 
 def welcome_session_suffix(session_id: str) -> str:
@@ -765,7 +770,13 @@ def build_status_bar(
     status: str = "idle",
     active_tool: str = "",
     activity_detail: str = "",
+    token_usage: int | None = None,
+    token_limit: int | None = None,
+    plan_status: str = "",
 ) -> StatusBarContent:
+    from llm_client import resolve_context_limit, resolve_session_model
+    from session import is_terminal_harness
+
     meta = session.meta
     effective_root = resolve_effective_root_abs(meta, paths)
     root_path = Path(effective_root)
@@ -773,6 +784,16 @@ def build_status_bar(
     llm_model = meta.llm_model or resolve_session_model(list(meta.topics))
     session_id = session.conversation_id
     suffix = session_id if len(session_id) <= 12 else f"…{session_id[-8:]}"
+    resolved_limit = resolve_context_limit(llm_model)
+    resolved_plan = (plan_status or "").strip()
+    if not resolved_plan and is_terminal_harness(meta):
+        from terminal_plan import load_artifact, plan_status_from_artifact
+
+        resolved_plan = plan_status_from_artifact(
+            load_artifact(session),
+            session_model=llm_model,
+            session_effort=str(meta.reasoning_effort or "medium"),
+        )
     return StatusBarContent(
         llm_model=llm_model,
         turn_mode=str(meta.turn_mode or "agent"),
@@ -781,17 +802,32 @@ def build_status_bar(
         status=status,
         active_tool=active_tool,
         activity_detail=activity_detail,
+        token_usage=token_usage,
+        token_limit=resolved_limit,
+        plan_status=resolved_plan,
     )
 
 
 def format_status_bar_line(bar: StatusBarContent) -> str:
+    from llm_client import format_context_tokens_short
+
     status = format_activity_status(
         bar.status,
         active_tool=bar.active_tool,
         activity_detail=bar.activity_detail,
     )
     dot = welcome_status_dot(bar.status)
-    return f"{bar.llm_model}  ·  {bar.root_short}  ·  {dot} {status}"
+    parts = [bar.llm_model, bar.root_short]
+    if bar.plan_status:
+        parts.append(bar.plan_status)
+    if bar.token_usage is not None and bar.token_limit is not None and bar.token_limit > 0:
+        parts.append(
+            f"{format_context_tokens_short(bar.token_usage)}/"
+            f"{format_context_tokens_short(bar.token_limit)}"
+        )
+    elif bar.token_limit is not None and bar.token_limit > 0:
+        parts.append(f"{format_context_tokens_short(bar.token_limit)} ctx")
+    return f"{'  ·  '.join(parts)}  ·  {dot} {status}"
 
 
 def prompt_model_short(model_id: str) -> str:
@@ -1450,28 +1486,7 @@ class RichTerminalBackend(TerminalBackend):
         return self.render_prompt_footer(bar)
 
     def render_prompt_footer(self, bar: StatusBarContent) -> str:
-        from rich.text import Text
-
-        left = Text()
-        left.append(bar.llm_model, style="dim")
-        left.append("  ·  ", style="bright_black")
-        left.append(bar.root_short, style="cyan dim")
-        status = format_activity_status(
-            bar.status,
-            active_tool=bar.active_tool,
-            activity_detail=bar.activity_detail,
-        )
-        dot = welcome_status_dot(bar.status)
-        status_style = {
-            "working": "yellow",
-            "cancelled": "red",
-        }.get(bar.status, "green")
-        left.append("  ·  ", style="bright_black")
-        left.append(f"{dot} ", style=status_style)
-        left.append(status, style=status_style)
-        with self._console.capture() as capture:
-            self._console.print(left)
-        line = capture.get().rstrip("\n")
+        line = format_status_bar_line(bar)
         self._write(line)
         return line
 
@@ -1564,6 +1579,10 @@ class TerminalEventSink:
             self.backend.render_notice(text)
             self.state.record_line(text)
             return
+        if event_type == "terminal.plan.state":
+            if self._console is not None:
+                self._console.apply_plan_state(event)
+            return
         if event_type == "assistant.delta":
             text = str(event.get("text", ""))
             self.backend.render_assistant_delta(text)
@@ -1590,6 +1609,13 @@ class TerminalEventSink:
             return
         if event_type == "tool.end":
             self._handle_tool_end(event)
+            return
+        if event_type == "session.memory":
+            usage = event.get("token_usage")
+            if self._console is not None:
+                if isinstance(usage, (int, float)):
+                    self._console._token_usage = int(usage)
+                self._console.refresh_status_bar()
             return
 
     def on_executor_event(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -1655,7 +1681,9 @@ class TerminalConsole:
     _status: str = "idle"
     _active_tool: str = ""
     _activity_detail: str = ""
+    _token_usage: int | None = None
     _footer_active: bool = False
+    _plan_status: str = ""
     _status_change_listener: Callable[[], None] | None = field(default=None, repr=False)
 
     @classmethod
@@ -1797,6 +1825,25 @@ class TerminalConsole:
         self._activity_detail = ""
         self._notify_status_change()
 
+    def apply_plan_state(self, event: dict[str, Any]) -> None:
+        from terminal_plan import plan_status_segment
+
+        mode = str(event.get("mode", "")).strip()
+        if mode.casefold() in {"", "cleared"}:
+            self._plan_status = ""
+        else:
+            self._plan_status = plan_status_segment(
+                mode=mode,
+                model=str(event.get("model", "")),
+                effort=str(event.get("effort", "")),
+                step=int(event.get("step", 0) or 0),
+                total=int(event.get("total", 0) or 0),
+                retry=int(event.get("retry", 0) or 0),
+                replan=int(event.get("replan", 0) or 0),
+                degraded=bool(event.get("degraded")),
+            )
+        self._notify_status_change()
+
     @property
     def active_tool(self) -> str:
         return self._active_tool
@@ -1814,6 +1861,8 @@ class TerminalConsole:
             status=self._status,
             active_tool=self._active_tool,
             activity_detail=self._activity_detail,
+            token_usage=self._token_usage,
+            plan_status=self._plan_status,
         )
 
     def begin_prompt_cycle(self) -> StatusBarContent | None:

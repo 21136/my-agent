@@ -64,6 +64,13 @@ export type ServerEvent =
     }
   | { type: "turn.start"; intent: string; intent_label: string }
   | { type: "llm.pending" }
+  | {
+      type: "llm.usage";
+      prompt_tokens: number;
+      cached_tokens: number;
+      cache_ratio: number;
+      completion_tokens?: number;
+    }
   | { type: "turn.notice"; level?: "info" | "warn"; text: string }
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
   | { type: "turn.end"; ok: boolean; finish_reason: string }

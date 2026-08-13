@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
+  formatStreamingThinkingLines,
   formatThinkingLines,
   sliceTextByWrappedRows,
   stripInlineMarkdown,
@@ -24,6 +25,13 @@ test('formatThinkingLines wraps wide reasoning rows', () => {
   const lines = formatThinkingLines(long, 80);
   assert.ok(lines.length > 1);
   assert.ok(lines.every((line) => line.length <= 70));
+});
+
+test('formatStreamingThinkingLines caps wrapped rows for live reasoning', () => {
+  const long = Array.from({length: 20}, () => 'x'.repeat(100)).join('\n');
+  const {lines, clippedTop} = formatStreamingThinkingLines(long, 80, 8);
+  assert.equal(lines.length, 8);
+  assert.equal(clippedTop, true);
 });
 
 test('tailLines keeps the newest reasoning tail', () => {

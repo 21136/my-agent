@@ -20,6 +20,26 @@ if not defined MY_AGENT_TERMINAL_UI set "MY_AGENT_TERMINAL_UI=ink"
 
 if not defined MY_AGENT_TERMINAL_LAYOUT set "MY_AGENT_TERMINAL_LAYOUT=bottom"
 
+REM Dev default: run terminal-ui TypeScript source (tsx), not stale dist/*.js.
+REM Force compiled bundle: set MY_AGENT_TERMINAL_USE_DIST=1
+
+if not exist "%~dp0terminal-ui\node_modules\.bin\tsx.cmd" (
+    echo [my-agent] terminal-ui deps missing — running npm install...
+    pushd "%~dp0terminal-ui"
+    call npm install
+    if errorlevel 1 (
+        echo [my-agent] npm install failed. Install Node.js 20+ and retry.
+        popd
+        pause
+        exit /b 1
+    )
+    popd
+    echo.
+)
+
+REM FILE-GUARD: background watcher for session/source truncation
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\file-sentinel\start-sentinel.ps1" >nul 2>&1
+
 where python >nul 2>&1
 
 if errorlevel 1 (

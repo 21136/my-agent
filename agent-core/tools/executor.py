@@ -138,6 +138,7 @@ class ExecutorSession:
     deliverable_review_calls: int = 0
     explore_builtin_calls: int = 0
     explore_continue_used: bool = False
+    terminal_plan_phase: str = ""
     subagent_overlay_pending: str | None = None
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
@@ -801,6 +802,27 @@ def _is_progress_gate_validation_error(result: ToolResult) -> bool:
     return is_progress_gate_tool_error(result)
 
 
+def _validate_terminal_plan_phase_block(
+    session: ExecutorSession,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolResult | None:
+    """TM-26: planning/replanning phases are read-only on the main executor."""
+    if not _is_terminal_executor_session(session):
+        return None
+    phase = (session.terminal_plan_phase or "").strip()
+    if phase not in {"planning", "replanning"}:
+        return None
+    if tool_name == "run_evolved":
+        return tool_fail(
+            tool_name,
+            ToolErrorCode.PERMISSION_DENIED,
+            "terminal planning phase forbids run_evolved (read-only planner)",
+            details={"terminal_plan_phase": phase, "retry": False},
+        )
+    return None
+
+
 def _validate_terminal_host_write(
     session: ExecutorSession,
     tool_name: str,
@@ -1187,7 +1209,11 @@ class ToolExecutor:
         _ = result
         self._emit_services_state()
 
-    def _start_tool_progress_heartbeat(self, call_id: str) -> tuple[threading.Event, threading.Thread]:
+    def _start_tool_progress_heartbeat(
+        self,
+        call_id: str,
+        tool: str,
+    ) -> tuple[threading.Event, threading.Thread]:
         """Emit tool.progress every few seconds while a tool is running (Phase 27 M1)."""
         stop = threading.Event()
 
@@ -1200,6 +1226,7 @@ class ToolExecutor:
                     "tool.progress",
                     {
                         "call_id": call_id,
+                        "tool": tool,
                         "text": f"仍在执行… {secs}s",
                         "phase": "running",
                         "elapsed_sec": secs,
@@ -1381,7 +1408,7 @@ class ToolExecutor:
         )
         # C6: always emit tool.end even when execute raises (BUG-011).
         # Phase 27 M1: heartbeat progress while the tool runs (incl. long run_service waits).
-        stop_hb, hb_thread = self._start_tool_progress_heartbeat(call_id)
+        stop_hb, hb_thread = self._start_tool_progress_heartbeat(call_id, name)
         result: ToolResult
         try:
             result = self._maybe_spill_output(self._execute_builtin(name, args, started=started))
@@ -2298,6 +2325,10 @@ class ToolExecutor:
                 "run_evolved is disabled in ask mode (只聊); say 动手 to enable writes",
                 details={"turn_mode": "ask"},
             )
+
+        plan_block = _validate_terminal_plan_phase_block(self.session, name, arguments)
+        if plan_block is not None:
+            return plan_block
 
         if name == "plan_partner":
             task = arguments.get("task")

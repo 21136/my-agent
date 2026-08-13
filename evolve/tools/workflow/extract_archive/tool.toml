@@ -1,0 +1,51 @@
+[tool]
+name = "extract_archive"
+description = "解压压缩包到目标目录；默认 Bandizip(bz.exe)，可 fallback PowerShell/Python；archive/dest 支持 agent 相对路径或 host:<id>/…"
+version = "1.0.0"
+status = "active"
+topics = ["workflow"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["archive_path"]
+[schema.input.properties.archive_path]
+type = "string"
+description = "压缩包路径（相对 agent root 或 host:<id>/…）"
+[schema.input.properties.dest_dir]
+type = "string"
+description = "解压目标目录；默认与压缩包同目录下的 <stem>/ 文件夹"
+[schema.input.properties.overwrite]
+type = "boolean"
+default = true
+description = "true=-aoa 覆盖；false=-aos 跳过已有文件"
+[schema.input.properties.password]
+type = "string"
+description = "加密压缩包密码（Bandizip -p:）"
+[schema.input.properties.backend]
+type = "string"
+enum = ["auto", "bandizip", "powershell", "python"]
+default = "auto"
+description = "auto=Bandizip→PowerShell(.zip)→Python(.zip)"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "true 时仅列出压缩包内容，不写磁盘"
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+archive_path = { type = "string" }
+dest_dir = { type = "string" }
+backend = { type = "string" }
+entry_count = { type = "integer" }
+listing = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = true
+timeout_sec = 300

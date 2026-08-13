@@ -9,6 +9,7 @@ type Props = {
   working?: boolean;
   toolName?: string;
   toolStartedAt?: number;
+  planStatus?: string;
 };
 
 function useElapsedSeconds(startedAt: number | undefined, active: boolean): number | undefined {
@@ -25,7 +26,7 @@ function useElapsedSeconds(startedAt: number | undefined, active: boolean): numb
   return Math.floor((now - startedAt) / 1000);
 }
 
-export function StatusBar({model, root, working, toolName, toolStartedAt}: Props) {
+export function StatusBar({model, root, working, toolName, toolStartedAt, planStatus}: Props) {
   const s = tokens.status;
   const elapsedSeconds = useElapsedSeconds(toolStartedAt, Boolean(working && toolName));
 
@@ -39,6 +40,12 @@ export function StatusBar({model, root, working, toolName, toolStartedAt}: Props
         <Text bold color={s.root}>
           {root}
         </Text>
+        {planStatus ? (
+          <>
+            <Text color={s.sep}> · </Text>
+            <Text color={s.working}>{planStatus}</Text>
+          </>
+        ) : null}
         {working ? (
           <>
             <Text color={s.sep}> · </Text>

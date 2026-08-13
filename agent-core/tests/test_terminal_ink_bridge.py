@@ -95,6 +95,24 @@ class TerminalInkBridgeStage3Tests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MY_AGENT_TERMINAL_REASONING": "0"}, clear=False):
             self.assertEqual(translate_agent_event_to_ink({"type": "reasoning.delta", "text": "x"}), [])
 
+    def test_tool_progress_translates_to_activity(self):
+        self.assertEqual(
+            translate_agent_event_to_ink(
+                {
+                    "type": "tool.progress",
+                    "tool": "run_command",
+                    "text": "仍在执行… 5s",
+                }
+            ),
+            [{"type": "activity.update", "text": "run_command · 仍在执行… 5s"}],
+        )
+
+    def test_llm_pending_translates_to_activity(self):
+        self.assertEqual(
+            translate_agent_event_to_ink({"type": "llm.pending"}),
+            [{"type": "activity.update", "text": "等待模型响应…"}],
+        )
+
     def test_wait_confirm_skips_stale_response(self):
         bridge = TerminalInkBridge(paths=mock.Mock())
         bridge._inputs.put(InkConfirmResponse('stale', 'y'))
@@ -104,16 +122,25 @@ class TerminalInkBridgeStage3Tests(unittest.TestCase):
         self.assertEqual(choice, 'n')
         done.assert_called_once_with(request_id='current', choice='n')
 
-    def test_resolve_cli_entry_ignores_stale_dist_and_uses_nested_build(self):
+    def test_resolve_cli_entry_prefers_live_source_over_dist(self):
         root = Path(__file__).resolve().parents[2]
         paths = AgentPaths.from_root(root)
         entry = resolve_cli_entry(paths)
         self.assertIsNotNone(entry)
         if entry is not None:
             _, entry_path = entry
-            source_path = root / 'terminal-ui' / 'src' / 'cli.tsx'
-            self.assertGreaterEqual(entry_path.stat().st_mtime, source_path.stat().st_mtime)
-            self.assertTrue(entry_path.name == 'cli.js' or entry_path.suffix == '.tsx')
+            self.assertEqual(entry_path.suffix, ".tsx")
+            self.assertTrue(entry_path.as_posix().endswith("terminal-ui/src/cli.tsx"))
+
+    def test_resolve_cli_entry_can_force_dist(self):
+        root = Path(__file__).resolve().parents[2]
+        paths = AgentPaths.from_root(root)
+        with mock.patch.dict(os.environ, {"MY_AGENT_TERMINAL_USE_DIST": "1"}, clear=False):
+            entry = resolve_cli_entry(paths)
+        self.assertIsNotNone(entry)
+        if entry is not None:
+            _, entry_path = entry
+            self.assertEqual(entry_path.suffix, ".js")
 
 
 if __name__ == '__main__':

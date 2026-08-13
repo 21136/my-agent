@@ -148,6 +148,17 @@ def terminal_prompt_path(agent_core_dir: Path | None = None) -> Path:
     return base / TERMINAL_REL
 
 
+TERMINAL_PLANNER_REL = Path("prompts") / "terminal-planner.txt"
+
+
+def load_terminal_planner_text(*, agent_core_dir: Path | None = None) -> str:
+    base = agent_core_dir or _AGENT_CORE
+    path = base / TERMINAL_PLANNER_REL
+    if not path.is_file():
+        return "[terminal-planner.txt missing — implement T-5730]"
+    return path.read_text(encoding="utf-8").strip()
+
+
 def load_terminal_text(*, agent_core_dir: Path | None = None) -> str:
     path = terminal_prompt_path(agent_core_dir)
     if not path.is_file():

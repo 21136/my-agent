@@ -146,7 +146,15 @@ class TerminalRepl(ConversationRepl):
             try:
                 bridge = TerminalInkBridge.start(paths)
             except (FileNotFoundError, RuntimeError) as exc:
-                print(f"warn: Ink UI unavailable ({exc}); falling back to legacy", file=sys.stderr)
+                print(
+                    f"warn: Ink UI unavailable ({exc}); falling back to legacy v0.2.1",
+                    file=sys.stderr,
+                )
+                print(
+                    "提示: 新版 Terminal UI 为 Ink v0.3.2；若看到 v0.2.1 说明 Ink 启动失败。"
+                    "可执行: cd terminal-ui && npm install",
+                    file=sys.stderr,
+                )
                 use_ink = False
         if use_ink:
             console = TerminalInkConsole.create(
@@ -552,7 +560,11 @@ class TerminalRepl(ConversationRepl):
             return "continue"
 
         for notice in result.notices:
-            self.output_fn(notice)
+            if (
+                self.terminal_console is None
+                or getattr(self.terminal_console, "backend_kind", "") != "ink"
+            ):
+                self.output_fn(notice)
         if result.assistant_text:
             if self.assistant_output_fn is not None:
                 self.assistant_output_fn(result.assistant_text)
@@ -666,6 +678,8 @@ class TerminalRepl(ConversationRepl):
 
         if self.terminal_console is not None:
             self.terminal_console.bind_context(self.session, self.paths, self.scope_fields)
+            self.terminal_console._token_usage = None
+            self.terminal_console.refresh_status_bar()
         bottom = self._bottom_terminal
         if bottom is not None and bottom.welcome_visible:
             self._mount_bottom_welcome(bottom)

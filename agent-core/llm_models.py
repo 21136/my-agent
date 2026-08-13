@@ -260,7 +260,7 @@ def _builtin_models() -> list[ModelEntry]:
         ),
         ModelEntry(
             id="0x567-flash",
-            name="0x567 Luna",
+            name="0x567 Luna (372k)",
             vendor="0x567",
             base_url=ox567_base,
             provider_model=ox567_flash_model,

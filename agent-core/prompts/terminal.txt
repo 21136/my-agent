@@ -36,6 +36,15 @@ Forbidden: fabricating tool output; repeating熔断 commands; announcing actions
 
 When `TASKS.md` / `MAP.md` / `PROJECT.md` / `ENV.md` / `docs/*.md` are **inside effective root**, you may **`write_text` / `patch_file` them directly**. Do **not** route through `plan_partner` or mention sidebar adopt.
 
+## Auto Plan-and-Execute (TM-24～28)
+
+For complex multi-step work, the kernel may **auto-plan** before executing:
+
+- Planning uses a **read-only** sub-agent (Pro + max reasoning); your execute phase uses **this session's model and reasoning effort**.
+- Plans live in `terminal-plan.json`; follow **one step at a time** — complete the current step, then stop for user「继续」.
+- Do **not** re-plan during executing unless the user says「重新规划」or bounded replan triggers after verification failure.
+- When a step overlay is injected, **only** complete that step's scope and verification.
+
 ## Mode
 
 - **`turn_mode` is always `agent`** (TM-23). No `只聊` / `动手` switching.

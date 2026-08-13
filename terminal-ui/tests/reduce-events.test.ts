@@ -172,13 +172,14 @@ test('IT-593: turn.start opens thinking placeholder until assistant streams', ()
   reducer.reduce({type: 'turn.start'});
   assert.deepEqual(reducer.getState().blocks, [
     {kind: 'user', text: 'hi'},
-    {kind: 'thinking', text: ''},
+    {kind: 'thinking', text: '', collapsed: false},
   ]);
 
   reducer.reduce({type: 'reasoning.delta', text: 'trace'});
-  assert.deepEqual(reducer.getState().blocks[1], {kind: 'thinking', text: 'trace'});
+  assert.deepEqual(reducer.getState().blocks[1], {kind: 'thinking', text: 'trace', collapsed: false});
 
   reducer.reduce({type: 'assistant.delta', text: 'answer'});
+  assert.deepEqual(reducer.getState().blocks[1], {kind: 'thinking', text: 'trace', collapsed: true});
   assert.deepEqual(reducer.getState().blocks.map((block) => block.kind), [
     'user',
     'thinking',
@@ -276,4 +277,57 @@ test('IT-593: clear resets markdown chat state and turns do not merge', () => {
   assert.deepEqual(reducer.getState().blocks, []);
   assert.equal(reducer.getState().turnIndex, 0);
   assert.equal(reducer.getState().assistantBuffer, '');
+});
+
+test('IT-607: assistant.delta collapses trailing thinking to one row', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({type: 'turn.start'});
+  reducer.reduce({type: 'reasoning.delta', text: 'line one\nline two'});
+  reducer.reduce({type: 'assistant.delta', text: 'answer'});
+  const blocks = reducer.getState().blocks;
+  assert.equal(blocks[0]?.kind, 'thinking');
+  if (blocks[0]?.kind === 'thinking') {
+    assert.equal(blocks[0].collapsed, true);
+    assert.equal(blocks[0].text, 'line one\nline two');
+  }
+  assert.equal(blocks[1]?.kind, 'assistant_streaming');
+});
+
+test('IT-605: activity.update feeds status bar state only', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({type: 'turn.start'});
+  reducer.reduce({type: 'activity.update', text: 'run_command · 仍在执行… 5s'});
+  assert.equal(reducer.getState().activityText, 'run_command · 仍在执行… 5s');
+});
+
+test('IT-604: notice drops empty trailing thinking block', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({type: 'turn.start'});
+  reducer.reduce({type: 'notice', text: '[Terminal] auto-plan 规划中…'});
+  assert.deepEqual(reducer.getState().blocks.map((block) => block.kind), ['notice']);
+});
+
+test('IT-608: auto-plan gate notices are marked ephemeral', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({type: 'notice', text: '[Terminal] auto-plan 判定 · reason'});
+  const block = reducer.getState().blocks[0];
+  assert.equal(block?.kind, 'notice');
+  if (block?.kind === 'notice') {
+    assert.equal(block.ephemeral, true);
+    assert.equal(typeof block.shownAt, 'number');
+  }
+});
+
+test('IT-603: plan.state updates status bar segment', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({
+    type: 'plan.state',
+    status: 'step 2/5 · execute · medium',
+    mode: 'executing',
+    step: 2,
+    total: 5,
+  });
+  assert.equal(reducer.getState().planStatus, 'step 2/5 · execute · medium');
+  reducer.reduce({type: 'plan.state', status: ''});
+  assert.equal(reducer.getState().planStatus, '');
 });

@@ -115,6 +115,10 @@ def _format_model_menu_lines(
     current_id: str,
     use_color: bool = True,
 ) -> list[str]:
+    from llm_client import format_context_tokens_short
+    from llm_models import get_registry
+
+    registry = get_registry()
     header = "选择模型"
     if current_id:
         header += f"  ·  当前 {current_id}"
@@ -128,7 +132,14 @@ def _format_model_menu_lines(
         selected = i == index
         prefix = "› " if selected else "  "
         tier = str(entry.tier).upper()
-        body = f"{prefix}{entry.name}  ({entry.id} · {tier})"
+        resolved = registry.get(entry.id)
+        ctx = (
+            format_context_tokens_short(resolved.max_input_tokens)
+            if resolved is not None
+            else ""
+        )
+        ctx_suffix = f" · {ctx} ctx" if ctx else ""
+        body = f"{prefix}{entry.name}  ({entry.id} · {tier}{ctx_suffix})"
         if use_color and selected:
             body = f"{_STYLE_SEL}{body}{_STYLE_OFF}"
         lines.append(body)

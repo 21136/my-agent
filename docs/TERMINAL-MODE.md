@@ -1,8 +1,8 @@
 # Terminal 模式（TERMINAL-MODE）
 
-> 版本 **0.2.0** · 2026-08-08 · **状态：M0 done · M1 done · Bottom TUI 已落地**  
+> 版本 **0.2.1** · 2026-08-13 · **状态：M0 done · M1 done · Bottom TUI 已落地 · TM-24 M0 已实施**  
 > **读者**：产品负责人、实现者  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [CLI-DESKTOP-PARITY.md](./CLI-DESKTOP-PARITY.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [CLI-DESKTOP-PARITY.md](./CLI-DESKTOP-PARITY.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [REASONING-EFFORT.md](./REASONING-EFFORT.md)
 
 ---
 
@@ -58,9 +58,9 @@ my-agent terminal                 # 无参数 = 就用这个 cwd
 | **TM-21** | **路径相对 cwd（8A）**：`terminal [path]` 相对 **当前 shell cwd**；绝对路径原样 |
 | **TM-22** | **R3-[2] 全登记（9A）**：选 `[2]` 走现有 host 登记（id / label / write），成功后 R2 进入 |
 | **TM-23** | **Q1-A · 固定 agent**：`turn_mode` **恒为 `agent`**；banner **无** `只聊`/`动手`；输入 `只聊`/`动手`/`ask` → 提示「Terminal 仅 agent 模式」；M1 defer `plan` / `/btw` |
-| **TM-24** | **全自动 Plan-and-Execute**：复杂执行任务由内核自动判断；无需用户切换或批准，先规划、后执行 |
+| **TM-24** | **全自动 Plan-and-Execute**：复杂 execute 由规则+分类器判定；无需用户切 plan 档（**M0 done** · [TERMINAL-MODE.md](./TERMINAL-MODE.md) §5.5） |
 | **TM-25** | **Plan Artifact + phase 锁**：计划外置为可恢复状态；`planning → executing → validating → done`，执行阶段不得因用户文本或计划内容再次自动进入 planning |
-| **TM-26** | **强规划 / 原模型执行**：planning 与 bounded replan 使用 `plan_partner` 路由（默认 Pro）+ `reasoning_effort=max`；executing 恢复本会话 `llm_model` 与原推理强度 |
+| **TM-26** | **强规划 / 原模型执行**：planning 用 `resolve_terminal_planning_profile()`（同厂商 pro + 逻辑 `max`，弱 API 降级 main + `high`）；API 实发见 [REASONING-EFFORT.md](./REASONING-EFFORT.md) §3；executing 恢复 `main_turn` + 会话 effort |
 | **TM-27** | **按步骤执行**：每次只执行当前 step；step 完成后验证并推进 `current_step`，不得把整份大计划当成单个写码任务 |
 | **TM-28** | **有限恢复**：每个 goal 最多 1 次自动初始 plan、每个 step 最多 2 次局部 retry、最多 1 次 bounded replan；超限必须停并报告，不得循环烧模型 |
 | **TM-8** | 同一磁盘目录可被 desktop 会话与 terminal 会话 **同时打开**（不同 `conversation_id`）；**无** `project_sessions` 绑定 |
@@ -296,26 +296,51 @@ Claude **没有** my-agent 的 `turn_mode=ask|agent` 二元开关：
 
 **M1 defer**：`plan` 权限档 · `/btw` 式旁路问答。
 
-### 5.5 TM-24～TM-28 · 全自动 Plan-and-Execute（已决方向，代码待做）
+### 5.5 TM-24～TM-28 · 全自动 Plan-and-Execute（**M0 已实施** · T-5730～5733）
 
-Terminal 不提供需要用户手动切换的常驻 `plan` 权限档；对复杂任务采用**全自动两阶段编排**。这是一次 `run_turn` 内的内核状态机，不改变 `meta.turn_mode`（TM-23 仍恒为 `agent`）。
+Terminal 不提供需要用户手动切换的常驻 `plan` 权限档；对复杂任务采用**全自动两阶段编排**（对标 Claude Code：用户不必说「plan」，复杂 execute 自动先规划再执行）。这是一次 `run_turn` 内的内核状态机，不改变 `meta.turn_mode`（TM-23 仍恒为 `agent`）。
 
-#### 5.5.1 自动判定
+实现：`agent-core/terminal_plan.py` · `agent.py` · `subagent.run_terminal_plan` · `data/sessions/<id>/terminal-plan.json`。
 
-`should_auto_plan_turn(user_text, session_state)` 只对潜在多步执行任务返回 true：
+#### 5.5.1 自动判定（规则 + 受约束分类器）
 
-- 新功能、多文件改动、架构调整、重构、模块/接口级实现；
-- 用户明确要求先设计、规划、拆步骤；
-- 当前 goal 没有仍有效的 `terminal_plan`。
+**禁止**：让 main 执行循环里的模型用自然语言自行递归触发 plan（不可控、难测、易烧 token）。
 
-以下情况跳过自动 plan，直接使用会话原模型执行：
+**允许**：回合入口的**受约束分类器** + 确定性规则 fast-path（§5.5.1 原文仍有效）。
 
-- 明确的单文件/单点小修；
-- 用户明确说「直接改」「别计划」；
+判定流水线（`auto_plan_gate_rules` → 可选 `classify_terminal_plan_need`）：
+
+| 阶段 | 函数 | 结果 | 行为 |
+|------|------|------|------|
+| 硬跳过 | `auto_plan_gate_rules` → `skip` | 不进 plan 机 | 直接 execute |
+| 硬进入 | `auto_plan_gate_rules` → `yes` | 关键词/多路径/长文创建等 | 立刻 auto-plan |
+| 语义判定 | `auto_plan_gate_rules` → `classify` | flash 分类器 JSON | `{"needs_plan": bool, "reason": "…"}` |
+| 续作 | `should_resume_step_execution` | artifact `executing` | 继续当前 step，不重新 plan |
+
+**规则 fast-path（`skip`）**：
+
+- 明确的单文件/单点小修（`修 typo`、`fix` 等）；
+- 用户明确「直接改」「别计划」；
 - `qa`、`recall`、纯 research；
-- 当前 goal 已处于 `executing`，用户说「继续」「下一步」「按方案做」。
+- 当前 goal 已 `executing` / `validating`（用户说「继续」「下一步」走续作，不重新 auto-plan）。
 
-自动判定必须是**确定性路由**（规则或受约束分类器），不能让普通执行模型通过自然语言自行递归触发 plan。
+**规则 fast-path（`yes`）**：
+
+- 新功能、多文件、重构、架构、模块/接口级实现；
+- 用户明确要求先设计/规划/拆步骤，或含 `plan模式`、`自动规划` 等；
+- 同一 goal 下尚无有效 plan，且文本含多路径或长文创建意图。
+
+**受约束分类器（`classify`）** — 对齐 Claude「复杂任务自动 plan」：
+
+- 模型：`resolve_model_id_for_role("topic_routing")`（默认 flash）；
+- 温度 `0`；**不传** `reasoning_effort`（与主循环隔离）；
+- 输出仅 JSON：`needs_plan` + `reason`；
+- 典型 `needs_plan=true`：从零写游戏/应用、多文件脚手架、用户未提 plan 但明显是多步工程；
+- 环境变量 `TERMINAL_PLAN_CLASSIFY=0` 关闭分类器；`classify` 路径退化为直接 execute。
+
+TUI：分类器判定后 notice `[Terminal] auto-plan 判定 · <reason>`；规划进行中 notice `[Terminal] auto-plan 规划中…`；长等待时思考框显示 `activity.update`（模型等待 / `run_command · 仍在执行… Ns`）。
+
+**与 Claude Code 对照**：Claude 无 my-agent 式 `turn_mode`，复杂任务由产品逻辑自动进入 plan；本实现用**回合外**分类器 + 规则，而非 execute 主循环内自触发。
 
 #### 5.5.2 阶段状态机
 
@@ -329,12 +354,14 @@ idle
                     └─(bounded replan valid)→ executing[remaining steps]
 ```
 
-- `planning`：使用 `plan_partner` 角色模型（默认 Pro）与 `max` 推理；允许读、搜、必要的只读探查，禁止源码写入。
-- `executing`：自动切回 `meta.llm_model` 和用户原先的 `meta.reasoning_effort`；cwd 内继续使用 Terminal 狂野写权限。
-- `validating`：执行测试、lint、静态检查或工具后置条件；验证失败先 retry 当前 step，不立即全量重规划。
-- `replanning`：仅接收失败证据、已完成结果和剩余 steps；只修订剩余计划，不从零覆盖已完成步骤。
+- `planning`：只读规划子代理（`subagent.run_terminal_plan`）；允许读、搜、只读探查；**禁止**源码写入（`terminal_plan_phase` 闸门）。
+- `executing`：自动切回 `meta.llm_model` 与用户 `meta.reasoning_effort`；cwd 内 Terminal 狂野写权限。
+- `validating`：step 验证命令（`run_step_verification`）；失败先 retry，不立即全量重规划。
+- `replanning`：bounded replan；仅修订剩余 steps。
 
-Plan 阶段结束后**不等待用户点击**。内核发出 notice 后立即进入 executing；Stop 在 planning 阶段则不写源码，Stop 在 executing 阶段则保存 artifact 供下次续作。
+**一动一停（M0）**：每轮 execute 只跑**一个** step，完成后停；用户回复「继续」再跑下一步。
+
+Plan 阶段结束后**不等待用户点击**。内核 notice 后立即进入 executing（同 turn 内 step 0）；Stop 在 planning 不写源码，Stop 在 executing 保留 artifact。
 
 #### 5.5.3 Plan Artifact
 
@@ -382,13 +409,26 @@ Plan 阶段结束后**不等待用户点击**。内核发出 notice 后立即进
 
 #### 5.5.5 模型与成本可见性
 
-- plan/replan：`resolve_model_id_for_role("plan_partner", meta)`；默认 Pro，可由既有 role override 配置；
-- execute：`resolve_model_id_for_role("main_turn", meta)`；不修改用户持久化模型选择；
-- plan/replan 强制 `reasoning_effort=max`，execute 恢复 plan 前的值；
-- TUI 至少显示：`auto-plan · Pro · max`、`execute · <session model> · <effort>`、当前 step 与 replan 计数；
-- 每次自动 plan 产生一次明确 notice，避免用户误以为模型无故换档。
+规划模型由 `resolve_terminal_planning_profile()` 选择（**弱 API 策略 A**）：
 
-该方案借鉴 Claude Code 的 plan 权限边界、Cursor 的可审阅 plan artifact、OpenHands 的 planning/execution 分离，以及 Plan-and-Execute 的 current-step / bounded-replan 模式；**不**复制它们的人工 approve UX。
+| 条件 | 规划模型 | 会话 `reasoning_effort` 标签 | API 实际 effort | TUI |
+|------|----------|------------------------------|-----------------|-----|
+| 同厂商已配置 pro 且有 key | 该 pro | `max` | 见 [REASONING-EFFORT.md](./REASONING-EFFORT.md) §3 厂商映射 | 正常 |
+| 否则（仅 flash 等） | `main_turn` 同款 | `high` | 映射后值 | 状态栏/notice 标 **降级** |
+
+- execute：`resolve_model_id_for_role("main_turn", meta)`；不修改用户持久化模型选择；
+- plan/replan 的**逻辑强度**为 `max`（或降级 `high`）；**发往 API 的值**经 `llm_client._api_reasoning_effort()` 按厂商裁剪（例如 `0x567` 将 `max` 映射为 `high`，避免 invalid parameter）；
+- TUI 状态栏：`auto-plan · <model> · <effort>`、`step N/M · execute · <effort>`、replan 计数；Ink `plan.state` reducer（T-5733）；
+- 每次 auto-plan / 分类器判定产生 notice；Ink 模式 notice **仅**走 `turn.notice` 事件流（不重复 `output_fn`）。
+
+环境变量（规划相关）：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `TERMINAL_PLAN_CLASSIFY` | `1` | `0` 关闭受约束分类器 |
+| `PLAN_PARTNER_MODEL` / `PLAN_AGENT_MODEL` | — | 规划 pro 候选（须与同厂商 main 可配对） |
+
+该方案借鉴 Claude Code plan 边界、Cursor plan artifact、OpenHands planning/execution 分离、Plan-and-Execute bounded-replan；**不**复制人工 approve UX。
 
 ## 6. 入口与 UX（M0 / M1）
 

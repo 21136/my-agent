@@ -1844,10 +1844,10 @@ python turn_intent.py    # 分类用例无回归
 | T-5723 | `marked` + `chat-state` 子集 reducer | packages/chat-blocks 或 terminal-ui/reduce | IT-593 | **阶段 4 done** — IT-593 通过 |
 | T-5724 | 60fps P0+P1（throttle · 热区 · 虚拟列表） | terminal-ui/perf | IT-594 · S-575 | **阶段 5 done** — IT-594 通过 |
 | T-5725 | 行级 diff（P2 · 可选） | terminal-ui/perf | defer | **阶段 6 defer** |
-| **T-5730** | M0：Terminal 自动 Plan-and-Execute 状态机（TM-24～TM-28） | agent.py · session.py · llm_routing.py | IT-595～598 | **todo** |
-| **T-5731** | M0：Plan Artifact 持久化、session-guard 接入、current-step 续作 | session.py · file_guard.py | IT-599 | **todo** |
-| **T-5732** | M0：planning 禁写、execute 自动切回原模型/effort、bounded replan | executor.py · agent.py · prompts/terminal.txt | IT-600～602 | **todo** |
-| **T-5733** | M1：Terminal TUI 自动 plan / execute / step / replan 状态展示 | terminal_ui.py · terminal_app.py · terminal-ui/ | IT-603 · S-576 | **todo** |
+| **T-5730** | M0：Terminal 自动 Plan-and-Execute 状态机（TM-24～TM-28） | agent.py · terminal_plan.py · subagent.py | IT-595～598 · IT-606 | **M0 done** |
+| **T-5731** | M0：Plan Artifact 持久化、session-guard 接入、current-step 续作 | terminal_plan.py · file_guard.py | IT-599 | **M0 done**（合入 T-5730） |
+| **T-5732** | M0：planning 禁写、execute 自动切回原模型/effort、bounded replan | executor.py · agent.py · prompts/terminal.txt | IT-600～602 | **M0 done** |
+| **T-5733** | M1：Terminal TUI 自动 plan / execute / step / replan 状态展示 | terminal_ui.py · terminal_ink_bridge.py · terminal-ui/ | IT-603～605 · S-576 | **M1 done**（S-576 手工 smoke 待做） |
 | S-572 | 手工：WT 全屏 TUI smoke（legacy prompt_toolkit） | log | TERMINAL §6.5 | todo |
 | S-573 | 手工：对照 preview HTML 配色（legacy Lexer 路线） | log | TERMINAL §6.4.9 | **superseded** → S-574 |
 | S-574 | 手工：`npm run demo` Ink 配色 smoke | log | TERMINAL §6.6 | todo |

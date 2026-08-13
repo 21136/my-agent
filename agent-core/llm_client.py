@@ -46,6 +46,10 @@ def _api_reasoning_effort(effort: str, vendor: str) -> str:
         if effort in _DEEPSEEK_REASONING_EFFORT_LEVELS:
             return effort
         return "high"
+    if vendor_key == "0x567":
+        # 0x567 gateway (e.g. gpt-5.4) rejects ``max``; cap at high.
+        if effort == "max":
+            return "high"
     return effort
 
 
@@ -301,6 +305,21 @@ def llm_model_label(model: str, *, config: LLMConfig | None = None) -> str:
     return "Flash"
 
 
+def format_context_tokens_short(tokens: int) -> str:
+    """Compact UI label for context limits (e.g. 372k, 1M)."""
+    if tokens >= 1_000_000:
+        millions = tokens / 1_000_000
+        if millions == int(millions):
+            return f"{int(millions)}M"
+        return f"{millions:.1f}M"
+    if tokens >= 1_000:
+        thousands = tokens / 1_000
+        if thousands == int(thousands):
+            return f"{int(thousands)}k"
+        return f"{thousands:.1f}k"
+    return str(tokens)
+
+
 def resolve_context_limit(model: str, *, config: LLMConfig | None = None) -> int:
     """Context token ceiling for *model* (registry max_input_tokens)."""
     cfg = config or load_config()
@@ -374,12 +393,16 @@ class LLMClient:
             raise LLMMissingApiKeyError(f"API key not set for model {entry.id} (set {env_hint})")
 
         resolved_model = entry.provider_model
+        streaming = stream is not None
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,
             "temperature": temperature,
-            "stream": stream is not None,
+            "stream": streaming,
         }
+        if streaming:
+            # Desktop/sidecar always stream; providers omit usage unless asked.
+            payload["stream_options"] = {"include_usage": True}
         if tools and entry.supports_tool_call:
             payload["tools"] = tools
         if response_format is not None:

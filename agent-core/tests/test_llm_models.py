@@ -115,6 +115,13 @@ class LlmModelRegistryTests(unittest.TestCase):
         assert entry is not None
         self.assertEqual(entry.max_input_tokens, 4096)
 
+    def test_luna_context_limit(self) -> None:
+        from llm_client import resolve_context_limit
+
+        self.assertEqual(resolve_context_limit("0x567-flash"), 372_000)
+        self.assertEqual(resolve_context_limit("gpt-5.6-luna"), 372_000)
+        self.assertEqual(resolve_context_limit("luna"), 372_000)
+
     def test_user_json_default_model_ids(self) -> None:
         paths = make_temp_agent_paths(self)
         paths.data.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,5 @@
 import type {TerminalBlock} from '../types.js';
+import {isEphemeralPlanNotice} from '../repl/committed-blocks.js';
 
 export const DEFAULT_ASSISTANT_NAME = '打工仔';
 const DEFAULT_GREET = '下午好。';
@@ -21,6 +22,10 @@ export type TerminalUiState = {
   activeTool?: string;
   /** Wall-clock ms when the current tool became active (client-side). */
   activeToolStartedAt?: number;
+  /** Terminal Plan-and-Execute status segment (T-5733). */
+  planStatus?: string;
+  /** Live activity for status bar (tool progress / waiting labels). */
+  activityText?: string;
   confirm?: {requestId: string; preview: string; allowApproveAll: boolean};
 };
 
@@ -38,6 +43,8 @@ export function createInitialState(overrides: Partial<TerminalUiState> = {}): Te
     assistantBuffer: overrides.assistantBuffer ?? '',
     activeTool: overrides.activeTool,
     activeToolStartedAt: overrides.activeToolStartedAt,
+    planStatus: overrides.planStatus ?? '',
+    activityText: overrides.activityText ?? '',
     confirm: overrides.confirm,
   };
 }
@@ -50,15 +57,22 @@ function dropEmptyTrailingThinking(blocks: TerminalBlock[]): TerminalBlock[] {
   return blocks;
 }
 
+function collapseTrailingThinking(blocks: TerminalBlock[]): TerminalBlock[] {
+  const last = blocks.at(-1);
+  if (last?.kind !== 'thinking') return blocks;
+  if (!last.text.trim()) return dropEmptyTrailingThinking(blocks);
+  return [...blocks.slice(0, -1), {kind: 'thinking', text: last.text, collapsed: true}];
+}
+
 function appendThinking(blocks: TerminalBlock[], text: string): TerminalBlock[] {
   if (!text) return blocks;
   const next = [...blocks];
   const last = next.at(-1);
   if (last?.kind === 'thinking') {
-    next[next.length - 1] = {kind: 'thinking', text: last.text + text};
+    next[next.length - 1] = {kind: 'thinking', text: last.text + text, collapsed: false};
     return next;
   }
-  next.push({kind: 'thinking', text});
+  next.push({kind: 'thinking', text, collapsed: false});
   return next;
 }
 
@@ -114,6 +128,8 @@ export function reduceState(
   let assistantBuffer = state.assistantBuffer;
   let activeTool = state.activeTool;
   let activeToolStartedAt = state.activeToolStartedAt;
+  let planStatus = state.planStatus ?? '';
+  let activityText = state.activityText ?? '';
   let confirm = state.confirm;
   let turns = turnCount;
   switch (event.type) {
@@ -132,8 +148,9 @@ export function reduceState(
       turns += 1;
       turnIndex = turns;
       assistantBuffer = '';
+      activityText = '';
       working = true;
-      blocks = [...blocks, {kind: 'thinking', text: ''}];
+      blocks = [...blocks, {kind: 'thinking', text: '', collapsed: false}];
       break;
     case 'user.message': {
       const text = typeof event.text === 'string' ? event.text.trim() : '';
@@ -141,24 +158,42 @@ export function reduceState(
       break;
     }
     case 'reasoning.delta':
+      activityText = '';
       blocks = appendThinking(blocks, typeof event.text === 'string' ? event.text : '');
       break;
+    case 'activity.update': {
+      const text = typeof event.text === 'string' ? event.text.trim() : '';
+      if (text) activityText = text;
+      break;
+    }
     case 'assistant.delta': {
       const text = typeof event.text === 'string' ? event.text : '';
       assistantBuffer += text;
-      blocks = dropEmptyTrailingThinking(blocks);
+      blocks = collapseTrailingThinking(blocks);
       blocks = appendAssistant(blocks, text, DEFAULT_ASSISTANT_NAME, turnIndex);
       break;
     }
     case 'assistant.done': {
       const name = typeof event.name === 'string' ? event.name : DEFAULT_ASSISTANT_NAME;
+      blocks = collapseTrailingThinking(blocks);
       blocks = finalizeAssistant(blocks, event.text, name, turnIndex, assistantBuffer);
       assistantBuffer = '';
       break;
     }
     case 'notice': {
       const text = typeof event.text === 'string' ? event.text.trim() : '';
-      if (text) blocks = [...blocks, {kind: 'notice', text}];
+      if (text) {
+        blocks = dropEmptyTrailingThinking(blocks);
+        const ephemeral = isEphemeralPlanNotice(text);
+        blocks = [
+          ...blocks,
+          {
+            kind: 'notice',
+            text,
+            ...(ephemeral ? {ephemeral: true, shownAt: Date.now()} : {}),
+          },
+        ];
+      }
       break;
     }
     case 'tool.active':
@@ -167,13 +202,33 @@ export function reduceState(
         typeof event.started_at === 'number' && Number.isFinite(event.started_at)
           ? event.started_at
           : Date.now();
+      if (activeTool) activityText = `${activeTool} · 执行中…`;
       break;
     case 'tool.clear':
       activeTool = undefined;
       activeToolStartedAt = undefined;
+      activityText = '';
       break;
+    case 'tool.progress': {
+      const text = typeof event.text === 'string' ? event.text.trim() : '';
+      const tool =
+        (typeof event.tool === 'string' && event.tool.trim()) || activeTool || 'tool';
+      if (text) activityText = `${tool} · ${text}`;
+      break;
+    }
     case 'status.working':
       working = Boolean(event.active);
+      if (!working) {
+        activityText = '';
+        blocks = blocks.map((block) =>
+          block.kind === 'thinking' && block.text.trim() && !block.collapsed
+            ? {kind: 'thinking', text: block.text, collapsed: true}
+            : block,
+        );
+      }
+      break;
+    case 'plan.state':
+      planStatus = typeof event.status === 'string' ? event.status : '';
       break;
     case 'confirm.request':
       if (typeof event.request_id === 'string' && typeof event.preview === 'string') {
@@ -191,6 +246,7 @@ export function reduceState(
       blocks = [];
       activeTool = undefined;
       activeToolStartedAt = undefined;
+      activityText = '';
       confirm = undefined;
       turns = 0;
       turnIndex = 0;
@@ -212,6 +268,8 @@ export function reduceState(
       assistantBuffer,
       activeTool,
       activeToolStartedAt,
+      planStatus,
+      activityText,
       confirm,
     },
     turnCount: turns,
@@ -263,3 +321,5 @@ export function createEventReducer(initial: Partial<TerminalUiState> = {}) {
     },
   };
 }
+
+export type EventReducer = ReturnType<typeof createEventReducer>;

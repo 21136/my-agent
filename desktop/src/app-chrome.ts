@@ -37,14 +37,27 @@ function pickModelId(model: string | undefined, models: LlmModelListItem[]): str
   return fuzzy?.id ?? models[0]?.id ?? key;
 }
 
+function formatContextTokensShort(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const millions = tokens / 1_000_000;
+    return Number.isInteger(millions) ? `${millions}M` : `${millions.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) {
+    const thousands = tokens / 1_000;
+    return Number.isInteger(thousands) ? `${thousands}k` : `${thousands.toFixed(1)}k`;
+  }
+  return String(tokens);
+}
+
 function formatModelOptionLabel(item: LlmModelListItem): string {
   const keySuffix = item.configured ? "" : " (未配置 key)";
+  const ctxSuffix = ` · ${formatContextTokensShort(item.max_input_tokens)} ctx`;
   const vendor = item.vendor.trim();
   const showVendor =
     vendor &&
     !item.name.toLowerCase().includes(vendor.toLowerCase());
   const label = showVendor ? `${item.name} · ${vendor}` : item.name;
-  return `${label}${keySuffix}`;
+  return `${label}${ctxSuffix}${keySuffix}`;
 }
 
 function renderModelOptions(models: LlmModelListItem[], booting: boolean): string {

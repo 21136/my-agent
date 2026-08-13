@@ -48,6 +48,33 @@ export function formatThinkingLines(text: string, columns: number): string[] {
   return out;
 }
 
+/** Default visible wrapped rows while reasoning is still streaming. */
+export const STREAMING_THINKING_WRAPPED_LINES = 8;
+/** Logical newline tail before wrap — keeps hot-path work bounded. */
+export const STREAMING_THINKING_LOGICAL_LINES = 6;
+
+/**
+ * Bounded wrap for live reasoning — only tails recent logical lines, then caps
+ * wrapped rows so Ink does not re-layout the entire trace on every delta.
+ */
+export function formatStreamingThinkingLines(
+  text: string,
+  columns: number,
+  maxWrappedLines = STREAMING_THINKING_WRAPPED_LINES,
+): {lines: string[]; clippedTop: boolean} {
+  const body = stripInlineMarkdown(text.trim());
+  if (!body) return {lines: [], clippedTop: false};
+
+  const {text: tailText, clipped: logicalClipped} = tailLines(
+    body,
+    STREAMING_THINKING_LOGICAL_LINES,
+  );
+  const wrapped = formatThinkingLines(tailText, columns);
+  const wrappedClipped = wrapped.length > maxWrappedLines;
+  const lines = wrappedClipped ? wrapped.slice(-maxWrappedLines) : wrapped;
+  return {lines, clippedTop: logicalClipped || wrappedClipped};
+}
+
 export function tailLines(
   text: string,
   maxLines: number,

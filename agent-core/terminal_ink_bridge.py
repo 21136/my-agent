@@ -64,20 +64,11 @@ def resolve_cli_entry(paths: AgentPaths) -> tuple[list[str], Path] | None:
     root = paths.agent_root
     terminal_ui = root / "terminal-ui"
     src = terminal_ui / "src" / "cli.tsx"
-    node = shutil.which("node")
-    if node:
-        dist_candidates = (
-            terminal_ui / "dist" / "cli.js",
-            terminal_ui / "dist" / "src" / "cli.js",
-        )
-        source_mtime = src.stat().st_mtime if src.is_file() else None
-        for dist in dist_candidates:
-            if not dist.is_file():
-                continue
-            if source_mtime is not None and dist.stat().st_mtime < source_mtime:
-                continue
-            return ([node], dist)
-    if src.is_file():
+    use_dist = os.environ.get("MY_AGENT_TERMINAL_USE_DIST", "").strip() == "1"
+
+    def _source_entry() -> tuple[list[str], Path] | None:
+        if not src.is_file():
+            return None
         local_tsx = terminal_ui / "node_modules" / ".bin" / (
             "tsx.cmd" if os.name == "nt" else "tsx"
         )
@@ -89,7 +80,32 @@ def resolve_cli_entry(paths: AgentPaths) -> tuple[list[str], Path] | None:
         npx = shutil.which("npx")
         if npx:
             return ([npx, "tsx"], src)
-    return None
+        return None
+
+    if not use_dist:
+        source_entry = _source_entry()
+        if source_entry is not None:
+            return source_entry
+
+    node = shutil.which("node")
+    if node:
+        dist_candidates = (
+            terminal_ui / "dist" / "cli.js",
+            terminal_ui / "dist" / "src" / "cli.js",
+        )
+        source_mtime = src.stat().st_mtime if src.is_file() else None
+        for dist in dist_candidates:
+            if not dist.is_file():
+                continue
+            if (
+                not use_dist
+                and source_mtime is not None
+                and dist.stat().st_mtime < source_mtime
+            ):
+                continue
+            return ([node], dist)
+
+    return _source_entry()
 
 
 def session_init_payload(
@@ -190,15 +206,60 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         return [{"type": "reasoning.delta", "text": str(event.get("text", ""))}]
 
+    if event_type == "tool.end":
+        return [{"type": "tool.clear"}]
+
+    if event_type == "tool.progress":
+        text = str(event.get("text", "")).strip()
+        tool = str(event.get("tool", "")).strip()
+        if not text:
+            return []
+        label = f"{tool} · {text}" if tool else text
+        return [{"type": "activity.update", "text": label}]
+
+    if event_type == "activity.update":
+        text = str(event.get("text", "")).strip()
+        return [{"type": "activity.update", "text": text}] if text else []
+
+    if event_type == "llm.pending":
+        return [{"type": "activity.update", "text": "等待模型响应…"}]
+
     if event_type == "tool.start":
         tool = str(event.get("tool", "tool"))
         return [
             {"type": "tool.active", "name": tool},
+            {"type": "activity.update", "text": f"{tool} · 执行中…"},
             {"type": "status.working", "active": True},
         ]
 
-    if event_type == "tool.end":
-        return [{"type": "tool.clear"}]
+    if event_type == "terminal.plan.state":
+        from terminal_plan import plan_status_segment
+
+        mode = str(event.get("mode", "")).strip()
+        if mode.casefold() in {"", "cleared"}:
+            return [{"type": "plan.state", "status": ""}]
+        status = plan_status_segment(
+            mode=mode,
+            model=str(event.get("model", "")),
+            effort=str(event.get("effort", "")),
+            step=int(event.get("step", 0) or 0),
+            total=int(event.get("total", 0) or 0),
+            retry=int(event.get("retry", 0) or 0),
+            replan=int(event.get("replan", 0) or 0),
+            degraded=bool(event.get("degraded")),
+        )
+        payload: dict[str, Any] = {
+            "type": "plan.state",
+            "status": status,
+            "mode": mode,
+            "step": int(event.get("step", 0) or 0),
+            "total": int(event.get("total", 0) or 0),
+            "retry": int(event.get("retry", 0) or 0),
+            "replan": int(event.get("replan", 0) or 0),
+        }
+        if event.get("degraded"):
+            payload["degraded"] = True
+        return [payload]
 
     if event_type == "notice":
         text = str(event.get("text", "")).strip()
@@ -253,6 +314,7 @@ class TerminalInkBridge:
             env=env,
             stdin=None,
             stdout=subprocess.PIPE,
+            # Ink renders the full-screen UI to stderr — must inherit the TTY, not a pipe.
             stderr=None,
             bufsize=1,
             text=True,
@@ -286,7 +348,12 @@ class TerminalInkBridge:
         if accept_error:
             raise RuntimeError(f"Ink event socket accept failed: {accept_error[0]}") from accept_error[0]
         if bridge._event_conn is None:
-            raise RuntimeError("Ink child did not connect to event socket")
+            proc = bridge.process
+            code = proc.poll() if proc is not None else None
+            raise RuntimeError(
+                f"Ink child did not connect to event socket"
+                + (f" (exit {code})" if code is not None else "")
+            )
 
         bridge._stdout = bridge.process.stdout
         bridge._reader = threading.Thread(

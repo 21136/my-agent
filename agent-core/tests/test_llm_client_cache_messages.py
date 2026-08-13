@@ -10,10 +10,15 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from unittest.mock import MagicMock, patch
+
 from llm_client import (
     as_cached_system_message,
     build_chat_messages,
     cached_prompt_tokens,
+    LLMClient,
+    LLMConfig,
+    StreamHandlers,
     vendor_supports_system_prompt_cache,
 )
 
@@ -96,6 +101,64 @@ class LlmClientCacheMessageTests(unittest.TestCase):
 
         self.assertIsNone(llm_usage_event(None))
         self.assertIsNone(llm_usage_event({}))
+
+    def test_stream_chat_requests_include_usage(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeStreamResponse:
+            status_code = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def iter_lines(self):
+                yield "data: [DONE]"
+
+        class _FakeClient:
+            def stream(self, method, url, headers=None, json=None):
+                captured["json"] = json
+                return _FakeStreamResponse()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        cfg = LLMConfig(
+            api_key="test-key",
+            base_url="https://example.test",
+            model="0x567-flash",
+            model_coding="0x567-pro",
+            timeout_sec=30.0,
+            context_limit_override=None,
+        )
+        client = LLMClient(cfg)
+
+        with patch("llm_client.make_httpx_client", return_value=_FakeClient()):
+            with patch("llm_client.get_registry") as mock_registry:
+                entry = MagicMock()
+                entry.id = "0x567-flash"
+                entry.provider_model = "gpt-5.6-luna"
+                entry.vendor = "0x567"
+                entry.supports_tool_call = True
+                entry.resolve_api_key.return_value = "test-key"
+                entry.chat_completions_url.return_value = "https://example.test/v1/chat/completions"
+                mock_registry.return_value.resolve.return_value = entry
+                mock_registry.return_value.default_flash_id = "0x567-flash"
+                client.chat(
+                    [{"role": "user", "content": "hi"}],
+                    stream=StreamHandlers(),
+                )
+
+        payload = captured.get("json")
+        self.assertIsInstance(payload, dict)
+        assert isinstance(payload, dict)
+        self.assertTrue(payload.get("stream"))
+        self.assertEqual(payload.get("stream_options"), {"include_usage": True})
 
 
 if __name__ == "__main__":

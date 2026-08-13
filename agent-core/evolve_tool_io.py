@@ -18,10 +18,9 @@ def normalize_newlines(text: str) -> str:
 
 def write_utf8_text(path: Path, content: str) -> None:
     """Write UTF-8 text without platform newline translation (BUG-025)."""
-    normalized = normalize_newlines(content)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write(normalized)
+    from file_guard import atomic_write_text
+
+    atomic_write_text(path, content)
 
 
 def ensure_utf8_stdio() -> None:

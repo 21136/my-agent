@@ -1,0 +1,40 @@
+{
+  "pollSeconds": 2,
+  "emptyBytesThreshold": 8,
+  "snapshotOnEveryChange": true,
+  "maxSnapshotsPerFile": 200,
+  "autoRestore": true,
+  "targets": [
+    "data/llm_models.json",
+    "data/llm_models.example.json",
+    ".cursor/mcp.json",
+    ".cursor/rules/project-map.mdc"
+  ],
+  "watchDirs": [
+    {
+      "subdir": "agent-core",
+      "patterns": ["*.py"],
+      "maxFiles": 600
+    },
+    {
+      "subdir": "evolve/tools",
+      "patterns": ["*.py", "*.toml"],
+      "maxFiles": 400
+    },
+    {
+      "subdir": "data/sessions",
+      "patterns": ["meta.json", "messages.jsonl", "goal.md"],
+      "maxFiles": 800
+    },
+    {
+      "subdir": "desktop/src",
+      "patterns": ["*.ts", "*.tsx"],
+      "maxFiles": 400
+    },
+    {
+      "subdir": "terminal-ui/src",
+      "patterns": ["*.ts", "*.tsx"],
+      "maxFiles": 200
+    }
+  ]
+}

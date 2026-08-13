@@ -3,6 +3,9 @@ REM my-agent desktop launcher (TASKS T-904f). Default entry — Electron + grow 
 setlocal
 cd /d "%~dp0"
 
+REM FILE-GUARD: background watcher for session/source truncation
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\file-sentinel\start-sentinel.ps1" >nul 2>&1
+
 where python >nul 2>&1
 if errorlevel 1 (
     echo [my-agent] Python not found. Install Python 3.12+ and add it to PATH.
