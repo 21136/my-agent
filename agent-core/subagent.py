@@ -825,7 +825,7 @@ def count_review_blockers(summary: str, *, verdict: str | None = None) -> int:
 
 
 _BLOCKER_LINE_RE = re.compile(
-    r"^(?:[-*•]\s*)?(?:(P[0-3])|blockers?)\s*[：:]\s*(.+)$",
+    r"^(?:[-*•]\s*)?(?:(P[0-3])|blockers?)\s*(?:[：:]\s+|\s+)(.+)$",
     re.IGNORECASE,
 )
 _VERDICT_LINE_RE = re.compile(r"(?:REVIEW|CHECKER)_VERDICT\s*:", re.IGNORECASE)

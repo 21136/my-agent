@@ -23,6 +23,7 @@ Rules:
 from __future__ import annotations
 
 import re
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -98,7 +99,12 @@ def _yaml_escape(value: str) -> str:
     return value
 
 
-def render_env_md(*, tools: dict[str, str], prefer: dict[str, str]) -> str:
+def render_env_md(
+    *,
+    tools: dict[str, str],
+    prefer: dict[str, str],
+    quality_commands: list[dict[str, Any]] | None = None,
+) -> str:
     lines = [
         "# ENV.md — project toolchain",
         "# `tools` is auto-refreshed when you open/switch this project.",
@@ -113,6 +119,18 @@ def render_env_md(*, tools: dict[str, str], prefer: dict[str, str]) -> str:
     jdk = prefer.get("jdk", _DEFAULT_PREFER["jdk"])
     lines.append(f"  package_manager: {_yaml_escape(str(pm))}")
     lines.append(f"  jdk: {_yaml_escape(str(jdk))}")
+    if quality_commands:
+        lines.extend(["", "quality:", "  commands:"])
+        for command in quality_commands:
+            command_id = str(command.get("id") or "quality").strip()
+            cmd = command.get("cmd") or []
+            if not isinstance(cmd, list) or not all(isinstance(item, str) for item in cmd):
+                continue
+            lines.append(f"    - id: {command_id}")
+            lines.append(f"      cmd: {json.dumps(cmd, ensure_ascii=False)}")
+            cwd = str(command.get("cwd") or "").strip()
+            if cwd:
+                lines.append(f"      cwd: {cwd}")
     lines.append("")
     return "\n".join(lines)
 
@@ -179,7 +197,11 @@ def load_env_near(start: Path) -> dict[str, dict[str, str]] | None:
         return None
 
 
-def ensure_project_env(paths: AgentPaths, project_id: str) -> Path:
+def ensure_project_env(
+    paths: AgentPaths,
+    project_id: str,
+    quality_commands: list[dict[str, Any]] | None = None,
+) -> Path:
     """Create or refresh ENV.md under workspace/<id>/ (refresh tools, keep prefer)."""
     dest = project_dir(paths, project_id)
     dest.mkdir(parents=True, exist_ok=True)
@@ -192,7 +214,7 @@ def ensure_project_env(paths: AgentPaths, project_id: str) -> Path:
         except OSError:
             pass
     tools = detect_host_tools()
-    body = render_env_md(tools=tools, prefer=prefer)
+    body = render_env_md(tools=tools, prefer=prefer, quality_commands=quality_commands)
     if env_path.is_file():
         try:
             existing = env_path.read_text(encoding="utf-8")

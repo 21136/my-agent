@@ -150,12 +150,85 @@ def _evidence_tool_names(turn_evidence: list[dict[str, Any]]) -> set[str]:
     return names
 
 
+def task_evidence_contract(
+    tasks_text: str,
+    *,
+    task_id: str | None = None,
+    task_line: int | None = None,
+) -> dict[str, Any] | None:
+    """Return the current task's stable evidence associations from TASKS.md."""
+    from project_mode import parse_tasks_metadata
+
+    wanted_id = str(task_id or "").strip().upper()
+    for task in parse_tasks_metadata(tasks_text):
+        parsed_id = str(task.get("id") or "").strip().upper()
+        if task_line is not None and task.get("line") == task_line:
+            match = True
+        elif wanted_id and parsed_id == wanted_id:
+            match = True
+        else:
+            match = False
+        if not match:
+            continue
+        return {
+            "task_id": parsed_id or wanted_id,
+            "task_text": str(task.get("text") or ""),
+            "ac_ids": list(task.get("ac") or []),
+            "verify_ids": list(task.get("verify") or []),
+            "evidence_ids": list(task.get("evidence") or []),
+            "metadata_present": any(
+                task.get(key) for key in ("req", "ac", "design", "verify", "evidence")
+            ),
+        }
+    return None
+
+
+def _entry_matches_binding(
+    entry: dict[str, Any],
+    *,
+    task_id: str = "",
+    ac_ids: list[str] | None = None,
+    verify_ids: list[str] | None = None,
+) -> bool:
+    expected_task = task_id.strip().upper()
+    actual_task = str(entry.get("task_id") or "").strip().upper()
+    if expected_task and actual_task != expected_task:
+        return False
+    for key, expected in (("ac_ids", ac_ids), ("verify_ids", verify_ids)):
+        required = {str(value).strip().upper() for value in (expected or []) if str(value).strip()}
+        if not required:
+            continue
+        actual = {str(value).strip().upper() for value in (entry.get(key) or []) if str(value).strip()}
+        if not required.issubset(actual):
+            return False
+    return True
+
+
 def evidence_satisfies(
     kind: EvidenceKind,
     turn_evidence: list[dict[str, Any]],
+    *,
+    task_id: str = "",
+    ac_ids: list[str] | None = None,
+    verify_ids: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Whether this-turn successful tools cover *kind* (G1/G2)."""
-    names = _evidence_tool_names(turn_evidence)
+    bound_evidence = [
+        entry
+        for entry in turn_evidence
+        if isinstance(entry, dict)
+        and _entry_matches_binding(
+            entry,
+            task_id=task_id,
+            ac_ids=ac_ids,
+            verify_ids=verify_ids,
+        )
+    ]
+    names = _evidence_tool_names(bound_evidence)
+
+    if task_id or ac_ids or verify_ids:
+        if not bound_evidence:
+            return False, "缺少当前任务/AC/V 绑定的成功证据"
 
     if kind == "unknown":
         return (
@@ -196,13 +269,23 @@ def make_evidence_entry(
     evolved_name: str = "",
     ok: bool,
     paths: list[str] | None = None,
+    task_id: str = "",
+    ac_ids: list[str] | None = None,
+    verify_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    entry: dict[str, Any] = {
         "tool": tool_name,
         "evolved_name": evolved_name,
         "ok": bool(ok),
         "paths": list(paths or []),
     }
+    if task_id.strip():
+        entry["task_id"] = task_id.strip().upper()
+    if ac_ids:
+        entry["ac_ids"] = list(ac_ids)
+    if verify_ids:
+        entry["verify_ids"] = list(verify_ids)
+    return entry
 
 
 def _turn_has_l1_failure(turn_evidence: list[dict[str, Any]]) -> bool:
@@ -273,11 +356,18 @@ def report_progress_evidence_block_reason(
     armed_task_text: str,
     turn_evidence: list[dict[str, Any]],
     delivery_profile: str = "solo",
+    task_id: str = "",
+    expected_ac_ids: list[str] | None = None,
+    expected_verify_ids: list[str] | None = None,
+    require_binding: bool = False,
 ) -> str | None:
     """G1/G2: block report_progress when this-turn matched evidence is missing."""
     if active_shell != "project":
         return None
     profile = (delivery_profile or "solo").strip().casefold()
+    if require_binding:
+        if not task_id or not expected_ac_ids or not expected_verify_ids:
+            return "[progress_gate] 当前任务缺少完整 AC/V 关联，禁止勾选。"
     if profile == "solo":
         if _turn_has_l1_failure(turn_evidence):
             return (
@@ -288,7 +378,13 @@ def report_progress_evidence_block_reason(
         if kind == "unknown":
             return None
     kind = classify_task_evidence_kind(armed_task_text)
-    ok, note = evidence_satisfies(kind, turn_evidence)
+    ok, note = evidence_satisfies(
+        kind,
+        turn_evidence,
+        task_id=task_id if require_binding else "",
+        ac_ids=expected_ac_ids if require_binding else None,
+        verify_ids=expected_verify_ids if require_binding else None,
+    )
     if ok:
         return None
     return (

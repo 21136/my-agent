@@ -148,6 +148,8 @@ tool_dirs = ["tools/coding"]
 
 ### 4.3 会话内 LLM 可见的 evolved 导引（Phase 23）
 
+设计文档场景先读 `evolve/tool-catalog/buckets/design.md`，再通过 `run_evolved` 调用 `design_document`；该工具支持 Markdown 与 DOCX。
+
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
 Builtin 恒为 **11** 个 function（核心 7 + 编排 4）；evolved **不**平铺为独立 function，经 `run_evolved` 调用：

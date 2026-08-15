@@ -352,9 +352,12 @@ class WsBridge:
         self.emit(session_history_event(session))
         self.emit(_proposals_payload(self.paths))
         if session.meta.project_id:
-            from project_api import project_state_payload
+            from project_api import project_plan_state_payload, project_state_payload
 
             self.emit(project_state_payload(session, self.paths))
+            plan_state = project_plan_state_payload(session, self.paths)
+            if plan_state is not None:
+                self.emit(plan_state)
 
     def emit_assistant(self, text: str) -> None:
         # C9: allow empty text so desktop always gets assistant.done.
@@ -903,6 +906,9 @@ class WsSessionHandler:
             bridge.emit(payload)
         except ProjectApiError as exc:
             emit_error(bridge, str(exc))
+        except Exception as exc:
+            log_sidecar_exception("project dispatch failed", exc)
+            emit_error(bridge, f"project request failed: {exc}")
 
     async def _dispatch_host_scope(
         self,

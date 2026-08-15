@@ -108,7 +108,12 @@ if (process.platform === "win32" && process.env.VITE_DEV_SERVER_URL) {
 }
 
 function pythonCommand(): string {
-  return process.platform === "win32" ? "python" : "python3";
+  if (process.platform === "win32") {
+    const localPython = path.join(AGENT_ROOT, ".venv", "Scripts", "python.exe");
+    return existsSync(localPython) ? localPython : "python";
+  }
+  const localPython = path.join(AGENT_ROOT, ".venv", "bin", "python");
+  return existsSync(localPython) ? localPython : "python3";
 }
 
 /** DOC-08 / T-1824-03: force UTF-8 on sidecar pipes (Electron always decodes stdout as utf-8). */

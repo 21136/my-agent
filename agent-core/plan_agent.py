@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
@@ -27,6 +28,7 @@ from project_mode import (
     TASKS_ARCHIVE_NAME,
     MILESTONE_PROJECT_COMPLETE_KEY,
     build_suggestion_phase_key_map,
+    compute_execution_stage,
     drop_task_line,
     evaluate_milestone_after_archive,
     migrate_active_milestone_suggestion_keys,
@@ -76,7 +78,7 @@ class UndoEntry:
 
 
 _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划搭档」通道的对话伙伴。
-先理解用户要什么，再决定是否改文件或查跑工具。系统只解析你返回的 JSON；**计划域四件套采纳前不会写盘**。
+先理解用户要什么，再决定是否改文件或查跑工具。系统只解析你返回的 JSON；**计划域文档采纳前不会写盘**。
 你 **看不到** 主 Agent 聊天全文；只吃本通道来回 + 计划域文件真源。
 
 ## 文档角色（先按这个判断「合不合理」）
@@ -85,7 +87,14 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 - **TASKS.archive.md**：已完成/关闭项；侧栏勾选 = 完成并归档。误勾后用 restore，不要当「删了」去 add 重写。
 - **PROJECT.md**：目标/非目标/约束。
 - **ENV.md**：环境与端口约定。
+- **SCOPE.md**：REQ/AC、范围边界与非目标；是需求和验收的依据。
+- **DESIGN.md**：UX 流程、交互状态与异常路径；是设计提案的依据。
+- **TECH-DESIGN.md**：架构、数据模型、API、依赖与技术风险。
+- **VERIFY.md**：AC→V→L1 验证矩阵；不要把缺失证据当作已验证。
+- **RELEASE.md**：迁移、发布、回滚与人工验收清单。
 - **bugs/**：缺陷与修复长文；MAP/TASKS 里最多留一行指针。
+
+标准项目制品以七文件为真源。制品区块是只读上下文；如需修改，必须提出 Plan patch 并等待采纳。
 
 ## 输出
 只输出一个 JSON 对象：
@@ -93,7 +102,7 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 
 operations 里每条：
 - kind: **patch** | **add** | **restore**
-- path: patch 时必填，且只能是 TASKS.md|MAP.md|PROJECT.md|ENV.md
+- path: patch 时必填，且只能是 PROJECT.md|SCOPE.md|DESIGN.md|TECH-DESIGN.md|TASKS.md|VERIFY.md|RELEASE.md|MAP.md|ENV.md
 - replacements: patch 时 [{ "old": "文件中唯一原文片段", "new": "替换后" }]
 - phase / description: 仅 kind=add
 - phase / task_ids / bodies: 仅 kind=restore（从归档恢复为开放 [ ]）
@@ -104,7 +113,7 @@ restore 示例：
 
 tool_calls（可选；结果只进本通道）：
 - {"name":"read_file"|"list_dir"|"grep"|"web_search"|"fetch_url"|"run_command", "arguments":{...}}
-- **禁止** write_text 等直写 TASKS/MAP/PROJECT/ENV（须 operations 提案）
+- **禁止** write_text 等直写七文件及 MAP/ENV（须 operations 提案）
 - **禁止** 对 TASKS.md / TASKS.archive.md 再 read_file（开放队列与归档切片已在下方 user prompt）；除非读其它业务代码路径
 
 ## 意图分流（先分清）
@@ -448,6 +457,46 @@ def _clip_doc(text: str, *, limit: int = 6000) -> str:
     return t[: limit - 20] + "\n\n…(截断)…\n"
 
 
+_PLAN_ARTIFACT_ORDER = (
+    "SCOPE.md",
+    "DESIGN.md",
+    "TECH-DESIGN.md",
+    "VERIFY.md",
+    "RELEASE.md",
+)
+
+
+def _format_plan_artifact_context(
+    artifact_texts: Mapping[str, str] | None,
+    manifest: Mapping[str, Any] | None = None,
+) -> str:
+    """Render standard project artifacts and freshness metadata for Plan LLM."""
+    texts = artifact_texts or {}
+    manifest_by_path = {
+        str(item.get("path")): item
+        for item in (manifest or {}).get("artifacts", [])
+        if isinstance(item, Mapping) and item.get("path")
+    }
+    rows: list[str] = []
+    for name in _PLAN_ARTIFACT_ORDER:
+        item = manifest_by_path.get(name, {})
+        revision = str(item.get("revision") or "unknown")
+        status = str(item.get("status") or "untracked")
+        rows.append(f"- `{name}` · revision `{revision}` · status `{status}`")
+    sections = [
+        "## 标准项目制品（只读参考；提案可引用，修改须走 Plan patch + 采纳）",
+        *rows,
+    ]
+    for name in _PLAN_ARTIFACT_ORDER:
+        sections.extend(
+            [
+                f"\n### {name}",
+                _clip_doc(texts.get(name, ""), limit=4000) or "（无）",
+            ]
+        )
+    return "\n".join(sections) + "\n\n"
+
+
 def _build_plan_prompt(
     tasks_text: str,
     user_intent: str,
@@ -455,6 +504,8 @@ def _build_plan_prompt(
     map_text: str = "",
     project_text: str = "",
     env_text: str = "",
+    artifact_texts: Mapping[str, str] | None = None,
+    manifest: Mapping[str, Any] | None = None,
     archive_tail: str = "",
     archive_path: "Path | None" = None,
     plan_transcript: list[dict[str, str]] | None = None,
@@ -508,6 +559,7 @@ def _build_plan_prompt(
 
 {_clip_doc(env_text, limit=2000) or "（无）"}
 
+{_format_plan_artifact_context(artifact_texts, manifest)}
 {archive_tail or ""}{tools_block}## 用户说
 
 {user_intent}
@@ -562,6 +614,8 @@ class PlanAgent:
     # Phase 38 · A11/C4–C6 — in-memory Plan channel only (never messages.jsonl)
     _plan_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
     _planning_model_id: str = field(default="", repr=False)
+    _state_save_depth: int = field(default=0, init=False, repr=False)
+    _state_save_pending: bool = field(default=False, init=False, repr=False)
 
     def configure_planning_model(self, model_id: str) -> None:
         """Set planning model for this run (Phase 42 · plan_partner role)."""
@@ -629,6 +683,18 @@ class PlanAgent:
         return self.plan_transcript_snapshot()
 
     # ---- persistence ----
+
+    @contextmanager
+    def state_save_batch(self):
+        """Coalesce repeated state writes during one compound mutation."""
+        self._state_save_depth += 1
+        try:
+            yield
+        finally:
+            self._state_save_depth -= 1
+            if self._state_save_depth == 0 and self._state_save_pending:
+                self._state_save_pending = False
+                self._save_state()
 
     @property
     def _state_dir(self) -> Path:
@@ -724,6 +790,9 @@ class PlanAgent:
         return r1 or r2 or r3
 
     def _save_state(self) -> None:
+        if self._state_save_depth:
+            self._state_save_pending = True
+            return
         self._state_dir.mkdir(parents=True, exist_ok=True)
         data = {
             "fingerprint": self._last_fingerprint,
@@ -961,13 +1030,19 @@ class PlanAgent:
 
         result = drop_task_line(self.paths, self.project_id, line)
         removed = result.get("removed", original_content)
+        import re
+        dropped_body = removed.strip()
+        task_id_match = re.search(r"\bT-\d+(?:-\d+)*\b", dropped_body)
         undo = UndoEntry(
             description=f"已删除「{removed.strip()[:30]}」",
             reverse_kind="insert",
             reverse_data={"position": line, "content": original_content},
         )
-        return self._mutate_and_check(result, "drop", removed, reason="drop",
-                                       line=line, undo=undo)
+        updated = self._mutate_and_check(result, "drop", removed, reason="drop",
+                                          line=line, undo=undo)
+        updated["dropped_body"] = dropped_body
+        updated["dropped_id"] = task_id_match.group(0) if task_id_match else dropped_body[:80]
+        return updated
 
     def skip_task(self, line: int) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -1283,6 +1358,42 @@ class PlanAgent:
         self._save_state()
         return sug
 
+    def _prune_invalid_pending_patch_suggestions(self) -> None:
+        """Withdraw persisted patches whose source text no longer exists."""
+        from plan_patch import build_patch_preview
+
+        changed = False
+        for sid, sug in list(self._pending_gated.items()):
+            if sug.get("action") != "apply_patch":
+                continue
+            payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+            path = str(payload.get("path") or "").strip()
+            replacements = payload.get("replacements")
+            if not path or not isinstance(replacements, list) or not replacements:
+                invalid = True
+            else:
+                try:
+                    build_patch_preview(
+                        self.paths,
+                        self.project_id,
+                        relpath=path,
+                        replacements=replacements,
+                    )
+                except ProjectModeError:
+                    invalid = True
+                else:
+                    invalid = False
+            if not invalid:
+                continue
+            self._pending_gated.pop(sid, None)
+            self._last_suggestions.pop(sid, None)
+            self._ignored_suggestion_ids.add(sid)
+            changed = True
+        if changed:
+            if not self._pending_gated:
+                self._last_partner_notices = []
+            self._save_state()
+
     def _rebase_pending_patch_suggestions_for_path(self, adopted_path: str) -> list[str]:
         """BUG-026 A2 (T-4812): refresh base_hash for other pending patches on same path."""
         from plan_patch import build_patch_preview
@@ -1330,7 +1441,21 @@ class PlanAgent:
             self._save_state()
         return withdrawn
 
-    def accept_suggestion(self, suggestion_id: str) -> dict[str, Any]:
+    def accept_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        code_policy: str = "plan_only",
+    ) -> dict[str, Any]:
+        with self.state_save_batch():
+            return self._accept_suggestion(suggestion_id, code_policy=code_policy)
+
+    def _accept_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        code_policy: str = "plan_only",
+    ) -> dict[str, Any]:
         """Apply a previously emitted suggestion via its action/payload."""
         sid = str(suggestion_id or "").strip()
         sug = self._last_suggestions.get(sid) or self._pending_gated.get(sid)
@@ -1349,12 +1474,23 @@ class PlanAgent:
 
         if action == "apply_patch":
             from plan_patch import apply_plan_patch
+            from project_manifest import (
+                append_change_ledger,
+                ensure_project_manifest,
+                next_change_id,
+                save_manifest,
+                adopt_manifest_change,
+            )
 
             rel = str(payload.get("path") or "").strip()
             reps = payload.get("replacements")
             if not isinstance(reps, list):
                 raise ProjectModeError("apply_patch requires replacements[]")
             base_hash = payload.get("base_hash")
+            project_root = project_dir(self.paths, self.project_id)
+            manifest = ensure_project_manifest(self.paths, self.project_id)
+            before_revision = str(manifest.get("manifest_revision") or "r0")
+            change_id = next_change_id(project_root)
             try:
                 result = apply_plan_patch(
                     self.paths,
@@ -1371,6 +1507,53 @@ class PlanAgent:
                     "summary": f"已撤回无效提案：{exc}",
                     "_next_task": self.next_task_text(),
                 }
+            adopted_path = str(result.get("path") or rel).strip()
+            adopt_manifest_change(
+                manifest,
+                project_root,
+                adopted_path,
+                change_id=change_id,
+                level="L2",
+            )
+            save_manifest(project_root / ".plan-agent" / "manifest.json", manifest)
+            changed_text = ""
+            changed_file = project_root / adopted_path
+            if changed_file.is_file():
+                changed_text = changed_file.read_text(encoding="utf-8")
+
+            def _ids(prefix: str) -> list[str]:
+                return sorted(
+                    set(re.findall(rf"\b{prefix}-\d{{3,}}\b", changed_text, re.IGNORECASE)),
+                    key=str.upper,
+                )
+
+            stale_docs = [
+                str(item.get("path"))
+                for item in manifest.get("artifacts", [])
+                if isinstance(item, dict) and item.get("status") in {"stale", "stale_soft"}
+            ]
+            change_entry = append_change_ledger(
+                project_root,
+                {
+                    "change_id": change_id,
+                    "adopted_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "source": "plan_partner",
+                    "proposal_id": sid,
+                    "paths": [adopted_path],
+                    "summary": str(sug.get("title") or f"Accepted patch for {adopted_path}"),
+                    "requirements": _ids("REQ"),
+                    "tasks": _ids("T"),
+                    "acceptance": _ids("AC"),
+                    "verification": _ids("V"),
+                    "stale_docs": stale_docs,
+                    "replan_required": any(
+                        isinstance(item, dict) and item.get("status") == "stale"
+                        for item in manifest.get("artifacts", [])
+                    ),
+                    "before_revision": before_revision,
+                    "after_revision": str(manifest.get("manifest_revision") or before_revision),
+                },
+            )
             self._record_change(
                 "external" if rel != "TASKS.md" else "add",
                 f"patch {rel}",
@@ -1385,6 +1568,16 @@ class PlanAgent:
             return {
                 **result,
                 "summary": notice,
+                "change": change_entry,
+                "impact": {
+                    "paths": change_entry["paths"],
+                    "requirements": change_entry["requirements"],
+                    "tasks": change_entry["tasks"],
+                    "acceptance": change_entry["acceptance"],
+                    "verification": change_entry["verification"],
+                    "stale_docs": change_entry["stale_docs"],
+                    "replan_required": change_entry["replan_required"],
+                },
                 "_next_task": self.next_task_text(),
             }
 
@@ -1466,6 +1659,35 @@ class PlanAgent:
                 raise ProjectModeError("drop_task suggestion missing line")
             result = self.drop_task(line)
             self._mark_suggestion_resolved(sid)
+            policy = code_policy if code_policy in {"plan_only", "agent_cleanup", "git_guide"} else "plan_only"
+            if policy == "agent_cleanup":
+                body = str(result.get("dropped_body") or "the deleted task")
+                result["_code_followup"] = {
+                    "mode": "agent_cleanup",
+                    "prefill": (
+                        f"计划任务已删除：{body}\n"
+                        "请在当前项目中清理与该任务相关的代码产出；不要自动恢复计划任务，完成后返回可接受的变更。"
+                    ),
+                    "paths": [],
+                    "dropped_body": body,
+                    "dropped_id": str(result.get("dropped_id") or ""),
+                }
+            elif policy == "git_guide":
+                body = str(result.get("dropped_body") or "the deleted task")
+                workspace_rel = f"workspace/{self.project_id}"
+                result["_code_followup"] = {
+                    "mode": "git_guide",
+                    "dropped_body": body,
+                    "dropped_id": str(result.get("dropped_id") or ""),
+                    "guide": {
+                        "workspace_rel": workspace_rel,
+                        "commands": [
+                            f"git -C {workspace_rel} status --short",
+                            f"git -C {workspace_rel} diff --stat",
+                        ],
+                        "note": "仅提供可复制的清理指引；不会自动 revert、删除文件或提交。",
+                    },
+                }
             return result
 
         if action == "move_task":
@@ -2240,14 +2462,18 @@ class PlanAgent:
 
         root = project_dir(self.paths, self.project_id)
         tasks_path = root / "TASKS.md"
-        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
-        map_text = (root / "MAP.md").read_text(encoding="utf-8") if (root / "MAP.md").is_file() else ""
-        project_text = (
-            (root / "PROJECT.md").read_text(encoding="utf-8")
-            if (root / "PROJECT.md").is_file()
-            else ""
-        )
-        env_text = (root / "ENV.md").read_text(encoding="utf-8") if (root / "ENV.md").is_file() else ""
+        artifact_texts = read_project_artifacts(self.paths, self.project_id)
+        tasks_text = artifact_texts.get("TASKS.md", "")
+        map_text = artifact_texts.get("MAP.md", "")
+        project_text = artifact_texts.get("PROJECT.md", "")
+        env_text = artifact_texts.get("ENV.md", "")
+        manifest = None
+        try:
+            from project_manifest import refresh_project_manifest
+
+            manifest = refresh_project_manifest(self.paths, self.project_id)
+        except Exception:
+            pass
         from project_mode import TASKS_ARCHIVE_NAME, format_archive_tail_for_prompt
 
         archive_path = root / TASKS_ARCHIVE_NAME
@@ -2267,6 +2493,8 @@ class PlanAgent:
                             map_text=map_text,
                             project_text=project_text,
                             env_text=env_text,
+                            artifact_texts=artifact_texts,
+                            manifest=manifest,
                             archive_tail=archive_tail,
                             archive_path=archive_path,
                             plan_transcript=self._plan_transcript,
@@ -2343,6 +2571,7 @@ class PlanAgent:
 
     def build_state(self, session: Session | None = None) -> dict[str, Any]:
         """Build project.plan.state payload. Runs auto_fix + quality_check every time."""
+        self._prune_invalid_pending_patch_suggestions()
         artifacts = read_project_artifacts(self.paths, self.project_id)
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         stats = read_task_stats(tasks_path)
@@ -2462,6 +2691,50 @@ class PlanAgent:
         if pruned_legacy:
             self._save_state()
 
+        try:
+            from project_manifest import change_ledger_path, load_change_ledger
+
+            change_timeline = load_change_ledger(
+                change_ledger_path(project_dir(self.paths, self.project_id))
+            )[-50:]
+        except Exception:
+            change_timeline = []
+
+        try:
+            from project_manifest import refresh_project_manifest
+
+            manifest = refresh_project_manifest(self.paths, self.project_id)
+        except Exception:
+            manifest = None
+        stage = compute_execution_stage(
+            project_id=self.project_id,
+            plan_status=plan_status or "draft",
+            task_stats=stats,
+            manifest=manifest,
+            review_verdict=getattr(session, "last_review_verdict", None),
+            review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+        )
+        release_artifact = next(
+            (item for item in (manifest or {}).get("artifacts", [])
+             if isinstance(item, dict) and item.get("path") == "RELEASE.md"),
+            None,
+        )
+        try:
+            from project_release import load_release_acceptance
+
+            release_acceptance = load_release_acceptance(
+                project_dir(self.paths, self.project_id),
+                self.project_id,
+                release_revision=str(release_artifact.get("revision")) if release_artifact else None,
+            )
+        except Exception:
+            release_acceptance = {
+                "accepted": False,
+                "accepted_at": None,
+                "release_revision": None,
+                "checklist": {},
+            }
+
         return {
             "type": "project.plan.state",
             "project_id": self.project_id,
@@ -2494,6 +2767,22 @@ class PlanAgent:
                     "line": c.line,
                 }
                 for c in self.pending_changes()
+            ],
+            "change_timeline": change_timeline,
+            "execution_stage": stage["stage"],
+            "execution_stage_reason": stage["reason"],
+            "execution_stage_blockers": list(stage["blockers"]),
+            "release_acceptance": release_acceptance,
+            "execution_stage_artifacts": [
+                {
+                    "path": item.get("path"),
+                    "role": item.get("role"),
+                    "revision": item.get("revision"),
+                    "status": item.get("status"),
+                    "ids": list(item.get("ids") or []),
+                }
+                for item in (manifest or {}).get("artifacts", [])
+                if isinstance(item, dict)
             ],
         }
 

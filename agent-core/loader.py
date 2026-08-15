@@ -652,7 +652,7 @@ _TOOL_WORKSHOP_FALLBACK = """# 工具工坊（Tool Workshop）
 你在工具工坊会话：沉淀可复用、够广的 evolved 工具。
 先查 evolve/tool-catalog/INDEX.md 能否用现有工具覆盖；能则不新建。
 写文件只用 write_evolve（先 main.py 再 tool.toml，status=draft）；细则见 buckets/evolve.md。
-验收：验收 <name>；PASS 后改 active + INDEX。"""
+验收：验收 <name>；PASS 后改 active + INDEX，并补对应 buckets/<桶>.md；验证 INDEX → bucket → run_evolved。"""
 
 
 def load_evolve_prompt_file(evolve_dir: Path, relative: str, *, fallback: str) -> str:

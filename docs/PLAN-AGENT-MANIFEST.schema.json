@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:my-agent:plan-agent-manifest:0.1",
+  "title": "my-agent Desktop project document manifest",
+  "description": "T-5810 draft schema for workspace/<project>/.plan-agent/manifest.json. T-5831 adds content_origin, change_scope, completeness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project", "artifacts"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "0.1"},
+    "project": {"$ref": "#/$defs/project"},
+    "manifest_revision": {"$ref": "#/$defs/revision"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "current_task": {"$ref": "#/$defs/taskId"},
+    "change_scope": {"$ref": "#/$defs/tier"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 7,
+      "allOf": [
+        {"contains": {"properties": {"path": {"const": "PROJECT.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "SCOPE.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "DESIGN.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "TECH-DESIGN.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "TASKS.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "VERIFY.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"path": {"const": "RELEASE.md"}}, "required": ["path"]}, "minContains": 1, "maxContains": 1}
+      ],
+      "items": {"$ref": "#/$defs/artifact"}
+    }
+  },
+  "$defs": {
+    "tier": {
+      "type": "string",
+      "enum": ["small", "normal", "large"]
+    },
+    "contentOrigin": {
+      "type": "string",
+      "enum": ["migrated", "scaffold"]
+    },
+    "completeness": {
+      "type": "string",
+      "enum": ["skeleton", "draft", "complete"]
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^r[0-9]+$"
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^T-[0-9]{3,}$"
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^(REQ|AC|UX|UC|SEQ|STATE|TD|API|ADR|NFR|T|V|REL|CHG|IT|S)-[0-9]{3,}$"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "root", "tier", "content_origin"],
+      "properties": {
+        "id": {"$ref": "#/$defs/projectId"},
+        "root": {
+          "type": "string",
+          "pattern": "^workspace/[a-z][a-z0-9-]*$"
+        },
+        "tier": {"$ref": "#/$defs/tier"},
+        "content_origin": {"$ref": "#/$defs/contentOrigin"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "role",
+        "revision",
+        "status",
+        "completeness",
+        "tier",
+        "depends_on",
+        "last_adopted_change",
+        "required_for"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(PROJECT|SCOPE|DESIGN|TECH-DESIGN|TASKS|VERIFY|RELEASE|ENV|MAP|TASKS\\.archive)\\.md$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "project",
+            "scope",
+            "design",
+            "tech_design",
+            "tasks",
+            "verify",
+            "release",
+            "environment",
+            "code_map",
+            "task_archive"
+          ]
+        },
+        "revision": {"$ref": "#/$defs/revision"},
+        "status": {
+          "type": "string",
+          "enum": ["current", "stale_soft", "stale", "evidence_stale"]
+        },
+        "completeness": {"$ref": "#/$defs/completeness"},
+        "tier": {"$ref": "#/$defs/tier"},
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(PROJECT|SCOPE|DESIGN|TECH-DESIGN|TASKS|VERIFY|RELEASE|ENV|MAP|TASKS\\.archive)\\.md$"
+          }
+        },
+        "last_adopted_change": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "string", "pattern": "^CHG-[0-9]{3,}$"}
+          ]
+        },
+        "required_for": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["requirements", "design", "implementation", "verification", "release"]
+          }
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/stableId"}
+        }
+      }
+    }
+  }
+}

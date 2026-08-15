@@ -7,7 +7,9 @@
 
 | 桶 | 何时读 | 路径 |
 |----|--------|------|
+| 设计文档与图表 | 生成设计文档、图源并渲染为图片 | `buckets/design.md` |
 | 写文件 | 新建 `write_text` / 改已有 `patch_file`、搬移、回收站 | `buckets/write.md` |
+| 设计文档 | 生成四类设计文档及 Mermaid/PlantUML 图表源 | `buckets/design.md` |
 | 执行构建 | `run_command` / `run_service` / `repair_node_modules` / `browser_open` / git_* | `buckets/run.md` |
 | 整理 | 按扩展名 / 去重 / 归档 / 重命名 | `buckets/organize.md` |
 | 项目 | 进度勾选、项目目录查询 | `buckets/project.md` |

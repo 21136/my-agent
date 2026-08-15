@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>my-agent Terminal · 颜色预览 B（高对比）</title>
+  <style>
+  /* 方案 B — 高对比 · TERMINAL-MODE §6.4.9 */
+    :root {
+      --bg: #09090b;
+      --separator: #3f3f46;
+
+      /* welcome — 琥珀系略提亮 */
+      --welcome-border: #d4a574;
+      --welcome-greet: #fff7ed;
+      --welcome-sub: #e7d5c4;
+      --welcome-model: #fbbf24;
+      --welcome-root: #38bdf8;
+
+      /* transcript — 方案 B */
+      --user-fg: #22d3ee;
+      --user-border: #06b6d4;
+      --user-bg: rgba(6, 182, 212, 0.1);
+
+      --think-border: #818cf8;
+      --think-label: #a5b4fc;
+      --think-text: #c4b5fd;
+      --think-bg: rgba(99, 102, 241, 0.12);
+
+      --asst-header: #ffffff;
+      --asst-diamond: #fbbf24;
+      --asst-body: #f4f4f5;
+      --asst-strong: #fef08a;
+
+      --path: #38bdf8;
+      --code-fg: #fde047;
+      --code-bg: #422006;
+
+      --notice: #fb923c;
+
+      --prompt: #fafafa;
+      --status-root: #38bdf8;
+      --status-working: #fbbf24;
+      --status-tool: #c084fc;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #18181b;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      font-family: "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.55;
+      color: #e4e4e7;
+    }
+
+    .page-title { color: #71717a; font-size: 12px; margin-bottom: 12px; }
+    .page-title a { color: #38bdf8; text-decoration: none; }
+    .scheme-tag {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #422006;
+      color: #fbbf24;
+      font-size: 11px;
+    }
+
+    .wrap { display: flex; gap: 20px; width: min(1100px, 100%); align-items: flex-start; }
+
+    .terminal {
+      width: min(920px, 100%);
+      height: min(700px, calc(100vh - 80px));
+      background: var(--bg);
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,.6);
+    }
+
+    .welcome-compact {
+      border: 1px solid var(--welcome-border);
+      border-radius: 4px;
+      margin: 10px 12px 0;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--welcome-sub);
+      background: rgba(212, 165, 116, 0.06);
+    }
+    .welcome-compact .greet { color: var(--welcome-greet); font-weight: 700; }
+    .welcome-compact .meta .model { color: var(--welcome-model); font-weight: 600; }
+    .welcome-compact .meta .root { color: var(--welcome-root); }
+    .welcome-compact .meta .sep { color: #52525b; }
+
+    .transcript { flex: 1; overflow-y: auto; padding: 14px 16px 8px; }
+
+    .block { margin-bottom: 20px; }
+
+    /* 用户 — 左边线 + 浅底，最醒目 */
+    .user-block {
+      border-left: 3px solid var(--user-border);
+      background: var(--user-bg);
+      padding: 8px 12px;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 12px;
+    }
+    .user-line {
+      color: var(--user-fg);
+      font-weight: 700;
+      text-shadow: 0 0 20px rgba(34, 211, 238, 0.25);
+    }
+    .user-line::before { content: "❯ "; color: var(--user-border); }
+
+    /* 思考 — 紫 indigo 层，和正文拉开 */
+    .thinking-box {
+      border: 1px solid var(--think-border);
+      border-radius: 6px;
+      background: var(--think-bg);
+      padding: 8px 12px;
+      margin: 10px 0 14px;
+    }
+    .thinking-label {
+      color: var(--think-label);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .thinking {
+      color: var(--think-text);
+      font-style: italic;
+      margin: 4px 0;
+    }
+
+    /* 助手 */
+    .assistant-header {
+      color: var(--asst-header);
+      font-weight: 800;
+      font-size: 15px;
+      margin-bottom: 8px;
+      letter-spacing: 0.02em;
+    }
+    .assistant-header .diamond { color: var(--asst-diamond); }
+
+    .assistant-body { color: var(--asst-body); padding-left: 2px; }
+    .assistant-body p { margin-bottom: 8px; }
+    .assistant-body strong {
+      color: var(--asst-strong);
+      font-weight: 700;
+    }
+    .assistant-body code {
+      color: var(--code-fg);
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid #713f12;
+      font-weight: 600;
+    }
+    .assistant-body ul { padding-left: 20px; margin: 6px 0; }
+    .assistant-body li { margin: 4px 0; }
+    .assistant-body .path {
+      color: var(--path);
+      font-weight: 600;
+      text-decoration: underline;
+      text-decoration-color: rgba(56, 189, 248, 0.4);
+      text-underline-offset: 2px;
+    }
+
+    .notice-warn {
+      color: var(--notice);
+      font-weight: 700;
+      font-size: 13px;
+      padding: 8px 12px;
+      border-left: 3px solid var(--notice);
+      background: rgba(251, 146, 60, 0.1);
+      border-radius: 0 6px 6px 0;
+      margin-top: 8px;
+    }
+
+    .turn-sep {
+      color: #52525b;
+      font-size: 11px;
+      margin: 18px 0;
+      text-align: center;
+      letter-spacing: 0.15em;
+    }
+
+    .rule { height: 1px; background: var(--separator); flex-shrink: 0; }
+
+    .input-row { display: flex; padding: 10px 14px; gap: 6px; }
+    .input-prompt { color: var(--prompt); font-weight: 700; }
+    .input-cursor { color: #a1a1aa; animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .status-bar {
+      padding: 8px 14px 12px;
+      font-size: 12px;
+      color: #71717a;
+    }
+    .status-bar .model { color: #e4e4e7; font-weight: 600; }
+    .status-bar .root { color: var(--status-root); font-weight: 600; }
+    .status-bar .sep { color: #3f3f46; }
+    .status-bar .working { color: var(--status-working); font-weight: 700; }
+    .status-bar .tool { color: var(--status-tool); }
+
+    .legend {
+      width: 250px;
+      flex-shrink: 0;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 12px;
+      position: sticky;
+      top: 24px;
+    }
+    .legend h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #71717a;
+      margin-bottom: 10px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+    .legend-note {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #27272a;
+      color: #71717a;
+      line-height: 1.55;
+      font-size: 11px;
+    }
+    .legend-diff {
+      margin-top: 10px;
+      padding: 8px;
+      background: #27272a;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #a1a1aa;
+    }
+    .legend-diff del { color: #71717a; }
+    .legend-diff ins { color: #fbbf24; text-decoration: none; }
+
+    @media (max-width: 900px) {
+      .legend { display: none; }
+      .wrap { justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <p class="page-title">
+    模拟预览 · <a href="../TERMINAL-MODE.md">TERMINAL-MODE §6.4.9</a>
+    <span class="scheme-tag">方案 B · 高对比</span>
+  </p>
+
+  <div class="wrap">
+    <aside class="legend">
+      <h3>方案 B 语义色</h3>
+      <div class="legend-item"><span class="legend-swatch" style="background:#22d3ee"></span>用户 + 左边线</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#a5b4fc"></span>思考（紫 indigo 框）</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#ffffff"></span>助手 ◆ <span style="color:#fbbf24">金</span></div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#fef08a"></span>小标题 strong</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#38bdf8"></span>路径（加粗+下划线）</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#fde047"></span>行内 code</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#fb923c"></span>提醒（左边线）</div>
+      <h3 style="margin-top:14px">底栏</h3>
+      <div class="legend-item"><span class="legend-swatch" style="background:#fbbf24"></span>◐ 状态</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#c084fc"></span>工具名</div>
+
+      <div class="legend-diff">
+        <strong>相对方案 A</strong><br>
+        <del>#7dd3fc</del> → <ins>#22d3ee</ins> 用户<br>
+        <del>#6a6a6a</del> → <ins>紫 indigo 框</ins> 思考<br>
+        <del>#f0ebe3</del> → <ins>#fff + 金◆</ins> 助手<br>
+        + 用户/提醒左边线 · code 深底
+      </div>
+
+      <p class="legend-note">
+        无 transcript 工具行（TM-Q17）。<br>
+        Ink 终端（<code>terminal-ui npm run demo</code>）无 CSS 浅底 — 见 TERMINAL-MODE §6.6.1
+      </p>
+    </aside>
+
+    <div class="terminal">
+      <div class="welcome-compact">
+        <span class="greet">下午好，忆梦。</span>
+        <span class="meta">
+          <span class="sep"> · </span><span class="model">flash</span>
+          <span class="sep"> · </span><span class="root">D:/my-agent/workspace/huiyi</span>
+        </span>
+      </div>
+
+      <div class="transcript">
+        <div class="block">
+          <div class="user-block">
+            <div class="user-line">帮我看看 DoctorController 的列表接口为什么 500</div>
+          </div>
+
+          <div class="thinking-box">
+            <div class="thinking-label">╭─ 思考</div>
+            <div class="thinking">需要先定位 Controller 和 Service，再跑测试复现…</div>
+            <div class="thinking-label">╰────────────────</div>
+          </div>
+
+          <div class="assistant-header"><span class="diamond">◆</span> 打工仔</div>
+          <div class="assistant-body">
+            <p>根因是 <code>DoctorService.list()</code> 里对 <code>null</code> cityId 没做兜底。</p>
+            <p><strong>做了什么</strong></p>
+            <ul>
+              <li>Service 层默认 city 过滤</li>
+              <li>Controller 参数校验</li>
+            </ul>
+            <p><strong>去哪看</strong></p>
+            <ul>
+              <li><span class="path">src/.../DoctorServiceImpl.java</span></li>
+              <li><span class="path">src/.../DoctorController.java</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="turn-sep">── 新回合 ──</div>
+
+        <div class="block">
+          <div class="user-block">
+            <div class="user-line">跑一下测试确认</div>
+          </div>
+
+          <div class="thinking-box">
+            <div class="thinking-label">╭─ 思考</div>
+            <div class="thinking">重跑 DoctorControllerTest…</div>
+            <div class="thinking-label">╰────────────────</div>
+          </div>
+
+          <div class="notice-warn">⚠ 测试失败：exit 1 — 见上文修复是否已保存</div>
+        </div>
+      </div>
+
+      <div class="rule"></div>
+      <div class="input-row">
+        <span class="input-prompt">&gt;</span>
+        <span class="input-cursor">█</span>
+      </div>
+      <div class="rule"></div>
+      <div class="status-bar">
+        <span class="model">flash</span><span class="sep"> · </span>
+        <span class="root">huiyi</span><span class="sep"> · </span>
+        <span class="working">◐ <span class="tool">run_command</span> · mvn test…</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

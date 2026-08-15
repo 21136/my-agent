@@ -56,11 +56,7 @@
 
 **common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
 
-**写盘纪律（BUG-025）**：
-
-- 整页/多行源文件（如 `.vue`）**>6KB** 或接近 8KB：禁止 inline `content`；`write_text` → `workspace/_staging/<name>` → 再 `content_workspace_path`。
-- `patch_file`：**优先 `find` 唯一锚点**做小改；**禁止** `start_line`+`end_line` 用一行替换多行块（empty slot、dialog、import 等）——易把骨架插进 `<el-table>`；多行块用 staging 整文件或精确 find 跨度。
-- 批量改多个同构页面：先改 **1 个** 并 `npm run build` 通过，再复制模式。
+**写盘纪律（BUG-025）**：细节与大文件写入规范见 `evolve/tool-catalog/buckets/evolve.md`。
 
 ## 与本仓库记忆
 

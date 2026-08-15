@@ -66,6 +66,60 @@ class PlanArchPatchTests(unittest.TestCase):
         self.assertIn("## 修复记录（原 Phase 6）", text)
         self.assertNotIn("## Phase 6 修复记录", text)
 
+    def test_it5816_accept_patch_persists_change_ledger_and_timeline(self) -> None:
+        from project_manifest import change_ledger_path, load_change_ledger, load_manifest
+
+        scope = self.root / "SCOPE.md"
+        scope.write_text(
+            "# scope\n\n## REQ-5816\n\n## AC-5816\n\n## T-5816\n\n## V-5816\n",
+            encoding="utf-8",
+        )
+        preview = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="SCOPE.md",
+            replacements=[{"old": "REQ-5816", "new": "REQ-5817"}],
+        )
+        suggestion = self.agent._suggestion(
+            kind="file_patch",
+            title="更新范围",
+            body="adopt scope change",
+            key="chg-5816",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "SCOPE.md",
+                "base_hash": preview["base_hash"],
+                "replacements": [{"old": "REQ-5816", "new": "REQ-5817"}],
+                "diff": preview["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(suggestion)
+
+        result = self.agent.accept_suggestion(suggestion["id"])
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result["change"]["change_id"], "CHG-001")
+        self.assertEqual(result["change"]["before_revision"], "r0")
+        self.assertEqual(result["change"]["after_revision"], "r1")
+        self.assertEqual(result["change"]["paths"], ["SCOPE.md"])
+        self.assertEqual(result["change"]["requirements"], ["REQ-5817"])
+        self.assertIn("DESIGN.md", result["change"]["stale_docs"])
+        self.assertTrue(result["change"]["replan_required"])
+
+        entries = load_change_ledger(change_ledger_path(self.root))
+        self.assertEqual(entries, [result["change"]])
+        manifest = load_manifest(self.root / ".plan-agent" / "manifest.json")
+        assert manifest is not None
+        self.assertEqual(manifest["manifest_revision"], "r1")
+        scope_entry = next(item for item in manifest["artifacts"] if item["path"] == "SCOPE.md")
+        self.assertEqual(scope_entry["last_adopted_change"], "CHG-001")
+
+        drop_plan_agent(self.pid)
+        reloaded = get_plan_agent(self.paths, self.pid)
+        timeline = reloaded.build_state().get("change_timeline") or []
+        self.assertEqual(timeline[-1]["change_id"], "CHG-001")
+
     def test_it_aff_01_accept_notice_no_diff(self) -> None:
         """IT-AFF-01: adopted partner_notices are one line, no diff hunks."""
         self.tasks.write_text(
@@ -101,6 +155,60 @@ class PlanArchPatchTests(unittest.TestCase):
         self.assertIn("已采纳写入", joined)
         self.assertNotIn("@@", joined)
         self.assertNotIn("\n-", joined)
+
+    def test_it5830_accept_batches_plan_state_writes(self) -> None:
+        """IT-5830: one accept operation flushes PlanAgent state once."""
+        from unittest.mock import patch
+
+        self.tasks.write_text("## Phase 1\n- [ ] old task\n", encoding="utf-8")
+        suggestion = self.agent._suggestion(
+            kind="add_task",
+            title="娣诲姞浠诲姟",
+            body="add one task",
+            key="batch-5830",
+            action="add_task",
+            payload={"phase": "Phase 1", "description": "new task"},
+        )
+        self.agent.park_gated_suggestion(suggestion)
+
+        writes: list[int] = []
+        original_save = self.agent._save_state
+
+        def observe_save() -> None:
+            writes.append(self.agent._state_save_depth)
+            original_save()
+
+        with patch.object(self.agent, "_save_state", side_effect=observe_save):
+            result = self.agent.accept_suggestion(suggestion["id"])
+
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(writes, [1, 1, 0])
+
+    def test_it_5807_drop_task_code_policies(self) -> None:
+        """T-5807: deleting a task exposes plan, cleanup, and git exits."""
+        for policy in ("plan_only", "agent_cleanup", "git_guide"):
+            with self.subTest(policy=policy):
+                self.tasks.write_text("## Phase 1\n- [ ] T-5807 remove this task\n", encoding="utf-8")
+                sug = self.agent._suggestion(
+                    kind="drop_task",
+                    title="删除任务",
+                    body="remove this task",
+                    key=f"drop-{policy}",
+                    action="drop_task",
+                    payload={"line": 1},
+                )
+                self.agent.park_gated_suggestion(sug)
+                result = self.agent.accept_suggestion(sug["id"], code_policy=policy)
+                self.assertEqual(result.get("dropped_id"), "T-5807")
+                if policy == "plan_only":
+                    self.assertNotIn("_code_followup", result)
+                else:
+                    followup = result.get("_code_followup") or {}
+                    self.assertEqual(followup.get("mode"), policy)
+                    if policy == "agent_cleanup":
+                        self.assertIn("不要自动恢复计划任务", str(followup))
+                    else:
+                        self.assertIn("git -C", str(followup))
 
     def test_adopt_clears_plan_dirty(self) -> None:
         """After human adopt, session plan_dirty should clear (Phase 40)."""
@@ -514,6 +622,41 @@ class PlanArchPatchTests(unittest.TestCase):
         self.assertTrue(result.get("ok"))
         self.assertNotIn(sug_conflict["id"], self.agent._pending_gated)
         self.assertIn("已撤回无效提案", result.get("summary") or "")
+
+
+    def test_it5822_invalid_persisted_patch_is_not_emitted(self) -> None:
+        """Invalid persisted patches must not return as sidebar adoption cards."""
+        self.map.write_text("# m\n\n## Section A\n", encoding="utf-8")
+        preview = build_patch_preview(
+            self.paths,
+            self.pid,
+            relpath="MAP.md",
+            replacements=[{"old": "## Section A", "new": "## Part A"}],
+        )
+        sug = self.agent._suggestion(
+            kind="file_patch",
+            title="invalid MAP patch",
+            body="stale source",
+            key="map-invalid-reload",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview["base_hash"],
+                "replacements": [{"old": "## Section A", "new": "## Part A"}],
+                "diff": preview["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug)
+        self.map.write_text("# m\n\n## Section B\n", encoding="utf-8")
+
+        drop_plan_agent(self.pid)
+        reloaded = get_plan_agent(self.paths, self.pid)
+        state = reloaded.build_state()
+
+        ids = {item.get("id") for item in state.get("suggestions", [])}
+        self.assertNotIn(sug["id"], ids)
+        self.assertNotIn(sug["id"], reloaded._pending_gated)
 
 
 if __name__ == "__main__":

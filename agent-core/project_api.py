@@ -19,6 +19,7 @@ from project_mode import (
     acceptance_workspace_path,
     add_task_to_tasks_md,
     create_project_doc,
+    compute_execution_stage,
     detect_potential_project,
     list_project_docs,
     list_projects,
@@ -33,6 +34,7 @@ from project_mode import (
     snapshot_plan_fingerprints,
     sync_plan_dirty_if_structure_changed,
 )
+from project_release import load_release_acceptance, save_release_acceptance
 from plan_agent import PlanAgent, get_plan_agent
 from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
 
@@ -87,14 +89,40 @@ def _project_summary(project_md: str) -> str:
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import get_delivery_profile
     from progress_gate import review_progress_blocked_flag
+    from project_manifest import manifest_has_l2_stale, manifest_payload, refresh_project_manifest
 
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
     plan_status = session.meta.project_plan_status or "draft"
     artifacts = read_project_artifacts(paths, pid) if pid else {}
+    manifest = None
+    manifest_error = None
+    if pid:
+        try:
+            manifest = refresh_project_manifest(paths, pid)
+        except Exception as exc:
+            manifest_error = str(exc)
     tasks_md = artifacts.get("TASKS.md", "")
     map_md = artifacts.get("MAP.md", "")
     stats = read_task_stats(project_dir(paths, pid) / "TASKS.md") if pid else read_task_stats(Path())
+    stage = compute_execution_stage(
+        project_id=pid,
+        plan_status=plan_status,
+        task_stats=stats,
+        manifest=manifest,
+        review_verdict=getattr(session, "last_review_verdict", None),
+        review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+    )
+    release_artifact = next(
+        (item for item in (manifest or {}).get("artifacts", [])
+         if isinstance(item, dict) and item.get("path") == "RELEASE.md"),
+        None,
+    )
+    release_acceptance = load_release_acceptance(
+        project_dir(paths, pid),
+        pid,
+        release_revision=str(release_artifact.get("revision")) if release_artifact else None,
+    ) if pid else {"accepted": False, "accepted_at": None, "release_revision": None, "checklist": {}}
     acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", "")) if pid else None
     can_verify = bool(
         pid
@@ -118,6 +146,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
+        "scope_confirmed_at": getattr(session.meta, "project_scope_confirmed_at", "") or None,
         "delivery_profile": get_delivery_profile(session.meta),
         "review_verdict": getattr(session, "last_review_verdict", None),
         "review_blockers_count": int(getattr(session, "last_review_blockers_count", 0) or 0),
@@ -126,6 +155,24 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             last_review_verdict=getattr(session, "last_review_verdict", None),
             last_review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
         ),
+        "manifest": manifest_payload(manifest) if manifest is not None else None,
+        "manifest_stale": manifest_has_l2_stale(manifest) if manifest is not None else False,
+        "manifest_error": manifest_error,
+        "execution_stage": stage["stage"],
+        "execution_stage_reason": stage["reason"],
+        "execution_stage_blockers": list(stage["blockers"]),
+        "release_acceptance": release_acceptance,
+        "execution_stage_artifacts": [
+            {
+                "path": item.get("path"),
+                "role": item.get("role"),
+                "revision": item.get("revision"),
+                "status": item.get("status"),
+                "ids": list(item.get("ids") or []),
+            }
+            for item in (manifest or {}).get("artifacts", [])
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -188,6 +235,9 @@ def emit_project_session_bundle(session: Session, paths: AgentPaths, emit: EmitF
     emit(session_banner_event(session))
     if session.meta.project_id and session.meta.active_shell == "project":
         emit(project_state_payload(session, paths))
+        plan_state = project_plan_state_payload(session, paths)
+        if plan_state is not None:
+            emit(plan_state)
 
 
 def maybe_emit_plan_request(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
@@ -245,6 +295,48 @@ def dispatch_project_message(
 
     if msg_type == "project.state":
         return project_state_payload(session, paths)
+
+    if msg_type == "project.release.accept":
+        pid = _project_pid(session)
+        state = project_state_payload(session, paths)
+        if state.get("execution_stage") != "release":
+            raise ProjectApiError("release acceptance requires the authoritative release stage")
+        artifacts = {
+            str(item.get("path")): item
+            for item in state.get("execution_stage_artifacts", [])
+            if isinstance(item, dict) and item.get("path")
+        }
+        checklist = {
+            "tasks_clear": bool(state.get("tasks_all_done")),
+            "evidence_fresh": all(
+                artifacts.get(path, {}).get("status") == "current"
+                for path in ("VERIFY.md", "RELEASE.md")
+            ),
+            "blockers_clear": (
+                state.get("review_verdict") == "pass"
+                and int(state.get("review_blockers_count") or 0) == 0
+            ),
+            "release_current": artifacts.get("RELEASE.md", {}).get("status") == "current",
+            "human_acceptance": True,
+        }
+        if not all(checklist.values()):
+            missing = [key for key, value in checklist.items() if not value and key != "human_acceptance"]
+            raise ProjectApiError(f"release checklist incomplete: {', '.join(missing)}")
+        release_revision = str(artifacts.get("RELEASE.md", {}).get("revision") or "")
+        if not release_revision:
+            raise ProjectApiError("RELEASE.md revision unavailable")
+        record = save_release_acceptance(
+            project_dir(paths, pid),
+            pid,
+            release_revision=release_revision,
+            checklist=checklist,
+        )
+        return {
+            "_events": [
+                {"type": "project.release.accepted", "release_acceptance": record},
+                project_state_payload(session, paths),
+            ]
+        }
 
     if msg_type == "project.open":
         project_id = message.get("project_id")
@@ -395,6 +487,13 @@ def _plan_agent(session: Session, paths: AgentPaths) -> PlanAgent | None:
         return get_plan_agent(paths, pid)
     except Exception:
         return None
+
+
+def project_plan_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any] | None:
+    agent = _plan_agent(session, paths)
+    if agent is None:
+        return None
+    return agent.build_state(session)
 
 
 def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
@@ -607,6 +706,11 @@ def _dispatch_plan_message(
         if msg_type == "project.plan.state":
             return agent.build_state(session)
 
+        if msg_type == "project.scope.confirm":
+            session.meta.project_scope_confirmed_at = utc_now_iso()
+            session.save()
+            return project_state_payload(session, paths)
+
         if msg_type == "project.plan.undo":
             entry = agent.undo_last()
             if entry is None:
@@ -636,9 +740,13 @@ def _dispatch_plan_message(
             sid = str(message.get("suggestion_id") or "").strip()
             if not sid:
                 raise ProjectApiError("project.plan.accept_suggestion requires suggestion_id")
-            result = agent.accept_suggestion(sid)
-            if isinstance(result, dict) and result.get("ok") is not False:
-                _ack_human_plan_adopt(session, paths, agent)
+            policy = str(message.get("code_policy") or "plan_only").strip()
+            if policy not in {"plan_only", "agent_cleanup", "git_guide"}:
+                raise ProjectApiError("code_policy must be plan_only, agent_cleanup, or git_guide")
+            with agent.state_save_batch():
+                result = agent.accept_suggestion(sid, code_policy=policy)
+                if isinstance(result, dict) and result.get("ok") is not False:
+                    _ack_human_plan_adopt(session, paths, agent)
             events: list[dict[str, Any]] = [
                 project_state_payload(session, paths),
                 agent.build_state(session),
@@ -651,6 +759,9 @@ def _dispatch_plan_message(
                 events.insert(0, {"type": "project.undo.available", "description": undo_desc})
             for action in (result.get("_auto_fix_actions") or []) if isinstance(result, dict) else []:
                 events.insert(0, {"type": "notice", "text": action})
+            followup = result.get("_code_followup") if isinstance(result, dict) else None
+            if isinstance(followup, dict):
+                events.insert(0, {"type": "project.code_followup", **followup})
             return {"_events": events}
 
         if msg_type == "project.plan.ignore_suggestion":
@@ -664,6 +775,38 @@ def _dispatch_plan_message(
             task_line = message.get("task_line")
             summary = str(message.get("summary", ""))
             from project_mode import get_delivery_profile
+            from progress_gate import report_progress_evidence_block_reason, task_evidence_contract
+
+            pid = _project_pid(session)
+            tasks_text = read_project_artifacts(paths, pid).get("TASKS.md", "")
+            contract = task_evidence_contract(
+                tasks_text,
+                task_id=str(message.get("task_id") or ""),
+                task_line=task_line if isinstance(task_line, int) else None,
+            )
+            if contract and contract.get("metadata_present"):
+                provided_evidence = message.get("turn_evidence")
+                turn_evidence = provided_evidence if isinstance(provided_evidence, list) else []
+                reason = report_progress_evidence_block_reason(
+                    active_shell=session.meta.active_shell,
+                    armed_task_text=str(contract.get("task_text") or ""),
+                    turn_evidence=[
+                        item for item in turn_evidence if isinstance(item, dict)
+                    ],
+                    delivery_profile=get_delivery_profile(session.meta),
+                    task_id=str(contract.get("task_id") or ""),
+                    expected_ac_ids=list(contract.get("ac_ids") or []),
+                    expected_verify_ids=list(contract.get("verify_ids") or []),
+                    require_binding=True,
+                )
+                if reason is not None:
+                    return {
+                        "type": "project.plan.report_progress.error",
+                        "message": reason,
+                        "task_id": contract.get("task_id"),
+                        "ac_ids": list(contract.get("ac_ids") or []),
+                        "verify_ids": list(contract.get("verify_ids") or []),
+                    }
 
             result = agent.report_progress(
                 task_line if isinstance(task_line, int) else None,
@@ -700,6 +843,9 @@ def perform_project_open(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
+    plan_state = project_plan_state_payload(updated, paths)
+    if plan_state is not None:
+        events.append(plan_state)
     events.extend(_clear_plan_chat_events(paths, project_id, updated))
     return updated, events
 
@@ -753,6 +899,9 @@ def perform_project_switch(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
+    plan_state = project_plan_state_payload(updated, paths)
+    if plan_state is not None:
+        events.append(plan_state)
     if session_replaced:
         from context import session_memory_event
         from session import session_history_event
@@ -798,6 +947,9 @@ def perform_project_thread_new(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
+    plan_state = project_plan_state_payload(updated, paths)
+    if plan_state is not None:
+        events.append(plan_state)
     if session_replaced:
         from context import session_memory_event
         from session import session_history_event

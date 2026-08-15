@@ -7,7 +7,11 @@ alwaysApply: true
 
 **新会话先读** [`docs/MAP.md`](../../docs/MAP.md)（含 **§2.1**）与 [`docs/TASKS.md`](../../docs/TASKS.md)。稳定化：[STABILIZATION.md](../../docs/STABILIZATION.md) **v1.1.0 · 已解冻**。
 
-## 当前代码状态（2026-08-13）
+## 当前代码状态（2026-08-14）
+
+- **产品定调**：[DESKTOP-TEXTBOOK-FLOW.md](../../docs/DESKTOP-TEXTBOOK-FLOW.md) — **Desktop 主战场**（project · 闸门+证据流程轨）· **Terminal frozen**（独立入口 · 维护/P0）
+- **Phase 58**：**M1 done** — 流程轨 + 阶段计划卡（T-5801～5808）· S-580 todo
+- **Phase 58b**：**L0 已决 · T-5810～T-5819 done · T-5831 doc done** — [DESKTOP-REAL-RD-FLOW.md](../../docs/DESKTOP-REAL-RD-FLOW.md) v0.2.5 七文件制品链 + 内容下限 · 下一步 **T-5832 编码** · S-581
 
 - **Phase 47+**：**done（已 push）** — LDM v0.3.3 · [ROADMAP-PACK-1245.md](../../docs/ROADMAP-PACK-1245.md) **v0.2.2**（Fable5 已签）
 
@@ -34,13 +38,13 @@ alwaysApply: true
 - **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
 - **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** 单项目态势侧栏（§6.2.2 · 文档已签 · M0 待实施）；UX-021～023 done。
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
-- **Phase 57**：**legacy M1 done** · **Ink 阶段 0～5 done** · **T-5730～5734 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6 · **下一手工 S-576**
-- **下一焦点**：S-576 Terminal Ink 全链路手工 smoke
+- **Phase 57**：**legacy M1 done** · **Ink 阶段 0～5 done** · **T-5730～5734 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6 · **frozen** · S-576 手工留痕
+- **下一焦点**：Phase 58b T-5832（manifest completeness + tier linter）· S-581 · UX-026 defer
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；Terminal：`start-terminal.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。
 - 缺陷索引：[BUGS.md](../../docs/BUGS.md)；**BUG-028 fixed** · **BUG-025 fixed** · **BUG-024 fixed** · **BUG-023 fixed** · **BUG-026/027 fixed**；确认管线 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md)。
-- 桌面协议与形态：[DESKTOP.md](../../docs/DESKTOP.md)（以 **unified** 为准；历史 grow/daily 章节标 deprecated）。
+- 桌面协议与形态：[DESKTOP.md](../../docs/DESKTOP.md) · [DESKTOP-TEXTBOOK-FLOW.md](../../docs/DESKTOP-TEXTBOOK-FLOW.md)（以 **unified project** 为准）
 - 项目模式：[PROJECT-MODE.md](../../docs/PROJECT-MODE.md)（UI = unified project perspective）。
 - 拖放：[FILES-DROP.md](../../docs/FILES-DROP.md)（挂载点 = unified / pet）。
 - Host 托管区：[HOST-SCOPE.md](../../docs/HOST-SCOPE.md)。
@@ -59,4 +63,4 @@ alwaysApply: true
 ## 实施顺序
 
 按 `TASKS.md` 顺序；实现前对照 `TOOLS.md` / `RUNTIME.md` 已决条款；M1 不做 skill。  
-新功能 Phase 须附 DOC-04 准入（矩阵行 + S/IT id）。
+新功能 Phase 须附 DOC-04 准入（矩阵行 + S/IT id）。新 task 默认 `surface: desktop`；Terminal 仅 BUG-P0/security（见 DESKTOP-TEXTBOOK-FLOW §8）。

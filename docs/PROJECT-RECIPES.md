@@ -1,6 +1,6 @@
 # 项目配方脚手架（PROJECT-RECIPES）
 
-> 版本 **0.2.0** · 2026-08-05 · **状态：M0+M1+M2 done · T-4307 done**  
+> 版本 **0.2.1** · 2026-08-15 · **状态：M0+M1+M2 done · T-4307 done · T-5831 文档已决**  
 > Phase **43** · 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) §0c · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) · [TOOLS.md](./TOOLS.md)  
 > 触发：用户盘点——从零建项目无配方；`scaffold_demo` 仅为 `write_evolve` 演示目录，非项目脚手架。
 
@@ -11,6 +11,22 @@
 **不让 LLM 自由搭整仓**；用 **`evolve/scaffolds/<recipe>/` 静态配方** + 薄工具 **`scaffold_project`** 编排 **`run_command`**（及模板渲染 / `write_env_md`），并与 **`create_project`** / **`ENV.md`** 挂钩。
 
 **T-4307（2026-08-05）**：配方步骤 **只** 使用 `kind: run_command` 跑 shell；**不再** 引用已归档的 `npm_exec` / `mvn_exec`（与 [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) IT-103 一致）。
+
+**Phase 58b T-5812（2026-08-14）**：`create_project` 先从 `workspace/_template` 生成七个标准制品，再生成 `ENV.md` / `MAP.md` 旁路和 manifest。打开没有 `.plan-agent/manifest.json` 的旧项目时，运行时一次性把旧 `PROJECT.md`、`TASKS.md`、`MAP.md`、`ENV.md` 内容迁入 `SCOPE.md`、`DESIGN.md`、`TECH-DESIGN.md`、`VERIFY.md`、`RELEASE.md`，并建立 `r0` baseline；已有 manifest 的项目不重复迁移。
+
+### 0.1 文档制品模板填充档位（已决 · T-5831）
+
+当前七文件模板是结构基线，不应继续停留在“每个文件几行说明”。模板以 `normal` 为默认填充档位；创建后制品 `completeness = skeleton`，须经 Plan 提案采纳后才进入 `draft` / `complete`（见 [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) §2.2.1–§2.2.2）。
+
+- `PROJECT.md` / `SCOPE.md`：目标、非目标、角色、用例边界、`REQ-*` / `AC-*`。
+- `DESIGN.md`：用户流程、主/异常路径、状态变化、`UC-*` / `UX-*` / `SEQ-*` / `STATE-*`，图源使用 Mermaid。
+  - `normal` 硬门槛：**两个独立 Mermaid 块**——(1) 非时序图含 `UC-*`/`UX-*`；(2) `sequenceDiagram` 含 `SEQ-*`。
+- `TECH-DESIGN.md`：架构边界、数据模型、API、依赖、风险，以及必要的 `ADR-*` / `NFR-*`；时序图可写在本文件。
+- `TASKS.md`：每个任务关联需求、设计和验证 ID，不承载长篇设计叙述。
+- `VERIFY.md`：`AC-*` → `V-*` → L1 证据矩阵，并覆盖关键时序的成功/失败分支。
+- `RELEASE.md`：迁移、兼容、回滚、监控和人工验收清单。
+
+`small` 可以缩短内容但不能删掉七文件；`large` 需要增加多角色、非功能、部署、安全、迁移和灾备内容。旧项目迁移见 REAL-RD §10：`content_origin = migrated`，`completeness = skeleton`，不自动 LLM 补齐。
 
 ---
 

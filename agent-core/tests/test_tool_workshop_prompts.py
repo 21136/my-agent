@@ -128,6 +128,8 @@ class ToolWorkshopContentTests(unittest.TestCase):
     def test_tool_workshop_under_55_lines(self) -> None:
         text = load_tool_workshop_prompt(self.paths.evolve)
         self.assertLessEqual(len(text.splitlines()), 55)
+        self.assertIn("buckets/<桶>.md", text)
+        self.assertIn("INDEX", text)
 
     def test_scaffold_turn_still_has_overlay_and_cookbook(self) -> None:
         registry = ToolRegistry.load(self.paths)

@@ -23,7 +23,6 @@
 
 ## 新建 data 工具
 
-1. 确认会话含 **data** 主题（`换主题` 或 S3 确认）。
+1. 数据工具按需使用，工具清单由当前会话注入。
 2. `run_evolved` → `write_evolve`：**先** `evolve/tools/data/<name>/main.py`，**再** `tool.toml`。
-3. **`path` + `content_base64` 放在 `run_evolved` 顶层**（与 `tool_name` 同级），`arguments` 用 `{}`；**禁止**把 TOML 塞进 `arguments.content`。
-4. 备选：先 `write_text` 到 `workspace/`，再 `content_workspace_path`。
+3. 工具写入参数与冲突处理见 `evolve/tool-catalog/buckets/evolve.md`。

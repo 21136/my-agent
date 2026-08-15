@@ -14,7 +14,19 @@ from typing import Any
 from paths import AgentPaths
 from project_mode import ProjectModeError, project_dir
 
-PLAN_PATCH_ALLOWLIST = frozenset({"TASKS.md", "MAP.md", "PROJECT.md", "ENV.md"})
+PLAN_PATCH_ALLOWLIST = frozenset(
+    {
+        "PROJECT.md",
+        "SCOPE.md",
+        "DESIGN.md",
+        "TECH-DESIGN.md",
+        "TASKS.md",
+        "VERIFY.md",
+        "RELEASE.md",
+        "MAP.md",
+        "ENV.md",
+    }
+)
 
 _PATH_SAFE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 

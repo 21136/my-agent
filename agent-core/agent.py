@@ -1000,14 +1000,14 @@ class Agent:
         checker_verdict = result.verdict
         checker_tool_rounds = result.tool_rounds
 
-        if checker_verdict == "fail" and (self.session.project_id or "").strip():
+        if checker_verdict == "fail" and (self.session.meta.project_id or "").strip():
             try:
                 from plan_agent import get_plan_agent
                 from project_mode import get_delivery_profile
 
                 get_plan_agent(
                     self.session.paths,
-                    self.session.project_id,
+                    self.session.meta.project_id,
                 ).emit_bug_promote_from_review(
                     result.summary,
                     source="checker",

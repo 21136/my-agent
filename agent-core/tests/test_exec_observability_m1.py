@@ -144,7 +144,7 @@ class TestExecObservabilityM1(unittest.TestCase):
             panel = (_ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("sidebar-turn-evidence", panel)
+            self.assertIn("sidebar-turn-summary", panel)
             self.assertIn("turnEvidence", panel)
 
     def test_progress_heartbeat_fires(self) -> None:

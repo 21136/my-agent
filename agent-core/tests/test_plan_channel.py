@@ -13,7 +13,8 @@ from plan_tools import (
     execute_plan_tool,
     is_plan_domain_write_target,
 )
-from project_api import dispatch_plan_user_message
+from progress_gate import make_evidence_entry
+from project_api import dispatch_plan_user_message, dispatch_project_message
 from project_mode import create_project, normalize_project_id, project_dir
 from session import create_new
 
@@ -82,6 +83,78 @@ class PlanChannelTests(unittest.TestCase):
         user_content = messages[1]["content"]
         self.assertNotIn("MAIN_CHAT_SECRET_SHOULD_NOT_LEAK", user_content)
         self.assertIn("优化下计划", user_content)
+
+    def test_it5813_plan_prompt_reads_standard_artifacts_and_manifest(self) -> None:
+        """IT-5813: Plan context includes the five downstream artifact documents."""
+        markers = {
+            "SCOPE.md": "REQ-5813 scope marker",
+            "DESIGN.md": "UX-5813 design marker",
+            "TECH-DESIGN.md": "TD-5813 tech marker",
+            "VERIFY.md": "V-5813 verify marker",
+            "RELEASE.md": "REL-5813 release marker",
+        }
+        for name, marker in markers.items():
+            (self.root / name).write_text(f"# {name}\n\n{marker}\n", encoding="utf-8")
+
+        mock_llm = MagicMock()
+        mock_llm.chat.return_value = MagicMock(
+            content=json.dumps(
+                {"reply": "已读取制品", "operations": [], "tool_calls": []},
+                ensure_ascii=False,
+            )
+        )
+        mock_llm._plan_model = "deepseek-v4-flash"
+        self.agent._llm = mock_llm
+        self.agent.reason_about_intent("引用当前制品规划")
+
+        user_content = mock_llm.chat.call_args[0][0][1]["content"]
+        for name, marker in markers.items():
+            self.assertIn(f"### {name}", user_content)
+            self.assertIn(marker, user_content)
+        self.assertIn("revision `r0`", user_content)
+        self.assertIn("status `stale`", user_content)
+
+    def test_it5815_project_api_requires_bound_turn_evidence(self) -> None:
+        self.tasks.write_text(
+            "# tasks\n\n"
+            "- [ ] T-001 写 API req: REQ-001; ac: AC-001; verify: V-001\n",
+            encoding="utf-8",
+        )
+        session = self._session()
+        blocked = dispatch_project_message(
+            session,
+            self.paths,
+            {
+                "type": "project.plan.report_progress",
+                "task_line": 2,
+                "summary": "T-001 done",
+            },
+        )
+        self.assertEqual(blocked.get("type"), "project.plan.report_progress.error")
+        self.assertIn("绑定", blocked.get("message", ""))
+
+        allowed = dispatch_project_message(
+            session,
+            self.paths,
+            {
+                "type": "project.plan.report_progress",
+                "task_line": 2,
+                "summary": "T-001 done",
+                "turn_evidence": [
+                    make_evidence_entry(
+                        tool_name="run_evolved",
+                        evolved_name="write_text",
+                        ok=True,
+                        task_id="T-001",
+                        ac_ids=["AC-001"],
+                        verify_ids=["V-001"],
+                    )
+                ],
+            },
+        )
+        self.assertNotEqual(allowed.get("type"), "project.plan.report_progress.error")
+        archive = (self.root / "TASKS.archive.md").read_text(encoding="utf-8")
+        self.assertIn("T-001", archive)
 
     def test_it71_compat_dispatch_does_not_append_main_messages(self) -> None:
         """IT-71′: compat API must not pollute session.messages."""

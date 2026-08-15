@@ -113,6 +113,7 @@ evolve/tool-catalog/          # 建议落盘位置（真源，随 evolve 版本�
 | 桶 | 何时读 | 路径 |
 |----|--------|------|
 | 写文件 | 新建/改文本、搬移、回收站 | buckets/write.md |
+| 设计文档 | 四类设计文档、图表源及本地渲染 | buckets/design.md |
 | 执行构建 | npm/mvn/python/测试/demo | buckets/run.md |
 | 整理 | 按扩展名/去重/归档 | buckets/organize.md |
 | 项目 | 进度勾选、项目目录 | buckets/project.md |

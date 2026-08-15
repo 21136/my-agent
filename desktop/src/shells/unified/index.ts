@@ -17,6 +17,7 @@ import {
   isViewingArchivedThread,
   parseTasksMarkdown,
   type OverlayPanel,
+  type FlowStage,
   type ProjectPanelState,
   type ProjectPanelCallbacks,
   type TaskItem,
@@ -143,8 +144,14 @@ export function mountUnifiedShell(
     switchConfirmTarget: null,
     projectSearchQuery: "",
     planChangeLog: [],
+    changeTimeline: [],
+    executionStage: null,
+    executionStageReason: "",
+    executionStageBlockers: [],
+    executionStageArtifacts: [],
     taskSnapshot: { lines: new Set(), lineTexts: new Map() },
     highlightChanges: false,
+    changeTimelineExpanded: false,
     highlightedLines: new Set(),
     projectDocs: [],
     currentDocPath: "",
@@ -194,11 +201,21 @@ export function mountUnifiedShell(
     reviewVerdict: null,
     reviewBlockersCount: 0,
     reviewProgressBlocked: false,
+    scopeConfirmedAt: "",
+    scopeNeedsReconfirm: false,
+    flowPreviewStage: null,
+    milestoneAccepted: false,
+    milestoneAcceptedAt: null,
+    codeFollowup: null,
+    nextTurnChangeSummary: null,
+    dropTaskPendingId: null,
+    dropTaskPendingWorking: false,
   };
 
   let suggestionAdoptFlashTimerId: number | null = null;
   let pendingAdoptAcceptTimeoutId: number | null = null;
-  let pendingAdoptAccept: { sid: string; path: string } | null = null;
+  let pendingAdoptAccept: { sid: string; path: string; whatChanged: string } | null = null;
+  let acceptedChangeForNextTurn: string | null = null;
   const ADOPT_FLASH_MS = 1500;
   const ADOPT_PENDING_MS = 30000;
 
@@ -240,6 +257,11 @@ export function mountUnifiedShell(
       },
       onTurnStart: (event) => {
         resetTurnCacheStats();
+        if (acceptedChangeForNextTurn) {
+          projectState.nextTurnChangeSummary = acceptedChangeForNextTurn;
+          acceptedChangeForNextTurn = null;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
         topbarState.intentLabel = event.intent_label;
         topbarState.checkerLabel = "";
         if (perspective === "night" && isRecallIntent(event.intent, event.intent_label)) {
@@ -424,6 +446,7 @@ export function mountUnifiedShell(
   const tokenBar = root.querySelector<HTMLElement>("#unified-token-bar")!;
   const threadArchiveBannerEl = root.querySelector<HTMLElement>("#thread-archive-banner")!;
   const threadReturnActiveBtn = root.querySelector<HTMLButtonElement>("#thread-return-active")!;
+  let planReviewIndex = 0;
 
   let turnCachePromptTotal = 0;
   let turnCacheCachedTotal = 0;
@@ -1131,6 +1154,29 @@ export function mountUnifiedShell(
       if (!active) return;
       projectCallbacks.onOpenThread(active);
     },
+    onScopeConfirm: () => {
+      try {
+        client.confirmProjectScope();
+        projectState.scopeConfirmedAt = new Date().toISOString();
+        projectState.scopeNeedsReconfirm = false;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      } catch (err) {
+        setStatus(`确认范围失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onStopTurn: () => {
+      if (!chat.requestCancel()) return;
+      setStatus("正在停止当前回合…");
+      try { client.sendTurnCancel(); } catch { /* keep the stop surface visible */ }
+    },
+    onMilestoneAccept: () => {
+      try {
+        client.acceptProjectRelease();
+        setStatus("正在保存 milestone 验收…");
+      } catch (err) {
+        setStatus(`milestone 验收失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
   };
 
   threadReturnActiveBtn.addEventListener("click", () => {
@@ -1155,8 +1201,12 @@ export function mountUnifiedShell(
     chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
+    chatEl.hidden = focus !== "chat";
+    planReviewEl.hidden = focus !== "plan_review";
+    planFullEl.hidden = focus !== "plan_full";
     if (focus === "plan_review") {
       renderPlanReviewPane();
+      planReviewEl.scrollTop = 0;
     } else if (focus === "plan_full") {
       renderPlanFullPane();
     }
@@ -1171,6 +1221,8 @@ export function mountUnifiedShell(
       suggestions: projectState.suggestions,
       reviewIndex: planReviewIndex,
       adoptPendingId: projectState.adoptPendingId,
+      dropTaskPendingId: projectState.dropTaskPendingId,
+      dropTaskPendingWorking: projectState.dropTaskPendingWorking,
     });
   }
 
@@ -1183,20 +1235,51 @@ export function mountUnifiedShell(
   }
 
   function openPlanReview(suggestionId?: string): void {
-    const queue = getActionableQueue();
-    if (!queue.length) {
-      setStatus("暂无待采纳提案");
-      return;
+    try {
+      setStatus("正在读取待审阅提案…");
+      const queue = getActionableQueue();
+      if (!queue.length) {
+        setStatus("暂无待采纳提案");
+        return;
+      }
+      let index = 0;
+      if (suggestionId) {
+        const found = queue.findIndex((s) => s.id === suggestionId);
+        if (found >= 0) index = found;
+      }
+      planReviewIndex = index;
+      projectState.reviewFocusId = queue[index]?.id ?? null;
+      projectState.overlayPanel = null;
+      setStatus("正在切换主区…");
+      projectState.mainFocus = "plan_review";
+      projectState.reviewFocusId = queue[index]?.id ?? null;
+      shellEl.dataset.mainFocus = "plan_review";
+      chatEl.classList.add("hidden");
+      chatEl.hidden = true;
+      planFullEl.classList.add("hidden");
+      planFullEl.hidden = true;
+      planReviewEl.classList.remove("hidden");
+      planReviewEl.hidden = false;
+      setStatus("正在渲染计划审阅…");
+      renderPlanReviewPane();
+      planReviewEl.scrollTop = 0;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      setStatus("计划审阅已打开");
+    } catch (err) {
+      setStatus(`计划审阅打开失败：${err instanceof Error ? err.message : String(err)}`);
     }
-    let index = 0;
-    if (suggestionId) {
-      const found = queue.findIndex((s) => s.id === suggestionId);
-      if (found >= 0) index = found;
-    }
-    planReviewIndex = index;
-    projectState.reviewFocusId = queue[index]?.id ?? null;
-    projectState.overlayPanel = null;
-    setMainFocus("plan_review");
+  }
+
+  function handleReviewSuggestionClick(ev: Event): void {
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="review-suggestion"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    openPlanReview(btn.dataset.suggestionId);
   }
 
   function openPlanFull(): void {
@@ -1251,7 +1334,7 @@ export function mountUnifiedShell(
 
   function resolvePendingAdopt(): void {
     if (!pendingAdoptAccept) return;
-    const { sid, path } = pendingAdoptAccept;
+    const { sid, path, whatChanged } = pendingAdoptAccept;
     if (projectState.suggestions.some((s) => s.id === sid)) return;
 
     const notices = projectState.partnerNotices.join("\n");
@@ -1268,6 +1351,7 @@ export function mountUnifiedShell(
     const match = notices.match(/已采纳写入\s+(\S+)/);
     const adoptPath = match?.[1] || path;
     const moreAfter = projectState.suggestions.some((s) => Boolean(s.action));
+    acceptedChangeForNextTurn = whatChanged;
     startAdoptFlash(`已采纳写入 ${adoptPath}`, !moreAfter);
   }
 
@@ -1290,13 +1374,34 @@ export function mountUnifiedShell(
     }, ADOPT_FLASH_MS);
   }
 
-  function acceptSuggestionById(sid: string): void {
+  function acceptSuggestionById(
+    sid: string,
+    codePolicy?: "plan_only" | "agent_cleanup" | "git_guide",
+  ): void {
     if (projectState.suggestionAdoptFlash || pendingAdoptAccept) return;
     const sug = projectState.suggestions.find((s) => s.id === sid);
     if (!sug?.action) return;
 
+    if (sug.action === "drop_task" && !codePolicy) {
+      projectState.dropTaskPendingId = sid;
+      projectState.dropTaskPendingWorking = chat.isWorking();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      if (projectState.mainFocus === "plan_review") renderPlanReviewPane();
+      return;
+    }
+    if (sug.action === "drop_task") {
+      projectState.dropTaskPendingId = null;
+      projectState.dropTaskPendingWorking = false;
+    }
+
     const path = adoptPathFromSuggestion(sug);
-    pendingAdoptAccept = { sid, path };
+    pendingAdoptAccept = {
+      sid,
+      path,
+      whatChanged: typeof sug.payload?.what_changed === "string" && sug.payload.what_changed.trim()
+        ? sug.payload.what_changed.trim()
+        : "见 diff",
+    };
     projectState.adoptPendingId = sid;
     clearPendingAdoptTimeout();
     pendingAdoptAcceptTimeoutId = window.setTimeout(() => {
@@ -1310,7 +1415,7 @@ export function mountUnifiedShell(
     }, ADOPT_PENDING_MS);
 
     try {
-      client.acceptPlanSuggestion(sid);
+      client.acceptPlanSuggestion(sid, codePolicy);
     } catch {
       clearPendingAdopt();
       return;
@@ -1378,6 +1483,21 @@ export function mountUnifiedShell(
       case "accept": {
         const sid = target.dataset.suggestionId;
         if (sid) acceptSuggestionById(sid);
+        return;
+      }
+      case "confirm-drop-while-working": {
+        const sid = target.dataset.suggestionId;
+        if (sid) {
+          projectState.dropTaskPendingWorking = false;
+          renderPlanReviewPane();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
+        return;
+      }
+      case "drop-policy": {
+        const sid = target.dataset.suggestionId;
+        const policy = target.dataset.policy as "plan_only" | "agent_cleanup" | "git_guide" | undefined;
+        if (sid && policy) acceptSuggestionById(sid, policy);
         return;
       }
       case "ignore": {
@@ -2175,6 +2295,8 @@ export function mountUnifiedShell(
 
   // ---- project sidebar events ----
 
+  root.addEventListener("click", handleReviewSuggestionClick, true);
+
   // Icon bar: switch overlay panel
   projectEls.iconBar.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".sidebar-icon-btn");
@@ -2245,12 +2367,80 @@ export function mountUnifiedShell(
 
   // Decision surface: plan overlay + suggestion stack + turn summary
   projectEls.taskFlow.addEventListener("click", (ev) => {
-    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="open-suggestion-review-new"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    setStatus("正在打开计划审阅…");
+    openPlanReview(btn.dataset.suggestionId);
+  }, true);
+
+  projectEls.taskFlow.addEventListener("click", (ev) => {
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="open-suggestion-review"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    openPlanReview(btn.dataset.suggestionId);
+  }, true);
+
+  projectEls.taskFlow.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const flowBtn = target.closest<HTMLButtonElement>("[data-flow-stage]");
+    if (flowBtn?.dataset.flowStage) {
+      projectState.flowPreviewStage = flowBtn.dataset.flowStage as FlowStage;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (btn?.dataset.action) {
       switch (btn.dataset.action) {
+        case "open-artifact-doc": {
+          const path = btn.dataset.artifactPath;
+          if (!path) return;
+          projectState.overlayPanel = "docs";
+          projectState.currentDocPath = path;
+          projectState.currentDocContent = "";
+          try { client.readDoc(path); } catch { /* ignore */ }
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        }
         case "open-full-plan":
           openPlanFull();
           return;
+        case "flow-return":
+          projectState.flowPreviewStage = null;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        case "confirm-scope":
+          projectCallbacks.onScopeConfirm();
+          return;
+        case "accept-milestone":
+          projectCallbacks.onMilestoneAccept();
+          return;
+        case "stop-turn":
+          projectCallbacks.onStopTurn();
+          return;
+        case "open-plan-review": {
+          const sid = btn.dataset.suggestionId;
+          openPlanReview(sid);
+          return;
+        }
+        case "confirm-drop-while-working":
+          projectState.dropTaskPendingWorking = false;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        case "drop-policy": {
+          const sid = btn.dataset.suggestionId;
+          const policy = btn.dataset.policy as "plan_only" | "agent_cleanup" | "git_guide" | undefined;
+          if (sid && policy) acceptSuggestionById(sid, policy);
+          return;
+        }
         case "jump-turn-process":
           jumpToCurrentTurnProcess();
           return;
@@ -2391,6 +2581,36 @@ export function mountUnifiedShell(
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
     switch (action) {
+      case "toggle-change-timeline":
+        projectState.changeTimelineExpanded = !projectState.changeTimelineExpanded;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "open-plan-review": {
+        const sid = btn.dataset.suggestionId;
+        openPlanReview(sid);
+        return;
+      }
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "stop-turn":
+        projectCallbacks.onStopTurn();
+        return;
+      case "open-code-followup":
+        if (projectState.codeFollowup?.prefill) {
+          input.value = projectState.codeFollowup.prefill;
+          input.focus();
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 200) + "px";
+          setMainFocus("chat");
+        }
+        projectState.codeFollowup = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-code-followup":
+        projectState.codeFollowup = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
       case "confirm-plan":
         void projectCallbacks.onPlanConfirm();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -2760,6 +2980,13 @@ export function mountUnifiedShell(
         handleProposalsEvent(event.items);
         break;
 
+      case "project.release.accepted":
+        projectState.milestoneAccepted = Boolean(event.release_acceptance.accepted);
+        projectState.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        setStatus("milestone 验收已持久化");
+        break;
+
       case "project.state":
         applyProjectStateEvent(projectState, event);
         if (projectState.projectId) {
@@ -2816,6 +3043,27 @@ export function mountUnifiedShell(
           }, 1000);
           projectState.autoConfirmTimerId = countdownInterval as unknown as number;
         }
+        break;
+
+      case "project.code_followup":
+        projectState.codeFollowup = {
+          mode: event.mode,
+          prefill: event.prefill,
+          paths: event.paths,
+          droppedBody: event.dropped_body,
+          droppedId: event.dropped_id,
+          guide: event.guide,
+        };
+        if (event.mode === "agent_cleanup" && event.prefill) {
+          input.value = event.prefill;
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 200) + "px";
+          setMainFocus("chat");
+          setStatus("已准备清理请求；请确认内容后发送");
+        } else {
+          setStatus("已准备 git 清理指引；不会自动 revert 或提交");
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "plan.subagent.start":
@@ -3127,6 +3375,16 @@ export function mountUnifiedShell(
         break;
 
       case "error":
+        if (pendingAdoptAccept) {
+          const adoptError = String(event.message || "unknown error").trim();
+          clearPendingAdopt();
+          projectState.partnerBusy = false;
+          setStatus(`閲囩撼澶辫触锛�${adoptError}`);
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          if (projectState.mainFocus === "plan_review") {
+            renderPlanReviewPane();
+          }
+        }
         if (projectState.servicesLoading) {
           projectState.servicesLoading = false;
           projectState.servicesError = event.message;

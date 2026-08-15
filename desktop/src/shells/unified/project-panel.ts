@@ -1,4 +1,4 @@
-import type { AgentWsClient, PlanChangeItem, PlanSuggestion, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
+import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
 import { renderMarkdown } from "../../markdown";
 import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
@@ -28,6 +28,17 @@ export interface TaskSnapshot {
 }
 
 export type OverlayPanel = "plan" | "docs" | "projects" | "threads" | null;
+
+export type FlowStage = "requirements" | "design" | "implementation" | "verification" | "release";
+
+export interface CodeFollowup {
+  mode: "agent_cleanup" | "git_guide";
+  prefill?: string;
+  paths?: string[];
+  droppedBody?: string;
+  droppedId?: string;
+  guide?: { workspace_rel?: string; commands?: string[]; note?: string };
+}
 
 // ---- existing types (compat) ----
 
@@ -80,9 +91,15 @@ export interface ProjectPanelState {
   taskPhases: TaskPhase[];
   taskSnapshot: TaskSnapshot;
   planBannerCollapsed: boolean;
+  changeTimelineExpanded: boolean;
   switchConfirmTarget: ProjectListItem | null;
   projectSearchQuery: string;
   planChangeLog: PlanChangeItem[];
+  changeTimeline: ChangeLedgerItem[];
+  executionStage: FlowStage | null;
+  executionStageReason: string;
+  executionStageBlockers: string[];
+  executionStageArtifacts: ProjectArtifactSummary[];
   highlightChanges: boolean;
   highlightedLines: Set<number>;
   // doc panel
@@ -145,6 +162,15 @@ export interface ProjectPanelState {
   reviewVerdict: string | null;
   reviewBlockersCount: number;
   reviewProgressBlocked: boolean;
+  scopeConfirmedAt: string;
+  scopeNeedsReconfirm: boolean;
+  flowPreviewStage: FlowStage | null;
+  milestoneAccepted: boolean;
+  milestoneAcceptedAt: string | null;
+  codeFollowup: CodeFollowup | null;
+  nextTurnChangeSummary: string | null;
+  dropTaskPendingId: string | null;
+  dropTaskPendingWorking: boolean;
 }
 
 export interface ProjectPanelCallbacks {
@@ -157,6 +183,9 @@ export interface ProjectPanelCallbacks {
   onNewThread: () => void;
   onOpenThread: (sessionId: string) => void;
   onReturnActiveThread: () => void;
+  onScopeConfirm: () => void;
+  onStopTurn: () => void;
+  onMilestoneAccept: () => void;
 }
 
 // ---- helpers ----
@@ -197,6 +226,209 @@ function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
   return out;
 }
 
+function suggestionWhatChanged(s: PlanSuggestion): string {
+  const value = s.payload?.what_changed;
+  return typeof value === "string" && value.trim() ? value.trim() : "见 diff";
+}
+
+const FLOW_STAGES: Array<{ id: FlowStage; label: string; short: string }> = [
+  { id: "requirements", label: "需求", short: "范围" },
+  { id: "design", label: "设计", short: "计划" },
+  { id: "implementation", label: "实现", short: "写码" },
+  { id: "verification", label: "验证", short: "证据" },
+  { id: "release", label: "发布", short: "里程碑" },
+];
+
+function isFlowStage(value: unknown): value is FlowStage {
+  return FLOW_STAGES.some((stage) => stage.id === value);
+}
+
+function hasOpenTasks(state: ProjectPanelState): boolean {
+  return state.tasksTotal > state.tasksDone || state.taskPhases.some((phase) => phase.tasks.some((task) => !task.done));
+}
+
+function hasQualityEvidence(state: ProjectPanelState): boolean {
+  return state.turnEvidence.some((item) => {
+    if (!item.ok) return false;
+    const tool = item.tool.toLowerCase();
+    return /test|quality|verify|build|compile|lint/.test(tool);
+  });
+}
+
+export function getExecutionStage(state: ProjectPanelState): FlowStage {
+  if (isFlowStage(state.executionStage)) return state.executionStage;
+  if (!state.projectId || !hasOpenTasks(state)) return state.projectId ? "release" : "requirements";
+  if (state.planStatus === "draft" || state.planStatus === "plan_dirty") return "requirements";
+  if (state.turnEvidence.length > 0 && !state.turnInProgress) return "verification";
+  if (state.turnInProgress || state.turnArmedId) return "implementation";
+  return "design";
+}
+
+function renderFlowRail(state: ProjectPanelState): string {
+  const execution = getExecutionStage(state);
+  const preview = state.flowPreviewStage;
+  const current = preview || execution;
+  const executionIndex = FLOW_STAGES.findIndex((stage) => stage.id === execution);
+  return `<div class="textbook-flow" aria-label="教科书流程">
+    <div class="textbook-flow-header">
+      <span class="textbook-flow-title">项目流程</span>
+      ${preview ? `<button type="button" class="unified-btn textbook-flow-return" data-action="flow-return">回到当前阶段</button>` : `<span class="textbook-flow-current">当前：${escapeHtml(FLOW_STAGES[executionIndex]?.label || "需求")}</span>`}
+    </div>
+    <div class="textbook-flow-rail">
+      ${FLOW_STAGES.map((stage, index) => {
+        const active = stage.id === execution ? " is-execution" : "";
+        const selected = stage.id === current ? " is-selected" : "";
+        const past = index < executionIndex ? " is-past" : "";
+        return `<button type="button" class="textbook-flow-step${active}${selected}${past}" data-flow-stage="${stage.id}" aria-current="${stage.id === current ? "step" : "false"}">
+          <span class="textbook-flow-dot"></span><span>${escapeHtml(stage.label)}</span>
+        </button>`;
+      }).join('<span class="textbook-flow-connector" aria-hidden="true"></span>')}
+    </div>
+  </div>`;
+}
+
+const STAGE_ARTIFACTS: Record<FlowStage, string[]> = {
+  requirements: ["PROJECT.md", "SCOPE.md"],
+  design: ["SCOPE.md", "DESIGN.md", "TECH-DESIGN.md"],
+  implementation: ["SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "TASKS.md"],
+  verification: ["TASKS.md", "VERIFY.md"],
+  release: ["VERIFY.md", "RELEASE.md"],
+};
+
+function artifactByPath(state: ProjectPanelState): Map<string, ProjectArtifactSummary> {
+  return new Map(state.executionStageArtifacts.map((artifact) => [artifact.path, artifact]));
+}
+
+function taskAssociationBasis(state: ProjectPanelState): {
+  id: string;
+  req: string[];
+  ac: string[];
+  design: string[];
+  verify: string[];
+  evidence: string[];
+} {
+  const lines = state.tasksMarkdown.split(/\r?\n/);
+  const targetId = (state.turnArmedId || state.nextTask || "").match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
+  let start = -1;
+  let end = lines.length;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*-\s*\[[ xX]\]\s+/.test(lines[index])) continue;
+    const id = lines[index].match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
+    if (start < 0 && (!targetId || id === targetId)) start = index;
+    else if (start >= 0) {
+      end = index;
+      break;
+    }
+  }
+  if (start < 0) return { id: targetId, req: [], ac: [], design: [], verify: [], evidence: [] };
+  const block = lines.slice(start, end).join("\n");
+  const read = (key: string): string[] => {
+    const match = block.match(new RegExp(`(?:^|\\s)${key}\\s*:\\s*([^\\n;|]+)`, "i"));
+    if (!match) return [];
+    return match[1].split(",").map((item) => item.trim()).filter(Boolean);
+  };
+  return {
+    id: block.match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || targetId,
+    req: read("req"),
+    ac: read("ac"),
+    design: read("design"),
+    verify: read("verify"),
+    evidence: read("evidence"),
+  };
+}
+
+function taskMappingCompleteness(state: ProjectPanelState): string {
+  const blocks = state.tasksMarkdown
+    .split(/\r?\n(?=\s*-\s*\[[ xX]\]\s+)/)
+    .filter((block) => /^\s*-\s*\[[ xX]\]\s+/.test(block));
+  const mapped = blocks.filter((block) => /(?:^|\s)ac\s*:/i.test(block) && /(?:^|\s)design\s*:/i.test(block)).length;
+  return `${mapped}/${blocks.length}`;
+}
+
+function renderStageArtifactSummary(state: ProjectPanelState, stage: FlowStage): string {
+  const artifacts = artifactByPath(state);
+  const rows = STAGE_ARTIFACTS[stage].map((path) => {
+    const artifact = artifacts.get(path);
+    if (!artifact) {
+      return `<span class="textbook-artifact-row is-missing"><code>${escapeHtml(path)}</code><span>未接入</span></span>`;
+    }
+    const status = artifact.status || "unknown";
+    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}"><code>${escapeHtml(artifact.path)}</code><span>${escapeHtml(artifact.role)} · ${escapeHtml(artifact.revision)} · <b class="textbook-artifact-status is-${escapeHtml(status)}">${escapeHtml(status)}</b></span></button>`;
+  }).join("");
+  return `<div class="textbook-artifacts"><div class="textbook-section-label">阶段制品</div><div class="textbook-artifact-list">${rows}</div></div>`;
+}
+
+function renderStageBasis(state: ProjectPanelState, stage: FlowStage): string {
+  const artifacts = artifactByPath(state);
+  const revision = (path: string): string => artifacts.get(path)?.revision || "—";
+  const task = taskAssociationBasis(state);
+  let lines: string[];
+  switch (stage) {
+    case "requirements": {
+      const scopeIds = artifacts.get("SCOPE.md")?.ids?.filter((id) => /^AC-/i.test(id)) || [];
+      lines = [`AC 覆盖：${scopeIds.join(", ") || task.ac.join(", ") || "待补充"}`];
+      break;
+    }
+    case "design":
+      lines = [`基线：DESIGN@${revision("DESIGN.md")} · TECH-DESIGN@${revision("TECH-DESIGN.md")}`, `映射完整度：${taskMappingCompleteness(state)} · 当前：${task.design.join(", ") || "待从 TASKS 关联"}`];
+      break;
+    case "implementation":
+      lines = [`编码依据：DESIGN@${revision("DESIGN.md")} · SCOPE@${revision("SCOPE.md")}`, `AC：${task.ac.join(", ") || "当前任务未声明"}${task.id ? ` · ${task.id}` : ""}`];
+      break;
+    case "verification":
+      lines = [`矩阵：VERIFY@${revision("VERIFY.md")} · V：${task.verify.join(", ") || "待补充"}`, `证据新鲜度：${state.turnEvidence.length ? `${state.turnEvidence.filter((item) => item.ok).length}/${state.turnEvidence.length} 本回合成功` : "本回合暂无"}`];
+      break;
+    case "release":
+      lines = [`清单：RELEASE@${revision("RELEASE.md")}`, `人工验收：${state.milestoneAccepted ? "已记录" : "待人工验收"}`];
+      break;
+  }
+  return `<div class="textbook-stage-basis"><div class="textbook-section-label">阶段依据</div>${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`;
+}
+
+function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
+  const execution = getExecutionStage(state);
+  const stage = state.flowPreviewStage || execution;
+  const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
+  const currentTask = state.turnArmedText || state.nextTask || "暂无已武装任务";
+  const evidence = state.turnEvidence.length
+    ? `${state.turnEvidence.filter((item) => item.ok).length}/${state.turnEvidence.length} 项本回合工具证据成功`
+    : "本回合尚无工具证据";
+  let body = "";
+  let action = "";
+  switch (stage) {
+    case "requirements":
+      body = `<div class="textbook-plan-goal">${state.projectId ? `项目 ${escapeHtml(state.projectId)}：` : ""}先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
+      action = state.scopeConfirmedAt
+        ? `<span class="textbook-soft-signal">范围已确认</span>`
+        : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
+      break;
+    case "design":
+      body = `<div class="textbook-plan-goal">计划已采纳后，选择下一条可武装任务。</div><div class="textbook-plan-stat">待审阅 ${state.suggestions.filter((suggestion) => Boolean(suggestion.action)).length} 条 · 计划 ${escapeHtml(state.planStatus || "draft")}</div>`;
+      action = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+        ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开审阅面</button>`
+        : `<span class="textbook-soft-signal">可进入实现</span>`;
+      break;
+    case "implementation":
+      body = `<div class="textbook-plan-goal">当前武装任务</div><div class="textbook-plan-task">${escapeHtml(currentTask)}</div><div class="textbook-plan-stat">Gate 证据：${escapeHtml(evidence)}</div>`;
+      action = state.planStatus === "plan_dirty"
+        ? `<button type="button" class="unified-btn unified-btn-accent" data-action="stop-turn">一键停止并再确认计划</button>`
+        : `<span class="textbook-soft-signal">完成依靠 report_progress + Gate</span>`;
+      break;
+    case "verification":
+      body = `<div class="textbook-plan-goal">检查本项或本 Phase 的源-L1 证据。</div><div class="textbook-plan-stat">${escapeHtml(evidence)}${hasQualityEvidence(state) ? " · 已检测到验证类工具" : " · 等待验证类工具"}</div>`;
+      action = `<span class="textbook-soft-signal ${hasQualityEvidence(state) ? "is-good" : "is-warn"}">${hasQualityEvidence(state) ? "验证证据已到" : "验证尚未闭合"}</span>`;
+      break;
+    case "release":
+      body = `<div class="textbook-plan-goal">milestone 发布清单</div><div class="textbook-plan-stat">${state.milestoneAccepted ? "已由人验收" : "需人点验收；不自动关闭"}</div><div class="textbook-release-list"><span>☑ 开放任务清空</span><span>${hasQualityEvidence(state) ? "☑" : "☐"} 源-L1 近期绿</span><span>${state.partnerNotices.length === 0 && state.reviewBlockersCount === 0 ? "☑" : "☐"} blocker 已处理</span><span>☐ 建议 git 快照（不自动提交）</span><span>${state.milestoneAccepted ? "☑" : "☐"} 人点本 milestone 验收</span></div>`;
+      action = state.milestoneAccepted
+        ? `<span class="textbook-soft-signal is-good">milestone 已验收</span>`
+        : `<button type="button" class="unified-btn unified-btn-accent" data-action="accept-milestone">本 milestone 验收</button>`;
+      break;
+  }
+  body += renderStageArtifactSummary(state, stage) + renderStageBasis(state, stage);
+  return `<section class="textbook-plan-card" aria-label="阶段计划卡"><div class="textbook-plan-card-header"><span>阶段计划 · ${escapeHtml(FLOW_STAGES.find((item) => item.id === stage)?.label || "需求")}</span>${stage !== execution ? `<span class="textbook-preview-badge">预览中</span>` : ""}</div><div class="textbook-plan-card-body">${body}</div><div class="textbook-plan-card-actions">${action}</div></section>`;
+}
+
 function renderTopSuggestionCard(
   s: PlanSuggestion,
   reviewFocusId: string | null,
@@ -211,17 +443,33 @@ function renderTopSuggestionCard(
     ? `<div class="sidebar-suggestion-stats">${escapeHtml(stats)}</div>`
     : "";
   const summary = truncateSummary(s.body, 80);
+  const whatChanged = s.action && s.action !== "toggle_task"
+    ? `<div class="sidebar-suggestion-change"><span>相对上一版：</span>${escapeHtml(truncateSummary(suggestionWhatChanged(s), 120))}</div>`
+    : "";
   const focused = reviewFocusId === s.id ? " is-review-focus" : "";
   return `<div class="sidebar-suggestion-card is-top${focused}" data-suggestion-id="${escapeHtml(s.id)}">
     <div class="sidebar-suggestion-title">${escapeHtml(s.title)}</div>
     <div class="sidebar-suggestion-body">${escapeHtml(summary)}</div>
+    ${whatChanged}
     ${statsLine}
     <div class="sidebar-suggestion-actions">
-      <button type="button" class="unified-btn" data-action="review-suggestion" data-suggestion-id="${escapeHtml(s.id)}">查看</button>
+      <button type="button" class="unified-btn" data-action="open-suggestion-review" data-suggestion-id="${escapeHtml(s.id)}" aria-controls="unified-plan-review">查看</button>
+      <button type="button" class="unified-btn unified-btn-accent" data-action="open-suggestion-review-new" data-suggestion-id="${escapeHtml(s.id)}" aria-controls="unified-plan-review">审阅</button>
       <button type="button" class="unified-btn unified-btn-accent" data-action="accept-suggestion" data-suggestion-id="${escapeHtml(s.id)}"${isPending ? " disabled" : ""}>${escapeHtml(acceptLbl)}</button>
       <button type="button" class="unified-btn" data-action="ignore-suggestion" data-suggestion-id="${escapeHtml(s.id)}">忽略</button>
     </div>
   </div>`;
+}
+
+function renderDropTaskChoice(state: ProjectPanelState): string {
+  if (!state.dropTaskPendingId) return "";
+  const suggestion = state.suggestions.find((item) => item.id === state.dropTaskPendingId);
+  if (!suggestion) return "";
+  const workingNotice = state.dropTaskPendingWorking
+    ? `<div class="textbook-drop-warning">助手仍在执行；这会改变计划，但不会自动回滚已写代码。仍要采纳吗？</div><button type="button" class="unified-btn unified-btn-accent" data-action="confirm-drop-while-working" data-suggestion-id="${escapeHtml(suggestion.id)}">仍要改计划</button>`
+    : `<div class="textbook-drop-warning">计划删除后，仓库代码不会自动删除。请选择清理出口：</div>
+      <div class="textbook-drop-actions"><button type="button" class="unified-btn unified-btn-accent" data-action="drop-policy" data-policy="plan_only" data-suggestion-id="${escapeHtml(suggestion.id)}">只删计划</button><button type="button" class="unified-btn" data-action="drop-policy" data-policy="agent_cleanup" data-suggestion-id="${escapeHtml(suggestion.id)}">删计划并让 agent 清理</button><button type="button" class="unified-btn" data-action="drop-policy" data-policy="git_guide" data-suggestion-id="${escapeHtml(suggestion.id)}">我用 git / IDE</button></div>`;
+  return `<div class="textbook-drop-choice"><div class="textbook-drop-choice-title">删除任务：${escapeHtml(suggestion.title)}</div>${workingNotice}</div>`;
 }
 
 /** UX-026 SP-9 — stacked proposals in sidebar body (top card + peek layers). */
@@ -281,6 +529,26 @@ function renderTurnSummary(state: ProjectPanelState): string {
   </button>`;
 }
 
+function renderReliabilityStrip(state: ProjectPanelState): string {
+  const postcondition = (state.turnPostcondition || "none").trim();
+  const circuitOpen = state.turnCircuitOpen || [];
+  const playbook = (state.turnPlaybookId || "").trim();
+  const failureClass = (state.turnFailureClass || "").trim();
+  if (postcondition === "none" && circuitOpen.length === 0 && !playbook && !failureClass) {
+    return "";
+  }
+  const postconditionClass = postcondition === "ok" ? "is-ok" : postcondition === "fail" ? "is-fail" : "is-warn";
+  const circuit = circuitOpen.length > 0
+    ? `<div class="sidebar-reliability-row is-fail">熔断：${escapeHtml(circuitOpen.join("、"))}</div>`
+    : "";
+  const playbookText = playbook ? ` · playbook=${playbook}` : "";
+  const failureText = failureClass ? ` · failure=${failureClass}` : "";
+  return `<div class="sidebar-reliability" aria-label="执行可靠性">
+    <div class="sidebar-reliability-row ${postconditionClass}">后置条件：${escapeHtml(postcondition)}${escapeHtml(playbookText)}${escapeHtml(failureText)}</div>
+    ${circuit}
+  </div>`;
+}
+
 function renderAdoptedFooterBanner(message: string): string {
   const short = message.length > 120 ? `${message.slice(0, 117)}…` : message;
   return `<div class="sidebar-change-banner sidebar-adopted-banner">
@@ -290,7 +558,7 @@ function renderAdoptedFooterBanner(message: string): string {
   </div>`;
 }
 
-function renderPartnerNotices(notices: string[], busy: boolean): string {
+function renderPartnerNotices(notices: string[], busy: boolean, actionableCount = 0): string {
   if (!busy && isAdoptedPartnerNotice(notices)) {
     return renderAdoptedNotice(notices);
   }
@@ -305,9 +573,15 @@ function renderPartnerNotices(notices: string[], busy: boolean): string {
     })
     .join("");
   const title = busy ? "计划搭档 · 思考中…" : "计划搭档";
+  const pendingAction = !busy && /待采纳|待审阅/.test(notices.join("\n"))
+    ? actionableCount > 0
+      ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开计划审阅（${actionableCount}）</button>`
+      : `<div class="sidebar-change-banner-changes">当前没有可采纳提案卡，请重新发送计划请求。</div>`
+    : "";
   return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
     <div class="sidebar-change-banner-title">${title}</div>
     ${lines || (busy ? `<div style="font-size:0.78rem;opacity:0.7;margin-top:0.2rem">正在理解你的话…</div>` : "")}
+    ${pendingAction}
   </div>`;
 }
 
@@ -351,7 +625,7 @@ function renderNextStepChip(state: ProjectPanelState): string {
   return "";
 }
 
-function renderDecisionSurface(state: ProjectPanelState): string {
+function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   const currentTask =
     (state.turnArmedText || "").trim() ||
     (state.nextTask || "").trim() ||
@@ -359,7 +633,12 @@ function renderDecisionSurface(state: ProjectPanelState): string {
       .flatMap((p) => p.tasks)
       .find((t) => t.status === "current" && !t.done)?.text ||
     "";
-  let html = `<div class="sidebar-decision">`;
+  let html = `${renderFlowRail(state)}${renderStagePlanCard(state, callbacks)}`;
+  if (state.nextTurnChangeSummary) {
+    html += `<div class="textbook-next-turn-overlay"><strong>侧栏已采纳计划变更：</strong>${escapeHtml(state.nextTurnChangeSummary)}</div>`;
+  }
+  html += renderDropTaskChoice(state);
+  html += `<div class="sidebar-decision">`;
   if (currentTask) {
     html += `<div class="sidebar-decision-current">
       <div class="sidebar-decision-label">当前</div>
@@ -394,6 +673,7 @@ function renderDecisionSurface(state: ProjectPanelState): string {
   html += `</div>`;
   html += renderSuggestionStack(state);
   html += renderTurnSummary(state);
+  html += renderReliabilityStrip(state);
   return html;
 }
 
@@ -750,9 +1030,29 @@ function renderDegradeBanner(level: string, label: string, explain: string): str
   </div>`;
 }
 
+function renderCodeFollowupBanner(followup: CodeFollowup): string {
+  if (followup.mode === "agent_cleanup") {
+    return `<div class="sidebar-change-banner textbook-followup-banner"><div class="sidebar-change-banner-title">任务已删 · 清理出口已准备</div><div class="sidebar-change-banner-changes">主聊已预填清理请求；不会自动发送，也不会自动删除文件。</div><button type="button" class="unified-btn unified-btn-accent" data-action="open-code-followup">打开清理请求</button><button type="button" class="unified-btn" data-action="dismiss-code-followup">关闭</button></div>`;
+  }
+  const guide = followup.guide;
+  const commands = (guide?.commands || []).map((command) => `<code>${escapeHtml(command)}</code>`).join("<br>");
+  return `<div class="sidebar-change-banner textbook-followup-banner"><div class="sidebar-change-banner-title">任务已删 · git 清理指引</div><div class="sidebar-change-banner-changes">${escapeHtml(guide?.note || "不会自动 revert 或提交。")}</div><pre>${commands || "请在项目目录检查未提交变更。"}</pre><button type="button" class="unified-btn" data-action="dismiss-code-followup">关闭</button></div>`;
+}
+
 // ---- change banner / plan confirmation inline ----
 
 function renderChangeBanner(state: ProjectPanelState): string {
+  const recentLedger = state.changeTimeline.slice(-3).reverse();
+  const ledgerRows = recentLedger.map((change) => {
+    const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
+    const impact = affected.length > 0 ? `ID: ${affected.join(", ")}` : "ID: none";
+    const stale = change.stale_docs.length > 0 ? `stale: ${change.stale_docs.join(", ")}` : "stale: none";
+    const replan = change.replan_required ? "需要重新规划" : "无需重新规划";
+    return `<div class="sidebar-change-banner-changes"><strong>${escapeHtml(change.change_id)}</strong> · ${escapeHtml(change.paths.join(", "))}<br>${escapeHtml(impact)}<br>${escapeHtml(stale)} · ${replan}</div>`;
+  }).join("");
+  const ledgerHtml = recentLedger.length > 0
+    ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
+    : "";
   // Plan confirmation (draft / plan_dirty with overlay)
   const needsPlanConfirm =
     state.planOverlay && state.planStatus !== "confirmed";
@@ -760,6 +1060,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     state.planStatus === "plan_dirty" && !needsPlanConfirm;
   const isTaskLevelChange =
     state.changesLevel === "task" && !needsPlanConfirm && !needsPlanDirtyBanner;
+  const needsScopeBanner = state.scopeNeedsReconfirm && state.planStatus === "confirmed";
 
   // Plan confirmation takes priority over change banner
   if (needsPlanConfirm) {
@@ -771,6 +1072,13 @@ function renderChangeBanner(state: ProjectPanelState): string {
       <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-plan" style="margin-right:0.4rem;">确认开工</button>
       <button type="button" class="unified-btn" data-action="edit-plan">修改计划</button>
     </div>`;
+  }
+
+  if (needsScopeBanner) {
+    const stop = state.turnInProgress
+      ? `<button type="button" class="unified-btn" data-action="stop-turn">一键停止</button>`
+      : "";
+    return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));"><div class="sidebar-change-banner-title">范围已变 · 可再确认</div><div class="sidebar-change-banner-changes">计划变更已由采纳控件写入真源；当前执行阶段不被伪造改变。</div><button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope">再确认范围</button>${stop}</div>`;
   }
 
   // Task-level changes: 30s auto-confirm
@@ -829,7 +1137,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     </div>`;
   }
 
-  return "";
+  return ledgerHtml;
 }
 
 // ---- project event application (keep compat) ----
@@ -840,6 +1148,19 @@ export function applyProjectStateEvent(
 ): void {
   state.projectId = event.project_id ?? "";
   state.planStatus = event.plan_status ?? "draft";
+  state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
+  state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
+  state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
+  state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
+    (artifact): artifact is ProjectArtifactSummary => Boolean(
+      artifact && typeof artifact.path === "string" && typeof artifact.role === "string"
+        && typeof artifact.revision === "string" && typeof artifact.status === "string",
+    ),
+  );
+  if (event.release_acceptance) {
+    state.milestoneAccepted = Boolean(event.release_acceptance.accepted);
+    state.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
+  }
   state.tasksMarkdown = event.tasks_markdown ?? "";
   state.mapMarkdown = event.map_markdown ?? "";
   state.tasksDone = event.tasks_done ?? 0;
@@ -849,6 +1170,8 @@ export function applyProjectStateEvent(
   state.reviewVerdict = event.review_verdict ?? null;
   state.reviewBlockersCount = event.review_blockers_count ?? 0;
   state.reviewProgressBlocked = Boolean(event.review_progress_blocked);
+  state.scopeConfirmedAt = event.scope_confirmed_at ?? state.scopeConfirmedAt;
+  state.scopeNeedsReconfirm = state.planStatus === "plan_dirty";
 
   // Diff old vs new to detect changes
   const oldPhases = state.taskPhases.length > 0 ? state.taskPhases : null;
@@ -894,16 +1217,31 @@ export function applyProjectPlanState(
 ): void {
   state.projectId = event.project_id ?? "";
   state.planStatus = event.plan_status ?? "draft";
+  state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
+  state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
+  state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
+  state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
+    (artifact): artifact is ProjectArtifactSummary => Boolean(
+      artifact && typeof artifact.path === "string" && typeof artifact.role === "string"
+        && typeof artifact.revision === "string" && typeof artifact.status === "string",
+    ),
+  );
+  if (event.release_acceptance) {
+    state.milestoneAccepted = Boolean(event.release_acceptance.accepted);
+    state.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
+  }
   state.tasksMarkdown = event.tasks_markdown ?? "";
   state.mapMarkdown = event.map_markdown ?? "";
   state.tasksDone = event.tasks_done ?? 0;
   state.tasksTotal = event.tasks_total ?? 0;
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.planChangeLog = event.change_log ?? [];
+  state.changeTimeline = event.change_timeline ?? [];
   state.planWarnings = event.warnings ?? [];
   state.degradationLevel = event.degradation_level ?? "L1";
   state.degradationLabel = event.degradation_label ?? "全功能";
   state.changesLevel = event.changes_level ?? null;
+  state.scopeNeedsReconfirm = state.planStatus === "plan_dirty" || state.planChangeLog.some((change) => change.kind !== "toggle");
   state.externalChanges = event.external_changes ?? false;
   state.suggestions = normalizeSuggestions(event.suggestions ?? []);
   if (state.suggestions.some((s) => Boolean(s.action))) {
@@ -1140,13 +1478,15 @@ export function renderProjectSidebar(
   const actionableSuggestions = state.suggestions.filter((s) => Boolean(s.action));
   const hasAdoptFlash = Boolean(state.suggestionAdoptFlash);
 
-  if (state.undoDescription) {
+  if (state.codeFollowup) {
+    bannerHtml = renderCodeFollowupBanner(state.codeFollowup);
+  } else if (state.undoDescription) {
     bannerHtml = `<div class="sidebar-undo-toast">
       <span>${escapeHtml(state.undoDescription)}</span>
       <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
     </div>`;
   } else if (state.partnerBusy) {
-    bannerHtml = renderPartnerNotices(state.partnerNotices || [], true);
+    bannerHtml = renderPartnerNotices(state.partnerNotices || [], true, actionableSuggestions.length);
   } else if (state.adoptedFooterMessage && actionableSuggestions.length === 0 && !hasAdoptFlash) {
     bannerHtml = renderAdoptedFooterBanner(state.adoptedFooterMessage);
   } else if (
@@ -1158,7 +1498,7 @@ export function renderProjectSidebar(
   ) {
     bannerHtml = renderAdoptedNotice(state.partnerNotices);
   } else if (state.partnerNotices && state.partnerNotices.length > 0 && !isAdoptedPartnerNotice(state.partnerNotices)) {
-    bannerHtml = renderPartnerNotices(state.partnerNotices, false);
+    bannerHtml = renderPartnerNotices(state.partnerNotices, false, actionableSuggestions.length);
   } else if (state.externalChanges) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">检测到外部修改</div>
@@ -1207,7 +1547,7 @@ export function renderProjectSidebar(
   }
 
   // A7 decision surface (main) — full TASKS only in plan overlay
-  els.taskFlow.innerHTML = renderDecisionSurface(state);
+  els.taskFlow.innerHTML = renderDecisionSurface(state, callbacks);
 
   // project count badge
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");

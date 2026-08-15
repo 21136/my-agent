@@ -17,6 +17,21 @@ export type LlmKeySlot = {
   source: "env" | "file" | null;
 };
 
+export interface ProjectArtifactSummary {
+  path: string;
+  role: string;
+  revision: string;
+  status: string;
+  ids?: string[];
+}
+
+export interface ReleaseAcceptanceSummary {
+  accepted: boolean;
+  accepted_at: string | null;
+  release_revision: string | null;
+  checklist: Record<string, boolean>;
+}
+
 export type ServerEvent =
   | {
       type: "session.banner";
@@ -151,10 +166,22 @@ export type ServerEvent =
       acceptance_command: string | null;
       acceptance_expected_exit: number | null;
       can_verify: boolean;
+      scope_confirmed_at?: string | null;
       delivery_profile?: string;
       review_verdict?: string | null;
       review_blockers_count?: number;
       review_progress_blocked?: boolean;
+      execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
+      execution_stage_reason?: string;
+      execution_stage_blockers?: string[];
+      execution_stage_artifacts?: Array<{
+        path: string;
+        role: string;
+        revision: string;
+        status: string;
+        ids?: string[];
+      }>;
+      release_acceptance?: ReleaseAcceptanceSummary;
     }
   | {
       type: "project.list";
@@ -218,8 +245,30 @@ export type ServerEvent =
       partner_notices?: string[];
       plan_transcript_len?: number;
       change_log: PlanChangeItem[];
+      change_timeline?: ChangeLedgerItem[];
+      execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
+      execution_stage_reason?: string;
+      execution_stage_blockers?: string[];
+      execution_stage_artifacts?: Array<{
+        path: string;
+        role: string;
+        revision: string;
+        status: string;
+        ids?: string[];
+      }>;
+      release_acceptance?: ReleaseAcceptanceSummary;
+    }
+  | {
+      type: "project.code_followup";
+      mode: "agent_cleanup" | "git_guide";
+      prefill?: string;
+      paths?: string[];
+      dropped_body?: string;
+      dropped_id?: string;
+      guide?: { workspace_rel?: string; commands?: string[]; note?: string };
     }
   | { type: "project.plan.confirm_changes.done" }
+  | { type: "project.release.accepted"; release_acceptance: ReleaseAcceptanceSummary }
   | { type: "project.plan.classify.done"; decision: "handle" | "forward" | "split" }
   | { type: "project.plan.bubble"; role: "user" | "assistant"; text: string }
   | { type: "project.plan.transcript.clear" }
@@ -403,6 +452,23 @@ export type PlanChangeItem = {
   reason: string;
   time: string;
   line?: number | null;
+};
+
+export type ChangeLedgerItem = {
+  change_id: string;
+  adopted_at: string;
+  source: string;
+  proposal_id: string;
+  paths: string[];
+  summary: string;
+  requirements: string[];
+  tasks: string[];
+  acceptance: string[];
+  verification: string[];
+  stale_docs: string[];
+  replan_required: boolean;
+  before_revision: string;
+  after_revision: string;
 };
 
 export type PlanSuggestion = {
@@ -711,8 +777,23 @@ export class AgentWsClient {
     this.send({ type: "project.plan.split_task", line });
   }
 
-  acceptPlanSuggestion(suggestionId: string): void {
-    this.send({ type: "project.plan.accept_suggestion", suggestion_id: suggestionId });
+  acceptPlanSuggestion(
+    suggestionId: string,
+    codePolicy?: "plan_only" | "agent_cleanup" | "git_guide",
+  ): void {
+    this.send({
+      type: "project.plan.accept_suggestion",
+      suggestion_id: suggestionId,
+      ...(codePolicy ? { code_policy: codePolicy } : {}),
+    });
+  }
+
+  confirmProjectScope(): void {
+    this.send({ type: "project.scope.confirm" });
+  }
+
+  acceptProjectRelease(): void {
+    this.send({ type: "project.release.accept" });
   }
 
   ignorePlanSuggestion(suggestionId: string): void {

@@ -1,8 +1,8 @@
 # 任务清单（TASKS）
 
-> 版本 0.1.2 · 2026-08-13 · 细分到每个 task，**先文档评审再动手**  
+> 版本 0.1.4 · 2026-08-15 · 细分到每个 task，**先文档评审再动手**  
 > **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Phase 57** — Ink **阶段 0～5 + T-5730～5734 done** · 下一手工 **S-576** · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6  
+> **当前焦点**：**Phase 58b** — T-5810～T-5819、T-5818 done · **T-5831 doc done** · 下一步 **T-5832 编码** + **S-581**  
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -52,6 +52,15 @@
 | **T-1830-01～08**（部分） | `ui.route` · refresh · 流式序等 | **superseded** | IT-X 中与四壳绑定的用例作废；其余仍 defer 维护 |
 
 **仍算真债（勿误删）**：Phase 24 **T-2408** S-70～74 · WORKBENCH M1/M2 · 后端 `active_shell` 收敛 · Phase 44 **T-4408** S-441 · evolve_log 轮转。
+
+## 产品面纪律（surface · [DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) §8）
+
+| 规则 | 说明 |
+|------|------|
+| 新 task 默认 | `surface: desktop` |
+| Terminal | 标 `frozen` / `TERMINAL-MAINT`；仅 **BUG-P0** · **security** 破例 |
+| DOC-04 | 新 Phase 写 `Surface: desktop`；动 Terminal **功能扩展** 须破例理由 |
+| Cursor | 默认不改 `terminal-ui/`、`TERMINAL-MODE` 功能章节 |
 
 ---
 
@@ -1852,6 +1861,77 @@ python turn_intent.py    # 分类用例无回归
 | S-572 | 手工：WT 全屏 TUI smoke（legacy prompt_toolkit） | log | TERMINAL §6.5 | todo |
 | S-573 | 手工：对照 preview HTML 配色（legacy Lexer 路线） | log | TERMINAL §6.4.9 | **superseded** → S-574 |
 | S-574 | 手工：`npm run demo` Ink 配色 smoke | log | TERMINAL §6.6 | todo |
+
+### Phase 58 — Desktop 教科书流程（TEXTBOOK）
+
+> 子文档：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) **v0.1.0** · **仅 Desktop** · Terminal **frozen**  
+> **定调**：默认 project · 流程轨五段 · 出口 = 闸门+证据 · Terminal 独立入口
+
+#### DOC-04 准入
+
+- [x] 矩阵行：Desktop unified project · 侧栏态势 · LDM 栈-D/C（见 DESKTOP-TEXTBOOK-FLOW §4）
+- [x] 回归 ID：**S-580**（北极星手工路径）；M1 实施时补 IT（流程轨状态推导）
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5800 | 产品定调 + 五段出口 + 大厂对照 + 纪律 | DESKTOP-TEXTBOOK-FLOW.md · README · MAP | 评审 | **doc done** |
+| T-5801 | M1：流程轨 UI（侧栏顶 + **阶段计划卡** + 预览切换） | unified shell | S-580 可观测五段 | done |
+| T-5805 | M1：`plan_dirty` / 范围变更与流程轨联动 + **编码中途** banner | project-panel · banner | §6.3.2 · §6.3.8 | done |
+| T-5808 | M1：编码中途采纳 · P1 分级软拦 + **系统展示** `what_changed`/overlay/disarm（禁甩锅核对）· P4 队列 | project-panel · after_turn hook | §6.3.8.4–5 | done |
+| T-5806 | M1：Plan 采纳卡 **「相对上一版」** 变更摘要 | plan-review · project-panel | §6.3.3 | done |
+| T-5802 | M1：默认 perspective=project + 主焦点切换 | unified index | DESKTOP-TEXTBOOK §6 | done |
+| T-5803 | M1：配方默认 verify/quality 命令（本地 CI） | PROJECT-RECIPES · ENV 脚手架 | 新配方带 test | done |
+| T-5804 | M1：发布 milestone checklist UI | project-panel | §7.2 五项 | done |
+| T-5807 | M1：删任务采纳 **三选一**（`drop_task` · `code_policy` · `project.code_followup`） | plan_agent · project_api · project-panel · plan-review · ws · index | §6.3.7–§6.3.8；IT：三 policy + armed disarm | done |
+
+### Phase 58b — Desktop 文档制品链（REAL-RD）
+
+> 子文档：[DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) **v0.2.5** · L0 已决 · **制品链优先于流程轨 UI 抛光**  
+> **定调**：标准项目 **七文件** · manifest + revision · stale/L1/L2 · CHG ledger · 阶段卡展示制品 revision  
+> **依赖**：Phase 58 M1 done（T-5801～5808）；扩展而非作废 T-5804/5805/5806/5808
+
+#### DOC-04 准入
+
+- [x] 矩阵行：Desktop unified project · 七文件制品链 · manifest stale（见 DESKTOP-REAL-RD-FLOW §2、§6）
+- [ ] 回归 ID：**S-581**（七文件迁移 + 变更 stale + 编码依据 + 发布验收端到端）
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5810 | M1：七文件角色、稳定 ID 格式、`tier`（small/normal/large） | DESKTOP-REAL-RD-FLOW · PROJECT-MODE · manifest schema | 角色表与 R0～R9 一致 | done |
+| T-5811 | M1：文档 manifest · revision · `current/stale/evidence_stale` · L1/L2 传播 | `.plan-agent/` · project_api | IT-5811：传播表 §6.3 | done |
+| T-5812 | M1：七文件项目模板 + **旧四件套一次性迁移**（§10） | PROJECT-RECIPES · migrate hook | 迁移有内容不空文件 | done |
+| T-5813 | M1：Plan Agent 读取 DESIGN/VERIFY/RELEASE/SCOPE | plan_agent context | Plan 提案可引用制品 | done |
+| T-5814 | M1：TASKS 任务元数据 REQ/AC/DESIGN/V 关联 | TASKS 模板 · parser | T-001 示例可解析 | done |
+| T-5815 | M1：L1 证据绑定任务/AC/V（消跨任务假阳性） | project_api · Gate | 证据行带 T/V id | done |
+| T-5816 | M1：采纳 CHG ledger + 影响时间线（扩展 T-5806） | plan_agent · project-panel | CHG JSON §9 | done |
+| T-5817 | M1：流程阶段后端权威计算（含制品状态） | project_api | 前端不再纯启发式 | done |
+| T-5818 | M1：milestone 验收/发布清单持久化（扩展 T-5804） | project_api · disk | 重开不丢验收 | done |
+| T-5819 | M1：阶段计划卡展示制品+revision+编码依据（扩展 T-5801） | project-panel | §4 阶段卡表 | done |
+| IT-5812 | 自动：七文件模板与旧四件套一次性迁移 | `agent-core/tests/test_project_artifacts.py` | T-5812 | pass |
+| IT-5814 | 自动：TASKS 五字段任务关联 parser | `agent-core/tests/test_task_metadata.py` | T-5814 | pass |
+| IT-5813 | 自动：Plan prompt 读取标准制品与 manifest 状态 | `agent-core/tests/test_plan_channel.py` | T-5813 | pass |
+| IT-5815 | 自动：L1 证据绑定任务/AC/V 与 API Gate | `agent-core/tests/test_progress_gate.py` · `test_plan_channel.py` | T-5815 | pass |
+| IT-5816 | 自动：采纳 patch 持久化 CHG ledger、manifest revision/stale 与重载时间线 | `agent-core/tests/test_plan_arch_patch.py` | T-5816 | pass |
+| IT-5817 | 自动：后端五段阶段判定、制品状态阻塞与 L2 stale 回退 | `agent-core/tests/test_project_stage.py` | T-5817 | pass |
+| IT-5819 | 自动：阶段卡制品摘要、revision、AC/设计/验证/发布依据契约 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5818 | 自动：发布验收记录按 RELEASE revision 持久化并在 revision 变化后失效 | `agent-core/tests/test_project_release.py` | T-5818 | pass |
+| IT-5820 | 自动：侧栏提案卡「查看」捕获并显式切换计划审阅面 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5821 | 自动：项目恢复/重开重新发送持久化待采纳提案 | `agent-core/tests/test_project_switch.py` | T-5819 | pass |
+| IT-5822 | 自动：恢复前过滤 `old not found` 等无效持久化 patch 提案 | `agent-core/tests/test_plan_arch_patch.py` | T-5819 | pass |
+| IT-5823 | 自动：有效采纳卡查看入口统一捕获；CHG 影响时间线默认折叠、可展开 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5824 | 自动：侧栏提案卡「查看」复用 `open-plan-review` 通路，并继续按 `suggestion_id` 定位审阅项 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5825 | 自动：侧栏提案卡「查看」改为专用 `open-suggestion-review` 动作，由提案区域捕获并切换主区审阅面 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5826 | 自动：保留旧「查看」入口但隐藏，新增「审阅」按钮并使用独立动作链路 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5827 | 自动：审阅按钮直接完成主区 plan-review DOM 切换，并显示打开成功/失败状态 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5828 | 自动：审阅打开流程全量纳入错误边界，并提供读取/切换/渲染阶段状态 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5829 | 自动：补齐计划审阅索引状态，修复 `planReviewIndex is not defined` | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5830 | 自动：采纳合并状态写入、项目分发异常回传与前端 pending 清理 | `agent-core/tests/test_plan_arch_patch.py` | T-5816 | pass |
+| T-5831 | doc：按 `small/normal/large` 补齐七文件内容下限、双独立图示硬门槛、`completeness`/`change_scope` | DESKTOP-REAL-RD-FLOW §2.2.1–§2.2.2 · §7 · §10 · R10–R14 | 文档已决 | done |
+| T-5832 | M1：manifest `content_origin`/`completeness`/`change_scope` + tier 内容 linter（L2 硬闸） | project_manifest · project_mode · stage card | IT-5832：skeleton 迁移、small 变更不拦、normal 缺 SEQ 拦 | todo |
+| T-5833 | M1：侧栏「文档基线不完整」缺项展示 + Plan Agent 软审查提示 | project-panel · plan_agent | §7.3 UX 路径 | todo |
+| S-581 | 手工：旧项目迁移→需求变更 L2→编码中途 L1→验证失效→发布验收 | log | DESKTOP-REAL-RD §16 | todo |
+
+**实施顺序**：5810 → 5811 → 5812 → 5814 → 5813 → 5815 → 5816 → 5817 → 5819 → 5818 → S-581
 
 ---
 

@@ -113,6 +113,7 @@ class ExecutorSession:
     task_done_baseline: int | None = None
     armed_task_id: str = ""
     armed_task_text: str = ""
+    armed_task_contract: dict[str, Any] = field(default_factory=dict)
     turn_evidence: list[dict[str, Any]] = field(default_factory=list)
     # G14 / EXEC-RELIABILITY M0 — segment-scoped circuit breaker
     failure_streak_fp: str = ""
@@ -665,6 +666,8 @@ def _validate_project_mode_call(
     session: ExecutorSession,
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    agent_paths: AgentPaths | None = None,
 ) -> ToolResult | None:
     from project_mode import project_mode_block_reason
 
@@ -674,6 +677,7 @@ def _validate_project_mode_call(
         plan_status=session.project_plan_status,
         tool_name=tool_name,
         arguments=arguments,
+        agent_paths=agent_paths,
     )
     if reason is None:
         return None
@@ -955,6 +959,10 @@ def _validate_progress_gate_evidence(
         armed_task_text=session.armed_task_text or "",
         turn_evidence=list(session.turn_evidence or []),
         delivery_profile=session.project_delivery_profile,
+        task_id=session.armed_task_id or "",
+        expected_ac_ids=list((session.armed_task_contract or {}).get("ac_ids") or []),
+        expected_verify_ids=list((session.armed_task_contract or {}).get("verify_ids") or []),
+        require_binding=bool((session.armed_task_contract or {}).get("metadata_present")),
     )
     if reason is None:
         return None
@@ -1099,6 +1107,7 @@ class ToolExecutor:
         self.session.task_done_baseline = None
         self.session.armed_task_id = ""
         self.session.armed_task_text = ""
+        self.session.armed_task_contract = {}
         self.session.turn_evidence = []
         self.session.service_postcondition = ""
         self.session.postcondition_claim_blocked = False
@@ -1113,6 +1122,7 @@ class ToolExecutor:
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
+        from progress_gate import task_evidence_contract
         from project_mode import first_open_task, project_id_from_root, read_task_stats
 
         pid = (self.session.project_id or "").strip() or project_id_from_root(
@@ -1125,9 +1135,17 @@ class ToolExecutor:
         stats = read_task_stats(tasks_path)
         self.session.task_done_baseline = stats.done
         if tasks_path.is_file():
-            _, body, tid = first_open_task(tasks_path.read_text(encoding="utf-8"))
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+            task_line, body, tid = first_open_task(tasks_text)
             self.session.armed_task_id = tid or ""
             self.session.armed_task_text = body or ""
+            contract = task_evidence_contract(
+                tasks_text,
+                task_id=tid,
+                task_line=task_line,
+            )
+            if contract is not None:
+                self.session.armed_task_contract = contract
         self._emit_turn_evidence()
 
     def _emit_turn_evidence(self) -> None:
@@ -1139,7 +1157,11 @@ class ToolExecutor:
             label = str(entry.get("evolved_name") or entry.get("tool") or "").strip()
             if not label:
                 continue
-            items.append({"tool": label, "ok": bool(entry.get("ok"))})
+            item = {"tool": label, "ok": bool(entry.get("ok"))}
+            for key in ("task_id", "ac_ids", "verify_ids"):
+                if entry.get(key):
+                    item[key] = entry[key]
+            items.append(item)
 
         if self.session.postcondition_claim_blocked:
             postcondition = "blocked"
@@ -2528,7 +2550,12 @@ class ToolExecutor:
                 return host_block
             return None
 
-        project_error = _validate_project_mode_call(self.session, name, arguments)
+        project_error = _validate_project_mode_call(
+            self.session,
+            name,
+            arguments,
+            agent_paths=self.registry.agent_paths,
+        )
         if project_error is not None:
             return project_error
 
@@ -2635,12 +2662,16 @@ class ToolExecutor:
         if data.get("background") is True or data.get("escalated") is True:
             return
         paths = extract_run_evolved_paths(tool_name, arguments)
+        contract = self.session.armed_task_contract or {}
         self.session.turn_evidence.append(
             make_evidence_entry(
                 tool_name=tool_name,
                 evolved_name=evolved or tool_name,
                 ok=bool(result.ok),
                 paths=paths,
+                task_id=str(contract.get("task_id") or self.session.armed_task_id or ""),
+                ac_ids=list(contract.get("ac_ids") or []),
+                verify_ids=list(contract.get("verify_ids") or []),
             )
         )
 

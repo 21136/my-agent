@@ -196,6 +196,17 @@ class PayloadTrimTests(unittest.TestCase):
             ),
             messages=[
                 {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": "{}"},
+                        }
+                    ],
+                },
                 {"role": "tool", "tool_call_id": "c1", "content": "y" * 9000},
             ],
             paths=paths,

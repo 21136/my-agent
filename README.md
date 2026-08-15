@@ -12,25 +12,27 @@
 
 | 入口 | 用途 | 文档 |
 |------|------|------|
-| **`start-desktop.bat`**（默认） | 项目工作台 · unified 壳 · LDM 纪律 · 侧栏计划/采纳 | [DESKTOP.md](docs/DESKTOP.md) · [PROJECT-MODE.md](docs/PROJECT-MODE.md) |
-| **`start-terminal.bat`** | Claude 式 **cwd agent** · Ink TUI · 狂野写码 · 自动 plan-execute | [TERMINAL-MODE.md](docs/TERMINAL-MODE.md) **v0.3.2** |
+| **`start-desktop.bat`**（默认） | **主战场** · 只为写 workspace 项目 · unified **project** 纪律 · 教科书流程（闸门+证据） | [DESKTOP-TEXTBOOK-FLOW.md](docs/DESKTOP-TEXTBOOK-FLOW.md) · [DESKTOP.md](docs/DESKTOP.md) |
+| **`start-terminal.bat`** | **狂野挎包** · cwd agent · Ink · auto plan-execute · **功能冻结**（维护/P0） | [TERMINAL-MODE.md](docs/TERMINAL-MODE.md) **v0.3.2** |
 | **`start.bat`** | 轻量 CLI REPL（备用） | [RUNTIME.md](docs/RUNTIME.md) |
 
-Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换界面只能 exit 后在另一入口续接。
+Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换界面只能 exit 后在另一入口续接。  
+**定调**：Desktop = 产品开发焦点；Terminal = 卖点维护态，**独立入口**，不进 Desktop 流程轨。
 
 ---
 
-## 当前摘要（2026-08-13）
+## 当前摘要（2026-08-14）
 
 | 项 | 说明 |
 |----|------|
+| **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal 冻结维护 |
 | **交付模型** | [LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3 · Pack 1245 M0 done |
 | **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立 `pet` 窗 |
 | **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |
 | **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
 | **Builtin** | 12 个（核心 7 + 编排 5：`explore` · `plan_partner` · `deliverable_review` 等） |
 | **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
-| **下一手工** | S-576 Terminal Ink 全链路 smoke |
+| **下一手工** | S-580 Desktop 北极星路径 · S-576 Terminal（frozen 留痕） |
 
 ---
 

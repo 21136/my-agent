@@ -17,6 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
+from project_manifest import STANDARD_ARTIFACTS
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
@@ -26,8 +27,9 @@ VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
 VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
-PROJECT_ARTIFACTS = frozenset({"PROJECT.md", "MAP.md", "TASKS.md"})
-PLAN_DOMAIN_FILES = frozenset({"TASKS.md", "MAP.md", "PROJECT.md", "ENV.md"})
+STANDARD_PROJECT_ARTIFACTS = STANDARD_ARTIFACTS
+PROJECT_ARTIFACTS = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
+PLAN_DOMAIN_FILES = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
 PLAN_DOMAIN_WRITE_BLOCK_MSG = (
     "计划域文件须通过 plan_partner 提案 + 侧栏采纳；"
     "或使用 report_progress 勾选已完成任务。"
@@ -36,11 +38,18 @@ TASKS_ARCHIVE_NAME = "TASKS.archive.md"
 TASKS_INJECTION_OPEN_CAP = 20
 CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
 _TEMPLATE_DIRNAME = "_template"
+_TEMPLATE_FILES = (*STANDARD_PROJECT_ARTIFACTS, "MAP.md")
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
+_TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
+_TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence")
+_TASK_METADATA_FIELD_RE = re.compile(
+    r"(?<![\w-])(req|ac|design|verify|evidence)\s*:",
+    re.IGNORECASE,
+)
 _CLOSED_SECTION_TITLE_RE = re.compile(
     r"^(?:[\d.]+\s*)?(已关闭|归档|archive|closed|archives)\b",
     re.IGNORECASE,
@@ -71,6 +80,109 @@ class TaskStats:
     @property
     def all_done(self) -> bool:
         return self.total > 0 and self.open_count == 0
+
+
+EXECUTION_STAGES = ("requirements", "design", "implementation", "verification", "release")
+
+
+def compute_execution_stage(
+    *,
+    project_id: str,
+    plan_status: str,
+    task_stats: TaskStats,
+    manifest: dict[str, Any] | None,
+    review_verdict: str | None = None,
+    review_blockers_count: int = 0,
+) -> dict[str, Any]:
+    """Compute the authoritative five-stage project state from disk-backed inputs."""
+    if not project_id:
+        return {"stage": "requirements", "reason": "no_project", "blockers": []}
+    if manifest is None:
+        return {
+            "stage": "requirements",
+            "reason": "manifest_unavailable",
+            "blockers": [".plan-agent/manifest.json"],
+        }
+
+    artifacts = {
+        str(item.get("path")): item
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("path")
+    }
+    l2_stale = [
+        path
+        for path, item in artifacts.items()
+        if item.get("status") == "stale"
+    ]
+    if l2_stale:
+        return {
+            "stage": "requirements",
+            "reason": "l2_stale",
+            "blockers": sorted(l2_stale),
+        }
+    if plan_status != "confirmed":
+        return {
+            "stage": "requirements",
+            "reason": "plan_not_confirmed",
+            "blockers": ["plan_status"],
+        }
+
+    scope = artifacts.get("SCOPE.md") or {}
+    scope_ids = set(scope.get("ids") or [])
+    scope_blockers: list[str] = []
+    if scope.get("status") != "current":
+        scope_blockers.append("SCOPE.md")
+    if not any(str(value).startswith("REQ-") for value in scope_ids):
+        scope_blockers.append("REQ")
+    if not any(str(value).startswith("AC-") for value in scope_ids):
+        scope_blockers.append("AC")
+    if scope_blockers:
+        return {
+            "stage": "requirements",
+            "reason": "scope_incomplete",
+            "blockers": scope_blockers,
+        }
+    if task_stats.total == 0:
+        return {
+            "stage": "requirements",
+            "reason": "no_executable_tasks",
+            "blockers": ["TASKS.md"],
+        }
+
+    design_blockers = [
+        path
+        for path in ("DESIGN.md", "TECH-DESIGN.md")
+        if (artifacts.get(path) or {}).get("status") != "current"
+    ]
+    if design_blockers:
+        return {
+            "stage": "design",
+            "reason": "design_incomplete",
+            "blockers": design_blockers,
+        }
+    if not task_stats.all_done:
+        if task_stats.done == 0:
+            return {"stage": "design", "reason": "tasks_not_started", "blockers": []}
+        return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": []}
+
+    verification_blockers = [
+        path
+        for path in ("VERIFY.md", "RELEASE.md")
+        if (artifacts.get(path) or {}).get("status") != "current"
+    ]
+    if verification_blockers:
+        return {
+            "stage": "verification",
+            "reason": "verification_artifact_stale",
+            "blockers": verification_blockers,
+        }
+    verdict = str(review_verdict or "").strip().casefold()
+    if verdict != "pass" or int(review_blockers_count or 0) > 0:
+        blockers = ["review"]
+        if int(review_blockers_count or 0) > 0:
+            blockers.append("review_blockers")
+        return {"stage": "verification", "reason": "verification_pending", "blockers": blockers}
+    return {"stage": "release", "reason": "verification_passed", "blockers": []}
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,14 +237,73 @@ def list_projects(paths: AgentPaths) -> list[str]:
 
 def ensure_template(paths: AgentPaths) -> Path:
     target = template_dir(paths)
-    if target.is_dir() and (target / "TASKS.md").is_file():
-        return target
     target.mkdir(parents=True, exist_ok=True)
-    for name in sorted(PROJECT_ARTIFACTS):
+    for name in _TEMPLATE_FILES:
         dest = target / name
-        if not dest.is_file():
-            dest.write_text(f"# template {name}\n", encoding="utf-8")
+        existing = ""
+        if dest.is_file():
+            try:
+                existing = dest.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+        if not existing.strip() or existing.strip() == f"# template {name}":
+            dest.write_text(_template_body(name, "template"), encoding="utf-8")
     return target
+
+
+def _template_body(name: str, project_id: str) -> str:
+    bodies = {
+        "PROJECT.md": (
+            "# {{project_id}} · 项目章程\n\n"
+            "## 目标\n\n- 待填写项目目标与用户价值。\n\n"
+            "## 用户与场景\n\n- 待填写主要用户和使用场景。\n\n"
+            "## 范围摘要\n\n- 第一轮范围见 `SCOPE.md`。\n\n"
+            "## 非目标\n\n- 待填写本阶段明确不做的内容。\n"
+        ),
+        "SCOPE.md": (
+            "# {{project_id}} · 范围与验收\n\n"
+            "## REQ-001\n\n- 待填写用户故事、范围和边界。\n\n"
+            "## AC-001\n\n- 待填写可验证的验收标准。\n\n"
+            "## 边界\n\n- 待填写约束、非目标和风险。\n"
+        ),
+        "DESIGN.md": (
+            "# {{project_id}} · UX 设计\n\n"
+            "## UX-001\n\n- 待填写页面流程、交互状态和异常路径。\n"
+        ),
+        "TECH-DESIGN.md": (
+            "# {{project_id}} · 技术设计\n\n"
+            "## TD-001\n\n- 待填写架构、数据模型、API、依赖和技术风险。\n"
+        ),
+        "TASKS.md": (
+            "# {{project_id}} · 执行队列\n\n"
+            "- [ ] T-001 完成第一项可交付工作\n"
+            "  req: REQ-001\n"
+            "  ac: AC-001\n"
+            "  design: UX-001, TD-001\n"
+            "  verify: V-001\n"
+            "  evidence: run_project_tests\n"
+        ),
+        "VERIFY.md": (
+            "# {{project_id}} · 验证矩阵\n\n"
+            "| V-001 | AC-001 | 待填写测试/Gate | 待填写 L1 证据 |\n"
+            "|---|---|---|---|\n"
+        ),
+        "RELEASE.md": (
+            "# {{project_id}} · 发布\n\n"
+            "## REL-001\n\n- 待填写发布、迁移、回滚和人工验收清单。\n"
+        ),
+        "MAP.md": (
+            "# {{project_id}} · 代码地图\n\n"
+            "## 入口\n\n- 待补充源码入口和模块指针。\n"
+        ),
+    }
+    return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
+
+
+def _copy_template_file(src: Path, dest: Path, project_id: str) -> None:
+    body = src.read_text(encoding="utf-8")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(body.replace("{{project_id}}", project_id), encoding="utf-8")
 
 
 def create_project(
@@ -147,12 +318,12 @@ def create_project(
         raise ProjectModeError(f"project already exists: workspace/{pid}")
     src = ensure_template(paths)
     dest.mkdir(parents=True, exist_ok=True)
-    for name in (*PROJECT_ARTIFACTS, TASKS_ARCHIVE_NAME):
+    for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
         src_file = src / name
         if src_file.is_file():
-            shutil.copy2(src_file, dest / name)
-        elif name in PROJECT_ARTIFACTS:
-            (dest / name).write_text(f"# {pid} · {name}\n", encoding="utf-8")
+            _copy_template_file(src_file, dest / name, pid)
+        elif name in _TEMPLATE_FILES:
+            (dest / name).write_text(_template_body(name, pid), encoding="utf-8")
     try:
         from project_env import ensure_project_env
 
@@ -168,7 +339,211 @@ def create_project(
             failed = result.get("failed_step") or "unknown"
             err = result.get("error") or f"scaffold step {failed} failed"
             raise ProjectModeError(f"scaffold {template_id!r} failed: {err}")
+    from project_manifest import bootstrap_manifest
+
+    bootstrap_manifest(dest, pid)
     return dest
+
+
+def _read_project_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError:
+        return ""
+
+
+def _first_stable_id(text: str, prefix: str, default: str) -> str:
+    match = re.search(rf"\b{re.escape(prefix)}-\d{{3,}}\b", text, re.IGNORECASE)
+    return match.group(0).upper() if match else default
+
+
+def _migration_excerpt(text: str, limit: int = 8000) -> str:
+    excerpt = text.strip()
+    if len(excerpt) > limit:
+        return excerpt[:limit] + "\n…（迁移摘录已截断）"
+    return excerpt or "（旧项目未提供此内容，待补充）"
+
+
+def _write_migration_file(path: Path, body: str) -> bool:
+    if path.is_file() and _read_project_text(path).strip():
+        return False
+    path.write_text(body.rstrip() + "\n", encoding="utf-8")
+    return True
+
+
+def migrate_legacy_project(paths: AgentPaths, project_id: str) -> bool:
+    """Migrate a pre-58b project to the seven-artifact baseline once."""
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+    from project_manifest import manifest_path
+
+    if manifest_path(root).is_file():
+        return False
+
+    project_text = _read_project_text(root / "PROJECT.md")
+    map_text = _read_project_text(root / "MAP.md")
+    env_text = _read_project_text(root / "ENV.md")
+    req_id = _first_stable_id(project_text, "REQ", "REQ-001")
+    ac_id = _first_stable_id(project_text, "AC", "AC-001")
+    changed = False
+    changed |= _write_migration_file(
+        root / "PROJECT.md",
+        _template_body("PROJECT.md", pid) + "\n## 迁移备注\n\n- 该项目由旧计划域迁移，原内容保持不变或待补充。\n",
+    )
+    changed |= _write_migration_file(
+        root / "SCOPE.md",
+        (
+            f"# {pid} · 范围与验收\n\n"
+            f"## {req_id}\n\n- 从旧 `PROJECT.md` 迁移的需求范围，待用户确认。\n\n"
+            f"## {ac_id}\n\n- 从旧项目验收内容迁移；缺失部分待补充为可验证条件。\n\n"
+            "## 边界\n\n- 旧项目边界从原计划域迁移，新增范围须重新规划。\n\n"
+            "## 旧 PROJECT.md 摘录\n\n"
+            f"{_migration_excerpt(project_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "DESIGN.md",
+        (
+            f"# {pid} · UX 设计\n\n## UX-001\n\n"
+            "- 从旧项目代码地图推断的设计入口；细节待确认。\n\n"
+            "## 旧 MAP.md 摘录\n\n"
+            f"{_migration_excerpt(map_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "TECH-DESIGN.md",
+        (
+            f"# {pid} · 技术设计\n\n## TD-001\n\n"
+            "- 从旧项目代码地图保留技术入口；架构、API 和风险待确认。\n\n"
+            "## 旧 MAP.md 摘录\n\n"
+            f"{_migration_excerpt(map_text)}\n"
+        ),
+    )
+    tasks_text = _read_project_text(root / "TASKS.md")
+    if not tasks_text.strip():
+        tasks_text = _template_body("TASKS.md", pid)
+    if not re.search(r"\breq\s*:", tasks_text, re.IGNORECASE):
+        association = (
+            f"  req: {req_id}\n  ac: {ac_id}\n  design: UX-001, TD-001\n"
+            "  verify: V-001\n  evidence: 待补充"
+        )
+        task_lines = tasks_text.splitlines()
+        task_index = next(
+            (index for index, line in enumerate(task_lines) if _TASK_CHECKBOX_RE.match(line)),
+            None,
+        )
+        if task_index is None:
+            tasks_text = tasks_text.rstrip() + "\n\n" + association + "\n"
+        else:
+            task_lines[task_index + 1 : task_index + 1] = association.splitlines()
+            tasks_text = "\n".join(task_lines) + "\n"
+        tasks_path = root / "TASKS.md"
+        tasks_path.write_text(tasks_text.rstrip() + "\n", encoding="utf-8")
+        changed = True
+    else:
+        changed |= _write_migration_file(root / "TASKS.md", tasks_text)
+    changed |= _write_migration_file(
+        root / "VERIFY.md",
+        (
+            f"# {pid} · 验证矩阵\n\n"
+            "| V-001 | "
+            f"{ac_id} | 旧项目验收与 ENV 质量命令 | 待重跑 L1 证据 |\n"
+            "|---|---|---|---|\n\n"
+            "## ENV.md 摘录\n\n"
+            f"{_migration_excerpt(env_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "RELEASE.md",
+        (
+            f"# {pid} · 发布\n\n## REL-001\n\n"
+            "- 迁移基线：发布前重跑 VERIFY 中的 L1 命令。\n"
+            "- 迁移/回滚：待根据项目技术设计补充。\n"
+            "- 人工验收：待用户确认。\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "MAP.md",
+        f"# {pid} · 代码地图\n\n## 入口\n\n{_migration_excerpt(map_text)}\n",
+    )
+    if not (root / "ENV.md").is_file():
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, pid)
+            changed = True
+        except Exception:
+            pass
+    return changed
+
+
+def _empty_task_metadata() -> dict[str, list[str]]:
+    return {key: [] for key in _TASK_METADATA_KEYS}
+
+
+def _split_task_metadata_values(raw: str) -> list[str]:
+    values: list[str] = []
+    for item in re.split(r"[,，;；|]", raw):
+        value = item.strip().lstrip("- ").strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _collect_task_metadata(text: str, metadata: dict[str, list[str]]) -> None:
+    matches = list(_TASK_METADATA_FIELD_RE.finditer(text))
+    for index, match in enumerate(matches):
+        key = match.group(1).lower()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        raw = text[match.end() : end].strip().strip(";|,")
+        for value in _split_task_metadata_values(raw):
+            if value not in metadata[key]:
+                metadata[key].append(value)
+
+
+def parse_task_metadata(task_text: str) -> dict[str, list[str]]:
+    """Parse the five fixed association fields from one task or task block."""
+    metadata = _empty_task_metadata()
+    _collect_task_metadata(task_text, metadata)
+    return metadata
+
+
+def parse_tasks_metadata(tasks_text: str) -> list[dict[str, Any]]:
+    """Parse task checkboxes and their inline/indented artifact associations."""
+    parsed: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line_number, line in enumerate((tasks_text or "").splitlines()):
+        task_match = _TASK_CHECKBOX_RE.match(line)
+        if task_match:
+            if current is not None:
+                parsed.append(current)
+            body = task_match.group(1).strip()
+            id_match = _TASK_FULL_ID_RE.search(body)
+            field_match = _TASK_METADATA_FIELD_RE.search(body)
+            description = body[: field_match.start() if field_match else len(body)].strip()
+            if id_match:
+                description = (description[: id_match.start()] + description[id_match.end() :]).strip(" -:;")
+            current = {
+                "line": line_number,
+                "id": id_match.group(0).upper() if id_match else None,
+                "text": description,
+                **_empty_task_metadata(),
+            }
+            _collect_task_metadata(body, current)
+            continue
+        if current is None:
+            continue
+        if line.startswith((" ", "\t")) and line.strip():
+            _collect_task_metadata(line, current)
+            continue
+        if line.strip().startswith("#") or line.strip():
+            parsed.append(current)
+            current = None
+    if current is not None:
+        parsed.append(current)
+    return parsed
 
 
 def read_task_stats(tasks_path: Path) -> TaskStats:
@@ -1527,6 +1902,7 @@ def project_mode_block_reason(
     plan_status: str,
     tool_name: str,
     arguments: dict[str, object],
+    agent_paths: AgentPaths | None = None,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
@@ -1557,6 +1933,26 @@ def project_mode_block_reason(
         return plan_domain_block
 
     if plan_allows_code_writes(plan_status):
+        if agent_paths is not None and active_shell == "project":
+            from project_manifest import manifest_has_l2_stale, refresh_project_manifest
+
+            pid = project_id_from_root(project_root)
+            if pid:
+                manifest = refresh_project_manifest(agent_paths, pid)
+                if manifest_has_l2_stale(manifest) and (
+                    evolved_name in _CODING_TOOLS
+                    or evolved_name == "patch_file"
+                    or (
+                        evolved_name in _WRITE_TOOLS
+                        and any(
+                            path
+                            and is_under_project_root(path, project_root)
+                            and not is_project_artifact_path(path, project_root)
+                            for path in extract_run_evolved_paths(tool_name, arguments)
+                        )
+                    )
+                ):
+                    return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
         if tool_name == "run_evolved" and evolved_name == "patch_file":
             for path in extract_run_evolved_paths(tool_name, arguments):
                 if path and not is_under_project_root(path, project_root):

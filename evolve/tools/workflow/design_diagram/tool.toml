@@ -1,0 +1,58 @@
+[tool]
+name = "design_diagram"
+description = "生成并校验软件工程设计图的 Mermaid 或 PlantUML 源文件"
+version = "1.0.0"
+status = "active"
+topics = ["workflow", "project"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "diagram_type", "source"]
+[schema.input.properties.path]
+type = "string"
+description = "图源输出路径；Mermaid 使用 .mmd/.mermaid，PlantUML 使用 .puml/.plantuml"
+[schema.input.properties.diagram_type]
+type = "string"
+description = "图表类型"
+enum = ["use_case", "sequence", "activity", "state", "class", "component", "deployment", "er", "flowchart", "context"]
+[schema.input.properties.engine]
+type = "string"
+description = "图表引擎；auto 按图类型选择"
+enum = ["auto", "mermaid", "plantuml"]
+default = "auto"
+[schema.input.properties.title]
+type = "string"
+description = "图表标题；写入源文件元数据"
+default = ""
+[schema.input.properties.source]
+type = "string"
+description = "Mermaid 或 PlantUML 图源代码"
+[schema.input.properties.on_conflict]
+type = "string"
+description = "目标文件已存在时的处理方式"
+enum = ["skip", "rename", "overwrite"]
+default = "skip"
+[schema.input.properties.dry_run]
+type = "boolean"
+description = "只校验并预览输出路径，不写文件"
+default = false
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean" }
+path = { type = "string" }
+written = { type = "boolean" }
+diagram_type = { type = "string" }
+engine = { type = "string" }
+format = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = true
+timeout_sec = 60

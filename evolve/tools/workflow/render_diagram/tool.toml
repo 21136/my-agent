@@ -1,0 +1,59 @@
+[tool]
+name = "render_diagram"
+description = "使用本地 Mermaid CLI 或 PlantUML 将已校验的图源渲染为 PNG、SVG 或 PDF"
+version = "1.0.0"
+status = "active"
+topics = ["workflow", "project"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["source_path", "output_path"]
+[schema.input.properties.source_path]
+type = "string"
+description = "已生成的 .mmd/.mermaid/.puml/.plantuml 图源路径"
+[schema.input.properties.output_path]
+type = "string"
+description = "渲染输出路径，支持 .png、.svg 或 .pdf"
+[schema.input.properties.engine]
+type = "string"
+description = "图源引擎；auto 根据图源后缀选择"
+enum = ["auto", "mermaid", "plantuml"]
+default = "auto"
+[schema.input.properties.mermaid_command]
+type = "string"
+description = "可选 Mermaid CLI 命令；默认读取 MMDC_COMMAND 或 mmdc"
+[schema.input.properties.plantuml_command]
+type = "string"
+description = "可选 PlantUML 命令；默认读取 PLANTUML_COMMAND 或 plantuml"
+[schema.input.properties.plantuml_jar]
+type = "string"
+description = "可选 PlantUML JAR 路径；默认读取 PLANTUML_JAR"
+[schema.input.properties.on_conflict]
+type = "string"
+description = "目标文件已存在时的处理方式"
+enum = ["skip", "rename", "overwrite"]
+default = "skip"
+[schema.input.properties.dry_run]
+type = "boolean"
+description = "只检查引擎和输出路径，不执行渲染"
+default = false
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean" }
+path = { type = "string" }
+written = { type = "boolean" }
+engine = { type = "string" }
+renderer = { type = "string" }
+format = { type = "string" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = true
+timeout_sec = 120

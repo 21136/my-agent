@@ -2,7 +2,7 @@
 
 > 版本 **0.4.2** · 2026-08-04  
 > 状态：`doc` — **当前 UI 真源 = `shells/unified/`**（perspective: default | project | night）+ **`shells/pet/`**；旧 grow/daily/project/govern **已删除**。历史章节保留作设计溯源，标 **deprecated**。  
-> 关联：[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
+> 关联：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)（**产品定调 · 教科书流程**） · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
 
 ---
 
@@ -11,7 +11,7 @@
 | 表面 | 路径 | 说明 |
 |------|------|------|
 | **统一聊天壳** | `desktop/src/shells/unified/` | 唯一全功能工作台；`shell-router` 只挂载此壳 |
-| **视角** | `data-perspective` | `default`（车间+过程块）· `project`（侧栏任务流）· `night`（暗色/Amp 手感，可选 starfield） |
+| **视角** | `data-perspective` | **`project`（默认 · 只为写项目）** · `default`（车间+过程块）· `night`（暗色/Amp 手感，可选 starfield） |
 | **伴侣窗** | `desktop/src/shells/pet/` | 默认入口；独立窗；backend 会话线仍可标 `daily` |
 | **皮肤** | `desktop/src/skins/starfield/` | 自旧 daily 迁出 |
 | **不再存在** | `shells/grow|daily|project|govern` | 代码已删；勿再引用为实现路径 |

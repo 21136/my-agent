@@ -19,7 +19,13 @@
         },
         {
           "id": "env",
-          "kind": "write_env_md"
+          "kind": "write_env_md",
+          "quality": {
+            "commands": [
+              { "id": "backend_tests", "cmd": ["python", "-m", "pytest", "-q"], "cwd": "backend" },
+              { "id": "frontend_build", "cmd": ["npm", "run", "build"], "cwd": "frontend" }
+            ]
+          }
         },
         {
           "id": "pip_install",

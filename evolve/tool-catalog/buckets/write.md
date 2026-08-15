@@ -9,6 +9,7 @@
 | `patch_file` | **改已有**：unified diff / 片段修补（主路径） |
 | `copy_move` | 复制或移动文件/目录（agent 树内；`host:` 路径见 builtin + 托管区 overlay） |
 | `move_to_trash` | 移到 `_trash/`（可还原语义，非永久删） |
+| `design_document` | 按四种软件设计文档类型生成结构化 Markdown 或 DOCX；项目内优先写入 `workspace/<id>/docs/` |
 
 ## 已归档
 

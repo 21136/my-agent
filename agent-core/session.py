@@ -131,6 +131,7 @@ class SessionMeta:
     project_id: str = ""
     project_plan_status: PlanStatus = ""
     project_plan_confirmed_at: str = ""
+    project_scope_confirmed_at: str = ""
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
@@ -161,6 +162,7 @@ class SessionMeta:
             "project_id": self.project_id,
             "project_plan_status": self.project_plan_status,
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
+            "project_scope_confirmed_at": self.project_scope_confirmed_at,
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
@@ -223,6 +225,10 @@ class SessionMeta:
         if not isinstance(confirmed_at, str):
             confirmed_at = ""
 
+        scope_confirmed_at = payload.get("project_scope_confirmed_at", "")
+        if not isinstance(scope_confirmed_at, str):
+            scope_confirmed_at = ""
+
         phase_fp = payload.get("project_phase_fingerprint", "")
         if not isinstance(phase_fp, str):
             phase_fp = ""
@@ -278,6 +284,7 @@ class SessionMeta:
             project_id=project_id.strip(),
             project_plan_status=project_plan_status,
             project_plan_confirmed_at=confirmed_at,
+            project_scope_confirmed_at=scope_confirmed_at,
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,

@@ -1,9 +1,10 @@
 # 项目模式设计（PROJECT-MODE）
 
-> 版本 **0.3.3** · 2026-08-06  
-> **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）  
+> 版本 **0.5.2** · 2026-08-15  
+> **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）；**Phase 58b T-5810～T-5819 制品链运行时基础 done，剩余 S-581**  
 > **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
-> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · `TASKS.md` Phase 11/20/**21**/37 · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
+> **Desktop 教科书流程**（产品定调）：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)  
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) · `TASKS.md` Phase 11/20/**21**/37/**58b** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
 ---
 
@@ -230,8 +231,8 @@ quality:
 |----|------|
 | **P1** | 新增第四外壳 **`project`**，与 `grow` / `daily` / `govern` 平级 |
 | **P2** | **grow** = 养 agent；**project** = 做产物（`workspace/<name>/`） |
-| **P3** | 每项目强制三件套：`PROJECT.md` · `MAP.md` · `TASKS.md` |
-| **P4** | 磁盘三件套 = **抗压缩真源**；未决以 `TASKS.md` 为准 |
+| **P3** | 每标准项目强制七文件：`PROJECT.md` · `SCOPE.md` · `DESIGN.md` · `TECH-DESIGN.md` · `TASKS.md` · `VERIFY.md` · `RELEASE.md` |
+| **P4** | 磁盘七文件 + `.plan-agent/manifest.json` = **抗压缩真源**；`MAP.md` / `ENV.md` 为旁路，未决以对应制品与 manifest revision 为准 |
 | **P5** | `meta.json` 扩展：`active_shell` · `project_root` · `project_id` · `project_plan_status` |
 | **P6** | project 壳 **硬拒绝** `write_evolve`；沉淀须显式切 grow |
 | **P7** | **一活线一项目（A）**：同时仅一条活线绑该项目；换项目 → `项目 切换`；同项目污染 → **新开线**（归档旧线可回看）· [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
@@ -264,7 +265,7 @@ quality:
 
 ### 1.2 结论
 
-**项目模式** = 外壳分界 + **三件套真源** + **计划确认门** + project prompt。
+**项目模式** = 外壳分界 + **七文件制品链真源** + **计划确认门** + project prompt。
 
 ---
 
@@ -272,7 +273,7 @@ quality:
 
 ```text
 grow     → 养 agent（evolve/、proposal、write_evolve、内核）
-project  → 做产物（workspace/<name>/、三件套、验收）
+project  → 做产物（workspace/<name>/、七文件制品链、验收）
 daily    → 日用（聊、workflow、轻 qa）
 govern   → 治理（review / audit）
 ```
@@ -295,17 +296,28 @@ govern   → 治理（review / audit）
 
 ---
 
-## 3. workspace 三件套
+## 3. workspace 七文件制品链
+
+> T-5810 定义标准布局与 manifest 契约；T-5812 已将 `create_project` 切到七文件模板，并在首次建立 manifest 时一次性迁移旧四件套。新代码不得新增第二套计划真源。
 
 ### 3.1 目录
 
 ```text
 workspace/
-  _template/          # PROJECT.md · MAP.md · TASKS.md
+  _template/          # 七文件 + MAP/ENV 旁路模板
   <project-id>/       # 如 doudizhu
     PROJECT.md
-    MAP.md
-    TASKS.md            # 执行队列（仅开放项 · 见 PLAN-ARCH）
+    SCOPE.md           # REQ/AC/边界
+    DESIGN.md          # UX 设计
+    TECH-DESIGN.md     # 技术设计 / ADR
+    TASKS.md           # 执行队列（仅开放项 · 见 PLAN-ARCH）
+    VERIFY.md          # AC → V → L1 矩阵
+    RELEASE.md         # 发布、迁移、回滚、人工验收
+    .plan-agent/
+      manifest.json    # 制品 revision / stale / 依赖
+      changes.jsonl    # CHG ledger（后续任务落地）
+    MAP.md             # 旁路代码地图
+    ENV.md             # 旁路工具链与质量命令
     TASKS.archive.md    # 可选 · 已关闭归档（Phase 37 M3）
     bugs/               # 可选 · 缺陷/议题长文
     …                   # 源码（confirmed 后才可写）
@@ -313,9 +325,17 @@ workspace/
 
 角色与写权限见 [PLAN-ARCH.md](./PLAN-ARCH.md)（A1～A5）：叙事进 `bugs/` / `PROJECT` / `MAP`，不往 `TASKS.md` 倒全场信息。
 
+### 3.1.1 默认 `normal` 文档基线（已决 · T-5831）
+
+七文件是完整制品链的固定容器，不是七个空壳。默认 `normal` 项目至少应在 `DESIGN.md` 写清用例、主/异常流程、状态变化和关键时序，在 `TECH-DESIGN.md` 写清架构边界、数据/API、依赖和风险，并让图源以 Mermaid 形式留在对应制品内。
+
+`normal` 图示是两个 **独立硬门槛**：`DESIGN.md` 内至少一个非时序 Mermaid 图（含 `UC-*`/`UX-*`）+ 至少一个 `sequenceDiagram`（含 `SEQ-*`，可在 `DESIGN` 或 `TECH-DESIGN`）；有生命周期才要求 `STATE-*`，否则写明理由。
+
+`status: current` 不等于设计已完成。manifest 用 `completeness`（`skeleton`/`draft`/`complete`）与 `content_origin`（`migrated`/`scaffold`）区分结构与内容达标；`change_scope` 控制本次变更是否触发内容闸门（`small` 小修不因缺图阻塞）。具体以 [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) §2.2.1–§2.2.2、§7.1 为准。
+
 ### 3.2 纪律
 
-1. **无三件套不出计划** — 先 `PROJECT.md` + `TASKS.md`（`MAP.md` 可后补）。
+1. **无七文件不出标准计划** — 标准项目必须有七文件；`MAP.md` / `ENV.md` 旁路可后补，旧项目按 REAL-RD §10 一次性迁移。
 2. **计划须用户确认（§4）** — 未 `confirmed` 不写代码、不 `run_python`。
 3. **小步完成标 `[x]`** — 经 `report_progress` + Progress Gate（禁止主 Agent 直写勾选）。
 4. **续做 / 压缩后** — 必须先 `read_file` `TASKS.md`（开放队列）；归档默认不充当「下一步」真源。
@@ -336,12 +356,12 @@ workspace/
 ```text
 ① 立项
    项目 新建 <id>  /  「写斗地主」→ confirm 新建
-   → workspace/<id>/ + 三件套骨架
+   → workspace/<id>/ + 七文件骨架 + `.plan-agent/manifest.json`
    → project_plan_status = draft
    → 顶栏：项目 · <id> · 计划待确认
 
 ② 出计划（仅文档）
-   对话中让助手填 PROJECT.md + TASKS.md（Phase + 条目）— **draft 阶段允许**，intent 命中三件套时走 `plan` 回合
+   对话中让助手填 PROJECT.md + SCOPE.md + TASKS.md（Phase + 条目）— **draft 阶段允许**，intent 命中文档制品链时走 `plan` 回合
    → 仍 draft；禁止写 src/、禁止 run_python
    → **不要**先点「确认开工」；填完计划、你认可后再确认
 
@@ -484,7 +504,7 @@ workspace/
 
 ### 7.1 `evolve/prompts/project.md`（T-1102）
 
-- 三件套 + 计划确认门（§4）
+- 七文件制品链 + manifest + 计划确认门（§4）
 - grow / project 边界
 - 未 `confirmed` 禁止写码
 - 续做必读 `TASKS.md`
@@ -532,7 +552,7 @@ workspace/
 | 点击切换 | 发 `project.switch`；当前项 disabled |
 | 确认卡 | 已绑其他项目且目标为 `load_session` / `new_session` 时 → `project.switch.request`；用户 **确认切换** 后带 `confirm: true` 重发 |
 | 忙时 | 助手执行中（`isWorking`）禁止切换 |
-| 切换后 | `project.switch.done` → 若 `session_replaced` 则推送 `session.memory`（`context.session_memory_event`）+ `session.history`（`session.session_history_event`），桌面 `session.refresh`；聊天区 **替换**（非追加）；侧栏 `project.state` 同步 `TASKS.md` |
+| 切换后 | `project.switch.done` → 若 `session_replaced` 则推送 `session.memory`（`context.session_memory_event`）+ `session.history`（`session.session_history_event`），桌面 `session.refresh`；聊天区 **替换**（非追加）；侧栏 `project.state` 同步 `TASKS.md`，`project.plan.state` 恢复项目级待采纳提案 |
 | 新建项目 | 列表为空时提示对话 `项目 新建 <id>`（M3 不做侧栏新建按钮） |
 
 ### 8.5 WS（M1 · T-1109；M2 +T-1112；M3 +T-1113）
@@ -619,3 +639,15 @@ workspace/
 | 0.2.3 | 2026-07-14 | §4.1 draft 出计划：三件套可在确认前由助手填写；提及 PROJECT/TASKS/MAP 走 `plan` intent |
 | 0.2.4 | 2026-07-19 | **P20** 指针：[TASK-STOP.md](./TASK-STOP.md) v0.2.0；§3.2 / §10 每 task 一停 |
 | 0.2.5 | 2026-08-03 | P7/P14/§4.4：一活线一项目 + `project_thread_archive` 指针；详 [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
+| 0.4.2 | 2026-08-14 | Phase 58b T-5810～T-5819 + T-5818：七文件制品链、manifest/stale、任务关联、L1 证据、CHG ledger、阶段卡制品依据与持久化人工验收 |
+| 0.4.3 | 2026-08-15 | IT-5821：项目恢复/切换补发 `project.plan.state`，待采纳提案不随会话重建消失 |
+| 0.4.4 | 2026-08-15 | IT-5823：侧栏有效提案的「查看」统一切换计划审阅面；CHG 时间线默认紧凑折叠，仍可展开查看最近记录 |
+| 0.4.5 | 2026-08-15 | IT-5824：侧栏提案卡的「查看」复用 `open-plan-review` 动作，避免与阶段卡分叉出第二条审阅入口 |
+| 0.4.6 | 2026-08-15 | IT-5825：侧栏提案卡的「查看」改用专用 `open-suggestion-review` 动作，由提案区域捕获后直接切换主区审阅面 |
+| 0.4.7 | 2026-08-15 | IT-5826：保留旧「查看」入口但隐藏，新增「审阅」按钮与独立动作链路，便于隔离验证 |
+| 0.4.8 | 2026-08-15 | IT-5827：审阅按钮直接完成主区 plan-review DOM 切换，并显示打开成功/失败状态 |
+| 0.4.9 | 2026-08-15 | IT-5828：审阅打开流程全量纳入错误边界，并提供读取、切换、渲染阶段状态 |
+| 0.5.0 | 2026-08-15 | IT-5829：补齐计划审阅索引状态，修复 `planReviewIndex is not defined` |
+| 0.5.1 | 2026-08-15 | IT-5830：采纳操作合并 PlanAgent 状态写入；项目分发异常回传并清理 Desktop pending 状态 |
+| 0.5.2 | 2026-08-15 | T-5831 讨论稿：补齐 `normal/large` 文档内容下限、用例/时序/状态图和技术设计要求 |
+| 0.5.3 | 2026-08-15 | T-5831 已决：双独立图示硬门槛、`completeness`/`content_origin`/`change_scope` 字段、迁移 skeleton 策略 |

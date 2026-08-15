@@ -150,6 +150,41 @@ class EvidenceMatchTests(unittest.TestCase):
         )
         self.assertTrue(ok_write)
 
+    def test_it5815_evidence_must_match_task_ac_and_verify(self) -> None:
+        wrong_task = make_evidence_entry(
+            tool_name="run_evolved",
+            evolved_name="run_project_tests",
+            ok=True,
+            task_id="T-002",
+            ac_ids=["AC-002"],
+            verify_ids=["V-002"],
+        )
+        right_task = make_evidence_entry(
+            tool_name="run_evolved",
+            evolved_name="run_project_tests",
+            ok=True,
+            task_id="T-001",
+            ac_ids=["AC-001"],
+            verify_ids=["V-001"],
+        )
+        rejected, note = evidence_satisfies(
+            "test",
+            [wrong_task],
+            task_id="T-001",
+            ac_ids=["AC-001"],
+            verify_ids=["V-001"],
+        )
+        self.assertFalse(rejected)
+        self.assertIn("绑定", note)
+        accepted, _ = evidence_satisfies(
+            "test",
+            [right_task],
+            task_id="T-001",
+            ac_ids=["AC-001"],
+            verify_ids=["V-001"],
+        )
+        self.assertTrue(accepted)
+
 
 class ProgressGateExecutorTests(unittest.TestCase):
     """IT-71 / IT-72"""
@@ -260,6 +295,36 @@ class ProgressGateExecutorTests(unittest.TestCase):
         )
         self.assertIn("T-001", archive)
         self.assertIn("closed:done", archive)
+
+    def test_it5815_executor_binds_evidence_to_armed_task(self) -> None:
+        tasks = project_dir(self.paths, self.pid) / "TASKS.md"
+        tasks.write_text(
+            "# tasks\n\n"
+            "- [ ] T-001 skeleton Entity write req: REQ-001; ac: AC-001; "
+            "verify: V-001; evidence: write_text\n",
+            encoding="utf-8",
+        )
+        executor = self._executor()
+        self.assertEqual(executor.session.armed_task_contract.get("task_id"), "T-001")
+        self.assertEqual(executor.session.armed_task_contract.get("ac_ids"), ["AC-001"])
+        self.assertEqual(executor.session.armed_task_contract.get("verify_ids"), ["V-001"])
+
+        written = executor.run(
+            "run_evolved",
+            {
+                "tool_name": "write_text",
+                "arguments": {
+                    "path": f"workspace/{self.pid}/src/A.java",
+                    "content": "class A {}",
+                    "on_conflict": "overwrite",
+                },
+            },
+        )
+        self.assertTrue(written.ok, written.error)
+        evidence = executor.session.turn_evidence[-1]
+        self.assertEqual(evidence.get("task_id"), "T-001")
+        self.assertEqual(evidence.get("ac_ids"), ["AC-001"])
+        self.assertEqual(evidence.get("verify_ids"), ["V-001"])
 
     def test_it72_second_report_blocked(self) -> None:
         executor = self._executor()
