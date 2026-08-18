@@ -99,6 +99,9 @@ export interface ProjectPanelState {
   executionStage: FlowStage | null;
   executionStageReason: string;
   executionStageBlockers: string[];
+  executionStageMissing: string[];
+  executionStageAffected: string[];
+  executionStageDeferred: string[];
   executionStageArtifacts: ProjectArtifactSummary[];
   highlightChanges: boolean;
   highlightedLines: Set<number>;
@@ -353,7 +356,8 @@ function renderStageArtifactSummary(state: ProjectPanelState, stage: FlowStage):
       return `<span class="textbook-artifact-row is-missing"><code>${escapeHtml(path)}</code><span>未接入</span></span>`;
     }
     const status = artifact.status || "unknown";
-    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}"><code>${escapeHtml(artifact.path)}</code><span>${escapeHtml(artifact.role)} · ${escapeHtml(artifact.revision)} · <b class="textbook-artifact-status is-${escapeHtml(status)}">${escapeHtml(status)}</b></span></button>`;
+    const completeness = artifact.completeness || "unknown";
+    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}"><code>${escapeHtml(artifact.path)}</code><span>${escapeHtml(artifact.role)} · ${escapeHtml(artifact.revision)} · <b class="textbook-artifact-status is-${escapeHtml(status)}">${escapeHtml(status)}</b> · <b class="textbook-artifact-completeness is-${escapeHtml(completeness)}">${escapeHtml(completeness)}</b></span></button>`;
   }).join("");
   return `<div class="textbook-artifacts"><div class="textbook-section-label">阶段制品</div><div class="textbook-artifact-list">${rows}</div></div>`;
 }
@@ -425,7 +429,18 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
         : `<button type="button" class="unified-btn unified-btn-accent" data-action="accept-milestone">本 milestone 验收</button>`;
       break;
   }
-  body += renderStageArtifactSummary(state, stage) + renderStageBasis(state, stage);
+  const renderDocumentGroup = (label: string, items: string[], tone: string): string => items.length
+    ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${items.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
+    : "";
+  const documentGroups = [
+    renderDocumentGroup("本阶段阻塞", state.executionStageMissing, "blocker"),
+    renderDocumentGroup("本次变更受影响", state.executionStageAffected, "affected"),
+    renderDocumentGroup("后续阶段待完善", state.executionStageDeferred, "deferred"),
+  ].filter(Boolean);
+  const missing = documentGroups.length
+    ? `<div class="textbook-stage-findings">${documentGroups.join("")}<div class="textbook-soft-signal">只处理当前阶段与本次变更包的直接影响，不递归补齐全项目文档。</div></div>`
+    : "";
+  body += missing + renderStageArtifactSummary(state, stage) + renderStageBasis(state, stage);
   return `<section class="textbook-plan-card" aria-label="阶段计划卡"><div class="textbook-plan-card-header"><span>阶段计划 · ${escapeHtml(FLOW_STAGES.find((item) => item.id === stage)?.label || "需求")}</span>${stage !== execution ? `<span class="textbook-preview-badge">预览中</span>` : ""}</div><div class="textbook-plan-card-body">${body}</div><div class="textbook-plan-card-actions">${action}</div></section>`;
 }
 
@@ -1151,6 +1166,9 @@ export function applyProjectStateEvent(
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
   state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
   state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
+  state.executionStageMissing = event.execution_stage_missing ?? state.executionStageBlockers;
+  state.executionStageAffected = event.execution_stage_affected ?? state.executionStageAffected;
+  state.executionStageDeferred = event.execution_stage_deferred ?? state.executionStageDeferred;
   state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
     (artifact): artifact is ProjectArtifactSummary => Boolean(
       artifact && typeof artifact.path === "string" && typeof artifact.role === "string"
@@ -1220,6 +1238,9 @@ export function applyProjectPlanState(
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
   state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
   state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
+  state.executionStageMissing = event.execution_stage_missing ?? state.executionStageBlockers;
+  state.executionStageAffected = event.execution_stage_affected ?? state.executionStageAffected;
+  state.executionStageDeferred = event.execution_stage_deferred ?? state.executionStageDeferred;
   state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
     (artifact): artifact is ProjectArtifactSummary => Boolean(
       artifact && typeof artifact.path === "string" && typeof artifact.role === "string"

@@ -16,6 +16,8 @@ MANIFEST_FILENAME = "manifest.json"
 CHG_LEDGER_FILENAME = "changes.jsonl"
 MANIFEST_SCHEMA_VERSION = "0.1"
 VALID_TIERS = frozenset({"small", "normal", "large"})
+VALID_CONTENT_ORIGINS = frozenset({"migrated", "scaffold"})
+VALID_COMPLETENESS = frozenset({"skeleton", "draft", "complete"})
 VALID_STATUSES = frozenset({"current", "stale_soft", "stale", "evidence_stale"})
 STANDARD_ARTIFACTS = (
     "PROJECT.md",
@@ -63,7 +65,7 @@ ARTIFACT_REQUIRED_FOR = {
     "MAP.md": (),
     "TASKS.archive.md": (),
 }
-_ID_RE = re.compile(r"\b(?:REQ|AC|UX|TD|ADR|T|V|REL|CHG|IT|S)-\d{3,}\b")
+_ID_RE = re.compile(r"\b(?:REQ|AC|UX|UC|SEQ|STATE|TD|API|ADR|NFR|T|V|REL|CHG|IT|S)-\d{3,}\b")
 _REVISION_RE = re.compile(r"^r(\d+)$")
 _HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -119,12 +121,20 @@ def _sha256(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _artifact_entry(name: str, root: Path, *, tier: str, revision: str) -> dict[str, Any]:
+def _artifact_entry(
+    name: str,
+    root: Path,
+    *,
+    tier: str,
+    revision: str,
+    completeness: str = "skeleton",
+) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "path": name,
         "role": ARTIFACT_ROLES[name],
         "revision": revision,
         "status": "current",
+        "completeness": completeness,
         "tier": tier,
         "depends_on": list(ARTIFACT_DEPENDENCIES[name]),
         "last_adopted_change": None,
@@ -143,11 +153,18 @@ def build_manifest(
     *,
     tier: str = "normal",
     revision: str = "r0",
+    content_origin: str = "scaffold",
+    change_scope: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     pid = _project_id(project_id)
     if tier not in VALID_TIERS:
         raise ManifestError(f"invalid tier: {tier!r}")
+    if content_origin not in VALID_CONTENT_ORIGINS:
+        raise ManifestError(f"invalid content origin: {content_origin!r}")
+    selected_scope = change_scope or tier
+    if selected_scope not in VALID_TIERS:
+        raise ManifestError(f"invalid change scope: {selected_scope!r}")
     if not _REVISION_RE.fullmatch(revision):
         raise ManifestError(f"invalid revision: {revision!r}")
     root = Path(project_root)
@@ -161,7 +178,13 @@ def build_manifest(
     timestamp = now or utc_now_iso()
     result = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
-        "project": {"id": pid, "root": f"workspace/{pid}", "tier": tier},
+        "project": {
+            "id": pid,
+            "root": f"workspace/{pid}",
+            "tier": tier,
+            "content_origin": content_origin,
+        },
+        "change_scope": selected_scope,
         "manifest_revision": revision,
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -186,6 +209,10 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise ManifestError("manifest project.root is invalid")
     if project.get("tier") not in VALID_TIERS:
         raise ManifestError("manifest project.tier is invalid")
+    if project.get("content_origin") not in VALID_CONTENT_ORIGINS:
+        raise ManifestError("manifest project.content_origin is invalid")
+    if manifest.get("change_scope") not in VALID_TIERS:
+        raise ManifestError("manifest change_scope is invalid")
     manifest_revision = manifest.get("manifest_revision", "r0")
     if not isinstance(manifest_revision, str) or not _REVISION_RE.fullmatch(manifest_revision):
         raise ManifestError("manifest_revision is invalid")
@@ -205,6 +232,7 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             "role",
             "revision",
             "status",
+            "completeness",
             "tier",
             "depends_on",
             "last_adopted_change",
@@ -219,6 +247,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise ManifestError(f"artifact {name!r} has an invalid revision")
         if item.get("status") not in VALID_STATUSES:
             raise ManifestError(f"artifact {name!r} has an invalid status")
+        if item.get("completeness") not in VALID_COMPLETENESS:
+            raise ManifestError(f"artifact {name!r} has an invalid completeness")
         if item.get("tier") not in VALID_TIERS:
             raise ManifestError(f"artifact {name!r} has an invalid tier")
         if not isinstance(item.get("depends_on"), list) or not all(
@@ -254,7 +284,9 @@ def save_manifest(path: Path | str, manifest: Mapping[str, Any]) -> Path:
     validate_manifest(manifest)
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(target)
     return target
 
 
@@ -341,8 +373,17 @@ def bootstrap_manifest(
     *,
     tier: str = "normal",
     revision: str = "r0",
+    content_origin: str = "scaffold",
+    change_scope: str | None = None,
 ) -> dict[str, Any]:
-    manifest = build_manifest(project_root, project_id, tier=tier, revision=revision)
+    manifest = build_manifest(
+        project_root,
+        project_id,
+        tier=tier,
+        revision=revision,
+        content_origin=content_origin,
+        change_scope=change_scope,
+    )
     save_manifest(manifest_path(project_root), manifest)
     return manifest
 
@@ -388,18 +429,13 @@ def _normalize_paths(paths: str | Path | list[str | Path] | tuple[str | Path, ..
 
 
 def _dependents(manifest: Mapping[str, Any], changed: set[str]) -> set[str]:
-    result = set(changed)
-    changed_again = True
-    while changed_again:
-        changed_again = False
-        for item in manifest.get("artifacts", []):
-            if not isinstance(item, dict):
-                continue
-            if item.get("path") in result:
-                continue
-            if any(dep in result for dep in item.get("depends_on", [])):
-                result.add(str(item["path"]))
-                changed_again = True
+    result: set[str] = set(changed)
+    for item in manifest.get("artifacts", []):
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("path") or "")
+        if name not in result and any(dep in changed for dep in item.get("depends_on", [])):
+            result.add(name)
     return result
 
 
@@ -479,7 +515,10 @@ def refresh_manifest(
         mark_evidence_stale(manifest)
     if changed or evidence_changed:
         manifest["updated_at"] = utc_now_iso()
-    return bool(changed or evidence_changed)
+    repaired = _repair_transitive_stale(manifest, root)
+    if repaired:
+        manifest["updated_at"] = utc_now_iso()
+    return bool(changed or evidence_changed or repaired)
 
 
 def refresh_project_manifest(
@@ -526,6 +565,7 @@ def adopt_manifest_change(
             continue
         item["revision"] = next_revision
         item["status"] = "current"
+        item["completeness"] = "draft"
         digest = _sha256(root / str(item["path"]))
         if digest is None:
             item.pop("content_sha256", None)
@@ -553,3 +593,83 @@ def manifest_has_l2_stale(manifest: Mapping[str, Any]) -> bool:
 def manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Return a detached payload safe to attach to a WebSocket event."""
     return deepcopy(dict(manifest))
+
+
+def _read_artifact_text(project_root: Path, name: str) -> str:
+    path = project_root / name
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+
+
+def lint_project_content(
+    project_root: Path | str,
+    *,
+    tier: str = "normal",
+    change_scope: str | None = None,
+) -> dict[str, Any]:
+    """Check the minimum document baseline without expanding the task scope."""
+    if tier not in VALID_TIERS:
+        raise ManifestError(f"invalid tier: {tier!r}")
+    scope = change_scope or tier
+    if scope not in VALID_TIERS:
+        raise ManifestError(f"invalid change scope: {scope!r}")
+    root = Path(project_root)
+    texts = {name: _read_artifact_text(root, name) for name in STANDARD_ARTIFACTS}
+    missing: list[str] = []
+    checks: dict[str, bool] = {}
+    checks["G1_non_sequence"] = bool(re.search(r"```mermaid\s*(?!sequenceDiagram)[\s\S]*?```", texts["DESIGN.md"], re.IGNORECASE))
+    checks["G2_sequence"] = bool(re.search(r"```mermaid\s*sequenceDiagram\b[\s\S]*?```", texts["TECH-DESIGN.md"] + texts["DESIGN.md"], re.IGNORECASE))
+    checks["G3_state"] = bool(re.search(r"```mermaid\s*stateDiagram(?:-v2)?\b[\s\S]*?```", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE))
+    checks["G4_state_condition"] = bool(re.search(r"\bSTATE-\d{3,}\b|\b(when|if|条件|状态)\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE))
+    checks["G5_task_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD)-\d{3,}\b", texts["TASKS.md"], re.IGNORECASE))
+    checks["G6_verify_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD|AC|REQ)-\d{3,}\b", texts["VERIFY.md"], re.IGNORECASE))
+    if scope != "small":
+        for key, label in (
+            ("G1_non_sequence", "G1"),
+            ("G2_sequence", "G2"),
+            ("G5_task_reference", "G5"),
+            ("G6_verify_reference", "G6"),
+        ):
+            if not checks[key]:
+                missing.append(label)
+        if re.search(r"\bSTATE-\d{3,}\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE) and not checks["G3_state"]:
+            missing.append("G3")
+    return {
+        "ok": not missing,
+        "hard_gate": scope != "small",
+        "tier": tier,
+        "change_scope": scope,
+        "missing": missing,
+        "checks": checks,
+    }
+
+
+def _repair_transitive_stale(manifest: dict[str, Any], project_root: Path | str) -> bool:
+    """Repair stale descendants left by older manifests after an intermediate adoption."""
+    entries = load_change_ledger(change_ledger_path(project_root))
+    if not entries:
+        return False
+    by_path = {
+        str(item.get("path")): item
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("path")
+    }
+    direct_dependents: set[str] = set()
+    for entry in entries:
+        direct_dependents.update(_dependents(manifest, set(str(path) for path in entry.get("paths", []))))
+    direct_dependents.difference_update(str(path) for entry in entries for path in entry.get("paths", []))
+    changed = False
+    for name, item in by_path.items():
+        if item.get("status") not in {"stale", "stale_soft"}:
+            continue
+        desired = "stale_soft" if name in direct_dependents else "current"
+        if item.get("status") != desired:
+            item["status"] = desired
+            changed = True
+    if changed:
+        manifest["updated_at"] = utc_now_iso()
+    return changed

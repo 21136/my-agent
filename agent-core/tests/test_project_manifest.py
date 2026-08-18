@@ -15,6 +15,7 @@ if str(_AGENT_CORE) not in sys.path:
 from project_manifest import (
     ManifestError,
     adopt_manifest_change,
+    append_change_ledger,
     bootstrap_manifest,
     load_manifest,
     mark_evidence_stale,
@@ -63,20 +64,22 @@ class ProjectManifestTests(unittest.TestCase):
             },
         )
 
-    def test_it5811_l1_is_soft_and_l2_propagates_transitively(self) -> None:
+    def test_it5811_propagates_only_direct_dependents(self) -> None:
         manifest = bootstrap_manifest(self.root, "demo")
         propagate_stale(manifest, "DESIGN.md", level="L1")
         statuses = {item["path"]: item["status"] for item in manifest["artifacts"]}
         self.assertEqual(statuses["DESIGN.md"], "stale_soft")
-        self.assertEqual(statuses["TASKS.md"], "stale_soft")
-        self.assertEqual(statuses["RELEASE.md"], "stale_soft")
+        self.assertEqual(statuses["TECH-DESIGN.md"], "stale_soft")
+        self.assertEqual(statuses["TASKS.md"], "current")
+        self.assertEqual(statuses["RELEASE.md"], "current")
         self.assertFalse(manifest_has_l2_stale(manifest))
 
         propagate_stale(manifest, "SCOPE.md", level="L2")
         statuses = {item["path"]: item["status"] for item in manifest["artifacts"]}
         self.assertTrue(manifest_has_l2_stale(manifest))
         self.assertEqual(statuses["SCOPE.md"], "stale")
-        self.assertEqual(statuses["RELEASE.md"], "stale")
+        self.assertEqual(statuses["DESIGN.md"], "stale")
+        self.assertEqual(statuses["RELEASE.md"], "current")
 
     def test_it5811_external_edit_keeps_revision_and_marks_stale(self) -> None:
         manifest = bootstrap_manifest(self.root, "demo")
@@ -107,10 +110,77 @@ class ProjectManifestTests(unittest.TestCase):
         self.assertEqual(design["revision"], "r1")
         self.assertEqual(design["status"], "current")
         self.assertEqual(design["last_adopted_change"], "CHG-001")
-        self.assertEqual(tasks["status"], "stale_soft")
+        tech_design = next(item for item in manifest["artifacts"] if item["path"] == "TECH-DESIGN.md")
+        self.assertEqual(tech_design["status"], "stale_soft")
         path = self.root / ".plan-agent" / "manifest.json"
         save_manifest(path, manifest)
         self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["manifest_revision"], "r1")
+
+    def test_it5835_repairs_old_transitive_stale_descendants(self) -> None:
+        from project_manifest import _repair_transitive_stale
+
+        manifest = bootstrap_manifest(self.root, "demo")
+        for item in manifest["artifacts"]:
+            if item["path"] in {"TASKS.md", "VERIFY.md", "RELEASE.md"}:
+                item["status"] = "stale"
+                item["last_adopted_change"] = "CHG-001"
+        manifest["artifacts"][2]["last_adopted_change"] = "CHG-001"
+        append_change_ledger(self.root, {
+            "change_id": "CHG-001",
+            "adopted_at": "2026-08-17T00:00:00Z",
+            "source": "test",
+            "proposal_id": "s1",
+            "paths": ["DESIGN.md"],
+            "summary": "design",
+            "requirements": [],
+            "tasks": [],
+            "acceptance": [],
+            "verification": [],
+            "stale_docs": ["TECH-DESIGN.md", "TASKS.md", "VERIFY.md", "RELEASE.md"],
+            "replan_required": True,
+            "before_revision": "r0",
+            "after_revision": "r1",
+        })
+        append_change_ledger(self.root, {
+            "change_id": "CHG-002",
+            "adopted_at": "2026-08-17T00:01:00Z",
+            "source": "test",
+            "proposal_id": "s2",
+            "paths": ["TECH-DESIGN.md"],
+            "summary": "tech",
+            "requirements": [],
+            "tasks": [],
+            "acceptance": [],
+            "verification": [],
+            "stale_docs": ["TASKS.md", "VERIFY.md", "RELEASE.md"],
+            "replan_required": True,
+            "before_revision": "r1",
+            "after_revision": "r2",
+        })
+        for item in manifest["artifacts"]:
+            if item["path"] in {"VERIFY.md", "RELEASE.md"}:
+                item["last_adopted_change"] = "CHG-002"
+        append_change_ledger(self.root, {
+            "change_id": "CHG-003",
+            "adopted_at": "2026-08-17T00:02:00Z",
+            "source": "test",
+            "proposal_id": "s3",
+            "paths": ["MAP.md"],
+            "summary": "map",
+            "requirements": [],
+            "tasks": [],
+            "acceptance": [],
+            "verification": [],
+            "stale_docs": ["VERIFY.md", "RELEASE.md"],
+            "replan_required": True,
+            "before_revision": "r2",
+            "after_revision": "r3",
+        })
+        self.assertTrue(_repair_transitive_stale(manifest, self.root))
+        statuses = {item["path"]: item["status"] for item in manifest["artifacts"]}
+        self.assertEqual(statuses["TASKS.md"], "stale_soft")
+        self.assertEqual(statuses["VERIFY.md"], "current")
+        self.assertEqual(statuses["RELEASE.md"], "current")
 
     def test_it5811_rejects_manifest_without_standard_artifacts(self) -> None:
         manifest = bootstrap_manifest(self.root, "demo")

@@ -87,7 +87,7 @@ def _project_summary(project_md: str) -> str:
 
 
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
-    from project_mode import get_delivery_profile
+    from project_mode import classify_stage_documents, get_delivery_profile
     from progress_gate import review_progress_blocked_flag
     from project_manifest import manifest_has_l2_stale, manifest_payload, refresh_project_manifest
 
@@ -110,8 +110,14 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         plan_status=plan_status,
         task_stats=stats,
         manifest=manifest,
+        project_root=project_dir(paths, pid) if pid else None,
         review_verdict=getattr(session, "last_review_verdict", None),
         review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+    )
+    stage_documents = classify_stage_documents(
+        manifest,
+        stage=str(stage["stage"]),
+        blockers=list(stage.get("blockers", [])),
     )
     release_artifact = next(
         (item for item in (manifest or {}).get("artifacts", [])
@@ -161,6 +167,10 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "execution_stage": stage["stage"],
         "execution_stage_reason": stage["reason"],
         "execution_stage_blockers": list(stage["blockers"]),
+        "execution_stage_missing": list(stage.get("missing", stage["blockers"])),
+        "execution_stage_affected": stage_documents["affected"],
+        "execution_stage_deferred": stage_documents["deferred"],
+        "content_lint": stage.get("content_lint"),
         "release_acceptance": release_acceptance,
         "execution_stage_artifacts": [
             {
@@ -168,6 +178,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
                 "role": item.get("role"),
                 "revision": item.get("revision"),
                 "status": item.get("status"),
+                "completeness": item.get("completeness"),
                 "ids": list(item.get("ids") or []),
             }
             for item in (manifest or {}).get("artifacts", [])
@@ -743,10 +754,18 @@ def _dispatch_plan_message(
             policy = str(message.get("code_policy") or "plan_only").strip()
             if policy not in {"plan_only", "agent_cleanup", "git_guide"}:
                 raise ProjectApiError("code_policy must be plan_only, agent_cleanup, or git_guide")
-            with agent.state_save_batch():
-                result = agent.accept_suggestion(sid, code_policy=policy)
-                if isinstance(result, dict) and result.get("ok") is not False:
-                    _ack_human_plan_adopt(session, paths, agent)
+            try:
+                with agent.state_save_batch():
+                    result = agent.accept_suggestion(sid, code_policy=policy)
+                    if isinstance(result, dict) and result.get("ok") is not False:
+                        _ack_human_plan_adopt(session, paths, agent)
+            except ProjectModeError:
+                agent.set_partner_notices("提案已失效，已刷新待采纳队列")
+                result = {
+                    "ok": False,
+                    "summary": "提案已失效，已刷新待采纳队列",
+                    "_suggestion_stale": True,
+                }
             events: list[dict[str, Any]] = [
                 project_state_payload(session, paths),
                 agent.build_state(session),

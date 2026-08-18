@@ -12,7 +12,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from project_manifest import bootstrap_manifest, propagate_stale
-from project_mode import TaskStats, compute_execution_stage
+from project_mode import TaskStats, classify_stage_documents, compute_execution_stage
 
 
 class ProjectStageTests(unittest.TestCase):
@@ -94,6 +94,25 @@ class ProjectStageTests(unittest.TestCase):
         self.assertEqual(result["stage"], "requirements")
         self.assertEqual(result["reason"], "l2_stale")
         self.assertIn("SCOPE.md", result["blockers"])
+
+    def test_t5834_future_documents_are_not_current_blockers(self) -> None:
+        result = classify_stage_documents(
+            self.manifest,
+            stage="requirements",
+            blockers=["plan_status"],
+        )
+        self.assertEqual(result["affected"], [])
+        self.assertEqual(result["deferred"], ["DESIGN.md", "RELEASE.md", "TECH-DESIGN.md", "VERIFY.md"])
+
+    def test_t5834_soft_stale_is_affected(self) -> None:
+        self.manifest["artifacts"][2]["status"] = "stale_soft"
+        result = classify_stage_documents(
+            self.manifest,
+            stage="requirements",
+            blockers=[],
+        )
+        self.assertIn("DESIGN.md", result["affected"])
+        self.assertNotIn("DESIGN.md", result["deferred"])
 
 
 if __name__ == "__main__":

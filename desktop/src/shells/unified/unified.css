@@ -412,6 +412,48 @@
   font-size: 0.85rem;
   line-height: 1.45;
 }
+.mermaid-sequence-wrap {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  border: 1px solid var(--ma-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ma-surface) 72%, var(--ma-bg));
+  padding: 0.6rem;
+}
+.mermaid-sequence {
+  display: block;
+  min-width: 560px;
+  width: 100%;
+  min-height: 220px;
+}
+.mermaid-sequence .sequence-participant rect {
+  fill: var(--ma-surface);
+  stroke: var(--ma-accent);
+  stroke-width: 1.2;
+}
+.mermaid-sequence .sequence-participant text,
+.mermaid-sequence .sequence-message text {
+  fill: var(--ma-text);
+  font-family: var(--ma-font, system-ui, sans-serif);
+  font-size: 13px;
+}
+.mermaid-sequence .sequence-participant line {
+  stroke: var(--ma-border);
+  stroke-dasharray: 4 4;
+}
+.mermaid-sequence .sequence-message line {
+  stroke: var(--ma-accent);
+  stroke-width: 1.5;
+}
+.mermaid-sequence .sequence-message-dashed {
+  stroke-dasharray: 6 4;
+}
+.mermaid-sequence marker path {
+  fill: var(--ma-accent);
+}
+.mermaid-sequence .sequence-message circle {
+  fill: var(--ma-accent);
+}
 .unified-markdown table {
   width: 100%;
   margin: 0.75em 0;
@@ -1812,6 +1854,17 @@
 .textbook-artifact-status.is-current { color: #3d8b5a; }
 .textbook-artifact-status.is-stale, .textbook-artifact-status.is-evidence_stale { color: #b34d4d; }
 .textbook-artifact-status.is-stale_soft { color: #b17d00; }
+.textbook-artifact-completeness { font-weight: 600; }
+.textbook-artifact-completeness.is-skeleton { color: #b17d00; }
+.textbook-artifact-completeness.is-draft { color: #8b6f3d; }
+.textbook-artifact-completeness.is-complete { color: #3d8b5a; }
+.textbook-stage-missing { margin-top: 0.55rem; padding: 0.45rem; border: 1px solid color-mix(in srgb, #b17d00 45%, var(--ma-border)); background: color-mix(in srgb, #b17d00 5%, transparent); }
+.textbook-stage-findings { display: grid; gap: 0.35rem; margin-top: 0.55rem; padding: 0.45rem; border: 1px solid var(--ma-border); background: color-mix(in srgb, var(--ma-surface) 96%, var(--ma-text)); }
+.textbook-stage-group { padding: 0.2rem 0.25rem; border-left: 2px solid var(--ma-border); }
+.textbook-stage-group.is-blocker { border-left-color: #b34d4d; }
+.textbook-stage-group.is-affected { border-left-color: #b17d00; }
+.textbook-stage-group.is-deferred { border-left-color: #8b6f3d; }
+.textbook-missing-chip { display: inline-block; margin: 0 0.2rem 0.2rem 0; padding: 0.12rem 0.3rem; border-radius: 3px; background: color-mix(in srgb, #b17d00 12%, transparent); color: #8b6f3d; font-size: 0.68rem; }
 .textbook-stage-basis { display: grid; gap: 0.18rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-next-turn-overlay { margin: 0.45rem 0.75rem; padding: 0.45rem 0.55rem; border-left: 3px solid var(--ma-accent); background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface)); font-size: 0.72rem; }
 .sidebar-suggestion-change, .unified-plan-review-what-changed { margin-top: 0.35rem; color: var(--ma-accent); font-size: 0.72rem; }

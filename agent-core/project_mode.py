@@ -17,7 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from project_manifest import STANDARD_ARTIFACTS
+from project_manifest import STANDARD_ARTIFACTS, lint_project_content
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
@@ -85,12 +85,51 @@ class TaskStats:
 EXECUTION_STAGES = ("requirements", "design", "implementation", "verification", "release")
 
 
+def classify_stage_documents(
+    manifest: dict[str, Any] | None,
+    *,
+    stage: str,
+    blockers: list[str] | tuple[str, ...] = (),
+) -> dict[str, list[str]]:
+    """Separate affected and future documents from current stage blockers."""
+    if not manifest or stage not in EXECUTION_STAGES:
+        return {"affected": [], "deferred": []}
+    stage_index = EXECUTION_STAGES.index(stage)
+    blocker_paths = {str(item) for item in blockers if str(item).endswith(".md")}
+    affected: list[str] = []
+    deferred: list[str] = []
+    for raw in manifest.get("artifacts", []):
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path") or "")
+        if not path or path in blocker_paths:
+            continue
+        status = str(raw.get("status") or "current")
+        required_for = {
+            str(item) for item in (raw.get("required_for") or []) if str(item) in EXECUTION_STAGES
+        }
+        if status in {"stale_soft", "evidence_stale"}:
+            affected.append(path)
+            continue
+        if (
+            raw.get("completeness") != "complete"
+            and stage not in required_for
+            and any(EXECUTION_STAGES.index(item) > stage_index for item in required_for)
+        ):
+            deferred.append(path)
+    return {
+        "affected": sorted(set(affected)),
+        "deferred": sorted(set(deferred)),
+    }
+
+
 def compute_execution_stage(
     *,
     project_id: str,
     plan_status: str,
     task_stats: TaskStats,
     manifest: dict[str, Any] | None,
+    project_root: Path | str | None = None,
     review_verdict: str | None = None,
     review_blockers_count: int = 0,
 ) -> dict[str, Any]:
@@ -159,6 +198,31 @@ def compute_execution_stage(
             "stage": "design",
             "reason": "design_incomplete",
             "blockers": design_blockers,
+        }
+    change_scope = str(manifest.get("change_scope") or manifest.get("project", {}).get("tier") or "normal")
+    content_lint: dict[str, Any] | None = None
+    if project_root is not None and change_scope != "small":
+        content_lint = lint_project_content(
+            project_root,
+            tier=str(manifest.get("project", {}).get("tier") or "normal"),
+            change_scope=change_scope,
+        )
+    elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
+        content_lint = manifest["content_lint"]
+    completeness_blockers = [
+        path
+        for path in ("DESIGN.md", "TECH-DESIGN.md")
+        if (artifacts.get(path) or {}).get("completeness") != "complete"
+    ] if change_scope != "small" and (project_root is not None or content_lint is not None) else []
+    lint_blockers = list(content_lint.get("missing", [])) if content_lint else []
+    if completeness_blockers or lint_blockers:
+        blockers = completeness_blockers + [item for item in lint_blockers if item not in completeness_blockers]
+        return {
+            "stage": "design",
+            "reason": "content_incomplete",
+            "blockers": blockers,
+            "missing": blockers,
+            "content_lint": content_lint,
         }
     if not task_stats.all_done:
         if task_stats.done == 0:
@@ -476,6 +540,10 @@ def migrate_legacy_project(paths: AgentPaths, project_id: str) -> bool:
             changed = True
         except Exception:
             pass
+    from project_manifest import bootstrap_manifest
+
+    if not manifest_path(root).is_file():
+        bootstrap_manifest(root, pid, tier="normal", content_origin="migrated", change_scope="normal")
     return changed
 
 

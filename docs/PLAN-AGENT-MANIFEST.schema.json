@@ -5,7 +5,7 @@
   "description": "T-5810 draft schema for workspace/<project>/.plan-agent/manifest.json. T-5831 adds content_origin, change_scope, completeness.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "project", "artifacts"],
+  "required": ["schema_version", "project", "change_scope", "artifacts"],
   "properties": {
     "schema_version": {"type": "string", "const": "0.1"},
     "project": {"$ref": "#/$defs/project"},

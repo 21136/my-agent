@@ -22,6 +22,7 @@ export interface ProjectArtifactSummary {
   role: string;
   revision: string;
   status: string;
+  completeness?: "skeleton" | "draft" | "complete" | string;
   ids?: string[];
 }
 
@@ -174,11 +175,16 @@ export type ServerEvent =
       execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
       execution_stage_reason?: string;
       execution_stage_blockers?: string[];
+      execution_stage_missing?: string[];
+      execution_stage_affected?: string[];
+      execution_stage_deferred?: string[];
+      content_lint?: Record<string, unknown> | null;
       execution_stage_artifacts?: Array<{
         path: string;
         role: string;
         revision: string;
         status: string;
+        completeness?: "skeleton" | "draft" | "complete" | string;
         ids?: string[];
       }>;
       release_acceptance?: ReleaseAcceptanceSummary;
@@ -249,11 +255,16 @@ export type ServerEvent =
       execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
       execution_stage_reason?: string;
       execution_stage_blockers?: string[];
+      execution_stage_missing?: string[];
+      execution_stage_affected?: string[];
+      execution_stage_deferred?: string[];
+      content_lint?: Record<string, unknown> | null;
       execution_stage_artifacts?: Array<{
         path: string;
         role: string;
         revision: string;
         status: string;
+        completeness?: "skeleton" | "draft" | "complete" | string;
         ids?: string[];
       }>;
       release_acceptance?: ReleaseAcceptanceSummary;

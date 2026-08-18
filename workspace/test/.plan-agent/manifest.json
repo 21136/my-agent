@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1",
+  "project": {
+    "id": "test",
+    "root": "workspace/test",
+    "tier": "normal",
+    "content_origin": "scaffold"
+  },
+  "change_scope": "normal",
+  "manifest_revision": "r31",
+  "created_at": "2026-08-17T10:14:37Z",
+  "updated_at": "2026-08-17T10:14:37Z",
+  "artifacts": [
+    {"path":"PROJECT.md","role":"project","revision":"r12","status":"current","completeness":"skeleton","tier":"normal","depends_on":[],"last_adopted_change":"CHG-012","required_for":["requirements"]},
+    {"path":"SCOPE.md","role":"scope","revision":"r15","status":"current","completeness":"skeleton","tier":"normal","depends_on":["PROJECT.md"],"last_adopted_change":"CHG-015","required_for":["requirements","design","implementation"]},
+    {"path":"DESIGN.md","role":"design","revision":"r27","status":"current","completeness":"draft","tier":"normal","depends_on":["SCOPE.md"],"last_adopted_change":"CHG-027","required_for":["design","implementation"]},
+    {"path":"TECH-DESIGN.md","role":"tech_design","revision":"r31","status":"current","completeness":"draft","tier":"normal","depends_on":["DESIGN.md"],"last_adopted_change":"CHG-031","required_for":["design","implementation"]},
+    {"path":"TASKS.md","role":"tasks","revision":"r28","status":"stale_soft","completeness":"skeleton","tier":"normal","depends_on":["TECH-DESIGN.md"],"last_adopted_change":"CHG-028","required_for":["requirements","design","implementation","verification","release"]},
+    {"path":"VERIFY.md","role":"verify","revision":"r29","status":"current","completeness":"skeleton","tier":"normal","depends_on":["TASKS.md"],"last_adopted_change":"CHG-029","required_for":["verification","release"]},
+    {"path":"RELEASE.md","role":"release","revision":"r30","status":"current","completeness":"skeleton","tier":"normal","depends_on":["VERIFY.md"],"last_adopted_change":"CHG-030","required_for":["release"]},
+    {"path":"ENV.md","role":"environment","revision":"r13","status":"current","completeness":"skeleton","tier":"normal","depends_on":[],"last_adopted_change":"CHG-013","required_for":["implementation","verification"]},
+    {"path":"MAP.md","role":"code_map","revision":"r20","status":"current","completeness":"skeleton","tier":"normal","depends_on":[],"last_adopted_change":"CHG-020","required_for":[]}
+  ]
+}

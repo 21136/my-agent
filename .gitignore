@@ -8,6 +8,15 @@ agent-core/data/
 
 # 敏感工作文件
 workspace/
+!workspace/
+workspace/*
+!workspace/test/
+workspace/test/*
+!workspace/test/*.md
+!workspace/test/.plan-agent/
+workspace/test/.plan-agent/*
+!workspace/test/.plan-agent/manifest.json
+!workspace/test/.plan-agent/changes.jsonl
 
 # Python
 __pycache__/

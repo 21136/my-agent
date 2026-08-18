@@ -148,6 +148,9 @@ export function mountUnifiedShell(
     executionStage: null,
     executionStageReason: "",
     executionStageBlockers: [],
+    executionStageMissing: [],
+    executionStageAffected: [],
+    executionStageDeferred: [],
     executionStageArtifacts: [],
     taskSnapshot: { lines: new Set(), lineTexts: new Map() },
     highlightChanges: false,
@@ -1340,7 +1343,7 @@ export function mountUnifiedShell(
     const notices = projectState.partnerNotices.join("\n");
     clearPendingAdopt();
 
-    if (/已撤回|无效提案/i.test(notices)) {
+    if (/已撤回|无效提案|提案已失效|刷新待采纳/i.test(notices)) {
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       if (projectState.mainFocus === "plan_review") {
         renderPlanReviewPane();
