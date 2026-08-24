@@ -836,6 +836,12 @@ class Agent:
         self.executor.session.project_root = self.session.meta.project_root
         self.executor.session.project_id = self.session.meta.project_id
         self.executor.session.project_plan_status = self.session.meta.project_plan_status
+        self.executor.session.project_workflow_stage = getattr(
+            self.session.meta, "project_workflow_stage", ""
+        )
+        self.executor.session.project_active_task_id = getattr(
+            self.session.meta, "project_active_task_id", ""
+        )
         self.executor.session.project_delivery_profile = get_delivery_profile(
             self.session.meta
         )
@@ -1087,6 +1093,7 @@ class Agent:
         segment_start_index: int,
         qa_soft_reminder: bool = False,
         recall_soft_reminder: bool = False,
+        retry_error_fingerprints: set[str] | None = None,
     ) -> ToolLoopSegmentResult:
         from context import (
             FIRST_COMPACT_USER_MESSAGE,
@@ -1107,6 +1114,7 @@ class Agent:
 
         tool_rounds = 0
         segment_retried = False
+        retry_error_fingerprints = retry_error_fingerprints if retry_error_fingerprints is not None else set()
         final_text = ""
         finish_reason: str | None = None
         reminder_injected = False
@@ -1363,6 +1371,23 @@ class Agent:
                     self.session.append_message(assistant_msg)
                 break
 
+            if response.tool_calls and not tools:
+                final_text = (
+                    "当前回合是只读对话，不能执行工具操作。"
+                    "如果你要开始实现，请明确说明动作并先绑定目标项目。"
+                )
+                self._emit_turn_event(
+                    {
+                        "type": "turn.notice",
+                        "level": "warn",
+                        "text": "只读回合已拦截模型工具调用。",
+                    }
+                )
+                self.session.append_message(
+                    {"role": "assistant", "content": final_text}
+                )
+                break
+
             tool_rounds += 1
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
@@ -1521,6 +1546,28 @@ class Agent:
                     error = result.error
                     error_text = error.message if error else str(result)
                     details = getattr(error, "details", None) or {}
+                    retry_fingerprint = _tool_retry_fingerprint(tool_name, arguments, result)
+                    if retry_fingerprint in retry_error_fingerprints:
+                        code = error.code if error else "unknown"
+                        final_text = (
+                            "工具调用未完成，已停止自动重试。\n"
+                            f"工具：{tool_name}\n"
+                            f"原因（{code}）：{error_text}"
+                        )
+                        self.session.append_message({"role": "assistant", "content": final_text})
+                        return ToolLoopSegmentResult(
+                            final_text=final_text,
+                            tool_rounds=tool_rounds,
+                            finish_reason="tool_error",
+                            exceeded=False,
+                            had_progress=segment_messages_show_progress(
+                                self.session.messages,
+                                segment_start_index,
+                            ),
+                            qa_soft_reminder_injected=reminder_injected,
+                            action_announce_nudge_injected=action_nudge_injected,
+                        )
+                    retry_error_fingerprints.add(retry_fingerprint)
                     received = details.get("received_keys", [])
                     hint_parts = [
                         f"[内核] 工具调用失败，请修正后重试（不消耗回合配额）：",
@@ -1670,6 +1717,7 @@ class Agent:
 
         total_tool_rounds = 0
         segment = 1
+        retry_error_fingerprints: set[str] = set()
         notices: list[str] = []
         final_text = ""
         finish_reason: str | None = None
@@ -1701,6 +1749,7 @@ class Agent:
                 model=model,
                 segment_start_index=segment_start_index,
                 qa_soft_reminder=qa_soft_reminder,
+                retry_error_fingerprints=retry_error_fingerprints,
             )
             total_tool_rounds += loop_result.tool_rounds
 
@@ -2467,6 +2516,32 @@ class Agent:
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
 
+        if intent == "requirements":
+            from llm_routing import resolve_model_id_for_role
+
+            self._emit_turn_event(
+                {
+                    "type": "turn.start",
+                    "intent": intent,
+                    "intent_label": intent_label(intent),
+                }
+            )
+            self.executor.begin_turn()
+            segment_start_index = len(self.session.messages)
+            loop_result = self._run_parent_tool_loop(
+                max_rounds=1,
+                tools=[],
+                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                segment_start_index=segment_start_index,
+            )
+            return self._finish_short_tool_loop(
+                loop_result=loop_result,
+                loop_max=1,
+                intent=intent,
+                spawn_explore_flag=False,
+                subagent_tool_rounds=0,
+            )
+
         from activity_router import apply_route_topics, infer_topic_scope
 
         scope = infer_topic_scope(user_text, paths=self.session.paths)
@@ -2769,6 +2844,22 @@ def _is_retryable(result: ToolResult) -> bool:
         # only retry if there's a close match available
         return bool(details.get("available_tools"))
     return False
+
+
+def _tool_retry_fingerprint(
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: ToolResult,
+) -> str:
+    """Build a stable in-turn key for one recoverable tool-argument failure."""
+    error = result.error
+    code = error.code if error else "unknown"
+    message = error.message if error else str(result)
+    try:
+        normalized = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        normalized = repr(arguments)
+    return "|".join((tool_name.strip(), normalized, str(code), str(message).strip()))
 
 
 def _tool_interrupt_kind(result: ToolResult) -> str | None:

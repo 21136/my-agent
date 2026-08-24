@@ -1,4 +1,4 @@
-import type {TerminalBlock} from '../types.js';
+import type {TerminalBlock, TerminalResult} from '../types.js';
 import {isEphemeralPlanNotice} from '../repl/committed-blocks.js';
 
 export const DEFAULT_ASSISTANT_NAME = '打工仔';
@@ -26,6 +26,7 @@ export type TerminalUiState = {
   planStatus?: string;
   /** Live activity for status bar (tool progress / waiting labels). */
   activityText?: string;
+  result?: TerminalResult;
   confirm?: {requestId: string; preview: string; allowApproveAll: boolean};
 };
 
@@ -45,8 +46,34 @@ export function createInitialState(overrides: Partial<TerminalUiState> = {}): Te
     activeToolStartedAt: overrides.activeToolStartedAt,
     planStatus: overrides.planStatus ?? '',
     activityText: overrides.activityText ?? '',
+    result: overrides.result,
     confirm: overrides.confirm,
   };
+}
+
+function classifyNotice(
+  text: string,
+  level: unknown,
+): {text: string; tone: 'warning' | 'error' | 'cancelled'; result?: TerminalResult} {
+  const normalized = text.trim();
+  const normalizedLevel = typeof level === 'string' ? level.toLowerCase() : '';
+  if (normalizedLevel === 'cancelled' || /^\(?cancelled\)?$/i.test(normalized)) {
+    return {
+      text: '已取消本轮执行',
+      tone: 'cancelled',
+      result: {kind: 'cancelled', text: '已取消本轮执行'},
+    };
+  }
+  if (normalizedLevel === 'error' || /^(?:llm )?error\s*:/i.test(normalized)) {
+    const reason = normalized.replace(/^(?:llm )?error\s*:\s*/i, '').trim();
+    const displayText = `失败 · ${reason || '执行失败'}`;
+    return {
+      text: displayText,
+      tone: 'error',
+      result: {kind: 'failed', text: displayText},
+    };
+  }
+  return {text: normalized, tone: 'warning'};
 }
 
 function dropEmptyTrailingThinking(blocks: TerminalBlock[]): TerminalBlock[] {
@@ -130,6 +157,7 @@ export function reduceState(
   let activeToolStartedAt = state.activeToolStartedAt;
   let planStatus = state.planStatus ?? '';
   let activityText = state.activityText ?? '';
+  let result = state.result;
   let confirm = state.confirm;
   let turns = turnCount;
   switch (event.type) {
@@ -149,6 +177,7 @@ export function reduceState(
       turnIndex = turns;
       assistantBuffer = '';
       activityText = '';
+      result = undefined;
       working = true;
       blocks = [...blocks, {kind: 'thinking', text: '', collapsed: false}];
       break;
@@ -183,16 +212,19 @@ export function reduceState(
     case 'notice': {
       const text = typeof event.text === 'string' ? event.text.trim() : '';
       if (text) {
+        const classification = classifyNotice(text, event.level);
         blocks = dropEmptyTrailingThinking(blocks);
         const ephemeral = isEphemeralPlanNotice(text);
         blocks = [
           ...blocks,
           {
             kind: 'notice',
-            text,
+            text: classification.text,
+            ...(classification.tone !== 'warning' ? {tone: classification.tone} : {}),
             ...(ephemeral ? {ephemeral: true, shownAt: Date.now()} : {}),
           },
         ];
+        if (classification.result) result = classification.result;
       }
       break;
     }
@@ -251,6 +283,7 @@ export function reduceState(
       turns = 0;
       turnIndex = 0;
       assistantBuffer = '';
+      result = undefined;
       working = false;
       break;
   }
@@ -270,6 +303,7 @@ export function reduceState(
       activeToolStartedAt,
       planStatus,
       activityText,
+      result,
       confirm,
     },
     turnCount: turns,

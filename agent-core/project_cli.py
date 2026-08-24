@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,12 +28,13 @@ from project_mode import (
     read_task_stats,
     run_acceptance_check,
     snapshot_plan_fingerprints,
+    organize_project_documents,
+    documentation_ready_for_design,
     utc_now_iso,
 )
-from router import TopicRoutingError, apply_confirmed_topics, registered_topic_ids
 from session import Session, utc_now_iso
 
-ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "confirm", "status", "verify", "discipline"]
+ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "organize", "confirm_design", "start_task", "confirm", "status", "verify", "discipline"]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
@@ -85,6 +87,13 @@ _PROJECT_VERBS = frozenset(
         "newthread",
         "thread",
         "确认",
+        "整理",
+        "文档",
+        "整理文档",
+        "开始整理文档",
+        "确认设计",
+        "设计确认",
+        "开始任务",
         "confirm",
         "状态",
         "status",
@@ -142,13 +151,22 @@ def _plausible_project_id_token(text: str) -> bool:
 
 
 def try_short_plan_confirm(session: Session, text: str, output_fn: OutputFn) -> bool:
-    """Map bare 「确认」/「开工」 to 项目 确认 when plan gate is open."""
+    """Map explicit project shortcuts without letting documentation start code work."""
     if session.meta.active_shell != "project":
         return False
     status = session.meta.project_plan_status or "draft"
     if status not in {"draft", "plan_dirty"}:
         return False
     normalized = text.strip().casefold().replace(" ", "")
+    if normalized in {"整理文档", "开始整理文档"}:
+        try:
+            message = organize_project_plan(session, session.paths)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return True
+        session.save()
+        output_fn(message)
+        return True
     if normalized not in _SHORT_PLAN_CONFIRM:
         return False
     try:
@@ -222,6 +240,14 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="new_thread")
     if verb in {"确认", "confirm"}:
         return ParsedProjectCommand(kind="confirm")
+    if verb in {"整理", "文档", "整理文档", "开始整理文档", "documentation", "organize"}:
+        return ParsedProjectCommand(kind="organize")
+    if verb in {"确认设计", "设计确认", "confirm-design", "design-confirm"}:
+        return ParsedProjectCommand(kind="confirm_design")
+    if verb in {"开始任务", "启动任务", "start-task", "implement"}:
+        if len(tokens) < 2:
+            raise ProjectCommandError("项目 开始任务 <T-ID>")
+        return ParsedProjectCommand(kind="start_task", project_id=tokens[1])
     if verb in {"状态", "status"}:
         return ParsedProjectCommand(kind="status")
     if verb in {"验收", "verify"}:
@@ -239,6 +265,8 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
 
 
 def _ensure_coding_topic(session: Session) -> None:
+    from router import TopicRoutingError, apply_confirmed_topics, registered_topic_ids
+
     if "coding" in session.meta.topics:
         return
     try:
@@ -270,6 +298,15 @@ def bind_project_session(
     session.meta.project_root = root
     session.meta.project_plan_status = plan_status
     if plan_status == "confirmed":
+        session.meta.project_workflow_stage = "implementation"
+    else:
+        core_docs = [project_dir(session.paths, pid) / name for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")]
+        session.meta.project_workflow_stage = (
+            "documentation"
+            if all(path.is_file() and "待填写" not in path.read_text(encoding="utf-8") for path in core_docs)
+            else "requirements"
+        )
+    if plan_status == "confirmed":
         session.meta.project_plan_confirmed_at = utc_now_iso()
     session.set_goal(build_project_goal(project_root=root, plan_status=plan_status), phase="S4")
     _ensure_coding_topic(session)
@@ -285,12 +322,18 @@ def confirm_project_plan(session: Session) -> str:
     pid = (session.meta.project_id or "").strip()
     if not root or not pid or session.meta.active_shell != "project":
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements")
+    if workflow_stage == "documentation":
+        raise ProjectModeError("文档整理尚未完成设计确认；当前不能开始写代码")
+    if workflow_stage == "design":
+        raise ProjectModeError("设计已确认；请使用「项目 开始任务 <T-ID>」授权实现批次")
 
     tasks_path = project_dir(session.paths, pid) / "TASKS.md"
     if not tasks_path.is_file():
         raise ProjectModeError(f"缺少 {root}/TASKS.md；请先让助手生成计划")
 
     session.meta.project_plan_status = "confirmed"
+    session.meta.project_workflow_stage = "implementation"
     session.meta.project_plan_confirmed_at = utc_now_iso()
     snapshot_plan_fingerprints(session, session.paths, pid)
     session.set_goal(
@@ -302,6 +345,69 @@ def confirm_project_plan(session: Session) -> str:
     return (
         f"计划已确认：{root}（任务 {stats.done}/{stats.total} 已完成）。可以开始写代码。"
     )
+
+
+def confirm_project_design(session: Session, paths: AgentPaths) -> str:
+    root = (session.meta.project_root or "").strip()
+    pid = (session.meta.project_id or "").strip()
+    if not root or not pid or session.meta.active_shell != "project":
+        raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    if getattr(session.meta, "project_workflow_stage", "requirements") != "documentation":
+        raise ProjectModeError("当前不在文档整理阶段，不能确认设计")
+    ready, missing = documentation_ready_for_design(paths, pid)
+    if not ready:
+        raise ProjectModeError(f"文档尚未达到设计确认标准：缺少 {', '.join(missing)}")
+    session.meta.project_workflow_stage = "design"
+    session.meta.project_plan_status = "draft"
+    session.meta.project_design_confirmed_at = utc_now_iso()
+    session.meta.project_active_task_id = ""
+    session.meta.updated_at = utc_now_iso()
+    session.save()
+    return f"设计已确认：{root}。当前进入 design；请选择一个任务，例如「项目 开始任务 T-001」。"
+
+
+def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str:
+    root = (session.meta.project_root or "").strip()
+    pid = (session.meta.project_id or "").strip()
+    normalized_task = task_id.strip().upper()
+    if not root or not pid or session.meta.active_shell != "project":
+        raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    if getattr(session.meta, "project_workflow_stage", "requirements") != "design":
+        raise ProjectModeError("必须先确认设计，再启动实现任务")
+    if not re.fullmatch(r"T-\d+(?:-\d+)*", normalized_task):
+        raise ProjectModeError("任务 ID 必须是 T-001 格式")
+    tasks_path = project_dir(paths, pid) / "TASKS.md"
+    if not tasks_path.is_file():
+        raise ProjectModeError(f"缺少 {root}/TASKS.md，无法启动实现任务")
+    tasks = tasks_path.read_text(encoding="utf-8")
+    if not re.search(rf"(?im)^\s*-\s*\[\s\]\s+.*\b{re.escape(normalized_task)}\b", tasks):
+        raise ProjectModeError(f"开放任务中不存在 {normalized_task}；只能启动当前队列中的未完成任务")
+    session.meta.project_workflow_stage = "implementation"
+    session.meta.project_plan_status = "confirmed"
+    session.meta.project_plan_confirmed_at = utc_now_iso()
+    session.meta.project_active_task_id = normalized_task
+    session.set_goal(build_project_goal(project_root=root, plan_status="confirmed"), phase="S4")
+    session.meta.updated_at = utc_now_iso()
+    session.save()
+    return f"已授权实现 {normalized_task}：仅限当前任务范围；完成后必须按 VERIFY.md 验证。"
+
+
+def organize_project_plan(session: Session, paths: AgentPaths) -> str:
+    root = (session.meta.project_root or "").strip()
+    pid = (session.meta.project_id or "").strip()
+    if not root or not pid or session.meta.active_shell != "project":
+        raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements")
+    if workflow_stage != "requirements":
+        raise ProjectModeError(f"当前阶段为 {workflow_stage}，不能重新开始文档整理")
+    result = organize_project_documents(paths, pid)
+    session.meta.project_workflow_stage = "documentation"
+    session.meta.project_plan_status = "draft"
+    session.meta.project_plan_confirmed_at = ""
+    session.set_goal(build_project_goal(project_root=root, plan_status="draft"), phase="S4")
+    session.meta.updated_at = utc_now_iso()
+    generated = ", ".join(result["generated"]) or "无（已有内容已保留）"
+    return f"文档整理已开始：{root}；生成/保留四个核心制品。新生成：{generated}。请确认设计后再进入实现。"
 
 
 def format_project_status(session: Session, paths: AgentPaths) -> str:
@@ -316,6 +422,7 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         f"项目：{pid}",
         f"根目录：{root}",
         f"计划：{status}",
+        f"阶段：{getattr(session.meta, 'project_workflow_stage', 'requirements')}",
         f"纪律：{session.meta.project_delivery_profile or 'solo'}",
         f"任务：{stats.done}/{stats.total} 已完成，{stats.open_count} 未勾",
     ]
@@ -420,6 +527,35 @@ def run_project_command(
             output_fn(f"error: {exc}")
             return ProjectCommandResult()
         session.save()
+        output_fn(message)
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "organize":
+        try:
+            message = organize_project_plan(session, paths)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        session.save()
+        output_fn(message)
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "confirm_design":
+        try:
+            message = confirm_project_design(session, paths)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        output_fn(message)
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "start_task":
+        assert command.project_id is not None
+        try:
+            message = start_project_task(session, paths, command.project_id)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
         output_fn(message)
         return ProjectCommandResult(meta_changed=True)
 

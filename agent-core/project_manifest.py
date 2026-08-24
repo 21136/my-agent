@@ -65,7 +65,10 @@ ARTIFACT_REQUIRED_FOR = {
     "MAP.md": (),
     "TASKS.archive.md": (),
 }
-_ID_RE = re.compile(r"\b(?:REQ|AC|UX|UC|SEQ|STATE|TD|API|ADR|NFR|T|V|REL|CHG|IT|S)-\d{3,}\b")
+_ID_RE = re.compile(
+    r"\b(?:REQ|AC|UX|UC|SEQ|STATE|TD|API|ADR|NFR|T|V|REL|CHG|IT|S)"
+    r"-(?:[A-Z0-9]+-)*\d{3,}\b"
+)
 _REVISION_RE = re.compile(r"^r(\d+)$")
 _HASH_RE = re.compile(r"^[a-f0-9]{64}$")
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -121,6 +124,12 @@ def _sha256(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _extract_ids(path: Path) -> list[str]:
+    if not path.is_file():
+        return []
+    return sorted(set(_ID_RE.findall(path.read_text(encoding="utf-8"))))
+
+
 def _artifact_entry(
     name: str,
     root: Path,
@@ -143,7 +152,7 @@ def _artifact_entry(
     digest = _sha256(root / name)
     if digest is not None:
         entry["content_sha256"] = digest
-        entry["ids"] = sorted(set(_ID_RE.findall((root / name).read_text(encoding="utf-8"))))
+        entry["ids"] = _extract_ids(root / name)
     return entry
 
 
@@ -492,20 +501,25 @@ def refresh_manifest(
     """Detect disk edits, retain revisions, and propagate freshness changes."""
     root = Path(project_root)
     changed: dict[str, str] = {}
+    metadata_changed = False
     for item in manifest.get("artifacts", []):
         if not isinstance(item, dict):
             continue
         name = str(item.get("path") or "")
         digest = _sha256(root / name)
         old_digest = item.get("content_sha256")
+        extracted_ids = _extract_ids(root / name) if digest is not None else []
         if digest == old_digest:
+            if digest is not None and item.get("ids") != extracted_ids:
+                item["ids"] = extracted_ids
+                metadata_changed = True
             continue
         if digest is None:
             item.pop("content_sha256", None)
             item.pop("ids", None)
         else:
             item["content_sha256"] = digest
-            item["ids"] = sorted(set(_ID_RE.findall((root / name).read_text(encoding="utf-8"))))
+            item["ids"] = extracted_ids
         changed[name] = (change_levels or {}).get(name, _default_external_level(name))
     for level in ("L1", "L2"):
         paths = [name for name, item_level in changed.items() if item_level.upper() == level]
@@ -513,12 +527,12 @@ def refresh_manifest(
             propagate_stale(manifest, paths, level=level)
     if evidence_changed:
         mark_evidence_stale(manifest)
-    if changed or evidence_changed:
+    if changed or evidence_changed or metadata_changed:
         manifest["updated_at"] = utc_now_iso()
     repaired = _repair_transitive_stale(manifest, root)
     if repaired:
         manifest["updated_at"] = utc_now_iso()
-    return bool(changed or evidence_changed or repaired)
+    return bool(changed or evidence_changed or metadata_changed or repaired)
 
 
 def refresh_project_manifest(
@@ -572,7 +586,7 @@ def adopt_manifest_change(
             item.pop("ids", None)
         else:
             item["content_sha256"] = digest
-            item["ids"] = sorted(set(_ID_RE.findall((root / str(item["path"])).read_text(encoding="utf-8"))))
+            item["ids"] = _extract_ids(root / str(item["path"]))
         item["last_adopted_change"] = change_id
     manifest["manifest_revision"] = next_revision
     propagate_stale(manifest, names, level=level)
@@ -624,9 +638,9 @@ def lint_project_content(
     checks["G1_non_sequence"] = bool(re.search(r"```mermaid\s*(?!sequenceDiagram)[\s\S]*?```", texts["DESIGN.md"], re.IGNORECASE))
     checks["G2_sequence"] = bool(re.search(r"```mermaid\s*sequenceDiagram\b[\s\S]*?```", texts["TECH-DESIGN.md"] + texts["DESIGN.md"], re.IGNORECASE))
     checks["G3_state"] = bool(re.search(r"```mermaid\s*stateDiagram(?:-v2)?\b[\s\S]*?```", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE))
-    checks["G4_state_condition"] = bool(re.search(r"\bSTATE-\d{3,}\b|\b(when|if|条件|状态)\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE))
-    checks["G5_task_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD)-\d{3,}\b", texts["TASKS.md"], re.IGNORECASE))
-    checks["G6_verify_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD|AC|REQ)-\d{3,}\b", texts["VERIFY.md"], re.IGNORECASE))
+    checks["G4_state_condition"] = bool(re.search(r"\bSTATE-(?:[A-Z0-9]+-)*\d{3,}\b|\b(when|if|条件|状态)\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE))
+    checks["G5_task_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD)-(?:[A-Z0-9]+-)*\d{3,}\b", texts["TASKS.md"], re.IGNORECASE))
+    checks["G6_verify_reference"] = bool(re.search(r"\b(?:SEQ|UX|UC|TD|AC|REQ)-(?:[A-Z0-9]+-)*\d{3,}\b", texts["VERIFY.md"], re.IGNORECASE))
     if scope != "small":
         for key, label in (
             ("G1_non_sequence", "G1"),
@@ -636,7 +650,7 @@ def lint_project_content(
         ):
             if not checks[key]:
                 missing.append(label)
-        if re.search(r"\bSTATE-\d{3,}\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE) and not checks["G3_state"]:
+        if re.search(r"\bSTATE-(?:[A-Z0-9]+-)*\d{3,}\b", texts["DESIGN.md"] + texts["TECH-DESIGN.md"], re.IGNORECASE) and not checks["G3_state"]:
             missing.append("G3")
     return {
         "ok": not missing,

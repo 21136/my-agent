@@ -213,6 +213,32 @@ test('IT-593: assistant.done is idempotent and explicit text wins', () => {
   ]);
 });
 
+test('result notices distinguish cancellation from failure', () => {
+  const cancelled = createEventReducer();
+  cancelled.reduce({type: 'notice', text: '(cancelled)'});
+  assert.deepEqual(cancelled.getState().result, {
+    kind: 'cancelled',
+    text: '已取消本轮执行',
+  });
+  assert.deepEqual(cancelled.getState().blocks[0], {
+    kind: 'notice',
+    text: '已取消本轮执行',
+    tone: 'cancelled',
+  });
+
+  const failed = createEventReducer();
+  failed.reduce({type: 'notice', level: 'error', text: 'provider unavailable'});
+  assert.deepEqual(failed.getState().result, {
+    kind: 'failed',
+    text: '失败 · provider unavailable',
+  });
+  assert.deepEqual(failed.getState().blocks[0], {
+    kind: 'notice',
+    text: '失败 · provider unavailable',
+    tone: 'error',
+  });
+});
+
 test('IT-593: markdown subset exposes structured Ink-safe blocks', () => {
   const blocks = parseMarkdown('# Title\n\n**bold** and `code`\n\n- one\n- two\n\n> quoted\n\n```ts\nconst x = 1;\n```');
   assert.equal(blocks[0]?.kind, 'heading');

@@ -90,6 +90,19 @@ class ProjectManifestTests(unittest.TestCase):
         self.assertEqual(scope["revision"], original_revision)
         self.assertEqual(scope["status"], "stale")
 
+    def test_it5912_extracts_compound_ids_and_repairs_legacy_manifest(self) -> None:
+        (self.root / "SCOPE.md").write_text(
+            "# scope\n\n## REQ-MUSIC-001\n\n### AC-MUSIC-001\n",
+            encoding="utf-8",
+        )
+        manifest = bootstrap_manifest(self.root, "demo")
+        scope = next(item for item in manifest["artifacts"] if item["path"] == "SCOPE.md")
+        self.assertEqual(scope["ids"], ["AC-MUSIC-001", "REQ-MUSIC-001"])
+
+        scope["ids"] = []
+        self.assertTrue(refresh_manifest(manifest, self.root))
+        self.assertEqual(scope["ids"], ["AC-MUSIC-001", "REQ-MUSIC-001"])
+
     def test_it5811_evidence_stale_does_not_change_revision(self) -> None:
         manifest = bootstrap_manifest(self.root, "demo")
         revision = next(item for item in manifest["artifacts"] if item["path"] == "VERIFY.md")["revision"]

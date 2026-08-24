@@ -1,6 +1,8 @@
 # my-agent
 
-个人用、可自我进化的**本地 Agent**。Git 为真源；`evolve/` 存 prompt / memory / tool；`data/` 存会话与审计（不进 Git）。
+面向真实软件项目的**本地生产工具**。项目文档、代码和验证结果是交付真源；`evolve/` 与 `data/` 是内部运行能力，不是当前产品主线。
+
+**产品决策真源**：[docs/PRODUCTION-PROJECT-MVP.md](docs/PRODUCTION-PROJECT-MVP.md)（先读；先写文档，再动手）
 
 **进度真源**：[docs/MAP.md](docs/MAP.md) §2 + [docs/TASKS.md](docs/TASKS.md)（勿以本 README 判断代码是否已落地）
 
@@ -26,6 +28,7 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 | 项 | 说明 |
 |----|------|
 | **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal 冻结维护 |
+| **当前产品基线** | [PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md) — 四个核心制品 · 三个硬门槛 |
 | **交付模型** | [LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3 · Pack 1245 M0 done |
 | **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立 `pet` 窗 |
 | **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |

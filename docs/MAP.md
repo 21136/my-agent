@@ -1,9 +1,9 @@
 # my-agent 项目地图（MAP）
 
-> 版本 **2026-08-13** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
+> 版本 **2026-08-19** · **新会话先读 `PRODUCTION-PROJECT-MVP.md`，再读本文 + `TASKS.md`**（含 **DOC-05 废止债**）
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
 > **产品定调**：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) — Desktop **主战场**（project · 闸门+证据流程轨）· Terminal **冻结维护**（独立入口）  
-> **当前焦点**：Desktop **Phase 58b** 文档制品链（T-5810～T-5819 done · T-5818 done · next S-581）· [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md)  
+> **当前焦点**：先以 `workspace/test` 跑通生产项目 MVP；Phase 58b 七文件方案暂停，详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -11,7 +11,7 @@
 
 ## 1. 一句话
 
-个人用、可进化的本地 Agent：**Git 为真源**，LLM 只能通过 **6 个 Builtin + `run_evolved`** 动手；写路径默认 **agent root**（deny-list 精确拦截）；进化产物在 `evolve/`（prompt / memory / tool），**M1 不做 skill**。
+面向真实软件项目的本地生产工具：以 **`PROJECT.md`、`DESIGN.md`、`TASKS.md`、`VERIFY.md`** 组织需求、设计、实现和验证；Git 为真源，LLM 只能通过注册工具动手。个人进化层和 Terminal 是内部/维护能力，不是当前产品主线。
 
 ---
 
@@ -69,7 +69,7 @@
 | **Phase 51～55** | **Pack 1/2/4/5/6**（收口 · 路由 · phase_key · 语义搜 · 编排） | **M0 done**（[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md)） |
 | **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5** · auto plan-execute） | **legacy M1 done · Ink 阶段 0～5 done · T-5730～5734 done**（TERMINAL v0.3.2 · **frozen** · S-576 手工待做） |
 | **Phase 58** | **Desktop 教科书流程**（产品定调 · 流程轨五段 · 阶段计划卡） | **M1 done**（[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · T-5801～5808 · S-580 todo） |
-| **Phase 58b** | **文档制品链**（七文件 · manifest · stale · CHG ledger） | **T-5810～T-5819 done · T-5818 done · next S-581**（[DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) · T-5810～5819） |
+| **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
 | **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |

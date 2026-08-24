@@ -30,6 +30,65 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertGreaterEqual(project_api.count('"ids": list(item.get("ids") or [])'), 1)
         self.assertGreaterEqual(plan_agent.count('"ids": list(item.get("ids") or [])'), 1)
 
+    def test_it5910a_frontend_contract_uses_shared_stage_status(self) -> None:
+        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
+            encoding="utf-8"
+        )
+        ws = (ROOT / "desktop" / "src" / "api" / "ws.ts").read_text(encoding="utf-8")
+        self.assertIn("executionStageStatus", panel)
+        self.assertIn("executionStageWarnings", panel)
+        self.assertIn("isDocumentationBatch", panel)
+        self.assertIn("四个核心制品按一个批次处理", panel)
+        self.assertIn("execution_stage_status", ws)
+        self.assertIn("execution_stage_warnings", ws)
+        self.assertIn("没有发现阻塞文档", panel)
+
+    def test_it5911_plan_review_requires_actionable_suggestions(self) -> None:
+        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("!busy && actionableCount > 0", panel)
+        self.assertNotIn("/待采纳|待审阅/.test(notices.join", panel)
+
+    def test_it5913_mermaid_uses_shared_render_and_error_fallback_contract(self) -> None:
+        markdown = (ROOT / "desktop" / "src" / "markdown.ts").read_text(encoding="utf-8")
+        unified = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
+            encoding="utf-8"
+        )
+        project_panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
+            encoding="utf-8"
+        )
+        pet = (ROOT / "desktop" / "src" / "shells" / "pet" / "index.ts").read_text(encoding="utf-8")
+        self.assertIn("```mermaid", markdown)
+        self.assertIn("mermaid-placeholder", markdown)
+        self.assertIn("mermaid.render", markdown)
+        self.assertIn("Mermaid 图表渲染失败，已保留源代码", markdown)
+        self.assertIn("void hydrateMermaid(documentEl)", unified)
+        self.assertIn("void hydrateMermaid(chatEl)", unified)
+        self.assertIn("void hydrateMermaid(els.overlayBody)", project_panel)
+        self.assertIn("void hydrateMermaid(chatEl)", pet)
+
+    def test_it5914_documents_use_main_focus_instead_of_sidebar_body(self) -> None:
+        index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
+            encoding="utf-8"
+        )
+        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
+            encoding="utf-8"
+        )
+        css = (ROOT / "desktop" / "src" / "shells" / "unified" / "unified.css").read_text(
+            encoding="utf-8"
+        )
+        plan_review = (ROOT / "desktop" / "src" / "shells" / "unified" / "plan-review.ts").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"document"', plan_review)
+        self.assertIn('setMainFocus("document")', index)
+        self.assertIn('data-action="document-back"', index)
+        self.assertIn('data-action="document-list"', index)
+        self.assertIn('主区阅读', panel)
+        self.assertIn("unified-document-content table", css)
+        self.assertIn("unified-document-content .mermaid-placeholder", css)
+
     def test_it5820_review_button_has_visible_focus_transition(self) -> None:
         index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
             encoding="utf-8"

@@ -4,7 +4,12 @@
 - 项目执行按一停一项；用户回复「继续」后再开始下一项。
 
 ## Phase 1：工程初始化与基础设施
-- [ ] T-001 初始化 Spring Cloud Alibaba 父工程（多模块 Maven，版本锁定）
+- [x] T-001 初始化 Music Dreamer 工程骨架（多模块 Maven，版本锁定）
+  req: REQ-001
+  ac: AC-001
+  design: UX-001, TD-001
+  verify: V-000
+  evidence: VERIFY.md V-000：scaffold dry-run 与实际生成均 exit 0
 - [ ] T-002 接入 Nacos 注册/配置中心并输出 bootstrap.yml 约定
 - [ ] T-003 建立 API Gateway 统一入口与基础路由
 - [ ] T-004 初始化 Vue3 前端工程、路由、Pinia、Axios 封装

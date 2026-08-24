@@ -1,6 +1,7 @@
 import { marked } from "marked";
 import { markedHighlight } from "marked-highlight";
 import hljs from "highlight.js";
+import mermaid from "mermaid";
 import "highlight.js/styles/github.css";
 
 marked.use(
@@ -20,6 +21,35 @@ marked.setOptions({
   breaks: true,
 });
 
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: "strict",
+});
+
+let mermaidRenderSequence = 0;
+
+function encodeMermaidSource(source: string): string {
+  return encodeURIComponent(source.trim());
+}
+
+function decodeMermaidSource(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return "";
+  }
+}
+
+function replaceMermaidBlocks(text: string): string {
+  return text.replace(
+    /```mermaid[ \t]*\r?\n([\s\S]*?)\r?\n```/gi,
+    (_match, source: string) => {
+      const encoded = encodeMermaidSource(source);
+      return `<div class="mermaid-placeholder" data-mermaid-source="${encoded}"><span>图表渲染中…</span></div>`;
+    },
+  );
+}
+
 export function renderMarkdown(text: string): string {
   if (!text.trim()) return "";
   let cleaned = text.trimEnd();
@@ -32,5 +62,47 @@ export function renderMarkdown(text: string): string {
   for (const re of trailingMarkers) {
     cleaned = cleaned.replace(re, "").trimEnd();
   }
-  return marked.parse(cleaned, { async: false }) as string;
+  return marked.parse(replaceMermaidBlocks(cleaned), { async: false }) as string;
+}
+
+export async function hydrateMermaid(root: ParentNode): Promise<void> {
+  const placeholders = Array.from(
+    root.querySelectorAll<HTMLElement>(".mermaid-placeholder:not([data-mermaid-rendered])"),
+  );
+  await Promise.all(
+    placeholders.map(async (placeholder) => {
+      const source = decodeMermaidSource(placeholder.dataset.mermaidSource || "");
+      if (!source) {
+        placeholder.dataset.mermaidRendered = "error";
+        placeholder.classList.add("mermaid-error");
+        placeholder.textContent = "Mermaid 图表为空";
+        return;
+      }
+      placeholder.dataset.mermaidRendered = "pending";
+      try {
+        const id = `mermaid-diagram-${mermaidRenderSequence++}`;
+        const result = await mermaid.render(id, source);
+        placeholder.classList.add("mermaid-diagram");
+        placeholder.replaceChildren();
+        placeholder.insertAdjacentHTML("afterbegin", result.svg);
+        result.bindFunctions?.(placeholder);
+        placeholder.dataset.mermaidRendered = "ok";
+      } catch (error) {
+        placeholder.classList.add("mermaid-error");
+        placeholder.replaceChildren();
+        const label = document.createElement("div");
+        label.className = "mermaid-error-title";
+        label.textContent = "Mermaid 图表渲染失败，已保留源代码";
+        const detail = document.createElement("div");
+        detail.className = "mermaid-error-detail";
+        detail.textContent = error instanceof Error ? error.message : String(error);
+        const sourceBlock = document.createElement("pre");
+        const sourceCode = document.createElement("code");
+        sourceCode.textContent = source;
+        sourceBlock.appendChild(sourceCode);
+        placeholder.append(label, detail, sourceBlock);
+        placeholder.dataset.mermaidRendered = "error";
+      }
+    }),
+  );
 }

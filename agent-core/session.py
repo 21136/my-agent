@@ -45,6 +45,18 @@ VALID_SHELLS = frozenset({"grow", "daily", "govern", "project", "unified"})
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
+ProjectWorkflowStage = Literal[
+    "requirements",
+    "documentation",
+    "design",
+    "implementation",
+    "verification",
+    "release",
+]
+VALID_PROJECT_WORKFLOW_STAGES = frozenset(
+    {"requirements", "documentation", "design", "implementation", "verification", "release"}
+)
+
 ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
@@ -130,6 +142,9 @@ class SessionMeta:
     project_root: str = ""
     project_id: str = ""
     project_plan_status: PlanStatus = ""
+    project_workflow_stage: ProjectWorkflowStage = "requirements"
+    project_design_confirmed_at: str = ""
+    project_active_task_id: str = ""
     project_plan_confirmed_at: str = ""
     project_scope_confirmed_at: str = ""
     project_phase_fingerprint: str = ""
@@ -161,6 +176,9 @@ class SessionMeta:
             "project_root": self.project_root,
             "project_id": self.project_id,
             "project_plan_status": self.project_plan_status,
+            "project_workflow_stage": self.project_workflow_stage,
+            "project_design_confirmed_at": self.project_design_confirmed_at,
+            "project_active_task_id": self.project_active_task_id,
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
             "project_scope_confirmed_at": self.project_scope_confirmed_at,
             "project_phase_fingerprint": self.project_phase_fingerprint,
@@ -220,6 +238,20 @@ class SessionMeta:
         project_plan_status: PlanStatus = (
             plan_raw if plan_raw in VALID_PLAN_STATUSES else ""
         )
+
+        workflow_stage_raw = payload.get("project_workflow_stage", "requirements")
+        project_workflow_stage: ProjectWorkflowStage = (
+            workflow_stage_raw
+            if workflow_stage_raw in VALID_PROJECT_WORKFLOW_STAGES
+            else "requirements"
+        )
+
+        design_confirmed_at = payload.get("project_design_confirmed_at", "")
+        if not isinstance(design_confirmed_at, str):
+            design_confirmed_at = ""
+        active_task_id = payload.get("project_active_task_id", "")
+        if not isinstance(active_task_id, str):
+            active_task_id = ""
 
         confirmed_at = payload.get("project_plan_confirmed_at", "")
         if not isinstance(confirmed_at, str):
@@ -283,6 +315,9 @@ class SessionMeta:
             project_root=project_root.strip(),
             project_id=project_id.strip(),
             project_plan_status=project_plan_status,
+            project_workflow_stage=project_workflow_stage,
+            project_design_confirmed_at=design_confirmed_at,
+            project_active_task_id=active_task_id,
             project_plan_confirmed_at=confirmed_at,
             project_scope_confirmed_at=scope_confirmed_at,
             project_phase_fingerprint=phase_fp,

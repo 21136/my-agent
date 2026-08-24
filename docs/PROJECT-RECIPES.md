@@ -1,5 +1,7 @@
 # 项目配方脚手架（PROJECT-RECIPES）
 
+> **当前执行基线：** 配方只负责生成可运行项目骨架，不要求生成或补齐七个研发文档。项目文档遵循 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品；本文中关于七文件制品链的内容属于历史设计，暂不作为硬门槛。
+
 > 版本 **0.2.1** · 2026-08-15 · **状态：M0+M1+M2 done · T-4307 done · T-5831 文档已决**  
 > Phase **43** · 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) §0c · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [SHELL-CHANNEL.md](./SHELL-CHANNEL.md) · [TOOLS.md](./TOOLS.md)  
 > 触发：用户盘点——从零建项目无配方；`scaffold_demo` 仅为 `write_evolve` 演示目录，非项目脚手架。

@@ -1,5 +1,7 @@
 # Desktop 教科书流程（产品定调）
 
+> **当前执行基线：** 请先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)。本文保留五段流程的背景设计，但不再单独增加文档数量或阶段 Gate；项目 MVP 只执行四个核心制品和三个硬门槛。
+
 > 版本 **0.1.9** · 2026-08-14  
 > **状态**：**M0 文档已签 · M1 待实施**（流程轨 UI / 配方 CI / §6.3 边角 · 见 §6.0）  
 > 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) · [UX-POLISH.md](./UX-POLISH.md) UX-026 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) · [TASKS.md](./TASKS.md) Phase 58

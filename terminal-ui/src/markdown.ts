@@ -1,4 +1,5 @@
 import {marked, type Token, type Tokens} from 'marked';
+import {expandWrappedLines} from './render/display-text.js';
 
 export type MarkdownBlock =
   | {kind: 'heading'; depth: number; text: string}
@@ -94,6 +95,40 @@ export function parseMarkdown(text: string): MarkdownBlock[] {
   if (!text.trim()) return [];
   const tokens = marked.lexer(text.trimEnd(), MARKDOWN_OPTIONS);
   return blockTokens(tokens);
+}
+
+function isFenceLine(line: string): boolean {
+  return /^\s*```/.test(line);
+}
+
+export function restoreClippedMarkdownFence(
+  source: string,
+  clipped: string,
+  columns: number,
+  skipRows: number,
+): string {
+  if (!clipped || skipRows <= 0) return clipped;
+
+  const sourceLines = source.split('\n');
+  let sourceIndex = 0;
+  let rows = 0;
+  while (sourceIndex < sourceLines.length && rows < skipRows) {
+    const lineRows = expandWrappedLines(sourceLines[sourceIndex] ?? '', columns).length;
+    if (rows + lineRows > skipRows) break;
+    rows += lineRows;
+    sourceIndex += 1;
+  }
+
+  const prefixLines = sourceLines.slice(0, sourceIndex);
+  const fenceLines = prefixLines.filter(isFenceLine);
+  if (fenceLines.length % 2 === 0) return clipped;
+
+  const opening = [...prefixLines].reverse().find(isFenceLine) ?? '```';
+  const language = opening.trim().slice(3).trim();
+  const lines = clipped.split('\n');
+  const inheritedOpening = `\`\`\`${language}`.trimEnd();
+  const hasClosingFence = lines.some(isFenceLine);
+  return [inheritedOpening, ...lines, ...(hasClosingFence ? [] : ['```'])].join('\n');
 }
 
 export function markdownText(block: MarkdownBlock): string {

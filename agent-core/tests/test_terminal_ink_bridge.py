@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 import unittest
@@ -14,6 +15,7 @@ from terminal_ink_bridge import (
     InkConfirmResponse,
     InkInputLine,
     TerminalInkBridge,
+    TerminalInkConsole,
     resolve_cli_entry,
     translate_agent_event_to_ink,
 )
@@ -84,6 +86,30 @@ class TerminalInkBridgeStage3Tests(unittest.TestCase):
             [{'type': 'transcript.clear'}],
         )
 
+    def test_ink_console_bind_context_refreshes_child_session(self):
+        bridge = mock.Mock()
+        console = TerminalInkConsole(
+            sink=mock.Mock(),
+            bridge=bridge,
+            session=mock.sentinel.old_session,
+            paths=mock.sentinel.old_paths,
+            scope_fields=mock.sentinel.old_scope,
+        )
+        session = mock.sentinel.new_session
+        paths = mock.sentinel.new_paths
+        scope_fields = mock.sentinel.new_scope
+
+        console.bind_context(session, paths, scope_fields)
+
+        self.assertIs(console.session, session)
+        self.assertIs(console.paths, paths)
+        self.assertIs(console.scope_fields, scope_fields)
+        bridge.emit_session_init.assert_called_once_with(
+            session=session,
+            scope_fields=scope_fields,
+            resume=True,
+        )
+
     def test_reasoning_delta_translation(self):
         with mock.patch.dict(os.environ, {"MY_AGENT_TERMINAL_REASONING": "1"}, clear=False):
             self.assertEqual(
@@ -112,6 +138,23 @@ class TerminalInkBridgeStage3Tests(unittest.TestCase):
             translate_agent_event_to_ink({"type": "llm.pending"}),
             [{"type": "activity.update", "text": "等待模型响应…"}],
         )
+
+    def test_error_translation_preserves_failure_level(self):
+        self.assertEqual(
+            translate_agent_event_to_ink({"type": "error", "message": "provider down"}),
+            [{"type": "notice", "level": "error", "text": "provider down"}],
+        )
+
+    def test_cancel_input_is_dispatched_without_blocking_turn_reader(self):
+        bridge = TerminalInkBridge(paths=mock.Mock())
+        bridge._stdout = io.StringIO('{"type":"turn.cancel"}\n')
+        listener = mock.Mock()
+        bridge.cancel_listener = listener
+
+        bridge._read_inputs()
+
+        listener.assert_called_once_with()
+        self.assertTrue(bridge._cancel_requested.is_set())
 
     def test_wait_confirm_skips_stale_response(self):
         bridge = TerminalInkBridge(paths=mock.Mock())

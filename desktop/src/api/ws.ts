@@ -172,10 +172,17 @@ export type ServerEvent =
       review_verdict?: string | null;
       review_blockers_count?: number;
       review_progress_blocked?: boolean;
-      execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
+      workflow_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
+      needs_documentation?: boolean;
+      needs_design_confirm?: boolean;
+      design_confirmed_at?: string | null;
+      active_task_id?: string | null;
+      execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
+      execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
       execution_stage_reason?: string;
       execution_stage_blockers?: string[];
       execution_stage_missing?: string[];
+      execution_stage_warnings?: string[];
       execution_stage_affected?: string[];
       execution_stage_deferred?: string[];
       content_lint?: Record<string, unknown> | null;
@@ -247,15 +254,22 @@ export type ServerEvent =
       degradation_level: string;
       degradation_label: string;
       warnings: string[];
+      operational_notices?: string[];
       auto_fix_actions: string[];
       partner_notices?: string[];
       plan_transcript_len?: number;
       change_log: PlanChangeItem[];
       change_timeline?: ChangeLedgerItem[];
-      execution_stage?: "requirements" | "design" | "implementation" | "verification" | "release";
+      workflow_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
+      needs_documentation?: boolean;
+      needs_design_confirm?: boolean;
+      active_task_id?: string | null;
+      execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
+      execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
       execution_stage_reason?: string;
       execution_stage_blockers?: string[];
       execution_stage_missing?: string[];
+      execution_stage_warnings?: string[];
       execution_stage_affected?: string[];
       execution_stage_deferred?: string[];
       content_lint?: Record<string, unknown> | null;
@@ -726,6 +740,10 @@ export class AgentWsClient {
     this.send({ type: "project.task.toggle", line, done });
   }
 
+  startProjectTask(taskId: string): void {
+    this.send({ type: "project.task.start", task_id: taskId });
+  }
+
   // project.plan.* convenience methods
   sendPlanMessage(payload: Record<string, unknown>): void {
     this.send(payload);
@@ -801,6 +819,10 @@ export class AgentWsClient {
 
   confirmProjectScope(): void {
     this.send({ type: "project.scope.confirm" });
+  }
+
+  confirmProjectDesign(): void {
+    this.send({ type: "project.design.confirm" });
   }
 
   acceptProjectRelease(): void {

@@ -169,6 +169,7 @@ class TerminalRepl(ConversationRepl):
                 resume=True,
             )
             repl._ink_bridge = bridge
+            bridge.cancel_listener = repl._handle_ink_cancel
             repl._tty_reader = None
             repl.terminal_console = console
             repl.output_fn = console.output_fn
@@ -292,6 +293,11 @@ class TerminalRepl(ConversationRepl):
         self._ink_pending_confirm = None
         resolver(choice)
         bridge.emit_confirm_done(request_id=request_id, choice=choice)
+
+    def _handle_ink_cancel(self) -> None:
+        guard = self._turn_cancel_guard
+        if guard is not None and guard.request_cancel():
+            self.output_fn("(cancelling turn…)")
 
     def _run_terminal_loop(self) -> int:
         return self._run_terminal_loop_legacy()

@@ -615,6 +615,10 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
         lines.append(
             "turn_intent: recall — 根据上文直接回顾；父循环不调工具（T-905）。"
         )
+    elif session.turn_intent == "requirements":
+        lines.append(
+            "turn_intent: requirements — 当前是需求输入；只做归纳回答，不调用工具、不写盘、不自动探索。"
+        )
     elif session.turn_intent in {"execute", "research"}:
         lines.append(
             f"turn_intent: {session.turn_intent} — 深调研应由子代理完成；可说 `探索 …` 或等待自动 explore。"
@@ -1291,6 +1295,8 @@ def build_system_prompt(
                 open_tasks_slice=open_slice or None,
                 delivery_profile=profile,
                 milestone_review_suggested=milestone_key,
+                workflow_stage=getattr(session.meta, "project_workflow_stage", ""),
+                active_task_id=getattr(session.meta, "project_active_task_id", "") or None,
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

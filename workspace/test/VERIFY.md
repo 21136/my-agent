@@ -1,9 +1,10 @@
 # Music Dreamer 悦享音乐 · 验证矩阵
 
-> 状态：计划态。所有结果/证据均为待执行/未记录，不虚构已通过结果。
+> 状态：首批工程骨架验证通过；其余业务验收仍待执行。
 
 | 验证编号 | 对应需求/任务 | 验证方法 | 预期结果 | 结果 | 证据 |
 |---|---|---|---|---|---|
+| V-000 | REQ-001 / AC-001 / T-001 | scaffold_music_dreamer dry-run 后实际生成 | dry-run 只返回文件清单；实际生成成功，父工程和服务边界文件存在 | 通过 | `.venv\\Scripts\\python.exe` 驱动 `run_command`；dry-run/实际均 exit 0；生成 `workspace/test/.acceptance/music-dreamer-skeleton` 共 15 个文件 |
 | V-001 | AC-001 / T-013 | GET /recommend/songs | 返回至少 10 条推荐且字段完整 | 待执行 | 未记录 |
 | V-002 | AC-002 / T-014 | 收藏与歌单接口+前端 | 收藏状态和歌单顺序正确 | 待执行 | 未记录 |
 | V-003 | AC-003 / T-015,T-012 | 播放历史接口+DB | 历史写入、查询、清空持久化生效 | 待执行 | 未记录 |

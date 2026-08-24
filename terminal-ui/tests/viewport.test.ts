@@ -9,6 +9,8 @@ import {
 } from '../src/render/display-text.js';
 import {
   getViewportBlockEntries,
+  reviewNewOutputRows,
+  transcriptFooterRows,
   transcriptRowBudget,
 } from '../src/perf/virtual-list.js';
 import type {TerminalBlock} from '../src/types.js';
@@ -55,6 +57,23 @@ test('viewport keeps the newest blocks when transcript exceeds budget', () => {
   assert.ok(!entries.some((entry) => entry.index === 0));
 });
 
+test('viewport clips the top of an oversized newest block so the footer stays visible', () => {
+  const blocks: TerminalBlock[] = [
+    {
+      kind: 'assistant',
+      name: '打工仔',
+      body: Array.from({length: 30}, (_, index) => `line-${index + 1}`).join('\n'),
+      turnIndex: 1,
+    },
+  ];
+  const {entries, clippedTop, clippedBottom} = getViewportBlockEntries(blocks, 5, 80);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.skipRows, 27);
+  assert.equal(entries[0]?.maxRows, 5);
+  assert.equal(clippedTop, true);
+  assert.equal(clippedBottom, false);
+});
+
 test('sliceTextByWrappedRows exposes middle of a long assistant reply', () => {
   const body = Array.from({length: 30}, (_, index) => `line-${index + 1}`).join('\n');
   const middle = sliceTextByWrappedRows(body, 80, 10, 5);
@@ -83,4 +102,16 @@ test('viewport scrollUpRows reveals older transcript blocks', () => {
 test('transcriptRowBudget reserves footer space', () => {
   assert.ok(transcriptRowBudget(24, true) < 24);
   assert.ok(transcriptRowBudget(24, false) < transcriptRowBudget(40, false));
+});
+
+test('transcriptFooterRows accounts for working and review composer hints', () => {
+  assert.equal(transcriptFooterRows(false, false, false), 4);
+  assert.equal(transcriptFooterRows(true, false, false), 5);
+  assert.equal(transcriptFooterRows(true, false, true), 6);
+  assert.equal(transcriptFooterRows(false, true, true), 5);
+});
+
+test('review output count never goes below zero', () => {
+  assert.equal(reviewNewOutputRows(18, 10), 8);
+  assert.equal(reviewNewOutputRows(8, 10), 0);
 });

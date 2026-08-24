@@ -1,13 +1,125 @@
 # 任务清单（TASKS）
 
-> 版本 0.1.4 · 2026-08-15 · 细分到每个 task，**先文档评审再动手**  
-> **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Phase 58b** — T-5810～T-5819、T-5818 done · **T-5831 doc done** · 下一步 **T-5832 编码** + **S-581**  
+> 版本 0.2.0 · 2026-08-19 · 细分到每个 task，**先写文档，再动手**
+> **新会话**：先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再读 [MAP.md](./MAP.md)。
+> **当前焦点**：以 `workspace/test` 为试点，使用四个核心制品跑通一个真实功能闭环。
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer` | **`superseded`** | **`cancelled`** | **`wontfix`**  
 **依赖**：必须先完成的 task id
+
+## 产品基线
+
+当前任务必须服从 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)：四个核心制品（`PROJECT.md`、`DESIGN.md`、`TASKS.md`、`VERIFY.md`）和三个硬门槛（开始编码、任务完成、版本发布）。
+
+Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid 硬门槛暂停，不得作为新任务的前置条件。
+
+### 生产项目 MVP：需求输入闸门（先文档，后编码）
+
+> 设计基线：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §5.1–§5.2。T-5901、T-5904、T-5905 已落地，后续阶段按授权继续实现。
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5901 | 需求输入默认只读，不自动进入工具执行 | 意图分类/项目边界设计；未绑定项目的执行拒绝规则 | 粘贴项目简介只得到需求归纳，不产生工具调用或写入 | done |
+| T-5902 | 明确执行授权与项目绑定条件 | 执行前置条件与确认规则 | 无明确动作、无项目绑定或缺少前置制品时停止并说明原因 | done |
+| T-5903 | 工具失败自动修正与熔断 | 参数错误一次修正、重复失败停止、失败结果准确展示 | schema 错误不盲试；失败后不宣称完成 | done |
+| S-5901 | 需求输入回归 | Desktop 项目窗口手工路径 | 粘贴 Music Dreamer 简介，界面保持需求阶段且无写入/工具创建 | todo |
+| T-5904 | 项目阶段权限状态 | requirements/documentation/design/implementation/verification/release 状态定义 | 每阶段工具权限和出口可解释，不能由模型自行升级 | done |
+| T-5905 | 文档整理阶段 | `project organize`/「项目 整理文档」与四个核心制品草稿生成 | 用户明确进入文档整理后，才允许写项目文档，不允许写业务代码 | done |
+| T-5906 | 设计确认阶段 | `项目 确认设计`、`项目 开始任务 <T-ID>`、阶段权限拦截 | 未确认设计时不能进入实现；确认后只开放当前批次 | done |
+| T-5907 | 第一条真实链路 | `workspace/test` Music Dreamer 端到端手工验收 | 需求输入 → 文档 → 设计 → 单任务 → 验证完整通过 | todo |
+| UI-5908 | 未绑定项目入口提示 | Desktop 项目侧栏未绑定态 | 不显示不可用的“确认范围”；明确引导打开或新建项目 | done |
+| UI-5909 | 文档整理期间计划提示降噪 | Desktop 文档批次状态与汇总提示 | 连续生成多个核心文档时不出现重复关闭提示；离开文档阶段后只出现一次去重后的汇总/审阅入口；真实错误仍即时提示 | done |
+| UI-5910 | 阶段阻塞状态与对话结论一致 | 后端阶段出口判定与 Desktop 阶段卡 | lint/skeleton/draft 建议不显示为“本阶段阻塞”；无真实阻塞时侧栏与对话均显示无阻塞 | superseded |
+| UI-5910a | 统一阶段状态快照契约 | `compute_execution_stage` 与 `project.state` / `project.plan.state` | 后端输出统一 `status/blockers/missing/warnings`；文档整理中不误报阻塞；两类状态事件字段语义一致 | done |
+| UI-5911 | 运行提醒不进入计划审阅 | Plan Agent 状态分类与 Desktop 侧栏提醒 | “耗时提醒/粒度建议”只作为非操作提醒展示；不进入 `suggestions`、不显示“打开计划审阅”；明确拆分后才生成审阅提案 | done |
+| UI-5912 | 采纳后阻塞状态刷新 | manifest ID 提取、阶段状态重算与 Desktop 状态事件 | 支持 `REQ-MUSIC-001` / `AC-MUSIC-001` 等复合 ID；采纳或外部编辑后重新计算，已解决阻塞不残留，真实缺失仍可见 | done |
+| UI-5913 | Mermaid 图表预览渲染 | Desktop 统一 Markdown 渲染入口 | `TECH-DESIGN.md` 中的部署/流程/时序 Mermaid 块渲染为 SVG；语法错误保留源码并显示错误，不影响其他正文 | done |
+| UI-5914 | 文档阅读区与左栏职责分离 | Unified 主区焦点与项目文档面板 | 左栏只显示文档列表/状态/摘要；点击后在主区宽版渲染全文、表格和 Mermaid；切换不丢失聊天状态 | done |
+
+### 现代项目交互重设计（先评审，后编码）
+
+> 设计基线：[INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md)。本批次回应真实项目体验反馈：把 Desktop 从“内部状态面板”收敛为“目标驱动的项目工作台”。文档评审通过前不修改 UI 代码。
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| UI-6001 | 项目上下文栏与统一状态 view model | Desktop 上下文栏、独立决策条、状态映射和下一步动作 | 六种状态与快照一致；不显示原始 Markdown 长摘要；设计未确认时不显示“开始实现”，先提供“确认设计”；设计确认后选择开放任务并切换下一目标上下文；聊天焦点保留完整对话区 | in_progress |
+| UI-6002 | 侧栏态势收敛 | 侧栏目标/进度/决策/异常四区 | 不展开完整文档、工具清单和 Services；同一进度只显示一种计数口径 | doc |
+| UI-6003 | 主区焦点导航 | 聊天/方案/文档/任务/验证焦点 | 从侧栏进入文档或任务后主区宽版展示，返回聊天不丢会话状态 | doc |
+| UI-6004 | 决策动作文案与打断治理 | 确认范围、确认方案、开始任务、风险接受、发布确认 | 普通 warning 不弹关闭式提示；决策卡明确对象、影响和动作 | doc |
+| UI-6005 | 文档批次连续体验 | 文档整理进度、去重汇总、错误即时提示 | 四个文档连续生成只出现一个批次进度和一个汇总入口，真实错误立即可见 | doc |
+| UI-6006 | 任务变更提示关闭语义 | 关闭指纹、倒计时生命周期和重新出现规则 | 关闭只隐藏当前提示，不确认变更、不触发自动确认；新变更内容才重新出现 | doc |
+| UI-6007 | 任务清空后的验证发布门 | 任务、验证、审查、发布和人工验收的统一状态文案 | 勾选全部任务只显示“任务已清空 · 待验证”；未完验证/审查/发布验收前不得显示项目完成 | doc |
+| UI-6008 | Harness 与用户交互分层 | 内部阶段/Gate/审查/归档与用户目标/决策/结果的映射规则 | 普通内部状态不进入默认主路径；只有改变用户下一步选择的事实才生成决策条；用户无需逐项关闭内部提示 | doc |
+| UI-6009 | 目标卡收敛为项目上下文栏 | 轻量上下文栏、独立决策条和重复信息清理 | 默认只显示项目名、当前目标、当前进展和必要动作；不再渲染大目标卡；需要决定时单独显示决策条；聊天与任务工作区保留完整可用空间 | in_progress |
+| S-6001 | 真实项目体验验收 | Music Dreamer Desktop 手工路径 | 新项目输入 → 文档整理 → 方案确认 → 单任务实现 → 验证，全程不要求用户理解内部术语 | todo |
+
+UI-6001～UI-6005 的共同前置：用户评审并采纳 [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md) 的目标、信息架构、提醒分级和迁移策略；未采纳前只允许继续完善设计文档，不允许开始编码。
+
+UI-6001 当前实现：主区目标卡和用户状态映射已接入 Unified；本轮将其收敛为项目上下文栏，并把需要用户决定的内容迁移到独立决策条。任务工作区仍待实施。复用 `project.state` / `project.plan.state` 的统一阶段快照，不新增后端状态。
+
+UI-6009 当前决策：目标信息保留为只读定位信息，但不再使用大目标卡承载它。默认主路径改用轻量项目上下文栏；目标详情、任务列表、文档全文和验证证据分别进入对应主区焦点。
+
+本次链路修复：范围确认必须经过后端 `project.scope.confirm` 路由并收到权威状态回执；失败时不把界面推进到“准备开始下一步”。
+
+T-5905 自动回归：`agent-core/tests/test_project_documentation_stage.py`（未明确整理不写入；明确整理生成四核心制品；文档阶段拒绝确认开工）。
+
+T-5906 自动回归同上测试文件（设计确认停在 `design`；未授权任务时阻止 `run_command`；启动开放任务后进入 `implementation`）。
+
+T-5907 当前进度：`workspace/test` 已完成文档链接、设计确认、未授权拦截、`T-001` 授权、scaffold dry-run/实际生成和 `V-000` 证据；Desktop 手工验收暂阻塞：本机 Electron 开发壳未创建窗口，启动日志显示旧端口/sidecar 复用与 Electron 缓存目录权限异常；已停止本次启动进程，待冷启动环境恢复后复测。
+
+UI-5908 触发原因：需求输入阶段截图显示未绑定项目时仍渲染“确认范围”卡片，按钮因开放任务为 0 而置灰，用户无法判断下一步动作。
+
+UI-5908 验证：未绑定项目时显示“打开项目/新建项目”；绑定项目后才显示“确认范围”。`npm run build` 与需求输入回归 `6/6` 通过。
+
+UI-5909 产品规则：文档整理期间的 completeness/基线 warning 只收集不打断，进入下一阶段后集中汇总；关闭后同一内容不重复出现。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.3。
+
+UI-5909 验证：`documentation` 阶段侧栏只显示批次进度；warning、普通计划搭档结果、质量建议和可采纳卡暂存，离开阶段后按指纹一次性汇总；代码跟进、撤销、权限/写入错误仍即时显示。对应前端契约测试与 `desktop` TypeScript 构建已通过。
+
+UI-5910 产品规则：`content_lint` 只提供待完善建议，阶段卡的“本阶段阻塞”只接受阶段出口缺失、L2 stale、权限失败或真实执行错误。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.4。
+
+UI-5910 状态说明：原始任务由 UI-5910a 的统一阶段状态快照契约完整覆盖，后续以 `status/blockers/missing/warnings` 单一语义为准，不再单独推进两套阻塞判定。
+
+UI-5910a 产品规则：阶段快照由后端单点计算，`project.state` 与 `project.plan.state` 共享 `status/blockers/missing/warnings` 契约；文档整理中的未生成文档只属于进行中或待完善，不得进入 blocker。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.9。
+
+UI-5910a 验证：`.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage agent-core.tests.test_project_stage_card` 通过 `13/13`；`desktop` 执行 `npm run build` 通过；文档整理阶段返回 `status=in_progress`、`blockers=[]`，未生成核心制品进入 `missing/warnings`。
+
+UI-5911 产品规则：耗时/粒度属于运行提醒，计划审阅只接收会写入任务或文档的 gated proposal。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.5。
+
+UI-5911 实现契约：计划审阅入口只由带有效 `action` 的 `suggestions` 驱动；`operational_notices`、普通 `partner_notices` 和 `warnings` 不得仅凭文案打开计划审阅。阶段 warning 使用“待完善/不阻塞当前运行”语义，不暗示必须进入计划审阅。
+
+UI-5911 验证：长任务和耗时提醒进入 `operational_notices`，不生成 `stale`/`split` 审阅卡；Desktop 只在存在带有效 `action` 的 `suggestions` 时显示“打开计划审阅”，不再解析“待采纳/待审阅”文案。定向 Python 测试、TypeScript 类型检查和 Desktop 构建通过。
+
+UI-5912 产品规则：阶段状态必须从采纳/编辑后的最新 manifest 和磁盘内容重算；稳定 ID 支持业务域复合格式，不能因旧 manifest 或过窄正则把已完成的 `REQ` / `AC` 持续标为阻塞。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.6。
+
+UI-5912 实现契约：采纳、外部编辑和回合结束后的状态事件均先刷新 manifest，再由统一阶段函数计算 `status/blockers/missing/warnings`，最后发送 `project.state` 与 `project.plan.state`；前端不依据旧快照自行修正阻塞。
+
+UI-5912 验证：复合 `REQ-MUSIC-001` / `AC-MUSIC-001` 可被 manifest 持久化；外部修改 `SCOPE.md` 后重新请求 `project.state` 会清除已解决的 `REQ`/`AC` blocker，真实缺失仍保留。定向 manifest、阶段和 Plan Agent 测试通过。
+
+UI-5913 产品规则：Mermaid 图源必须在统一 Markdown 预览入口渲染为 SVG；失败时回退显示图源和错误状态。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.7。
+
+UI-5913 实现契约：`renderMarkdown()` 只负责把 Mermaid fenced block 转为可 hydration 的占位节点；`hydrateMermaid()` 统一负责 SVG 渲染和错误回退。文档正文、项目制品阅读区、计划/聊天消息和地图覆盖层都必须调用同一套入口，不能维护第二份图片真源。
+
+UI-5913 验证：合法 Mermaid 块进入 SVG hydration；语法错误显示错误信息并保留源码；文档阅读、统一聊天、Pet 聊天和项目覆盖层均接入 hydration。Desktop TypeScript 检查与生产构建通过。
+
+UI-5914 产品规则：左栏只做文档导航，完整正文进入主工作区文档阅读焦点；不得用固定窄栏承载宽表格和部署图。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.8。
+
+UI-5914 实现契约：文档覆盖层只提供列表、新建和当前项提示；点击文档后关闭覆盖层并切换到 `mainFocus=document`，主区显示路径、返回聊天、文档列表和完整 Markdown 内容。文档阅读与聊天、计划审阅共享同一主区焦点状态，不复制聊天内容或在左栏展开正文。
+
+UI-5914 验证：文档列表项标注“主区阅读”，主区文档容器支持宽表格和 Mermaid hydration，并提供“返回聊天/文档列表”入口；Desktop TypeScript 检查与生产构建通过。
+
+T-5902 实现契约：项目壳副作用调用统一经过项目模式闸门；`active_shell=project` 且无 `project_root` 时，`run_evolved` 的写入、编码、命令、测试、服务、脚手架和工具创建调用立即返回“未绑定项目”，只读调用不受影响。需求输入仍由 intent 层保持只读。
+
+T-5902 验证：未绑定项目的副作用调用不会进入 runner；未绑定项目的只读调用仍可继续。需求输入、项目阶段、manifest、Plan Agent 和阶段卡定向测试通过。
+
+T-5903 文档契约：参数/schema 错误按回合内指纹最多自动修正一次；同一错误第二次失败立即停止工具循环。命令退出码、权限、取消、超时和用户拒绝不自动重试；所有失败保留统一 `ok=false/error` 结果，助手不得宣称完成。既有同指纹三次执行熔断继续作为更外层保护。
+
+T-5903 验证：新增回合内错误指纹和跨 execute segment 传递；同一 schema 错误第二次失败返回 `finish_reason=tool_error` 与“已停止自动重试”，命令退出码/取消/熔断不进入免费重试。定向可靠性测试通过。
+
+T-5904 验证：阶段定义、阶段出口、文档阶段写入限制、设计确认和单任务授权均已落地；`requirements → documentation → design → implementation → verification → release` 不允许由模型自行升级。项目阶段、文档阶段和生命周期定向测试通过。
+
+T-5901 验证：需求简介被分类为 `requirements`，不启动探索、不向 LLM 暴露工具；即使模型返回伪造工具调用也会被内核拦截并保持只读。`.venv\Scripts\python.exe -m unittest agent-core.tests.test_requirements_input` 通过。
 
 ## done 定义（DOC-03 · [STABILIZATION.md](./STABILIZATION.md) §9.2）
 
@@ -1884,10 +1996,10 @@ python turn_intent.py    # 分类用例无回归
 | T-5804 | M1：发布 milestone checklist UI | project-panel | §7.2 五项 | done |
 | T-5807 | M1：删任务采纳 **三选一**（`drop_task` · `code_policy` · `project.code_followup`） | plan_agent · project_api · project-panel · plan-review · ws · index | §6.3.7–§6.3.8；IT：三 policy + armed disarm | done |
 
-### Phase 58b — Desktop 文档制品链（REAL-RD）
+### Phase 58b — Desktop 文档制品链（REAL-RD，暂停执行）
 
-> 子文档：[DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) **v0.2.5** · L0 已决 · **制品链优先于流程轨 UI 抛光**  
-> **定调**：标准项目 **七文件** · manifest + revision · stale/L1/L2 · CHG ledger · 阶段卡展示制品 revision  
+> 子文档：[DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) **v0.2.5** · 历史设计，仅供参考
+> **当前规则**：不以七文件、manifest、completeness 或双 Mermaid 作为硬门槛；以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 为准。
 > **依赖**：Phase 58 M1 done（T-5801～5808）；扩展而非作废 T-5804/5805/5806/5808
 
 #### DOC-04 准入

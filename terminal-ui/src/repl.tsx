@@ -2,6 +2,8 @@ import React, {useMemo} from 'react';
 import type {TerminalBlock} from './types.js';
 import type {TerminalChrome, TerminalLayoutProps, TerminalSession} from './repl/TerminalLayout.js';
 import {TerminalLayout} from './repl/TerminalLayout.js';
+import type {SlashCommand} from './slash-commands.js';
+import type {TerminalResult} from './types.js';
 
 export type ReplProps = {
   greet?: string;
@@ -19,7 +21,11 @@ export type ReplProps = {
   working?: boolean;
   input?: string;
   confirm?: {requestId: string; preview: string; allowApproveAll: boolean};
+  result?: TerminalResult;
   scrollUpRows?: number;
+  newOutputRows?: number;
+  slashCommands?: readonly SlashCommand[];
+  slashCommandIndex?: number;
   height?: number;
   columns?: number;
 };
@@ -40,7 +46,11 @@ export function Repl({
   working = true,
   input = '',
   confirm,
+  result,
   scrollUpRows = 0,
+  newOutputRows = 0,
+  slashCommands = [],
+  slashCommandIndex = 0,
   height,
   columns = 80,
 }: ReplProps) {
@@ -62,8 +72,9 @@ export function Repl({
       activeToolStartedAt,
       planStatus,
       confirm,
+      result,
     }),
-    [working, activeTool, activeToolStartedAt, planStatus, confirm],
+    [working, activeTool, activeToolStartedAt, planStatus, confirm, result],
   );
 
   const layoutProps: TerminalLayoutProps = {
@@ -76,6 +87,9 @@ export function Repl({
     liveAssistantText,
     input,
     scrollUpRows,
+    newOutputRows,
+    slashCommands,
+    slashCommandIndex,
   };
 
   return <TerminalLayout {...layoutProps} />;

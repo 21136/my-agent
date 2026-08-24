@@ -10,9 +10,14 @@ export type AssistantStreamingBlock = {
 export type NoticeBlock = {
   kind: 'notice';
   text: string;
+  tone?: 'warning' | 'error' | 'cancelled';
   /** Auto-hide after a few seconds (plan gate notices). */
   ephemeral?: boolean;
   shownAt?: number;
+};
+export type TerminalResult = {
+  kind: 'failed' | 'cancelled';
+  text: string;
 };
 export type TurnSepBlock = {kind: 'turn_sep'};
 export type TerminalBlock =

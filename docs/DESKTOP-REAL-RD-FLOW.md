@@ -1,5 +1,7 @@
 # Desktop 真实研发流程与文档制品链
 
+> **当前状态：历史设计，暂停执行。** 当前产品基线以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 为准：项目默认使用四个核心制品，不要求七文件布局、completeness 分级或双 Mermaid 硬门槛。本文保留作 Phase 58b 的设计记录，除非产品基线重新采纳，否则不得据此新增代码或 Gate。
+
 > 版本 **0.2.5** · 2026-08-15  
 > **状态**：**L0 产品已决 · T-5810～T-5819 运行时完成 · T-5831 文档已决 · 下一步 T-5832 编码 + S-581**（Phase 58b · 制品链优先于流程轨 UI 抛光）  
 > **定位**：扩展 [`DESKTOP-TEXTBOOK-FLOW.md`](./DESKTOP-TEXTBOOK-FLOW.md) — 保留五段流程轨与闸门+证据，把「阶段仪表盘」推进为「文档制品链」。  
@@ -200,7 +202,7 @@ PROJECT.md
 | `IT-001` | 集成回归检查（可选，不属于七文件正文） |
 | `S-581` | 场景回归检查（可选，不属于七文件正文） |
 
-稳定 ID 的格式为 `<PREFIX>-<decimal>`，前缀只表达角色，不表达文件行号：
+稳定 ID 的格式为 `<PREFIX>-<decimal>` 或 `<PREFIX>-<DOMAIN>-<decimal>`，前缀只表达角色，业务域段用于区分项目内的领域：
 
 ```text
 REQ-*  AC-*  UX-*  UC-*  SEQ-*  STATE-*  TD-*  API-*  ADR-*  NFR-*  T-*  V-*  REL-*  CHG-*  IT-*  S-*

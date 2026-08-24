@@ -1,7 +1,7 @@
 import { setAgentBusy } from "../../agent-busy";
 import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
-import { renderMarkdown } from "../../markdown";
+import { hydrateMermaid, renderMarkdown } from "../../markdown";
 import { formatUserMessageHtml } from "../../user-message";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, isThinkingBodyOpen, thinkingTitleLabel, type ChatBlock } from "../chat-state";
 import { renderTopbar, type TopbarState } from "./topbar";
@@ -9,6 +9,9 @@ import { renderProposals, currentProposal, nextProposalIndex, type ProposalsStat
 import {
   setupProjectPanel,
   renderProjectSidebar,
+  renderProjectGoalCard,
+  deriveProjectGoalViewModel,
+  getTaskChangeFingerprint,
   renderPlanTaskFlow,
   applyProjectStateEvent,
   applyProjectListEvent,
@@ -127,6 +130,7 @@ export function mountUnifiedShell(
 
   const projectState: ProjectPanelState = {
     projectId: "",
+    projectSummary: "",
     planStatus: "",
     tasksMarkdown: "",
     mapMarkdown: "",
@@ -146,9 +150,13 @@ export function mountUnifiedShell(
     planChangeLog: [],
     changeTimeline: [],
     executionStage: null,
+    workflowStage: null,
+    needsDesignConfirm: false,
+    executionStageStatus: "ready",
     executionStageReason: "",
     executionStageBlockers: [],
     executionStageMissing: [],
+    executionStageWarnings: [],
     executionStageAffected: [],
     executionStageDeferred: [],
     executionStageArtifacts: [],
@@ -163,15 +171,21 @@ export function mountUnifiedShell(
     quickAddText: "",
     detectedProject: null,
     planWarnings: [],
+    planWarningsPending: [],
+    dismissedWarningFingerprint: "",
+    planWarningStage: null,
     undoDescription: "",
     undoTimerId: null,
     degradationLevel: "L1",
     degradationLabel: "全功能",
     changesLevel: null,
+    dismissedTaskChangeFingerprint: "",
     autoConfirmTimerId: null,
     externalChanges: false,
     suggestions: [],
     autoFixNotices: [],
+    operationalNotices: [],
+    dismissedOperationalNoticeFingerprint: "",
     partnerNotices: [],
     partnerBusy: false,
     nextTask: null,
@@ -362,7 +376,7 @@ export function mountUnifiedShell(
           <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
           <div class="sidebar-icon-bar" id="sidebar-icon-bar">
             <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon">◎</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="完整计划"><span class="sidebar-icon">☰</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="任务"><span class="sidebar-icon">☰</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon">📄</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
               <span class="sidebar-icon">⎇</span>
@@ -397,6 +411,7 @@ export function mountUnifiedShell(
           <span class="thread-archive-banner-text">归档线 · 只读回看（不会改回活线）</span>
           <button type="button" class="unified-btn" id="thread-return-active">回到活线</button>
         </div>
+        <section class="unified-context-region hidden" id="unified-goal-card" aria-label="项目上下文"></section>
         <section class="unified-expand hidden" id="unified-expand"></section>
         <div class="workbench-empty" id="workbench-empty" hidden>
           <div class="workbench-empty-card">
@@ -413,6 +428,7 @@ export function mountUnifiedShell(
           <main class="unified-chat" id="unified-chat"></main>
           <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="计划审阅"></section>
           <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
+          <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
         </div>
         <div class="unified-status" id="unified-status"></div>
         <div class="unified-token-bar hidden" id="unified-token-bar"></div>
@@ -435,6 +451,7 @@ export function mountUnifiedShell(
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
   const planReviewEl = root.querySelector<HTMLElement>("#unified-plan-review")!;
   const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
+  const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
@@ -608,6 +625,9 @@ export function mountUnifiedShell(
   function syncWorkingVisual(): void {
     const working = chat.isWorking();
     projectState.turnInProgress = working;
+    projectEls.goalCard.classList.toggle("hidden", !projectState.projectId);
+    projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
+    projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
@@ -1157,14 +1177,30 @@ export function mountUnifiedShell(
       if (!active) return;
       projectCallbacks.onOpenThread(active);
     },
+    onOpenProjects: () => {
+      projectState.overlayPanel = "projects";
+      projectState.switchConfirmTarget = null;
+      projectState.projectSearchQuery = "";
+      try { client.listProjects(); } catch { /* ignore */ }
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    },
+    onNewProject: () => {
+      handleNewProject();
+    },
     onScopeConfirm: () => {
       try {
+        setStatus("正在确认范围…");
         client.confirmProjectScope();
-        projectState.scopeConfirmedAt = new Date().toISOString();
-        projectState.scopeNeedsReconfirm = false;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
       } catch (err) {
         setStatus(`确认范围失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onDesignConfirm: () => {
+      try {
+        setStatus("正在确认设计…");
+        client.confirmProjectDesign();
+      } catch (err) {
+        setStatus(`确认设计失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
     onStopTurn: () => {
@@ -1175,9 +1211,9 @@ export function mountUnifiedShell(
     onMilestoneAccept: () => {
       try {
         client.acceptProjectRelease();
-        setStatus("正在保存 milestone 验收…");
+        setStatus("正在保存发布确认…");
       } catch (err) {
-        setStatus(`milestone 验收失败：${err instanceof Error ? err.message : String(err)}`);
+        setStatus(`发布确认失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
   };
@@ -1200,21 +1236,31 @@ export function mountUnifiedShell(
 
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
+    const chatFocus = focus === "chat";
+    const runtimeSurface = chatFocus || chat.isWorking() || chat.model.confirmPending;
     shellEl.dataset.mainFocus = focus;
     chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
+    documentEl.classList.toggle("hidden", focus !== "document");
     chatEl.hidden = focus !== "chat";
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
+    documentEl.hidden = focus !== "document";
+    composer.hidden = !runtimeSurface;
+    statusEl.hidden = !runtimeSurface;
+    tokenBar.hidden = !chatFocus;
     if (focus === "plan_review") {
       renderPlanReviewPane();
       planReviewEl.scrollTop = 0;
     } else if (focus === "plan_full") {
       renderPlanFullPane();
+    } else if (focus === "document") {
+      renderDocumentPane();
     }
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
+
 
   function renderPlanReviewPane(): void {
     const queue = getActionableQueue();
@@ -1235,6 +1281,35 @@ export function mountUnifiedShell(
         ? projectState.highlightedLines
         : null;
     planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
+  }
+
+  function renderDocumentPane(): void {
+    const path = projectState.currentDocPath;
+    const content = projectState.currentDocContent;
+    documentEl.innerHTML = `<div class="unified-document-inner">
+      <header class="unified-document-header">
+        <button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>
+        <div class="unified-document-heading">
+          <div class="unified-document-kicker">项目文档</div>
+          <h1>${escapeHtml(path || "文档")}</h1>
+        </div>
+        <button type="button" class="unified-btn" data-action="document-list">文档列表</button>
+      </header>
+      <article class="unified-document-content unified-markdown">${content
+        ? renderMarkdown(content)
+        : `<p class="overlay-empty">加载中…</p>`}</article>
+    </div>`;
+    void hydrateMermaid(documentEl);
+    documentEl.scrollTop = 0;
+  }
+
+  function openDocument(path: string): void {
+    if (!path) return;
+    projectState.currentDocPath = path;
+    projectState.currentDocContent = "";
+    projectState.overlayPanel = null;
+    setMainFocus("document");
+    try { client.readDoc(path); } catch { /* ignore */ }
   }
 
   function openPlanReview(suggestionId?: string): void {
@@ -1288,6 +1363,24 @@ export function mountUnifiedShell(
   function openPlanFull(): void {
     projectState.overlayPanel = null;
     setMainFocus("plan_full");
+  }
+
+  function startProjectTaskFromUi(taskId: string): void {
+    const normalizedTaskId = taskId.trim();
+    if (!normalizedTaskId) return;
+    try {
+      setStatus(`正在启动 ${normalizedTaskId}…`);
+      setMainFocus("chat");
+      client.startProjectTask(normalizedTaskId);
+    } catch (err) {
+      setStatus(`启动任务失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function openDocumentList(): void {
+    projectState.overlayPanel = "docs";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try { client.listDocs(); } catch { /* ignore */ }
   }
 
   function closePlanMainFocus(): void {
@@ -1541,6 +1634,12 @@ export function mountUnifiedShell(
     handlePlanReviewAction(btn.dataset.planReviewAction, btn);
   });
 
+  planFullEl.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-action="start-task"]');
+    if (!btn?.dataset.taskId) return;
+    startProjectTaskFromUi(btn.dataset.taskId);
+  });
+
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
     if (projectState.mainFocus === "chat") return;
@@ -1744,8 +1843,8 @@ export function mountUnifiedShell(
           : "";
       const title =
         block.status === "running"
-          ? "交付审查 · 进行中…"
-          : `交付审查 · 完成${verdictLabel}${blockers}`;
+          ? "正在检查交付结果…"
+          : block.verdict === "pass" ? "交付检查已通过" : "交付检查需要处理";
       const detail =
         block.status === "running"
           ? escapeHtml(block.taskPreview || "正在审查交付物…")
@@ -2060,12 +2159,14 @@ export function mountUnifiedShell(
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    void hydrateMermaid(chatEl);
     scrollStreamingThinkingBodies();
     syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
+      void hydrateMermaid(chatEl);
       scrollStreamingThinkingBodies();
       syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
@@ -2307,13 +2408,10 @@ export function mountUnifiedShell(
     const panel = btn.dataset.panel;
     if (panel === "tasks") {
       projectState.overlayPanel = null;
-      projectState.currentDocPath = "";
-      projectState.currentDocContent = "";
+      setMainFocus("chat");
     } else {
       projectState.switchConfirmTarget = null;
       projectState.projectSearchQuery = "";
-      projectState.currentDocPath = "";
-      projectState.currentDocContent = "";
       if (panel === "plan") {
         openPlanFull();
         return;
@@ -2363,8 +2461,6 @@ export function mountUnifiedShell(
   projectEls.overlayBackBtn.addEventListener("click", () => {
     projectState.overlayPanel = null;
     projectState.switchConfirmTarget = null;
-    projectState.currentDocPath = "";
-    projectState.currentDocContent = "";
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   });
 
@@ -2406,22 +2502,33 @@ export function mountUnifiedShell(
         case "open-artifact-doc": {
           const path = btn.dataset.artifactPath;
           if (!path) return;
-          projectState.overlayPanel = "docs";
-          projectState.currentDocPath = path;
-          projectState.currentDocContent = "";
-          try { client.readDoc(path); } catch { /* ignore */ }
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          openDocument(path);
           return;
         }
         case "open-full-plan":
           openPlanFull();
           return;
+        case "start-task": {
+          const taskId = btn.dataset.taskId?.trim();
+          if (!taskId) return;
+          startProjectTaskFromUi(taskId);
+          return;
+        }
         case "flow-return":
           projectState.flowPreviewStage = null;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           return;
         case "confirm-scope":
           projectCallbacks.onScopeConfirm();
+          return;
+        case "confirm-design":
+          projectCallbacks.onDesignConfirm();
+          return;
+        case "open-projects":
+          projectCallbacks.onOpenProjects();
+          return;
+        case "new-project":
+          projectCallbacks.onNewProject();
           return;
         case "accept-milestone":
           projectCallbacks.onMilestoneAccept();
@@ -2468,6 +2575,49 @@ export function mountUnifiedShell(
         default:
           break;
       }
+    }
+  });
+
+  projectEls.goalCard.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    switch (btn.dataset.action) {
+      case "open-projects":
+        projectCallbacks.onOpenProjects();
+        return;
+      case "new-project":
+        projectCallbacks.onNewProject();
+        return;
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "confirm-design":
+        projectCallbacks.onDesignConfirm();
+        return;
+      case "open-scope-doc":
+        openDocument("SCOPE.md");
+        return;
+      case "confirm-plan":
+        void projectCallbacks.onPlanConfirm();
+        return;
+      case "open-plan-review":
+        openPlanReview();
+        return;
+      case "open-full-plan":
+        openPlanFull();
+        return;
+      case "jump-turn-process":
+        jumpToCurrentTurnProcess();
+        return;
+      case "jump-review-summary":
+        jumpToReviewSummary();
+        return;
+      case "stop-turn":
+        projectCallbacks.onStopTurn();
+        return;
+      default:
+        return;
     }
   });
 
@@ -2528,10 +2678,7 @@ export function mountUnifiedShell(
     // Document item click
     const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item");
     if (docBtn?.dataset.docPath) {
-      projectState.currentDocPath = docBtn.dataset.docPath;
-      projectState.currentDocContent = "";
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      try { client.readDoc(projectState.currentDocPath); } catch { /* ignore */ }
+      openDocument(docBtn.dataset.docPath);
       return;
     }
 
@@ -2544,6 +2691,19 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
       }
       return;
+    }
+  });
+
+  documentEl.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "document-back") {
+      setMainFocus("chat");
+      return;
+    }
+    if (btn.dataset.action === "document-list") {
+      openDocumentList();
     }
   });
 
@@ -2624,6 +2784,7 @@ export function mountUnifiedShell(
           projectState.autoConfirmTimerId = null;
         }
         projectState.changesLevel = null;
+        projectState.dismissedTaskChangeFingerprint = "";
         try { client.planConfirmChanges(); } catch { /* ignore */ }
         break;
       case "edit-plan":
@@ -2646,6 +2807,9 @@ export function mountUnifiedShell(
       case "collapse-banner":
         projectState.planBannerCollapsed = true;
         projectState.highlightChanges = false;
+        if (projectState.changesLevel === "task") {
+          projectState.dismissedTaskChangeFingerprint = getTaskChangeFingerprint(projectState);
+        }
         if (projectState.autoConfirmTimerId !== null) {
           window.clearInterval(projectState.autoConfirmTimerId);
           projectState.autoConfirmTimerId = null;
@@ -2704,12 +2868,18 @@ export function mountUnifiedShell(
         projectState.autoFixNotices = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
+      case "dismiss-operational-notices":
+        projectState.dismissedOperationalNoticeFingerprint = projectState.operationalNotices.join("\u001f");
+        projectState.operationalNotices = [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
       case "dismiss-partner-notice":
         projectState.partnerNotices = [];
         projectState.adoptedFooterMessage = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
+        projectState.dismissedWarningFingerprint = projectState.planWarnings.join("\u001f");
         projectState.planWarnings = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
@@ -2987,7 +3157,7 @@ export function mountUnifiedShell(
         projectState.milestoneAccepted = Boolean(event.release_acceptance.accepted);
         projectState.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        setStatus("milestone 验收已持久化");
+        setStatus("发布确认已保存");
         break;
 
       case "project.state":
@@ -3014,7 +3184,12 @@ export function mountUnifiedShell(
         if (!perspectiveLocked) setPerspective("project", "session");
         updatePlaceholder();
         if (projectState.mainFocus === "plan_review") {
-          renderPlanReviewPane();
+          if (getActionableQueue().length === 0) {
+            closePlanMainFocus();
+            setStatus("当前没有可审阅的计划提案");
+          } else {
+            renderPlanReviewPane();
+          }
         } else if (projectState.mainFocus === "plan_full") {
           renderPlanFullPane();
         }
@@ -3029,7 +3204,10 @@ export function mountUnifiedShell(
           window.clearInterval(projectState.autoConfirmTimerId);
           projectState.autoConfirmTimerId = null;
         }
-        if (projectState.changesLevel === "task") {
+        if (
+          projectState.changesLevel === "task"
+          && getTaskChangeFingerprint(projectState) !== projectState.dismissedTaskChangeFingerprint
+        ) {
           let remaining = 30;
           const countdownInterval = window.setInterval(() => {
             remaining--;
@@ -3037,8 +3215,13 @@ export function mountUnifiedShell(
             if (el) el.textContent = String(remaining);
             if (remaining <= 0) {
               window.clearInterval(countdownInterval);
-              if (projectState.autoConfirmTimerId === countdownInterval as unknown as number) {
+              if (
+                projectState.autoConfirmTimerId === countdownInterval as unknown as number
+                && projectState.changesLevel === "task"
+                && getTaskChangeFingerprint(projectState) !== projectState.dismissedTaskChangeFingerprint
+              ) {
                 projectState.changesLevel = null;
+                projectState.dismissedTaskChangeFingerprint = "";
                 try { client.planConfirmChanges(); } catch { /* */ }
                 renderProjectSidebar(projectEls, projectState, projectCallbacks);
               }
@@ -3265,6 +3448,7 @@ export function mountUnifiedShell(
       case "project.plan.confirm_changes.done":
         projectState.planBannerCollapsed = true;
         projectState.changesLevel = null;
+        projectState.dismissedTaskChangeFingerprint = "";
         client.refreshProject();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
@@ -3276,6 +3460,7 @@ export function mountUnifiedShell(
 
       case "project.doc.read.done":
         projectState.currentDocContent = event.content;
+        if (projectState.mainFocus === "document") renderDocumentPane();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -3410,7 +3595,11 @@ export function mountUnifiedShell(
 
   function planStatusLabel(): string {
     if (projectState.planStatus === "confirmed") {
-      if (projectState.tasksAllDone && projectState.tasksTotal > 0) return "全部完成";
+      if (projectState.tasksAllDone && projectState.tasksTotal > 0) {
+        if (projectState.executionStage === "release" && projectState.milestoneAccepted) return "项目已完成";
+        if (projectState.executionStage === "release") return "待发布验收";
+        return "任务已清空 · 待验证";
+      }
       const open = Math.max(0, projectState.tasksTotal - projectState.tasksDone);
       return `${open}/${projectState.tasksTotal} 未完成`;
     }

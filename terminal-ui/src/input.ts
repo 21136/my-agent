@@ -4,13 +4,15 @@ export type TerminalInputKey = {
   delete?: boolean;
   ctrl?: boolean;
   meta?: boolean;
+  escape?: boolean;
 };
 
 export type TerminalInputAction =
   | {type: 'none'}
   | {type: 'submit'; text: string}
   | {type: 'confirm'; choice: string}
-  | {type: 'cancel'};
+  | {type: 'cancel'}
+  | {type: 'exit'};
 
 export type TerminalInputState = {
   text: string;
@@ -23,6 +25,7 @@ export function reduceTerminalInput(
   confirm?: {allowApproveAll: boolean},
 ): {state: TerminalInputState; action: TerminalInputAction} {
   if (confirm) {
+    if (key.escape) return {state, action: {type: 'cancel'}};
     const choice = input.trim().toLowerCase();
     if (choice === 'y' || choice === 'n' || (choice === 'a' && confirm.allowApproveAll)) {
       return {state, action: {type: 'confirm', choice}};
@@ -31,6 +34,12 @@ export function reduceTerminalInput(
   }
 
   if (key.ctrl && input.toLowerCase() === 'c') {
+    return {state, action: {type: 'cancel'}};
+  }
+  if (key.ctrl && input.toLowerCase() === 'd') {
+    return {state, action: {type: 'exit'}};
+  }
+  if (key.escape) {
     return {state, action: {type: 'cancel'}};
   }
   if (key.return) {

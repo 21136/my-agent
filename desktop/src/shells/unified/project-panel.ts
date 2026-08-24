@@ -1,5 +1,4 @@
 import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
-import { renderMarkdown } from "../../markdown";
 import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
@@ -29,7 +28,7 @@ export interface TaskSnapshot {
 
 export type OverlayPanel = "plan" | "docs" | "projects" | "threads" | null;
 
-export type FlowStage = "requirements" | "design" | "implementation" | "verification" | "release";
+export type FlowStage = "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
 
 export interface CodeFollowup {
   mode: "agent_cleanup" | "git_guide";
@@ -75,6 +74,7 @@ export interface ProjectThreadItem {
 
 export interface ProjectPanelState {
   projectId: string;
+  projectSummary: string;
   planStatus: string;
   tasksMarkdown: string;
   mapMarkdown: string;
@@ -97,9 +97,13 @@ export interface ProjectPanelState {
   planChangeLog: PlanChangeItem[];
   changeTimeline: ChangeLedgerItem[];
   executionStage: FlowStage | null;
+  workflowStage: FlowStage | null;
+  needsDesignConfirm: boolean;
+  executionStageStatus: "in_progress" | "blocked" | "ready" | string;
   executionStageReason: string;
   executionStageBlockers: string[];
   executionStageMissing: string[];
+  executionStageWarnings: string[];
   executionStageAffected: string[];
   executionStageDeferred: string[];
   executionStageArtifacts: ProjectArtifactSummary[];
@@ -116,6 +120,9 @@ export interface ProjectPanelState {
   detectedProject: { id: string; reason: string } | null;
   // Plan Agent warnings (legacy / non-structured)
   planWarnings: string[];
+  planWarningsPending: string[];
+  dismissedWarningFingerprint: string;
+  planWarningStage: FlowStage | null;
   // Undo toast
   undoDescription: string;
   undoTimerId: number | null;
@@ -124,10 +131,13 @@ export interface ProjectPanelState {
   degradationLabel: string;
   // Change confirmation
   changesLevel: string | null;
+  dismissedTaskChangeFingerprint: string;
   autoConfirmTimerId: number | null;
   externalChanges: boolean;
   suggestions: PlanSuggestion[];
   autoFixNotices: string[];
+  operationalNotices: string[];
+  dismissedOperationalNoticeFingerprint: string;
   partnerNotices: string[];
   partnerBusy: boolean;
   nextTask: string | null;
@@ -176,6 +186,18 @@ export interface ProjectPanelState {
   dropTaskPendingWorking: boolean;
 }
 
+export type ProjectGoalStatus = "empty" | "processing" | "decision" | "blocked" | "failed" | "completed";
+
+export interface ProjectGoalViewModel {
+  status: ProjectGoalStatus;
+  statusLabel: string;
+  title: string;
+  summary: string;
+  nextStep: string;
+  action: string | null;
+  actionLabel: string | null;
+}
+
 export interface ProjectPanelCallbacks {
   onProjectSwitch: (projectId: string) => void;
   onProjectSwitchConfirm: () => void;
@@ -186,7 +208,10 @@ export interface ProjectPanelCallbacks {
   onNewThread: () => void;
   onOpenThread: (sessionId: string) => void;
   onReturnActiveThread: () => void;
+  onOpenProjects: () => void;
+  onNewProject: () => void;
   onScopeConfirm: () => void;
+  onDesignConfirm: () => void;
   onStopTurn: () => void;
   onMilestoneAccept: () => void;
 }
@@ -214,6 +239,7 @@ function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
     const id = typeof o.id === "string" && o.id ? o.id : `sug-${i}`;
     const body = typeof o.body === "string" ? o.body : String(o.title ?? "");
     if (!body && !o.title) return;
+    if (o.kind === "stale" || (o.payload && typeof o.payload === "object" && (o.payload as Record<string, unknown>).operational === true)) return;
     out.push({
       id,
       kind: typeof o.kind === "string" ? o.kind : "info",
@@ -236,6 +262,7 @@ function suggestionWhatChanged(s: PlanSuggestion): string {
 
 const FLOW_STAGES: Array<{ id: FlowStage; label: string; short: string }> = [
   { id: "requirements", label: "需求", short: "范围" },
+  { id: "documentation", label: "文档整理", short: "文档" },
   { id: "design", label: "设计", short: "计划" },
   { id: "implementation", label: "实现", short: "写码" },
   { id: "verification", label: "验证", short: "证据" },
@@ -244,6 +271,82 @@ const FLOW_STAGES: Array<{ id: FlowStage; label: string; short: string }> = [
 
 function isFlowStage(value: unknown): value is FlowStage {
   return FLOW_STAGES.some((stage) => stage.id === value);
+}
+
+function isDocumentationBatch(state: ProjectPanelState): boolean {
+  return state.executionStage === "documentation" && state.executionStageStatus === "in_progress";
+}
+
+function operationalNoticeFingerprint(notices: string[]): string {
+  return Array.from(new Set(notices.map((notice) => notice.trim()).filter(Boolean))).join("\u001f");
+}
+
+function renderOperationalNotices(notices: string[]): string {
+  const lines = notices
+    .map((notice) => `<div class="sidebar-change-banner-changes">${escapeHtml(notice)}</div>`)
+    .join("");
+  return `<div class="sidebar-change-banner" style="border-color:#8b7cf6;background:color-mix(in srgb, #8b7cf6 7%, var(--ma-surface));">
+    <div class="sidebar-change-banner-title">运行提醒</div>
+    ${lines}
+    <button type="button" class="unified-btn" data-action="dismiss-operational-notices" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+  </div>`;
+}
+
+function uniquePlanWarnings(warnings: string[]): string[] {
+  return Array.from(new Set(warnings.map((warning) => warning.trim()).filter(Boolean)));
+}
+
+function planWarningFingerprint(warnings: string[]): string {
+  return uniquePlanWarnings(warnings).join("\u001f");
+}
+
+function resetPlanWarningState(state: ProjectPanelState): void {
+  state.planWarnings = [];
+  state.planWarningsPending = [];
+  state.dismissedWarningFingerprint = "";
+  state.planWarningStage = null;
+  state.dismissedTaskChangeFingerprint = "";
+}
+
+export function getTaskChangeFingerprint(state: ProjectPanelState): string {
+  return JSON.stringify({
+    projectId: state.projectId,
+    changesLevel: state.changesLevel,
+    externalChanges: state.externalChanges,
+    changes: state.planChangeLog.map((change) => ({
+      id: change.id,
+      kind: change.kind,
+      task_text: change.task_text,
+      reason: change.reason,
+      line: change.line ?? null,
+    })),
+  });
+}
+
+function updatePlanWarningState(
+  state: ProjectPanelState,
+  stage: FlowStage,
+  incomingWarnings?: string[],
+): void {
+  const previousStage = state.planWarningStage;
+  const leavingDocumentation = previousStage === "documentation" && stage !== "documentation";
+  if (stage === "documentation") {
+    if (incomingWarnings !== undefined) {
+      state.planWarningsPending = uniquePlanWarnings([
+        ...state.planWarningsPending,
+        ...incomingWarnings,
+      ]);
+    }
+    state.planWarnings = [];
+  } else if (incomingWarnings !== undefined || leavingDocumentation) {
+    const warnings = uniquePlanWarnings([
+      ...(leavingDocumentation ? state.planWarningsPending : []),
+      ...(incomingWarnings ?? []),
+    ]);
+    state.planWarningsPending = [];
+    state.planWarnings = planWarningFingerprint(warnings) === state.dismissedWarningFingerprint ? [] : warnings;
+  }
+  state.planWarningStage = stage;
 }
 
 function hasOpenTasks(state: ProjectPanelState): boolean {
@@ -267,7 +370,331 @@ export function getExecutionStage(state: ProjectPanelState): FlowStage {
   return "design";
 }
 
-function renderFlowRail(state: ProjectPanelState): string {
+function getWorkflowStage(state: ProjectPanelState): FlowStage {
+  return state.workflowStage || getExecutionStage(state);
+}
+
+const USER_STAGE_LABELS: Record<FlowStage, string> = {
+  requirements: "了解需求",
+  documentation: "整理项目文档",
+  design: "准备项目方案",
+  implementation: "实现当前任务",
+  verification: "验证交付结果",
+  release: "准备发布检查",
+};
+
+const USER_BLOCKER_LABELS: Record<string, string> = {
+  "SCOPE.md": "项目范围",
+  "PROJECT.md": "项目说明",
+  "DESIGN.md": "项目方案",
+  "TECH-DESIGN.md": "技术方案",
+  "TASKS.md": "任务清单",
+  "VERIFY.md": "验证计划",
+  "RELEASE.md": "发布检查",
+  REQ: "需求目标",
+  AC: "验收标准",
+  plan_status: "方案确认",
+  review: "交付检查",
+  review_blockers: "交付检查中的问题",
+};
+
+function userFacingBlockerSummary(state: ProjectPanelState): string {
+  if (state.reviewProgressBlocked && state.executionStageBlockers.length === 0) {
+    return "交付检查还没有通过，请先处理检查结果。";
+  }
+  const labels = Array.from(new Set(
+    state.executionStageBlockers.map((item) => USER_BLOCKER_LABELS[item] || item)
+      .filter(Boolean),
+  ));
+  return labels.length > 0
+    ? "还需要处理：" + labels.join("、")
+    : "当前还不能继续，请查看原因。";
+}
+
+function userFacingTaskGroupTitle(title: string): string {
+  const cleaned = title.replace(/^Phase\s+\d+[a-z]?\s*[·—:-]?\s*/i, "").trim();
+  return cleaned || "任务";
+}
+
+function firstProjectGoalTask(state: ProjectPanelState): string {
+  return state.turnArmedText.trim()
+    || state.nextTask?.trim()
+    || state.taskPhases
+      .flatMap((phase) => phase.tasks)
+      .find((task) => !task.done)?.text
+    || "当前项目";
+}
+
+function compactGoalText(text: string, max = 180): string {
+  const plain = text
+    .replace(/[`*_#>\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncateSummary(plain, max);
+}
+
+function projectTaskProgressLabel(state: ProjectPanelState): string {
+  if (state.tasksTotal > 0) {
+    return `${Math.min(state.tasksDone, state.tasksTotal)}/${state.tasksTotal} 个任务`;
+  }
+  if (getExecutionStage(state) === "documentation") return "文档整理中";
+  return "暂无任务";
+}
+
+function decisionCopy(view: ProjectGoalViewModel): { detail: string; impact: string } {
+  if (view.action === "confirm-scope") {
+    return {
+      detail: "确认内容：第一轮交付范围",
+      impact: "影响：确认后进入设计阶段",
+    };
+  }
+  if (view.action === "confirm-plan") {
+    return {
+      detail: "确认内容：当前项目方案",
+      impact: "影响：确认后进入当前任务的实现",
+    };
+  }
+  if (view.action === "confirm-design") {
+    return {
+      detail: "确认内容：四个核心项目文档与设计基线",
+      impact: "影响：确认后开放任务授权，进入设计阶段",
+    };
+  }
+  if (view.action === "open-plan-review") {
+    return {
+      detail: `确认内容：${compactGoalText(view.summary, 120)}`,
+      impact: "影响：采纳后写入项目计划并继续当前流程",
+    };
+  }
+  if (view.action === "open-full-plan" && view.title === "选择下一条任务") {
+    return {
+      detail: "操作：从开放任务队列中选择一项",
+      impact: "影响：开始实现后进入当前任务阶段",
+    };
+  }
+  if (view.status === "blocked") {
+    return {
+      detail: `原因：${compactGoalText(view.summary, 140)}`,
+      impact: `影响：${view.nextStep}`,
+    };
+  }
+  if (view.status === "failed") {
+    return {
+      detail: `原因：${compactGoalText(view.summary, 140)}`,
+      impact: `影响：${view.nextStep}`,
+    };
+  }
+  return {
+    detail: compactGoalText(view.summary, 140),
+    impact: view.nextStep,
+  };
+}
+
+export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoalViewModel {
+  if (!state.projectId) {
+    return {
+      status: "empty",
+      statusLabel: "未开始",
+      title: "选择或新建项目",
+      summary: "绑定项目后，系统会把目标、文档、任务和验证串成一条工作链路。",
+      nextStep: "先选择一个项目，或创建新项目。",
+      action: "open-projects",
+      actionLabel: "打开项目",
+    };
+  }
+
+  const goal = compactGoalText(state.projectSummary) || compactGoalText(firstProjectGoalTask(state));
+  const executionStage = getExecutionStage(state);
+  const stageLabel = USER_STAGE_LABELS[executionStage];
+  const blocker = userFacingBlockerSummary(state);
+  if (state.executionStageStatus === "blocked" || state.executionStageBlockers.length > 0 || state.reviewProgressBlocked) {
+    return {
+      status: "blocked",
+      statusLabel: "需要处理",
+      title: "当前无法继续",
+      summary: blocker,
+      nextStep: state.reviewProgressBlocked ? "查看审查摘要并处理阻塞项。" : "补齐缺失内容或修复阻塞后继续。",
+      action: state.reviewProgressBlocked ? "jump-review-summary" : null,
+      actionLabel: state.reviewProgressBlocked ? "查看原因" : null,
+    };
+  }
+
+  const hasFailedEvidence = state.turnEvidence.some((item) => !item.ok);
+  if (
+    state.executionStageStatus === "failed"
+    || state.turnPostcondition === "fail"
+    || Boolean(state.turnFailureClass)
+    || (hasFailedEvidence && !state.turnInProgress)
+  ) {
+    return {
+      status: "failed",
+      statusLabel: "验证未通过",
+      title: "上一步没有完成",
+      summary: state.turnFailureClass || "最近一次执行或验证没有通过。",
+      nextStep: "查看失败原因，再决定修复、重试或调整方案。",
+      action: "jump-turn-process",
+      actionLabel: "查看失败原因",
+    };
+  }
+
+  if (state.turnInProgress || state.executionStageStatus === "in_progress") {
+    return {
+      status: "processing",
+      statusLabel: "进行中",
+      title: stageLabel,
+      summary: goal,
+      nextStep: "系统正在连续处理当前批次；你可以查看过程或随时停止。",
+      action: "jump-turn-process",
+      actionLabel: "查看过程",
+    };
+  }
+
+  if (
+    state.tasksTotal > 0
+    && state.tasksAllDone
+    && executionStage === "release"
+    && state.milestoneAccepted
+  ) {
+    return {
+      status: "completed",
+      statusLabel: "已完成",
+      title: "当前批次已完成",
+      summary: goal,
+      nextStep: state.milestoneAccepted ? "可以开始下一批工作。" : "查看发布检查并进行人工验收。",
+      action: state.milestoneAccepted ? null : "open-full-plan",
+      actionLabel: state.milestoneAccepted ? null : "查看发布检查",
+    };
+  }
+
+  if (state.tasksTotal > 0 && state.tasksAllDone && executionStage === "release") {
+    return {
+      status: "decision",
+      statusLabel: "待发布验收",
+      title: "发布检查已准备好",
+      summary: goal,
+      nextStep: "验证和审查已经通过，请检查发布清单并确认发布；在此之前项目不会标记为完成。",
+      action: "accept-milestone",
+      actionLabel: "确认发布",
+    };
+  }
+
+  const actionableSuggestions = state.suggestions.filter((suggestion) => Boolean(suggestion.action));
+  if (actionableSuggestions.length > 0) {
+    return {
+      status: "decision",
+      statusLabel: "等你决定",
+      title: "有一个方案需要你确认",
+      summary: actionableSuggestions[0].title || goal,
+      nextStep: "查看变更内容，确认或忽略这项方案。",
+      action: "open-plan-review",
+      actionLabel: "查看方案",
+    };
+  }
+
+  if (state.tasksTotal > 0 && state.tasksAllDone) {
+    return {
+      status: "decision",
+      statusLabel: "待验证",
+      title: "任务已清空，待验证",
+      summary: goal,
+      nextStep: "先查看验证证据和交付审查结果；任务清空本身不代表项目完成。",
+      action: "open-full-plan",
+      actionLabel: "查看验证结果",
+    };
+  }
+
+  if (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0)) {
+    return {
+      status: "decision",
+      statusLabel: "等你决定",
+      title: state.planStatus === "plan_dirty" ? "计划已变更，等你确认" : "方案已准备好",
+      summary: compactGoalText(state.planOverlay?.summary || "") || goal,
+      nextStep: "确认方案后，系统才会进入当前任务的实现。",
+      action: "confirm-plan",
+      actionLabel: "确认方案",
+    };
+  }
+
+  if (state.scopeNeedsReconfirm || (!state.scopeConfirmedAt && state.tasksTotal > 0)) {
+    return {
+      status: "decision",
+      statusLabel: "等你决定",
+      title: "范围需要确认",
+      summary: goal,
+      nextStep: "确认第一轮范围后，再继续准备方案。",
+      action: "confirm-scope",
+      actionLabel: "确认范围",
+    };
+  }
+
+  if (state.needsDesignConfirm || state.workflowStage === "documentation") {
+    return {
+      status: "decision",
+      statusLabel: "等你决定",
+      title: "设计需要确认",
+      summary: "",
+      nextStep: "确认设计后，才能选择任务并开始实现。",
+      action: "confirm-design",
+      actionLabel: "确认设计",
+    };
+  }
+
+  return {
+    status: "decision",
+    statusLabel: "等你决定",
+    title: executionStage === "verification"
+      ? "验证结果已准备好"
+      : executionStage === "design" ? "选择下一条任务" : "准备开始下一步",
+    summary: goal,
+    nextStep: executionStage === "verification"
+      ? "查看本回合证据，确认结果是否满足验收。"
+      : "选择一个开放任务，或继续补充当前目标。",
+    action: "open-full-plan",
+    actionLabel: executionStage === "verification" ? "查看结果" : "选择任务",
+  };
+}
+
+export function renderProjectGoalCard(state: ProjectPanelState): string {
+  const view = deriveProjectGoalViewModel(state);
+  const contextGoal = compactGoalText(state.projectSummary)
+    || compactGoalText(firstProjectGoalTask(state))
+    || view.title;
+  const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
+  const contextAction = !isDecision && view.action && view.actionLabel
+    ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+    : "";
+  const decision = isDecision
+      ? (() => {
+        const copy = decisionCopy(view);
+        const detailAction = view.action === "confirm-scope"
+          ? `<button type="button" class="unified-btn" data-action="open-scope-doc">查看范围</button>`
+          : "";
+        const action = view.action && view.actionLabel
+          ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+          : "";
+        return `<section class="unified-decision-strip is-${escapeHtml(view.status)}" aria-label="需要处理的事项">
+          <div class="unified-decision-copy">
+            <strong class="unified-decision-title">${escapeHtml(view.title)}</strong>
+            <span>${escapeHtml(copy.detail)}</span>
+            <span>${escapeHtml(copy.impact)}</span>
+          </div>
+          <div class="unified-decision-actions">${detailAction}${action}</div>
+        </section>`;
+      })()
+    : "";
+  return `<div class="unified-context-bar" data-goal-status="${escapeHtml(view.status)}">
+    <div class="unified-context-main">
+      <strong class="unified-context-project" title="${escapeHtml(state.projectId)}">${escapeHtml(state.projectId)}</strong>
+      <span class="unified-context-separator" aria-hidden="true">·</span>
+      <span class="unified-context-goal" title="${escapeHtml(contextGoal)}">${escapeHtml(contextGoal)}</span>
+      <span class="unified-context-progress">${escapeHtml(projectTaskProgressLabel(state))}</span>
+      <span class="unified-context-status is-${escapeHtml(view.status)}">${escapeHtml(view.statusLabel)}</span>
+      ${contextAction}
+    </div>
+  </div>${decision}`;
+}
+
+function renderDetailedFlowRail(state: ProjectPanelState): string {
   const execution = getExecutionStage(state);
   const preview = state.flowPreviewStage;
   const current = preview || execution;
@@ -292,6 +719,7 @@ function renderFlowRail(state: ProjectPanelState): string {
 
 const STAGE_ARTIFACTS: Record<FlowStage, string[]> = {
   requirements: ["PROJECT.md", "SCOPE.md"],
+  documentation: ["PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md"],
   design: ["SCOPE.md", "DESIGN.md", "TECH-DESIGN.md"],
   implementation: ["SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "TASKS.md"],
   verification: ["TASKS.md", "VERIFY.md"],
@@ -389,7 +817,7 @@ function renderStageBasis(state: ProjectPanelState, stage: FlowStage): string {
   return `<div class="textbook-stage-basis"><div class="textbook-section-label">阶段依据</div>${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`;
 }
 
-function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
+function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
   const execution = getExecutionStage(state);
   const stage = state.flowPreviewStage || execution;
   const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
@@ -401,10 +829,15 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
   let action = "";
   switch (stage) {
     case "requirements":
-      body = `<div class="textbook-plan-goal">${state.projectId ? `项目 ${escapeHtml(state.projectId)}：` : ""}先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
-      action = state.scopeConfirmedAt
-        ? `<span class="textbook-soft-signal">范围已确认</span>`
-        : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
+      if (!state.projectId) {
+        body = `<div class="textbook-plan-goal">请先打开或新建项目</div><div class="textbook-plan-stat">绑定项目后才能确认范围并进入文档整理。</div>`;
+        action = `<button type="button" class="unified-btn" data-action="open-projects">打开项目</button><button type="button" class="unified-btn unified-btn-accent" data-action="new-project">新建项目</button>`;
+      } else {
+        body = `<div class="textbook-plan-goal">项目 ${escapeHtml(state.projectId)}：先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
+        action = state.scopeConfirmedAt
+          ? `<span class="textbook-soft-signal">范围已确认</span>`
+          : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
+      }
       break;
     case "design":
       body = `<div class="textbook-plan-goal">计划已采纳后，选择下一条可武装任务。</div><div class="textbook-plan-stat">待审阅 ${state.suggestions.filter((suggestion) => Boolean(suggestion.action)).length} 条 · 计划 ${escapeHtml(state.planStatus || "draft")}</div>`;
@@ -432,16 +865,94 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
   const renderDocumentGroup = (label: string, items: string[], tone: string): string => items.length
     ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${items.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
     : "";
+  const blockerSummary = state.executionStageBlockers.length
+    ? "当前阶段存在必须先处理的阻塞"
+    : state.executionStageStatus === "in_progress"
+      ? "文档整理进行中；未生成文档属于进度，不是阻塞"
+      : "没有发现阻塞文档";
   const documentGroups = [
-    renderDocumentGroup("本阶段阻塞", state.executionStageMissing, "blocker"),
+    renderDocumentGroup("本阶段阻塞", state.executionStageBlockers, "blocker"),
     renderDocumentGroup("本次变更受影响", state.executionStageAffected, "affected"),
     renderDocumentGroup("后续阶段待完善", state.executionStageDeferred, "deferred"),
+    renderDocumentGroup("待完善建议", state.executionStageWarnings, "deferred"),
   ].filter(Boolean);
-  const missing = documentGroups.length
-    ? `<div class="textbook-stage-findings">${documentGroups.join("")}<div class="textbook-soft-signal">只处理当前阶段与本次变更包的直接影响，不递归补齐全项目文档。</div></div>`
-    : "";
+  const missing = `<div class="textbook-stage-findings"><div class="textbook-stage-status is-${escapeHtml(state.executionStageStatus)}">${escapeHtml(blockerSummary)}</div>${documentGroups.join("")}${documentGroups.length ? `<div class="textbook-soft-signal">只处理当前阶段与本次变更包的直接影响，不递归补齐全项目文档。</div>` : ""}</div>`;
   body += missing + renderStageArtifactSummary(state, stage) + renderStageBasis(state, stage);
   return `<section class="textbook-plan-card" aria-label="阶段计划卡"><div class="textbook-plan-card-header"><span>阶段计划 · ${escapeHtml(FLOW_STAGES.find((item) => item.id === stage)?.label || "需求")}</span>${stage !== execution ? `<span class="textbook-preview-badge">预览中</span>` : ""}</div><div class="textbook-plan-card-body">${body}</div><div class="textbook-plan-card-actions">${action}</div></section>`;
+}
+
+function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
+  void callbacks;
+  const stage = getExecutionStage(state);
+  const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
+  const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
+  const reviewPassed = state.reviewVerdict === "pass" && state.reviewBlockersCount === 0;
+  let goal = "系统会在这里告诉你当前进展。";
+  let stat = "";
+  let action = "";
+  switch (stage) {
+    case "requirements":
+      goal = state.projectId ? "先确认这一轮要做什么。" : "先打开或新建一个项目。";
+      stat = state.projectId ? "待处理任务 " + openCount + " 条" : "绑定项目后才能继续。";
+      action = !state.projectId
+        ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-projects">打开项目</button>'
+        : state.scopeConfirmedAt
+          ? '<span class="textbook-soft-signal">范围已确认</span>'
+          : '<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope">确认范围</button>';
+      break;
+    case "documentation":
+      goal = "系统正在整理项目资料。";
+      stat = "资料准备好后，会请你确认方案。";
+      break;
+    case "design":
+      goal = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+        ? "方案有一项变更需要你查看。"
+        : "方案已经准备好，可以选择一项任务开始。";
+      stat = "还有 " + openCount + " 条待处理任务";
+      action = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+        ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看方案</button>'
+        : '<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>';
+      break;
+    case "implementation":
+      goal = "系统正在处理当前任务。";
+      stat = currentTask;
+      action = state.planStatus === "plan_dirty"
+        ? '<button type="button" class="unified-btn unified-btn-accent" data-action="stop-turn">暂停并查看变更</button>'
+        : '<span class="textbook-soft-signal">完成后会展示结果和验证入口</span>';
+      break;
+    case "verification":
+      goal = "任务已经收口，系统正在检查交付结果。";
+      stat = state.turnEvidence.length > 0 ? "验证结果已经产生，等待你查看。" : "正在准备验证结果。";
+      action = '<button type="button" class="unified-btn unified-btn-accent" data-action="jump-turn-process">查看验证结果</button>';
+      break;
+    case "release":
+      goal = state.milestoneAccepted ? "发布确认已经记录。" : "交付结果已经准备好，请完成发布前检查。";
+      stat = state.milestoneAccepted ? "可以开始下一轮工作。" : "项目在确认发布前不会标记为完成。";
+      action = state.milestoneAccepted
+        ? '<span class="textbook-soft-signal is-good">发布已确认</span>'
+        : '<button type="button" class="unified-btn unified-btn-accent" data-action="accept-milestone">确认发布</button>';
+      break;
+  }
+  const checklist = stage === "release"
+    ? '<div class="textbook-release-list">'
+      + '<span>☑ 任务已完成</span>'
+      + '<span>' + (state.turnEvidence.length > 0 ? "☑" : "☐") + ' 验证结果</span>'
+      + '<span>' + (reviewPassed ? "☑" : "☐") + ' 交付检查</span>'
+      + '<span>' + (state.milestoneAccepted ? "☑" : "☐") + ' 人工确认发布</span>'
+      + "</div>"
+    : "";
+  const blocker = state.executionStageBlockers.length > 0
+    ? '<div class="textbook-stage-findings"><div class="textbook-stage-status is-blocked">'
+      + escapeHtml(userFacingBlockerSummary(state))
+      + "</div></div>"
+    : "";
+  return '<section class="textbook-plan-card" aria-label="当前进展">'
+    + '<div class="textbook-plan-card-header"><span>当前进展</span></div>'
+    + '<div class="textbook-plan-card-body">'
+    + '<div class="textbook-plan-goal">' + escapeHtml(goal) + "</div>"
+    + '<div class="textbook-plan-stat">' + escapeHtml(stat) + "</div>"
+    + checklist + blocker
+    + '<div class="textbook-plan-card-actions">' + action + "</div></section>";
 }
 
 function renderTopSuggestionCard(
@@ -489,6 +1000,7 @@ function renderDropTaskChoice(state: ProjectPanelState): string {
 
 /** UX-026 SP-9 — stacked proposals in sidebar body (top card + peek layers). */
 function renderSuggestionStack(state: ProjectPanelState): string {
+  if (isDocumentationBatch(state)) return "";
   if (state.suggestionAdoptFlash) {
     return `<div class="sidebar-suggestion-stack is-adopt-flash">
       <div class="sidebar-suggestion-stack-flash">
@@ -518,7 +1030,7 @@ function renderSuggestionStack(state: ProjectPanelState): string {
   </div>`;
 }
 
-function renderTurnSummary(state: ProjectPanelState): string {
+function renderDetailedTurnSummary(state: ProjectPanelState): string {
   const total = state.turnEvidence.length;
   const fails = state.turnEvidence.filter((e) => !e.ok).length;
   const ok = total - fails;
@@ -544,7 +1056,7 @@ function renderTurnSummary(state: ProjectPanelState): string {
   </button>`;
 }
 
-function renderReliabilityStrip(state: ProjectPanelState): string {
+function renderDetailedReliabilityStrip(state: ProjectPanelState): string {
   const postcondition = (state.turnPostcondition || "none").trim();
   const circuitOpen = state.turnCircuitOpen || [];
   const playbook = (state.turnPlaybookId || "").trim();
@@ -583,15 +1095,14 @@ function renderPartnerNotices(notices: string[], busy: boolean, actionableCount 
     .filter(Boolean)
     .slice(0, 3)
     .map((n) => {
-      const short = n.length > 140 ? `${n.slice(0, 137)}…` : n;
+      const userText = userFacingNotice(n);
+      const short = userText.length > 140 ? `${userText.slice(0, 137)}…` : userText;
       return `<div style="font-size:0.78rem;opacity:0.92;margin-top:0.2rem">${escapeHtml(short)}</div>`;
     })
     .join("");
   const title = busy ? "计划搭档 · 思考中…" : "计划搭档";
-  const pendingAction = !busy && /待采纳|待审阅/.test(notices.join("\n"))
-    ? actionableCount > 0
-      ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开计划审阅（${actionableCount}）</button>`
-      : `<div class="sidebar-change-banner-changes">当前没有可采纳提案卡，请重新发送计划请求。</div>`
+  const pendingAction = !busy && actionableCount > 0
+    ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开计划审阅（${actionableCount}）</button>`
     : "";
   return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
     <div class="sidebar-change-banner-title">${title}</div>
@@ -611,6 +1122,19 @@ function normalizePartnerNoticeLine(text: string): string {
   return lines[0] ?? "";
 }
 
+function userFacingNotice(text: string): string {
+  return text
+    .replace(/\bPhase\s+\d+[a-z]?\b/gi, "当前批次")
+    .replace(/\bM[12]\b/gi, "")
+    .replace(/\bmilestone\b/gi, "发布检查")
+    .replace(/\bdeliverable_review\b/gi, "交付检查")
+    .replace(/\breport_progress\b/gi, "任务完成记录")
+    .replace(/\bGate\b/gi, "验证检查")
+    .replace(/\bblockers?\b/gi, "待处理问题")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function isAdoptedPartnerNotice(notices: string[]): boolean {
   const head = normalizePartnerNoticeLine(notices[0] ?? "");
   if (!head) return false;
@@ -619,7 +1143,7 @@ function isAdoptedPartnerNotice(notices: string[]): boolean {
 }
 
 function renderAdoptedNotice(notices: string[]): string {
-  const line = normalizePartnerNoticeLine(notices[0] ?? "");
+  const line = userFacingNotice(normalizePartnerNoticeLine(notices[0] ?? ""));
   return renderAdoptedFooterBanner(line);
 }
 
@@ -640,7 +1164,7 @@ function renderNextStepChip(state: ProjectPanelState): string {
   return "";
 }
 
-function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+function renderDetailedDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   const currentTask =
     (state.turnArmedText || "").trim() ||
     (state.nextTask || "").trim() ||
@@ -683,7 +1207,7 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     </div>`;
   }
   if (state.projectId) {
-    html += `<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看完整计划</button>`;
+    html += `<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看任务</button>`;
   }
   html += `</div>`;
   html += renderSuggestionStack(state);
@@ -692,7 +1216,64 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
   return html;
 }
 
-function renderReviewProgressBanner(state: ProjectPanelState): string {
+function renderReliabilityStrip(state: ProjectPanelState): string {
+  const postcondition = (state.turnPostcondition || "none").trim();
+  const hasFailure = postcondition === "fail"
+    || state.turnCircuitOpen.length > 0
+    || Boolean(state.turnFailureClass);
+  if (!hasFailure) return "";
+  return '<button type="button" class="sidebar-reliability is-fail" data-action="jump-turn-process">'
+    + '<span class="sidebar-reliability-row is-fail">这次处理没有完成 · 查看原因</span>'
+    + "</button>";
+}
+
+function renderTurnSummary(state: ProjectPanelState): string {
+  const total = state.turnEvidence.length;
+  const fails = state.turnEvidence.filter((item) => !item.ok).length;
+  const label = state.turnInProgress
+    ? "正在处理"
+    : fails > 0
+      ? "处理未完成"
+      : total > 0
+        ? "本次处理已完成"
+        : "等待处理";
+  return '<button type="button" class="sidebar-turn-summary" data-action="jump-turn-process">'
+    + '<span class="sidebar-turn-summary-chevron">' + (state.turnInProgress ? "▾" : "▸") + "</span>"
+    + '<span class="sidebar-turn-summary-text">当前处理 · ' + label + "</span>"
+    + '<span class="sidebar-turn-summary-jump" aria-hidden="true">›</span></button>';
+}
+
+function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  const currentTask =
+    (state.turnArmedText || "").trim()
+    || (state.nextTask || "").trim()
+    || state.taskPhases
+      .flatMap((phase) => phase.tasks)
+      .find((task) => task.status === "current" && !task.done)?.text
+    || "";
+  let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
+  html += renderDropTaskChoice(state);
+  html += '<div class="sidebar-decision">';
+  if (currentTask) {
+    html += '<div class="sidebar-decision-current">'
+      + '<div class="sidebar-decision-label">当前任务</div>'
+      + '<div class="sidebar-decision-text">' + escapeHtml(currentTask) + "</div></div>";
+  } else if (state.projectId) {
+    html += '<p class="overlay-empty" style="padding:0.5rem 0;">当前没有待处理任务</p>';
+  } else {
+    html += '<p class="overlay-empty" style="padding:0.5rem 0;">先打开或新建一个项目</p>';
+  }
+  if (state.projectId) {
+    html += '<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看任务</button>';
+  }
+  html += "</div>";
+  html += renderSuggestionStack(state);
+  html += renderTurnSummary(state);
+  html += renderReliabilityStrip(state);
+  return html;
+}
+
+function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
   if (!state.reviewProgressBlocked) return "";
   const count = state.reviewBlockersCount > 0 ? ` · ${state.reviewBlockersCount} 项阻塞` : "";
   return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
@@ -704,7 +1285,11 @@ function renderReviewProgressBanner(state: ProjectPanelState): string {
 
 function planStatusLabel(state: ProjectPanelState): string {
   if (state.planStatus === "confirmed") {
-    if (state.tasksAllDone && state.tasksTotal > 0) return "全部完成";
+    if (state.tasksAllDone && state.tasksTotal > 0) {
+      if (state.executionStage === "release" && state.milestoneAccepted) return "项目已完成";
+      if (state.executionStage === "release") return "待发布验收";
+      return "任务已清空 · 待验证";
+    }
     const open = Math.max(0, state.tasksTotal - state.tasksDone);
     return `还有 ${open} 条开放`;
   }
@@ -715,7 +1300,7 @@ function planStatusLabel(state: ProjectPanelState): string {
 function projectProgressLabel(item: ProjectListItem): string {
   if (item.tasksTotal === 0) return "无任务";
   const open = Math.max(0, item.tasksTotal - item.tasksDone);
-  if (open === 0) return "全部完成";
+  if (open === 0) return "任务已清空 · 待验证";
   return `${open}/${item.tasksTotal} 未完成`;
 }
 
@@ -742,7 +1327,7 @@ export function parseTasksMarkdown(text: string): TaskPhase[] {
       if (currentPhase.title || currentPhase.tasks.length) {
         phases.push(currentPhase);
       }
-      currentPhase = { title: phaseMatch[1].trim(), tasks: [] };
+      currentPhase = { title: userFacingTaskGroupTitle(phaseMatch[1].trim()), tasks: [] };
       continue;
     }
 
@@ -832,13 +1417,36 @@ export function diffTaskPhases(old: TaskSnapshot, phases: TaskPhase[]): {
 
 // ---- task flow rendering ----
 
+function taskIdFromText(text: string): string {
+  return text.match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
+}
+
+function renderReviewProgressBanner(state: ProjectPanelState): string {
+  if (!state.reviewProgressBlocked) return "";
+  const count = state.reviewBlockersCount > 0 ? " · " + state.reviewBlockersCount + " 项待处理" : "";
+  return '<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">'
+    + '<div class="sidebar-change-banner-title">交付检查需要处理</div>'
+    + '<div class="sidebar-change-banner-changes">系统暂时不会继续推进，请先处理交付检查中的问题' + count + '。</div>'
+    + '<button type="button" class="unified-btn" data-action="jump-review-summary" style="font-size:0.72rem;">查看检查结果</button>'
+    + "</div>";
+}
+
+function renderFlowRail(state: ProjectPanelState): string {
+  const stage = getExecutionStage(state);
+  const progress = projectTaskProgressLabel(state);
+  return '<div class="textbook-flow textbook-flow-summary" aria-label="当前进展">'
+    + '<div class="textbook-flow-header"><span class="textbook-flow-title">当前进展</span>'
+    + '<span class="textbook-flow-current">' + escapeHtml(USER_STAGE_LABELS[stage]) + '</span></div>'
+    + '<div class="textbook-flow-summary-text">' + escapeHtml(progress) + '</div></div>';
+}
+
 function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | null = null): string {
   if (!state.taskPhases.length) {
     return `<p class="overlay-empty">TASKS.md 将显示在这里</p>`;
   }
 
   // A7 overlay: open items only (done items live in archive)
-  let html = `<p class="overlay-empty" style="padding:0.25rem 0 0.5rem;font-size:0.72rem;">完整开放队列 · 勾选/右键可操作</p>`;
+  let html = '<p class="overlay-empty" style="padding:0.25rem 0 0.5rem;font-size:0.72rem;">待处理任务 · 选择一项开始</p>';
   let anyOpen = false;
   for (const phase of state.taskPhases) {
     const openTasks = phase.tasks.filter((t) => !t.done);
@@ -855,10 +1463,17 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
         cls.push("is-highlighted");
       }
 
-      html += `<label class="${cls.join(" ")}" data-line="${task.line}">
-        <input type="checkbox" class="task-checkbox" data-line="${task.line}">
-        <span class="task-text">${escapeHtml(task.text)}</span>
-      </label>`;
+      const taskId = taskIdFromText(task.text);
+      const startAction = getWorkflowStage(state) === "design" && taskId
+        ? `<button type="button" class="unified-btn task-start-action" data-action="start-task" data-task-id="${escapeHtml(taskId)}">开始实现</button>`
+        : "";
+      html += `<div class="${cls.join(" ")}" data-line="${task.line}">
+        <label class="task-item-select">
+          <input type="checkbox" class="task-checkbox" data-line="${task.line}">
+          <span class="task-text">${escapeHtml(task.text)}</span>
+        </label>
+        ${startAction}
+      </div>`;
 
       if (task.subtasks && task.subtasks.length > 0) {
         for (const sub of task.subtasks) {
@@ -872,7 +1487,7 @@ function renderTaskFlow(state: ProjectPanelState, highlightLines: Set<number> | 
     }
   }
   if (!anyOpen) {
-    html = `<p class="overlay-empty">暂无开放任务（已完成项在 TASKS.archive.md）</p>`;
+    html = '<p class="overlay-empty">暂时没有待处理任务，已完成内容可在任务详情查看。</p>';
   }
 
   return html;
@@ -888,14 +1503,6 @@ export function renderPlanTaskFlow(
 // ---- overlay panel rendering ----
 
 function renderDocsOverlay(state: ProjectPanelState): string {
-  // If viewing a specific document
-  if (state.currentDocPath) {
-    return `<div style="padding:0.25rem 0;font-size:0.78rem;color:var(--ma-text-muted);margin-bottom:0.5rem;">${escapeHtml(state.currentDocPath)}</div>
-      <div class="unified-markdown-panel">${state.currentDocContent
-        ? renderMarkdown(state.currentDocContent)
-        : `<p class="overlay-empty">加载中…</p>`}</div>`;
-  }
-
   // List all docs
   let html = "";
 
@@ -921,8 +1528,9 @@ function renderDocsOverlay(state: ProjectPanelState): string {
   for (const doc of sorted) {
     const icon = doc.is_standard ? "📋" : "📄";
     const sub = doc.name !== doc.path ? ` <span style="font-size:0.7rem;color:var(--ma-text-muted);">${escapeHtml(doc.path)}</span>` : "";
-    html += `<button type="button" class="overlay-doc-item" data-doc-path="${escapeHtml(doc.path)}">
-      <span>${icon} ${escapeHtml(doc.name)}</span>${sub}
+    const active = doc.path === state.currentDocPath ? " is-current" : "";
+    html += `<button type="button" class="overlay-doc-item${active}" data-doc-path="${escapeHtml(doc.path)}">
+      <span>${icon} ${escapeHtml(doc.name)}</span>${sub}<span class="overlay-doc-item-hint">主区阅读</span>
     </button>`;
   }
 
@@ -1097,7 +1705,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
   }
 
   // Task-level changes: 30s auto-confirm
-  if (isTaskLevelChange) {
+  if (isTaskLevelChange && getTaskChangeFingerprint(state) !== state.dismissedTaskChangeFingerprint) {
     let changesHtml = "";
     if (state.planChangeLog.length > 0) {
       const recent = state.planChangeLog.slice(-6);
@@ -1137,7 +1745,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
         return `${icon} ${escapeHtml(c.task_text)}`;
       }).join("<br>");
     } else {
-      changesHtml = "Phase 结构已变更，请确认后继续。";
+      changesHtml = "任务结构已变更，请确认后继续。";
     }
 
     const highlightLabel = state.highlightChanges ? "取消高亮" : "查看变更";
@@ -1161,12 +1769,22 @@ export function applyProjectStateEvent(
   state: ProjectPanelState,
   event: Extract<ServerEvent, { type: "project.state" }>,
 ): void {
-  state.projectId = event.project_id ?? "";
+  const nextProjectId = event.project_id ?? "";
+  if (state.projectId !== nextProjectId) {
+    resetPlanWarningState(state);
+    state.projectSummary = "";
+  }
+  state.projectId = nextProjectId;
+  state.projectSummary = event.project_summary ?? state.projectSummary;
   state.planStatus = event.plan_status ?? "draft";
+  state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
+  state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
+  state.executionStageStatus = event.execution_stage_status ?? state.executionStageStatus;
   state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
   state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
   state.executionStageMissing = event.execution_stage_missing ?? state.executionStageBlockers;
+  state.executionStageWarnings = event.execution_stage_warnings ?? state.executionStageWarnings;
   state.executionStageAffected = event.execution_stage_affected ?? state.executionStageAffected;
   state.executionStageDeferred = event.execution_stage_deferred ?? state.executionStageDeferred;
   state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
@@ -1227,18 +1845,25 @@ export function applyProjectStateEvent(
     state.planOverlay = null;
     state.highlightChanges = false;
   }
+  updatePlanWarningState(state, getExecutionStage(state));
 }
 
 export function applyProjectPlanState(
   state: ProjectPanelState,
   event: Extract<ServerEvent, { type: "project.plan.state" }>,
 ): void {
-  state.projectId = event.project_id ?? "";
+  const nextProjectId = event.project_id ?? "";
+  if (state.projectId !== nextProjectId) resetPlanWarningState(state);
+  state.projectId = nextProjectId;
   state.planStatus = event.plan_status ?? "draft";
+  state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
+  state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
+  state.executionStageStatus = event.execution_stage_status ?? state.executionStageStatus;
   state.executionStageReason = event.execution_stage_reason ?? state.executionStageReason;
   state.executionStageBlockers = event.execution_stage_blockers ?? state.executionStageBlockers;
   state.executionStageMissing = event.execution_stage_missing ?? state.executionStageBlockers;
+  state.executionStageWarnings = event.execution_stage_warnings ?? state.executionStageWarnings;
   state.executionStageAffected = event.execution_stage_affected ?? state.executionStageAffected;
   state.executionStageDeferred = event.execution_stage_deferred ?? state.executionStageDeferred;
   state.executionStageArtifacts = (event.execution_stage_artifacts ?? []).filter(
@@ -1258,7 +1883,11 @@ export function applyProjectPlanState(
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.planChangeLog = event.change_log ?? [];
   state.changeTimeline = event.change_timeline ?? [];
-  state.planWarnings = event.warnings ?? [];
+  updatePlanWarningState(
+    state,
+    getExecutionStage(state),
+    event.execution_stage_warnings ?? event.warnings ?? [],
+  );
   state.degradationLevel = event.degradation_level ?? "L1";
   state.degradationLabel = event.degradation_label ?? "全功能";
   state.changesLevel = event.changes_level ?? null;
@@ -1269,6 +1898,9 @@ export function applyProjectPlanState(
     state.adoptedFooterMessage = null;
   }
   state.autoFixNotices = event.auto_fix_actions ?? [];
+  const operationalNotices = Array.from(new Set((event.operational_notices ?? []).map((notice) => notice.trim()).filter(Boolean)));
+  const operationalFingerprint = operationalNoticeFingerprint(operationalNotices);
+  state.operationalNotices = operationalFingerprint === state.dismissedOperationalNoticeFingerprint ? [] : operationalNotices;
   state.partnerNotices = event.partner_notices ?? [];
   state.partnerBusy = false;
   state.nextTask = event.next_task ?? null;
@@ -1338,6 +1970,7 @@ export function isViewingArchivedThread(state: ProjectPanelState): boolean {
 // ---- element refs (matches new DOM) ----
 
 export function setupProjectPanel(container: HTMLElement): {
+  goalCard: HTMLElement;
   sidebarTitle: HTMLElement;
   sidebarMeta: HTMLElement;
   sidebarProgressWrap: HTMLElement;
@@ -1371,6 +2004,7 @@ export function setupProjectPanel(container: HTMLElement): {
 
   return {
     // new elements
+    goalCard: el("unified-goal-card"),
     sidebarTitle: el("project-sidebar-title"),
     sidebarMeta: el("project-sidebar-meta"),
     sidebarProgressWrap: el("project-sidebar-progress"),
@@ -1474,6 +2108,11 @@ export function renderProjectSidebar(
   state: ProjectPanelState,
   callbacks: ProjectPanelCallbacks,
 ): void {
+  const goalView = deriveProjectGoalViewModel(state);
+  els.goalCard.classList.toggle("hidden", !state.projectId);
+  els.goalCard.dataset.goalStatus = goalView.status;
+  els.goalCard.innerHTML = renderProjectGoalCard(state);
+
   // header
   if (state.projectId) {
     els.sidebarTitle.textContent = `项目 · ${state.projectId}`;
@@ -1506,6 +2145,18 @@ export function renderProjectSidebar(
       <span>${escapeHtml(state.undoDescription)}</span>
       <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
     </div>`;
+  } else if (state.externalChanges) {
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">检测到外部修改</div>
+      <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
+      <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
+    </div>`;
+  } else if (isDocumentationBatch(state)) {
+    const pending = state.planWarningsPending.length;
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">文档整理中</div>
+      <div class="sidebar-change-banner-changes">四个核心制品按一个批次处理；${pending ? `已收集 ${pending} 条待完善建议，` : ""}阶段结束后统一审阅。</div>
+    </div>`;
   } else if (state.partnerBusy) {
     bannerHtml = renderPartnerNotices(state.partnerNotices || [], true, actionableSuggestions.length);
   } else if (state.adoptedFooterMessage && actionableSuggestions.length === 0 && !hasAdoptFlash) {
@@ -1520,14 +2171,10 @@ export function renderProjectSidebar(
     bannerHtml = renderAdoptedNotice(state.partnerNotices);
   } else if (state.partnerNotices && state.partnerNotices.length > 0 && !isAdoptedPartnerNotice(state.partnerNotices)) {
     bannerHtml = renderPartnerNotices(state.partnerNotices, false, actionableSuggestions.length);
-  } else if (state.externalChanges) {
-    bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">检测到外部修改</div>
-      <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
-      <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
-    </div>`;
   } else if (state.autoFixNotices.length > 0) {
     bannerHtml = renderAutoFixNotice(state.autoFixNotices);
+  } else if (state.operationalNotices.length > 0) {
+    bannerHtml = renderOperationalNotices(state.operationalNotices);
   } else if (state.reviewProgressBlocked) {
     bannerHtml = renderReviewProgressBanner(state);
   } else if (state.detectedProject && !state.projectId) {
@@ -1543,17 +2190,13 @@ export function renderProjectSidebar(
     const level = state.degradationLevel || "L1";
     const label = state.degradationLabel || level;
     const explain = level === "L3"
-      ? "项目管理器不可用，退回直接文件操作模式。勾选/排序仍可用，拆分和新任务需通过聊天框。"
-      : "LLM 服务暂时不可用，拆分和新任务退回单条添加模式。勾选和排序正常。";
+      ? "项目服务暂时不可用，退回直接文件操作模式。拆分和新增任务请通过聊天框。"
+      : "项目服务暂时不可用，拆分和新增任务退回单条添加模式。";
     bannerHtml = renderDegradeBanner(level, label, explain);
-  } else if (state.planWarnings.length > 0) {
-    const warnHtml = state.planWarnings
-      .map((w) => `<div style="padding:0.2rem 0.75rem;font-size:0.78rem;color:#d4a000;">⚠ ${escapeHtml(w)}</div>`)
-      .join("");
-    bannerHtml = `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">计划提示</div>
-      ${warnHtml}
-      <button type="button" class="unified-btn" data-action="dismiss-warnings" style="margin-top:0.3rem;font-size:0.72rem;">关闭</button>
+  } else if (isDocumentationBatch(state)) {
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
+      <div class="sidebar-change-banner-title">文档整理中</div>
+      <div class="sidebar-change-banner-changes">项目资料正在连续整理，完成后会统一告诉你下一步。</div>
     </div>`;
   } else {
     bannerHtml = renderChangeBanner(state);
@@ -1611,6 +2254,7 @@ export function renderProjectSidebar(
     els.overlayPanel.classList.remove("hidden");
     els.overlayTitle.textContent = overlayTitle(state.overlayPanel);
     els.overlayBody.innerHTML = renderOverlayBody(state);
+    void hydrateMermaid(els.overlayBody);
   } else {
     els.overlayPanel.classList.add("hidden");
   }

@@ -267,7 +267,7 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
 
     if event_type == "error":
         text = str(event.get("message", "")).strip()
-        return [{"type": "notice", "text": text}] if text else []
+        return [{"type": "notice", "level": "error", "text": text}] if text else []
 
     return []
 
@@ -285,6 +285,8 @@ class TerminalInkBridge:
     _event_server: socket.socket | None = field(default=None, repr=False)
     _event_conn: socket.socket | None = field(default=None, repr=False)
     _event_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _cancel_requested: threading.Event = field(default_factory=threading.Event, repr=False)
+    cancel_listener: Callable[[], None] | None = field(default=None, repr=False)
 
     @classmethod
     def start(cls, paths: AgentPaths) -> TerminalInkBridge:
@@ -376,6 +378,12 @@ class TerminalInkBridge:
                     continue
                 parsed = self._parse_input(message)
                 if parsed is not None:
+                    if isinstance(parsed, InkCancelRequest):
+                        self._cancel_requested.set()
+                        listener = self.cancel_listener
+                        if listener is not None:
+                            listener()
+                            continue
                     self._inputs.put(parsed)
         finally:
             self._inputs.put(None)
@@ -410,9 +418,16 @@ class TerminalInkBridge:
         except queue.Empty:
             return None
 
+    def clear_cancel_request(self) -> None:
+        self._cancel_requested.clear()
+
     def wait_confirm(self, request_id: str, allow_approve_all: bool) -> str:
         while True:
-            message = self.next_input()
+            if self._cancel_requested.is_set():
+                self._cancel_requested.clear()
+                self.emit_confirm_done(request_id=request_id, choice="n")
+                return "n"
+            message = self.next_input(timeout=0.1)
             if message is None:
                 return "n"
             if not isinstance(message, InkConfirmResponse):
@@ -600,6 +615,17 @@ class TerminalInkConsole:
     def emit_meta_notice(self, text: str) -> None:
         self.output_fn(text)
 
+    def bind_context(self, session: Any, paths: AgentPaths, scope_fields: Any) -> None:
+        """Refresh Ink session metadata after a slash command changes context."""
+        self.session = session
+        self.paths = paths
+        self.scope_fields = scope_fields
+        self.bridge.emit_session_init(
+            session=session,
+            scope_fields=scope_fields,
+            resume=True,
+        )
+
     def wire_repl(self, repl: Any) -> None:
         repl.stream_handlers = self.sink.stream_handlers()
         repl.agent.stream_handlers = repl.stream_handlers
@@ -628,6 +654,7 @@ class TerminalInkConsole:
         return self.bridge.wait_confirm(request_id, allow_approve_all)
 
     def begin_user_turn(self, text: str) -> None:
+        self.bridge.clear_cancel_request()
         self.sink.set_pending_user_text(text)
 
     def clear_transcript(self) -> None:

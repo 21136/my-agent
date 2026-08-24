@@ -11,7 +11,7 @@ _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-TurnIntent = Literal["qa", "plan", "execute", "research", "recall"]
+TurnIntent = Literal["qa", "plan", "execute", "research", "recall", "requirements"]
 
 _EXECUTE_KEYWORDS = (
     "造",
@@ -95,6 +95,55 @@ _MIXED_RESEARCH_MARKERS = (
     "顺便看看",
 )
 
+_DIRECT_ACTION_MARKERS = (
+    "请根据",
+    "请帮",
+    "帮我",
+    "开始做",
+    "开始写",
+    "开始实现",
+    "动手",
+    "直接做",
+    "直接写",
+    "先写",
+    "创建项目",
+    "创建工具",
+    "创建代码",
+    "修改文件",
+    "修改代码",
+    "生成项目",
+    "生成代码",
+    "运行测试",
+    "运行命令",
+    "执行测试",
+    "执行命令",
+    "落地实现",
+    "实现一下",
+    "做一下",
+    "please",
+    "help me",
+    "start",
+    "create",
+    "modify",
+    "generate",
+    "run",
+    "execute",
+    "implement",
+    "build",
+)
+
+_REQUIREMENT_HEADINGS = (
+    "项目简介",
+    "需求说明",
+    "项目背景",
+    "产品需求",
+    "功能需求",
+    "系统简介",
+    "project brief",
+    "requirements",
+    "product requirements",
+)
+
 
 def auto_explore_enabled() -> bool:
     return os.environ.get("MY_AGENT_AUTO_EXPLORE", "1").strip() not in {"0", "false", "no"}
@@ -139,12 +188,29 @@ def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
         return "先只读探索"
     labels: dict[TurnIntent, str] = {
         "recall": "根据上文直接回顾，不调工具",
+        "requirements": "需求输入，只读归纳",
         "qa": "直接回答",
         "plan": "整理方案，少动手",
         "research": "先查阅再回答",
         "execute": "可动手执行",
     }
     return labels.get(intent, intent)
+
+
+def is_requirement_input(user_text: str) -> bool:
+    """Recognize pasted project prose without treating it as an execution request."""
+    text = user_text.strip()
+    if len(text) < 120:
+        return False
+    lower = text.casefold()
+    if text.startswith(("请", "帮我", "开始", "动手", "直接", "先写", "创建", "修改", "生成", "运行", "执行")):
+        return False
+    if any(marker in text or marker in lower for marker in _DIRECT_ACTION_MARKERS):
+        return False
+    heading = any(marker in text or marker in lower for marker in _REQUIREMENT_HEADINGS)
+    numbered = text.startswith(tuple(f"{index}." for index in range(1, 10)))
+    sentence_count = sum(text.count(mark) for mark in ("。", "！", "？", ".", "!", "?"))
+    return heading or (numbered and sentence_count >= 2) or sentence_count >= 4
 
 
 def _mentions_project_artifacts(text: str, lower: str) -> bool:
@@ -158,6 +224,9 @@ def classify_turn(user_text: str) -> TurnIntent:
 
     if is_recall_turn(text):
         return "recall"
+
+    if is_requirement_input(text):
+        return "requirements"
 
     if lower.startswith(("探索", "调研", "explore ")):
         return "research"

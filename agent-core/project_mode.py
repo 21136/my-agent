@@ -21,6 +21,14 @@ from project_manifest import STANDARD_ARTIFACTS, lint_project_content
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
+ProjectWorkflowStage = Literal[
+    "requirements",
+    "documentation",
+    "design",
+    "implementation",
+    "verification",
+    "release",
+]
 ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
@@ -36,6 +44,7 @@ PLAN_DOMAIN_WRITE_BLOCK_MSG = (
 )
 TASKS_ARCHIVE_NAME = "TASKS.archive.md"
 TASKS_INJECTION_OPEN_CAP = 20
+CORE_PROJECT_ARTIFACTS = ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
 CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
 _TEMPLATE_DIRNAME = "_template"
 _TEMPLATE_FILES = (*STANDARD_PROJECT_ARTIFACTS, "MAP.md")
@@ -82,7 +91,7 @@ class TaskStats:
         return self.total > 0 and self.open_count == 0
 
 
-EXECUTION_STAGES = ("requirements", "design", "implementation", "verification", "release")
+EXECUTION_STAGES = ("requirements", "documentation", "design", "implementation", "verification", "release")
 
 
 def classify_stage_documents(
@@ -123,7 +132,7 @@ def classify_stage_documents(
     }
 
 
-def compute_execution_stage(
+def _compute_execution_stage(
     *,
     project_id: str,
     plan_status: str,
@@ -132,10 +141,17 @@ def compute_execution_stage(
     project_root: Path | str | None = None,
     review_verdict: str | None = None,
     review_blockers_count: int = 0,
+    workflow_stage: str = "requirements",
 ) -> dict[str, Any]:
-    """Compute the authoritative five-stage project state from disk-backed inputs."""
+    """Compute the authoritative workflow stage from disk-backed inputs."""
     if not project_id:
         return {"stage": "requirements", "reason": "no_project", "blockers": []}
+    if workflow_stage == "documentation":
+        return {
+            "stage": "documentation",
+            "reason": "documentation_in_progress",
+            "blockers": list(CORE_PROJECT_ARTIFACTS),
+        }
     if manifest is None:
         return {
             "stage": "requirements",
@@ -159,7 +175,7 @@ def compute_execution_stage(
             "reason": "l2_stale",
             "blockers": sorted(l2_stale),
         }
-    if plan_status != "confirmed":
+    if workflow_stage == "requirements" and plan_status != "confirmed":
         return {
             "stage": "requirements",
             "reason": "plan_not_confirmed",
@@ -209,25 +225,10 @@ def compute_execution_stage(
         )
     elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
         content_lint = manifest["content_lint"]
-    completeness_blockers = [
-        path
-        for path in ("DESIGN.md", "TECH-DESIGN.md")
-        if (artifacts.get(path) or {}).get("completeness") != "complete"
-    ] if change_scope != "small" and (project_root is not None or content_lint is not None) else []
-    lint_blockers = list(content_lint.get("missing", [])) if content_lint else []
-    if completeness_blockers or lint_blockers:
-        blockers = completeness_blockers + [item for item in lint_blockers if item not in completeness_blockers]
-        return {
-            "stage": "design",
-            "reason": "content_incomplete",
-            "blockers": blockers,
-            "missing": blockers,
-            "content_lint": content_lint,
-        }
     if not task_stats.all_done:
         if task_stats.done == 0:
-            return {"stage": "design", "reason": "tasks_not_started", "blockers": []}
-        return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": []}
+            return {"stage": "design", "reason": "tasks_not_started", "blockers": [], "content_lint": content_lint}
+        return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": [], "content_lint": content_lint}
 
     verification_blockers = [
         path
@@ -247,6 +248,70 @@ def compute_execution_stage(
             blockers.append("review_blockers")
         return {"stage": "verification", "reason": "verification_pending", "blockers": blockers}
     return {"stage": "release", "reason": "verification_passed", "blockers": []}
+
+
+def compute_execution_stage(
+    *,
+    project_id: str,
+    plan_status: str,
+    task_stats: TaskStats,
+    manifest: dict[str, Any] | None,
+    project_root: Path | str | None = None,
+    review_verdict: str | None = None,
+    review_blockers_count: int = 0,
+    workflow_stage: str = "requirements",
+) -> dict[str, Any]:
+    """Return the backend-authoritative stage snapshot consumed by every UI surface.
+
+    ``_compute_execution_stage`` keeps the existing gate decisions. This wrapper
+    adds the shared status vocabulary so a warning or in-progress document batch
+    cannot be mistaken for an execution blocker.
+    """
+    result = _compute_execution_stage(
+        project_id=project_id,
+        plan_status=plan_status,
+        task_stats=task_stats,
+        manifest=manifest,
+        project_root=project_root,
+        review_verdict=review_verdict,
+        review_blockers_count=review_blockers_count,
+        workflow_stage=workflow_stage,
+    )
+    blockers = [str(item) for item in result.get("blockers", []) if str(item).strip()]
+    warnings = [str(item) for item in result.get("warnings", []) if str(item).strip()]
+    missing = [str(item) for item in result.get("missing", blockers) if str(item).strip()]
+
+    if result.get("stage") == "documentation":
+        artifacts = {
+            str(item.get("path")): item
+            for item in (manifest or {}).get("artifacts", [])
+            if isinstance(item, dict) and item.get("path")
+        }
+        missing = [
+            path
+            for path in CORE_PROJECT_ARTIFACTS
+            if (artifacts.get(path) or {}).get("status") != "current"
+        ]
+        blockers = []
+        warnings.extend(f"文档整理中：{path}" for path in missing)
+
+    content_lint = result.get("content_lint")
+    if isinstance(content_lint, dict):
+        warnings.extend(
+            f"文档待完善：{item}"
+            for item in (content_lint.get("missing") or [])
+            if str(item).strip()
+        )
+    warnings = sorted(set(warnings))
+    return {
+        **result,
+        "status": "blocked" if blockers else (
+            "in_progress" if result.get("stage") == "documentation" else "ready"
+        ),
+        "blockers": sorted(set(blockers)),
+        "missing": sorted(set(missing)),
+        "warnings": warnings,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +472,95 @@ def create_project(
 
     bootstrap_manifest(dest, pid)
     return dest
+
+
+def _is_template_document(name: str, project_id: str, text: str) -> bool:
+    normalized = text.strip()
+    return (
+        not normalized
+        or normalized == f"# template {name}"
+        or normalized == _template_body(name, project_id).strip()
+        or normalized == _template_body(name, "template").strip()
+    )
+
+
+def organize_project_documents(paths: AgentPaths, project_id: str) -> dict[str, Any]:
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+
+    documents = {
+        "PROJECT.md": (
+            f"# {pid} · 项目章程\n\n"
+            "## 目标\n\n"
+            "说明要解决的问题、目标用户和可衡量结果。\n\n"
+            "## 范围\n\n"
+            "- REQ-001：本轮要交付的用户价值。\n"
+            "- AC-001：用户可以通过明确步骤验证结果。\n\n"
+            "## 非目标\n\n"
+            "- 本轮不包含未在范围中确认的功能、重构或基础设施。\n\n"
+            "## 待确认问题\n\n"
+            "- 用户、数据、合规和发布约束待确认。\n"
+        ),
+        "DESIGN.md": (
+            f"# {pid} · 需求与设计\n\n"
+            "## 用户流程\n\n"
+            "- UX-001：描述主流程、关键状态、异常路径和空状态。\n\n"
+            "## 技术方案\n\n"
+            "- TD-001：描述模块边界、数据流、接口、依赖和失败处理。\n\n"
+            "## 关键决策\n\n"
+            "- ADR-001：记录方案选择、替代方案和取舍。\n\n"
+            "## 设计验收\n\n"
+            "- AC-001：设计能够支撑一个小任务独立实现和验证。\n"
+        ),
+        "TASKS.md": (
+            f"# {pid} · 执行队列\n\n"
+            "- [ ] T-001 实现第一条可交付用户流程\n"
+            "  req: REQ-001\n"
+            "  ac: AC-001\n"
+            "  design: UX-001, TD-001\n"
+            "  verify: V-001\n"
+            "  evidence: 按 VERIFY.md 执行对口验证\n"
+        ),
+        "VERIFY.md": (
+            f"# {pid} · 验证计划与证据\n\n"
+            "## V-001 · 第一条用户流程\n\n"
+            "- 对应验收：AC-001\n"
+            "- 验证方法：运行与 T-001 对口的测试或人工验收步骤。\n"
+            "- 预期结果：主流程、异常路径和数据结果符合 DESIGN.md。\n"
+            "- 实际证据：待执行。\n\n"
+            "## 发布检查\n\n"
+            "- 测试结果、迁移/回滚影响和人工发布确认：待补充。\n"
+        ),
+    }
+    generated: list[str] = []
+    preserved: list[str] = []
+    for name, content in documents.items():
+        path = root / name
+        existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if _is_template_document(name, pid, existing):
+            path.write_text(content, encoding="utf-8")
+            generated.append(name)
+        else:
+            preserved.append(name)
+    return {
+        "project_id": pid,
+        "generated": generated,
+        "preserved": preserved,
+        "artifacts": list(CORE_PROJECT_ARTIFACTS),
+    }
+
+
+def documentation_ready_for_design(paths: AgentPaths, project_id: str) -> tuple[bool, list[str]]:
+    artifacts = read_project_artifacts(paths, project_id)
+    checks = {
+        "PROJECT.md": all(token in artifacts.get("PROJECT.md", "") for token in ("REQ-", "AC-")),
+        "DESIGN.md": all(token in artifacts.get("DESIGN.md", "") for token in ("UX-", "TD-")),
+        "TASKS.md": "T-" in artifacts.get("TASKS.md", "") and "- [ ]" in artifacts.get("TASKS.md", ""),
+        "VERIFY.md": all(token in artifacts.get("VERIFY.md", "") for token in ("V-", "AC-")),
+    }
+    return all(checks.values()), [name for name, ok in checks.items() if not ok]
 
 
 def _read_project_text(path: Path) -> str:
@@ -1971,11 +2125,15 @@ def project_mode_block_reason(
     tool_name: str,
     arguments: dict[str, object],
     agent_paths: AgentPaths | None = None,
+    workflow_stage: str = "",
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+    effective_stage = workflow_stage or (
+        "implementation" if plan_status == "confirmed" else ""
+    )
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
         return (
@@ -1989,8 +2147,35 @@ def project_mode_block_reason(
         if isinstance(inner, dict) and inner.get("target") == "evolve_tools":
             return "project 模式禁止向 evolve/tools clone；请切换到 grow 壳沉淀能力"
 
+    if active_shell == "project" and not root:
+        if tool_name == "run_evolved" and (
+            evolved_name in _CODING_TOOLS
+            or evolved_name in _WRITE_TOOLS
+            or evolved_name in {"git_clone", "write_evolve"}
+        ):
+            return (
+                "当前项目窗口未绑定项目；已停止副作用操作。"
+                "请先打开或新建项目，再执行写入、运行、测试或创建工具。"
+            )
+
     if not root:
         return None
+
+    if active_shell == "project" and effective_stage and effective_stage != "implementation":
+        code_write = evolved_name in _CODING_TOOLS or evolved_name == "patch_file"
+        if evolved_name in _WRITE_TOOLS:
+            code_write = any(
+                path
+                and is_under_project_root(path, project_root)
+                and not is_project_artifact_path(path, project_root)
+                for path in extract_run_evolved_paths(tool_name, arguments)
+            )
+        if code_write and (effective_stage in {"documentation", "design"} or plan_status == "confirmed"):
+            if effective_stage == "documentation":
+                return "当前处于 documentation：只允许整理项目文档，不能修改业务代码"
+            if effective_stage == "design":
+                return "当前处于 design：请先「项目 开始任务 <T-ID>」授权一个实现任务"
+            return "当前项目尚未进入 implementation，不能修改业务代码"
 
     plan_domain_block = main_agent_plan_domain_write_block(
         project_root=root,
@@ -2112,6 +2297,8 @@ def format_project_overlay(
     open_tasks_slice: str | None = None,
     delivery_profile: str = DEFAULT_PROJECT_DELIVERY_PROFILE,
     milestone_review_suggested: str | None = None,
+    workflow_stage: str = "",
+    active_task_id: str | None = None,
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -2121,7 +2308,21 @@ def format_project_overlay(
         f"project_plan_status: {plan_status or 'draft'}",
         f"project_delivery_profile: {profile}",
     ]
-    if plan_status != "confirmed":
+    if workflow_stage:
+        lines.append(f"project_workflow_stage: {workflow_stage}")
+    if active_task_id:
+        lines.append(f"project_active_task_id: {active_task_id}")
+    if workflow_stage == "documentation":
+        lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
+    elif workflow_stage == "design":
+        lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
+    elif workflow_stage == "implementation" and active_task_id:
+        lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+    if workflow_stage == "documentation":
+        lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
+    elif workflow_stage == "design":
+        lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
+    elif plan_status != "confirmed":
         lines.append(
             "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
         )

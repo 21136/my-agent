@@ -12,7 +12,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from project_cli import confirm_project_plan
+from project_cli import confirm_project_design, confirm_project_plan, start_project_task
 from project_mode import (
     ProjectModeError,
     acceptance_script_exists,
@@ -94,6 +94,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
     plan_status = session.meta.project_plan_status or "draft"
+    workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
     artifacts = read_project_artifacts(paths, pid) if pid else {}
     manifest = None
     manifest_error = None
@@ -113,6 +114,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         project_root=project_dir(paths, pid) if pid else None,
         review_verdict=getattr(session, "last_review_verdict", None),
         review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+        workflow_stage=workflow_stage,
     )
     stage_documents = classify_stage_documents(
         manifest,
@@ -141,6 +143,9 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "project_id": pid or None,
         "project_root": root or None,
         "plan_status": plan_status,
+        "workflow_stage": workflow_stage,
+        "design_confirmed_at": getattr(session.meta, "project_design_confirmed_at", "") or None,
+        "active_task_id": getattr(session.meta, "project_active_task_id", "") or None,
         "tasks_markdown": tasks_md,
         "map_markdown": map_md,
         "tasks_done": stats.done,
@@ -148,7 +153,11 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "tasks_open": stats.open_count,
         "tasks_all_done": stats.all_done,
         "project_summary": _project_summary(artifacts.get("PROJECT.md", "")),
-        "needs_plan_confirm": plan_status in {"draft", "plan_dirty"},
+        "needs_plan_confirm": (
+            plan_status in {"draft", "plan_dirty"} and workflow_stage == "requirements"
+        ),
+        "needs_design_confirm": workflow_stage == "documentation",
+        "needs_documentation": workflow_stage == "requirements",
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
@@ -165,9 +174,11 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "manifest_stale": manifest_has_l2_stale(manifest) if manifest is not None else False,
         "manifest_error": manifest_error,
         "execution_stage": stage["stage"],
+        "execution_stage_status": stage["status"],
         "execution_stage_reason": stage["reason"],
         "execution_stage_blockers": list(stage["blockers"]),
         "execution_stage_missing": list(stage.get("missing", stage["blockers"])),
+        "execution_stage_warnings": list(stage.get("warnings", [])),
         "execution_stage_affected": stage_documents["affected"],
         "execution_stage_deferred": stage_documents["deferred"],
         "content_lint": stage.get("content_lint"),
@@ -213,6 +224,9 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
     if not pid or session.meta.active_shell != "project":
         return None
     plan_status = session.meta.project_plan_status or "draft"
+    workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
+    if workflow_stage != "requirements":
+        return None
     if plan_status not in {"draft", "plan_dirty"}:
         return None
     artifacts = read_project_artifacts(paths, pid)
@@ -307,6 +321,12 @@ def dispatch_project_message(
     if msg_type == "project.state":
         return project_state_payload(session, paths)
 
+    if msg_type == "project.scope.confirm":
+        _project_pid(session)
+        session.meta.project_scope_confirmed_at = utc_now_iso()
+        session.save()
+        return project_state_payload(session, paths)
+
     if msg_type == "project.release.accept":
         pid = _project_pid(session)
         state = project_state_payload(session, paths)
@@ -397,6 +417,33 @@ def dispatch_project_message(
                 "request_id": request_id,
             }
         raise ProjectApiError("plan.response choice must be confirm or edit")
+
+    if msg_type == "project.design.confirm":
+        try:
+            message = confirm_project_design(session, paths)
+        except ProjectModeError as exc:
+            raise ProjectApiError(str(exc)) from exc
+        return {
+            "_events": [
+                {"type": "notice", "text": message},
+                project_state_payload(session, paths),
+            ]
+        }
+
+    if msg_type == "project.task.start":
+        task_id = message.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ProjectApiError("project.task.start requires task_id")
+        try:
+            result = start_project_task(session, paths, task_id)
+        except ProjectModeError as exc:
+            raise ProjectApiError(str(exc)) from exc
+        return {
+            "_events": [
+                {"type": "notice", "text": result},
+                project_state_payload(session, paths),
+            ]
+        }
 
     if msg_type == "project.verify":
         pid = (session.meta.project_id or "").strip()
@@ -551,6 +598,8 @@ def dispatch_doc_message(
             return read_project_doc(paths, pid, doc_path)
 
         if msg_type == "project.doc.create":
+            if getattr(session.meta, "project_workflow_stage", "requirements") == "requirements":
+                raise ProjectApiError("请先明确「开始整理文档」；需求阶段不写项目文档")
             doc_path = str(message.get("path", ""))
             content = str(message.get("content", ""))
             if not doc_path:
@@ -716,11 +765,6 @@ def _dispatch_plan_message(
 
         if msg_type == "project.plan.state":
             return agent.build_state(session)
-
-        if msg_type == "project.scope.confirm":
-            session.meta.project_scope_confirmed_at = utc_now_iso()
-            session.save()
-            return project_state_payload(session, paths)
 
         if msg_type == "project.plan.undo":
             entry = agent.undo_last()

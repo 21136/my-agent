@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-**my-agent 是只活在单机上的项目开发工作台**：交付真源在 **栈-C（把关）**——**磁盘已写入 + 终端 build/test 绿**；**栈-D（纪律）** 上的 TASKS 视图与 `deliverable_review` **不**替代栈-C，**不**走云 PR；Phase 开放队列清空时 **侧栏 suggestion 提醒**验收，**不自动 spawn** 子代理。
+**my-agent 是只活在单机上的项目开发工作台**：交付真源在 **栈-C（把关）**——**磁盘已写入 + 终端 build/test 绿**；**栈-D（纪律）** 上的 TASKS 视图与 `deliverable_review` **不**替代栈-C，**不**走云 PR；Phase 开放队列清空时由 Harness 产生验证/发布提醒，**不自动 spawn** 子代理，也不把内部提醒直接变成用户的连续操作。
 
 ---
 
@@ -142,6 +142,8 @@
 
 ## 5. 里程碑自动提醒（栈-D · T-4714～4718）
 
+本节描述的是 Harness 的内部进度判定，不是默认用户界面流程。侧栏只有在提醒改变用户下一步选择时才显示用户层摘要；内部的 Phase、M1/M2、去重键和 archive 细节进入诊断或详情，不要求用户逐条关闭。
+
 ### 5.1 PLAN-ARCH 归档语义（实现必读）
 
 ```text
@@ -197,15 +199,17 @@ assert archived_done > 0          # 排除从未有过任务的空 Phase 标题�
 
 语义：该 **精确 Phase 标题** 下开放队列已空，且 archive 证明本 Phase **曾完成过至少一条任务**。`evaluate_milestone_after_archive` 另返回 **`remind_scope`**：`phase` · `project` · `phase_and_project`（写入 suggestion `payload`，影响 dismiss 是否连带 M2）。
 
-### 5.4 M2 · 项目完成
+### 5.4 M2 · 全项目队列收口提醒（非项目完成）
 
 `toggle` 成功后：
 
 ```python
 stats = read_task_stats(tasks_path)  # 已跳过关闭区 + 含 archive done 累计
 # M2：stats.total == stats.done and stats.done > 0
-# 等价：开放队列空且曾有完成任务
+# 语义：开放队列空且曾有完成任务；仅触发验证/发布提醒，不代表项目已完成
 # M2 去重键：project:complete（非 phase:N）
+
+M2 是进度提醒的历史内部名称，不是项目完成回执。项目完成仍必须满足 `VERIFY.md` 证据、交付审查、发布检查和用户人工验收；UI 不得把 `project:complete` 直接渲染为“项目已完成”或“全部完成”。
 ```
 
 **可选加强**（M1 IT）：toggle 前 `open_before == 1` 且 `result["phase"]` 一致。
@@ -281,7 +285,7 @@ M2 哨兵：固定 "project:complete"（MILESTONE_PROJECT_COMPLETE_KEY）
 建议：① git_commit 快照 ② build/test ③ 口语「验收」（只读 review，不挡写码）。
 ```
 
-M2 追加：`全项目开放队列已空；收尾前建议 review + commit。`
+M2 追加：`全项目开放队列已空；下一步是验证、review 和发布验收。`
 
 ### 5.8 挂钩点
 

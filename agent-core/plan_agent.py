@@ -1179,7 +1179,7 @@ class PlanAgent:
             "建议：① git_commit 快照 ② build/test ③ 口语「验收」（只读 review，不挡写码）。",
         ]
         if ev.get("m2") or ev.get("should_remind_m2"):
-            lines.append("全项目开放队列已空；收尾前建议 review + commit。")
+            lines.append("全项目开放队列已空；下一步是验证、review 和发布验收。")
         if normalize_delivery_profile(delivery_profile) == "ritual":
             lines.append(
                 "ritual：建议先 deliverable_review，fail 时会挡 report_progress。"
@@ -1587,7 +1587,13 @@ class PlanAgent:
 
             def _ids(prefix: str) -> list[str]:
                 return sorted(
-                    set(re.findall(rf"\b{prefix}-\d{{3,}}\b", changed_text, re.IGNORECASE)),
+                    set(
+                        re.findall(
+                            rf"\b{prefix}-(?:[A-Z0-9]+-)*\d{{3,}}\b",
+                            changed_text,
+                            re.IGNORECASE,
+                        )
+                    ),
                     key=str.upper,
                 )
 
@@ -1912,20 +1918,23 @@ class PlanAgent:
                     payload={"line": i},
                 ))
             elif len(desc) > 120:
-                out.append(self._suggestion(
-                    kind="split",
-                    title="建议拆分任务",
-                    body=(
-                        f"行 {i} 过长（{len(desc)} 字）。"
-                        f"采纳 = 拆成更小步骤；忽略 = 本会话不再提示。"
-                    ),
-                    key=f"long-{i}",
-                    action="split_task",
-                    payload={"line": i},
-                ))
+                continue
 
         # phase_long without a safe auto action — skip (Ignore-only cards banned)
         return out
+
+    def _operational_task_notices(self, tasks_text: str) -> list[str]:
+        notices: list[str] = []
+        for line_number, line in enumerate(tasks_text.splitlines()):
+            match = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
+            if not match:
+                continue
+            description = match.group(1).strip()
+            if len(description) > 120:
+                notices.append(
+                    f"任务行 {line_number} 描述较长；如需拆分，请明确提出拆分任务。"
+                )
+        return notices
 
     def _suggest_empty_phases(self) -> list[dict[str, Any]]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -2859,6 +2868,7 @@ class PlanAgent:
 
         # Stale task detection + next step (after auto_fix)
         self._suggestions = []
+        operational_notices = self._operational_task_notices(current_tasks)
         import re as _re
         current_line = -1
         next_task_text: str | None = None
@@ -2874,19 +2884,9 @@ class PlanAgent:
             self._stale_task_line = current_line
             self._stale_task_count = 1
         if self._stale_task_count >= 5 and current_line >= 0:
-            stale = self._suggestion(
-                kind="stale",
-                title="耗时提醒",
-                body=(
-                    f"任务「{(next_task_text or '')[:40]}」已保持 "
-                    f"{self._stale_task_count} 轮未完成，是否拆分为更小的子任务？"
-                ),
-                key=f"stale-{current_line}",
-                action="split_task",
-                payload={"line": current_line},
+            operational_notices.append(
+                f"任务「{(next_task_text or '')[:40]}」仍在进行中；如需拆分，请明确提出拆分任务。"
             )
-            if stale["id"] not in self._ignored_suggestion_ids:
-                self._suggestions.append(stale)
 
         self._suggestions.extend(self.quality_suggestions())
         for sug in self._active_milestone_suggestions.values():
@@ -2946,6 +2946,9 @@ class PlanAgent:
             project_root=project_dir(self.paths, self.project_id),
             review_verdict=getattr(session, "last_review_verdict", None),
             review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+            workflow_stage=getattr(session.meta, "project_workflow_stage", "requirements")
+            if session is not None
+            else "requirements",
         )
         stage_documents = classify_stage_documents(
             manifest,
@@ -2977,6 +2980,17 @@ class PlanAgent:
             "type": "project.plan.state",
             "project_id": self.project_id,
             "plan_status": plan_status,
+            "workflow_stage": getattr(session.meta, "project_workflow_stage", "requirements")
+            if session is not None
+            else "requirements",
+            "needs_design_confirm": (
+                getattr(session.meta, "project_workflow_stage", "requirements") == "documentation"
+                if session is not None
+                else False
+            ),
+            "active_task_id": getattr(session.meta, "project_active_task_id", "") or None
+            if session is not None
+            else None,
             "tasks_markdown": current_tasks,
             "map_markdown": artifacts.get("MAP.md", ""),
             "tasks_done": stats.done,
@@ -2987,12 +3001,13 @@ class PlanAgent:
             "changes_level": changes_level,
             "external_changes": external_changes,
             "suggestions": list(self._suggestions),
+            "operational_notices": operational_notices,
             "next_task": next_task_text,
             "next_task_line": current_line if current_line >= 0 else None,
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
             "warnings": [
-                f"文档基线缺项：{item}（建议在 Plan 审阅中补齐）"
+                f"阶段待完善：{item}（不阻塞当前运行）"
                 for item in stage.get("missing", [])
             ],
             "auto_fix_actions": auto_fix_actions,
@@ -3011,9 +3026,11 @@ class PlanAgent:
             ],
             "change_timeline": change_timeline,
             "execution_stage": stage["stage"],
+            "execution_stage_status": stage["status"],
             "execution_stage_reason": stage["reason"],
             "execution_stage_blockers": list(stage["blockers"]),
             "execution_stage_missing": list(stage.get("missing", stage["blockers"])),
+            "execution_stage_warnings": list(stage.get("warnings", [])),
             "execution_stage_affected": stage_documents["affected"],
             "execution_stage_deferred": stage_documents["deferred"],
             "content_lint": stage.get("content_lint"),

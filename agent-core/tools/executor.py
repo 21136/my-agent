@@ -100,6 +100,8 @@ class ExecutorSession:
     project_root: str = ""
     project_id: str = ""
     project_plan_status: str = ""
+    project_workflow_stage: str = ""
+    project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
     harness: str = "desktop"
     terminal_scope_kind: str = ""
@@ -152,6 +154,8 @@ class ExecutorSession:
         project_root = ""
         project_id = ""
         project_plan_status = ""
+        project_workflow_stage = ""
+        project_active_task_id = ""
         project_delivery_profile = "solo"
         harness = "desktop"
         terminal_scope_kind = ""
@@ -171,6 +175,8 @@ class ExecutorSession:
                     project_root = str(payload.get("project_root", "") or "").strip()
                     project_id = str(payload.get("project_id", "") or "").strip()
                     project_plan_status = str(payload.get("project_plan_status", "") or "")
+                    project_workflow_stage = str(payload.get("project_workflow_stage", "") or "")
+                    project_active_task_id = str(payload.get("project_active_task_id", "") or "")
                     from project_mode import normalize_delivery_profile
 
                     project_delivery_profile = normalize_delivery_profile(
@@ -197,6 +203,8 @@ class ExecutorSession:
             project_root=project_root,
             project_id=project_id,
             project_plan_status=project_plan_status,
+            project_workflow_stage=project_workflow_stage,
+            project_active_task_id=project_active_task_id,
             project_delivery_profile=project_delivery_profile,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
@@ -222,6 +230,8 @@ class ExecutorSession:
         self.project_root = str(payload.get("project_root", "") or "").strip()
         self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
+        self.project_workflow_stage = str(payload.get("project_workflow_stage", "") or "")
+        self.project_active_task_id = str(payload.get("project_active_task_id", "") or "")
         from project_mode import normalize_delivery_profile
 
         self.project_delivery_profile = normalize_delivery_profile(
@@ -675,6 +685,7 @@ def _validate_project_mode_call(
         active_shell=session.active_shell,
         project_root=session.project_root,
         plan_status=session.project_plan_status,
+        workflow_stage=session.project_workflow_stage,
         tool_name=tool_name,
         arguments=arguments,
         agent_paths=agent_paths,

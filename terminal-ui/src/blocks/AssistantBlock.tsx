@@ -1,6 +1,11 @@
 import React from 'react';
 import {Box, Text} from 'ink';
-import {parseMarkdown, type MarkdownBlock, type MarkdownInline} from '../markdown.js';
+import {
+  parseMarkdown,
+  restoreClippedMarkdownFence,
+  type MarkdownBlock,
+  type MarkdownInline,
+} from '../markdown.js';
 import {LineText} from '../components/LineText.js';
 import {sliceTextByWrappedRows} from '../render/display-text.js';
 import {tokens} from '../theme/tokens.js';
@@ -135,9 +140,15 @@ export function MarkdownBody({text, columns, skipRows = 0, maxRows}: BodySlicePr
     maxRows ?? Number.MAX_SAFE_INTEGER,
   );
   if (!slice.text && skipRows > 0) return <AssistantBody>{null}</AssistantBody>;
+  const markdownText = restoreClippedMarkdownFence(
+    text,
+    slice.text,
+    columns,
+    skipRows,
+  );
   return (
     <AssistantBody>
-      {parseMarkdown(slice.text).map((block, index) => <MarkdownBlockView key={index} block={block} />)}
+      {parseMarkdown(markdownText).map((block, index) => <MarkdownBlockView key={index} block={block} />)}
     </AssistantBody>
   );
 }

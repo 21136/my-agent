@@ -13,6 +13,7 @@ export const MAX_THINKING_DISPLAY_LINES = 8;
 export const MAX_ASSISTANT_DISPLAY_LINES = 48;
 
 export const ASSISTANT_HEADER_ROWS = 1;
+export const ASSISTANT_BODY_MARGIN_ROWS = 1;
 export const USER_PREFIX_COLS = 4;
 
 export type VisibleBlock = {
@@ -96,7 +97,7 @@ export function estimateBlockRows(block: TerminalBlock, columns: number): number
     }
     case 'assistant':
     case 'assistant_streaming':
-      return ASSISTANT_HEADER_ROWS + assistantBodyRows(block.body, columns);
+      return ASSISTANT_HEADER_ROWS + assistantBodyRows(block.body, columns) + ASSISTANT_BODY_MARGIN_ROWS;
     case 'notice':
       return wrapLineCount(block.text, columns, USER_PREFIX_COLS) + 1;
     case 'turn_sep':
@@ -121,13 +122,37 @@ export function estimateTranscriptRows(
   return buildBlockLayout(blocks, columns).reduce((sum, item) => sum + item.rows, 0);
 }
 
+export function estimateLiveTranscriptRows(
+  liveReasoningText: string,
+  liveAssistantText: string,
+  columns: number,
+): number {
+  let rows = 0;
+  if (liveReasoningText.trim()) {
+    const {lines, clippedTop} = formatStreamingThinkingLines(
+      liveReasoningText,
+      columns,
+      MAX_THINKING_DISPLAY_LINES,
+    );
+    rows += 2 + Math.max(lines.length, 1) + (clippedTop ? 1 : 0);
+  }
+  if (liveAssistantText.trim()) {
+    rows +=
+      ASSISTANT_HEADER_ROWS +
+      assistantBodyRows(liveAssistantText, columns) +
+      ASSISTANT_BODY_MARGIN_ROWS;
+  }
+  return rows;
+}
+
 export function maxTranscriptScrollUp(
   blocks: readonly TerminalBlock[],
   maxRows: number,
   columns: number,
+  extraRows = 0,
 ): number {
-  if (maxRows <= 0 || blocks.length === 0) return 0;
-  return Math.max(0, estimateTranscriptRows(blocks, columns) - maxRows);
+  if (maxRows <= 0) return 0;
+  return Math.max(0, estimateTranscriptRows(blocks, columns) + extraRows - maxRows);
 }
 
 /** Fit transcript blocks into a row budget; scrollUpRows shifts the window toward older content. */
@@ -162,18 +187,23 @@ export function getViewportBlockEntries(
     let used = 0;
     for (let i = layout.length - 1; i >= 0; i -= 1) {
       const item = layout[i]!;
+      const remaining = maxRows - used;
+      if (remaining <= 0) break;
+      const visibleRows = Math.min(item.rows, remaining);
+      const skipRows = item.rows - visibleRows;
       entries.unshift({
         block: item.block,
         index: item.index,
-        skipRows: 0,
-        maxRows: Number.MAX_SAFE_INTEGER,
+        skipRows,
+        maxRows: skipRows === 0 ? Number.MAX_SAFE_INTEGER : visibleRows,
       });
-      used += item.rows;
-      if (i > 0 && used >= maxRows) break;
+      used += visibleRows;
+      if (skipRows > 0) break;
     }
     return {
       entries,
-      clippedTop: entries.length > 0 && entries[0]!.index > 0,
+      clippedTop:
+        entries.length > 0 && (entries[0]!.index > 0 || entries[0]!.skipRows > 0),
       clippedBottom: false,
     };
   }
@@ -212,11 +242,27 @@ export function getViewportBlockEntries(
 export function transcriptRowBudget(
   height: number | undefined,
   welcomeCompact: boolean,
+  footerRows = 4,
 ): number {
   if (!height || height <= 0) return 24;
   const welcomeRows = welcomeCompact ? 3 : 12;
-  const footerRows = 3;
   return Math.max(12, height - welcomeRows - footerRows);
+}
+
+export function transcriptFooterRows(
+  working: boolean,
+  confirming: boolean,
+  reviewing: boolean,
+  paletteRows = 0,
+): number {
+  const composerRows = confirming
+    ? 4
+    : 3 + (working ? 1 : 0) + (reviewing ? 1 : 0) + paletteRows;
+  return composerRows + 1;
+}
+
+export function reviewNewOutputRows(currentRows: number, baselineRows: number): number {
+  return Math.max(0, currentRows - baselineRows);
 }
 
 export function scrollTranscriptRows(

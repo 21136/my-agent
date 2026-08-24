@@ -95,6 +95,32 @@ class ProjectStageTests(unittest.TestCase):
         self.assertEqual(result["reason"], "l2_stale")
         self.assertIn("SCOPE.md", result["blockers"])
 
+    def test_it5912_compound_scope_ids_do_not_remain_blockers(self) -> None:
+        (self.root / "SCOPE.md").write_text(
+            "# scope\nREQ-MUSIC-001\nAC-MUSIC-001\n",
+            encoding="utf-8",
+        )
+        self.manifest = bootstrap_manifest(self.root, "demo")
+        result = compute_execution_stage(
+            project_id="demo",
+            plan_status="confirmed",
+            task_stats=TaskStats(done=0, total=1),
+            manifest=self.manifest,
+        )
+        self.assertNotIn("REQ", result["blockers"])
+        self.assertNotIn("AC", result["blockers"])
+
+        scope = next(item for item in self.manifest["artifacts"] if item["path"] == "SCOPE.md")
+        scope["ids"] = []
+        result = compute_execution_stage(
+            project_id="demo",
+            plan_status="confirmed",
+            task_stats=TaskStats(done=0, total=1),
+            manifest=self.manifest,
+        )
+        self.assertIn("REQ", result["blockers"])
+        self.assertIn("AC", result["blockers"])
+
     def test_t5834_future_documents_are_not_current_blockers(self) -> None:
         result = classify_stage_documents(
             self.manifest,
@@ -113,6 +139,25 @@ class ProjectStageTests(unittest.TestCase):
         )
         self.assertIn("DESIGN.md", result["affected"])
         self.assertNotIn("DESIGN.md", result["deferred"])
+
+    def test_documentation_progress_is_not_a_blocker(self) -> None:
+        for artifact in self.manifest["artifacts"]:
+            if artifact["path"] in {"PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md"}:
+                artifact["status"] = "skeleton"
+        result = compute_execution_stage(
+            project_id="demo",
+            plan_status="draft",
+            task_stats=TaskStats(done=0, total=0),
+            manifest=self.manifest,
+            workflow_stage="documentation",
+        )
+        self.assertEqual(result["stage"], "documentation")
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["blockers"], [])
+        self.assertEqual(set(result["missing"]), set((
+            "PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md",
+        )))
+        self.assertTrue(result["warnings"])
 
 
 if __name__ == "__main__":

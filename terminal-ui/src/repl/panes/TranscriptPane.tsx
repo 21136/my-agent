@@ -11,6 +11,7 @@ import {NoticeBlock} from '../../blocks/NoticeBlock.js';
 import {TurnSep} from '../../components/TurnSep.js';
 import type {TerminalBlock} from '../../types.js';
 import {
+  ASSISTANT_BODY_MARGIN_ROWS,
   getViewportBlockEntries,
   ASSISTANT_HEADER_ROWS,
 } from '../../perf/virtual-list.js';
@@ -54,7 +55,9 @@ const StaticBlockView = memo(function StaticBlockView({
       const bodySkip = Math.max(0, skipRows - ASSISTANT_HEADER_ROWS);
       const bodyMax = Math.max(
         0,
-        maxRows - (showHeader ? ASSISTANT_HEADER_ROWS - skipRows : 0),
+        maxRows -
+          (showHeader ? ASSISTANT_HEADER_ROWS - skipRows : 0) -
+          ASSISTANT_BODY_MARGIN_ROWS,
       );
       return (
         <>
@@ -73,7 +76,7 @@ const StaticBlockView = memo(function StaticBlockView({
       );
     }
     case 'notice':
-      return <NoticeBlock text={block.text} />;
+      return <NoticeBlock text={block.text} tone={block.tone} />;
     case 'turn_sep':
       return <TurnSep />;
     default:

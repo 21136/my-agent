@@ -44,7 +44,7 @@ class ProjectContentLinterTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["hard_gate"])
 
-    def test_manifest_lifecycle_and_stage_missing_are_visible(self) -> None:
+    def test_manifest_lifecycle_and_lint_advice_do_not_block_stage(self) -> None:
         manifest = bootstrap_manifest(self.root, "demo")
         self.assertEqual(manifest["project"]["content_origin"], "scaffold")
         self.assertEqual(manifest["change_scope"], "normal")
@@ -59,9 +59,10 @@ class ProjectContentLinterTests(unittest.TestCase):
             manifest=manifest,
             project_root=self.root,
         )
-        self.assertEqual(result["stage"], "design")
-        self.assertEqual(result["reason"], "content_incomplete")
-        self.assertIn("G2", result["missing"])
+        self.assertEqual(result["stage"], "implementation")
+        self.assertEqual(result["reason"], "tasks_in_progress")
+        self.assertEqual(result["blockers"], [])
+        self.assertIn("G2", result["content_lint"]["missing"])
 
 
 if __name__ == "__main__":
