@@ -1462,7 +1462,7 @@ case "session.history":
 | I1 | `list_session_summaries` 带 `project_id`；项目签去重（每 project 取最新一条） | ✅ |
 | I2 | 下拉 UI：页签 + 列表滚动 + 项目标题 | ✅ |
 | I3 | 顶栏双加号 + D8/D10 确认文案 | ✅ |
-| I4 | 后端硬门：同 project 已有会话则续接而非再建（`项目 新建` 路径） | ✅ |
+| I4 | 后端硬门：`项目 新建` 遇已有 project 必须报错；已有项目仅由打开/切换路径续接 | ✅ |
 | I5 | 「项目 +」接到 `项目 新建 <id>`；普通 + 挂起项目（`create_new` 不改 project_sessions） | ✅ |
 
 #### 与 S-5～S-8 关系

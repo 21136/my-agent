@@ -12,7 +12,7 @@
 |----|------|
 | **F1** | 拖放真源在 **sidecar**；渲染进程只上报本地绝对路径 |
 | **F2** | 拖入 **≠** 自动发消息；先 **附件 chip**，用户点发送才进回合 |
-| **F3** | 助手仍通过 `read_file` / host builtin / `run_evolved` 动手；**WS 不传文件正文** |
+| **F3** | 文本附件仍通过 `read_file` / host builtin / `run_evolved` 动手；**WS 不传文件正文** |
 | **F4** | **project 视角**（已绑项目）：区外文件 → `workspace/<project>/_incoming/<drop_id>/` |
 | **F5** | **非 project 视角**：区外文件 → `workspace/_drops/<session_id>/<drop_id>/` |
 | **F6** | 已在 **host 托管区**内 → **引用** `host:<id>/rel`，不复制（T-1205） |
@@ -21,6 +21,7 @@
 | **F9** | 允许 **纯附件** 发送（无文字时注入默认句） |
 | **F10** | 计划门 **不挡** 用户拖入 `_incoming/`；**挡** 助手写 `src/`（既有 P10） |
 | **F11** | 历史回放：`user` 消息含 `[附件]` 块（服务端拼文本） |
+| **F12** | PNG / JPEG / WEBP / GIF 在支持视觉的模型上作为图片输入发送；图片正文只在 LLM 请求内编码 |
 
 **实现锚点**：`desktop/src/file-drop.ts` · `composer-attachments.ts` · `shells/unified/index.ts` · `shells/pet/`。
 
@@ -68,6 +69,8 @@
 |----|-----|
 | 单文件上限 | 32 MB（超过：暂存失败或仅元数据，见实现） |
 | 单次最多 | 20 个文件 |
+| 图片识别格式 | `image/png`、`image/jpeg`、`image/webp`、`image/gif` |
+| 图片输入上限 | 8 MB；超过后保留附件路径，不注入图片正文 |
 | 文件夹 | **拒绝**，提示拖入文件 |
 | `read_file` 可读 | ≤512 KB UTF-8 文本；否则 `readable_text: false` |
 
@@ -87,7 +90,7 @@
 
 | type | 载荷 |
 |------|------|
-| `file.staged` | `{ "items": [{ "id", "name", "ref", "size", "mime", "readable_text", "copied" }] }` |
+| `file.staged` | `{ "items": [{ "id", "name", "ref", "size", "mime", "readable_text", "copied", "image_input" }] }` |
 | `file.unstaged` | `{ "attachment_id" }` |
 | `file.error` | `{ "message", "path"? }` — 单文件失败不阻断同批其它文件 |
 
@@ -97,6 +100,7 @@
 [附件]
 - main.py → workspace/doudizhu/_incoming/a1b2/main.py (4.0 KB, text/x-python)
 - spec.pdf → host:desktop/spec.pdf (1.2 MB, 不可直接 read_file)
+- screen.png → workspace/_drops/s1/screen.png (240 KB, 图片附件)
 
 请把这些模块并进当前项目
 ```
@@ -133,6 +137,14 @@
 
 不把文件正文写入 WS 或 `evolve_log`（对齐 TOOLS §10）。
 
+## 8.1 图片输入
+
+- `image_input: true` 只表示附件格式可作为图片输入，不表示当前模型一定支持视觉。
+- 模型注册表使用 `supportsImageInput`（或蛇形命名 `supports_image_input`）声明能力；桌面模型列表将支持视觉的模型标为「视觉」。
+- 支持视觉的模型收到 OpenAI-compatible 的 `image_url` data URI；图片不会写入 `messages.jsonl`、历史回放或日志。
+- 不支持视觉的模型不会收到图片二进制；服务端提示用户切换模型，主 Agent 同时被约束为不得声称看过图片。
+- 图片读取失败、路径越权或超过 8 MB 时只保留附件说明，不阻断整轮对话。
+
 ---
 
 ## 9. 里程碑
@@ -156,4 +168,5 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.1.1 | 2026-08-24 | 增加视觉图片输入协议与模型能力声明 |
 | 0.1.0 | 2026-07-12 | 初稿；**F4** project 优先 `_incoming/`；开放问题 1–4 已决 |

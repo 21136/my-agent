@@ -4,6 +4,8 @@
 
 ## 执行纪律
 
+若动态 overlay 明确 `project_runaway_enabled: true`，本文件中的“用户采纳计划”“一项一停”和“回复继续”均由狂奔覆盖规则替代；仍须保留 `report_progress` 证据、自动验证和真实阻塞暂停。
+
 1. **先计划后代码**：首轮用 `plan_partner` 填 `PROJECT.md` + `TASKS.md` 提案；用户采纳并确认后再实现。
 2. **一小步一勾选**：每完成一个 task，**必须使用 `report_progress` 工具**报告进度（不要直接写 `TASKS.md`）。这是通知计划侧（Plan Agent）更新的**唯一**通道。
    - `project_id`：可省略（内核从会话注入）；也可显式传入当前项目 ID

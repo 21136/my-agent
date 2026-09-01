@@ -53,6 +53,10 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-6007 | 任务清空后的验证发布门 | 任务、验证、审查、发布和人工验收的统一状态文案 | 勾选全部任务只显示“任务已清空 · 待验证”；未完验证/审查/发布验收前不得显示项目完成 | doc |
 | UI-6008 | Harness 与用户交互分层 | 内部阶段/Gate/审查/归档与用户目标/决策/结果的映射规则 | 普通内部状态不进入默认主路径；只有改变用户下一步选择的事实才生成决策条；用户无需逐项关闭内部提示 | doc |
 | UI-6009 | 目标卡收敛为项目上下文栏 | 轻量上下文栏、独立决策条和重复信息清理 | 默认只显示项目名、当前目标、当前进展和必要动作；不再渲染大目标卡；需要决定时单独显示决策条；聊天与任务工作区保留完整可用空间 | in_progress |
+| UI-6010 | 任务完成计数改为验证状态 | 顶部上下文栏与左侧进展区的统一文案 | 全部任务完成后不显示 `25/25 个任务`；统一显示“任务已清空 · 待验证”，并保留验证入口；未全部完成时才显示开放任务进度 | in_progress |
+| UI-6011 | 狂奔项目级自动运行 | 狂奔开关、持久化运行授权、跨任务推进和安全暂停 | 默认关闭；开启后可从一句话连续推进任务、测试、修复和验证；真实歧义/高风险/重复失败/外部发布仍暂停；重启后可恢复运行检查点 | done |
+| UI-6012 | 狂奔后台持续运行 | 单回合边界内续接、全天运行时限、狂奔下隐藏计划确认 | 开启狂奔后用户可以离开；系统不要求确认计划、任务、阶段或“继续”，后台持续推进直到完成、人工取消或命中真实暂停条件；重启后按检查点恢复 | done |
+| UI-6013 | 狂奔一次授权覆盖工具与提案 | 项目内工具自动放行、高风险动作保留暂停、计划提案自动采纳 | 狂奔开启后项目内代码/测试/构建/普通依赖/本地服务不弹确认；`plan_partner` 提案自动采纳；宿主机、敏感文件、删除、推送、外部写入和换线仍暂停 | done |
 | S-6001 | 真实项目体验验收 | Music Dreamer Desktop 手工路径 | 新项目输入 → 文档整理 → 方案确认 → 单任务实现 → 验证，全程不要求用户理解内部术语 | todo |
 
 UI-6001～UI-6005 的共同前置：用户评审并采纳 [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md) 的目标、信息架构、提醒分级和迁移策略；未采纳前只允许继续完善设计文档，不允许开始编码。
@@ -60,6 +64,30 @@ UI-6001～UI-6005 的共同前置：用户评审并采纳 [INTERACTION-REDESIGN.
 UI-6001 当前实现：主区目标卡和用户状态映射已接入 Unified；本轮将其收敛为项目上下文栏，并把需要用户决定的内容迁移到独立决策条。任务工作区仍待实施。复用 `project.state` / `project.plan.state` 的统一阶段快照，不新增后端状态。
 
 UI-6009 当前决策：目标信息保留为只读定位信息，但不再使用大目标卡承载它。默认主路径改用轻量项目上下文栏；目标详情、任务列表、文档全文和验证证据分别进入对应主区焦点。
+
+UI-6010 当前决策：`25/25 个任务` 只适合任务列表或历史统计，不适合当前进展。任务队列清空后，用户界面统一使用“任务已清空 · 待验证”，避免制造“已经完成但仍需处理”的数字冲突。
+
+UI-6011 当前决策：新增“狂奔”项目级运行授权，默认关闭。它负责让 Harness 自动跨任务推进，不把内部任务队列和阶段闸门变成用户操作清单；涉及范围变化、风险、外部发布和无法安全修复的失败仍然回到用户决策。
+
+UI-6012 当前决策：狂奔是后台长跑授权，不是连续弹窗确认器。用户只负责一次开启、随时停止和处理真实阻塞；计划采纳、任务切换、验证重试和单回合续接由 Harness 内部完成。
+
+UI-6013 当前决策：确认机制按“用户授权边界”而不是按单个工具调用触发。狂奔授权只覆盖当前项目内可逆、可验证的生产动作；高风险动作仍回到用户决策，但不得把普通项目工具和计划提案混入确认队列。
+
+UI-6013 验证：`test_runaway_covers_local_tool_confirmation_but_not_external_or_sensitive` · `test_runaway_auto_adopts_plan_partner_proposals` · `test_runaway_does_not_emit_plan_confirmation_request` · `test_runaway_overlay_overrides_confirmation_and_task_stop`（`agent-core/tests/test_project_artifacts.py` · `test_async_orchestration_task_stop.py`）通过。
+
+### 分支 `codex/runaway-mode-research` 合入清单（2026-09-01）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| 已提交（5 commits） | done | 教科书流程对齐 · manifest · Phase 58b 制品链基线 |
+| 工作区 WIP | **待提交** | ~2.4k 行：狂奔 Harness + Desktop UI + 交互重设计 |
+| 未跟踪核心文件 | **必须 add** | `runaway_flow.py` · `runaway_lease.py` · `runaway_verification.py` · `test_runaway_flow.py` · RUNAWAY 文档 |
+| 自动回归 | 待复跑 | `test_runaway_flow` · `test_project_artifacts` · 阶段卡契约（已修 UI 文案） |
+| Desktop build | 待确认 | `npm run build` |
+| 手工验收 | todo | S-6001 Music Dreamer 狂奔路径 · T-5907 端到端 |
+| 合入目标 | 建议 | `phase-58-textbook-flow`（远端默认开发线；本地无 `main`） |
+
+建议拆成 2～3 个 commit：`feat(runaway): harness state machine + lease + verification` → `feat(desktop): runaway controls + interaction redesign` → `docs: RUNAWAY + TASKS sync`。
 
 本次链路修复：范围确认必须经过后端 `project.scope.confirm` 路由并收到权威状态回执；失败时不把界面推进到“准备开始下一步”。
 
