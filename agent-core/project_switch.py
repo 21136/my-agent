@@ -276,6 +276,9 @@ def _inherit_project_meta(fresh: Session, previous: Session, project_id: str) ->
         fresh.meta.project_plan_confirmed_at = previous.meta.project_plan_confirmed_at
     fresh.meta.project_phase_fingerprint = previous.meta.project_phase_fingerprint
     fresh.meta.project_doc_fingerprint = previous.meta.project_doc_fingerprint
+    fresh.meta.project_runaway_enabled = bool(
+        getattr(previous.meta, "project_runaway_enabled", False)
+    )
 
 
 def start_new_project_thread(

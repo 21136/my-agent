@@ -1297,6 +1297,7 @@ def build_system_prompt(
                 milestone_review_suggested=milestone_key,
                 workflow_stage=getattr(session.meta, "project_workflow_stage", ""),
                 active_task_id=getattr(session.meta, "project_active_task_id", "") or None,
+                runaway_enabled=bool(getattr(session.meta, "project_runaway_enabled", False)),
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

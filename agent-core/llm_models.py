@@ -37,6 +37,7 @@ class ModelEntry:
     max_input_tokens: int = 128_000
     max_output_tokens: int = 8192
     supports_tool_call: bool = True
+    supports_image_input: bool = False
     tier: ModelTier = "flash"
     aliases: tuple[str, ...] = ()
 
@@ -99,6 +100,7 @@ class ModelRegistry:
                 "tier": entry.tier,
                 "max_input_tokens": entry.max_input_tokens,
                 "supports_tool_call": entry.supports_tool_call,
+                "supports_image_input": entry.supports_image_input,
                 "api_key_env": entry.api_key_env,
                 "configured": entry.resolve_api_key(agent_paths) is not None,
             }
@@ -254,6 +256,7 @@ def _builtin_models() -> list[ModelEntry]:
             provider_model=ox567_pro_model,
             api_key_env="OX567_API_KEY",
             max_input_tokens=1_000_000,
+            supports_image_input=True,
             max_output_tokens=65_536,
             tier="pro",
             aliases=("0x567", "567-pro", "567"),
@@ -266,6 +269,7 @@ def _builtin_models() -> list[ModelEntry]:
             provider_model=ox567_flash_model,
             api_key_env="OX567_API_KEY",
             max_input_tokens=372_000,
+            supports_image_input=True,
             tier="flash",
             aliases=("567-flash", "luna"),
         ),
@@ -332,6 +336,9 @@ def _parse_model_entry(raw: dict[str, Any]) -> ModelEntry | None:
     max_input = _int_field(raw, "maxInputTokens", "max_input_tokens", 128_000)
     max_output = _int_field(raw, "maxOutputTokens", "max_output_tokens", 8192)
     supports_tool_call = bool(raw.get("supportsToolCall", raw.get("supports_tool_call", True)))
+    supports_image_input = bool(
+        raw.get("supportsImageInput", raw.get("supports_image_input", False))
+    )
 
     return ModelEntry(
         id=registry_id,
@@ -344,6 +351,7 @@ def _parse_model_entry(raw: dict[str, Any]) -> ModelEntry | None:
         max_input_tokens=max_input,
         max_output_tokens=max_output,
         supports_tool_call=supports_tool_call,
+        supports_image_input=supports_image_input,
         tier=tier,
         aliases=tuple(aliases),
     )

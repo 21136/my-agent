@@ -2821,6 +2821,32 @@ class PlanAgent:
         if session is not None:
             plan_status = session.meta.project_plan_status or "draft"
 
+        runaway_enabled = bool(getattr(session.meta, "project_runaway_enabled", False)) if session is not None else False
+        runaway_checkpoint = "idle"
+        runaway_status = "已关闭"
+        runaway_paused_reason = None
+        runaway_acceptance_passed = False
+        runaway_verification_evidence = None
+        runaway_verification_evidence_path = None
+        if session is not None:
+            from runaway_flow import checkpoint_label, normalize_checkpoint
+            from runaway_verification import load_verification_evidence, verification_evidence_path
+
+            runaway_checkpoint = normalize_checkpoint(getattr(session.meta, "project_runaway_checkpoint", ""))
+            runaway_paused_reason = getattr(session.meta, "project_runaway_paused_reason", "") or None
+            runaway_acceptance_passed = bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
+            runaway_verification_evidence = load_verification_evidence(self.paths, self.project_id)
+            evidence_path = verification_evidence_path(self.paths, self.project_id)
+            if evidence_path.is_file():
+                runaway_verification_evidence_path = str(evidence_path.relative_to(self.paths.workspace)).replace("\\", "/")
+            runaway_status = (
+                f"已暂停：{runaway_paused_reason}"
+                if runaway_paused_reason
+                else checkpoint_label(runaway_checkpoint)
+                if runaway_enabled
+                else "已关闭"
+            )
+
         needs_confirm = self.check_plan_dirty()
         pending = self.pending_changes()
 
@@ -3035,6 +3061,15 @@ class PlanAgent:
             "execution_stage_deferred": stage_documents["deferred"],
             "content_lint": stage.get("content_lint"),
             "release_acceptance": release_acceptance,
+            "runaway_enabled": runaway_enabled,
+            "runaway_status": runaway_status,
+            "runaway_checkpoint": runaway_checkpoint,
+            "runaway_repair_count": int(getattr(session.meta, "project_runaway_repair_count", 0) or 0) if session is not None else 0,
+            "runaway_last_verification": getattr(session.meta, "project_runaway_last_verification", "") or None if session is not None else None,
+            "runaway_paused_reason": runaway_paused_reason,
+            "runaway_acceptance_passed": runaway_acceptance_passed,
+            "runaway_verification_evidence": runaway_verification_evidence,
+            "runaway_verification_evidence_path": runaway_verification_evidence_path,
             "execution_stage_artifacts": [
                 {
                     "path": item.get("path"),

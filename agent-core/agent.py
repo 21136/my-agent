@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -52,6 +53,10 @@ SCAFFOLD_COMPLETE_REPLACEMENT = "〔验收未通过·已拦截〕"
 QA_SOFT_REMINDER_MESSAGE = (
     "[内核] 请直接回答：根据已有上下文给出文字回复，勿再调用工具。"
 )
+IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE = (
+    "[能力约束] 当前模型不支持直接读取图片内容。"
+    "请明确告知用户无法查看图片，不要根据图片文件名、路径或附件元数据臆测图片内容。"
+)
 RECALL_SOFT_REMINDER_MESSAGE = (
     "[内核] 根据上文直接回顾，勿 read_file/grep messages.jsonl。"
 )
@@ -71,6 +76,8 @@ _DEFAULT_PARENT_SHORT_MAX = 5
 _DEFAULT_EXECUTE_SEGMENT_MAX = 50
 _DEFAULT_PROJECT_EXECUTE_SEGMENT_MAX = 15  # AGENT-HARNESS P2 · T-4102
 _DEFAULT_EXECUTE_TOTAL_MAX = 50
+RUNAWAY_REPAIR_BUDGET = 3
+RUNAWAY_TOOL_ROUND_MAX = 10000
 
 _CHECKLIST_PROGRESS_RE = re.compile(
     r"(?:\[[xX✓✔]\]|[-*]\s*\[[xX]\])",
@@ -142,7 +149,7 @@ def parent_execute_total_max() -> int:
     return max(1, value)
 
 
-def auto_continue_enabled(*, active_shell: str = "", harness: str = "") -> bool:
+def auto_continue_enabled(*, active_shell: str = "", harness: str = "", runaway_enabled: bool = False) -> bool:
     """Whether execute may auto-start the next segment in the same turn (T-705).
 
     Phase 20 / TASK-STOP S4: project shell always pauses at segment/task boundary.
@@ -153,8 +160,16 @@ def auto_continue_enabled(*, active_shell: str = "", harness: str = "") -> bool:
     if (harness or "").strip() == "terminal":
         return True
     if (active_shell or "").strip() == "project":
-        return False
+        return bool(runaway_enabled)
     return os.environ.get("MY_AGENT_AUTO_CONTINUE", "0").strip() not in {"0", "false", "no"}
+
+
+def runaway_total_max() -> int:
+    raw = os.environ.get("RUNAWAY_TOOL_ROUND_MAX", str(RUNAWAY_TOOL_ROUND_MAX))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return RUNAWAY_TOOL_ROUND_MAX
 
 
 def is_delivery_complete(text: str) -> bool:
@@ -845,6 +860,9 @@ class Agent:
         self.executor.session.project_delivery_profile = get_delivery_profile(
             self.session.meta
         )
+        self.executor.session.runaway_enabled = bool(
+            getattr(self.session.meta, "project_runaway_enabled", False)
+        )
         self.executor.session.harness = normalize_harness(self.session.meta.harness)
         self.executor.session.terminal_scope_kind = str(
             self.session.meta.terminal_scope_kind or ""
@@ -859,6 +877,89 @@ class Agent:
         self.executor.session.terminal_host_id = str(
             self.session.meta.terminal_host_id or ""
         ).strip()
+
+    def _transition_runaway_checkpoint(
+        self,
+        target: str,
+        *,
+        paused_reason: str | None = None,
+    ) -> str:
+        from runaway_flow import transition_checkpoint
+
+        checkpoint = transition_checkpoint(
+            self.session.meta,
+            target,
+            paused_reason=paused_reason,
+        )
+        self.session.meta.updated_at = utc_now_iso()
+        return checkpoint
+
+    def _pause_runaway(self, reason: str, *, error: str = "") -> None:
+        from runaway_flow import pause_runaway
+
+        pause_runaway(self.session.meta, reason, error=error)
+        self.session.meta.updated_at = utc_now_iso()
+        self.session.save()
+
+    def _run_runaway_hard_verification(self) -> bool:
+        """Run the project acceptance command and persist its evidence."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        pid = (self.session.meta.project_id or "").strip()
+        if not pid or self.session.meta.active_shell != "project":
+            self._pause_runaway("无法确定当前项目，不能执行验收")
+            return False
+
+        from runaway_verification import evidence_passed, run_harness_verification
+
+        record = run_harness_verification(self.session.paths, pid)
+        meta = self.session.meta
+        passed = evidence_passed(record, pid)
+        meta.project_runaway_acceptance_passed = passed
+        meta.project_runaway_verification_evidence_fingerprint = str(
+            record.get("evidence_fingerprint") or ""
+        )
+        if passed:
+            meta.updated_at = utc_now_iso()
+            self.session.save()
+            return True
+
+        summary = str(record.get("error") or "项目验收命令未通过").strip()
+        fingerprint = str(record.get("evidence_fingerprint") or "").strip()
+        previous = str(getattr(meta, "project_runaway_last_error_fingerprint", "") or "")
+        if previous and previous == fingerprint:
+            self._transition_runaway_checkpoint("paused", paused_reason="同一验收问题再次出现")
+            meta.project_runaway_last_error = summary[:500]
+            self.session.save()
+            return False
+        if int(getattr(meta, "project_runaway_repair_count", 0) or 0) >= RUNAWAY_REPAIR_BUDGET:
+            self._transition_runaway_checkpoint("paused", paused_reason="自动修复次数已用尽")
+            meta.project_runaway_last_error = summary[:500]
+            self.session.save()
+            return False
+
+        self._transition_runaway_checkpoint("repairing")
+        meta.project_runaway_repair_count = int(
+            getattr(meta, "project_runaway_repair_count", 0) or 0
+        ) + 1
+        meta.project_runaway_last_error = summary[:500]
+        meta.project_runaway_last_error_fingerprint = fingerprint
+        meta.updated_at = utc_now_iso()
+        self.session.save()
+        self.session.append_message(
+            {
+                "role": "user",
+                "content": (
+                    "[Harness] 项目验收命令未通过。请只在当前项目范围内修复问题，"
+                    "然后重新实现、测试并验证；不要等待用户回复。"
+                    f"验收结果：{summary[:500]}"
+                ),
+            }
+        )
+        self._emit_turn_event(
+            {"type": "turn.notice", "level": "warn", "text": "项目验收未通过，正在自动修复并复验…"}
+        )
+        return False
 
     def _set_terminal_plan_phase(self, phase: str) -> None:
         self.executor.session.terminal_plan_phase = (phase or "").strip()
@@ -1099,6 +1200,7 @@ class Agent:
             FIRST_COMPACT_USER_MESSAGE,
             build_llm_messages,
             build_llm_messages_with_optional_trim,
+            has_image_attachment,
             load_context_config,
             maybe_auto_compact,
             session_memory_event,
@@ -1202,6 +1304,7 @@ class Agent:
                     full_system,
                     model,
                     force_trim=True,
+                    include_images=bool(getattr(model_entry, "supports_image_input", False)),
                 )
                 if trimmed:
                     self._emit_turn_event(
@@ -1212,7 +1315,15 @@ class Agent:
                         }
                     )
             else:
-                working = build_llm_messages(self.session)
+                working = build_llm_messages(
+                    self.session,
+                    include_images=bool(getattr(model_entry, "supports_image_input", False)),
+                )
+
+            if not getattr(model_entry, "supports_image_input", False) and has_image_attachment(
+                self.session.messages
+            ):
+                full_system = f"{full_system}\n\n{IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE}"
 
             if recall_soft_reminder and not recall_injected:
                 self.session.append_message(
@@ -1435,6 +1546,26 @@ class Agent:
                     "content": to_json(result),
                 }
                 self.session.append_message(tool_message)
+
+                if tool_name == "deliverable_review" and result.ok:
+                    self._record_runaway_review_result(result)
+                if tool_name == "plan_partner" and result.ok:
+                    data = result.data if isinstance(result.data, dict) else {}
+                    proposal_ids = data.get("proposal_ids")
+                    if self._adopt_runaway_proposals(proposal_ids):
+                        dynamic_dirty = True
+                        from project_api import project_plan_state_payload, project_state_payload
+
+                        self._emit_turn_event(project_state_payload(self.session, self.session.paths))
+                        plan_state = project_plan_state_payload(self.session, self.session.paths)
+                        if plan_state is not None:
+                            self._emit_turn_event(plan_state)
+                        self.session.append_message(
+                            {
+                                "role": "system",
+                                "content": "[Harness] 狂奔模式：项目内提案已自动采纳，继续执行，不等待用户确认。",
+                            }
+                        )
 
                 if not result.ok:
                     from progress_gate import (
@@ -1709,10 +1840,12 @@ class Agent:
         segment_max = parent_execute_segment_max(
             active_shell=self.session.meta.active_shell,
         )
-        total_max = parent_execute_total_max()
+        runaway_enabled = bool(getattr(self.session.meta, "project_runaway_enabled", False))
+        total_max = runaway_total_max() if runaway_enabled else parent_execute_total_max()
         auto_continue = auto_continue_enabled(
             active_shell=self.session.meta.active_shell,
             harness=self.session.meta.harness,
+            runaway_enabled=runaway_enabled,
         )
 
         total_tool_rounds = 0
@@ -1752,6 +1885,14 @@ class Agent:
                 retry_error_fingerprints=retry_error_fingerprints,
             )
             total_tool_rounds += loop_result.tool_rounds
+            if getattr(self.session.meta, "project_runaway_enabled", False):
+                self.session.meta.project_runaway_tool_rounds = total_tool_rounds
+                if self.executor.session.task_done_baseline is not None:
+                    self.session.meta.project_runaway_task_done_baseline = int(
+                        self.executor.session.task_done_baseline
+                    )
+                self.session.meta.updated_at = utc_now_iso()
+                self.session.save()
 
             if loop_result.finish_reason in {"cancelled", "timeout"}:
                 finish_reason = loop_result.finish_reason
@@ -1764,6 +1905,24 @@ class Agent:
                 finish_reason = loop_result.finish_reason
                 if is_delivery_complete(final_text):
                     break
+                if self._runaway_repair_pending() and total_tool_rounds < total_max:
+                    final_text = ""
+                    finish_reason = None
+                    segment += 1
+                    continue
+                if self._advance_runaway_checkpoint() and total_tool_rounds < total_max:
+                    final_text = ""
+                    finish_reason = None
+                    segment += 1
+                    continue
+                if self._continue_runaway_after_natural_stop(
+                    final_text=final_text,
+                    finish_reason=finish_reason,
+                ) and total_tool_rounds < total_max:
+                    final_text = ""
+                    finish_reason = None
+                    segment += 1
+                    continue
                 break
 
             if not loop_result.exceeded:
@@ -1828,6 +1987,11 @@ class Agent:
             finish_reason=finish_reason,
         )
 
+        final_text, finish_reason = self._apply_runaway_pause_message(
+            final_text=final_text,
+            finish_reason=finish_reason,
+        )
+
         self.session.save()
         self.executor.end_execute_segments()
         return TurnResult(
@@ -1846,6 +2010,494 @@ class Agent:
             checker_tool_rounds=checker_tool_rounds,
         )
 
+    def _continue_runaway_after_natural_stop(
+        self,
+        *,
+        final_text: str,
+        finish_reason: str | None,
+    ) -> bool:
+        """Turn an ordinary model stop into an internal checkpoint continuation."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        if self.session.meta.active_shell != "project":
+            return False
+        if finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+            return False
+        from runaway_flow import normalize_checkpoint
+
+        checkpoint = normalize_checkpoint(
+            getattr(self.session.meta, "project_runaway_checkpoint", "")
+        )
+        if checkpoint in {"paused", "release_wait", "completed"}:
+            return False
+        stage = str(getattr(self.session.meta, "project_workflow_stage", "") or "")
+        if stage in {"release", "requirements", "documentation", "design"}:
+            return False
+        self.session.append_message(
+            {
+                "role": "user",
+                "content": (
+                    "[Harness] 狂奔运行未到交付出口。请继续检查当前项目状态，"
+                    "执行下一项实现、测试或验证；不要只做总结，也不要等待用户回复。"
+                    + (f"上一段回复：{final_text[:400]}" if final_text else "")
+                ),
+            }
+        )
+        self.session.meta.project_runaway_tool_rounds = 0
+        self.session.meta.updated_at = utc_now_iso()
+        self.session.save()
+        self._emit_turn_event(
+            {"type": "turn.notice", "level": "info", "text": "仍未完成交付，Harness 正在自动续接…"}
+        )
+        return True
+
+    def _record_runaway_review_result(self, result: ToolResult) -> bool:
+        """Persist verification outcomes and schedule bounded same-scope repair."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        if getattr(self.session.meta, "project_workflow_stage", "") != "verification":
+            return False
+        data = result.data if isinstance(result.data, dict) else {}
+        verdict = str(
+            data.get("verdict") or self.session.last_review_verdict or "warn"
+        ).strip().lower()
+        blockers = int(
+            data.get("blockers_count") or self.session.last_review_blockers_count or 0
+        )
+        summary = str(data.get("summary") or "验证审查未通过").strip()
+        meta = self.session.meta
+        meta.project_runaway_last_verification = verdict
+        meta.project_runaway_review_blockers_count = blockers
+        if verdict == "pass" and blockers == 0:
+            from runaway_flow import normalize_checkpoint
+
+            if normalize_checkpoint(
+                getattr(meta, "project_runaway_checkpoint", "")
+            ) == "repairing":
+                self._transition_runaway_checkpoint("verifying")
+            if not self._run_runaway_hard_verification():
+                return self._runaway_repair_pending()
+            self._transition_runaway_checkpoint("release_wait")
+            meta.project_runaway_last_error = ""
+            meta.project_runaway_last_error_fingerprint = ""
+            meta.project_runaway_paused_reason = ""
+            meta.updated_at = utc_now_iso()
+            self.session.save()
+            return False
+
+        fingerprint_source = f"{verdict}|{blockers}|{summary[:1200]}"
+        fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()[:16]
+        previous = str(getattr(meta, "project_runaway_last_error_fingerprint", "") or "")
+        if previous == fingerprint:
+            self._transition_runaway_checkpoint("paused", paused_reason="同一验证问题再次出现")
+            meta.project_runaway_paused_reason = "同一验证问题再次出现"
+            meta.project_runaway_last_error = summary[:500]
+            meta.updated_at = utc_now_iso()
+            self.session.save()
+            self._emit_turn_event(
+                {"type": "turn.notice", "level": "warn", "text": "验证问题重复出现，狂奔已暂停。"}
+            )
+            return False
+        if int(getattr(meta, "project_runaway_repair_count", 0) or 0) >= RUNAWAY_REPAIR_BUDGET:
+            self._transition_runaway_checkpoint("paused", paused_reason="自动修复次数已用尽")
+            meta.project_runaway_paused_reason = "自动修复次数已用尽"
+            meta.project_runaway_last_error = summary[:500]
+            meta.updated_at = utc_now_iso()
+            self.session.save()
+            self._emit_turn_event(
+                {"type": "turn.notice", "level": "warn", "text": "自动修复预算已用尽，狂奔已暂停。"}
+            )
+            return False
+
+        self._transition_runaway_checkpoint("repairing")
+        meta.project_runaway_repair_count = int(
+            getattr(meta, "project_runaway_repair_count", 0) or 0
+        ) + 1
+        meta.project_runaway_last_error = summary[:500]
+        meta.project_runaway_last_error_fingerprint = fingerprint
+        meta.project_runaway_paused_reason = ""
+        meta.updated_at = utc_now_iso()
+        self.session.save()
+        self.session.append_message(
+            {
+                "role": "user",
+                "content": (
+                    "[Harness] 狂奔验证未通过。请只在当前项目范围内修复审查指出的问题，"
+                    "然后重新运行对口测试与 deliverable_review；不要等待用户回复，"
+                    f"本次自动修复预算剩余 {RUNAWAY_REPAIR_BUDGET - meta.project_runaway_repair_count} 次。"
+                ),
+            }
+        )
+        self._emit_turn_event(
+            {"type": "turn.notice", "level": "warn", "text": "验证未通过，正在自动修复并重新验证…"}
+        )
+        return True
+
+    def _runaway_repair_pending(self) -> bool:
+        from runaway_flow import normalize_checkpoint
+
+        return bool(
+            getattr(self.session.meta, "project_runaway_enabled", False)
+            and normalize_checkpoint(
+                getattr(self.session.meta, "project_runaway_checkpoint", "")
+            ) == "repairing"
+        )
+
+    def _queue_runaway_documentation_repair(self, error: Exception) -> bool:
+        """Continue the current run to repair incomplete project documents."""
+        from project_mode import documentation_ready_for_design
+        from runaway_flow import normalize_checkpoint
+
+        pid = (self.session.meta.project_id or "").strip()
+        if not pid:
+            return False
+        try:
+            ready, missing = documentation_ready_for_design(self.session.paths, pid)
+        except Exception:
+            return False
+        if ready:
+            return False
+
+        missing_text = ", ".join(missing) or "核心项目文档"
+        if normalize_checkpoint(
+            getattr(self.session.meta, "project_runaway_checkpoint", "")
+        ) != "preparing":
+            self._transition_runaway_checkpoint("preparing")
+        self._sync_turn_mode()
+        self.session.meta.project_runaway_paused_reason = ""
+        self.session.meta.project_runaway_last_error = (
+            f"文档待补齐：{missing_text}"
+        )[:500]
+        self.session.meta.updated_at = utc_now_iso()
+        self.session.save()
+        self.session.append_message(
+            {
+                "role": "user",
+                "content": (
+                    "[Harness] 当前项目文档尚未达到设计确认标准，不能把这个缺口交给用户处理。"
+                    f"请只在当前项目目录内补齐或修正文档：{missing_text}。"
+                    "先读取现有 PROJECT.md、DESIGN.md、TASKS.md、VERIFY.md，保留已有内容，"
+                    "补齐需求/验收/设计/任务/验证之间的映射；完成后重新检查文档，"
+                    "不要请求用户确认，也不要等待用户回复。"
+                    f"触发检查信息：{str(error).strip()[:300]}"
+                ),
+            }
+        )
+        self._emit_turn_event(
+            {
+                "type": "turn.notice",
+                "level": "info",
+                "text": f"文档尚未完整，正在自动补齐：{missing_text}",
+            }
+        )
+        return True
+
+    def _apply_runaway_pause_message(
+        self,
+        *,
+        final_text: str,
+        finish_reason: str | None,
+    ) -> tuple[str, str | None]:
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return final_text, finish_reason
+        from runaway_flow import normalize_checkpoint
+
+        if normalize_checkpoint(
+            getattr(self.session.meta, "project_runaway_checkpoint", "")
+        ) != "paused":
+            return final_text, finish_reason
+        reason = str(
+            getattr(self.session.meta, "project_runaway_paused_reason", "") or "验证未通过"
+        ).strip()
+        message = f"狂奔已暂停：{reason}。请处理当前问题后，再重新开启狂奔。"
+        if final_text:
+            self._patch_last_assistant_message(message)
+        else:
+            self.session.append_message({"role": "assistant", "content": message})
+        return message, "runaway_paused"
+
+    def _advance_runaway_checkpoint(self) -> bool:
+        """Advance a completed project task without exposing a manual continue step."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        if self.session.meta.active_shell != "project":
+            return False
+
+        from project_mode import (
+            next_open_task,
+            project_dir,
+            project_id_from_root,
+            read_task_stats,
+            task_dependency_blockers,
+        )
+        from runaway_flow import task_fingerprint
+        from session import utc_now_iso
+
+        pid = (self.session.meta.project_id or "").strip() or project_id_from_root(
+            self.session.meta.project_root or ""
+        )
+        if not pid:
+            return False
+        tasks_path = project_dir(self.session.paths, pid) / "TASKS.md"
+        if not tasks_path.is_file():
+            return False
+
+        workflow_stage = getattr(self.session.meta, "project_workflow_stage", "requirements")
+        if workflow_stage == "documentation":
+            from project_cli import confirm_project_design
+
+            try:
+                confirm_project_design(self.session, self.session.paths)
+            except Exception as exc:
+                if self._queue_runaway_documentation_repair(exc):
+                    return True
+                self._pause_runaway("文档尚未达到设计确认标准", error=str(exc))
+                return False
+            workflow_stage = "design"
+        if workflow_stage == "design":
+            from project_cli import start_project_task
+
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+            _, next_task_text, next_task_id = next_open_task(tasks_text)
+            if not next_task_id:
+                blockers = task_dependency_blockers(tasks_text)
+                reason = "没有依赖已满足的开放任务"
+                if blockers:
+                    details = "; ".join(
+                        f"{task_id} 等待 {', '.join(values)}"
+                        for task_id, values in sorted(blockers.items())
+                    )
+                    reason = f"任务依赖未满足：{details}"
+                self._pause_runaway(reason)
+                return False
+            try:
+                start_project_task(self.session, self.session.paths, next_task_id)
+            except Exception as exc:
+                self._pause_runaway("无法自动启动实现任务", error=str(exc))
+                return False
+            self._sync_turn_mode()
+            self._transition_runaway_checkpoint("implementing")
+            self.session.meta.project_runaway_task_fingerprint = task_fingerprint(
+                next_task_id, next_task_text
+            )
+            self.session.meta.project_runaway_task_done_baseline = 0
+            self.session.meta.project_runaway_tool_rounds = 0
+            self.session.meta.project_runaway_repair_count = 0
+            self.session.meta.project_runaway_last_verification = ""
+            self.session.meta.updated_at = utc_now_iso()
+            self.session.save()
+            self.executor.begin_turn()
+            self.session.append_message(
+                {
+                    "role": "system",
+                    "content": (
+                        f"[Harness] 狂奔模式：已自动授权 {next_task_id}。"
+                        "请继续实现、测试并验证，不要等待用户回复。"
+                    ),
+                }
+            )
+            self._emit_turn_event(
+                {"type": "turn.notice", "level": "info", "text": "项目已准备好，正在开始第一项任务…"}
+            )
+            return True
+        if workflow_stage != "implementation" or not self.executor.session.task_stop_armed:
+            return False
+
+        stats = read_task_stats(tasks_path)
+        baseline = self.executor.session.task_done_baseline
+        if baseline is not None and stats.done <= baseline:
+            return False
+        tasks_text = tasks_path.read_text(encoding="utf-8")
+        task_line, task_text, task_id = next_open_task(tasks_text)
+        if task_id:
+            self.session.meta.project_workflow_stage = "implementation"
+            self.session.meta.project_plan_status = "confirmed"
+            self.session.meta.project_active_task_id = task_id
+            self._transition_runaway_checkpoint("implementing")
+            self.session.meta.project_runaway_task_fingerprint = task_fingerprint(
+                task_id, task_text
+            )
+            self.session.meta.project_runaway_task_done_baseline = 0
+            self.session.meta.project_runaway_tool_rounds = 0
+            self.session.meta.project_runaway_repair_count = 0
+            self.session.meta.project_runaway_last_error = ""
+            self.session.meta.project_runaway_last_error_fingerprint = ""
+            self.session.meta.project_runaway_last_verification = ""
+            self.session.meta.project_runaway_review_blockers_count = 0
+            self.session.meta.project_runaway_paused_reason = ""
+            self.session.meta.updated_at = utc_now_iso()
+            self.session.save()
+            self._sync_turn_mode()
+            self.executor.begin_turn()
+            self.session.append_message(
+                {
+                    "role": "system",
+                    "content": (
+                        f"[Harness] 狂奔模式：上一任务已完成，自动进入 {task_id}。"
+                        f"任务内容：{task_text or task_line or '见 TASKS.md'}。"
+                        "请继续实现、测试并验证，不要等待用户回复。"
+                    ),
+                }
+            )
+            self._emit_turn_event(
+                {"type": "turn.notice", "level": "info", "text": "当前任务已完成，正在进入下一项…"}
+            )
+            return True
+
+        blockers = task_dependency_blockers(tasks_text)
+        if blockers:
+            details = "; ".join(
+                f"{task_id} 等待 {', '.join(values)}"
+                for task_id, values in sorted(blockers.items())
+            )
+            self._pause_runaway(f"任务依赖未满足：{details}")
+            return False
+        if self.session.meta.project_workflow_stage == "verification":
+            return False
+        self.session.meta.project_workflow_stage = "verification"
+        self.session.meta.project_active_task_id = ""
+        self._transition_runaway_checkpoint("verifying")
+        self.session.meta.project_runaway_tool_rounds = 0
+        self.session.meta.project_runaway_repair_count = 0
+        self.session.meta.project_runaway_last_verification = ""
+        self.session.meta.project_runaway_review_blockers_count = 0
+        self.session.meta.project_runaway_acceptance_passed = False
+        self.session.meta.project_runaway_verification_evidence_fingerprint = ""
+        self.session.meta.project_runaway_paused_reason = ""
+        self.session.last_review_verdict = None
+        self.session.last_review_blockers_count = 0
+        self.session.meta.updated_at = utc_now_iso()
+        self.session.save()
+        hard_passed = self._run_runaway_hard_verification()
+        self._sync_turn_mode()
+        self.executor.begin_turn()
+        if not hard_passed:
+            return True
+        self.session.append_message(
+            {
+                "role": "system",
+                "content": (
+                    "[Harness] 狂奔模式：所有开放任务已完成。"
+                    "现在自动执行 VERIFY.md 对口验证和交付检查；发现可安全修复的问题就修复并复验，"
+                    "不要等待用户回复。"
+                ),
+            }
+        )
+        self._emit_turn_event(
+            {"type": "turn.notice", "level": "info", "text": "任务已完成，正在自动验证交付结果…"}
+        )
+        return True
+
+    def _prepare_runaway_project_start(self) -> bool:
+        """Prepare the first executable task when a runaway turn starts."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        if self.session.meta.active_shell != "project" or not self.session.meta.project_id:
+            return False
+        from project_cli import confirm_project_design, start_project_task
+        from project_mode import next_open_task, project_dir, task_dependency_blockers
+        from runaway_flow import checkpoint_for_stage, normalize_checkpoint, task_fingerprint
+
+        for _ in range(4):
+            stage = getattr(self.session.meta, "project_workflow_stage", "requirements")
+            try:
+                if normalize_checkpoint(
+                    getattr(self.session.meta, "project_runaway_checkpoint", "")
+                ) == "idle":
+                    self._transition_runaway_checkpoint(checkpoint_for_stage(stage))
+                if stage == "requirements":
+                    from project_cli import organize_project_plan
+
+                    organize_project_plan(self.session, self.session.paths)
+                    continue
+                if stage == "documentation":
+                    try:
+                        confirm_project_design(self.session, self.session.paths)
+                    except Exception as exc:
+                        if self._queue_runaway_documentation_repair(exc):
+                            return True
+                        raise
+                    continue
+                if stage == "design":
+                    tasks_path = project_dir(self.session.paths, self.session.meta.project_id) / "TASKS.md"
+                    tasks_text = tasks_path.read_text(encoding="utf-8")
+                    _, task_text, task_id = next_open_task(tasks_text)
+                    if not task_id:
+                        blockers = task_dependency_blockers(tasks_text)
+                        reason = "没有依赖已满足的开放任务"
+                        if blockers:
+                            details = "; ".join(
+                                f"{task_id} 等待 {', '.join(values)}"
+                                for task_id, values in sorted(blockers.items())
+                            )
+                            reason = f"任务依赖未满足：{details}"
+                        self._pause_runaway(reason)
+                        return False
+                    start_project_task(self.session, self.session.paths, task_id)
+                    self._sync_turn_mode()
+                    self._transition_runaway_checkpoint("implementing")
+                    self.session.meta.project_runaway_task_fingerprint = task_fingerprint(
+                        task_id, task_text
+                    )
+                    self.session.meta.updated_at = utc_now_iso()
+                    self.session.save()
+                    return True
+                if stage == "implementation":
+                    if normalize_checkpoint(
+                        getattr(self.session.meta, "project_runaway_checkpoint", "")
+                    ) == "idle":
+                        self._transition_runaway_checkpoint("implementing")
+                        self.session.meta.updated_at = utc_now_iso()
+                        self.session.save()
+                    return True
+                if stage == "verification":
+                    if normalize_checkpoint(
+                        getattr(self.session.meta, "project_runaway_checkpoint", "")
+                    ) == "idle":
+                        self._transition_runaway_checkpoint("verifying")
+                        self.session.meta.updated_at = utc_now_iso()
+                        self.session.save()
+                    return True
+                return stage == "release"
+            except Exception as exc:
+                self._pause_runaway("无法自动准备项目流程", error=str(exc))
+                return False
+        return False
+
+    def _adopt_runaway_plan(self, plan_result: Any) -> bool:
+        """Auto-adopt plan-domain proposals under the explicit runaway grant."""
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        proposal_ids = getattr(plan_result, "proposal_ids", ())
+        return self._adopt_runaway_proposals(proposal_ids)
+
+    def _adopt_runaway_proposals(self, proposal_ids: Any) -> bool:
+        if not getattr(self.session.meta, "project_runaway_enabled", False):
+            return False
+        if not isinstance(proposal_ids, (list, tuple, set)):
+            return False
+        proposal_ids = tuple(str(item).strip() for item in proposal_ids if str(item).strip())
+        if not proposal_ids:
+            return False
+        pid = (self.session.meta.project_id or "").strip()
+        if not pid:
+            return False
+        from plan_agent import get_plan_agent
+        from project_api import _ack_human_plan_adopt
+
+        agent = get_plan_agent(self.session.paths, pid)
+        adopted = False
+        for suggestion_id in proposal_ids:
+            try:
+                result = agent.accept_suggestion(str(suggestion_id), code_policy="plan_only")
+            except Exception:
+                continue
+            if isinstance(result, dict) and result.get("ok") is False:
+                continue
+            _ack_human_plan_adopt(self.session, self.session.paths, agent)
+            adopted = True
+        return adopted
+
     def _apply_task_stop_finish(
         self,
         *,
@@ -1861,6 +2513,8 @@ class Agent:
             return final_text, finish_reason
         from project_mode import get_delivery_profile, ritual_task_stop_enabled
 
+        if getattr(self.session.meta, "project_runaway_enabled", False):
+            return final_text, finish_reason
         if not ritual_task_stop_enabled(self.session.meta):
             return final_text, finish_reason
         if self.session.meta.active_shell != "project":
@@ -2418,6 +3072,7 @@ class Agent:
         user_text: str,
         *,
         force_skip: bool = False,
+        force_spawn: bool = False,
     ) -> Any | None:
         """Kernel pre-spawn Plan subagent when LLM classifies plan-domain intent (T-3905)."""
         if force_skip:
@@ -2431,7 +3086,7 @@ class Agent:
         from plan_agent import classify_plan_spawn_intent, get_plan_agent
 
         decision = classify_plan_spawn_intent(user_text, llm=self.llm, meta=self.session.meta)
-        if not decision.spawn:
+        if not force_spawn and not decision.spawn:
             return None
 
         from llm_routing import resolve_model_id_for_role
@@ -2516,7 +3171,11 @@ class Agent:
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
 
-        if intent == "requirements":
+        runaway_requirements_turn = (
+            intent == "requirements"
+            and bool(getattr(self.session.meta, "project_runaway_enabled", False))
+        )
+        if intent == "requirements" and not runaway_requirements_turn:
             from llm_routing import resolve_model_id_for_role
 
             self._emit_turn_event(
@@ -2576,16 +3235,31 @@ class Agent:
 
         subagent_tool_rounds = 0
         overlay_parts: list[str] = []
+        runaway_plan_adopted = False
 
         plan_result = self._maybe_pre_spawn_plan(
             user_text,
             force_skip=force_skip_plan_spawn,
+            force_spawn=runaway_requirements_turn,
         )
         if plan_result is not None:
             from subagent import format_subagent_overlay
 
             overlay_parts.append(format_subagent_overlay(plan_result))
             subagent_tool_rounds += plan_result.tool_rounds
+            if runaway_requirements_turn:
+                runaway_plan_adopted = self._adopt_runaway_plan(plan_result)
+                if runaway_plan_adopted and self._prepare_runaway_project_start():
+                    intent = "execute"
+                    self.session.turn_intent = intent
+        if (
+            runaway_requirements_turn
+            and intent == "requirements"
+            and (runaway_plan_adopted or getattr(self.session.meta, "project_workflow_stage", "requirements") != "requirements")
+            and self._prepare_runaway_project_start()
+        ):
+            intent = "execute"
+            self.session.turn_intent = intent
 
         spawn_explore_flag = spawn_explore
         if intent == "recall":
@@ -2604,7 +3278,13 @@ class Agent:
                 "intent_label": intent_label(intent, spawn_explore=bool(spawn_explore_flag)),
             }
         )
-        if project_plan_gate_open(self.session.meta) and intent == "execute" and not terminal:
+        if (
+            project_plan_gate_open(self.session.meta)
+            and intent == "execute"
+            and not terminal
+            and not runaway_requirements_turn
+            and not bool(getattr(self.session.meta, "project_runaway_enabled", False))
+        ):
             self._emit_turn_event(
                 {
                     "type": "turn.notice",

@@ -103,6 +103,7 @@ class ExecutorSession:
     project_workflow_stage: str = ""
     project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
+    runaway_enabled: bool = False
     harness: str = "desktop"
     terminal_scope_kind: str = ""
     terminal_cwd: str = ""
@@ -157,6 +158,7 @@ class ExecutorSession:
         project_workflow_stage = ""
         project_active_task_id = ""
         project_delivery_profile = "solo"
+        runaway_enabled = False
         harness = "desktop"
         terminal_scope_kind = ""
         terminal_cwd = ""
@@ -182,6 +184,7 @@ class ExecutorSession:
                     project_delivery_profile = normalize_delivery_profile(
                         payload.get("project_delivery_profile", "solo")
                     )
+                    runaway_enabled = bool(payload.get("project_runaway_enabled", False))
                     from session import normalize_harness, normalize_terminal_path_field
 
                     harness = normalize_harness(payload.get("harness", "desktop"))
@@ -206,6 +209,7 @@ class ExecutorSession:
             project_workflow_stage=project_workflow_stage,
             project_active_task_id=project_active_task_id,
             project_delivery_profile=project_delivery_profile,
+            runaway_enabled=runaway_enabled,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
             terminal_cwd=terminal_cwd,
@@ -237,6 +241,7 @@ class ExecutorSession:
         self.project_delivery_profile = normalize_delivery_profile(
             payload.get("project_delivery_profile", "solo")
         )
+        self.runaway_enabled = bool(payload.get("project_runaway_enabled", False))
         from session import normalize_harness, normalize_terminal_path_field
 
         self.harness = normalize_harness(payload.get("harness", "desktop"))
@@ -686,6 +691,7 @@ def _validate_project_mode_call(
         project_root=session.project_root,
         plan_status=session.project_plan_status,
         workflow_stage=session.project_workflow_stage,
+        runaway_enabled=session.runaway_enabled,
         tool_name=tool_name,
         arguments=arguments,
         agent_paths=agent_paths,
@@ -908,6 +914,7 @@ def _validate_task_stop_write(
         tool_name=tool_name,
         arguments=arguments,
         delivery_profile=session.project_delivery_profile,
+        runaway_enabled=session.runaway_enabled,
     )
     if reason is None:
         return None
@@ -1416,7 +1423,10 @@ class ToolExecutor:
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
-            confirm_decision = self._ask_confirm(name, args, evolved_target)
+            if self._runaway_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
+                confirm_decision = "runaway"
+            else:
+                confirm_decision = self._ask_confirm(name, args, evolved_target)
             if confirm_decision == "n":
                 result = tool_fail(
                     name,
@@ -2708,7 +2718,10 @@ class ToolExecutor:
 
         from project_mode import normalize_delivery_profile
 
-        if normalize_delivery_profile(self.session.project_delivery_profile) == "solo":
+        if (
+            normalize_delivery_profile(self.session.project_delivery_profile) == "solo"
+            and not self.session.runaway_enabled
+        ):
             return
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             return
@@ -2972,6 +2985,59 @@ class ToolExecutor:
         ):
             return False
         return True
+
+    def _runaway_confirm_is_covered(
+        self,
+        builtin: BuiltinTool,
+        evolved: EvolvedTool | None,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> bool:
+        """Apply the one-time project runaway authorization to safe local work."""
+        if not self.session.runaway_enabled or self.session.active_shell != "project":
+            return False
+        if evolved is None or _arguments_use_host_scope(arguments):
+            return False
+
+        name = evolved.name
+        if name in {"git_push", "git_clone", "http_request", "browser_open"}:
+            return False
+
+        from tools.builtin import run_evolved as _run_evolved_mod
+
+        inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+        if name in {"write_text", "patch_file"}:
+            from write_policy import is_sensitive_write_path, path_under_project
+
+            path = str(inner.get("path") or "").strip()
+            return bool(
+                path
+                and path_under_project(path, self.session.project_root)
+                and not is_sensitive_write_path(path)
+            )
+
+        if name == "run_command":
+            from run_command_policy import classify_run_command, working_dir_under_project
+
+            command = str(inner.get("command") or "")
+            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
+            kind = classify_run_command(command)
+            return bool(
+                kind not in {"danger", "network"}
+                and working_dir_under_project(working_dir, self.session.project_root)
+            )
+
+        if name in {"run_service", "dev_start", "pip_install", "repair_node_modules", "git_commit", "git_branch"}:
+            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
+            return bool(
+                not working_dir
+                or working_dir == self.session.project_root
+                or working_dir.startswith(self.session.project_root.rstrip("/") + "/")
+            )
+
+        # Evolved tools explicitly scoped to the project are covered by the grant.
+        return evolved.scope == "project"
 
     def _resolve_evolved_target(self, tool_name: str, arguments: dict[str, Any]) -> EvolvedTool | None:
         if tool_name != "run_evolved":

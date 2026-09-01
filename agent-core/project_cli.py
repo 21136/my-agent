@@ -293,6 +293,7 @@ def bind_project_session(
         from project_mode import DEFAULT_PROJECT_DELIVERY_PROFILE
 
         session.meta.project_delivery_profile = DEFAULT_PROJECT_DELIVERY_PROFILE
+        session.meta.project_runaway_enabled = False
     session.meta.active_shell = "project"
     session.meta.project_id = pid
     session.meta.project_root = root

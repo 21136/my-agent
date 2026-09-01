@@ -30,7 +30,7 @@ from evolve import (
     list_pending_proposals,
     reject_proposal,
 )
-from llm_client import LLMError  # noqa: F401
+from llm_client import LLMError, resolve_model_entry  # noqa: F401
 from llm_client import StreamHandlers
 from context import session_memory_event, validate_llm_model_switch
 from llm_models import models_list_event
@@ -38,7 +38,8 @@ from main import ConversationRepl, ReplConfig
 from paths import AgentPaths
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
-from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
+from runtime_guards import TurnWatchdog, runaway_wall_sec, stall_watchdog_sec, turn_wall_sec
+from runaway_flow import normalize_checkpoint
 from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
@@ -54,6 +55,25 @@ EmitFn = Callable[[dict[str, Any]], None]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_CONFIRM_TIMEOUT_SEC = 90.0
 TURN_LOCK = asyncio.Lock()
+
+
+def _runaway_lease_key(session: Session) -> str:
+    project_id = str(getattr(session.meta, "project_id", "") or "").strip()
+    return project_id
+
+
+def _acquire_runaway_lease(session: Session, paths: AgentPaths) -> Any | None:
+    key = _runaway_lease_key(session)
+    if not key:
+        return None
+    from runaway_lease import acquire_runaway_lease
+
+    return acquire_runaway_lease(paths, key)
+
+
+def _release_runaway_lease(lease: Any | None) -> None:
+    if lease is not None:
+        lease.release()
 
 
 def confirm_timeout_sec() -> float:
@@ -119,9 +139,10 @@ class WsBridge:
         if self.turn_watchdog is not None:
             self.turn_watchdog.touch_progress()
 
-    def begin_turn(self) -> None:
+    def begin_turn(self, *, runaway: bool = False) -> None:
         self.cancel_event.clear()
         if self.turn_watchdog is not None:
+            self.turn_watchdog.wall_sec = runaway_wall_sec() if runaway else turn_wall_sec()
             self.turn_watchdog.begin()
 
     def end_turn(self) -> None:
@@ -451,9 +472,20 @@ def _repl_refreshes_session_state(line: str) -> bool:
     return lower in {"新会话", "new", "换主题", "压缩", "summarize", "compact"}
 
 
+def _refresh_repl_project_binding(repl: ConversationRepl) -> None:
+    """Keep the long-lived executor in sync with project controls changed by the UI."""
+    repl.agent.executor.session.refresh_bound_project_meta()
+
+
 async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: AgentPaths) -> None:
     repl.last_turn_finish_reason = None
-    bridge.begin_turn()
+    runaway = bool(getattr(repl.session.meta, "project_runaway_enabled", False))
+    lease = _acquire_runaway_lease(repl.session, paths) if runaway else None
+    if runaway and lease is None:
+        bridge.emit({"type": "notice", "text": "狂奔作业已在运行，忽略重复恢复请求。"})
+        bridge.emit({"type": "turn.end", "ok": False, "finish_reason": "runaway_duplicate"})
+        return
+    bridge.begin_turn(runaway=bool(getattr(repl.session.meta, "project_runaway_enabled", False)))
     bridge._turn_busy.set()
     ok = True
     finish_reason = "completed"
@@ -463,11 +495,16 @@ async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: 
         finish_reason = bridge.resolve_turn_finish_reason(agent_reason)
         if finish_reason in {"cancelled", "timeout"}:
             ok = False
+            if getattr(repl.session.meta, "project_runaway_enabled", False):
+                reason = "用户停止了狂奔" if finish_reason == "cancelled" else "运行时间达到上限"
+                repl.agent._pause_runaway(reason)
             repl.session.save()
         elif outcome == "stop":
             bridge.emit({"type": "notice", "text": f"session saved: {repl.session.conversation_id}"})
             finish_reason = "cancelled"
             ok = False
+            if getattr(repl.session.meta, "project_runaway_enabled", False):
+                repl.agent._pause_runaway("用户停止了狂奔")
         else:
             from project_api import after_turn_project_hooks
 
@@ -477,6 +514,8 @@ async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: 
         ok = False
         finish_reason = "error"
         log_sidecar_exception(f"_run_line failed line={line!r}", exc)
+        if getattr(repl.session.meta, "project_runaway_enabled", False):
+            repl.agent._pause_runaway("狂奔运行异常", error=str(exc))
         emit_error(bridge, str(exc))
     finally:
         bridge._turn_busy.clear()
@@ -485,6 +524,7 @@ async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: 
         bridge.emit(session_memory_event(repl.session))
         # C9: always close the turn so desktop can resetTurnActivity (BUG-012).
         bridge.emit({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
+        _release_runaway_lease(lease)
 
 
 class WsSessionHandler:
@@ -509,6 +549,16 @@ class WsSessionHandler:
         sender_task = asyncio.create_task(self._sender(websocket, outbox))
         bridge.emit_session_state(repl.session)
         emit_corruption_notices(bridge.emit, repl.session)
+        checkpoint = normalize_checkpoint(
+            getattr(repl.session.meta, "project_runaway_checkpoint", "")
+        )
+        if (
+            getattr(repl.session.meta, "project_runaway_enabled", False)
+            and checkpoint in {"preparing", "implementing", "verifying", "repairing"}
+        ):
+            asyncio.create_task(
+                self._resume_runaway(repl, bridge)
+            )
 
         try:
             async for raw in websocket:
@@ -607,6 +657,21 @@ class WsSessionHandler:
 
         return False
 
+    async def _resume_runaway(
+        self,
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        async with TURN_LOCK:
+            if bridge._turn_busy.is_set():
+                return
+            await _run_line(
+                repl,
+                bridge,
+                "[Harness] 进程已恢复。请从已保存的狂奔检查点继续执行，不要等待用户回复。",
+                self.paths,
+            )
+
     async def _dispatch(
         self,
         message: dict[str, Any],
@@ -645,6 +710,16 @@ class WsSessionHandler:
                 return
 
             line = compose_user_message(text=text, attachments=attachments)
+            if any(item.image_input for item in attachments):
+                model_entry = resolve_model_entry(repl.session.meta.llm_model)
+                if model_entry is None or not model_entry.supports_image_input:
+                    bridge.emit(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": "当前模型不支持识图，请切换到支持视觉的模型。",
+                        }
+                    )
             # TURN_LOCK is held by _handle_incoming for user.message / command.
             await _run_line(repl, bridge, line, self.paths)
             if _repl_refreshes_session_state(line):
@@ -711,7 +786,29 @@ class WsSessionHandler:
             if not isinstance(name, str) or not name.strip():
                 emit_error(bridge, "command requires name")
                 return
+            previous_session_id = repl.session.conversation_id
+            previous_project_id = (repl.session.meta.project_id or "").strip()
             await _run_line(repl, bridge, name.strip(), self.paths)
+            current_session_id = repl.session.conversation_id
+            current_project_id = (repl.session.meta.project_id or "").strip()
+            if (
+                current_session_id != previous_session_id
+                or current_project_id != previous_project_id
+            ):
+                bridge.emit(
+                    {
+                        "type": "context.switch.done",
+                        "request_id": f"command-{uuid.uuid4()}",
+                        "choice": "y",
+                        "applied": True,
+                        "action": "project.create" if current_project_id else "session.new",
+                        "target": current_project_id or "current",
+                        "project_id": current_project_id or None,
+                        "session_id": current_session_id,
+                        "session_replaced": current_session_id != previous_session_id,
+                        "message": "命令已切换当前工作上下文",
+                    }
+                )
             bridge.emit_session_state(repl.session)
             return
 
@@ -840,6 +937,7 @@ class WsSessionHandler:
             payload = await asyncio.to_thread(
                 dispatch_doc_message, repl.session, self.paths, message
             )
+            _refresh_repl_project_binding(repl)
             if isinstance(payload, dict) and "_events" in payload:
                 for event in payload["_events"]:
                     bridge.emit(event)
@@ -860,6 +958,7 @@ class WsSessionHandler:
             payload = await asyncio.to_thread(
                 dispatch_task_add, repl.session, self.paths, message
             )
+            _refresh_repl_project_binding(repl)
             if isinstance(payload, dict) and "_events" in payload:
                 if "_session" in payload:
                     repl.session = payload["_session"]
@@ -880,6 +979,20 @@ class WsSessionHandler:
         from project_api import ProjectApiError, dispatch_project_message, handle_plan_response
 
         try:
+            runaway_resume = (
+                message.get("type") == "project.runaway.set"
+                and message.get("enabled") is True
+                and (
+                    message.get("resume") is True
+                    or not bool(repl.session.meta.project_runaway_enabled)
+                )
+            ) and not bridge._turn_busy.is_set()
+            if (
+                message.get("type") == "project.runaway.set"
+                and message.get("enabled") is False
+                and bridge._turn_busy.is_set()
+            ):
+                bridge.request_cancel()
             if message.get("type") == "plan.response":
                 await asyncio.to_thread(
                     handle_plan_response,
@@ -888,6 +1001,7 @@ class WsSessionHandler:
                     message,
                     bridge.emit,
                 )
+                _refresh_repl_project_binding(repl)
                 repl.session.save()
                 return
             payload = await asyncio.to_thread(
@@ -896,12 +1010,20 @@ class WsSessionHandler:
                 self.paths,
                 message,
             )
+            _refresh_repl_project_binding(repl)
             if isinstance(payload, dict) and "_events" in payload:
                 if "_session" in payload:
                     repl.session = payload["_session"]
                     repl._rebind_agent()
                 for event in payload["_events"]:
                     bridge.emit(event)
+                if runaway_resume and bool(repl.session.meta.project_runaway_enabled):
+                    await _run_line(
+                        repl,
+                        bridge,
+                        "[Harness] 狂奔已恢复。请从当前检查点继续补齐文档、实现、测试和验证，不要等待用户回复。",
+                        self.paths,
+                    )
                 return
             bridge.emit(payload)
         except ProjectApiError as exc:

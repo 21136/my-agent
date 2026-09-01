@@ -147,6 +147,19 @@ class SessionMeta:
     project_active_task_id: str = ""
     project_plan_confirmed_at: str = ""
     project_scope_confirmed_at: str = ""
+    project_runaway_enabled: bool = False
+    project_runaway_checkpoint: str = ""
+    project_runaway_task_fingerprint: str = ""
+    project_runaway_verification_evidence_fingerprint: str = ""
+    project_runaway_acceptance_passed: bool = False
+    project_runaway_task_done_baseline: int = 0
+    project_runaway_tool_rounds: int = 0
+    project_runaway_repair_count: int = 0
+    project_runaway_last_error: str = ""
+    project_runaway_last_error_fingerprint: str = ""
+    project_runaway_last_verification: str = ""
+    project_runaway_review_blockers_count: int = 0
+    project_runaway_paused_reason: str = ""
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
@@ -181,6 +194,19 @@ class SessionMeta:
             "project_active_task_id": self.project_active_task_id,
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
             "project_scope_confirmed_at": self.project_scope_confirmed_at,
+            "project_runaway_enabled": self.project_runaway_enabled,
+            "project_runaway_checkpoint": self.project_runaway_checkpoint,
+            "project_runaway_task_fingerprint": self.project_runaway_task_fingerprint,
+            "project_runaway_verification_evidence_fingerprint": self.project_runaway_verification_evidence_fingerprint,
+            "project_runaway_acceptance_passed": self.project_runaway_acceptance_passed,
+            "project_runaway_task_done_baseline": self.project_runaway_task_done_baseline,
+            "project_runaway_tool_rounds": self.project_runaway_tool_rounds,
+            "project_runaway_repair_count": self.project_runaway_repair_count,
+            "project_runaway_last_error": self.project_runaway_last_error,
+            "project_runaway_last_error_fingerprint": self.project_runaway_last_error_fingerprint,
+            "project_runaway_last_verification": self.project_runaway_last_verification,
+            "project_runaway_review_blockers_count": self.project_runaway_review_blockers_count,
+            "project_runaway_paused_reason": self.project_runaway_paused_reason,
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
@@ -261,6 +287,57 @@ class SessionMeta:
         if not isinstance(scope_confirmed_at, str):
             scope_confirmed_at = ""
 
+        project_runaway_enabled = bool(payload.get("project_runaway_enabled", False))
+
+        runaway_checkpoint = payload.get("project_runaway_checkpoint", "")
+        if not isinstance(runaway_checkpoint, str):
+            runaway_checkpoint = ""
+        from runaway_flow import normalize_checkpoint
+
+        runaway_checkpoint = normalize_checkpoint(runaway_checkpoint)
+        runaway_task_fingerprint = payload.get("project_runaway_task_fingerprint", "")
+        if not isinstance(runaway_task_fingerprint, str):
+            runaway_task_fingerprint = ""
+        runaway_evidence_fingerprint = payload.get(
+            "project_runaway_verification_evidence_fingerprint", ""
+        )
+        if not isinstance(runaway_evidence_fingerprint, str):
+            runaway_evidence_fingerprint = ""
+        runaway_baseline_raw = payload.get("project_runaway_task_done_baseline", 0)
+        runaway_rounds_raw = payload.get("project_runaway_tool_rounds", 0)
+        try:
+            runaway_task_done_baseline = max(0, int(runaway_baseline_raw or 0))
+        except (TypeError, ValueError):
+            runaway_task_done_baseline = 0
+        try:
+            runaway_tool_rounds = max(0, int(runaway_rounds_raw or 0))
+        except (TypeError, ValueError):
+            runaway_tool_rounds = 0
+        runaway_repair_count_raw = payload.get("project_runaway_repair_count", 0)
+        try:
+            runaway_repair_count = max(0, int(runaway_repair_count_raw or 0))
+        except (TypeError, ValueError):
+            runaway_repair_count = 0
+        runaway_last_error = payload.get("project_runaway_last_error", "")
+        if not isinstance(runaway_last_error, str):
+            runaway_last_error = ""
+        runaway_last_error_fingerprint = payload.get(
+            "project_runaway_last_error_fingerprint", ""
+        )
+        if not isinstance(runaway_last_error_fingerprint, str):
+            runaway_last_error_fingerprint = ""
+        runaway_last_verification = payload.get("project_runaway_last_verification", "")
+        if not isinstance(runaway_last_verification, str):
+            runaway_last_verification = ""
+        runaway_review_blockers_raw = payload.get("project_runaway_review_blockers_count", 0)
+        try:
+            runaway_review_blockers_count = max(0, int(runaway_review_blockers_raw or 0))
+        except (TypeError, ValueError):
+            runaway_review_blockers_count = 0
+        runaway_paused_reason = payload.get("project_runaway_paused_reason", "")
+        if not isinstance(runaway_paused_reason, str):
+            runaway_paused_reason = ""
+
         phase_fp = payload.get("project_phase_fingerprint", "")
         if not isinstance(phase_fp, str):
             phase_fp = ""
@@ -320,6 +397,21 @@ class SessionMeta:
             project_active_task_id=active_task_id,
             project_plan_confirmed_at=confirmed_at,
             project_scope_confirmed_at=scope_confirmed_at,
+            project_runaway_enabled=project_runaway_enabled,
+            project_runaway_checkpoint=runaway_checkpoint.strip(),
+            project_runaway_task_fingerprint=runaway_task_fingerprint.strip(),
+            project_runaway_verification_evidence_fingerprint=runaway_evidence_fingerprint.strip(),
+            project_runaway_acceptance_passed=bool(
+                payload.get("project_runaway_acceptance_passed", False)
+            ),
+            project_runaway_task_done_baseline=runaway_task_done_baseline,
+            project_runaway_tool_rounds=runaway_tool_rounds,
+            project_runaway_repair_count=runaway_repair_count,
+            project_runaway_last_error=runaway_last_error.strip(),
+            project_runaway_last_error_fingerprint=runaway_last_error_fingerprint.strip(),
+            project_runaway_last_verification=runaway_last_verification.strip(),
+            project_runaway_review_blockers_count=runaway_review_blockers_count,
+            project_runaway_paused_reason=runaway_paused_reason.strip(),
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,
@@ -1157,6 +1249,8 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
 def session_history_event(session: Session) -> dict[str, Any]:
     return {
         "type": "session.history",
+        "session_id": session.conversation_id,
+        "project_id": session.meta.project_id or None,
         "items": build_session_chat_history(session),
     }
 

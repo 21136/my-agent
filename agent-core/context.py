@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ DEFAULT_SUMMARIZE_TIMEOUT_SEC = 180.0
 DEFAULT_PAYLOAD_TRIM_RATIO = 0.70
 DEFAULT_TOOL_PAYLOAD_MAX_CHARS = 4000
 _TOOL_PAYLOAD_TRUNC_SUFFIX = "\n…[tool output truncated for context payload]"
+_ATTACHMENT_LINE_RE = re.compile(r"^- .+? → (.+?) \((.+)\)$")
 FIRST_COMPACT_USER_MESSAGE = (
     "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
 )
@@ -143,10 +145,11 @@ def build_llm_messages_with_optional_trim(
     model: str,
     *,
     force_trim: bool = False,
+    include_images: bool = False,
     config: ContextConfig | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Build payload; trim tool bodies when still above post-compact threshold."""
-    messages = build_llm_messages(session)
+    messages = build_llm_messages(session, include_images=include_images)
     tokens = estimate_context_tokens(system_prompt, messages)
     threshold = payload_trim_threshold_tokens(model, config=config)
     if not force_trim and tokens < threshold:
@@ -404,7 +407,88 @@ def repair_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
     return repair_stray_tool_messages(repair_orphaned_tool_calls(messages))
 
 
-def build_llm_messages(session: Session) -> list[dict[str, Any]]:
+def _image_data_uri_for_attachment(
+    session: Session,
+    ref: str,
+    mime: str,
+) -> str | None:
+    from file_stage import MAX_IMAGE_INPUT_BYTES, is_image_mime
+
+    if not is_image_mime(mime):
+        return None
+    try:
+        path = session.paths.resolve_under_agent(ref, must_exist=True)
+        raw = path.read_bytes()
+    except (OSError, ValueError, FileNotFoundError):
+        return None
+    if len(raw) > MAX_IMAGE_INPUT_BYTES:
+        return None
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _multimodal_user_content(session: Session, content: str) -> list[dict[str, Any]] | None:
+    if not content.strip().startswith("[附件]"):
+        return None
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": content}]
+    image_count = 0
+    for line in content.splitlines()[1:]:
+        match = _ATTACHMENT_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        ref, metadata = match.groups()
+        mime = re.split(r"[;,；]", metadata.rsplit(",", maxsplit=1)[-1], maxsplit=1)[0].strip()
+        data_uri = _image_data_uri_for_attachment(session, ref.strip(), mime)
+        if data_uri is None:
+            continue
+        blocks.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": data_uri, "detail": "auto"},
+            }
+        )
+        image_count += 1
+    return blocks if image_count else None
+
+
+def has_image_attachment(messages: list[dict[str, Any]]) -> bool:
+    """Return whether persisted user messages refer to an image attachment."""
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip().startswith("[附件]"):
+            continue
+        for line in content.splitlines()[1:]:
+            match = _ATTACHMENT_LINE_RE.match(line.strip())
+            if not match:
+                continue
+            _, metadata = match.groups()
+            mime = re.split(r"[;,；]", metadata.rsplit(",", maxsplit=1)[-1], maxsplit=1)[0].strip()
+            from file_stage import is_image_mime
+
+            if is_image_mime(mime):
+                return True
+    return False
+
+
+def _attach_multimodal_images(
+    session: Session,
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        if message.get("role") != "user" or not isinstance(message.get("content"), str):
+            out.append(message)
+            continue
+        content = _multimodal_user_content(session, str(message["content"]))
+        out.append({**message, "content": content} if content is not None else message)
+    return out
+
+
+def build_llm_messages(
+    session: Session,
+    *,
+    include_images: bool = False,
+) -> list[dict[str, Any]]:
     """Messages for LLM payload: anchor + post-digest history (disk keeps full log)."""
     messages = session.messages
     if not messages:
@@ -415,11 +499,14 @@ def build_llm_messages(session: Session) -> list[dict[str, Any]]:
         anchor = messages[0]
         tail = messages[start:]
         if start <= 1 and not tail:
-            return repair_tool_messages([anchor])
-        if start <= 1:
-            return repair_tool_messages([anchor, *tail])
-        return repair_tool_messages([anchor, *messages[start:]])
-    return repair_tool_messages(messages[start:])
+            result = repair_tool_messages([anchor])
+        elif start <= 1:
+            result = repair_tool_messages([anchor, *tail])
+        else:
+            result = repair_tool_messages([anchor, *messages[start:]])
+    else:
+        result = repair_tool_messages(messages[start:])
+    return _attach_multimodal_images(session, result) if include_images else result
 
 
 def should_auto_compact(

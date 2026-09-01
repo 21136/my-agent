@@ -15,6 +15,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths
 from plan_agent import get_plan_agent
+from plan_patch import build_patch_preview
 from project_api import perform_project_switch
 from project_cli import ParsedProjectCommand, run_project_command
 from project_mode import create_project, normalize_project_id, project_dir
@@ -168,6 +169,8 @@ class ProjectSwitchTests(unittest.TestCase):
         history_evt = next(event for event in events if event.get("type") == "session.history")
         self.assertEqual(memory_evt, session_memory_event(updated_b))
         self.assertEqual(history_evt, session_history_event(updated_b))
+        self.assertEqual(history_evt.get("session_id"), updated_b.conversation_id)
+        self.assertEqual(history_evt.get("project_id"), normalize_project_id(self.project_b))
         self.assertIsInstance(history_evt.get("items"), list)
 
         updated_b.messages.append({"role": "user", "content": "MARKER-SESSION-B"})
@@ -212,16 +215,30 @@ class ProjectSwitchTests(unittest.TestCase):
     def test_reopen_emits_persisted_plan_suggestions(self) -> None:
         """IT-5821: project resume restores the persisted adoption queue."""
         self._open_project_a()
-        agent = get_plan_agent(self.paths, normalize_project_id(self.project_a))
+        pid = normalize_project_id(self.project_a)
+        design_path = project_dir(self.paths, pid) / "DESIGN.md"
+        design_path.write_text("# Design\n\nplaceholder\n", encoding="utf-8")
+        preview = build_patch_preview(
+            self.paths,
+            pid,
+            relpath="DESIGN.md",
+            replacements=[{"old": "placeholder", "new": "placeholder updated"}],
+        )
+        agent = get_plan_agent(self.paths, pid)
         agent.park_gated_suggestion(
             {
                 "id": "sug-resume-test",
-                "kind": "apply_patch",
+                "kind": "file_patch",
                 "title": "恢复提案",
                 "body": "重开项目后仍应可审阅",
                 "risk": "gate",
                 "action": "apply_patch",
-                "payload": {"path": "DESIGN.md", "diff": ""},
+                "payload": {
+                    "path": preview["path"],
+                    "base_hash": preview["base_hash"],
+                    "replacements": [{"old": "placeholder", "new": "placeholder updated"}],
+                    "diff": preview["diff"],
+                },
             }
         )
 

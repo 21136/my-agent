@@ -208,17 +208,18 @@ def _apply_project_create(
 ) -> tuple[Session, str]:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
-    created = False
+    if dest.exists():
+        raise ContextSwitchError(
+            f"项目 workspace/{pid} 已存在；如需继续该项目，请使用「项目 打开 {pid}」或「项目 切换 {pid}」"
+        )
     try:
         create_project(paths, pid, template=template)
-        created = True
     except ProjectModeError as exc:
-        if "already exists" not in str(exc):
-            raise ContextSwitchError(str(exc)) from exc
-        if not (dest / "TASKS.md").is_file():
+        if "already exists" in str(exc):
             raise ContextSwitchError(
-                f"workspace/{pid} 已存在但缺少 TASKS.md；请手工补齐或换 id"
+                f"项目 workspace/{pid} 已存在；如需继续该项目，请使用「项目 打开 {pid}」或「项目 切换 {pid}」"
             ) from exc
+        raise ContextSwitchError(str(exc)) from exc
 
     current_pid = (session.meta.project_id or "").strip()
     # Already on this project in project shell — noop bind.
@@ -231,8 +232,7 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        verb = "已打开" if not created else "已创建"
-        return session, f"{verb}项目 workspace/{pid}（当前会话）"
+        return session, f"已创建项目 workspace/{pid}（当前会话）"
 
     # D6: project already has a dedicated session → resume it (never open a second).
     mapped = lookup_project_session(paths, pid)
@@ -251,8 +251,7 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        verb = "已创建并续接" if created else "已续接"
-        return loaded, f"{verb}项目 workspace/{pid}（会话 {mapped}）"
+        return loaded, f"已创建并续接项目 workspace/{pid}（会话 {mapped}）"
 
     # Unbound session may bind in place; bound to another project → new session for NEW project only.
     if not current_pid:
@@ -268,8 +267,7 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        verb = "已创建并打开" if created else "已打开"
-        return session, f"{verb}项目 workspace/{pid}（计划待确认）"
+        return session, f"已创建并打开项目 workspace/{pid}（计划待确认）"
 
     fresh = create_new(paths)
     _inject_seed(fresh, session, reason=f"切换到项目 {pid}")
@@ -285,8 +283,7 @@ def _apply_project_create(
         ensure_project_env(paths, pid)
     except Exception:
         pass
-    verb = "已创建并切换到" if created else "已切换到"
-    return fresh, f"{verb}项目 workspace/{pid}（新会话 · 计划待确认）"
+    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认）"
 
 
 def _apply_project_switch(
@@ -303,7 +300,7 @@ def create_project_with_session_isolation(
     session: Session,
     project_id: str,
 ) -> tuple[Session, str]:
-    """Meta-command 「项目 新建」: never rebind a session already tied to another project."""
+    """Meta-command 「项目 新建」: create only; existing projects must be opened explicitly."""
     return _apply_project_create(paths, session, project_id)
 
 

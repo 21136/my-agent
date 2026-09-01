@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from project_api import dispatch_project_message, project_state_payload
+from project_api import build_plan_request_payload, dispatch_project_message, project_state_payload
 from project_manifest import STANDARD_ARTIFACTS, build_manifest, load_manifest, save_manifest
 from project_mode import create_project, migrate_legacy_project, project_dir
 from session import create_new
+from tools.schema import tool_ok
 from tests.isolation_helpers import temporary_agent_paths
 
 
@@ -39,6 +42,202 @@ class ProjectArtifactTests(unittest.TestCase):
                 response["scope_confirmed_at"],
                 session.meta.project_scope_confirmed_at,
             )
+
+    def test_runaway_toggle_is_project_scoped_and_persisted(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "runaway-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+
+            enabled = dispatch_project_message(
+                session,
+                paths,
+                {"type": "project.runaway.set", "enabled": True},
+            )
+
+            self.assertTrue(session.meta.project_runaway_enabled)
+            enabled_state = next(item for item in enabled["_events"] if item.get("type") == "project.state")
+            self.assertTrue(enabled_state["runaway_enabled"])
+
+            reloaded = type(session).load(paths, session.conversation_id)
+            self.assertTrue(reloaded.meta.project_runaway_enabled)
+
+            disabled = dispatch_project_message(
+                reloaded,
+                paths,
+                {"type": "project.runaway.set", "enabled": False},
+            )
+            self.assertFalse(reloaded.meta.project_runaway_enabled)
+            disabled_state = next(item for item in disabled["_events"] if item.get("type") == "project.state")
+            self.assertFalse(disabled_state["runaway_enabled"])
+
+    def test_runaway_checkpoint_round_trips_and_state_exposes_pause(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "runaway-checkpoint-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_checkpoint_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_runaway_checkpoint = "paused"
+            session.meta.project_runaway_task_done_baseline = 4
+            session.meta.project_runaway_tool_rounds = 12
+            session.meta.project_runaway_repair_count = 3
+            session.meta.project_runaway_last_verification = "fail"
+            session.meta.project_runaway_review_blockers_count = 2
+            session.meta.project_runaway_paused_reason = "自动修复次数已用尽"
+            session.save()
+
+            reloaded = type(session).load(paths, session.conversation_id)
+            self.assertEqual(reloaded.meta.project_runaway_checkpoint, "paused")
+            self.assertEqual(reloaded.meta.project_runaway_task_done_baseline, 4)
+            self.assertEqual(reloaded.meta.project_runaway_tool_rounds, 12)
+            self.assertEqual(reloaded.meta.project_runaway_repair_count, 3)
+            payload = project_state_payload(reloaded, paths)
+            self.assertEqual(payload["runaway_status"], "已暂停：自动修复次数已用尽")
+            self.assertEqual(payload["runaway_last_verification"], "fail")
+            self.assertEqual(payload["runaway_repair_count"], 3)
+
+    def test_runaway_review_retries_once_then_breaks_on_same_error(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-review-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_review_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_workflow_stage = "verification"
+            agent = Agent.create(session)
+            failed = tool_ok(
+                "deliverable_review",
+                {"verdict": "fail", "blockers_count": 1, "summary": "测试命令失败"},
+            )
+
+            self.assertTrue(agent._record_runaway_review_result(failed))
+            self.assertEqual(session.meta.project_runaway_checkpoint, "repairing")
+            self.assertEqual(session.meta.project_runaway_repair_count, 1)
+            self.assertFalse(agent._record_runaway_review_result(failed))
+            self.assertEqual(session.meta.project_runaway_checkpoint, "paused")
+            self.assertEqual(session.meta.project_runaway_paused_reason, "同一验证问题再次出现")
+
+    def test_runaway_does_not_emit_plan_confirmation_request(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "runaway-plan-gate-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_plan_gate_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_plan_status = "draft"
+            self.assertIsNone(build_plan_request_payload(session, paths))
+
+    def test_runaway_allows_project_write_after_internal_plan_adoption(self) -> None:
+        from project_mode import project_mode_block_reason
+
+        reason = project_mode_block_reason(
+            active_shell="project",
+            project_root="workspace/runaway-plan-gate-demo",
+            plan_status="draft",
+            workflow_stage="implementation",
+            runaway_enabled=True,
+            tool_name="run_evolved",
+            arguments={
+                "tool_name": "write_text",
+                "arguments": {"path": "workspace/runaway-plan-gate-demo/src/app.py"},
+            },
+        )
+        self.assertIsNone(reason)
+
+    def test_runaway_natural_stop_is_internal_continuation(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-continuation-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_continuation_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_workflow_stage = "implementation"
+            session.meta.project_runaway_checkpoint = "implementation"
+            agent = Agent.create(session)
+            self.assertTrue(
+                agent._continue_runaway_after_natural_stop(
+                    final_text="我先总结一下。",
+                    finish_reason="stop",
+                )
+            )
+            self.assertIn("不要只做总结", session.messages[-1]["content"])
+
+    def test_runaway_covers_local_tool_confirmation_but_not_external_or_sensitive(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-confirm-demo"
+            root = create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_confirm_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_workflow_stage = "implementation"
+            session.meta.project_runaway_enabled = True
+            session.save()
+            executor = Agent.create(session).executor
+            builtin = executor.registry.get_builtin("run_evolved")
+            run_command = SimpleNamespace(name="run_command", scope="project")
+            write_text = SimpleNamespace(name="write_text", scope="project")
+            self.assertIsNotNone(builtin)
+            assert builtin is not None
+
+            local_install = {"tool_name": "run_command", "arguments": {
+                "command": "python -m pip install -r requirements.txt",
+                "working_dir": f"workspace/{pid}",
+            }}
+            self.assertTrue(executor._needs_confirm(builtin, run_command, local_install, tool_name="run_evolved"))
+            self.assertTrue(executor._runaway_confirm_is_covered(builtin, run_command, local_install, tool_name="run_evolved"))
+
+            sensitive = {"tool_name": "write_text", "arguments": {
+                "path": f"workspace/{pid}/.env",
+                "content": "SECRET=x",
+            }}
+            self.assertFalse(executor._runaway_confirm_is_covered(builtin, write_text, sensitive, tool_name="run_evolved"))
+
+            external = {"tool_name": "run_command", "arguments": {
+                "command": "git push origin main",
+                "working_dir": f"workspace/{pid}",
+            }}
+            self.assertFalse(executor._runaway_confirm_is_covered(builtin, run_command, external, tool_name="run_evolved"))
+
+    def test_runaway_auto_adopts_plan_partner_proposals(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-proposal-demo"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_proposal_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            agent = Agent.create(session)
+            fake_plan = Mock()
+            fake_plan.accept_suggestion.return_value = {"ok": True}
+            with patch("plan_agent.get_plan_agent", return_value=fake_plan):
+                with patch("project_api._ack_human_plan_adopt") as ack:
+                    self.assertTrue(agent._adopt_runaway_proposals(["proposal-1"]))
+            fake_plan.accept_suggestion.assert_called_once_with("proposal-1", code_policy="plan_only")
+            ack.assert_called_once()
 
     def test_it5812_new_project_has_non_empty_standard_artifacts(self) -> None:
         with temporary_agent_paths() as paths:

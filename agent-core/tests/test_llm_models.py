@@ -70,6 +70,7 @@ class LlmModelRegistryTests(unittest.TestCase):
                             "baseUrl": "https://example.com/api",
                             "modelId": "custom-model-v1",
                             "tier": "flash",
+                            "supportsImageInput": True,
                         }
                     ]
                 }
@@ -81,6 +82,7 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertIsNotNone(entry)
         assert entry is not None
         self.assertEqual(entry.provider_model, "custom-model-v1")
+        self.assertTrue(entry.supports_image_input)
         resolved = registry.resolve("custom-flash")
         self.assertIsNotNone(resolved)
         assert resolved is not None

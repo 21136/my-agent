@@ -54,9 +54,9 @@ _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
 _TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
-_TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence")
+_TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence", "depends_on")
 _TASK_METADATA_FIELD_RE = re.compile(
-    r"(?<![\w-])(req|ac|design|verify|evidence)\s*:",
+    r"(?<![\w-])(req|ac|design|verify|evidence|depends_on)\s*:",
     re.IGNORECASE,
 )
 _CLOSED_SECTION_TITLE_RE = re.compile(
@@ -1822,6 +1822,60 @@ def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None
     return None, None, None
 
 
+def next_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
+    """Return the first open task whose ``depends_on`` IDs are complete."""
+    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
+    tasks = parse_tasks_metadata(tasks_text)
+    done_ids = {
+        str(task.get("id") or "").upper()
+        for task in tasks
+        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
+    }
+    for task in tasks:
+        line_index = int(task.get("line", -1))
+        line = visible.get(line_index, "")
+        if not line or not _TASK_OPEN_RE.match(line):
+            continue
+        dependencies = {
+            value.upper()
+            for value in task.get("depends_on", [])
+            if str(value).strip()
+        }
+        if dependencies and not dependencies.issubset(done_ids):
+            continue
+        body_match = _TASK_CHECKBOX_RE.match(line)
+        body = body_match.group(1).strip() if body_match else line.strip()
+        return line_index, body, task.get("id") or extract_task_id(body)
+    return None, None, None
+
+
+def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
+    """Return unresolved dependency IDs for each currently open task."""
+    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
+    tasks = parse_tasks_metadata(tasks_text)
+    done_ids = {
+        str(task.get("id") or "").upper()
+        for task in tasks
+        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
+    }
+    blockers: dict[str, list[str]] = {}
+    for task in tasks:
+        task_id = str(task.get("id") or "").upper()
+        line = visible.get(int(task.get("line", -1)), "")
+        if not task_id or not _TASK_OPEN_RE.match(line):
+            continue
+        missing = sorted(
+            {
+                value.upper()
+                for value in task.get("depends_on", [])
+                if str(value).strip() and value.upper() not in done_ids
+            }
+        )
+        if missing:
+            blockers[task_id] = missing
+    return blockers
+
+
 def is_closed_section_title(title: str) -> bool:
     """True for PLAN-ARCH closed/archive section headers (LLM-invisible)."""
     key = (title or "").strip()
@@ -2068,9 +2122,10 @@ def task_stop_block_reason(
     tool_name: str,
     arguments: dict[str, object],
     delivery_profile: str = "ritual",
+    runaway_enabled: bool = False,
 ) -> str | None:
     """Block product writes after a TASKS checkbox was completed this turn (S5/S10)."""
-    if normalize_delivery_profile(delivery_profile) == "solo":
+    if runaway_enabled or normalize_delivery_profile(delivery_profile) == "solo":
         return None
     if not task_stop_armed or active_shell != "project":
         return None
@@ -2126,13 +2181,18 @@ def project_mode_block_reason(
     arguments: dict[str, object],
     agent_paths: AgentPaths | None = None,
     workflow_stage: str = "",
+    runaway_enabled: bool = False,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
     effective_stage = workflow_stage or (
-        "implementation" if plan_status == "confirmed" else ""
+        "implementation"
+        if plan_status == "confirmed"
+        else "preparing"
+        if runaway_enabled and active_shell == "project"
+        else ""
     )
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
@@ -2170,6 +2230,13 @@ def project_mode_block_reason(
                 and not is_project_artifact_path(path, project_root)
                 for path in extract_run_evolved_paths(tool_name, arguments)
             )
+        if runaway_enabled and effective_stage in {
+            "requirements",
+            "preparing",
+            "documentation",
+            "design",
+        } and code_write:
+            return "狂奔正在准备项目流程，当前阶段不能修改业务代码"
         if code_write and (effective_stage in {"documentation", "design"} or plan_status == "confirmed"):
             if effective_stage == "documentation":
                 return "当前处于 documentation：只允许整理项目文档，不能修改业务代码"
@@ -2185,7 +2252,10 @@ def project_mode_block_reason(
     if plan_domain_block:
         return plan_domain_block
 
-    if plan_allows_code_writes(plan_status):
+    plan_is_effectively_confirmed = plan_allows_code_writes(plan_status) or (
+        runaway_enabled and active_shell == "project"
+    )
+    if plan_is_effectively_confirmed:
         if agent_paths is not None and active_shell == "project":
             from project_manifest import manifest_has_l2_stale, refresh_project_manifest
 
@@ -2214,7 +2284,7 @@ def project_mode_block_reason(
         return None
 
     # Plan gate: any session bound to project_root — even if router switched shell.
-    if tool_name == "run_evolved":
+    if tool_name == "run_evolved" and not plan_is_effectively_confirmed:
         if evolved_name in _CODING_TOOLS:
             return (
                 f"计划未确认（{plan_status or 'draft'}）；"
@@ -2299,6 +2369,7 @@ def format_project_overlay(
     milestone_review_suggested: str | None = None,
     workflow_stage: str = "",
     active_task_id: str | None = None,
+    runaway_enabled: bool = False,
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -2312,42 +2383,56 @@ def format_project_overlay(
         lines.append(f"project_workflow_stage: {workflow_stage}")
     if active_task_id:
         lines.append(f"project_active_task_id: {active_task_id}")
-    if workflow_stage == "documentation":
-        lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
-    elif workflow_stage == "design":
-        lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
-    elif workflow_stage == "implementation" and active_task_id:
-        lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-    if workflow_stage == "documentation":
-        lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
-    elif workflow_stage == "design":
-        lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
-    elif plan_status != "confirmed":
-        lines.append(
-            "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
-        )
+    if runaway_enabled:
+        lines.append("project_runaway_enabled: true")
+        lines.append("runaway_policy: 自动采纳计划、自动推进任务、自动验证和修复；不等待用户确认或继续")
+        lines.append("runaway_scope: 仅当前项目内安全写入、执行和测试；网络、宿主目录、敏感/删除/发布/Git 操作须暂停")
+        if workflow_stage == "documentation":
+            lines.append("stage_gate: 狂奔自动整理四个核心制品，完成后进入设计；不向用户展示计划确认门")
+        elif workflow_stage == "design":
+            lines.append("stage_gate: 狂奔自动完成设计并授权下一个可执行 T-* 任务；不等待用户确认")
+        elif workflow_stage == "implementation" and active_task_id:
+            lines.append(f"batch_scope: 狂奔模式正在实现 {active_task_id}；完成后自动验证并启动下一任务")
+        else:
+            lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
+        lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
     else:
-        lines.append("plan_gate: 已确认 — 可写项目内代码")
-        if profile == "solo":
+        if workflow_stage == "documentation":
+            lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
+        elif workflow_stage == "design":
+            lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
+        elif workflow_stage == "implementation" and active_task_id:
+            lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+        if workflow_stage == "documentation":
+            lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
+        elif workflow_stage == "design":
+            lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
+        elif plan_status != "confirmed":
             lines.append(
-                "delivery: 完成以构建/测试为准；TASKS 为视图；"
-                "验收口语可 spawn deliverable_review"
-            )
-            lines.append(
-                "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
-                "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+                "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
             )
         else:
-            lines.append(
-                "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
-            )
-            lines.append(
-                "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
-            )
-            lines.append(
-                "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
-                "仅 report_progress 成功勾选后 Task 一停"
-            )
+            lines.append("plan_gate: 已确认 — 可写项目内代码")
+            if profile == "solo":
+                lines.append(
+                    "delivery: 完成以构建/测试为准；TASKS 为视图；"
+                    "验收口语可 spawn deliverable_review"
+                )
+                lines.append(
+                    "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
+                    "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+                )
+            else:
+                lines.append(
+                    "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
+                )
+                lines.append(
+                    "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
+                )
+                lines.append(
+                    "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
+                    "仅 report_progress 成功勾选后 Task 一停"
+                )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
     if plan_status == "confirmed":

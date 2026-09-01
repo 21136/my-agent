@@ -36,14 +36,14 @@ from project_mode import (
 )
 from project_release import load_release_acceptance, save_release_acceptance
 from plan_agent import PlanAgent, get_plan_agent
+from runaway_flow import normalize_checkpoint
+from runaway_verification import evidence_passed, load_verification_evidence, verification_evidence_path
 from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
 
 EmitFn = Callable[[dict[str, Any]], None]
 
 _PLAN_PREVIEW_MAX = 4000
 _PROJECT_SUMMARY_MAX = 1200
-
-
 class ProjectApiError(Exception):
     """Invalid project WS message."""
 
@@ -86,6 +86,19 @@ def _project_summary(project_md: str) -> str:
     return text[:_PROJECT_SUMMARY_MAX] + "\n…(truncated)"
 
 
+def _runaway_user_status(session: Session) -> str:
+    """Map internal runaway checkpoint data to stable user-facing copy."""
+    from runaway_flow import checkpoint_label, normalize_checkpoint
+
+    if not bool(getattr(session.meta, "project_runaway_enabled", False)):
+        return "已关闭"
+    paused_reason = str(getattr(session.meta, "project_runaway_paused_reason", "") or "").strip()
+    if paused_reason:
+        return f"已暂停：{paused_reason}"
+    checkpoint = str(getattr(session.meta, "project_runaway_checkpoint", "") or "").strip()
+    return checkpoint_label(normalize_checkpoint(checkpoint))
+
+
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import classify_stage_documents, get_delivery_profile
     from progress_gate import review_progress_blocked_flag
@@ -106,14 +119,29 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
     tasks_md = artifacts.get("TASKS.md", "")
     map_md = artifacts.get("MAP.md", "")
     stats = read_task_stats(project_dir(paths, pid) / "TASKS.md") if pid else read_task_stats(Path())
+    review_verdict = getattr(session, "last_review_verdict", None) or getattr(
+        session.meta, "project_runaway_last_verification", ""
+    ) or None
+    review_blockers_count = int(
+        getattr(session, "last_review_blockers_count", 0)
+        or getattr(session.meta, "project_runaway_review_blockers_count", 0)
+        or 0
+    )
     stage = compute_execution_stage(
         project_id=pid,
         plan_status=plan_status,
         task_stats=stats,
         manifest=manifest,
         project_root=project_dir(paths, pid) if pid else None,
-        review_verdict=getattr(session, "last_review_verdict", None),
-        review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+        review_verdict=(
+            review_verdict
+            if not (
+                bool(getattr(session.meta, "project_runaway_enabled", False))
+                and not bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
+            )
+            else None
+        ),
+        review_blockers_count=review_blockers_count,
         workflow_stage=workflow_stage,
     )
     stage_documents = classify_stage_documents(
@@ -132,6 +160,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         release_revision=str(release_artifact.get("revision")) if release_artifact else None,
     ) if pid else {"accepted": False, "accepted_at": None, "release_revision": None, "checklist": {}}
     acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", "")) if pid else None
+    runaway_evidence = load_verification_evidence(paths, pid) if pid else None
     can_verify = bool(
         pid
         and plan_allows_code_writes(plan_status)
@@ -154,21 +183,30 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "tasks_all_done": stats.all_done,
         "project_summary": _project_summary(artifacts.get("PROJECT.md", "")),
         "needs_plan_confirm": (
-            plan_status in {"draft", "plan_dirty"} and workflow_stage == "requirements"
+            not bool(getattr(session.meta, "project_runaway_enabled", False))
+            and plan_status in {"draft", "plan_dirty"}
+            and workflow_stage == "requirements"
         ),
-        "needs_design_confirm": workflow_stage == "documentation",
-        "needs_documentation": workflow_stage == "requirements",
+        "needs_design_confirm": (
+            not bool(getattr(session.meta, "project_runaway_enabled", False))
+            and workflow_stage == "documentation"
+        ),
+        "needs_documentation": (
+            not bool(getattr(session.meta, "project_runaway_enabled", False))
+            and workflow_stage == "requirements"
+        ),
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
         "scope_confirmed_at": getattr(session.meta, "project_scope_confirmed_at", "") or None,
+        "runaway_enabled": bool(getattr(session.meta, "project_runaway_enabled", False)),
         "delivery_profile": get_delivery_profile(session.meta),
-        "review_verdict": getattr(session, "last_review_verdict", None),
-        "review_blockers_count": int(getattr(session, "last_review_blockers_count", 0) or 0),
+        "review_verdict": review_verdict,
+        "review_blockers_count": review_blockers_count,
         "review_progress_blocked": review_progress_blocked_flag(
             delivery_profile=get_delivery_profile(session.meta),
-            last_review_verdict=getattr(session, "last_review_verdict", None),
-            last_review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+            last_review_verdict=review_verdict,
+            last_review_blockers_count=review_blockers_count,
         ),
         "manifest": manifest_payload(manifest) if manifest is not None else None,
         "manifest_stale": manifest_has_l2_stale(manifest) if manifest is not None else False,
@@ -183,6 +221,21 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "execution_stage_deferred": stage_documents["deferred"],
         "content_lint": stage.get("content_lint"),
         "release_acceptance": release_acceptance,
+        "runaway_status": _runaway_user_status(session),
+        "runaway_checkpoint": normalize_checkpoint(
+            getattr(session.meta, "project_runaway_checkpoint", "")
+        ),
+        "runaway_repair_count": int(getattr(session.meta, "project_runaway_repair_count", 0) or 0),
+        "runaway_last_verification": getattr(session.meta, "project_runaway_last_verification", "") or None,
+        "runaway_paused_reason": getattr(session.meta, "project_runaway_paused_reason", "") or None,
+        "runaway_acceptance_passed": bool(
+            getattr(session.meta, "project_runaway_acceptance_passed", False)
+        ),
+        "runaway_verification_evidence": runaway_evidence,
+        "runaway_verification_evidence_path": (
+            str(verification_evidence_path(paths, pid).relative_to(paths.workspace)).replace("\\", "/")
+            if pid else None
+        ),
         "execution_stage_artifacts": [
             {
                 "path": item.get("path"),
@@ -222,6 +275,8 @@ def project_list_payload(paths: AgentPaths, session: Session | None = None) -> d
 def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str, Any] | None:
     pid = (session.meta.project_id or "").strip()
     if not pid or session.meta.active_shell != "project":
+        return None
+    if bool(getattr(session.meta, "project_runaway_enabled", False)):
         return None
     plan_status = session.meta.project_plan_status or "draft"
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
@@ -266,6 +321,8 @@ def emit_project_session_bundle(session: Session, paths: AgentPaths, emit: EmitF
 
 
 def maybe_emit_plan_request(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
+    if bool(getattr(session.meta, "project_runaway_enabled", False)):
+        return
     sync_plan_dirty_if_structure_changed(session, paths)
     payload = build_plan_request_payload(session, paths)
     if payload is not None:
@@ -327,6 +384,43 @@ def dispatch_project_message(
         session.save()
         return project_state_payload(session, paths)
 
+    if msg_type == "project.runaway.set":
+        pid = _project_pid(session)
+        enabled = message.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ProjectApiError("project.runaway.set requires boolean enabled")
+        was_enabled = bool(session.meta.project_runaway_enabled)
+        resume_requested = message.get("resume") is True
+        session.meta.project_runaway_enabled = enabled
+        if enabled and (not was_enabled or resume_requested):
+            from runaway_flow import checkpoint_for_stage, normalize_checkpoint, transition_checkpoint
+
+            current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
+            if current == "paused":
+                target = checkpoint_for_stage(session.meta.project_workflow_stage)
+                transition_checkpoint(session.meta, target if target != "idle" else "preparing")
+            elif current == "completed":
+                transition_checkpoint(session.meta, "idle")
+            else:
+                transition_checkpoint(session.meta, current)
+        if not enabled:
+            from runaway_flow import normalize_checkpoint, pause_runaway, transition_checkpoint
+
+            current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
+            if current == "completed":
+                transition_checkpoint(session.meta, "idle")
+            else:
+                pause_runaway(session.meta, "用户关闭了狂奔模式")
+        session.meta.updated_at = utc_now_iso()
+        session.save()
+        label = "已恢复" if enabled and resume_requested else "已开启" if enabled else "已暂停"
+        return {
+            "_events": [
+                {"type": "notice", "text": f"狂奔模式{label}：仅在当前项目范围内连续运行。"},
+                project_state_payload(session, paths),
+            ]
+        }
+
     if msg_type == "project.release.accept":
         pid = _project_pid(session)
         state = project_state_payload(session, paths)
@@ -348,6 +442,13 @@ def dispatch_project_message(
                 and int(state.get("review_blockers_count") or 0) == 0
             ),
             "release_current": artifacts.get("RELEASE.md", {}).get("status") == "current",
+            "runaway_evidence": (
+                not bool(state.get("runaway_enabled"))
+                or (
+                    bool(state.get("runaway_acceptance_passed"))
+                    and evidence_passed(state.get("runaway_verification_evidence"), pid)
+                )
+            ),
             "human_acceptance": True,
         }
         if not all(checklist.values()):
@@ -666,13 +767,30 @@ def dispatch_plan_user_message(
         events.extend([project_state_payload(session, paths), agent.build_state(session)])
         return {"_events": events}
 
+    proposal_ids = tuple(result.proposal_ids)
+    adopt_pending = result.adopt_pending
+    if bool(getattr(session.meta, "project_runaway_enabled", False)) and proposal_ids:
+        adopted_ids: list[str] = []
+        with agent.state_save_batch():
+            for suggestion_id in proposal_ids:
+                try:
+                    adopted = agent.accept_suggestion(suggestion_id, code_policy="plan_only")
+                except ProjectModeError:
+                    adopted = {"ok": False}
+                if not isinstance(adopted, dict) or adopted.get("ok") is not False:
+                    adopted_ids.append(suggestion_id)
+        if adopted_ids:
+            _ack_human_plan_adopt(session, paths, agent)
+        proposal_ids = tuple(item for item in proposal_ids if item not in adopted_ids)
+        adopt_pending = bool(proposal_ids)
+
     events.append(
         {
             "type": "plan.subagent.done",
             "summary": result.summary,
-            "proposal_count": len(result.proposal_ids),
-            "proposal_ids": list(result.proposal_ids),
-            "adopt_pending": result.adopt_pending,
+            "proposal_count": len(proposal_ids),
+            "proposal_ids": list(proposal_ids),
+            "adopt_pending": adopt_pending,
             "ok": True,
         }
     )

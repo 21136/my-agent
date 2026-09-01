@@ -16,7 +16,7 @@ from context_switch import (
     normalize_proposal,
 )
 from project_cli import parse_project_command, run_project_command
-from project_mode import normalize_project_id, project_dir
+from project_mode import create_project, normalize_project_id, project_dir
 from project_switch import read_project_sessions
 from session import create_new
 from tools.executor import ExecutorSession, ToolExecutor
@@ -74,6 +74,35 @@ class ContextSwitchTests(unittest.TestCase):
             result.session.conversation_id,
         )
         self.assertTrue(project_dir(self.paths, self.pid_b).is_dir())
+
+    def test_project_new_existing_id_rejects_without_rebinding(self) -> None:
+        """A new command must not silently open an existing project."""
+        run_project_command(
+            self.session,
+            self.paths,
+            parse_project_command(f"项目 新建 {self.pid_a}"),
+            output_fn=lambda _l: None,
+        )
+        old_cid = self.session.conversation_id
+        pid_a = normalize_project_id(self.pid_a)
+        create_project(self.paths, self.pid_b)
+
+        outputs: list[str] = []
+        result = run_project_command(
+            self.session,
+            self.paths,
+            parse_project_command(f"项目 新建 {self.pid_b}"),
+            output_fn=outputs.append,
+        )
+
+        self.assertFalse(result.meta_changed)
+        self.assertIsNone(result.session)
+        self.assertEqual(self.session.conversation_id, old_cid)
+        self.assertEqual(self.session.meta.project_id, pid_a)
+        self.assertEqual(read_project_sessions(self.paths).get(pid_a), old_cid)
+        self.assertNotIn(normalize_project_id(self.pid_b), read_project_sessions(self.paths))
+        self.assertTrue(any(line.startswith("error:") for line in outputs))
+        self.assertTrue(any("项目 打开" in line or "项目 切换" in line for line in outputs))
 
     def test_foreign_write_path_detection(self) -> None:
         self.assertEqual(
