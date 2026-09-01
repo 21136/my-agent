@@ -11,9 +11,13 @@ import {
   renderProjectSidebar,
   renderProjectGoalCard,
   deriveProjectGoalViewModel,
+  hasProjectBlocker,
+  renderProjectBlockerDetails,
   getTaskChangeFingerprint,
   renderPlanTaskFlow,
   applyProjectStateEvent,
+  resetProjectScopedState,
+  shouldApplyProjectEvent,
   applyProjectListEvent,
   applyProjectPlanState,
   applyProjectThreadsEvent,
@@ -219,6 +223,15 @@ export function mountUnifiedShell(
     reviewBlockersCount: 0,
     reviewProgressBlocked: false,
     scopeConfirmedAt: "",
+    runawayEnabled: false,
+    runawayStatus: "",
+    runawayCheckpoint: "",
+    runawayRepairCount: 0,
+    runawayLastVerification: null,
+    runawayPausedReason: null,
+    runawayAcceptancePassed: false,
+    runawayVerificationEvidence: null,
+    runawayVerificationEvidencePath: null,
     scopeNeedsReconfirm: false,
     flowPreviewStage: null,
     milestoneAccepted: false,
@@ -426,7 +439,7 @@ export function mountUnifiedShell(
         </div>
         <div class="unified-stage" id="unified-stage">
           <main class="unified-chat" id="unified-chat"></main>
-          <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="计划审阅"></section>
+          <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="方案变更"></section>
           <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
         </div>
@@ -1097,10 +1110,15 @@ export function mountUnifiedShell(
     },
     onProjectSwitchConfirm: () => {
       if (!projectState.switchOverlay) return;
+      const target = projectState.switchOverlay.projectId;
+      resetProjectScopedState(projectState);
+      projectState.projectId = target;
+      projectState.switchOverlay = null;
+      projectState.pendingPickerId = target;
       projectState.switchInProgress = true;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       try {
-        client.switchProject(projectState.switchOverlay.projectId, {
+        client.switchProject(target, {
           confirm: true,
           requestId: projectState.switchOverlay.requestId,
         });
@@ -1228,6 +1246,9 @@ export function mountUnifiedShell(
 
   function setMainFocus(focus: MainFocus): void {
     projectState.mainFocus = focus;
+    if (focus !== "chat") {
+      clearExpandedSurface();
+    }
     if (focus === "chat") {
       projectState.reviewFocusId = null;
     }
@@ -1314,7 +1335,7 @@ export function mountUnifiedShell(
 
   function openPlanReview(suggestionId?: string): void {
     try {
-      setStatus("正在读取待审阅提案…");
+      setStatus("正在读取待处理方案…");
       const queue = getActionableQueue();
       if (!queue.length) {
         setStatus("暂无待采纳提案");
@@ -1338,13 +1359,13 @@ export function mountUnifiedShell(
       planFullEl.hidden = true;
       planReviewEl.classList.remove("hidden");
       planReviewEl.hidden = false;
-      setStatus("正在渲染计划审阅…");
+      setStatus("正在打开方案变更…");
       renderPlanReviewPane();
       planReviewEl.scrollTop = 0;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      setStatus("计划审阅已打开");
+      setStatus("方案变更已打开");
     } catch (err) {
-      setStatus(`计划审阅打开失败：${err instanceof Error ? err.message : String(err)}`);
+      setStatus(`方案变更打开失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1363,6 +1384,30 @@ export function mountUnifiedShell(
   function openPlanFull(): void {
     projectState.overlayPanel = null;
     setMainFocus("plan_full");
+  }
+
+  function clearExpandedSurface(): void {
+    sessionsOpen = false;
+    expandEl.classList.add("hidden");
+    expandEl.innerHTML = "";
+  }
+
+  function showBlockerDetails(): void {
+    setMainFocus("chat");
+    clearExpandedSurface();
+    expandEl.innerHTML = renderProjectBlockerDetails(projectState);
+    expandEl.classList.remove("hidden");
+    expandEl.querySelector<HTMLButtonElement>('[data-action="resume-runaway"]')?.addEventListener("click", () => {
+      try {
+        client.resumeProjectRunaway();
+        setStatus("正在恢复狂奔并补齐文档…");
+      } catch (err) {
+        setStatus(`恢复狂奔失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+    expandEl.querySelector<HTMLButtonElement>('[data-action="blocker-details-close"]')?.addEventListener("click", () => {
+      clearExpandedSurface();
+    });
   }
 
   function startProjectTaskFromUi(taskId: string): void {
@@ -1536,6 +1581,10 @@ export function mountUnifiedShell(
   }
 
   function jumpToCurrentTurnProcess(): void {
+    setMainFocus("chat");
+    if (hasProjectBlocker(projectState)) {
+      showBlockerDetails();
+    }
     const blocks = chat.model.blocks;
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i];
@@ -1545,7 +1594,7 @@ export function mountUnifiedShell(
       }
       requestAnimationFrame(() => {
         const el = chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${block.turnKey}"]`);
-        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
       });
       return;
     }
@@ -1553,6 +1602,10 @@ export function mountUnifiedShell(
   }
 
   function jumpToReviewSummary(): void {
+    setMainFocus("chat");
+    if (hasProjectBlocker(projectState)) {
+      showBlockerDetails();
+    }
     const blocks = chat.model.blocks;
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i];
@@ -1561,7 +1614,7 @@ export function mountUnifiedShell(
         const el = chatEl.querySelector<HTMLElement>(
           `.unified-plan-subagent[data-turn-index="${block.turnIndex}"]`,
         );
-        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
       });
       return;
     }
@@ -2473,7 +2526,7 @@ export function mountUnifiedShell(
     if (!btn) return;
     ev.preventDefault();
     ev.stopImmediatePropagation();
-    setStatus("正在打开计划审阅…");
+    setStatus("正在打开方案变更…");
     openPlanReview(btn.dataset.suggestionId);
   }, true);
 
@@ -3103,13 +3156,17 @@ export function mountUnifiedShell(
   const off = client.onEvent((event: ServerEvent) => {
     switch (event.type) {
       case "session.banner":
+        if (!shouldApplyProjectEvent(projectState, event.project_id)) break;
+        if ((event.project_id || "") !== projectState.projectId) {
+          resetProjectScopedState(projectState);
+        }
         chat.handleEvent(event);
         projectState.currentSessionId = event.session_id;
         if (event.project_id) {
           projectState.projectId = event.project_id;
-          projectState.planStatus = event.project_plan_status ?? projectState.planStatus;
-          projectState.tasksDone = event.project_tasks_done ?? projectState.tasksDone;
-          projectState.tasksTotal = event.project_tasks_total ?? projectState.tasksTotal;
+          projectState.planStatus = event.project_plan_status ?? "draft";
+          projectState.tasksDone = event.project_tasks_done ?? 0;
+          projectState.tasksTotal = event.project_tasks_total ?? 0;
           const plan = event.project_plan_label ?? "计划待确认";
           topbarState.projectLabel = `项目 · ${event.project_id} · ${plan}`;
           syncFreeChatFromSession(true, event.session_id);
@@ -3153,6 +3210,41 @@ export function mountUnifiedShell(
         handleProposalsEvent(event.items);
         break;
 
+      case "context.switch.request":
+        projectState.switchInProgress = true;
+        projectState.pendingPickerId = (event.project_id || "").trim();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "context.switch.done":
+        if (event.applied === false || event.choice !== "y") {
+          projectState.switchInProgress = false;
+          projectState.pendingPickerId = "";
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          break;
+        }
+        resetProjectScopedState(projectState);
+        projectState.switchInProgress = false;
+        projectState.switchOverlay = null;
+        projectState.pendingPickerId = "";
+        projectState.projectId = (event.project_id || "").trim();
+        projectState.currentSessionId = event.session_id || "";
+        freeChatActive = !projectState.projectId;
+        client.listProjects();
+        if (projectState.projectId) refreshProjectThreads();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        updatePlaceholder();
+        updateWorkbenchEmpty();
+        composerWire.syncSendEnabled();
+        if (projectState.projectId) {
+          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
+        } else {
+          topbarState.projectLabel = "";
+        }
+        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        setStatus(event.message || "已切换工作上下文");
+        break;
+
       case "project.release.accepted":
         projectState.milestoneAccepted = Boolean(event.release_acceptance.accepted);
         projectState.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
@@ -3161,7 +3253,7 @@ export function mountUnifiedShell(
         break;
 
       case "project.state":
-        applyProjectStateEvent(projectState, event);
+        if (!applyProjectStateEvent(projectState, event)) break;
         if (projectState.projectId) {
           freeChatActive = false;
         }
@@ -3178,7 +3270,7 @@ export function mountUnifiedShell(
         break;
 
       case "project.plan.state":
-        applyProjectPlanState(projectState, event);
+        if (!applyProjectPlanState(projectState, event)) break;
         resolvePendingAdopt();
         projectState.partnerBusy = false;
         if (!perspectiveLocked) setPerspective("project", "session");
@@ -3186,7 +3278,7 @@ export function mountUnifiedShell(
         if (projectState.mainFocus === "plan_review") {
           if (getActionableQueue().length === 0) {
             closePlanMainFocus();
-            setStatus("当前没有可审阅的计划提案");
+            setStatus("当前没有待处理方案");
           } else {
             renderPlanReviewPane();
           }
@@ -3254,17 +3346,30 @@ export function mountUnifiedShell(
 
       case "plan.subagent.start":
         projectState.partnerBusy = true;
-        chat.pushPlanSubagentCard("running", { taskPreview: event.task_preview });
+        if (!projectState.runawayEnabled) {
+          chat.pushPlanSubagentCard("running", { taskPreview: event.task_preview });
+        }
         setStatus("计划搭档整理中…");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
+      case "session.history":
+        if (
+          event.session_id
+          && projectState.currentSessionId
+          && event.session_id !== projectState.currentSessionId
+        ) break;
+        chat.handleEvent(event);
+        break;
+
       case "plan.subagent.done":
         projectState.partnerBusy = false;
-        chat.updatePlanSubagentCard("proposals_ready", {
-          summary: event.summary,
-          proposalCount: event.proposal_count,
-        });
+        if (!projectState.runawayEnabled) {
+          chat.updatePlanSubagentCard("proposals_ready", {
+            summary: event.summary,
+            proposalCount: event.proposal_count,
+          });
+        }
         setStatus("就绪");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
@@ -3301,7 +3406,7 @@ export function mountUnifiedShell(
         break;
 
       case "project.threads":
-        applyProjectThreadsEvent(projectState, event);
+        if (!applyProjectThreadsEvent(projectState, event)) break;
         projectState.currentSessionId = projectState.currentSessionId || event.active_session_id || "";
         syncArchivedViewUi();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -3382,10 +3487,16 @@ export function mountUnifiedShell(
         break;
 
       case "project.switch.done":
+        if (
+          projectState.pendingPickerId
+          && event.project_id !== projectState.pendingPickerId
+        ) break;
+        resetProjectScopedState(projectState);
         projectState.switchInProgress = false;
         projectState.switchOverlay = null;
         projectState.pendingPickerId = "";
         projectState.projectId = event.project_id;
+        projectState.currentSessionId = event.session_id;
         if (event.project_id) {
           freeChatActive = false;
         }
@@ -3594,17 +3705,16 @@ export function mountUnifiedShell(
   });
 
   function planStatusLabel(): string {
+    if (projectState.runawayEnabled && projectState.runawayStatus) return projectState.runawayStatus;
     if (projectState.planStatus === "confirmed") {
       if (projectState.tasksAllDone && projectState.tasksTotal > 0) {
         if (projectState.executionStage === "release" && projectState.milestoneAccepted) return "项目已完成";
-        if (projectState.executionStage === "release") return "待发布验收";
-        return "任务已清空 · 待验证";
+        return "交付检查";
       }
-      const open = Math.max(0, projectState.tasksTotal - projectState.tasksDone);
-      return `${open}/${projectState.tasksTotal} 未完成`;
+      return "项目进行中";
     }
-    if (projectState.planStatus === "plan_dirty") return "计划已变更 · 待确认";
-    return "计划待确认";
+    if (projectState.planStatus === "plan_dirty") return "方案有变更";
+    return "等待方案确认";
   }
 
   // ---- initial render ----

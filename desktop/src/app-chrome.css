@@ -148,6 +148,12 @@
   color: var(--ma-accent);
 }
 
+.app-chrome-runaway.is-active {
+  border-color: var(--ma-accent);
+  color: var(--ma-accent);
+  font-weight: 600;
+}
+
 #shell-root {
   flex: 1;
   min-height: 0;

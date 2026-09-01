@@ -41,7 +41,7 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("四个核心制品按一个批次处理", panel)
         self.assertIn("execution_stage_status", ws)
         self.assertIn("execution_stage_warnings", ws)
-        self.assertIn("没有发现阻塞文档", panel)
+        self.assertIn("文档整理进行中；未生成文档属于进度，不是阻塞", panel)
 
     def test_it5911_plan_review_requires_actionable_suggestions(self) -> None:
         panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
@@ -125,11 +125,11 @@ class ProjectStageCardContractTests(unittest.TestCase):
         )
         self.assertIn('data-action="open-suggestion-review-new"', panel)
         self.assertIn('[data-action="open-suggestion-review-new"]', index)
-        self.assertIn('正在打开计划审阅', index)
-        self.assertIn('计划审阅已打开', index)
-        self.assertIn('正在读取待审阅提案', index)
+        self.assertIn('正在打开方案变更', index)
+        self.assertIn('方案变更已打开', index)
+        self.assertIn('正在读取待处理方案', index)
         self.assertIn('正在切换主区', index)
-        self.assertIn('正在渲染计划审阅', index)
+        self.assertIn('renderPlanReviewPane', index)
         self.assertIn('planReviewEl.hidden = false', index)
         self.assertIn('let planReviewIndex = 0;', index)
         self.assertIn('[data-action="open-suggestion-review"]', css)

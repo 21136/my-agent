@@ -320,6 +320,21 @@
   margin-top: 0.75rem;
 }
 
+.unified-blocker-details {
+  border-color: color-mix(in srgb, var(--ma-danger) 45%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-danger) 4%, var(--ma-bg));
+}
+
+.unified-blocker-details p {
+  margin: 0.45rem 0 0;
+  color: var(--ma-text-muted);
+  line-height: 1.5;
+}
+
+.unified-blocker-details strong {
+  color: var(--ma-text);
+}
+
 /* ================================================================
    Chat area
    ================================================================ */
@@ -2023,6 +2038,18 @@
 .textbook-plan-task { margin-top: 0.3rem; padding: 0.4rem; border-left: 2px solid var(--ma-accent); background: color-mix(in srgb, var(--ma-accent) 5%, transparent); }
 .textbook-plan-stat { margin-top: 0.25rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-plan-card-actions { display: flex; gap: 0.35rem; align-items: center; margin-top: 0.55rem; }
+.textbook-runaway-surface {
+  margin: 0.65rem 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--ma-accent) 4%, var(--ma-surface));
+}
+.textbook-runaway-surface-title { color: var(--ma-text-muted); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; }
+.textbook-runaway-surface-status { margin-top: 0.22rem; color: var(--ma-text); font-size: 0.9rem; font-weight: 700; }
+.textbook-runaway-surface-summary { margin-top: 0.3rem; color: var(--ma-text-muted); font-size: 0.76rem; line-height: 1.45; }
+.textbook-runaway-surface-task { margin-top: 0.45rem; padding: 0.4rem; border-left: 2px solid var(--ma-accent); color: var(--ma-text); background: color-mix(in srgb, var(--ma-accent) 5%, transparent); font-size: 0.74rem; line-height: 1.4; }
+.textbook-runaway-surface-next { margin-top: 0.45rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-soft-signal.is-good { color: #3d8b5a; }
 .textbook-soft-signal.is-warn { color: #b17d00; }
 .textbook-release-list { display: grid; gap: 0.15rem; margin-top: 0.35rem; color: var(--ma-text-muted); font-size: 0.7rem; }

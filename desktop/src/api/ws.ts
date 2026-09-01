@@ -5,6 +5,7 @@ export type LlmModelListItem = {
   tier: string;
   max_input_tokens: number;
   supports_tool_call: boolean;
+  supports_image_input?: boolean;
   configured: boolean;
 };
 
@@ -66,6 +67,8 @@ export type ServerEvent =
   | { type: "llm_keys.updated" }
   | {
       type: "session.history";
+      session_id?: string;
+      project_id?: string | null;
       items: Array<{ role: "user" | "assistant"; text: string }>;
     }
   | {
@@ -168,6 +171,15 @@ export type ServerEvent =
       acceptance_expected_exit: number | null;
       can_verify: boolean;
       scope_confirmed_at?: string | null;
+      runaway_enabled?: boolean;
+      runaway_status?: string;
+      runaway_checkpoint?: string | null;
+      runaway_repair_count?: number;
+      runaway_last_verification?: string | null;
+      runaway_paused_reason?: string | null;
+      runaway_acceptance_passed?: boolean;
+      runaway_verification_evidence?: Record<string, unknown> | null;
+      runaway_verification_evidence_path?: string | null;
       delivery_profile?: string;
       review_verdict?: string | null;
       review_blockers_count?: number;
@@ -260,10 +272,19 @@ export type ServerEvent =
       plan_transcript_len?: number;
       change_log: PlanChangeItem[];
       change_timeline?: ChangeLedgerItem[];
+      runaway_enabled?: boolean;
+      runaway_status?: string;
+      runaway_checkpoint?: string | null;
+      runaway_repair_count?: number;
+      runaway_last_verification?: string | null;
+      runaway_paused_reason?: string | null;
       workflow_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
       needs_documentation?: boolean;
       needs_design_confirm?: boolean;
       active_task_id?: string | null;
+      runaway_acceptance_passed?: boolean;
+      runaway_verification_evidence?: Record<string, unknown> | null;
+      runaway_verification_evidence_path?: string | null;
       execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
       execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
       execution_stage_reason?: string;
@@ -452,6 +473,7 @@ export type StagedFileItem = {
   mime: string;
   readable_text: boolean;
   copied: boolean;
+  image_input?: boolean;
 };
 
 export type ProposalItem = {
@@ -819,6 +841,14 @@ export class AgentWsClient {
 
   confirmProjectScope(): void {
     this.send({ type: "project.scope.confirm" });
+  }
+
+  setProjectRunaway(enabled: boolean): void {
+    this.send({ type: "project.runaway.set", enabled });
+  }
+
+  resumeProjectRunaway(): void {
+    this.send({ type: "project.runaway.set", enabled: true, resume: true });
   }
 
   confirmProjectDesign(): void {

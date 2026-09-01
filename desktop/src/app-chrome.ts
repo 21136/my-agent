@@ -52,12 +52,13 @@ function formatContextTokensShort(tokens: number): string {
 function formatModelOptionLabel(item: LlmModelListItem): string {
   const keySuffix = item.configured ? "" : " (未配置 key)";
   const ctxSuffix = ` · ${formatContextTokensShort(item.max_input_tokens)} ctx`;
+  const visionSuffix = item.supports_image_input ? " · 视觉" : "";
   const vendor = item.vendor.trim();
   const showVendor =
     vendor &&
     !item.name.toLowerCase().includes(vendor.toLowerCase());
   const label = showVendor ? `${item.name} · ${vendor}` : item.name;
-  return `${label}${ctxSuffix}${keySuffix}`;
+  return `${label}${ctxSuffix}${visionSuffix}${keySuffix}`;
 }
 
 function renderModelOptions(models: LlmModelListItem[], booting: boolean): string {
@@ -100,6 +101,7 @@ export function mountAppChrome(
       </div>
       <span class="app-chrome-spacer"></span>
       <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
+      <button type="button" class="app-chrome-btn app-chrome-runaway" id="chrome-runaway" aria-pressed="false" disabled>狂奔：关</button>
       ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-btn" id="chrome-model-keys">模型密钥</button>' : ""}
       ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-btn" id="chrome-settings">托管区</button>' : ""}
       <button type="button" class="app-chrome-btn" id="chrome-pet">伴侣窗</button>
@@ -112,11 +114,26 @@ export function mountAppChrome(
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
   const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
+  const runawayBtn = root.querySelector<HTMLButtonElement>("#chrome-runaway")!;
 
   themeSelect.value = theme;
 
   let routeTimer: number | null = null;
   let syncingModel = false;
+  let runawayEnabled = false;
+  let runawayProjectBound = false;
+
+  const syncRunaway = (enabled: boolean, projectBound: boolean): void => {
+    runawayEnabled = enabled;
+    runawayProjectBound = projectBound;
+    runawayBtn.disabled = !projectBound;
+    runawayBtn.textContent = `狂奔：${enabled ? "开" : "关"}`;
+    runawayBtn.setAttribute("aria-pressed", String(enabled));
+    runawayBtn.title = projectBound
+      ? (enabled ? "狂奔运行已开启；点击暂停" : "开启后允许当前项目连续推进")
+      : "先打开一个项目才能开启狂奔运行";
+    runawayBtn.classList.toggle("is-active", enabled);
+  };
 
   const applyModelCatalog = (models: LlmModelListItem[], selectedId?: string) => {
     knownModels = models;
@@ -141,6 +158,12 @@ export function mountAppChrome(
     const next = pickModelId(modelSelect.value, knownModels);
     modelSelect.value = next;
     handlers.client?.setSessionModel(next);
+  });
+
+  runawayBtn.addEventListener("click", () => {
+    if (!runawayProjectBound) return;
+    runawayBtn.disabled = true;
+    handlers.client?.setProjectRunaway(!runawayEnabled);
   });
 
   cliBtn.addEventListener("click", () => {
@@ -169,8 +192,11 @@ export function mountAppChrome(
     applyModelCatalog(event.models);
   });
 
+  let currentProjectId = "";
+
   const unsubBanner = handlers.client?.onEvent((event) => {
     if (event.type !== "session.banner") return;
+    currentProjectId = event.project_id || "";
     syncingModel = true;
     if (knownModels.length) {
       modelSelect.value = pickModelId(event.llm_model, knownModels);
@@ -180,8 +206,32 @@ export function mountAppChrome(
     syncingModel = false;
   });
 
+  const unsubProject = handlers.client?.onEvent((event) => {
+    if (event.type !== "project.state") return;
+    const eventProjectId = event.project_id || "";
+    if (currentProjectId && eventProjectId !== currentProjectId) return;
+    currentProjectId = eventProjectId;
+    syncRunaway(Boolean(event.runaway_enabled), Boolean(event.project_id));
+  });
+
+  const unsubSwitch = handlers.client?.onEvent((event) => {
+    if (event.type === "context.switch.done") {
+      if (event.applied === false || event.choice !== "y") return;
+      currentProjectId = event.project_id || "";
+      syncRunaway(false, Boolean(event.project_id));
+      return;
+    }
+    if (event.type !== "project.switch.done") return;
+    currentProjectId = event.project_id;
+    syncRunaway(false, Boolean(event.project_id));
+  });
+
   void unsubModels;
   void unsubBanner;
+  void unsubProject;
+  void unsubSwitch;
+
+  syncRunaway(false, false);
 
   modelSelect.innerHTML = renderModelOptions([], true);
   modelSelect.disabled = true;

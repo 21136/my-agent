@@ -56,7 +56,7 @@ export function mountFileDrop(options: {
     for (const item of items) {
       const chip = document.createElement("span");
       chip.className = "file-drop-chip";
-      const readable = item.readable_text ? "" : " · 非文本";
+      const readable = item.image_input ? " · 可识图" : item.readable_text ? "" : " · 非文本";
       chip.innerHTML = `
         <span class="file-drop-chip-name" title="${escapeHtml(item.ref)}">${escapeHtml(item.name)}</span>
         <span class="file-drop-chip-meta">${formatSize(item.size)}${readable}</span>

@@ -78,7 +78,11 @@ function composeDisplayMessage(
         : item.size < 1024 * 1024
           ? `${(item.size / 1024).toFixed(1)} KB`
           : `${(item.size / (1024 * 1024)).toFixed(1)} MB`;
-    const hint = item.readable_text ? item.mime : `${item.mime}；不可直接 read_file`;
+    const hint = item.image_input
+      ? `${item.mime}；可识图`
+      : item.readable_text
+        ? item.mime
+        : `${item.mime}；不可直接 read_file`;
     lines.push(`- ${item.name} → ${item.ref} (${size}, ${hint})`);
   }
   if (text.trim()) {

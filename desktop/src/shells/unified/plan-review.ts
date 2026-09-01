@@ -82,7 +82,7 @@ export function renderPlanReviewPanel(opts: {
     ? `<pre class="unified-plan-review-diff">${escapeHtml(diffRaw)}</pre>`
     : `<pre class="unified-plan-review-diff unified-plan-review-diff-empty">${escapeHtml(item.body)}</pre>`;
 
-  const position = queue.length > 1 ? `计划审阅 · ${index + 1}/${queue.length}` : "计划审阅";
+  const position = queue.length > 1 ? `方案变更 · ${index + 1}/${queue.length}` : "方案变更";
   const statsBadge = stats
     ? `<span class="unified-plan-review-stats">${escapeHtml(stats)}</span>`
     : "";

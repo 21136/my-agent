@@ -176,6 +176,15 @@ export interface ProjectPanelState {
   reviewBlockersCount: number;
   reviewProgressBlocked: boolean;
   scopeConfirmedAt: string;
+  runawayEnabled: boolean;
+  runawayStatus: string;
+  runawayCheckpoint: string;
+  runawayRepairCount: number;
+  runawayLastVerification: string | null;
+  runawayPausedReason: string | null;
+  runawayAcceptancePassed: boolean;
+  runawayVerificationEvidence: Record<string, unknown> | null;
+  runawayVerificationEvidencePath: string | null;
   scopeNeedsReconfirm: boolean;
   flowPreviewStage: FlowStage | null;
   milestoneAccepted: boolean;
@@ -308,6 +317,116 @@ function resetPlanWarningState(state: ProjectPanelState): void {
   state.dismissedTaskChangeFingerprint = "";
 }
 
+export function resetProjectScopedState(state: ProjectPanelState): void {
+  if (typeof window !== "undefined") {
+    if (state.autoConfirmTimerId !== null) window.clearInterval(state.autoConfirmTimerId);
+    if (state.undoTimerId !== null) window.clearTimeout(state.undoTimerId);
+  }
+  state.projectSummary = "";
+  state.planStatus = "";
+  state.tasksMarkdown = "";
+  state.mapMarkdown = "";
+  state.tasksDone = 0;
+  state.tasksTotal = 0;
+  state.tasksAllDone = false;
+  state.planOverlay = null;
+  state.switchConfirmTarget = null;
+  state.taskPhases = [];
+  state.taskSnapshot = { lines: new Set(), lineTexts: new Map() };
+  state.planChangeLog = [];
+  state.changeTimeline = [];
+  state.executionStage = null;
+  state.workflowStage = null;
+  state.needsDesignConfirm = false;
+  state.executionStageStatus = "ready";
+  state.executionStageReason = "";
+  state.executionStageBlockers = [];
+  state.executionStageMissing = [];
+  state.executionStageWarnings = [];
+  state.executionStageAffected = [];
+  state.executionStageDeferred = [];
+  state.executionStageArtifacts = [];
+  state.highlightChanges = false;
+  state.highlightedLines = new Set();
+  state.currentDocPath = "";
+  state.currentDocContent = "";
+  state.newDocName = "";
+  state.quickAddText = "";
+  resetPlanWarningState(state);
+  state.undoDescription = "";
+  state.undoTimerId = null;
+  state.degradationLevel = "L1";
+  state.degradationLabel = "全功能";
+  state.changesLevel = null;
+  state.autoConfirmTimerId = null;
+  state.externalChanges = false;
+  state.suggestions = [];
+  state.autoFixNotices = [];
+  state.operationalNotices = [];
+  state.dismissedOperationalNoticeFingerprint = "";
+  state.partnerNotices = [];
+  state.partnerBusy = false;
+  state.nextTask = null;
+  state.nextTaskLine = null;
+  state.servicesLoading = false;
+  state.servicesError = "";
+  state.servicesLogName = "";
+  state.servicesLogText = "";
+  state.turnArmedId = "";
+  state.turnArmedText = "";
+  state.turnEvidence = [];
+  state.turnGateNotice = "";
+  state.turnPostcondition = "none";
+  state.turnCircuitOpen = [];
+  state.turnPlaybookId = "";
+  state.turnFailureClass = "";
+  state.activeSessionId = "";
+  state.threads = [];
+  state.threadsLoading = false;
+  state.currentSessionId = "";
+  state.mainFocus = "chat";
+  state.reviewFocusId = null;
+  state.suggestionAdoptFlash = null;
+  state.adoptedFooterMessage = null;
+  state.adoptPendingId = null;
+  state.turnInProgress = false;
+  state.deliveryProfile = "solo";
+  state.reviewVerdict = null;
+  state.reviewBlockersCount = 0;
+  state.reviewProgressBlocked = false;
+  state.scopeConfirmedAt = "";
+  state.runawayEnabled = false;
+  state.runawayStatus = "";
+  state.runawayCheckpoint = "";
+  state.runawayRepairCount = 0;
+  state.runawayLastVerification = null;
+  state.runawayPausedReason = null;
+  state.runawayAcceptancePassed = false;
+  state.runawayVerificationEvidence = null;
+  state.runawayVerificationEvidencePath = null;
+  state.scopeNeedsReconfirm = false;
+  state.flowPreviewStage = null;
+  state.milestoneAccepted = false;
+  state.milestoneAcceptedAt = null;
+  state.codeFollowup = null;
+  state.nextTurnChangeSummary = null;
+  state.dropTaskPendingId = null;
+  state.dropTaskPendingWorking = false;
+}
+
+export function shouldApplyProjectEvent(
+  state: ProjectPanelState,
+  eventProjectId: string | null | undefined,
+): boolean {
+  const incomingProjectId = (eventProjectId || "").trim();
+  const pendingProjectId = state.switchInProgress
+    ? (state.pendingPickerId || state.switchOverlay?.projectId || "").trim()
+    : "";
+  if (pendingProjectId && incomingProjectId !== pendingProjectId) return false;
+  if (state.projectId && incomingProjectId !== state.projectId) return false;
+  return true;
+}
+
 export function getTaskChangeFingerprint(state: ProjectPanelState): string {
   return JSON.stringify({
     projectId: state.projectId,
@@ -398,9 +517,41 @@ const USER_BLOCKER_LABELS: Record<string, string> = {
   review_blockers: "交付检查中的问题",
 };
 
+const USER_BLOCKER_REASON_LABELS: Record<string, string> = {
+  documentation_in_progress: "项目文档正在整理中，当前还没有进入实现阶段。",
+  design_not_confirmed: "项目设计尚未完成，当前还不能进入实现阶段。",
+  plan_not_confirmed: "项目方案尚未确认，当前还不能开始实现。",
+  scope_incomplete: "项目范围或验收标准还不完整。",
+  no_executable_tasks: "当前没有满足依赖条件的可执行任务。",
+  manifest_unavailable: "项目状态清单暂时不可用，无法安全继续。",
+  l2_stale: "项目文档与当前变更不一致，需要先更新受影响内容。",
+  review_blocked: "交付检查没有通过，仍有问题需要处理。",
+};
+
+export interface ProjectBlockerDetails {
+  reason: string;
+  impact: string;
+  attempted: string;
+  nextStep: string;
+}
+
+function userFacingBlockerReason(reason: string): string {
+  const normalized = reason.trim();
+  if (!normalized) return "当前阶段出口尚未满足，系统已暂停继续推进。";
+  return USER_BLOCKER_REASON_LABELS[normalized]
+    || (normalized.includes("documentation_in_progress")
+      ? USER_BLOCKER_REASON_LABELS.documentation_in_progress
+      : normalized.includes("design_not_confirmed")
+        ? USER_BLOCKER_REASON_LABELS.design_not_confirmed
+        : normalized);
+}
+
 function userFacingBlockerSummary(state: ProjectPanelState): string {
   if (state.reviewProgressBlocked && state.executionStageBlockers.length === 0) {
-    return "交付检查还没有通过，请先处理检查结果。";
+    return USER_BLOCKER_REASON_LABELS.review_blocked;
+  }
+  if (state.executionStageReason.trim()) {
+    return userFacingBlockerReason(state.executionStageReason);
   }
   const labels = Array.from(new Set(
     state.executionStageBlockers.map((item) => USER_BLOCKER_LABELS[item] || item)
@@ -409,6 +560,73 @@ function userFacingBlockerSummary(state: ProjectPanelState): string {
   return labels.length > 0
     ? "还需要处理：" + labels.join("、")
     : "当前还不能继续，请查看原因。";
+}
+
+function hasActualProjectBlocker(state: ProjectPanelState): boolean {
+  if (state.reviewProgressBlocked) return true;
+  if (state.runawayEnabled) {
+    return state.runawayCheckpoint === "paused" || Boolean(state.runawayPausedReason?.trim());
+  }
+  return state.executionStageStatus === "blocked";
+}
+
+export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerDetails {
+  const reviewBlocked = state.reviewProgressBlocked;
+  const reason = reviewBlocked && !state.executionStageReason.trim()
+    ? USER_BLOCKER_REASON_LABELS.review_blocked
+    : userFacingBlockerReason(
+      state.runawayPausedReason?.trim() || state.executionStageReason.trim(),
+    );
+  const stageLabel = USER_STAGE_LABELS[getExecutionStage(state)] || "当前阶段";
+  const blockerLabels = Array.from(new Set(
+    [...state.executionStageBlockers, ...state.executionStageMissing]
+      .map((item) => USER_BLOCKER_LABELS[item] || item)
+      .filter(Boolean),
+  ));
+  const impact = reviewBlocked
+    ? "项目不会进入下一阶段，也不会被标记为已完成。"
+    : `当前停在「${stageLabel}」阶段${blockerLabels.length ? `，待处理项：${blockerLabels.join("、")}` : ""}。`;
+  const attempted = state.runawayEnabled
+    ? "Harness 已保存当前检查点并停止自动推进，没有跳过前置条件或替你执行高风险操作。"
+    : "Harness 已停在当前阶段出口，没有绕过前置条件继续写入。";
+  const nextStep = state.runawayEnabled
+    ? "处理上述问题后，再重新开启狂奔；如需人工判断，请直接在聊天中说明处理方式。"
+    : "处理上述问题后，再回到聊天继续当前项目。";
+  return { reason, impact, attempted, nextStep };
+}
+
+export function hasProjectBlocker(state: ProjectPanelState): boolean {
+  return hasActualProjectBlocker(state);
+}
+
+export function renderProjectBlockerDetails(state: ProjectPanelState): string {
+  const details = projectBlockerDetails(state);
+  const pausedReason = state.runawayPausedReason?.trim() || "";
+  const canResumeDocumentation = state.runawayEnabled
+    && state.runawayCheckpoint === "paused"
+    && (
+      pausedReason === "文档尚未达到设计确认标准"
+      || state.executionStageReason.trim() === "documentation_in_progress"
+    );
+  return `<section class="unified-surface unified-blocker-details" aria-label="阻塞原因">
+    <div class="unified-expand-title">为什么停在这里</div>
+    <p><strong>原因</strong>：${escapeHtml(details.reason)}</p>
+    <p><strong>影响</strong>：${escapeHtml(details.impact)}</p>
+    <p><strong>已处理</strong>：${escapeHtml(details.attempted)}</p>
+    <p><strong>下一步</strong>：${escapeHtml(details.nextStep)}</p>
+    <div class="unified-expand-actions">
+      ${canResumeDocumentation ? '<button type="button" class="unified-btn unified-btn-accent" data-action="resume-runaway">让 Harness 继续补齐文档</button>' : ""}
+      <button type="button" class="unified-btn" data-action="blocker-details-close">关闭详情</button>
+    </div>
+  </section>`;
+}
+
+function isRunawayActive(state: ProjectPanelState): boolean {
+  if (!state.runawayEnabled) return false;
+  if (hasActualProjectBlocker(state) || state.milestoneAccepted) return false;
+  return ["idle", "preparing", "implementing", "verifying", "repairing", "release_wait"].includes(
+    state.runawayCheckpoint,
+  ) && state.runawayCheckpoint !== "release_wait";
 }
 
 function userFacingTaskGroupTitle(title: string): string {
@@ -434,11 +652,18 @@ function compactGoalText(text: string, max = 180): string {
 }
 
 function projectTaskProgressLabel(state: ProjectPanelState): string {
-  if (state.tasksTotal > 0) {
-    return `${Math.min(state.tasksDone, state.tasksTotal)}/${state.tasksTotal} 个任务`;
+  if (state.runawayEnabled) {
+    if (hasActualProjectBlocker(state)) return "等待处理";
+    if (state.tasksTotal > 0 && state.tasksAllDone) return "交付检查";
+    if (state.runawayCheckpoint === "verifying") return "正在验证";
+    if (state.runawayCheckpoint === "repairing") return "正在修复";
+    if (state.runawayCheckpoint === "implementing") return "正在实现";
+    if (state.runawayCheckpoint === "preparing" || state.runawayCheckpoint === "idle") return "正在准备";
   }
-  if (getExecutionStage(state) === "documentation") return "文档整理中";
-  return "暂无任务";
+  if (state.tasksTotal > 0 && state.tasksAllDone) return "交付检查";
+  if (getExecutionStage(state) === "documentation") return "正在整理资料";
+  if (state.tasksTotal > 0) return "项目进行中";
+  return "等待开始";
 }
 
 function decisionCopy(view: ProjectGoalViewModel): { detail: string; impact: string } {
@@ -503,27 +728,41 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
+  if (state.switchInProgress) {
+    return {
+      status: "processing",
+      statusLabel: "切换中",
+      title: "正在加载项目",
+      summary: `正在加载项目 ${state.projectId} 的目标和任务。`,
+      nextStep: "项目状态加载完成后即可继续。",
+      action: null,
+      actionLabel: null,
+    };
+  }
+
   const goal = compactGoalText(state.projectSummary) || compactGoalText(firstProjectGoalTask(state));
   const executionStage = getExecutionStage(state);
   const stageLabel = USER_STAGE_LABELS[executionStage];
   const blocker = userFacingBlockerSummary(state);
-  if (state.executionStageStatus === "blocked" || state.executionStageBlockers.length > 0 || state.reviewProgressBlocked) {
+  if (hasActualProjectBlocker(state)) {
     return {
       status: "blocked",
       statusLabel: "需要处理",
-      title: "当前无法继续",
+      title: state.runawayEnabled ? "需要你的处理" : "当前无法继续",
       summary: blocker,
-      nextStep: state.reviewProgressBlocked ? "查看审查摘要并处理阻塞项。" : "补齐缺失内容或修复阻塞后继续。",
-      action: state.reviewProgressBlocked ? "jump-review-summary" : null,
-      actionLabel: state.reviewProgressBlocked ? "查看原因" : null,
+      nextStep: "查看原因，处理后再继续。",
+      action: state.reviewProgressBlocked ? "jump-review-summary" : "jump-turn-process",
+      actionLabel: "查看原因",
     };
   }
 
-  const hasFailedEvidence = state.turnEvidence.some((item) => !item.ok);
+  const hasFailedEvidence = !state.runawayEnabled && state.turnEvidence.some((item) => !item.ok);
   if (
-    state.executionStageStatus === "failed"
-    || state.turnPostcondition === "fail"
-    || Boolean(state.turnFailureClass)
+    !state.runawayEnabled && (
+      state.executionStageStatus === "failed"
+      || state.turnPostcondition === "fail"
+      || Boolean(state.turnFailureClass)
+    )
     || (hasFailedEvidence && !state.turnInProgress)
   ) {
     return {
@@ -537,13 +776,15 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.turnInProgress || state.executionStageStatus === "in_progress") {
+  if (state.turnInProgress || state.executionStageStatus === "in_progress" || isRunawayActive(state)) {
     return {
       status: "processing",
       statusLabel: "进行中",
       title: stageLabel,
       summary: goal,
-      nextStep: "系统正在连续处理当前批次；你可以查看过程或随时停止。",
+      nextStep: state.runawayEnabled
+        ? "系统会自动继续实现、验证和修复；你可以查看过程或停止。"
+        : "系统正在处理当前内容；你可以查看过程或停止。",
       action: "jump-turn-process",
       actionLabel: "查看过程",
     };
@@ -578,7 +819,9 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  const actionableSuggestions = state.suggestions.filter((suggestion) => Boolean(suggestion.action));
+  const actionableSuggestions = state.runawayEnabled
+    ? []
+    : state.suggestions.filter((suggestion) => Boolean(suggestion.action));
   if (actionableSuggestions.length > 0) {
     return {
       status: "decision",
@@ -595,7 +838,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     return {
       status: "decision",
       statusLabel: "待验证",
-      title: "任务已清空，待验证",
+      title: "交付结果待检查",
       summary: goal,
       nextStep: "先查看验证证据和交付审查结果；任务清空本身不代表项目完成。",
       action: "open-full-plan",
@@ -603,11 +846,11 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0)) {
+  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0))) {
     return {
       status: "decision",
       statusLabel: "等你决定",
-      title: state.planStatus === "plan_dirty" ? "计划已变更，等你确认" : "方案已准备好",
+      title: state.planStatus === "plan_dirty" ? "方案有变更，等你确认" : "方案已准备好",
       summary: compactGoalText(state.planOverlay?.summary || "") || goal,
       nextStep: "确认方案后，系统才会进入当前任务的实现。",
       action: "confirm-plan",
@@ -660,7 +903,7 @@ export function renderProjectGoalCard(state: ProjectPanelState): string {
     || compactGoalText(firstProjectGoalTask(state))
     || view.title;
   const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
-  const contextAction = !isDecision && view.action && view.actionLabel
+  const contextAction = !state.runawayEnabled && !isDecision && view.action && view.actionLabel
     ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
     : "";
   const decision = isDecision
@@ -834,15 +1077,21 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
         action = `<button type="button" class="unified-btn" data-action="open-projects">打开项目</button><button type="button" class="unified-btn unified-btn-accent" data-action="new-project">新建项目</button>`;
       } else {
         body = `<div class="textbook-plan-goal">项目 ${escapeHtml(state.projectId)}：先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
-        action = state.scopeConfirmedAt
+        action = state.runawayEnabled
+          ? `<span class="textbook-soft-signal">狂奔已授权，Harness 正在自动准备项目</span>`
+          : state.scopeConfirmedAt
           ? `<span class="textbook-soft-signal">范围已确认</span>`
           : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
       }
       break;
     case "design":
-      body = `<div class="textbook-plan-goal">计划已采纳后，选择下一条可武装任务。</div><div class="textbook-plan-stat">待审阅 ${state.suggestions.filter((suggestion) => Boolean(suggestion.action)).length} 条 · 计划 ${escapeHtml(state.planStatus || "draft")}</div>`;
-      action = state.suggestions.some((suggestion) => Boolean(suggestion.action))
-        ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开审阅面</button>`
+      body = state.runawayEnabled
+        ? `<div class="textbook-plan-goal">Harness 正在自动准备实现任务。</div><div class="textbook-plan-stat">计划提案由狂奔授权自动采纳</div>`
+        : `<div class="textbook-plan-goal">方案已确定后，可以开始下一项工作。</div><div class="textbook-plan-stat">还有待处理的方案变更</div>`;
+      action = state.runawayEnabled
+        ? `<span class="textbook-soft-signal">狂奔已授权，正在进入实现</span>`
+        : state.suggestions.some((suggestion) => Boolean(suggestion.action))
+        ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看变更</button>`
         : `<span class="textbook-soft-signal">可进入实现</span>`;
       break;
     case "implementation":
@@ -865,18 +1114,20 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
   const renderDocumentGroup = (label: string, items: string[], tone: string): string => items.length
     ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${items.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
     : "";
-  const blockerSummary = state.executionStageBlockers.length
-    ? "当前阶段存在必须先处理的阻塞"
+  const actualBlocker = hasActualProjectBlocker(state);
+  const blockerSummary = actualBlocker
+    ? userFacingBlockerSummary(state)
     : state.executionStageStatus === "in_progress"
       ? "文档整理进行中；未生成文档属于进度，不是阻塞"
-      : "没有发现阻塞文档";
+      : "当前没有需要你处理的问题";
   const documentGroups = [
-    renderDocumentGroup("本阶段阻塞", state.executionStageBlockers, "blocker"),
+    actualBlocker ? renderDocumentGroup("需要处理", state.executionStageBlockers, "blocker") : "",
     renderDocumentGroup("本次变更受影响", state.executionStageAffected, "affected"),
     renderDocumentGroup("后续阶段待完善", state.executionStageDeferred, "deferred"),
     renderDocumentGroup("待完善建议", state.executionStageWarnings, "deferred"),
   ].filter(Boolean);
-  const missing = `<div class="textbook-stage-findings"><div class="textbook-stage-status is-${escapeHtml(state.executionStageStatus)}">${escapeHtml(blockerSummary)}</div>${documentGroups.join("")}${documentGroups.length ? `<div class="textbook-soft-signal">只处理当前阶段与本次变更包的直接影响，不递归补齐全项目文档。</div>` : ""}</div>`;
+  const displayStageStatus = actualBlocker ? "blocked" : state.executionStageStatus === "in_progress" ? "in_progress" : "ready";
+  const missing = `<div class="textbook-stage-findings"><div class="textbook-stage-status is-${escapeHtml(displayStageStatus)}">${escapeHtml(blockerSummary)}</div>${documentGroups.join("")}${documentGroups.length ? `<div class="textbook-soft-signal">只处理当前阶段与本次变更包的直接影响，不递归补齐全项目文档。</div>` : ""}</div>`;
   body += missing + renderStageArtifactSummary(state, stage) + renderStageBasis(state, stage);
   return `<section class="textbook-plan-card" aria-label="阶段计划卡"><div class="textbook-plan-card-header"><span>阶段计划 · ${escapeHtml(FLOW_STAGES.find((item) => item.id === stage)?.label || "需求")}</span>${stage !== execution ? `<span class="textbook-preview-badge">预览中</span>` : ""}</div><div class="textbook-plan-card-body">${body}</div><div class="textbook-plan-card-actions">${action}</div></section>`;
 }
@@ -884,16 +1135,18 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
 function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
   void callbacks;
   const stage = getExecutionStage(state);
-  const openCount = Math.max(0, state.tasksTotal - state.tasksDone);
   const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
   const reviewPassed = state.reviewVerdict === "pass" && state.reviewBlockersCount === 0;
+  const runawayStatus = state.runawayEnabled && state.runawayStatus
+    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(state.runawayStatus)}</div>`
+    : "";
   let goal = "系统会在这里告诉你当前进展。";
   let stat = "";
   let action = "";
   switch (stage) {
     case "requirements":
       goal = state.projectId ? "先确认这一轮要做什么。" : "先打开或新建一个项目。";
-      stat = state.projectId ? "待处理任务 " + openCount + " 条" : "绑定项目后才能继续。";
+      stat = state.projectId ? "先确认这一轮的范围。" : "绑定项目后才能继续。";
       action = !state.projectId
         ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-projects">打开项目</button>'
         : state.scopeConfirmedAt
@@ -905,13 +1158,15 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
       stat = "资料准备好后，会请你确认方案。";
       break;
     case "design":
-      goal = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+      goal = !state.runawayEnabled && state.suggestions.some((suggestion) => Boolean(suggestion.action))
         ? "方案有一项变更需要你查看。"
-        : "方案已经准备好，可以选择一项任务开始。";
-      stat = "还有 " + openCount + " 条待处理任务";
-      action = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+        : state.runawayEnabled ? "Harness 正在自动准备实现任务。" : "方案已经准备好，可以选择一项任务开始。";
+      stat = "方案准备好后会自动进入实现。";
+      action = !state.runawayEnabled && state.suggestions.some((suggestion) => Boolean(suggestion.action))
         ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看方案</button>'
-        : '<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>';
+        : state.runawayEnabled
+          ? '<span class="textbook-soft-signal">狂奔已授权，自动进入实现</span>'
+          : '<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>';
       break;
     case "implementation":
       goal = "系统正在处理当前任务。";
@@ -941,7 +1196,7 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
       + '<span>' + (state.milestoneAccepted ? "☑" : "☐") + ' 人工确认发布</span>'
       + "</div>"
     : "";
-  const blocker = state.executionStageBlockers.length > 0
+  const blocker = hasActualProjectBlocker(state)
     ? '<div class="textbook-stage-findings"><div class="textbook-stage-status is-blocked">'
       + escapeHtml(userFacingBlockerSummary(state))
       + "</div></div>"
@@ -951,6 +1206,7 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
     + '<div class="textbook-plan-card-body">'
     + '<div class="textbook-plan-goal">' + escapeHtml(goal) + "</div>"
     + '<div class="textbook-plan-stat">' + escapeHtml(stat) + "</div>"
+    + runawayStatus
     + checklist + blocker
     + '<div class="textbook-plan-card-actions">' + action + "</div></section>";
 }
@@ -1000,6 +1256,7 @@ function renderDropTaskChoice(state: ProjectPanelState): string {
 
 /** UX-026 SP-9 — stacked proposals in sidebar body (top card + peek layers). */
 function renderSuggestionStack(state: ProjectPanelState): string {
+  if (state.runawayEnabled) return "";
   if (isDocumentationBatch(state)) return "";
   if (state.suggestionAdoptFlash) {
     return `<div class="sidebar-suggestion-stack is-adopt-flash">
@@ -1100,9 +1357,9 @@ function renderPartnerNotices(notices: string[], busy: boolean, actionableCount 
       return `<div style="font-size:0.78rem;opacity:0.92;margin-top:0.2rem">${escapeHtml(short)}</div>`;
     })
     .join("");
-  const title = busy ? "计划搭档 · 思考中…" : "计划搭档";
+  const title = busy ? "方案搭档 · 思考中…" : "方案搭档";
   const pendingAction = !busy && actionableCount > 0
-    ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">打开计划审阅（${actionableCount}）</button>`
+    ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看方案</button>`
     : "";
   return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));">
     <div class="sidebar-change-banner-title">${title}</div>
@@ -1244,6 +1501,28 @@ function renderTurnSummary(state: ProjectPanelState): string {
 }
 
 function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  if (state.switchInProgress) {
+    return `<section class="textbook-runaway-surface" aria-label="项目切换中">
+      <div class="textbook-runaway-surface-title">项目切换中</div>
+      <div class="textbook-runaway-surface-status">正在加载 ${escapeHtml(state.projectId || "目标项目")}</div>
+      <div class="textbook-runaway-surface-summary">旧项目内容已暂时隐藏，等待新项目状态加载完成。</div>
+    </section>`;
+  }
+  if (state.runawayEnabled) {
+    const view = deriveProjectGoalViewModel(state);
+    const action = view.action && view.actionLabel
+      ? `<button type="button" class="unified-btn${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+      : "";
+    const currentTask = (state.turnArmedText || state.nextTask || "").trim();
+    return `<section class="textbook-runaway-surface" aria-label="自动执行进展">
+      <div class="textbook-runaway-surface-title">自动执行</div>
+      <div class="textbook-runaway-surface-status">${escapeHtml(view.title)}</div>
+      <div class="textbook-runaway-surface-summary">${escapeHtml(view.summary || "系统正在处理当前目标。")}</div>
+      ${currentTask && view.status === "processing" ? `<div class="textbook-runaway-surface-task">${escapeHtml(currentTask)}</div>` : ""}
+      <div class="textbook-runaway-surface-next">${escapeHtml(view.nextStep)}</div>
+      ${action ? `<div class="textbook-plan-card-actions">${action}</div>` : ""}
+    </section>`;
+  }
   const currentTask =
     (state.turnArmedText || "").trim()
     || (state.nextTask || "").trim()
@@ -1277,31 +1556,30 @@ function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
   if (!state.reviewProgressBlocked) return "";
   const count = state.reviewBlockersCount > 0 ? ` · ${state.reviewBlockersCount} 项阻塞` : "";
   return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-    <div class="sidebar-change-banner-title">交付审查未通过</div>
-    <div class="sidebar-change-banner-changes">审查 verdict=fail${escapeHtml(count)}；ritual 模式下暂不可勾选 TASKS。请先修复 blocker 或重新审查。</div>
-    <button type="button" class="unified-btn" data-action="jump-review-summary" style="font-size:0.72rem;">查看审查摘要</button>
+    <div class="sidebar-change-banner-title">交付检查需要处理</div>
+    <div class="sidebar-change-banner-changes">交付检查未通过${escapeHtml(count)}，请先处理问题后再继续。</div>
+    <button type="button" class="unified-btn" data-action="jump-review-summary" style="font-size:0.72rem;">查看原因</button>
   </div>`;
 }
 
 function planStatusLabel(state: ProjectPanelState): string {
+  if (state.runawayEnabled && state.runawayStatus) return state.runawayStatus;
   if (state.planStatus === "confirmed") {
     if (state.tasksAllDone && state.tasksTotal > 0) {
       if (state.executionStage === "release" && state.milestoneAccepted) return "项目已完成";
-      if (state.executionStage === "release") return "待发布验收";
-      return "任务已清空 · 待验证";
+      return "交付检查";
     }
-    const open = Math.max(0, state.tasksTotal - state.tasksDone);
-    return `还有 ${open} 条开放`;
+    return "项目进行中";
   }
-  if (state.planStatus === "plan_dirty") return "计划已变更 · 待确认";
-  return "计划待确认";
+  if (state.planStatus === "plan_dirty") return "方案有变更";
+  return "等待方案确认";
 }
 
 function projectProgressLabel(item: ProjectListItem): string {
-  if (item.tasksTotal === 0) return "无任务";
+  if (item.tasksTotal === 0) return "等待开始";
   const open = Math.max(0, item.tasksTotal - item.tasksDone);
-  if (open === 0) return "任务已清空 · 待验证";
-  return `${open}/${item.tasksTotal} 未完成`;
+  if (open === 0) return "交付检查";
+  return "项目进行中";
 }
 
 function projectSessionHint(item: ProjectListItem): string {
@@ -1665,6 +1943,7 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 // ---- change banner / plan confirmation inline ----
 
 function renderChangeBanner(state: ProjectPanelState): string {
+  if (state.runawayEnabled) return "";
   const recentLedger = state.changeTimeline.slice(-3).reverse();
   const ledgerRows = recentLedger.map((change) => {
     const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
@@ -1678,18 +1957,18 @@ function renderChangeBanner(state: ProjectPanelState): string {
     : "";
   // Plan confirmation (draft / plan_dirty with overlay)
   const needsPlanConfirm =
-    state.planOverlay && state.planStatus !== "confirmed";
+    !state.runawayEnabled && state.planOverlay && state.planStatus !== "confirmed";
   const needsPlanDirtyBanner =
-    state.planStatus === "plan_dirty" && !needsPlanConfirm;
+    !state.runawayEnabled && state.planStatus === "plan_dirty" && !needsPlanConfirm;
   const isTaskLevelChange =
     state.changesLevel === "task" && !needsPlanConfirm && !needsPlanDirtyBanner;
-  const needsScopeBanner = state.scopeNeedsReconfirm && state.planStatus === "confirmed";
+  const needsScopeBanner = !state.runawayEnabled && state.scopeNeedsReconfirm && state.planStatus === "confirmed";
 
   // Plan confirmation takes priority over change banner
   if (needsPlanConfirm) {
     const planLabel = state.planStatus === "plan_dirty"
-      ? "计划已变更 · 请确认"
-      : "计划待确认";
+      ? "方案有变更 · 请确认"
+      : "方案待确认";
     return `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">${escapeHtml(planLabel)} (${escapeHtml(state.projectId)})</div>
       <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-plan" style="margin-right:0.4rem;">确认开工</button>
@@ -1730,7 +2009,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     if (state.planBannerCollapsed) {
       const pendingCount = state.planChangeLog.length;
       return `<div class="sidebar-change-banner" style="border-color:#d4a000;background:color-mix(in srgb, #d4a000 6%, var(--ma-surface));">
-        <span style="color:#d4a000">⚠ 计划已变更${pendingCount > 0 ? ` (${pendingCount} 项)` : ""}</span>
+        <span style="color:#d4a000">⚠ 方案有变更${pendingCount > 0 ? ` (${pendingCount} 项)` : ""}</span>
         <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-changes" style="margin-left:0.35rem;font-size:0.72rem;">确认变更</button>
         <button type="button" class="unified-btn" data-action="expand-banner" style="margin-left:0.25rem;font-size:0.72rem;">查看</button>
       </div>`;
@@ -1750,7 +2029,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
 
     const highlightLabel = state.highlightChanges ? "取消高亮" : "查看变更";
     return `<div class="sidebar-change-banner">
-      <div class="sidebar-change-banner-title">⚠ 计划已变更 · 请确认</div>
+      <div class="sidebar-change-banner-title">⚠ 方案有变更 · 请确认</div>
       <div class="sidebar-change-banner-changes">${changesHtml}</div>
       <div class="sidebar-change-banner-actions">
         <button type="button" class="unified-btn unified-btn-accent" data-action="confirm-changes">确认变更</button>
@@ -1768,11 +2047,11 @@ function renderChangeBanner(state: ProjectPanelState): string {
 export function applyProjectStateEvent(
   state: ProjectPanelState,
   event: Extract<ServerEvent, { type: "project.state" }>,
-): void {
+): boolean {
   const nextProjectId = event.project_id ?? "";
+  if (!shouldApplyProjectEvent(state, nextProjectId)) return false;
   if (state.projectId !== nextProjectId) {
-    resetPlanWarningState(state);
-    state.projectSummary = "";
+    resetProjectScopedState(state);
   }
   state.projectId = nextProjectId;
   state.projectSummary = event.project_summary ?? state.projectSummary;
@@ -1803,6 +2082,15 @@ export function applyProjectStateEvent(
   state.tasksTotal = event.tasks_total ?? 0;
   state.tasksAllDone = Boolean(event.tasks_all_done);
   state.deliveryProfile = event.delivery_profile ?? "solo";
+  state.runawayEnabled = Boolean(event.runaway_enabled);
+  state.runawayStatus = event.runaway_status ?? "";
+  state.runawayCheckpoint = event.runaway_checkpoint ?? state.runawayCheckpoint;
+  state.runawayRepairCount = event.runaway_repair_count ?? 0;
+  state.runawayLastVerification = event.runaway_last_verification ?? null;
+  state.runawayPausedReason = event.runaway_paused_reason ?? null;
+  state.runawayAcceptancePassed = Boolean(event.runaway_acceptance_passed);
+  state.runawayVerificationEvidence = event.runaway_verification_evidence ?? null;
+  state.runawayVerificationEvidencePath = event.runaway_verification_evidence_path ?? null;
   state.reviewVerdict = event.review_verdict ?? null;
   state.reviewBlockersCount = event.review_blockers_count ?? 0;
   state.reviewProgressBlocked = Boolean(event.review_progress_blocked);
@@ -1846,16 +2134,27 @@ export function applyProjectStateEvent(
     state.highlightChanges = false;
   }
   updatePlanWarningState(state, getExecutionStage(state));
+  return true;
 }
 
 export function applyProjectPlanState(
   state: ProjectPanelState,
   event: Extract<ServerEvent, { type: "project.plan.state" }>,
-): void {
+): boolean {
   const nextProjectId = event.project_id ?? "";
-  if (state.projectId !== nextProjectId) resetPlanWarningState(state);
+  if (!shouldApplyProjectEvent(state, nextProjectId)) return false;
+  if (state.projectId !== nextProjectId) resetProjectScopedState(state);
   state.projectId = nextProjectId;
   state.planStatus = event.plan_status ?? "draft";
+  state.runawayEnabled = event.runaway_enabled ?? state.runawayEnabled;
+  state.runawayStatus = event.runaway_status ?? state.runawayStatus;
+  state.runawayCheckpoint = event.runaway_checkpoint ?? state.runawayCheckpoint;
+  state.runawayRepairCount = event.runaway_repair_count ?? state.runawayRepairCount;
+  state.runawayLastVerification = event.runaway_last_verification ?? state.runawayLastVerification;
+  state.runawayPausedReason = event.runaway_paused_reason ?? state.runawayPausedReason;
+  state.runawayAcceptancePassed = event.runaway_acceptance_passed ?? state.runawayAcceptancePassed;
+  state.runawayVerificationEvidence = event.runaway_verification_evidence ?? state.runawayVerificationEvidence;
+  state.runawayVerificationEvidencePath = event.runaway_verification_evidence_path ?? state.runawayVerificationEvidencePath;
   state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
   state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
@@ -1930,6 +2229,7 @@ export function applyProjectPlanState(
   }
 
   state.taskSnapshot = captureTaskSnapshot(state.taskPhases);
+  return true;
 }
 
 export function applyProjectListEvent(
@@ -1948,7 +2248,8 @@ export function applyProjectListEvent(
 export function applyProjectThreadsEvent(
   state: ProjectPanelState,
   event: Extract<ServerEvent, { type: "project.threads" }>,
-): void {
+): boolean {
+  if (!shouldApplyProjectEvent(state, event.project_id)) return false;
   state.threadsLoading = false;
   state.activeSessionId = event.active_session_id || "";
   state.threads = (event.threads || []).map((item) => ({
@@ -1958,6 +2259,7 @@ export function applyProjectThreadsEvent(
     updatedAt: item.updated_at || "",
     archived: Boolean(item.archived),
   }));
+  return true;
 }
 
 export function isViewingArchivedThread(state: ProjectPanelState): boolean {
@@ -2135,10 +2437,17 @@ export function renderProjectSidebar(
   // Priority: undo > partner busy > partner notices (non-adopted) > adopted footer >
   //           external > auto_fix > …
   let bannerHtml = "";
-  const actionableSuggestions = state.suggestions.filter((s) => Boolean(s.action));
+  const actionableSuggestions = state.runawayEnabled
+    ? []
+    : state.suggestions.filter((s) => Boolean(s.action));
   const hasAdoptFlash = Boolean(state.suggestionAdoptFlash);
 
-  if (state.codeFollowup) {
+  if (state.switchInProgress) {
+    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);">
+      <div class="sidebar-change-banner-title">正在切换项目</div>
+      <div class="sidebar-change-banner-changes">正在加载新项目的目标、任务和会话。</div>
+    </div>`;
+  } else if (state.codeFollowup) {
     bannerHtml = renderCodeFollowupBanner(state.codeFollowup);
   } else if (state.undoDescription) {
     bannerHtml = `<div class="sidebar-undo-toast">
@@ -2151,17 +2460,18 @@ export function renderProjectSidebar(
       <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
       <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
     </div>`;
-  } else if (isDocumentationBatch(state)) {
+  } else if (!state.runawayEnabled && isDocumentationBatch(state)) {
     const pending = state.planWarningsPending.length;
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">文档整理中</div>
-      <div class="sidebar-change-banner-changes">四个核心制品按一个批次处理；${pending ? `已收集 ${pending} 条待完善建议，` : ""}阶段结束后统一审阅。</div>
+      <div class="sidebar-change-banner-changes">四个核心制品按一个批次处理；${pending ? `已收集 ${pending} 条待完善建议，` : ""}阶段结束后统一告诉你结果。</div>
     </div>`;
-  } else if (state.partnerBusy) {
+  } else if (!state.runawayEnabled && state.partnerBusy) {
     bannerHtml = renderPartnerNotices(state.partnerNotices || [], true, actionableSuggestions.length);
   } else if (state.adoptedFooterMessage && actionableSuggestions.length === 0 && !hasAdoptFlash) {
     bannerHtml = renderAdoptedFooterBanner(state.adoptedFooterMessage);
   } else if (
+    !state.runawayEnabled &&
     state.partnerNotices &&
     state.partnerNotices.length > 0 &&
     actionableSuggestions.length === 0 &&
@@ -2169,9 +2479,9 @@ export function renderProjectSidebar(
     isAdoptedPartnerNotice(state.partnerNotices)
   ) {
     bannerHtml = renderAdoptedNotice(state.partnerNotices);
-  } else if (state.partnerNotices && state.partnerNotices.length > 0 && !isAdoptedPartnerNotice(state.partnerNotices)) {
+  } else if (!state.runawayEnabled && state.partnerNotices && state.partnerNotices.length > 0 && !isAdoptedPartnerNotice(state.partnerNotices)) {
     bannerHtml = renderPartnerNotices(state.partnerNotices, false, actionableSuggestions.length);
-  } else if (state.autoFixNotices.length > 0) {
+  } else if (!state.runawayEnabled && state.autoFixNotices.length > 0) {
     bannerHtml = renderAutoFixNotice(state.autoFixNotices);
   } else if (state.operationalNotices.length > 0) {
     bannerHtml = renderOperationalNotices(state.operationalNotices);
@@ -2193,7 +2503,7 @@ export function renderProjectSidebar(
       ? "项目服务暂时不可用，退回直接文件操作模式。拆分和新增任务请通过聊天框。"
       : "项目服务暂时不可用，拆分和新增任务退回单条添加模式。";
     bannerHtml = renderDegradeBanner(level, label, explain);
-  } else if (isDocumentationBatch(state)) {
+  } else if (!state.runawayEnabled && isDocumentationBatch(state)) {
     bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
       <div class="sidebar-change-banner-title">文档整理中</div>
       <div class="sidebar-change-banner-changes">项目资料正在连续整理，完成后会统一告诉你下一步。</div>
@@ -2277,7 +2587,7 @@ function updateCompatElements(
     els.planPreview.textContent = state.planOverlay.tasksPreview || state.planOverlay.summary;
   } else if (state.planStatus === "draft" || state.planStatus === "plan_dirty") {
     els.planTitle.textContent =
-      state.planStatus === "plan_dirty" ? "计划已变更 · 请确认" : "计划待确认";
+      state.planStatus === "plan_dirty" ? "方案有变更 · 请确认" : "方案待确认";
     els.planPreview.textContent = state.tasksMarkdown.slice(0, 1200) || "（等待助手生成 TASKS.md）";
   }
 
