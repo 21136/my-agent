@@ -57,6 +57,61 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-6011 | 狂奔项目级自动运行 | 狂奔开关、持久化运行授权、跨任务推进和安全暂停 | 默认关闭；开启后可从一句话连续推进任务、测试、修复和验证；真实歧义/高风险/重复失败/外部发布仍暂停；重启后可恢复运行检查点 | done |
 | UI-6012 | 狂奔后台持续运行 | 单回合边界内续接、全天运行时限、狂奔下隐藏计划确认 | 开启狂奔后用户可以离开；系统不要求确认计划、任务、阶段或“继续”，后台持续推进直到完成、人工取消或命中真实暂停条件；重启后按检查点恢复 | done |
 | UI-6013 | 狂奔一次授权覆盖工具与提案 | 项目内工具自动放行、高风险动作保留暂停、计划提案自动采纳 | 狂奔开启后项目内代码/测试/构建/普通依赖/本地服务不弹确认；`plan_partner` 提案自动采纳；宿主机、敏感文件、删除、推送、外部写入和换线仍暂停 | done |
+| UI-6014 | 狂奔 TASKS 队列净化 | plan 提案与非 `T-*` 行不得进入开放任务调度 | `next_open_task` 与狂奔 advance 只认正式 `T-\d+` 任务；plan 采纳写入 change ledger 或 plan 域，不污染 TASKS 开放队列 | done |
+| UI-6015 | 狂奔 advance 绑定证据 | 任务切换前要求 VERIFY 证据或对口命令成功 | 仅有 TASKS 勾选或 plan patch 不足以切下一项；VERIFY 可记录 partial pass，但不得无证据 advance | done |
+| UI-6016 | 狂奔运行提醒降噪 | API 重试与 advance 通知不刷屏 | 504/重试合并为单条 operational notice；advance 通知绑定具体任务名且去重 | done |
+| UI-6017 | 狂奔 segment 摘要与验证里程碑 | 空 assistant 时有 Harness 摘要；开放正式任务清空后进 verifying | segment 结束输出一句进展摘要；Desktop 显示「任务已清空 · 待验证」（对齐 UI-6010） | done |
+| UI-6018 | 狂奔 plan 越序勾选收口 | active 之后的正式任务不得被 plan 勾选 | implementation 阶段 plan 采纳后 revert 序号大于 active 的 done 勾选 | done |
+| UI-6019 | 狂奔 TASKS 文件级净化 | 非行首 `T-*` 的开放 checkbox 从 TASKS 移除 | plan 采纳后 strip plan 污染开放行（调度层已忽略） | done |
+| UI-6020 | 狂奔 plan 采纳后立即 advance | adopt 后 sanitize TASKS 并尝试 checkpoint advance | `_reconcile_runaway_tasks_after_plan` | done |
+| UI-6021 | 狂奔 patch anchor 段预算 | anchor 参数错误不计段预算 + 内核 nudge | `should_count_segment_failure` · `MY_AGENT_RUNAWAY_SEGMENT_FAILURE_BUDGET=8` | done |
+| UI-6022 | 狂奔 LLM 504 重试 | pool exhausted 指数 backoff 多轮重试 | `runaway_llm_transport_retries` · `MY_AGENT_RUNAWAY_LLM_RETRIES=4` | done |
+| UI-6023 | 狂奔 pool exhausted 长退避 | 503/504 少重试、30～90s backoff | `is_pool_exhausted_error` · `MY_AGENT_RUNAWAY_POOL_RETRIES=2` | done |
+| UI-6024 | 狂奔 LLM 轮间冷却 | tool loop 每轮 LLM 前短 sleep | `MY_AGENT_RUNAWAY_LLM_COOLDOWN_SEC=1.5` | done |
+| UI-6025 | 狂奔 implementing plan 限频 | 每 turn plan_partner ≤1 | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX=1` | done |
+| UI-6026 | 狂奔体验脚本 timeout 续跑 | 默认 180s · timeout 不中断 4 turn | `tools/runaway_experience.py` | done |
+| UI-6027 | 狂奔 segment 空转修复 | duplicate continue_key 不再无限 segment | `_continue_runaway_after_natural_stop` | done |
+| UI-6028 | 体验脚本 Windows 控制台编码 | GBK 下 `✓` 等字符不崩溃 | `_console_text` · UI-6028 | done |
+| UI-6029 | 狂奔 plan_partner 双次预算 | implementing 每 turn ≤2（sanitize + VERIFY） | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX=2` | done |
+| UI-6030 | VERIFY→TASKS Harness 勾选 | 有 VERIFY 证据但 TASKS open 时自动 `[x]` | `sync_runaway_task_checkoff_from_verify` | done |
+| UI-6031 | 体验脚本 turn 上限 | 默认 12 turn · 进 verifying 即停 | `RUNAWAY_EXPERIENCE_MAX_TURNS` | done |
+| UI-6032 | 狂奔 advance 不重置 plan 计数 | 单 turn 内 advance 后 plan cap 仍累计 | `begin_turn(reset_plan_cap=False)` on advance | done |
+| UI-6033 | plan LLM gateway 误报与 fallback | `Insufficient Balance` 长退避重试；失败不 adopt 假提案 | `is_pool_exhausted_transport_error` · `_plan_gateway_failure_reply` | done |
+| UI-6034 | VERIFY batch→TASKS 勾选 | 全部 open 行首 `T-*` 有 VERIFY 证据时 Harness `[x]` | `sync_all_runaway_task_checkoffs_from_verify` | done |
+| UI-6035 | 狂奔 active 聚焦续接 | 续接 prompt 绑定 active；stuck turn 检测 | `_continue_runaway_after_natural_stop` | done |
+| UI-6036 | 体验脚本里程碑停止 | 开放正式队列空或 verifying 即停 | `RUNAWAY_EXPERIENCE_UNTIL=verifying` | done |
+| UI-6037 | gateway plan 失败计入 cap | gateway `tool_fail` 也消耗 plan 预算 | `plan_partner_calls` on upstream_error | done |
+| UI-6038 | repairing plan 风暴 nudge | 连续 gateway fail → 禁 plan、改 write_text | `EXEC_RUNAWAY_PLAN_GATEWAY_NUDGE` | done |
+| UI-6039 | PROJECT.md 验收命令自愈 | hard verify 缺命令时 Harness append | `ensure_project_acceptance_section` | done |
+| **Phase 59 · bug-fix** | | | | |
+| T-5960 | bug-fix 契约文档 | [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · 双轨 · T↔V 矩阵 · 与 plan/review 分工 | DOC-04 矩阵行 + IT/S id 已列 | **doc done** |
+| UI-5961 | T↔V 矩阵 linter M0 | `lint_verify_matrix` · MX-1～MX-3 | 红灯不得 `release_wait`；进入 `verifying` 前预检 | **done** |
+| UI-5962 | 验收 blocker 扫描 M1 | 无 LLM · PROJECT 命令 · 开放 T 缺 V | 与 `parse_acceptance_spec` 对齐 | **done** |
+| UI-5963 | `bug_fix` 子代理 M2 | `subagent.py` · prompt `evolve/subagents/bug_fix.md` | repairing Harness spawn；工具 allowlist §6.2 | **done** |
+| UI-5964 | repairing → bug_fix M3 | Harness 禁 `plan_partner` · 自动 spawn | Round 8 plan 风暴根治路径 | **done** |
+| UI-5965 | implementing 狂奔默认禁 plan | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX` 默认 0（bug-fix on） | VERIFY→TASKS 由 Harness；plan 可 env 覆盖 | **done** |
+| UI-5966 | verification 阶段验收命令门 | `project_mode_block_reason` · `_VERIFY_STAGE_EXEC_TOOLS` | `verification`/`release` 允许 `run_command` 等；仍禁业务写码 | **done** |
+| UI-5967 | Harness 真源 checkpoint 对齐 | `_promote_runaway_to_verifying_if_harness_green` | 矩阵+硬验收绿时忽略陈旧 review；不增 repair_count | **done** |
+| UI-5968 | review 去权 + verifying 出口 | `_sync_runaway_harness_truth` · advisory review | review 不单独进 repairing；队列空+硬验收绿 → `release_wait` 并停 segment | **done** |
+| UI-5969 | verification 出口工具面对齐 | `runaway_verification_tool_suppressed` · overlay · experience 提示 | `verifying`/`release_wait` 禁 plan_partner/review；与 Harness 真源一致 | **done** |
+| UI-5970 | verification 出口短接 turn | `runaway_verification_exit_short_circuit` · `_maybe_finish_runaway_verification_exit_turn` | `release_wait`+`acceptance_passed` → 0 LLM；`qa`/`recall` 仍可调模型 | **done** |
+| UI-5971 | 队列空自动进 verifying | `_advance_runaway_checkpoint` · `queue_complete` 旁路 progress 门 | 无 active T-* · 全勾选 → `verifying`（不等本 turn 证据） | **done** |
+| UI-5972 | 项目会话切换性能 | [SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md) · UX-027 | 去重 refresh · history 窗口 · tail 读 jsonl · plan state 去重 | **done** |
+| UI-6040 | 聊天活动轨重设计 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · UX-028 | P0～M2 ActivityEntry 时间线 · Turn Card · 历史/侧栏对齐 | **done** |
+| UI-6041 | 狂奔开头 prep 触发 | [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md) · `_prepare_runaway_project_start` | 狂奔 + 早期 stage 每回合 prep；`project.runaway.set` 同步 prep；不绑长文 requirements intent | **done** |
+| UI-6042 | 狂奔 begin_turn 武装对齐 | `executor.begin_turn` · `next_open_task` / `active_task_id` | 狂奔武装当前/下一依赖满足任务，不用 `first_open_task` | **done** |
+| UI-6043 | 狂奔早期 overlay 与 executor 一致 | `format_project_overlay` | requirements/documentation 明示 stage_gate 禁止业务代码 | **done** |
+| UI-6044 | 狂奔跳过 plan 路由标签 | `activity_router.compute_activity_route` | 狂奔下不显示「计划待确认」 | **done** |
+| UI-6045 | bug-fix repairing 写 ENV | `BUG_FIX_PLAN_WRITE_ALLOWLIST` · `run_bug_fix` | repairing 可 patch ENV.md `quality.commands` + PROJECT 验收段 | **done** |
+| UI-6046 | verification 谓词门 · ENV bootstrap | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · MX-5 · `ensure_env_quality_commands` | 硬验收绿但 MX 红仍 repairing；PROJECT→ENV quality 幂等 bootstrap | **done** |
+| UI-6047 | verification Harness 短接 | `_maybe_short_circuit_runaway_verification_harness_turn` | `[Harness]` + verifying/repairing → 0 主 Agent 轮 | **done** |
+| UI-6048 | verification overlay 消歧 | `format_project_overlay` | verification 禁止 else 分支「可连续写计划域」 | **done** |
+| UI-6049 | verification 跳过 G5 重复勾选 | `progress_gate.report_progress_repeat_block_reason` | runaway + verification 不拦 report_progress 重复 | **done** |
+| UI-6050 | 狂奔续接 verification 文案 | `runaway_chain_user_line` | 队列空 → verification 出口说明，非「下一项任务」 | **done** |
+| UI-6051 | verification prompt 对齐 | `loader` digest_note · project_prompt | 与 Harness 谓词一致；勿教主 Agent 直写 ENV | **done** |
+| UI-6052 | checkpoint 谓词审计 | `agent` · `exec_reliability` | review/report_progress 不驱动 checkpoint | **done** |
+| S-5951 | bug-fix 手工回归 | `workspace/test` repairing → **verifying** 稳态 | 0 plan 风暴 · 矩阵绿 · hard verify 过 | **done** |
+| S-6011 | 狂奔真实 LLM 回归 | `workspace/test` · 0x567-flash · `tools/runaway_experience.py` | mid-queue → **verifying**，0 确认；Round 10b：**verifying 达成** | **done** |
 | S-6001 | 真实项目体验验收 | Music Dreamer Desktop 手工路径 | 新项目输入 → 文档整理 → 方案确认 → 单任务实现 → 验证，全程不要求用户理解内部术语 | todo |
 
 UI-6001～UI-6005 的共同前置：用户评审并采纳 [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md) 的目标、信息架构、提醒分级和迁移策略；未采纳前只允许继续完善设计文档，不允许开始编码。
@@ -73,21 +128,54 @@ UI-6012 当前决策：狂奔是后台长跑授权，不是连续弹窗确认器
 
 UI-6013 当前决策：确认机制按“用户授权边界”而不是按单个工具调用触发。狂奔授权只覆盖当前项目内可逆、可验证的生产动作；高风险动作仍回到用户决策，但不得把普通项目工具和计划提案混入确认队列。
 
+UI-6014 当前决策：狂奔调度只认正式 `T-\d+` 任务行。`plan_partner` 采纳不得把提案摘要写入 TASKS 开放队列；非任务行进入 change ledger 或 plan 域归档。
+
+UI-6015 当前决策：任务 advance 是 Harness 决策，不是 TASKS 勾选副作用。切换下一项前需当前任务有对口 VERIFY 证据或授权命令成功；partial pass 可记录但不得无证据推进。
+
+UI-6016 当前决策：operational notice（504 重试、advance 提示）按 turn 去重合并，避免每个工具轮次重复 toast。
+
+UI-6017 当前决策：segment 结束若无自然语言 assistant 回复，Harness 补一句进展摘要；正式开放 `T-*` 清空后自动进入 `verifying` 并对齐 UI-6010 文案。
+
 UI-6013 验证：`test_runaway_covers_local_tool_confirmation_but_not_external_or_sensitive` · `test_runaway_auto_adopts_plan_partner_proposals` · `test_runaway_does_not_emit_plan_confirmation_request` · `test_runaway_overlay_overrides_confirmation_and_task_stop`（`agent-core/tests/test_project_artifacts.py` · `test_async_orchestration_task_stop.py`）通过。
+
+UI-6014～UI-6017 验证（2026-09-01 已编码）：`test_next_open_task_skips_non_formal_plan_lines` · `test_advance_runaway_requires_evidence_before_next_task` · `test_runaway_task_has_advance_evidence_accepts_verify_documentation` · `test_runaway_task_has_advance_evidence_accepts_inline_verify_paren` · `test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty`（`agent-core/tests/test_runaway_flow.py`）。
+
+UI-6018～UI-6020 验证：`test_strip_nonformal_open_task_lines` · `test_revert_out_of_order_runaway_checkoffs` · `test_sanitize_runaway_tasks_artifact`（`agent-core/tests/test_runaway_flow.py`）。`workspace/test` 手工 sanitize：strip 2 plan 行 · revert T-007 · advance → T-007。
+
+UI-6023～UI-6027 验证：`test_runaway_reliability` · `test_runaway_duplicate_continue_key_does_not_loop_segments`（`agent-core/tests/test_runaway_reliability.py` · `test_project_artifacts.py` · `ProjectArtifactTests`）。
+
+UI-6028～UI-6031 验证：`test_sync_runaway_task_checkoff_from_verify` · `test_runaway_reliability`（plan cap=2）（`agent-core/tests/test_runaway_flow.py` · `test_runaway_reliability.py`）。
+
+UI-6032～UI-6036 验证（2026-09-01 已编码）：`test_advance_preserves_plan_partner_cap` · `test_sync_all_runaway_task_checkoffs_from_verify` · `test_plan_gateway_failure_summary` · `test_pool_exhausted_error_detection`（`test_runaway_flow.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12。
+
+UI-6037～UI-6039 验证（2026-09-01 已编码）：`test_plan_gateway_tool_failure` · `test_ensure_project_acceptance_section` · `test_runaway_plan_gateway_fail_max_default`（`test_runaway_reliability.py` · `test_runaway_flow.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13。
+
+UI-6041～6045 验证（2026-09-03 已编码）：`test_runaway_startup` · `test_bug_fix_lane_allows_env_write` · `test_bug_fix_executor_allows_env_write_in_verification`（`agent-core/tests/test_runaway_startup.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md)。
+
+UI-6046～6052 验证（2026-09-03 **done**）：`test_runaway_verification_bootstrap` · `test_runaway_verification_orchestrator` · `test_verifying_without_quality_commands_bootstraps_env`（`test_runaway_flow.py`）。设计：[RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)。手工 **S-6046** todo。
+
+Phase 59 **bug-fix**（2026-09-02）：M0～M3 已编码；**UI-5966** verification 阶段允许验收 `run_command`；**UI-5967** Harness 真源 checkpoint 对齐。回归：`test_runaway_verify_matrix` · `test_runaway_reliability` · `test_runaway_flow`（含 IT-5966/5967）。手工：**S-5951 done（Round 10b）** · S-6011 **done（Round 10b → verifying）**。
+
+Harness R3 补丁（2026-09-01 已编码）：implementation 阶段 `_advance_runaway_checkpoint` 不再硬依赖 `task_stop_armed`；`test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty` 通过。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §2.2。
 
 ### 分支 `codex/runaway-mode-research` 合入清单（2026-09-01）
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| 已提交（5 commits） | done | 教科书流程对齐 · manifest · Phase 58b 制品链基线 |
-| 工作区 WIP | **待提交** | ~2.4k 行：狂奔 Harness + Desktop UI + 交互重设计 |
-| 未跟踪核心文件 | **必须 add** | `runaway_flow.py` · `runaway_lease.py` · `runaway_verification.py` · `test_runaway_flow.py` · RUNAWAY 文档 |
-| 自动回归 | 待复跑 | `test_runaway_flow` · `test_project_artifacts` · 阶段卡契约（已修 UI 文案） |
-| Desktop build | 待确认 | `npm run build` |
-| 手工验收 | todo | S-6001 Music Dreamer 狂奔路径 · T-5907 端到端 |
+| 已提交（3 commits） | done | `feat(runaway)` · `feat(desktop)` · `docs: RUNAWAY` |
+| Harness R3 任务切换 | **WIP 未提交** | `agent.py` + `test_runaway_flow.py` · 见 RUNAWAY-EXPERIENCE §2.2 |
+| 真实 LLM 体验 | done | 0x567-flash 两轮 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) |
+| R7 收口（UI-6014～6017） | **done** | plan 调度过滤 · 证据 advance · 降噪 · segment 摘要 |
+| R7b 收口（UI-6018～6020） | **done** | 越序 revert · strip plan 行 · adopt 后 reconcile+advance |
+| R7c 收口（UI-6023～6027） | **done** | Round 4 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3c · §10 |
+| R7d 收口（UI-6028～6031） | **done** | Round 5/6 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3d · §11 |
+| R7e 收口（UI-6032～6036） | **done** | Round 7 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12 |
+| R7f 收口（UI-6037～6039） | **done** | Round 8 repairing 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13 |
+| **Phase 59 bug-fix** | **done** | T-5960 · UI-5961～5965 · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · S-5951 todo |
+| 手工验收 | todo | S-6011 狂奔 LLM 回归（Round 7：23/25）· S-6001 Desktop 体验 · T-5907 端到端 |
 | 合入目标 | 建议 | `phase-58-textbook-flow`（远端默认开发线；本地无 `main`） |
 
-建议拆成 2～3 个 commit：`feat(runaway): harness state machine + lease + verification` → `feat(desktop): runaway controls + interaction redesign` → `docs: RUNAWAY + TASKS sync`。
+合入前复跑：`test_runaway_flow` · `test_project_artifacts` · `test_async_orchestration_task_stop`；R7 编码完成后跑 S-6011。
 
 本次链路修复：范围确认必须经过后端 `project.scope.confirm` 路由并收到权威状态回执；失败时不把界面推进到“准备开始下一步”。
 

@@ -70,6 +70,8 @@
 | **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5** · auto plan-execute） | **legacy M1 done · Ink 阶段 0～5 done · T-5730～5734 done**（TERMINAL v0.3.2 · **frozen** · S-576 手工待做） |
 | **Phase 58** | **Desktop 教科书流程**（产品定调 · 流程轨五段 · 阶段计划卡） | **M1 done**（[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · T-5801～5808 · S-580 todo） |
 | **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
+| **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
+| **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
 | **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |
@@ -375,6 +377,12 @@ flowchart TD
 | `CHECKER_AUTO_ON_SCAFFOLD` | grow scaffold 后自动 checker（M1 T-1620） | `0`（设 `1` 开启） |
 | `CHECKER_MODEL` | checker 模型覆盖（空=跟 session） | 空 |
 | `LLM_CONTEXT_LIMIT` | context 上限（可选覆盖） | flash `128000` / pro `1000000` |
+| `LLM_tokeness_KEY` | Tokeness 自定义 API Key（[文档](https://docs.tokeness.ai/zh/integrations/custom-api-key)） | — |
+| `LLM_TOKENESS_KEY` | Tokeness Key 备用名（同 `LLM_tokeness_KEY`） | — |
+| `TOKENESS_BASE_URL` | Tokeness OpenAI 兼容端点（勿重复 `/v1`） | `https://n.tokeness.dev` |
+| `TOKENESS_MODEL_LUNA` | Tokeness Luna 市场全名 | `gpt-5.6-luna` |
+
+Tokeness Luna 在 `/v1/chat/completions` 下 **tools 与 reasoning_effort 不可同用**；agent 带工具调用时会自动发 `reasoning_effort: none`（见 `llm_client.py`）。与 0x567 对照见 [LLM-LUNA-GATEWAYS.md](./LLM-LUNA-GATEWAYS.md)。
 | `SUBAGENT_EXPLORE_MAX` | explore 子代理 tool 轮次上限 | `16` |
 | `REVIEW_SUBAGENT_MAX_ROUNDS` | deliverable_review tool 轮 | `16` |
 | `PLAN_SUBAGENT_TOOL_ROUNDS` | plan_partner 查跑 loop | `4` |

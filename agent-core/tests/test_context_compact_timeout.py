@@ -21,7 +21,7 @@ from context import (
     summarize_timeout_sec,
     trim_tool_payloads_for_llm,
 )
-from llm_client import LLMResponse, LLMTimeoutError, load_config
+from llm_client import LLMApiError, LLMResponse, LLMTimeoutError, load_config
 from runtime_guards import TurnWatchdog
 from session import Session, SessionMeta, utc_now_iso
 
@@ -219,6 +219,61 @@ class PayloadTrimTests(unittest.TestCase):
         )
         self.assertTrue(trimmed)
         self.assertLess(len(working[-1]["content"]), 9000)
+
+
+class CompactPolicyFallbackTests(unittest.TestCase):
+    def test_content_policy_uses_mechanical_digest(self) -> None:
+        paths = make_temp_agent_paths(self)
+        session = Session(
+            conversation_id="_policy_compact",
+            session_dir=paths.data / "sessions" / "_policy_compact",
+            goal="music project",
+            meta=SessionMeta(
+                topics=[],
+                llm_model="deepseek-v4-flash",
+                updated_at=utc_now_iso(),
+                phase="S4",
+                active_shell="project",
+                project_root="workspace/music",
+                project_plan_status="confirmed",
+            ),
+            messages=[
+                {"role": "user", "content": "u1"},
+                {"role": "assistant", "content": "see desktop/src/foo.ts"},
+                {"role": "user", "content": "u2"},
+                {"role": "assistant", "content": "a2"},
+                {"role": "user", "content": "u3"},
+                {"role": "assistant", "content": "a3"},
+                {"role": "user", "content": "u4"},
+                {"role": "assistant", "content": "a4"},
+                {"role": "user", "content": "u5"},
+                {"role": "assistant", "content": "a5"},
+                {"role": "user", "content": "u6"},
+                {"role": "assistant", "content": "a6"},
+                {"role": "user", "content": "u7"},
+                {"role": "assistant", "content": "a7"},
+                {"role": "user", "content": "u8"},
+                {"role": "assistant", "content": "a8"},
+                {"role": "user", "content": "u9"},
+                {"role": "assistant", "content": "a9"},
+            ],
+            paths=paths,
+        )
+        session.save()
+
+        class _PolicyRejectLLM:
+            def chat(self, *_args: Any, **_kwargs: Any) -> LLMResponse:
+                raise LLMApiError(
+                    "This request was rejected by content policy.",
+                    status_code=400,
+                )
+
+        result = compact_context(session, _PolicyRejectLLM(), force=True)
+        self.assertTrue(result.compacted)
+        self.assertIn("机械摘要", result.message)
+        self.assertTrue(session.digest_path.is_file())
+        digest_text = session.digest_path.read_text(encoding="utf-8")
+        self.assertIn("desktop/src/foo.ts", digest_text)
 
 
 if __name__ == "__main__":

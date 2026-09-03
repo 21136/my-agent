@@ -198,6 +198,55 @@
 
 ---
 
+## 2i. 第十四轮 · 项目会话切换性能（**UI-5972** · 2026-09-02）
+
+> 真源：[SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md)
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-027 | 换项目会话卡数分钟 | 双次 refresh + 全量 jsonl + 全量 markdown 渲染 | Cursor 式：一次 switch 包 · history 窗口 · tail 读 · 视口外懒 markdown | **M0～M4 done** |
+
+### 验收（S-UX-027）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-027a | 1000+ 条会话间切换 | 明显快于改前；无「卡住数分钟」 |
+| S-UX-027b | 历史 >200 条 | 仅加载最近 200；顶部 notice 说明省略条数 |
+| S-UX-027c | 切换后向上滚动历史 | 视口外助手消息先纯文本；滚入视口后渲染 markdown |
+
+---
+
+## 2j. 第十五轮 · 聊天活动轨（**已决 · 待实施** · 2026-09-03）
+
+> 真源：[CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · 延续 [DESKTOP.md](./DESKTOP.md) §3.2.2 D-T1～T7。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-028 | 双「思考中」/ 过程入口重复 / 底栏与聊天区抢戏 | `process` 块可泄漏 live 状态；等待脉冲与灰框 accordion 两套 UI；狂奔连发不收尾旧轮 | **Turn Card + 单一活动轨**：时间线交错思考与工具；**仅当前 turn live**；底栏不再独立思考秒表 | `turn-card-layout.ts` · `activity-state.ts` · `activity-timeline.ts` · `chat-state.ts` · `unified/index.ts` | **done** |
+
+### 验收（S-UX-028）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-028a | 狂奔或连发两条用户消息 | 仅最后一轮 live 思考；无双重计时 |
+| S-UX-028b | pending → reasoning → tool | 时间线顺序正确；无双思考 UI |
+| S-UX-028c | 收起活动轨 | 思考 + 工具 + 失败 alert 一起隐藏 |
+| S-UX-028d | `assistant.done` | 活动轨默认折叠 |
+| S-UX-028e | 流式思考（M1） | 底栏无独立思考秒表 |
+| S-UX-028f | 侧栏「查看过程」（M1） | 定位并展开当前活动轨 |
+| S-UX-028g | 切换会话（M2） | 无僵尸思考态 |
+
+### 实施分期
+
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| P0 | `finalizeInFlightProcessBlocks` · live turn 门控 · 统一等待 DOM | **done** |
+| M0 | `ActivityEntry` 时间线 · 单一渲染路径 | **done** |
+| M1 | Turn Card 分组 · 底栏降噪 · `jumpToCurrentActivity` | **done** |
+| M2 | 狂奔/侧栏/历史恢复 · night confirm overlay | **done** |
+
+---
+
 ## 3. 已完成
 
 | # | 日期 | 内容 |

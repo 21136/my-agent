@@ -363,12 +363,223 @@
   word-break: break-word;
 }
 
+/* ── Output display refresh (project chat) ── */
+.unified-shell[data-perspective="project"] .unified-turn-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.unified-shell[data-perspective="project"] .unified-turn-user {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.65rem;
+}
+
+.unified-shell[data-perspective="project"] .unified-turn-user .unified-turn-body {
+  max-width: 88%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 12px 12px 4px 12px;
+  background: color-mix(in srgb, var(--ma-surface) 92%, var(--ma-bg));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ma-text) 4%, transparent);
+}
+
+.unified-shell[data-perspective="project"] .unified-turn-assistant {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ma-bg) 88%, white);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ma-text) 5%, transparent);
+}
+
+.unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > p:first-child {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ma-text);
+}
+
+.unified-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.65rem;
+}
+
+.unified-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--ma-surface) 80%, var(--ma-bg));
+  color: var(--ma-project-accent, var(--ma-accent));
+}
+
+.unified-file-chip.is-ok::before {
+  content: "✓";
+  color: #16a34a;
+  font-size: 0.68rem;
+}
+
+.unified-sys-line {
+  font-size: 0.8rem;
+  color: var(--ma-text-muted);
+  margin: 0.25rem 0 0.5rem;
+}
+
+.unified-review-callout {
+  margin: 0.65rem 0 0.85rem;
+  padding: 0.65rem 0.75rem 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ma-bg) 90%, white);
+  border-left: 3px solid var(--ma-project-accent, var(--ma-accent));
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ma-text) 4%, transparent);
+}
+
+.unified-review-callout-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ma-text);
+  margin-bottom: 0.35rem;
+}
+
+.unified-review-callout-body,
+.unified-review-callout-list {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ma-text-muted);
+  line-height: 1.5;
+}
+
+.unified-review-callout-list {
+  padding-left: 1.1rem;
+}
+
+.unified-tag-p0 {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.08rem 0.35rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, #dc2626 12%, transparent);
+  color: #b91c1c;
+  margin-right: 0.2rem;
+  vertical-align: 0.05em;
+}
+
+.unified-process-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border: none;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ma-text-muted);
+  background: color-mix(in srgb, var(--ma-surface) 75%, var(--ma-bg));
+  cursor: pointer;
+}
+
+.unified-process-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ma-accent);
+  animation: unified-process-pill-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes unified-process-pill-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.unified-tool-step {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.unified-tool-step-label {
+  font-family: var(--ma-font);
+  font-weight: 500;
+  color: var(--ma-text);
+}
+
+.unified-tool-step-sub {
+  font-family: var(--ma-font);
+  font-size: 0.75rem;
+  color: color-mix(in srgb, #c44 75%, var(--ma-text-muted));
+}
+
+.unified-tool-alert {
+  margin-top: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, #dc2626 8%, var(--ma-bg));
+}
+
+.unified-tool-alert-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #b91c1c;
+  margin-bottom: 0.2rem;
+}
+
+.unified-tool-alert-body {
+  margin: 0;
+  font-size: 0.78rem;
+  color: color-mix(in srgb, #7f1d1d 85%, var(--ma-text));
+  line-height: 1.45;
+}
+
+.unified-tool-alert-logs {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+}
+
+.unified-tool-alert-logs pre {
+  max-height: 8rem;
+  overflow: auto;
+  margin: 0.25rem 0 0;
+  padding: 0.35rem;
+  background: color-mix(in srgb, var(--ma-surface) 80%, transparent);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--ma-mono);
+}
+
+.unified-shell[data-perspective="project"] .unified-process {
+  border-left: none;
+  padding: 0;
+  background: transparent;
+  font-size: 0.85rem;
+}
+
+
 /* ================================================================
    Markdown content
    ================================================================ */
 
 .unified-markdown {
   line-height: 1.6;
+}
+
+.unified-markdown-lazy {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .unified-markdown > :first-child { margin-top: 0; }
@@ -547,60 +758,262 @@
   margin-bottom: 0.35rem;
 }
 
-/* UX-021 — Cursor-style thinking accordion (pinned at top of process body) */
+/* UX-021 — slim thinking line (live above process tools) */
 .unified-thinking {
   margin-bottom: 0.45rem;
-  border: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--ma-surface) 65%, transparent);
 }
+
+.unified-thinking.is-waiting {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  margin-bottom: 0.35rem;
+}
+
+.unified-thinking.is-waiting .unified-thinking-summary.is-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.15rem 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ma-text-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: default;
+}
+
+.unified-thinking-pulse {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--ma-accent);
+  opacity: 0.85;
+  animation: unified-thinking-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes unified-thinking-pulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.45; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+.unified-thinking:not(.is-waiting) {
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 22%, var(--ma-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ma-bg) 82%, white);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--ma-text) 4%, transparent);
+  overflow: hidden;
+}
+
+.unified-process.is-thinking-live .unified-thinking {
+  border-color: color-mix(in srgb, var(--ma-accent) 38%, var(--ma-border));
+}
+
 .unified-thinking-summary {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.4rem;
   width: 100%;
-  padding: 0.35rem 0.5rem;
+  padding: 0.45rem 0.65rem;
   border: none;
-  background: transparent;
+  background: color-mix(in srgb, var(--ma-surface) 40%, transparent);
   color: var(--ma-text-muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   text-align: left;
   cursor: pointer;
 }
+
 .unified-thinking-summary::before {
   content: "▸";
   display: inline-block;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   transition: transform 0.15s ease;
   color: var(--ma-text-muted);
+  flex-shrink: 0;
 }
+
 .unified-thinking.is-open .unified-thinking-summary::before,
 .unified-thinking.is-streaming .unified-thinking-summary::before {
   transform: rotate(90deg);
 }
-.unified-thinking.is-streaming .unified-thinking-summary {
+
+.unified-thinking.is-streaming .unified-thinking-summary,
+.unified-thinking.is-waiting .unified-thinking-summary {
   color: var(--ma-accent);
 }
+
 .unified-thinking.is-waiting .unified-thinking-summary.is-static {
   cursor: default;
 }
+
 .unified-thinking-summary.is-static::before {
   transform: rotate(90deg);
 }
+
 .unified-thinking-body {
-  max-height: 5.5rem;
+  max-height: min(40vh, 14rem);
   overflow-y: auto;
-  padding: 0 0.5rem 0.45rem;
+  padding: 0.5rem 0.65rem 0.6rem;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.8rem;
-  line-height: 1.35;
+  font-size: 0.78rem;
+  line-height: 1.45;
   color: var(--ma-text-muted);
   scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 78%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 78%, transparent 100%);
 }
+
+.unified-thinking-body.is-waiting-body {
+  max-height: 4.5rem;
+  padding: 0.45rem 0.65rem 0.55rem;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.unified-thinking-shimmer {
+  height: 2.25rem;
+  border-radius: 6px;
+  margin-bottom: 0.35rem;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ma-surface) 70%, var(--ma-bg)) 0%,
+    color-mix(in srgb, var(--ma-accent) 12%, var(--ma-surface)) 50%,
+    color-mix(in srgb, var(--ma-surface) 70%, var(--ma-bg)) 100%
+  );
+  background-size: 200% 100%;
+  animation: unified-thinking-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes unified-thinking-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.unified-thinking-wait-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ma-text-muted);
+  opacity: 0.85;
+}
+
+.unified-thinking-peek {
+  max-height: 2.8rem;
+  overflow: hidden;
+  padding: 0 0.65rem 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--ma-text-muted);
+  opacity: 0.75;
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent 100%);
+}
+
 .unified-thinking:not(.is-open):not(.is-streaming) .unified-thinking-body {
   display: none;
+}
+
+.unified-thinking.is-pinned:not(.is-open) .unified-thinking-peek {
+  display: block;
+}
+
+.unified-thinking.is-compact:not(.is-open) {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.unified-thinking.is-compact .unified-thinking-summary {
+  font-size: 0.78rem;
+  padding: 0.12rem 0;
+  color: var(--ma-text-muted);
+  font-weight: 500;
+}
+
+.unified-thinking.is-compact:not(.is-open) .unified-thinking-summary::before {
+  opacity: 0.55;
+}
+
+.unified-think-fold {
+  margin: 0.08rem 0;
+}
+
+.unified-think-fold > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--ma-text-muted);
+  list-style: none;
+  padding: 0.12rem 0;
+}
+
+.unified-think-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.unified-think-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  padding-left: 0.4rem;
+  border-left: 2px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
+  margin: 0.12rem 0 0.2rem;
+}
+
+.unified-process.has-thinking .unified-thinking {
+  display: block;
+}
+
+/* UX-028 M1 — turn card groups user + activity + assistant per round */
+.unified-turn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1.1rem;
+  padding-bottom: 0.35rem;
+}
+
+.unified-turn-card.is-live {
+  border-radius: 10px;
+  padding: 0.35rem 0.15rem 0.5rem;
+  background: color-mix(in srgb, var(--ma-surface) 35%, transparent);
+}
+
+.unified-shell[data-perspective="project"] .unified-turn-card {
+  gap: 0.45rem;
+  margin-bottom: 1.25rem;
+}
+
+.unified-turn-card .unified-process,
+.unified-turn-card .unified-turn {
+  margin-bottom: 0;
+}
+
+.unified-turn-card .unified-process {
+  margin-top: 0.1rem;
+}
+
+.unified-process-body > .unified-activity-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.unified-activity-entry.is-think.unified-thinking {
+  margin-bottom: 0;
+}
+
+.unified-activity-timeline .unified-tool-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.unified-process-body > .unified-thinking:first-child {
+  margin-top: 0.1rem;
 }
 
 .unified-process-reasoning {
@@ -2039,11 +2452,33 @@
 .textbook-plan-stat { margin-top: 0.25rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-plan-card-actions { display: flex; gap: 0.35rem; align-items: center; margin-top: 0.55rem; }
 .textbook-runaway-surface {
+  position: relative;
+  z-index: 2;
   margin: 0.65rem 0.75rem;
   padding: 0.8rem;
   border: 1px solid color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
   border-radius: 0.55rem;
   background: color-mix(in srgb, var(--ma-accent) 4%, var(--ma-surface));
+}
+.textbook-plan-card-actions .unified-runaway-action {
+  width: 100%;
+  justify-content: center;
+}
+.unified-turn-card.is-live.is-jump-target,
+.unified-process.is-jump-target,
+.unified-turn-card.is-jump-target {
+  outline: 2px solid color-mix(in srgb, var(--ma-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.unified-process.is-jump-target {
+  outline: 2px solid color-mix(in srgb, var(--ma-accent) 70%, white);
+  outline-offset: 2px;
+  animation: unified-process-jump 1.2s ease;
+}
+@keyframes unified-process-jump {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ma-accent) 35%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ma-accent) 18%, transparent); }
 }
 .textbook-runaway-surface-title { color: var(--ma-text-muted); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; }
 .textbook-runaway-surface-status { margin-top: 0.22rem; color: var(--ma-text); font-size: 0.9rem; font-weight: 700; }

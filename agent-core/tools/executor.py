@@ -104,6 +104,9 @@ class ExecutorSession:
     project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
     runaway_enabled: bool = False
+    bug_fix_lane: bool = False
+    project_runaway_checkpoint: str = ""
+    project_runaway_acceptance_passed: bool = False
     harness: str = "desktop"
     terminal_scope_kind: str = ""
     terminal_cwd: str = ""
@@ -118,6 +121,7 @@ class ExecutorSession:
     armed_task_text: str = ""
     armed_task_contract: dict[str, Any] = field(default_factory=dict)
     turn_evidence: list[dict[str, Any]] = field(default_factory=list)
+    llm_retry_notice_emitted: bool = False
     # G14 / EXEC-RELIABILITY M0 — segment-scoped circuit breaker
     failure_streak_fp: str = ""
     failure_streak_count: int = 0
@@ -139,6 +143,8 @@ class ExecutorSession:
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
     plan_partner_calls: int = 0
+    plan_partner_gateway_streak: int = 0
+    plan_gateway_nudge_emitted: bool = False
     deliverable_review_calls: int = 0
     explore_builtin_calls: int = 0
     explore_continue_used: bool = False
@@ -535,11 +541,21 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
         tool_name = fields.get("tool_name", "?")
         return f"[guard] 已拒调 run_python demo · {tool_name}（本 segment 已有自动 demo 结果）"
     if guard_type == "task_stop_armed":
+        if fields.get("runaway_enabled"):
+            return (
+                "[guard] 本轮已勾选完成一条 TASK；"
+                "狂奔将自动进入下一项，请继续写码（本回合勿再次 report_progress）。"
+            )
         return "[guard] 本轮已勾选完成一条 TASK；请停下，等用户「继续」再做下一项"
     if guard_type == "task_stop":
         message = fields.get("message")
         if isinstance(message, str) and message.strip():
             return message
+        if fields.get("runaway_enabled"):
+            return (
+                "[guard] task 一停门：本回合已勾选一条 TASK，"
+                "狂奔下可继续写下一项产物（勿同回合再 report_progress）。"
+            )
         return "[guard] task 一停门：请先结束本回合，用户回复「继续」后再写下一产物"
     if guard_type == "exec_circuit":
         fp = fields.get("fingerprint", "")
@@ -695,6 +711,7 @@ def _validate_project_mode_call(
         tool_name=tool_name,
         arguments=arguments,
         agent_paths=agent_paths,
+        bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
     )
     if reason is None:
         return None
@@ -710,6 +727,7 @@ def _validate_project_mode_call(
             project_root=session.project_root,
             tool_name=tool_name,
             arguments=arguments,
+            bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
         )
         == PLAN_DOMAIN_WRITE_BLOCK_MSG
     ):
@@ -888,6 +906,8 @@ def _validate_task_stop_write(
         report_progress_done_this_turn=session.report_progress_done_this_turn,
         tool_name=tool_name,
         arguments=arguments,
+        runaway_enabled=bool(session.runaway_enabled),
+        workflow_stage=str(getattr(session, "project_workflow_stage", "") or ""),
     )
     if repeat is not None:
         session.progress_gate_notice = build_progress_gate_notice(
@@ -1115,7 +1135,7 @@ class ToolExecutor:
 
         clear_circuit_state(self.session)
 
-    def begin_turn(self) -> None:
+    def begin_turn(self, *, reset_plan_cap: bool = True) -> None:
         """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
         from exec_reliability import clear_inline_write_guard
 
@@ -1127,11 +1147,15 @@ class ToolExecutor:
         self.session.armed_task_text = ""
         self.session.armed_task_contract = {}
         self.session.turn_evidence = []
+        self.session.llm_retry_notice_emitted = False
         self.session.service_postcondition = ""
         self.session.postcondition_claim_blocked = False
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
-        self.session.plan_partner_calls = 0
+        if reset_plan_cap:
+            self.session.plan_partner_calls = 0
+        self.session.plan_partner_gateway_streak = 0
+        self.session.plan_gateway_nudge_emitted = False
         self.session.deliverable_review_calls = 0
         self.session.explore_builtin_calls = 0
         self.session.explore_continue_used = False
@@ -1154,13 +1178,32 @@ class ToolExecutor:
         self.session.task_done_baseline = stats.done
         if tasks_path.is_file():
             tasks_text = tasks_path.read_text(encoding="utf-8")
-            task_line, body, tid = first_open_task(tasks_text)
+            from project_mode import next_open_task
+
+            active_id = (self.session.project_active_task_id or "").strip().upper()
+            if self.session.runaway_enabled and active_id:
+                from project_mode import parse_tasks_metadata
+
+                task_line = -1
+                body = ""
+                tid = active_id
+                for task in parse_tasks_metadata(tasks_text):
+                    if str(task.get("id") or "").upper() != active_id:
+                        continue
+                    task_line = int(task.get("line", -1))
+                    body = str(task.get("text") or "").strip()
+                    break
+            elif self.session.runaway_enabled:
+                task_line, body, tid = next_open_task(tasks_text)
+            else:
+                task_line, body, tid = first_open_task(tasks_text)
             self.session.armed_task_id = tid or ""
             self.session.armed_task_text = body or ""
+            resolved_line = task_line if isinstance(task_line, int) else None
             contract = task_evidence_contract(
                 tasks_text,
                 task_id=tid,
-                task_line=task_line,
+                task_line=resolved_line if resolved_line is not None and resolved_line >= 0 else None,
             )
             if contract is not None:
                 self.session.armed_task_contract = contract
@@ -1362,6 +1405,7 @@ class ToolExecutor:
             fields = dict(payload)
 
         fields.pop("guard_type", None)
+        fields["runaway_enabled"] = bool(self.session.runaway_enabled)
 
         if self.evolve_log is not None:
             self.evolve_log.log_guard_event(
@@ -1504,6 +1548,7 @@ class ToolExecutor:
             record_circuit_failure,
             record_circuit_success,
             record_segment_failure,
+            should_count_segment_failure,
         )
 
         insight = classify_failure(result)
@@ -1542,7 +1587,8 @@ class ToolExecutor:
             if result.ok and insight.failure_class == "A":
                 record_circuit_success(self.session)
             return
-        record_segment_failure(self.session)
+        if should_count_segment_failure(result, self.session):
+            record_segment_failure(self.session)
         opened = record_circuit_failure(self.session, fp)
         if opened:
             self._record_guard_event(
@@ -1769,6 +1815,7 @@ class ToolExecutor:
         """Spawn Plan subagent (Phase 39 · PLAN-SUBAGENT §4.1)."""
         from session import Session
         from subagent import SubagentRunner, plan_partner_max_per_turn
+        from exec_reliability import runaway_plan_partner_max_per_turn
 
         name = "plan_partner"
         task = str(arguments.get("task") or "").strip()
@@ -1797,7 +1844,46 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
+        from runaway_flow import normalize_checkpoint
+        from exec_reliability import (
+            runaway_plan_partner_blocked,
+            runaway_plan_partner_max_per_turn,
+        )
+
+        checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
+        stage = (self.session.project_workflow_stage or "").strip()
+        if runaway_plan_partner_blocked(
+            runaway_enabled=bool(self.session.runaway_enabled),
+            workflow_stage=stage,
+            checkpoint=checkpoint,
+        ):
+            if checkpoint in {"verifying", "release_wait"}:
+                message = (
+                    "verification/release_wait 阶段禁止 plan_partner；"
+                    "Harness 硬验收为真源，勿再改 PROJECT/TASKS"
+                )
+            else:
+                message = (
+                    "repairing 阶段禁止 plan_partner；"
+                    "请由 Harness bug-fix 轨或直接 write_text 修复"
+                )
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                message,
+                duration_ms=_elapsed_ms(started),
+                details={"checkpoint": checkpoint},
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
         cap = plan_partner_max_per_turn()
+        if self.session.runaway_enabled and stage in {
+            "implementation",
+            "verification",
+            "release",
+        }:
+            cap = min(cap, runaway_plan_partner_max_per_turn())
         if self.session.plan_partner_calls >= cap:
             result = tool_fail(
                 name,
@@ -1882,12 +1968,48 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
-        self.session.plan_partner_calls += 1
-
-        from project_api import project_state_payload
+        from exec_reliability import is_plan_gateway_failure_summary
         from plan_agent import get_plan_agent
+        from project_api import project_state_payload
 
         agent = get_plan_agent(paths, pid)
+        if getattr(agent, "_last_gateway_failure", False) or is_plan_gateway_failure_summary(
+            sub_result.summary
+        ):
+            agent._last_gateway_failure = False
+            self.session.plan_partner_calls += 1
+            self.session.plan_partner_gateway_streak += 1
+            result = tool_fail(
+                name,
+                "upstream_error",
+                sub_result.summary,
+                duration_ms=_elapsed_ms(started),
+                details={"retryable": True, "plan_gateway_failure": True},
+            )
+            self._emit_event(
+                "plan.subagent.done",
+                {
+                    "summary": sub_result.summary,
+                    "proposal_count": 0,
+                    "ok": False,
+                    "call_id": call_id,
+                },
+            )
+            self._emit_event(
+                "tool.end",
+                {
+                    "tool": name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "summary": _tool_result_summary(result),
+                },
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        self.session.plan_partner_calls += 1
+        self.session.plan_partner_gateway_streak = 0
+
         state_events: list[dict[str, Any]] = [
             project_state_payload(session, paths),
             agent.build_state(session),
@@ -1961,6 +2083,26 @@ class ToolExecutor:
                 ToolErrorCode.VALIDATION_ERROR,
                 "deliverable_review requires a bound project",
                 duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        from exec_reliability import runaway_deliverable_review_blocked
+        from runaway_flow import normalize_checkpoint
+
+        review_checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
+        if runaway_deliverable_review_blocked(
+            runaway_enabled=bool(self.session.runaway_enabled),
+            workflow_stage=(self.session.project_workflow_stage or "").strip(),
+            checkpoint=review_checkpoint,
+            acceptance_passed=bool(self.session.project_runaway_acceptance_passed),
+        ):
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "Harness 硬验收为真源，verification 出口禁止 deliverable_review",
+                duration_ms=_elapsed_ms(started),
+                details={"checkpoint": review_checkpoint},
             )
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
@@ -3011,6 +3153,12 @@ class ToolExecutor:
             from write_policy import is_sensitive_write_path, path_under_project
 
             path = str(inner.get("path") or "").strip()
+            if bool(getattr(self.session, "bug_fix_lane", False)) and path:
+                from project_mode import BUG_FIX_PLAN_WRITE_ALLOWLIST, project_path_rel
+
+                rel = project_path_rel(path, self.session.project_root)
+                if rel in BUG_FIX_PLAN_WRITE_ALLOWLIST:
+                    return path_under_project(path, self.session.project_root)
             return bool(
                 path
                 and path_under_project(path, self.session.project_root)
@@ -3022,6 +3170,8 @@ class ToolExecutor:
 
             command = str(inner.get("command") or "")
             working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
+            if not working_dir.strip() and self.session.project_root:
+                working_dir = self.session.project_root
             kind = classify_run_command(command)
             return bool(
                 kind not in {"danger", "network"}

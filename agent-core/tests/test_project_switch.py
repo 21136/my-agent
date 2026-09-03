@@ -167,7 +167,10 @@ class ProjectSwitchTests(unittest.TestCase):
 
         memory_evt = next(event for event in events if event.get("type") == "session.memory")
         history_evt = next(event for event in events if event.get("type") == "session.history")
-        self.assertEqual(memory_evt, session_memory_event(updated_b))
+        self.assertEqual(memory_evt, session_memory_event(
+            updated_b,
+            quick=not updated_b._messages_fully_loaded,
+        ))
         self.assertEqual(history_evt, session_history_event(updated_b))
         self.assertEqual(history_evt.get("session_id"), updated_b.conversation_id)
         self.assertEqual(history_evt.get("project_id"), normalize_project_id(self.project_b))
@@ -205,7 +208,7 @@ class ProjectSwitchTests(unittest.TestCase):
         )
         self.assertEqual(
             next(event for event in bridge_events if event.get("type") == "session.memory"),
-            session_memory_event(resumed),
+            session_memory_event(resumed, quick=not resumed._messages_fully_loaded),
         )
         self.assertEqual(
             next(event for event in bridge_events if event.get("type") == "session.history"),

@@ -70,6 +70,9 @@ export type ServerEvent =
       session_id?: string;
       project_id?: string | null;
       items: Array<{ role: "user" | "assistant"; text: string }>;
+      truncated?: boolean;
+      total_items?: number;
+      omitted_count?: number;
     }
   | {
       type: "session.memory";

@@ -39,7 +39,8 @@ alwaysApply: true
 - **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** 单项目态势侧栏（§6.2.2 · 文档已签 · M0 待实施）；UX-021～023 done。
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
 - **Phase 57**：**legacy M1 done** · **Ink 阶段 0～5 done** · **T-5730～5734 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6 · **frozen** · S-576 手工留痕
-- **下一焦点**：Phase 58b T-5832（manifest completeness + tier linter）· S-581 · UX-026 defer
+- **Phase 59b**：**done** — verification 谓词门 UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](../../docs/RUNAWAY-VERIFICATION-ORCHESTRATOR.md)
+- **下一焦点**：Phase 58b T-5832（manifest completeness + tier linter）· S-581 · UX-026 defer · S-6046 手工
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；Terminal：`start-terminal.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。

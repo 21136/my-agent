@@ -284,13 +284,8 @@ class ConversationRepl:
             self.start_new_session()
             return "continue"
 
-        if lower in {"压缩", "summarize", "compact"}:
-            try:
-                result = compact_context(self.session, self.agent.llm, force=True)
-                self.output_fn(result.message)
-            except LLMError as exc:
-                self.output_fn(f"compress error: {exc}")
-            return "continue"
+        if self._is_compact_command(stripped):
+            return self._handle_compact_command()
 
         mode_cmd = parse_turn_mode_command(stripped)
         if mode_cmd is not None:
@@ -402,6 +397,30 @@ class ConversationRepl:
         elif self.assistant_output_fn is not None:
             # C9: empty reply still closes the desktop turn (paired with turn.end).
             self.assistant_output_fn("")
+        return "continue"
+
+    def _is_compact_command(self, line: str) -> bool:
+        stripped = line.strip()
+        lower = stripped.casefold()
+        if lower in {"压缩", "summarize", "compact"}:
+            return True
+        from terminal_ui import parse_terminal_slash_command
+
+        return parse_terminal_slash_command(stripped) == "compact"
+
+    def _handle_compact_command(self) -> ReplOutcome:
+        self.session.ensure_messages_loaded()
+        try:
+            result = compact_context(self.session, self.agent.llm, force=True)
+            self.output_fn(result.message)
+        except LLMError as exc:
+            if "content policy" in str(exc).casefold():
+                self.output_fn(
+                    "压缩失败：摘要模型因内容策略拒绝请求。"
+                    "请尝试「新会话」开新线，或删除含敏感内容的旧消息后重试。"
+                )
+            else:
+                self.output_fn(f"压缩失败：{exc}")
         return "continue"
 
     def start_new_session(self) -> None:

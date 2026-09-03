@@ -46,6 +46,7 @@
 
 - **DeepSeek / Sophnet**：API 使用 `thinking` 对象，不认平铺 `medium`；`medium` 映射为 `high`。见 §3.2。
 - **0x567**（如 gpt-5.4 网关）：使用顶层 `reasoning_effort`；**不支持 `max`**（会 `invalid parameter`），故 `max` → `high`。TUI 仍可显示逻辑标签 `max`。
+- **Tokeness**（`gpt-5.6-luna` · `/v1/chat/completions`）：**带 `tools` 时须 `reasoning_effort: none`**，否则 400；由 `llm_client` 自动处理。见 [LLM-LUNA-GATEWAYS.md](./LLM-LUNA-GATEWAYS.md)。
 - **其他厂商**：原样透传（OpenAI 兼容网关按各自模型文档）。
 
 ### 3.2 请求体形态（按厂商）

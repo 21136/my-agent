@@ -22,3 +22,8 @@
 ## 非目标
 - 不实现实时音视频直播、社交评论/弹幕、版权交易、高保真无损多版本、移动端原生 App。
 - 不包含商业化支付、广告投放、智能硬件接入。
+
+## 验收标准
+
+- AC-001 工程基线可验证
+- 命令：`python .acceptance/music-dreamer-skeleton/infrastructure/release-drill.py` 期望退出码：0

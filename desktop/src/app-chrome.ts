@@ -18,12 +18,18 @@ export type AppChromeApi = {
   setModel: (model: string) => void;
 };
 
-const FALLBACK_MODEL_ID = "deepseek-v4-flash";
+const FALLBACK_MODEL_ID = "tokeness-luna";
 
-function pickModelId(model: string | undefined, models: LlmModelListItem[]): string {
+function pickModelId(
+  model: string | undefined,
+  models: LlmModelListItem[],
+  preferredDefault?: string,
+): string {
   const key = (model || "").trim();
   if (!key) {
-    return models[0]?.id ?? FALLBACK_MODEL_ID;
+    const fallback = preferredDefault?.trim() || FALLBACK_MODEL_ID;
+    if (models.some((item) => item.id === fallback)) return fallback;
+    return models[0]?.id ?? fallback;
   }
   const exact = models.find((item) => item.id === key);
   if (exact) return exact.id;
@@ -82,6 +88,8 @@ export function mountAppChrome(
   const theme = readTheme();
   let knownModels: LlmModelListItem[] = [];
   let modelsBooting = true;
+  let defaultFlashId = FALLBACK_MODEL_ID;
+  let sessionModelReceived = false;
 
   root.innerHTML = `
     <header class="app-chrome">
@@ -139,9 +147,13 @@ export function mountAppChrome(
     knownModels = models;
     modelsBooting = false;
     modelSelect.disabled = false;
-    const nextId = pickModelId(selectedId ?? modelSelect.value, models);
+    const nextId = pickModelId(
+      selectedId ?? modelSelect.value,
+      models,
+      defaultFlashId,
+    );
     modelSelect.innerHTML = renderModelOptions(models, false);
-    modelSelect.value = pickModelId(nextId, models);
+    modelSelect.value = pickModelId(nextId, models, defaultFlashId);
     const selected = models.find((item) => item.id === modelSelect.value);
     modelSelect.title = selected
       ? `切换主 Agent 模型（${selected.name} · ${selected.max_input_tokens.toLocaleString()} ctx）`
@@ -155,7 +167,7 @@ export function mountAppChrome(
 
   modelSelect.addEventListener("change", () => {
     if (syncingModel) return;
-    const next = pickModelId(modelSelect.value, knownModels);
+    const next = pickModelId(modelSelect.value, knownModels, defaultFlashId);
     modelSelect.value = next;
     handlers.client?.setSessionModel(next);
   });
@@ -189,6 +201,11 @@ export function mountAppChrome(
 
   const unsubModels = handlers.client?.onEvent((event) => {
     if (event.type !== "session.models") return;
+    defaultFlashId = event.default_flash_id?.trim() || defaultFlashId;
+    if (!sessionModelReceived) {
+      applyModelCatalog(event.models, defaultFlashId);
+      return;
+    }
     applyModelCatalog(event.models);
   });
 
@@ -196,12 +213,13 @@ export function mountAppChrome(
 
   const unsubBanner = handlers.client?.onEvent((event) => {
     if (event.type !== "session.banner") return;
+    sessionModelReceived = true;
     currentProjectId = event.project_id || "";
     syncingModel = true;
     if (knownModels.length) {
-      modelSelect.value = pickModelId(event.llm_model, knownModels);
+      modelSelect.value = pickModelId(event.llm_model, knownModels, defaultFlashId);
     } else {
-      modelSelect.value = event.llm_model || FALLBACK_MODEL_ID;
+      modelSelect.value = event.llm_model || defaultFlashId || FALLBACK_MODEL_ID;
     }
     syncingModel = false;
   });
@@ -274,7 +292,7 @@ export function mountAppChrome(
     },
     setModel(model: string): void {
       syncingModel = true;
-      modelSelect.value = pickModelId(model, knownModels);
+      modelSelect.value = pickModelId(model, knownModels, defaultFlashId);
       syncingModel = false;
     },
   };

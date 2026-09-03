@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="warm">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>03 · 暖色极简</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="_shared.css" />
+  <link rel="stylesheet" href="_working.css" />
+  <style>
+    :root {
+      --bg: #faf7f4;
+      --surface: #ffffff;
+      --sidebar: #ffffff;
+      --flow-a: #fff5f0;
+      --flow-b: #fdd5c5;
+      --flow-c: #e07a5f;
+      --flow-duration: 5s;
+      --surface-2: #fff8f5;
+      --text: #2a2420;
+      --muted: #8a7f76;
+      --border: #f0e6de;
+      --accent: #e07a5f;
+      --accent-soft: rgba(224, 122, 95, 0.12);
+      --danger: #c45c5c;
+      --radius: 14px;
+      --shadow: 0 4px 24px rgba(42, 36, 32, 0.06);
+      --font: "DM Sans", "Noto Sans SC", system-ui, sans-serif;
+      --sidebar-w: 268px;
+    }
+    .topbar { border: none; background: transparent; padding-bottom: 0; }
+    .app { padding: 12px; gap: 12px; background: var(--bg); }
+    .topbar, .main-wrap { background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); }
+    .main-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    .sidebar { border: none; background: transparent; }
+    .sidebar-inner { padding: 1rem; }
+    .task-card { border: none; background: var(--surface-2); border-radius: var(--radius); }
+    .process-card { border: none; background: var(--surface-2); border-radius: var(--radius); }
+    .composer { border: none; background: var(--surface-2); margin: 0 1rem 1rem; border-radius: var(--radius); }
+    .btn-primary { background: linear-gradient(135deg, #e07a5f, #d4a574); border: none; color: #fff; }
+    .chip.on { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="app-frame warm-layout" id="app-frame"></div>
+  <script src="_shared.js"></script>
+</body>
+</html>

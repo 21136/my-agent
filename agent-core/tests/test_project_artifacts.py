@@ -102,30 +102,38 @@ class ProjectArtifactTests(unittest.TestCase):
             self.assertEqual(payload["runaway_last_verification"], "fail")
             self.assertEqual(payload["runaway_repair_count"], 3)
 
-    def test_runaway_review_retries_once_then_breaks_on_same_error(self) -> None:
+    def test_review_fail_delegates_repair_to_hard_verify(self) -> None:
         from agent import Agent
 
         with temporary_agent_paths() as paths:
-            pid = "runaway-review-demo"
+            pid = "runaway-review-hard-gate"
             create_project(paths, pid)
-            session = create_new(paths, conversation_id="_runaway_review_")
+            session = create_new(paths, conversation_id="_runaway_review_hard_")
             session.meta.active_shell = "project"
             session.meta.project_id = pid
             session.meta.project_root = f"workspace/{pid}"
             session.meta.project_runaway_enabled = True
             session.meta.project_workflow_stage = "verification"
+            session.meta.project_runaway_checkpoint = "verifying"
             agent = Agent.create(session)
             failed = tool_ok(
                 "deliverable_review",
                 {"verdict": "fail", "blockers_count": 1, "summary": "测试命令失败"},
             )
-
-            self.assertTrue(agent._record_runaway_review_result(failed))
+            with patch.object(agent, "_sync_runaway_harness_truth", return_value=False):
+                with patch(
+                    "runaway_verification.run_harness_verification",
+                    return_value={
+                        "project_id": pid,
+                        "passed": False,
+                        "evidence_persisted": True,
+                        "evidence_fingerprint": "hard-failure",
+                        "error": "验收命令失败",
+                    },
+                ):
+                    self.assertTrue(agent._record_runaway_review_result(failed))
             self.assertEqual(session.meta.project_runaway_checkpoint, "repairing")
             self.assertEqual(session.meta.project_runaway_repair_count, 1)
-            self.assertFalse(agent._record_runaway_review_result(failed))
-            self.assertEqual(session.meta.project_runaway_checkpoint, "paused")
-            self.assertEqual(session.meta.project_runaway_paused_reason, "同一验证问题再次出现")
 
     def test_runaway_does_not_emit_plan_confirmation_request(self) -> None:
         with temporary_agent_paths() as paths:
@@ -158,10 +166,16 @@ class ProjectArtifactTests(unittest.TestCase):
 
     def test_runaway_natural_stop_is_internal_continuation(self) -> None:
         from agent import Agent
+        from project_mode import project_dir
 
         with temporary_agent_paths() as paths:
             pid = "runaway-continuation-demo"
             create_project(paths, pid)
+            root = project_dir(paths, pid)
+            (root / "VERIFY.md").write_text(
+                "# runaway-continuation-demo · 验证矩阵\n\n（尚无证据）\n",
+                encoding="utf-8",
+            )
             session = create_new(paths, conversation_id="_runaway_continuation_")
             session.meta.active_shell = "project"
             session.meta.project_id = pid
@@ -169,7 +183,8 @@ class ProjectArtifactTests(unittest.TestCase):
             session.meta.project_runaway_enabled = True
             session.meta.project_plan_status = "confirmed"
             session.meta.project_workflow_stage = "implementation"
-            session.meta.project_runaway_checkpoint = "implementation"
+            session.meta.project_runaway_checkpoint = "implementing"
+            session.meta.project_active_task_id = "T-001"
             agent = Agent.create(session)
             self.assertTrue(
                 agent._continue_runaway_after_natural_stop(
@@ -177,9 +192,36 @@ class ProjectArtifactTests(unittest.TestCase):
                     finish_reason="stop",
                 )
             )
-            self.assertIn("不要只做总结", session.messages[-1]["content"])
+            self.assertIn("不要反复验证已完成任务", session.messages[-1]["content"])
 
-    def test_runaway_covers_local_tool_confirmation_but_not_external_or_sensitive(self) -> None:
+    def test_runaway_duplicate_continue_key_does_not_loop_segments(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-continuation-dedupe"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_continue_dedupe_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_workflow_stage = "implementation"
+            session.meta.project_runaway_checkpoint = "implementing"
+            session.meta.project_active_task_id = "T-008"
+            agent = Agent.create(session)
+            self.assertTrue(
+                agent._continue_runaway_after_natural_stop(
+                    final_text="",
+                    finish_reason="stop",
+                )
+            )
+            self.assertFalse(
+                agent._continue_runaway_after_natural_stop(
+                    final_text="",
+                    finish_reason="stop",
+                )
+            )
         from agent import Agent
 
         with temporary_agent_paths() as paths:
@@ -218,6 +260,15 @@ class ProjectArtifactTests(unittest.TestCase):
                 "working_dir": f"workspace/{pid}",
             }}
             self.assertFalse(executor._runaway_confirm_is_covered(builtin, run_command, external, tool_name="run_evolved"))
+
+            find_no_cwd = {"tool_name": "run_command", "arguments": {
+                "command": "find . -name PROJECT.md",
+            }}
+            self.assertTrue(
+                executor._runaway_confirm_is_covered(
+                    builtin, run_command, find_no_cwd, tool_name="run_evolved"
+                )
+            )
 
     def test_runaway_auto_adopts_plan_partner_proposals(self) -> None:
         from agent import Agent

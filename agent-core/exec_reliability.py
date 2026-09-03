@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -57,6 +58,69 @@ EXEC_INLINE_WRITE_NUDGE_MESSAGE = (
 )
 
 _DEFAULT_SEGMENT_FAILURE_BUDGET = 3
+_DEFAULT_RUNAWAY_SEGMENT_FAILURE_BUDGET = 8
+_DEFAULT_RUNAWAY_LLM_TRANSPORT_RETRIES = 4
+_DEFAULT_RUNAWAY_POOL_EXHAUSTED_RETRIES = 2
+_DEFAULT_RUNAWAY_LLM_COOLDOWN_SEC = 1.5
+_DEFAULT_RUNAWAY_PLAN_PARTNER_MAX = 2
+_DEFAULT_RUNAWAY_PLAN_PARTNER_MAX_BUG_FIX = 0
+_DEFAULT_RUNAWAY_PLAN_GATEWAY_FAIL_MAX = 3
+
+EXEC_PATCH_ANCHOR_NUDGE_MESSAGE = (
+    "[内核] patch_file 锚点不唯一或未找到：请先 read_file 确认上下文，"
+    "改用更长 find 锚点、line_range，或 run_evolved write_text 小范围重写；"
+    "狂奔模式下此类参数错误不计入段失败预算，但请勿重复同一锚点。"
+)
+
+EXEC_RUNAWAY_PLAN_GATEWAY_NUDGE_MESSAGE = (
+    "[Harness] plan_partner 网关连续失败，本回合 plan 预算已耗尽或不可用。"
+    "请改用 run_evolved write_text 或 patch_file 直接修改项目文件（尤其 PROJECT.md 的验收命令章节），"
+    "不要继续调用 plan_partner；修复后重新运行对口测试与验收命令。"
+)
+
+
+def runaway_kernel_plan_spawn_blocked(
+    *,
+    runaway_enabled: bool,
+    workflow_stage: str,
+    checkpoint: str,
+) -> bool:
+    """T-3905 kernel pre-spawn must respect the same gates as tool surface (UI-5969+)."""
+    return runaway_plan_partner_blocked(
+        runaway_enabled=runaway_enabled,
+        workflow_stage=workflow_stage,
+        checkpoint=checkpoint,
+    )
+
+
+def runaway_plan_gateway_nudge_message(
+    *,
+    checkpoint: str,
+    workflow_stage: str,
+    acceptance_passed: bool = False,
+) -> str:
+    """Checkpoint-aware nudge — avoid contradicting verification exit / bug-fix lane."""
+    from runaway_flow import normalize_checkpoint
+
+    cp = normalize_checkpoint(checkpoint)
+    stage = (workflow_stage or "").strip()
+    if cp in _RUNAWAY_EXIT_CHECKPOINTS and stage in _RUNAWAY_VERIFICATION_STAGES:
+        return (
+            "[Harness] plan_partner 在 verification 出口已禁用。"
+            "Harness 硬验收已通过，勿再改 PROJECT/TASKS 或调用 plan_partner / deliverable_review。"
+        )
+    if cp == "repairing":
+        return (
+            "[Harness] plan_partner 不可用。"
+            "repairing 由 bug-fix 子代理补 PROJECT 验收命令、ENV quality.commands 与 VERIFY 证据；"
+            "勿再调用 plan_partner。"
+        )
+    if acceptance_passed and stage in _RUNAWAY_VERIFICATION_STAGES:
+        return (
+            "[Harness] plan_partner 不可用。"
+            "验收已通过，勿再调用 plan_partner；仅修复代码或 VERIFY 证据后重跑验收命令。"
+        )
+    return EXEC_RUNAWAY_PLAN_GATEWAY_NUDGE_MESSAGE
 
 _CALL_FP_KEYS: tuple[str, ...] = (
     "command",
@@ -165,23 +229,316 @@ def circuit_threshold() -> int:
     return max(2, value)
 
 
-def segment_failure_budget() -> int:
+def segment_failure_budget(session: Any = None) -> int:
     """Max countable failures per execute segment (AGENT-HARNESS P5)."""
     raw = os.environ.get(
         "MY_AGENT_SEGMENT_FAILURE_BUDGET",
         str(_DEFAULT_SEGMENT_FAILURE_BUDGET),
     )
     try:
+        base = max(1, int(raw))
+    except ValueError:
+        base = _DEFAULT_SEGMENT_FAILURE_BUDGET
+    if session is not None and getattr(session, "runaway_enabled", False):
+        runaway_raw = os.environ.get(
+            "MY_AGENT_RUNAWAY_SEGMENT_FAILURE_BUDGET",
+            str(_DEFAULT_RUNAWAY_SEGMENT_FAILURE_BUDGET),
+        )
+        try:
+            return max(base, int(runaway_raw))
+        except ValueError:
+            return max(base, _DEFAULT_RUNAWAY_SEGMENT_FAILURE_BUDGET)
+    return base
+
+
+def runaway_llm_transport_retries() -> int:
+    """Extra LLM transport retries while runaway is active (504 / pool exhausted)."""
+    raw = os.environ.get(
+        "MY_AGENT_RUNAWAY_LLM_RETRIES",
+        str(_DEFAULT_RUNAWAY_LLM_TRANSPORT_RETRIES),
+    )
+    try:
+        return max(2, int(raw))
+    except ValueError:
+        return _DEFAULT_RUNAWAY_LLM_TRANSPORT_RETRIES
+
+
+def runaway_pool_exhausted_retries() -> int:
+    """Fewer retries when provider reports pool exhausted / gateway timeout."""
+    raw = os.environ.get(
+        "MY_AGENT_RUNAWAY_POOL_RETRIES",
+        str(_DEFAULT_RUNAWAY_POOL_EXHAUSTED_RETRIES),
+    )
+    try:
         return max(1, int(raw))
     except ValueError:
-        return _DEFAULT_SEGMENT_FAILURE_BUDGET
+        return _DEFAULT_RUNAWAY_POOL_EXHAUSTED_RETRIES
+
+
+def is_pool_exhausted_transport_error(exc: BaseException) -> bool:
+    """True for pool exhausted / gateway timeout / balance misreport / Tokeness channel class errors."""
+    message = str(exc or "").lower()
+    return (
+        "pool exhausted" in message
+        or "gateway timeout" in message
+        or "insufficient balance" in message
+        or "temporarily_unavailable" in message
+        or "temporarily unavailable" in message
+        or "可用渠道" in message
+        or "503" in message
+        or "504" in message
+        or "upstream" in message
+    )
+
+
+def is_tokeness_reasoning_tools_error(exc: BaseException) -> bool:
+    message = str(exc or "").lower()
+    return "reasoning_effort" in message and "function tools" in message
+
+
+def llm_transport_user_hint(exc: BaseException) -> str:
+    """Short user-facing hint; keep raw exception in logs elsewhere."""
+    if is_tokeness_reasoning_tools_error(exc):
+        return (
+            "Tokeness 拒绝 tools+reasoning_effort：请完全退出 Desktop 后重启"
+            "（需加载最新 llm_client 修复）"
+        )
+    message = str(exc or "")
+    lower = message.lower()
+    if "temporarily_unavailable" in lower or "可用渠道" in message:
+        return "Tokeness Luna 上游渠道暂时不可用，可稍后重试或切换 0x567-flash"
+    if is_pool_exhausted_transport_error(exc):
+        return "模型网关繁忙或超时"
+    return message[:240]
+
+
+def is_plan_gateway_failure_summary(summary: str) -> bool:
+    """Plan subagent returned an LLM gateway failure without valid operations."""
+    text = str(summary or "").strip()
+    if not text.startswith("LLM 调用失败"):
+        return False
+    lower = text.lower()
+    return is_pool_exhausted_transport_error(RuntimeError(lower))
+
+
+def is_plan_gateway_tool_failure(result: Any) -> bool:
+    """True when plan_partner failed with retryable gateway / upstream error."""
+    if getattr(result, "ok", None) is not False:
+        return False
+    error = getattr(result, "error", None)
+    if error is None:
+        return False
+    code = str(getattr(error, "code", "") or "")
+    if code == "upstream_error":
+        return True
+    details = getattr(error, "details", None)
+    if isinstance(details, dict) and details.get("plan_gateway_failure"):
+        return True
+    message = str(getattr(error, "message", "") or "")
+    return is_plan_gateway_failure_summary(message)
+
+
+def runaway_plan_gateway_fail_max() -> int:
+    """Consecutive gateway plan failures before Harness nudge (R7-31b)."""
+    raw = os.environ.get(
+        "MY_AGENT_RUNAWAY_PLAN_GATEWAY_FAIL_MAX",
+        str(_DEFAULT_RUNAWAY_PLAN_GATEWAY_FAIL_MAX),
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return _DEFAULT_RUNAWAY_PLAN_GATEWAY_FAIL_MAX
+
+
+def runaway_llm_round_cooldown_seconds() -> float:
+    """Pause between tool-loop LLM rounds while runaway is active."""
+    raw = os.environ.get(
+        "MY_AGENT_RUNAWAY_LLM_COOLDOWN_SEC",
+        str(_DEFAULT_RUNAWAY_LLM_COOLDOWN_SEC),
+    )
+    try:
+        value = float(raw)
+    except ValueError:
+        value = _DEFAULT_RUNAWAY_LLM_COOLDOWN_SEC
+    return max(0.0, value)
+
+
+def runaway_bug_fix_enabled() -> bool:
+    """Phase 59 · Harness-owned bug-fix lane (default on)."""
+    raw = os.environ.get("MY_AGENT_RUNAWAY_BUG_FIX_ENABLED", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def runaway_plan_partner_max_per_turn() -> int:
+    """Cap plan_partner calls per turn during runaway implementation."""
+    default = (
+        _DEFAULT_RUNAWAY_PLAN_PARTNER_MAX_BUG_FIX
+        if runaway_bug_fix_enabled()
+        else _DEFAULT_RUNAWAY_PLAN_PARTNER_MAX
+    )
+    raw = os.environ.get("MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX", str(default))
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+_RUNAWAY_VERIFICATION_STAGES = frozenset({"verification", "release"})
+_RUNAWAY_EXIT_CHECKPOINTS = frozenset({"verifying", "release_wait"})
+
+
+def runaway_plan_partner_blocked(
+    *,
+    runaway_enabled: bool,
+    workflow_stage: str,
+    checkpoint: str,
+) -> bool:
+    """UI-5969: repairing + verification 出口禁止 plan_partner（Harness/bug-fix 为真源）。"""
+    if not runaway_enabled or not runaway_bug_fix_enabled():
+        return False
+    from runaway_flow import normalize_checkpoint
+
+    cp = normalize_checkpoint(checkpoint)
+    if cp == "repairing":
+        return True
+    stage = (workflow_stage or "").strip()
+    return cp in _RUNAWAY_EXIT_CHECKPOINTS and stage in _RUNAWAY_VERIFICATION_STAGES
+
+
+def runaway_deliverable_review_blocked(
+    *,
+    runaway_enabled: bool,
+    workflow_stage: str,
+    checkpoint: str,
+    acceptance_passed: bool,
+) -> bool:
+    """UI-5969: Harness 已绿后 deliverable_review 仅制造噪声。"""
+    if not runaway_enabled or not runaway_bug_fix_enabled():
+        return False
+    from runaway_flow import normalize_checkpoint
+
+    cp = normalize_checkpoint(checkpoint)
+    if cp in {"release_wait", "repairing"}:
+        return True
+    stage = (workflow_stage or "").strip()
+    return (
+        cp == "verifying"
+        and acceptance_passed
+        and stage in _RUNAWAY_VERIFICATION_STAGES
+    )
+
+
+def runaway_verification_tool_suppressed(
+    *,
+    runaway_enabled: bool,
+    workflow_stage: str,
+    checkpoint: str,
+    acceptance_passed: bool,
+) -> frozenset[str]:
+    blocked: set[str] = set()
+    if runaway_plan_partner_blocked(
+        runaway_enabled=runaway_enabled,
+        workflow_stage=workflow_stage,
+        checkpoint=checkpoint,
+    ):
+        blocked.add("plan_partner")
+    if runaway_deliverable_review_blocked(
+        runaway_enabled=runaway_enabled,
+        workflow_stage=workflow_stage,
+        checkpoint=checkpoint,
+        acceptance_passed=acceptance_passed,
+    ):
+        blocked.add("deliverable_review")
+    return frozenset(blocked)
+
+
+_RUNAWAY_HARNESS_UTTERANCE_RE = re.compile(
+    r"^\s*(?:\[Harness\]|狂奔模式[:：])",
+    re.IGNORECASE,
+)
+
+
+def is_runaway_harness_utterance(text: str) -> bool:
+    """True for Harness-injected continuation lines (not end-user Q&A)."""
+    return bool(_RUNAWAY_HARNESS_UTTERANCE_RE.search(text or ""))
+
+
+# UI-6052: these tools are advisory / plan-domain — never checkpoint truth.
+RUNAWAY_CHECKPOINT_ADVISORY_TOOLS = frozenset(
+    {"deliverable_review", "plan_partner", "report_progress"}
+)
+
+
+def runaway_advisory_tool_may_own_checkpoint(tool_name: str) -> bool:
+    """False for tools that must not drive ``project_runaway_checkpoint`` transitions."""
+    return (tool_name or "").strip() not in RUNAWAY_CHECKPOINT_ADVISORY_TOOLS
+
+
+def runaway_verification_exit_short_circuit(
+    *,
+    runaway_enabled: bool,
+    workflow_stage: str,
+    checkpoint: str,
+    acceptance_passed: bool,
+    turn_intent: str = "",
+    user_text: str = "",
+) -> bool:
+    """UI-5970: release_wait + acceptance_passed → skip LLM (avoid stale history narrative)."""
+    if not runaway_enabled or not acceptance_passed:
+        return False
+    intent = (turn_intent or "").strip()
+    if intent == "requirements":
+        return False
+    harness_line = is_runaway_harness_utterance(user_text)
+    if intent in {"qa", "recall"} and not harness_line:
+        return False
+    from runaway_flow import normalize_checkpoint
+
+    cp = normalize_checkpoint(checkpoint)
+    if cp != "release_wait":
+        return False
+    stage = (workflow_stage or "").strip()
+    return stage in _RUNAWAY_VERIFICATION_STAGES
+
+
+def llm_transport_backoff_seconds(attempt: int, *, pool_exhausted: bool = False) -> float:
+    """Exponential backoff for provider transport errors."""
+    step = max(1, int(attempt or 1))
+    if pool_exhausted:
+        return min(30.0 * step, 90.0)
+    return min(2.0 * (2 ** (step - 1)), 15.0)
+
+
+def is_patch_anchor_param_failure(result: Any) -> bool:
+    """patch_file find anchor not found / ambiguous — param error, not env failure."""
+    if getattr(result, "ok", None) is not False:
+        return False
+    error = getattr(result, "error", None)
+    if error is None:
+        return False
+    code = str(getattr(error, "code", "") or "")
+    if code not in {"validation_error", "VALIDATION_ERROR"}:
+        return False
+    message = str(getattr(error, "message", "") or "").lower()
+    return "anchor" in message and (
+        "not found" in message or "must be unique" in message or "matched" in message
+    )
+
+
+def should_count_segment_failure(result: Any, session: Any) -> bool:
+    """Whether a failure consumes the per-segment failure budget."""
+    if not is_circuit_countable_failure(result):
+        return False
+    if getattr(session, "runaway_enabled", False) and is_patch_anchor_param_failure(result):
+        return False
+    return True
 
 
 def record_segment_failure(session: Any) -> bool:
     """Bump segment-wide failure count. Return True if budget just reached."""
     count = int(getattr(session, "segment_failure_count", 0) or 0) + 1
     session.segment_failure_count = count
-    if count >= segment_failure_budget() and not getattr(
+    if count >= segment_failure_budget(session) and not getattr(
         session, "segment_failure_budget_hit", False
     ):
         session.segment_failure_budget_hit = True

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>my-agent · 壳子风格对比</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: "DM Sans", "Noto Sans SC", system-ui, sans-serif;
+      background: #0f1117;
+      color: #e8eaed;
+      padding: 2.5rem 2rem 4rem;
+    }
+    header { max-width: 1100px; margin: 0 auto 2rem; }
+    h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; }
+    .sub { margin-top: 0.5rem; color: #9aa0a6; line-height: 1.6; max-width: 52rem; }
+    .hero {
+      max-width: 1100px;
+      margin: 0 auto 1.25rem;
+      padding: 1rem 1.15rem;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(74,222,128,0.12), rgba(59,130,246,0.08));
+      border: 1px solid rgba(74,222,128,0.25);
+    }
+    .hero a {
+      color: #86efac;
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .hero a:hover { text-decoration: underline; }
+    .section-title {
+      max-width: 1100px;
+      margin: 0 auto 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #6b7280;
+    }
+    .grid {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1rem;
+    }
+    a.card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      border: 1px solid #2a2f3a;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #161a22;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    a.card:hover {
+      transform: translateY(-2px);
+      border-color: #4a5568;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    .thumb {
+      height: 168px;
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb iframe {
+      width: 1280px;
+      height: 800px;
+      border: 0;
+      transform: scale(0.28);
+      transform-origin: top left;
+      pointer-events: none;
+    }
+    .meta { padding: 1rem 1.1rem 1.15rem; }
+    .tag {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.45rem;
+      border-radius: 999px;
+      margin-bottom: 0.55rem;
+    }
+    .name { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.35rem; }
+    .desc { font-size: 0.82rem; color: #9aa0a6; line-height: 1.5; }
+    .note {
+      max-width: 1100px;
+      margin: 2rem auto 0;
+      padding: 1rem 1.1rem;
+      border-radius: 10px;
+      background: #161a22;
+      border: 1px solid #2a2f3a;
+      font-size: 0.84rem;
+      color: #9aa0a6;
+      line-height: 1.55;
+    }
+    code { font-family: "JetBrains Mono", monospace; font-size: 0.78rem; color: #c4cad4; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>my-agent 壳子风格对比</h1>
+    <p class="sub">工作中默认<strong style="color:#86efac">微变</strong>：底色不动，只缘内光 + 过程卡轻 tint。左下角可切空闲对比。</p>
+  </header>
+
+  <div class="hero">
+    👉 先看左右对比：<a href="compare-lines.html">线条多 vs 线条少</a>（01 现状 对 07 Cursor）
+  </div>
+
+  <p class="section-title">推荐 · 少线条</p>
+  <div class="grid" style="margin-bottom: 1.5rem">
+    <a class="card" href="07-cursor.html" target="_blank" style="border-color: rgba(74,222,128,0.35)">
+      <div class="thumb" style="background:#f4f4f5"><iframe src="07-cursor.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:rgba(74,222,128,0.15);color:#4ade80">少线条</span>
+        <div class="name">07 · Cursor 亮色</div>
+        <div class="desc">几乎无边框。侧栏/主区靠背景色差，输入框浮动，消息无分割线。</div>
+      </div>
+    </a>
+
+    <a class="card" href="08-codex.html" target="_blank" style="border-color: rgba(74,222,128,0.35)">
+      <div class="thumb" style="background:#171717"><iframe src="08-codex.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:rgba(74,222,128,0.15);color:#4ade80">少线条</span>
+        <div class="name">08 · Codex 暗色</div>
+        <div class="desc">同上原则，暗色底。圆角输入岛 + 灰阶分层，没有满屏直线。</div>
+      </div>
+    </a>
+  </div>
+
+  <p class="section-title">早期探索 · 仍偏线条感</p>
+  <div class="grid">
+    <a class="card" href="01-current.html" target="_blank">
+      <div class="thumb" style="background:#f6f3ed"><iframe src="01-current.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:#ede8df;color:#7a746a">现状</span>
+        <div class="name">01 · 纸面赭石（当前）</div>
+        <div class="desc">米黄底 + 细边框 + 扁控件。你现在看到的就是这套。</div>
+      </div>
+    </a>
+
+    <a class="card" href="02-linear.html" target="_blank">
+      <div class="thumb" style="background:#fafafa"><iframe src="02-linear.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:#eef2ff;color:#4f46e5">推荐</span>
+        <div class="name">02 · Linear 清爽</div>
+        <div class="desc">白底、大留白、细分割线。接近 Cursor / Linear 的现代工具感。</div>
+      </div>
+    </a>
+
+    <a class="card" href="03-warm.html" target="_blank">
+      <div class="thumb" style="background:#faf7f4"><iframe src="03-warm.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:#fff0eb;color:#e07a5f">柔和</span>
+        <div class="name">03 · 暖色极简</div>
+        <div class="desc">圆角卡片、暖白底、珊瑚点缀。友好、不冰冷。</div>
+      </div>
+    </a>
+
+    <a class="card" href="04-dark-pro.html" target="_blank">
+      <div class="thumb" style="background:#1c1c1e"><iframe src="04-dark-pro.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:#1f2937;color:#38bdf8">暗色</span>
+        <div class="name">04 · 暗色专业</div>
+        <div class="desc">深灰底 + 蓝色强调。长时间编码不累眼。</div>
+      </div>
+    </a>
+
+    <a class="card" href="05-music.html" target="_blank">
+      <div class="thumb" style="background:#0d0d12"><iframe src="05-music.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:#2d1f4e;color:#a78bfa">品牌</span>
+        <div class="name">05 · Music Dreamer</div>
+        <div class="desc">深色 + 紫粉渐变。项目有品牌感，壳子跟着项目走。</div>
+      </div>
+    </a>
+
+    <a class="card" href="06-glass.html" target="_blank">
+      <div class="thumb" style="background:linear-gradient(135deg,#667eea,#764ba2)"><iframe src="06-glass.html" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="meta">
+        <span class="tag" style="background:rgba(255,255,255,0.15);color:#fff">质感</span>
+        <div class="name">06 · 毛玻璃</div>
+        <div class="desc">半透明面板 + 背景渐变。偏 macOS / visionOS 气质。</div>
+      </div>
+    </a>
+  </div>
+
+  <p class="note">
+    打开方式：双击 <code>desktop/mockups/shell-styles/index.html</code>，或浏览器地址栏打开本地文件。
+    选好风格后告诉我编号（如「就 07」或「08 暗色」），我可以按那套改 <code>theme.css</code> 和 unified 壳——重点会砍边框、改色阶分层。
+  </p>
+</body>
+</html>

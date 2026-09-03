@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="cursor">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 · Cursor 去线条（亮色）</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="_shared.css" />
+  <link rel="stylesheet" href="_borderless.css" />
+  <link rel="stylesheet" href="_working.css" />
+  <style>
+    :root {
+      --bg: #fcfcfc;
+      --sidebar: #f4f4f5;
+      --surface: #f4f4f5;
+      --flow-a: #f4f4f5;
+      --flow-b: #e4e4e7;
+      --flow-c: #a1a1aa;
+      --flow-duration: 5s;
+      --elevated: #ffffff;
+      --hover: rgba(0,0,0,0.04);
+      --text: #1a1a1a;
+      --muted: #71717a;
+      --accent: #262626;
+      --accent-soft: rgba(0,0,0,0.06);
+      --danger: #e11d48;
+      --danger-soft: rgba(225, 29, 72, 0.08);
+      --radius: 10px;
+      --font: "Inter", "Noto Sans SC", system-ui, sans-serif;
+      --sidebar-w: 248px;
+      --composer-shadow: 0 0 0 1px rgba(0,0,0,0.04), 0 4px 20px rgba(0,0,0,0.06);
+    }
+    body { font-size: 14px; }
+    .brand { font-weight: 600; letter-spacing: -0.02em; }
+    .task-card .label { color: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 500; }
+    .btn-primary { background: #1a1a1a; color: #fff; border-radius: 10px; }
+    .chip.on { color: var(--text); }
+    .process-card .icon { border-color: #a1a1aa; border-top-color: transparent; }
+    .status-dot { background: #22c55e; }
+  </style>
+</head>
+<body>
+  <div class="app-frame borderless-layout" id="app-frame"></div>
+  <script src="_shared.js"></script>
+</body>
+</html>

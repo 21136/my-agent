@@ -1511,7 +1511,7 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
   if (state.runawayEnabled) {
     const view = deriveProjectGoalViewModel(state);
     const action = view.action && view.actionLabel
-      ? `<button type="button" class="unified-btn${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+      ? `<button type="button" class="unified-btn unified-runaway-action${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
       : "";
     const currentTask = (state.turnArmedText || state.nextTask || "").trim();
     return `<section class="textbook-runaway-surface" aria-label="自动执行进展">

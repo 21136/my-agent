@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sys
 import tempfile
@@ -442,6 +443,9 @@ class Session:
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
     corruption_notices: list[str] = field(default_factory=list, compare=False, repr=False)
+    # UI-5972: desktop switch may defer full messages.jsonl load until first turn.
+    messages_total_count: int | None = field(default=None, compare=False, repr=False)
+    _messages_fully_loaded: bool = field(default=True, compare=False, repr=False)
 
     @property
     def goal_path(self) -> Path:
@@ -511,6 +515,7 @@ class Session:
         self.meta.turn_mode = normalize_turn_mode(mode)
 
     def append_message(self, message: dict[str, Any], *, persist: bool = True) -> None:
+        self.ensure_messages_loaded()
         self.messages.append(message)
         if persist:
             self._append_message_line(message)
@@ -522,7 +527,8 @@ class Session:
         self.meta.updated_at = utc_now_iso()
         self.persist_goal()
         _write_meta(self.meta_path, self.meta, agent_root=self.paths.agent_root)
-        _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
+        if self._messages_fully_loaded:
+            _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
         from file_guard import backup_session_files
 
         backup_session_files(self.session_dir, self.paths.agent_root)
@@ -539,8 +545,38 @@ class Session:
         loaded = _read_meta(self.meta_path)
         self.meta.pending_feedback = list(loaded.pending_feedback)
 
+    def ensure_messages_loaded(self) -> None:
+        """Load full messages.jsonl when desktop switch used a deferred load."""
+        if self._messages_fully_loaded:
+            return
+        skipped_lines: list[int] = []
+        messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
+        from context import repair_tool_messages
+
+        repaired = repair_tool_messages(messages)
+        if repaired != messages:
+            _write_messages_snapshot(
+                self.messages_path,
+                repaired,
+                agent_root=self.paths.agent_root,
+            )
+            messages = repaired
+        if skipped_lines:
+            self.corruption_notices.append(
+                format_messages_corruption_notice(skipped_lines)
+            )
+        self.messages = messages
+        self._messages_fully_loaded = True
+        self.messages_total_count = None
+
     @classmethod
-    def load(cls, paths: AgentPaths, conversation_id: str) -> Session:
+    def load(
+        cls,
+        paths: AgentPaths,
+        conversation_id: str,
+        *,
+        message_cap: int | None = None,
+    ) -> Session:
         session_dir = sessions_root(paths) / conversation_id
         if not session_dir.is_dir():
             raise SessionError(f"session does not exist: {conversation_id}")
@@ -552,20 +588,35 @@ class Session:
         meta_issues: list[str] = []
         meta = _read_meta(session_dir / META_FILENAME, corruption_kinds=meta_issues)
         skipped_lines: list[int] = []
-        messages = _read_messages(
-            session_dir / MESSAGES_FILENAME,
-            skipped_lines=skipped_lines,
-        )
-        from context import repair_tool_messages
-
-        repaired = repair_tool_messages(messages)
-        if repaired != messages:
-            _write_messages_snapshot(
+        messages_total_count: int | None = None
+        messages_fully_loaded = True
+        if message_cap is not None and message_cap <= 0:
+            messages: list[dict[str, Any]] = []
+            messages_total_count = _count_file_newlines(session_dir / MESSAGES_FILENAME)
+            messages_fully_loaded = False
+        elif message_cap is not None and message_cap > 0:
+            messages, messages_total_count = _read_messages_tail(
                 session_dir / MESSAGES_FILENAME,
-                repaired,
-                agent_root=paths.agent_root,
+                message_cap,
+                skipped_lines=skipped_lines,
             )
-            messages = repaired
+            messages_fully_loaded = messages_total_count <= len(messages)
+        else:
+            messages = _read_messages(
+                session_dir / MESSAGES_FILENAME,
+                skipped_lines=skipped_lines,
+            )
+        if messages_fully_loaded:
+            from context import repair_tool_messages
+
+            repaired = repair_tool_messages(messages)
+            if repaired != messages:
+                _write_messages_snapshot(
+                    session_dir / MESSAGES_FILENAME,
+                    repaired,
+                    agent_root=paths.agent_root,
+                )
+                messages = repaired
         notices: list[str] = []
         for kind in meta_issues:
             notices.append(format_meta_corruption_notice(kind))
@@ -579,6 +630,8 @@ class Session:
             messages=messages,
             paths=paths,
             corruption_notices=notices,
+            messages_total_count=messages_total_count,
+            _messages_fully_loaded=messages_fully_loaded,
         )
 
     def _append_message_line(self, message: dict[str, Any]) -> None:
@@ -777,43 +830,99 @@ def list_session_ids(
     return sorted(ids)
 
 
+def _count_file_newlines(path: Path) -> int:
+    try:
+        with path.open("rb") as handle:
+            count = 0
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+            return count
+    except OSError:
+        return 0
+
+
+def _user_text_from_jsonl_line(line: str) -> str:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return ""
+    content = str(msg.get("content", "")).strip()
+    if not content:
+        return ""
+    if any(content.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+        return ""
+    return content
+
+
+def _extract_user_messages_from_lines(lines: list[str]) -> tuple[str, str]:
+    first_user = ""
+    last_user = ""
+    for line in lines:
+        if not line.strip():
+            continue
+        text = _user_text_from_jsonl_line(line)
+        if text and not first_user:
+            first_user = text
+            break
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        text = _user_text_from_jsonl_line(line)
+        if text:
+            last_user = text
+            break
+    return first_user, last_user
+
+
+_JSONL_TAIL_BYTES = 65536
+
+
 def _extract_user_messages(messages_path: Path) -> tuple[str, str, int]:
     """Return (first_user_content, last_user_content, message_count) from a jsonl file.
 
     Skips anchor / kernel / seed prefixes so title and preview are real user messages.
+    UI-5972: tail-read large files instead of loading entire messages.jsonl.
     """
+    if not messages_path.is_file():
+        return "", "", 0
+    msg_count = _count_file_newlines(messages_path)
+    if msg_count == 0:
+        return "", "", 0
     try:
-        text = messages_path.read_text(encoding="utf-8")
+        size = messages_path.stat().st_size
     except OSError:
         return "", "", 0
-
-    lines = [l for l in text.splitlines() if l.strip()]
-    msg_count = len(lines)
-    first_user = ""
-    last_user = ""
-
-    for line in lines:
+    if size <= _JSONL_TAIL_BYTES * 2:
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            content = str(msg.get("content", "")).strip()
-            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
-                first_user = content
-                break
+            text = messages_path.read_text(encoding="utf-8")
+        except OSError:
+            return "", "", 0
+        first_user, last_user = _extract_user_messages_from_lines(text.splitlines())
+        return first_user, last_user, msg_count
 
-    for line in reversed(lines):
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            content = str(msg.get("content", "")).strip()
-            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
-                last_user = content
-                break
+    try:
+        head_text = messages_path.read_bytes()[:_JSONL_TAIL_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+        with messages_path.open("rb") as handle:
+            handle.seek(max(0, size - _JSONL_TAIL_BYTES))
+            tail_text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return "", "", msg_count
 
+    head_lines = head_text.splitlines()
+    if head_lines and not head_text.endswith("\n"):
+        head_lines = head_lines[:-1]
+    tail_lines = tail_text.splitlines()
+    if tail_lines and size > _JSONL_TAIL_BYTES and not tail_text.startswith("\n"):
+        tail_lines = tail_lines[1:]
+    first_user, _ = _extract_user_messages_from_lines(head_lines)
+    _, last_user = _extract_user_messages_from_lines(tail_lines)
     return first_user, last_user, msg_count
 
 
@@ -998,9 +1107,17 @@ def load_session_for_harness(
     conversation_id: str,
     *,
     expected: HarnessKind,
+    full_messages: bool = False,
 ) -> Session:
-    """Load session and enforce harness match (TM-4)."""
-    session = Session.load(paths, conversation_id)
+    """Load session and enforce harness match (TM-4).
+
+    Desktop UI paths default to deferred messages.jsonl load (UI-5972).
+    Pass ``full_messages=True`` when the caller needs the entire log in RAM.
+    """
+    message_cap: int | None = None
+    if expected == "desktop" and not full_messages:
+        message_cap = desktop_switch_message_cap()
+    session = Session.load(paths, conversation_id, message_cap=message_cap)
     assert_session_harness(session, expected)
     return session
 
@@ -1210,10 +1327,30 @@ def build_seed_message(
 
 
 _UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]", SEED_PREFIX)
+_DEFAULT_SESSION_HISTORY_MAX_ITEMS = 200
+
+
+def session_history_max_items() -> int:
+    """UI-5972 · Desktop session.history window (0 = unlimited)."""
+    raw = os.environ.get(
+        "MY_AGENT_SESSION_HISTORY_MAX_ITEMS",
+        str(_DEFAULT_SESSION_HISTORY_MAX_ITEMS),
+    )
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_SESSION_HISTORY_MAX_ITEMS
 
 
 def build_session_chat_history(session: Session) -> list[dict[str, str]]:
     """User/assistant lines for desktop chat hydration (DESKTOP §5.2 session.history)."""
+    if not session._messages_fully_loaded and session.messages_path.is_file():
+        max_items = session_history_max_items()
+        items, _total = build_session_chat_history_from_path(
+            session.messages_path,
+            max_items=max_items if max_items > 0 else None,
+        )
+        return items
     items: list[dict[str, str]] = []
     last_user: str | None = None
 
@@ -1246,13 +1383,90 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
     return items
 
 
+def build_session_chat_history_from_path(
+    messages_path: Path,
+    *,
+    max_items: int | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Stream jsonl once; return (items, total_ui_item_count). UI-5972 switch fast path."""
+    if not messages_path.is_file():
+        return [], 0
+    items: list[dict[str, str]] = []
+    total = 0
+    last_user: str | None = None
+    try:
+        with messages_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text_line = line.strip()
+                if not text_line:
+                    continue
+                try:
+                    message = json.loads(text_line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                content = message.get("content")
+                if role == "user":
+                    if not isinstance(content, str):
+                        continue
+                    text = content.strip()
+                    if not text:
+                        continue
+                    if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+                        continue
+                    if text == last_user:
+                        continue
+                    last_user = text
+                    total += 1
+                    items.append({"role": "user", "text": text})
+                    if max_items and max_items > 0 and len(items) > max_items:
+                        items.pop(0)
+                    continue
+                if role == "assistant":
+                    if not isinstance(content, str):
+                        continue
+                    text = content.strip()
+                    if not text:
+                        continue
+                    total += 1
+                    items.append({"role": "assistant", "text": text})
+                    last_user = None
+                    if max_items and max_items > 0 and len(items) > max_items:
+                        items.pop(0)
+    except OSError:
+        return [], 0
+    return items, total
+
+
 def session_history_event(session: Session) -> dict[str, Any]:
-    return {
+    max_items = session_history_max_items()
+    if not session._messages_fully_loaded and session.messages_path.is_file():
+        items, total_items = build_session_chat_history_from_path(
+            session.messages_path,
+            max_items=max_items if max_items > 0 else None,
+        )
+    else:
+        items = build_session_chat_history(session)
+        total_items = len(items)
+    truncated = False
+    omitted_count = 0
+    if max_items > 0 and total_items > max_items:
+        omitted_count = total_items - max_items
+        items = items[-max_items:]
+        truncated = True
+    payload: dict[str, Any] = {
         "type": "session.history",
         "session_id": session.conversation_id,
         "project_id": session.meta.project_id or None,
-        "items": build_session_chat_history(session),
+        "items": items,
+        "total_items": total_items,
     }
+    if truncated:
+        payload["truncated"] = True
+        payload["omitted_count"] = omitted_count
+    return payload
 
 
 def prompt_and_set_goal(
@@ -1390,6 +1604,117 @@ def _read_messages(
         elif skipped_lines is not None:
             skipped_lines.append(line_no)
     return messages
+
+
+def _read_messages_tail(
+    messages_path: Path,
+    max_records: int,
+    *,
+    skipped_lines: list[int] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Load trailing jsonl records without reading the whole file into memory."""
+    total = _count_file_newlines(messages_path)
+    if total == 0 or max_records <= 0:
+        return [], total
+    if total <= max_records:
+        return _read_messages(messages_path, skipped_lines=skipped_lines), total
+    try:
+        size = messages_path.stat().st_size
+    except OSError:
+        return [], total
+    chunk_size = 256 * 1024
+    collected: list[str] = []
+    with messages_path.open("rb") as handle:
+        pos = size
+        buffer = ""
+        while pos > 0 and len(collected) < max_records:
+            read_size = min(chunk_size, pos)
+            pos -= read_size
+            handle.seek(pos)
+            chunk = handle.read(read_size).decode("utf-8", errors="replace")
+            buffer = chunk + buffer
+            lines = buffer.split("\n")
+            if pos > 0:
+                buffer = lines[0]
+                lines = lines[1:]
+            else:
+                buffer = ""
+            for line in reversed(lines):
+                stripped = line.strip()
+                if stripped:
+                    collected.append(stripped)
+                    if len(collected) >= max_records:
+                        break
+    collected.reverse()
+    messages: list[dict[str, Any]] = []
+    for line in collected:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            if skipped_lines is not None:
+                skipped_lines.append(-1)
+            continue
+        if isinstance(payload, dict):
+            messages.append(payload)
+    return messages, total
+
+
+def desktop_switch_message_cap() -> int:
+    """0 = defer messages.jsonl load until first turn (UI-5972)."""
+    raw = os.environ.get("MY_AGENT_SWITCH_MESSAGE_CAP", "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def session_summary_for_id(
+    paths: AgentPaths,
+    conversation_id: str,
+) -> dict[str, Any] | None:
+    """Single-session summary for project threads (avoid full list_session_summaries)."""
+    entry = sessions_root(paths) / conversation_id
+    if not entry.is_dir():
+        return None
+    if not ((entry / META_FILENAME).is_file() or (entry / MESSAGES_FILENAME).is_file()):
+        return None
+    goal = ""
+    updated_at = ""
+    project_id = ""
+    meta_path = entry / META_FILENAME
+    harness = DEFAULT_HARNESS
+    if meta_path.is_file():
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                updated_at = str(payload.get("updated_at", "") or "")
+                raw_pid = payload.get("project_id", "")
+                if isinstance(raw_pid, str):
+                    project_id = raw_pid.strip()
+                harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
+        except (OSError, json.JSONDecodeError):
+            pass
+    if harness == "terminal":
+        return None
+    goal_path = entry / GOAL_FILENAME
+    if goal_path.is_file():
+        try:
+            goal = goal_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    first_user, last_user, msg_count = _extract_user_messages(entry / MESSAGES_FILENAME)
+    if project_id:
+        title = project_id
+    else:
+        title = goal[:80] if goal else (first_user[:80] if first_user else conversation_id)
+    return {
+        "session_id": conversation_id,
+        "title": title,
+        "preview": last_user[:120] if last_user else "",
+        "updated_at": updated_at,
+        "message_count": msg_count,
+        "project_id": project_id,
+    }
 
 
 def _write_messages_snapshot(

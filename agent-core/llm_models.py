@@ -21,6 +21,17 @@ ModelTier = Literal["flash", "pro"]
 CHAT_COMPLETIONS_SUFFIX = "/v1/chat/completions"
 DEFAULT_FLASH_ID = "deepseek-v4-flash"
 DEFAULT_PRO_ID = "deepseek-v4-pro"
+TOKENESS_DEFAULT_BASE_URL = "https://n.tokeness.dev"
+TOKENESS_LUNA_REGISTRY_ID = "tokeness-luna"
+TOKENESS_LUNA_MODEL_DEFAULT = "gpt-5.6-luna"
+TOKENESS_API_KEY_ENVS = ("LLM_tokeness_KEY", "LLM_TOKENESS_KEY", "TOKENESS_API_KEY")
+
+
+def is_tokeness_gateway(entry: ModelEntry) -> bool:
+    """True for built-in Tokeness profiles or custom entries pointing at Tokeness."""
+    if entry.vendor.casefold() == "tokeness" or entry.id.startswith("tokeness"):
+        return True
+    return "tokeness" in entry.base_url.casefold()
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,13 +53,21 @@ class ModelEntry:
     aliases: tuple[str, ...] = ()
 
     def resolve_api_key(self, paths: AgentPaths | None = None) -> str | None:
-        if self.api_key_env:
-            value = os.environ.get(self.api_key_env)
+        agent_paths = paths or AgentPaths.discover()
+        env_names: list[str] = []
+        if self.api_key_env.strip():
+            env_names.append(self.api_key_env.strip())
+        if self.vendor.casefold() == "tokeness":
+            for alt in TOKENESS_API_KEY_ENVS:
+                if alt not in env_names:
+                    env_names.append(alt)
+        for env_name in env_names:
+            value = os.environ.get(env_name)
             if value and value.strip():
                 return value.strip()
             from llm_secrets import get_llm_secret
 
-            stored = get_llm_secret(self.api_key_env, paths)
+            stored = get_llm_secret(env_name, agent_paths)
             if stored:
                 return stored
         if self.api_key and self.api_key.strip():
@@ -203,6 +222,14 @@ def _builtin_models() -> list[ModelEntry]:
         or "gpt-5.4"
     ).strip()
     ox567_flash_model = os.environ.get("OX567_MODEL_FLASH", "gpt-5.6-luna").strip()
+    tokeness_base = os.environ.get("TOKENESS_BASE_URL", TOKENESS_DEFAULT_BASE_URL).rstrip("/")
+    if tokeness_base.endswith(CHAT_COMPLETIONS_SUFFIX):
+        tokeness_base = tokeness_base[: -len(CHAT_COMPLETIONS_SUFFIX)]
+    tokeness_luna_model = (
+        os.environ.get("TOKENESS_MODEL_LUNA")
+        or os.environ.get("TOKENESS_MODEL")
+        or TOKENESS_LUNA_MODEL_DEFAULT
+    ).strip()
     return [
         ModelEntry(
             id=DEFAULT_FLASH_ID,
@@ -271,7 +298,20 @@ def _builtin_models() -> list[ModelEntry]:
             max_input_tokens=372_000,
             supports_image_input=True,
             tier="flash",
-            aliases=("567-flash", "luna"),
+            aliases=("567-flash",),
+        ),
+        ModelEntry(
+            id=TOKENESS_LUNA_REGISTRY_ID,
+            name="Tokeness Luna (372k)",
+            vendor="Tokeness",
+            base_url=tokeness_base,
+            provider_model=tokeness_luna_model,
+            api_key_env="LLM_tokeness_KEY",
+            max_input_tokens=372_000,
+            supports_image_input=True,
+            max_output_tokens=65_536,
+            tier="flash",
+            aliases=("tokeness", "tokeness-luna", "luna"),
         ),
     ]
 

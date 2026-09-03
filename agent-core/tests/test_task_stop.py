@@ -27,7 +27,7 @@ from project_mode import (
     task_stop_block_reason,
 )
 from session import create_new
-from tools.executor import ToolExecutor
+from tools.executor import ToolExecutor, _format_guard_notice
 from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode
 
@@ -259,6 +259,16 @@ class TaskStopHardGateTests(unittest.TestCase):
         self.assertIsNotNone(reason)
         assert reason is not None
         self.assertIn("一停", reason)
+
+    def test_task_stop_armed_guard_notice_runaway(self) -> None:
+        ritual = _format_guard_notice("task_stop_armed", {"runaway_enabled": False})
+        runaway = _format_guard_notice("task_stop_armed", {"runaway_enabled": True})
+        self.assertIsNotNone(ritual)
+        self.assertIsNotNone(runaway)
+        assert ritual is not None and runaway is not None
+        self.assertIn("用户「继续」", ritual)
+        self.assertNotIn("用户「继续」", runaway)
+        self.assertIn("狂奔", runaway)
 
         allow_map = task_stop_block_reason(
             active_shell="project",

@@ -1,7 +1,7 @@
 # 狂奔流程状态机与恢复协议
 
-> 版本：0.1.0 · 2026-08-26  
-> 状态：实现基线
+> 版本：0.1.1 · 2026-09-01  
+> 状态：实现基线 · R7 体验收口 doc
 
 本文定义项目“狂奔模式”的运行时契约。狂奔是 Harness 驱动的连续交付作业，不是把更多内部提示展示给用户，也不是让 LLM 自行决定项目阶段。
 
@@ -76,6 +76,15 @@ idle
 ### 3.3 阶段出口的可修复缺口
 
 `documentation` 阶段的制品缺少必要 ID、章节或验收映射时，属于 Harness 可修复的阶段缺口，不属于用户阻塞。狂奔应在当前项目范围内续接文档生成/修复，重新运行设计确认检查；只有文档修复工具失败、权限或路径越界、同一缺口重复出现，或运行预算耗尽时才进入 `paused`。用户界面显示自动修复进展，不要求用户确认普通文档闸门。
+
+### 3.4 verification 出口谓词门（UI-6046～6052）
+
+> 详设：[RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)
+
+- **进入 `repairing`**：验收矩阵（含 ENV `quality.commands`）或硬验收失败；不得仅因 PROJECT 脚本通过而跳过矩阵。
+- **Harness bootstrap**：`ensure_env_quality_commands` 从 PROJECT 验收命令幂等写入 ENV；先于主 Agent 与 bug-fix。
+- **`[Harness]` 续接**：verification 出口默认 **0 主 Agent 轮**；配置写入由代码或 bug-fix 轨完成。
+- **主 Agent**：verification 阶段 **不得**直写 `PROJECT.md` / `ENV.md`；prompt overlay 须与 executor 一致（UI-6048～6051）。
 
 ## 4. 检查点与恢复
 
@@ -205,6 +214,7 @@ Harness 的内部状态机服务于自动执行，不应变成用户必须学习
 | R4 | Harness 驱动验证和证据落盘 | 没有真实证据不能进入发布等待（已落地） |
 | R5 | 用户界面收敛 | 只显示自然语言状态和真实决策，不显示内部流程门（本节） |
 | R6 | 可靠性与长跑演练 | 跨进程不重复执行，重启/崩溃可恢复，预算耗尽可解释暂停 |
+| R7 | 体验收口（真实 LLM） | plan 不污染 TASKS、advance 绑定证据、通知降噪、验证里程碑；见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) |
 
 ## 9. 已落地行为
 
@@ -216,3 +226,5 @@ Harness 的内部状态机服务于自动执行，不应变成用户必须学习
 - R5 契约已定义：内部 Harness 状态只驱动自动执行，主界面只呈现进展、真实阻塞和必要决策；详细内容通过显式详情入口查看。
 - R6 契约已定义：租约、预算、故障矩阵和长跑演练标准见 `docs/RUNAWAY-R6-RELIABILITY.md`。
 - R6 已落地：项目级租约使用原子文件抢占、心跳、TTL、进程存活检查和 token 安全释放；租约与恢复演练见 `agent-core/runaway_lease.py` 及其测试。
+- **R7 待收口（2026-09-01 体验）**：UI-6014～6031 done；S-6011 待复跑。见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3d · §11。
+- **R3 补丁（2026-09-01）**：implementation advance + R7-1b/R7-2b 行首 `T-*` / inline `V-*` 证据。见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §2.2 · §8。

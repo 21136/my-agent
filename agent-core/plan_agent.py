@@ -658,6 +658,7 @@ class PlanAgent:
     _undo_stack: list[UndoEntry] = field(default_factory=list)
     _undo_applying: bool = field(default=False, repr=False)
     _degradation_level: DegradationLevel = field(default="L1")
+    _last_gateway_failure: bool = field(default=False, repr=False)
     _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation
     _stale_task_line: int = -1  # line of current task last seen
     _stale_task_count: int = 0  # consecutive build_state calls with same current
@@ -2141,6 +2142,17 @@ class PlanAgent:
             f"（{count} 个文件提案，未写盘）。请在侧栏审阅后采纳。"
         )
 
+    def _plan_gateway_failure_reply(self, exc: BaseException) -> str:
+        """Gateway/ pool class LLM failure — no fallback proposals (R7-27)."""
+        self._degradation_level = "L2"
+        self._last_gateway_failure = True
+        self._pending_gated.clear()
+        msg = (
+            f"LLM 调用失败（{exc}）。计划域暂不可写；"
+            "请继续实现与 VERIFY 证据，稍后重试 plan_partner。"
+        )
+        return self._finalize_plan_reply(msg)
+
     def _plan_channel_fallback(self, text: str, extra: str = "") -> str:
         """L2兜底 only — LLM 不可用 / 解析失败时。正常路径应已走 LLM。"""
         if looks_like_document_diagram_request(text):
@@ -2737,11 +2749,40 @@ class PlanAgent:
             raw = response.content or ""
             return self._parse_operations_json(raw)
 
-        try:
-            operations, parsed_ok, reply, tool_calls = _one_llm_call()
-        except Exception as exc:
+        self._last_gateway_failure = False
+
+        import time
+
+        from exec_reliability import (
+            is_pool_exhausted_transport_error,
+            llm_transport_backoff_seconds,
+            runaway_pool_exhausted_retries,
+        )
+
+        operations: list[dict[str, Any]] = []
+        parsed_ok = False
+        reply = ""
+        tool_calls: list[dict[str, Any]] = []
+        last_exc: Exception | None = None
+        max_attempts = runaway_pool_exhausted_retries()
+        for attempt in range(max_attempts):
+            try:
+                operations, parsed_ok, reply, tool_calls = _one_llm_call()
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if not is_pool_exhausted_transport_error(exc) or attempt >= max_attempts - 1:
+                    break
+                time.sleep(llm_transport_backoff_seconds(attempt + 1, pool_exhausted=True))
+        if last_exc is not None:
+            if is_pool_exhausted_transport_error(last_exc):
+                return self._plan_gateway_failure_reply(last_exc)
             self._degradation_level = "L2"
-            out = self._plan_channel_fallback(user_text, extra=f"LLM 调用失败（{exc}）")
+            out = self._plan_channel_fallback(
+                user_text,
+                extra=f"LLM 调用失败（{last_exc}）",
+            )
             return self._finalize_plan_reply(out)
 
         from subagent import plan_subagent_tool_rounds
@@ -2758,7 +2799,13 @@ class PlanAgent:
             try:
                 operations, parsed_ok, reply, tool_calls = _one_llm_call()
             except Exception as exc:
-                out = self._plan_channel_fallback(user_text, extra=f"工具后 LLM 失败（{exc}）")
+                if is_pool_exhausted_transport_error(exc):
+                    return self._plan_gateway_failure_reply(exc)
+                self._degradation_level = "L2"
+                out = self._plan_channel_fallback(
+                    user_text,
+                    extra=f"工具后 LLM 失败（{exc}）",
+                )
                 return self._finalize_plan_reply(out)
 
         if parsed_ok and looks_like_document_diagram_request(user_text):
@@ -2810,8 +2857,11 @@ class PlanAgent:
 
     # ---- state payload ----
 
-    def build_state(self, session: Session | None = None) -> dict[str, Any]:
-        """Build project.plan.state payload. Runs auto_fix + quality_check every time."""
+    def build_state(self, session: Session | None = None, *, light: bool = False) -> dict[str, Any]:
+        """Build project.plan.state payload.
+
+        ``light=True`` (human adopt/ignore): skip auto_fix + full manifest refresh.
+        """
         self._prune_invalid_pending_patch_suggestions()
         artifacts = read_project_artifacts(self.paths, self.project_id)
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -2875,17 +2925,19 @@ class PlanAgent:
         self._last_tasks_snapshot = current_tasks
 
         # Always auto_fix first so suggestion line numbers match post-fix file
-        auto_fix_actions = self.auto_fix()
-        try:
-            from project_mode import migrate_closed_sections_to_archive
+        auto_fix_actions: list[str] = []
+        if not light:
+            auto_fix_actions = self.auto_fix()
+            try:
+                from project_mode import migrate_closed_sections_to_archive
 
-            migrated = migrate_closed_sections_to_archive(self.paths, self.project_id)
-            if migrated:
-                auto_fix_actions = list(auto_fix_actions) + [
-                    f"已将 {migrated} 条「已关闭」区任务迁入 TASKS.archive.md"
-                ]
-        except Exception:
-            pass
+                migrated = migrate_closed_sections_to_archive(self.paths, self.project_id)
+                if migrated:
+                    auto_fix_actions = list(auto_fix_actions) + [
+                        f"已将 {migrated} 条「已关闭」区任务迁入 TASKS.archive.md"
+                    ]
+            except Exception:
+                pass
         if auto_fix_actions and tasks_path.is_file():
             current_tasks = tasks_path.read_text(encoding="utf-8")
             self._last_tasks_snapshot = current_tasks
@@ -2959,9 +3011,14 @@ class PlanAgent:
             change_timeline = []
 
         try:
-            from project_manifest import refresh_project_manifest
+            if light:
+                from project_manifest import ensure_project_manifest
 
-            manifest = refresh_project_manifest(self.paths, self.project_id)
+                manifest = ensure_project_manifest(self.paths, self.project_id)
+            else:
+                from project_manifest import refresh_project_manifest
+
+                manifest = refresh_project_manifest(self.paths, self.project_id)
         except Exception:
             manifest = None
         stage = compute_execution_stage(

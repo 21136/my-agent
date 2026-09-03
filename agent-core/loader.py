@@ -1298,6 +1298,12 @@ def build_system_prompt(
                 workflow_stage=getattr(session.meta, "project_workflow_stage", ""),
                 active_task_id=getattr(session.meta, "project_active_task_id", "") or None,
                 runaway_enabled=bool(getattr(session.meta, "project_runaway_enabled", False)),
+                runaway_checkpoint=str(
+                    getattr(session.meta, "project_runaway_checkpoint", "") or ""
+                ),
+                runaway_acceptance_passed=bool(
+                    getattr(session.meta, "project_runaway_acceptance_passed", False)
+                ),
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (
@@ -1306,6 +1312,16 @@ def build_system_prompt(
                 overlay += (
                     "\ndigest_profile_note: solo — 忽略 digest 中与一停/"
                     "强制 report_progress 冲突的旧叙述"
+                )
+            workflow_stage = str(getattr(session.meta, "project_workflow_stage", "") or "")
+            if (
+                bool(getattr(session.meta, "project_runaway_enabled", False))
+                and workflow_stage == "verification"
+                and digest_text
+            ):
+                overlay += (
+                    "\ndigest_profile_note: verification — 忽略 digest 中"
+                    "「直写 ENV/PROJECT 验收」「report_progress 脱困」等与 Harness 谓词冲突的旧叙述"
                 )
             sections.append(
                 (

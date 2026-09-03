@@ -1,4 +1,21 @@
 import type { ServerEvent } from "../api/ws";
+import {
+  type ProcessActivityBlock,
+  activityEntriesPrint,
+  addToolStart,
+  appendReasoning,
+  clearLlmPending,
+  ensureProcessEntries,
+  finalizeProcessAfterTurn as finalizeActivityProcess,
+  findToolEntry,
+  isProcessThinkingLive,
+  markLlmPending,
+  openLastPinnedThink,
+  pinOpenThink,
+  prepareProcessForLlmRound as prepareActivityForLlmRound,
+  syncProcessLegacyFields,
+  toggleThinkOpen,
+} from "./activity-state";
 
 export type ChatBlock =
   | { kind: "user"; text: string; turnIndex: number }
@@ -7,32 +24,7 @@ export type ChatBlock =
   | { kind: "plan-subagent"; status: "running" | "proposals_ready"; taskPreview?: string; summary?: string; proposalCount?: number; turnIndex: number }
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
   | { kind: "notice"; text: string }
-  | {
-      kind: "process";
-      lines: string[];
-      reasoning: string;
-      collapsed: boolean;
-      turnKey: string;
-      /** UX-021 — Cursor-style thinking accordion */
-      reasoningPhase?: "idle" | "streaming" | "pinned";
-      reasoningUserOpen?: boolean;
-      reasoningStartedAt?: number;
-      reasoningPinnedAt?: number;
-      /** Waiting for LLM before first reasoning/tool in a segment */
-      llmPending?: boolean;
-      /** Phase 27 M0 — per-call running cards */
-      tools?: Array<{
-        callId: string;
-        tool: string;
-        summary: string;
-        status: "running" | "ok" | "fail";
-        startedAt: number;
-        endedAt?: number;
-        endSummary?: string;
-        progressText?: string;
-        logsTail?: string;
-      }>;
-    }
+  | (ProcessActivityBlock & { kind: "process" })
   | {
       kind: "confirm";
       requestId: string;
@@ -85,6 +77,7 @@ export interface ChatSessionHooks {
     seeds: HistoryStarSeed[];
   }) => void;
   onTurnStart?: (event: Extract<ServerEvent, { type: "turn.start" }>, turnIndex: number) => void;
+  onLlmPending?: () => void;
   onToolStart?: (turnIndex: number) => void;
   onToolEnd?: (turnIndex: number) => void;
   onAssistantDone?: (turnIndex: number) => void;
@@ -116,7 +109,8 @@ export interface ChatSession {
     opts?: { summary?: string; proposalCount?: number },
   ): void;
   toggleProcessCollapsed(turnKey: string): void;
-  toggleThinkingOpen(turnKey: string): void;
+  toggleThinkingOpen(turnKey: string, thinkId?: string): void;
+  openThinking(turnKey: string): void;
   /** C3: optimistic resolve + only accept current requestId. Returns false if ignored. */
   submitConfirm(requestId: string, choice: "y" | "n" | "a"): boolean;
   /** Phase 15: debounce Stop and optimistically resolve a pending confirm. */
@@ -130,6 +124,22 @@ export function escapeHtml(text: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+export function isEphemeralChatBlock(kind: ChatBlock["kind"]): boolean {
+  return kind === "process" || kind === "assistant-streaming" || kind === "confirm";
+}
+
+/** UX-028 M2 — history reload must not resurrect live process/thinking UI. */
+export function sanitizeChatBlocksForHistory(blocks: ChatBlock[]): ChatBlock[] {
+  return blocks.filter((block) => !isEphemeralChatBlock(block.kind));
+}
+
+export function clearSessionEphemeralState(model: ChatSessionModel): void {
+  model.currentTurnKey = "";
+  model.assistantBuffer = "";
+  model.blocks = sanitizeChatBlocksForHistory(model.blocks);
+  model._toolTimers.clear();
 }
 
 export function historyFromItems(
@@ -193,11 +203,18 @@ export function formatThinkingElapsedSec(block: {
 
 export function thinkingTitleLabel(block: {
   reasoning: string;
+  llmPending?: boolean;
   reasoningPhase?: "idle" | "streaming" | "pinned";
   reasoningStartedAt?: number;
   reasoningPinnedAt?: number;
 }): string {
-  if (!block.reasoning.trim()) return "";
+  if (!block.reasoning.trim()) {
+    if (block.llmPending) {
+      const sec = formatThinkingElapsedSec({ ...block, reasoningPhase: "streaming" });
+      return sec > 0 ? `思考中…（${sec}s）` : "思考中…";
+    }
+    return "";
+  }
   if (block.reasoningPhase === "streaming") {
     const sec = formatThinkingElapsedSec(block);
     return sec > 0 ? `思考中…（${sec}s）` : "思考中…";
@@ -208,9 +225,11 @@ export function thinkingTitleLabel(block: {
 
 export function isThinkingBodyOpen(block: {
   reasoning: string;
+  llmPending?: boolean;
   reasoningPhase?: "idle" | "streaming" | "pinned";
   reasoningUserOpen?: boolean;
 }): boolean {
+  if (block.llmPending && !block.reasoning.trim()) return true;
   if (!block.reasoning.trim()) return false;
   if (block.reasoningPhase === "streaming") return true;
   return Boolean(block.reasoningUserOpen);
@@ -272,6 +291,50 @@ export function createChatSession(
     model.turnFinished = false;
   }
 
+  function findProcessBlock(turnKey: string): (ChatBlock & { kind: "process" }) | undefined {
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind === "process" && block.turnKey === turnKey) {
+        return block;
+      }
+    }
+    return undefined;
+  }
+
+  /** One process block per user turn — reopen collapsed instead of spawning another. */
+  function ensureActiveProcessBlock(): ChatBlock & { kind: "process" } {
+    const uncollapsed = model.blocks.find(
+      (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
+    );
+    if (uncollapsed?.kind === "process") return uncollapsed;
+
+    const collapsed = findProcessBlock(model.currentTurnKey);
+    if (collapsed) {
+      collapsed.collapsed = false;
+      return collapsed;
+    }
+
+    const block: ChatBlock & { kind: "process" } = {
+      kind: "process",
+      lines: [],
+      reasoning: "",
+      collapsed: false,
+      turnKey: model.currentTurnKey,
+      reasoningPhase: "idle",
+      reasoningUserOpen: false,
+      tools: [],
+      entries: [],
+    };
+    model.blocks.push(block);
+    return block;
+  }
+
+  function prepareProcessForLlmRound(): ChatBlock & { kind: "process" } {
+    const proc = ensureActiveProcessBlock();
+    prepareActivityForLlmRound(proc);
+    return proc;
+  }
+
   function resetTurnActivity(): void {
     clearCancelWatchdog();
     model.turnActive = false;
@@ -285,8 +348,13 @@ export function createChatSession(
     if (model.cancelRequested) return true;
     // C5: post-click submitting counts as working even while confirmPending clears.
     if (model.confirmSubmitting) return true;
+    const liveThinking = model.blocks.some(
+      (block) =>
+        block.kind === "process" && isProcessThinkingLive(block, model.currentTurnKey),
+    );
     return (
-      !model.confirmPending && (model.toolsRunning > 0 || (model.turnActive && !model.turnFinished))
+      !model.confirmPending &&
+      (model.toolsRunning > 0 || (model.turnActive && !model.turnFinished) || liveThinking)
     );
   }
 
@@ -369,7 +437,20 @@ export function createChatSession(
     return true;
   }
 
+  /** Close live thinking on prior turns — prevents stacked "思考中" when 狂奔 auto-sends. */
+  function finalizeInFlightProcessBlocks(): void {
+    for (const block of model.blocks) {
+      if (block.kind !== "process") continue;
+      const live =
+        Boolean(block.llmPending) || block.reasoningPhase === "streaming";
+      if (!live) continue;
+      finalizeProcessAfterTurn(block);
+      block.collapsed = true;
+    }
+  }
+
   function beginTurn(): number {
+    finalizeInFlightProcessBlocks();
     model.currentTurnKey = `turn-${Date.now()}`;
     model.turnCounter += 1;
     model.assistantBuffer = "";
@@ -485,95 +566,60 @@ export function createChatSession(
     return block;
   }
 
-  function ensureProcessBlock(): ChatBlock & { kind: "process" } {
-    const existing = model.blocks.find(
-      (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
-    );
-    if (existing?.kind === "process") {
-      return existing;
-    }
-    const block: ChatBlock & { kind: "process" } = {
-      kind: "process",
-      lines: [],
-      reasoning: "",
-      collapsed: false,
-      turnKey: model.currentTurnKey,
-      reasoningPhase: "idle",
-      reasoningUserOpen: false,
-      tools: [],
-    };
-    model.blocks.push(block);
-    return block;
-  }
-
   function collapseCurrentProcess(): void {
-    const block = model.blocks.find(
-      (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
-    );
-    if (block?.kind === "process") {
+    const block = findProcessBlock(model.currentTurnKey);
+    if (block && !block.collapsed) {
       block.collapsed = true;
     }
   }
 
-  function clearLlmPending(proc: ChatBlock & { kind: "process" }): void {
-    proc.llmPending = false;
-  }
-
-  function markLlmPending(proc: ChatBlock & { kind: "process" }): void {
-    proc.llmPending = true;
-  }
-
-  function pinReasoning(proc: ChatBlock & { kind: "process" }): void {
-    if (!proc.reasoning.trim() && proc.reasoningPhase !== "streaming") return;
-    if (proc.reasoningPhase === "streaming") {
-      proc.reasoningPhase = "pinned";
-      proc.reasoningPinnedAt = Date.now();
-      proc.reasoningUserOpen = false;
-    }
-  }
-
-  function appendReasoning(proc: ChatBlock & { kind: "process" }, text: string): void {
-    if (!text) return;
-    if (!proc.reasoningStartedAt) {
-      proc.reasoningStartedAt = Date.now();
-    }
-    if (proc.reasoningPhase === "pinned") {
-      proc.reasoningPhase = "streaming";
-      proc.reasoningUserOpen = true;
-    } else if (proc.reasoningPhase === "idle") {
-      proc.reasoningPhase = "streaming";
-    }
-    proc.reasoning += text;
+  function finalizeProcessAfterTurn(proc: ChatBlock & { kind: "process" }): void {
+    finalizeActivityProcess(proc);
   }
 
   function toggleProcessCollapsed(turnKey: string): void {
-    const block = model.blocks.find((b) => b.kind === "process" && b.turnKey === turnKey);
-    if (block?.kind === "process") {
-      block.collapsed = !block.collapsed;
+    const block = findProcessBlock(turnKey);
+    if (block) {
+      if (isProcessThinkingLive(block, model.currentTurnKey)) {
+        block.collapsed = false;
+      } else {
+        block.collapsed = !block.collapsed;
+      }
       notify();
     }
   }
 
-  function toggleThinkingOpen(turnKey: string): void {
-    const block = model.blocks.find((b) => b.kind === "process" && b.turnKey === turnKey);
-    if (block?.kind !== "process" || !block.reasoning.trim()) return;
-    if (block.reasoningPhase === "streaming") return;
-    block.reasoningUserOpen = !block.reasoningUserOpen;
+  function toggleThinkingOpen(turnKey: string, thinkId?: string): void {
+    const block = findProcessBlock(turnKey);
+    if (!block) return;
+    toggleThinkOpen(block, thinkId);
+    notify();
+  }
+
+  function openThinking(turnKey: string): void {
+    const block = findProcessBlock(turnKey);
+    if (!block) return;
+    openLastPinnedThink(block);
     notify();
   }
 
   function handleEvent(event: ServerEvent): void {
     switch (event.type) {
-      case "session.banner":
+      case "session.banner": {
+        const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
         resetTurnActivity();
         model.confirmPending = false;
         model.confirmSubmitting = false;
         model.cancelRequested = false;
         model.confirmOverlay = null;
+        if (sessionChanged) {
+          clearSessionEphemeralState(model);
+        }
         model.sessionId = event.session_id;
         hooks.onSessionBanner?.(event.session_id);
         notify();
         break;
+      }
       case "session.history": {
         resetTurnActivity();
         model.confirmPending = false;
@@ -581,8 +627,17 @@ export function createChatSession(
         model.cancelRequested = false;
         model.confirmOverlay = null;
         const loaded = historyFromItems(event.items);
-        model.blocks = loaded.blocks;
+        model.blocks = sanitizeChatBlocksForHistory(loaded.blocks);
         model.turnCounter = loaded.turnCounter;
+        model.currentTurnKey = "";
+        model.assistantBuffer = "";
+        model._toolTimers.clear();
+        if (event.truncated && (event.omitted_count ?? 0) > 0) {
+          model.blocks.unshift({
+            kind: "notice",
+            text: `仅显示最近 ${event.items.length} 条对话（另有 ${event.omitted_count} 条未加载）。`,
+          });
+        }
         hooks.onHistoryLoaded?.(loaded);
         notify();
         break;
@@ -590,15 +645,16 @@ export function createChatSession(
       case "turn.start":
         beginTurnActivity();
         if (options.showProcess) {
-          markLlmPending(ensureProcessBlock());
+          markLlmPending(prepareProcessForLlmRound());
         }
         hooks.onTurnStart?.(event, currentTurnIndex());
         notify();
         break;
       case "llm.pending":
         if (options.showProcess) {
-          markLlmPending(ensureProcessBlock());
+          markLlmPending(prepareProcessForLlmRound());
         }
+        hooks.onLlmPending?.();
         notify();
         break;
       case "turn.end":
@@ -626,6 +682,10 @@ export function createChatSession(
           model.blocks.push({ kind: "notice", text: label });
         }
         if (options.showProcess) {
+          const proc = findProcessBlock(model.currentTurnKey);
+          if (proc) {
+            finalizeProcessAfterTurn(proc);
+          }
           collapseCurrentProcess();
         }
         finalizeInProgressConfirms(event.finish_reason === "cancelled" ? "已取消" : "已完成执行");
@@ -652,11 +712,8 @@ export function createChatSession(
         model.toolsRunning += 1;
         model._toolTimers.set(event.call_id, Date.now());
         if (options.showProcess) {
-          const proc = ensureProcessBlock();
-          pinReasoning(proc);
-          clearLlmPending(proc);
-          if (!proc.tools) proc.tools = [];
-          proc.tools.push({
+          const proc = ensureActiveProcessBlock();
+          addToolStart(proc, {
             callId: event.call_id,
             tool: event.tool,
             summary: event.summary || event.tool,
@@ -673,24 +730,26 @@ export function createChatSession(
           const startTime = model._toolTimers.get(event.call_id);
           const now = Date.now();
           const started = startTime ?? now;
-          const proc = ensureProcessBlock();
-          if (!proc.tools) proc.tools = [];
-          let card = proc.tools.find((t) => t.callId === event.call_id);
+          const proc = ensureActiveProcessBlock();
+          let card = findToolEntry(proc, event.call_id);
           if (!card) {
-            card = {
+            addToolStart(proc, {
               callId: event.call_id,
               tool: event.tool,
               summary: event.tool,
               status: "running",
               startedAt: started,
-            };
-            proc.tools.push(card);
+            });
+            card = findToolEntry(proc, event.call_id);
           }
-          card.status = event.ok ? "ok" : "fail";
-          card.endedAt = now;
-          card.endSummary = event.summary || (event.ok ? "完成" : "失败");
-          if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {
-            card.logsTail = event.logs_tail.trim();
+          if (card) {
+            card.status = event.ok ? "ok" : "fail";
+            card.endedAt = now;
+            card.endSummary = event.summary || (event.ok ? "完成" : "失败");
+            if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {
+              card.logsTail = event.logs_tail.trim();
+            }
+            syncProcessLegacyFields(proc);
           }
           model._toolTimers.delete(event.call_id);
         }
@@ -709,22 +768,22 @@ export function createChatSession(
           const proc = model.blocks.find(
             (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
           );
-          const card = proc?.kind === "process"
-            ? proc.tools?.find((t) => t.callId === event.call_id)
-            : undefined;
+          const card =
+            proc?.kind === "process" ? findToolEntry(proc, event.call_id) : undefined;
           if (card && card.status === "running") {
             if (typeof event.text === "string" && event.text.trim()) {
               card.progressText = event.text.trim();
             } else if (typeof event.elapsed_sec === "number") {
               card.progressText = `仍在执行… ${event.elapsed_sec}s`;
             }
+            syncProcessLegacyFields(proc!);
             notify();
           }
         }
         break;
       case "reasoning.delta":
         if (options.showProcess) {
-          const proc = ensureProcessBlock();
+          const proc = ensureActiveProcessBlock();
           clearLlmPending(proc);
           appendReasoning(proc, event.text);
         }
@@ -736,8 +795,8 @@ export function createChatSession(
             (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
           );
           if (proc?.kind === "process") {
+            pinOpenThink(proc);
             clearLlmPending(proc);
-            pinReasoning(proc);
           }
         }
         const streaming = ensureStreamingAssistant();
@@ -748,11 +807,9 @@ export function createChatSession(
       }
       case "assistant.done": {
         if (options.showProcess) {
-          const proc = model.blocks.find(
-            (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
-          );
-          if (proc?.kind === "process") {
-            pinReasoning(proc);
+          const proc = findProcessBlock(model.currentTurnKey);
+          if (proc) {
+            finalizeProcessAfterTurn(proc);
           }
           collapseCurrentProcess();
         }
@@ -862,6 +919,7 @@ export function createChatSession(
     updateReviewSubagentCard,
     toggleProcessCollapsed,
     toggleThinkingOpen,
+    openThinking,
     submitConfirm,
     requestCancel,
     handleEvent,

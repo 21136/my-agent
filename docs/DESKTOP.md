@@ -178,6 +178,8 @@ desktop/src/skins/
 
 #### 3.2.2 过程可见 · 思考展示（**已定：要，两层** · B 层对齐 Cursor · 2026-08-04）
 
+> **2026-09-03 收束**：双「思考中」与过程入口重复 → [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md)（**UX-028** / **UI-6040**）。D-T1～T7 **不变**；呈现合并为 **单一活动轨**，实施分 P0（热修）/ M0～M2。
+
 空等整段回复会显得闷；桌面壳在 **同一轮助手回复区域** 内展示 **过程**，仍不是仪表盘。
 
 **两层来源（都真，不编造）**：
@@ -779,6 +781,7 @@ data/sessions/.interface.lock   # { "ui": "electron"|"cli"|"terminal", "pid": N,
 | 包含 | `role: user` / `assistant` 且 `content` 非空 |
 | 跳过 | 锚定块 `[本次会议上下文]` · `[内核]…` · `role: tool` · 仅 `tool_calls` 无文字的 assistant |
 | 去重 | **连续**相同 user 文本只保留一条（重连重复发送） |
+| 窗口 | **UI-5972**：默认最近 `MY_AGENT_SESSION_HISTORY_MAX_ITEMS`（200）条；超出时 `truncated` + `omitted_count` |
 | 不含 | tool 过程行、reasoning 流（历史轮过程默认不恢复；见 §3.2.2） |
 
 与 `session.memory` 分工：**memory** = 条数/压缩元数据（顶栏）；**history** = 用户可见对话正文（聊天区）。

@@ -403,6 +403,9 @@ def dispatch_project_message(
                 transition_checkpoint(session.meta, "idle")
             else:
                 transition_checkpoint(session.meta, current)
+            from agent import run_runaway_startup_prep_if_needed
+
+            run_runaway_startup_prep_if_needed(session)
         if not enabled:
             from runaway_flow import normalize_checkpoint, pause_runaway, transition_checkpoint
 
@@ -819,12 +822,14 @@ def _clear_plan_chat_events(
     paths: AgentPaths,
     project_id: str,
     session: Session | None = None,
+    *,
+    skip_plan_state: bool = False,
 ) -> list[dict[str, Any]]:
     from plan_agent import clear_plan_chat_on_enter
 
     agent = clear_plan_chat_on_enter(paths, project_id)
     events: list[dict[str, Any]] = [{"type": "project.plan.transcript.clear"}]
-    if session is not None:
+    if session is not None and not skip_plan_state:
         events.append(agent.build_state(session))
     return events
 
@@ -929,8 +934,7 @@ def _dispatch_plan_message(
                     "_suggestion_stale": True,
                 }
             events: list[dict[str, Any]] = [
-                project_state_payload(session, paths),
-                agent.build_state(session),
+                agent.build_state(session, light=True),
             ]
             summary = result.get("summary") if isinstance(result, dict) else None
             if isinstance(summary, str) and summary.strip():
@@ -950,7 +954,7 @@ def _dispatch_plan_message(
             if not sid:
                 raise ProjectApiError("project.plan.ignore_suggestion requires suggestion_id")
             agent.ignore_suggestion(sid)
-            return agent.build_state(session)
+            return agent.build_state(session, light=True)
 
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")
@@ -1027,7 +1031,11 @@ def perform_project_open(
     plan_state = project_plan_state_payload(updated, paths)
     if plan_state is not None:
         events.append(plan_state)
-    events.extend(_clear_plan_chat_events(paths, project_id, updated))
+    events.extend(
+        _clear_plan_chat_events(
+            paths, project_id, updated, skip_plan_state=plan_state is not None
+        )
+    )
     return updated, events
 
 
@@ -1087,12 +1095,16 @@ def perform_project_switch(
         from context import session_memory_event
         from session import session_history_event
 
-        events.append(session_memory_event(updated))
+        events.append(session_memory_event(updated, quick=not updated._messages_fully_loaded))
         events.append(session_history_event(updated))
         events.extend(corruption_notice_events(updated))
     events.append({"type": "notice", "text": msg})
     # C6 / S-192 — entering target project clears Plan chat memory
-    events.extend(_clear_plan_chat_events(paths, plan.project_id, updated))
+    events.extend(
+        _clear_plan_chat_events(
+            paths, plan.project_id, updated, skip_plan_state=plan_state is not None
+        )
+    )
     return updated, events
 
 
@@ -1135,7 +1147,7 @@ def perform_project_thread_new(
         from context import session_memory_event
         from session import session_history_event
 
-        events.append(session_memory_event(updated))
+        events.append(session_memory_event(updated, quick=not updated._messages_fully_loaded))
         events.append(session_history_event(updated))
         events.extend(corruption_notice_events(updated))
     events.append({"type": "notice", "text": msg})

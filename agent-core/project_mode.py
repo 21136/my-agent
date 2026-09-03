@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass
@@ -53,6 +54,8 @@ _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
 _TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
+_FORMAL_TASK_LEAD_RE = re.compile(r"^(T-\d+(?:-\d+)*)\b", re.IGNORECASE)
+_VERIFY_ID_INLINE_RE = re.compile(r"\bV-\d+(?:-\d+)*\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
 _TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence", "depends_on")
 _TASK_METADATA_FIELD_RE = re.compile(
@@ -71,6 +74,17 @@ _CODING_TOOLS = frozenset(
     {"run_python", "run_command", "run_tests", "run_demo", "patch_file"}
 )
 _WRITE_TOOLS = frozenset({"write_text", "append_text", "copy_move", "move_to_trash"})
+# verification / release：只读验收执行，不算「写业务代码」（Phase 59 · UI-5966）
+_VERIFY_STAGE_EXEC_TOOLS = frozenset(
+    {
+        "run_command",
+        "run_tests",
+        "run_python",
+        "run_demo",
+        "run_project_tests",
+        "run_quality",
+    }
+)
 
 
 class ProjectModeError(Exception):
@@ -317,8 +331,13 @@ def compute_execution_stage(
 @dataclass(frozen=True, slots=True)
 class AcceptanceSpec:
     display: str
-    script_rel: str
+    script_rel: str = ""
     expected_exit_code: int = 0
+    argv: tuple[str, ...] = ()
+
+    @property
+    def is_python(self) -> bool:
+        return bool((self.script_rel or "").strip())
 
 
 def utc_now_iso() -> str:
@@ -786,6 +805,18 @@ def read_task_stats(tasks_path: Path) -> TaskStats:
     )
     done = legacy_done + archive_done
     return TaskStats(done=done, total=done + open_count)
+
+
+def read_formal_task_stats(tasks_path: Path) -> TaskStats:
+    """Runaway scheduling stats: formal ``T-*`` tasks only."""
+    if not tasks_path.is_file():
+        return TaskStats(done=0, total=0)
+    text = tasks_path.read_text(encoding="utf-8")
+    archive_done = count_archive_entries(
+        tasks_path.parent / TASKS_ARCHIVE_NAME,
+        reason="done",
+    )
+    return formal_task_stats(text, archive_done=archive_done)
 
 
 def normalize_close_reason(reason: str) -> str:
@@ -1757,11 +1788,21 @@ def is_plan_domain_path(path: str, project_root: str) -> bool:
     return rel in PLAN_DOMAIN_FILES or rel == TASKS_ARCHIVE_NAME
 
 
+# bug-fix repairing lane may patch plan/quality config (BF3); MAP + archive stay forbidden.
+BUG_FIX_PLAN_WRITE_ALLOWLIST = frozenset(
+    {"PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md", "ENV.md"}
+)
+_BUG_FIX_ALLOWED_PLAN_WRITES = BUG_FIX_PLAN_WRITE_ALLOWLIST
+_BUG_FIX_FORBIDDEN_PLAN_WRITES = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
+_BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG = "bug-fix 轨禁止修改 MAP 或 TASKS.archive"
+
+
 def main_agent_plan_domain_write_block(
     *,
     project_root: str,
     tool_name: str,
     arguments: dict[str, object],
+    bug_fix_lane: bool = False,
 ) -> str | None:
     """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly."""
     root = project_root.strip()
@@ -1772,10 +1813,22 @@ def main_agent_plan_domain_write_block(
     if evolved_name in _WRITE_TOOLS:
         for path in extract_run_evolved_paths(tool_name, arguments):
             if path and (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
+                if bug_fix_lane:
+                    rel = project_path_rel(path, root)
+                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
+                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
+                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                        continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     if evolved_name == "patch_file":
         for path in extract_run_evolved_paths(tool_name, arguments):
             if path and is_plan_domain_path(path, root):
+                if bug_fix_lane:
+                    rel = project_path_rel(path, root)
+                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
+                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
+                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                        continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     return None
 
@@ -1804,21 +1857,48 @@ def is_project_continue_utterance(text: str) -> bool:
     return False
 
 
+def formal_task_id_from_checkbox_line(line: str) -> str | None:
+    """Return ``T-*`` id for a checkbox line when the body *starts* with ``T-*``."""
+    match = _TASK_CHECKBOX_RE.match(line or "")
+    if not match:
+        return None
+    return formal_task_id(None, match.group(1))
+
+
+def formal_task_id(task_id: str | None, body: str | None = None) -> str | None:
+    """Normalize to a formal queue ``T-*`` id only when it leads the task body."""
+    body_text = (body or "").strip()
+    if not body_text:
+        return None
+    lead = _FORMAL_TASK_LEAD_RE.match(body_text)
+    if not lead:
+        return None
+    return lead.group(1).upper()
+
+
+def inline_verify_ids(task_text: str) -> list[str]:
+    """Extract ``V-*`` ids from inline task text such as ``（V-015）``."""
+    return sorted({match.upper() for match in _VERIFY_ID_INLINE_RE.findall(task_text or "")})
+
+
 def first_open_task_line(tasks_text: str) -> str | None:
     for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
-        if _TASK_OPEN_RE.match(line):
+        if _TASK_OPEN_RE.match(line) and formal_task_id_from_checkbox_line(line):
             return line.strip()
     return None
 
 
 def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
-    """Return (line_idx, body, tid) for the first open checkbox, else (None, None, None)."""
+    """Return (line_idx, body, tid) for the first open formal task, else (None, None, None)."""
     for i, line in iter_tasks_lines_skipping_closed(tasks_text):
         if not _TASK_OPEN_RE.match(line):
             continue
         m = _TASK_CHECKBOX_RE.match(line)
         body = m.group(1).strip() if m else line.strip()
-        return i, body, extract_task_id(body)
+        task_id = formal_task_id(None, body)
+        if not task_id:
+            continue
+        return i, body, task_id
     return None, None, None
 
 
@@ -1845,8 +1925,26 @@ def next_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]
             continue
         body_match = _TASK_CHECKBOX_RE.match(line)
         body = body_match.group(1).strip() if body_match else line.strip()
-        return line_index, body, task.get("id") or extract_task_id(body)
+        task_id = formal_task_id(task.get("id"), body)
+        if not task_id:
+            continue
+        return line_index, body, task_id
     return None, None, None
+
+
+def formal_task_stats(tasks_text: str, *, archive_done: int = 0) -> TaskStats:
+    """Count only formal ``T-*`` checkbox tasks (ignores plan/noise open items)."""
+    open_count = 0
+    done_count = 0
+    for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
+        if not formal_task_id_from_checkbox_line(line):
+            continue
+        if _TASK_OPEN_RE.match(line):
+            open_count += 1
+        elif _TASK_DONE_RE.match(line):
+            done_count += 1
+    done = done_count + max(0, int(archive_done or 0))
+    return TaskStats(done=done, total=done + open_count)
 
 
 def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
@@ -1862,7 +1960,7 @@ def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
     for task in tasks:
         task_id = str(task.get("id") or "").upper()
         line = visible.get(int(task.get("line", -1)), "")
-        if not task_id or not _TASK_OPEN_RE.match(line):
+        if not task_id or not formal_task_id(task_id) or not _TASK_OPEN_RE.match(line):
             continue
         missing = sorted(
             {
@@ -2182,6 +2280,7 @@ def project_mode_block_reason(
     agent_paths: AgentPaths | None = None,
     workflow_stage: str = "",
     runaway_enabled: bool = False,
+    bug_fix_lane: bool = False,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
@@ -2221,6 +2320,14 @@ def project_mode_block_reason(
     if not root:
         return None
 
+    if (
+        active_shell == "project"
+        and effective_stage in {"verification", "release"}
+        and tool_name == "run_evolved"
+        and evolved_name in _VERIFY_STAGE_EXEC_TOOLS
+    ):
+        return None
+
     if active_shell == "project" and effective_stage and effective_stage != "implementation":
         code_write = evolved_name in _CODING_TOOLS or evolved_name == "patch_file"
         if evolved_name in _WRITE_TOOLS:
@@ -2248,6 +2355,7 @@ def project_mode_block_reason(
         project_root=root,
         tool_name=tool_name,
         arguments=arguments,
+        bug_fix_lane=bug_fix_lane,
     )
     if plan_domain_block:
         return plan_domain_block
@@ -2370,6 +2478,8 @@ def format_project_overlay(
     workflow_stage: str = "",
     active_task_id: str | None = None,
     runaway_enabled: bool = False,
+    runaway_checkpoint: str = "",
+    runaway_acceptance_passed: bool = False,
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -2389,13 +2499,67 @@ def format_project_overlay(
         lines.append("runaway_scope: 仅当前项目内安全写入、执行和测试；网络、宿主目录、敏感/删除/发布/Git 操作须暂停")
         if workflow_stage == "documentation":
             lines.append("stage_gate: 狂奔自动整理四个核心制品，完成后进入设计；不向用户展示计划确认门")
+        elif workflow_stage == "requirements":
+            lines.append(
+                "stage_gate: 狂奔准备中 — 自动整理文档→设计→首项任务；"
+                "此阶段禁止写业务代码（计划域制品除外）"
+            )
         elif workflow_stage == "design":
             lines.append("stage_gate: 狂奔自动完成设计并授权下一个可执行 T-* 任务；不等待用户确认")
         elif workflow_stage == "implementation" and active_task_id:
             lines.append(f"batch_scope: 狂奔模式正在实现 {active_task_id}；完成后自动验证并启动下一任务")
+        elif workflow_stage in {"verification", "release"}:
+            from runaway_flow import normalize_checkpoint
+
+            cp = normalize_checkpoint(runaway_checkpoint)
+            if cp:
+                lines.append(f"project_runaway_checkpoint: {cp}")
+            if runaway_acceptance_passed:
+                lines.append(
+                    "harness_truth: 矩阵与硬验收已通过（真源）；勿根据陈旧 review 声称缺 PROJECT 验收段"
+                )
+            if cp == "release_wait":
+                lines.append(
+                    "stage_gate: verification 出口 — Harness 已收尾；"
+                    "禁止 plan_partner / deliverable_review；"
+                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
+                )
+                lines.append(
+                    "plan_gate: verification 出口 — 计划域由 Harness/bug-fix 负责；"
+                    "主 Agent 勿调 plan_partner"
+                )
+            elif cp == "verifying":
+                lines.append(
+                    "stage_gate: verification — 硬验收已通过，Harness 正在推进 release_wait；"
+                    "禁止 plan_partner / deliverable_review；"
+                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
+                )
+                lines.append(
+                    "plan_gate: verification — 计划域由 Harness/bug-fix 负责；"
+                    "主 Agent 勿调 plan_partner"
+                )
+            elif cp == "repairing":
+                lines.append(
+                    "stage_gate: repairing — Harness bug-fix 轨修复验收；"
+                    "禁止 plan_partner / deliverable_review；主 Agent 勿写业务代码"
+                )
+                lines.append(
+                    "plan_gate: repairing — bug-fix 可写 PROJECT.md 验收段、"
+                    "ENV.md quality.commands、VERIFY 证据；"
+                    "主 Agent 禁止 write_text/patch_file 计划域文件"
+                )
+            else:
+                lines.append(
+                    "stage_gate: verification — 仅允许 run_command / run_quality / "
+                    "run_project_tests 等验收执行；禁止主 Agent 写业务代码"
+                )
+                lines.append(
+                    "plan_gate: verification — 计划域（PROJECT/ENV/TASKS/VERIFY）"
+                    "由 Harness bootstrap 或 bug-fix 写入；主 Agent 禁止直写；勿 plan_partner"
+                )
         else:
             lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
-        lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
+            lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
     else:
         if workflow_stage == "documentation":
             lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
@@ -2464,7 +2628,13 @@ def format_project_overlay(
                 "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
             )
     milestone_key = (milestone_review_suggested or "").strip()
-    if milestone_key:
+    suppress_milestone = False
+    if runaway_enabled and workflow_stage in {"verification", "release"}:
+        from runaway_flow import normalize_checkpoint
+
+        cp = normalize_checkpoint(runaway_checkpoint)
+        suppress_milestone = cp in {"verifying", "release_wait", "repairing"}
+    if milestone_key and not suppress_milestone:
         lines.append(f"milestone_review_suggested: {milestone_key}")
     return "\n".join(lines)
 
@@ -2536,26 +2706,53 @@ def _acceptance_section(project_md: str) -> str:
     return project_md[idx:]
 
 
+def acceptance_command_to_argv(display: str) -> list[str]:
+    """Split PROJECT acceptance display into argv (python, powershell, etc.)."""
+    text = (display or "").strip()
+    if not text:
+        return []
+    if sys.platform == "win32":
+        return shlex.split(text, posix=False)
+    return shlex.split(text, posix=True)
+
+
+def parse_acceptance_command_display(project_md: str) -> str | None:
+    """First executable ``命令：`…` `` under ## 验收标准 (any shell, not only python)."""
+    section = _acceptance_section(project_md)
+    for line in section.splitlines():
+        match = _ACCEPT_CMD_RE.search(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
 def parse_acceptance_spec(project_md: str) -> AcceptanceSpec | None:
-    """Parse first `命令：`…`` line under ## 验收标准."""
+    """Parse first executable ``命令：`…` `` under ## 验收标准 (python or shell)."""
     section = _acceptance_section(project_md)
     for line in section.splitlines():
         match = _ACCEPT_CMD_RE.search(line)
         if not match:
             continue
         command = match.group(1).strip()
-        script_match = _PYTHON_SCRIPT_RE.search(command)
-        if not script_match:
-            continue
-        script = script_match.group(1).strip().replace("\\", "/").lstrip("/")
-        if script.startswith("workspace/"):
-            script = script.removeprefix("workspace/")
         exit_match = _ACCEPT_EXIT_RE.search(line)
         expected = int(exit_match.group(1)) if exit_match else 0
+        script_match = _PYTHON_SCRIPT_RE.search(command)
+        if script_match:
+            script = script_match.group(1).strip().replace("\\", "/").lstrip("/")
+            if script.startswith("workspace/"):
+                script = script.removeprefix("workspace/")
+            return AcceptanceSpec(
+                display=command,
+                script_rel=script,
+                expected_exit_code=expected,
+            )
+        argv = tuple(acceptance_command_to_argv(command))
+        if not argv:
+            continue
         return AcceptanceSpec(
             display=command,
-            script_rel=script,
             expected_exit_code=expected,
+            argv=argv,
         )
     return None
 
@@ -2569,8 +2766,24 @@ def acceptance_workspace_path(project_id: str, spec: AcceptanceSpec) -> str:
 
 
 def acceptance_script_exists(paths: AgentPaths, project_id: str, spec: AcceptanceSpec) -> bool:
-    rel = acceptance_workspace_path(project_id, spec)
-    return (paths.workspace / rel).is_file()
+    if spec.is_python:
+        rel = acceptance_workspace_path(project_id, spec)
+        return (paths.workspace / rel).is_file()
+    root = project_dir(paths, project_id)
+    argv = list(spec.argv) or acceptance_command_to_argv(spec.display)
+    for index, arg in enumerate(argv):
+        lowered = arg.lower()
+        if lowered in {"-file", "/file"} and index + 1 < len(argv):
+            candidate = root / argv[index + 1].replace("\\", "/").lstrip("/")
+            return candidate.is_file()
+        if lowered.endswith((".py", ".ps1", ".bat", ".cmd", ".sh")):
+            rel = arg.replace("\\", "/").lstrip("/")
+            if (root / rel).is_file():
+                return True
+            workspace_rel = f"{normalize_project_id(project_id)}/{rel}"
+            if (paths.workspace / workspace_rel).is_file():
+                return True
+    return bool(argv)
 
 
 def run_acceptance_check(
@@ -2578,33 +2791,37 @@ def run_acceptance_check(
     project_id: str,
     spec: AcceptanceSpec,
 ) -> dict[str, Any]:
-    """Run PROJECT.md acceptance via run_command (python script)."""
+    """Run PROJECT.md acceptance via run_command (python script or shell command)."""
     import sys
 
     from tools.builtin.run_evolved import run
     from tools.registry import ToolRegistry
 
-    rel = acceptance_workspace_path(project_id, spec)
-    script_path = paths.workspace / rel
-    if not script_path.is_file():
-        return {
-            "ok": False,
-            "passed": False,
-            "error": f"验收脚本不存在：workspace/{rel}",
-            "command": spec.display,
-            "path": f"workspace/{rel}",
-            "expected_exit_code": spec.expected_exit_code,
-        }
-
     pid = normalize_project_id(project_id)
     registry = ToolRegistry.load(paths)
-    # Prefer quoting that works under PowerShell -Command and bash -lc.
-    script_abs = str(script_path.resolve())
-    py = sys.executable
-    if sys.platform == "win32":
-        command = f'& "{py}" "{script_abs}"'
+    if spec.is_python:
+        rel = acceptance_workspace_path(project_id, spec)
+        script_path = paths.workspace / rel
+        if not script_path.is_file():
+            return {
+                "ok": False,
+                "passed": False,
+                "error": f"验收脚本不存在：workspace/{rel}",
+                "command": spec.display,
+                "path": f"workspace/{rel}",
+                "expected_exit_code": spec.expected_exit_code,
+            }
+        script_abs = str(script_path.resolve())
+        py = sys.executable
+        if sys.platform == "win32":
+            command = f'& "{py}" "{script_abs}"'
+        else:
+            command = f'"{py}" "{script_abs}"'
+        path = f"workspace/{rel}"
     else:
-        command = f'"{py}" "{script_abs}"'
+        command = spec.display
+        path = f"workspace/{pid}"
+
     tool_result = run(
         {
             "tool_name": "run_command",
@@ -2622,7 +2839,7 @@ def run_acceptance_check(
             "passed": False,
             "error": message,
             "command": spec.display,
-            "path": f"workspace/{rel}",
+            "path": path,
             "expected_exit_code": spec.expected_exit_code,
         }
 
@@ -2635,7 +2852,7 @@ def run_acceptance_check(
         "exit_code": exit_code,
         "expected_exit_code": spec.expected_exit_code,
         "command": spec.display,
-        "path": f"workspace/{rel}",
+        "path": path,
         "stdout": data.get("stdout", ""),
         "stderr": data.get("stderr", ""),
     }

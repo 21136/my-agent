@@ -436,9 +436,13 @@ def report_progress_repeat_block_reason(
     report_progress_done_this_turn: bool = False,
     tool_name: str,
     arguments: dict[str, object],
+    runaway_enabled: bool = False,
+    workflow_stage: str = "",
 ) -> str | None:
     """G5: after a successful checkbox this turn, ban another report_progress."""
     if active_shell != "project":
+        return None
+    if runaway_enabled and (workflow_stage or "").strip() == "verification":
         return None
     if not task_stop_armed and not report_progress_done_this_turn:
         return None
@@ -447,6 +451,11 @@ def report_progress_repeat_block_reason(
     evolved = arguments.get("tool_name")
     if not isinstance(evolved, str) or evolved.strip() != "report_progress":
         return None
+    if runaway_enabled:
+        return (
+            "[progress_gate] 本轮已完成一条 TASKS 勾选；"
+            "狂奔下请继续写下一项产物，下一 segment 再 report_progress。"
+        )
     return (
         "[progress_gate] 本轮已完成一条 TASKS 勾选；"
         "禁止再次 report_progress。请结束回合，用户「继续」后再报下一项。"

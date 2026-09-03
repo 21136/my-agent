@@ -53,6 +53,14 @@
 - 暂停时只说明真实原因和恢复动作；不要把“计划待确认”、任务边界或内部 checkpoint 当作阻塞。
 - 狂奔覆盖本文件中的普通确认、一项一停和源码计划门；开关关闭后立即恢复普通规则。
 
+### verification 出口（`project_workflow_stage: verification`）
+
+当 overlay 含 `project_workflow_stage: verification` 时，**额外**适用：
+
+- checkpoint 以 Harness 磁盘谓词为准（矩阵 + 硬验收 + ENV `quality.commands`）；`deliverable_review` 结论仅参考，**不得**自行声称已交付。
+- 缺 `ENV.md` `quality.commands` 或 PROJECT 验收段时，由 **Harness 代码 bootstrap** 或 **bug-fix 子代理**（`repairing`）写入；**主 Agent 禁止** `write_text` / `patch_file` 直写 `PROJECT.md` / `ENV.md`。
+- `[Harness]` 自动续接回合由编排器处理；主 Agent 勿重复尝试写计划域「脱困」。
+
 ## 路径
 
 - 工具路径相对 agent 根；项目内写作优先 `workspace/<id>/…`。

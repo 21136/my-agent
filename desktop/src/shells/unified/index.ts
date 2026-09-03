@@ -2,8 +2,12 @@ import { setAgentBusy } from "../../agent-busy";
 import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import { hydrateMermaid, renderMarkdown } from "../../markdown";
+import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver } from "../../lazy-markdown";
 import { formatUserMessageHtml } from "../../user-message";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, isThinkingBodyOpen, thinkingTitleLabel, type ChatBlock } from "../chat-state";
+import { segmentChatBlocks, segmentPrint, renderTurnCardShell, type ChatRenderSegment } from "../turn-card-layout";
+import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
+import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
+import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
@@ -37,13 +41,19 @@ import {
   renderPlanReviewPanel,
   type MainFocus,
 } from "./plan-review";
+import {
+  adoptPathFromNotice,
+  lastFailedTool,
+  processPillLabel,
+  renderAdoptChip,
+  renderReviewCallout,
+  renderToolFailAlert,
+} from "./output-display";
 import "./unified.css";
 
 export type Perspective = "default" | "project" | "night";
 
 const FOCUS_TURNS = 2;
-/** Process A-layer: show only the latest N tool lines; earlier ones fold (UX-023). */
-const PROCESS_TOOL_LINES_CAP = 6;
 const RECALL_TURNS = 3;
 
 function isRecallIntent(intent: string, intentLabel: string): boolean {
@@ -253,10 +263,11 @@ export function mountUnifiedShell(
   let cancelledStatusTimer: number | null = null;
   let cancelSafetyTimer: number | null = null;
   let destroyed = false;
-  let thinkingStarted = 0;
-  let thinkingTimer: number | null = null;
   let renderThrottleTimer: number | null = null;
   let renderedPrints: string[] = [];
+  let renderedSegmentPrints: string[] = [];
+  /** UI-5972 M4: full history load defers markdown; incremental paths render eagerly. */
+  let markdownRenderEager = true;
   /** turnKey → user expanded the folded early tool list (UX-023). */
   const toolsListExpanded = new Set<string>();
   // night perspective state
@@ -283,6 +294,12 @@ export function mountUnifiedShell(
       },
       onHistoryLoaded: () => {
         renderedPrints = [];
+        renderedSegmentPrints = [];
+        resetLazyMarkdownObserver();
+        syncWorkingVisual();
+        if (!chat.model.confirmPending) {
+          setStatus("就绪");
+        }
         scrollChatToBottom();
       },
       onTurnStart: (event) => {
@@ -301,6 +318,10 @@ export function mountUnifiedShell(
         }
         renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
         setStatus(event.intent_label);
+        requestAnimationFrame(() => scrollChatToBottom());
+      },
+      onLlmPending: () => {
+        requestAnimationFrame(() => scrollChatToBottom());
       },
       onCheckerVerdict: (event) => {
         topbarState.checkerLabel = checkerVerdictStatusText(event.verdict);
@@ -370,6 +391,16 @@ export function mountUnifiedShell(
       },
     },
   );
+
+  bindLazyMarkdownLookup((turnIndex) => {
+    const block = chat.model.blocks.find(
+      (b) =>
+        (b.kind === "assistant" || b.kind === "assistant-streaming")
+        && b.turnIndex === turnIndex,
+    );
+    if (!block || block.kind === "assistant-streaming") return null;
+    return block.text;
+  });
 
   // ---- DOM layout ----
   root.innerHTML = `
@@ -635,8 +666,11 @@ export function mountUnifiedShell(
   });
 
   // ---- visual sync ----
+  let lastSidebarWorking = false;
   function syncWorkingVisual(): void {
     const working = chat.isWorking();
+    const workingChanged = lastSidebarWorking !== working;
+    lastSidebarWorking = working;
     projectState.turnInProgress = working;
     projectEls.goalCard.classList.toggle("hidden", !projectState.projectId);
     projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
@@ -645,28 +679,18 @@ export function mountUnifiedShell(
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
+    if (perspective === "project" && workingChanged) {
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  function useTurnCardLayout(): boolean {
+    return perspective !== "night";
   }
 
   function setStatus(text: string): void {
     statusText = text;
-    if (text === "思考中…") {
-      thinkingStarted = Date.now();
-      if (thinkingTimer === null) {
-        thinkingTimer = window.setInterval(() => {
-          if (statusText === "思考中…" && thinkingStarted > 0) {
-            const elapsed = Math.round((Date.now() - thinkingStarted) / 1000);
-            statusEl.textContent = `思考中…（${elapsed}s）`;
-          }
-        }, 1000);
-      }
-    } else {
-      if (thinkingTimer !== null) {
-        window.clearInterval(thinkingTimer);
-        thinkingTimer = null;
-      }
-      thinkingStarted = 0;
-      statusEl.textContent = text;
-    }
+    statusEl.textContent = text;
   }
 
   function setTurnEndStatus(finishReason: string): void {
@@ -687,8 +711,12 @@ export function mountUnifiedShell(
   }
 
   function updateTokenBar(usage: number | undefined, limit: number | undefined): void {
-    lastTokenUsage = usage;
-    lastTokenLimit = limit;
+    // Ignore spurious zero from backend before deferred messages.jsonl is loaded.
+    if (usage === 0 && lastTokenUsage !== undefined && lastTokenUsage > 0) {
+      usage = lastTokenUsage;
+    }
+    if (usage !== undefined) lastTokenUsage = usage;
+    if (limit !== undefined) lastTokenLimit = limit;
     if (usage === undefined || limit === undefined || limit <= 0) {
       if (lastLlmCacheRatio === undefined && turnCachePromptTotal <= 0) {
         tokenBar.classList.add("hidden");
@@ -757,6 +785,66 @@ export function mountUnifiedShell(
   }
 
   function refreshProjectThreads(): void {
+    if (!projectState.projectId) return;
+    if (refreshProjectThreadsTimer !== null) {
+      window.clearTimeout(refreshProjectThreadsTimer);
+    }
+    refreshProjectThreadsTimer = window.setTimeout(() => {
+      refreshProjectThreadsTimer = null;
+      refreshProjectThreadsNow();
+    }, 0);
+  }
+
+  let refreshProjectThreadsTimer: number | null = null;
+  let listSessionsTimer: number | null = null;
+  let listProjectsTimer: number | null = null;
+  /** UI-5972: suppress redundant list* until switch/open batch finishes (session.history). */
+  let pendingSwitchBatch = false;
+  let hydrationSessionId = "";
+
+  function shortSessionId(sessionId: string): string {
+    const trimmed = sessionId.trim();
+    if (trimmed.length <= 18) return trimmed;
+    return `${trimmed.slice(0, 18)}…`;
+  }
+
+  function startHydrationWait(sessionId: string, label: string): void {
+    hydrationSessionId = sessionId;
+    pendingSwitchBatch = true;
+    projectState.switchInProgress = true;
+    setStatus(`${label} ${shortSessionId(sessionId)}…`);
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function completeHydrationWait(sessionId?: string): void {
+    if (sessionId && hydrationSessionId && sessionId !== hydrationSessionId) return;
+    if (!pendingSwitchBatch && !hydrationSessionId) return;
+    hydrationSessionId = "";
+    pendingSwitchBatch = false;
+    projectState.switchInProgress = false;
+    debouncedListProjects();
+    debouncedListSessions();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function debouncedListSessions(): void {
+    if (pendingSwitchBatch) return;
+    if (listSessionsTimer !== null) window.clearTimeout(listSessionsTimer);
+    listSessionsTimer = window.setTimeout(() => {
+      listSessionsTimer = null;
+      client.listSessions();
+    }, 250);
+  }
+
+  function debouncedListProjects(): void {
+    if (listProjectsTimer !== null) window.clearTimeout(listProjectsTimer);
+    listProjectsTimer = window.setTimeout(() => {
+      listProjectsTimer = null;
+      client.listProjects();
+    }, 250);
+  }
+
+  function refreshProjectThreadsNow(): void {
     if (!projectState.projectId) return;
     projectState.threadsLoading = true;
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -1038,7 +1126,7 @@ export function mountUnifiedShell(
           sessionsOpen = false;
           expandEl.classList.add("hidden");
           expandEl.innerHTML = "";
-          setStatus(`打开会话 ${sid}…`);
+          startHydrationWait(sid, "打开会话");
         } catch (err) {
           setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1185,7 +1273,7 @@ export function mountUnifiedShell(
       closePlanMainFocus();
       try {
         client.openSession(sid);
-        setStatus(`打开会话线 ${sid}…`);
+        startHydrationWait(sid, "打开会话线");
       } catch (err) {
         setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1580,26 +1668,110 @@ export function mountUnifiedShell(
     afterSuggestionQueueChanged();
   }
 
-  function jumpToCurrentTurnProcess(): void {
-    setMainFocus("chat");
-    if (hasProjectBlocker(projectState)) {
-      showBlockerDetails();
-    }
+  function findActiveProcessBlock(): Extract<ChatBlock, { kind: "process" }> | undefined {
     const blocks = chat.model.blocks;
+    const currentKey = chat.model.currentTurnKey;
+    if (currentKey) {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const block = blocks[i];
+        if (block.kind !== "process" || block.turnKey !== currentKey) continue;
+        if (!block.collapsed || isProcessThinkingLive(block, currentKey)) {
+          return block;
+        }
+      }
+    }
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i];
       if (block.kind !== "process") continue;
-      if (block.collapsed) {
-        chat.toggleProcessCollapsed(block.turnKey);
+      if (!block.collapsed && isProcessThinkingLive(block, chat.model.currentTurnKey)) {
+        return block;
       }
+    }
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind === "process" && !block.collapsed) return block;
+    }
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind === "process") return block;
+    }
+    return undefined;
+  }
+
+  function scrollToActivityElement(el: HTMLElement): void {
+    el.classList.add("is-jump-target");
+    window.setTimeout(() => el.classList.remove("is-jump-target"), 1400);
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.querySelector<HTMLElement>(".unified-thinking.is-streaming, .unified-thinking.is-waiting")?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }
+
+  function jumpToLiveTurnCard(): boolean {
+    const card =
+      chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live") ??
+      chatEl.querySelector<HTMLElement>(".unified-turn-card:last-of-type");
+    if (!card) return false;
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.add("is-jump-target");
+    window.setTimeout(() => card.classList.remove("is-jump-target"), 1400);
+    return true;
+  }
+
+  function jumpToCurrentActivity(): void {
+    if (projectState.mainFocus !== "chat") {
+      setMainFocus("chat");
+    }
+    if (hasProjectBlocker(projectState)) {
+      showBlockerDetails();
+    }
+    const block = findActiveProcessBlock();
+    if (!block) {
       requestAnimationFrame(() => {
-        const el = chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${block.turnKey}"]`);
-        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        renderChat();
+        if (jumpToLiveTurnCard()) {
+          setStatus("已定位到当前回合");
+          return;
+        }
+        scrollChatToBottom();
+        setStatus(chat.isWorking() ? "当前回合尚无活动记录" : "当前没有可查看的活动");
       });
       return;
     }
-    scrollChatToBottom();
+    if (block.collapsed) {
+      chat.toggleProcessCollapsed(block.turnKey);
+    }
+    ensureProcessEntries(block);
+    const streamingThink = block.entries?.find(
+      (e) => e.kind === "think" && e.phase === "streaming" && e.text.trim(),
+    );
+    if (!streamingThink) {
+      chat.openThinking(block.turnKey);
+    }
+    const turnKey = block.turnKey;
+    requestAnimationFrame(() => {
+      renderChat();
+      const card =
+        chatEl.querySelector<HTMLElement>(`.unified-turn-card[data-turn-key="${turnKey}"]`) ??
+        chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live");
+      const el =
+        card?.querySelector<HTMLElement>(`.unified-activity[data-turn="${turnKey}"], .unified-process[data-turn="${turnKey}"]`) ??
+        chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${turnKey}"]`);
+      if (!el) {
+        if (jumpToLiveTurnCard()) {
+          setStatus("已定位到当前回合");
+        } else {
+          scrollChatToBottom();
+        }
+        return;
+      }
+      scrollToActivityElement(el);
+      setStatus("已定位到当前活动");
+    });
   }
+
+  const jumpToCurrentTurnProcess = jumpToCurrentActivity;
 
   function jumpToReviewSummary(): void {
     setMainFocus("chat");
@@ -1720,84 +1892,20 @@ export function mountUnifiedShell(
     return turnIndex >= chat.currentTurnIndex() - (FOCUS_TURNS - 1);
   }
 
-  function truncateToolHint(text: string, max = 72): string {
-    const oneLine = text.replace(/\s+/g, " ").trim();
-    if (oneLine.length <= max) return oneLine;
-    return `${oneLine.slice(0, max - 1)}…`;
+  /** One-line tool rows moved to activity-timeline.ts (UX-028 M0). */
+
+  function findThinkEntryForDom(
+    block: Extract<ChatBlock, { kind: "process" }>,
+    thinkId: string,
+  ): ThinkEntry | undefined {
+    ensureProcessEntries(block);
+    return block.entries?.find(
+      (e): e is ThinkEntry => e.kind === "think" && e.id === thinkId,
+    );
   }
 
-  /** One-line tool rows (DESKTOP §3.2.2 A 层); fold older rows when many (UX-023). */
-  function renderCompactToolLines(
-    tools: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>,
-    turnKey: string,
-  ): string {
-    if (!tools.length) return "";
-    const now = Date.now();
-
-    function renderOne(
-      t: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>[number],
-    ): string {
-      const running = t.status === "running";
-      const elapsedMs = running ? now - t.startedAt : (t.endedAt ?? now) - t.startedAt;
-      const mark = running ? "·" : t.status === "ok" ? "✓" : "✗";
-      const elapsedLabel = running
-        ? `运行中… ${formatToolElapsed(elapsedMs)}`
-        : formatToolElapsed(elapsedMs);
-      const progressBit =
-        running && t.progressText
-          ? ` · ${escapeHtml(truncateToolHint(t.progressText, 48))}`
-          : "";
-      const failHint =
-        !running && t.status === "fail" && t.endSummary
-          ? ` · ${escapeHtml(truncateToolHint(t.endSummary, 48))}`
-          : "";
-      const logsBit =
-        !running && t.status === "fail" && t.logsTail
-          ? `<details class="unified-tool-logs-inline"><summary>日志</summary><pre>${escapeHtml(t.logsTail)}</pre></details>`
-          : "";
-      return `<div class="unified-process-line unified-tool-line is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
-        <span class="unified-tool-mark">${mark}</span>
-        <span class="unified-tool-name">${escapeHtml(t.tool)}</span>
-        <span class="unified-tool-hint">${escapeHtml(truncateToolHint(t.summary))}</span>
-        <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${failHint}${logsBit}
-      </div>`;
-    }
-
-    const hiddenCount = Math.max(0, tools.length - PROCESS_TOOL_LINES_CAP);
-    const hidden = hiddenCount > 0 ? tools.slice(0, hiddenCount) : [];
-    const visible = hiddenCount > 0 ? tools.slice(hiddenCount) : tools;
-    const failHidden = hidden.filter((t) => t.status === "fail").length;
-    const foldOpen = toolsListExpanded.has(turnKey);
-    const foldBit =
-      hidden.length > 0
-        ? `<details class="unified-tool-fold" data-tools-fold="${escapeHtml(turnKey)}"${foldOpen ? " open" : ""}>
-            <summary>更早 ${hidden.length} 个工具${failHidden > 0 ? ` · ${failHidden} 失败` : ""}</summary>
-            <div class="unified-tool-fold-body">${hidden.map(renderOne).join("")}</div>
-          </details>`
-        : "";
-    return `<div class="unified-tool-lines">${foldBit}${visible.map(renderOne).join("")}</div>`;
-  }
-
-  function renderThinkingAccordion(block: Extract<ChatBlock, { kind: "process" }>): string {
-    const waiting = Boolean(block.llmPending) && !block.reasoning.trim();
-    if (!block.reasoning.trim() && !waiting) return "";
-    if (waiting) {
-      return `<div class="unified-thinking is-waiting is-streaming" data-turn="${escapeHtml(block.turnKey)}">
-        <div class="unified-thinking-summary is-static" aria-expanded="true">思考中…</div>
-      </div>`;
-    }
-    const open = isThinkingBodyOpen(block);
-    const streaming = block.reasoningPhase === "streaming";
-    const title = thinkingTitleLabel(block);
-    const openCls = open ? " is-open" : "";
-    const streamCls = streaming ? " is-streaming" : " is-pinned";
-    const body = open
-      ? `<div class="unified-thinking-body">${escapeHtml(block.reasoning)}</div>`
-      : "";
-    return `<div class="unified-thinking${streamCls}${openCls}" data-turn="${escapeHtml(block.turnKey)}">
-      <button type="button" class="unified-thinking-summary" data-thinking-toggle="${escapeHtml(block.turnKey)}" aria-expanded="${open ? "true" : "false"}">${escapeHtml(title)}</button>
-      ${body}
-    </div>`;
+  function isLiveProcessBlock(block: Extract<ChatBlock, { kind: "process" }>): boolean {
+    return block.turnKey === chat.model.currentTurnKey;
   }
 
   function tickRunningToolElapsed(): void {
@@ -1811,18 +1919,74 @@ export function mountUnifiedShell(
   }
 
   function tickStreamingThinking(): void {
-    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming").forEach((el) => {
+    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming, .unified-thinking.is-waiting").forEach((el) => {
       const turnKey = el.dataset.turn;
+      const thinkId = el.dataset.thinkId;
       if (!turnKey) return;
-      const block = chat.model.blocks.find(
-        (b) => b.kind === "process" && b.turnKey === turnKey,
-      );
-      if (block?.kind !== "process") return;
-      const summary = el.querySelector<HTMLElement>(".unified-thinking-summary");
-      if (summary) summary.textContent = thinkingTitleLabel(block);
-      const body = el.querySelector<HTMLElement>(".unified-thinking-body");
-      if (body) body.scrollTop = body.scrollHeight;
+      const blocks = chat.model.blocks;
+      let block: Extract<ChatBlock, { kind: "process" }> | undefined;
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const candidate = blocks[i];
+        if (candidate.kind === "process" && candidate.turnKey === turnKey) {
+          block = candidate;
+          break;
+        }
+      }
+      if (!block) return;
+      const waiting =
+        isLiveProcessBlock(block) &&
+        Boolean(block.llmPending) &&
+        thinkId === "pending";
+      if (waiting) {
+        const pendingThink: ThinkEntry = {
+          kind: "think",
+          id: "pending",
+          text: "",
+          phase: "streaming",
+          startedAt: block.reasoningStartedAt ?? Date.now(),
+        };
+        syncThinkDom(el, pendingThink, { waiting: true });
+        return;
+      }
+      if (!thinkId) return;
+      const entry = findThinkEntryForDom(block, thinkId);
+      if (!entry) return;
+      syncThinkDom(el, entry, { waiting: false });
     });
+  }
+
+  function syncLiveThinkingDom(): void {
+    for (const block of chat.model.blocks) {
+      if (block.kind !== "process") continue;
+      if (!isLiveProcessBlock(block)) continue;
+      ensureProcessEntries(block);
+      const pendingOnly =
+        Boolean(block.llmPending) &&
+        !block.entries?.some((e) => e.kind === "think" && e.phase === "streaming");
+      if (pendingOnly) {
+        const el = chatEl.querySelector<HTMLElement>(
+          `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="pending"]`,
+        );
+        if (el) {
+          const pendingThink: ThinkEntry = {
+            kind: "think",
+            id: "pending",
+            text: "",
+            phase: "streaming",
+            startedAt: block.reasoningStartedAt ?? Date.now(),
+          };
+          syncThinkDom(el, pendingThink, { waiting: true });
+        }
+      }
+      for (const entry of block.entries ?? []) {
+        if (entry.kind !== "think") continue;
+        if (entry.phase !== "streaming") continue;
+        const el = chatEl.querySelector<HTMLElement>(
+          `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="${entry.id}"]`,
+        );
+        if (el) syncThinkDom(el, entry);
+      }
+    }
   }
 
   function scrollStreamingThinkingBodies(): void {
@@ -1834,20 +1998,67 @@ export function mountUnifiedShell(
   let toolElapsedTimer: number | null = null;
   function syncToolElapsedTimer(): void {
     const hasRunning = chat.model.blocks.some(
-      (b) => b.kind === "process" && b.tools?.some((t) => t.status === "running"),
+      (b) => b.kind === "process" && getProcessTools(b).some((t) => t.status === "running"),
     );
     const hasStreamingThinking = chat.model.blocks.some(
-      (b) => b.kind === "process" && (b.reasoningPhase === "streaming" || b.llmPending),
+      (b) => b.kind === "process" && isProcessThinkingLive(b, chat.model.currentTurnKey),
     );
     if ((hasRunning || hasStreamingThinking) && toolElapsedTimer === null) {
+      const intervalMs = hasStreamingThinking ? 100 : 1000;
       toolElapsedTimer = window.setInterval(() => {
         tickRunningToolElapsed();
         tickStreamingThinking();
-      }, 1000);
+        syncLiveThinkingDom();
+      }, intervalMs);
     } else if (!hasRunning && !hasStreamingThinking && toolElapsedTimer !== null) {
       window.clearInterval(toolElapsedTimer);
       toolElapsedTimer = null;
     }
+  }
+
+  function shouldLazyMarkdown(block: ChatBlock): boolean {
+    if (block.kind === "assistant-streaming") return false;
+    if (block.kind !== "assistant") return false;
+    if (markdownRenderEager) return false;
+    return block.turnIndex < chat.currentTurnIndex() - 1;
+  }
+
+  function renderBlocksFlat(blocks: ChatBlock[]): string {
+    const parts: string[] = [];
+    let chipBuf: string[] = [];
+    const flushChips = () => {
+      if (!chipBuf.length) return;
+      parts.push(`<div class="unified-file-chips">${chipBuf.join("")}</div>`);
+      chipBuf = [];
+    };
+    for (const block of blocks) {
+      if (block.kind === "notice") {
+        const path = adoptPathFromNotice(block.text);
+        if (path) {
+          chipBuf.push(renderAdoptChip(path));
+          continue;
+        }
+      }
+      flushChips();
+      parts.push(renderBlock(block));
+    }
+    flushChips();
+    return parts.join("");
+  }
+
+  function renderChatSegment(segment: ChatRenderSegment): string {
+    if (segment.kind === "orphan") {
+      return renderBlocksFlat(segment.blocks);
+    }
+    const live = segment.group.turnIndex === chat.currentTurnIndex() && chat.isWorking();
+    return renderTurnCardShell(segment.group, renderBlocksFlat(segment.group.blocks), { live });
+  }
+
+  function renderBlocksGrouped(blocks: ChatBlock[]): string {
+    if (!useTurnCardLayout()) {
+      return renderBlocksFlat(blocks);
+    }
+    return segmentChatBlocks(blocks).map(renderChatSegment).join("");
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -1886,26 +2097,15 @@ export function mountUnifiedShell(
       </article>`;
     }
     if (block.kind === "review-subagent") {
-      const verdictLabel =
-        block.verdict && block.status === "done"
-          ? ` · ${String(block.verdict).toUpperCase()}`
-          : "";
-      const blockers =
-        block.status === "done" && (block.blockersCount ?? 0) > 0
-          ? ` · ${block.blockersCount} 项阻塞`
-          : "";
       const title =
         block.status === "running"
-          ? "正在检查交付结果…"
-          : block.verdict === "pass" ? "交付检查已通过" : "交付检查需要处理";
+          ? "交付审查"
+          : block.verdict === "pass" ? "交付审查 · 已通过" : "交付审查";
       const detail =
         block.status === "running"
-          ? escapeHtml(block.taskPreview || "正在审查交付物…")
-          : escapeHtml(block.summary || block.taskPreview || "");
-      return `<article class="unified-plan-subagent" data-turn-index="${block.turnIndex}" data-status="${block.status}">
-        <div class="unified-plan-subagent-title">${escapeHtml(title)}</div>
-        <div class="unified-plan-subagent-body">${detail}</div>
-      </article>`;
+          ? block.taskPreview || "正在审查交付物…"
+          : block.summary || block.taskPreview || "";
+      return `<div data-turn-index="${block.turnIndex}">${renderReviewCallout(title, detail, block.status === "running")}</div>`;
     }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
       let cls = "unified-turn unified-turn-assistant";
@@ -1914,31 +2114,58 @@ export function mountUnifiedShell(
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
         if (block.kind === "assistant-streaming") cls += " unified-turn-streaming";
       }
+      const lazy = shouldLazyMarkdown(block);
+      const bodyCls = `unified-turn-body unified-markdown${lazy ? " unified-markdown-lazy" : ""}`;
+      const bodyAttr = lazy ? ` data-lazy-md="${block.turnIndex}"` : "";
+      const bodyHtml = lazy ? escapeHtml(block.text) : renderMarkdown(block.text);
       return `<article class="${cls}" data-turn-index="${block.turnIndex}">
         <div class="unified-turn-label">助手</div>
-        <div class="unified-turn-body unified-markdown">${renderMarkdown(block.text)}</div>
+        <div class="${bodyCls}"${bodyAttr}>${bodyHtml}</div>
       </article>`;
     }
     if (block.kind === "notice") {
-      return `<p class="text-muted">${escapeHtml(block.text)}</p>`;
+      const adoptPath = adoptPathFromNotice(block.text);
+      if (adoptPath) {
+        return `<div class="unified-file-chips">${renderAdoptChip(adoptPath)}</div>`;
+      }
+      if (/^已切换模型至\s+/i.test(block.text)) {
+        return `<p class="unified-sys-line">${escapeHtml(block.text)}</p>`;
+      }
+      return `<p class="unified-sys-line text-muted">${escapeHtml(block.text)}</p>`;
     }
     // night perspective: skip process and confirm blocks (use overlay instead)
     if (block.kind === "process") {
       if (perspective === "night") return "";
-      const thinkingHtml = renderThinkingAccordion(block);
-      const toolsHtml = renderCompactToolLines(block.tools ?? [], block.turnKey);
-      const title = block.tools?.some((t) => t.status === "running") ? "执行中…" : "过程";
-      const toggle = block.collapsed ? "展开" : "收起";
+      ensureProcessEntries(block);
+      const liveTurn = isLiveProcessBlock(block);
+      const timelineHtml = renderActivityTimeline(block, {
+        liveTurn,
+        toolsFoldOpen: toolsListExpanded.has(block.turnKey),
+      });
+      const tools = getProcessTools(block);
+      const pill = processPillLabel(block, { expanded: !block.collapsed });
+      const chevron = block.collapsed ? "▸" : "▾";
+      const running = tools.some((t) => t.status === "running");
+      const failAlert = renderToolFailAlert(lastFailedTool(tools));
+      const thinkingLive = isProcessThinkingLive(block, chat.model.currentTurnKey);
+      const processCls = [
+        "unified-process",
+        "unified-activity",
+        block.collapsed ? "collapsed" : "",
+        timelineHasThinking(block, liveTurn) ? "has-thinking" : "",
+        thinkingLive ? "is-thinking-live" : "",
+      ].filter(Boolean).join(" ");
+      const showPillDot = running || thinkingLive;
       return `
-        <div class="unified-process ${block.collapsed ? "collapsed" : ""}" data-turn="${block.turnKey}">
-          <div class="unified-process-header">
-            <span>${title}</span>
-            <button type="button" class="unified-btn" data-process-toggle="${block.turnKey}">${toggle}</button>
-          </div>
+        <div class="${processCls}" data-turn="${block.turnKey}">
+          <button type="button" class="unified-process-pill" data-process-toggle="${block.turnKey}" aria-expanded="${block.collapsed ? "false" : "true"}">
+            ${showPillDot ? '<span class="unified-process-pill-dot" aria-hidden="true"></span>' : ""}
+            <span class="unified-process-pill-text">${escapeHtml(pill)} ${chevron}</span>
+          </button>
           <div class="unified-process-body">
-            ${thinkingHtml}
-            ${toolsHtml}
+            ${timelineHtml}
           </div>
+          ${failAlert}
         </div>`;
     }
     if (block.kind === "confirm") {
@@ -2024,10 +2251,11 @@ export function mountUnifiedShell(
         return `AS${block.turnIndex}:${block.turnKey}:${block.text.length}`;
       case "notice":
         return `N:${block.text.length}`;
-      case "process":
-        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${block.reasoningPhase ?? "idle"}:${block.reasoningUserOpen ? 1 : 0}:${block.llmPending ? 1 : 0}:${(block.tools ?? [])
-          .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}:${t.progressText ?? ""}:${(t.logsTail ?? "").length}`)
-          .join(",")}`;
+      case "process": {
+        ensureProcessEntries(block);
+        const entriesSig = activityEntriesPrint(block.entries ?? [], Boolean(block.llmPending));
+        return `P${block.turnKey}:${block.collapsed ? 1 : 0}:${entriesSig}`;
+      }
       case "confirm":
         return `C${block.requestId}:${block.resolved ?? "_"}`;
     }
@@ -2045,7 +2273,8 @@ export function mountUnifiedShell(
       btn.dataset.thinkingBound = "1";
       btn.addEventListener("click", () => {
         const turnKey = btn.dataset.thinkingToggle;
-        if (turnKey) chat.toggleThinkingOpen(turnKey);
+        const thinkId = btn.dataset.thinkId;
+        if (turnKey) chat.toggleThinkingOpen(turnKey, thinkId);
       });
     });
     container.querySelectorAll<HTMLDetailsElement>("[data-tools-fold]:not([data-tools-fold-bound])").forEach((el) => {
@@ -2074,7 +2303,66 @@ export function mountUnifiedShell(
   }
 
   function doRender(): void {
+    markdownRenderEager = true;
     const curPrints = chat.model.blocks.map(blockPrint);
+
+    if (useTurnCardLayout()) {
+      const segments = segmentChatBlocks(chat.model.blocks);
+      const curSegPrints = segments.map((seg) => segmentPrint(seg, blockPrint));
+
+      if (
+        renderedSegmentPrints.length > 0 &&
+        curSegPrints.length === renderedSegmentPrints.length &&
+        chatEl.children.length === curSegPrints.length
+      ) {
+        const last = curSegPrints.length - 1;
+        let prefixOk = true;
+        for (let i = 0; i < last; i++) {
+          if (curSegPrints[i] !== renderedSegmentPrints[i]) {
+            prefixOk = false;
+            break;
+          }
+        }
+        if (prefixOk && curSegPrints[last] !== renderedSegmentPrints[last]) {
+          chatEl.children[last].outerHTML = renderChatSegment(segments[last]);
+          bindNewProcessToggles(chatEl);
+          setupFocusObserver();
+          scrollToBottomIfNear();
+          renderedSegmentPrints = curSegPrints;
+          renderedPrints = curPrints;
+          return;
+        }
+      }
+
+      if (
+        renderedSegmentPrints.length > 0 &&
+        curSegPrints.length > renderedSegmentPrints.length
+      ) {
+        const prefixOk = renderedSegmentPrints.every((p, i) => p === curSegPrints[i]);
+        if (prefixOk && chatEl.children.length === renderedSegmentPrints.length) {
+          const newSegs = segments.slice(renderedSegmentPrints.length);
+          chatEl.insertAdjacentHTML("beforeend", newSegs.map(renderChatSegment).join(""));
+          bindNewProcessToggles(chatEl);
+          setupFocusObserver();
+          scrollToBottomIfNear();
+          renderedSegmentPrints = curSegPrints;
+          renderedPrints = curPrints;
+          return;
+        }
+      }
+
+      resetLazyMarkdownObserver();
+      markdownRenderEager = false;
+      chatEl.innerHTML = segments.map(renderChatSegment).join("");
+      markdownRenderEager = true;
+      bindNewProcessToggles(chatEl);
+      setupFocusObserver();
+      scrollToBottomIfNear();
+      renderedSegmentPrints = curSegPrints;
+      renderedPrints = curPrints;
+      return;
+    }
+
     // A3-2: pure tail-append — insertAdjacentHTML instead of full innerHTML
     if (renderedPrints.length > 0 && curPrints.length > renderedPrints.length) {
       const isTailAppend = renderedPrints.every(
@@ -2082,7 +2370,7 @@ export function mountUnifiedShell(
       );
       if (isTailAppend) {
         const newBlocks = chat.model.blocks.slice(renderedPrints.length);
-        const newHtml = newBlocks.map(renderBlock).join("");
+        const newHtml = renderBlocksGrouped(newBlocks);
         chatEl.insertAdjacentHTML("beforeend", newHtml);
         bindNewProcessToggles(chatEl);
         setupFocusObserver();
@@ -2190,8 +2478,18 @@ export function mountUnifiedShell(
         if (el) {
           el.classList.toggle("collapsed");
           const btn = el.querySelector<HTMLButtonElement>("[data-process-toggle]");
-          if (btn) {
-            btn.textContent = el.classList.contains("collapsed") ? "展开" : "收起";
+          const block = chat.model.blocks.find(
+            (b) => b.kind === "process" && b.turnKey === collapseToggle,
+          );
+          if (btn && block?.kind === "process") {
+            const collapsed = el.classList.contains("collapsed");
+            block.collapsed = collapsed;
+            const chevron = collapsed ? "▸" : "▾";
+            const textEl = btn.querySelector(".unified-process-pill-text");
+            if (textEl) {
+              textEl.textContent = `${processPillLabel(block, { expanded: !block.collapsed })} ${chevron}`;
+            }
+            btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
           }
           renderedPrints = curPrints;
           return;
@@ -2200,7 +2498,10 @@ export function mountUnifiedShell(
     }
 
     // full render (initial, or escape hatch for unhandled change patterns)
-    chatEl.innerHTML = chat.model.blocks.map(renderBlock).join("");
+    resetLazyMarkdownObserver();
+    markdownRenderEager = false;
+    chatEl.innerHTML = renderBlocksGrouped(chat.model.blocks);
+    markdownRenderEager = true;
     bindNewProcessToggles(chatEl);
     setupFocusObserver();
     scrollToBottomIfNear();
@@ -2212,14 +2513,18 @@ export function mountUnifiedShell(
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    syncLiveThinkingDom();
     void hydrateMermaid(chatEl);
+    observeLazyMarkdown(chatEl);
     scrollStreamingThinkingBodies();
     syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
+      syncLiveThinkingDom();
       void hydrateMermaid(chatEl);
+      observeLazyMarkdown(chatEl);
       scrollStreamingThinkingBodies();
       syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
@@ -2518,6 +2823,15 @@ export function mountUnifiedShell(
   });
 
   // Decision surface: plan overlay + suggestion stack + turn summary
+  sidebarEl.addEventListener("click", (ev) => {
+    const target = ev.target;
+    const el = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+    const btn = el?.closest<HTMLButtonElement>('[data-action="jump-turn-process"]');
+    if (!btn || !sidebarEl.contains(btn)) return;
+    ev.preventDefault();
+    jumpToCurrentTurnProcess();
+  });
+
   projectEls.taskFlow.addEventListener("click", (ev) => {
     const target = ev.target;
     const btn = target instanceof Element
@@ -2604,9 +2918,6 @@ export function mountUnifiedShell(
           if (sid && policy) acceptSuggestionById(sid, policy);
           return;
         }
-        case "jump-turn-process":
-          jumpToCurrentTurnProcess();
-          return;
         case "jump-review-summary":
           jumpToReviewSummary();
           return;
@@ -3160,8 +3471,15 @@ export function mountUnifiedShell(
         if ((event.project_id || "") !== projectState.projectId) {
           resetProjectScopedState(projectState);
         }
+        if (event.session_id !== chat.model.sessionId) {
+          renderedPrints = [];
+          renderedSegmentPrints = [];
+        }
         chat.handleEvent(event);
         projectState.currentSessionId = event.session_id;
+        if (hydrationSessionId && event.session_id === hydrationSessionId) {
+          setStatus(`加载聊天 ${shortSessionId(hydrationSessionId)}…`);
+        }
         if (event.project_id) {
           projectState.projectId = event.project_id;
           projectState.planStatus = event.project_plan_status ?? "draft";
@@ -3183,7 +3501,7 @@ export function mountUnifiedShell(
         setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
         renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        client.listSessions();
+        debouncedListSessions();
         if (event.project_id) {
           refreshProjectThreads();
         }
@@ -3264,8 +3582,10 @@ export function mountUnifiedShell(
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
           renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
-          refreshServices();
-          refreshProjectThreads();
+          if (!projectState.adoptPendingId) {
+            refreshServices();
+            refreshProjectThreads();
+          }
         }
         break;
 
@@ -3356,10 +3676,20 @@ export function mountUnifiedShell(
       case "session.history":
         if (
           event.session_id
+          && hydrationSessionId
+          && event.session_id !== hydrationSessionId
+        ) break;
+        if (
+          event.session_id
+          && !hydrationSessionId
           && projectState.currentSessionId
           && event.session_id !== projectState.currentSessionId
         ) break;
         chat.handleEvent(event);
+        if (pendingSwitchBatch || hydrationSessionId) {
+          completeHydrationWait(event.session_id);
+          setStatus("就绪");
+        }
         break;
 
       case "plan.subagent.done":
@@ -3415,11 +3745,7 @@ export function mountUnifiedShell(
       case "project.thread.new.done":
         projectState.currentSessionId = event.session_id;
         projectState.activeSessionId = event.session_id;
-        if (event.session_replaced) {
-          client.refreshSession();
-        }
-        client.refreshProject();
-        refreshProjectThreads();
+        client.listProjects();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
@@ -3492,7 +3818,13 @@ export function mountUnifiedShell(
           && event.project_id !== projectState.pendingPickerId
         ) break;
         resetProjectScopedState(projectState);
-        projectState.switchInProgress = false;
+        if (event.session_replaced) {
+          startHydrationWait(event.session_id, "切换项目");
+        } else {
+          completeHydrationWait();
+          debouncedListProjects();
+          debouncedListSessions();
+        }
         projectState.switchOverlay = null;
         projectState.pendingPickerId = "";
         projectState.projectId = event.project_id;
@@ -3500,12 +3832,8 @@ export function mountUnifiedShell(
         if (event.project_id) {
           freeChatActive = false;
         }
-        if (event.session_replaced) {
-          client.refreshSession();
-        }
-        client.listProjects();
-        client.refreshProject();
-        refreshProjectThreads();
+        // perform_project_switch already emits project.state, session.banner,
+        // session.memory, session.history — avoid duplicate refresh round-trips.
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
@@ -3514,7 +3842,9 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
-        setStatus(event.message);
+        if (!event.session_replaced) {
+          setStatus(event.message);
+        }
         break;
 
       case "plan.request":
@@ -3611,7 +3941,7 @@ export function mountUnifiedShell(
       case "llm.pending":
         chat.handleEvent(event);
         if (!chat.model.cancelRequested) {
-          setStatus("思考中…");
+          setStatus("处理中…");
         }
         break;
 
@@ -3631,8 +3961,8 @@ export function mountUnifiedShell(
 
       case "reasoning.delta":
         chat.handleEvent(event);
-        if (!chat.model.cancelRequested) {
-          setStatus("思考中…");
+        if (!chat.model.cancelRequested && !statusText.startsWith("·")) {
+          setStatus("处理中…");
         }
         break;
 
@@ -3642,12 +3972,15 @@ export function mountUnifiedShell(
           client.refreshProject();
         }
         if (!chat.model.cancelRequested && !chat.model.confirmPending) {
-          setStatus("就绪");
+          setStatus(chat.isWorking() ? "处理中…" : "就绪");
         }
+        syncWorkingVisual();
         break;
 
       case "turn.end":
         chat.handleEvent(event);
+        setTurnEndStatus(event.finish_reason);
+        syncWorkingVisual();
         break;
 
       case "notice":
@@ -3692,6 +4025,7 @@ export function mountUnifiedShell(
         if (projectState.switchInProgress || projectState.switchOverlay) {
           projectState.switchInProgress = false;
           projectState.pendingPickerId = "";
+          completeHydrationWait();
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
         chat.handleEvent(event);
@@ -3754,10 +4088,10 @@ export function mountUnifiedShell(
     destroyed = true;
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
     clearCancelSafety();
-    if (thinkingTimer !== null) window.clearInterval(thinkingTimer);
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
     if (renderThrottleTimer !== null) window.clearTimeout(renderThrottleTimer);
     renderedPrints = [];
+    renderedSegmentPrints = [];
     focusObserver?.disconnect();
     fileDrop.destroy();
     off();

@@ -18,7 +18,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from agent import has_anchor_message
-from llm_client import LLMClient, LLMResponse, load_config, resolve_context_limit, resolve_session_model
+from llm_client import LLMClient, LLMError, LLMResponse, load_config, resolve_context_limit, resolve_session_model
 from session import Session
 from tools.schema import ToolErrorCode, tool_fail, to_json
 
@@ -37,6 +37,12 @@ DEFAULT_SUMMARIZE_TIMEOUT_SEC = 180.0
 DEFAULT_PAYLOAD_TRIM_RATIO = 0.70
 DEFAULT_TOOL_PAYLOAD_MAX_CHARS = 4000
 _TOOL_PAYLOAD_TRUNC_SUFFIX = "\n…[tool output truncated for context payload]"
+_PATH_HINT_RE = re.compile(
+    r"(?:workspace/[\w./-]+|(?:docs|desktop|agent-core)/[\w./-]+|\b[\w.-]+\."
+    r"(?:md|py|ts|tsx|json|toml|css|html|bat))\b",
+    re.IGNORECASE,
+)
+_SKIP_DIGEST_USER_PREFIXES = ("[本次会议上下文]", "[内核]", "[附件]")
 _ATTACHMENT_LINE_RE = re.compile(r"^- .+? → (.+?) \((.+)\)$")
 FIRST_COMPACT_USER_MESSAGE = (
     "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
@@ -582,29 +588,150 @@ def count_digest_sections(digest_path: Path) -> int:
     return max(numbers) if numbers else 0
 
 
-def format_messages_for_digest(messages: list[dict[str, Any]]) -> str:
+@dataclass(frozen=True, slots=True)
+class DigestFormatOptions:
+    include_tools: bool = True
+    max_content_chars: int | None = None
+    max_total_chars: int | None = None
+
+
+def _clip_text(text: str, max_chars: int | None) -> str:
+    if max_chars is None or len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return "…"
+    return text[: max_chars - 1] + "…"
+
+
+def format_messages_for_digest(
+    messages: list[dict[str, Any]],
+    *,
+    options: DigestFormatOptions | None = None,
+) -> str:
+    opts = options or DigestFormatOptions()
     lines: list[str] = []
+    total = 0
     for message in messages:
         role = message.get("role", "?")
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            lines.append(f"[{role}]\n{content.strip()}")
+        if role == "tool" and not opts.include_tools:
             continue
-        if role == "assistant" and message.get("tool_calls"):
-            lines.append(f"[{role}] (tool_calls)")
+        content = message.get("content")
+        block = ""
+        if isinstance(content, str) and content.strip():
+            body = _clip_text(content.strip(), opts.max_content_chars)
+            block = f"[{role}]\n{body}"
+        elif role == "assistant" and message.get("tool_calls"):
+            tool_lines = [f"[{role}] (tool_calls)"]
             for call in message.get("tool_calls", []):
                 if not isinstance(call, dict):
                     continue
                 fn = call.get("function")
                 if isinstance(fn, dict):
                     name = fn.get("name", "?")
-                    lines.append(f"  - {name}")
+                    tool_lines.append(f"  - {name}")
+            block = "\n".join(tool_lines)
         elif role == "tool":
             preview = content if isinstance(content, str) else str(content)
-            if len(preview) > 500:
-                preview = preview[:499] + "…"
-            lines.append(f"[{role}]\n{preview}")
+            preview = _clip_text(preview, opts.max_content_chars or 500)
+            block = f"[{role}]\n{preview}"
+        if not block:
+            continue
+        sep = "\n\n" if lines else ""
+        projected = total + len(sep) + len(block)
+        if opts.max_total_chars is not None and projected > opts.max_total_chars:
+            remaining = opts.max_total_chars - total - len(sep)
+            if remaining > 20:
+                block = _clip_text(block, remaining)
+                lines.append(block)
+            break
+        if sep:
+            lines.append(block)
+            total = projected
+        else:
+            lines.append(block)
+            total = len(block)
     return "\n\n".join(lines)
+
+
+def _is_summarize_policy_rejection(exc: Exception) -> bool:
+    text = str(exc).casefold()
+    return "content policy" in text or "content_policy" in text
+
+
+def _summarize_model_candidates(session: Session, primary: str) -> list[str]:
+    models: list[str] = []
+    for candidate in (primary,):
+        if candidate and candidate not in models:
+            models.append(candidate)
+    try:
+        from llm_models import get_registry
+
+        flash_id = get_registry(session.paths).default_flash_id
+        if flash_id and flash_id not in models:
+            models.append(flash_id)
+    except Exception:
+        pass
+    return models
+
+
+def _mechanical_digest_body(session: Session, messages: list[dict[str, Any]]) -> str:
+    goal_text = session.goal.strip() or "(unset)"
+    user_snippets: list[str] = []
+    assistant_snippets: list[str] = []
+    tool_names: list[str] = []
+    path_hints: set[str] = set()
+
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role == "user" and isinstance(content, str):
+            text = content.strip()
+            if not text or any(text.startswith(prefix) for prefix in _SKIP_DIGEST_USER_PREFIXES):
+                continue
+            user_snippets.append(_clip_text(text.replace("\n", " "), 240))
+            for match in _PATH_HINT_RE.findall(text):
+                path_hints.add(match)
+        elif role == "assistant" and isinstance(content, str):
+            text = content.strip()
+            if text:
+                assistant_snippets.append(_clip_text(text.replace("\n", " "), 180))
+                for match in _PATH_HINT_RE.findall(text):
+                    path_hints.add(match)
+        elif role == "assistant" and message.get("tool_calls"):
+            for call in message.get("tool_calls", []):
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function")
+                if isinstance(fn, dict):
+                    name = str(fn.get("name", "")).strip()
+                    if name:
+                        tool_names.append(name)
+        elif role == "tool" and isinstance(content, str):
+            for match in _PATH_HINT_RE.findall(content):
+                path_hints.add(match)
+
+    recent_users = user_snippets[-6:]
+    recent_assistant = assistant_snippets[-4:]
+    project_hint = _project_digest_hint(session)
+    paths_block = "\n".join(f"- {item}" for item in sorted(path_hints)[:24]) or "(无)"
+    tools_block = "\n".join(f"- {name}" for name in tool_names[-12:]) or "(无)"
+    users_block = "\n".join(f"- {line}" for line in recent_users) or "(无)"
+    assistant_block = "\n".join(f"- {line}" for line in recent_assistant) or "(无)"
+    return (
+        "## 目标\n"
+        f"{goal_text}\n\n"
+        "## 已做\n"
+        f"{assistant_block}\n\n"
+        "## 未决\n"
+        f"{users_block}\n\n"
+        "## 活跃项目\n"
+        f"{project_hint or '(无)'}\n\n"
+        "## 关键路径与命令\n"
+        f"{paths_block}\n"
+        f"工具调用：\n{tools_block}\n\n"
+        "## 用户约束\n"
+        "(机械摘要：摘要模型因内容策略拒绝，仅保留路径/任务线索)"
+    )
 
 
 def build_digest_summarize_prompt(*, goal: str, transcript: str, project_hint: str = "") -> str:
@@ -639,30 +766,51 @@ def summarize_messages_for_digest(
     *,
     config: ContextConfig | None = None,
     timeout_sec: float | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Return (digest body, used_mechanical_fallback)."""
     cfg = config or load_context_config()
-    transcript = format_messages_for_digest(messages)
-    if not transcript.strip():
-        return _empty_digest_body(session.goal)
-
-    prompt = build_digest_summarize_prompt(
-        goal=session.goal,
-        transcript=transcript,
-        project_hint=_project_digest_hint(session),
-    )
-    model = session.meta.llm_model or resolve_session_model(session.meta.topics)
+    primary_model = session.meta.llm_model or resolve_session_model(session.meta.topics)
     effective_timeout = summarize_timeout_sec() if timeout_sec is None else timeout_sec
-    response = llm.chat(
-        [{"role": "user", "content": prompt}],
-        model=model,
-        tools=None,
-        temperature=0.0,
-        timeout_sec=effective_timeout,
-    )
-    body = (response.content or "").strip()
-    if not body:
-        body = _empty_digest_body(session.goal)
-    return _truncate_digest(body, cfg.digest_max_chars)
+    strategies: list[DigestFormatOptions] = [
+        DigestFormatOptions(),
+        DigestFormatOptions(include_tools=False, max_content_chars=1200, max_total_chars=120_000),
+        DigestFormatOptions(include_tools=False, max_content_chars=400, max_total_chars=40_000),
+    ]
+    policy_rejected = False
+
+    for options in strategies:
+        transcript = format_messages_for_digest(messages, options=options)
+        if not transcript.strip():
+            return _empty_digest_body(session.goal), False
+        prompt = build_digest_summarize_prompt(
+            goal=session.goal,
+            transcript=transcript,
+            project_hint=_project_digest_hint(session),
+        )
+        for model in _summarize_model_candidates(session, primary_model):
+            try:
+                response = llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    model=model,
+                    tools=None,
+                    temperature=0.0,
+                    timeout_sec=effective_timeout,
+                )
+            except LLMError as exc:
+                if _is_summarize_policy_rejection(exc):
+                    policy_rejected = True
+                    continue
+                raise
+            body = (response.content or "").strip()
+            if not body:
+                body = _empty_digest_body(session.goal)
+            return _truncate_digest(body, cfg.digest_max_chars), False
+
+    if policy_rejected:
+        body = _mechanical_digest_body(session, messages)
+        return _truncate_digest(body, cfg.digest_max_chars), True
+
+    return _empty_digest_body(session.goal), False
 
 
 def append_digest_section(session: Session, body: str) -> int:
@@ -688,6 +836,7 @@ def compact_context(
     on_summarize_end: Callable[[], None] | None = None,
 ) -> CompactResult:
     """Compress earlier turns into digest.md; messages.jsonl on disk stays完整."""
+    session.ensure_messages_loaded()
     cfg = config or load_context_config()
     compact_before = effective_compact_start(session)
     split_index = compute_compact_split_index(
@@ -718,7 +867,7 @@ def compact_context(
     if on_summarize_begin is not None:
         on_summarize_begin()
     try:
-        digest_body = summarize_messages_for_digest(session, to_digest, llm, config=cfg)
+        digest_body, mechanical = summarize_messages_for_digest(session, to_digest, llm, config=cfg)
     finally:
         if on_summarize_end is not None:
             on_summarize_end()
@@ -726,18 +875,25 @@ def compact_context(
     session.meta.compact_before_index = split_index
     session.save()
 
+    base_message = (
+        f"已压缩：摘要 {len(to_digest)} 条消息 → digest.md §压缩 {section_number}；"
+        f"保留最近 {cfg.keep_turns} 轮完整对话。"
+    )
+    if mechanical:
+        base_message = (
+            f"已压缩（机械摘要）：摘要模型因内容策略拒绝 LLM 请求，已写入路径/任务线索。"
+            f" {len(to_digest)} 条 → digest.md §压缩 {section_number}；"
+            f"保留最近 {cfg.keep_turns} 轮。"
+        )
     return CompactResult(
         compacted=True,
-        message=(
-            f"已压缩：摘要 {len(to_digest)} 条消息 → digest.md §压缩 {section_number}；"
-            f"保留最近 {cfg.keep_turns} 轮完整对话。"
-        ),
+        message=base_message,
         digest_section=section_number,
         digested_message_count=len(to_digest),
     )
 
 
-def session_memory_event(session: Session) -> dict[str, Any]:
+def session_memory_event(session: Session, *, quick: bool = False) -> dict[str, Any]:
     """WebSocket / CLI payload for thread memory visibility (TURN-FEEDBACK §5)."""
     compacted = session.digest_path.is_file() or session.meta.compact_before_index > 1
     sections = count_digest_sections(session.digest_path) if session.digest_path.is_file() else 0
@@ -746,12 +902,28 @@ def session_memory_event(session: Session) -> dict[str, Any]:
     # UX-019: estimate token usage for frontend indicator
     model = session.meta.llm_model or resolve_session_model(session.meta.topics)
     token_limit = resolve_context_limit(model)
-    llm_messages = build_llm_messages(session)
-    token_usage = estimate_messages_tokens(llm_messages)
+    # Deferred load uses messages.jsonl byte size, which does not shrink after compact
+    # (disk keeps full history). Use real payload estimate once digest exists.
+    use_disk_heuristic = quick and not session._messages_fully_loaded and not compacted
+    if use_disk_heuristic:
+        from session import _count_file_newlines
+
+        message_count = session.messages_total_count
+        if message_count is None:
+            message_count = _count_file_newlines(session.messages_path)
+        try:
+            size = session.messages_path.stat().st_size
+            token_usage = max(1, size // 4)
+        except OSError:
+            token_usage = 0
+    else:
+        session.ensure_messages_loaded()
+        message_count = len(session.messages)
+        token_usage = estimate_session_context_tokens(session)
 
     payload: dict[str, Any] = {
         "type": "session.memory",
-        "message_count": len(session.messages),
+        "message_count": message_count,
         "memory_mode": "compact" if compacted else "full",
         "memory_mode_label": "已压缩" if compacted else "未压缩",
         "token_usage": token_usage,

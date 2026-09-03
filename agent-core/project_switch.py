@@ -233,7 +233,13 @@ def execute_project_switch(
 
     if plan.action == "load_session":
         assert plan.session_id
-        loaded = Session.load(paths, plan.session_id)
+        from session import desktop_switch_message_cap
+
+        loaded = Session.load(
+            paths,
+            plan.session_id,
+            message_cap=desktop_switch_message_cap(),
+        )
         if (loaded.meta.project_id or "").strip() != plan.project_id:
             _bind(loaded, plan.project_id, plan_status=_resolve_open_plan_status(loaded, plan.project_id))
         elif loaded.meta.active_shell != "project":
@@ -347,19 +353,24 @@ def build_project_threads_payload(
     *,
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    from session import list_session_summaries
-
     pid = normalize_project_id(project_id or session.meta.project_id or "")
     archive = read_project_thread_archive(paths).get(pid, [])
     active = lookup_project_session(paths, pid)
+    from session import session_summary_for_id
+
+    needed_ids: list[str] = []
+    if active:
+        needed_ids.append(active)
+    for sid in archive:
+        if sid != active:
+            needed_ids.append(sid)
     summaries = {
-        item["session_id"]: item
-        for item in list_session_summaries(paths, limit=200, include_internal=True)
-        if isinstance(item.get("session_id"), str)
+        sid: session_summary_for_id(paths, sid)
+        for sid in needed_ids
     }
 
     def _thread_item(sid: str, *, archived: bool) -> dict[str, Any]:
-        summary = summaries.get(sid, {})
+        summary = summaries.get(sid) or {}
         return {
             "session_id": sid,
             "title": summary.get("title") or sid,

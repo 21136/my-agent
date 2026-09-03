@@ -367,10 +367,14 @@ class WsBridge:
         return True
 
     def emit_session_state(self, session: Session) -> None:
+        quick_memory = not session._messages_fully_loaded
         self.emit(_session_banner_payload(session))
-        self.emit(models_list_event(self.paths))
-        self.emit(session_memory_event(session))
+        # History before heavy project.state so chat hydrates first (UI-5972).
         self.emit(session_history_event(session))
+        self.emit(
+            session_memory_event(session, quick=quick_memory)
+        )
+        self.emit(models_list_event(self.paths))
         self.emit(_proposals_payload(self.paths))
         if session.meta.project_id:
             from project_api import project_plan_state_payload, project_state_payload
@@ -469,12 +473,15 @@ def _emit_session_list(bridge: WsBridge, paths: AgentPaths) -> None:
 def _repl_refreshes_session_state(line: str) -> bool:
     """REPL meta-commands that replace session overlay / chat history on desktop."""
     lower = line.strip().casefold()
-    return lower in {"新会话", "new", "换主题", "压缩", "summarize", "compact"}
+    return lower in {"新会话", "new", "换主题"}
 
 
 def _refresh_repl_project_binding(repl: ConversationRepl) -> None:
     """Keep the long-lived executor in sync with project controls changed by the UI."""
     repl.agent.executor.session.refresh_bound_project_meta()
+
+
+RUNAWAY_CHAIN_COOLDOWN_SEC = 1.5
 
 
 async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: AgentPaths) -> None:
@@ -525,6 +532,19 @@ async def _run_line(repl: ConversationRepl, bridge: WsBridge, line: str, paths: 
         # C9: always close the turn so desktop can resetTurnActivity (BUG-012).
         bridge.emit({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
         _release_runaway_lease(lease)
+
+    if repl.agent.should_chain_runaway_after_turn(finish_reason):
+        await asyncio.sleep(RUNAWAY_CHAIN_COOLDOWN_SEC)
+        if bridge._turn_busy.is_set():
+            return
+        bridge.emit(
+            {
+                "type": "turn.notice",
+                "level": "info",
+                "text": "仍未完成交付，Harness 正在自动续接…",
+            }
+        )
+        await _run_line(repl, bridge, repl.agent.runaway_chain_user_line(), paths)
 
 
 class WsSessionHandler:
@@ -809,7 +829,8 @@ class WsSessionHandler:
                         "message": "命令已切换当前工作上下文",
                     }
                 )
-            bridge.emit_session_state(repl.session)
+            if _repl_refreshes_session_state(name.strip()):
+                bridge.emit_session_state(repl.session)
             return
 
         if msg_type == "session.list":
@@ -822,16 +843,20 @@ class WsSessionHandler:
             if not isinstance(session_id, str) or not session_id.strip():
                 emit_error(bridge, "session.open requires session_id")
                 return
-            try:
-                repl.session = load_session_for_harness(
+            sid = session_id.strip()
+
+            def _open_session() -> Session:
+                return load_session_for_harness(
                     self.paths,
-                    session_id.strip(),
+                    sid,
                     expected="desktop",
                 )
+
+            try:
+                repl.session = await asyncio.to_thread(_open_session)
                 repl._rebind_agent()
                 bridge.emit_session_state(repl.session)
                 emit_corruption_notices(bridge.emit, repl.session)
-                _emit_session_list(bridge, self.paths)
             except (SessionError, HarnessMismatchError) as exc:
                 emit_error(bridge, str(exc))
             return
@@ -1133,7 +1158,17 @@ async def run_server(host: str, port: int, *, takeover: bool = False) -> int:
             if not sockets:
                 raise RuntimeError("server failed to bind")
             actual_port = sockets[0].getsockname()[1]
-            print(json.dumps({"ready": True, "host": host, "port": actual_port}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "ready": True,
+                        "host": host,
+                        "port": actual_port,
+                        "features": {"tokeness_tools_reasoning_none": True},
+                    }
+                ),
+                flush=True,
+            )
             await server.serve_forever()
     except OSError as exc:
         # S-52: dual bind / stale listener — clear JSON, do not silent-fail or hang.

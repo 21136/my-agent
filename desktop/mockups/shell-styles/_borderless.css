@@ -1,0 +1,140 @@
+/* 去线条：用色阶 + 间距分层，不用 border 画格子（Cursor / Codex 思路） */
+
+.borderless-layout {
+  --border: transparent;
+  --line: none;
+}
+
+.borderless-layout .topbar {
+  border: none;
+  background: var(--sidebar);
+  padding: 0.5rem 1rem;
+}
+
+.borderless-layout .body-row {
+  gap: 0;
+}
+
+.borderless-layout .sidebar {
+  border: none;
+  background: var(--sidebar);
+}
+
+.borderless-layout .main {
+  background: var(--bg);
+}
+
+.borderless-layout .context-bar {
+  border: none;
+  padding: 0.75rem 1.25rem 0.25rem;
+  background: transparent;
+}
+
+.borderless-layout .chat {
+  padding: 0.5rem 1.25rem 1rem;
+}
+
+.borderless-layout .msg {
+  padding: 0.4rem 0;
+  border: none;
+}
+
+.borderless-layout .msg + .msg {
+  border: none;
+}
+
+.borderless-layout .task-card {
+  border: none;
+  background: var(--elevated);
+  border-radius: 10px;
+}
+
+.borderless-layout .sidebar-footer {
+  border: none;
+  padding-top: 0.25rem;
+  opacity: 0.7;
+}
+
+.borderless-layout .view-process {
+  border: none;
+  background: var(--danger-soft);
+}
+
+.borderless-layout .process-card {
+  border: none;
+  background: var(--elevated);
+  border-radius: 12px;
+  margin: 0 1.25rem 0.5rem;
+}
+
+.borderless-layout .composer {
+  border: none;
+  background: transparent;
+  padding: 0 1.25rem 1.25rem;
+}
+
+.borderless-layout .input-row {
+  background: var(--elevated);
+  border-radius: 14px;
+  padding: 0.45rem 0.45rem 0.45rem 0.65rem;
+  box-shadow: var(--composer-shadow, 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04));
+}
+
+.borderless-layout .input-wrap {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  min-height: 40px;
+}
+
+.borderless-layout .btn-stop,
+.borderless-layout .btn-ghost {
+  border: none;
+  background: transparent;
+}
+
+.borderless-layout .btn-stop:hover,
+.borderless-layout .btn-ghost:hover {
+  background: var(--hover);
+}
+
+.borderless-layout .btn-primary {
+  border: none;
+}
+
+.borderless-layout select,
+.borderless-layout .chip {
+  border: none;
+  background: var(--elevated);
+}
+
+.borderless-layout .chip.on {
+  background: var(--accent-soft);
+}
+
+.borderless-layout .token-bar {
+  opacity: 0.55;
+  margin-bottom: 0.5rem;
+}
+
+/* 顶栏控件：无边框药丸 */
+.borderless-layout .tb-group select {
+  padding: 0.32rem 0.6rem;
+  border-radius: 8px;
+}
+
+.borderless-layout .chip {
+  border-radius: 8px;
+}
+
+/* 对比页：线条版叠加 */
+.lines-overlay .topbar { border-bottom: 1px solid #d4cec4 !important; }
+.lines-overlay .sidebar { border-right: 1px solid #d4cec4 !important; }
+.lines-overlay .context-bar { border-bottom: 1px solid #d4cec4 !important; }
+.lines-overlay .msg + .msg { border-top: 1px solid #e8e2d8 !important; }
+.lines-overlay .task-card { border: 1px solid #d4cec4 !important; }
+.lines-overlay .process-card { border: 1px solid #d4cec4 !important; }
+.lines-overlay .composer { border-top: 1px solid #d4cec4 !important; }
+.lines-overlay .input-wrap { border: 1px solid #d4cec4 !important; }
+.lines-overlay .sidebar-footer { border-top: 1px solid #d4cec4 !important; }
+.lines-overlay select, .lines-overlay .chip, .lines-overlay .btn-ghost { border: 1px solid #d4cec4 !important; }

@@ -259,6 +259,52 @@ class PlanArchPatchTests(unittest.TestCase):
         self.assertEqual(session.meta.project_plan_status, "confirmed")
         self.assertFalse(self.agent.check_plan_dirty())
 
+    def test_accept_suggestion_emits_light_plan_state_only(self) -> None:
+        """UI-5972: adopt must not run full project.state + auto_fix rebuild."""
+        from plan_patch import build_patch_preview
+        from project_api import dispatch_project_message
+        from session import create_new
+
+        session = create_new(self.paths, conversation_id=f"adopt-light-{secrets.token_hex(3)}")
+        session.meta.project_id = self.pid
+        session.meta.project_root = f"workspace/{self.pid}"
+        session.meta.active_shell = "project"
+        self.map.write_text("# demo\n\n## Phase 6 修复记录\n\nnote\n", encoding="utf-8")
+        reps = [
+            {
+                "old": "## Phase 6 修复记录",
+                "new": "## 修复记录（原 Phase 6）",
+            }
+        ]
+        preview = build_patch_preview(self.paths, self.pid, relpath="MAP.md", replacements=reps)
+        sug = self.agent._suggestion(
+            kind="file_patch",
+            title="改 MAP.md（待采纳）",
+            body="rename",
+            key="map-light",
+            risk="gate",
+            action="apply_patch",
+            payload={
+                "path": "MAP.md",
+                "base_hash": preview["base_hash"],
+                "replacements": reps,
+                "diff": preview["diff"],
+            },
+        )
+        self.agent.park_gated_suggestion(sug)
+        result = dispatch_project_message(
+            session,
+            self.paths,
+            {
+                "type": "project.plan.accept_suggestion",
+                "suggestion_id": sug["id"],
+            },
+        )
+        events = result.get("_events") if isinstance(result, dict) else []
+        types = [event.get("type") for event in events if isinstance(event, dict)]
+        self.assertNotIn("project.state", types)
+        self.assertEqual(types.count("project.plan.state"), 1)
+
     def test_maybe_clear_stale_plan_dirty_on_load(self) -> None:
         from project_api import maybe_clear_stale_plan_dirty
         from session import create_new

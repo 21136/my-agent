@@ -54,3 +54,26 @@ sequenceDiagram
 
 ## ADR-001 · 首批范围
 - 先验证工程骨架和项目链路，再逐项实现业务服务；业务 API、鉴权和数据持久化留给后续任务。
+
+## SEQ-002 · 异步操作时序
+
+以下为根据当前请求补出的最小可审阅版本；具体参与者和失败分支可在采纳后继续细化。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant C as 客户端
+    participant S as 服务
+    participant A as 异步处理
+    U->>C: 发起操作
+    C->>S: 提交请求
+    S-->>C: 返回受理结果
+    S-)A: 投递异步任务
+    A-->>S: 完成或失败通知
+    S-->>C: 更新处理状态
+    C-->>U: 展示最终结果
+```
+
+- SEQ-002 覆盖用户发起、同步受理、异步处理和结果回传。
+

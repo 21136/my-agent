@@ -145,7 +145,9 @@ def compute_activity_route(
 
     from project_mode import project_plan_gate_open
 
-    if project_plan_gate_open(session.meta):
+    if project_plan_gate_open(session.meta) and not bool(
+        getattr(session.meta, "project_runaway_enabled", False)
+    ):
         return ActivityRoute("project", _project_topics(session), "项目 · 计划待确认")
 
     if pending_proposals > 0:

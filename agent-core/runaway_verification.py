@@ -11,7 +11,9 @@ from typing import Any
 
 from paths import AgentPaths
 from project_mode import (
+    acceptance_command_to_argv,
     acceptance_script_exists,
+    parse_acceptance_command_display,
     parse_acceptance_spec,
     project_dir,
     read_project_artifacts,
@@ -23,6 +25,109 @@ EVIDENCE_FILENAME = "runaway-verification.json"
 EVIDENCE_SCHEMA_VERSION = "0.1"
 _ID_RE = re.compile(r"\b(?:AC|V)-\d+(?:-\d+)*\b", re.IGNORECASE)
 _OUTPUT_LIMIT = 1600
+_ACCEPTANCE_SECTION_HEADER = "## 验收标准"
+MISSING_ACCEPTANCE_ERROR = "PROJECT.md 未定义可执行验收命令"
+_ACCEPTANCE_SCRIPT_PATTERNS = (
+    "**/release-drill.py",
+    "**/project_verify.py",
+    "**/verify*.py",
+    "**/accept*.py",
+)
+
+
+def _find_acceptance_script(root: Path) -> str | None:
+    """Pick a project-local python script suitable for PROJECT.md acceptance."""
+    candidates: list[Path] = []
+    for pattern in _ACCEPTANCE_SCRIPT_PATTERNS:
+        candidates.extend(root.glob(pattern))
+    acceptance_root = root / ".acceptance"
+    if acceptance_root.is_dir():
+        candidates.extend(path for path in acceptance_root.rglob("*.py") if path.is_file())
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for path in candidates:
+        key = path.resolve().as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(path)
+    ordered.sort(key=lambda item: (len(item.parts), item.as_posix()))
+    for path in ordered:
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith(".plan-agent/"):
+            continue
+        return rel
+    return None
+
+
+def ensure_env_quality_commands(paths: AgentPaths, project_id: str) -> bool:
+    """Bootstrap ENV.md quality.commands from PROJECT acceptance when missing (UI-6046)."""
+    from project_env import ENV_FILENAME, ensure_project_env
+    from project_quality import parse_quality_commands_from_env_text
+
+    pid = project_id.strip()
+    if not pid:
+        return False
+    root = project_dir(paths, pid)
+    env_path = root / ENV_FILENAME
+    existing = ""
+    if env_path.is_file():
+        try:
+            existing = env_path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    if parse_quality_commands_from_env_text(existing):
+        return False
+
+    artifacts = read_project_artifacts(paths, pid)
+    display = parse_acceptance_command_display(artifacts.get("PROJECT.md", ""))
+    if not display:
+        return False
+    argv = acceptance_command_to_argv(display)
+    if not argv:
+        return False
+
+    ensure_project_env(
+        paths,
+        pid,
+        quality_commands=[{"id": "acceptance", "cmd": argv}],
+    )
+    try:
+        updated = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(parse_quality_commands_from_env_text(updated))
+
+
+def ensure_project_acceptance_section(paths: AgentPaths, project_id: str) -> bool:
+    """Append executable acceptance command to PROJECT.md when missing (R7-31c)."""
+    pid = project_id.strip()
+    if not pid:
+        return False
+    root = project_dir(paths, pid)
+    project_path = root / "PROJECT.md"
+    if not project_path.is_file():
+        return False
+    original = project_path.read_text(encoding="utf-8")
+    if parse_acceptance_command_display(original) is not None:
+        return False
+    script_rel = _find_acceptance_script(root)
+    if not script_rel:
+        return False
+    command_line = f"- 命令：`python {script_rel}` 期望退出码：0"
+    if _ACCEPTANCE_SECTION_HEADER in original:
+        updated = original.rstrip() + f"\n{command_line}\n"
+    else:
+        updated = (
+            original.rstrip()
+            + f"\n\n{_ACCEPTANCE_SECTION_HEADER}\n\n"
+            + "- AC-001 工程基线可验证\n"
+            + f"{command_line}\n"
+        )
+    if updated == original:
+        return False
+    project_path.write_text(updated, encoding="utf-8")
+    return parse_acceptance_spec(updated) is not None
 
 
 def verification_evidence_path(paths: AgentPaths, project_id: str) -> Path:
@@ -102,7 +207,7 @@ def run_harness_verification(paths: AgentPaths, project_id: str) -> dict[str, An
     if record["error"]:
         pass
     elif acceptance is None:
-        record["error"] = "PROJECT.md 未定义可执行验收命令"
+        record["error"] = MISSING_ACCEPTANCE_ERROR
     elif not acceptance_script_exists(paths, pid, acceptance):
         record["command"] = acceptance.display
         record["expected_exit_code"] = acceptance.expected_exit_code

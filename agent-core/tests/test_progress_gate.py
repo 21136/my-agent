@@ -391,7 +391,17 @@ class ProgressGateExecutorTests(unittest.TestCase):
         )
         self.assertIsNotNone(solo_reason)
 
-    def test_it2406_gate_notice_on_blocked_report(self) -> None:
+    def test_repeat_helper_runaway(self) -> None:
+        reason = report_progress_repeat_block_reason(
+            active_shell="project",
+            task_stop_armed=True,
+            tool_name="run_evolved",
+            arguments={"tool_name": "report_progress", "arguments": {}},
+            runaway_enabled=True,
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("狂奔", reason or "")
+        self.assertNotIn("用户「继续」", reason or "")
         """T-2406: progress gate rejection emits structured gate_notice (no force-check)."""
         from tools.executor import ExecutorSession, ToolExecutor
         from tools.registry import ToolRegistry

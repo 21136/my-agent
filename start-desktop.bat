@@ -3,6 +3,9 @@ REM my-agent desktop launcher (TASKS T-904f). Default entry — Electron + grow 
 setlocal
 cd /d "%~dp0"
 
+REM Default flash model for new sessions / registry (override with your own LLM_MODEL).
+if not defined LLM_MODEL set "LLM_MODEL=tokeness-luna"
+
 set "MY_AGENT_PYTHON=python"
 if exist "%~dp0.venv\Scripts\python.exe" set "MY_AGENT_PYTHON=%~dp0.venv\Scripts\python.exe"
 
