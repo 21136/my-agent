@@ -318,6 +318,51 @@ class RunawayReliabilityTests(unittest.TestCase):
         )
         self.assertIsNone(stage_reason)
 
+    def test_bug_fix_patch_file_env_allowed_in_verification(self) -> None:
+        from project_mode import project_mode_block_reason
+
+        reason = project_mode_block_reason(
+            active_shell="project",
+            project_root="workspace/demo",
+            plan_status="confirmed",
+            workflow_stage="verification",
+            runaway_enabled=True,
+            bug_fix_lane=True,
+            tool_name="run_evolved",
+            arguments={
+                "tool_name": "patch_file",
+                "arguments": {
+                    "path": "workspace/demo/ENV.md",
+                    "find": "tools:",
+                    "replace": "tools:\n  node: \"\"\n",
+                },
+            },
+        )
+        self.assertIsNone(reason)
+
+    def test_verification_patch_file_to_artifact_not_implementation_block(self) -> None:
+        from project_mode import project_mode_block_reason
+
+        reason = project_mode_block_reason(
+            active_shell="project",
+            project_root="workspace/demo",
+            plan_status="confirmed",
+            workflow_stage="verification",
+            runaway_enabled=True,
+            bug_fix_lane=False,
+            tool_name="run_evolved",
+            arguments={
+                "tool_name": "patch_file",
+                "arguments": {
+                    "path": "workspace/demo/ENV.md",
+                    "find": "x",
+                    "replace": "y",
+                },
+            },
+        )
+        self.assertIsNotNone(reason)
+        self.assertNotIn("implementation", reason or "")
+
     def test_bug_fix_executor_allows_env_write_in_verification(self) -> None:
         from tools.executor import ToolExecutor
 

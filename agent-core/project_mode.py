@@ -2328,9 +2328,14 @@ def project_mode_block_reason(
     ):
         return None
 
-    if active_shell == "project" and effective_stage and effective_stage != "implementation":
-        code_write = evolved_name in _CODING_TOOLS or evolved_name == "patch_file"
-        if evolved_name in _WRITE_TOOLS:
+    if (
+        active_shell == "project"
+        and effective_stage
+        and effective_stage != "implementation"
+        and not (bug_fix_lane and effective_stage in {"verification", "release"})
+    ):
+        code_write = evolved_name in _CODING_TOOLS and evolved_name != "patch_file"
+        if evolved_name == "patch_file" or evolved_name in _WRITE_TOOLS:
             code_write = any(
                 path
                 and is_under_project_root(path, project_root)
