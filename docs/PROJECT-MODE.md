@@ -373,6 +373,17 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 
 压缩摘要仅参考；**未决以 `TASKS.md` 为准**（digest 模板见 §7.3）。
 
+### 3.4 轻量模板 vs 标准七文件（ordinary M2）
+
+普通小项目可以跳过完整七文件链。模板旗标写在 `.plan-agent/manifest.json` 的 `project.template`（`light` | `standard`），跟项目走，不跟会话走。
+
+| 模板 | 新建时落盘 | 闸门 |
+|------|------------|------|
+| **standard**（默认） | 七文件 + MAP 旁路，行为不变 | 完整 L2 stale；Progress Gate 仍要任务的 AC/V 关联 |
+| **light** | 短 `PROJECT.md` + `TASKS.md` + `VERIFY.md`（不要求 DESIGN/MAP/SCOPE/TECH-DESIGN/RELEASE） | 跳过 L2 stale 写码阻断；Progress Gate 只要求 TASKS + VERIFY 证据；缺 DESIGN/MAP 不挡写码 |
+
+CLI：`项目 新建 <id> --light` 或 `项目 新建 <id> light`。升档：`项目 升档` / `项目 标准模板` — 只补缺失的标准制品，不覆盖已有进度，并把 `template` 设回 `standard`（幂等）。直接实现入口（M0/M1）与模板档位正交。
+
 ---
 
 ## 4. 计划确认门（核心）
@@ -603,7 +614,9 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 | 命令 | 说明 |
 |------|------|
 | `项目 列表` | 列含 `TASKS.md` 的 workspace 子目录 |
-| `项目 新建 <id>` | `_template` → `workspace/<id>/`；`draft`；建议接 `新会话` |
+| `项目 新建 <id>` | `_template` → `workspace/<id>/` 标准七文件；`draft`；建议接 `新会话` |
+| `项目 新建 <id> --light` / `light` | 轻量模板：只建 `PROJECT.md` / `TASKS.md` / `VERIFY.md`；`project.template=light` |
+| `项目 升档` / `项目 标准模板` | 补齐缺失的标准制品并恢复完整 L2；已是 standard 则幂等 |
 | `项目 打开 <id>` | 设 `project_root`；`active_shell=project`（当前会话须未绑其他项目） |
 | `项目 切换 <id>` | 按 `project_sessions` 续接或新建专用会话；跨项目须确认（CLI 等价于桌面确认卡） |
 | `项目 确认` | `draft`/`plan_dirty` → `confirmed`（等同桌面确认开工）；空 `project_entry` 时记为 `plan` |
@@ -679,3 +692,4 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 | 0.5.2 | 2026-08-15 | T-5831 讨论稿：补齐 `normal/large` 文档内容下限、用例/时序/状态图和技术设计要求 |
 | 0.5.3 | 2026-08-15 | T-5831 已决：双独立图示硬门槛、`completeness`/`content_origin`/`change_scope` 字段、迁移 skeleton 策略 |
 | 0.5.4 | 2026-09-12 | 普通模式 M1：会话 `project_entry`（`""`/`plan`/`direct`）+ CLI `项目 直接实现`；仅 `requirements`+草稿可直接进编码，文档/设计阶段仍走确认设计/开始任务 |
+| 0.5.5 | 2026-09-12 | ordinary M2：轻量模板 `project.template=light`；L2/DESIGN/MAP 降档；`项目 升档` 回标准七文件 |

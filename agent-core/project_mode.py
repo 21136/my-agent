@@ -18,7 +18,15 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from project_manifest import STANDARD_ARTIFACTS, lint_project_content
+from project_manifest import (
+    DEFAULT_PROJECT_TEMPLATE,
+    LIGHT_SCAFFOLD_ARTIFACTS,
+    STANDARD_ARTIFACTS,
+    is_light_project_template,
+    lint_project_content,
+    normalize_project_template,
+    project_template_of,
+)
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
@@ -185,12 +193,13 @@ def _compute_execution_stage(
         for item in manifest.get("artifacts", [])
         if isinstance(item, dict) and item.get("path")
     }
+    light = is_light_project_template(manifest)
     l2_stale = [
         path
         for path, item in artifacts.items()
         if item.get("status") == "stale"
     ]
-    if l2_stale:
+    if l2_stale and not light:
         return {
             "stage": "requirements",
             "reason": "l2_stale",
@@ -203,21 +212,22 @@ def _compute_execution_stage(
             "blockers": ["plan_status"],
         }
 
-    scope = artifacts.get("SCOPE.md") or {}
-    scope_ids = set(scope.get("ids") or [])
-    scope_blockers: list[str] = []
-    if scope.get("status") != "current":
-        scope_blockers.append("SCOPE.md")
-    if not any(str(value).startswith("REQ-") for value in scope_ids):
-        scope_blockers.append("REQ")
-    if not any(str(value).startswith("AC-") for value in scope_ids):
-        scope_blockers.append("AC")
-    if scope_blockers:
-        return {
-            "stage": "requirements",
-            "reason": "scope_incomplete",
-            "blockers": scope_blockers,
-        }
+    if not light:
+        scope = artifacts.get("SCOPE.md") or {}
+        scope_ids = set(scope.get("ids") or [])
+        scope_blockers: list[str] = []
+        if scope.get("status") != "current":
+            scope_blockers.append("SCOPE.md")
+        if not any(str(value).startswith("REQ-") for value in scope_ids):
+            scope_blockers.append("REQ")
+        if not any(str(value).startswith("AC-") for value in scope_ids):
+            scope_blockers.append("AC")
+        if scope_blockers:
+            return {
+                "stage": "requirements",
+                "reason": "scope_incomplete",
+                "blockers": scope_blockers,
+            }
     if task_stats.total == 0:
         return {
             "stage": "requirements",
@@ -225,35 +235,38 @@ def _compute_execution_stage(
             "blockers": ["TASKS.md"],
         }
 
-    design_blockers = [
-        path
-        for path in ("DESIGN.md", "TECH-DESIGN.md")
-        if (artifacts.get(path) or {}).get("status") != "current"
-    ]
-    if design_blockers:
-        return {
-            "stage": "design",
-            "reason": "design_incomplete",
-            "blockers": design_blockers,
-        }
+    if not light:
+        design_blockers = [
+            path
+            for path in ("DESIGN.md", "TECH-DESIGN.md")
+            if (artifacts.get(path) or {}).get("status") != "current"
+        ]
+        if design_blockers:
+            return {
+                "stage": "design",
+                "reason": "design_incomplete",
+                "blockers": design_blockers,
+            }
     change_scope = str(manifest.get("change_scope") or manifest.get("project", {}).get("tier") or "normal")
     content_lint: dict[str, Any] | None = None
-    if project_root is not None and change_scope != "small":
-        content_lint = lint_project_content(
-            project_root,
-            tier=str(manifest.get("project", {}).get("tier") or "normal"),
-            change_scope=change_scope,
-        )
-    elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
-        content_lint = manifest["content_lint"]
+    if not light:
+        if project_root is not None and change_scope != "small":
+            content_lint = lint_project_content(
+                project_root,
+                tier=str(manifest.get("project", {}).get("tier") or "normal"),
+                change_scope=change_scope,
+            )
+        elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
+            content_lint = manifest["content_lint"]
     if not task_stats.all_done:
         if task_stats.done == 0:
             return {"stage": "design", "reason": "tasks_not_started", "blockers": [], "content_lint": content_lint}
         return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": [], "content_lint": content_lint}
 
+    verification_names = ("VERIFY.md",) if light else ("VERIFY.md", "RELEASE.md")
     verification_blockers = [
         path
-        for path in ("VERIFY.md", "RELEASE.md")
+        for path in verification_names
         if (artifacts.get(path) or {}).get("status") != "current"
     ]
     if verification_blockers:
@@ -455,6 +468,29 @@ def _template_body(name: str, project_id: str) -> str:
     return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
 
 
+def _light_template_body(name: str, project_id: str) -> str:
+    bodies = {
+        "PROJECT.md": (
+            "# {{project_id}} · 项目\n\n"
+            "## 目标\n\n- 待填写本轮要交付的结果。\n\n"
+            "## 验证\n\n- 对口证据见 `VERIFY.md`；勾选 TASKS 前须留下验证记录。\n"
+        ),
+        "TASKS.md": (
+            "# {{project_id}} · 任务\n\n"
+            "- [ ] T-001 完成第一项可交付工作\n"
+            "  verify: V-001\n"
+            "  evidence: run_project_tests\n"
+        ),
+        "VERIFY.md": (
+            "# {{project_id}} · 验证\n\n"
+            "## V-001 · T-001\n\n"
+            "- 方法：运行与 T-001 对口的测试或验收命令。\n"
+            "- 证据：待执行。\n"
+        ),
+    }
+    return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
+
+
 def _copy_template_file(src: Path, dest: Path, project_id: str) -> None:
     body = src.read_text(encoding="utf-8")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -466,38 +502,108 @@ def create_project(
     project_id: str,
     *,
     template: str | None = None,
+    project_template: str | None = None,
 ) -> Path:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
     if dest.exists() and any(dest.iterdir()):
         raise ProjectModeError(f"project already exists: workspace/{pid}")
-    src = ensure_template(paths)
+    recipe_id = (template or "").strip()
+    selected_template = normalize_project_template(project_template)
+    if recipe_id in {"light", "standard", "lite", "full"}:
+        selected_template = normalize_project_template(recipe_id)
+        recipe_id = ""
     dest.mkdir(parents=True, exist_ok=True)
-    for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
-        src_file = src / name
-        if src_file.is_file():
-            _copy_template_file(src_file, dest / name, pid)
-        elif name in _TEMPLATE_FILES:
-            (dest / name).write_text(_template_body(name, pid), encoding="utf-8")
+    if selected_template == "light":
+        for name in LIGHT_SCAFFOLD_ARTIFACTS:
+            (dest / name).write_text(_light_template_body(name, pid), encoding="utf-8")
+    else:
+        src = ensure_template(paths)
+        for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+            src_file = src / name
+            if src_file.is_file():
+                _copy_template_file(src_file, dest / name, pid)
+            elif name in _TEMPLATE_FILES:
+                (dest / name).write_text(_template_body(name, pid), encoding="utf-8")
     try:
         from project_env import ensure_project_env
 
         ensure_project_env(paths, pid)
     except Exception:
         pass
-    template_id = (template or "").strip()
-    if template_id:
+    if recipe_id:
         from scaffold_recipes import run_scaffold_after_create
 
-        result = run_scaffold_after_create(paths, pid, template_id)
+        result = run_scaffold_after_create(paths, pid, recipe_id)
         if not result.get("ok"):
             failed = result.get("failed_step") or "unknown"
             err = result.get("error") or f"scaffold step {failed} failed"
-            raise ProjectModeError(f"scaffold {template_id!r} failed: {err}")
+            raise ProjectModeError(f"scaffold {recipe_id!r} failed: {err}")
     from project_manifest import bootstrap_manifest
 
-    bootstrap_manifest(dest, pid)
+    bootstrap_manifest(dest, pid, project_template=selected_template)
     return dest
+
+
+def read_project_template(paths: AgentPaths, project_id: str) -> str:
+    """Return the durable project artifact template (``light`` | ``standard``)."""
+    from project_manifest import load_manifest, manifest_path
+
+    try:
+        pid = normalize_project_id(project_id)
+    except ProjectModeError:
+        return DEFAULT_PROJECT_TEMPLATE
+    try:
+        manifest = load_manifest(manifest_path(project_dir(paths, pid)))
+    except Exception:
+        return DEFAULT_PROJECT_TEMPLATE
+    return project_template_of(manifest)
+
+
+def upgrade_project_to_standard(paths: AgentPaths, project_id: str) -> dict[str, Any]:
+    """Backfill missing seven-file artifacts and re-enable standard L2 gates."""
+    from project_manifest import build_manifest, manifest_path, save_manifest
+
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+    previous = read_project_template(paths, pid)
+    created: list[str] = []
+    src = ensure_template(paths)
+    for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+        dest = root / name
+        existing = ""
+        if dest.is_file():
+            try:
+                existing = dest.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+        if existing.strip():
+            continue
+        src_file = src / name
+        if src_file.is_file():
+            _copy_template_file(src_file, dest, pid)
+        elif name in _TEMPLATE_FILES:
+            dest.write_text(_template_body(name, pid), encoding="utf-8")
+        else:
+            continue
+        created.append(name)
+    try:
+        from project_env import ensure_project_env
+
+        ensure_project_env(paths, pid)
+    except Exception:
+        pass
+    manifest = build_manifest(root, pid, project_template="standard")
+    save_manifest(manifest_path(root), manifest)
+    return {
+        "project_id": pid,
+        "previous_template": previous,
+        "template": "standard",
+        "created": created,
+        "already_standard": previous == "standard" and not created,
+    }
 
 
 def _is_template_document(name: str, project_id: str, text: str) -> bool:
@@ -2524,12 +2630,12 @@ def project_mode_block_reason(
     )
     if plan_is_effectively_confirmed:
         if agent_paths is not None and active_shell == "project":
-            from project_manifest import manifest_has_l2_stale, refresh_project_manifest
+            from project_manifest import manifest_blocks_on_l2_stale, refresh_project_manifest
 
             pid = project_id_from_root(project_root)
             if pid:
                 manifest = refresh_project_manifest(agent_paths, pid)
-                if manifest_has_l2_stale(manifest) and (
+                if manifest_blocks_on_l2_stale(manifest) and (
                     evolved_name in _CODING_TOOLS
                     or evolved_name == "patch_file"
                     or (

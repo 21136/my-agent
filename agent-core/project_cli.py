@@ -30,6 +30,8 @@ from project_mode import (
     snapshot_plan_fingerprints,
     organize_project_documents,
     documentation_ready_for_design,
+    read_project_template,
+    upgrade_project_to_standard,
     utc_now_iso,
 )
 from session import Session, utc_now_iso
@@ -48,6 +50,7 @@ ProjectCommandKind = Literal[
     "status",
     "verify",
     "discipline",
+    "upgrade",
 ]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
@@ -65,6 +68,7 @@ class ProjectCommandResult:
 class ParsedProjectCommand:
     kind: ProjectCommandKind
     project_id: str | None = None
+    project_template: str = "standard"
 
 
 class ProjectCommandError(Exception):
@@ -131,6 +135,11 @@ _PROJECT_VERBS = frozenset(
         "纪律",
         "discipline",
         "profile",
+        "升档",
+        "标准模板",
+        "upgrade",
+        "standard-template",
+        "promote",
     }
 )
 
@@ -235,7 +244,11 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
             except ValueError as exc:
                 raise ProjectCommandError(f"invalid project command: {exc}") from exc
             if tokens and _plausible_project_id_token(tokens[0]):
-                return ParsedProjectCommand(kind="new", project_id=tokens[0])
+                return ParsedProjectCommand(
+                    kind="new",
+                    project_id=tokens[0],
+                    project_template=_parse_new_project_template(tokens[1:]),
+                )
             return None
 
     lowered = stripped.casefold()
@@ -264,12 +277,21 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         combined = f"{tokens[0]}{tokens[1]}".casefold().replace("-", "").replace("_", "")
         if combined in {"直接实现", "直接开工", "directimplement", "implementnow"}:
             verb = "直接实现"
+    if verb in {"标准", "standard"} and len(tokens) >= 2 and tokens[1].casefold() in {
+        "模板",
+        "template",
+    }:
+        verb = "标准模板"
     if verb in {"列表", "list"}:
         return ParsedProjectCommand(kind="list")
     if verb in {"新建", "new", "create"}:
         if len(tokens) < 2:
-            raise ProjectCommandError("项目 新建 <id>")
-        return ParsedProjectCommand(kind="new", project_id=tokens[1])
+            raise ProjectCommandError("项目 新建 <id> [--light]")
+        return ParsedProjectCommand(
+            kind="new",
+            project_id=tokens[1],
+            project_template=_parse_new_project_template(tokens[2:]),
+        )
     if verb in {"打开", "open"}:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 打开 <id>")
@@ -302,12 +324,53 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 纪律 solo|ritual|strict|宽松")
         return ParsedProjectCommand(kind="discipline", project_id=tokens[1])
+    if verb in {"升档", "标准模板", "upgrade", "standard-template", "promote"}:
+        return ParsedProjectCommand(kind="upgrade")
 
     if verb not in _PROJECT_VERBS and _looks_like_project_natural_language(tokens[0]):
         return None
 
     # Unknown verb: pass through to main chat instead of blocking the turn.
     return None
+
+
+def _parse_new_project_template(tokens: list[str]) -> str:
+    """Parse leftover ``项目 新建 <id>`` tokens into ``light`` | ``standard``."""
+    from project_mode import DEFAULT_PROJECT_TEMPLATE, normalize_project_template
+
+    selected = DEFAULT_PROJECT_TEMPLATE
+    skip_next = False
+    for index, raw in enumerate(tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        folded = raw.strip().casefold()
+        bare = folded.lstrip("-")
+        if bare in {"light", "lite"} or folded == "--light":
+            selected = "light"
+            continue
+        if bare in {"standard", "full"} or folded == "--standard":
+            selected = "standard"
+            continue
+        if folded in {"--template", "-t", "template"}:
+            if index + 1 >= len(tokens):
+                raise ProjectCommandError("项目 新建 <id> --template light|standard")
+            skip_next = True
+            selected = _coerce_project_template_token(tokens[index + 1])
+            continue
+        if folded.startswith("--template="):
+            selected = _coerce_project_template_token(folded.split("=", 1)[1])
+            continue
+    return normalize_project_template(selected)
+
+
+def _coerce_project_template_token(raw: str) -> str:
+    value = raw.strip().casefold().lstrip("-")
+    if value in {"light", "lite", "standard", "full"}:
+        from project_mode import normalize_project_template
+
+        return normalize_project_template(value)
+    raise ProjectCommandError("项目模板须为 light 或 standard")
 
 
 def _ensure_coding_topic(session: Session) -> None:
@@ -503,6 +566,7 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         f"计划：{status}",
         f"阶段：{getattr(session.meta, 'project_workflow_stage', 'requirements')}",
         f"纪律：{session.meta.project_delivery_profile or 'solo'}",
+        f"模板：{read_project_template(paths, pid) if pid else 'standard'}",
         f"任务：{stats.done}/{stats.total} 已完成，{stats.open_count} 未勾",
     ]
     entry = getattr(session.meta, "project_entry", "") or ""
@@ -557,7 +621,10 @@ def run_project_command(
 
         try:
             updated, message = create_project_with_session_isolation(
-                paths, session, command.project_id
+                paths,
+                session,
+                command.project_id,
+                project_template=command.project_template,
             )
         except (ProjectModeError, ContextSwitchError) as exc:
             output_fn(f"error: {exc}")
@@ -667,6 +734,26 @@ def run_project_command(
         session.save()
         label = "严格（ritual）" if profile == "ritual" else "宽松（solo）"
         output_fn(f"项目交付纪律已设为 {profile}（{label}）。")
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "upgrade":
+        pid = (session.meta.project_id or "").strip()
+        if not pid or session.meta.active_shell != "project":
+            output_fn("error: 当前会话未打开项目；先「项目 打开 <id>」再升档")
+            return ProjectCommandResult()
+        try:
+            result = upgrade_project_to_standard(paths, pid)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        created = ", ".join(result.get("created") or []) or "无（已有制品已保留）"
+        if result.get("already_standard"):
+            output_fn(f"项目 {pid} 已是标准七文件模板；无需升档。")
+        else:
+            output_fn(
+                f"已升档为标准模板：workspace/{pid}；"
+                f"补全制品：{created}；L2 闸门已恢复。"
+            )
         return ProjectCommandResult(meta_changed=True)
 
     if command.kind == "verify":

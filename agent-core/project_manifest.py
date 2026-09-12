@@ -16,7 +16,10 @@ MANIFEST_FILENAME = "manifest.json"
 CHG_LEDGER_FILENAME = "changes.jsonl"
 MANIFEST_SCHEMA_VERSION = "0.1"
 VALID_TIERS = frozenset({"small", "normal", "large"})
+VALID_PROJECT_TEMPLATES = frozenset({"light", "standard"})
+DEFAULT_PROJECT_TEMPLATE = "standard"
 VALID_CONTENT_ORIGINS = frozenset({"migrated", "scaffold"})
+LIGHT_SCAFFOLD_ARTIFACTS = ("PROJECT.md", "TASKS.md", "VERIFY.md")
 VALID_COMPLETENESS = frozenset({"skeleton", "draft", "complete"})
 VALID_STATUSES = frozenset({"current", "stale_soft", "stale", "evidence_stale"})
 STANDARD_ARTIFACTS = (
@@ -111,6 +114,28 @@ def project_manifest_path(paths: AgentPaths, project_id: str) -> Path:
     return manifest_path(paths.workspace / _project_id(project_id))
 
 
+def normalize_project_template(value: object) -> str:
+    """Persistable artifact set: ``light`` | ``standard`` (default standard)."""
+    text = str(value or "").strip().casefold()
+    if text in {"lite"}:
+        text = "light"
+    if text in {"full"}:
+        text = "standard"
+    return text if text in VALID_PROJECT_TEMPLATES else DEFAULT_PROJECT_TEMPLATE
+
+
+def project_template_of(manifest: Mapping[str, Any] | None) -> str:
+    if not isinstance(manifest, Mapping):
+        return DEFAULT_PROJECT_TEMPLATE
+    project = manifest.get("project")
+    raw = project.get("template") if isinstance(project, Mapping) else None
+    return normalize_project_template(raw)
+
+
+def is_light_project_template(manifest: Mapping[str, Any] | None) -> bool:
+    return project_template_of(manifest) == "light"
+
+
 def _project_id(project_id: str) -> str:
     value = str(project_id or "").strip().lower().replace("_", "-")
     if not _PROJECT_ID_RE.fullmatch(value):
@@ -164,6 +189,7 @@ def build_manifest(
     revision: str = "r0",
     content_origin: str = "scaffold",
     change_scope: str | None = None,
+    project_template: str = DEFAULT_PROJECT_TEMPLATE,
     now: str | None = None,
 ) -> dict[str, Any]:
     pid = _project_id(project_id)
@@ -174,6 +200,7 @@ def build_manifest(
     selected_scope = change_scope or tier
     if selected_scope not in VALID_TIERS:
         raise ManifestError(f"invalid change scope: {selected_scope!r}")
+    selected_template = normalize_project_template(project_template)
     if not _REVISION_RE.fullmatch(revision):
         raise ManifestError(f"invalid revision: {revision!r}")
     root = Path(project_root)
@@ -191,6 +218,7 @@ def build_manifest(
             "id": pid,
             "root": f"workspace/{pid}",
             "tier": tier,
+            "template": selected_template,
             "content_origin": content_origin,
         },
         "change_scope": selected_scope,
@@ -218,6 +246,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
         raise ManifestError("manifest project.root is invalid")
     if project.get("tier") not in VALID_TIERS:
         raise ManifestError("manifest project.tier is invalid")
+    if "template" in project and project.get("template") not in VALID_PROJECT_TEMPLATES:
+        raise ManifestError("manifest project.template is invalid")
     if project.get("content_origin") not in VALID_CONTENT_ORIGINS:
         raise ManifestError("manifest project.content_origin is invalid")
     if manifest.get("change_scope") not in VALID_TIERS:
@@ -384,6 +414,7 @@ def bootstrap_manifest(
     revision: str = "r0",
     content_origin: str = "scaffold",
     change_scope: str | None = None,
+    project_template: str = DEFAULT_PROJECT_TEMPLATE,
 ) -> dict[str, Any]:
     manifest = build_manifest(
         project_root,
@@ -392,6 +423,7 @@ def bootstrap_manifest(
         revision=revision,
         content_origin=content_origin,
         change_scope=change_scope,
+        project_template=project_template,
     )
     save_manifest(manifest_path(project_root), manifest)
     return manifest
@@ -602,6 +634,15 @@ def manifest_has_l2_stale(manifest: Mapping[str, Any]) -> bool:
         isinstance(item, Mapping) and item.get("status") == "stale"
         for item in manifest.get("artifacts", [])
     )
+
+
+def manifest_blocks_on_l2_stale(manifest: Mapping[str, Any] | None) -> bool:
+    """True when L2 stale should block coding writes (standard template only)."""
+    if not isinstance(manifest, Mapping):
+        return False
+    if is_light_project_template(manifest):
+        return False
+    return manifest_has_l2_stale(manifest)
 
 
 def manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:

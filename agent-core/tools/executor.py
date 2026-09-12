@@ -961,6 +961,22 @@ def _validate_task_stop_write(
     )
 
 
+def _session_requires_ac_progress_binding(session: ExecutorSession) -> bool:
+    """Standard projects keep AC+VERIFY binding; light only needs VERIFY."""
+    pid = (getattr(session, "project_id", "") or "").strip()
+    session_dir = getattr(session, "session_dir", None)
+    if not pid or session_dir is None:
+        return True
+    try:
+        from paths import AgentPaths
+        from project_mode import read_project_template
+
+        paths = AgentPaths.from_root(Path(session_dir).parents[2])
+        return read_project_template(paths, pid) != "light"
+    except Exception:
+        return True
+
+
 def _validate_progress_gate_evidence(
     session: ExecutorSession,
     tool_name: str,
@@ -1012,6 +1028,7 @@ def _validate_progress_gate_evidence(
         expected_ac_ids=list((session.armed_task_contract or {}).get("ac_ids") or []),
         expected_verify_ids=list((session.armed_task_contract or {}).get("verify_ids") or []),
         require_binding=bool((session.armed_task_contract or {}).get("metadata_present")),
+        require_ac_binding=_session_requires_ac_progress_binding(session),
     )
     if reason is None:
         return None
