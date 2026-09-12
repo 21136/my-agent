@@ -72,6 +72,13 @@ _READONLY_RE = re.compile(
     r")"
 )
 
+# CLI usage probes — treat as readonly (confirm-free under project cwd).
+_HELP_RE = re.compile(
+    r"(?is)"
+    r"(?:^|\s)(?:--help|-h)(?:\s|$)"
+    r"|(?:^|\s)/\?(?:\s|$)"
+)
+
 
 def classify_run_command(command: str) -> CommandClass:
     text = (command or "").strip()
@@ -85,7 +92,7 @@ def classify_run_command(command: str) -> CommandClass:
         return "network"
     if _BUILD_TEST_RE.search(text):
         return "build_test"
-    if _READONLY_RE.search(text):
+    if _HELP_RE.search(text) or _READONLY_RE.search(text):
         return "readonly"
     return "other"
 

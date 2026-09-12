@@ -40,6 +40,8 @@ class RunCommandPolicyTests(unittest.TestCase):
         self.assertEqual(classify_run_command("gh pr create --title demo"), "network")
         self.assertEqual(classify_run_command("npm run build"), "build_test")
         self.assertEqual(classify_run_command("echo hi"), "readonly")
+        self.assertEqual(classify_run_command("python todo.py --help"), "readonly")
+        self.assertEqual(classify_run_command("python todo.py -h"), "readonly")
 
     def test_project_skip(self) -> None:
         self.assertTrue(working_dir_under_project("workspace/a/b", "workspace/a"))
@@ -155,6 +157,17 @@ class RunCommandPolicyTests(unittest.TestCase):
             )
             self.assertFalse(needs, msg=command)
             self.assertTrue(reason.startswith("skip:"), msg=command)
+
+
+    def test_help_flag_is_readonly_and_skips_in_project(self) -> None:
+        self.assertEqual(classify_run_command("python todo.py --help"), "readonly")
+        needs, reason = run_command_requires_confirm(
+            command="python todo.py --help",
+            working_dir="workspace/a",
+            project_root="workspace/a",
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:readonly")
 
 
 if __name__ == "__main__":
