@@ -29,6 +29,7 @@ from project_mode import (
     project_dir,
     read_project_artifacts,
     read_project_doc,
+    read_project_template,
     read_task_stats,
     run_acceptance_check,
     snapshot_plan_fingerprints,
@@ -110,7 +111,12 @@ def _runaway_user_status(session: Session) -> str:
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import classify_stage_documents, get_delivery_profile
     from progress_gate import review_progress_blocked_flag
-    from project_manifest import manifest_has_l2_stale, manifest_payload, refresh_project_manifest
+    from project_manifest import (
+        manifest_blocks_on_l2_stale,
+        manifest_payload,
+        project_template_of,
+        refresh_project_manifest,
+    )
 
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
@@ -241,7 +247,8 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             last_review_blockers_count=review_blockers_count,
         ),
         "manifest": manifest_payload(manifest) if manifest is not None else None,
-        "manifest_stale": manifest_has_l2_stale(manifest) if manifest is not None else False,
+        "manifest_stale": manifest_blocks_on_l2_stale(manifest) if manifest is not None else False,
+        "project_template": project_template_of(manifest) if manifest is not None else "standard",
         "manifest_error": manifest_error,
         "execution_stage": stage["stage"],
         "execution_stage_status": stage["status"],
@@ -1142,7 +1149,7 @@ def _dispatch_plan_message(
         if msg_type == "project.plan.report_progress":
             task_line = message.get("task_line")
             summary = str(message.get("summary", ""))
-            from project_mode import get_delivery_profile
+            from project_mode import get_delivery_profile, read_project_template
             from progress_gate import report_progress_evidence_block_reason, task_evidence_contract
 
             pid = _project_pid(session)
@@ -1166,6 +1173,7 @@ def _dispatch_plan_message(
                     expected_ac_ids=list(contract.get("ac_ids") or []),
                     expected_verify_ids=list(contract.get("verify_ids") or []),
                     require_binding=True,
+                    require_ac_binding=read_project_template(paths, pid) != "light",
                 )
                 if reason is not None:
                     return {

@@ -360,14 +360,19 @@ def report_progress_evidence_block_reason(
     expected_ac_ids: list[str] | None = None,
     expected_verify_ids: list[str] | None = None,
     require_binding: bool = False,
+    require_ac_binding: bool = True,
 ) -> str | None:
     """G1/G2: block report_progress when this-turn matched evidence is missing."""
     if active_shell != "project":
         return None
     profile = (delivery_profile or "solo").strip().casefold()
     if require_binding:
-        if not task_id or not expected_ac_ids or not expected_verify_ids:
+        if not task_id:
             return "[progress_gate] 当前任务缺少完整 AC/V 关联，禁止勾选。"
+        if require_ac_binding and (not expected_ac_ids or not expected_verify_ids):
+            return "[progress_gate] 当前任务缺少完整 AC/V 关联，禁止勾选。"
+        if not require_ac_binding and not expected_verify_ids:
+            return "[progress_gate] 当前任务缺少 VERIFY 关联，禁止勾选。"
     if profile == "solo":
         if _turn_has_l1_failure(turn_evidence):
             return (
@@ -382,7 +387,7 @@ def report_progress_evidence_block_reason(
         kind,
         turn_evidence,
         task_id=task_id if require_binding else "",
-        ac_ids=expected_ac_ids if require_binding else None,
+        ac_ids=expected_ac_ids if require_binding and require_ac_binding else None,
         verify_ids=expected_verify_ids if require_binding else None,
     )
     if ok:

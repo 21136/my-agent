@@ -205,6 +205,7 @@ def _apply_project_create(
     project_id: str,
     *,
     template: str | None = None,
+    project_template: str | None = None,
 ) -> tuple[Session, str]:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
@@ -213,7 +214,7 @@ def _apply_project_create(
             f"项目 workspace/{pid} 已存在；如需继续该项目，请使用「项目 打开 {pid}」或「项目 切换 {pid}」"
         )
     try:
-        create_project(paths, pid, template=template)
+        create_project(paths, pid, template=template, project_template=project_template)
     except ProjectModeError as exc:
         if "already exists" in str(exc):
             raise ContextSwitchError(
@@ -267,7 +268,7 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        return session, f"已创建并打开项目 workspace/{pid}（计划待确认）"
+        return session, f"已创建并打开项目 workspace/{pid}（计划待确认{_create_template_note(template, project_template)}）"
 
     fresh = create_new(paths)
     _inject_seed(fresh, session, reason=f"切换到项目 {pid}")
@@ -283,7 +284,17 @@ def _apply_project_create(
         ensure_project_env(paths, pid)
     except Exception:
         pass
-    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认）"
+    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认{_create_template_note(template, project_template)}）"
+
+
+def _create_template_note(template: str | None, project_template: str | None) -> str:
+    from project_mode import normalize_project_template
+
+    selected = normalize_project_template(project_template)
+    raw_recipe = (template or "").strip()
+    if raw_recipe in {"light", "standard", "lite", "full"}:
+        selected = normalize_project_template(raw_recipe)
+    return " · 轻量模板" if selected == "light" else ""
 
 
 def _apply_project_switch(
@@ -299,9 +310,18 @@ def create_project_with_session_isolation(
     paths: AgentPaths,
     session: Session,
     project_id: str,
+    *,
+    template: str | None = None,
+    project_template: str | None = None,
 ) -> tuple[Session, str]:
     """Meta-command 「项目 新建」: create only; existing projects must be opened explicitly."""
-    return _apply_project_create(paths, session, project_id)
+    return _apply_project_create(
+        paths,
+        session,
+        project_id,
+        template=template,
+        project_template=project_template,
+    )
 
 
 def foreign_workspace_project_write(
