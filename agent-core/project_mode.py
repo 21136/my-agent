@@ -1790,6 +1790,17 @@ _DIRECT_IMPLEMENT_EXTRA_MARKERS = (
     "implement now",
 )
 
+_DIRECT_IMPLEMENT_BLOCKED_STAGES = frozenset(
+    {"documentation", "design", "verification", "release"}
+)
+VALID_PROJECT_ENTRIES = frozenset({"", "plan", "direct"})
+
+
+def normalize_project_entry(value: object) -> str:
+    """Persistable ordinary-mode entry: ``""`` | ``plan`` | ``direct``."""
+    text = str(value or "").strip()
+    return text if text in VALID_PROJECT_ENTRIES else ""
+
 
 def is_direct_implement_request(user_text: str) -> bool:
     """True when the user explicitly wants code now, not another plan round."""
@@ -1807,24 +1818,65 @@ def is_direct_implement_request(user_text: str) -> bool:
     return any(marker.casefold() in lower for marker in _DIRECT_IMPLEMENT_EXTRA_MARKERS)
 
 
+def ordinary_direct_implement_draft_allowed(session: object) -> bool:
+    """True when ordinary project draft may auto-enter coding (requirements only)."""
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return False
+    if bool(getattr(meta, "project_runaway_enabled", False)):
+        return False
+    if (getattr(meta, "active_shell", "") or "") != "project":
+        return False
+    if not (getattr(meta, "project_id", "") or "").strip():
+        return False
+    if not (getattr(meta, "project_root", "") or "").strip():
+        return False
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    if status not in {"draft", "plan_dirty"}:
+        return False
+    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
+    return stage == "requirements"
+
+
+def should_treat_ordinary_direct_implement(session: object, user_text: str = "") -> bool:
+    """Ordinary-mode turn gate: explicit ``project_entry=direct`` or phrase fallback.
+
+    Never auto-enters coding from documentation/design. Phrase path only when
+    ``project_entry`` is unset. Sticky ``direct`` also applies after that entry
+    already confirmed the plan (implementation / confirmed).
+    """
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return False
+    if bool(getattr(meta, "project_runaway_enabled", False)):
+        return False
+    if (getattr(meta, "active_shell", "") or "") != "project":
+        return False
+    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
+    if stage in _DIRECT_IMPLEMENT_BLOCKED_STAGES:
+        return False
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
+    if entry == "direct":
+        if stage == "requirements" and status in {"draft", "plan_dirty"}:
+            return True
+        return status == "confirmed" or stage == "implementation"
+    if entry:
+        return False
+    if not is_direct_implement_request(user_text):
+        return False
+    if stage == "requirements" and status in {"draft", "plan_dirty"}:
+        return True
+    return status == "confirmed" or stage == "implementation"
+
+
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
     """Ordinary mode: open the plan gate when the user asked to implement directly.
 
     Returns a short notice when confirmation was applied; None when unchanged.
+    Only requirements + draft/plan_dirty (never documentation/design).
     """
-    meta = getattr(session, "meta", None)
-    if meta is None:
-        return None
-    if bool(getattr(meta, "project_runaway_enabled", False)):
-        return None
-    if (getattr(meta, "active_shell", "") or "") != "project":
-        return None
-    status = str(getattr(meta, "project_plan_status", "") or "draft")
-    if status not in {"draft", "plan_dirty"}:
-        return None
-    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
-    # confirm_project_plan only accepts requirements-like stages (not documentation/design).
-    if stage in {"documentation", "design"}:
+    if not ordinary_direct_implement_draft_allowed(session):
         return None
     from project_cli import ProjectModeError, confirm_project_plan
 

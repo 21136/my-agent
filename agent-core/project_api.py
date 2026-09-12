@@ -205,6 +205,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "project_root": root or None,
         "plan_status": plan_status,
         "workflow_stage": workflow_stage,
+        "project_entry": getattr(session.meta, "project_entry", "") or "",
         "design_confirmed_at": getattr(session.meta, "project_design_confirmed_at", "") or None,
         "active_task_id": getattr(session.meta, "project_active_task_id", "") or None,
         "tasks_markdown": tasks_md,
@@ -638,6 +639,8 @@ def dispatch_project_message(
                 confirm_project_plan(session)
             except ProjectModeError as exc:
                 raise ProjectApiError(str(exc)) from exc
+            if not getattr(session.meta, "project_entry", ""):
+                session.meta.project_entry = "plan"
             session.save()
             return {
                 **project_state_payload(session, paths),

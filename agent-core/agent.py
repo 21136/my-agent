@@ -708,41 +708,47 @@ def build_llm_tools(
     if not pid:
         blocked_project = {"plan_partner", "deliverable_review"}
         tools = [item for item in tools if item["function"]["name"] not in blocked_project]
-    elif bool(getattr(session, "direct_implement_turn", False)):
-        # Ordinary direct-implement: plan already auto-confirmed; don't re-enter plan_partner.
-        blocked_direct = {"plan_partner", "deliverable_review"}
-        tools = [item for item in tools if item["function"]["name"] not in blocked_direct]
-    elif getattr(session.meta, "project_runaway_enabled", False):
-        from exec_reliability import runaway_verification_tool_suppressed
-        from runaway_v2 import runaway_v2_enabled
+    else:
+        from project_mode import should_treat_ordinary_direct_implement
 
-        acceptance_passed = bool(
-            getattr(session.meta, "project_runaway_acceptance_passed", False)
+        hide_plan_tools = bool(getattr(session, "direct_implement_turn", False)) or (
+            should_treat_ordinary_direct_implement(session, "")
         )
-        if runaway_v2_enabled(session):
-            from runaway_v2.state import build_v2_state_fields
+        if hide_plan_tools:
+            # Ordinary direct-implement: plan already auto-confirmed; don't re-enter plan_partner.
+            blocked_direct = {"plan_partner", "deliverable_review"}
+            tools = [item for item in tools if item["function"]["name"] not in blocked_direct]
+        elif getattr(session.meta, "project_runaway_enabled", False):
+            from exec_reliability import runaway_verification_tool_suppressed
+            from runaway_v2 import runaway_v2_enabled
 
-            v2_fields = build_v2_state_fields(
-                session.paths,
-                project_id=pid,
-                plan_status=str(getattr(session.meta, "project_plan_status", "") or "draft"),
-                paused_reason=str(
-                    getattr(session.meta, "project_runaway_paused_reason", "") or ""
-                ),
+            acceptance_passed = bool(
+                getattr(session.meta, "project_runaway_acceptance_passed", False)
             )
-            acceptance_passed = bool(v2_fields.get("runaway_acceptance_passed"))
-        suppressed = runaway_verification_tool_suppressed(
-            runaway_enabled=True,
-            workflow_stage=str(getattr(session.meta, "project_workflow_stage", "") or ""),
-            checkpoint=str(getattr(session.meta, "project_runaway_checkpoint", "") or ""),
-            acceptance_passed=acceptance_passed,
-        )
-        if suppressed:
-            tools = [
-                item
-                for item in tools
-                if item["function"]["name"] not in suppressed
-            ]
+            if runaway_v2_enabled(session):
+                from runaway_v2.state import build_v2_state_fields
+
+                v2_fields = build_v2_state_fields(
+                    session.paths,
+                    project_id=pid,
+                    plan_status=str(getattr(session.meta, "project_plan_status", "") or "draft"),
+                    paused_reason=str(
+                        getattr(session.meta, "project_runaway_paused_reason", "") or ""
+                    ),
+                )
+                acceptance_passed = bool(v2_fields.get("runaway_acceptance_passed"))
+            suppressed = runaway_verification_tool_suppressed(
+                runaway_enabled=True,
+                workflow_stage=str(getattr(session.meta, "project_workflow_stage", "") or ""),
+                checkpoint=str(getattr(session.meta, "project_runaway_checkpoint", "") or ""),
+                acceptance_passed=acceptance_passed,
+            )
+            if suppressed:
+                tools = [
+                    item
+                    for item in tools
+                    if item["function"]["name"] not in suppressed
+                ]
     return tools
 
 
@@ -4253,14 +4259,14 @@ class Agent:
             intent == "requirements"
             and bool(getattr(self.session.meta, "project_runaway_enabled", False))
         )
-        from project_mode import is_direct_implement_request
+        from project_mode import should_treat_ordinary_direct_implement
 
         if (
             intent == "requirements"
             and not runaway_requirements_turn
-            and is_direct_implement_request(user_text)
+            and should_treat_ordinary_direct_implement(self.session, user_text)
         ):
-            # Ordinary mode: user asked to implement now — treat as execute.
+            # Ordinary mode: explicit entry or phrase asked to implement now.
             intent = "execute"
             self.session.turn_intent = intent
         if intent == "requirements" and not runaway_requirements_turn:
@@ -4315,19 +4321,21 @@ class Agent:
         self.executor.begin_turn()
 
         direct_implement = False
-        from project_mode import is_direct_implement_request, maybe_auto_confirm_plan_for_direct_implement
+        from project_mode import (
+            maybe_auto_confirm_plan_for_direct_implement,
+            should_treat_ordinary_direct_implement,
+        )
 
-        if (
-            not terminal
-            and not bool(getattr(self.session.meta, "project_runaway_enabled", False))
-            and is_direct_implement_request(user_text)
-        ):
+        if not terminal and should_treat_ordinary_direct_implement(self.session, user_text):
             direct_implement = True
             self.session.direct_implement_turn = True
             notice = maybe_auto_confirm_plan_for_direct_implement(self.session)
             # Keep executor session mirrors in sync with auto-confirm.
             self._sync_turn_mode()
             self.executor.session.project_plan_status = self.session.meta.project_plan_status
+            self.executor.session.project_workflow_stage = getattr(
+                self.session.meta, "project_workflow_stage", ""
+            )
             if notice:
                 self._emit_turn_event(
                     {

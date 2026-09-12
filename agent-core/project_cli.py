@@ -34,7 +34,21 @@ from project_mode import (
 )
 from session import Session, utc_now_iso
 
-ProjectCommandKind = Literal["list", "new", "open", "switch", "new_thread", "organize", "confirm_design", "start_task", "confirm", "status", "verify", "discipline"]
+ProjectCommandKind = Literal[
+    "list",
+    "new",
+    "open",
+    "switch",
+    "new_thread",
+    "organize",
+    "confirm_design",
+    "start_task",
+    "confirm",
+    "direct_implement",
+    "status",
+    "verify",
+    "discipline",
+]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
@@ -71,6 +85,17 @@ _SHORT_PLAN_CONFIRM = frozenset(
     }
 )
 
+_SHORT_DIRECT_IMPLEMENT = frozenset(
+    {
+        "直接实现",
+        "直接开工",
+        "direct-implement",
+        "implement-now",
+        "directimplement",
+        "implementnow",
+    }
+)
+
 _PROJECT_VERBS = frozenset(
     {
         "列表",
@@ -94,6 +119,10 @@ _PROJECT_VERBS = frozenset(
         "确认设计",
         "设计确认",
         "开始任务",
+        "直接实现",
+        "直接开工",
+        "direct-implement",
+        "implement-now",
         "confirm",
         "状态",
         "status",
@@ -167,6 +196,15 @@ def try_short_plan_confirm(session: Session, text: str, output_fn: OutputFn) -> 
         session.save()
         output_fn(message)
         return True
+    if normalized in _SHORT_DIRECT_IMPLEMENT:
+        try:
+            message = confirm_direct_implement(session)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return True
+        session.save()
+        output_fn(message)
+        return True
     if normalized not in _SHORT_PLAN_CONFIRM:
         return False
     try:
@@ -174,6 +212,8 @@ def try_short_plan_confirm(session: Session, text: str, output_fn: OutputFn) -> 
     except ProjectModeError as exc:
         output_fn(f"error: {exc}")
         return True
+    if not getattr(session.meta, "project_entry", ""):
+        session.meta.project_entry = "plan"
     session.save()
     output_fn(message)
     return True
@@ -220,6 +260,10 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="list")
 
     verb = tokens[0].casefold()
+    if len(tokens) >= 2:
+        combined = f"{tokens[0]}{tokens[1]}".casefold().replace("-", "").replace("_", "")
+        if combined in {"直接实现", "直接开工", "directimplement", "implementnow"}:
+            verb = "直接实现"
     if verb in {"列表", "list"}:
         return ParsedProjectCommand(kind="list")
     if verb in {"新建", "new", "create"}:
@@ -244,6 +288,8 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="organize")
     if verb in {"确认设计", "设计确认", "confirm-design", "design-confirm"}:
         return ParsedProjectCommand(kind="confirm_design")
+    if verb in {"直接实现", "直接开工", "direct-implement", "implement-now"}:
+        return ParsedProjectCommand(kind="direct_implement")
     if verb in {"开始任务", "启动任务", "start-task", "implement"}:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 开始任务 <T-ID>")
@@ -294,6 +340,7 @@ def bind_project_session(
 
         session.meta.project_delivery_profile = DEFAULT_PROJECT_DELIVERY_PROFILE
         session.meta.project_runaway_enabled = False
+        session.meta.project_entry = ""
     session.meta.active_shell = "project"
     session.meta.project_id = pid
     session.meta.project_root = root
@@ -316,6 +363,37 @@ def bind_project_session(
 
     record_project_session(session.paths, pid, session.conversation_id)
     return root
+
+
+def confirm_direct_implement(session: Session) -> str:
+    """Ordinary-mode explicit entry: persist ``project_entry=direct`` and open the plan gate."""
+    if session.meta.active_shell != "project":
+        raise ProjectModeError("当前不在项目壳；「项目 直接实现」仅在项目会话可用。")
+    if bool(getattr(session.meta, "project_runaway_enabled", False)):
+        raise ProjectModeError("狂奔模式已开启；「项目 直接实现」仅用于普通模式。")
+    root = (session.meta.project_root or "").strip()
+    pid = (session.meta.project_id or "").strip()
+    if not root or not pid:
+        raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    stage = str(getattr(session.meta, "project_workflow_stage", "requirements") or "requirements")
+    status = str(session.meta.project_plan_status or "draft")
+    if stage == "documentation":
+        raise ProjectModeError(
+            "文档整理阶段不能直接实现；请先「项目 确认设计」后再「项目 开始任务」。"
+        )
+    if stage == "design":
+        raise ProjectModeError("设计阶段不能直接实现；请使用「项目 开始任务 <T-ID>」。")
+    if stage != "requirements":
+        raise ProjectModeError(
+            f"当前阶段为 {stage}，「项目 直接实现」仅在 requirements 且计划为草稿时可用。"
+        )
+    if status not in {"draft", "plan_dirty"}:
+        raise ProjectModeError(
+            f"当前计划状态为 {status}，「项目 直接实现」仅在 draft/plan_dirty 可用。"
+        )
+    message = confirm_project_plan(session)
+    session.meta.project_entry = "direct"
+    return f"已选择直接实现入口（project_entry=direct）。{message}"
 
 
 def confirm_project_plan(session: Session) -> str:
@@ -427,8 +505,13 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         f"纪律：{session.meta.project_delivery_profile or 'solo'}",
         f"任务：{stats.done}/{stats.total} 已完成，{stats.open_count} 未勾",
     ]
+    entry = getattr(session.meta, "project_entry", "") or ""
+    if entry == "direct":
+        lines.append("入口：直接实现")
+    elif entry == "plan":
+        lines.append("入口：先计划")
     if not plan_allows_code_writes(status):
-        lines.append("提示：计划未确认 — 使用「项目 确认」后开始写代码。")
+        lines.append("提示：计划未确认 — 使用「项目 确认」或「项目 直接实现」后开始写代码。")
     return "\n".join(lines)
 
 
@@ -524,6 +607,18 @@ def run_project_command(
     if command.kind == "confirm":
         try:
             message = confirm_project_plan(session)
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        if not getattr(session.meta, "project_entry", ""):
+            session.meta.project_entry = "plan"
+        session.save()
+        output_fn(message)
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "direct_implement":
+        try:
+            message = confirm_direct_implement(session)
         except ProjectModeError as exc:
             output_fn(f"error: {exc}")
             return ProjectCommandResult()

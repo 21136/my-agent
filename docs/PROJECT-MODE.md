@@ -1,6 +1,6 @@
 # 项目模式设计（PROJECT-MODE）
 
-> 版本 **0.5.2** · 2026-08-15  
+> 版本 **0.5.4** · 2026-09-12  
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）；**Phase 58b T-5810～T-5819 制品链运行时基础 done，剩余 S-581**  
 > **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
 > **Desktop 教科书流程**（产品定调）：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)  
@@ -606,7 +606,8 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 | `项目 新建 <id>` | `_template` → `workspace/<id>/`；`draft`；建议接 `新会话` |
 | `项目 打开 <id>` | 设 `project_root`；`active_shell=project`（当前会话须未绑其他项目） |
 | `项目 切换 <id>` | 按 `project_sessions` 续接或新建专用会话；跨项目须确认（CLI 等价于桌面确认卡） |
-| `项目 确认` | `draft`/`plan_dirty` → `confirmed`（等同桌面确认开工） |
+| `项目 确认` | `draft`/`plan_dirty` → `confirmed`（等同桌面确认开工）；空 `project_entry` 时记为 `plan` |
+| `项目 直接实现` | 普通模式 · `requirements` + `draft`/`plan_dirty`：设 `project_entry=direct` 并确认计划，后续回合跳过 `plan_partner` 直接写码。文档/设计阶段与狂奔模式拒绝。短语「直接实现」仍是 `project_entry` 未设时的兼容回退 |
 | `项目 验收` | 解析 `PROJECT.md` 验收命令并 `run_python`（须 `confirmed`） |
 | `项目 状态` | 计划状态 + 未勾 task 数 |
 
@@ -677,3 +678,4 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 | 0.5.1 | 2026-08-15 | IT-5830：采纳操作合并 PlanAgent 状态写入；项目分发异常回传并清理 Desktop pending 状态 |
 | 0.5.2 | 2026-08-15 | T-5831 讨论稿：补齐 `normal/large` 文档内容下限、用例/时序/状态图和技术设计要求 |
 | 0.5.3 | 2026-08-15 | T-5831 已决：双独立图示硬门槛、`completeness`/`content_origin`/`change_scope` 字段、迁移 skeleton 策略 |
+| 0.5.4 | 2026-09-12 | 普通模式 M1：会话 `project_entry`（`""`/`plan`/`direct`）+ CLI `项目 直接实现`；仅 `requirements`+草稿可直接进编码，文档/设计阶段仍走确认设计/开始任务 |

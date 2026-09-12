@@ -62,6 +62,10 @@ ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
 
+ProjectEntry = Literal["", "plan", "direct"]
+DEFAULT_PROJECT_ENTRY: ProjectEntry = ""
+VALID_PROJECT_ENTRIES = frozenset({"", "plan", "direct"})
+
 HarnessKind = Literal["desktop", "terminal"]
 DEFAULT_HARNESS: HarnessKind = "desktop"
 VALID_HARNESSES = frozenset({"desktop", "terminal"})
@@ -171,6 +175,7 @@ class SessionMeta:
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
+    project_entry: ProjectEntry = DEFAULT_PROJECT_ENTRY
     harness: HarnessKind = DEFAULT_HARNESS
     terminal_scope_kind: TerminalScopeKind | Literal[""] = ""
     terminal_cwd: str = ""
@@ -225,6 +230,7 @@ class SessionMeta:
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
+            "project_entry": self.project_entry,
             "harness": self.harness,
             "terminal_scope_kind": self.terminal_scope_kind,
             "terminal_cwd": self.terminal_cwd,
@@ -395,6 +401,11 @@ class SessionMeta:
             else DEFAULT_PROJECT_DELIVERY_PROFILE
         )
 
+        entry_raw = payload.get("project_entry", DEFAULT_PROJECT_ENTRY)
+        project_entry: ProjectEntry = (
+            entry_raw if entry_raw in VALID_PROJECT_ENTRIES else DEFAULT_PROJECT_ENTRY
+        )
+
         harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
         terminal_scope_kind = normalize_terminal_scope_kind(
             payload.get("terminal_scope_kind", "")
@@ -463,6 +474,7 @@ class SessionMeta:
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,
+            project_entry=project_entry,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
             terminal_cwd=terminal_cwd,
