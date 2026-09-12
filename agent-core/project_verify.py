@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
-import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,7 +105,7 @@ def suite_command(suite: str, cwd: Path) -> tuple[str, list[str]]:
     if key == "auto":
         key = detect_suite(cwd)
     if key == "pytest":
-        return "pytest", ["-m", "pytest", "-q", "--tb=short"]
+        return str(cwd), [sys.executable, "-m", "pytest", "-q", "--tb=short"]
     if key == "mvn":
         mvn_cwd = cwd / "backend" if (cwd / "backend" / "pom.xml").is_file() else cwd
         return str(mvn_cwd), ["mvn", "-q", "test"]
@@ -448,8 +448,6 @@ def run_project_tests(
                 "command": command_str,
             }
         except OSError as exc:
-            if argv[0] == "-m" and not shutil.which("python"):
-                return {"ok": False, "error": str(exc), "command": command_str}
             return {"ok": False, "error": str(exc), "command": command_str}
 
     duration_ms = int((time.perf_counter() - started) * 1000)

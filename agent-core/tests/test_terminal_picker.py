@@ -62,6 +62,25 @@ class TerminalPickerTests(unittest.TestCase):
         )
         self.assertIsNone(picked)
 
+    def test_prompt_model_choice_replaces_unencodable_menu_glyphs(self) -> None:
+        import io
+
+        models = [_Entry("deepseek-v4-flash", "Flash")]
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="gbk")
+        try:
+            with mock.patch("terminal_picker._menu_stream", return_value=stream):
+                picked = prompt_model_choice(
+                    models,
+                    current_id="deepseek-v4-flash",
+                    read_key=lambda: "esc",
+                )
+            stream.flush()
+            self.assertIsNone(picked)
+            self.assertTrue(raw.getvalue())
+        finally:
+            stream.close()
+
     def test_render_model_menu_highlight_follows_index(self) -> None:
         from terminal_picker import _format_model_menu_lines
 

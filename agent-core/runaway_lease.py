@@ -220,6 +220,44 @@ class RunawayLease:
             return True
 
 
+def reclaim_local_idle_lease(paths: AgentPaths, project_id: str) -> bool:
+    """Drop a lease file owned by this process when no turn holds it (orphan cleanup)."""
+    pid = project_id.strip()
+    if not pid:
+        return False
+    path = lease_path(paths, pid)
+    with _operation_lock(path):
+        current = _read(path)
+        if not current:
+            return False
+        try:
+            owner = int(current.get("pid"))
+        except (TypeError, ValueError):
+            return False
+        if owner != os.getpid():
+            return False
+        try:
+            path.unlink()
+            return True
+        except OSError:
+            return False
+
+
+def acquire_runaway_lease_with_reclaim(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+    reclaim_local_orphan: bool = False,
+) -> RunawayLease | None:
+    lease = acquire_runaway_lease(paths, project_id, ttl_seconds=ttl_seconds)
+    if lease is not None:
+        return lease
+    if reclaim_local_orphan and reclaim_local_idle_lease(paths, project_id):
+        return acquire_runaway_lease(paths, project_id, ttl_seconds=ttl_seconds)
+    return None
+
+
 def acquire_runaway_lease(
     paths: AgentPaths,
     project_id: str,

@@ -72,6 +72,33 @@ class RunawayVerifyMatrixTests(unittest.TestCase):
             result = lint_verify_matrix(paths, pid)
             self.assertTrue(result.ok)
 
+    def test_mx2_accepts_multiline_verify_record_binding(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "demo"
+            root = paths.workspace / pid
+            root.mkdir(parents=True, exist_ok=True)
+            self._write_core(root)
+            (root / "VERIFY.md").write_text(
+                "# verify_id=V-001\n"
+                "# task_id=T-001\n\n"
+                "## V-001\n"
+                "verification_id: V-001\n"
+                "task_id: T-001\n",
+                encoding="utf-8",
+            )
+            result = lint_verify_matrix(paths, pid)
+            self.assertNotIn("MX-2", {item.rule_id for item in result.errors})
+
+    def test_mx2_flags_unbound_verify_record(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "demo"
+            root = paths.workspace / pid
+            root.mkdir(parents=True, exist_ok=True)
+            self._write_core(root)
+            (root / "VERIFY.md").write_text("- V-002 smoke result\n", encoding="utf-8")
+            result = lint_verify_matrix(paths, pid)
+            self.assertIn("MX-2", {item.rule_id for item in result.errors})
+
 
 if __name__ == "__main__":
     unittest.main()

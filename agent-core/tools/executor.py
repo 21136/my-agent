@@ -101,10 +101,16 @@ class ExecutorSession:
     project_id: str = ""
     project_plan_status: str = ""
     project_workflow_stage: str = ""
+    # v2 may open a temporary maintenance context for one user turn while
+    # the persisted project remains in release_wait. Tool validation refreshes
+    # meta.json on every call, so retain this explicit per-turn override.
+    runaway_v2_runtime_workflow_stage: str = ""
     project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
     runaway_enabled: bool = False
     bug_fix_lane: bool = False
+    runaway_v2_write_scope: tuple[str, ...] | None = None
+    runaway_v2_forbid_plan_partner: bool = False
     project_runaway_checkpoint: str = ""
     project_runaway_acceptance_passed: bool = False
     harness: str = "desktop"
@@ -240,7 +246,10 @@ class ExecutorSession:
         self.project_root = str(payload.get("project_root", "") or "").strip()
         self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
-        self.project_workflow_stage = str(payload.get("project_workflow_stage", "") or "")
+        persisted_stage = str(payload.get("project_workflow_stage", "") or "")
+        self.project_workflow_stage = (
+            self.runaway_v2_runtime_workflow_stage.strip() or persisted_stage
+        )
         self.project_active_task_id = str(payload.get("project_active_task_id", "") or "")
         from project_mode import normalize_delivery_profile
 
@@ -712,6 +721,7 @@ def _validate_project_mode_call(
         arguments=arguments,
         agent_paths=agent_paths,
         bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
+        runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
     )
     if reason is None:
         return None
@@ -728,6 +738,7 @@ def _validate_project_mode_call(
             tool_name=tool_name,
             arguments=arguments,
             bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
+            runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
         )
         == PLAN_DOMAIN_WRITE_BLOCK_MSG
     ):
@@ -1856,6 +1867,9 @@ class ToolExecutor:
             runaway_enabled=bool(self.session.runaway_enabled),
             workflow_stage=stage,
             checkpoint=checkpoint,
+            runaway_v2_forbid_plan_partner=bool(
+                getattr(self.session, "runaway_v2_forbid_plan_partner", False)
+            ),
         ):
             if checkpoint in {"verifying", "release_wait"}:
                 message = (
@@ -3048,6 +3062,14 @@ class ToolExecutor:
             action = str(inner.get("action") or "").strip().lower()
             if action == "list" or bool(inner.get("dry_run")):
                 return False
+        # git_restore defaults to a preview; only an explicit dry_run=false may discard.
+        if evolved is not None and evolved.name == "git_restore":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            raw_dry_run = inner.get("dry_run", arguments.get("dry_run"))
+            if raw_dry_run is None or raw_dry_run is True:
+                return False
         # db_query: readonly SELECT path skips confirm; write=true requires confirm.
         if evolved is not None and evolved.name == "db_query":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -3143,7 +3165,7 @@ class ToolExecutor:
             return False
 
         name = evolved.name
-        if name in {"git_push", "git_clone", "http_request", "browser_open"}:
+        if name in {"git_restore", "git_push", "git_clone", "http_request", "browser_open"}:
             return False
 
         from tools.builtin import run_evolved as _run_evolved_mod
@@ -3151,19 +3173,23 @@ class ToolExecutor:
         inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
         if name in {"write_text", "patch_file"}:
             from write_policy import is_sensitive_write_path, path_under_project
+            from project_mode import (
+                BUG_FIX_PLAN_WRITE_ALLOWLIST,
+                _path_matches_write_scope,
+                project_path_rel,
+            )
 
             path = str(inner.get("path") or "").strip()
-            if bool(getattr(self.session, "bug_fix_lane", False)) and path:
-                from project_mode import BUG_FIX_PLAN_WRITE_ALLOWLIST, project_path_rel
-
-                rel = project_path_rel(path, self.session.project_root)
+            if not path or not path_under_project(path, self.session.project_root):
+                return False
+            rel = project_path_rel(path, self.session.project_root)
+            runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
+            if runaway_scope and rel and _path_matches_write_scope(rel, runaway_scope):
+                return True
+            if bool(getattr(self.session, "bug_fix_lane", False)) and rel:
                 if rel in BUG_FIX_PLAN_WRITE_ALLOWLIST:
-                    return path_under_project(path, self.session.project_root)
-            return bool(
-                path
-                and path_under_project(path, self.session.project_root)
-                and not is_sensitive_write_path(path)
-            )
+                    return True
+            return not is_sensitive_write_path(path)
 
         if name == "run_command":
             from run_command_policy import classify_run_command, working_dir_under_project
@@ -3659,6 +3685,60 @@ def resolve_write_confirm(
     )
 
 
+def _preview_text_field(value: str, *, label: str, head: int = 80) -> str:
+    """One-line summary for large text fields in confirm previews."""
+    lines = value.count("\n") + 1
+    if len(value) <= head and lines <= 3:
+        snippet = value.replace("\n", " ").strip()
+        return f"{label}：{snippet}"
+    return f"{label}：{len(value)} 字符 · {lines} 行"
+
+
+def _summarize_confirm_inner(evolved_name: str, inner: dict[str, Any]) -> list[str]:
+    """Compact human lines for evolved tool confirm — never dump full file bodies."""
+    from tool_display import display_tool_name
+
+    name = (evolved_name or "").strip()
+    if name == "write_text" and isinstance(inner, dict):
+        path = inner.get("path") or inner.get("file") or "?"
+        lines = [f"{display_tool_name('write_text')}：{path}"]
+        content = inner.get("content")
+        if isinstance(content, str) and content:
+            lines.append(_preview_text_field(content, label="内容"))
+        on_conflict = inner.get("on_conflict")
+        if on_conflict:
+            lines.append(f"冲突处理：{on_conflict}")
+        return lines
+    if name == "patch_file" and isinstance(inner, dict):
+        path = inner.get("path") or inner.get("file") or "?"
+        lines = [f"{display_tool_name('patch_file')}：{path}"]
+        find = inner.get("find")
+        if isinstance(find, str) and find:
+            lines.append(_preview_text_field(find, label="查找", head=72))
+        replace = inner.get("replace")
+        if isinstance(replace, str) and replace:
+            lines.append(_preview_text_field(replace, label="替换为", head=72))
+        return lines
+    if name == "run_command" and isinstance(inner, dict):
+        cmd = inner.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            cmd_line = _preview_text_field(cmd, label="命令", head=96)
+            lines = [f"运行命令：{cmd_line.removeprefix('命令：')}"]
+            cwd = inner.get("cwd")
+            if isinstance(cwd, str) and cwd.strip():
+                lines.append(f"工作目录：{cwd}")
+            return lines
+    preview_inner: dict[str, Any] = dict(inner)
+    for key in ("content", "text", "new_text", "find", "replace", "patch", "command"):
+        val = preview_inner.get(key)
+        if isinstance(val, str) and len(val) > 120:
+            preview_inner[key] = f"({len(val)} 字符)"
+    b64 = preview_inner.get("content_base64")
+    if isinstance(b64, str) and len(b64) > 64:
+        preview_inner["content_base64"] = f"{b64[:48]}…({len(b64)} chars)"
+    return [f"参数：{json.dumps(preview_inner, ensure_ascii=False, sort_keys=True)}"]
+
+
 def build_confirm_preview(
     tool_name: str,
     arguments: dict[str, Any],
@@ -3669,31 +3749,29 @@ def build_confirm_preview(
     agent_paths: AgentPaths | None = None,
 ) -> str:
     """Human-readable preview shown before confirm."""
-    lines = [f"Tool: {tool_name}"]
+    lines: list[str] = []
     if tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
-        lines.append(f"Evolved: {evolved_name}")
         inner = run_evolved.coalesce_tool_arguments(arguments)
-        if isinstance(inner, dict) and inner:
-            preview_inner = dict(inner)
-            b64 = preview_inner.get("content_base64")
-            if isinstance(b64, str) and len(b64) > 64:
-                preview_inner["content_base64"] = f"{b64[:48]}…({len(b64)} chars)"
-            lines.append(f"Arguments: {json.dumps(preview_inner, ensure_ascii=False, sort_keys=True)}")
+        if isinstance(evolved_name, str) and evolved_name.strip():
+            lines.extend(_summarize_confirm_inner(evolved_name, inner if isinstance(inner, dict) else {}))
+        elif isinstance(inner, dict) and inner:
+            lines.extend(_summarize_confirm_inner("", inner))
         if arguments.get("dry_run"):
-            lines.append("Mode: dry_run")
+            lines.append("模式：dry_run")
         if evolved is not None:
-            lines.append(f"Policy: allow_approve_all={evolved.policy.allow_approve_all}")
+            if evolved.policy.allow_approve_all:
+                lines.append("可本会话一键放行：是")
             if evolved.name == "run_command" and isinstance(inner, dict):
                 if bool(inner.get("background")):
-                    lines.append("Mode: background → escalate to run_service start")
+                    lines.append("模式：后台 → 转为 run_service")
                 else:
-                    lines.append("Note: exits when done; long-lived processes use run_service (or background:true)")
+                    lines.append("说明：结束后退出；长驻进程请用 run_service")
                 try:
                     from run_command_policy import classify_run_command
 
                     cmd = inner.get("command") if isinstance(inner.get("command"), str) else ""
-                    lines.append(f"Command class: {classify_run_command(cmd)}")
+                    lines.append(f"命令类型：{classify_run_command(cmd)}")
                 except Exception:
                     pass
             if (
@@ -3712,7 +3790,7 @@ def build_confirm_preview(
                         session=session,
                         agent_paths=agent_paths,
                     )
-                    lines.append(f"Write policy: {reason}")
+                    lines.append(f"写入策略：{reason}")
                 except Exception:
                     pass
             if evolved.name == "browser_open" and isinstance(inner, dict):

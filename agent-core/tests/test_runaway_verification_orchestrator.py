@@ -153,7 +153,7 @@ class RunawayVerificationOrchestratorTests(unittest.TestCase):
             session.meta.project_runaway_enabled = True
             agent = Agent.create(session)
             line = agent.runaway_chain_user_line()
-            self.assertIn("verification 出口", line)
+            self.assertIn("进入验收阶段", line)
             self.assertNotIn("下一项开放任务", line)
 
 

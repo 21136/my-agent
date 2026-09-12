@@ -433,6 +433,7 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
 
   const fileDrop = mountFileDrop({
     composer,
+    pasteTargets: [composer, input],
     client,
     shell: BACKEND_SHELL,
     canAccept: () => bubbleOpen && !chat.model.confirmPending,

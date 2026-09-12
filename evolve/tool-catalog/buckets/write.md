@@ -6,7 +6,7 @@
 | 工具 | 作用 |
 |------|------|
 | `write_text` | **新建/覆盖**文本文件（路径相对 agent root；见 WRITE-SCOPE） |
-| `patch_file` | **改已有**：unified diff / 片段修补（主路径） |
+| `patch_file` | **改已有**：单片段或结构化多 hunk 原子修补（主路径；统一 diff 解析待后续适配） |
 | `copy_move` | 复制或移动文件/目录（agent 树内；`host:` 路径见 builtin + 托管区 overlay） |
 | `move_to_trash` | 移到 `_trash/`（可还原语义，非永久删） |
 | `design_document` | 按四种软件设计文档类型生成结构化 Markdown 或 DOCX；项目内优先写入 `workspace/<id>/docs/` |
@@ -26,5 +26,6 @@
 - **换行（BUG-025 · fixed）**：`write_text` / `patch_file` 落盘前规范化 LF，避免 Windows CRLF 上 `\r` 增殖；已污染文件可一次 `write_text` 覆盖清理。
 - **Vue / 多行源文件 >6KB**：禁止 inline `content`；用 `workspace/_staging/<name>` + `content_workspace_path`。
 - **多行块插入**（empty slot、skeleton）：勿用 `start_line`+`end_line` 单行替多行；用 **find 唯一锚点** 或 staging 整文件。
+- **patch_file v2**：可用 `hunks=[{find,replacement}, …]`、`base_hash`、`patch_id`、`dry_run`；所有 hunk 先在内存中校验，任一失败都不落盘。相同 `patch_id` 会查 `data/patch-ledger.jsonl` 并幂等跳过；文件外部变化后不会猜测重放。
 - **不要**为「追加一行」再造分域工具；用 `patch_file`。
 - **项目绑定**下：`patch_file` 与覆盖已有文件的 `write_text` 由执行器 `write_policy` 分层免确认（仍受 WRITE-SCOPE / 计划门约束）；见 [CONFIRM-PIPELINE.md](../../docs/CONFIRM-PIPELINE.md) §11。

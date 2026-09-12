@@ -28,10 +28,13 @@
 |------|------|
 | `run_command` | 通用 shell（一次性）；`background:true` 升格 `run_service` |
 | `run_service` | 长驻进程托管 |
+| `interactive_terminal` | **active**；需要 stdin、实时输出、Ctrl-C、EOF 或 attach/resume；由长期 agent/server 宿主托管 worker |
 | `repair_node_modules` | **前端依赖损坏**：删 `node_modules`（可选 lock）+ 重装；优先于此，勿拆成 rmdir+npm install |
 | `browser_open` | 系统浏览器打开 http(s) |
 | `run_demo` | 在 `agent-core/` 下运行 `python <script>.py` |
-| `git_snapshot` | 只读 status + diff --stat |
+| `git_snapshot` | 只读 status + diff stat；需要检查具体改动时使用 `include_diff=true`，可选 staged/base_ref/path 过滤 |
+| `git_restore` | **active**；默认 dry-run，只有显式 `dry_run=false`、expected_hash 匹配且通过确认后才恢复 |
+| `structured_test` | **active**；统一测试 status/失败定位/超时/缺依赖，底层复用 `run_project_tests` |
 | `git_commit` | 受控 add+commit（禁 force/amend/push） |
 | `git_branch` | list / create / switch（禁 force checkout） |
 | `git_push` | 推送当前分支（禁 force；永远确认） |
@@ -52,7 +55,7 @@
 | `workspace/` | 用户工作 / 项目产物 |
 | `data/` | session / log；默认 gitignore |
 
-动手只用 **6 Builtin + `run_evolved`**；读记忆正文用 `read_file evolve/memories/...`。
+动手只通过当前暴露的已注册 builtin、扁平原语和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。当前 builtin 基线为 12 个（核心 8 + 编排 4），不把 evolved 工具误写成 builtin。
 
 **common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
 

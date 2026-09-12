@@ -155,6 +155,9 @@ class ReplTurnCancelGuard:
         """Equivalent to desktop ``turn.cancel`` while a REPL turn is active."""
         if not self._turn_busy:
             return False
+        mark_stopping = getattr(self._repl, "mark_execution_stopping", None)
+        if callable(mark_stopping):
+            mark_stopping()
         self._repl.agent.request_cancel()
         return True
 

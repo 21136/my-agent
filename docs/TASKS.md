@@ -1,8 +1,8 @@
 # 任务清单（TASKS）
 
-> 版本 0.2.0 · 2026-08-19 · 细分到每个 task，**先写文档，再动手**
+> 版本 0.2.1 · 2026-09-07 · 细分到每个 task，**先写文档，再动手**
 > **新会话**：先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再读 [MAP.md](./MAP.md)。
-> **当前焦点**：以 `workspace/test` 为试点，使用四个核心制品跑通一个真实功能闭环。
+> **当前焦点**：收口 T-6106 v1 兼容回归、T-6107 续接单真源；S-6106 music 试点已完成，继续推进 UX-029 M2 / UX-030 验收。
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -45,7 +45,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | ID | 任务 | 交付物 | 验收 | 状态 |
 |----|------|--------|------|------|
 | UI-6001 | 项目上下文栏与统一状态 view model | Desktop 上下文栏、独立决策条、状态映射和下一步动作 | 六种状态与快照一致；不显示原始 Markdown 长摘要；设计未确认时不显示“开始实现”，先提供“确认设计”；设计确认后选择开放任务并切换下一目标上下文；聊天焦点保留完整对话区 | in_progress |
-| UI-6002 | 侧栏态势收敛 | 侧栏目标/进度/决策/异常四区 | 不展开完整文档、工具清单和 Services；同一进度只显示一种计数口径 | doc |
+| UI-6002 | 侧栏态势收敛 | 侧栏目标/进度/决策/异常四区 | 不展开完整文档、工具清单和 Services；同一进度只显示一种计数口径 | doc · 信息架构见 UX-026 · **视觉见 UX-029 / [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)** |
 | UI-6003 | 主区焦点导航 | 聊天/方案/文档/任务/验证焦点 | 从侧栏进入文档或任务后主区宽版展示，返回聊天不丢会话状态 | doc |
 | UI-6004 | 决策动作文案与打断治理 | 确认范围、确认方案、开始任务、风险接受、发布确认 | 普通 warning 不弹关闭式提示；决策卡明确对象、影响和动作 | doc |
 | UI-6005 | 文档批次连续体验 | 文档整理进度、去重汇总、错误即时提示 | 四个文档连续生成只出现一个批次进度和一个汇总入口，真实错误立即可见 | doc |
@@ -98,6 +98,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-5971 | 队列空自动进 verifying | `_advance_runaway_checkpoint` · `queue_complete` 旁路 progress 门 | 无 active T-* · 全勾选 → `verifying`（不等本 turn 证据） | **done** |
 | UI-5972 | 项目会话切换性能 | [SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md) · UX-027 | 去重 refresh · history 窗口 · tail 读 jsonl · plan state 去重 | **done** |
 | UI-6040 | 聊天活动轨重设计 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · UX-028 | P0～M2 ActivityEntry 时间线 · Turn Card · 历史/侧栏对齐 | **done** |
+| UI-6041 | 壳层视觉统一（侧栏+顶栏） | [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · UX-029 | M0+M1 done · M2 去重；S-UX-029 · S-6041 手工 | **in_progress** |
 | UI-6041 | 狂奔开头 prep 触发 | [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md) · `_prepare_runaway_project_start` | 狂奔 + 早期 stage 每回合 prep；`project.runaway.set` 同步 prep；不绑长文 requirements intent | **done** |
 | UI-6042 | 狂奔 begin_turn 武装对齐 | `executor.begin_turn` · `next_open_task` / `active_task_id` | 狂奔武装当前/下一依赖满足任务，不用 `first_open_task` | **done** |
 | UI-6043 | 狂奔早期 overlay 与 executor 一致 | `format_project_overlay` | requirements/documentation 明示 stage_gate 禁止业务代码 | **done** |
@@ -110,6 +111,77 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-6050 | 狂奔续接 verification 文案 | `runaway_chain_user_line` | 队列空 → verification 出口说明，非「下一项任务」 | **done** |
 | UI-6051 | verification prompt 对齐 | `loader` digest_note · project_prompt | 与 Harness 谓词一致；勿教主 Agent 直写 ENV | **done** |
 | UI-6052 | checkpoint 谓词审计 | `agent` · `exec_reliability` | review/report_progress 不驱动 checkpoint | **done** |
+| UI-6053 | 同回合过程段跳转 + 狂奔 idle 侧栏 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) §7.5 · `project-panel.ts` · `index.ts` | S-UX-028h～j；幂等 resume 不刷 notice | **in_progress** |
+
+### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./RUNAWAY-V2.md)）
+
+> **DOC-04**：MAP §2 Phase 60 · 矩阵行「狂奔 v2」· 回归 S-6106 / IT-6101～6106 / **IT-6107**
+> **原则**：Anthropic 外部 checklist + Codex 单 turn + Cursor 薄 harness + Pi profile；**不**再叠 checkpoint / bug-fix 轨 / Harness 短接。续接见 [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6100 | v2 设计文档 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) **v0.2.1** · MAP · 本文 | 失败场景、derive 算法、清单 merge、单 turn 时序、升格、走查、测试矩阵已写清 | **done** |
+| T-6101 | `build_checklist` 生成器 | `runaway_v2/checklist.py` · 复用 `lint_verify_matrix` | IT-6101 MX/T/PROJECT/ENV → checklist 项 | **done** |
+| T-6102 | `RunawayController.run_turn` 单入口 | `runaway_v2/controller.py` · `agent.run_turn` 分流 · `MY_AGENT_RUNAWAY_V2` | IT-6102 不调用 v1 `_maybe_runaway_*` | **done** |
+| T-6103 | turn_end acceptance hook | `runaway_v2/acceptance.py` · command exit code | IT-6103 非 0 不标 passed | **done** |
+| T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
+| T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
+| T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · 文档废止表 | v2 默认 off 时 v1 仍可跑；当前选定 v1 回归 108/112，通过外的 4 项待收口 | **in_progress** |
+| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；兼容 `chain_after_ok` / `plan.should_chain` 待移除；IT-6107-a～g · S-UX-028m | **in_progress**（核心与 IT-6107-a～g 已接入并通过；体验脚本里程碑回归已修；兼容层 / 指纹 / S-UX-028m 待收口） |
+| S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
+
+### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
+
+> **DOC-04**：MAP §2 Phase 61 · 影响面为工具协议、执行可靠性、上下文和 Desktop/Terminal 消费；实现前需补 STABILIZATION 矩阵与独立 IT/S 编号。
+> **当前状态**：缺口盘点、契约补全和提示词矩阵已完成；P0 `interactive_terminal`、Git diff/restore 文件级切片与 `structured_test` 协议适配已验收并 active，`patch_file` v2 仍为 experimental，其余工具尚未开始。
+> **原则**：补齐 Agent 开发原语，不复制完整 IDE；先评估成熟开源组件，再通过适配层复用；优先复用现有 `run_command`、`run_service`、`patch_file`、Git、测试和浏览器入口。开源项目只借鉴设计时，不嵌入完整 Agent runtime。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6200 | 工具体验缺口路线图 | [AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · MAP | 当前能力、P0/P1/P2、狂奔边界和实施顺序写清 | **doc** |
+| T-6201 | P0 终端会话实现切片 | `evolve/tools/common/interactive_terminal/` · `requirements-optional.txt` | IT-6201；PTY/pipe、Windows Ctrl-C、stdin EOF、编码、并发、session lock、孤儿进程、上限、日志保留和重启恢复 | **active**（agent/server 宿主托管 worker；Windows smoke 和跨调用 attach 已通过；服务重启主动恢复待后续） |
+| T-6202 | P0 原子编辑实现切片 | `evolve/tools/coding/patch_file/` · `data/patch-ledger.jsonl` | IT-6202；多 hunk、base hash、dry-run、失败不落盘、patch id、换行/二进制/幂等和多文件失败语义 | **experimental**（单文件结构化 hunk 已实现；统一 diff/跨文件事务待收口） |
+| T-6203 | P0 Git 变更与回退实现切片 | `git_snapshot` diff 扩展 · `git_restore` · `GIT-VENDOR.md` | 文件 diff、文件级局部恢复、用户改动保护、确认卡而非模型 token | **active**（IT-6203 5/5；hunk 级恢复、baseline/ledger 归属待后续收口） |
+| T-6204 | P0 结构化测试协议实现切片 | `agent-core/structured_test.py` · `evolve/tools/project/structured_test/` · `PROJECT-VERIFY.md` | 统一状态、失败 `file:line`、耗时、重跑和缺依赖语义 | **active**（IT-6204 4/4；JUnit/JSON 原生报告适配、取消和真实重跑执行待后续收口） |
+| T-6205 | P1 语言服务原语设计 | `diagnostics` · `symbol` | LSP 发现/启动/缓存、workspace root、缺依赖、不支持语言、只读诊断和受门控重命名 | todo |
+| T-6206 | P1 浏览器检查设计 | `browser_inspect` · [BROWSER.md](./BROWSER.md) | 生命周期、profile/cookie 隔离、截图/trace、网络 allowlist、超时、上传下载和敏感状态清理 | todo |
+| T-6207 | P1 并行隔离工作区设计 | `explore` · `deliverable_review` · worktree contract | 单项目单活线、只读并行、显式隔离写入、输入快照、冲突检测和结果采纳 | todo |
+| T-6208 | P1 变更审查设计 | `change_review` · `git_snapshot` diff · VERIFY | hunk 风险、测试关联、接受/拒绝和审查状态 | todo |
+| T-6209 | P2 生态适配设计 | GitHub/GitLab/CI · container/db · context planner | 只读回链优先，外部写操作与上下文预算边界明确 | defer |
+| IT-6200 | Phase 61 文档一致性检查 | 新文档、MAP、TASKS、现有工具文档 | 不把已有能力误标为缺口；实现前无虚假 done | **done** |
+| IT-6201 | `interactive_terminal` 基础协议回归 | `agent-core/tests/test_interactive_terminal.py` | 缺少 pywinpty 返回 unsupported；输入/EOF/中断/关闭；阻塞 read 不阻塞请求；退出尾部输出；游标重置；孤儿清理记录；宿主跨调用生命周期 | **pass**（9/9；Windows pywinpty 和长期宿主 attach 已通过；服务重启主动恢复待做） |
+| IT-6202 | `patch_file` v2 结构化编辑回归 | `agent-core/tests/test_patch_file_v2.py` · `test_patch_file_crlf.py` | 多 hunk 原子写入；任一 hunk 失败不落盘；base hash 冲突；dry-run；patch id 幂等；旧参数/CRLF 兼容 | **pass**（6/6；统一 diff 与跨文件事务待做） |
+| IT-6203 | `git_snapshot` / `git_restore` 文件级回归 | `agent-core/tests/test_git_tools.py` | 工作树/staged 完整 diff；路径过滤；未跟踪路径；dry-run；worktree/staged 文件恢复；expected hash 冲突；未跟踪文件拒绝；狂奔模式不覆盖恢复确认 | **pass**（5/5；hunk 级恢复和 baseline/ledger 归属待做） |
+| IT-6204 | `structured_test` v1 协议回归 | `agent-core/tests/test_structured_test.py` | passed/failed/blocked/timeout；失败 file:line；rerun 提示；缺依赖阻塞；dry-run 阻塞 | **pass**（4/4；真实测试命令适配沿用 run_project_tests） |
+| T-6210 | 系统提示词装配与分层设计 | `loader.py::build_system_prompt` · `core.txt` · topic/project prompts · INDEX | 静态/动态段、职责边界、feature flag 和禁止重复注入写清 | **doc** |
+| T-6211 | P0 提示词改动矩阵 | `core.txt` · `INDEX.md` · `buckets/{run,write}.md` · `coding.md` · `project-boundaries.md` · `safety.md` | terminal/edit/git/test 每项都有文件、文案、schema、confirm 和狂奔边界 | **doc** |
+| T-6212 | P1/P2 提示词改动矩阵 | discover/browser/integrations buckets 与主题 prompt | diagnostics/browser/隔离/CI/容器/数据库/上下文的注入层和退化路径明确 | **doc** |
+| T-6213 | 提示词与工具 schema 一致性回归设计 | IT-6210～6219 · S-6210～6211 | disabled 工具不出现在 prompt/schema；只聊、draft、狂奔、verification 分支不越权 | **doc** |
+| T-6214 | 变更归属与 baseline/patch ledger 设计 | `git_snapshot` · `git_restore` · `patch_file` v2 | 回合 baseline、Agent patch ledger、用户中途编辑、外部改动、回退/rebase 后的 `unknown`/`mixed` 处理 | **done** |
+| T-6215 | 单活线与隔离 worktree 边界设计 | `PROJECT-THREADS.md` · 狂奔 v2 · Phase 61 | 默认单项目单活线；只读并行可用；写型隔离仅用户显式开启，不自动创建活跃 worktree | **done** |
+| T-6216 | 现行 builtin 数量文案同步 | `docs/TOOLS.md` · `evolve/prompts/coding.md` · registry | 当前规范统一为 12 个 builtin（核心 8 + 编排 4）；历史任务记录不回写 | **done** |
+| T-6220 | 开源优先组件盘点与复用边界 | `AGENT-TOOL-EXPERIENCE.md` §2 | 组件、许可证、官方来源、直接依赖/适配/仅参考分类；OpenHands 等完整 runtime 不直接嵌入 | **done** |
+| T-6221 | 开源依赖引入门设计 | `AGENT-TOOL-EXPERIENCE.md` §2.4 · `GIT-VENDOR.md` | SPDX、NOTICE、传递依赖、Python 3.14/Windows、可选依赖退化、smoke test 和发布前扫描要求明确 | **doc** |
+| T-6222 | P0 开源适配评估 | T-6201～T-6204 · T-6221 | pywinpty/ConPTY、unidiff、Git CLI、JUnit XML/pytest-json-report 逐项完成兼容性和最小回归后再编码 | **in_progress**（pywinpty 适配和缺依赖退化已落地；其余组件待评估） |
+| T-6223 | P1 开源适配评估 | T-6205～T-6208 · T-6221 | Pyright/Tree-sitter/Playwright/LSP 逐项完成许可证、版本、资源隔离和退化路径评估 | todo |
+| T-6224 | 交互终端 UI 设计 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) | 状态真源、列表/详情、输出 cursor、重连、关闭权限和 M0/M1 验收写清 | **doc** |
+| T-6225 | 交互终端 UI 实现 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · `server.py` · `project-panel.ts` | S-6224-a～h；用户可见运行中终端、退出/丢失原因、输出和关闭动作 | todo |
+| T-6230 | 执行生命周期收口 | [execution-lifecycle-design.md](./superpowers/specs/2026-09-11-execution-lifecycle-design.md) · `server.py` · Desktop / Terminal consumers | `queued/running/stopping` 可见；Stop 幂等；同一 `run_id` 唯一收尾；重复租约和取消竞态不留工作态 | **in_progress** |
+| IT-6230 | 执行生命周期回归 | `test_execution_lifecycle.py` · `test_turn_cancel.py` · `reduce-events.test.ts` | 状态机、乱序事件、重复 Stop、queued 取消、重复租约、Desktop/Terminal 收口 | **in_progress** |
+
+
+### 2026-09-07 同步 / 验证记录
+
+| 范围 | 结果 |
+|------|------|
+| 狂奔 v2 自动测试 | **40/40 通过**（checklist / controller / continuation / resume / state / experience harness） |
+| Python 基础验证 | `.venv` 解释器 `F:\my-agent-main\.venv\Scripts\python.exe`；`compileall` 通过；当前环境缺少 `pydantic` / `pytest` |
+| v1 兼容回归选集 | **108/112 通过**；4 项旧 v1 断言待收口，故 T-6106 保持 `in_progress` |
+| Python unittest 全量 | **1079 项**；无断言失败；`3` 项跳过；`2` 项因 `.venv` 缺少 `pytest` 导入错误 |
+| Terminal UI | **64/64 通过**；`npm run build` 仍有 5 个 TypeScript 类型错误 |
+| Desktop | Electron `tsconfig.node.json` 与完整 `npm run build` 通过；生产构建正常退出（修复 Electron 子构建误入 watch） |
+| v2 真实体验复跑 | `workspace/music` 真实 0x567-flash 回合完成；修复 MX-2 多行绑定误报、`[P1] T-*` 正式任务解析和质量配置阻塞后，36/36 任务完成，矩阵与 `AC-PROJECT` 全绿，项目进入 `release_wait`；状态镜像已同步清空 active task 并切到 `release` |
+
 | S-5951 | bug-fix 手工回归 | `workspace/test` repairing → **verifying** 稳态 | 0 plan 风暴 · 矩阵绿 · hard verify 过 | **done** |
 | S-6011 | 狂奔真实 LLM 回归 | `workspace/test` · 0x567-flash · `tools/runaway_experience.py` | mid-queue → **verifying**，0 确认；Round 10b：**verifying 达成** | **done** |
 | S-6001 | 真实项目体验验收 | Music Dreamer Desktop 手工路径 | 新项目输入 → 文档整理 → 方案确认 → 单任务实现 → 验证，全程不要求用户理解内部术语 | todo |

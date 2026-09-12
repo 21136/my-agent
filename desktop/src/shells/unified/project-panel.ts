@@ -1,9 +1,10 @@
-import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem } from "../../api/ws";
+import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
+import { RUNAWAY_BLOCKER, RUNAWAY_STAGE, RUNAWAY_STATUS } from "../../copy/user-messages";
 import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 
-export type { PlanSuggestion, ServiceListItem };
+export type { PlanSuggestion, ServiceListItem, TerminalSessionItem };
 
 // ---- new task-flow types ----
 
@@ -148,6 +149,18 @@ export interface ProjectPanelState {
   servicesError: string;
   servicesLogName: string;
   servicesLogText: string;
+  // Persistent interactive terminal sessions (M0 visibility surface).
+  terminalSessions: TerminalSessionItem[];
+  terminalsLoading: boolean;
+  terminalsError: string;
+  terminalsCollapsed: boolean;
+  terminalDetails: TerminalSessionItem | null;
+  terminalOutput: string;
+  terminalOutputCursor: number;
+  terminalOutputLoading: boolean;
+  terminalOutputError: string;
+  terminalOutputCursorReset: boolean;
+  terminalOutputTruncated: boolean;
   // Phase 27 M1 — turn evidence strip
   turnArmedId: string;
   turnArmedText: string;
@@ -185,6 +198,25 @@ export interface ProjectPanelState {
   runawayAcceptancePassed: boolean;
   runawayVerificationEvidence: Record<string, unknown> | null;
   runawayVerificationEvidencePath: string | null;
+  runawayVersion: number;
+  runawayPhase: string;
+  runawayUserLine: string;
+  runawayMode: string;
+  runawayBlocked: boolean;
+  runawayChecklist: {
+    passed: number;
+    total: number;
+    currentId: string | null;
+    currentTitle: string | null;
+    failedId: string | null;
+  } | null;
+  runawayCancelAvailable: boolean;
+  runawayBlock: {
+    itemId: string | null;
+    reason: string;
+    command: string;
+    tail: string;
+  } | null;
   scopeNeedsReconfirm: boolean;
   flowPreviewStage: FlowStage | null;
   milestoneAccepted: boolean;
@@ -205,6 +237,8 @@ export interface ProjectGoalViewModel {
   nextStep: string;
   action: string | null;
   actionLabel: string | null;
+  secondaryAction?: string | null;
+  secondaryActionLabel?: string | null;
 }
 
 export interface ProjectPanelCallbacks {
@@ -226,6 +260,78 @@ export interface ProjectPanelCallbacks {
 }
 
 // ---- helpers ----
+
+function isRunawayV2(state: ProjectPanelState): boolean {
+  return state.runawayEnabled && state.runawayVersion >= 2;
+}
+
+function applyRunawayPayload(
+  state: ProjectPanelState,
+  event: {
+    runaway_version?: number;
+    runaway_phase?: string;
+    runaway_user_line?: string;
+    runaway_mode?: string;
+    runaway_blocked?: boolean;
+    runaway_checklist?: {
+      passed?: number;
+      total?: number;
+      current_id?: string | null;
+      current_title?: string | null;
+      failed_id?: string | null;
+    } | null;
+    runaway_block?: {
+      item_id?: string | null;
+      reason?: string;
+      command?: string;
+      tail?: string;
+    } | null;
+    runaway_status?: string;
+    runaway_checkpoint?: string | null;
+    runaway_paused_reason?: string | null;
+  },
+): void {
+  if (event.runaway_version !== undefined) {
+    state.runawayVersion = Number(event.runaway_version) || 0;
+  }
+  if (event.runaway_phase !== undefined) {
+    state.runawayPhase = event.runaway_phase ?? "";
+  }
+  if (event.runaway_user_line !== undefined) {
+    state.runawayUserLine = event.runaway_user_line ?? "";
+  } else if (event.runaway_status) {
+    state.runawayUserLine = event.runaway_status;
+  }
+  if (event.runaway_mode !== undefined) {
+    state.runawayMode = event.runaway_mode ?? "auto";
+  }
+  if (event.runaway_blocked !== undefined) {
+    state.runawayBlocked = Boolean(event.runaway_blocked);
+  }
+  const checklist = event.runaway_checklist;
+  if (checklist && typeof checklist === "object") {
+    state.runawayChecklist = {
+      passed: Number(checklist.passed ?? 0),
+      total: Number(checklist.total ?? 0),
+      currentId: checklist.current_id ?? null,
+      currentTitle: checklist.current_title ?? null,
+      failedId: checklist.failed_id ?? null,
+    };
+  }
+  const block = event.runaway_block;
+  if (block && typeof block === "object") {
+    state.runawayBlock = {
+      itemId: block.item_id ?? null,
+      reason: block.reason ?? "",
+      command: block.command ?? "",
+      tail: block.tail ?? "",
+    };
+  } else if (event.runaway_blocked === false) {
+    state.runawayBlock = null;
+    state.runawayPausedReason = null;
+    state.runawayCheckpoint = event.runaway_checkpoint ?? state.runawayCheckpoint;
+  }
+}
 
 function normalizeSuggestions(raw: unknown): PlanSuggestion[] {
   if (!Array.isArray(raw)) return [];
@@ -404,6 +510,14 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.runawayAcceptancePassed = false;
   state.runawayVerificationEvidence = null;
   state.runawayVerificationEvidencePath = null;
+  state.runawayVersion = 0;
+  state.runawayPhase = "";
+  state.runawayUserLine = "";
+  state.runawayMode = "auto";
+  state.runawayBlocked = false;
+  state.runawayChecklist = null;
+  state.runawayCancelAvailable = false;
+  state.runawayBlock = null;
   state.scopeNeedsReconfirm = false;
   state.flowPreviewStage = null;
   state.milestoneAccepted = false;
@@ -565,6 +679,7 @@ function userFacingBlockerSummary(state: ProjectPanelState): string {
 function hasActualProjectBlocker(state: ProjectPanelState): boolean {
   if (state.reviewProgressBlocked) return true;
   if (state.runawayEnabled) {
+    if (isRunawayV2(state)) return state.runawayBlocked;
     return state.runawayCheckpoint === "paused" || Boolean(state.runawayPausedReason?.trim());
   }
   return state.executionStageStatus === "blocked";
@@ -572,11 +687,13 @@ function hasActualProjectBlocker(state: ProjectPanelState): boolean {
 
 export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerDetails {
   const reviewBlocked = state.reviewProgressBlocked;
+  const v2Block = isRunawayV2(state) ? state.runawayBlock : null;
   const reason = reviewBlocked && !state.executionStageReason.trim()
     ? USER_BLOCKER_REASON_LABELS.review_blocked
-    : userFacingBlockerReason(
-      state.runawayPausedReason?.trim() || state.executionStageReason.trim(),
-    );
+    : v2Block?.reason?.trim()
+      || userFacingBlockerReason(
+        state.runawayPausedReason?.trim() || state.executionStageReason.trim(),
+      );
   const stageLabel = USER_STAGE_LABELS[getExecutionStage(state)] || "当前阶段";
   const blockerLabels = Array.from(new Set(
     [...state.executionStageBlockers, ...state.executionStageMissing]
@@ -587,11 +704,17 @@ export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerD
     ? "项目不会进入下一阶段，也不会被标记为已完成。"
     : `当前停在「${stageLabel}」阶段${blockerLabels.length ? `，待处理项：${blockerLabels.join("、")}` : ""}。`;
   const attempted = state.runawayEnabled
-    ? "Harness 已保存当前检查点并停止自动推进，没有跳过前置条件或替你执行高风险操作。"
-    : "Harness 已停在当前阶段出口，没有绕过前置条件继续写入。";
+    ? RUNAWAY_BLOCKER.pausedImpact
+    : "已停在当前阶段出口，没有绕过前置条件继续写入。";
   const nextStep = state.runawayEnabled
-    ? "处理上述问题后，再重新开启狂奔；如需人工判断，请直接在聊天中说明处理方式。"
-    : "处理上述问题后，再回到聊天继续当前项目。";
+    ? (
+      isRunawayV2(state)
+        ? RUNAWAY_BLOCKER.pausedNextV2
+        : state.runawayCheckpoint === "paused"
+          ? RUNAWAY_BLOCKER.pausedNextLegacy
+          : "处理上述问题后，再重新开启狂奔；如需人工判断，请直接在聊天中说明处理方式。"
+    )
+    : RUNAWAY_BLOCKER.pausedNextOff;
   return { reason, impact, attempted, nextStep };
 }
 
@@ -602,20 +725,40 @@ export function hasProjectBlocker(state: ProjectPanelState): boolean {
 export function renderProjectBlockerDetails(state: ProjectPanelState): string {
   const details = projectBlockerDetails(state);
   const pausedReason = state.runawayPausedReason?.trim() || "";
-  const canResumeDocumentation = state.runawayEnabled
-    && state.runawayCheckpoint === "paused"
+  const canResumeRunaway = state.runawayEnabled && (
+    isRunawayV2(state) ? state.runawayBlocked : state.runawayCheckpoint === "paused"
+  );
+  const canDirectedRetry = isRunawayV2(state) && state.runawayBlocked;
+  const canResumeDocumentation = !isRunawayV2(state) && canResumeRunaway
     && (
       pausedReason === "文档尚未达到设计确认标准"
       || state.executionStageReason.trim() === "documentation_in_progress"
     );
+  const resumeLabel = canResumeDocumentation
+    ? RUNAWAY_BLOCKER.resumeDocumentation
+    : RUNAWAY_BLOCKER.resumeDefault;
+  const v2Block = state.runawayBlock;
+  const tailBlock = v2Block?.tail?.trim()
+    ? `<pre class="unified-blocker-tail">${escapeHtml(v2Block.tail.trim())}</pre>`
+    : "";
+  const commandLine = v2Block?.command?.trim()
+    ? `<p><strong>命令</strong>：<code>${escapeHtml(v2Block.command.trim())}</code></p>`
+    : "";
+  const itemLine = v2Block?.itemId
+    ? `<p><strong>验收项</strong>：${escapeHtml(v2Block.itemId)}</p>`
+    : "";
   return `<section class="unified-surface unified-blocker-details" aria-label="阻塞原因">
     <div class="unified-expand-title">为什么停在这里</div>
+    ${itemLine}
     <p><strong>原因</strong>：${escapeHtml(details.reason)}</p>
+    ${commandLine}
+    ${tailBlock}
     <p><strong>影响</strong>：${escapeHtml(details.impact)}</p>
     <p><strong>已处理</strong>：${escapeHtml(details.attempted)}</p>
     <p><strong>下一步</strong>：${escapeHtml(details.nextStep)}</p>
     <div class="unified-expand-actions">
-      ${canResumeDocumentation ? '<button type="button" class="unified-btn unified-btn-accent" data-action="resume-runaway">让 Harness 继续补齐文档</button>' : ""}
+      ${canResumeRunaway ? `<button type="button" class="unified-btn unified-btn-accent" data-action="resume-runaway">${escapeHtml(resumeLabel)}</button>` : ""}
+      ${canDirectedRetry ? '<button type="button" class="unified-btn" data-action="directed-runaway-retry">定向再试</button>' : ""}
       <button type="button" class="unified-btn" data-action="blocker-details-close">关闭详情</button>
     </div>
   </section>`;
@@ -624,6 +767,9 @@ export function renderProjectBlockerDetails(state: ProjectPanelState): string {
 function isRunawayActive(state: ProjectPanelState): boolean {
   if (!state.runawayEnabled) return false;
   if (hasActualProjectBlocker(state) || state.milestoneAccepted) return false;
+  if (isRunawayV2(state)) {
+    return !state.runawayBlocked && state.runawayPhase !== "release_wait" && state.runawayPhase !== "human";
+  }
   return ["idle", "preparing", "implementing", "verifying", "repairing", "release_wait"].includes(
     state.runawayCheckpoint,
   ) && state.runawayCheckpoint !== "release_wait";
@@ -654,6 +800,13 @@ function compactGoalText(text: string, max = 180): string {
 function projectTaskProgressLabel(state: ProjectPanelState): string {
   if (state.runawayEnabled) {
     if (hasActualProjectBlocker(state)) return "等待处理";
+    if (isRunawayV2(state)) {
+      if (state.runawayPhase === "release_wait") return "交付检查";
+      if (state.runawayPhase === "implement") return "正在实现";
+      if (state.runawayPhase === "verify") return "正在验证";
+      if (state.runawayPhase === "prepare") return "正在准备";
+      if (state.runawayUserLine) return state.runawayUserLine;
+    }
     if (state.tasksTotal > 0 && state.tasksAllDone) return "交付检查";
     if (state.runawayCheckpoint === "verifying") return "正在验证";
     if (state.runawayCheckpoint === "repairing") return "正在修复";
@@ -745,14 +898,29 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
   const stageLabel = USER_STAGE_LABELS[executionStage];
   const blocker = userFacingBlockerSummary(state);
   if (hasActualProjectBlocker(state)) {
+    const title = isRunawayV2(state) && state.runawayUserLine
+      ? state.runawayUserLine
+      : (state.runawayEnabled ? "需要你的处理" : "当前无法继续");
     return {
       status: "blocked",
       statusLabel: "需要处理",
-      title: state.runawayEnabled ? "需要你的处理" : "当前无法继续",
+      title,
       summary: blocker,
       nextStep: "查看原因，处理后再继续。",
       action: state.reviewProgressBlocked ? "jump-review-summary" : "jump-turn-process",
       actionLabel: "查看原因",
+    };
+  }
+
+  if (state.runawayCancelAvailable) {
+    return {
+      status: "processing",
+      statusLabel: "等待停止",
+      title: "狂奔续接等待中",
+      summary: "上一回合还占用执行通道，当前没有新的模型回合在运行。",
+      nextStep: "可以立即停止这次续接等待，释放狂奔通道。",
+      action: "stop-turn",
+      actionLabel: "停止续接",
     };
   }
 
@@ -776,12 +944,43 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.turnInProgress || state.executionStageStatus === "in_progress" || isRunawayActive(state)) {
+  if (
+    isRunawayV2(state)
+    && state.runawayEnabled
+    && !state.runawayBlocked
+    && !state.turnInProgress
+    && state.runawayPhase !== "release_wait"
+    && state.runawayPhase !== "human"
+  ) {
+    const checklist = state.runawayChecklist;
+    const summary = checklist && checklist.total > 0
+      ? `验收 ${checklist.passed}/${checklist.total}`
+      : goal;
+    return {
+      status: "processing",
+      statusLabel: "续接中",
+      title: state.runawayUserLine || "狂奔已开启",
+      summary,
+      nextStep: "系统会自动续接；若停在这里，点「手动续接」或发送「继续」。",
+      action: "jump-turn-process",
+      actionLabel: "查看过程",
+      secondaryAction: "resume-runaway",
+      secondaryActionLabel: "手动续接",
+    };
+  }
+
+  if (state.turnInProgress || state.executionStageStatus === "in_progress") {
+    const title = isRunawayV2(state) && state.runawayUserLine
+      ? state.runawayUserLine
+      : stageLabel;
+    const summary = isRunawayV2(state) && state.runawayChecklist && state.runawayChecklist.total > 0
+      ? `验收进度 ${state.runawayChecklist.passed}/${state.runawayChecklist.total}`
+      : goal;
     return {
       status: "processing",
       statusLabel: "进行中",
-      title: stageLabel,
-      summary: goal,
+      title,
+      summary,
       nextStep: state.runawayEnabled
         ? "系统会自动继续实现、验证和修复；你可以查看过程或停止。"
         : "系统正在处理当前内容；你可以查看过程或停止。",
@@ -903,7 +1102,8 @@ export function renderProjectGoalCard(state: ProjectPanelState): string {
     || compactGoalText(firstProjectGoalTask(state))
     || view.title;
   const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
-  const contextAction = !state.runawayEnabled && !isDecision && view.action && view.actionLabel
+  const contextAction = (!state.runawayEnabled || state.runawayCancelAvailable)
+    && !isDecision && view.action && view.actionLabel
     ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
     : "";
   const decision = isDecision
@@ -1078,7 +1278,7 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
       } else {
         body = `<div class="textbook-plan-goal">项目 ${escapeHtml(state.projectId)}：先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
         action = state.runawayEnabled
-          ? `<span class="textbook-soft-signal">狂奔已授权，Harness 正在自动准备项目</span>`
+          ? `<span class="textbook-soft-signal">${RUNAWAY_STAGE.preparingProject}</span>`
           : state.scopeConfirmedAt
           ? `<span class="textbook-soft-signal">范围已确认</span>`
           : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
@@ -1086,10 +1286,10 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
       break;
     case "design":
       body = state.runawayEnabled
-        ? `<div class="textbook-plan-goal">Harness 正在自动准备实现任务。</div><div class="textbook-plan-stat">计划提案由狂奔授权自动采纳</div>`
+        ? `<div class="textbook-plan-goal">${RUNAWAY_STAGE.preparingTasks}</div><div class="textbook-plan-stat">计划提案由狂奔授权自动采纳</div>`
         : `<div class="textbook-plan-goal">方案已确定后，可以开始下一项工作。</div><div class="textbook-plan-stat">还有待处理的方案变更</div>`;
       action = state.runawayEnabled
-        ? `<span class="textbook-soft-signal">狂奔已授权，正在进入实现</span>`
+        ? `<span class="textbook-soft-signal">${RUNAWAY_STAGE.enteringImplementation}</span>`
         : state.suggestions.some((suggestion) => Boolean(suggestion.action))
         ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看变更</button>`
         : `<span class="textbook-soft-signal">可进入实现</span>`;
@@ -1160,12 +1360,12 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
     case "design":
       goal = !state.runawayEnabled && state.suggestions.some((suggestion) => Boolean(suggestion.action))
         ? "方案有一项变更需要你查看。"
-        : state.runawayEnabled ? "Harness 正在自动准备实现任务。" : "方案已经准备好，可以选择一项任务开始。";
+        : state.runawayEnabled ? RUNAWAY_STAGE.preparingTasks : "方案已经准备好，可以选择一项任务开始。";
       stat = "方案准备好后会自动进入实现。";
       action = !state.runawayEnabled && state.suggestions.some((suggestion) => Boolean(suggestion.action))
         ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看方案</button>'
         : state.runawayEnabled
-          ? '<span class="textbook-soft-signal">狂奔已授权，自动进入实现</span>'
+          ? `<span class="textbook-soft-signal">${RUNAWAY_STAGE.autoEnterImplementation}</span>`
           : '<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>';
       break;
     case "implementation":
@@ -1500,28 +1700,81 @@ function renderTurnSummary(state: ProjectPanelState): string {
     + '<span class="sidebar-turn-summary-jump" aria-hidden="true">›</span></button>';
 }
 
+function sidebarOpenTasksLabel(state: ProjectPanelState): string {
+  const open = Math.max(0, state.tasksTotal - state.tasksDone);
+  if (state.tasksTotal === 0) return "等待开始";
+  if (open === 0) return "任务已清空 · 待验证";
+  return `还有 ${open} 条开放`;
+}
+
+function renderSidebarStatusCard(params: {
+  ariaLabel: string;
+  title: string;
+  summary?: string;
+  detail?: string;
+  footnote?: string;
+  action?: string | null;
+  actionLabel?: string | null;
+  secondaryAction?: string | null;
+  secondaryActionLabel?: string | null;
+  actionAccent?: boolean;
+}): string {
+  const summary = params.summary
+    ? `<p class="sidebar-status-card-summary">${escapeHtml(params.summary)}</p>`
+    : "";
+  const detail = params.detail
+    ? `<p class="sidebar-status-card-detail">${escapeHtml(params.detail)}</p>`
+    : "";
+  const footnote = params.footnote
+    ? `<p class="sidebar-status-card-footnote">${escapeHtml(params.footnote)}</p>`
+    : "";
+  const primary = params.action && params.actionLabel
+    ? `<button type="button" class="unified-btn${params.actionAccent ? " unified-btn-accent" : ""}" data-action="${escapeHtml(params.action)}">${escapeHtml(params.actionLabel)}</button>`
+    : "";
+  const secondary = params.secondaryAction && params.secondaryActionLabel
+    ? `<button type="button" class="unified-btn" data-action="${escapeHtml(params.secondaryAction)}">${escapeHtml(params.secondaryActionLabel)}</button>`
+    : "";
+  const action = primary || secondary
+    ? `<div class="sidebar-status-card-actions">${primary}${secondary}</div>`
+    : "";
+  return `<section class="sidebar-status-card" aria-label="${escapeHtml(params.ariaLabel)}">
+    <h3 class="sidebar-status-card-title">${escapeHtml(params.title)}</h3>
+    ${summary}
+    ${detail}
+    ${footnote}
+    ${action}
+  </section>`;
+}
+
 function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (state.switchInProgress) {
-    return `<section class="textbook-runaway-surface" aria-label="项目切换中">
-      <div class="textbook-runaway-surface-title">项目切换中</div>
-      <div class="textbook-runaway-surface-status">正在加载 ${escapeHtml(state.projectId || "目标项目")}</div>
-      <div class="textbook-runaway-surface-summary">旧项目内容已暂时隐藏，等待新项目状态加载完成。</div>
-    </section>`;
+    return renderSidebarStatusCard({
+      ariaLabel: "项目切换中",
+      title: `正在加载 ${state.projectId || "目标项目"}`,
+      summary: "旧项目内容已暂时隐藏，等待新项目状态加载完成。",
+    });
   }
   if (state.runawayEnabled) {
     const view = deriveProjectGoalViewModel(state);
-    const action = view.action && view.actionLabel
-      ? `<button type="button" class="unified-btn unified-runaway-action${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-      : "";
     const currentTask = (state.turnArmedText || state.nextTask || "").trim();
-    return `<section class="textbook-runaway-surface" aria-label="自动执行进展">
-      <div class="textbook-runaway-surface-title">自动执行</div>
-      <div class="textbook-runaway-surface-status">${escapeHtml(view.title)}</div>
-      <div class="textbook-runaway-surface-summary">${escapeHtml(view.summary || "系统正在处理当前目标。")}</div>
-      ${currentTask && view.status === "processing" ? `<div class="textbook-runaway-surface-task">${escapeHtml(currentTask)}</div>` : ""}
-      <div class="textbook-runaway-surface-next">${escapeHtml(view.nextStep)}</div>
-      ${action ? `<div class="textbook-plan-card-actions">${action}</div>` : ""}
-    </section>`;
+    let summary = view.summary || "系统正在处理当前目标。";
+    if (isRunawayV2(state) && state.runawayChecklist && state.runawayChecklist.total > 0) {
+      const checklist = `验收 ${state.runawayChecklist.passed}/${state.runawayChecklist.total}`;
+      if (!summary.includes("验收")) summary = `${summary} · ${checklist}`;
+    }
+    const showFootnote = view.status === "blocked" || view.status === "decision" || view.status === "failed";
+    return renderSidebarStatusCard({
+      ariaLabel: "自动执行进展",
+      title: view.title,
+      summary,
+      detail: currentTask && view.status === "processing" ? currentTask : undefined,
+      footnote: showFootnote ? view.nextStep : (view.status === "processing" ? view.nextStep : undefined),
+      action: view.action,
+      actionLabel: view.actionLabel,
+      secondaryAction: view.secondaryAction,
+      secondaryActionLabel: view.secondaryActionLabel,
+      actionAccent: view.status !== "blocked",
+    });
   }
   const currentTask =
     (state.turnArmedText || "").trim()
@@ -1532,20 +1785,29 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     || "";
   let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
   html += renderDropTaskChoice(state);
-  html += '<div class="sidebar-decision">';
   if (currentTask) {
-    html += '<div class="sidebar-decision-current">'
-      + '<div class="sidebar-decision-label">当前任务</div>'
-      + '<div class="sidebar-decision-text">' + escapeHtml(currentTask) + "</div></div>";
+    html += renderSidebarStatusCard({
+      ariaLabel: "当前任务",
+      title: currentTask,
+      action: state.projectId ? "open-full-plan" : null,
+      actionLabel: state.projectId ? "查看任务" : null,
+    });
   } else if (state.projectId) {
-    html += '<p class="overlay-empty" style="padding:0.5rem 0;">当前没有待处理任务</p>';
+    html += renderSidebarStatusCard({
+      ariaLabel: "当前任务",
+      title: "当前没有待处理任务",
+      summary: "可以从任务列表选择下一项，或继续补充当前目标。",
+      action: "open-full-plan",
+      actionLabel: "查看任务",
+    });
   } else {
-    html += '<p class="overlay-empty" style="padding:0.5rem 0;">先打开或新建一个项目</p>';
+    html += renderSidebarStatusCard({
+      ariaLabel: "项目",
+      title: "先打开或新建一个项目",
+      action: "open-projects",
+      actionLabel: "打开项目",
+    });
   }
-  if (state.projectId) {
-    html += '<button type="button" class="unified-btn" data-action="open-full-plan" style="width:100%;margin:0.35rem 0 0.15rem;font-size:0.78rem;">查看任务</button>';
-  }
-  html += "</div>";
   html += renderSuggestionStack(state);
   html += renderTurnSummary(state);
   html += renderReliabilityStrip(state);
@@ -1563,7 +1825,15 @@ function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
 }
 
 function planStatusLabel(state: ProjectPanelState): string {
-  if (state.runawayEnabled && state.runawayStatus) return state.runawayStatus;
+  if (state.runawayEnabled) {
+    if (isRunawayV2(state)) {
+      if (state.turnInProgress) return RUNAWAY_STATUS.processing;
+      if (state.runawayBlocked) return state.runawayUserLine || state.runawayStatus || "需要处理";
+      if (state.runawayUserLine) return state.runawayUserLine;
+      return RUNAWAY_STATUS.idle;
+    }
+    if (state.runawayStatus) return state.runawayStatus;
+  }
   if (state.planStatus === "confirmed") {
     if (state.tasksAllDone && state.tasksTotal > 0) {
       if (state.executionStage === "release" && state.milestoneAccepted) return "项目已完成";
@@ -2091,6 +2361,7 @@ export function applyProjectStateEvent(
   state.runawayAcceptancePassed = Boolean(event.runaway_acceptance_passed);
   state.runawayVerificationEvidence = event.runaway_verification_evidence ?? null;
   state.runawayVerificationEvidencePath = event.runaway_verification_evidence_path ?? null;
+  applyRunawayPayload(state, event);
   state.reviewVerdict = event.review_verdict ?? null;
   state.reviewBlockersCount = event.review_blockers_count ?? 0;
   state.reviewProgressBlocked = Boolean(event.review_progress_blocked);
@@ -2146,16 +2417,21 @@ export function applyProjectPlanState(
   if (state.projectId !== nextProjectId) resetProjectScopedState(state);
   state.projectId = nextProjectId;
   state.planStatus = event.plan_status ?? "draft";
-  state.runawayEnabled = event.runaway_enabled ?? state.runawayEnabled;
-  state.runawayStatus = event.runaway_status ?? state.runawayStatus;
-  state.runawayCheckpoint = event.runaway_checkpoint ?? state.runawayCheckpoint;
-  state.runawayRepairCount = event.runaway_repair_count ?? state.runawayRepairCount;
-  state.runawayLastVerification = event.runaway_last_verification ?? state.runawayLastVerification;
-  state.runawayPausedReason = event.runaway_paused_reason ?? state.runawayPausedReason;
-  state.runawayAcceptancePassed = event.runaway_acceptance_passed ?? state.runawayAcceptancePassed;
-  state.runawayVerificationEvidence = event.runaway_verification_evidence ?? state.runawayVerificationEvidence;
-  state.runawayVerificationEvidencePath = event.runaway_verification_evidence_path ?? state.runawayVerificationEvidencePath;
-  state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
+  const hasAuthoritativeRunawayV2 = event.runaway_version !== undefined;
+  const preserveAuthoritativeRunawayV2 = state.runawayVersion >= 2 && !hasAuthoritativeRunawayV2;
+  if (!preserveAuthoritativeRunawayV2) {
+    state.runawayEnabled = event.runaway_enabled ?? state.runawayEnabled;
+    state.runawayStatus = event.runaway_status ?? state.runawayStatus;
+    state.runawayCheckpoint = event.runaway_checkpoint ?? state.runawayCheckpoint;
+    state.runawayRepairCount = event.runaway_repair_count ?? state.runawayRepairCount;
+    state.runawayLastVerification = event.runaway_last_verification ?? state.runawayLastVerification;
+    state.runawayPausedReason = event.runaway_paused_reason ?? state.runawayPausedReason;
+    state.runawayAcceptancePassed = event.runaway_acceptance_passed ?? state.runawayAcceptancePassed;
+    state.runawayVerificationEvidence = event.runaway_verification_evidence ?? state.runawayVerificationEvidence;
+    state.runawayVerificationEvidencePath = event.runaway_verification_evidence_path ?? state.runawayVerificationEvidencePath;
+    applyRunawayPayload(state, event);
+    state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
+  }
   state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
   state.executionStageStatus = event.execution_stage_status ?? state.executionStageStatus;
@@ -2279,6 +2555,7 @@ export function setupProjectPanel(container: HTMLElement): {
   sidebarProgressFill: HTMLElement;
   taskFlow: HTMLElement;
   servicesPanel: HTMLElement;
+  terminalsPanel: HTMLElement;
   changeBanner: HTMLElement;
   iconBar: HTMLElement;
   overlayPanel: HTMLElement;
@@ -2312,6 +2589,7 @@ export function setupProjectPanel(container: HTMLElement): {
     sidebarProgressWrap: el("project-sidebar-progress"),
     sidebarProgressFill: el("sidebar-progress-fill"),
     taskFlow: el("sidebar-task-flow"),
+    terminalsPanel: el("sidebar-terminals"),
     servicesPanel: el("sidebar-services"),
     changeBanner: el("sidebar-change-banner"),
     iconBar: el("sidebar-icon-bar"),
@@ -2336,6 +2614,142 @@ export function setupProjectPanel(container: HTMLElement): {
     mapPanel: el("project-panel-map"),
     pickerList: el("project-picker-list"),
   };
+}
+
+const TERMINAL_STATE_LABELS: Record<string, string> = {
+  starting: "正在启动",
+  running: "运行中",
+  closed: "已关闭",
+  exited: "已退出",
+  lost: "会话已丢失",
+  orphaned: "宿主已断开",
+  unsupported: "当前环境不支持",
+  failed: "启动失败",
+};
+
+function terminalIsActive(session: TerminalSessionItem): boolean {
+  return session.state === "starting" || session.state === "running";
+}
+
+function terminalStatusLabel(session: TerminalSessionItem): string {
+  return TERMINAL_STATE_LABELS[session.state] || session.state || "未知状态";
+}
+
+function terminalStateClass(session: TerminalSessionItem): string {
+  return Object.prototype.hasOwnProperty.call(TERMINAL_STATE_LABELS, session.state)
+    ? session.state
+    : "unknown";
+}
+
+function terminalActivityLabel(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value || "暂无活动记录";
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  if (elapsed < 60_000) return "刚刚活动";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前活动`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前活动`;
+  return `${Math.floor(elapsed / 86_400_000)} 天前活动`;
+}
+
+function terminalDetailExitLabel(session: TerminalSessionItem): string {
+  const parts: string[] = [];
+  if (session.exit_code !== null) parts.push(`退出码 ${session.exit_code}`);
+  if (session.signal) parts.push(`信号 ${session.signal}`);
+  return parts.join(" · ");
+}
+
+function renderTerminalDetails(state: ProjectPanelState): string {
+  const session = state.terminalDetails;
+  if (!session) return "";
+  const exitLabel = terminalDetailExitLabel(session);
+  const reason = session.reason
+    ? `<div class="sidebar-terminal-detail-reason">${escapeHtml(session.reason)}</div>`
+    : "";
+  const cursorNotice = state.terminalOutputCursorReset
+    ? `<div class="sidebar-terminal-output-note">输出已被截断，已从最早可用位置重新读取。</div>`
+    : state.terminalOutputTruncated
+      ? `<div class="sidebar-terminal-output-note">本次输出达到上限，刷新可继续读取。</div>`
+      : "";
+  const error = state.terminalOutputError
+    ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalOutputError)}</div>`
+    : "";
+  const output = state.terminalOutput || (state.terminalOutputLoading ? "正在读取输出…" : "暂无输出");
+  const closeButton = terminalIsActive(session)
+    ? `<button type="button" class="unified-btn unified-btn-danger" data-action="terminal-close" data-terminal-id="${escapeHtml(session.session_id)}">关闭会话</button>`
+    : "";
+  return `<div class="sidebar-terminal-details" id="terminalDetails">
+    <div class="sidebar-terminal-details-header">
+      <div>
+        <div class="sidebar-terminal-details-title">${escapeHtml(terminalStatusLabel(session))}</div>
+        <div class="sidebar-terminal-details-id">${escapeHtml(session.session_id)}</div>
+      </div>
+      <button type="button" class="sidebar-terminal-icon-btn" data-action="terminal-details-close" aria-label="关闭终端详情" title="关闭详情">×</button>
+    </div>
+    <div class="sidebar-terminal-details-command">${escapeHtml(session.command || "未命名命令")}</div>
+    <div class="sidebar-terminal-details-meta">${escapeHtml(session.cwd || ".")} · ${escapeHtml(terminalActivityLabel(session.last_activity_at))}</div>
+    ${exitLabel || reason ? `<div class="sidebar-terminal-details-meta">${escapeHtml(exitLabel)}${exitLabel && reason ? " · " : ""}${reason}</div>` : ""}
+    ${error}
+    ${cursorNotice}
+    <pre class="sidebar-terminal-output" id="terminal-output" aria-live="polite">${escapeHtml(output)}</pre>
+    <div class="sidebar-terminal-details-actions">
+      <button type="button" class="unified-btn" data-action="terminal-output-refresh" data-terminal-id="${escapeHtml(session.session_id)}" ${state.terminalOutputLoading ? "disabled" : ""}>刷新输出</button>
+      <button type="button" class="unified-btn" data-action="terminal-copy-output" data-terminal-id="${escapeHtml(session.session_id)}" ${state.terminalOutput ? "" : "disabled"}>复制可见输出</button>
+      ${closeButton}
+    </div>
+  </div>`;
+}
+
+function renderTerminalsPanel(state: ProjectPanelState): string {
+  const active = state.terminalSessions.filter(terminalIsActive).length;
+  const inactive = state.terminalSessions.length - active;
+  const attention = state.terminalSessions.filter((session) =>
+    ["lost", "orphaned", "failed", "unsupported"].includes(session.state),
+  ).length;
+  const summary = state.terminalSessions.length === 0
+    ? state.terminalsLoading ? "加载中…" : "暂无会话"
+    : [
+        active > 0 ? `${active} 个运行中` : "无运行中",
+        inactive > 0 ? `${inactive} 个已结束` : "",
+        attention > 0 ? `${attention} 个需处理` : "",
+      ].filter(Boolean).join(" · ");
+
+  const rows = state.terminalSessions.length === 0
+    ? `<div class="sidebar-terminals-empty">${state.terminalsLoading ? "正在读取终端会话…" : "暂无终端会话"}</div>`
+    : state.terminalSessions.map((session) => {
+      const status = terminalStatusLabel(session);
+      const command = truncateSummary(session.command || "未命名命令", 64);
+      const cwd = truncateSummary(session.cwd || ".", 72);
+      const activity = terminalActivityLabel(session.last_activity_at);
+      const selected = state.terminalDetails?.session_id === session.session_id;
+      return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(session)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(session.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(session.command || "")}">
+        <span class="sidebar-terminal-dot" aria-hidden="true"></span>
+        <div class="sidebar-terminal-main">
+          <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(command)}</span></div>
+          <div class="sidebar-terminal-meta"><span>${escapeHtml(cwd)}</span><span>· ${escapeHtml(activity)}</span></div>
+        </div>
+      </button>`;
+    }).join("");
+
+  const collapsed = state.terminalsCollapsed;
+  const bodyClass = collapsed ? "sidebar-terminals-body is-collapsed" : "sidebar-terminals-body";
+  const error = state.terminalsError
+    ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalsError)}</div>`
+    : "";
+  return `<section class="sidebar-terminals" aria-label="终端会话">
+    <button type="button" class="sidebar-terminals-toggle" data-action="toggle-terminals" aria-expanded="${collapsed ? "false" : "true"}">
+      <span class="sidebar-terminals-toggle-chevron">${collapsed ? "▸" : "▾"}</span>
+      <span>终端会话 · ${escapeHtml(summary)}</span>
+    </button>
+    <div class="${bodyClass}">
+      <div class="sidebar-terminals-header">
+        <span>持久终端</span>
+        <button type="button" class="unified-btn" data-action="terminals-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>刷新</button>
+      </div>
+      ${error}
+      <div class="sidebar-terminals-list">${rows}</div>
+      ${renderTerminalDetails(state)}
+    </div>
+  </section>`;
 }
 
 // ---- Phase 27 services panel ----
@@ -2417,8 +2831,8 @@ export function renderProjectSidebar(
 
   // header
   if (state.projectId) {
-    els.sidebarTitle.textContent = `项目 · ${state.projectId}`;
-    els.sidebarMeta.textContent = planStatusLabel(state);
+    els.sidebarTitle.textContent = state.projectId;
+    els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
     els.sidebarProgressWrap.classList.remove("hidden");
     const pct = state.tasksTotal > 0
       ? Math.round((state.tasksDone / state.tasksTotal) * 100)
@@ -2431,6 +2845,7 @@ export function renderProjectSidebar(
   }
 
   // Phase 27 — Services panel (always in project sidebar)
+  els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
   els.servicesPanel.innerHTML = renderServicesPanel(state);
 
   // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---

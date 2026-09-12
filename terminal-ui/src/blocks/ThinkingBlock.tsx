@@ -82,7 +82,7 @@ export function ThinkingBlock({
 }: Props) {
   const t = tokens.transcript;
   const [tick, setTick] = useState(0);
-  const showCollapsed = collapsed || (!active && text.trim());
+  const showCollapsed = collapsed || (!active && Boolean(text.trim()));
   const {top, bottom} = useMemo(() => thinkingFrame(columns), [columns]);
 
   useEffect(() => {

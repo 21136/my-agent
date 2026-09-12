@@ -25,6 +25,10 @@ description = "working_dir 的别名"
 type = "integer"
 default = 120
 description = "子进程超时秒数；普通命令硬顶 600。npm/pnpm/yarn install、rmdir/rimraf node_modules 等自动走长超时（默认 1800，MY_AGENT_RUN_COMMAND_LONG_TIMEOUT_SEC 可配）"
+[schema.input.properties.expected_exit_code]
+type = "integer"
+default = 0
+description = "预期退出码；命令返回该码时 ok=true，允许用非零码表达预期的负向测试"
 [schema.input.properties.env]
 type = "object"
 description = "增量环境变量（敏感键拒绝）"
@@ -59,6 +63,7 @@ stdout = { type = "string" }
 stderr = { type = "string" }
 cwd = { type = "string" }
 elapsed_ms = { type = "integer" }
+expected_exit_code = { type = "integer" }
 truncated = { type = "boolean" }
 background = { type = "boolean" }
 escalated = { type = "boolean" }

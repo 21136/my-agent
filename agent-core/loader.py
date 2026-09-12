@@ -907,31 +907,15 @@ def format_tool_loop_user_message(
     total_tool_rounds: int | None = None,
 ) -> str:
     """User-facing message when the tool inner loop hits its cap without progress."""
-    reg = registry or ToolRegistry.load(session.paths)
-    allowed = sorted(session_evolved_allowlist(session, registry=reg))
-    topics = session.meta.topics
-    topic_label = "、".join(topics) if topics else "（未确认）"
-    tools_label = ", ".join(allowed) if allowed else "（无）"
+    from user_copy import format_tool_loop_exceeded_message
 
-    segment_note = ""
-    if segment is not None and segment > 1:
-        segment_note = f"（execute segment {segment}"
-        if total_tool_rounds is not None:
-            segment_note += f"，累计 {total_tool_rounds} 轮"
-        segment_note += "）"
-
-    return (
-        f"本条消息的 segment 工具预算已用尽（本 segment 上限 {tool_loop_max} 轮"
-        f"{segment_note}，已执行 {tool_rounds} 轮），未能得到最终文字回复，且本段无可见进展。\n\n"
-        "每条用户消息都会重新计算工具预算；若任务未完成，请发新消息（如「继续」）再试。\n\n"
-        "常见原因：\n"
-        "1. 任务需要的能力尚无对应 evolved 工具（或工具 status 非 active）\n"
-        "2. 在反复观察（read_file / grep / list_dir / glob_file_search）而未收敛到结论\n"
-        "3. 子代理/编排 builtin 预算用尽，或 segment 内无可见进展\n\n"
-        f"本会话可用 evolved（凡 active）：{tools_label}\n"
-        f"当前主题（管 prompt/memory，不管工具锁）：{topic_label}\n\n"
-        "建议：简化问题后重试；查阅 evolve/tool-catalog/INDEX.md 或对应 buckets；"
-        "若长期缺工具，可说「记住」提交 tool 建议。"
+    return format_tool_loop_exceeded_message(
+        session,
+        tool_rounds=tool_rounds,
+        tool_loop_max=tool_loop_max,
+        registry=registry,
+        segment=segment,
+        total_tool_rounds=total_tool_rounds,
     )
 
 
@@ -942,18 +926,13 @@ def format_segment_pause_message(
     auto_continue: bool,
 ) -> str:
     """Message when execute segment cap hit with progress (T-705)."""
-    lines = [
-        f"本条消息的工具预算已用尽（segment {segment}，本消息累计 {total_tool_rounds} 轮），已有进展。",
-        "",
-        "已完成部分：见上文 tool 结果与 assistant 回复。",
-    ]
-    if auto_continue:
-        lines.append("")
-        lines.append("将自动继续下一 segment。")
-    else:
-        lines.append("")
-        lines.append("请发一条新消息（如「继续」）以开始下一轮工具预算。")
-    return "\n".join(lines)
+    from user_copy import format_segment_pause_message as _format
+
+    return _format(
+        segment=segment,
+        total_tool_rounds=total_tool_rounds,
+        auto_continue=auto_continue,
+    )
 
 
 TASK_PAUSED_MARKER = "本项已完成。回复「继续」开始下一项。"

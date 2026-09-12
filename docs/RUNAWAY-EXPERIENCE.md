@@ -1,7 +1,7 @@
 # 狂奔模式体验报告与待办
 
-> 版本：0.1.9 · 2026-09-02  
-> 状态：R7f done · **Phase 59 bug-fix done** · **Round 10b S-6011/S-5951 pass** · UI-5966 done  
+> 版本：0.2.0 · 2026-09-07
+> 状态：R7f done · **Phase 59 bug-fix done** · v2 核心测试通过；S-6106 music 真实 0x567 试点已完成
 > 关联：[RUNAWAY-FLOW-STATE-MACHINE.md](./RUNAWAY-FLOW-STATE-MACHINE.md) · [RUNAWAY-R6-RELIABILITY.md](./RUNAWAY-R6-RELIABILITY.md) · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · [TASKS.md](./TASKS.md) UI-6011～6017 · UI-5961～5965
 
 本文记录 `workspace/test`（Music Dreamer）在真实 LLM（**0x567-flash**）下的狂奔体验结论，供后续 Harness / Desktop 收口。手工脚本：`tools/runaway_experience.py`。
@@ -519,3 +519,19 @@ set MY_AGENT_RUNAWAY_LLM_RETRIES=4
 | verification 下 `report_progress` 被 G5 拦 | progress_gate 误用 | UI-6049 |
 
 **手工**：S-6046（`workspace/music` 或 test）狂奔至 release_wait，无计划域写撞墙复读。
+
+## 18. v2 真实体验收口（2026-09-07）
+
+本轮使用 `MY_AGENT_RUNAWAY_V2=1`、`0x567-flash`，在 `workspace/music` 会话 `20260818-cef22232` 中从真实项目状态继续狂奔，目标 `release_wait`。
+
+| 项 | 结果 |
+|---|---|
+| 正式任务 | 36/36 完成；`[P1] T-*` 行可被正确识别 |
+| 验证矩阵 | 通过；MX-2 多行 `V-037 → T-103` 绑定误报已修复 |
+| 项目验收 | `AC-PROJECT` 通过；API、实时 API、Nginx smoke 和生产构建均通过 |
+| v2 phase | `release_wait` |
+| checklist | 全部通过 |
+| 状态镜像 | `active_task_id` 已清空，`workflow_stage=release` |
+| 过程约束 | 无 bug-fix 子代理卡片；未把计划提案写入正式任务队列 |
+
+过程中还修复了正式任务解析器漏识别 `- [x] [P1] T-1007 ...` 的问题；首次验收遇到本机 Docker/质量配置阻塞，放行并补齐质量配置后 `AC-PROJECT` 正常通过。该回合确认了 v2 从 implement 到 verify 再到 release_wait 的真实链路，但不等同于 T-6107 兼容层、进展指纹或 S-UX-028m 已完成。

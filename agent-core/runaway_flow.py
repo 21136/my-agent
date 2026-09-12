@@ -71,6 +71,45 @@ def checkpoint_transition_allowed(current: Any, target: str) -> bool:
     return destination in _ALLOWED_TRANSITIONS[source]
 
 
+def checkpoint_resume_path(source: Any, destination: Any) -> list[str]:
+    """Shortest allowed checkpoint hops from ``source`` to ``destination``."""
+    start = normalize_checkpoint(source)
+    goal = normalize_checkpoint(destination)
+    if start == goal:
+        return []
+    queue: list[tuple[str, list[str]]] = [(start, [])]
+    seen = {start}
+    while queue:
+        node, hops = queue.pop(0)
+        for neighbor in sorted(_ALLOWED_TRANSITIONS[node]):
+            if neighbor in seen:
+                continue
+            if neighbor == "paused" and start != "paused" and goal != "paused":
+                continue
+            next_hops = hops + [neighbor]
+            if neighbor == goal:
+                return next_hops
+            seen.add(neighbor)
+            queue.append((neighbor, next_hops))
+    return []
+
+
+def sync_checkpoint_to_target(meta: Any, target: Any) -> str:
+    """Walk allowed transitions until ``meta`` reaches ``target``."""
+    destination = normalize_checkpoint(target)
+    for hop in checkpoint_resume_path(
+        getattr(meta, "project_runaway_checkpoint", ""),
+        destination,
+    ):
+        transition_checkpoint(meta, hop)
+    return normalize_checkpoint(getattr(meta, "project_runaway_checkpoint", ""))
+
+
+def sync_checkpoint_to_stage(meta: Any, stage: Any) -> str:
+    """Resume ``meta`` checkpoint to match an authoritative workflow stage."""
+    return sync_checkpoint_to_target(meta, checkpoint_for_stage(stage))
+
+
 def transition_checkpoint(
     meta: Any,
     target: str,

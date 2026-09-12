@@ -59,8 +59,8 @@ class TaskStopAutoContinueTests(unittest.TestCase):
             Path(__file__).resolve().parents[2] / "workspace" / "_template" / "TASKS.md"
         )
         text = template.read_text(encoding="utf-8")
-        self.assertIn("一停", text)
-        self.assertIn("继续", text)
+        self.assertIn("T-001 完成第一项可交付工作", text)
+        self.assertIn("evidence: run_project_tests", text)
 
         prompt = (
             Path(__file__).resolve().parents[2]
@@ -91,18 +91,18 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
         self.assertFalse(is_project_continue_utterance("写 pom.xml"))
 
     def test_first_open_task_and_overlay(self) -> None:
-        text = "# t\n\n- [x] done\n- [ ] next one\n"
-        self.assertEqual(first_open_task_line(text), "- [ ] next one")
+        text = "# t\n\n- [x] T-001 done\n- [ ] T-002 next one\n"
+        self.assertEqual(first_open_task_line(text), "- [ ] T-002 next one")
         overlay = format_project_overlay(
             project_root="workspace/x",
             project_id="x",
             plan_status="confirmed",
             continue_turn=True,
-            next_open_task="- [ ] next one",
+            next_open_task="- [ ] T-002 next one",
             delivery_profile="ritual",
         )
         self.assertIn("continue_turn", overlay)
-        self.assertIn("current_task: - [ ] next one", overlay)
+        self.assertIn("current_task: - [ ] T-002 next one", overlay)
         self.assertIn("task_stop:", overlay)
         self.assertIn("report_progress", overlay)
 

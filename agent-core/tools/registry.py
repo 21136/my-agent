@@ -17,7 +17,7 @@ from paths import AgentPaths
 
 EVOLVED_TOOLS_DIR = Path("tools")
 MANIFEST_NAME = "tool.toml"
-VALID_STATUSES = frozenset({"draft", "staged", "active", "suspect", "archived"})
+VALID_STATUSES = frozenset({"draft", "experimental", "staged", "active", "suspect", "archived"})
 VALID_ENTRY_TYPES = frozenset({"python"})
 
 

@@ -2,6 +2,8 @@ import React, {memo} from 'react';
 import {Box, Text} from 'ink';
 import {tokens} from '../../theme/tokens.js';
 import type {SlashCommand} from '../../slash-commands.js';
+import type {ModelOption} from '../../model-picker.js';
+import {MODEL_PICKER_MAX_VISIBLE, modelPickerVisibleWindow} from '../../model-picker.js';
 
 type Props = {
   input: string;
@@ -11,6 +13,10 @@ type Props = {
   newOutputRows?: number;
   slashCommands?: readonly SlashCommand[];
   slashCommandIndex?: number;
+  modelPickerOpen?: boolean;
+  modelOptions?: readonly ModelOption[];
+  modelPickerIndex?: number;
+  currentModel?: string;
 };
 
 export const ComposerPane = memo(function ComposerPane({
@@ -21,7 +27,20 @@ export const ComposerPane = memo(function ComposerPane({
   newOutputRows = 0,
   slashCommands = [],
   slashCommandIndex = 0,
+  modelPickerOpen = false,
+  modelOptions = [],
+  modelPickerIndex = 0,
+  currentModel = '',
 }: Props) {
+  const pickerWindow = modelPickerVisibleWindow(
+    modelOptions.length,
+    modelPickerIndex,
+    MODEL_PICKER_MAX_VISIBLE,
+  );
+  const visibleModels = modelOptions.slice(pickerWindow.start, pickerWindow.end);
+  const hiddenAbove = pickerWindow.start;
+  const hiddenBelow = modelOptions.length - pickerWindow.end;
+
   return (
     <Box
       width="100%"
@@ -31,7 +50,34 @@ export const ComposerPane = memo(function ComposerPane({
       paddingX={1}
       flexShrink={0}
     >
-      {!confirm && slashCommands.length > 0 ? (
+      {modelPickerOpen ? (
+        <Box flexDirection="column" paddingLeft={1}>
+          <Text color={tokens.status.muted}>
+            选择模型{currentModel ? ` · 当前 ${currentModel}` : ''} · ↑↓ 移动 · Enter 确认 · Esc 取消
+          </Text>
+          {hiddenAbove > 0 ? (
+            <Text color={tokens.status.muted}>  ↑ 还有 {hiddenAbove} 项</Text>
+          ) : null}
+          {visibleModels.map((entry, offset) => {
+            const index = pickerWindow.start + offset;
+            return (
+            <Text
+              key={entry.id}
+              color={index === modelPickerIndex ? tokens.prompt : tokens.status.muted}
+            >
+              {index === modelPickerIndex ? '❯ ' : '  '}
+              {entry.name} ({entry.id}
+              {entry.tier ? ` · ${entry.tier.toUpperCase()}` : ''})
+              {entry.id === currentModel ? ' ← 当前' : ''}
+            </Text>
+            );
+          })}
+          {hiddenBelow > 0 ? (
+            <Text color={tokens.status.muted}>  ↓ 还有 {hiddenBelow} 项</Text>
+          ) : null}
+        </Box>
+      ) : null}
+      {!confirm && !modelPickerOpen && slashCommands.length > 0 ? (
         <Box flexDirection="column" paddingLeft={1}>
           {slashCommands.map((command, index) => (
             <Text key={command.name} color={index === slashCommandIndex ? tokens.prompt : tokens.status.muted}>

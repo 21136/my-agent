@@ -149,8 +149,20 @@ def _format_model_menu_lines(
 def _print_menu(lines: list[str], *, stream: Any | None = None) -> None:
     target = stream if stream is not None else _menu_stream()
     for line in lines:
-        target.write(line + "\n")
+        _write_menu_text(target, line + "\n")
     target.flush()
+
+
+def _write_menu_text(target: Any, text: str) -> None:
+    """Write menu text without crashing on legacy Windows console encodings."""
+    try:
+        target.write(text)
+    except UnicodeEncodeError:
+        encoding = getattr(target, "encoding", None) or "utf-8"
+        safe_text = text.encode(encoding, errors="replace").decode(
+            encoding, errors="replace"
+        )
+        target.write(safe_text)
 
 
 def _redraw_menu(lines: list[str], *, stream: Any | None = None) -> None:
@@ -159,10 +171,10 @@ def _redraw_menu(lines: list[str], *, stream: Any | None = None) -> None:
         return
     target = stream if stream is not None else _menu_stream()
     height = len(lines)
-    target.write(f"\033[{height}A")
+    _write_menu_text(target, f"\033[{height}A")
     for line in lines:
-        target.write("\033[2K\r")
-        target.write(line + "\n")
+        _write_menu_text(target, "\033[2K\r")
+        _write_menu_text(target, line + "\n")
     target.flush()
 
 
@@ -172,8 +184,8 @@ def _erase_menu_lines(lines: list[str], *, stream: Any | None = None) -> None:
         return
     target = stream if stream is not None else _menu_stream()
     height = len(lines)
-    target.write(f"\033[{height}A\r")
-    target.write(f"\033[{height}M")
+    _write_menu_text(target, f"\033[{height}A\r")
+    _write_menu_text(target, f"\033[{height}M")
     target.flush()
 
 

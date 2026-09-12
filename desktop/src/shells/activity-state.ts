@@ -1,6 +1,6 @@
 /** UX-028 M0 — activity timeline entries (source of truth for process blocks). */
 
-import { reasoningSummaryLine } from "./unified/output-display";
+import { reasoningSummaryLine, shouldNeutralizeReasoningSummary } from "./unified/output-display";
 
 export type ProcessToolCard = {
   callId: string;
@@ -42,6 +42,8 @@ export type ProcessActivityBlock = {
   reasoningUserOpen?: boolean;
   reasoningStartedAt?: number;
   reasoningPinnedAt?: number;
+  /** Fresh timestamp when waiting for the model before the next think stream. */
+  llmWaitStartedAt?: number;
   llmPending?: boolean;
   tools?: ProcessToolCard[];
 };
@@ -105,8 +107,10 @@ export function syncProcessLegacyFields(proc: ProcessActivityBlock): void {
     proc.reasoningUserOpen = lastThink.userOpen;
   } else {
     proc.reasoning = "";
-    proc.reasoningPhase = proc.llmPending ? "idle" : "idle";
-    proc.reasoningStartedAt = proc.llmPending ? Date.now() : undefined;
+    proc.reasoningPhase = "idle";
+    if (!proc.llmPending) {
+      proc.reasoningStartedAt = undefined;
+    }
     proc.reasoningPinnedAt = undefined;
     proc.reasoningUserOpen = false;
   }
@@ -127,9 +131,10 @@ export function pinOpenThink(proc: ProcessActivityBlock): void {
   const open = findOpenThink(entries);
   if (!open) return;
   if (open.text.trim() || open.phase === "streaming") {
+    const keepOpen = Boolean(open.userOpen);
     open.phase = "pinned";
     open.pinnedAt = Date.now();
-    open.userOpen = false;
+    open.userOpen = keepOpen;
   }
   syncProcessLegacyFields(proc);
 }
@@ -150,19 +155,19 @@ export function prepareProcessForLlmRound(proc: ProcessActivityBlock): void {
   ensureProcessEntries(proc);
   pinOpenThink(proc);
   proc.llmPending = false;
+  proc.llmWaitStartedAt = undefined;
 }
 
 export function markLlmPending(proc: ProcessActivityBlock): void {
   ensureProcessEntries(proc);
   proc.llmPending = true;
-  if (!proc.reasoningStartedAt) {
-    proc.reasoningStartedAt = Date.now();
-  }
+  proc.llmWaitStartedAt = Date.now();
   syncProcessLegacyFields(proc);
 }
 
 export function clearLlmPending(proc: ProcessActivityBlock): void {
   proc.llmPending = false;
+  proc.llmWaitStartedAt = undefined;
   syncProcessLegacyFields(proc);
 }
 
@@ -215,6 +220,7 @@ export function findToolEntry(
 
 export function finalizeProcessAfterTurn(proc: ProcessActivityBlock): void {
   proc.llmPending = false;
+  proc.llmWaitStartedAt = undefined;
   pinAllStreamingThinks(proc);
   const entries = proc.entries ?? [];
   const hasThinkText = entries.some((e) => e.kind === "think" && e.text.trim());
@@ -247,7 +253,14 @@ export function toggleThinkOpen(proc: ProcessActivityBlock, thinkId?: string): v
           e.kind === "think" && e.phase === "pinned" && Boolean(e.text.trim()),
       );
   const think = targets.length ? targets[targets.length - 1] : undefined;
-  if (!think || think.phase === "streaming") return;
+  if (!think) return;
+  if (think.phase === "streaming") {
+    think.phase = "pinned";
+    think.pinnedAt = Date.now();
+    think.userOpen = false;
+    syncProcessLegacyFields(proc);
+    return;
+  }
   think.userOpen = !think.userOpen;
   syncProcessLegacyFields(proc);
 }
@@ -269,40 +282,47 @@ export function formatThinkElapsedSec(entry: ThinkEntry): number {
   return Math.max(1, Math.round((end - entry.startedAt) / 1000));
 }
 
+export function formatWaitElapsedSec(startedAt: number): number {
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
+
 export function thinkEntryTitle(
   entry: ThinkEntry,
-  opts?: { waiting?: boolean },
+  opts?: { waiting?: boolean; waitStartedAt?: number },
 ): string {
   if (!entry.text.trim() && opts?.waiting) {
-    const sec = formatThinkElapsedSec({ ...entry, phase: "streaming" });
-    return sec > 0 ? `思考中…（${sec}s）` : "思考中…";
+    const sec = formatWaitElapsedSec(opts.waitStartedAt ?? entry.startedAt);
+    return sec > 0 ? `等待模型…（${sec}s）` : "等待模型…";
   }
   if (entry.phase === "streaming") {
     const sec = formatThinkElapsedSec(entry);
     return sec > 0 ? `思考中…（${sec}s）` : "思考中…";
   }
   const summary = reasoningSummaryLine(entry.text);
-  if (summary) return `思考 · ${summary}`;
+  if (summary) {
+    if (!entry.userOpen && shouldNeutralizeReasoningSummary(summary)) {
+      const sec = formatThinkElapsedSec(entry);
+      return sec > 0 ? `思考 · ${sec}s（点击展开）` : "思考 · 点击展开";
+    }
+    return entry.userOpen ? `思考 · ${summary}` : `思考 · ${summary}（点击展开）`;
+  }
   const sec = formatThinkElapsedSec(entry);
   return `思考 · ${sec}s`;
 }
 
-export function isThinkBodyOpen(
-  entry: ThinkEntry,
-  opts?: { waiting?: boolean },
-): boolean {
-  if (opts?.waiting) return true;
+export function isThinkBodyOpen(entry: ThinkEntry): boolean {
   if (!entry.text.trim()) return false;
   if (entry.phase === "streaming") return true;
   return Boolean(entry.userOpen);
 }
 
-export function activityEntriesPrint(entries: ActivityEntry[], llmPending: boolean): string {
+export function activityEntriesPrint(entries: ActivityEntry[], llmPending: boolean, llmWaitStartedAt?: number): string {
   const parts = entries.map((e) => {
     if (e.kind === "think") {
       return `T:${e.id}:${e.phase}:${e.text.length}:${e.userOpen ? 1 : 0}`;
     }
     return `U:${e.callId}:${e.status}:${e.endSummary ?? ""}:${e.progressText ?? ""}:${(e.logsTail ?? "").length}`;
   });
-  return `${parts.join(",")}:${llmPending ? 1 : 0}`;
+  const waitBit = llmWaitStartedAt ? `:W${llmWaitStartedAt}` : "";
+  return `${parts.join(",")}:${llmPending ? 1 : 0}${waitBit}`;
 }

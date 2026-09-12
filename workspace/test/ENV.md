@@ -12,3 +12,8 @@ tools:
 prefer:
   package_manager: npm
   jdk: 17
+
+quality:
+  commands:
+    - id: acceptance
+      cmd: ["python", ".acceptance/music-dreamer-skeleton/infrastructure/release-drill.py"]

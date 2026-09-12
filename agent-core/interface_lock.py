@@ -126,6 +126,26 @@ def release_lock(paths: AgentPaths, *, ui: InterfaceUi | None = None) -> bool:
     return True
 
 
+def clear_terminal_lock_file(paths: AgentPaths) -> InterfaceLock | None:
+    """Remove a Terminal interface lock without killing the holder process.
+
+    Use when the Terminal window was closed but the lock file was left behind
+    and the python process is still used for other work.
+    """
+    holder = read_lock(paths)
+    if holder is None:
+        return None
+    if holder.ui != "terminal":
+        raise InterfaceLockError(
+            f"当前锁由 {_ui_label(holder.ui)} 持有，不能用 terminal --clear-lock 清除。"
+        )
+    try:
+        lock_path(paths).unlink()
+    except OSError as exc:
+        raise InterfaceLockError(f"无法删除会话锁: {exc}") from exc
+    return holder
+
+
 def acquire_lock(
     paths: AgentPaths,
     ui: InterfaceUi,

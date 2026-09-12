@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -11,15 +12,24 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from project_mode import next_open_task, project_mode_block_reason, task_dependency_blockers
+from project_mode import (
+    formal_task_id_from_checkbox_line,
+    formal_task_stats,
+    next_open_task,
+    project_mode_block_reason,
+    task_dependency_blockers,
+)
 from project_mode import create_project
 from project_api import dispatch_project_message
 from runaway_flow import (
+    checkpoint_resume_path,
     checkpoint_transition_allowed,
     normalize_checkpoint,
     runaway_task_has_advance_evidence,
     revert_out_of_order_runaway_checkoffs,
     sanitize_runaway_tasks_artifact,
+    sync_checkpoint_to_stage,
+    sync_checkpoint_to_target,
     sync_runaway_task_checkoff_from_verify,
     sync_all_runaway_task_checkoffs_from_verify,
     strip_nonformal_open_task_lines,
@@ -103,6 +113,37 @@ class RunawayFlowTests(unittest.TestCase):
             assert lease is not None
             self.assertTrue(lease.release())
 
+    def test_reclaim_local_idle_lease_same_process(self) -> None:
+        with temporary_agent_paths() as paths:
+            project_id = "runaway-lease-orphan"
+            create_project(paths, project_id)
+            lease_file = lease_path(paths, project_id)
+            lease_file.parent.mkdir(parents=True, exist_ok=True)
+            lease_file.write_text(
+                json.dumps(
+                    {
+                        "project_id": project_id,
+                        "pid": os.getpid(),
+                        "token": "orphan",
+                        "heartbeat_unix": time.time(),
+                        "ttl_seconds": 120,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            from runaway_lease import acquire_runaway_lease_with_reclaim, reclaim_local_idle_lease
+
+            self.assertIsNone(acquire_runaway_lease(paths, project_id, ttl_seconds=120))
+            self.assertTrue(reclaim_local_idle_lease(paths, project_id))
+            reclaimed = acquire_runaway_lease_with_reclaim(
+                paths,
+                project_id,
+                reclaim_local_orphan=True,
+            )
+            self.assertIsNotNone(reclaimed)
+            assert reclaimed is not None
+            self.assertTrue(reclaimed.release())
+
     def test_legacy_checkpoints_are_normalized(self) -> None:
         self.assertEqual(normalize_checkpoint("implementation"), "implementing")
         self.assertEqual(normalize_checkpoint("verification"), "verifying")
@@ -111,10 +152,72 @@ class RunawayFlowTests(unittest.TestCase):
     def test_invalid_transition_is_rejected(self) -> None:
         self.assertTrue(checkpoint_transition_allowed("verifying", "repairing"))
         self.assertFalse(checkpoint_transition_allowed("implementing", "completed"))
+        self.assertFalse(checkpoint_transition_allowed("idle", "verifying"))
 
         meta = type("Meta", (), {"project_runaway_checkpoint": "implementing"})()
         with self.assertRaises(ValueError):
             transition_checkpoint(meta, "completed")
+
+    def test_checkpoint_resume_path_reaches_verifying_from_idle(self) -> None:
+        self.assertEqual(
+            checkpoint_resume_path("idle", "verifying"),
+            ["preparing", "verifying"],
+        )
+        self.assertEqual(
+            checkpoint_resume_path("idle", "implementing"),
+            ["preparing", "implementing"],
+        )
+
+    def test_sync_checkpoint_to_target_resumes_new_thread_on_verification_stage(self) -> None:
+        from agent import Agent
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-new-thread-verify"
+            create_project(paths, pid)
+            session = create_new(paths, conversation_id="_runaway_new_thread_verify_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_workflow_stage = "verification"
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_runaway_checkpoint = "idle"
+            session.save()
+
+            sync_checkpoint_to_stage(session.meta, "verification")
+            self.assertEqual(session.meta.project_runaway_checkpoint, "verifying")
+
+            agent = Agent.create(session)
+            agent.executor.begin_turn()
+            self.assertTrue(agent._prepare_runaway_project_start())
+
+    def test_advance_runaway_from_idle_on_finished_queue_enters_verifying(self) -> None:
+        """Fresh session: idle checkpoint + done TASKS must not raise on advance."""
+        from agent import Agent
+        from project_mode import project_dir
+
+        with temporary_agent_paths() as paths:
+            pid = "runaway-idle-advance-verify"
+            create_project(paths, pid)
+            tasks_path = project_dir(paths, pid) / "TASKS.md"
+            tasks_path.write_text("## Phase 1\n- [x] T-001 only task verify: V-001\n", encoding="utf-8")
+            session = create_new(paths, conversation_id="_runaway_idle_advance_verify_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_workflow_stage = "implementation"
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_active_task_id = ""
+            session.meta.project_runaway_checkpoint = "idle"
+            session.meta.project_runaway_task_done_baseline = 0
+            session.save()
+
+            agent = Agent.create(session)
+            agent.executor.begin_turn()
+            with patch.object(agent, "_run_runaway_hard_verification", return_value=True):
+                self.assertTrue(agent._advance_runaway_checkpoint())
+            self.assertEqual(session.meta.project_runaway_checkpoint, "verifying")
 
     def test_task_selection_honors_dependencies(self) -> None:
         text = (
@@ -212,6 +315,31 @@ class RunawayFlowTests(unittest.TestCase):
             self.assertEqual(session.meta.project_runaway_task_fingerprint, "task-fingerprint")
             self.assertEqual(session.meta.project_runaway_last_error, "保留这个错误")
 
+    def test_resume_from_paused_clears_repair_budget(self) -> None:
+        with temporary_agent_paths() as paths:
+            project_id = "runaway-repair-resume"
+            create_project(paths, project_id)
+            session = create_new(paths, conversation_id="_runaway_repair_resume_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = project_id
+            session.meta.project_root = f"workspace/{project_id}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_workflow_stage = "verification"
+            session.meta.project_runaway_checkpoint = "paused"
+            session.meta.project_runaway_paused_reason = "自动修复次数已用尽"
+            session.meta.project_runaway_repair_count = 3
+            session.meta.project_runaway_last_error = "matrix red"
+
+            dispatch_project_message(
+                session,
+                paths,
+                {"type": "project.runaway.set", "enabled": True, "resume": True},
+            )
+            self.assertEqual(session.meta.project_runaway_checkpoint, "verifying")
+            self.assertEqual(session.meta.project_runaway_repair_count, 0)
+            self.assertEqual(session.meta.project_runaway_paused_reason, "")
+            self.assertEqual(session.meta.project_runaway_last_error, "")
+
     def test_documentation_pause_can_resume_without_plan_confirmation(self) -> None:
         with temporary_agent_paths() as paths:
             project_id = "runaway-documentation-resume"
@@ -234,7 +362,27 @@ class RunawayFlowTests(unittest.TestCase):
             self.assertEqual(session.meta.project_runaway_checkpoint, "preparing")
             self.assertEqual(session.meta.project_runaway_paused_reason, "")
             notice = next(item for item in response["_events"] if item.get("type") == "notice")
-            self.assertIn("狂奔模式已恢复", notice["text"])
+            self.assertIn("恢复", notice["text"])
+
+    def test_idempotent_resume_skips_toggle_notice(self) -> None:
+        with temporary_agent_paths() as paths:
+            project_id = "runaway-idempotent-resume"
+            create_project(paths, project_id)
+            session = create_new(paths, conversation_id="_runaway_idempotent_resume_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = project_id
+            session.meta.project_root = f"workspace/{project_id}"
+            session.meta.project_runaway_enabled = True
+            session.save()
+
+            response = dispatch_project_message(
+                session,
+                paths,
+                {"type": "project.runaway.set", "enabled": True, "resume": True},
+            )
+
+            notices = [item for item in response["_events"] if item.get("type") == "notice"]
+            self.assertEqual(notices, [])
 
     def test_harness_verification_persists_real_acceptance_evidence(self) -> None:
         from runaway_verification import load_verification_evidence, run_harness_verification
@@ -468,6 +616,20 @@ class RunawayFlowTests(unittest.TestCase):
         line, _body, task_id = next_open_task(polluted)
         self.assertEqual(task_id, "T-008")
         self.assertEqual(line, 3)
+
+    def test_priority_label_before_task_id_stays_formal(self) -> None:
+        text = (
+            "- [x] [P1] T-001 completed\n"
+            "- [ ] [P1] T-002 next task\n"
+            "- [ ] plan: consider T-003 later\n"
+        )
+        self.assertEqual(
+            formal_task_id_from_checkbox_line("- [ ] [P1] T-002 next task"),
+            "T-002",
+        )
+        self.assertEqual(next_open_task(text)[2], "T-002")
+        self.assertEqual(formal_task_stats(text).done, 1)
+        self.assertEqual(formal_task_stats(text).total, 2)
 
     def test_advance_runaway_requires_evidence_before_next_task(self) -> None:
         from agent import Agent
@@ -898,7 +1060,8 @@ class RunawayFlowTests(unittest.TestCase):
             agent.llm.chat.assert_not_called()
             self.assertEqual(result.finish_reason, "runaway_verification_exit")
             self.assertEqual(result.tool_rounds, 0)
-            self.assertIn("release_wait", result.assistant_text)
+            self.assertIn("发布等待", result.assistant_text)
+            self.assertNotIn("release_wait", result.assistant_text)
 
     def test_run_turn_allows_qa_at_release_wait(self) -> None:
         from unittest.mock import MagicMock

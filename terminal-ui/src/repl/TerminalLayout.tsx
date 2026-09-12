@@ -15,6 +15,8 @@ import {LiveAssistantPane} from './panes/LiveAssistantPane.js';
 import {ComposerPane} from './panes/ComposerPane.js';
 import {StatusPane} from './panes/StatusPane.js';
 import type {SlashCommand} from '../slash-commands.js';
+import type {ModelOption} from '../model-picker.js';
+import {MODEL_PICKER_MAX_VISIBLE} from '../model-picker.js';
 
 export type TerminalChrome = {
   working: boolean;
@@ -32,6 +34,7 @@ export type TerminalSession = {
   root: string;
   mascotLines: string[];
   mascotLabel: string;
+  models?: ModelOption[];
 };
 
 export type TerminalLayoutProps = {
@@ -47,6 +50,10 @@ export type TerminalLayoutProps = {
   newOutputRows?: number;
   slashCommands?: readonly SlashCommand[];
   slashCommandIndex?: number;
+  modelPickerOpen?: boolean;
+  modelOptions?: readonly ModelOption[];
+  modelPickerIndex?: number;
+  currentModel?: string;
 };
 
 const DEMO_BLOCKS: TerminalBlock[] = [
@@ -97,6 +104,10 @@ export function TerminalLayout({
   newOutputRows = 0,
   slashCommands = [],
   slashCommandIndex = 0,
+  modelPickerOpen = false,
+  modelOptions = [],
+  modelPickerIndex = 0,
+  currentModel = session.model,
 }: TerminalLayoutProps) {
   const [now, setNow] = useState(() => Date.now());
   const visibleBlocks = useMemo(
@@ -122,7 +133,8 @@ export function TerminalLayout({
       chrome.working,
       Boolean(chrome.confirm),
       scrollUpRows > 0,
-      slashCommands.length,
+      slashCommands.length +
+        (modelPickerOpen ? Math.min(modelOptions.length, MODEL_PICKER_MAX_VISIBLE) + 4 : 0),
     ),
   );
   const assistantLive = trailingAssistantStreaming(
@@ -201,6 +213,10 @@ export function TerminalLayout({
         newOutputRows={newOutputRows}
         slashCommands={slashCommands}
         slashCommandIndex={slashCommandIndex}
+        modelPickerOpen={modelPickerOpen}
+        modelOptions={modelOptions}
+        modelPickerIndex={modelPickerIndex}
+        currentModel={currentModel}
       />
       <StatusPane
         model={session.model}

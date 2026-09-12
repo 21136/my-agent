@@ -24,6 +24,9 @@ from paths import AgentPaths
 from project_api import dispatch_project_message, project_state_payload
 from project_mode import next_open_task, project_dir, read_formal_task_stats, read_task_stats
 from runaway_flow import normalize_checkpoint, transition_checkpoint
+from runaway_v2.checklist import load_or_build_checklist
+from runaway_v2.config import runaway_v2_env_enabled
+from runaway_v2.phase import derive_phase
 from session import load_session_for_harness
 
 
@@ -34,6 +37,7 @@ SESSION_ID = (
 MODEL_ID = "0x567-flash"
 MAX_TURNS = max(1, int(os.environ.get("RUNAWAY_EXPERIENCE_MAX_TURNS", "12")))
 UNTIL = (os.environ.get("RUNAWAY_EXPERIENCE_UNTIL", "verifying") or "verifying").strip().lower()
+RESUME_MODE = (os.environ.get("RUNAWAY_EXPERIENCE_RESUME", "") or "").strip().lower()
 
 
 def _formal_queue_done(paths: AgentPaths, project_id: str) -> bool:
@@ -41,8 +45,43 @@ def _formal_queue_done(paths: AgentPaths, project_id: str) -> bool:
     return read_formal_task_stats(tasks_path).all_done
 
 
+def _v2_phase(session, paths: AgentPaths, project_id: str):
+    if not runaway_v2_env_enabled():
+        return None
+    checklist = load_or_build_checklist(paths, project_id)
+    return derive_phase(
+        paths,
+        project_id,
+        plan_status=str(getattr(session.meta, "project_plan_status", "") or "draft"),
+        checklist=checklist,
+    )
+
+
+def _v2_human_block(session, paths: AgentPaths, project_id: str) -> str:
+    phase = _v2_phase(session, paths, project_id)
+    if phase is None:
+        return ""
+    state = project_state_payload(session, paths)
+    if phase.phase == "human" or bool(state.get("runaway_blocked")):
+        return str(
+            state.get("runaway_user_line")
+            or phase.human_reason
+            or "v2 已升格为人工处理"
+        ).strip()
+    return ""
+
+
 def _until_milestone_reached(session, paths: AgentPaths, project_id: str) -> bool:
-    """UNTIL=verifying stops at verifying; UNTIL=release_wait requires release_wait."""
+    """Stop only at the requested milestone, using v2 disk state when enabled."""
+    v2_phase = _v2_phase(session, paths, project_id)
+    if v2_phase is not None:
+        # v2's ``verify`` phase can still have open checklist items.  The
+        # experience target is therefore the completed verification exit.
+        if UNTIL in {"verifying", "release_wait"}:
+            return v2_phase.phase == "release_wait"
+        if UNTIL in {"queue-empty", "queue_empty"}:
+            return _formal_queue_done(paths, project_id)
+
     checkpoint = normalize_checkpoint(getattr(session.meta, "project_runaway_checkpoint", ""))
     if UNTIL == "release_wait":
         return checkpoint in {"release_wait", "completed"}
@@ -223,8 +262,13 @@ def main() -> int:
     repl.agent.on_turn_event = emit
 
     _sync_runaway_checkpoint(repl.session)
+    runaway_message = {"type": "project.runaway.set", "enabled": True}
+    if RESUME_MODE in {"resume", "directed"}:
+        runaway_message["resume"] = True
+    if RESUME_MODE == "directed":
+        runaway_message["directed"] = True
     for event in dispatch_project_message(
-        repl.session, paths, {"type": "project.runaway.set", "enabled": True}
+        repl.session, paths, runaway_message
     ).get("_events", []):
         emit(event)
     _print_state(repl.session, paths, "before-advance")
@@ -246,6 +290,10 @@ def main() -> int:
         paused = (getattr(repl.session.meta, "project_runaway_paused_reason", "") or "").strip()
         if paused:
             print(f"[stop] paused before turn {index}: {paused}")
+            break
+        human_block = _v2_human_block(repl.session, paths, pid)
+        if human_block:
+            print(f"[stop] v2 human block before turn {index}: {_short(human_block, 160)}")
             break
         checkpoint = normalize_checkpoint(getattr(repl.session.meta, "project_runaway_checkpoint", ""))
         if checkpoint in {"release_wait", "completed", "paused"}:

@@ -497,7 +497,10 @@ def _format_tasks_with_line_numbers(tasks_text: str) -> str:
 
 
 def _clip_doc(text: str, *, limit: int = 6000) -> str:
-    t = text or ""
+    # Prompt context is assembled from filesystem readers, but callers and
+    # tests may provide mapping-like adapters. Never let a non-text value
+    # abort the LLM call while building the prompt.
+    t = text if isinstance(text, str) else (str(text) if text else "")
     if len(t) <= limit:
         return t
     return t[: limit - 20] + "\n\n…(截断)…\n"
@@ -3049,7 +3052,11 @@ class PlanAgent:
             release_acceptance = load_release_acceptance(
                 project_dir(self.paths, self.project_id),
                 self.project_id,
-                release_revision=str(release_artifact.get("revision")) if release_artifact else None,
+                release_revision=(
+                    str(release_artifact.get("revision"))
+                    if release_artifact and release_artifact.get("status") == "current"
+                    else None
+                ),
             )
         except Exception:
             release_acceptance = {

@@ -50,10 +50,8 @@ function replaceMermaidBlocks(text: string): string {
   );
 }
 
-export function renderMarkdown(text: string): string {
-  if (!text.trim()) return "";
+export function sanitizeAssistantMarkdown(text: string): string {
   let cleaned = text.trimEnd();
-  // strip trailing delivery markers that some models emit
   const trailingMarkers = [
     /【[^】]*交付完成[^】]*】\s*$/,
     /【[^】]*已验收[^】]*】\s*$/,
@@ -62,6 +60,23 @@ export function renderMarkdown(text: string): string {
   for (const re of trailingMarkers) {
     cleaned = cleaned.replace(re, "").trimEnd();
   }
+  // UX-030 — repair common model markdown glitches before marked.parse
+  cleaned = cleaned.replace(/^\[continue\]\s*$/gim, "");
+  cleaned = cleaned.replace(/[ \t]+`{2,}\s*$/gm, "");
+  cleaned = cleaned.replace(
+    /命令[：:]\s*\\?`+\s*(powershell\b[^\n`]*)/gim,
+    (_match, cmd: string) => `\n\n\`\`\`powershell\n${cmd.trim()}\n\`\`\`\n`,
+  );
+  cleaned = cleaned.replace(
+    /(^|[\n\r])`{1,2}\s*(powershell\b[^\n`]+)`?/gim,
+    (_match, prefix: string, cmd: string) => `${prefix}\n\`\`\`powershell\n${cmd.trim()}\n\`\`\`\n`,
+  );
+  return cleaned;
+}
+
+export function renderMarkdown(text: string): string {
+  if (!text.trim()) return "";
+  const cleaned = sanitizeAssistantMarkdown(text);
   return marked.parse(replaceMermaidBlocks(cleaned), { async: false }) as string;
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -12,15 +13,112 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from project_api import build_plan_request_payload, dispatch_project_message, project_state_payload
-from project_manifest import STANDARD_ARTIFACTS, build_manifest, load_manifest, save_manifest
+from project_api import (
+    after_turn_project_hooks,
+    build_plan_request_payload,
+    dispatch_project_message,
+    project_plan_state_payload,
+    project_state_payload,
+)
+from project_manifest import (
+    STANDARD_ARTIFACTS,
+    bootstrap_manifest,
+    build_manifest,
+    load_manifest,
+    save_manifest,
+)
 from project_mode import create_project, migrate_legacy_project, project_dir
+from runaway_v2.checklist import build_checklist, save_checklist
 from session import create_new
 from tools.schema import tool_ok
 from tests.isolation_helpers import temporary_agent_paths
 
 
 class ProjectArtifactTests(unittest.TestCase):
+    @patch.dict(os.environ, {"MY_AGENT_RUNAWAY_V2": "1"}, clear=False)
+    def test_plan_state_preserves_v2_release_wait(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "plan-state-release-wait"
+            root = paths.workspace / pid
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "PROJECT.md").write_text(
+                "REQ-001\nAC-001\n\n## 验收标准\n\n"
+                "- 命令：`python verify.py` 期望退出码：0\n",
+                encoding="utf-8",
+            )
+            (root / "DESIGN.md").write_text("UX-001\nTD-001\n", encoding="utf-8")
+            (root / "TASKS.md").write_text("- [x] T-001 done\n", encoding="utf-8")
+            (root / "VERIFY.md").write_text("V-001 T-001 pass\nAC-001\n", encoding="utf-8")
+            (root / "ENV.md").write_text(
+                "quality:\n  commands:\n    - id: smoke\n      cmd: [\"echo\", \"ok\"]\n",
+                encoding="utf-8",
+            )
+            bootstrap_manifest(root, pid)
+            session = create_new(paths, conversation_id="_plan_state_release_wait_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_runaway_enabled = True
+
+            checklist = build_checklist(paths, pid)
+            for item in checklist.items:
+                item.status = "passed"
+            save_checklist(paths, checklist)
+
+            payload = project_plan_state_payload(session, paths)
+
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(payload["runaway_version"], 2)
+            self.assertEqual(payload["runaway_phase"], "release_wait")
+            self.assertEqual(payload["runaway_checkpoint"], "release_wait")
+            self.assertEqual(payload["workflow_stage"], "release")
+            self.assertIn("等待发布确认", payload["runaway_user_line"])
+
+    @patch.dict(os.environ, {"MY_AGENT_RUNAWAY_V2": "1"}, clear=False)
+    def test_after_turn_v2_repairs_stale_plan_dirty_without_reopening_prepare(self) -> None:
+        with temporary_agent_paths() as paths:
+            pid = "after-turn-release-wait"
+            root = paths.workspace / pid
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "PROJECT.md").write_text(
+                "REQ-001\nAC-001\n\n## 验收标准\n\n"
+                "- 命令：`python verify.py` 期望退出码：0\n",
+                encoding="utf-8",
+            )
+            (root / "DESIGN.md").write_text("UX-001\nTD-001\n", encoding="utf-8")
+            (root / "TASKS.md").write_text("- [x] T-001 done\n", encoding="utf-8")
+            (root / "VERIFY.md").write_text("V-001 T-001 pass\nAC-001\n", encoding="utf-8")
+            (root / "ENV.md").write_text(
+                "quality:\n  commands:\n    - id: smoke\n      cmd: [\"echo\", \"ok\"]\n",
+                encoding="utf-8",
+            )
+            bootstrap_manifest(root, pid)
+            session = create_new(paths, conversation_id="_after_turn_release_wait_")
+            session.meta.active_shell = "project"
+            session.meta.project_id = pid
+            session.meta.project_root = f"workspace/{pid}"
+            session.meta.project_runaway_enabled = True
+            session.meta.project_plan_status = "plan_dirty"
+            session.meta.project_runaway_checkpoint = "release_wait"
+            session.meta.project_runaway_v2_phase = "release_wait"
+
+            checklist = build_checklist(paths, pid)
+            for item in checklist.items:
+                item.status = "passed"
+            save_checklist(paths, checklist)
+
+            events: list[dict] = []
+            after_turn_project_hooks(session, paths, events.append)
+
+            self.assertEqual(session.meta.project_plan_status, "confirmed")
+            plan_state = next(
+                event for event in events if event.get("type") == "project.plan.state"
+            )
+            self.assertEqual(plan_state["runaway_phase"], "release_wait")
+            self.assertEqual(plan_state["runaway_checkpoint"], "release_wait")
+
     def test_scope_confirm_is_routed_and_persisted(self) -> None:
         with temporary_agent_paths() as paths:
             pid = "scope-confirm-demo"
@@ -192,7 +290,8 @@ class ProjectArtifactTests(unittest.TestCase):
                     finish_reason="stop",
                 )
             )
-            self.assertIn("不要反复验证已完成任务", session.messages[-1]["content"])
+            self.assertIn("[Harness] 狂奔继续", session.messages[-1]["content"])
+            self.assertIn("T-001", session.messages[-1]["content"])
 
     def test_runaway_duplicate_continue_key_does_not_loop_segments(self) -> None:
         from agent import Agent
@@ -255,6 +354,24 @@ class ProjectArtifactTests(unittest.TestCase):
             }}
             self.assertFalse(executor._runaway_confirm_is_covered(builtin, write_text, sensitive, tool_name="run_evolved"))
 
+            plan_domain = {"tool_name": "patch_file", "arguments": {
+                "path": f"workspace/{pid}/VERIFY.md",
+                "search": "old",
+                "replace": "new",
+            }}
+            patch_file = SimpleNamespace(name="patch_file", scope="project")
+            self.assertFalse(
+                executor._runaway_confirm_is_covered(
+                    builtin, patch_file, plan_domain, tool_name="run_evolved"
+                )
+            )
+            executor.session.runaway_v2_write_scope = ("VERIFY.md", "PROJECT.md", "TASKS.md", "DESIGN.md")
+            self.assertTrue(
+                executor._runaway_confirm_is_covered(
+                    builtin, patch_file, plan_domain, tool_name="run_evolved"
+                )
+            )
+
             external = {"tool_name": "run_command", "arguments": {
                 "command": "git push origin main",
                 "working_dir": f"workspace/{pid}",
@@ -284,11 +401,17 @@ class ProjectArtifactTests(unittest.TestCase):
             agent = Agent.create(session)
             fake_plan = Mock()
             fake_plan.accept_suggestion.return_value = {"ok": True}
+            fake_plan._pending_gated = {"proposal-2": {"id": "proposal-2", "action": "apply_patch"}}
+            fake_plan.quality_suggestions.return_value = []
             with patch("plan_agent.get_plan_agent", return_value=fake_plan):
                 with patch("project_api._ack_human_plan_adopt") as ack:
                     self.assertTrue(agent._adopt_runaway_proposals(["proposal-1"]))
-            fake_plan.accept_suggestion.assert_called_once_with("proposal-1", code_policy="plan_only")
-            ack.assert_called_once()
+                    self.assertTrue(agent._flush_runaway_plan_proposals())
+            self.assertEqual(
+                [call.args[0] for call in fake_plan.accept_suggestion.call_args_list],
+                ["proposal-1", "proposal-2"],
+            )
+            self.assertGreaterEqual(ack.call_count, 1)
 
     def test_it5812_new_project_has_non_empty_standard_artifacts(self) -> None:
         with temporary_agent_paths() as paths:

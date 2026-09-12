@@ -7,11 +7,13 @@ alwaysApply: true
 
 **新会话先读** [`docs/MAP.md`](../../docs/MAP.md)（含 **§2.1**）与 [`docs/TASKS.md`](../../docs/TASKS.md)。稳定化：[STABILIZATION.md](../../docs/STABILIZATION.md) **v1.1.0 · 已解冻**。
 
-## 当前代码状态（2026-08-14）
+## 当前代码状态（2026-09-07）
 
 - **产品定调**：[DESKTOP-TEXTBOOK-FLOW.md](../../docs/DESKTOP-TEXTBOOK-FLOW.md) — **Desktop 主战场**（project · 闸门+证据流程轨）· **Terminal frozen**（独立入口 · 维护/P0）
 - **Phase 58**：**M1 done** — 流程轨 + 阶段计划卡（T-5801～5808）· S-580 todo
-- **Phase 58b**：**L0 已决 · T-5810～T-5819 done · T-5831 doc done** — [DESKTOP-REAL-RD-FLOW.md](../../docs/DESKTOP-REAL-RD-FLOW.md) v0.2.5 七文件制品链 + 内容下限 · 下一步 **T-5832 编码** · S-581
+- **Phase 58b**：**历史设计，暂停执行** — [DESKTOP-REAL-RD-FLOW.md](../../docs/DESKTOP-REAL-RD-FLOW.md) 七文件制品链不作为当前产品主线。
+
+- **Phase 60**：**狂奔 v2 M0/M1 已编码** — v2 自动验证 40/40；T-6106 v1 兼容回归待收口；T-6107 续接核心已接入，兼容层/指纹待收口；S-6106 music 手工试点待做。[RUNAWAY-V2.md](../../docs/RUNAWAY-V2.md)
 
 - **Phase 47+**：**done（已 push）** — LDM v0.3.3 · [ROADMAP-PACK-1245.md](../../docs/ROADMAP-PACK-1245.md) **v0.2.2**（Fable5 已签）
 
@@ -36,11 +38,11 @@ alwaysApply: true
 - **壳合并**：**done（前端）** — 唯一聊天壳 `desktop/src/shells/unified/`（perspective: `default` | `project` | `night`）；`pet` 独立窗；旧 `grow`/`daily`/`project`/`govern` 目录已删。设计见 [SHELL-CONSOLIDATION.md](../../docs/SHELL-CONSOLIDATION.md)。后端仍用 `active_shell` / `shell_sessions` 作**会话线标签**（非 DOM 切壳）。
 - **WRITE-SCOPE**：**done** — `resolve_under_agent_for_write` + deny-list；evolved 写路径默认 agent root。[WRITE-SCOPE.md](../../docs/WRITE-SCOPE.md)。
 - **TOOL-RETRY**：**done** — 参数校验失败可自修正一次。[TOOL-RETRY.md](../../docs/TOOL-RETRY.md)。
-- **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** 单项目态势侧栏（§6.2.2 · 文档已签 · M0 待实施）；UX-021～023 done。
+- **UX-POLISH**：**进行中** — UX-001～025 done；**UX-026** M0 done；**UX-028** 活动轨已实施；**UX-029** M0+M1 done、M2 todo（[DESKTOP-CHROME.md](../../docs/DESKTOP-CHROME.md)）；**UX-030** M0 已编码、待完整手工验收（[CHAT-OUTPUT-POLISH.md](../../docs/CHAT-OUTPUT-POLISH.md)）。
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
 - **Phase 57**：**legacy M1 done** · **Ink 阶段 0～5 done** · **T-5730～5734 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6 · **frozen** · S-576 手工留痕
 - **Phase 59b**：**done** — verification 谓词门 UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](../../docs/RUNAWAY-VERIFICATION-ORCHESTRATOR.md)
-- **下一焦点**：Phase 58b T-5832（manifest completeness + tier linter）· S-581 · UX-026 defer · S-6046 手工
+- **下一焦点**：T-6106 v1 兼容回归 · T-6107 continuation · S-6106 music 试点 · UX-029 M2 / UX-030 验收；Phase 58b T-5832 保持暂停
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；Terminal：`start-terminal.bat`；CLI 备用 `start.bat`。
 - Python 3.12+；`requirements.txt`：`httpx` + `websockets`；**不要**擅自 git commit。

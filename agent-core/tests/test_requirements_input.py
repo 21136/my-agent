@@ -24,6 +24,27 @@ PROJECT_BRIEF = (
     "后台管理员负责用户、歌手和歌曲管理。"
 )
 
+DIRECT_MAINTENANCE_REQUEST = (
+    "这是普通模式下的真实 bug 修复请求。请先对当前项目运行 pytest 和 verify.py 定位失败，"
+    "再读取 app.py 找到根因，直接修改实际代码修复 add 运算。修复后重新运行相关测试和硬验收，"
+    "最后只基于实际输出说明证据。不要只给建议或总结，不要修改项目计划文档。"
+)
+
+DIRECT_IMPLEMENTATION_REQUEST = (
+    "请直接实现当前已确认项目的 T-001：创建纯 Python CLI 计算器 app.py、pytest 测试和 verify.py，"
+    "满足 PROJECT.md 中的 add、mul 和非法命令验收。实际修改文件，运行测试与硬验收并修复失败，"
+    "最后只报告真实证据。"
+)
+
+EXPLANATION_REQUESTS = (
+    "请告诉我如何实现这个功能？",
+    "请解释如何实现这个功能，不要修改代码。",
+    "请说明如何运行测试。",
+    "请先告诉我如何修复这个 bug，不要动文件。",
+    "请帮我解释如何实现这个功能。",
+    "Please tell me how to implement this feature without changing files.",
+)
+
 
 class RequirementsInputTests(unittest.TestCase):
     def test_project_brief_is_read_only_requirements_input(self) -> None:
@@ -31,6 +52,23 @@ class RequirementsInputTests(unittest.TestCase):
         self.assertEqual(classify_turn(PROJECT_BRIEF), "requirements")
         self.assertFalse(should_spawn_explore(PROJECT_BRIEF))
         self.assertEqual(classify_turn("请根据这份简介创建项目脚手架"), "execute")
+
+    def test_long_explicit_maintenance_request_is_executable(self) -> None:
+        self.assertFalse(is_requirement_input(DIRECT_MAINTENANCE_REQUEST))
+        self.assertEqual(classify_turn(DIRECT_MAINTENANCE_REQUEST), "execute")
+
+    def test_artifact_reference_does_not_hide_explicit_implementation(self) -> None:
+        self.assertEqual(classify_turn(DIRECT_IMPLEMENTATION_REQUEST), "execute")
+        self.assertEqual(
+            classify_turn("用纯 Java 实现斗地主，先帮我填 PROJECT.md 和 TASKS.md"),
+            "plan",
+        )
+        self.assertEqual(classify_turn("帮我列个 Phase 7 实施计划"), "plan")
+
+    def test_explanation_requests_do_not_enter_execution(self) -> None:
+        for request in EXPLANATION_REQUESTS:
+            with self.subTest(request=request):
+                self.assertEqual(classify_turn(request), "qa")
 
     def test_requirements_turn_does_not_expose_tools(self) -> None:
         with temporary_agent_paths() as paths:

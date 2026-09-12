@@ -7,7 +7,8 @@
 > **A8/A9/Q4（2026-08-03）· M6 done**：Plan 提案 = 文件 patch + 侧栏 diff 采纳。  
 > **§15.12（2026-08-03）· Phase 39 done**：**废止 §15.11 双通道**；用户只跟主 Agent 说话；Plan = **幕后子代理** + 侧栏短卡入口 + **主列审阅面**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）+ 主聊过程卡。见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)。
 > **§15.13（2026-08-04）· Phase 40 设计已签**：采纳 **控件对齐**（禁口述「点采纳」；待采纳 ≠ 已写入）— [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)。
-> **§6.2.2（2026-08-05）· UX-026 已决 · 待实施**：**单项目态势侧栏** — 侧栏只服务当前绑定项目；本回合证据改一行摘要；Services 默认折叠；多项目仅 overlay/顶栏切换。见 §6.2.2 · [UX-POLISH.md](./UX-POLISH.md) UX-026。
+> **§6.2.2（2026-08-05）· UX-026 已决 · M0 done**：**单项目态势侧栏** — 侧栏只服务当前绑定项目；本回合证据改一行摘要；Services 默认折叠；多项目仅 overlay/顶栏切换。见 §6.2.2 · [UX-POLISH.md](./UX-POLISH.md) UX-026。  
+> **§6.2.3（2026-09-04）· UX-029 已决 · 待实施**：**壳层视觉统一** — 侧栏/顶栏与主聊对齐；态势单卡、顶栏菜单化、去 `textbook-*` CRUD 皮。见 §6.2.3 · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)。
 > **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。
 > **§15.10**：侧栏建议卡 / 低风险 auto_fix — **done**（T-2202～T-2207）。
 > 代码锚点：`agent-core/plan_agent.py` · `desktop/src/shells/unified/project-panel.ts` · `desktop/src/shells/unified/index.ts`
@@ -477,6 +478,47 @@ DOM（项目 perspective）：
 代码锚点（M0）：`project-panel.ts`（`renderDecisionSurface` · `renderServicesPanel` · 本回合渲染）· `unified.css` · `index.ts`（跳主聊 scroll/expand process）。
 
 验收见 [UX-POLISH.md](./UX-POLISH.md) **S-UX-026**。
+
+#### 6.2.2.8 与 UX-029 分工
+
+| 维度 | UX-026 | UX-029 |
+|------|--------|--------|
+| 问题 | 展示什么（工具列表、双轨进度） | 长什么样（圆角、banner、按钮排布） |
+| 侧栏体 | 当前卡、堆叠、本回合一行 | **`.sidebar-status-card`** 统一狂奔/非狂奔态势面 |
+| 顶栏 | 项目 `▾`（M1 todo） | **`⋯` 菜单** 替代四按钮横排（M1） |
+| 验收 | S-UX-026 | S-UX-029 |
+
+真源：[DESKTOP-CHROME.md](./DESKTOP-CHROME.md)。
+
+### 6.2.3 壳层视觉语言（UX-029 · 已决 · 待实施 · 2026-09-04）
+
+> **动机**：UX-026 M0 已收敛信息架构，但侧栏/顶栏仍保留 `textbook-*`、直角按钮、黄框叠层——与 UX-028 后的主聊区不像同一产品。  
+> **非目标**：不改 SP-1～SP-10 逻辑；不重做 overlay 面板。
+
+#### 6.2.3.1 原则
+
+| ID | 决议 |
+|----|------|
+| **CH-1** | 侧栏体 **一张态势卡** 为 C 位（狂奔 `renderDecisionSurface` 与非狂奔 `sidebar-decision` **共用** `.sidebar-status-card` 基类） |
+| **CH-2** | 顶栏：项目名 + `⋯` 溢出菜单；**禁止** `+ 对话` / `+ 新开线` / `+ 项目` / `会话` 四钮横排 |
+| **CH-3** | 全局按钮 `border-radius: 8px`；与 `unified-process` token 对齐 |
+| **CH-4** | 同时最多 **一层** 高强调横条（决策条 / change-banner / 态势卡 按优先级互斥露脸） |
+| **CH-5** | 底栏：文字 tab 或 SVG；**禁**裸 emoji 作主识别 |
+| **CH-6** | 退役 `textbook-runaway-surface-title` 式 UPPERCASE 微标签 |
+
+#### 6.2.3.2 顶栏目标态（摘要）
+
+见 [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) §3。与 [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md) §5.2、**UI-6009** M2 合并去重。
+
+#### 6.2.3.3 实施分期
+
+| 阶段 | 内容 | 档位 |
+|------|------|------|
+| **M0** | `unified.css` 纯视觉：按钮、banner、狂奔面、图标条、顶栏间距 | P0 |
+| **M1** | `topbar.ts` 菜单 · `project-panel.ts` → `sidebar-status-card` | P1 |
+| **M2** | 顶栏 meta 与 `unified-context-region` / 侧栏头字段去重；`textbook-*` 删除 | P2 |
+
+验收见 [UX-POLISH.md](./UX-POLISH.md) **S-UX-029** · 手工 **S-6041**。
 
 ### 6.3 任务行样式
 

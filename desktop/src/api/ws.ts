@@ -18,6 +18,15 @@ export type LlmKeySlot = {
   source: "env" | "file" | null;
 };
 
+export type ExecutionStateName =
+  | "idle"
+  | "queued"
+  | "running"
+  | "stopping"
+  | "settled"
+  | "paused"
+  | "failed";
+
 export interface ProjectArtifactSummary {
   path: string;
   role: string;
@@ -84,8 +93,21 @@ export type ServerEvent =
       token_usage?: number;
       token_limit?: number;
     }
-  | { type: "turn.start"; intent: string; intent_label: string }
-  | { type: "llm.pending" }
+  | { type: "turn.start"; intent: string; intent_label: string; run_id?: string }
+  | {
+      type: "execution.state";
+      run_id: string;
+      mode?: string;
+      state: Exclude<ExecutionStateName, "idle">;
+      sequence: number;
+      cancel_requested?: boolean;
+      cancel_reason?: string | null;
+      finish_reason?: string | null;
+      ok?: boolean | null;
+      started_at?: number | null;
+      ended_at?: number | null;
+    }
+  | { type: "llm.pending"; run_id?: string }
   | {
       type: "llm.usage";
       prompt_tokens: number;
@@ -93,18 +115,25 @@ export type ServerEvent =
       cache_ratio: number;
       completion_tokens?: number;
     }
-  | { type: "turn.notice"; level?: "info" | "warn"; text: string }
+  | {
+      type: "turn.notice";
+      level?: "info" | "warn";
+      text: string;
+      runaway_cancel_available?: boolean;
+      run_id?: string;
+    }
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
-  | { type: "turn.end"; ok: boolean; finish_reason: string }
+  | { type: "turn.end"; ok: boolean; finish_reason: string; run_id?: string }
   | { type: "evolve.proposals"; items: ProposalItem[] }
-  | { type: "assistant.delta"; text: string }
-  | { type: "assistant.done"; text: string }
-  | { type: "reasoning.delta"; text: string }
-  | { type: "notice"; text: string }
+  | { type: "assistant.delta"; text: string; run_id?: string }
+  | { type: "assistant.done"; text: string; run_id?: string }
+  | { type: "reasoning.delta"; text: string; run_id?: string }
+  | { type: "notice"; text: string; runaway_cancel_available?: boolean }
   | { type: "error"; message: string }
-  | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean }
-  | { type: "confirm.done"; request_id: string; choice: string }
-  | { type: "tool.start"; tool: string; call_id: string; summary: string }
+  | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean; run_id?: string }
+  | { type: "confirm.done"; request_id: string; choice: string; run_id?: string }
+  | { type: "activity.update"; text: string; run_id?: string }
+  | { type: "tool.start"; tool: string; call_id: string; summary: string; run_id?: string }
   | {
       type: "tool.end";
       tool: string;
@@ -113,6 +142,7 @@ export type ServerEvent =
       summary: string;
       output_path?: string;
       logs_tail?: string;
+      run_id?: string;
     }
   | {
       type: "tool.progress";
@@ -121,6 +151,7 @@ export type ServerEvent =
       pct?: number;
       phase?: string;
       elapsed_sec?: number;
+      run_id?: string;
     }
   | {
       type: "turn.evidence";
@@ -183,6 +214,24 @@ export type ServerEvent =
       runaway_acceptance_passed?: boolean;
       runaway_verification_evidence?: Record<string, unknown> | null;
       runaway_verification_evidence_path?: string | null;
+      runaway_version?: number;
+      runaway_phase?: string;
+      runaway_user_line?: string;
+      runaway_mode?: string;
+      runaway_blocked?: boolean;
+      runaway_checklist?: {
+        passed?: number;
+        total?: number;
+        current_id?: string | null;
+        current_title?: string | null;
+        failed_id?: string | null;
+      } | null;
+      runaway_block?: {
+        item_id?: string | null;
+        reason?: string;
+        command?: string;
+        tail?: string;
+      } | null;
       delivery_profile?: string;
       review_verdict?: string | null;
       review_blockers_count?: number;
@@ -288,6 +337,24 @@ export type ServerEvent =
       runaway_acceptance_passed?: boolean;
       runaway_verification_evidence?: Record<string, unknown> | null;
       runaway_verification_evidence_path?: string | null;
+      runaway_version?: number;
+      runaway_phase?: string;
+      runaway_user_line?: string;
+      runaway_mode?: string;
+      runaway_blocked?: boolean;
+      runaway_checklist?: {
+        passed?: number;
+        total?: number;
+        current_id?: string | null;
+        current_title?: string | null;
+        failed_id?: string | null;
+      } | null;
+      runaway_block?: {
+        item_id?: string | null;
+        reason?: string;
+        command?: string;
+        tail?: string;
+      } | null;
       execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
       execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
       execution_stage_reason?: string;
@@ -453,6 +520,35 @@ export type ServerEvent =
       name: string;
       log_path?: string;
       text: string;
+    }
+  | {
+      type: "terminal.list.done";
+      ok: boolean;
+      sessions: TerminalSessionItem[];
+      request_id?: string;
+      error?: string;
+    }
+  | {
+      type: "terminal.output.done";
+      ok: boolean;
+      session_id: string;
+      request_id?: string;
+      output: string;
+      cursor: number;
+      next_cursor: number;
+      cursor_reset?: boolean;
+      truncated?: boolean;
+      session?: TerminalSessionItem;
+      error?: string;
+    }
+  | {
+      type: "terminal.close.done";
+      ok: boolean;
+      session_id: string;
+      request_id?: string;
+      state?: string;
+      session?: TerminalSessionItem;
+      error?: string;
     };
 
 export type ServiceListItem = {
@@ -463,6 +559,21 @@ export type ServiceListItem = {
   cwd?: string | null;
   command?: string | null;
   ready_port?: number | null;
+};
+
+export type TerminalSessionItem = {
+  session_id: string;
+  command: string;
+  cwd: string;
+  state: string;
+  alive: boolean;
+  exit_code: number | null;
+  signal: string | null;
+  reason: string | null;
+  created_at: string;
+  last_activity_at: string;
+  output_bytes: number;
+  output_start: number;
 };
 
 /** @deprecated — kept for old shell compatibility; will be removed in Phase 4 */
@@ -563,6 +674,10 @@ export class AgentWsClient {
           window.clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
+        // Rehydrate persistent terminal visibility after the initial connect
+        // and every reconnect; the unified shell also requests an explicit
+        // snapshot after its event handler is mounted.
+        this.send({ type: "terminal.list" });
         resolve();
       });
 
@@ -854,6 +969,10 @@ export class AgentWsClient {
     this.send({ type: "project.runaway.set", enabled: true, resume: true });
   }
 
+  resumeProjectRunawayDirected(): void {
+    this.send({ type: "project.runaway.set", enabled: true, resume: true, directed: true });
+  }
+
   confirmProjectDesign(): void {
     this.send({ type: "project.design.confirm" });
   }
@@ -942,6 +1061,38 @@ export class AgentWsClient {
   fetchServiceLogs(name: string, tailLines = 40): void {
     this.send({ type: "services.logs", name, tail_lines: tailLines });
   }
+
+  /** Persistent interactive terminal session visibility and controls. */
+  listTerminals(requestId?: string): void {
+    this.send({
+      type: "terminal.list",
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  }
+
+  readTerminalOutput(
+    sessionId: string,
+    cursor = 0,
+    maxChars = 16_384,
+    requestId?: string,
+  ): void {
+    this.send({
+      type: "terminal.output",
+      session_id: sessionId,
+      cursor,
+      max_chars: maxChars,
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  }
+
+  closeTerminal(sessionId: string, requestId?: string, force = false): void {
+    this.send({
+      type: "terminal.close",
+      session_id: sessionId,
+      force,
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  }
 }
 
 export async function createWsClient(): Promise<AgentWsClient> {
@@ -982,6 +1133,8 @@ declare global {
       getDownloadsPath: () => Promise<string>;
       getDesktopPath: () => Promise<string>;
       getPathForFile?: (file: File) => string;
+      writeTempStagingFile?: (name: string, data: Uint8Array) => Promise<string>;
+      readClipboardImageToTemp?: () => Promise<string | null>;
       readConstellation: () => Promise<{ version: 1; stars: unknown[]; links: unknown[] }>;
       writeConstellation: (payload: { version: 1; stars: unknown[]; links: unknown[] }) => Promise<boolean>;
       clearConstellation: () => Promise<boolean>;

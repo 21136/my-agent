@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -68,6 +69,7 @@ def run(
 
     tool_args = coalesce_tool_arguments(arguments)
 
+    dry_run_explicit = "dry_run" in arguments or "dry_run" in tool_args
     dry_run = bool(arguments.get("dry_run", False))
     if not dry_run and isinstance(tool_args.get("dry_run"), bool):
         dry_run = tool_args["dry_run"]
@@ -136,6 +138,7 @@ def run(
             tool,
             tool_args,
             dry_run=dry_run,
+            dry_run_explicit=dry_run_explicit,
             cancel_event=cancel_event,
         )
     except _EvolvedCancelledError:
@@ -181,11 +184,21 @@ def execute_evolved_tool(
     arguments: dict[str, Any],
     *,
     dry_run: bool = False,
+    dry_run_explicit: bool = True,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run ``tool`` entry script; return parsed JSON from stdout."""
     payload = dict(arguments)
-    payload["dry_run"] = dry_run
+    if dry_run_explicit:
+        payload["dry_run"] = dry_run
+
+    # A persistent interactive terminal cannot be owned by this short-lived
+    # evolved-tool subprocess on Windows: the host may reap its descendants
+    # when the JSON request completes.  Run the terminal adapter in the
+    # long-lived agent process so its PTY worker has the correct lifetime.
+    if tool.name == "interactive_terminal":
+        return _execute_in_process_tool(tool, payload)
+
     stdin = json.dumps(payload, ensure_ascii=False)
 
     env = os.environ.copy()
@@ -232,16 +245,19 @@ def execute_evolved_tool(
             _terminate_subprocess(proc)
             stdout_thread.join(timeout=2)
             stderr_thread.join(timeout=2)
+            _close_process_pipes(proc)
             raise _EvolvedCancelledError()
         if time.monotonic() >= deadline:
             _terminate_subprocess(proc)
             stdout_thread.join(timeout=2)
             stderr_thread.join(timeout=2)
+            _close_process_pipes(proc)
             raise subprocess.TimeoutExpired(cmd=proc.args, timeout=tool.policy.timeout_sec)
         time.sleep(0.05)
 
     stdout_thread.join(timeout=5)
     stderr_thread.join(timeout=5)
+    _close_process_pipes(proc)
     stdout = "".join(stdout_chunks)
     stderr = "".join(stderr_chunks)
 
@@ -287,6 +303,48 @@ def execute_evolved_tool(
         )
 
     return inner
+
+
+def _execute_in_process_tool(tool: EvolvedTool, payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute a lifecycle-sensitive evolved tool without a child wrapper."""
+    module_name = f"_evolved_in_process_{tool.name}"
+    module = sys.modules.get(module_name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(module_name, tool.entry.script_path)
+        if spec is None or spec.loader is None:
+            raise _EvolvedExecutionError(
+                f"cannot load in-process evolved tool: {tool.name}",
+                code=ToolErrorCode.VALIDATION_ERROR,
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+    runner = getattr(module, "interactive_terminal", None)
+    if not callable(runner):
+        raise _EvolvedExecutionError(
+            f"in-process evolved tool has no interactive_terminal runner: {tool.name}",
+            code=ToolErrorCode.VALIDATION_ERROR,
+        )
+    try:
+        result = runner(payload)
+    except _EvolvedExecutionError:
+        raise
+    except Exception as exc:
+        raise _EvolvedExecutionError(
+            f"in-process evolved tool failed: {exc}",
+            code=ToolErrorCode.VALIDATION_ERROR,
+        ) from exc
+    if not isinstance(result, dict):
+        raise _EvolvedExecutionError(
+            "in-process evolved tool must return an object",
+            code=ToolErrorCode.VALIDATION_ERROR,
+        )
+    return result
 
 
 def run_scaffold_demo(
@@ -343,6 +401,7 @@ def run_scaffold_demo(
             _terminate_subprocess(proc)
             st_reader.join(timeout=2)
             se_reader.join(timeout=2)
+            _close_process_pipes(proc)
             return {
                 **base,
                 "ok": False,
@@ -355,6 +414,7 @@ def run_scaffold_demo(
             _terminate_subprocess(proc)
             st_reader.join(timeout=2)
             se_reader.join(timeout=2)
+            _close_process_pipes(proc)
             return {
                 **base,
                 "ok": False,
@@ -366,6 +426,7 @@ def run_scaffold_demo(
 
     st_reader.join(timeout=5)
     se_reader.join(timeout=5)
+    _close_process_pipes(proc)
     stdout = "".join(stdout_chunks)
     stderr = "".join(stderr_chunks)
     exit_code = proc.returncode if proc.returncode is not None else -1
@@ -393,6 +454,17 @@ def _terminate_subprocess(proc: subprocess.Popen[str]) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+
+
+def _close_process_pipes(proc: subprocess.Popen[str]) -> None:
+    """Close inherited pipe wrappers after reader threads have drained them."""
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
 
 
 class _EvolvedCancelledError(RuntimeError):

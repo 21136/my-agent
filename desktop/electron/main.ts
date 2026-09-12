@@ -4,18 +4,7 @@ import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  globalShortcut,
-  ipcMain,
-  Menu,
-  nativeImage,
-  screen,
-  shell,
-  Tray,
-} from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from "electron";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
@@ -771,6 +760,37 @@ ipcMain.handle("dialog:pick-directory", async () => {
 
 ipcMain.handle("app:get-downloads-path", () => app.getPath("downloads"));
 ipcMain.handle("app:get-desktop-path", () => app.getPath("desktop"));
+
+ipcMain.handle("staging:write-temp", async (_event, name: unknown, data: unknown) => {
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error("staging name required");
+  }
+  const bytes =
+    data instanceof Uint8Array
+      ? Buffer.from(data)
+      : Buffer.isBuffer(data)
+        ? data
+        : null;
+  if (!bytes?.length) {
+    throw new Error("staging payload empty");
+  }
+  const safeName = path.basename(name).replace(/[^\w.\-()+ ]+/g, "_") || "paste.png";
+  const dir = path.join(os.tmpdir(), "my-agent-paste");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${Date.now()}-${safeName}`);
+  writeFileSync(filePath, bytes);
+  return filePath;
+});
+
+ipcMain.handle("clipboard:read-image-temp", async () => {
+  const image = clipboard.readImage();
+  if (image.isEmpty()) return null;
+  const dir = path.join(os.tmpdir(), "my-agent-paste");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${Date.now()}-clipboard.png`);
+  writeFileSync(filePath, image.toPNG());
+  return filePath;
+});
 
 ipcMain.handle("constellation:read", () => readConstellationFile());
 

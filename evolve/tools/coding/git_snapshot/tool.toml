@@ -1,7 +1,7 @@
 [tool]
 name = "git_snapshot"
 description = "只读 Git 快照：status --porcelain 与 diff --stat（可选 staged）"
-version = "1.0.0"
+version = "1.1.0"
 status = "active"
 topics = ["coding"]
 
@@ -19,6 +19,13 @@ description = "可选，限制 diff 范围（相对 agent 根）"
 type = "boolean"
 default = true
 description = "是否包含 git diff --cached --stat"
+[schema.input.properties.include_diff]
+type = "boolean"
+default = false
+description = "是否返回完整工作树 diff 和 staged diff（有上限）"
+[schema.input.properties.base_ref]
+type = "string"
+description = "可选，工作树 diff 的基线 ref；不填则为未暂存工作树"
 
 [schema.output]
 type = "object"
@@ -27,6 +34,9 @@ branch = { type = "string" }
 status_lines = { type = "array" }
 diff_stat = { type = "string" }
 staged_diff_stat = { type = "string" }
+untracked_paths = { type = "array" }
+diff = { type = "string" }
+staged_diff = { type = "string" }
 
 [policy]
 confirm = true

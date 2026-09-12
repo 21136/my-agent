@@ -1,0 +1,45 @@
+[tool]
+name = "git_restore"
+description = "按文件安全回退 Git worktree/staged；真实回退要求 expected_hash，默认先 dry_run"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "expected_hash"]
+[schema.input.properties.path]
+type = "string"
+description = "相对 working_dir 的 tracked 文件路径"
+[schema.input.properties.working_dir]
+type = "string"
+description = "相对 agent root 的 git 仓库或其子目录"
+[schema.input.properties.cwd]
+type = "string"
+description = "working_dir 别名"
+[schema.input.properties.scope]
+type = "string"
+enum = ["worktree", "staged"]
+default = "worktree"
+[schema.input.properties.base_ref]
+type = "string"
+default = "HEAD"
+[schema.input.properties.expected_hash]
+type = "string"
+description = "当前文件内容 SHA-256；删除的 tracked 文件使用 'deleted'；不匹配则拒绝丢弃改动"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = true
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 60

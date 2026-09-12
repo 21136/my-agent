@@ -1,4 +1,4 @@
-import type { ServerEvent } from "../api/ws";
+import type { ExecutionStateName, ServerEvent } from "../api/ws";
 import {
   type ProcessActivityBlock,
   activityEntriesPrint,
@@ -58,6 +58,10 @@ export interface ChatSessionModel {
   turnActive: boolean;
   turnFinished: boolean;
   toolsRunning: number;
+  executionRunId: string;
+  executionState: ExecutionStateName;
+  executionSequence: number;
+  executionFinishReason: string | null;
   _toolTimers: Map<string, number>;
 }
 
@@ -96,6 +100,7 @@ export interface ChatSession {
   model: ChatSessionModel;
   currentTurnIndex(): number;
   beginTurn(): number;
+  beginServerProcessTurn(): void;
   beginTurnActivity(): void;
   resetTurnActivity(): void;
   isWorking(): boolean;
@@ -115,7 +120,8 @@ export interface ChatSession {
   submitConfirm(requestId: string, choice: "y" | "n" | "a"): boolean;
   /** Phase 15: debounce Stop and optimistically resolve a pending confirm. */
   requestCancel(): boolean;
-  handleEvent(event: ServerEvent): void;
+  /** Returns false when a stale run event was ignored. */
+  handleEvent(event: ServerEvent): boolean;
 }
 
 export function escapeHtml(text: string): string {
@@ -240,6 +246,10 @@ export function isConfirmInProgressLabel(label: string | undefined): boolean {
   return label.includes("执行中") || label === "提交中…";
 }
 
+function normalizedRunId(runId: string | undefined): string {
+  return typeof runId === "string" ? runId.trim() : "";
+}
+
 const CONFIRM_LABELS: Record<string, string> = {
   y: "已同意，执行中…",
   n: "已跳过",
@@ -266,6 +276,10 @@ export function createChatSession(
     turnActive: false,
     turnFinished: false,
     toolsRunning: 0,
+    executionRunId: "",
+    executionState: "idle",
+    executionSequence: 0,
+    executionFinishReason: null,
     _toolTimers: new Map<string, number>(),
   };
 
@@ -348,6 +362,7 @@ export function createChatSession(
     if (model.cancelRequested) return true;
     // C5: post-click submitting counts as working even while confirmPending clears.
     if (model.confirmSubmitting) return true;
+    if (["queued", "running", "stopping"].includes(model.executionState)) return true;
     const liveThinking = model.blocks.some(
       (block) =>
         block.kind === "process" && isProcessThinkingLive(block, model.currentTurnKey),
@@ -413,7 +428,12 @@ export function createChatSession(
 
   function requestCancel(): boolean {
     if (model.cancelRequested) return false;
-    if (!model.turnActive && !model.confirmPending && model.toolsRunning === 0) {
+    if (
+      !model.turnActive
+      && !model.confirmPending
+      && model.toolsRunning === 0
+      && !["queued", "running", "stopping"].includes(model.executionState)
+    ) {
       return false;
     }
     model.cancelRequested = true;
@@ -447,6 +467,14 @@ export function createChatSession(
       finalizeProcessAfterTurn(block);
       block.collapsed = true;
     }
+  }
+
+  /** New process timeline for each server turn / v2 chain segment (no user bubble). */
+  function beginServerProcessTurn(): void {
+    finalizeInFlightProcessBlocks();
+    model.currentTurnKey = `turn-${Date.now()}`;
+    model.assistantBuffer = "";
+    beginTurnActivity();
   }
 
   function beginTurn(): number {
@@ -603,7 +631,36 @@ export function createChatSession(
     notify();
   }
 
-  function handleEvent(event: ServerEvent): void {
+  function isStaleRunEvent(event: ServerEvent): boolean {
+    const currentRunId = normalizedRunId(model.executionRunId);
+    const eventRunId = [
+      "execution.state",
+      "turn.start",
+      "turn.end",
+      "turn.notice",
+      "llm.pending",
+      "assistant.delta",
+      "assistant.done",
+      "reasoning.delta",
+      "activity.update",
+      "confirm.request",
+      "confirm.done",
+      "tool.start",
+      "tool.end",
+      "tool.progress",
+    ].includes(event.type)
+      ? normalizedRunId("run_id" in event ? event.run_id : undefined)
+      : "";
+    if (!currentRunId || !eventRunId) return false;
+    if (event.type === "execution.state") {
+      return event.sequence < model.executionSequence
+        || (event.sequence === model.executionSequence && eventRunId !== currentRunId);
+    }
+    return eventRunId !== currentRunId;
+  }
+
+  function handleEvent(event: ServerEvent): boolean {
+    if (isStaleRunEvent(event)) return false;
     switch (event.type) {
       case "session.banner": {
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
@@ -611,6 +668,10 @@ export function createChatSession(
         model.confirmPending = false;
         model.confirmSubmitting = false;
         model.cancelRequested = false;
+        model.executionRunId = "";
+        model.executionState = "idle";
+        model.executionSequence = 0;
+        model.executionFinishReason = null;
         model.confirmOverlay = null;
         if (sessionChanged) {
           clearSessionEphemeralState(model);
@@ -625,6 +686,10 @@ export function createChatSession(
         model.confirmPending = false;
         model.confirmSubmitting = false;
         model.cancelRequested = false;
+        model.executionRunId = "";
+        model.executionState = "idle";
+        model.executionSequence = 0;
+        model.executionFinishReason = null;
         model.confirmOverlay = null;
         const loaded = historyFromItems(event.items);
         model.blocks = sanitizeChatBlocksForHistory(loaded.blocks);
@@ -642,14 +707,40 @@ export function createChatSession(
         notify();
         break;
       }
-      case "turn.start":
-        beginTurnActivity();
+      case "execution.state": {
+        if (event.sequence < model.executionSequence) return false;
+        const runId = normalizedRunId(event.run_id);
+        if (runId) model.executionRunId = runId;
+        model.executionState = event.state;
+        model.executionSequence = event.sequence;
+        model.executionFinishReason = event.finish_reason ?? null;
+        if (event.state === "queued" || event.state === "running") {
+          beginTurnActivity();
+          model.cancelRequested = false;
+        } else if (event.state === "stopping") {
+          beginTurnActivity();
+          model.cancelRequested = true;
+        } else {
+          model.turnActive = false;
+          model.turnFinished = true;
+          model.cancelRequested = false;
+          model.toolsRunning = 0;
+          model.confirmSubmitting = false;
+        }
+        notify();
+        break;
+      }
+      case "turn.start": {
+        const runId = normalizedRunId(event.run_id);
+        if (runId) model.executionRunId = runId;
+        beginServerProcessTurn();
         if (options.showProcess) {
           markLlmPending(prepareProcessForLlmRound());
         }
         hooks.onTurnStart?.(event, currentTurnIndex());
         notify();
         break;
+      }
       case "llm.pending":
         if (options.showProcess) {
           markLlmPending(prepareProcessForLlmRound());
@@ -658,6 +749,11 @@ export function createChatSession(
         notify();
         break;
       case "turn.end":
+        if (event.run_id && !model.executionRunId) {
+          const runId = normalizedRunId(event.run_id);
+          if (runId) model.executionRunId = runId;
+        }
+        model.executionFinishReason = event.finish_reason;
         if (event.finish_reason === "cancelled" || event.finish_reason === "timeout") {
           model.blocks = model.blocks.filter(
             (block) =>
@@ -903,12 +999,14 @@ export function createChatSession(
       default:
         break;
     }
+    return true;
   }
 
   return {
     model,
     currentTurnIndex,
     beginTurn,
+    beginServerProcessTurn,
     beginTurnActivity,
     resetTurnActivity,
     isWorking,

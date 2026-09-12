@@ -23,7 +23,7 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 
 ---
 
-## 当前摘要（2026-08-14）
+## 当前摘要（2026-09-07）
 
 | 项 | 说明 |
 |----|------|
@@ -35,7 +35,8 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 | **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
 | **Builtin** | 12 个（核心 7 + 编排 5：`explore` · `plan_partner` · `deliverable_review` 等） |
 | **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
-| **下一手工** | S-580 Desktop 北极星路径 · S-576 Terminal（frozen 留痕） |
+| **狂奔 v2** | Desktop 默认 `MY_AGENT_RUNAWAY_V2=1`；Phase 60 M0/M1 已编码，v2 自动测试 40/40；续接核心已接入，兼容层/指纹与手工试点待收口 |
+| **下一手工** | S-6106 music 试点；另收口 T-6106 v1 兼容、T-6107 续接、Terminal TS build |
 
 ---
 
@@ -43,7 +44,12 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 
 ```powershell
 # 前置：Python 3.12+；桌面 / Terminal Ink 还要 Node.js 20+（LTS 即可）
-pip install -r requirements.txt
+if (-not (Test-Path .venv\Scripts\python.exe)) { python -m venv .venv }
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 开发 / 回归测试：pytest 安装到项目虚拟环境，不属于运行时依赖
+.venv\Scripts\python.exe -m pip install pytest
+.venv\Scripts\python.exe -m pytest agent-core/tests -q
 
 # 桌面（默认；首次自动 npm install）
 .\start-desktop.bat
@@ -101,7 +107,7 @@ my-agent/
 |----|------|------|
 | 0 | **前置** | `python --version` → 3.12+；`node -v` / `npm -v`（桌面与 Terminal） |
 | 1 | **clone** | `git clone <private-url> my-agent` → `cd my-agent` |
-| 2 | **pip** | `pip install -r requirements.txt`（`httpx` + `websockets`） |
+| 2 | **pip** | 创建 `.venv` 后，运行时：`.venv\Scripts\python.exe -m pip install -r requirements.txt`；回归测试：`.venv\Scripts\python.exe -m pip install pytest` |
 | 3 | **密钥** | 设置 `LLM_API_KEY`；无 key 仍可跑 `tool` CLI |
 | 4a | **桌面** | `.\start-desktop.bat` → 自动 `desktop/npm install` |
 | 4b | **Terminal** | `.\start-terminal.bat` → 自动 `terminal-ui/npm install` |
@@ -115,7 +121,8 @@ my-agent/
 | 现象 | 处理 |
 |------|------|
 | `Python not found` / `npm not found` | 安装并加入 PATH |
-| `ModuleNotFoundError: httpx` | 重跑 `pip install -r requirements.txt` |
+| `ModuleNotFoundError: httpx` | 重跑 `.venv\Scripts\python.exe -m pip install -r requirements.txt` |
+| `ModuleNotFoundError: pytest` | `.venv\Scripts\python.exe -m pip install pytest`，再用 `.venv\Scripts\python.exe -m pytest` |
 | 桌面首启卡在 npm | `cd desktop` → `npm install` |
 | Terminal 黑屏或显示 v0.2.1 | 确认 `terminal-ui` 已 `npm install`；或设 `MY_AGENT_TERMINAL_UI=legacy` 排查 |
 | 端口 8765 占用 | 关旧实例或托盘「接管」 |
@@ -146,6 +153,7 @@ my-agent/
 | [docs/ROADMAP-PACK-1245.md](docs/ROADMAP-PACK-1245.md) | Pack 1/2/4/5/6 路线图 |
 | [docs/LOCAL-DELIVERY-MODEL.md](docs/LOCAL-DELIVERY-MODEL.md) | 本地交付模型（LDM） |
 | [docs/PROJECT-MODE.md](docs/PROJECT-MODE.md) | 项目模式 · ENV |
+| [docs/PROJECT-VERIFY.md](docs/PROJECT-VERIFY.md) | 项目测试、结构化验证与 pytest 约定 |
 | [docs/TOOLS.md](docs/TOOLS.md) | Builtin + evolved 工具 |
 | [docs/DESKTOP.md](docs/DESKTOP.md) | 桌面壳 · unified 工作台 |
 | [docs/STABILIZATION.md](docs/STABILIZATION.md) | 稳定化 · smoke · Gate |

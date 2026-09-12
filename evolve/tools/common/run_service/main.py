@@ -141,14 +141,26 @@ def _kill_tree(pid: int, *, force: bool = True) -> dict[str, Any]:
                 errors="replace",
                 timeout=30,
             )
-            return {
-                "ok": completed.returncode == 0 or not _pid_alive(pid),
+            result = {
                 "exit_code": completed.returncode,
                 "stdout": (completed.stdout or "")[:2000],
                 "stderr": (completed.stderr or "")[:2000],
             }
+            if completed.returncode == 0 or not _pid_alive(pid):
+                return {"ok": True, **result}
+            fallback = _terminate_windows_tree(pid, force=force)
+            return {
+                "ok": bool(fallback.get("ok")) or not _pid_alive(pid),
+                **result,
+                "fallback": fallback,
+            }
         except Exception as exc:
-            return {"ok": False, "error": str(exc)}
+            fallback = _terminate_windows_tree(pid, force=force)
+            return {
+                "ok": bool(fallback.get("ok")) or not _pid_alive(pid),
+                "error": str(exc),
+                "fallback": fallback,
+            }
     try:
         os.killpg(pid, signal.SIGTERM if not force else signal.SIGKILL)
         return {"ok": True}
@@ -164,6 +176,99 @@ def _kill_tree(pid: int, *, force: bool = True) -> dict[str, Any]:
             return {"ok": True, "fallback": "kill"}
         except Exception as exc2:
             return {"ok": False, "error": f"{exc}; {exc2}"}
+
+
+def _windows_process_tree(root_pid: int) -> list[int]:
+    """Return root and descendants using the Win32 process snapshot API."""
+    import ctypes
+
+    class _ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32
+    handle_type = ctypes.c_void_p
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
+    kernel32.CreateToolhelp32Snapshot.restype = handle_type
+    kernel32.Process32FirstW.argtypes = [handle_type, ctypes.POINTER(_ProcessEntry)]
+    kernel32.Process32FirstW.restype = ctypes.c_int
+    kernel32.Process32NextW.argtypes = [handle_type, ctypes.POINTER(_ProcessEntry)]
+    kernel32.Process32NextW.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [handle_type]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid = ctypes.c_void_p(-1).value
+    snapshot_value = snapshot.value if hasattr(snapshot, "value") else int(snapshot)
+    if not snapshot_value or snapshot_value == invalid:
+        return [root_pid]
+    try:
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        children: dict[int, list[int]] = {}
+        first = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while first:
+            children.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+            first = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+    ordered: list[int] = []
+    pending = [root_pid]
+    while pending:
+        current = pending.pop()
+        if current in ordered:
+            continue
+        ordered.append(current)
+        pending.extend(children.get(current, ()))
+    return ordered
+
+
+def _terminate_windows_tree(pid: int, *, force: bool) -> dict[str, Any]:
+    """Fallback for sandboxes where taskkill cannot open a same-user process."""
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    access = 0x0001  # PROCESS_TERMINATE
+    handle_type = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = handle_type
+    kernel32.TerminateProcess.argtypes = [handle_type, ctypes.c_uint]
+    kernel32.TerminateProcess.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [handle_type]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    terminated: list[int] = []
+    failed: list[int] = []
+    for target in reversed(_windows_process_tree(pid)):
+        handle = kernel32.OpenProcess(access, False, int(target))
+        if not handle:
+            if _pid_alive(target):
+                failed.append(target)
+            continue
+        try:
+            # The fallback is only used after taskkill failed; force is retained
+            # in the API for parity with the POSIX path.
+            if kernel32.TerminateProcess(handle, 1):
+                terminated.append(target)
+            else:
+                failed.append(target)
+        finally:
+            kernel32.CloseHandle(handle)
+    return {
+        "ok": not failed and not _pid_alive(pid),
+        "terminated": terminated,
+        "failed": failed,
+        "force": bool(force),
+    }
 
 
 def _load_state(paths, name: str) -> dict[str, Any] | None:

@@ -3,6 +3,7 @@ import type {TerminalBlock} from './types.js';
 import type {TerminalChrome, TerminalLayoutProps, TerminalSession} from './repl/TerminalLayout.js';
 import {TerminalLayout} from './repl/TerminalLayout.js';
 import type {SlashCommand} from './slash-commands.js';
+import type {ModelOption} from './model-picker.js';
 import type {TerminalResult} from './types.js';
 
 export type ReplProps = {
@@ -26,6 +27,10 @@ export type ReplProps = {
   newOutputRows?: number;
   slashCommands?: readonly SlashCommand[];
   slashCommandIndex?: number;
+  modelPickerOpen?: boolean;
+  modelOptions?: readonly ModelOption[];
+  modelPickerIndex?: number;
+  currentModel?: string;
   height?: number;
   columns?: number;
 };
@@ -51,6 +56,10 @@ export function Repl({
   newOutputRows = 0,
   slashCommands = [],
   slashCommandIndex = 0,
+  modelPickerOpen = false,
+  modelOptions = [],
+  modelPickerIndex = 0,
+  currentModel = model,
   height,
   columns = 80,
 }: ReplProps) {
@@ -90,6 +99,10 @@ export function Repl({
     newOutputRows,
     slashCommands,
     slashCommandIndex,
+    modelPickerOpen,
+    modelOptions,
+    modelPickerIndex,
+    currentModel,
   };
 
   return <TerminalLayout {...layoutProps} />;

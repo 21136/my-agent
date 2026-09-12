@@ -9,7 +9,15 @@ export type StagedFile = {
   mime: string;
   readable_text: boolean;
   copied: boolean;
+  image_input?: boolean;
 };
+
+const IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
 
 function formatSize(size: number): string {
   if (size < 1024) return `${size} B`;
@@ -25,6 +33,81 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function extForMime(mime: string): string {
+  switch (mime.trim().toLowerCase()) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/webp":
+      return ".webp";
+    case "image/gif":
+      return ".gif";
+    default:
+      return ".png";
+  }
+}
+
+async function collectPastePaths(dataTransfer: DataTransfer): Promise<string[]> {
+  const api = window.myAgentDesktop;
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string) => {
+    const text = value.trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    paths.push(text);
+  };
+
+  if (api?.getPathForFile) {
+    for (const file of Array.from(dataTransfer.files)) {
+      push(api.getPathForFile(file));
+    }
+  }
+
+  let sawImageItem = false;
+  for (const item of Array.from(dataTransfer.items)) {
+    const mime = (item.type || "").trim().toLowerCase();
+    if (item.kind !== "file" && !mime.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    if (mime.startsWith("image/") || IMAGE_MIMES.has(file.type)) {
+      sawImageItem = true;
+    }
+
+    if (api?.getPathForFile) {
+      const fromPath = api.getPathForFile(file);
+      if (fromPath) {
+        push(fromPath);
+        continue;
+      }
+    }
+
+    const fileMime = (file.type || mime || "image/png").toLowerCase();
+    if (!fileMime.startsWith("image/") && !IMAGE_MIMES.has(fileMime)) continue;
+    if (!api?.writeTempStagingFile) continue;
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!bytes.length) continue;
+    const ext = extForMime(fileMime);
+    const name = file.name?.trim() || `paste${ext}`;
+    try {
+      push(await api.writeTempStagingFile(name, bytes));
+    } catch {
+      // fall through to clipboard fallback
+    }
+  }
+
+  if (!paths.length && sawImageItem && api?.readClipboardImageToTemp) {
+    try {
+      const fromClipboard = await api.readClipboardImageToTemp();
+      if (fromClipboard) push(fromClipboard);
+    } catch {
+      // ignore
+    }
+  }
+
+  return paths;
+}
+
 export type FileDropHandle = {
   getAttachments: () => StagedFile[];
   clearAttachments: () => void;
@@ -33,6 +116,7 @@ export type FileDropHandle = {
 
 export function mountFileDrop(options: {
   composer: HTMLElement;
+  pasteTargets?: HTMLElement[];
   client: AgentWsClient;
   shell: ShellId;
   canAccept: () => boolean;
@@ -40,6 +124,9 @@ export function mountFileDrop(options: {
   onNotice?: (text: string) => void;
 }): FileDropHandle {
   const { composer, client, shell, canAccept, onChange, onNotice } = options;
+  const pasteTargets = options.pasteTargets?.length
+    ? options.pasteTargets
+    : [composer];
   let items: StagedFile[] = [];
 
   const chips = document.createElement("div");
@@ -85,6 +172,16 @@ export function mountFileDrop(options: {
     setItems(items.filter((item) => item.id !== id));
   }
 
+  async function stageAbsolutePaths(paths: string[]): Promise<void> {
+    if (!paths.length) return;
+    try {
+      client.stageFiles(paths, shell);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onNotice?.(message);
+    }
+  }
+
   function onDragOver(ev: DragEvent): void {
     if (!canAccept()) return;
     if (!ev.dataTransfer?.types.includes("Files")) return;
@@ -115,20 +212,36 @@ export function mountFileDrop(options: {
 
     const paths: string[] = [];
     for (const file of files) {
-      const path = api.getPathForFile(file);
-      if (path) paths.push(path);
+      const filePath = api.getPathForFile(file);
+      if (filePath) paths.push(filePath);
     }
     if (!paths.length) {
       onNotice?.("无法读取拖入文件的路径");
       return;
     }
 
-    try {
-      client.stageFiles(paths, shell);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      onNotice?.(message);
+    await stageAbsolutePaths(paths);
+  }
+
+  async function onPaste(ev: ClipboardEvent): Promise<void> {
+    if (!canAccept()) return;
+    const dataTransfer = ev.clipboardData;
+    if (!dataTransfer) return;
+
+    const hasPasteable = dataTransfer.types.some((type) => type === "Files" || type.startsWith("image/"))
+      || Array.from(dataTransfer.items).some(
+        (item) => item.kind === "file" || item.type.startsWith("image/"),
+      );
+    if (!hasPasteable) return;
+
+    const paths = await collectPastePaths(dataTransfer);
+    if (!paths.length) {
+      onNotice?.("无法读取剪贴板图片，请保存为文件后拖入");
+      return;
     }
+
+    ev.preventDefault();
+    await stageAbsolutePaths(paths);
   }
 
   const offStaged = client.onFileStaged((staged) => {
@@ -150,6 +263,9 @@ export function mountFileDrop(options: {
   composer.addEventListener("dragover", onDragOver);
   composer.addEventListener("dragleave", onDragLeave);
   composer.addEventListener("drop", onDrop);
+  for (const target of pasteTargets) {
+    target.addEventListener("paste", onPaste);
+  }
 
   return {
     getAttachments: () => [...items],
@@ -161,6 +277,9 @@ export function mountFileDrop(options: {
       composer.removeEventListener("dragover", onDragOver);
       composer.removeEventListener("dragleave", onDragLeave);
       composer.removeEventListener("drop", onDrop);
+      for (const target of pasteTargets) {
+        target.removeEventListener("paste", onPaste);
+      }
       chips.remove();
       composer.classList.remove("file-drop-active");
     },

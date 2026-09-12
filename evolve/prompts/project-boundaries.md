@@ -35,7 +35,7 @@
 | `project_plan_status` | 允许 |
 |-----------------------|------|
 | `draft` / `plan_dirty` | 计划域四件套须经 `plan_partner` 提案 + 侧栏采纳；源码仍禁 |
-| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` |
+| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` · `structured_test` |
 
 未确认前 **禁止**写 `src/`、`tests/` 等，禁止 `run_command` 写码类命令。**即使用户催促「开始做/确认」，也须等用户点「确认开工」或 `项目 确认` 后 executor 才放行写码。**
 
@@ -49,7 +49,7 @@
 
 - 自动整理需求、文档和设计，自动采纳 `plan_partner` 提案，并自动进入下一个可执行任务。
 - 项目内安全的 `write_text`、`patch_file`、`run_command` 和测试调用按 executor 授权连续执行，不等待「继续」或计划确认。
-- 仍须暂停：网络、宿主目录、密钥/敏感文件、删除、发布、Git 提交/推送，以及重复失败、预算耗尽、状态不一致或真实外部阻塞。
+- 仍须暂停：网络、宿主目录、密钥/敏感文件、删除、发布、Git restore/提交/推送，以及重复失败、预算耗尽、状态不一致或真实外部阻塞。
 - 暂停时只说明真实原因和恢复动作；不要把“计划待确认”、任务边界或内部 checkpoint 当作阻塞。
 - 狂奔覆盖本文件中的普通确认、一项一停和源码计划门；开关关闭后立即恢复普通规则。
 

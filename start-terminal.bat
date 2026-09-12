@@ -10,6 +10,8 @@ REM - Auto re-opens inside Windows Terminal when available (WT_SESSION is set th
 
 setlocal EnableExtensions
 
+pushd "%~dp0"
+
 chcp 65001 >nul 2>&1
 
 set "PYTHONIOENCODING=utf-8"
@@ -34,6 +36,7 @@ if not exist "%~dp0terminal-ui\node_modules\.bin\tsx.cmd" (
     if errorlevel 1 (
         echo [my-agent] npm install failed. Install Node.js 20+ and retry.
         popd
+        popd
         pause
         exit /b 1
     )
@@ -50,13 +53,29 @@ if "%MY_AGENT_PYTHON%"=="python" if errorlevel 1 (
 
     echo [my-agent] Python not found. Install Python 3.12+ and add it to PATH.
 
+    popd
+
     pause
 
     exit /b 1
 
 )
 
-
+REM Preflight: surface interface-lock conflicts before WT hand-off (avoids silent flash-close).
+"%MY_AGENT_PYTHON%" "%~dp0tools\check-terminal-lock.py" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo [my-agent] 无法启动 Terminal：已有实例占用会话锁。
+    "%MY_AGENT_PYTHON%" "%~dp0tools\check-terminal-lock.py"
+    echo.
+    echo 处理办法（无需结束正在使用的 python 进程）：
+    echo   - 运行: "%~dp0my-agent" terminal --clear-lock
+    echo   - 或手动删除: data\sessions\.interface.lock
+    echo.
+    popd
+    pause
+    exit /b 1
+)
 
 if not defined WT_SESSION (
 
@@ -66,9 +85,10 @@ if not defined WT_SESSION (
 
         echo [my-agent] Opening Windows Terminal...
 
-        REM Relaunch self inside WT. Do NOT pass internal markers — only user args (%*).
+        REM Relaunch inside WT at repo root (-d sets cwd; avoid nested quotes).
+        start "" wt -d "%~dp0." --title "my-agent" cmd /k call "%~f0" %*
 
-        start "" wt -d "%CD%" --title "my-agent" cmd /k call "%~f0" %*
+        popd
 
         exit /b 0
 
@@ -80,16 +100,20 @@ if not defined WT_SESSION (
 
 )
 
-
-
 "%MY_AGENT_PYTHON%" "%~dp0my-agent" terminal %*
 
 set "EXIT_CODE=%ERRORLEVEL%"
 
+popd
+
 if not "%EXIT_CODE%"=="0" (
     echo.
     echo [my-agent] Terminal exited with code %EXIT_CODE%.
-    echo If session is locked, close other Terminal windows or delete data\sessions\.interface.lock
+    echo.
+    echo Common fixes:
+    echo   - Run: my-agent terminal --clear-lock
+    echo   - Or delete data\sessions\.interface.lock
+    echo.
     pause
 )
 

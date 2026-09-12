@@ -29,6 +29,12 @@ import {
   slashCommandCandidates,
 } from './slash-commands.js';
 import {
+  isModelPickerTrigger,
+  MODEL_PICKER_MAX_VISIBLE,
+  modelPickerStartIndex,
+  nextModelPickerIndex,
+} from './model-picker.js';
+import {
   estimateTranscriptRows,
   estimateLiveTranscriptRows,
   maxTranscriptScrollUp,
@@ -86,6 +92,7 @@ function sessionFromState(state: TerminalUiState): TerminalSession {
     root: state.root,
     mascotLines: state.mascotLines,
     mascotLabel: state.mascotLabel,
+    models: state.models,
   };
 }
 
@@ -170,6 +177,8 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
   const [historyCursor, setHistoryCursor] = useState<InputHistoryCursor>({index: -1, draft: ''});
   const [scrollUpRows, setScrollUpRows] = useState(0);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelPickerIndex, setModelPickerIndex] = useState(0);
   const [screenRevision, setScreenRevision] = useState(0);
   const reviewBaselineRowsRef = useRef<number | null>(null);
   const reviewTotalRowsRef = useRef<number | null>(null);
@@ -177,6 +186,34 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
 
   const slashCommands = useMemo(() => slashCommandCandidates(inputText), [inputText]);
   const selectedSlashCommand = slashCommands[Math.min(slashCommandIndex, Math.max(0, slashCommands.length - 1))];
+  const modelOptions = session.models ?? [];
+
+  const openModelPicker = useCallback(() => {
+    if (modelOptions.length === 0) return false;
+    setModelPickerOpen(true);
+    setModelPickerIndex(modelPickerStartIndex(modelOptions, session.model));
+    setSlashCommandIndex(0);
+    return true;
+  }, [modelOptions, session.model]);
+
+  const closeModelPicker = useCallback(() => {
+    setModelPickerOpen(false);
+    setModelPickerIndex(0);
+  }, []);
+
+  const submitModelChoice = useCallback(
+    (modelId: string) => {
+      const submittedText = `/model ${modelId}`;
+      send({type: 'input.line', text: submittedText});
+      setInputHistory((current) => appendInputHistory(current, submittedText));
+      setHistoryCursor({index: -1, draft: ''});
+      setSlashCommandIndex(0);
+      setScrollUpRows(0);
+      closeModelPicker();
+      setInputText('');
+    },
+    [closeModelPicker],
+  );
 
   const {
     text: liveReasoningText,
@@ -204,7 +241,8 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
       Boolean(chrome.working),
       Boolean(chrome.confirm),
       scrollUpRows > 0,
-      slashCommands.length,
+      slashCommands.length +
+        (modelPickerOpen ? Math.min(modelOptions.length, MODEL_PICKER_MAX_VISIBLE) + 4 : 0),
     ),
   );
   const maxScrollUp = useMemo(
@@ -382,6 +420,24 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
         setScreenRevision((current) => current + 1);
         return;
       }
+      if (modelPickerOpen && !confirmRef.current) {
+        if (key.escape) {
+          closeModelPicker();
+          return;
+        }
+        if (key.upArrow || key.downArrow) {
+          setModelPickerIndex((current) =>
+            nextModelPickerIndex(current, key.upArrow ? -1 : 1, modelOptions.length),
+          );
+          return;
+        }
+        if (key.return) {
+          const selected = modelOptions[modelPickerIndex];
+          if (selected) submitModelChoice(selected.id);
+          return;
+        }
+        return;
+      }
       if (!confirmRef.current && slashCommands.length > 0) {
         if (key.upArrow || key.downArrow) {
           setSlashCommandIndex((current) =>
@@ -448,6 +504,13 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
         });
       } else if (result.action.type === 'submit') {
         const submittedText = result.action.text;
+        if (isModelPickerTrigger(submittedText) && openModelPicker()) {
+          setInputText('');
+          setHistoryCursor({index: -1, draft: ''});
+          setSlashCommandIndex(0);
+          setScrollUpRows(0);
+          return;
+        }
         send({type: 'input.line', text: submittedText});
         setInputHistory((current) => appendInputHistory(current, submittedText));
         setHistoryCursor({index: -1, draft: ''});
@@ -502,6 +565,10 @@ function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppP
       newOutputRows={newOutputRows}
       slashCommands={slashCommands}
       slashCommandIndex={slashCommandIndex}
+      modelPickerOpen={modelPickerOpen}
+      modelOptions={modelOptions}
+      modelPickerIndex={modelPickerIndex}
+      currentModel={session.model}
     />
   );
 }

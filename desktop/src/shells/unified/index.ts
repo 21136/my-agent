@@ -4,7 +4,7 @@ import { mountFileDrop } from "../../file-drop";
 import { hydrateMermaid, renderMarkdown } from "../../markdown";
 import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver } from "../../lazy-markdown";
 import { formatUserMessageHtml } from "../../user-message";
-import { segmentChatBlocks, segmentPrint, renderTurnCardShell, type ChatRenderSegment } from "../turn-card-layout";
+import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
@@ -49,6 +49,9 @@ import {
   renderReviewCallout,
   renderToolFailAlert,
 } from "./output-display";
+import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
+import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
+import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import "./unified.css";
 
 export type Perspective = "default" | "project" | "night";
@@ -118,6 +121,7 @@ export function mountUnifiedShell(
     checkerLabel: "",
     memoryLabel: "",
     projectLabel: "",
+    contextLabel: "",
     sessionCount: 0,
   };
 
@@ -132,7 +136,18 @@ export function mountUnifiedShell(
   let sessionsOpen = false;
   let sessionsTab: "chat" | "project" = "chat";
 
+  function syncTopbarFromProject(): void {
+    if (projectState.projectId) {
+      topbarState.projectLabel = projectState.projectId;
+      topbarState.contextLabel = deriveProjectGoalViewModel(projectState).title;
+    } else {
+      topbarState.projectLabel = "";
+      topbarState.contextLabel = "";
+    }
+  }
+
   function refreshTopbar(): void {
+    syncTopbarFromProject();
     renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
   }
 
@@ -209,6 +224,17 @@ export function mountUnifiedShell(
     servicesError: "",
     servicesLogName: "",
     servicesLogText: "",
+    terminalSessions: [],
+    terminalsLoading: false,
+    terminalsError: "",
+    terminalsCollapsed: true,
+    terminalDetails: null,
+    terminalOutput: "",
+    terminalOutputCursor: 0,
+    terminalOutputLoading: false,
+    terminalOutputError: "",
+    terminalOutputCursorReset: false,
+    terminalOutputTruncated: false,
     turnArmedId: "",
     turnArmedText: "",
     turnEvidence: [],
@@ -242,6 +268,14 @@ export function mountUnifiedShell(
     runawayAcceptancePassed: false,
     runawayVerificationEvidence: null,
     runawayVerificationEvidencePath: null,
+    runawayVersion: 0,
+    runawayPhase: "",
+    runawayUserLine: "",
+    runawayMode: "auto",
+    runawayBlocked: false,
+    runawayChecklist: null,
+    runawayCancelAvailable: false,
+    runawayBlock: null,
     scopeNeedsReconfirm: false,
     flowPreviewStage: null,
     milestoneAccepted: false,
@@ -264,6 +298,14 @@ export function mountUnifiedShell(
   let cancelSafetyTimer: number | null = null;
   let destroyed = false;
   let renderThrottleTimer: number | null = null;
+  let terminalPollTimerId: number | null = null;
+  let terminalRequestTimeoutId: number | null = null;
+  let terminalRequestSerial = 0;
+  let terminalRequestId: string | null = null;
+  let terminalOutputRequestTimeoutId: number | null = null;
+  let terminalOutputRequestSerial = 0;
+  let terminalOutputRequestId: string | null = null;
+  let terminalOutputRequestSessionId: string | null = null;
   let renderedPrints: string[] = [];
   let renderedSegmentPrints: string[] = [];
   /** UI-5972 M4: full history load defers markdown; incremental paths render eagerly. */
@@ -303,6 +345,10 @@ export function mountUnifiedShell(
         scrollChatToBottom();
       },
       onTurnStart: (event) => {
+        projectState.runawayCancelAvailable = false;
+        clearRunawayResumePending();
+        resetProcessJumpCursor();
+        syncWorkingVisual();
         resetTurnCacheStats();
         if (acceptedChangeForNextTurn) {
           projectState.nextTurnChangeSummary = acceptedChangeForNextTurn;
@@ -316,21 +362,26 @@ export function mountUnifiedShell(
           renderChat();
           requestAnimationFrame(() => scrollToRecallTurns());
         }
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         setStatus(event.intent_label);
-        requestAnimationFrame(() => scrollChatToBottom());
+        syncToolElapsedTimer();
+        requestAnimationFrame(() => scrollToBottomIfNear());
       },
       onLlmPending: () => {
-        requestAnimationFrame(() => scrollChatToBottom());
+        syncToolElapsedTimer();
+        requestAnimationFrame(() => scrollToBottomIfNear());
       },
       onCheckerVerdict: (event) => {
         topbarState.checkerLabel = checkerVerdictStatusText(event.verdict);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         setStatus(topbarState.checkerLabel);
       },
       onConfirmRequest: () => {
         setComposerEnabled(false);
         setStatus("等待确认…");
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => scrollPendingConfirmIntoView());
+        });
       },
       onConfirmDone: (choice) => {
         setComposerEnabled(choice !== "cancelled");
@@ -360,6 +411,8 @@ export function mountUnifiedShell(
         }
       },
       onTurnEnd: (_ok, finishReason) => {
+        clearRunawayResumePending();
+        syncWorkingVisual();
         clearCancelSafety();
         setComposerEnabled(true);
         if (!chat.model.confirmPending) {
@@ -415,19 +468,20 @@ export function mountUnifiedShell(
           </div>
         </div>
         <div class="sidebar-task-flow" id="sidebar-task-flow"></div>
+        <div id="sidebar-terminals"></div>
         <div class="sidebar-services" id="sidebar-services"></div>
         <div class="sidebar-footer" id="sidebar-footer">
           <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
           <div class="sidebar-icon-bar" id="sidebar-icon-bar">
-            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon">◎</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="任务"><span class="sidebar-icon">☰</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon">📄</span></button>
+            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon-label">当下</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="任务"><span class="sidebar-icon-label">任务</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon-label">文档</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
-              <span class="sidebar-icon">⎇</span>
+              <span class="sidebar-icon-label">会话</span>
               <span class="sidebar-icon-badge" id="thread-count-badge">0</span>
             </button>
             <button type="button" class="sidebar-icon-btn" data-panel="projects" title="我的项目" id="icon-btn-projects">
-              <span class="sidebar-icon">▢</span>
+              <span class="sidebar-icon-label">项目</span>
               <span class="sidebar-icon-badge" id="project-count-badge">0</span>
             </button>
             <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
@@ -456,7 +510,6 @@ export function mountUnifiedShell(
           <button type="button" class="unified-btn" id="thread-return-active">回到活线</button>
         </div>
         <section class="unified-context-region hidden" id="unified-goal-card" aria-label="项目上下文"></section>
-        <section class="unified-expand hidden" id="unified-expand"></section>
         <div class="workbench-empty" id="workbench-empty" hidden>
           <div class="workbench-empty-card">
             <h2 class="workbench-empty-title">选择或新建项目</h2>
@@ -474,13 +527,18 @@ export function mountUnifiedShell(
           <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
         </div>
-        <div class="unified-status" id="unified-status"></div>
-        <div class="unified-token-bar hidden" id="unified-token-bar"></div>
-        <footer class="unified-composer" id="unified-composer">
-          <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
-          <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入文件…"></textarea>
-          <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
-        </footer>
+        <div class="unified-composer-dock" id="unified-composer-dock">
+          <section class="unified-expand hidden" id="unified-expand"></section>
+          <div class="unified-composer-meta" id="unified-composer-meta">
+            <div class="unified-status" id="unified-status"></div>
+            <div class="unified-token-bar hidden" id="unified-token-bar"></div>
+          </div>
+          <footer class="unified-composer" id="unified-composer">
+            <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
+            <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入/粘贴文件…"></textarea>
+            <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
+          </footer>
+        </div>
       </div>
       <div class="unified-confirm-glass hidden" id="unified-confirm-glass" role="dialog" aria-modal="true"></div>
       <div class="unified-confirm-glass hidden" id="workbench-dialog" role="dialog" aria-modal="true"></div>
@@ -500,6 +558,8 @@ export function mountUnifiedShell(
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
   const emptyFreeChatBtn = root.querySelector<HTMLButtonElement>("#empty-free-chat")!;
+  const composerDock = root.querySelector<HTMLElement>("#unified-composer-dock")!;
+  const composerMetaEl = root.querySelector<HTMLElement>("#unified-composer-meta")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
@@ -617,7 +677,7 @@ export function mountUnifiedShell(
       return;
     }
     input.placeholder =
-      "输入消息或拖入文件；改计划会自动交给计划搭档";
+      "输入消息或拖入/粘贴文件；改计划会自动交给计划搭档";
   }
 
   function syncArchivedViewUi(): void {
@@ -639,6 +699,7 @@ export function mountUnifiedShell(
   // ---- file drop + composer ----
   const fileDrop = mountFileDrop({
     composer,
+    pasteTargets: [composer, input],
     client,
     shell: shellId,
     canAccept: () => {
@@ -662,13 +723,75 @@ export function mountUnifiedShell(
     beforeSend: () => {
       topbarState.intentLabel = "";
       setStatus("发送中…");
+      resetUserScrollPin();
     },
   });
 
   // ---- visual sync ----
   let lastSidebarWorking = false;
+  let runawayResumePending = false;
+  let runawayResumeTimer: number | null = null;
+  let processJumpCursor = -1;
+  let processJumpTurnIndex = -1;
+  let lastRunawayNudgeAt = 0;
+  let runawayIdleResumeTimer: number | null = null;
+
+  const RUNAWAY_IDLE_RESUME_MS = 2500;
+  const RUNAWAY_NUDGE_DEBOUNCE_MS = 4000;
+
+  function clearRunawayIdleResume(): void {
+    if (runawayIdleResumeTimer !== null) {
+      window.clearTimeout(runawayIdleResumeTimer);
+      runawayIdleResumeTimer = null;
+    }
+  }
+
+  function scheduleRunawayIdleResume(): void {
+    clearRunawayIdleResume();
+    const canAutoResume = () => {
+      if (
+        !projectState.runawayEnabled
+        || projectState.runawayBlocked
+        || projectState.runawayCancelAvailable
+        || chat.isWorking()
+      ) {
+        return false;
+      }
+      // Runaway v2 performs continuation in the backend controller. The
+      // legacy desktop idle watchdog must not become a second owner.
+      if (projectState.runawayVersion >= 2) {
+        return false;
+      }
+      return !["paused", "completed", "release_wait"].includes(projectState.runawayCheckpoint);
+    };
+    if (!canAutoResume()) {
+      return;
+    }
+    runawayIdleResumeTimer = window.setTimeout(() => {
+      runawayIdleResumeTimer = null;
+      if (!canAutoResume()) {
+        return;
+      }
+      resumeRunawayFromUi("狂奔待命，正在自动续接…", { force: true });
+    }, RUNAWAY_IDLE_RESUME_MS);
+  }
+
+  function resetProcessJumpCursor(): void {
+    processJumpCursor = -1;
+    processJumpTurnIndex = -1;
+  }
+
+  function clearRunawayResumePending(): void {
+    runawayResumePending = false;
+    if (runawayResumeTimer !== null) {
+      window.clearTimeout(runawayResumeTimer);
+      runawayResumeTimer = null;
+    }
+    clearRunawayIdleResume();
+  }
+
   function syncWorkingVisual(): void {
-    const working = chat.isWorking();
+    const working = chat.isWorking() || runawayResumePending || projectState.runawayCancelAvailable;
     const workingChanged = lastSidebarWorking !== working;
     lastSidebarWorking = working;
     projectState.turnInProgress = working;
@@ -676,11 +799,55 @@ export function mountUnifiedShell(
     projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
     projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
+    statusEl.classList.toggle("is-idle", statusText === "就绪" && !working);
+    syncComposerMetaVisibility();
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
     if (perspective === "project" && workingChanged) {
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      refreshTopbar();
+    }
+  }
+
+  function sendStopRequest(): void {
+    const activeTurn = chat.isWorking() || chat.model.confirmPending;
+    if (activeTurn) {
+      if (!chat.requestCancel()) return;
+      setComposerEnabled(false);
+      setStatus("正在停止…");
+      clearCancelSafety();
+      cancelSafetyTimer = window.setTimeout(() => {
+        if (chat.model.cancelRequested) {
+          chat.model.cancelRequested = false;
+          chat.model.confirmPending = false;
+          setComposerEnabled(true);
+          setStatus("就绪");
+          syncWorkingVisual();
+        }
+        cancelSafetyTimer = null;
+      }, 3000);
+      try {
+        client.sendTurnCancel();
+      } catch (err) {
+        clearCancelSafety();
+        chat.model.cancelRequested = false;
+        setComposerEnabled(!chat.model.confirmPending);
+        setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
+        syncWorkingVisual();
+      }
+      return;
+    }
+    if (!projectState.runawayCancelAvailable) return;
+    projectState.runawayCancelAvailable = false;
+    syncWorkingVisual();
+    setStatus("正在停止狂奔续接…");
+    try {
+      client.sendTurnCancel();
+    } catch (err) {
+      projectState.runawayCancelAvailable = true;
+      syncWorkingVisual();
+      setStatus(`停止续接失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -688,9 +855,22 @@ export function mountUnifiedShell(
     return perspective !== "night";
   }
 
+  function syncComposerMetaVisibility(): void {
+    const statusVisible =
+      !statusEl.hidden && !statusEl.classList.contains("is-idle");
+    const tokenVisible =
+      !tokenBar.hidden && !tokenBar.classList.contains("hidden");
+    const showMeta = statusVisible || tokenVisible;
+    composerMetaEl.classList.toggle("hidden", !showMeta);
+    composerMetaEl.hidden = !showMeta;
+  }
+
   function setStatus(text: string): void {
     statusText = text;
     statusEl.textContent = text;
+    const idle = text === "就绪" && !shellEl.classList.contains("is-working");
+    statusEl.classList.toggle("is-idle", idle);
+    syncComposerMetaVisibility();
   }
 
   function setTurnEndStatus(finishReason: string): void {
@@ -720,6 +900,7 @@ export function mountUnifiedShell(
     if (usage === undefined || limit === undefined || limit <= 0) {
       if (lastLlmCacheRatio === undefined && turnCachePromptTotal <= 0) {
         tokenBar.classList.add("hidden");
+        syncComposerMetaVisibility();
         return;
       }
     }
@@ -751,6 +932,7 @@ export function mountUnifiedShell(
       turnRatio !== undefined
         ? `本回合 LLM 累计：${turnCacheCachedTotal} / ${turnCachePromptTotal} prompt tokens 来自缓存`
         : "最近一次 LLM 调用的 prompt 缓存命中率";
+    syncComposerMetaVisibility();
   }
 
   function setComposerEnabled(enabled: boolean): void {
@@ -1066,7 +1248,7 @@ export function mountUnifiedShell(
     const items = sessionsTab === "project" ? projectItems : chatItems;
     const emptyHint = sessionsDropdown.length
       ? sessionsTab === "project"
-        ? "暂无项目会话"
+        ? "暂无可恢复的项目会话 · 项目目录请从左侧打开"
         : "暂无普通对话"
       : "加载中…";
 
@@ -1097,7 +1279,7 @@ export function mountUnifiedShell(
         <div class="unified-expand-title">会话 <button type="button" class="unified-btn" id="unified-sessions-close">关闭</button></div>
         <div class="unified-sessions-tabs" role="tablist">
           <button type="button" class="unified-sessions-tab ${sessionsTab === "chat" ? "is-active" : ""}" data-sessions-tab="chat" role="tab">对话 (${chatItems.length})</button>
-          <button type="button" class="unified-sessions-tab ${sessionsTab === "project" ? "is-active" : ""}" data-sessions-tab="project" role="tab">项目 (${projectItems.length})</button>
+          <button type="button" class="unified-sessions-tab ${sessionsTab === "project" ? "is-active" : ""}" data-sessions-tab="project" role="tab">项目会话 (${projectItems.length})</button>
         </div>
       </div>
       <div class="unified-sessions-list">${listHtml}</div>
@@ -1170,7 +1352,7 @@ export function mountUnifiedShell(
     // also sync topbarState for renderTopbar
     topbarState.proposals = items;
     syncProposalsState();
-    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+    refreshTopbar();
     renderProposalsPanel();
   }
 
@@ -1310,9 +1492,7 @@ export function mountUnifiedShell(
       }
     },
     onStopTurn: () => {
-      if (!chat.requestCancel()) return;
-      setStatus("正在停止当前回合…");
-      try { client.sendTurnCancel(); } catch { /* keep the stop surface visible */ }
+      sendStopRequest();
     },
     onMilestoneAccept: () => {
       try {
@@ -1356,9 +1536,11 @@ export function mountUnifiedShell(
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
+    composerDock.hidden = !runtimeSurface;
     composer.hidden = !runtimeSurface;
     statusEl.hidden = !runtimeSurface;
     tokenBar.hidden = !chatFocus;
+    syncComposerMetaVisibility();
     if (focus === "plan_review") {
       renderPlanReviewPane();
       planReviewEl.scrollTop = 0;
@@ -1480,17 +1662,57 @@ export function mountUnifiedShell(
     expandEl.innerHTML = "";
   }
 
+  function resumeRunawayFromUi(label = "正在恢复狂奔…", opts?: { force?: boolean }): void {
+    try {
+      if (chat.isWorking()) {
+        setStatus("狂奔已在执行中，请查看活动区");
+        return;
+      }
+      const now = Date.now();
+      if (
+        !opts?.force
+        && projectState.runawayEnabled
+        && !hasProjectBlocker(projectState)
+        && now - lastRunawayNudgeAt < RUNAWAY_NUDGE_DEBOUNCE_MS
+      ) {
+        setStatus("狂奔已开启，系统会自动续接");
+        jumpToCurrentActivity();
+        return;
+      }
+      lastRunawayNudgeAt = now;
+      clearRunawayResumePending();
+      runawayResumePending = true;
+      syncWorkingVisual();
+      client.resumeProjectRunaway();
+      setStatus(label);
+      runawayResumeTimer = window.setTimeout(() => {
+        if (runawayResumePending && !chat.isWorking()) {
+          clearRunawayResumePending();
+          syncWorkingVisual();
+          setStatus("恢复超时：可能被上一回合占用，请点停止或重启桌面端");
+        }
+      }, 12000);
+    } catch (err) {
+      clearRunawayResumePending();
+      syncWorkingVisual();
+      setStatus(`恢复狂奔失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   function showBlockerDetails(): void {
     setMainFocus("chat");
     clearExpandedSurface();
     expandEl.innerHTML = renderProjectBlockerDetails(projectState);
     expandEl.classList.remove("hidden");
     expandEl.querySelector<HTMLButtonElement>('[data-action="resume-runaway"]')?.addEventListener("click", () => {
+      resumeRunawayFromUi();
+    });
+    expandEl.querySelector<HTMLButtonElement>('[data-action="directed-runaway-retry"]')?.addEventListener("click", () => {
       try {
-        client.resumeProjectRunaway();
-        setStatus("正在恢复狂奔并补齐文档…");
+        client.resumeProjectRunawayDirected();
+        setStatus("正在定向再试…");
       } catch (err) {
-        setStatus(`恢复狂奔失败：${err instanceof Error ? err.message : String(err)}`);
+        setStatus(`定向再试失败：${err instanceof Error ? err.message : String(err)}`);
       }
     });
     expandEl.querySelector<HTMLButtonElement>('[data-action="blocker-details-close"]')?.addEventListener("click", () => {
@@ -1668,6 +1890,45 @@ export function mountUnifiedShell(
     afterSuggestionQueueChanged();
   }
 
+  function processMetaForTurnKey(turnKey: string): { index: number; total: number } | undefined {
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, chat.currentTurnIndex());
+    if (segments.length <= 1) return undefined;
+    const idx = segments.findIndex((block) => block.turnKey === turnKey);
+    if (idx < 0) return undefined;
+    return { index: idx + 1, total: segments.length };
+  }
+
+  function pickProcessBlockForJump(): Extract<ChatBlock, { kind: "process" }> | undefined {
+    const turnIndex = chat.currentTurnIndex();
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, turnIndex);
+    if (!segments.length) {
+      return findActiveProcessBlock();
+    }
+    if (chat.isWorking()) {
+      resetProcessJumpCursor();
+      const live = segments.find((block) => isProcessThinkingLive(block, chat.model.currentTurnKey));
+      if (live) return live;
+      const expanded = segments.find((block) => !block.collapsed);
+      if (expanded) return expanded;
+      return segments[segments.length - 1];
+    }
+    if (processJumpTurnIndex !== turnIndex) {
+      processJumpCursor = -1;
+      processJumpTurnIndex = turnIndex;
+    }
+    processJumpCursor = (processJumpCursor + 1) % segments.length;
+    return segments[segments.length - 1 - processJumpCursor];
+  }
+
+  function processJumpStatusLabel(block: Extract<ChatBlock, { kind: "process" }>): string {
+    const turnIndex = chat.currentTurnIndex();
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, turnIndex);
+    if (segments.length <= 1) return "已定位到当前活动";
+    const idx = segments.findIndex((item) => item.turnKey === block.turnKey);
+    if (idx < 0) return "已定位到当前活动";
+    return `已定位到过程段 ${idx + 1}/${segments.length}`;
+  }
+
   function findActiveProcessBlock(): Extract<ChatBlock, { kind: "process" }> | undefined {
     const blocks = chat.model.blocks;
     const currentKey = chat.model.currentTurnKey;
@@ -1701,7 +1962,7 @@ export function mountUnifiedShell(
   function scrollToActivityElement(el: HTMLElement): void {
     el.classList.add("is-jump-target");
     window.setTimeout(() => el.classList.remove("is-jump-target"), 1400);
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
     el.querySelector<HTMLElement>(".unified-thinking.is-streaming, .unified-thinking.is-waiting")?.scrollIntoView({
       behavior: "smooth",
       block: "nearest",
@@ -1713,7 +1974,7 @@ export function mountUnifiedShell(
       chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live") ??
       chatEl.querySelector<HTMLElement>(".unified-turn-card:last-of-type");
     if (!card) return false;
-    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     card.classList.add("is-jump-target");
     window.setTimeout(() => card.classList.remove("is-jump-target"), 1400);
     return true;
@@ -1726,7 +1987,7 @@ export function mountUnifiedShell(
     if (hasProjectBlocker(projectState)) {
       showBlockerDetails();
     }
-    const block = findActiveProcessBlock();
+    const block = pickProcessBlockForJump();
     if (!block) {
       requestAnimationFrame(() => {
         renderChat();
@@ -1767,7 +2028,7 @@ export function mountUnifiedShell(
         return;
       }
       scrollToActivityElement(el);
-      setStatus("已定位到当前活动");
+      setStatus(processJumpStatusLabel(block));
     });
   }
 
@@ -1786,7 +2047,7 @@ export function mountUnifiedShell(
         const el = chatEl.querySelector<HTMLElement>(
           `.unified-plan-subagent[data-turn-index="${block.turnIndex}"]`,
         );
-        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
       return;
     }
@@ -1887,6 +2148,110 @@ export function mountUnifiedShell(
     }
   }
 
+  function refreshTerminals(): void {
+    if (projectState.terminalsLoading) return;
+    const requestSerial = ++terminalRequestSerial;
+    const requestId = `terminal-${Date.now()}-${requestSerial}`;
+    terminalRequestId = requestId;
+    projectState.terminalsLoading = true;
+    projectState.terminalsError = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.listTerminals(requestId);
+      if (terminalRequestTimeoutId !== null) window.clearTimeout(terminalRequestTimeoutId);
+      terminalRequestTimeoutId = window.setTimeout(() => {
+        if (requestSerial !== terminalRequestSerial || !projectState.terminalsLoading) return;
+        projectState.terminalsLoading = false;
+        projectState.terminalsError = "读取终端状态超时";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }, 8000);
+    } catch (err) {
+      projectState.terminalsLoading = false;
+      projectState.terminalsError = err instanceof Error ? err.message : String(err);
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  function requestTerminalOutput(sessionId: string, cursor: number): void {
+    if (!sessionId || projectState.terminalDetails?.session_id !== sessionId) return;
+    const requestSerial = ++terminalOutputRequestSerial;
+    const requestId = `terminal-output-${Date.now()}-${requestSerial}`;
+    terminalOutputRequestId = requestId;
+    terminalOutputRequestSessionId = sessionId;
+    projectState.terminalOutputLoading = true;
+    projectState.terminalOutputError = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.readTerminalOutput(sessionId, cursor, 16_384, requestId);
+      if (terminalOutputRequestTimeoutId !== null) {
+        window.clearTimeout(terminalOutputRequestTimeoutId);
+      }
+      terminalOutputRequestTimeoutId = window.setTimeout(() => {
+        if (
+          requestSerial !== terminalOutputRequestSerial
+          || terminalOutputRequestSessionId !== sessionId
+          || !projectState.terminalOutputLoading
+        ) return;
+        projectState.terminalOutputLoading = false;
+        projectState.terminalOutputError = "读取终端输出超时";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }, 8000);
+    } catch (err) {
+      projectState.terminalOutputLoading = false;
+      projectState.terminalOutputError = err instanceof Error ? err.message : String(err);
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  function openTerminalDetails(sessionId: string): void {
+    const session = projectState.terminalSessions.find((item) => item.session_id === sessionId);
+    if (!session) return;
+    terminalOutputRequestSerial += 1;
+    if (terminalOutputRequestTimeoutId !== null) {
+      window.clearTimeout(terminalOutputRequestTimeoutId);
+      terminalOutputRequestTimeoutId = null;
+    }
+    terminalOutputRequestId = null;
+    terminalOutputRequestSessionId = sessionId;
+    projectState.terminalDetails = session;
+    projectState.terminalOutput = "";
+    projectState.terminalOutputCursor = 0;
+    projectState.terminalOutputLoading = false;
+    projectState.terminalOutputError = "";
+    projectState.terminalOutputCursorReset = false;
+    projectState.terminalOutputTruncated = false;
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    requestTerminalOutput(sessionId, 0);
+  }
+
+  function closeTerminalDetails(): void {
+    terminalOutputRequestSerial += 1;
+    if (terminalOutputRequestTimeoutId !== null) {
+      window.clearTimeout(terminalOutputRequestTimeoutId);
+      terminalOutputRequestTimeoutId = null;
+    }
+    terminalOutputRequestId = null;
+    terminalOutputRequestSessionId = null;
+    projectState.terminalDetails = null;
+    projectState.terminalOutput = "";
+    projectState.terminalOutputCursor = 0;
+    projectState.terminalOutputLoading = false;
+    projectState.terminalOutputError = "";
+    projectState.terminalOutputCursorReset = false;
+    projectState.terminalOutputTruncated = false;
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function scheduleTerminalPoll(): void {
+    if (terminalPollTimerId !== null) window.clearTimeout(terminalPollTimerId);
+    const delay = projectState.terminalsCollapsed ? 10_000 : 2_000;
+    terminalPollTimerId = window.setTimeout(() => {
+      terminalPollTimerId = null;
+      refreshTerminals();
+      scheduleTerminalPoll();
+    }, delay);
+  }
+
   // ---- chat rendering ----
   function isRecentTurnBlock(turnIndex: number): boolean {
     return turnIndex >= chat.currentTurnIndex() - (FOCUS_TURNS - 1);
@@ -1938,20 +2303,21 @@ export function mountUnifiedShell(
         Boolean(block.llmPending) &&
         thinkId === "pending";
       if (waiting) {
+        const waitStartedAt = block.llmWaitStartedAt ?? Date.now();
         const pendingThink: ThinkEntry = {
           kind: "think",
           id: "pending",
           text: "",
           phase: "streaming",
-          startedAt: block.reasoningStartedAt ?? Date.now(),
+          startedAt: waitStartedAt,
         };
-        syncThinkDom(el, pendingThink, { waiting: true });
+        syncThinkDom(el, pendingThink, { waiting: true, waitStartedAt });
         return;
       }
       if (!thinkId) return;
       const entry = findThinkEntryForDom(block, thinkId);
       if (!entry) return;
-      syncThinkDom(el, entry, { waiting: false });
+      syncThinkDom(el, entry, { waiting: false, liveTurn: isLiveProcessBlock(block) });
     });
   }
 
@@ -1968,14 +2334,15 @@ export function mountUnifiedShell(
           `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="pending"]`,
         );
         if (el) {
+          const waitStartedAt = block.llmWaitStartedAt ?? Date.now();
           const pendingThink: ThinkEntry = {
             kind: "think",
             id: "pending",
             text: "",
             phase: "streaming",
-            startedAt: block.reasoningStartedAt ?? Date.now(),
+            startedAt: waitStartedAt,
           };
-          syncThinkDom(el, pendingThink, { waiting: true });
+          syncThinkDom(el, pendingThink, { waiting: true, waitStartedAt });
         }
       }
       for (const entry of block.entries ?? []) {
@@ -1984,13 +2351,15 @@ export function mountUnifiedShell(
         const el = chatEl.querySelector<HTMLElement>(
           `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="${entry.id}"]`,
         );
-        if (el) syncThinkDom(el, entry);
+        if (el) syncThinkDom(el, entry, { liveTurn: true });
       }
     }
   }
 
   function scrollStreamingThinkingBodies(): void {
-    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming .unified-thinking-body").forEach((body) => {
+    chatEl.querySelectorAll<HTMLElement>(
+      ".unified-thinking.is-streaming .unified-thinking-body, .unified-thinking-stream-text",
+    ).forEach((body) => {
       body.scrollTop = body.scrollHeight;
     });
   }
@@ -2023,6 +2392,8 @@ export function mountUnifiedShell(
     return block.turnIndex < chat.currentTurnIndex() - 1;
   }
 
+  let activeProcessMeta: Map<string, { index: number; total: number }> | null = null;
+
   function renderBlocksFlat(blocks: ChatBlock[]): string {
     const parts: string[] = [];
     let chipBuf: string[] = [];
@@ -2051,7 +2422,16 @@ export function mountUnifiedShell(
       return renderBlocksFlat(segment.blocks);
     }
     const live = segment.group.turnIndex === chat.currentTurnIndex() && chat.isWorking();
-    return renderTurnCardShell(segment.group, renderBlocksFlat(segment.group.blocks), { live });
+    const processBlocks = segment.group.blocks.filter(
+      (block): block is Extract<ChatBlock, { kind: "process" }> => block.kind === "process",
+    );
+    const prevMeta = activeProcessMeta;
+    activeProcessMeta = processBlocks.length > 1
+      ? new Map(processBlocks.map((block, index) => [block.turnKey, { index: index + 1, total: processBlocks.length }]))
+      : null;
+    const inner = renderBlocksFlat(segment.group.blocks);
+    activeProcessMeta = prevMeta;
+    return renderTurnCardShell(segment.group, inner, { live });
   }
 
   function renderBlocksGrouped(blocks: ChatBlock[]): string {
@@ -2143,7 +2523,12 @@ export function mountUnifiedShell(
         toolsFoldOpen: toolsListExpanded.has(block.turnKey),
       });
       const tools = getProcessTools(block);
-      const pill = processPillLabel(block, { expanded: !block.collapsed });
+      const meta = activeProcessMeta?.get(block.turnKey);
+      const pill = processPillLabel(block, {
+        expanded: !block.collapsed,
+        segmentIndex: meta?.index,
+        segmentTotal: meta?.total,
+      });
       const chevron = block.collapsed ? "▸" : "▾";
       const running = tools.some((t) => t.status === "running");
       const failAlert = renderToolFailAlert(lastFailedTool(tools));
@@ -2173,31 +2558,20 @@ export function mountUnifiedShell(
       const disabled = block.resolved ? "disabled" : "";
       const inProgress = isConfirmInProgressLabel(block.resolved);
       const isTerminal = Boolean(block.resolved) && !inProgress;
-      const resolvedCls = block.resolved
-        ? inProgress
-          ? "is-running"
-          : "resolved is-compact"
-        : "";
       // Resolved confirms are already reflected in the process tool lines (DESKTOP §3.2.2).
       if (isTerminal) return "";
-      const resolved = block.resolved
-        ? `<div class="text-muted unified-confirm-status">${escapeHtml(block.resolved)}</div>`
-        : `
-        <div class="unified-expand-actions">
-          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>同意</button>
-          <button type="button" class="unified-btn unified-btn-danger" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
+      const actions = `
+          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>允许此次</button>
+          <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
           ${
             block.allowApproveAll
-              ? `<button type="button" class="unified-btn" data-confirm="a" data-id="${block.requestId}" ${disabled}>本会话 workspace 均允许</button>`
+              ? `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="a" data-id="${block.requestId}" ${disabled}>本会话均允许</button>`
               : ""
-          }
-        </div>`;
-      return `
-        <div class="unified-surface unified-confirm ${resolvedCls}">
-          <div class="unified-expand-title">工具确认</div>
-          <pre class="unified-confirm-preview">${escapeHtml(block.preview)}</pre>
-          ${resolved}
-        </div>`;
+          }`;
+      if (block.resolved) {
+        return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
+      }
+      return renderConfirmCardHtml(block.preview, actions);
     }
     return "";
   }
@@ -2253,7 +2627,11 @@ export function mountUnifiedShell(
         return `N:${block.text.length}`;
       case "process": {
         ensureProcessEntries(block);
-        const entriesSig = activityEntriesPrint(block.entries ?? [], Boolean(block.llmPending));
+        const entriesSig = activityEntriesPrint(
+          block.entries ?? [],
+          Boolean(block.llmPending),
+          block.llmWaitStartedAt,
+        );
         return `P${block.turnKey}:${block.collapsed ? 1 : 0}:${entriesSig}`;
       }
       case "confirm":
@@ -2286,17 +2664,64 @@ export function mountUnifiedShell(
         else toolsListExpanded.delete(turnKey);
       });
     });
+    container.querySelectorAll<HTMLButtonElement>("[data-tool-rename]:not([data-tool-rename-bound])").forEach((btn) => {
+      btn.dataset.toolRenameBound = "1";
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const toolId = btn.dataset.toolRename;
+        if (toolId) openToolDisplayEditor(toolId);
+      });
+    });
   }
 
-  function scrollToBottomIfNear(): void {
-    const distFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
-    if (distFromBottom < 50) {
-      chatEl.scrollTop = chatEl.scrollHeight;
+  /** UX-025 / UX-POLISH §5.2 A2: user scrolled up → stop yanking chat viewport. */
+  let userScrollPinned = false;
+  const SCROLL_PIN_THRESHOLD_PX = 80;
+  const SCROLL_RELEASE_THRESHOLD_PX = 24;
+
+  function resetUserScrollPin(): void {
+    userScrollPinned = false;
+  }
+
+  chatEl.addEventListener(
+    "scroll",
+    () => {
+      const distFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
+      if (distFromBottom > SCROLL_PIN_THRESHOLD_PX) {
+        userScrollPinned = true;
+      } else if (distFromBottom <= SCROLL_RELEASE_THRESHOLD_PX) {
+        userScrollPinned = false;
+      }
+    },
+    { passive: true },
+  );
+
+  function scrollPendingConfirmIntoView(): void {
+    const confirmEl = chatEl.querySelector<HTMLElement>(".unified-confirm:not(.resolved)");
+    if (confirmEl) {
+      confirmEl.scrollIntoView({
+        behavior: motionQuery.matches ? "auto" : "smooth",
+        block: "nearest",
+      });
+      return;
     }
+    scrollUnlessPinned();
+  }
+
+  function scrollUnlessPinned(): void {
+    if (userScrollPinned) return;
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  /** @deprecated alias */
+  function scrollToBottomIfNear(): void {
+    scrollUnlessPinned();
   }
 
   /** UX-025: after session.history — always land on latest messages. */
   function scrollChatToBottom(): void {
+    resetUserScrollPin();
     requestAnimationFrame(() => {
       chatEl.scrollTop = chatEl.scrollHeight;
     });
@@ -2487,7 +2912,12 @@ export function mountUnifiedShell(
             const chevron = collapsed ? "▸" : "▾";
             const textEl = btn.querySelector(".unified-process-pill-text");
             if (textEl) {
-              textEl.textContent = `${processPillLabel(block, { expanded: !block.collapsed })} ${chevron}`;
+              const meta = processMetaForTurnKey(collapseToggle);
+              textEl.textContent = `${processPillLabel(block, {
+                expanded: !block.collapsed,
+                segmentIndex: meta?.index,
+                segmentTotal: meta?.total,
+              })} ${chevron}`;
             }
             btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
           }
@@ -2565,10 +2995,18 @@ export function mountUnifiedShell(
           }
         </div>`;
 
+    const view = summarizeConfirmPreview(confirm.preview);
+    const reasonBlock = view.reason
+      ? `<p class="unified-confirm-reason">${escapeHtml(view.reason)}</p>`
+      : "";
     confirmGlass.innerHTML = `
       <div class="unified-confirm-glass-card ${confirm.resolved ? "resolved" : ""}">
-        <div class="unified-confirm-glass-title">工具确认</div>
-        <pre class="unified-confirm-glass-preview">${escapeHtml(confirm.preview)}</pre>
+        <div class="unified-confirm-kicker">需要确认</div>
+        <div class="unified-confirm-glass-title">${escapeHtml(view.headline)}</div>
+        ${reasonBlock}
+        ${view.compact
+          ? `<details class="unified-confirm-details"><summary class="unified-confirm-details-toggle">查看详情</summary><pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre></details>`
+          : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}
         ${resolved}
       </div>
     `;
@@ -2605,29 +3043,7 @@ export function mountUnifiedShell(
     sendComposerMessage(ev);
   });
   stopBtn.addEventListener("click", () => {
-    if (!chat.requestCancel()) return;
-    setComposerEnabled(false);
-    setStatus("正在停止…");
-    clearCancelSafety();
-    cancelSafetyTimer = window.setTimeout(() => {
-      if (chat.model.cancelRequested) {
-        chat.model.cancelRequested = false;
-        chat.model.confirmPending = false;
-        setComposerEnabled(true);
-        setStatus("就绪");
-        syncWorkingVisual();
-      }
-      cancelSafetyTimer = null;
-    }, 3000);
-    try {
-      client.sendTurnCancel();
-    } catch (err) {
-      clearCancelSafety();
-      chat.model.cancelRequested = false;
-      setComposerEnabled(!chat.model.confirmPending);
-      setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
-      syncWorkingVisual();
-    }
+    sendStopRequest();
   });
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && ev.shiftKey) {
@@ -2646,30 +3062,8 @@ export function mountUnifiedShell(
   document.addEventListener("keydown", (ev) => {
     if (destroyed) return;
     if (ev.key !== "Escape") return;
-    if (!(chat.isWorking() || chat.model.confirmPending)) return;
-    if (!chat.requestCancel()) return;
-    setComposerEnabled(false);
-    setStatus("正在停止…");
-    clearCancelSafety();
-    cancelSafetyTimer = window.setTimeout(() => {
-      if (chat.model.cancelRequested) {
-        chat.model.cancelRequested = false;
-        chat.model.confirmPending = false;
-        setComposerEnabled(true);
-        setStatus("就绪");
-        syncWorkingVisual();
-      }
-      cancelSafetyTimer = null;
-    }, 3000);
-    try {
-      client.sendTurnCancel();
-    } catch (err) {
-      clearCancelSafety();
-      chat.model.cancelRequested = false;
-      setComposerEnabled(!chat.model.confirmPending);
-      setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
-      syncWorkingVisual();
-    }
+    if (!(chat.isWorking() || chat.model.confirmPending || projectState.runawayCancelAvailable)) return;
+    sendStopRequest();
   });
 
   // ---- confirm keyboard shortcuts ----
@@ -2815,6 +3209,64 @@ export function mountUnifiedShell(
     }
   });
 
+  projectEls.terminalsPanel.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "terminal-open") {
+      const sessionId = btn.dataset.terminalId;
+      if (sessionId) openTerminalDetails(sessionId);
+      return;
+    }
+    if (btn.dataset.action === "terminal-details-close") {
+      closeTerminalDetails();
+      return;
+    }
+    if (btn.dataset.action === "terminal-output-refresh") {
+      const sessionId = btn.dataset.terminalId;
+      if (sessionId && projectState.terminalDetails?.session_id === sessionId) {
+        requestTerminalOutput(sessionId, projectState.terminalOutputCursor);
+      }
+      return;
+    }
+    if (btn.dataset.action === "terminal-copy-output") {
+      const sessionId = btn.dataset.terminalId;
+      if (!sessionId || sessionId !== projectState.terminalDetails?.session_id) return;
+      const text = projectState.terminalOutput;
+      if (!text) return;
+      const write = navigator.clipboard?.writeText(text);
+      if (!write) {
+        setStatus("当前环境不支持复制");
+        return;
+      }
+      void write.then(
+        () => setStatus("已复制终端输出"),
+        () => setStatus("复制终端输出失败"),
+      );
+      return;
+    }
+    if (btn.dataset.action === "terminal-close") {
+      const sessionId = btn.dataset.terminalId;
+      if (!sessionId) return;
+      try {
+        setStatus("等待终端关闭确认…");
+        client.closeTerminal(sessionId, `terminal-close-${Date.now()}`);
+      } catch (err) {
+        projectState.terminalOutputError = err instanceof Error ? err.message : String(err);
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }
+      return;
+    }
+    if (btn.dataset.action === "toggle-terminals") {
+      projectState.terminalsCollapsed = !projectState.terminalsCollapsed;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      scheduleTerminalPoll();
+      return;
+    }
+    if (btn.dataset.action === "terminals-refresh") {
+      refreshTerminals();
+    }
+  });
+
   // Overlay back button
   projectEls.overlayBackBtn.addEventListener("click", () => {
     projectState.overlayPanel = null;
@@ -2921,6 +3373,9 @@ export function mountUnifiedShell(
         case "jump-review-summary":
           jumpToReviewSummary();
           return;
+        case "resume-runaway":
+          resumeRunawayFromUi();
+          return;
         case "accept-suggestion": {
           const sid = btn.dataset.suggestionId;
           if (sid) acceptSuggestionById(sid);
@@ -2977,10 +3432,13 @@ export function mountUnifiedShell(
       case "jump-review-summary":
         jumpToReviewSummary();
         return;
-      case "stop-turn":
-        projectCallbacks.onStopTurn();
-        return;
-      default:
+        case "stop-turn":
+          projectCallbacks.onStopTurn();
+          return;
+        case "resume-runaway":
+          resumeRunawayFromUi();
+          return;
+        default:
         return;
     }
   });
@@ -3485,13 +3943,10 @@ export function mountUnifiedShell(
           projectState.planStatus = event.project_plan_status ?? "draft";
           projectState.tasksDone = event.project_tasks_done ?? 0;
           projectState.tasksTotal = event.project_tasks_total ?? 0;
-          const plan = event.project_plan_label ?? "计划待确认";
-          topbarState.projectLabel = `项目 · ${event.project_id} · ${plan}`;
           syncFreeChatFromSession(true, event.session_id);
           setPerspective("project", "session");
         } else {
           projectState.projectId = "";
-          topbarState.projectLabel = "";
           syncFreeChatFromSession(false, event.session_id);
           setPerspective("project", "session");
         }
@@ -3499,7 +3954,7 @@ export function mountUnifiedShell(
         updateWorkbenchEmpty();
         syncArchivedViewUi();
         setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         debouncedListSessions();
         if (event.project_id) {
@@ -3510,13 +3965,13 @@ export function mountUnifiedShell(
       case "session.list":
         sessionsDropdown = event.sessions;
         topbarState.sessionCount = event.sessions.length;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         if (sessionsOpen) renderSessionsDropdown();
         break;
 
       case "session.memory":
         topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        break;
         updateTokenBar(event.token_usage, event.token_limit);
         break;
 
@@ -3554,12 +4009,7 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
-        if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-        } else {
-          topbarState.projectLabel = "";
-        }
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         setStatus(event.message || "已切换工作上下文");
         break;
 
@@ -3580,8 +4030,7 @@ export function mountUnifiedShell(
         updateWorkbenchEmpty();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
           if (!projectState.adoptPendingId) {
             refreshServices();
             refreshProjectThreads();
@@ -3607,8 +4056,7 @@ export function mountUnifiedShell(
         }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
 
         // Auto-confirm timer for task-level changes
@@ -3748,8 +4196,7 @@ export function mountUnifiedShell(
         client.listProjects();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         syncArchivedViewUi();
         updatePlaceholder();
@@ -3775,6 +4222,67 @@ export function mountUnifiedShell(
       case "services.logs.done":
         projectState.servicesLogName = event.name;
         projectState.servicesLogText = event.text || "";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.list.done":
+        if (event.request_id && event.request_id !== terminalRequestId) break;
+        if (terminalRequestTimeoutId !== null) {
+          window.clearTimeout(terminalRequestTimeoutId);
+          terminalRequestTimeoutId = null;
+        }
+        projectState.terminalsLoading = false;
+        projectState.terminalsError = event.ok ? "" : (event.error || "读取终端状态失败");
+        projectState.terminalSessions = Array.isArray(event.sessions) ? event.sessions : [];
+        if (projectState.terminalDetails) {
+          const current = projectState.terminalSessions.find(
+            (session) => session.session_id === projectState.terminalDetails?.session_id,
+          );
+          if (current) {
+            projectState.terminalDetails = current;
+          } else {
+            closeTerminalDetails();
+            break;
+          }
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.output.done":
+        if (
+          event.request_id
+          && event.request_id !== terminalOutputRequestId
+        ) break;
+        if (
+          event.session_id !== terminalOutputRequestSessionId
+          || event.session_id !== projectState.terminalDetails?.session_id
+        ) break;
+        if (terminalOutputRequestTimeoutId !== null) {
+          window.clearTimeout(terminalOutputRequestTimeoutId);
+          terminalOutputRequestTimeoutId = null;
+        }
+        projectState.terminalOutputLoading = false;
+        projectState.terminalOutputError = event.ok ? "" : (event.error || "输出暂时不可用");
+        projectState.terminalOutputCursorReset = Boolean(event.cursor_reset);
+        projectState.terminalOutputTruncated = Boolean(event.truncated);
+        if (event.ok) {
+          projectState.terminalOutput = event.cursor_reset
+            ? event.output
+            : projectState.terminalOutput + event.output;
+          projectState.terminalOutputCursor = event.next_cursor;
+          if (event.session) projectState.terminalDetails = event.session;
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.close.done":
+        if (event.session_id === projectState.terminalDetails?.session_id && !event.ok) {
+          projectState.terminalOutputError = event.error || "关闭终端失败";
+        }
+        if (event.ok) {
+          setStatus("终端关闭请求已提交");
+          refreshTerminals();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -3836,8 +4344,7 @@ export function mountUnifiedShell(
         // session.memory, session.history — avoid duplicate refresh round-trips.
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         updatePlaceholder();
         updateWorkbenchEmpty();
@@ -3869,8 +4376,7 @@ export function mountUnifiedShell(
         }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         client.refreshProject();
         break;
@@ -3933,41 +4439,59 @@ export function mountUnifiedShell(
         setStatus(event.reason);
         break;
 
+      case "execution.state":
+        if (!chat.handleEvent(event)) break;
+        if (event.state === "queued") {
+          setStatus("等待续接…");
+        } else if (event.state === "stopping") {
+          setStatus("正在停止…");
+        } else if (event.state === "running") {
+          setStatus("处理中…");
+        } else if (event.finish_reason) {
+          setTurnEndStatus(event.finish_reason);
+        }
+        syncWorkingVisual();
+        break;
+
       case "tool.start":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         setStatus(`· ${event.tool}`);
         break;
 
       case "llm.pending":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (!chat.model.cancelRequested) {
           setStatus("处理中…");
         }
+        syncToolElapsedTimer();
         break;
 
       case "tool.progress":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (typeof event.text === "string" && event.text.trim()) {
           setStatus(event.text.trim());
         }
         break;
 
       case "tool.end":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
+        if (event.tool === "run_evolved" || /interactive_terminal/.test(event.summary || "")) {
+          refreshTerminals();
+        }
         if (!chat.model.confirmPending) {
           setStatus(event.ok ? (chat.isWorking() ? "处理中…" : "就绪") : "工具失败");
         }
         break;
 
       case "reasoning.delta":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (!chat.model.cancelRequested && !statusText.startsWith("·")) {
           setStatus("处理中…");
         }
         break;
 
       case "assistant.done":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (perspective === "project") {
           client.refreshProject();
         }
@@ -3977,15 +4501,35 @@ export function mountUnifiedShell(
         syncWorkingVisual();
         break;
 
+      case "turn.notice":
+        if (!chat.handleEvent(event)) break;
+        if (event.text) {
+          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+        }
+        syncWorkingVisual();
+        break;
+
       case "turn.end":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         setTurnEndStatus(event.finish_reason);
         syncWorkingVisual();
+        scheduleRunawayIdleResume();
         break;
 
       case "notice":
         chat.model.blocks.push({ kind: "notice", text: event.text });
         renderChat();
+        if (event.runaway_cancel_available !== undefined) {
+          projectState.runawayCancelAvailable = event.runaway_cancel_available;
+          syncWorkingVisual();
+        }
+        if (/狂奔|恢复|租约|续接|占用|启动狂奔/.test(event.text)) {
+          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+          if (/已在执行|占用|超时|租约/.test(event.text)) {
+            clearRunawayResumePending();
+            syncWorkingVisual();
+          }
+        }
         if (
           projectState.planStatus !== "confirmed" &&
           /计划已确认|可以开始写代码/.test(event.text)
@@ -3994,8 +4538,7 @@ export function mountUnifiedShell(
           projectState.planOverlay = null;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           if (projectState.projectId) {
-            topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-            renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+            refreshTopbar();
           }
           client.refreshProject();
         }
@@ -4003,7 +4546,12 @@ export function mountUnifiedShell(
 
       case "confirm.request":
       case "confirm.done":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
+        if (event.type === "confirm.request") {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => scrollPendingConfirmIntoView());
+          });
+        }
         break;
 
       case "error":
@@ -4039,7 +4587,17 @@ export function mountUnifiedShell(
   });
 
   function planStatusLabel(): string {
-    if (projectState.runawayEnabled && projectState.runawayStatus) return projectState.runawayStatus;
+    if (projectState.runawayEnabled) {
+      if (projectState.runawayVersion >= 2) {
+        if (chat.isWorking()) return "狂奔进行中";
+        if (projectState.runawayBlocked) {
+          return projectState.runawayUserLine || projectState.runawayStatus || "需要处理";
+        }
+        if (projectState.runawayUserLine) return projectState.runawayUserLine;
+        return "狂奔待命";
+      }
+      if (projectState.runawayStatus) return projectState.runawayStatus;
+    }
     if (projectState.planStatus === "confirmed") {
       if (projectState.tasksAllDone && projectState.tasksTotal > 0) {
         if (projectState.executionStage === "release" && projectState.milestoneAccepted) return "项目已完成";
@@ -4052,8 +4610,10 @@ export function mountUnifiedShell(
   }
 
   // ---- initial render ----
+  mountToolDisplayEditor();
+  onToolDisplayOverridesChange(() => renderChat());
   updatePlaceholder();
-  renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+  refreshTopbar();
   renderProposalsPanel();
   renderChat();
   setComposerEnabled(true);
@@ -4083,6 +4643,8 @@ export function mountUnifiedShell(
   } catch {
     /* ignore */
   }
+  refreshTerminals();
+  scheduleTerminalPoll();
 
   return () => {
     destroyed = true;
@@ -4090,6 +4652,10 @@ export function mountUnifiedShell(
     clearCancelSafety();
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
     if (renderThrottleTimer !== null) window.clearTimeout(renderThrottleTimer);
+    if (terminalPollTimerId !== null) window.clearTimeout(terminalPollTimerId);
+    if (terminalRequestTimeoutId !== null) window.clearTimeout(terminalRequestTimeoutId);
+    if (terminalOutputRequestTimeoutId !== null) window.clearTimeout(terminalOutputRequestTimeoutId);
+    terminalOutputRequestSerial += 1;
     renderedPrints = [];
     renderedSegmentPrints = [];
     focusObserver?.disconnect();

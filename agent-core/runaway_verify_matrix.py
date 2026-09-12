@@ -71,17 +71,38 @@ def _open_formal_task_ids(tasks_text: str) -> list[str]:
 
 
 def _verify_orphan_lines(verify_text: str) -> list[str]:
-    """V-* lines in VERIFY.md that do not reference any T-* task id."""
-    orphans: list[str] = []
+    """Return verification ids that have no task binding in their record.
+
+    VERIFY.md commonly repeats one record in a table, metadata comments, and a
+    detail section.  A binding can therefore be split across lines, for
+    example ``verify_id=V-037`` followed by ``task_id=T-103``.  Treating each
+    line independently produces false MX-2 failures and can escalate a valid
+    project to human handling.
+    """
+    verify_ids: list[str] = []
+    seen_ids: set[str] = set()
+    bound_ids: set[str] = set()
+    pending_record_ids: list[str] = []
     for line in (verify_text or "").splitlines():
-        if not _VERIFY_ID_RE.search(line):
+        matches = [match.group(0).upper() for match in _VERIFY_ID_RE.finditer(line)]
+        if not matches:
+            if _TASK_ID_RE.search(line) and pending_record_ids:
+                bound_ids.update(pending_record_ids)
             continue
+        # A new verify id starts a new record unless it repeats an id already
+        # being described. This handles table rows as well as metadata such as
+        # ``verify_id=V-037`` followed by ``task_id=T-103``.
+        if pending_record_ids and not set(matches).intersection(pending_record_ids):
+            pending_record_ids = []
+        for verify_id in matches:
+            if verify_id not in seen_ids:
+                seen_ids.add(verify_id)
+                verify_ids.append(verify_id)
+            if verify_id not in pending_record_ids:
+                pending_record_ids.append(verify_id)
         if _TASK_ID_RE.search(line):
-            continue
-        match = _VERIFY_ID_RE.search(line)
-        if match:
-            orphans.append(match.group(0).upper())
-    return orphans
+            bound_ids.update(matches)
+    return [verify_id for verify_id in verify_ids if verify_id not in bound_ids]
 
 
 def lint_verify_matrix(paths: AgentPaths, project_id: str) -> MatrixLintResult:

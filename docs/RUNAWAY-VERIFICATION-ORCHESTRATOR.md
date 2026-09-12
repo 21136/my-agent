@@ -2,6 +2,7 @@
 
 > 版本 **0.1.0** · 2026-09-03  
 > 状态：**done**（UI-6046～6052 · 2026-09-03）  
+> **⚠️ 运行时替代**：[RUNAWAY-V2.md](./RUNAWAY-V2.md) — v2 用外部 checklist + turn_end hook 取代谓词门短接与 bug-fix 分轨；v1 在 `MY_AGENT_RUNAWAY_V2=0` 时冻结。  
 > 关联：[RUNAWAY-FLOW-STATE-MACHINE.md](./RUNAWAY-FLOW-STATE-MACHINE.md) · [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md) · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · [TASKS.md](./TASKS.md) UI-6046～6052
 
 ---

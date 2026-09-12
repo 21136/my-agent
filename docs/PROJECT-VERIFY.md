@@ -10,6 +10,30 @@
 
 **不做黑盒 auto-patch 闭环**；新增 **`run_project_tests`** 把 pytest/jest/surefire 输出解析成 **`{file, line, message}[]`**，喂给 harness + LLM，由 **`patch_file`** 与 **Progress Gate `test` 证据** 完成可审修复环。
 
+## 0.1 本仓库的 pytest 环境
+
+`pytest` 是开发/回归测试依赖，不属于 my-agent 的运行时依赖，因此不放入 `requirements.txt`。Windows 优先使用项目虚拟环境中的解释器，避免把测试依赖装进系统 Python：
+
+```powershell
+if (-not (Test-Path .venv\Scripts\python.exe)) { python -m venv .venv }
+.venv\Scripts\python.exe -m pip install pytest
+.venv\Scripts\python.exe -c "import sys, pytest; print(sys.executable); print(pytest.__version__)"
+```
+
+运行本仓库回归：
+
+```powershell
+.venv\Scripts\python.exe -m pytest agent-core/tests -q
+```
+
+运行指定测试文件：
+
+```powershell
+.venv\Scripts\python.exe -m pytest agent-core/tests/test_cross_session_read.py agent-core/tests/test_evolve_tool_io.py -q
+```
+
+不要直接使用系统 `pytest` 或用户目录中的 Python 包；解释器和测试依赖必须来自同一个 `.venv`。项目自身的 `run_project_tests` / `structured_test` 仍按绑定项目的测试契约执行，不替代仓库回归命令。
+
 ---
 
 ## 1. 动机

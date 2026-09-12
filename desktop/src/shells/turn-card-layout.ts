@@ -18,6 +18,25 @@ function blockStartsTurn(block: ChatBlock): number | null {
   return null;
 }
 
+export function liveTurnCardProcessBlocks(
+  blocks: ChatBlock[],
+  currentTurnIndex: number,
+): Array<Extract<ChatBlock, { kind: "process" }>> {
+  const segments = segmentChatBlocks(blocks);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (seg.kind !== "turn-card") continue;
+    if (seg.group.turnIndex === currentTurnIndex) {
+      return seg.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process");
+    }
+  }
+  const last = segments[segments.length - 1];
+  if (last?.kind === "turn-card") {
+    return last.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process");
+  }
+  return [];
+}
+
 /** Group chat blocks into turn cards (UX-028 M1). */
 export function segmentChatBlocks(blocks: ChatBlock[]): ChatRenderSegment[] {
   const segments: ChatRenderSegment[] = [];

@@ -40,8 +40,9 @@ STANDARD_PROJECT_ARTIFACTS = STANDARD_ARTIFACTS
 PROJECT_ARTIFACTS = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
 PLAN_DOMAIN_FILES = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
 PLAN_DOMAIN_WRITE_BLOCK_MSG = (
-    "计划域文件须通过 plan_partner 提案 + 侧栏采纳；"
-    "或使用 report_progress 勾选已完成任务。"
+    "不能直接修改该计划文件。"
+    "非狂奔时请用侧栏「方案搭档」提案并采纳；"
+    "狂奔时请确认当前验收项是否允许修改该文件。"
 )
 TASKS_ARCHIVE_NAME = "TASKS.archive.md"
 TASKS_INJECTION_OPEN_CAP = 20
@@ -54,7 +55,13 @@ _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
 _TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
-_FORMAL_TASK_LEAD_RE = re.compile(r"^(T-\d+(?:-\d+)*)\b", re.IGNORECASE)
+# Priority/label prefixes are allowed before the task id (for example
+# ``[P1] T-1007``), while descriptive plan lines such as ``plan: T-1007``
+# remain non-formal because the task id is not the leading token.
+_FORMAL_TASK_LEAD_RE = re.compile(
+    r"^(?:\[[^\]\r\n]+\]\s+)*(T-\d+(?:-\d+)*)\b",
+    re.IGNORECASE,
+)
 _VERIFY_ID_INLINE_RE = re.compile(r"\bV-\d+(?:-\d+)*\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
 _TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence", "depends_on")
@@ -869,7 +876,7 @@ def count_archive_entries(archive_path: Path, *, reason: str | None = None) -> i
         return 0
     try:
         text = archive_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return 0
     n = 0
     want = f"closed:{reason}" if reason else None
@@ -927,8 +934,12 @@ def parse_archive_entry_line(line: str) -> dict[str, str] | None:
 def list_archive_entries(archive_path: Path) -> list[dict[str, str]]:
     if not archive_path.is_file():
         return []
+    try:
+        text = archive_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
     out: list[dict[str, str]] = []
-    for line in archive_path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         entry = parse_archive_entry_line(line)
         if entry:
             out.append(entry)
@@ -1797,12 +1808,26 @@ _BUG_FIX_FORBIDDEN_PLAN_WRITES = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
 _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG = "bug-fix 轨禁止修改 MAP 或 TASKS.archive"
 
 
+def _path_matches_write_scope(rel_path: str, write_scope: tuple[str, ...]) -> bool:
+    import fnmatch
+
+    rel = rel_path.replace("\\", "/")
+    for pattern in write_scope:
+        pat = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(rel, pat):
+            return True
+        if fnmatch.fnmatch(rel.split("/")[-1], pat):
+            return True
+    return False
+
+
 def main_agent_plan_domain_write_block(
     *,
     project_root: str,
     tool_name: str,
     arguments: dict[str, object],
     bug_fix_lane: bool = False,
+    runaway_v2_write_scope: tuple[str, ...] | None = None,
 ) -> str | None:
     """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly."""
     root = project_root.strip()
@@ -1819,6 +1844,10 @@ def main_agent_plan_domain_write_block(
                         return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
                     if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
                         continue
+                if runaway_v2_write_scope:
+                    rel = project_path_rel(path, root)
+                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
+                        continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     if evolved_name == "patch_file":
         for path in extract_run_evolved_paths(tool_name, arguments):
@@ -1828,6 +1857,10 @@ def main_agent_plan_domain_write_block(
                     if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
                         return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
                     if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                        continue
+                if runaway_v2_write_scope:
+                    rel = project_path_rel(path, root)
+                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
                         continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     return None
@@ -1960,7 +1993,10 @@ def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
     for task in tasks:
         task_id = str(task.get("id") or "").upper()
         line = visible.get(int(task.get("line", -1)), "")
-        if not task_id or not formal_task_id(task_id) or not _TASK_OPEN_RE.match(line):
+        # ``formal_task_id`` validates the task body as well as the id.  Here
+        # the parsed id is all we have, so pass it as the body too; calling it
+        # with the default empty body silently rejected every dependency task.
+        if not task_id or not formal_task_id(task_id, task_id) or not _TASK_OPEN_RE.match(line):
             continue
         missing = sorted(
             {
@@ -2281,6 +2317,7 @@ def project_mode_block_reason(
     workflow_stage: str = "",
     runaway_enabled: bool = False,
     bug_fix_lane: bool = False,
+    runaway_v2_write_scope: tuple[str, ...] | None = None,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
@@ -2361,6 +2398,7 @@ def project_mode_block_reason(
         tool_name=tool_name,
         arguments=arguments,
         bug_fix_lane=bug_fix_lane,
+        runaway_v2_write_scope=runaway_v2_write_scope,
     )
     if plan_domain_block:
         return plan_domain_block
@@ -2388,7 +2426,10 @@ def project_mode_block_reason(
                         )
                     )
                 ):
-                    return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
+                    from runaway_v2.config import runaway_v2_env_enabled
+
+                    if not (runaway_enabled and runaway_v2_env_enabled()):
+                        return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
         if tool_name == "run_evolved" and evolved_name == "patch_file":
             for path in extract_run_evolved_paths(tool_name, arguments):
                 if path and not is_under_project_root(path, project_root):

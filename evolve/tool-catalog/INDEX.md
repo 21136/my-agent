@@ -3,6 +3,7 @@
 > Phase 23 · L0。需要细节时：`read_file evolve/tool-catalog/buckets/<桶>.md`  
 > **常用扁平原语**（Phase 41）：`run_command` · `write_text` · `patch_file` — 直接调用，无需 `run_evolved` 嵌套  
 > 其它 evolved：`run_evolved` · `tool_name=<名>`（须 `status=active`）  
+> **实验性工具**：目录可记录但不会进入 active 默认清单；需完成独立验收后再升格。
 > Builtin（始终）：`read_file` · `list_dir` · `glob_file_search` · `grep` · `web_search` · `fetch_url` · `run_evolved` ·（+ 上三项 proxy）
 
 | 桶 | 何时读 | 路径 |

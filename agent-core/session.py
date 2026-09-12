@@ -161,6 +161,13 @@ class SessionMeta:
     project_runaway_last_verification: str = ""
     project_runaway_review_blockers_count: int = 0
     project_runaway_paused_reason: str = ""
+    project_runaway_v2_phase: str = ""
+    project_runaway_v2_mode: str = ""
+    project_runaway_v2_user_line: str = ""
+    project_runaway_v2_blocked: bool = False
+    project_runaway_v2_last_state_fingerprint: str = ""
+    project_runaway_v2_no_progress_turns: int = 0
+    project_runaway_v2_auto_turns: int = 0
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
@@ -208,6 +215,13 @@ class SessionMeta:
             "project_runaway_last_verification": self.project_runaway_last_verification,
             "project_runaway_review_blockers_count": self.project_runaway_review_blockers_count,
             "project_runaway_paused_reason": self.project_runaway_paused_reason,
+            "project_runaway_v2_phase": self.project_runaway_v2_phase,
+            "project_runaway_v2_mode": self.project_runaway_v2_mode,
+            "project_runaway_v2_user_line": self.project_runaway_v2_user_line,
+            "project_runaway_v2_blocked": self.project_runaway_v2_blocked,
+            "project_runaway_v2_last_state_fingerprint": self.project_runaway_v2_last_state_fingerprint,
+            "project_runaway_v2_no_progress_turns": self.project_runaway_v2_no_progress_turns,
+            "project_runaway_v2_auto_turns": self.project_runaway_v2_auto_turns,
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
@@ -339,6 +353,32 @@ class SessionMeta:
         if not isinstance(runaway_paused_reason, str):
             runaway_paused_reason = ""
 
+        runaway_v2_phase = payload.get("project_runaway_v2_phase", "")
+        if not isinstance(runaway_v2_phase, str):
+            runaway_v2_phase = ""
+        runaway_v2_mode = payload.get("project_runaway_v2_mode", "")
+        if not isinstance(runaway_v2_mode, str):
+            runaway_v2_mode = ""
+        runaway_v2_user_line = payload.get("project_runaway_v2_user_line", "")
+        if not isinstance(runaway_v2_user_line, str):
+            runaway_v2_user_line = ""
+
+        runaway_v2_last_state_fingerprint = payload.get(
+            "project_runaway_v2_last_state_fingerprint", ""
+        )
+        if not isinstance(runaway_v2_last_state_fingerprint, str):
+            runaway_v2_last_state_fingerprint = ""
+        runaway_v2_no_progress_raw = payload.get("project_runaway_v2_no_progress_turns", 0)
+        runaway_v2_auto_turns_raw = payload.get("project_runaway_v2_auto_turns", 0)
+        try:
+            runaway_v2_no_progress_turns = max(0, int(runaway_v2_no_progress_raw or 0))
+        except (TypeError, ValueError):
+            runaway_v2_no_progress_turns = 0
+        try:
+            runaway_v2_auto_turns = max(0, int(runaway_v2_auto_turns_raw or 0))
+        except (TypeError, ValueError):
+            runaway_v2_auto_turns = 0
+
         phase_fp = payload.get("project_phase_fingerprint", "")
         if not isinstance(phase_fp, str):
             phase_fp = ""
@@ -413,6 +453,13 @@ class SessionMeta:
             project_runaway_last_verification=runaway_last_verification.strip(),
             project_runaway_review_blockers_count=runaway_review_blockers_count,
             project_runaway_paused_reason=runaway_paused_reason.strip(),
+            project_runaway_v2_phase=runaway_v2_phase.strip(),
+            project_runaway_v2_mode=runaway_v2_mode.strip(),
+            project_runaway_v2_user_line=runaway_v2_user_line.strip(),
+            project_runaway_v2_blocked=bool(payload.get("project_runaway_v2_blocked", False)),
+            project_runaway_v2_last_state_fingerprint=runaway_v2_last_state_fingerprint.strip(),
+            project_runaway_v2_no_progress_turns=runaway_v2_no_progress_turns,
+            project_runaway_v2_auto_turns=runaway_v2_auto_turns,
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,
@@ -1000,7 +1047,10 @@ def list_session_summaries(
             "project_id": project_id,
         })
 
-    # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at
+    # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at.
+    # Project-bound rows must survive the global limit: a burst of ordinary sessions
+    # (including empty sessions created during reconnects) must not make projects
+    # disappear from the desktop's project-session tab.
     by_project: dict[str, dict[str, Any]] = {}
     unbound: list[dict[str, Any]] = []
     for item in entries:
@@ -1023,9 +1073,19 @@ def list_session_summaries(
             if str(item.get("updated_at") or "") > str(existing.get("updated_at") or ""):
                 by_project[pid] = item
 
-    merged = unbound + list(by_project.values())
-    merged.sort(key=lambda e: e["updated_at"], reverse=True)
-    return merged[:limit]
+    if limit <= 0:
+        return []
+
+    project_bound = list(by_project.values())
+    project_bound.sort(key=lambda e: e["updated_at"], reverse=True)
+    unbound.sort(key=lambda e: e["updated_at"], reverse=True)
+
+    # Reserve the first slots for project rows, then fill the remaining capacity
+    # with the newest ordinary conversations. Keep the final result chronological.
+    selected = project_bound[:limit]
+    selected.extend(unbound[: max(0, limit - len(selected))])
+    selected.sort(key=lambda e: e["updated_at"], reverse=True)
+    return selected
 
 
 def _harness_for_session_dir(session_dir: Path) -> HarnessKind:

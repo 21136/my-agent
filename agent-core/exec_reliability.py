@@ -392,8 +392,11 @@ def runaway_plan_partner_blocked(
     runaway_enabled: bool,
     workflow_stage: str,
     checkpoint: str,
+    runaway_v2_forbid_plan_partner: bool = False,
 ) -> bool:
     """UI-5969: repairing + verification 出口禁止 plan_partner（Harness/bug-fix 为真源）。"""
+    if runaway_v2_forbid_plan_partner:
+        return True
     if not runaway_enabled or not runaway_bug_fix_enabled():
         return False
     from runaway_flow import normalize_checkpoint
@@ -461,6 +464,39 @@ _RUNAWAY_HARNESS_UTTERANCE_RE = re.compile(
 def is_runaway_harness_utterance(text: str) -> bool:
     """True for Harness-injected continuation lines (not end-user Q&A)."""
     return bool(_RUNAWAY_HARNESS_UTTERANCE_RE.search(text or ""))
+
+
+_RUNAWAY_CONTINUE_EXACT = frozenset(
+    {
+        "继续",
+        "继续狂奔",
+        "接着",
+        "接着做",
+        "下一项",
+        "下一回合",
+        "continue",
+        "resume",
+        "go on",
+        "go",
+    }
+)
+
+
+def is_runaway_continue_utterance(text: str) -> bool:
+    """Short user nudges that should keep runaway chaining (not qa-only turns)."""
+    if is_runaway_harness_utterance(text):
+        return True
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if stripped.casefold() in _RUNAWAY_CONTINUE_EXACT:
+        return True
+    lower = stripped.casefold()
+    if lower.startswith(("继续", "接着", "下一", "续接")):
+        return True
+    if lower in {"continue", "resume"}:
+        return True
+    return False
 
 
 # UI-6052: these tools are advisory / plan-domain — never checkpoint truth.

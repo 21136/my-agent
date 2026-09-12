@@ -276,6 +276,35 @@ type ActivityBlock = {
 
 **验收**：S-UX-028g
 
+### 7.5 M3 · 同回合多段过程 + 狂奔 idle 侧栏（2026-09-04）
+
+**背景（music 项目走查）**：狂奔 Harness 连发时 `beginServerProcessTurn()` 不递增 `turnCounter`，多段 `process` 块折叠在同一 Turn Card；助手正文可见，过程收成 `过程 · N步 ▸` pill。「查看过程」只跳当前 live 段。侧栏在 `runawayEnabled && !turnInProgress` 时显示「待命 + 继续狂奔」，与顶栏「狂奔：开」矛盾；重复点 resume 刷「狂奔已恢复」与「通道占用」。
+
+| 任务 | 说明 |
+|------|------|
+| T-6053-01 | `liveTurnCardProcessBlocks()`：枚举当前 Turn Card 内全部 process 段 |
+| T-6053-02 | `jumpToCurrentActivity()`：idle 时按 **新→旧** 轮询定位；进行中仍优先 live 段 |
+| T-6053-03 | 多段 pill 标注 `(i/n)`；状态栏提示「过程段 i/n」 |
+| T-6053-04 | 狂奔 v2 idle：侧栏 **续接中 + 查看过程**；禁默认「继续狂奔」（仅 blocked 时） |
+| T-6053-05 | `resumeRunawayFromUi`：已开且未 blocked → 不 POST resume，改跳过程 |
+| T-6053-06 | `project.runaway.set` 幂等 resume（已开且无 paused）→ **不**发 toggle notice |
+| T-6054-01 | 狂奔 `plan_partner` 提案：回合末 `_flush_runaway_plan_proposals` + 失败 notice |
+| T-6054-02 | 残留提案自动 chain 直写 VERIFY/MAP；v2 implement/prepare 禁 plan_partner |
+| T-6054-03 | 模型禁止对用户说「请审阅采纳」（locale append） |
+| T-6055-01 | 狂奔 idle：侧栏「手动续接」+ 5s 客户端 watchdog 自动 nudge |
+| T-6055-02 | 未 auto-chain 时 `turn.notice` 说明原因；prepare 段内不因 PREPARE 失败数停链 |
+| T-6056-01 | v2 非 human 计划 `chain_after_ok=True`；不受 qa/recall 意图掐断 |
+| T-6056-02 | 「继续」等短句 → execute；服务端 chain 重试 4 次 + 客户端 2.5s watchdog |
+| T-6107-01 | **续接收敛**：[RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `pending_runaway_work()` 单真源 |
+| T-6107-02 | controller + server + agent 同调 `should_continue_runaway`；删 `chain_after_ok` / `plan.should_chain` 兼容面待收口 |
+| T-6107-03 | IT-6107-a～g 已通过；进展指纹（借 v1 stuck）待收口 |
+
+**验收**：S-UX-028h～j · S-UX-028k（提案不卡死）· **S-UX-028l**（idle 5s 内自动续接或可见手动出口）· **S-UX-028m**（发「继续」后应连跑 ≥3 内链条，不单轮停；**T-6107 编码后正式验收**）
+
+**止血 vs 收敛**：T-6055～6056 为四层规则补丁；**T-6107 核心**已收敛为 `pending_work` 单真源，兼容面与进展指纹仍待完成（见续接专文 §10）。
+
+**非目标（M3）**：`session.history` 跨会话回放 process（仍仅 user/assistant）；Harness 每段新开 Turn Card（defer M4）。
+
 ---
 
 ## 8. 验收标准
@@ -289,6 +318,11 @@ type ActivityBlock = {
 | **S-UX-028e** | 流式思考中 | 底栏**不**显示独立 `思考中…（Ns）` 秒表（M1） |
 | **S-UX-028f** | 侧栏「查看过程」 | 滚到当前 live 活动轨并展开（M1） |
 | **S-UX-028g** | 切换会话后再回来 | 无僵尸 `思考中`；token/压缩状态不受影响（M2） |
+| **S-UX-028h** | 狂奔同回合 ≥2 段 process · idle | 连点侧栏「查看过程」依次展开 **最新→更早** 段；pill 显示 `(2/3)` 等 |
+| **S-UX-028i** | 狂奔已开 · 回合间隙 idle | 侧栏 **续接中** +「查看过程」；**无**默认「继续狂奔」 |
+| **S-UX-028j** | 已开狂奔 idle 时点原「继续狂奔」入口 | 不刷「狂奔已恢复」；不触发 duplicate lease notice |
+| **S-UX-028k** | plan_partner 后回合结束仍有残留提案 | 自动续链直写 VERIFY/MAP；**不**要求用户审阅采纳 |
+| **S-UX-028l** | 狂奔已开 · 回合结束 idle | 5s 内自动续接 **或** 侧栏「手动续接」；notice 说明未续接原因 |
 
 ---
 
@@ -321,6 +355,7 @@ type ActivityBlock = {
 |------|------|
 | 2026-09-03 | 用户截图：双「思考中」+ 过程在外；结论：先 P0 热修再 M0 活动轨；**本文档落盘后再编码 M0** |
 | 2026-09-03 | 与 UX-021 关系：收信息架构，不删 accordion 能力；D-T1～T7 仍有效 |
+| 2026-09-04 | music 走查：同回合多段折叠 + 查看过程不跳历史 + 狂奔 idle 侧栏矛盾；**M3 落盘** |
 
 ---
 
@@ -329,3 +364,4 @@ type ActivityBlock = {
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | 0.1.0 | 2026-09-03 | 初稿：问题、Turn Card、ActivityEntry、P0/M0/M1/M2、S-UX-028、DOC-04 |
+| 0.2.0 | 2026-09-04 | M3：同回合过程段轮询跳转 · 狂奔 idle 侧栏 · 幂等 resume 降噪 |

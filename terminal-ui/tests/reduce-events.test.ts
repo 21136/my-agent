@@ -149,6 +149,23 @@ test('IT-590b: malformed JSONL lines are skipped', () => {
   assert.equal(events[0]?.type, 'notice');
 });
 
+test('session.init stores model catalog for Ink picker', () => {
+  const ui = reduceEvents([
+    {
+      type: 'session.init',
+      model: 'deepseek-v4-flash',
+      models: [
+        {id: 'deepseek-v4-flash', name: 'Flash', tier: 'flash'},
+        {id: 'deepseek-v4-pro', name: 'Pro', tier: 'pro'},
+      ],
+    },
+  ]);
+  assert.deepEqual(ui.models, [
+    {id: 'deepseek-v4-flash', name: 'Flash', tier: 'flash'},
+    {id: 'deepseek-v4-pro', name: 'Pro', tier: 'pro'},
+  ]);
+});
+
 test('IT-592b: confirm state and clear preserve session data', () => {
   const ui = reduceEvents([
     {type: 'session.init', greet: '真实问候', model: 'pro', root: 'D:/workspace'},
@@ -324,6 +341,81 @@ test('IT-605: activity.update feeds status bar state only', () => {
   reducer.reduce({type: 'turn.start'});
   reducer.reduce({type: 'activity.update', text: 'run_command · 仍在执行… 5s'});
   assert.equal(reducer.getState().activityText, 'run_command · 仍在执行… 5s');
+});
+
+test('execution.state keeps queued and stopping work visible until final state', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-1',
+    state: 'queued',
+    sequence: 1,
+  });
+  assert.equal(reducer.getState().working, true);
+
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-1',
+    state: 'stopping',
+    sequence: 2,
+    cancel_requested: true,
+  });
+  assert.equal(reducer.getState().working, true);
+
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-1',
+    state: 'settled',
+    sequence: 3,
+    finish_reason: 'cancelled',
+  });
+  assert.equal(reducer.getState().working, false);
+});
+
+test('execution.state ignores stale sequence from an older run', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-new',
+    state: 'running',
+    sequence: 4,
+  });
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-old',
+    state: 'settled',
+    sequence: 3,
+  });
+  assert.equal(reducer.getState().working, true);
+});
+
+test('run-scoped turn.start ignores an older run id', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-new',
+    state: 'running',
+    sequence: 4,
+  });
+  reducer.reduce({type: 'turn.start', run_id: 'run-new'});
+  reducer.reduce({type: 'turn.start', run_id: 'run-old'});
+  assert.equal(reducer.getState().turnIndex, 1);
+});
+
+test('execution-owned status ignores a stale run id', () => {
+  const reducer = createEventReducer();
+  reducer.reduce({
+    type: 'execution.state',
+    run_id: 'run-new',
+    state: 'running',
+    sequence: 4,
+  });
+  reducer.reduce({
+    type: 'status.working',
+    run_id: 'run-old',
+    active: false,
+  });
+  assert.equal(reducer.getState().working, true);
 });
 
 test('IT-604: notice drops empty trailing thinking block', () => {

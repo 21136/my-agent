@@ -13,10 +13,13 @@ import {
   formatReasoningDisplay,
   humanizeToolAction,
   humanizeToolSubline,
+  resolveEffectiveToolName,
+  shouldNeutralizeReasoningSummary,
 } from "./unified/output-display";
 
 const PROCESS_TOOL_LINES_CAP = 6;
-const PINNED_THINK_FOLD_MIN = 3;
+/** Keep each think segment individually expandable; do not bundle into「思考 ×N」. */
+const PINNED_THINK_FOLD_MIN = 99;
 
 function truncateToolHint(text: string, max = 72): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
@@ -28,31 +31,47 @@ function displayReasoning(text: string): string {
   return formatReasoningDisplay(text);
 }
 
+function isCompactWait(
+  entry: ThinkEntry,
+  opts: { liveTurn: boolean; waiting: boolean },
+): boolean {
+  if (!opts.liveTurn || entry.phase !== "streaming") return false;
+  return opts.waiting || !entry.text.trim();
+}
+
+function renderThinkBody(
+  entry: ThinkEntry,
+  opts: { streaming: boolean; open: boolean; compactWait: boolean },
+): string {
+  if (opts.compactWait || !opts.open) return "";
+  const displayText = displayReasoning(entry.text);
+  if (opts.streaming && entry.text.trim()) {
+    return `<div class="unified-thinking-body"><div class="unified-thinking-stream-text">${escapeHtml(displayText)}</div></div>`;
+  }
+  if (!entry.text.trim()) return "";
+  return `<div class="unified-thinking-body">${escapeHtml(displayText)}</div>`;
+}
+
 function renderThinkEntry(
   entry: ThinkEntry,
   turnKey: string,
-  opts: { liveTurn: boolean; waiting: boolean },
+  opts: { liveTurn: boolean; waiting: boolean; waitStartedAt?: number },
 ): string {
   const streaming = opts.liveTurn && entry.phase === "streaming";
   const waiting = opts.waiting && !entry.text.trim();
-  const open = waiting || isThinkBodyOpen(entry, { waiting });
-  const title = thinkEntryTitle(entry, { waiting });
-  const phaseCls = streaming || waiting ? " is-streaming" : " is-pinned";
+  const compactWait = isCompactWait(entry, opts);
+  const open = !compactWait && isThinkBodyOpen(entry);
+  const title = thinkEntryTitle(entry, {
+    waiting: waiting || compactWait,
+    waitStartedAt: opts.waitStartedAt,
+  });
+  const phaseCls = streaming || waiting || compactWait ? " is-streaming" : " is-pinned";
   const openCls = open ? " is-open" : "";
-  const waitCls = waiting ? " is-waiting" : "";
-  const compactPinned = entry.phase === "pinned" && !open && !waiting;
+  const waitCls = compactWait ? " is-waiting is-compact-wait" : waiting ? " is-waiting" : "";
+  const compactPinned = entry.phase === "pinned" && !open && !waiting && !compactWait;
   const compactCls = compactPinned ? " is-compact" : "";
-  const displayText = displayReasoning(entry.text);
-  const peek =
-    !open && displayText && !compactPinned
-      ? `<div class="unified-thinking-peek">${escapeHtml(displayText.split(/\n/).slice(-2).join("\n"))}</div>`
-      : "";
-  const body = waiting
-    ? ""
-    : open
-      ? `<div class="unified-thinking-body">${escapeHtml(displayText)}</div>`
-      : peek;
-  const toggle = waiting
+  const body = renderThinkBody(entry, { streaming, open, compactWait });
+  const toggle = compactWait || waiting
     ? `<div class="unified-thinking-summary is-static" aria-live="polite">
         <span class="unified-thinking-pulse" aria-hidden="true"></span>
         <span class="unified-thinking-waiting-text">${escapeHtml(title)}</span>
@@ -99,10 +118,14 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
       : "";
   const label = humanizeToolAction(tool.tool, tool.summary, tool.endSummary);
   const sub = humanizeToolSubline(tool.status, tool.endSummary);
-  return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}">
+  const canonical = resolveEffectiveToolName(tool.tool, tool.summary);
+  return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}" title="${escapeHtml(canonical)}">
     <span class="unified-tool-mark">${mark}</span>
     <span class="unified-tool-step">
-      <span class="unified-tool-step-label">${escapeHtml(label)}</span>
+      <span class="unified-tool-step-head">
+        <span class="unified-tool-step-label">${escapeHtml(label)}</span>
+        <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(canonical)}」的显示名称">改名</button>
+      </span>
       ${sub ? `<span class="unified-tool-step-sub">${escapeHtml(sub)}</span>` : ""}
     </span>
     <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${logsBit}
@@ -152,14 +175,19 @@ export function renderActivityTimeline(
   };
 
   if (hasPendingOnly) {
+    const waitStartedAt = block.llmWaitStartedAt ?? now;
     const pendingThink: ThinkEntry = {
       kind: "think",
       id: "pending",
       text: "",
       phase: "streaming",
-      startedAt: block.reasoningStartedAt ?? now,
+      startedAt: waitStartedAt,
     };
-    parts.push(renderThinkEntry(pendingThink, block.turnKey, { liveTurn: true, waiting: true }));
+    parts.push(renderThinkEntry(pendingThink, block.turnKey, {
+      liveTurn: true,
+      waiting: true,
+      waitStartedAt,
+    }));
   }
 
   for (let i = 0; i < entries.length; i++) {
@@ -205,12 +233,47 @@ export function timelineHasThinking(block: ProcessActivityBlock, liveTurn: boole
 export function syncThinkDom(
   el: HTMLElement,
   entry: ThinkEntry,
-  opts: { waiting?: boolean },
+  opts: { waiting?: boolean; liveTurn?: boolean; waitStartedAt?: number },
 ): void {
-  const title = thinkEntryTitle(entry, opts);
+  const compactWait =
+    Boolean(opts.liveTurn) &&
+    entry.phase === "streaming" &&
+    (!entry.text.trim() || Boolean(opts.waiting));
+  const title = thinkEntryTitle(entry, {
+    waiting: compactWait || Boolean(opts.waiting),
+    waitStartedAt: opts.waitStartedAt,
+  });
   const summary = el.querySelector<HTMLElement>(".unified-thinking-summary, .unified-thinking-waiting-text");
   if (summary) summary.textContent = title;
-  const body = el.querySelector<HTMLElement>(".unified-thinking-body");
+  if (compactWait) {
+    el.querySelector<HTMLElement>(".unified-thinking-body")?.remove();
+    el.classList.add("is-compact-wait", "is-waiting");
+    return;
+  }
+  const liveStreaming = Boolean(opts.liveTurn) && entry.phase === "streaming" && Boolean(entry.text.trim());
+  let body = el.querySelector<HTMLElement>(".unified-thinking-body");
+  if (liveStreaming) {
+    if (!body) {
+      body = document.createElement("div");
+      body.className = "unified-thinking-body";
+      el.appendChild(body);
+    }
+    let streamText = body.querySelector<HTMLElement>(".unified-thinking-stream-text");
+    if (entry.text.trim()) {
+      const displayText = formatReasoningDisplay(entry.text);
+      if (!streamText) {
+        streamText = document.createElement("div");
+        streamText.className = "unified-thinking-stream-text";
+        body.appendChild(streamText);
+      }
+      if (streamText.textContent !== displayText) {
+        streamText.textContent = displayText;
+      }
+      streamText.scrollTop = streamText.scrollHeight;
+    }
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
   if (body && entry.phase === "streaming" && entry.text) {
     const displayText = formatReasoningDisplay(entry.text);
     if (body.textContent !== displayText) {

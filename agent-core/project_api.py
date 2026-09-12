@@ -37,8 +37,10 @@ from project_mode import (
 from project_release import load_release_acceptance, save_release_acceptance
 from plan_agent import PlanAgent, get_plan_agent
 from runaway_flow import normalize_checkpoint
+from runaway_v2.continuation import repair_stale_v2_plan_status
 from runaway_verification import evidence_passed, load_verification_evidence, verification_evidence_path
 from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
+from user_copy import runaway_mode_toggle_notice
 
 EmitFn = Callable[[dict[str, Any]], None]
 
@@ -88,6 +90,12 @@ def _project_summary(project_md: str) -> str:
 
 def _runaway_user_status(session: Session) -> str:
     """Map internal runaway checkpoint data to stable user-facing copy."""
+    from runaway_v2 import runaway_v2_enabled
+
+    if runaway_v2_enabled(session):
+        line = str(getattr(session.meta, "project_runaway_v2_user_line", "") or "").strip()
+        if line:
+            return line
     from runaway_flow import checkpoint_label, normalize_checkpoint
 
     if not bool(getattr(session.meta, "project_runaway_enabled", False)):
@@ -106,9 +114,29 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
 
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
+    repair_stale_v2_plan_status(paths, session)
     plan_status = session.meta.project_plan_status or "draft"
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
     artifacts = read_project_artifacts(paths, pid) if pid else {}
+    v2_fields: dict[str, Any] | None = None
+    from runaway_v2 import runaway_v2_enabled
+
+    if pid and runaway_v2_enabled(session):
+        from runaway_v2.state import build_v2_state_fields
+
+        v2_fields = build_v2_state_fields(
+            paths,
+            project_id=pid,
+            plan_status=plan_status,
+            paused_reason=str(
+                getattr(session.meta, "project_runaway_paused_reason", "") or ""
+            ),
+        )
+    acceptance_passed = (
+        bool(v2_fields.get("runaway_acceptance_passed"))
+        if v2_fields is not None
+        else bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
+    )
     manifest = None
     manifest_error = None
     if pid:
@@ -137,7 +165,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             review_verdict
             if not (
                 bool(getattr(session.meta, "project_runaway_enabled", False))
-                and not bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
+                and not acceptance_passed
             )
             else None
         ),
@@ -157,7 +185,11 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
     release_acceptance = load_release_acceptance(
         project_dir(paths, pid),
         pid,
-        release_revision=str(release_artifact.get("revision")) if release_artifact else None,
+        release_revision=(
+            str(release_artifact.get("revision"))
+            if release_artifact and release_artifact.get("status") == "current"
+            else None
+        ),
     ) if pid else {"accepted": False, "accepted_at": None, "release_revision": None, "checklist": {}}
     acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", "")) if pid else None
     runaway_evidence = load_verification_evidence(paths, pid) if pid else None
@@ -167,7 +199,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         and acceptance is not None
         and acceptance_script_exists(paths, pid, acceptance)
     )
-    return {
+    payload = {
         "type": "project.state",
         "project_id": pid or None,
         "project_root": root or None,
@@ -228,9 +260,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "runaway_repair_count": int(getattr(session.meta, "project_runaway_repair_count", 0) or 0),
         "runaway_last_verification": getattr(session.meta, "project_runaway_last_verification", "") or None,
         "runaway_paused_reason": getattr(session.meta, "project_runaway_paused_reason", "") or None,
-        "runaway_acceptance_passed": bool(
-            getattr(session.meta, "project_runaway_acceptance_passed", False)
-        ),
+        "runaway_acceptance_passed": acceptance_passed,
         "runaway_verification_evidence": runaway_evidence,
         "runaway_verification_evidence_path": (
             str(verification_evidence_path(paths, pid).relative_to(paths.workspace)).replace("\\", "/")
@@ -249,6 +279,32 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             if isinstance(item, dict)
         ],
     }
+    if v2_fields is not None:
+        payload.update(v2_fields)
+        session.meta.project_runaway_acceptance_passed = acceptance_passed
+        user_line = str(v2_fields.get("runaway_user_line") or "").strip()
+        if user_line:
+            payload["runaway_status"] = user_line
+        if v2_fields.get("runaway_blocked"):
+            block = v2_fields.get("runaway_block") if isinstance(v2_fields.get("runaway_block"), dict) else {}
+            reason = str(block.get("reason") or user_line or "需要人工处理").strip()
+            payload["runaway_paused_reason"] = reason
+            payload["runaway_checkpoint"] = "paused"
+        else:
+            if not str(getattr(session.meta, "project_runaway_paused_reason", "") or "").strip():
+                payload["runaway_paused_reason"] = None
+                session.meta.project_runaway_paused_reason = ""
+            phase = str(v2_fields.get("runaway_phase") or "").strip()
+            checkpoint_map = {
+                "prepare": "preparing",
+                "implement": "implementing",
+                "verify": "verifying",
+                "release_wait": "release_wait",
+            }
+            if phase in checkpoint_map:
+                session.meta.project_runaway_checkpoint = checkpoint_map[phase]
+                payload["runaway_checkpoint"] = checkpoint_map[phase]
+    return payload
 
 
 def project_list_payload(paths: AgentPaths, session: Session | None = None) -> dict[str, Any]:
@@ -334,15 +390,20 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
         # Not in project mode: detect potential workspace projects
         maybe_emit_project_detect(session, paths, emit)
         return
-    if sync_plan_dirty_if_structure_changed(session, paths):
+    from runaway_v2 import runaway_v2_enabled
+
+    # v2 derives its phase from the external checklist and owns the project
+    # transition. The legacy fingerprint watcher must not reopen prepare after
+    # v2 has already reached release_wait.
+    if not runaway_v2_enabled(session) and sync_plan_dirty_if_structure_changed(session, paths):
         session.save()
     emit(project_state_payload(session, paths))
     emit(session_banner_event(session))
 
-    # Plan Agent: emit plan state (build_state runs auto_fix + quality_check internally)
-    agent = _plan_agent(session, paths)
-    if agent is not None:
-        plan_state = agent.build_state(session)
+    # Keep the compatibility plan event read-only for v2. The v2 overlay is
+    # authoritative and avoids legacy auto-fixes reopening a passed checklist.
+    plan_state = project_plan_state_payload(session, paths)
+    if plan_state is not None:
         for action in plan_state.get("auto_fix_actions", []):
             emit({"type": "notice", "text": action})
         emit(plan_state)
@@ -391,21 +452,84 @@ def dispatch_project_message(
             raise ProjectApiError("project.runaway.set requires boolean enabled")
         was_enabled = bool(session.meta.project_runaway_enabled)
         resume_requested = message.get("resume") is True
+        directed_retry = message.get("directed") is True
+        from runaway_flow import normalize_checkpoint
+
+        idempotent_resume = bool(
+            enabled
+            and resume_requested
+            and was_enabled
+            and not directed_retry
+            and not str(session.meta.project_runaway_paused_reason or "").strip()
+            and normalize_checkpoint(session.meta.project_runaway_checkpoint) != "paused"
+        )
         session.meta.project_runaway_enabled = enabled
-        if enabled and (not was_enabled or resume_requested):
-            from runaway_flow import checkpoint_for_stage, normalize_checkpoint, transition_checkpoint
+        if enabled and (not was_enabled or resume_requested or directed_retry):
+            from runaway_v2 import runaway_v2_enabled
 
-            current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
-            if current == "paused":
-                target = checkpoint_for_stage(session.meta.project_workflow_stage)
-                transition_checkpoint(session.meta, target if target != "idle" else "preparing")
-            elif current == "completed":
-                transition_checkpoint(session.meta, "idle")
+            if runaway_v2_enabled(session):
+                from runaway_v2.continuation import reset_continuation_guard
+
+                if not was_enabled:
+                    session.meta.project_runaway_paused_reason = ""
+                    session.meta.project_runaway_last_error = ""
+                    session.meta.project_runaway_repair_count = 0
+                    reset_continuation_guard(session)
+                if resume_requested or directed_retry:
+                    from runaway_v2.checklist import (
+                        load_or_build_checklist,
+                        reset_failed_item_attempts,
+                        reset_failed_item_directed_retry,
+                        save_checklist,
+                    )
+
+                    checklist = load_or_build_checklist(paths, pid)
+                    changed = (
+                        reset_failed_item_directed_retry(checklist)
+                        if directed_retry
+                        else reset_failed_item_attempts(checklist)
+                    )
+                    if changed:
+                        save_checklist(paths, checklist)
+                    reset_continuation_guard(session)
+                    session.meta.project_runaway_paused_reason = ""
+                    session.meta.project_runaway_last_error = ""
+                    session.meta.project_runaway_v2_phase = ""
+                    session.meta.project_runaway_v2_mode = ""
+                    session.meta.project_runaway_v2_user_line = ""
+                    session.meta.project_runaway_v2_blocked = False
+                from agent import run_runaway_startup_prep_if_needed
+
+                run_runaway_startup_prep_if_needed(session)
             else:
-                transition_checkpoint(session.meta, current)
-            from agent import run_runaway_startup_prep_if_needed
+                from runaway_flow import (
+                    checkpoint_for_stage,
+                    normalize_checkpoint,
+                    sync_checkpoint_to_stage,
+                    sync_checkpoint_to_target,
+                    transition_checkpoint,
+                )
 
-            run_runaway_startup_prep_if_needed(session)
+                current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
+                if current == "paused":
+                    target = checkpoint_for_stage(session.meta.project_workflow_stage)
+                    sync_checkpoint_to_target(
+                        session.meta,
+                        target if target != "idle" else "preparing",
+                    )
+                    if resume_requested:
+                        session.meta.project_runaway_repair_count = 0
+                        session.meta.project_runaway_paused_reason = ""
+                        session.meta.project_runaway_last_error = ""
+                elif current == "completed":
+                    transition_checkpoint(session.meta, "idle")
+                elif current == "idle":
+                    sync_checkpoint_to_stage(session.meta, session.meta.project_workflow_stage)
+                else:
+                    transition_checkpoint(session.meta, current)
+                from agent import run_runaway_startup_prep_if_needed
+
+                run_runaway_startup_prep_if_needed(session)
         if not enabled:
             from runaway_flow import normalize_checkpoint, pause_runaway, transition_checkpoint
 
@@ -416,13 +540,19 @@ def dispatch_project_message(
                 pause_runaway(session.meta, "用户关闭了狂奔模式")
         session.meta.updated_at = utc_now_iso()
         session.save()
-        label = "已恢复" if enabled and resume_requested else "已开启" if enabled else "已暂停"
-        return {
-            "_events": [
-                {"type": "notice", "text": f"狂奔模式{label}：仅在当前项目范围内连续运行。"},
-                project_state_payload(session, paths),
-            ]
-        }
+        events: list[dict[str, Any]] = [project_state_payload(session, paths)]
+        if not idempotent_resume:
+            events.insert(
+                0,
+                {
+                    "type": "notice",
+                    "text": runaway_mode_toggle_notice(
+                        enabled=enabled,
+                        resumed=bool(enabled and resume_requested),
+                    ),
+                },
+            )
+        return {"_events": events}
 
     if msg_type == "project.release.accept":
         pid = _project_pid(session)
@@ -655,7 +785,60 @@ def project_plan_state_payload(session: Session, paths: AgentPaths) -> dict[str,
     agent = _plan_agent(session, paths)
     if agent is None:
         return None
-    return agent.build_state(session)
+    pid = (session.meta.project_id or "").strip()
+    from runaway_v2 import runaway_v2_enabled
+
+    repair_stale_v2_plan_status(paths, session)
+
+    # v2 owns checklist/document progression. The legacy PlanAgent state
+    # builder performs auto-fixes as a side effect; running those fixes while
+    # merely emitting a compatibility event can invalidate a passed checklist
+    # and reopen verification. Keep this event read-only for v2.
+    payload = agent.build_state(
+        session,
+        light=bool(pid and runaway_v2_enabled(session)),
+    )
+
+    if pid and runaway_v2_enabled(session):
+        # PlanAgent is a legacy-compatible producer. Overlay the same disk-
+        # authoritative v2 state used by project.state so a later plan event
+        # cannot roll the sidebar back from release_wait to an old checkpoint.
+        from runaway_v2.state import build_v2_state_fields
+
+        v2_fields = build_v2_state_fields(
+            paths,
+            project_id=pid,
+            plan_status=str(session.meta.project_plan_status or "draft"),
+            paused_reason=str(
+                getattr(session.meta, "project_runaway_paused_reason", "") or ""
+            ),
+        )
+        payload.update(v2_fields)
+        phase = str(v2_fields.get("runaway_phase") or "").strip()
+        workflow_by_phase = {
+            "prepare": "documentation",
+            "implement": "implementation",
+            "verify": "verification",
+            "release_wait": "release",
+            "human": "verification",
+        }
+        if phase in workflow_by_phase:
+            payload["workflow_stage"] = workflow_by_phase[phase]
+        if phase == "human":
+            payload["runaway_checkpoint"] = "paused"
+        else:
+            checkpoint_by_phase = {
+                "prepare": "preparing",
+                "implement": "implementing",
+                "verify": "verifying",
+                "release_wait": "release_wait",
+            }
+            if phase in checkpoint_by_phase:
+                payload["runaway_checkpoint"] = checkpoint_by_phase[phase]
+        payload["runaway_status"] = str(
+            v2_fields.get("runaway_user_line") or payload.get("runaway_status") or ""
+        )
+    return payload
 
 
 def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,

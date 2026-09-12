@@ -285,6 +285,12 @@ def _inherit_project_meta(fresh: Session, previous: Session, project_id: str) ->
     fresh.meta.project_runaway_enabled = bool(
         getattr(previous.meta, "project_runaway_enabled", False)
     )
+    previous_stage = str(getattr(previous.meta, "project_workflow_stage", "") or "").strip()
+    if previous_stage:
+        fresh.meta.project_workflow_stage = previous_stage
+    previous_task = str(getattr(previous.meta, "project_active_task_id", "") or "").strip()
+    if previous_task:
+        fresh.meta.project_active_task_id = previous_task
 
 
 def start_new_project_thread(
