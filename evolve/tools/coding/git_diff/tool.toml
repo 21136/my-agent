@@ -1,0 +1,61 @@
+[tool]
+name = "git_diff"
+description = """只读 Git diff：默认返回补丁正文（可截断）。
+
+支持 worktree / staged、可选 base_ref、路径过滤、name-status。不写入、不 confirm。
+概览统计仍可用 git_snapshot；需要看具体改动时优先本工具。"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+[schema.input.properties.paths]
+type = "array"
+items = { type = "string" }
+description = "可选；限制 diff 范围（相对 agent 根或仓库相对路径）"
+[schema.input.properties.staged]
+type = "boolean"
+default = false
+description = "true 时看暂存区（git diff --cached）"
+[schema.input.properties.base_ref]
+type = "string"
+description = "可选；与该 ref 比较（如 HEAD~1、origin/main）；空=工作区对 index"
+[schema.input.properties.name_status]
+type = "boolean"
+default = false
+description = "true 时只返回 --name-status，不返回补丁正文"
+[schema.input.properties.stat_only]
+type = "boolean"
+default = false
+description = "true 时只返回 --stat"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root 的仓库子目录；空=agent root"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 别名"
+[schema.input.properties.max_chars]
+type = "integer"
+default = 120000
+description = "补丁最大字符数，超出截断并标 truncated"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "只预览将执行的 git 参数，不跑 git"
+
+[schema.output]
+type = "object"
+
+[policy]
+# read-only diff: no confirm
+confirm = false
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 60

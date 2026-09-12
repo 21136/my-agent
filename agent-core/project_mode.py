@@ -1775,6 +1775,70 @@ def plan_allows_code_writes(plan_status: str) -> bool:
     return plan_status == "confirmed"
 
 
+_DIRECT_IMPLEMENT_EXTRA_MARKERS = (
+    "直接实现",
+    "直接写代码",
+    "直接推进",
+    "不要只出计划",
+    "不要只给计划",
+    "不要再问我是否开始",
+    "不要问我是否开始",
+    "现在就实际",
+    "实际改文件",
+    "写出可运行代码",
+    "just implement",
+    "implement now",
+)
+
+
+def is_direct_implement_request(user_text: str) -> bool:
+    """True when the user explicitly wants code now, not another plan round."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    try:
+        from terminal_plan import is_skip_plan_turn
+
+        if is_skip_plan_turn(text):
+            return True
+    except Exception:
+        pass
+    lower = text.casefold()
+    return any(marker.casefold() in lower for marker in _DIRECT_IMPLEMENT_EXTRA_MARKERS)
+
+
+def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
+    """Ordinary mode: open the plan gate when the user asked to implement directly.
+
+    Returns a short notice when confirmation was applied; None when unchanged.
+    """
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return None
+    if bool(getattr(meta, "project_runaway_enabled", False)):
+        return None
+    if (getattr(meta, "active_shell", "") or "") != "project":
+        return None
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    if status not in {"draft", "plan_dirty"}:
+        return None
+    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
+    # confirm_project_plan only accepts requirements-like stages (not documentation/design).
+    if stage in {"documentation", "design"}:
+        return None
+    from project_cli import ProjectModeError, confirm_project_plan
+
+    try:
+        message = confirm_project_plan(session)  # type: ignore[arg-type]
+    except ProjectModeError as exc:
+        return f"直接实现请求未能自动确认计划：{exc}"
+    save = getattr(session, "save", None)
+    if callable(save):
+        save()
+    return f"[项目] 检测到直接实现意图，已自动确认计划。{message}"
+
+
+
 def is_under_project_root(path: str, project_root: str) -> bool:
     return project_path_rel(path, project_root) is not None
 

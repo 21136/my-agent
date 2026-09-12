@@ -39,7 +39,8 @@ diff = { type = "string" }
 staged_diff = { type = "string" }
 
 [policy]
-confirm = true
+# read-only snapshot: no confirm
+confirm = false
 dry_run_supported = true
 allow_approve_all = false
 timeout_sec = 30

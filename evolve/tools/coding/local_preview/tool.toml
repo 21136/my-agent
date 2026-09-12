@@ -1,0 +1,55 @@
+[tool]
+name = "local_preview"
+description = """本地预览：可选启动命令 → 等待端口就绪 → 可选 HTTP 探测 → 用系统浏览器打开。
+
+启动进程或打开非 loopback 地址须确认；dry_run 只打印计划。
+"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["url"]
+[schema.input.properties.url]
+type = "string"
+description = "要打开的 URL，如 http://127.0.0.1:5173/"
+[schema.input.properties.start_command]
+type = "string"
+default = ""
+description = "可选：后台启动的 shell 命令（在 working_dir 下）"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 agent root；空=agent root"
+[schema.input.properties.port]
+type = "integer"
+description = "可选：等待该端口可连接后再打开"
+[schema.input.properties.wait_sec]
+type = "integer"
+default = 30
+description = "等端口最长秒数"
+[schema.input.properties.probe]
+type = "boolean"
+default = true
+description = "打开前对 url 做一次 HEAD/GET 探测"
+[schema.input.properties.open_browser]
+type = "boolean"
+default = true
+description = "是否调用系统浏览器打开"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 180

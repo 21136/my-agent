@@ -17,10 +17,14 @@
 | `run_tests` | 批量跑约定 demo / 测试套件 |
 | `structured_test` | **active**：统一项目测试 status/exit/duration/failed/rerun；底层复用 `run_project_tests` |
 | `git_snapshot` | **只读**：status + diff stat；可选返回有上限的工作树/staged 完整 diff、基线 ref 和未跟踪路径 |
+| `git_diff` | **只读免确认**：默认返回 diff 补丁（可截断）；支持 staged / base_ref / paths / name-status |
 | `git_restore` | **active**：按文件安全回退 worktree/staged；dry-run 可预览，真实回退要求 expected hash，拒绝未知归属 |
 | `git_commit` | 受控提交：`add` + `commit`（禁 push/force/amend）；`dry_run` 可预览 |
 | `git_branch` | 受控分支：`list` / `create` / `switch`（禁 force checkout） |
 | `git_push` | 受控推送：仅当前分支 → remote（禁 force；永远确认） |
+| `gh_pr` | **受控 PR 最小集**（需 `gh`）：create / view / checks / list；禁 merge/force/delete |
+| `search_replace` | **多文件字面量替换**：默认 dry_run 预览；写入须确认；限 agent root |
+| `local_preview` | **本地预览**：可选启动 → 等端口 → HTTP 探测 → 浏览器打开 |
 | `csv_head` | 预览 CSV 前 N 行（表头、列类型、总行数） |
 | `doc_parser` | 解析 `.doc` / `.docx` / `.xlsx` 为可读文本（支持 `host:`） |
 

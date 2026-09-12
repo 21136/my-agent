@@ -3054,6 +3054,9 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
                 return False
+        # git_snapshot / git_diff are read-only — never confirm.
+        if evolved is not None and evolved.name in {"git_snapshot", "git_diff"}:
+            return False
         # git_branch: list + dry_run skip confirm; create/switch confirm.
         if evolved is not None and evolved.name == "git_branch":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -3062,6 +3065,34 @@ class ToolExecutor:
             action = str(inner.get("action") or "").strip().lower()
             if action == "list" or bool(inner.get("dry_run")):
                 return False
+        # gh_pr: view/checks/list + dry_run skip; create confirms.
+        if evolved is not None and evolved.name == "gh_pr":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            action = str(inner.get("action") or "").strip().lower()
+            if action in {"view", "checks", "list"} or bool(inner.get("dry_run")):
+                return False
+        # search_replace: default dry_run preview skips confirm; write confirms.
+        if evolved is not None and evolved.name == "search_replace":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            raw_dry = inner.get("dry_run", arguments.get("dry_run"))
+            if raw_dry is None or raw_dry is True:
+                return False
+        # local_preview: dry_run skip; loopback open without start_command like browser_open.
+        if evolved is not None and evolved.name == "local_preview":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
+            start_cmd = inner.get("start_command")
+            has_start = isinstance(start_cmd, str) and start_cmd.strip()
+            if not has_start and not _browser_open_needs_confirm({"url": inner.get("url")}):
+                return False
+
         # git_restore defaults to a preview; only an explicit dry_run=false may discard.
         if evolved is not None and evolved.name == "git_restore":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -3165,19 +3196,35 @@ class ToolExecutor:
             return False
 
         name = evolved.name
-        if name in {"git_restore", "git_push", "git_clone", "http_request", "browser_open"}:
+        if name in {"git_restore", "git_push", "git_clone", "http_request", "browser_open", "gh_pr", "local_preview"}:
             return False
 
         from tools.builtin import run_evolved as _run_evolved_mod
 
         inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
-        if name in {"write_text", "patch_file"}:
+        if name in {"write_text", "patch_file", "search_replace"}:
             from write_policy import is_sensitive_write_path, path_under_project
             from project_mode import (
                 BUG_FIX_PLAN_WRITE_ALLOWLIST,
                 _path_matches_write_scope,
                 project_path_rel,
             )
+
+            if name == "search_replace":
+                raw_paths = inner.get("paths")
+                if not isinstance(raw_paths, list) or not raw_paths:
+                    return False  # default broad scan not covered by runaway grant
+                for item in raw_paths:
+                    path = str(item or "").strip()
+                    if not path or not path_under_project(path, self.session.project_root):
+                        return False
+                    if is_sensitive_write_path(path):
+                        return False
+                    rel = project_path_rel(path, self.session.project_root)
+                    runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
+                    if runaway_scope and rel and not _path_matches_write_scope(rel, runaway_scope):
+                        return False
+                return True
 
             path = str(inner.get("path") or "").strip()
             if not path or not path_under_project(path, self.session.project_root):
@@ -3718,6 +3765,32 @@ def _summarize_confirm_inner(evolved_name: str, inner: dict[str, Any]) -> list[s
         replace = inner.get("replace")
         if isinstance(replace, str) and replace:
             lines.append(_preview_text_field(replace, label="替换为", head=72))
+        return lines
+    if name == "search_replace" and isinstance(inner, dict):
+        lines = [f"{display_tool_name('search_replace')}：多文件字面量替换"]
+        find = inner.get("find")
+        if isinstance(find, str) and find:
+            lines.append(_preview_text_field(find, label="查找", head=72))
+        replace = inner.get("replace")
+        if isinstance(replace, str) and replace:
+            lines.append(_preview_text_field(replace, label="替换为", head=72))
+        paths = inner.get("paths")
+        if isinstance(paths, list) and paths:
+            lines.append(f"路径数：{len(paths)}")
+        return lines
+    if name == "gh_pr" and isinstance(inner, dict):
+        action = str(inner.get("action") or "?").strip()
+        lines = [f"{display_tool_name('gh_pr')}：{action}"]
+        title = inner.get("title")
+        if isinstance(title, str) and title.strip():
+            lines.append(_preview_text_field(title, label="标题", head=96))
+        return lines
+    if name == "local_preview" and isinstance(inner, dict):
+        url = inner.get("url") or "?"
+        lines = [f"{display_tool_name('local_preview')}：{url}"]
+        start = inner.get("start_command")
+        if isinstance(start, str) and start.strip():
+            lines.append(_preview_text_field(start, label="启动命令", head=96))
         return lines
     if name == "run_command" and isinstance(inner, dict):
         cmd = inner.get("command")

@@ -9,7 +9,7 @@
 
 ## 硬规则
 
-- `path` 均相对 **workspace**；`workspace_only` 工具不得越界
+- `path` 均相对 **workspace**；路径须落在 workspace；`allow_approve_all=false` 时不得借会话批准越界到宿主目录
 - 大文件优先用 `csv_head` 预览，不要一次性 `read_file` 整表
 - 新增 data 工具放 `evolve/tools/data/<name>/`，`topics = ["data"]`
 

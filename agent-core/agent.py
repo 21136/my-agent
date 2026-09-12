@@ -708,6 +708,10 @@ def build_llm_tools(
     if not pid:
         blocked_project = {"plan_partner", "deliverable_review"}
         tools = [item for item in tools if item["function"]["name"] not in blocked_project]
+    elif bool(getattr(session, "direct_implement_turn", False)):
+        # Ordinary direct-implement: plan already auto-confirmed; don't re-enter plan_partner.
+        blocked_direct = {"plan_partner", "deliverable_review"}
+        tools = [item for item in tools if item["function"]["name"] not in blocked_direct]
     elif getattr(session.meta, "project_runaway_enabled", False):
         from exec_reliability import runaway_verification_tool_suppressed
         from runaway_v2 import runaway_v2_enabled
@@ -4225,6 +4229,7 @@ class Agent:
         self.session.subagent_overlay = None
         self.session.turn_intent = None
         self.session.scaffold_tool_turn = False
+        self.session.direct_implement_turn = False
         self.session.scaffold_check_status = None
         self.session.scaffold_check_tool = None
 
@@ -4248,6 +4253,16 @@ class Agent:
             intent == "requirements"
             and bool(getattr(self.session.meta, "project_runaway_enabled", False))
         )
+        from project_mode import is_direct_implement_request
+
+        if (
+            intent == "requirements"
+            and not runaway_requirements_turn
+            and is_direct_implement_request(user_text)
+        ):
+            # Ordinary mode: user asked to implement now — treat as execute.
+            intent = "execute"
+            self.session.turn_intent = intent
         if intent == "requirements" and not runaway_requirements_turn:
             from llm_routing import resolve_model_id_for_role
 
@@ -4298,6 +4313,34 @@ class Agent:
         self._sync_turn_mode()
         self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()
+
+        direct_implement = False
+        from project_mode import is_direct_implement_request, maybe_auto_confirm_plan_for_direct_implement
+
+        if (
+            not terminal
+            and not bool(getattr(self.session.meta, "project_runaway_enabled", False))
+            and is_direct_implement_request(user_text)
+        ):
+            direct_implement = True
+            self.session.direct_implement_turn = True
+            notice = maybe_auto_confirm_plan_for_direct_implement(self.session)
+            # Keep executor session mirrors in sync with auto-confirm.
+            self._sync_turn_mode()
+            self.executor.session.project_plan_status = self.session.meta.project_plan_status
+            if notice:
+                self._emit_turn_event(
+                    {
+                        "type": "turn.notice",
+                        "level": "info",
+                        "text": notice,
+                    }
+                )
+            if intent == "requirements":
+                intent = "execute"
+                self.session.turn_intent = intent
+            force_skip_plan_spawn = True
+
         if getattr(self.session.meta, "project_runaway_enabled", False):
             workflow_stage = getattr(self.session.meta, "project_workflow_stage", "")
             if workflow_stage in {"implementation", "verification"}:
@@ -4448,6 +4491,12 @@ class Agent:
                 overlay_parts.append(format_subagent_overlay(explore_result))
                 subagent_tool_rounds += explore_result.tool_rounds
 
+        if direct_implement and not bool(getattr(self.session.meta, "project_runaway_enabled", False)):
+            overlay_parts.append(
+                "[直接实现] 计划门已按用户明确要求自动确认（project_plan_status=confirmed，"
+                "workflow_stage=implementation）。禁止再调用 plan_partner / 要求「确认开工」。"
+                "立即用 write_text/patch_file 与 run_command 完成代码、测试与 verify.py。"
+            )
         self.session.subagent_overlay = "\n\n".join(overlay_parts) if overlay_parts else None
         subagent_used = bool(overlay_parts)
 
@@ -4780,7 +4829,9 @@ class _MockLLM:
         temperature: float = 0.0,
         reasoning_effort: str | None = None,
         stream: StreamHandlers | None = None,
+        timeout_sec: float | None = None,
     ) -> LLMResponse:
+        _ = timeout_sec
         if not self.responses:
             raise RuntimeError("mock LLM has no scripted responses left")
         response = self.responses.pop(0)

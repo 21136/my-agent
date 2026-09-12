@@ -486,6 +486,7 @@ class Session:
     last_review_blockers_count: int = field(default=0, compare=False, repr=False)
     turn_intent: str | None = field(default=None, compare=False, repr=False)
     scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
+    direct_implement_turn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1

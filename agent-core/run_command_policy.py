@@ -47,6 +47,9 @@ _BUILD_TEST_RE = re.compile(
     r"|\byarn\s+(?:run\s+)?(?:build|test|lint)\b"
     r"|\bpytest\b"
     r"|\bpython(?:3)?\s+-m\s+pytest\b"
+    r"|\bpy\s+-m\s+pytest\b"
+    r"|\bpython(?:3)?\s+(?:[\w./\\-]+/)?verify\.py\b"
+    r"|\bpy\s+(?:[\w./\\-]+/)?verify\.py\b"
     r"|\bgo\s+test\b"
     r"|\bcargo\s+(?:build|test)\b"
 )
