@@ -35,12 +35,13 @@ class DirectImplementMarkersTests(unittest.TestCase):
         self.assertTrue(is_direct_implement_request("项目 直接实现"))
         self.assertFalse(is_direct_implement_request("先规划一下整体架构"))
 
-    def test_desktop_direct_implement_command_falls_through_until_m1(self) -> None:
+    def test_desktop_direct_implement_command_is_cli_verb(self) -> None:
         from project_cli import parse_project_command
 
-        # M3 Desktop CTA sends this command. M1 (PR #2) will register the verb;
-        # until then it must reach chat phrase detection, not error as unknown CLI.
-        self.assertIsNone(parse_project_command("项目 直接实现"))
+        # M3 Desktop CTA sends this command; after M1 it is a first-class CLI verb.
+        parsed = parse_project_command("项目 直接实现")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.kind, "direct_implement")
 
 
 class VerifyCommandPolicyTests(unittest.TestCase):
