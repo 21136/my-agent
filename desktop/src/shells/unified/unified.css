@@ -2368,6 +2368,26 @@
   padding: 0.2rem 0.55rem;
   font-size: 0.74rem;
 }
+.unified-header-ctas {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.unified-header-cta {
+  padding: 0.22rem 0.65rem;
+  font-size: 0.76rem;
+}
+.unified-topbar-context.has-next-step {
+  justify-content: flex-start;
+}
+.unified-topbar-context .unified-header-ctas {
+  margin-left: 0.35rem;
+}
+.unified-decision-actions .unified-header-ctas {
+  margin-left: 0;
+}
 @media (max-width: 720px) {
   .unified-context-bar { padding-inline: 0.75rem; }
   .unified-context-main { gap: 0.25rem 0.45rem; }

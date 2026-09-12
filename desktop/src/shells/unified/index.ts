@@ -15,6 +15,7 @@ import {
   renderProjectSidebar,
   renderProjectGoalCard,
   deriveProjectGoalViewModel,
+  deriveHeaderNextStepView,
   hasProjectBlocker,
   renderProjectBlockerDetails,
   getTaskChangeFingerprint,
@@ -123,6 +124,7 @@ export function mountUnifiedShell(
     projectLabel: "",
     contextLabel: "",
     sessionCount: 0,
+    headerCtas: [],
   };
 
   let sessionsDropdown: Array<{
@@ -140,15 +142,26 @@ export function mountUnifiedShell(
     if (projectState.projectId) {
       topbarState.projectLabel = projectState.projectId;
       topbarState.contextLabel = deriveProjectGoalViewModel(projectState).title;
+      topbarState.headerCtas = deriveHeaderNextStepView(projectState).actions;
     } else {
       topbarState.projectLabel = "";
       topbarState.contextLabel = "";
+      topbarState.headerCtas = [];
     }
   }
 
   function refreshTopbar(): void {
     syncTopbarFromProject();
-    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+    renderTopbar(
+      topbarEl,
+      topbarState,
+      openProposals,
+      handleNewChat,
+      handleOpenSessions,
+      handleNewProject,
+      handleNewThread,
+      handleHeaderNextStepAction,
+    );
   }
 
   const proposalsState: ProposalsState = {
@@ -1729,6 +1742,87 @@ export function mountUnifiedShell(
       client.startProjectTask(normalizedTaskId);
     } catch (err) {
       setStatus(`启动任务失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function startDirectImplementFromUi(): void {
+    // Ordinary M3: same user-visible command as CLI「项目 直接实现」.
+    // On this base the verb is not registered yet (M1 PR #2), so it falls
+    // through to chat and hits is_direct_implement_request →
+    // maybe_auto_confirm_plan_for_direct_implement + implement overlay.
+    // TODO(M1): when project_entry lands, this command sets
+    // project_entry=direct and later turns skip plan_partner. If M1's CLI
+    // only confirms the gate without starting a turn, follow with a short
+    // implement message so the CTA still kicks work.
+    try {
+      setStatus("正在直接实现…");
+      setMainFocus("chat");
+      client.sendCommand("项目 直接实现");
+    } catch (err) {
+      setStatus(`直接实现失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function runProjectVerifyFromUi(): void {
+    try {
+      setStatus("正在跑验收…");
+      setMainFocus("chat");
+      client.sendCommand("项目 验收");
+    } catch (err) {
+      setStatus(`验收失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function handleHeaderNextStepAction(action: string, taskId?: string): void {
+    switch (action) {
+      case "confirm-plan":
+        void projectCallbacks.onPlanConfirm();
+        return;
+      case "direct-implement":
+        startDirectImplementFromUi();
+        return;
+      case "run-verify":
+        runProjectVerifyFromUi();
+        return;
+      case "start-task":
+        if (taskId?.trim()) {
+          startProjectTaskFromUi(taskId);
+          return;
+        }
+        openPlanFull();
+        return;
+      case "accept-milestone":
+        projectCallbacks.onMilestoneAccept();
+        return;
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "confirm-design":
+        projectCallbacks.onDesignConfirm();
+        return;
+      case "open-plan-review":
+        openPlanReview();
+        return;
+      case "open-full-plan":
+        openPlanFull();
+        return;
+      case "open-projects":
+        projectCallbacks.onOpenProjects();
+        return;
+      case "jump-turn-process":
+        jumpToCurrentTurnProcess();
+        return;
+      case "jump-review-summary":
+        jumpToReviewSummary();
+        return;
+      case "stop-turn":
+        projectCallbacks.onStopTurn();
+        return;
+      case "resume-runaway":
+        resumeRunawayFromUi();
+        return;
+      default:
+        return;
     }
   }
 
@@ -3333,6 +3427,15 @@ export function mountUnifiedShell(
           startProjectTaskFromUi(taskId);
           return;
         }
+        case "direct-implement":
+          startDirectImplementFromUi();
+          return;
+        case "run-verify":
+          runProjectVerifyFromUi();
+          return;
+        case "confirm-plan":
+          void projectCallbacks.onPlanConfirm();
+          return;
         case "flow-return":
           projectState.flowPreviewStage = null;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -3420,6 +3523,21 @@ export function mountUnifiedShell(
       case "confirm-plan":
         void projectCallbacks.onPlanConfirm();
         return;
+      case "direct-implement":
+        startDirectImplementFromUi();
+        return;
+      case "run-verify":
+        runProjectVerifyFromUi();
+        return;
+      case "start-task": {
+        const taskId = btn.dataset.taskId?.trim();
+        if (taskId) {
+          startProjectTaskFromUi(taskId);
+          return;
+        }
+        openPlanFull();
+        return;
+      }
       case "open-plan-review":
         openPlanReview();
         return;

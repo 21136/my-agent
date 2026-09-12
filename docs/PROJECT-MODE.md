@@ -1,6 +1,6 @@
 # 项目模式设计（PROJECT-MODE）
 
-> 版本 **0.5.2** · 2026-08-15  
+> 版本 **0.5.4** · 2026-09-12  
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）；**Phase 58b T-5810～T-5819 制品链运行时基础 done，剩余 S-581**  
 > **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
 > **Desktop 教科书流程**（产品定调）：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)  
@@ -391,13 +391,15 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
    → 仍 draft；禁止写 src/、禁止 run_python
    → **不要**先点「确认开工」；填完计划、你认可后再确认
 
-③ 计划确认（用户必点）
-   桌面：计划确认卡（类 tool confirm）
-         摘要：目标、Phase 列表、验收标准
-         [修改计划] [确认开工]
+③ 计划确认（用户必点；普通模式双入口）
+   桌面顶栏 / 上下文栏（狂奔关闭、draft / plan_dirty）：
+         [规划后开工] [直接实现]  — 确认前可随时切换
+         规划后开工 → 既有计划确认卡 / CLI「项目 确认」
+         直接实现 → 同一条「项目 直接实现」命令（见 §4.6）
+   确认后顶栏只保留一个下一步主按钮（跑验收 / 开始任务 / 确认发布）
    CLI：项目 确认
    → project_plan_status = confirmed
-   → 顶栏：项目 · <id> · n/m 未完成（§8.2）
+   → 顶栏：项目 · <id> · 单一下一步 CTA（§8.2）
 
 ④ 动手
    写代码、run_python、标 [x]
@@ -473,6 +475,28 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 计划状态：见 meta.project_plan_status
 ```
 
+### 4.6 普通模式确认白名单与双 CTA（M3）
+
+**确认合并原则**：一门一确认。项目内质量/验收命令免确认；危险动作仍确认。
+
+`run_command` 在**已绑定项目 cwd** 下：
+
+| 免确认 | 仍确认 |
+|--------|--------|
+| ENV.md `quality.commands` 列出的命令 | install / network / danger / background |
+| 基线 `pytest` / `python verify.py`（及既有 build/test/readonly） | 非项目 cwd |
+| `run_quality`（工具本身 `confirm=false`） | `git push` / `gh pr create` / 非 loopback preview |
+
+优先读项目 `ENV.md` 的 quality 列表，不硬编码一长串二进制名。
+
+**Desktop（狂奔关闭）**
+
+- `draft` / `plan_dirty`：顶栏双 CTA「规划后开工」/「直接实现」，确认前可切换。
+- 「规划后开工」走既有 `项目 确认` / `plan.response` 确认卡。
+- 「直接实现」发送 `项目 直接实现`。M1（`project_entry=direct`）未合入前，该命令会落到对话里的 `is_direct_implement_request` 短语路径并自动确认计划后开工。M1 合入后同一命令会写 `project_entry=direct` 并跳过 `plan_partner`；若 CLI 只开门不开回合，CTA 需再跟一条短实现消息。
+- 已确认：隐藏双 CTA，顶栏只留当前阶段的一个主按钮（验证→跑验收，实现且有 T-*→开始任务，发布→确认发布）。
+- 侧栏终端/服务默认折叠，折叠时不展开会话/服务计数，避免盖过下一步 CTA。
+
 ---
 
 ## 5. 工具与权限
@@ -499,6 +523,7 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 
 - `run_python`、一般写文件：仍逐次 confirm。
 - `TASKS.md` / `MAP.md`：`workspace_only` 可 session **`a`**（减摩擦）。
+- 项目 cwd 下 ENV.md `quality.commands`、`pytest`、`python verify.py`：**免确认**（§4.6）。install / `git push` / `gh pr create` / 危险命令仍确认。
 
 ### 5.4 主题
 
@@ -554,7 +579,7 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 |----|------|
 | 布局 | **复用 grow 聊天区**；无 TASKS 侧栏 |
 | 顶栏 | `生长 \| 项目 \| 日用 \| 治理` + `项目 · <id>` |
-| 顶栏进度 | `draft` → **计划待确认**；`plan_dirty` → **计划已变更 · 待确认**；`confirmed` → **`5/12` 未完成**（点击 popover 列未勾 task，可选实现） |
+| 顶栏进度 | `draft` / `plan_dirty`（普通模式）→ 双 CTA **规划后开工 / 直接实现**；`confirmed` → 单一下一步主按钮（跑验收 / 开始任务 / 确认发布）；侧栏会话/服务默认折叠 |
 | 计划确认 | **计划确认卡**（`plan.confirm` WS，对齐 §3.2.1 tool confirm） |
 | UI 目录 | `desktop/src/shells/unified/` + `project-panel.ts`（旧 `shells/project/` 已删） |
 
@@ -677,3 +702,4 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 | 0.5.1 | 2026-08-15 | IT-5830：采纳操作合并 PlanAgent 状态写入；项目分发异常回传并清理 Desktop pending 状态 |
 | 0.5.2 | 2026-08-15 | T-5831 讨论稿：补齐 `normal/large` 文档内容下限、用例/时序/状态图和技术设计要求 |
 | 0.5.3 | 2026-08-15 | T-5831 已决：双独立图示硬门槛、`completeness`/`content_origin`/`change_scope` 字段、迁移 skeleton 策略 |
+| 0.5.4 | 2026-09-12 | 普通模式 M3：§4.6 确认白名单 + draft 双 CTA / 确认后单一下一步 |

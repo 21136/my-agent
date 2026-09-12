@@ -3148,6 +3148,7 @@ class ToolExecutor:
                 working_dir=working,
                 project_root=self.session.project_root or "",
                 background=bool(inner.get("background")),
+                agent_paths=self.registry.agent_paths,
             )
             if not needs:
                 return False
