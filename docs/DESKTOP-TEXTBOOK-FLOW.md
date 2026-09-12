@@ -2,7 +2,7 @@
 
 > **当前执行基线：** 请先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)。本文保留五段流程的背景设计，但不再单独增加文档数量或阶段 Gate；项目 MVP 只执行四个核心制品和三个硬门槛。
 
-> 版本 **0.1.9** · 2026-08-14  
+> 版本 **0.1.10** · 2026-09-12  
 > **状态**：**M0 文档已签 · M1 待实施**（流程轨 UI / 配方 CI / §6.3 边角 · 见 §6.0）  
 > 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) · [UX-POLISH.md](./UX-POLISH.md) UX-026 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) · [TASKS.md](./TASKS.md) Phase 58
 
@@ -297,6 +297,7 @@ Terminal 继续宣传：`cd` 进仓库就开干、effective root 内狂野、aut
 |------|------|
 | **流程轨** | **侧栏顶**（`project-panel` 最上）：`需求→设计→实现→验证→发布` + 当前段一句出口条件；其下为任务流 / 态势（UX-026） |
 | **确认范围** | 需求段侧栏顶 **软按钮**；见 §3.2.1 |
+| **普通模式下一步** | 狂奔关闭时：`draft`/`plan_dirty` 顶栏双 CTA「规划后开工 / 直接实现」；确认后只留一个主按钮（跑验收 / 开始任务）。见 [PROJECT-MODE.md](./PROJECT-MODE.md) §4.6 |
 | **主焦点** | 设计段 → `plan_review`；实现段 → chat + 采纳队列；验证段 → 证据行 + 跑测入口 |
 | **默认 perspective** | **project**（DESKTOP §0） |
 | **非目标** | 新房间/新 harness；Terminal 嵌入 |
@@ -785,6 +786,7 @@ sequenceDiagram
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
+| 2026-09-12 | 0.1.10 | 普通模式 M3：顶栏 draft 双 CTA / 确认后单一下一步；见 PROJECT-MODE §4.6 |
 | 2026-08-14 | 0.2.1 | Phase 58b T-5819：阶段卡展示制品 path/role/revision/status 与阶段依据；流程轨保持只读查看焦点 |
 | 2026-08-14 | 0.2.2 | Phase 58b T-5818：milestone 验收与 RELEASE checklist 持久化并绑定 RELEASE revision |
 | 2026-08-14 | 0.1.9 | §6.0 成熟度与完整流程差距 · M1 任务对照与实施顺序 |

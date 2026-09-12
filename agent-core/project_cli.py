@@ -331,6 +331,8 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return None
 
     # Unknown verb: pass through to main chat instead of blocking the turn.
+    # Desktop ordinary M3 sends「项目 直接实现」here. Until M1 registers that
+    # verb (project_entry=direct), the line hits is_direct_implement_request.
     return None
 
 

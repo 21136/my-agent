@@ -1,5 +1,6 @@
 import type { ProposalItem } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
+import type { HeaderNextStepAction } from "./project-panel";
 
 export interface TopbarState {
   proposals: ProposalItem[];
@@ -14,6 +15,7 @@ export interface TopbarState {
   /** One-line goal / status from deriveProjectGoalViewModel.title */
   contextLabel: string;
   sessionCount: number;
+  headerCtas: HeaderNextStepAction[];
 }
 
 export type TopbarHandlers = {
@@ -22,6 +24,7 @@ export type TopbarHandlers = {
   onNewThread?: () => void;
   onOpenSessions?: () => void;
   onOpenProposals?: () => void;
+  onHeaderAction?: (action: string, taskId?: string) => void;
 };
 
 export function renderTopbar(
@@ -32,6 +35,7 @@ export function renderTopbar(
   onOpenSessions?: () => void,
   onNewProject?: () => void,
   onNewThread?: () => void,
+  onHeaderAction?: (action: string, taskId?: string) => void,
 ): void {
   const handlers: TopbarHandlers = {
     onNewChat: onNewSession,
@@ -39,6 +43,7 @@ export function renderTopbar(
     onNewThread,
     onOpenSessions,
     onOpenProposals,
+    onHeaderAction,
   };
   renderTopbarV2(container, state, handlers);
 }
@@ -54,6 +59,9 @@ function renderOverflowMenu(state: TopbarState, handlers: TopbarHandlers): strin
   if (handlers.onNewProject) {
     items.push(`<button type="button" class="unified-topbar-menu-item" id="unified-new-project">新建项目</button>`);
   }
+  if (handlers.onOpenSessions && state.headerCtas.length) {
+    items.push(`<button type="button" class="unified-topbar-menu-item" id="unified-open-sessions">会话${state.sessionCount ? ` ${state.sessionCount}` : ""}</button>`);
+  }
   if (!items.length) return "";
   return `<details class="unified-topbar-menu">
     <summary class="unified-btn unified-btn-ghost unified-topbar-menu-trigger" aria-label="更多操作">⋯</summary>
@@ -67,6 +75,9 @@ function bindTopbarHandlers(container: HTMLElement, handlers: TopbarHandlers): v
   container.querySelector<HTMLButtonElement>("#unified-new-project")?.addEventListener("click", () => handlers.onNewProject?.());
   container.querySelector<HTMLButtonElement>("#unified-open-sessions")?.addEventListener("click", () => handlers.onOpenSessions?.());
   container.querySelector<HTMLButtonElement>("#unified-open-proposal")?.addEventListener("click", () => handlers.onOpenProposals?.());
+  container.querySelectorAll<HTMLButtonElement>(".unified-header-cta").forEach((btn) => {
+    btn.addEventListener("click", () => handlers.onHeaderAction?.(btn.dataset.action || "", btn.dataset.taskId));
+  });
 
   const menu = container.querySelector<HTMLDetailsElement>(".unified-topbar-menu");
   if (menu) {
@@ -103,16 +114,23 @@ export function renderTopbarV2(
     : "";
   const leading = `<div class="unified-topbar-leading">${projectName}${renderOverflowMenu(state, handlers)}${newProjectStandalone}</div>`;
 
-  const sessionsBtn = handlers.onOpenSessions
+  const sessionsBtn = handlers.onOpenSessions && !state.headerCtas.length
     ? `<button type="button" class="unified-btn unified-btn-ghost" id="unified-open-sessions" title="最近会话">${state.sessionCount ? `会话 ${state.sessionCount}` : "会话"}</button>`
     : "";
   const trailing = `<div class="unified-topbar-trailing">${sessionsBtn}</div>`;
+  const headerCtas = state.headerCtas.length
+    ? `<div class="unified-header-ctas">${state.headerCtas.map((item) => {
+      const accent = item.accent ? " unified-btn-accent" : "";
+      const task = item.taskId ? ` data-task-id="${escapeHtml(item.taskId)}"` : "";
+      return `<button type="button" class="unified-btn${accent} unified-header-cta" data-action="${escapeHtml(item.action)}"${task}>${escapeHtml(item.label)}</button>`;
+    }).join("")}</div>`
+    : "";
 
   if (!proposal) {
     const context = state.contextLabel
       ? `<span class="unified-topbar-context-text" title="${escapeHtml(state.contextLabel)}">${escapeHtml(state.contextLabel)}</span>`
       : `<span class="unified-topbar-context-text is-muted">当前无待处理</span>`;
-    container.innerHTML = `${leading}<div class="unified-topbar-context">${context}</div>${trailing}`;
+    container.innerHTML = `${leading}<div class="unified-topbar-context${headerCtas ? " has-next-step" : ""}">${context}${headerCtas}</div>${trailing}`;
   } else {
     const count = state.proposals.length;
     const label = proposal.summary || proposal.proposal_id;

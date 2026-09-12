@@ -1,11 +1,18 @@
-"""Phase 29 Track A — layered confirm policy for run_command (CURSOR-ALIGN A2)."""
+"""Phase 29 Track A — layered confirm policy for run_command (CURSOR-ALIGN A2).
+
+Ordinary-mode M3: project cwd quality/verify commands skip confirm. Danger,
+install, network, background, and non-project cwd still confirm.
+"""
 
 from __future__ import annotations
 
 import re
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal
 
 CommandClass = Literal["danger", "install", "network", "build_test", "readonly", "other"]
+
+_PYTHON_LAUNCHERS = ("python", "python3", "py")
 
 _DANGER_RE = re.compile(
     r"(?is)"
@@ -32,6 +39,7 @@ _INSTALL_RE = re.compile(
 _NETWORK_WRITE_RE = re.compile(
     r"(?is)"
     r"\bgit\s+push\b"
+    r"|\bgh\s+pr\s+create\b"
     r"|\bcurl\b[^\n]*\s-[A-Z]*[dFX]\b"
     r"|\bInvoke-(?:WebRequest|RestMethod)\b"
     r"|\bwget\b[^\n]*--post"
@@ -97,16 +105,95 @@ def working_dir_under_project(working_dir: str, project_root: str) -> bool:
     return cwd == root or cwd.startswith(root + "/")
 
 
+def _normalize_cmd(command: str) -> str:
+    return " ".join((command or "").replace("\\", "/").split())
+
+
+def _argv_match_variants(argv: Sequence[str]) -> list[str]:
+    parts = [part.strip() for part in argv if isinstance(part, str) and part.strip()]
+    if not parts:
+        return []
+    joined = " ".join(parts)
+    variants = [joined]
+    if len(parts) >= 3 and parts[0] in _PYTHON_LAUNCHERS and parts[1] == "-m":
+        variants.append(" ".join(parts[2:]))
+    return variants
+
+
+def matches_quality_command(
+    command: str,
+    quality_commands: Sequence[Sequence[str]] | None,
+) -> bool:
+    """True when ``command`` matches an ENV.md quality.commands argv list."""
+    text = _normalize_cmd(command)
+    if not text or not quality_commands:
+        return False
+    for argv in quality_commands:
+        for variant in _argv_match_variants(argv):
+            norm = _normalize_cmd(variant)
+            if not norm:
+                continue
+            if text == norm or text.startswith(norm + " "):
+                return True
+            for launcher in _PYTHON_LAUNCHERS:
+                wrapped = f"{launcher} -m {norm}"
+                if text == wrapped or text.startswith(wrapped + " "):
+                    return True
+    return False
+
+
+def load_quality_command_argv(
+    *,
+    quality_commands: Sequence[Sequence[str]] | None = None,
+    env_text: str | None = None,
+    project_root: str = "",
+    agent_paths: Any | None = None,
+) -> list[list[str]]:
+    """Resolve quality argv lists from an explicit list, ENV.md text, or project root."""
+    if quality_commands:
+        return [list(cmd) for cmd in quality_commands if cmd]
+    text = env_text
+    if text is None and agent_paths is not None and (project_root or "").strip():
+        try:
+            start = agent_paths.resolve_under_agent(project_root, must_exist=False)
+            from project_quality import load_quality_commands_near
+
+            entries = load_quality_commands_near(start)
+        except Exception:
+            entries = []
+        return [
+            list(entry["cmd"])
+            for entry in entries
+            if isinstance(entry.get("cmd"), list)
+            and all(isinstance(item, str) for item in entry["cmd"])
+        ]
+    if text:
+        from project_quality import parse_quality_commands_from_env_text
+
+        entries = parse_quality_commands_from_env_text(text)
+        return [
+            list(entry["cmd"])
+            for entry in entries
+            if isinstance(entry.get("cmd"), list)
+            and all(isinstance(item, str) for item in entry["cmd"])
+        ]
+    return []
+
+
 def run_command_requires_confirm(
     *,
     command: str,
     working_dir: str = "",
     project_root: str = "",
     background: bool = False,
+    quality_commands: Sequence[Sequence[str]] | None = None,
+    env_text: str | None = None,
+    agent_paths: Any | None = None,
 ) -> tuple[bool, str]:
-    """A2: build/test + readonly under project_root may skip; else confirm.
+    """A2 + M3: build/test/readonly/ENV quality under project_root may skip.
 
     Background escalate (D1) always confirms — same risk class as run_service start.
+    Danger / install / network always confirm, even if listed in ENV.md.
 
     Returns ``(needs_confirm, reason)``.
     """
@@ -120,6 +207,14 @@ def run_command_requires_confirm(
     if kind == "network":
         return True, "network"
     in_project = working_dir_under_project(working_dir, project_root)
+    quality_argv = load_quality_command_argv(
+        quality_commands=quality_commands,
+        env_text=env_text,
+        project_root=project_root,
+        agent_paths=agent_paths,
+    )
+    if in_project and matches_quality_command(command, quality_argv):
+        return False, "skip:quality"
     if kind in {"build_test", "readonly"} and in_project:
         return False, f"skip:{kind}"
     if not in_project:

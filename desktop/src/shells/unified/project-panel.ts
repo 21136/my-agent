@@ -241,6 +241,18 @@ export interface ProjectGoalViewModel {
   secondaryActionLabel?: string | null;
 }
 
+export interface HeaderNextStepAction {
+  action: string;
+  label: string;
+  accent?: boolean;
+  taskId?: string;
+}
+
+export interface HeaderNextStepView {
+  kind: "dual-draft" | "single" | "none";
+  actions: HeaderNextStepAction[];
+}
+
 export interface ProjectPanelCallbacks {
   onProjectSwitch: (projectId: string) => void;
   onProjectSwitchConfirm: () => void;
@@ -829,7 +841,9 @@ function decisionCopy(view: ProjectGoalViewModel): { detail: string; impact: str
   if (view.action === "confirm-plan") {
     return {
       detail: "确认内容：当前项目方案",
-      impact: "影响：确认后进入当前任务的实现",
+      impact: view.secondaryAction === "direct-implement"
+        ? "影响：规划后开工进入实现；直接实现跳过计划搭档立刻写代码"
+        : "影响：确认后进入当前任务的实现",
     };
   }
   if (view.action === "confirm-design") {
@@ -1039,9 +1053,9 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       statusLabel: "待验证",
       title: "交付结果待检查",
       summary: goal,
-      nextStep: "先查看验证证据和交付审查结果；任务清空本身不代表项目完成。",
-      action: "open-full-plan",
-      actionLabel: "查看验证结果",
+      nextStep: "先跑验收并查看验证证据；任务清空本身不代表项目完成。",
+      action: "run-verify",
+      actionLabel: "跑验收",
     };
   }
 
@@ -1051,9 +1065,11 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       statusLabel: "等你决定",
       title: state.planStatus === "plan_dirty" ? "方案有变更，等你确认" : "方案已准备好",
       summary: compactGoalText(state.planOverlay?.summary || "") || goal,
-      nextStep: "确认方案后，系统才会进入当前任务的实现。",
+      nextStep: "规划后开工走计划确认；直接实现跳过计划搭档、立刻写代码。确认前可随时切换。",
       action: "confirm-plan",
-      actionLabel: "确认方案",
+      actionLabel: "规划后开工",
+      secondaryAction: "direct-implement",
+      secondaryActionLabel: "直接实现",
     };
   }
 
@@ -1089,39 +1105,98 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       : executionStage === "design" ? "选择下一条任务" : "准备开始下一步",
     summary: goal,
     nextStep: executionStage === "verification"
-      ? "查看本回合证据，确认结果是否满足验收。"
+      ? "跑验收并查看本回合证据，确认结果是否满足验收。"
       : "选择一个开放任务，或继续补充当前目标。",
-    action: "open-full-plan",
-    actionLabel: executionStage === "verification" ? "查看结果" : "选择任务",
+    action: executionStage === "verification" ? "run-verify" : "open-full-plan",
+    actionLabel: executionStage === "verification" ? "跑验收" : "选择任务",
   };
+}
+
+function extractHeaderTaskId(state: ProjectPanelState): string {
+  const raw = `${state.turnArmedId || ""} ${state.nextTask || ""}`;
+  return raw.match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
+}
+
+export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextStepView {
+  if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
+    return { kind: "none", actions: [] };
+  }
+  if (state.planStatus === "draft" || state.planStatus === "plan_dirty") {
+    return {
+      kind: "dual-draft",
+      actions: [
+        { action: "confirm-plan", label: "规划后开工", accent: true },
+        { action: "direct-implement", label: "直接实现" },
+      ],
+    };
+  }
+  const stage = getExecutionStage(state);
+  if (state.tasksAllDone || stage === "verification") {
+    return { kind: "single", actions: [{ action: "run-verify", label: "跑验收", accent: true }] };
+  }
+  const taskId = extractHeaderTaskId(state);
+  if (stage === "implementation" && taskId) {
+    return {
+      kind: "single",
+      actions: [{ action: "start-task", label: "开始任务", accent: true, taskId }],
+    };
+  }
+  if (stage === "release" && !state.milestoneAccepted) {
+    return { kind: "single", actions: [{ action: "accept-milestone", label: "确认发布", accent: true }] };
+  }
+  const view = deriveProjectGoalViewModel(state);
+  if (view.action && view.actionLabel) {
+    return {
+      kind: "single",
+      actions: [{ action: view.action, label: view.actionLabel, accent: true }],
+    };
+  }
+  return { kind: "none", actions: [] };
+}
+
+export function renderHeaderNextStepCtas(actions: HeaderNextStepAction[]): string {
+  if (!actions.length) return "";
+  return `<div class="unified-header-ctas">${actions.map((item) => {
+    const accent = item.accent ? " unified-btn-accent" : "";
+    const task = item.taskId ? ` data-task-id="${escapeHtml(item.taskId)}"` : "";
+    return `<button type="button" class="unified-btn${accent} unified-header-cta" data-action="${escapeHtml(item.action)}"${task}>${escapeHtml(item.label)}</button>`;
+  }).join("")}</div>`;
 }
 
 export function renderProjectGoalCard(state: ProjectPanelState): string {
   const view = deriveProjectGoalViewModel(state);
+  const header = deriveHeaderNextStepView(state);
   const contextGoal = compactGoalText(state.projectSummary)
     || compactGoalText(firstProjectGoalTask(state))
     || view.title;
   const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
-  const contextAction = (!state.runawayEnabled || state.runawayCancelAvailable)
-    && !isDecision && view.action && view.actionLabel
-    ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-    : "";
+  const headerCtas = renderHeaderNextStepCtas(header.actions);
+  const contextAction = headerCtas
+    || ((!state.runawayEnabled || state.runawayCancelAvailable)
+      && !isDecision && view.action && view.actionLabel
+      ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+      : "");
   const decision = isDecision
       ? (() => {
         const copy = decisionCopy(view);
         const detailAction = view.action === "confirm-scope"
           ? `<button type="button" class="unified-btn" data-action="open-scope-doc">查看范围</button>`
           : "";
-        const action = view.action && view.actionLabel
-          ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-          : "";
+        const stripCtas = header.kind === "dual-draft"
+          ? renderHeaderNextStepCtas(header.actions)
+          : view.action && view.actionLabel
+            ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+              + (view.secondaryAction && view.secondaryActionLabel
+                ? `<button type="button" class="unified-btn" data-action="${escapeHtml(view.secondaryAction)}">${escapeHtml(view.secondaryActionLabel)}</button>`
+                : "")
+            : "";
         return `<section class="unified-decision-strip is-${escapeHtml(view.status)}" aria-label="需要处理的事项">
           <div class="unified-decision-copy">
             <strong class="unified-decision-title">${escapeHtml(view.title)}</strong>
             <span>${escapeHtml(copy.detail)}</span>
             <span>${escapeHtml(copy.impact)}</span>
           </div>
-          <div class="unified-decision-actions">${detailAction}${action}</div>
+          <div class="unified-decision-actions">${detailAction}${stripCtas}</div>
         </section>`;
       })()
     : "";
@@ -2735,10 +2810,13 @@ function renderTerminalsPanel(state: ProjectPanelState): string {
   const error = state.terminalsError
     ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalsError)}</div>`
     : "";
+  const toggleLabel = collapsed
+    ? (active > 0 ? `终端 · ${active} 运行中` : "终端")
+    : `终端会话 · ${summary}`;
   return `<section class="sidebar-terminals" aria-label="终端会话">
     <button type="button" class="sidebar-terminals-toggle" data-action="toggle-terminals" aria-expanded="${collapsed ? "false" : "true"}">
       <span class="sidebar-terminals-toggle-chevron">${collapsed ? "▸" : "▾"}</span>
-      <span>终端会话 · ${escapeHtml(summary)}</span>
+      <span>${escapeHtml(toggleLabel)}</span>
     </button>
     <div class="${bodyClass}">
       <div class="sidebar-terminals-header">
@@ -2802,9 +2880,12 @@ function renderServicesPanel(state: ProjectPanelState): string {
   const collapsed = state.servicesCollapsed;
   const chevron = collapsed ? "▸" : "▾";
   const bodyCls = collapsed ? "sidebar-services-body is-collapsed" : "sidebar-services-body";
+  const toggleLabel = collapsed
+    ? (running > 0 ? `服务 · ${running} 运行中` : "服务")
+    : `服务 · ${summary}`;
   return `<button type="button" class="sidebar-services-toggle" data-action="toggle-services">
       <span class="sidebar-services-toggle-chevron">${chevron}</span>
-      <span>服务 · ${escapeHtml(summary)}</span>
+      <span>${escapeHtml(toggleLabel)}</span>
     </button>
     <div class="${bodyCls}">
       <div class="sidebar-services-header">
