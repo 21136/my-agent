@@ -1124,6 +1124,10 @@ function extractHeaderTaskId(state: ProjectPanelState): string {
   return raw.match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
 }
 
+function isDeliveryCheckBanner(view: ProjectGoalViewModel): boolean {
+  return view.action === "run-verify" || view.title === "交付结果待检查";
+}
+
 export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextStepView {
   if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
     return { kind: "none", actions: [] };
@@ -1139,7 +1143,8 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
   }
   const stage = getExecutionStage(state);
   if (state.tasksAllDone || stage === "verification") {
-    return { kind: "single", actions: [{ action: "run-verify", label: "跑验收", accent: true }] };
+    // Sidebar already owns the delivery-check card / 跑验收 CTA.
+    return { kind: "none", actions: [] };
   }
   const taskId = extractHeaderTaskId(state);
   if (stage === "implementation" && taskId) {
@@ -1173,14 +1178,16 @@ export function renderHeaderNextStepCtas(actions: HeaderNextStepAction[]): strin
 export function renderProjectGoalCard(state: ProjectPanelState): string {
   const view = deriveProjectGoalViewModel(state);
   const header = deriveHeaderNextStepView(state);
+  const deliveryCheck = isDeliveryCheckBanner(view);
   const contextGoal = compactGoalText(state.projectSummary)
     || compactGoalText(firstProjectGoalTask(state))
-    || view.title;
-  const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
-  const headerCtas = renderHeaderNextStepCtas(header.actions);
+    || (deliveryCheck ? projectTaskProgressLabel(state) : view.title);
+  const isDecision = !deliveryCheck
+    && (view.status === "decision" || view.status === "blocked" || view.status === "failed");
+  const headerCtas = deliveryCheck ? "" : renderHeaderNextStepCtas(header.actions);
   const contextAction = headerCtas
     || ((!state.runawayEnabled || state.runawayCancelAvailable)
-      && !isDecision && view.action && view.actionLabel
+      && !isDecision && !deliveryCheck && view.action && view.actionLabel
       ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
       : "");
   const decision = isDecision

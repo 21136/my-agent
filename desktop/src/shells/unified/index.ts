@@ -820,7 +820,10 @@ export function mountUnifiedShell(
     const workingChanged = lastSidebarWorking !== working;
     lastSidebarWorking = working;
     projectState.turnInProgress = working;
-    projectEls.goalCard.classList.toggle("hidden", !projectState.projectId);
+    projectEls.goalCard.classList.toggle(
+      "hidden",
+      !projectState.projectId || projectState.railTab !== "now",
+    );
     projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
     projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
