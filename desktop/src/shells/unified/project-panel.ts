@@ -1,10 +1,12 @@
 import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
 import { RUNAWAY_BLOCKER, RUNAWAY_STAGE, RUNAWAY_STATUS } from "../../copy/user-messages";
-import { hydrateMermaid } from "../../markdown";
 import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
+import { RAIL_TAB_LABELS, type RailTab } from "./rail";
+
+export type { RailTab };
 
 export type { PlanSuggestion, ServiceListItem, TerminalSessionItem };
 
@@ -91,6 +93,7 @@ export interface ProjectPanelState {
   pendingPickerId: string;
   // new fields
   overlayPanel: OverlayPanel;
+  railTab: RailTab;
   taskPhases: TaskPhase[];
   taskSnapshot: TaskSnapshot;
   planBannerCollapsed: boolean;
@@ -504,6 +507,8 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.threads = [];
   state.threadsLoading = false;
   state.currentSessionId = "";
+  state.overlayPanel = null;
+  state.railTab = "now";
   state.mainFocus = "chat";
   state.reviewFocusId = null;
   state.suggestionAdoptFlash = null;
@@ -1824,6 +1829,122 @@ function renderSidebarStatusCard(params: {
   </section>`;
 }
 
+export function renderRailBindEmpty(title: string, summary?: string): string {
+  return renderSidebarStatusCard({
+    ariaLabel: "未绑定项目",
+    title,
+    summary: summary || "绑定一个项目后，这个标签会显示对应内容。",
+    action: "open-projects",
+    actionLabel: "打开项目",
+    actionAccent: true,
+  });
+}
+
+export function renderRailStageEmpty(params: {
+  title: string;
+  copy: string;
+  action?: string;
+  actionLabel?: string;
+}): string {
+  const action = params.action && params.actionLabel
+    ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(params.action)}">${escapeHtml(params.actionLabel)}</button>`
+    : "";
+  return `<div class="rail-stage-empty">
+    <h2 class="rail-stage-empty-title">${escapeHtml(params.title)}</h2>
+    <p class="rail-stage-empty-copy">${escapeHtml(params.copy)}</p>
+    ${action}
+  </div>`;
+}
+
+export function renderProjectsStage(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    if (state.projects.length) {
+      return renderRailStageEmpty({
+        title: "选择项目",
+        copy: "从左侧列表打开一个项目，打开后会回到当下继续工作。",
+      });
+    }
+    return renderRailStageEmpty({
+      title: "还没有项目",
+      copy: "新建一个项目后即可开始对话与改代码。",
+      action: "new-project",
+      actionLabel: "新建项目",
+    });
+  }
+  const view = deriveProjectGoalViewModel(state);
+  return `<div class="rail-stage-empty rail-project-overview">
+    <h2 class="rail-stage-empty-title">${escapeHtml(state.projectId)}</h2>
+    <p class="rail-stage-empty-copy">${escapeHtml(view.summary || sidebarOpenTasksLabel(state))}</p>
+    <p class="rail-stage-empty-meta">${escapeHtml(view.nextStep || "进入当下继续当前工作。")}</p>
+    <button type="button" class="unified-btn unified-btn-accent" data-action="open-now">进入当下</button>
+  </div>`;
+}
+
+function renderNowRailSidebar(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  if (!state.projectId && !state.switchInProgress) {
+    if (state.detectedProject) return "";
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+  }
+  return renderDecisionSurface(state, callbacks);
+}
+
+function renderTasksRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return `<p class="overlay-empty">绑定项目后，主区会显示任务。</p>`;
+  }
+  const open = Math.max(0, state.tasksTotal - state.tasksDone);
+  const current = (state.turnArmedText || state.nextTask || "").trim();
+  let summary = "完整任务列表在主区。";
+  if (open > 0) summary = current ? `当前：${current}` : `还有 ${open} 条开放任务。`;
+  else if (state.tasksTotal > 0) summary = "任务已清空，主区可查看验证状态。";
+  return renderSidebarStatusCard({
+    ariaLabel: "任务摘要",
+    title: sidebarOpenTasksLabel(state),
+    summary,
+    detail: state.tasksTotal > 0 ? `已完成 ${state.tasksDone} / ${state.tasksTotal}` : undefined,
+  });
+}
+
+function renderDocsRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return `<p class="overlay-empty">绑定项目后，这里会列出文档目录。</p>`;
+  }
+  const chip = `<div class="rail-project-chip">${escapeHtml(state.projectId)}</div>`;
+  return chip + renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
+    newDocName: state.newDocName,
+    currentContent: state.currentDocContent,
+    inputId: "overlay-new-doc-input",
+    createAction: "overlay-new-doc",
+  });
+}
+
+function renderThreadsRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return renderRailBindEmpty("绑定项目后查看会话");
+  }
+  return renderThreadsOverlay(state);
+}
+
+function renderProjectsRailSidebar(state: ProjectPanelState): string {
+  return renderProjectsOverlay(state);
+}
+
+function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  switch (state.railTab) {
+    case "tasks":
+      return renderTasksRailSidebar(state);
+    case "docs":
+      return renderDocsRailSidebar(state);
+    case "threads":
+      return renderThreadsRailSidebar(state);
+    case "projects":
+      return renderProjectsRailSidebar(state);
+    case "now":
+    default:
+      return renderNowRailSidebar(state, callbacks);
+  }
+}
+
 function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (state.switchInProgress) {
     return renderSidebarStatusCard({
@@ -1831,6 +1952,9 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       title: `正在加载 ${state.projectId || "目标项目"}`,
       summary: "旧项目内容已暂时隐藏，等待新项目状态加载完成。",
     });
+  }
+  if (!state.projectId) {
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
   }
   if (state.runawayEnabled) {
     const view = deriveProjectGoalViewModel(state);
@@ -1877,13 +2001,6 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       summary: "可以从任务列表选择下一项，或继续补充当前目标。",
       action: "open-full-plan",
       actionLabel: "查看任务",
-    });
-  } else {
-    html += renderSidebarStatusCard({
-      ariaLabel: "项目",
-      title: "先打开或新建一个项目",
-      action: "open-projects",
-      actionLabel: "打开项目",
     });
   }
   html += renderSuggestionStack(state);
@@ -2158,7 +2275,7 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
   const query = state.projectSearchQuery.toLowerCase().trim();
 
   if (!state.projects.length) {
-    html += `<p class="overlay-empty">暂无项目 · 对话中说「项目 新建 &lt;id&gt;」</p>`;
+    html += `<p class="overlay-empty">暂无项目</p>`;
     return html;
   }
 
@@ -2883,28 +3000,54 @@ export function renderProjectSidebar(
   callbacks: ProjectPanelCallbacks,
 ): void {
   const goalView = deriveProjectGoalViewModel(state);
-  els.goalCard.classList.toggle("hidden", !state.projectId);
+  els.goalCard.classList.toggle("hidden", !state.projectId || state.railTab !== "now");
   els.goalCard.dataset.goalStatus = goalView.status;
   els.goalCard.innerHTML = renderProjectGoalCard(state);
 
-  // header
-  if (state.projectId) {
-    els.sidebarTitle.textContent = state.projectId;
-    els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
-    els.sidebarProgressWrap.classList.remove("hidden");
-    const pct = state.tasksTotal > 0
-      ? Math.round((state.tasksDone / state.tasksTotal) * 100)
-      : 0;
-    els.sidebarProgressFill.style.width = `${pct}%`;
+  const rail = state.railTab || "now";
+  const railMeta = RAIL_TAB_LABELS[rail];
+  if (rail === "now") {
+    if (state.projectId) {
+      els.sidebarTitle.textContent = state.projectId;
+      els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
+      els.sidebarProgressWrap.classList.remove("hidden");
+      const pct = state.tasksTotal > 0
+        ? Math.round((state.tasksDone / state.tasksTotal) * 100)
+        : 0;
+      els.sidebarProgressFill.style.width = `${pct}%`;
+    } else {
+      els.sidebarTitle.textContent = railMeta.label;
+      els.sidebarMeta.textContent = "未绑定项目";
+      els.sidebarProgressWrap.classList.add("hidden");
+    }
+  } else if (rail === "docs") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId || "文档目录";
+    els.sidebarProgressWrap.classList.add("hidden");
+  } else if (rail === "tasks") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId ? sidebarOpenTasksLabel(state) : "任务";
+    els.sidebarProgressWrap.classList.add("hidden");
+  } else if (rail === "threads") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId ? `${state.threads.length} 条会话` : "会话";
+    els.sidebarProgressWrap.classList.add("hidden");
   } else {
-    els.sidebarTitle.textContent = "项目";
-    els.sidebarMeta.textContent = "未绑定项目 · 使用「项目 新建 <id>」";
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projects.length ? `${state.projects.length} 个项目` : "我的项目";
     els.sidebarProgressWrap.classList.add("hidden");
   }
 
-  // Phase 27 — Services panel (always in project sidebar)
-  els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
-  els.servicesPanel.innerHTML = renderServicesPanel(state);
+  const showRuntimeChrome = rail === "now";
+  els.terminalsPanel.classList.toggle("hidden", !showRuntimeChrome);
+  els.servicesPanel.classList.toggle("hidden", !showRuntimeChrome);
+  if (showRuntimeChrome) {
+    els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
+    els.servicesPanel.innerHTML = renderServicesPanel(state);
+  } else {
+    els.terminalsPanel.innerHTML = "";
+    els.servicesPanel.innerHTML = "";
+  }
 
   // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---
   // Priority: undo > partner busy > partner notices (non-adopted) > adopted footer >
@@ -2985,7 +3128,7 @@ export function renderProjectSidebar(
     bannerHtml = renderChangeBanner(state);
   }
 
-  if (bannerHtml) {
+  if (bannerHtml && showRuntimeChrome) {
     els.changeBanner.classList.remove("hidden");
     els.changeBanner.innerHTML = bannerHtml;
   } else {
@@ -2993,8 +3136,7 @@ export function renderProjectSidebar(
     els.changeBanner.innerHTML = "";
   }
 
-  // A7 decision surface (main) — full TASKS only in plan overlay
-  els.taskFlow.innerHTML = renderDecisionSurface(state, callbacks);
+  els.taskFlow.innerHTML = renderRailSidebarBody(state, callbacks);
 
   // project count badge
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");
@@ -3003,9 +3145,10 @@ export function renderProjectSidebar(
   }
   const threadBadge = els.iconBar.querySelector<HTMLElement>("#thread-count-badge");
   if (threadBadge) {
-    const archivedCount = state.threads.filter((t) => t.archived).length;
-    threadBadge.textContent = String(archivedCount);
-    threadBadge.classList.toggle("hidden", archivedCount === 0);
+    const liveCount = state.threads.filter((t) => !t.archived).length;
+    const count = liveCount || state.threads.length;
+    threadBadge.textContent = String(count);
+    threadBadge.classList.toggle("hidden", count === 0);
   }
   // degradation indicator
   const degradeDot = els.iconBar.querySelector<HTMLElement>("#sidebar-degrade-dot");
@@ -3022,26 +3165,12 @@ export function renderProjectSidebar(
       degradeDot.title = `项目管理器: ${state.degradationLabel || level}`;
     }
   }
-  // active icon
   for (const btn of els.iconBar.querySelectorAll<HTMLButtonElement>(".sidebar-icon-btn")) {
-    const panel = btn.dataset.panel as OverlayPanel | "tasks" | undefined;
-    const active =
-      (panel === "tasks" && !state.overlayPanel && state.mainFocus === "chat") ||
-      (panel === "plan" && state.mainFocus === "plan_full") ||
-      (panel === "docs" && (state.mainFocus === "document" || state.overlayPanel === "docs")) ||
-      (panel !== "tasks" && panel !== "plan" && panel !== "docs" && panel === state.overlayPanel);
-    btn.classList.toggle("is-active", Boolean(active));
+    btn.classList.toggle("is-active", btn.dataset.panel === rail);
   }
 
-  // overlay panel
-  if (state.overlayPanel) {
-    els.overlayPanel.classList.remove("hidden");
-    els.overlayTitle.textContent = overlayTitle(state.overlayPanel);
-    els.overlayBody.innerHTML = renderOverlayBody(state);
-    void hydrateMermaid(els.overlayBody);
-  } else {
-    els.overlayPanel.classList.add("hidden");
-  }
+  els.overlayPanel.classList.add("hidden");
+  els.overlayBody.innerHTML = "";
 
   // -- compat update: handle plan overlay / switch overlay in new style --
   updateCompatElements(els, state, callbacks);
