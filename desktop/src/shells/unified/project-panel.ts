@@ -192,7 +192,6 @@ export interface ProjectPanelState {
   reviewFocusId: string | null;
   // UX-026 — sidebar body / adopt feedback
   servicesCollapsed: boolean;
-  nowMoreOpen: boolean;
   suggestionAdoptFlash: string | null;
   adoptedFooterMessage: string | null;
   adoptPendingId: string | null;
@@ -1932,31 +1931,6 @@ function renderNowFocusCard(state: ProjectPanelState, view: ProjectGoalViewModel
   </section>`;
 }
 
-function renderNowMoreDisclosure(
-  state: ProjectPanelState,
-  callbacks: ProjectPanelCallbacks,
-): string {
-  const extras = [
-    state.nextTurnChangeSummary
-      ? `<div class="textbook-next-turn-overlay"><strong>侧栏已采纳计划变更：</strong>${escapeHtml(state.nextTurnChangeSummary)}</div>`
-      : "",
-    renderDetailedFlowRail(state),
-    renderDetailedStagePlanCard(state, callbacks),
-    renderSuggestionStack(state),
-    renderTurnSummary(state),
-    renderReliabilityStrip(state),
-  ].filter(Boolean).join("");
-  if (!extras) return "";
-  const open = state.nowMoreOpen;
-  return `<div class="now-more">
-    <button type="button" class="now-more-toggle" data-action="toggle-now-more" aria-expanded="${open ? "true" : "false"}">
-      <span class="now-more-chevron" aria-hidden="true">${open ? "▾" : "▸"}</span>
-      <span>更多</span>
-    </button>
-    <div class="now-more-body${open ? "" : " is-collapsed"}">${extras}</div>
-  </div>`;
-}
-
 function renderNowRailSidebar(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (!state.projectId && !state.switchInProgress) {
     if (state.detectedProject) return "";
@@ -2036,10 +2010,11 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
   if (!state.projectId) {
     return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步。");
   }
+  void callbacks;
   const view = deriveProjectGoalViewModel(state);
-  return renderNowFocusCard(state, view)
-    + renderDropTaskChoice(state)
-    + renderNowMoreDisclosure(state, callbacks);
+  // User-facing Now rail: one focus card only. Textbook flow/stage/artifact
+  // dumps and CHG ledgers are agent-internal and must not appear here.
+  return renderNowFocusCard(state, view) + renderDropTaskChoice(state);
 }
 
 function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
@@ -2419,17 +2394,6 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 
 function renderChangeBanner(state: ProjectPanelState): string {
   if (state.runawayEnabled) return "";
-  const recentLedger = state.changeTimeline.slice(-3).reverse();
-  const ledgerRows = recentLedger.map((change) => {
-    const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
-    const impact = affected.length > 0 ? `ID: ${affected.join(", ")}` : "ID: none";
-    const stale = change.stale_docs.length > 0 ? `stale: ${change.stale_docs.join(", ")}` : "stale: none";
-    const replan = change.replan_required ? "需要重新规划" : "无需重新规划";
-    return `<div class="sidebar-change-banner-changes"><strong>${escapeHtml(change.change_id)}</strong> · ${escapeHtml(change.paths.join(", "))}<br>${escapeHtml(impact)}<br>${escapeHtml(stale)} · ${replan}</div>`;
-  }).join("");
-  const ledgerHtml = recentLedger.length > 0
-    ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
-    : "";
   // Plan confirmation (draft / plan_dirty with overlay)
   const needsPlanConfirm =
     !state.runawayEnabled && state.planOverlay && state.planStatus !== "confirmed";
@@ -2514,7 +2478,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     </div>`;
   }
 
-  return ledgerHtml;
+  return "";
 }
 
 // ---- project event application (keep compat) ----

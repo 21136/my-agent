@@ -284,7 +284,6 @@ export function mountUnifiedShell(
     mainFocus: "chat",
     reviewFocusId: null,
     servicesCollapsed: true,
-    nowMoreOpen: false,
     suggestionAdoptFlash: null,
     adoptedFooterMessage: null,
     adoptPendingId: null,
@@ -3763,10 +3762,6 @@ export function mountUnifiedShell(
           return;
         case "flow-return":
           projectState.flowPreviewStage = null;
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-          return;
-        case "toggle-now-more":
-          projectState.nowMoreOpen = !projectState.nowMoreOpen;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           return;
         case "confirm-scope":
