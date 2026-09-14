@@ -2330,7 +2330,8 @@
   margin: 0 auto;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 0.35rem 0.6rem;
   color: var(--ma-text-muted);
   font-size: 0.78rem;
