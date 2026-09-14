@@ -1,8 +1,10 @@
 import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
 import { RUNAWAY_BLOCKER, RUNAWAY_STAGE, RUNAWAY_STATUS } from "../../copy/user-messages";
+import { hydrateMermaid } from "../../markdown";
 import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
+import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
 
 export type { PlanSuggestion, ServiceListItem, TerminalSessionItem };
 
@@ -1299,11 +1301,12 @@ function renderStageArtifactSummary(state: ProjectPanelState, stage: FlowStage):
   const rows = STAGE_ARTIFACTS[stage].map((path) => {
     const artifact = artifacts.get(path);
     if (!artifact) {
-      return `<span class="textbook-artifact-row is-missing"><code>${escapeHtml(path)}</code><span>未接入</span></span>`;
+      return `<span class="textbook-artifact-row is-missing" title="${escapeHtml(path)}"><span class="textbook-artifact-title">${escapeHtml(humanDocTitle(path))}</span><span>未接入</span></span>`;
     }
     const status = artifact.status || "unknown";
     const completeness = artifact.completeness || "unknown";
-    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}"><code>${escapeHtml(artifact.path)}</code><span>${escapeHtml(artifact.role)} · ${escapeHtml(artifact.revision)} · <b class="textbook-artifact-status is-${escapeHtml(status)}">${escapeHtml(status)}</b> · <b class="textbook-artifact-completeness is-${escapeHtml(completeness)}">${escapeHtml(completeness)}</b></span></button>`;
+    const detail = `${artifact.path} · ${artifact.role} · ${artifact.revision} · ${status} · ${completeness}`;
+    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}" title="${escapeHtml(detail)}"><span class="textbook-artifact-title">${escapeHtml(humanDocTitle(artifact.path))}</span><span class="textbook-artifact-path">${escapeHtml(artifact.path)}</span></button>`;
   }).join("");
   return `<div class="textbook-artifacts"><div class="textbook-section-label">阶段制品</div><div class="textbook-artifact-list">${rows}</div></div>`;
 }
@@ -2126,38 +2129,12 @@ export function renderPlanTaskFlow(
 // ---- overlay panel rendering ----
 
 function renderDocsOverlay(state: ProjectPanelState): string {
-  // List all docs
-  let html = "";
-
-  // New doc input
-  html += `<div style="display:flex;gap:0.3rem;margin-bottom:0.5rem;">
-    <input type="text" class="overlay-search-input" id="overlay-new-doc-input" placeholder="新建文档（如 需求分析.md）…" value="${escapeHtml(state.newDocName)}" style="margin-bottom:0;">
-    <button type="button" class="unified-btn unified-btn-accent" id="overlay-new-doc-btn" style="flex-shrink:0;font-size:0.78rem;">新建</button>
-  </div>`;
-
-  if (!state.projectDocs.length) {
-    html += `<p class="overlay-empty">暂无文档</p>`;
-    return html;
-  }
-
-  // Sort: standard docs first
-  const sorted = [...state.projectDocs].sort((a, b) => {
-    if (a.is_standard && !b.is_standard) return -1;
-    if (!a.is_standard && b.is_standard) return 1;
-    return a.name.localeCompare(b.name);
+  return renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
+    newDocName: state.newDocName,
+    currentContent: state.currentDocContent,
+    inputId: "overlay-new-doc-input",
+    createAction: "overlay-new-doc",
   });
-
-  html += `<div style="font-size:0.72rem;font-weight:600;color:var(--ma-text-muted);margin-bottom:0.25rem;">项目文档</div>`;
-  for (const doc of sorted) {
-    const icon = doc.is_standard ? "📋" : "📄";
-    const sub = doc.name !== doc.path ? ` <span style="font-size:0.7rem;color:var(--ma-text-muted);">${escapeHtml(doc.path)}</span>` : "";
-    const active = doc.path === state.currentDocPath ? " is-current" : "";
-    html += `<button type="button" class="overlay-doc-item${active}" data-doc-path="${escapeHtml(doc.path)}">
-      <span>${icon} ${escapeHtml(doc.name)}</span>${sub}<span class="overlay-doc-item-hint">主区阅读</span>
-    </button>`;
-  }
-
-  return html;
 }
 
 function renderProjectsOverlay(state: ProjectPanelState): string {
@@ -3051,7 +3028,8 @@ export function renderProjectSidebar(
     const active =
       (panel === "tasks" && !state.overlayPanel && state.mainFocus === "chat") ||
       (panel === "plan" && state.mainFocus === "plan_full") ||
-      (panel !== "tasks" && panel !== "plan" && panel === state.overlayPanel);
+      (panel === "docs" && (state.mainFocus === "document" || state.overlayPanel === "docs")) ||
+      (panel !== "tasks" && panel !== "plan" && panel !== "docs" && panel === state.overlayPanel);
     btn.classList.toggle("is-active", Boolean(active));
   }
 

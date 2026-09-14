@@ -35,6 +35,11 @@ import {
   type TaskItem,
 } from "./project-panel";
 import {
+  applyHeadingIds,
+  renderDocumentReaderHtml,
+  sortProjectDocs,
+} from "./doc-reading";
+import {
   actionableSuggestions,
   adoptPathFromSuggestion,
   clampReviewIndex,
@@ -1539,13 +1544,14 @@ export function mountUnifiedShell(
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
     const chatFocus = focus === "chat";
-    const runtimeSurface = chatFocus || chat.isWorking() || chat.model.confirmPending;
+    const documentFocus = focus === "document";
+    const runtimeSurface = chatFocus || documentFocus || chat.isWorking() || chat.model.confirmPending;
     shellEl.dataset.mainFocus = focus;
-    chatEl.classList.toggle("hidden", focus !== "chat");
+    chatEl.classList.toggle("hidden", focus !== "chat" && focus !== "document");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
     documentEl.classList.toggle("hidden", focus !== "document");
-    chatEl.hidden = focus !== "chat";
+    chatEl.hidden = focus !== "chat" && focus !== "document";
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
@@ -1590,30 +1596,52 @@ export function mountUnifiedShell(
   function renderDocumentPane(): void {
     const path = projectState.currentDocPath;
     const content = projectState.currentDocContent;
-    documentEl.innerHTML = `<div class="unified-document-inner">
-      <header class="unified-document-header">
-        <button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>
-        <div class="unified-document-heading">
-          <div class="unified-document-kicker">项目文档</div>
-          <h1>${escapeHtml(path || "文档")}</h1>
-        </div>
-        <button type="button" class="unified-btn" data-action="document-list">文档列表</button>
-      </header>
-      <article class="unified-document-content unified-markdown">${content
-        ? renderMarkdown(content)
-        : `<p class="overlay-empty">加载中…</p>`}</article>
-    </div>`;
+    const { html, outline } = renderDocumentReaderHtml({
+      docs: projectState.projectDocs,
+      currentPath: path,
+      currentContent: content,
+      renderedHtml: content ? renderMarkdown(content) : "",
+      newDocName: projectState.newDocName,
+    });
+    documentEl.innerHTML = html;
+    const reader = documentEl.querySelector(".unified-document-content");
+    if (reader) applyHeadingIds(reader, outline);
     void hydrateMermaid(documentEl);
-    documentEl.scrollTop = 0;
+    const readerPane = documentEl.querySelector<HTMLElement>(".unified-document-reader");
+    if (readerPane) readerPane.scrollTop = 0;
+    else documentEl.scrollTop = 0;
   }
 
   function openDocument(path: string): void {
     if (!path) return;
+    const alreadyOpen = projectState.mainFocus === "document"
+      && projectState.currentDocPath === path
+      && Boolean(projectState.currentDocContent);
     projectState.currentDocPath = path;
-    projectState.currentDocContent = "";
     projectState.overlayPanel = null;
+    if (alreadyOpen) {
+      setMainFocus("document");
+      try { client.listDocs(); } catch { /* ignore */ }
+      return;
+    }
+    projectState.currentDocContent = "";
     setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
     try { client.readDoc(path); } catch { /* ignore */ }
+  }
+
+  function openDocumentReader(path?: string): void {
+    projectState.overlayPanel = null;
+    const target = path
+      || projectState.currentDocPath
+      || sortProjectDocs(projectState.projectDocs)[0]?.path
+      || "";
+    if (target) {
+      openDocument(target);
+      return;
+    }
+    setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
   }
 
   function openPlanReview(suggestionId?: string): void {
@@ -1827,8 +1855,7 @@ export function mountUnifiedShell(
   }
 
   function openDocumentList(): void {
-    projectState.overlayPanel = "docs";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    openDocumentReader();
     try { client.listDocs(); } catch { /* ignore */ }
   }
 
@@ -3262,11 +3289,17 @@ export function mountUnifiedShell(
         openPlanFull();
         return;
       }
-      projectState.overlayPanel = panel as OverlayPanel;
-      // Auto-fetch docs list when entering docs panel
       if (panel === "docs") {
-        try { client.listDocs(); } catch { /* ignore */ }
+        if (projectState.mainFocus === "document") {
+          projectState.overlayPanel = null;
+          setMainFocus("chat");
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        }
+        openDocumentReader();
+        return;
       }
+      projectState.overlayPanel = panel as OverlayPanel;
       if (panel === "threads") {
         refreshProjectThreads();
       }
@@ -3623,7 +3656,7 @@ export function mountUnifiedShell(
     }
 
     // New doc button
-    if (target.closest("#overlay-new-doc-btn")) {
+    if (target.closest("#overlay-new-doc-btn") || target.closest('[data-action="overlay-new-doc"]')) {
       const name = projectState.newDocName.trim();
       if (name) {
         try { client.createDoc(name); } catch { /* ignore */ }
@@ -3636,6 +3669,11 @@ export function mountUnifiedShell(
 
   documentEl.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement;
+    const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item, .doc-catalog-item");
+    if (docBtn?.dataset.docPath) {
+      openDocument(docBtn.dataset.docPath);
+      return;
+    }
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
     if (btn.dataset.action === "document-back") {
@@ -3643,8 +3681,45 @@ export function mountUnifiedShell(
       return;
     }
     if (btn.dataset.action === "document-list") {
-      openDocumentList();
+      const catalog = documentEl.querySelector<HTMLElement>(".unified-document-catalog");
+      catalog?.scrollTo({ top: 0, behavior: "smooth" });
+      catalog?.classList.add("is-flash");
+      window.setTimeout(() => catalog?.classList.remove("is-flash"), 900);
+      return;
     }
+    if (btn.dataset.action === "create-doc") {
+      const name = projectState.newDocName.trim();
+      if (name) {
+        try { client.createDoc(name); } catch { /* ignore */ }
+        projectState.newDocName = "";
+        renderDocumentPane();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }
+      return;
+    }
+    if (btn.dataset.action === "doc-outline-jump") {
+      const headingId = btn.dataset.headingId;
+      if (!headingId) return;
+      const heading = documentEl.querySelector<HTMLElement>(`#${CSS.escape(headingId)}`);
+      heading?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  });
+
+  documentEl.addEventListener("input", (ev) => {
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (docInput) projectState.newDocName = docInput.value;
+  });
+
+  documentEl.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (!docInput) return;
+    const name = projectState.newDocName.trim();
+    if (!name) return;
+    try { client.createDoc(name); } catch { /* ignore */ }
+    projectState.newDocName = "";
+    renderDocumentPane();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
   });
 
   // Overlay: search input + new-doc input
@@ -3655,7 +3730,7 @@ export function mountUnifiedShell(
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
-    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
     if (docInput) {
       projectState.newDocName = docInput.value;
       return;
@@ -3665,7 +3740,7 @@ export function mountUnifiedShell(
   // Overlay: new-doc input Enter key
   projectEls.overlayBody.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") {
-      const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
+      const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
       if (docInput) {
         const name = projectState.newDocName.trim();
         if (name) {
@@ -4520,6 +4595,16 @@ export function mountUnifiedShell(
 
       case "project.doc.list.done":
         projectState.projectDocs = event.docs;
+        if (projectState.mainFocus === "document") {
+          if (!projectState.currentDocPath) {
+            const first = sortProjectDocs(event.docs)[0];
+            if (first) {
+              openDocument(first.path);
+              break;
+            }
+          }
+          renderDocumentPane();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -4531,6 +4616,9 @@ export function mountUnifiedShell(
 
       case "project.doc.create.done":
         projectState.newDocName = "";
+        if (event.path && projectState.mainFocus === "document") {
+          openDocument(event.path);
+        }
         client.listDocs();
         break;
 
