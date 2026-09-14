@@ -35,7 +35,10 @@ import {
   type TaskItem,
 } from "./project-panel";
 import {
-  applyHeadingIds,
+  displayDocTitle,
+  finalizeDocumentOutline,
+  normalizeNewDocPath,
+  renderDocOutlineHtml,
   renderDocumentReaderHtml,
   sortProjectDocs,
 } from "./doc-reading";
@@ -706,7 +709,8 @@ export function mountUnifiedShell(
   }
 
   function updateWorkbenchEmpty(): void {
-    const showEmpty = !projectState.projectId && !freeChatActive;
+    const reading = projectState.mainFocus === "document";
+    const showEmpty = !projectState.projectId && !freeChatActive && !reading;
     workbenchEmptyEl.hidden = !showEmpty;
     chatEl.classList.toggle("is-empty-gated", showEmpty);
     composer.classList.toggle("is-empty-gated", showEmpty);
@@ -1547,11 +1551,11 @@ export function mountUnifiedShell(
     const documentFocus = focus === "document";
     const runtimeSurface = chatFocus || documentFocus || chat.isWorking() || chat.model.confirmPending;
     shellEl.dataset.mainFocus = focus;
-    chatEl.classList.toggle("hidden", focus !== "chat" && focus !== "document");
+    chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
     documentEl.classList.toggle("hidden", focus !== "document");
-    chatEl.hidden = focus !== "chat" && focus !== "document";
+    chatEl.hidden = focus !== "chat";
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
@@ -1568,6 +1572,7 @@ export function mountUnifiedShell(
     } else if (focus === "document") {
       renderDocumentPane();
     }
+    updateWorkbenchEmpty();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
 
@@ -1605,11 +1610,28 @@ export function mountUnifiedShell(
     });
     documentEl.innerHTML = html;
     const reader = documentEl.querySelector(".unified-document-content");
-    if (reader) applyHeadingIds(reader, outline);
+    let resolved = outline;
+    if (reader) {
+      resolved = finalizeDocumentOutline(reader, content);
+      const outlineBody = documentEl.querySelector(".doc-outline-body");
+      if (outlineBody) outlineBody.innerHTML = renderDocOutlineHtml(resolved);
+      const resolvedTitle = path ? displayDocTitle(path, path, content, resolved) : "";
+      const heading = documentEl.querySelector(".unified-document-heading h1");
+      if (heading && resolvedTitle) heading.textContent = resolvedTitle;
+      const currentItem = documentEl.querySelector<HTMLElement>(".doc-catalog-item.is-current .doc-catalog-item-title");
+      if (currentItem && resolvedTitle) currentItem.textContent = resolvedTitle;
+    }
     void hydrateMermaid(documentEl);
     const readerPane = documentEl.querySelector<HTMLElement>(".unified-document-reader");
     if (readerPane) readerPane.scrollTop = 0;
     else documentEl.scrollTop = 0;
+  }
+
+  function createProjectDocFromTitle(): void {
+    const name = normalizeNewDocPath(projectState.newDocName);
+    if (!name) return;
+    try { client.createDoc(name); } catch { /* ignore */ }
+    projectState.newDocName = "";
   }
 
   function openDocument(path: string): void {
@@ -1852,11 +1874,6 @@ export function mountUnifiedShell(
       default:
         return;
     }
-  }
-
-  function openDocumentList(): void {
-    openDocumentReader();
-    try { client.listDocs(); } catch { /* ignore */ }
   }
 
   function closePlanMainFocus(): void {
@@ -3657,12 +3674,8 @@ export function mountUnifiedShell(
 
     // New doc button
     if (target.closest("#overlay-new-doc-btn") || target.closest('[data-action="overlay-new-doc"]')) {
-      const name = projectState.newDocName.trim();
-      if (name) {
-        try { client.createDoc(name); } catch { /* ignore */ }
-        projectState.newDocName = "";
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      }
+      createProjectDocFromTitle();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
   });
@@ -3680,21 +3693,10 @@ export function mountUnifiedShell(
       setMainFocus("chat");
       return;
     }
-    if (btn.dataset.action === "document-list") {
-      const catalog = documentEl.querySelector<HTMLElement>(".unified-document-catalog");
-      catalog?.scrollTo({ top: 0, behavior: "smooth" });
-      catalog?.classList.add("is-flash");
-      window.setTimeout(() => catalog?.classList.remove("is-flash"), 900);
-      return;
-    }
     if (btn.dataset.action === "create-doc") {
-      const name = projectState.newDocName.trim();
-      if (name) {
-        try { client.createDoc(name); } catch { /* ignore */ }
-        projectState.newDocName = "";
-        renderDocumentPane();
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      }
+      createProjectDocFromTitle();
+      renderDocumentPane();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
     if (btn.dataset.action === "doc-outline-jump") {
@@ -3714,10 +3716,7 @@ export function mountUnifiedShell(
     if (ev.key !== "Enter") return;
     const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
     if (!docInput) return;
-    const name = projectState.newDocName.trim();
-    if (!name) return;
-    try { client.createDoc(name); } catch { /* ignore */ }
-    projectState.newDocName = "";
+    createProjectDocFromTitle();
     renderDocumentPane();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   });
@@ -3742,12 +3741,8 @@ export function mountUnifiedShell(
     if (ev.key === "Enter") {
       const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
       if (docInput) {
-        const name = projectState.newDocName.trim();
-        if (name) {
-          try { client.createDoc(name); } catch { /* ignore */ }
-          projectState.newDocName = "";
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        }
+        createProjectDocFromTitle();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
       }
     }
   });
