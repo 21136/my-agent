@@ -277,10 +277,18 @@ def _compute_execution_stage(
         }
     verdict = str(review_verdict or "").strip().casefold()
     if verdict != "pass" or int(review_blockers_count or 0) > 0:
-        blockers = ["review"]
+        # Ordinary mode: pending review is optional wrap-up, not a hard
+        # execution wall. Runaway still enforces verification via its own
+        # checkpoint / write gate, not this snapshot status.
+        wrap_warnings = ["review"]
         if int(review_blockers_count or 0) > 0:
-            blockers.append("review_blockers")
-        return {"stage": "verification", "reason": "verification_pending", "blockers": blockers}
+            wrap_warnings.append("review_blockers")
+        return {
+            "stage": "verification",
+            "reason": "verification_pending",
+            "blockers": [],
+            "warnings": wrap_warnings,
+        }
     return {"stage": "release", "reason": "verification_passed", "blockers": []}
 
 
@@ -2587,11 +2595,15 @@ def project_mode_block_reason(
     ):
         return None
 
+    ordinary_verification_wrapup = (
+        not runaway_enabled and effective_stage in {"verification", "release"}
+    )
     if (
         active_shell == "project"
         and effective_stage
         and effective_stage != "implementation"
         and not (bug_fix_lane and effective_stage in {"verification", "release"})
+        and not ordinary_verification_wrapup
     ):
         code_write = evolved_name in _CODING_TOOLS and evolved_name != "patch_file"
         if evolved_name == "patch_file" or evolved_name in _WRITE_TOOLS:
@@ -2835,6 +2847,11 @@ def format_project_overlay(
             lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
         elif workflow_stage == "implementation" and active_task_id:
             lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+        elif workflow_stage in {"verification", "release"}:
+            lines.append(
+                "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
+                "可以先跑验收，也可以继续实现"
+            )
         if workflow_stage == "documentation":
             lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
         elif workflow_stage == "design":
