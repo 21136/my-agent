@@ -5,6 +5,20 @@ import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
 import { RAIL_TAB_LABELS, type RailTab } from "./rail";
+import {
+  SERVICE_SCROLL_SELECTORS,
+  TERMINAL_ENDED_PREVIEW,
+  TERMINAL_SCROLL_SELECTORS,
+  clearPanelHtml,
+  groupTerminalSessions,
+  patchPanelHtml,
+  servicesPanelFingerprint,
+  terminalCwdLabel,
+  terminalHumanTitle,
+  terminalIsActive,
+  terminalsPanelFingerprint,
+  terminalsSummaryParts,
+} from "./terminal-list";
 
 export type { RailTab };
 
@@ -166,6 +180,8 @@ export interface ProjectPanelState {
   terminalsLoading: boolean;
   terminalsError: string;
   terminalsCollapsed: boolean;
+  terminalsEndedCollapsed: boolean;
+  terminalsEndedShowAll: boolean;
   terminalDetails: TerminalSessionItem | null;
   terminalOutput: string;
   terminalOutputCursor: number;
@@ -2796,10 +2812,6 @@ const TERMINAL_STATE_LABELS: Record<string, string> = {
   failed: "启动失败",
 };
 
-function terminalIsActive(session: TerminalSessionItem): boolean {
-  return session.state === "starting" || session.state === "running";
-}
-
 function terminalStatusLabel(session: TerminalSessionItem): string {
   return TERMINAL_STATE_LABELS[session.state] || session.state || "未知状态";
 }
@@ -2868,45 +2880,70 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   </div>`;
 }
 
-function renderTerminalsPanel(state: ProjectPanelState): string {
-  const active = state.terminalSessions.filter(terminalIsActive).length;
-  const inactive = state.terminalSessions.length - active;
-  const attention = state.terminalSessions.filter((session) =>
-    ["lost", "orphaned", "failed", "unsupported"].includes(session.state),
-  ).length;
-  const summary = state.terminalSessions.length === 0
-    ? state.terminalsLoading ? "加载中…" : "暂无会话"
-    : [
-        active > 0 ? `${active} 个运行中` : "无运行中",
-        inactive > 0 ? `${inactive} 个已结束` : "",
-        attention > 0 ? `${attention} 个需处理` : "",
-      ].filter(Boolean).join(" · ");
-
-  const rows = state.terminalSessions.length === 0
-    ? `<div class="sidebar-terminals-empty">${state.terminalsLoading ? "正在读取终端会话…" : "暂无终端会话"}</div>`
-    : state.terminalSessions.map((session) => {
-      const status = terminalStatusLabel(session);
-      const command = truncateSummary(session.command || "未命名命令", 64);
-      const cwd = truncateSummary(session.cwd || ".", 72);
-      const activity = terminalActivityLabel(session.last_activity_at);
-      const selected = state.terminalDetails?.session_id === session.session_id;
-      return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(session)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(session.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(session.command || "")}">
+function renderTerminalRow(state: ProjectPanelState, session: TerminalSessionItem): string {
+  const status = terminalStatusLabel(session);
+  const title = terminalHumanTitle(session.command || "", session.cwd || "");
+  const cwd = terminalCwdLabel(session.cwd || "");
+  const activity = terminalActivityLabel(session.last_activity_at);
+  const selected = state.terminalDetails?.session_id === session.session_id;
+  const meta = [cwd, activity].filter(Boolean).join(" · ");
+  return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(session)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(session.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(session.command || title)}">
         <span class="sidebar-terminal-dot" aria-hidden="true"></span>
         <div class="sidebar-terminal-main">
-          <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(command)}</span></div>
-          <div class="sidebar-terminal-meta"><span>${escapeHtml(cwd)}</span><span>· ${escapeHtml(activity)}</span></div>
+          <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(title)}</span></div>
+          <div class="sidebar-terminal-meta">${escapeHtml(meta)}</div>
         </div>
       </button>`;
-    }).join("");
+}
+
+function renderTerminalsPanel(state: ProjectPanelState): string {
+  const grouped = groupTerminalSessions(state.terminalSessions, {
+    selectedId: state.terminalDetails?.session_id,
+    endedCollapsed: state.terminalsEndedCollapsed,
+    endedShowAll: state.terminalsEndedShowAll,
+    endedPreview: TERMINAL_ENDED_PREVIEW,
+  });
+  const summaryParts = terminalsSummaryParts(grouped.active.length, grouped.attention.length, grouped.endedTotal);
+  const summary = state.terminalSessions.length === 0
+    ? (state.terminalsLoading ? "加载中…" : "暂无会话")
+    : (summaryParts.join(" · ") || "暂无会话");
+  const pinnedEnded = state.terminalsEndedCollapsed ? grouped.endedVisible : [];
+  const liveSessions = [...grouped.active, ...grouped.attention, ...pinnedEnded];
+  let liveRows: string;
+  if (state.terminalSessions.length === 0) {
+    liveRows = `<div class="sidebar-terminals-empty">${state.terminalsLoading ? "正在读取终端会话…" : "暂无终端会话"}</div>`;
+  } else if (liveSessions.length === 0 && grouped.endedTotal > 0) {
+    liveRows = `<div class="sidebar-terminals-empty">没有运行中或需处理的会话</div>`;
+  } else {
+    liveRows = liveSessions.map((session) => renderTerminalRow(state, session)).join("");
+  }
+
+  let endedBlock = "";
+  if (grouped.endedTotal > 0) {
+    const endedCollapsed = state.terminalsEndedCollapsed;
+    const endedRows = endedCollapsed
+      ? ""
+      : grouped.endedVisible.map((session) => renderTerminalRow(state, session)).join("");
+    const showAll = !endedCollapsed && !state.terminalsEndedShowAll && grouped.endedHiddenCount > 0
+      ? `<button type="button" class="sidebar-terminals-more" data-action="terminals-show-all-ended">查看全部 ${grouped.endedTotal}</button>`
+      : "";
+    endedBlock = `<div class="sidebar-terminals-ended">
+      <button type="button" class="sidebar-terminals-ended-toggle" data-action="toggle-ended-terminals" aria-expanded="${endedCollapsed ? "false" : "true"}">
+        <span class="sidebar-terminals-toggle-chevron">${endedCollapsed ? "▸" : "▾"}</span>
+        <span>已结束 · ${grouped.endedTotal}</span>
+      </button>
+      <div class="sidebar-terminals-ended-list${endedCollapsed ? " is-collapsed" : ""}">${endedRows}${showAll}</div>
+    </div>`;
+  }
 
   const collapsed = state.terminalsCollapsed;
   const bodyClass = collapsed ? "sidebar-terminals-body is-collapsed" : "sidebar-terminals-body";
   const error = state.terminalsError
     ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalsError)}</div>`
     : "";
-  const toggleLabel = collapsed
-    ? (active > 0 ? `终端 · ${active} 运行中` : "终端")
-    : `终端会话 · ${summary}`;
+  const toggleLabel = summary === "暂无会话" || summary === "加载中…"
+    ? (collapsed ? "终端" : `终端 · ${summary}`)
+    : `终端 · ${summary}`;
   return `<section class="sidebar-terminals" aria-label="终端会话">
     <button type="button" class="sidebar-terminals-toggle" data-action="toggle-terminals" aria-expanded="${collapsed ? "false" : "true"}">
       <span class="sidebar-terminals-toggle-chevron">${collapsed ? "▸" : "▾"}</span>
@@ -2918,7 +2955,8 @@ function renderTerminalsPanel(state: ProjectPanelState): string {
         <button type="button" class="unified-btn" data-action="terminals-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>刷新</button>
       </div>
       ${error}
-      <div class="sidebar-terminals-list">${rows}</div>
+      <div class="sidebar-terminals-list">${liveRows}</div>
+      ${endedBlock}
       ${renderTerminalDetails(state)}
     </div>
   </section>`;
@@ -3042,11 +3080,21 @@ export function renderProjectSidebar(
   els.terminalsPanel.classList.toggle("hidden", !showRuntimeChrome);
   els.servicesPanel.classList.toggle("hidden", !showRuntimeChrome);
   if (showRuntimeChrome) {
-    els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
-    els.servicesPanel.innerHTML = renderServicesPanel(state);
+    patchPanelHtml(
+      els.terminalsPanel,
+      renderTerminalsPanel(state),
+      terminalsPanelFingerprint(state),
+      TERMINAL_SCROLL_SELECTORS,
+    );
+    patchPanelHtml(
+      els.servicesPanel,
+      renderServicesPanel(state),
+      servicesPanelFingerprint(state),
+      SERVICE_SCROLL_SELECTORS,
+    );
   } else {
-    els.terminalsPanel.innerHTML = "";
-    els.servicesPanel.innerHTML = "";
+    clearPanelHtml(els.terminalsPanel);
+    clearPanelHtml(els.servicesPanel);
   }
 
   // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---

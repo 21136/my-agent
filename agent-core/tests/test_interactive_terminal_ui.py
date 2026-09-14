@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -291,10 +292,33 @@ class InteractiveTerminalUiTests(unittest.TestCase):
         self.assertIn("terminal.close", server)
         self.assertIn("terminalSessions", panel)
         self.assertIn("terminalDetails", panel)
+        self.assertIn("patchPanelHtml", panel)
+        self.assertIn("terminalsEndedCollapsed", panel)
+        self.assertIn("toggle-ended-terminals", panel)
+        self.assertIn("terminals-show-all-ended", panel)
+        self.assertIn("terminalHumanTitle", panel)
         self.assertIn("terminal-output", index)
         self.assertIn('id="sidebar-terminals"', index)
         self.assertIn("refreshTerminals", index)
+        self.assertIn("toggle-ended-terminals", index)
         self.assertIn("sidebar-terminals", css)
+        self.assertIn("sidebar-terminals-ended-list", css)
+        self.assertNotIn("els.terminalsPanel.innerHTML = renderTerminalsPanel(state)", panel)
+        self.assertNotIn("els.servicesPanel.innerHTML = renderServicesPanel(state)", panel)
+        self.assertIn("now-focus-card", panel)
+        self.assertIn('aria-label="当下焦点"', panel)
+
+    def test_terminal_list_helpers(self) -> None:
+        script = _ROOT / "desktop" / "tests" / "terminal-list.test.ts"
+        result = subprocess.run(
+            ["node", "--experimental-strip-types", str(script)],
+            cwd=_ROOT / "desktop",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("terminal-list tests ok", result.stdout)
 
 
 if __name__ == "__main__":
