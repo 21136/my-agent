@@ -30,6 +30,8 @@ export type DocOutlineItem = {
   text: string;
 };
 
+const TITLE_ACRONYMS = new Set(["ux", "ui", "api", "toc", "id", "ai", "cli", "ws", "html", "css"]);
+
 export function docBasename(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const slash = normalized.lastIndexOf("/");
@@ -37,12 +39,15 @@ export function docBasename(path: string): string {
 }
 
 export function prettifyDocName(name: string): string {
-  const base = name.replace(/\.md$/i, "").replace(/[_-]+/g, " ").trim();
-  if (!base) return name;
-  if (/^[\x00-\x7F]+$/.test(base)) {
-    return base.replace(/\b[a-zA-Z]/g, (ch) => ch.toUpperCase());
-  }
-  return base;
+  const file = docBasename(name);
+  const base = file.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!base) return "未命名文档";
+  if (!/^[\x00-\x7F]+$/.test(base)) return base;
+  return base.split(" ").map((word) => {
+    const lower = word.toLowerCase();
+    if (TITLE_ACRONYMS.has(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(" ");
 }
 
 export function firstMarkdownHeading(content: string): string {
@@ -60,6 +65,18 @@ export function humanDocTitle(path: string, name?: string, content?: string): st
   return prettifyDocName(name || file);
 }
 
+export function displayDocTitle(
+  path: string,
+  name: string | undefined,
+  content: string,
+  outline: DocOutlineItem[] = [],
+): string {
+  const title = humanDocTitle(path, name, content);
+  if (STANDARD_DOC_TITLES[docBasename(path)]) return title;
+  if (outline[0]?.text && title === prettifyDocName(name || path)) return outline[0].text;
+  return title;
+}
+
 export function sortProjectDocs(docs: ProjectDocItem[]): ProjectDocItem[] {
   const rank = new Map<string, number>(STANDARD_DOC_ORDER.map((file, index) => [file, index]));
   return [...docs].sort((a, b) => {
@@ -70,33 +87,21 @@ export function sortProjectDocs(docs: ProjectDocItem[]): ProjectDocItem[] {
     if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
     if (aRank !== undefined) return -1;
     if (bRank !== undefined) return 1;
-    return (a.name || aKey).localeCompare(b.name || bKey, "zh");
+    return humanDocTitle(a.path, a.name).localeCompare(humanDocTitle(b.path, b.name), "zh");
   });
 }
 
+export function normalizeNewDocPath(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "";
+  if (/\.[a-z0-9]+$/i.test(trimmed)) return trimmed;
+  return `${trimmed}.md`;
+}
+
 export function extractDocOutline(markdown: string): DocOutlineItem[] {
-  if (!markdown.trim()) return [];
-  const items: DocOutlineItem[] = [];
-  const used = new Set<string>();
-  let inFence = false;
-  for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
-    const line = rawLine.trimEnd();
-    if (/^\s*```/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const atx = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-    if (!atx) continue;
-    const text = stripMarkdownInline(atx[2]);
-    if (!text) continue;
-    items.push({
-      id: slugifyHeading(text, used),
-      level: atx[1].length,
-      text,
-    });
-  }
-  return items;
+  const structured = extractStructuredOutline(markdown);
+  if (structured.length) return structured;
+  return extractLooseMarkdownTitles(markdown);
 }
 
 export function applyHeadingIds(root: ParentNode, outline: DocOutlineItem[]): void {
@@ -105,6 +110,54 @@ export function applyHeadingIds(root: ParentNode, outline: DocOutlineItem[]): vo
     const heading = headings[index];
     if (heading) heading.id = item.id;
   });
+}
+
+export function extractOutlineFromRendered(root: ParentNode): DocOutlineItem[] {
+  const used = new Set<string>();
+  const items: DocOutlineItem[] = [];
+  for (const el of Array.from(root.querySelectorAll("h1, h2, h3"))) {
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    const id = el.id || slugifyHeading(text, used);
+    el.id = id;
+    used.add(id);
+    items.push({ id, level: Number(el.tagName[1]) || 2, text });
+  }
+  return items;
+}
+
+export function extractLooseOutlineFromRendered(root: ParentNode): DocOutlineItem[] {
+  const used = new Set<string>();
+  const items: DocOutlineItem[] = [];
+  for (const el of Array.from(root.querySelectorAll("p, li"))) {
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!isLooseTitle(text)) continue;
+    const strongChild = el.firstElementChild;
+    const strongOnly = Boolean(
+      strongChild
+      && (strongChild.tagName === "STRONG" || strongChild.tagName === "B")
+      && (strongChild.textContent || "").replace(/\s+/g, " ").trim() === text,
+    );
+    const numbered = isNumberedTitle(text);
+    if (!strongOnly && !numbered) continue;
+    const id = el.id || slugifyHeading(text, used);
+    el.id = id;
+    used.add(id);
+    items.push({ id, level: numbered ? 2 : 1, text });
+    if (items.length >= 24) break;
+  }
+  return items;
+}
+
+export function finalizeDocumentOutline(root: ParentNode, markdown: string): DocOutlineItem[] {
+  const structured = extractStructuredOutline(markdown);
+  if (structured.length) {
+    applyHeadingIds(root, structured);
+    return structured;
+  }
+  const rendered = extractOutlineFromRendered(root);
+  if (rendered.length) return rendered;
+  return extractLooseOutlineFromRendered(root);
 }
 
 export function renderDocCatalogHtml(
@@ -117,15 +170,14 @@ export function renderDocCatalogHtml(
 ): string {
   const newValue = options.newDocName || "";
   let html = `<div class="doc-catalog-new">
-    <input type="text" class="overlay-search-input doc-catalog-new-input" id="${escapeHtml(options.inputId)}" placeholder="新建文档（如 需求分析.md）…" value="${escapeHtml(newValue)}">
+    <input type="text" class="overlay-search-input doc-catalog-new-input" id="${escapeHtml(options.inputId)}" placeholder="文档标题，例如：需求分析" value="${escapeHtml(newValue)}">
     <button type="button" class="unified-btn unified-btn-accent doc-catalog-new-btn" data-action="${escapeHtml(options.createAction)}">新建</button>
   </div>`;
   if (!docs.length) {
-    html += `<p class="overlay-empty">暂无文档</p>`;
+    html += `<p class="doc-catalog-empty">还没有文档。输入标题后点新建。</p>`;
     return html;
   }
-  html += `<div class="doc-catalog-label">项目文档</div>`;
-  html += `<nav class="doc-catalog-list" aria-label="项目文档">`;
+  html += `<nav class="doc-catalog-list" aria-label="文档目录">`;
   for (const doc of sortProjectDocs(docs)) {
     const content = doc.path === currentPath ? options.currentContent : undefined;
     const title = humanDocTitle(doc.path, doc.name, content);
@@ -141,7 +193,7 @@ export function renderDocCatalogHtml(
 
 export function renderDocOutlineHtml(outline: DocOutlineItem[]): string {
   if (!outline.length) {
-    return `<p class="doc-outline-empty">本页暂无标题</p>`;
+    return `<p class="doc-outline-empty">本页还没有可跳转的小节</p>`;
   }
   const items = outline.map((item) => (
     `<button type="button" class="doc-outline-item is-h${item.level}" data-action="doc-outline-jump" data-heading-id="${escapeHtml(item.id)}" title="${escapeHtml(item.text)}">${escapeHtml(item.text)}</button>`
@@ -159,24 +211,22 @@ export function renderDocumentReaderHtml(args: {
   const outline = extractDocOutline(args.currentContent);
   const title = args.currentPath
     ? humanDocTitle(args.currentPath, docBasename(args.currentPath), args.currentContent)
-    : "文档";
+    : "选择一篇文档";
   const pathLine = args.currentPath
     ? `<div class="unified-document-path" title="${escapeHtml(args.currentPath)}">${escapeHtml(args.currentPath)}</div>`
     : "";
   const body = args.currentPath
     ? (args.currentContent
       ? args.renderedHtml
-      : `<p class="overlay-empty">加载中…</p>`)
-    : `<p class="overlay-empty">从左侧选择一篇文档</p>`;
+      : `<p class="doc-reader-empty">正在打开…</p>`)
+    : `<p class="doc-reader-empty">从左侧打开一篇文档，在这里阅读全文。</p>`;
   const html = `<div class="unified-document-inner">
     <header class="unified-document-header">
       <button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>
       <div class="unified-document-heading">
-        <div class="unified-document-kicker">项目文档</div>
         <h1>${escapeHtml(title)}</h1>
         ${pathLine}
       </div>
-      <button type="button" class="unified-btn" data-action="document-list">文档列表</button>
     </header>
     <div class="unified-document-shell">
       <aside class="unified-document-catalog">
@@ -192,11 +242,81 @@ export function renderDocumentReaderHtml(args: {
       </article>
       <aside class="unified-document-outline">
         <div class="doc-outline-label">本页目录</div>
-        ${renderDocOutlineHtml(outline)}
+        <div class="doc-outline-body">${renderDocOutlineHtml(outline)}</div>
       </aside>
     </div>
   </div>`;
   return { html, outline };
+}
+
+function extractStructuredOutline(markdown: string): DocOutlineItem[] {
+  if (!markdown.trim()) return [];
+  const items: DocOutlineItem[] = [];
+  const used = new Set<string>();
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const atx = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (atx) {
+      pushOutlineItem(items, used, atx[1].length, atx[2]);
+      continue;
+    }
+    const underline = /^(=+|-+)\s*$/.exec(line);
+    const previous = index > 0 ? lines[index - 1].trim() : "";
+    if (underline && previous && !/^#/.test(previous) && !/^\s*```/.test(previous)) {
+      pushOutlineItem(items, used, line.trim().startsWith("=") ? 1 : 2, previous);
+    }
+  }
+  return items;
+}
+
+function extractLooseMarkdownTitles(markdown: string): DocOutlineItem[] {
+  if (!markdown.trim()) return [];
+  const items: DocOutlineItem[] = [];
+  const used = new Set<string>();
+  let inFence = false;
+  for (const rawLine of markdown.replace(/\r\n/g, "\n").split("\n")) {
+    if (/^\s*```/.test(rawLine)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const line = rawLine.trim();
+    const bold = /^\*\*(.+?)\*\*$/.exec(line) || /^__(.+?)__$/.exec(line);
+    if (bold && isLooseTitle(bold[1])) {
+      pushOutlineItem(items, used, 1, bold[1]);
+      continue;
+    }
+    const numbered = /^(?:\d+[\.、．\)]\s+)(.+)$/.exec(line);
+    if (numbered && isLooseTitle(numbered[1])) {
+      pushOutlineItem(items, used, 2, numbered[1]);
+    }
+    if (items.length >= 24) break;
+  }
+  return items;
+}
+
+function pushOutlineItem(items: DocOutlineItem[], used: Set<string>, level: number, raw: string): void {
+  const text = stripMarkdownInline(raw);
+  if (!text) return;
+  items.push({ id: slugifyHeading(text, used), level, text });
+}
+
+function isLooseTitle(text: string): boolean {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length < 2 || compact.length > 48) return false;
+  if (/[.。:：]$/.test(compact) && compact.length > 28) return false;
+  return true;
+}
+
+function isNumberedTitle(text: string): boolean {
+  return /^\d+[\.、．\)]\s+\S/.test(text);
 }
 
 function stripMarkdownInline(text: string): string {
