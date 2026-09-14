@@ -81,13 +81,36 @@ class ProjectStageCardContractTests(unittest.TestCase):
         plan_review = (ROOT / "desktop" / "src" / "shells" / "unified" / "plan-review.ts").read_text(
             encoding="utf-8"
         )
+        reading = (ROOT / "desktop" / "src" / "shells" / "unified" / "doc-reading.ts").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('"document"', plan_review)
         self.assertIn('setMainFocus("document")', index)
-        self.assertIn('data-action="document-back"', index)
-        self.assertIn('data-action="document-list"', index)
-        self.assertIn('主区阅读', panel)
+        self.assertIn('data-action="document-back"', reading)
         self.assertIn("unified-document-content table", css)
         self.assertIn("unified-document-content .mermaid-placeholder", css)
+        self.assertIn("unified-document-shell", css)
+        self.assertIn("doc-outline-label", css)
+        self.assertIn("min(72ch", css)
+        self.assertIn('PROJECT.md": "项目说明"', reading)
+        self.assertIn('TECH-DESIGN.md": "技术要点"', reading)
+        self.assertIn("本页目录", reading)
+        self.assertIn("文档标题，例如：需求分析", reading)
+        self.assertIn("finalizeDocumentOutline", index)
+        self.assertIn("normalizeNewDocPath", index)
+        self.assertIn('chatEl.classList.toggle("hidden", focus !== "chat")', index)
+        self.assertNotIn("data-main-focus=\"document\"] .unified-chat", css)
+        self.assertIn("renderDocumentReaderHtml", index)
+        self.assertIn("doc-outline-jump", index)
+        self.assertNotIn("主区阅读", panel)
+        self.assertNotIn("项目文档", reading)
+        self.assertIn("textbook-artifact-title", panel)
+        self.assertNotIn('textbook-artifact-completeness is-', panel)
+        self.assertIn("ENV.md", reading)
+        self.assertIn("环境与质量", reading)
+        self.assertLess(reading.index("PROJECT.md"), reading.index("SCOPE.md"))
+        self.assertLess(reading.index("TASKS.md"), reading.index("VERIFY.md"))
+        self.assertLess(reading.index("VERIFY.md"), reading.index("ENV.md"))
 
     def test_it5820_review_button_has_visible_focus_transition(self) -> None:
         index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(

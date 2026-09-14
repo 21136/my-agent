@@ -1,7 +1,7 @@
 import type { PlanSuggestion } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
 
-export type MainFocus = "chat" | "plan_review" | "plan_full" | "document";
+export type MainFocus = "chat" | "plan_review" | "plan_full" | "document" | "projects";
 
 export interface PlanReviewUiState {
   mainFocus: MainFocus;
@@ -122,8 +122,8 @@ export function renderPlanReviewPanel(opts: {
 
 export function renderPlanFullHeader(): string {
   return `<header class="unified-plan-review-header">
-    <button type="button" class="unified-btn unified-plan-review-back" data-plan-review-action="back">← 返回聊天</button>
     <span class="unified-plan-review-position">任务</span>
+    <span></span>
     <span></span>
   </header>`;
 }

@@ -421,6 +421,9 @@ export type ServerEvent =
       size: number;
     }
   | { type: "project.doc.create.done"; path: string; name: string }
+  | { type: "project.doc.write.done"; path: string; name: string; size: number }
+  | { type: "project.doc.rename.done"; path: string; old_path: string; name: string }
+  | { type: "project.doc.delete.done"; path: string; name: string; is_standard?: boolean }
   | { type: "project.task.add.done"; line: number; description: string; tasks_done: number; tasks_total: number }
   | { type: "project.undo.available"; description: string }
   | { type: "project.detect"; project_id: string; reason: string; file_count: number; has_tasks: boolean }
@@ -923,6 +926,23 @@ export class AgentWsClient {
 
   createDoc(path: string, content?: string): void {
     this.send({ type: "project.doc.create", path, content: content ?? "" });
+  }
+
+  writeDoc(path: string, content: string): void {
+    this.send({ type: "project.doc.write", path, content });
+  }
+
+  renameDoc(path: string, opts: { title?: string; newPath?: string }): void {
+    this.send({
+      type: "project.doc.rename",
+      path,
+      title: opts.title ?? "",
+      new_path: opts.newPath ?? "",
+    });
+  }
+
+  deleteDoc(path: string): void {
+    this.send({ type: "project.doc.delete", path });
   }
 
   addTask(description: string, phase?: string): void {
