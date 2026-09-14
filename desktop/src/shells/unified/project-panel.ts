@@ -1,6 +1,7 @@
 import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
 import { RUNAWAY_BLOCKER, RUNAWAY_STAGE, RUNAWAY_STATUS } from "../../copy/user-messages";
 import { escapeHtml } from "../chat-state";
+import { renderDocsCatalog } from "./doc-reading";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 
@@ -115,6 +116,13 @@ export interface ProjectPanelState {
   currentDocPath: string;
   currentDocContent: string;
   newDocName: string;
+  renamingDocPath: string;
+  renameDraft: string;
+  deleteConfirmPath: string;
+  docView: "preview" | "edit";
+  docEditDraft: string;
+  docDirty: boolean;
+  docSaving: boolean;
   // task add
   quickAddText: string;
   // auto-detect
@@ -469,6 +477,13 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.currentDocPath = "";
   state.currentDocContent = "";
   state.newDocName = "";
+  state.renamingDocPath = "";
+  state.renameDraft = "";
+  state.deleteConfirmPath = "";
+  state.docView = "preview";
+  state.docEditDraft = "";
+  state.docDirty = false;
+  state.docSaving = false;
   state.quickAddText = "";
   resetPlanWarningState(state);
   state.undoDescription = "";
@@ -2126,38 +2141,7 @@ export function renderPlanTaskFlow(
 // ---- overlay panel rendering ----
 
 function renderDocsOverlay(state: ProjectPanelState): string {
-  // List all docs
-  let html = "";
-
-  // New doc input
-  html += `<div style="display:flex;gap:0.3rem;margin-bottom:0.5rem;">
-    <input type="text" class="overlay-search-input" id="overlay-new-doc-input" placeholder="新建文档（如 需求分析.md）…" value="${escapeHtml(state.newDocName)}" style="margin-bottom:0;">
-    <button type="button" class="unified-btn unified-btn-accent" id="overlay-new-doc-btn" style="flex-shrink:0;font-size:0.78rem;">新建</button>
-  </div>`;
-
-  if (!state.projectDocs.length) {
-    html += `<p class="overlay-empty">暂无文档</p>`;
-    return html;
-  }
-
-  // Sort: standard docs first
-  const sorted = [...state.projectDocs].sort((a, b) => {
-    if (a.is_standard && !b.is_standard) return -1;
-    if (!a.is_standard && b.is_standard) return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  html += `<div style="font-size:0.72rem;font-weight:600;color:var(--ma-text-muted);margin-bottom:0.25rem;">项目文档</div>`;
-  for (const doc of sorted) {
-    const icon = doc.is_standard ? "📋" : "📄";
-    const sub = doc.name !== doc.path ? ` <span style="font-size:0.7rem;color:var(--ma-text-muted);">${escapeHtml(doc.path)}</span>` : "";
-    const active = doc.path === state.currentDocPath ? " is-current" : "";
-    html += `<button type="button" class="overlay-doc-item${active}" data-doc-path="${escapeHtml(doc.path)}">
-      <span>${icon} ${escapeHtml(doc.name)}</span>${sub}<span class="overlay-doc-item-hint">主区阅读</span>
-    </button>`;
-  }
-
-  return html;
+  return renderDocsCatalog(state);
 }
 
 function renderProjectsOverlay(state: ProjectPanelState): string {

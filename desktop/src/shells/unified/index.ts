@@ -51,6 +51,14 @@ import {
   renderToolFailAlert,
 } from "./output-display";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
+import {
+  docCatalogMenuItems,
+  docDisplayTitle,
+  docStem,
+  findProjectDoc,
+  mountPopupMenu,
+  renderDocumentPaneHtml,
+} from "./doc-reading";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import "./unified.css";
@@ -210,6 +218,13 @@ export function mountUnifiedShell(
     currentDocPath: "",
     currentDocContent: "",
     newDocName: "",
+    renamingDocPath: "",
+    renameDraft: "",
+    deleteConfirmPath: "",
+    docView: "preview",
+    docEditDraft: "",
+    docDirty: false,
+    docSaving: false,
     quickAddText: "",
     detectedProject: null,
     planWarnings: [],
@@ -1525,7 +1540,206 @@ export function mountUnifiedShell(
     return actionableSuggestions(projectState.suggestions);
   }
 
+  let pendingDocAction: "rename" | "delete" | "write" | "create" | null = null;
+  let docLeaveNext: (() => void) | null = null;
+  let docLeavePrompt = false;
+  let destroyDocMenu: (() => void) | null = null;
+
+  function isDocDirty(): boolean {
+    return projectState.docView === "edit" && projectState.docDirty;
+  }
+
+  function resetDocEditState(nextPath = "", content = ""): void {
+    projectState.currentDocPath = nextPath;
+    projectState.currentDocContent = content;
+    projectState.docView = "preview";
+    projectState.docEditDraft = content;
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    docLeaveNext = null;
+    docLeavePrompt = false;
+  }
+
+  function captureDocDraftFromEditor(): void {
+    const editor = documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor");
+    if (editor) projectState.docEditDraft = editor.value;
+    projectState.docDirty = projectState.docEditDraft !== projectState.currentDocContent;
+  }
+
+  function syncDocEditChrome(): void {
+    const saveBtn = documentEl.querySelector<HTMLButtonElement>("[data-action='document-save']");
+    if (saveBtn) {
+      saveBtn.disabled = !projectState.docDirty || projectState.docSaving;
+      saveBtn.textContent = projectState.docSaving ? "保存中…" : "保存";
+    }
+    const discardBtn = documentEl.querySelector<HTMLButtonElement>("[data-action='document-discard']");
+    if (discardBtn) discardBtn.disabled = !projectState.docDirty || projectState.docSaving;
+    documentEl.querySelector(".unified-document-inner")?.classList.toggle("is-dirty", projectState.docDirty);
+    const kicker = documentEl.querySelector(".unified-document-kicker");
+    if (kicker) kicker.textContent = projectState.docDirty ? "项目文档 · 未保存" : "项目文档";
+  }
+
+  function currentDocTitle(path = projectState.currentDocPath): string {
+    const doc = findProjectDoc(projectState.projectDocs, path);
+    return docDisplayTitle(path, doc?.name);
+  }
+
+  function renderDocumentPane(): void {
+    const path = projectState.currentDocPath;
+    const content = projectState.currentDocContent;
+    const previewHtml = content
+      ? renderMarkdown(content)
+      : `<p class="overlay-empty">${path ? "加载中…" : "未选择文档"}</p>`;
+    documentEl.innerHTML = renderDocumentPaneHtml({
+      path,
+      title: currentDocTitle(path),
+      view: projectState.docView,
+      previewHtml,
+      draft: projectState.docEditDraft,
+      dirty: projectState.docDirty,
+      saving: projectState.docSaving,
+      leavePrompt: docLeavePrompt,
+    });
+    if (projectState.docView === "preview") void hydrateMermaid(documentEl);
+    if (!docLeavePrompt) documentEl.scrollTop = 0;
+  }
+
+  function requestLeaveDocument(next: () => void): boolean {
+    if (!isDocDirty()) return true;
+    captureDocDraftFromEditor();
+    docLeaveNext = next;
+    docLeavePrompt = true;
+    if (projectState.mainFocus !== "document") {
+      projectState.mainFocus = "document";
+      syncMainFocusView();
+    } else {
+      renderDocumentPane();
+    }
+    setStatus("有未保存的更改");
+    return false;
+  }
+
+  function clearDocLeavePrompt(): void {
+    docLeavePrompt = false;
+    docLeaveNext = null;
+  }
+
+  function finishDocLeave(): void {
+    const next = docLeaveNext;
+    clearDocLeavePrompt();
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    next?.();
+  }
+
+  function saveCurrentDoc(after?: () => void): void {
+    const path = projectState.currentDocPath;
+    if (!path) return;
+    captureDocDraftFromEditor();
+    pendingDocAction = "write";
+    projectState.docSaving = true;
+    if (after) docLeaveNext = after;
+    syncDocEditChrome();
+    try {
+      client.writeDoc(path, projectState.docEditDraft);
+      setStatus("正在保存文档…");
+    } catch (err) {
+      projectState.docSaving = false;
+      pendingDocAction = null;
+      syncDocEditChrome();
+      setStatus(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function refreshDocsSidebar(): void {
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function startRenameDoc(path: string): void {
+    projectState.deleteConfirmPath = "";
+    projectState.renamingDocPath = path;
+    projectState.renameDraft = docStem(path);
+    refreshDocsSidebar();
+    const input = projectEls.overlayBody.querySelector<HTMLInputElement>("#overlay-doc-rename-input");
+    input?.focus();
+    input?.select();
+  }
+
+  function cancelRenameDoc(): void {
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    refreshDocsSidebar();
+  }
+
+  function commitRenameDoc(): void {
+    const path = projectState.renamingDocPath;
+    const title = projectState.renameDraft.trim();
+    if (!path) return;
+    if (!title || title === docStem(path)) {
+      cancelRenameDoc();
+      return;
+    }
+    pendingDocAction = "rename";
+    try {
+      client.renameDoc(path, { title });
+      setStatus("正在重命名…");
+    } catch (err) {
+      pendingDocAction = null;
+      setStatus(`重命名失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    refreshDocsSidebar();
+  }
+
+  function askDeleteDoc(path: string): void {
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    projectState.deleteConfirmPath = path;
+    refreshDocsSidebar();
+  }
+
+  function confirmDeleteDoc(): void {
+    const path = projectState.deleteConfirmPath;
+    if (!path) return;
+    pendingDocAction = "delete";
+    try {
+      client.deleteDoc(path);
+      setStatus("正在删除文档…");
+    } catch (err) {
+      pendingDocAction = null;
+      setStatus(`删除失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function showDocCatalogMenu(path: string, x: number, y: number): void {
+    destroyDocMenu?.();
+    destroyDocMenu = mountPopupMenu({
+      x,
+      y,
+      items: docCatalogMenuItems(),
+      onSelect: (id) => {
+        destroyDocMenu = null;
+        if (id === "rename") startRenameDoc(path);
+        else if (id === "delete") askDeleteDoc(path);
+      },
+    });
+  }
+
   function setMainFocus(focus: MainFocus): void {
+    if (
+      projectState.mainFocus === "document" &&
+      focus !== "document" &&
+      !requestLeaveDocument(() => setMainFocus(focus))
+    ) {
+      return;
+    }
+    if (focus !== "document") {
+      projectState.docView = "preview";
+      projectState.docDirty = false;
+      projectState.docSaving = false;
+      docLeavePrompt = false;
+    }
     projectState.mainFocus = focus;
     if (focus !== "chat") {
       clearExpandedSurface();
@@ -1534,6 +1748,30 @@ export function mountUnifiedShell(
       projectState.reviewFocusId = null;
     }
     syncMainFocusView();
+  }
+
+  function openDocument(path: string): void {
+    if (!path) return;
+    if (path === projectState.currentDocPath) {
+      projectState.overlayPanel = null;
+      if (projectState.mainFocus !== "document") setMainFocus("document");
+      else refreshDocsSidebar();
+      return;
+    }
+    if (isDocDirty()) {
+      requestLeaveDocument(() => openDocument(path));
+      return;
+    }
+    projectState.currentDocPath = path;
+    projectState.currentDocContent = "";
+    projectState.docEditDraft = "";
+    projectState.docView = "preview";
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    clearDocLeavePrompt();
+    projectState.overlayPanel = null;
+    setMainFocus("document");
+    try { client.readDoc(path); } catch { /* ignore */ }
   }
 
   function syncMainFocusView(): void {
@@ -1585,35 +1823,6 @@ export function mountUnifiedShell(
         ? projectState.highlightedLines
         : null;
     planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
-  }
-
-  function renderDocumentPane(): void {
-    const path = projectState.currentDocPath;
-    const content = projectState.currentDocContent;
-    documentEl.innerHTML = `<div class="unified-document-inner">
-      <header class="unified-document-header">
-        <button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>
-        <div class="unified-document-heading">
-          <div class="unified-document-kicker">项目文档</div>
-          <h1>${escapeHtml(path || "文档")}</h1>
-        </div>
-        <button type="button" class="unified-btn" data-action="document-list">文档列表</button>
-      </header>
-      <article class="unified-document-content unified-markdown">${content
-        ? renderMarkdown(content)
-        : `<p class="overlay-empty">加载中…</p>`}</article>
-    </div>`;
-    void hydrateMermaid(documentEl);
-    documentEl.scrollTop = 0;
-  }
-
-  function openDocument(path: string): void {
-    if (!path) return;
-    projectState.currentDocPath = path;
-    projectState.currentDocContent = "";
-    projectState.overlayPanel = null;
-    setMainFocus("document");
-    try { client.readDoc(path); } catch { /* ignore */ }
   }
 
   function openPlanReview(suggestionId?: string): void {
@@ -3615,10 +3824,33 @@ export function mountUnifiedShell(
       return;
     }
 
-    // Document item click
-    const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item");
-    if (docBtn?.dataset.docPath) {
-      openDocument(docBtn.dataset.docPath);
+    // Document catalog
+    if (target.closest("#overlay-doc-rename-input")) return;
+    const deleteConfirm = target.closest<HTMLButtonElement>("[data-action='doc-delete-confirm']");
+    if (deleteConfirm) {
+      confirmDeleteDoc();
+      return;
+    }
+    const deleteCancel = target.closest<HTMLButtonElement>("[data-action='doc-delete-cancel']");
+    if (deleteCancel) {
+      projectState.deleteConfirmPath = "";
+      refreshDocsSidebar();
+      return;
+    }
+    const moreBtn = target.closest<HTMLButtonElement>("[data-doc-more]");
+    if (moreBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".overlay-doc-item")?.dataset.docPath;
+      if (path) {
+        const rect = moreBtn.getBoundingClientRect();
+        showDocCatalogMenu(path, rect.left, rect.bottom + 4);
+      }
+      return;
+    }
+    const docRow = target.closest<HTMLElement>(".overlay-doc-item");
+    if (docRow?.dataset.docPath && !docRow.classList.contains("is-renaming")) {
+      openDocument(docRow.dataset.docPath);
       return;
     }
 
@@ -3626,9 +3858,10 @@ export function mountUnifiedShell(
     if (target.closest("#overlay-new-doc-btn")) {
       const name = projectState.newDocName.trim();
       if (name) {
-        try { client.createDoc(name); } catch { /* ignore */ }
+        pendingDocAction = "create";
+        try { client.createDoc(name); } catch { pendingDocAction = null; }
         projectState.newDocName = "";
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        refreshDocsSidebar();
       }
       return;
     }
@@ -3638,12 +3871,82 @@ export function mountUnifiedShell(
     const target = ev.target as HTMLElement;
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
-    if (btn.dataset.action === "document-back") {
+    const action = btn.dataset.action;
+    if (action === "document-back") {
       setMainFocus("chat");
       return;
     }
-    if (btn.dataset.action === "document-list") {
+    if (action === "document-list") {
       openDocumentList();
+      return;
+    }
+    if (action === "document-edit") {
+      clearDocLeavePrompt();
+      projectState.docView = "edit";
+      if (!projectState.docDirty) projectState.docEditDraft = projectState.currentDocContent;
+      renderDocumentPane();
+      documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor")?.focus();
+      return;
+    }
+    if (action === "document-preview") {
+      captureDocDraftFromEditor();
+      if (isDocDirty()) {
+        requestLeaveDocument(() => {
+          projectState.docView = "preview";
+          projectState.docDirty = false;
+          projectState.docEditDraft = projectState.currentDocContent;
+          renderDocumentPane();
+        });
+        return;
+      }
+      projectState.docView = "preview";
+      renderDocumentPane();
+      return;
+    }
+    if (action === "document-save") {
+      saveCurrentDoc();
+      return;
+    }
+    if (action === "document-discard") {
+      projectState.docEditDraft = projectState.currentDocContent;
+      projectState.docDirty = false;
+      clearDocLeavePrompt();
+      renderDocumentPane();
+      return;
+    }
+    if (action === "document-save-leave") {
+      saveCurrentDoc();
+      return;
+    }
+    if (action === "document-discard-leave") {
+      projectState.docEditDraft = projectState.currentDocContent;
+      finishDocLeave();
+      return;
+    }
+    if (action === "document-cancel-leave") {
+      docLeavePrompt = false;
+      docLeaveNext = null;
+      renderDocumentPane();
+    }
+  });
+
+  documentEl.addEventListener("input", (ev) => {
+    const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
+    if (!editor) return;
+    projectState.docEditDraft = editor.value;
+    const dirty = projectState.docEditDraft !== projectState.currentDocContent;
+    if (dirty !== projectState.docDirty) {
+      projectState.docDirty = dirty;
+      syncDocEditChrome();
+    }
+  });
+
+  documentEl.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      if (projectState.docView === "edit" && projectState.mainFocus === "document") {
+        ev.preventDefault();
+        saveCurrentDoc();
+      }
     }
   });
 
@@ -3660,21 +3963,62 @@ export function mountUnifiedShell(
       projectState.newDocName = docInput.value;
       return;
     }
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (renameInput) {
+      projectState.renameDraft = renameInput.value;
+    }
   });
 
-  // Overlay: new-doc input Enter key
+  // Overlay: new-doc / rename keys and F2
   projectEls.overlayBody.addEventListener("keydown", (ev) => {
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (renameInput) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commitRenameDoc();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancelRenameDoc();
+      }
+      return;
+    }
+    if (ev.key === "F2") {
+      const row = (ev.target as HTMLElement).closest<HTMLElement>(".overlay-doc-item");
+      if (row?.dataset.docPath) {
+        ev.preventDefault();
+        startRenameDoc(row.dataset.docPath);
+      }
+      return;
+    }
     if (ev.key === "Enter") {
       const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
       if (docInput) {
         const name = projectState.newDocName.trim();
         if (name) {
-          try { client.createDoc(name); } catch { /* ignore */ }
+          pendingDocAction = "create";
+          try { client.createDoc(name); } catch { pendingDocAction = null; }
           projectState.newDocName = "";
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          refreshDocsSidebar();
         }
       }
     }
+  });
+
+  projectEls.overlayBody.addEventListener("focusout", (ev) => {
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (!renameInput) return;
+    window.setTimeout(() => {
+      if (projectState.renamingDocPath && document.activeElement !== renameInput) {
+        commitRenameDoc();
+      }
+    }, 0);
+  });
+
+  projectEls.overlayBody.addEventListener("contextmenu", (ev) => {
+    const row = (ev.target as HTMLElement).closest<HTMLElement>(".overlay-doc-item");
+    if (!row?.dataset.docPath) return;
+    ev.preventDefault();
+    showDocCatalogMenu(row.dataset.docPath, ev.clientX, ev.clientY);
   });
 
   // Change banner actions
@@ -4520,18 +4864,68 @@ export function mountUnifiedShell(
 
       case "project.doc.list.done":
         projectState.projectDocs = event.docs;
+        if (projectState.deleteConfirmPath && !event.docs.some((doc: { path: string }) => doc.path === projectState.deleteConfirmPath)) {
+          projectState.deleteConfirmPath = "";
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.read.done":
+        if (projectState.currentDocPath && event.path !== projectState.currentDocPath) break;
+        if (isDocDirty()) break;
+        projectState.currentDocPath = event.path;
         projectState.currentDocContent = event.content;
+        if (projectState.docView === "edit") projectState.docEditDraft = event.content;
         if (projectState.mainFocus === "document") renderDocumentPane();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.create.done":
         projectState.newDocName = "";
-        client.listDocs();
+        pendingDocAction = null;
+        setStatus(`已新建 ${event.name}`);
+        break;
+
+      case "project.doc.write.done":
+        pendingDocAction = null;
+        projectState.docSaving = false;
+        if (event.path === projectState.currentDocPath) {
+          projectState.currentDocContent = projectState.docEditDraft;
+          projectState.docDirty = false;
+        }
+        setStatus("文档已保存");
+        if (docLeaveNext) {
+          finishDocLeave();
+        } else if (projectState.mainFocus === "document") {
+          syncDocEditChrome();
+        }
+        break;
+
+      case "project.doc.rename.done":
+        pendingDocAction = null;
+        projectState.renamingDocPath = "";
+        projectState.renameDraft = "";
+        if (projectState.currentDocPath === event.old_path) {
+          projectState.currentDocPath = event.path;
+          if (projectState.mainFocus === "document") {
+            if (projectState.docView === "edit") captureDocDraftFromEditor();
+            renderDocumentPane();
+          }
+        }
+        setStatus(`已重命名为 ${event.name}`);
+        break;
+
+      case "project.doc.delete.done":
+        pendingDocAction = null;
+        projectState.deleteConfirmPath = "";
+        if (projectState.currentDocPath === event.path) {
+          resetDocEditState();
+          if (projectState.mainFocus === "document") {
+            setMainFocus("chat");
+          }
+        }
+        setStatus("文档已删除");
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.task.add.done":
@@ -4673,6 +5067,21 @@ export function mountUnifiedShell(
         break;
 
       case "error":
+        if (pendingDocAction) {
+          const action = pendingDocAction;
+          pendingDocAction = null;
+          projectState.docSaving = false;
+          const prefix =
+            action === "rename" ? "重命名失败"
+            : action === "delete" ? "删除失败"
+            : action === "write" ? "保存失败"
+            : "新建失败";
+          setStatus(`${prefix}：${event.message}`);
+          if (action === "write" && projectState.mainFocus === "document") syncDocEditChrome();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          chat.handleEvent(event);
+          break;
+        }
         if (pendingAdoptAccept) {
           const adoptError = String(event.message || "unknown error").trim();
           clearPendingAdopt();

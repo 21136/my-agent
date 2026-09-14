@@ -2456,7 +2456,7 @@
 }
 .unified-document-header {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   padding-bottom: 0.75rem;
@@ -2478,8 +2478,74 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.unified-document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.35rem;
+}
+.unified-segmented {
+  display: inline-flex;
+  border: 1px solid var(--ma-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.unified-segmented-btn {
+  border: none;
+  background: transparent;
+  color: var(--ma-text);
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.unified-segmented-btn:hover {
+  background: color-mix(in srgb, var(--ma-text) 6%, transparent);
+}
+.unified-segmented-btn.is-active {
+  background: color-mix(in srgb, var(--ma-accent) 16%, transparent);
+  color: var(--ma-accent);
+}
+.unified-document-unsaved {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--ma-danger) 40%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-danger) 6%, var(--ma-surface));
+  border-radius: 8px;
+  font-size: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.unified-document-unsaved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
 .unified-document-content {
   padding: 1.25rem 0 3rem;
+}
+.unified-document-editor {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 28rem;
+  margin: 1rem 0 2rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 8px;
+  background: var(--ma-surface);
+  color: var(--ma-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+.unified-document-inner.is-dirty .unified-document-kicker {
+  color: var(--ma-danger);
 }
 .unified-document-content table {
   display: block;
@@ -3325,6 +3391,8 @@
   align-items: center;
   gap: 0.3rem;
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 0.4rem 0.5rem;
   border: none;
   border-bottom: 1px solid var(--ma-border);
@@ -3337,6 +3405,94 @@
   border-radius: 2px;
 }
 .overlay-doc-item:hover { background: var(--ma-bg); }
+.overlay-doc-item.is-current {
+  background: color-mix(in srgb, var(--ma-accent) 8%, transparent);
+}
+.overlay-doc-item.is-renaming {
+  cursor: default;
+}
+.overlay-doc-item-icon {
+  flex-shrink: 0;
+}
+.overlay-doc-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 0.05rem;
+}
+.overlay-doc-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overlay-doc-item-path {
+  font-size: 0.7rem;
+  color: var(--ma-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overlay-doc-item-hint {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: var(--ma-text-muted);
+  opacity: 0;
+}
+.overlay-doc-item-more {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--ma-text-muted);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  letter-spacing: 0.04em;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  cursor: pointer;
+  opacity: 0;
+}
+.overlay-doc-item:hover .overlay-doc-item-hint,
+.overlay-doc-item:focus-within .overlay-doc-item-hint,
+.overlay-doc-item:hover .overlay-doc-item-more,
+.overlay-doc-item:focus-within .overlay-doc-item-more {
+  opacity: 1;
+}
+.overlay-doc-item-more:hover,
+.overlay-doc-item-more:focus {
+  background: color-mix(in srgb, var(--ma-text) 8%, transparent);
+  color: var(--ma-text);
+}
+.overlay-doc-rename-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--ma-accent);
+  border-radius: 4px;
+  background: var(--ma-surface);
+  color: var(--ma-text);
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.15rem 0.35rem;
+}
+.docs-catalog-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+}
+.docs-catalog-toolbar .overlay-search-input {
+  margin-bottom: 0;
+}
+.docs-catalog-toolbar .unified-btn {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+}
+.docs-catalog-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ma-text-muted);
+  margin-bottom: 0.25rem;
+}
 
 /* overlay: empty state */
 .overlay-empty {

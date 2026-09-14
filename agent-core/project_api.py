@@ -20,6 +20,7 @@ from project_mode import (
     add_task_to_tasks_md,
     create_project_doc,
     compute_execution_stage,
+    delete_project_doc,
     detect_potential_project,
     list_project_docs,
     list_projects,
@@ -31,9 +32,11 @@ from project_mode import (
     read_project_doc,
     read_project_template,
     read_task_stats,
+    rename_project_doc,
     run_acceptance_check,
     snapshot_plan_fingerprints,
     sync_plan_dirty_if_structure_changed,
+    write_project_doc,
 )
 from project_release import load_release_acceptance, save_release_acceptance
 from plan_agent import PlanAgent, get_plan_agent
@@ -902,6 +905,51 @@ def dispatch_doc_message(
             if not doc_path:
                 raise ProjectApiError("project.doc.create requires path")
             result = create_project_doc(paths, pid, doc_path, content)
+            return {
+                "_events": [
+                    result,
+                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
+                ]
+            }
+
+        if msg_type in {"project.doc.write", "project.doc.save"}:
+            doc_path = str(message.get("path", ""))
+            if not doc_path:
+                raise ProjectApiError("project.doc.write requires path")
+            content = message.get("content")
+            if content is None:
+                raise ProjectApiError("project.doc.write requires content")
+            result = write_project_doc(paths, pid, doc_path, str(content))
+            return {
+                "_events": [
+                    result,
+                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
+                ]
+            }
+
+        if msg_type == "project.doc.rename":
+            doc_path = str(message.get("path", ""))
+            if not doc_path:
+                raise ProjectApiError("project.doc.rename requires path")
+            title = str(message.get("title") or message.get("name") or "")
+            new_path = str(message.get("new_path") or "")
+            if not title and not new_path:
+                raise ProjectApiError("project.doc.rename requires title or new_path")
+            result = rename_project_doc(
+                paths, pid, doc_path, title=title, new_path=new_path
+            )
+            return {
+                "_events": [
+                    result,
+                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
+                ]
+            }
+
+        if msg_type == "project.doc.delete":
+            doc_path = str(message.get("path", ""))
+            if not doc_path:
+                raise ProjectApiError("project.doc.delete requires path")
+            result = delete_project_doc(paths, pid, doc_path)
             return {
                 "_events": [
                     result,
