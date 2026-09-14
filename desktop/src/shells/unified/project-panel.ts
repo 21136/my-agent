@@ -1,9 +1,12 @@
 import type { AgentWsClient, ChangeLedgerItem, PlanChangeItem, PlanSuggestion, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
 import { RUNAWAY_BLOCKER, RUNAWAY_STAGE, RUNAWAY_STATUS } from "../../copy/user-messages";
 import { escapeHtml } from "../chat-state";
-import { renderDocsCatalog } from "./doc-reading";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
+import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
+import { RAIL_TAB_LABELS, type RailTab } from "./rail";
+
+export type { RailTab };
 
 export type { PlanSuggestion, ServiceListItem, TerminalSessionItem };
 
@@ -90,6 +93,7 @@ export interface ProjectPanelState {
   pendingPickerId: string;
   // new fields
   overlayPanel: OverlayPanel;
+  railTab: RailTab;
   taskPhases: TaskPhase[];
   taskSnapshot: TaskSnapshot;
   planBannerCollapsed: boolean;
@@ -517,6 +521,8 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.threads = [];
   state.threadsLoading = false;
   state.currentSessionId = "";
+  state.overlayPanel = null;
+  state.railTab = "now";
   state.mainFocus = "chat";
   state.reviewFocusId = null;
   state.suggestionAdoptFlash = null;
@@ -846,55 +852,21 @@ function projectTaskProgressLabel(state: ProjectPanelState): string {
   return "等待开始";
 }
 
-function decisionCopy(view: ProjectGoalViewModel): { detail: string; impact: string } {
-  if (view.action === "confirm-scope") {
-    return {
-      detail: "确认内容：第一轮交付范围",
-      impact: "影响：确认后进入设计阶段",
-    };
-  }
-  if (view.action === "confirm-plan") {
-    return {
-      detail: "确认内容：当前项目方案",
-      impact: view.secondaryAction === "direct-implement"
-        ? "影响：规划后开工进入实现；直接实现跳过计划搭档立刻写代码"
-        : "影响：确认后进入当前任务的实现",
-    };
-  }
-  if (view.action === "confirm-design") {
-    return {
-      detail: "确认内容：四个核心项目文档与设计基线",
-      impact: "影响：确认后开放任务授权，进入设计阶段",
-    };
-  }
-  if (view.action === "open-plan-review") {
-    return {
-      detail: `确认内容：${compactGoalText(view.summary, 120)}`,
-      impact: "影响：采纳后写入项目计划并继续当前流程",
-    };
-  }
-  if (view.action === "open-full-plan" && view.title === "选择下一条任务") {
-    return {
-      detail: "操作：从开放任务队列中选择一项",
-      impact: "影响：开始实现后进入当前任务阶段",
-    };
-  }
-  if (view.status === "blocked") {
-    return {
-      detail: `原因：${compactGoalText(view.summary, 140)}`,
-      impact: `影响：${view.nextStep}`,
-    };
-  }
-  if (view.status === "failed") {
-    return {
-      detail: `原因：${compactGoalText(view.summary, 140)}`,
-      impact: `影响：${view.nextStep}`,
-    };
-  }
-  return {
-    detail: compactGoalText(view.summary, 140),
-    impact: view.nextStep,
-  };
+const SIDEBAR_OWNED_GOAL_ACTIONS = new Set([
+  "run-verify",
+  "jump-turn-process",
+  "jump-review-summary",
+]);
+
+function isSidebarOwnedGoalAction(action: string | null): boolean {
+  return Boolean(action && SIDEBAR_OWNED_GOAL_ACTIONS.has(action));
+}
+
+function isSidebarGoalCard(view: ProjectGoalViewModel): boolean {
+  return view.status === "blocked"
+    || view.status === "failed"
+    || view.action === "run-verify"
+    || view.title === "交付结果待检查";
 }
 
 export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoalViewModel {
@@ -1147,7 +1119,8 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
   }
   const stage = getExecutionStage(state);
   if (state.tasksAllDone || stage === "verification") {
-    return { kind: "single", actions: [{ action: "run-verify", label: "跑验收", accent: true }] };
+    // Sidebar already owns the delivery-check card / 跑验收 CTA.
+    return { kind: "none", actions: [] };
   }
   const taskId = extractHeaderTaskId(state);
   if (stage === "implementation" && taskId) {
@@ -1160,7 +1133,7 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
     return { kind: "single", actions: [{ action: "accept-milestone", label: "确认发布", accent: true }] };
   }
   const view = deriveProjectGoalViewModel(state);
-  if (view.action && view.actionLabel) {
+  if (view.action && view.actionLabel && !isSidebarOwnedGoalAction(view.action)) {
     return {
       kind: "single",
       actions: [{ action: view.action, label: view.actionLabel, accent: true }],
@@ -1179,42 +1152,11 @@ export function renderHeaderNextStepCtas(actions: HeaderNextStepAction[]): strin
 }
 
 export function renderProjectGoalCard(state: ProjectPanelState): string {
+  // Compact one-line fallback only. Decision/blocker/delivery banners stay in the sidebar.
   const view = deriveProjectGoalViewModel(state);
-  const header = deriveHeaderNextStepView(state);
   const contextGoal = compactGoalText(state.projectSummary)
     || compactGoalText(firstProjectGoalTask(state))
     || view.title;
-  const isDecision = view.status === "decision" || view.status === "blocked" || view.status === "failed";
-  const headerCtas = renderHeaderNextStepCtas(header.actions);
-  const contextAction = headerCtas
-    || ((!state.runawayEnabled || state.runawayCancelAvailable)
-      && !isDecision && view.action && view.actionLabel
-      ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-      : "");
-  const decision = isDecision
-      ? (() => {
-        const copy = decisionCopy(view);
-        const detailAction = view.action === "confirm-scope"
-          ? `<button type="button" class="unified-btn" data-action="open-scope-doc">查看范围</button>`
-          : "";
-        const stripCtas = header.kind === "dual-draft"
-          ? renderHeaderNextStepCtas(header.actions)
-          : view.action && view.actionLabel
-            ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-              + (view.secondaryAction && view.secondaryActionLabel
-                ? `<button type="button" class="unified-btn" data-action="${escapeHtml(view.secondaryAction)}">${escapeHtml(view.secondaryActionLabel)}</button>`
-                : "")
-            : "";
-        return `<section class="unified-decision-strip is-${escapeHtml(view.status)}" aria-label="需要处理的事项">
-          <div class="unified-decision-copy">
-            <strong class="unified-decision-title">${escapeHtml(view.title)}</strong>
-            <span>${escapeHtml(copy.detail)}</span>
-            <span>${escapeHtml(copy.impact)}</span>
-          </div>
-          <div class="unified-decision-actions">${detailAction}${stripCtas}</div>
-        </section>`;
-      })()
-    : "";
   return `<div class="unified-context-bar" data-goal-status="${escapeHtml(view.status)}">
     <div class="unified-context-main">
       <strong class="unified-context-project" title="${escapeHtml(state.projectId)}">${escapeHtml(state.projectId)}</strong>
@@ -1222,9 +1164,8 @@ export function renderProjectGoalCard(state: ProjectPanelState): string {
       <span class="unified-context-goal" title="${escapeHtml(contextGoal)}">${escapeHtml(contextGoal)}</span>
       <span class="unified-context-progress">${escapeHtml(projectTaskProgressLabel(state))}</span>
       <span class="unified-context-status is-${escapeHtml(view.status)}">${escapeHtml(view.statusLabel)}</span>
-      ${contextAction}
     </div>
-  </div>${decision}`;
+  </div>`;
 }
 
 function renderDetailedFlowRail(state: ProjectPanelState): string {
@@ -1314,11 +1255,12 @@ function renderStageArtifactSummary(state: ProjectPanelState, stage: FlowStage):
   const rows = STAGE_ARTIFACTS[stage].map((path) => {
     const artifact = artifacts.get(path);
     if (!artifact) {
-      return `<span class="textbook-artifact-row is-missing"><code>${escapeHtml(path)}</code><span>未接入</span></span>`;
+      return `<span class="textbook-artifact-row is-missing" title="${escapeHtml(path)}"><span class="textbook-artifact-title">${escapeHtml(humanDocTitle(path))}</span><span>未接入</span></span>`;
     }
     const status = artifact.status || "unknown";
     const completeness = artifact.completeness || "unknown";
-    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}"><code>${escapeHtml(artifact.path)}</code><span>${escapeHtml(artifact.role)} · ${escapeHtml(artifact.revision)} · <b class="textbook-artifact-status is-${escapeHtml(status)}">${escapeHtml(status)}</b> · <b class="textbook-artifact-completeness is-${escapeHtml(completeness)}">${escapeHtml(completeness)}</b></span></button>`;
+    const detail = `${artifact.path} · ${artifact.role} · ${artifact.revision} · ${status} · ${completeness}`;
+    return `<button type="button" class="textbook-artifact-row" data-action="open-artifact-doc" data-artifact-path="${escapeHtml(artifact.path)}" title="${escapeHtml(detail)}"><span class="textbook-artifact-title">${escapeHtml(humanDocTitle(artifact.path))}</span><span class="textbook-artifact-path">${escapeHtml(artifact.path)}</span></button>`;
   }).join("");
   return `<div class="textbook-artifacts"><div class="textbook-section-label">阶段制品</div><div class="textbook-artifact-list">${rows}</div></div>`;
 }
@@ -1836,6 +1778,125 @@ function renderSidebarStatusCard(params: {
   </section>`;
 }
 
+export function renderRailBindEmpty(title: string, summary?: string): string {
+  return renderSidebarStatusCard({
+    ariaLabel: "未绑定项目",
+    title,
+    summary: summary || "绑定一个项目后，这个标签会显示对应内容。",
+    action: "open-projects",
+    actionLabel: "打开项目",
+    actionAccent: true,
+  });
+}
+
+export function renderRailStageEmpty(params: {
+  title: string;
+  copy: string;
+  action?: string;
+  actionLabel?: string;
+}): string {
+  const action = params.action && params.actionLabel
+    ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(params.action)}">${escapeHtml(params.actionLabel)}</button>`
+    : "";
+  return `<div class="rail-stage-empty">
+    <h2 class="rail-stage-empty-title">${escapeHtml(params.title)}</h2>
+    <p class="rail-stage-empty-copy">${escapeHtml(params.copy)}</p>
+    ${action}
+  </div>`;
+}
+
+export function renderProjectsStage(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    if (state.projects.length) {
+      return renderRailStageEmpty({
+        title: "选择项目",
+        copy: "从左侧列表打开一个项目，打开后会回到当下继续工作。",
+      });
+    }
+    return renderRailStageEmpty({
+      title: "还没有项目",
+      copy: "新建一个项目后即可开始对话与改代码。",
+      action: "new-project",
+      actionLabel: "新建项目",
+    });
+  }
+  const view = deriveProjectGoalViewModel(state);
+  return `<div class="rail-stage-empty rail-project-overview">
+    <h2 class="rail-stage-empty-title">${escapeHtml(state.projectId)}</h2>
+    <p class="rail-stage-empty-copy">${escapeHtml(view.summary || sidebarOpenTasksLabel(state))}</p>
+    <p class="rail-stage-empty-meta">${escapeHtml(view.nextStep || "进入当下继续当前工作。")}</p>
+    <button type="button" class="unified-btn unified-btn-accent" data-action="open-now">进入当下</button>
+  </div>`;
+}
+
+function renderNowRailSidebar(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  if (!state.projectId && !state.switchInProgress) {
+    if (state.detectedProject) return "";
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+  }
+  return renderDecisionSurface(state, callbacks);
+}
+
+function renderTasksRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return `<p class="overlay-empty">绑定项目后，主区会显示任务。</p>`;
+  }
+  const open = Math.max(0, state.tasksTotal - state.tasksDone);
+  const current = (state.turnArmedText || state.nextTask || "").trim();
+  let summary = "完整任务列表在主区。";
+  if (open > 0) summary = current ? `当前：${current}` : `还有 ${open} 条开放任务。`;
+  else if (state.tasksTotal > 0) summary = "任务已清空，主区可查看验证状态。";
+  return renderSidebarStatusCard({
+    ariaLabel: "任务摘要",
+    title: sidebarOpenTasksLabel(state),
+    summary,
+    detail: state.tasksTotal > 0 ? `已完成 ${state.tasksDone} / ${state.tasksTotal}` : undefined,
+  });
+}
+
+function renderDocsRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return `<p class="overlay-empty">绑定项目后，这里会列出文档目录。</p>`;
+  }
+  const chip = `<div class="rail-project-chip">${escapeHtml(state.projectId)}</div>`;
+  return chip + renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
+    newDocName: state.newDocName,
+    currentContent: state.currentDocContent,
+    inputId: "overlay-new-doc-input",
+    createAction: "overlay-new-doc",
+    renamingDocPath: state.renamingDocPath,
+    renameDraft: state.renameDraft,
+    deleteConfirmPath: state.deleteConfirmPath,
+  });
+}
+
+function renderThreadsRailSidebar(state: ProjectPanelState): string {
+  if (!state.projectId) {
+    return renderRailBindEmpty("绑定项目后查看会话");
+  }
+  return renderThreadsOverlay(state);
+}
+
+function renderProjectsRailSidebar(state: ProjectPanelState): string {
+  return renderProjectsOverlay(state);
+}
+
+function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  switch (state.railTab) {
+    case "tasks":
+      return renderTasksRailSidebar(state);
+    case "docs":
+      return renderDocsRailSidebar(state);
+    case "threads":
+      return renderThreadsRailSidebar(state);
+    case "projects":
+      return renderProjectsRailSidebar(state);
+    case "now":
+    default:
+      return renderNowRailSidebar(state, callbacks);
+  }
+}
+
 function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (state.switchInProgress) {
     return renderSidebarStatusCard({
@@ -1843,6 +1904,9 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       title: `正在加载 ${state.projectId || "目标项目"}`,
       summary: "旧项目内容已暂时隐藏，等待新项目状态加载完成。",
     });
+  }
+  if (!state.projectId) {
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
   }
   if (state.runawayEnabled) {
     const view = deriveProjectGoalViewModel(state);
@@ -1866,6 +1930,7 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       actionAccent: view.status !== "blocked",
     });
   }
+  const view = deriveProjectGoalViewModel(state);
   const currentTask =
     (state.turnArmedText || "").trim()
     || (state.nextTask || "").trim()
@@ -1875,7 +1940,19 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     || "";
   let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
   html += renderDropTaskChoice(state);
-  if (currentTask) {
+  if (isSidebarGoalCard(view)) {
+    html += renderSidebarStatusCard({
+      ariaLabel: "需要处理的事项",
+      title: view.title,
+      summary: view.summary,
+      footnote: view.nextStep,
+      action: view.action,
+      actionLabel: view.actionLabel,
+      secondaryAction: view.secondaryAction,
+      secondaryActionLabel: view.secondaryActionLabel,
+      actionAccent: view.status !== "blocked",
+    });
+  } else if (currentTask) {
     html += renderSidebarStatusCard({
       ariaLabel: "当前任务",
       title: currentTask,
@@ -1889,13 +1966,6 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       summary: "可以从任务列表选择下一项，或继续补充当前目标。",
       action: "open-full-plan",
       actionLabel: "查看任务",
-    });
-  } else {
-    html += renderSidebarStatusCard({
-      ariaLabel: "项目",
-      title: "先打开或新建一个项目",
-      action: "open-projects",
-      actionLabel: "打开项目",
     });
   }
   html += renderSuggestionStack(state);
@@ -2141,7 +2211,15 @@ export function renderPlanTaskFlow(
 // ---- overlay panel rendering ----
 
 function renderDocsOverlay(state: ProjectPanelState): string {
-  return renderDocsCatalog(state);
+  return renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
+    newDocName: state.newDocName,
+    currentContent: state.currentDocContent,
+    inputId: "overlay-new-doc-input",
+    createAction: "overlay-new-doc",
+    renamingDocPath: state.renamingDocPath,
+    renameDraft: state.renameDraft,
+    deleteConfirmPath: state.deleteConfirmPath,
+  });
 }
 
 function renderProjectsOverlay(state: ProjectPanelState): string {
@@ -2165,7 +2243,7 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
   const query = state.projectSearchQuery.toLowerCase().trim();
 
   if (!state.projects.length) {
-    html += `<p class="overlay-empty">暂无项目 · 对话中说「项目 新建 &lt;id&gt;」</p>`;
+    html += `<p class="overlay-empty">暂无项目</p>`;
     return html;
   }
 
@@ -2890,28 +2968,54 @@ export function renderProjectSidebar(
   callbacks: ProjectPanelCallbacks,
 ): void {
   const goalView = deriveProjectGoalViewModel(state);
-  els.goalCard.classList.toggle("hidden", !state.projectId);
+  els.goalCard.classList.add("hidden");
   els.goalCard.dataset.goalStatus = goalView.status;
   els.goalCard.innerHTML = renderProjectGoalCard(state);
 
-  // header
-  if (state.projectId) {
-    els.sidebarTitle.textContent = state.projectId;
-    els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
-    els.sidebarProgressWrap.classList.remove("hidden");
-    const pct = state.tasksTotal > 0
-      ? Math.round((state.tasksDone / state.tasksTotal) * 100)
-      : 0;
-    els.sidebarProgressFill.style.width = `${pct}%`;
+  const rail = state.railTab || "now";
+  const railMeta = RAIL_TAB_LABELS[rail];
+  if (rail === "now") {
+    if (state.projectId) {
+      els.sidebarTitle.textContent = state.projectId;
+      els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
+      els.sidebarProgressWrap.classList.remove("hidden");
+      const pct = state.tasksTotal > 0
+        ? Math.round((state.tasksDone / state.tasksTotal) * 100)
+        : 0;
+      els.sidebarProgressFill.style.width = `${pct}%`;
+    } else {
+      els.sidebarTitle.textContent = railMeta.label;
+      els.sidebarMeta.textContent = "未绑定项目";
+      els.sidebarProgressWrap.classList.add("hidden");
+    }
+  } else if (rail === "docs") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId || "文档目录";
+    els.sidebarProgressWrap.classList.add("hidden");
+  } else if (rail === "tasks") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId ? sidebarOpenTasksLabel(state) : "任务";
+    els.sidebarProgressWrap.classList.add("hidden");
+  } else if (rail === "threads") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projectId ? `${state.threads.length} 条会话` : "会话";
+    els.sidebarProgressWrap.classList.add("hidden");
   } else {
-    els.sidebarTitle.textContent = "项目";
-    els.sidebarMeta.textContent = "未绑定项目 · 使用「项目 新建 <id>」";
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = state.projects.length ? `${state.projects.length} 个项目` : "我的项目";
     els.sidebarProgressWrap.classList.add("hidden");
   }
 
-  // Phase 27 — Services panel (always in project sidebar)
-  els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
-  els.servicesPanel.innerHTML = renderServicesPanel(state);
+  const showRuntimeChrome = rail === "now";
+  els.terminalsPanel.classList.toggle("hidden", !showRuntimeChrome);
+  els.servicesPanel.classList.toggle("hidden", !showRuntimeChrome);
+  if (showRuntimeChrome) {
+    els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
+    els.servicesPanel.innerHTML = renderServicesPanel(state);
+  } else {
+    els.terminalsPanel.innerHTML = "";
+    els.servicesPanel.innerHTML = "";
+  }
 
   // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---
   // Priority: undo > partner busy > partner notices (non-adopted) > adopted footer >
@@ -2992,7 +3096,7 @@ export function renderProjectSidebar(
     bannerHtml = renderChangeBanner(state);
   }
 
-  if (bannerHtml) {
+  if (bannerHtml && showRuntimeChrome) {
     els.changeBanner.classList.remove("hidden");
     els.changeBanner.innerHTML = bannerHtml;
   } else {
@@ -3000,8 +3104,7 @@ export function renderProjectSidebar(
     els.changeBanner.innerHTML = "";
   }
 
-  // A7 decision surface (main) — full TASKS only in plan overlay
-  els.taskFlow.innerHTML = renderDecisionSurface(state, callbacks);
+  els.taskFlow.innerHTML = renderRailSidebarBody(state, callbacks);
 
   // project count badge
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");
@@ -3010,9 +3113,10 @@ export function renderProjectSidebar(
   }
   const threadBadge = els.iconBar.querySelector<HTMLElement>("#thread-count-badge");
   if (threadBadge) {
-    const archivedCount = state.threads.filter((t) => t.archived).length;
-    threadBadge.textContent = String(archivedCount);
-    threadBadge.classList.toggle("hidden", archivedCount === 0);
+    const liveCount = state.threads.filter((t) => !t.archived).length;
+    const count = liveCount || state.threads.length;
+    threadBadge.textContent = String(count);
+    threadBadge.classList.toggle("hidden", count === 0);
   }
   // degradation indicator
   const degradeDot = els.iconBar.querySelector<HTMLElement>("#sidebar-degrade-dot");
@@ -3029,25 +3133,12 @@ export function renderProjectSidebar(
       degradeDot.title = `项目管理器: ${state.degradationLabel || level}`;
     }
   }
-  // active icon
   for (const btn of els.iconBar.querySelectorAll<HTMLButtonElement>(".sidebar-icon-btn")) {
-    const panel = btn.dataset.panel as OverlayPanel | "tasks" | undefined;
-    const active =
-      (panel === "tasks" && !state.overlayPanel && state.mainFocus === "chat") ||
-      (panel === "plan" && state.mainFocus === "plan_full") ||
-      (panel !== "tasks" && panel !== "plan" && panel === state.overlayPanel);
-    btn.classList.toggle("is-active", Boolean(active));
+    btn.classList.toggle("is-active", btn.dataset.panel === rail);
   }
 
-  // overlay panel
-  if (state.overlayPanel) {
-    els.overlayPanel.classList.remove("hidden");
-    els.overlayTitle.textContent = overlayTitle(state.overlayPanel);
-    els.overlayBody.innerHTML = renderOverlayBody(state);
-    void hydrateMermaid(els.overlayBody);
-  } else {
-    els.overlayPanel.classList.add("hidden");
-  }
+  els.overlayPanel.classList.add("hidden");
+  els.overlayBody.innerHTML = "";
 
   // -- compat update: handle plan overlay / switch overlay in new style --
   updateCompatElements(els, state, callbacks);

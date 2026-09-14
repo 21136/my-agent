@@ -28,12 +28,24 @@ import {
   applyProjectThreadsEvent,
   isViewingArchivedThread,
   parseTasksMarkdown,
-  type OverlayPanel,
+  renderRailStageEmpty,
+  renderProjectsStage,
   type FlowStage,
   type ProjectPanelState,
   type ProjectPanelCallbacks,
   type TaskItem,
 } from "./project-panel";
+import {
+  displayDocTitle,
+  docCatalogMenuItems,
+  docStem,
+  finalizeDocumentOutline,
+  mountPopupMenu,
+  normalizeNewDocPath,
+  renderDocOutlineHtml,
+  renderDocumentReaderHtml,
+  sortProjectDocs,
+} from "./doc-reading";
 import {
   actionableSuggestions,
   adoptPathFromSuggestion,
@@ -42,6 +54,7 @@ import {
   renderPlanReviewPanel,
   type MainFocus,
 } from "./plan-review";
+import { isRailTab, mainFocusForRail, type RailTab } from "./rail";
 import {
   adoptPathFromNotice,
   lastFailedTool,
@@ -51,14 +64,6 @@ import {
   renderToolFailAlert,
 } from "./output-display";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
-import {
-  docCatalogMenuItems,
-  docDisplayTitle,
-  docStem,
-  findProjectDoc,
-  mountPopupMenu,
-  renderDocumentPaneHtml,
-} from "./doc-reading";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import "./unified.css";
@@ -193,6 +198,7 @@ export function mountUnifiedShell(
     switchInProgress: false,
     pendingPickerId: "",
     overlayPanel: null,
+    railTab: "now",
     taskPhases: [],
     planBannerCollapsed: true,
     switchConfirmTarget: null,
@@ -485,7 +491,7 @@ export function mountUnifiedShell(
 
   // ---- DOM layout ----
   root.innerHTML = `
-    <div class="unified-shell" data-perspective="project">
+    <div class="unified-shell" data-perspective="project" data-rail="now">
       <aside class="unified-sidebar" id="unified-sidebar">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <div class="unified-sidebar-header">
@@ -501,8 +507,8 @@ export function mountUnifiedShell(
         <div class="sidebar-footer" id="sidebar-footer">
           <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
           <div class="sidebar-icon-bar" id="sidebar-icon-bar">
-            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon-label">当下</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="任务"><span class="sidebar-icon-label">任务</span></button>
+            <button type="button" class="sidebar-icon-btn is-active" data-panel="now" title="当下"><span class="sidebar-icon-label">当下</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="tasks" title="任务"><span class="sidebar-icon-label">任务</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon-label">文档</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
               <span class="sidebar-icon-label">会话</span>
@@ -552,8 +558,9 @@ export function mountUnifiedShell(
         <div class="unified-stage" id="unified-stage">
           <main class="unified-chat" id="unified-chat"></main>
           <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="方案变更"></section>
-          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
+          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="任务"></section>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
+          <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
         </div>
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
@@ -582,6 +589,7 @@ export function mountUnifiedShell(
   const planReviewEl = root.querySelector<HTMLElement>("#unified-plan-review")!;
   const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
+  const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
@@ -684,7 +692,7 @@ export function mountUnifiedShell(
 
   function isWorkbenchChatAllowed(): boolean {
     if (isViewingArchivedThread(projectState)) return false;
-    return Boolean(projectState.projectId) || freeChatActive;
+    return true;
   }
 
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
@@ -701,7 +709,7 @@ export function mountUnifiedShell(
       return;
     }
     if (!projectState.projectId) {
-      input.placeholder = "先选择或新建项目…";
+      input.placeholder = "输入消息，或先打开一个项目…";
       return;
     }
     input.placeholder =
@@ -716,10 +724,9 @@ export function mountUnifiedShell(
   }
 
   function updateWorkbenchEmpty(): void {
-    const showEmpty = !projectState.projectId && !freeChatActive;
-    workbenchEmptyEl.hidden = !showEmpty;
-    chatEl.classList.toggle("is-empty-gated", showEmpty);
-    composer.classList.toggle("is-empty-gated", showEmpty);
+    workbenchEmptyEl.hidden = true;
+    chatEl.classList.remove("is-empty-gated");
+    composer.classList.remove("is-empty-gated");
     updatePlaceholder();
     composerWire.syncSendEnabled();
   }
@@ -823,7 +830,7 @@ export function mountUnifiedShell(
     const workingChanged = lastSidebarWorking !== working;
     lastSidebarWorking = working;
     projectState.turnInProgress = working;
-    projectEls.goalCard.classList.toggle("hidden", !projectState.projectId);
+    projectEls.goalCard.classList.add("hidden");
     projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
     projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
@@ -1480,7 +1487,9 @@ export function mountUnifiedShell(
         setStatus("助手执行中，请稍后再切换会话线");
         return;
       }
-      closePlanMainFocus();
+      projectState.railTab = "threads";
+      projectState.overlayPanel = null;
+      setMainFocus("chat");
       try {
         client.openSession(sid);
         startHydrationWait(sid, "打开会话线");
@@ -1494,11 +1503,7 @@ export function mountUnifiedShell(
       projectCallbacks.onOpenThread(active);
     },
     onOpenProjects: () => {
-      projectState.overlayPanel = "projects";
-      projectState.switchConfirmTarget = null;
-      projectState.projectSearchQuery = "";
-      try { client.listProjects(); } catch { /* ignore */ }
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      selectRailTab("projects");
     },
     onNewProject: () => {
       handleNewProject();
@@ -1579,31 +1584,6 @@ export function mountUnifiedShell(
     if (kicker) kicker.textContent = projectState.docDirty ? "项目文档 · 未保存" : "项目文档";
   }
 
-  function currentDocTitle(path = projectState.currentDocPath): string {
-    const doc = findProjectDoc(projectState.projectDocs, path);
-    return docDisplayTitle(path, doc?.name);
-  }
-
-  function renderDocumentPane(): void {
-    const path = projectState.currentDocPath;
-    const content = projectState.currentDocContent;
-    const previewHtml = content
-      ? renderMarkdown(content)
-      : `<p class="overlay-empty">${path ? "加载中…" : "未选择文档"}</p>`;
-    documentEl.innerHTML = renderDocumentPaneHtml({
-      path,
-      title: currentDocTitle(path),
-      view: projectState.docView,
-      previewHtml,
-      draft: projectState.docEditDraft,
-      dirty: projectState.docDirty,
-      saving: projectState.docSaving,
-      leavePrompt: docLeavePrompt,
-    });
-    if (projectState.docView === "preview") void hydrateMermaid(documentEl);
-    if (!docLeavePrompt) documentEl.scrollTop = 0;
-  }
-
   function requestLeaveDocument(next: () => void): boolean {
     if (!isDocDirty()) return true;
     captureDocDraftFromEditor();
@@ -1611,6 +1591,8 @@ export function mountUnifiedShell(
     docLeavePrompt = true;
     if (projectState.mainFocus !== "document") {
       projectState.mainFocus = "document";
+      projectState.railTab = "docs";
+      shellEl.dataset.rail = "docs";
       syncMainFocusView();
     } else {
       renderDocumentPane();
@@ -1750,46 +1732,65 @@ export function mountUnifiedShell(
     syncMainFocusView();
   }
 
-  function openDocument(path: string): void {
-    if (!path) return;
-    if (path === projectState.currentDocPath) {
-      projectState.overlayPanel = null;
-      if (projectState.mainFocus !== "document") setMainFocus("document");
-      else refreshDocsSidebar();
+  function selectRailTab(tab: RailTab): void {
+    if (
+      projectState.railTab === "docs" &&
+      tab !== "docs" &&
+      !requestLeaveDocument(() => selectRailTab(tab))
+    ) {
       return;
     }
-    if (isDocDirty()) {
-      requestLeaveDocument(() => openDocument(path));
-      return;
-    }
-    projectState.currentDocPath = path;
-    projectState.currentDocContent = "";
-    projectState.docEditDraft = "";
-    projectState.docView = "preview";
-    projectState.docDirty = false;
-    projectState.docSaving = false;
-    clearDocLeavePrompt();
+    projectState.railTab = tab;
     projectState.overlayPanel = null;
-    setMainFocus("document");
-    try { client.readDoc(path); } catch { /* ignore */ }
+    shellEl.dataset.rail = tab;
+    if (tab !== "projects") {
+      projectState.switchConfirmTarget = null;
+    }
+    if (tab === "projects") {
+      projectState.projectSearchQuery = "";
+      try { client.listProjects(); } catch { /* ignore */ }
+    }
+    if (tab === "docs") {
+      openDocumentReader();
+      return;
+    }
+    if (tab === "threads") {
+      refreshProjectThreads();
+    }
+    setMainFocus(mainFocusForRail(tab));
+  }
+
+  function showNowChat(): void {
+    if (
+      projectState.mainFocus === "document" &&
+      !requestLeaveDocument(() => showNowChat())
+    ) {
+      return;
+    }
+    projectState.railTab = "now";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "now";
+    setMainFocus("chat");
   }
 
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
     const chatFocus = focus === "chat";
-    const runtimeSurface = chatFocus || chat.isWorking() || chat.model.confirmPending;
     shellEl.dataset.mainFocus = focus;
+    shellEl.dataset.rail = projectState.railTab || "now";
     chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
     documentEl.classList.toggle("hidden", focus !== "document");
+    projectsEl.classList.toggle("hidden", focus !== "projects");
     chatEl.hidden = focus !== "chat";
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
-    composerDock.hidden = !runtimeSurface;
-    composer.hidden = !runtimeSurface;
-    statusEl.hidden = !runtimeSurface;
+    projectsEl.hidden = focus !== "projects";
+    composerDock.hidden = false;
+    composer.hidden = false;
+    statusEl.hidden = false;
     tokenBar.hidden = !chatFocus;
     syncComposerMetaVisibility();
     if (focus === "plan_review") {
@@ -1799,7 +1800,10 @@ export function mountUnifiedShell(
       renderPlanFullPane();
     } else if (focus === "document") {
       renderDocumentPane();
+    } else if (focus === "projects") {
+      renderProjectsPane();
     }
+    updateWorkbenchEmpty();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
 
@@ -1818,6 +1822,15 @@ export function mountUnifiedShell(
   }
 
   function renderPlanFullPane(): void {
+    if (!projectState.projectId) {
+      planFullEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看任务",
+        copy: "打开项目后，这里会显示任务列表与进度。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
+      return;
+    }
     const highlight =
       projectState.highlightChanges && projectState.highlightedLines.size > 0
         ? projectState.highlightedLines
@@ -1825,8 +1838,121 @@ export function mountUnifiedShell(
     planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
   }
 
+  function renderProjectsPane(): void {
+    projectsEl.innerHTML = renderProjectsStage(projectState);
+  }
+
+  function renderDocumentPane(): void {
+    if (!projectState.projectId) {
+      documentEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看文档",
+        copy: "打开项目后，这里会显示文档阅读区。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
+      return;
+    }
+    const path = projectState.currentDocPath;
+    const content = projectState.currentDocContent;
+    const { html, outline } = renderDocumentReaderHtml({
+      docs: projectState.projectDocs,
+      currentPath: path,
+      currentContent: content,
+      renderedHtml: content ? renderMarkdown(content) : "",
+      newDocName: projectState.newDocName,
+      includeCatalog: false,
+      includeBack: false,
+      view: projectState.docView,
+      draft: projectState.docEditDraft,
+      dirty: projectState.docDirty,
+      saving: projectState.docSaving,
+      leavePrompt: docLeavePrompt,
+    });
+    documentEl.innerHTML = html;
+    const reader = documentEl.querySelector(".unified-document-content");
+    let resolved = outline;
+    if (reader && projectState.docView === "preview") {
+      resolved = finalizeDocumentOutline(reader, content);
+      const outlineBody = documentEl.querySelector(".doc-outline-body");
+      if (outlineBody) outlineBody.innerHTML = renderDocOutlineHtml(resolved);
+      const resolvedTitle = path ? displayDocTitle(path, path, content, resolved) : "";
+      const heading = documentEl.querySelector(".unified-document-heading h1");
+      if (heading && resolvedTitle) heading.textContent = resolvedTitle;
+      const currentItem = documentEl.querySelector<HTMLElement>(".doc-catalog-item.is-current .doc-catalog-item-title");
+      if (currentItem && resolvedTitle) currentItem.textContent = resolvedTitle;
+    }
+    if (projectState.docView === "preview") void hydrateMermaid(documentEl);
+    if (projectState.docView === "edit") {
+      documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor")?.focus();
+    }
+    if (!docLeavePrompt) {
+      const readerPane = documentEl.querySelector<HTMLElement>(".unified-document-reader");
+      if (readerPane) readerPane.scrollTop = 0;
+      else documentEl.scrollTop = 0;
+    }
+  }
+
+  function createProjectDocFromTitle(): void {
+    const name = normalizeNewDocPath(projectState.newDocName);
+    if (!name) return;
+    pendingDocAction = "create";
+    try { client.createDoc(name); } catch { pendingDocAction = null; }
+    projectState.newDocName = "";
+  }
+
+  function openDocument(path: string): void {
+    if (!path) return;
+    const alreadyOpen = projectState.mainFocus === "document"
+      && projectState.currentDocPath === path
+      && Boolean(projectState.currentDocContent);
+    if (path !== projectState.currentDocPath && isDocDirty()) {
+      requestLeaveDocument(() => openDocument(path));
+      return;
+    }
+    projectState.currentDocPath = path;
+    projectState.railTab = "docs";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
+    if (alreadyOpen) {
+      setMainFocus("document");
+      try { client.listDocs(); } catch { /* ignore */ }
+      return;
+    }
+    projectState.currentDocContent = "";
+    projectState.docEditDraft = "";
+    projectState.docView = "preview";
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    clearDocLeavePrompt();
+    setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
+    try { client.readDoc(path); } catch { /* ignore */ }
+  }
+
+  function openDocumentReader(path?: string): void {
+    projectState.railTab = "docs";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
+    const target = path
+      || projectState.currentDocPath
+      || sortProjectDocs(projectState.projectDocs)[0]?.path
+      || "";
+    if (target) {
+      openDocument(target);
+      return;
+    }
+    setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
+  }
+
   function openPlanReview(suggestionId?: string): void {
     try {
+      if (
+        projectState.mainFocus === "document" &&
+        !requestLeaveDocument(() => openPlanReview(suggestionId))
+      ) {
+        return;
+      }
       setStatus("正在读取待处理方案…");
       const queue = getActionableQueue();
       if (!queue.length) {
@@ -1840,21 +1966,11 @@ export function mountUnifiedShell(
       }
       planReviewIndex = index;
       projectState.reviewFocusId = queue[index]?.id ?? null;
+      projectState.railTab = "now";
       projectState.overlayPanel = null;
+      shellEl.dataset.rail = "now";
       setStatus("正在切换主区…");
-      projectState.mainFocus = "plan_review";
-      projectState.reviewFocusId = queue[index]?.id ?? null;
-      shellEl.dataset.mainFocus = "plan_review";
-      chatEl.classList.add("hidden");
-      chatEl.hidden = true;
-      planFullEl.classList.add("hidden");
-      planFullEl.hidden = true;
-      planReviewEl.classList.remove("hidden");
-      planReviewEl.hidden = false;
-      setStatus("正在打开方案变更…");
-      renderPlanReviewPane();
-      planReviewEl.scrollTop = 0;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      setMainFocus("plan_review");
       setStatus("方案变更已打开");
     } catch (err) {
       setStatus(`方案变更打开失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1874,7 +1990,15 @@ export function mountUnifiedShell(
   }
 
   function openPlanFull(): void {
+    if (
+      projectState.mainFocus === "document" &&
+      !requestLeaveDocument(() => openPlanFull())
+    ) {
+      return;
+    }
+    projectState.railTab = "tasks";
     projectState.overlayPanel = null;
+    shellEl.dataset.rail = "tasks";
     setMainFocus("plan_full");
   }
 
@@ -1922,7 +2046,7 @@ export function mountUnifiedShell(
   }
 
   function showBlockerDetails(): void {
-    setMainFocus("chat");
+    showNowChat();
     clearExpandedSurface();
     expandEl.innerHTML = renderProjectBlockerDetails(projectState);
     expandEl.classList.remove("hidden");
@@ -1947,7 +2071,7 @@ export function mountUnifiedShell(
     if (!normalizedTaskId) return;
     try {
       setStatus(`正在启动 ${normalizedTaskId}…`);
-      setMainFocus("chat");
+      showNowChat();
       client.startProjectTask(normalizedTaskId);
     } catch (err) {
       setStatus(`启动任务失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1965,7 +2089,7 @@ export function mountUnifiedShell(
     // implement message so the CTA still kicks work.
     try {
       setStatus("正在直接实现…");
-      setMainFocus("chat");
+      showNowChat();
       client.sendCommand("项目 直接实现");
     } catch (err) {
       setStatus(`直接实现失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1975,7 +2099,7 @@ export function mountUnifiedShell(
   function runProjectVerifyFromUi(): void {
     try {
       setStatus("正在跑验收…");
-      setMainFocus("chat");
+      showNowChat();
       client.sendCommand("项目 验收");
     } catch (err) {
       setStatus(`验收失败：${err instanceof Error ? err.message : String(err)}`);
@@ -2035,14 +2159,8 @@ export function mountUnifiedShell(
     }
   }
 
-  function openDocumentList(): void {
-    projectState.overlayPanel = "docs";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
-    try { client.listDocs(); } catch { /* ignore */ }
-  }
-
   function closePlanMainFocus(): void {
-    setMainFocus("chat");
+    selectRailTab("now");
   }
 
   function afterSuggestionQueueChanged(): void {
@@ -2284,8 +2402,8 @@ export function mountUnifiedShell(
   }
 
   function jumpToCurrentActivity(): void {
-    if (projectState.mainFocus !== "chat") {
-      setMainFocus("chat");
+    if (projectState.mainFocus !== "chat" || projectState.railTab !== "now") {
+      showNowChat();
     }
     if (hasProjectBlocker(projectState)) {
       showBlockerDetails();
@@ -2338,7 +2456,7 @@ export function mountUnifiedShell(
   const jumpToCurrentTurnProcess = jumpToCurrentActivity;
 
   function jumpToReviewSummary(): void {
-    setMainFocus("chat");
+    showNowChat();
     if (hasProjectBlocker(projectState)) {
       showBlockerDetails();
     }
@@ -2429,12 +2547,31 @@ export function mountUnifiedShell(
     startProjectTaskFromUi(btn.dataset.taskId);
   });
 
+  function handleRailStageAction(ev: Event): void {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "open-projects") {
+      selectRailTab("projects");
+      return;
+    }
+    if (btn.dataset.action === "new-project") {
+      projectCallbacks.onNewProject();
+      return;
+    }
+    if (btn.dataset.action === "open-now") {
+      selectRailTab("now");
+    }
+  }
+  planFullEl.addEventListener("click", handleRailStageAction);
+  projectsEl.addEventListener("click", handleRailStageAction);
+  documentEl.addEventListener("click", handleRailStageAction);
+
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
-    if (projectState.mainFocus === "chat") return;
+    if (projectState.railTab === "now" && projectState.mainFocus === "chat") return;
     if (document.activeElement === input) return;
     ev.preventDefault();
-    closePlanMainFocus();
+    selectRailTab("now");
   });
 
   function refreshServices(): void {
@@ -3456,31 +3593,11 @@ export function mountUnifiedShell(
 
   root.addEventListener("click", handleReviewSuggestionClick, true);
 
-  // Icon bar: switch overlay panel
+  // Icon bar: each tab owns sidebar + main stage
   projectEls.iconBar.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".sidebar-icon-btn");
-    if (!btn?.dataset.panel) return;
-    const panel = btn.dataset.panel;
-    if (panel === "tasks") {
-      projectState.overlayPanel = null;
-      setMainFocus("chat");
-    } else {
-      projectState.switchConfirmTarget = null;
-      projectState.projectSearchQuery = "";
-      if (panel === "plan") {
-        openPlanFull();
-        return;
-      }
-      projectState.overlayPanel = panel as OverlayPanel;
-      // Auto-fetch docs list when entering docs panel
-      if (panel === "docs") {
-        try { client.listDocs(); } catch { /* ignore */ }
-      }
-      if (panel === "threads") {
-        refreshProjectThreads();
-      }
-    }
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    if (!isRailTab(btn?.dataset.panel)) return;
+    selectRailTab(btn.dataset.panel);
   });
 
   // Phase 27 — Services panel actions
@@ -3572,9 +3689,7 @@ export function mountUnifiedShell(
 
   // Overlay back button
   projectEls.overlayBackBtn.addEventListener("click", () => {
-    projectState.overlayPanel = null;
-    projectState.switchConfirmTarget = null;
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    selectRailTab("now");
   });
 
   // Decision surface: plan overlay + suggestion stack + turn summary
@@ -3656,7 +3771,10 @@ export function mountUnifiedShell(
           projectCallbacks.onDesignConfirm();
           return;
         case "open-projects":
-          projectCallbacks.onOpenProjects();
+          selectRailTab("projects");
+          return;
+        case "open-now":
+          selectRailTab("now");
           return;
         case "new-project":
           projectCallbacks.onNewProject();
@@ -3770,8 +3888,7 @@ export function mountUnifiedShell(
     }
   });
 
-  // Overlay: project search + list + switch confirm
-  projectEls.overlayBody.addEventListener("click", (ev) => {
+  function handleRailListClick(ev: Event): void {
     const target = ev.target as HTMLElement;
 
     if (target.closest("#overlay-new-thread-btn")) {
@@ -3786,37 +3903,31 @@ export function mountUnifiedShell(
     const threadBtn = target.closest<HTMLButtonElement>(".overlay-thread-item");
     if (threadBtn?.dataset.threadId && !threadBtn.disabled) {
       projectCallbacks.onOpenThread(threadBtn.dataset.threadId);
-      projectState.overlayPanel = null;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Project item click
-    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item");
+    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item:not(.overlay-thread-item)");
     if (projectBtn?.dataset.projectId && !projectBtn.disabled) {
       const pid = projectBtn.dataset.projectId;
       const item = projectState.projects.find((p) => p.id === pid);
       if (item && item.sessionId && !item.isCurrent) {
-        // needs confirm: show inline switch confirm
         projectState.switchConfirmTarget = item;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
       } else {
-        // no session or current: switch directly
         projectCallbacks.onProjectSwitch(pid);
-        projectState.overlayPanel = null;
+        selectRailTab("now");
       }
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Switch confirm actions (inside overlay body)
     if (target.closest("#overlay-switch-confirm")) {
       const confirmBtn = target.closest<HTMLButtonElement>("#overlay-switch-confirm-btn");
       const cancelBtn = target.closest<HTMLButtonElement>("#overlay-switch-cancel-btn");
       if (confirmBtn && projectState.switchConfirmTarget) {
-        projectCallbacks.onProjectSwitch(projectState.switchConfirmTarget.id);
-        projectState.overlayPanel = null;
+        const targetId = projectState.switchConfirmTarget.id;
         projectState.switchConfirmTarget = null;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        projectCallbacks.onProjectSwitch(targetId);
+        selectRailTab("now");
       } else if (cancelBtn) {
         projectState.switchConfirmTarget = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -3824,7 +3935,6 @@ export function mountUnifiedShell(
       return;
     }
 
-    // Document catalog
     if (target.closest("#overlay-doc-rename-input")) return;
     const deleteConfirm = target.closest<HTMLButtonElement>("[data-action='doc-delete-confirm']");
     if (deleteConfirm) {
@@ -3848,36 +3958,57 @@ export function mountUnifiedShell(
       }
       return;
     }
-    const docRow = target.closest<HTMLElement>(".overlay-doc-item");
+    const docRow = target.closest<HTMLElement>(".overlay-doc-item, .doc-catalog-item");
     if (docRow?.dataset.docPath && !docRow.classList.contains("is-renaming")) {
       openDocument(docRow.dataset.docPath);
       return;
     }
 
-    // New doc button
-    if (target.closest("#overlay-new-doc-btn")) {
-      const name = projectState.newDocName.trim();
-      if (name) {
-        pendingDocAction = "create";
-        try { client.createDoc(name); } catch { pendingDocAction = null; }
-        projectState.newDocName = "";
-        refreshDocsSidebar();
-      }
-      return;
+    if (target.closest("#overlay-new-doc-btn") || target.closest('[data-action="overlay-new-doc"]')) {
+      createProjectDocFromTitle();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
     }
-  });
+  }
+
+  projectEls.overlayBody.addEventListener("click", handleRailListClick);
+  projectEls.taskFlow.addEventListener("click", handleRailListClick);
 
   documentEl.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement;
+    const moreBtn = target.closest<HTMLButtonElement>("[data-doc-more]");
+    if (moreBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".overlay-doc-item")?.dataset.docPath;
+      if (path) {
+        const rect = moreBtn.getBoundingClientRect();
+        showDocCatalogMenu(path, rect.left, rect.bottom + 4);
+      }
+      return;
+    }
+    const docBtn = target.closest<HTMLElement>(".overlay-doc-item, .doc-catalog-item");
+    if (docBtn?.dataset.docPath && !docBtn.classList.contains("is-renaming")) {
+      openDocument(docBtn.dataset.docPath);
+      return;
+    }
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
     if (action === "document-back") {
-      setMainFocus("chat");
+      selectRailTab("now");
       return;
     }
-    if (action === "document-list") {
-      openDocumentList();
+    if (action === "create-doc") {
+      createProjectDocFromTitle();
+      renderDocumentPane();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    if (action === "doc-outline-jump") {
+      const headingId = btn.dataset.headingId;
+      if (!headingId) return;
+      const heading = documentEl.querySelector<HTMLElement>(`#${CSS.escape(headingId)}`);
+      heading?.scrollIntoView({ block: "start", behavior: "smooth" });
       return;
     }
     if (action === "document-edit") {
@@ -3885,7 +4016,6 @@ export function mountUnifiedShell(
       projectState.docView = "edit";
       if (!projectState.docDirty) projectState.docEditDraft = projectState.currentDocContent;
       renderDocumentPane();
-      documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor")?.focus();
       return;
     }
     if (action === "document-preview") {
@@ -3932,13 +4062,17 @@ export function mountUnifiedShell(
 
   documentEl.addEventListener("input", (ev) => {
     const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
-    if (!editor) return;
-    projectState.docEditDraft = editor.value;
-    const dirty = projectState.docEditDraft !== projectState.currentDocContent;
-    if (dirty !== projectState.docDirty) {
-      projectState.docDirty = dirty;
-      syncDocEditChrome();
+    if (editor) {
+      projectState.docEditDraft = editor.value;
+      const dirty = projectState.docEditDraft !== projectState.currentDocContent;
+      if (dirty !== projectState.docDirty) {
+        projectState.docDirty = dirty;
+        syncDocEditChrome();
+      }
+      return;
     }
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (docInput) projectState.newDocName = docInput.value;
   });
 
   documentEl.addEventListener("keydown", (ev) => {
@@ -3947,30 +4081,34 @@ export function mountUnifiedShell(
         ev.preventDefault();
         saveCurrentDoc();
       }
+      return;
     }
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (!docInput) return;
+    createProjectDocFromTitle();
+    renderDocumentPane();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
   });
 
   // Overlay: search input + new-doc input
-  projectEls.overlayBody.addEventListener("input", (ev) => {
-    const input = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
-    if (input) {
-      projectState.projectSearchQuery = input.value;
+  function handleRailListInput(ev: Event): void {
+    const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
+    if (searchInput) {
+      projectState.projectSearchQuery = searchInput.value;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
-    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
     if (docInput) {
       projectState.newDocName = docInput.value;
       return;
     }
     const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
-    if (renameInput) {
-      projectState.renameDraft = renameInput.value;
-    }
-  });
+    if (renameInput) projectState.renameDraft = renameInput.value;
+  }
 
-  // Overlay: new-doc / rename keys and F2
-  projectEls.overlayBody.addEventListener("keydown", (ev) => {
+  function handleRailListKeydown(ev: KeyboardEvent): void {
     const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
     if (renameInput) {
       if (ev.key === "Enter") {
@@ -3990,20 +4128,17 @@ export function mountUnifiedShell(
       }
       return;
     }
-    if (ev.key === "Enter") {
-      const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
-      if (docInput) {
-        const name = projectState.newDocName.trim();
-        if (name) {
-          pendingDocAction = "create";
-          try { client.createDoc(name); } catch { pendingDocAction = null; }
-          projectState.newDocName = "";
-          refreshDocsSidebar();
-        }
-      }
-    }
-  });
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
+    if (!docInput) return;
+    createProjectDocFromTitle();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
 
+  projectEls.overlayBody.addEventListener("input", handleRailListInput);
+  projectEls.taskFlow.addEventListener("input", handleRailListInput);
+  projectEls.overlayBody.addEventListener("keydown", handleRailListKeydown);
+  projectEls.taskFlow.addEventListener("keydown", handleRailListKeydown);
   projectEls.overlayBody.addEventListener("focusout", (ev) => {
     const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
     if (!renameInput) return;
@@ -4013,10 +4148,9 @@ export function mountUnifiedShell(
       }
     }, 0);
   });
-
   projectEls.overlayBody.addEventListener("contextmenu", (ev) => {
     const row = (ev.target as HTMLElement).closest<HTMLElement>(".overlay-doc-item");
-    if (!row?.dataset.docPath) return;
+    if (!row?.dataset.docPath || row.classList.contains("is-renaming")) return;
     ev.preventDefault();
     showDocCatalogMenu(row.dataset.docPath, ev.clientX, ev.clientY);
   });
@@ -4049,7 +4183,7 @@ export function mountUnifiedShell(
           input.focus();
           input.style.height = "auto";
           input.style.height = Math.min(input.scrollHeight, 200) + "px";
-          setMainFocus("chat");
+          showNowChat();
         }
         projectState.codeFollowup = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -4464,10 +4598,12 @@ export function mountUnifiedShell(
         projectState.pendingPickerId = "";
         projectState.projectId = (event.project_id || "").trim();
         projectState.currentSessionId = event.session_id || "";
+        projectState.railTab = "now";
+        projectState.overlayPanel = null;
         freeChatActive = !projectState.projectId;
         client.listProjects();
         if (projectState.projectId) refreshProjectThreads();
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        setMainFocus("chat");
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
@@ -4491,6 +4627,9 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
+        if (projectState.mainFocus === "plan_full") renderPlanFullPane();
+        if (projectState.mainFocus === "document") renderDocumentPane();
         if (projectState.projectId) {
           refreshTopbar();
           if (!projectState.adoptPendingId) {
@@ -4566,7 +4705,7 @@ export function mountUnifiedShell(
           input.value = event.prefill;
           input.style.height = "auto";
           input.style.height = Math.min(input.scrollHeight, 200) + "px";
-          setMainFocus("chat");
+          showNowChat();
           setStatus("已准备清理请求；请确认内容后发送");
         } else {
           setStatus("已准备 git 清理指引；不会自动 revert 或提交");
@@ -4643,6 +4782,7 @@ export function mountUnifiedShell(
       case "project.list":
         applyProjectListEvent(projectState, event);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
         break;
 
       case "project.threads":
@@ -4867,6 +5007,16 @@ export function mountUnifiedShell(
         if (projectState.deleteConfirmPath && !event.docs.some((doc: { path: string }) => doc.path === projectState.deleteConfirmPath)) {
           projectState.deleteConfirmPath = "";
         }
+        if (projectState.mainFocus === "document") {
+          if (!projectState.currentDocPath) {
+            const first = sortProjectDocs(event.docs)[0];
+            if (first) {
+              openDocument(first.path);
+              break;
+            }
+          }
+          renderDocumentPane();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -4884,6 +5034,10 @@ export function mountUnifiedShell(
         projectState.newDocName = "";
         pendingDocAction = null;
         setStatus(`已新建 ${event.name}`);
+        if (event.path && projectState.mainFocus === "document") {
+          openDocument(event.path);
+        }
+        client.listDocs();
         break;
 
       case "project.doc.write.done":
@@ -4920,8 +5074,8 @@ export function mountUnifiedShell(
         projectState.deleteConfirmPath = "";
         if (projectState.currentDocPath === event.path) {
           resetDocEditState();
-          if (projectState.mainFocus === "document") {
-            setMainFocus("chat");
+          if (projectState.mainFocus === "document" || projectState.railTab === "docs") {
+            openDocumentReader();
           }
         }
         setStatus("文档已删除");
@@ -5149,15 +5303,7 @@ export function mountUnifiedShell(
   // Phase 34: workbench layout + empty gate
   emptyNewBtn.addEventListener("click", () => handleNewProject());
   emptyPickBtn.addEventListener("click", () => {
-    projectState.overlayPanel = "projects";
-    projectState.switchConfirmTarget = null;
-    projectState.projectSearchQuery = "";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
-    try {
-      client.listProjects();
-    } catch {
-      /* ignore */
-    }
+    selectRailTab("projects");
   });
   emptyFreeChatBtn.addEventListener("click", () => {
     void handleFreeChat();
