@@ -3452,14 +3452,112 @@ def skip_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, A
     }
 
 
+_DOC_LIST_SKIP_DIRS = frozenset({
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".cursor",
+})
+
+
+def _catalog_skips_rel(rel: str) -> bool:
+    parts = rel.replace("\\", "/").split("/")
+    return any(part in _DOC_LIST_SKIP_DIRS for part in parts[:-1])
+
+
+def _iter_project_markdown(root: Path):
+    """Yield markdown files under *root*, skipping vendor/cache directories."""
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            name = entry.name
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                if name in _DOC_LIST_SKIP_DIRS:
+                    continue
+                stack.append(entry)
+                continue
+            if entry.suffix.lower() == ".md":
+                yield entry
+
+
+def _resolve_project_doc_path(
+    root: Path,
+    doc_path: str,
+    *,
+    add_md: bool = False,
+) -> tuple[str, Path]:
+    raw = str(doc_path or "").replace("\\", "/").strip().lstrip("/")
+    if not raw or raw in {".", ".."}:
+        raise ProjectModeError("文档路径无效")
+    if add_md and not raw.lower().endswith(".md"):
+        raw = f"{raw}.md"
+    root_resolved = root.resolve()
+    full = (root / raw).resolve()
+    try:
+        rel = full.relative_to(root_resolved).as_posix()
+    except ValueError as exc:
+        raise ProjectModeError(f"路径超出项目目录：{doc_path}") from exc
+    if rel in {".", ""}:
+        raise ProjectModeError("文档路径无效")
+    if _catalog_skips_rel(rel):
+        raise ProjectModeError("该路径不在项目文档目录中")
+    if not rel.lower().endswith(".md"):
+        raise ProjectModeError("只能操作 Markdown 文档")
+    if Path(rel).name.lower() == ".md":
+        raise ProjectModeError("文档名不能为空")
+    return rel, full
+
+
+def _write_project_markdown(full: Path, content: str) -> str:
+    from evolve_tool_io import normalize_newlines, write_utf8_text
+
+    text = normalize_newlines(content)
+    write_utf8_text(full, text)
+    return text
+
+
+def _rel_from_title(old_rel: str, title: str) -> str:
+    raw = str(title or "").replace("\\", "/").strip().strip("/")
+    if not raw or raw in {".", ".."}:
+        raise ProjectModeError("文档名不能为空")
+    if "/" in raw:
+        rel = raw
+    else:
+        parent = Path(old_rel).parent.as_posix()
+        rel = raw if parent in {".", ""} else f"{parent}/{raw}"
+    if not rel.lower().endswith(".md"):
+        rel += ".md"
+    return rel
+
+
 def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]]:
-    """List all .md files in the project directory."""
+    """List project-root markdown files, skipping vendor/cache trees."""
     root = project_dir(paths, project_id)
     if not root.is_dir():
         return []
     docs: list[dict[str, Any]] = []
-    for fpath in sorted(root.rglob("*.md")):
-        rel = str(fpath.relative_to(root)).replace("\\", "/")
+    for fpath in sorted(_iter_project_markdown(root), key=lambda item: item.as_posix().lower()):
+        try:
+            rel = fpath.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if _catalog_skips_rel(rel):
+            continue
         try:
             size = fpath.stat().st_size
         except OSError:
@@ -3476,12 +3574,9 @@ def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]
 def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
     """Read a single .md file from the project directory. Returns {type, path, content}."""
     root = project_dir(paths, project_id)
-    safe_path = doc_path.replace("\\", "/").lstrip("/")
-    full = (root / safe_path).resolve()
-    if not str(full).startswith(str(root.resolve())):
-        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
     if not full.is_file():
-        raise ProjectModeError(f"document not found: {doc_path}")
+        raise ProjectModeError(f"找不到文档：{doc_path}")
     content = full.read_text(encoding="utf-8")
     return {
         "type": "project.doc.read.done",
@@ -3494,21 +3589,85 @@ def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[
 def create_project_doc(paths: AgentPaths, project_id: str, doc_path: str, content: str = "") -> dict[str, Any]:
     """Create a new .md file in the project directory."""
     root = project_dir(paths, project_id)
-    safe_path = doc_path.replace("\\", "/").lstrip("/")
-    if not safe_path.endswith(".md"):
-        safe_path += ".md"
-    full = (root / safe_path).resolve()
-    if not str(full).startswith(str(root.resolve())):
-        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    safe_path, full = _resolve_project_doc_path(root, doc_path, add_md=True)
     if full.exists():
-        raise ProjectModeError(f"document already exists: {safe_path}")
+        raise ProjectModeError(f"已有同名文档：{safe_path}")
     full.parent.mkdir(parents=True, exist_ok=True)
     default_content = content if content else f"# {full.stem}\n\n"
-    full.write_text(default_content, encoding="utf-8")
+    _write_project_markdown(full, default_content)
     return {
         "type": "project.doc.create.done",
         "path": safe_path,
         "name": full.name,
+    }
+
+
+def write_project_doc(
+    paths: AgentPaths,
+    project_id: str,
+    doc_path: str,
+    content: str,
+) -> dict[str, Any]:
+    """Overwrite an existing project markdown document."""
+    root = project_dir(paths, project_id)
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
+    if not full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    text = _write_project_markdown(full, content)
+    return {
+        "type": "project.doc.write.done",
+        "path": safe_path,
+        "name": full.name,
+        "size": len(text),
+    }
+
+
+def rename_project_doc(
+    paths: AgentPaths,
+    project_id: str,
+    doc_path: str,
+    *,
+    title: str = "",
+    new_path: str = "",
+) -> dict[str, Any]:
+    """Rename a project markdown file by title (stem) or explicit new path."""
+    root = project_dir(paths, project_id)
+    old_rel, old_full = _resolve_project_doc_path(root, doc_path)
+    if not old_full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    target_raw = str(new_path or "").strip() or _rel_from_title(old_rel, title)
+    new_rel, new_full = _resolve_project_doc_path(root, target_raw, add_md=True)
+    if new_rel == old_rel:
+        return {
+            "type": "project.doc.rename.done",
+            "path": new_rel,
+            "old_path": old_rel,
+            "name": new_full.name,
+        }
+    if new_full.exists():
+        raise ProjectModeError(f"已有同名文档：{new_rel}")
+    new_full.parent.mkdir(parents=True, exist_ok=True)
+    old_full.rename(new_full)
+    return {
+        "type": "project.doc.rename.done",
+        "path": new_rel,
+        "old_path": old_rel,
+        "name": new_full.name,
+    }
+
+
+def delete_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
+    """Permanently delete a project markdown file (no trash)."""
+    root = project_dir(paths, project_id)
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
+    if not full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    full.unlink()
+    return {
+        "type": "project.doc.delete.done",
+        "path": safe_path,
+        "name": full.name,
+        "is_standard": safe_path in PROJECT_ARTIFACTS,
     }
 
 
