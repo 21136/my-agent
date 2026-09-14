@@ -838,55 +838,21 @@ function projectTaskProgressLabel(state: ProjectPanelState): string {
   return "等待开始";
 }
 
-function decisionCopy(view: ProjectGoalViewModel): { detail: string; impact: string } {
-  if (view.action === "confirm-scope") {
-    return {
-      detail: "确认内容：第一轮交付范围",
-      impact: "影响：确认后进入设计阶段",
-    };
-  }
-  if (view.action === "confirm-plan") {
-    return {
-      detail: "确认内容：当前项目方案",
-      impact: view.secondaryAction === "direct-implement"
-        ? "影响：规划后开工进入实现；直接实现跳过计划搭档立刻写代码"
-        : "影响：确认后进入当前任务的实现",
-    };
-  }
-  if (view.action === "confirm-design") {
-    return {
-      detail: "确认内容：四个核心项目文档与设计基线",
-      impact: "影响：确认后开放任务授权，进入设计阶段",
-    };
-  }
-  if (view.action === "open-plan-review") {
-    return {
-      detail: `确认内容：${compactGoalText(view.summary, 120)}`,
-      impact: "影响：采纳后写入项目计划并继续当前流程",
-    };
-  }
-  if (view.action === "open-full-plan" && view.title === "选择下一条任务") {
-    return {
-      detail: "操作：从开放任务队列中选择一项",
-      impact: "影响：开始实现后进入当前任务阶段",
-    };
-  }
-  if (view.status === "blocked") {
-    return {
-      detail: `原因：${compactGoalText(view.summary, 140)}`,
-      impact: `影响：${view.nextStep}`,
-    };
-  }
-  if (view.status === "failed") {
-    return {
-      detail: `原因：${compactGoalText(view.summary, 140)}`,
-      impact: `影响：${view.nextStep}`,
-    };
-  }
-  return {
-    detail: compactGoalText(view.summary, 140),
-    impact: view.nextStep,
-  };
+const SIDEBAR_OWNED_GOAL_ACTIONS = new Set([
+  "run-verify",
+  "jump-turn-process",
+  "jump-review-summary",
+]);
+
+function isSidebarOwnedGoalAction(action: string | null): boolean {
+  return Boolean(action && SIDEBAR_OWNED_GOAL_ACTIONS.has(action));
+}
+
+function isSidebarGoalCard(view: ProjectGoalViewModel): boolean {
+  return view.status === "blocked"
+    || view.status === "failed"
+    || view.action === "run-verify"
+    || view.title === "交付结果待检查";
 }
 
 export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoalViewModel {
@@ -1124,10 +1090,6 @@ function extractHeaderTaskId(state: ProjectPanelState): string {
   return raw.match(/\bT-\d+(?:-\d+)*\b/i)?.[0]?.toUpperCase() || "";
 }
 
-function isDeliveryCheckBanner(view: ProjectGoalViewModel): boolean {
-  return view.action === "run-verify" || view.title === "交付结果待检查";
-}
-
 export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextStepView {
   if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
     return { kind: "none", actions: [] };
@@ -1157,7 +1119,7 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
     return { kind: "single", actions: [{ action: "accept-milestone", label: "确认发布", accent: true }] };
   }
   const view = deriveProjectGoalViewModel(state);
-  if (view.action && view.actionLabel) {
+  if (view.action && view.actionLabel && !isSidebarOwnedGoalAction(view.action)) {
     return {
       kind: "single",
       actions: [{ action: view.action, label: view.actionLabel, accent: true }],
@@ -1176,44 +1138,11 @@ export function renderHeaderNextStepCtas(actions: HeaderNextStepAction[]): strin
 }
 
 export function renderProjectGoalCard(state: ProjectPanelState): string {
+  // Compact one-line fallback only. Decision/blocker/delivery banners stay in the sidebar.
   const view = deriveProjectGoalViewModel(state);
-  const header = deriveHeaderNextStepView(state);
-  const deliveryCheck = isDeliveryCheckBanner(view);
   const contextGoal = compactGoalText(state.projectSummary)
     || compactGoalText(firstProjectGoalTask(state))
-    || (deliveryCheck ? projectTaskProgressLabel(state) : view.title);
-  const isDecision = !deliveryCheck
-    && (view.status === "decision" || view.status === "blocked" || view.status === "failed");
-  const headerCtas = deliveryCheck ? "" : renderHeaderNextStepCtas(header.actions);
-  const contextAction = headerCtas
-    || ((!state.runawayEnabled || state.runawayCancelAvailable)
-      && !isDecision && !deliveryCheck && view.action && view.actionLabel
-      ? `<button type="button" class="unified-btn unified-context-action" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-      : "");
-  const decision = isDecision
-      ? (() => {
-        const copy = decisionCopy(view);
-        const detailAction = view.action === "confirm-scope"
-          ? `<button type="button" class="unified-btn" data-action="open-scope-doc">查看范围</button>`
-          : "";
-        const stripCtas = header.kind === "dual-draft"
-          ? renderHeaderNextStepCtas(header.actions)
-          : view.action && view.actionLabel
-            ? `<button type="button" class="unified-btn unified-btn-accent" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
-              + (view.secondaryAction && view.secondaryActionLabel
-                ? `<button type="button" class="unified-btn" data-action="${escapeHtml(view.secondaryAction)}">${escapeHtml(view.secondaryActionLabel)}</button>`
-                : "")
-            : "";
-        return `<section class="unified-decision-strip is-${escapeHtml(view.status)}" aria-label="需要处理的事项">
-          <div class="unified-decision-copy">
-            <strong class="unified-decision-title">${escapeHtml(view.title)}</strong>
-            <span>${escapeHtml(copy.detail)}</span>
-            <span>${escapeHtml(copy.impact)}</span>
-          </div>
-          <div class="unified-decision-actions">${detailAction}${stripCtas}</div>
-        </section>`;
-      })()
-    : "";
+    || view.title;
   return `<div class="unified-context-bar" data-goal-status="${escapeHtml(view.status)}">
     <div class="unified-context-main">
       <strong class="unified-context-project" title="${escapeHtml(state.projectId)}">${escapeHtml(state.projectId)}</strong>
@@ -1221,9 +1150,8 @@ export function renderProjectGoalCard(state: ProjectPanelState): string {
       <span class="unified-context-goal" title="${escapeHtml(contextGoal)}">${escapeHtml(contextGoal)}</span>
       <span class="unified-context-progress">${escapeHtml(projectTaskProgressLabel(state))}</span>
       <span class="unified-context-status is-${escapeHtml(view.status)}">${escapeHtml(view.statusLabel)}</span>
-      ${contextAction}
     </div>
-  </div>${decision}`;
+  </div>`;
 }
 
 function renderDetailedFlowRail(state: ProjectPanelState): string {
@@ -1985,6 +1913,7 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
       actionAccent: view.status !== "blocked",
     });
   }
+  const view = deriveProjectGoalViewModel(state);
   const currentTask =
     (state.turnArmedText || "").trim()
     || (state.nextTask || "").trim()
@@ -1994,7 +1923,19 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     || "";
   let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
   html += renderDropTaskChoice(state);
-  if (currentTask) {
+  if (isSidebarGoalCard(view)) {
+    html += renderSidebarStatusCard({
+      ariaLabel: "需要处理的事项",
+      title: view.title,
+      summary: view.summary,
+      footnote: view.nextStep,
+      action: view.action,
+      actionLabel: view.actionLabel,
+      secondaryAction: view.secondaryAction,
+      secondaryActionLabel: view.secondaryActionLabel,
+      actionAccent: view.status !== "blocked",
+    });
+  } else if (currentTask) {
     html += renderSidebarStatusCard({
       ariaLabel: "当前任务",
       title: currentTask,
@@ -3007,7 +2948,7 @@ export function renderProjectSidebar(
   callbacks: ProjectPanelCallbacks,
 ): void {
   const goalView = deriveProjectGoalViewModel(state);
-  els.goalCard.classList.toggle("hidden", !state.projectId || state.railTab !== "now");
+  els.goalCard.classList.add("hidden");
   els.goalCard.dataset.goalStatus = goalView.status;
   els.goalCard.innerHTML = renderProjectGoalCard(state);
 
