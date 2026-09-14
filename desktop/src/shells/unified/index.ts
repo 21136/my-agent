@@ -262,6 +262,8 @@ export function mountUnifiedShell(
     terminalsLoading: false,
     terminalsError: "",
     terminalsCollapsed: true,
+    terminalsEndedCollapsed: true,
+    terminalsEndedShowAll: false,
     terminalDetails: null,
     terminalOutput: "",
     terminalOutputCursor: 0,
@@ -3680,6 +3682,18 @@ export function mountUnifiedShell(
       projectState.terminalsCollapsed = !projectState.terminalsCollapsed;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       scheduleTerminalPoll();
+      return;
+    }
+    if (btn.dataset.action === "toggle-ended-terminals") {
+      projectState.terminalsEndedCollapsed = !projectState.terminalsEndedCollapsed;
+      if (projectState.terminalsEndedCollapsed) projectState.terminalsEndedShowAll = false;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    if (btn.dataset.action === "terminals-show-all-ended") {
+      projectState.terminalsEndedCollapsed = false;
+      projectState.terminalsEndedShowAll = true;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
     if (btn.dataset.action === "terminals-refresh") {

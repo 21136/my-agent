@@ -5,6 +5,25 @@ import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
 import { RAIL_TAB_LABELS, type RailTab } from "./rail";
+import {
+  SERVICE_SCROLL_SELECTORS,
+  TERMINAL_ENDED_PREVIEW,
+  TERMINAL_SCROLL_SELECTORS,
+  TERMINAL_STATE_LABELS,
+  clearPanelHtml,
+  groupTerminalSessions,
+  patchPanelHtml,
+  reconcileTerminalSession,
+  servicesPanelFingerprint,
+  terminalActivityCaption,
+  terminalCwdLabel,
+  terminalDisplayStatusLabel,
+  terminalHumanTitle,
+  terminalIsActive,
+  terminalsPanelFingerprint,
+  terminalsSummaryParts,
+  type TerminalListSession,
+} from "./terminal-list";
 
 export type { RailTab };
 
@@ -166,6 +185,8 @@ export interface ProjectPanelState {
   terminalsLoading: boolean;
   terminalsError: string;
   terminalsCollapsed: boolean;
+  terminalsEndedCollapsed: boolean;
+  terminalsEndedShowAll: boolean;
   terminalDetails: TerminalSessionItem | null;
   terminalOutput: string;
   terminalOutputCursor: number;
@@ -662,18 +683,51 @@ const USER_BLOCKER_LABELS: Record<string, string> = {
   plan_status: "方案确认",
   review: "交付检查",
   review_blockers: "交付检查中的问题",
+  ".plan-agent/manifest.json": "项目状态清单",
 };
 
 const USER_BLOCKER_REASON_LABELS: Record<string, string> = {
   documentation_in_progress: "项目文档正在整理中，当前还没有进入实现阶段。",
   design_not_confirmed: "项目设计尚未完成，当前还不能进入实现阶段。",
+  design_incomplete: "项目设计还不完整。",
   plan_not_confirmed: "项目方案尚未确认，当前还不能开始实现。",
   scope_incomplete: "项目范围或验收标准还不完整。",
   no_executable_tasks: "当前没有满足依赖条件的可执行任务。",
+  no_project: "还没有绑定项目。",
   manifest_unavailable: "项目状态清单暂时不可用，无法安全继续。",
   l2_stale: "项目文档与当前变更不一致，需要先更新受影响内容。",
   review_blocked: "交付检查没有通过，仍有问题需要处理。",
+  tasks_not_started: "任务还没有开始。",
+  tasks_in_progress: "任务正在实现中。",
+  verification_pending: "任务已经做完，交付结果还在等待检查。",
+  verification_artifact_stale: "验证相关文档需要先更新。",
+  verification_passed: "验证已经通过。",
 };
+
+const USER_FAILURE_CLASS_LABELS: Record<string, string> = {
+  A: "最近一次执行没有给出可用结果。",
+  B: "环境或依赖没有就绪。",
+  C: "测试或构建没有通过。",
+  D: "权限或路径不允许这次操作。",
+  E: "这次执行出错，需要换一种做法。",
+  F: "输出不完整，无法确认结果。",
+};
+
+function looksLikeInternalToken(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) return false;
+  if (/^[A-F]$/.test(normalized)) return true;
+  return /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+$/.test(normalized);
+}
+
+function humanizeVisibleText(value: string, fallback: string): string {
+  const normalized = value.trim();
+  if (!normalized) return fallback;
+  return USER_BLOCKER_REASON_LABELS[normalized]
+    || USER_FAILURE_CLASS_LABELS[normalized]
+    || USER_BLOCKER_LABELS[normalized]
+    || (looksLikeInternalToken(normalized) ? fallback : normalized);
+}
 
 export interface ProjectBlockerDetails {
   reason: string;
@@ -683,14 +737,15 @@ export interface ProjectBlockerDetails {
 }
 
 function userFacingBlockerReason(reason: string): string {
+  const fallback = "当前还不能继续，请查看原因。";
   const normalized = reason.trim();
-  if (!normalized) return "当前阶段出口尚未满足，系统已暂停继续推进。";
-  return USER_BLOCKER_REASON_LABELS[normalized]
-    || (normalized.includes("documentation_in_progress")
-      ? USER_BLOCKER_REASON_LABELS.documentation_in_progress
-      : normalized.includes("design_not_confirmed")
-        ? USER_BLOCKER_REASON_LABELS.design_not_confirmed
-        : normalized);
+  if (!normalized) return fallback;
+  if (USER_BLOCKER_REASON_LABELS[normalized]) return USER_BLOCKER_REASON_LABELS[normalized];
+  if (normalized.includes("verification_pending")) return USER_BLOCKER_REASON_LABELS.verification_pending;
+  if (normalized.includes("documentation_in_progress")) return USER_BLOCKER_REASON_LABELS.documentation_in_progress;
+  if (normalized.includes("design_not_confirmed")) return USER_BLOCKER_REASON_LABELS.design_not_confirmed;
+  if (normalized.includes("verification_artifact_stale")) return USER_BLOCKER_REASON_LABELS.verification_artifact_stale;
+  return humanizeVisibleText(normalized, fallback);
 }
 
 function userFacingBlockerSummary(state: ProjectPanelState): string {
@@ -701,7 +756,8 @@ function userFacingBlockerSummary(state: ProjectPanelState): string {
     return userFacingBlockerReason(state.executionStageReason);
   }
   const labels = Array.from(new Set(
-    state.executionStageBlockers.map((item) => USER_BLOCKER_LABELS[item] || item)
+    state.executionStageBlockers
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
       .filter(Boolean),
   ));
   return labels.length > 0
@@ -730,7 +786,7 @@ export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerD
   const stageLabel = USER_STAGE_LABELS[getExecutionStage(state)] || "当前阶段";
   const blockerLabels = Array.from(new Set(
     [...state.executionStageBlockers, ...state.executionStageMissing]
-      .map((item) => USER_BLOCKER_LABELS[item] || item)
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
       .filter(Boolean),
   ));
   const impact = reviewBlocked
@@ -898,9 +954,21 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
   const executionStage = getExecutionStage(state);
   const stageLabel = USER_STAGE_LABELS[executionStage];
   const blocker = userFacingBlockerSummary(state);
+  const reasonKey = state.executionStageReason.trim();
+  if (hasActualProjectBlocker(state) && reasonKey === "verification_pending" && !state.reviewProgressBlocked) {
+    return {
+      status: "decision",
+      statusLabel: "待验证",
+      title: "交付结果待检查",
+      summary: USER_BLOCKER_REASON_LABELS.verification_pending,
+      nextStep: "先跑验收并查看验证证据。",
+      action: "run-verify",
+      actionLabel: "跑验收",
+    };
+  }
   if (hasActualProjectBlocker(state)) {
     const title = isRunawayV2(state) && state.runawayUserLine
-      ? state.runawayUserLine
+      ? humanizeVisibleText(state.runawayUserLine, "需要你的处理")
       : (state.runawayEnabled ? "需要你的处理" : "当前无法继续");
     return {
       status: "blocked",
@@ -938,7 +1006,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       status: "failed",
       statusLabel: "验证未通过",
       title: "上一步没有完成",
-      summary: state.turnFailureClass || "最近一次执行或验证没有通过。",
+      summary: humanizeVisibleText(state.turnFailureClass, "最近一次执行或验证没有通过。"),
       nextStep: "查看失败原因，再决定修复、重试或调整方案。",
       action: "jump-turn-process",
       actionLabel: "查看失败原因",
@@ -1288,6 +1356,12 @@ function renderStageBasis(state: ProjectPanelState, stage: FlowStage): string {
     case "release":
       lines = [`清单：RELEASE@${revision("RELEASE.md")}`, `人工验收：${state.milestoneAccepted ? "已记录" : "待人工验收"}`];
       break;
+    case "documentation":
+      lines = ["资料正在整理，完成后会汇总待完善项。"];
+      break;
+    default:
+      lines = [];
+      break;
   }
   return `<div class="textbook-stage-basis"><div class="textbook-section-label">阶段依据</div>${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`;
 }
@@ -1343,9 +1417,14 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
         : `<button type="button" class="unified-btn unified-btn-accent" data-action="accept-milestone">本 milestone 验收</button>`;
       break;
   }
-  const renderDocumentGroup = (label: string, items: string[], tone: string): string => items.length
-    ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${items.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
-    : "";
+  const renderDocumentGroup = (label: string, items: string[], tone: string): string => {
+    const chips = items
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
+      .filter(Boolean);
+    return chips.length
+      ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${chips.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
+      : "";
+  };
   const actualBlocker = hasActualProjectBlocker(state);
   const blockerSummary = actualBlocker
     ? userFacingBlockerSummary(state)
@@ -1370,7 +1449,7 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
   const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
   const reviewPassed = state.reviewVerdict === "pass" && state.reviewBlockersCount === 0;
   const runawayStatus = state.runawayEnabled && state.runawayStatus
-    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(state.runawayStatus)}</div>`
+    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(humanizeVisibleText(state.runawayStatus, "进行中"))}</div>`
     : "";
   let goal = "系统会在这里告诉你当前进展。";
   let stat = "";
@@ -1829,10 +1908,54 @@ export function renderProjectsStage(state: ProjectPanelState): string {
   </div>`;
 }
 
+function nowStuckReason(state: ProjectPanelState, view: ProjectGoalViewModel): string {
+  if (view.status === "failed") {
+    return humanizeVisibleText(view.summary, "最近一次执行或验证没有通过。");
+  }
+  if (view.status === "blocked" || hasActualProjectBlocker(state)) {
+    return userFacingBlockerSummary(state);
+  }
+  if (view.status === "decision" && (state.tasksAllDone || view.action === "run-verify")) {
+    return USER_BLOCKER_REASON_LABELS.verification_pending;
+  }
+  return "";
+}
+
+function renderNowFocusCard(state: ProjectPanelState, view: ProjectGoalViewModel): string {
+  const currentTask = (state.turnArmedText || state.nextTask || "").trim();
+  const nextStep = view.status === "processing" && currentTask
+    ? currentTask
+    : (view.nextStep || view.title);
+  const stuck = nowStuckReason(state, view);
+  const stuckHtml = stuck
+    ? `<div class="now-focus-block">
+        <div class="now-focus-label">为什么卡住</div>
+        <p class="now-focus-reason">${escapeHtml(stuck)}</p>
+      </div>`
+    : "";
+  const primary = view.action && view.actionLabel
+    ? `<button type="button" class="unified-btn${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+    : "";
+  const secondary = view.secondaryAction && view.secondaryActionLabel
+    ? `<button type="button" class="unified-btn" data-action="${escapeHtml(view.secondaryAction)}">${escapeHtml(view.secondaryActionLabel)}</button>`
+    : "";
+  const actions = primary || secondary
+    ? `<div class="sidebar-status-card-actions now-focus-actions">${primary}${secondary}</div>`
+    : "";
+  return `<section class="sidebar-status-card now-focus-card" aria-label="当下焦点">
+    <div class="now-focus-block">
+      <div class="now-focus-label">下一步</div>
+      <p class="now-focus-next">${escapeHtml(nextStep)}</p>
+    </div>
+    ${stuckHtml}
+    ${actions}
+  </section>`;
+}
+
 function renderNowRailSidebar(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (!state.projectId && !state.switchInProgress) {
     if (state.detectedProject) return "";
-    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步。");
   }
   return renderDecisionSurface(state, callbacks);
 }
@@ -1906,72 +2029,13 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     });
   }
   if (!state.projectId) {
-    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步。");
   }
-  if (state.runawayEnabled) {
-    const view = deriveProjectGoalViewModel(state);
-    const currentTask = (state.turnArmedText || state.nextTask || "").trim();
-    let summary = view.summary || "系统正在处理当前目标。";
-    if (isRunawayV2(state) && state.runawayChecklist && state.runawayChecklist.total > 0) {
-      const checklist = `验收 ${state.runawayChecklist.passed}/${state.runawayChecklist.total}`;
-      if (!summary.includes("验收")) summary = `${summary} · ${checklist}`;
-    }
-    const showFootnote = view.status === "blocked" || view.status === "decision" || view.status === "failed";
-    return renderSidebarStatusCard({
-      ariaLabel: "自动执行进展",
-      title: view.title,
-      summary,
-      detail: currentTask && view.status === "processing" ? currentTask : undefined,
-      footnote: showFootnote ? view.nextStep : (view.status === "processing" ? view.nextStep : undefined),
-      action: view.action,
-      actionLabel: view.actionLabel,
-      secondaryAction: view.secondaryAction,
-      secondaryActionLabel: view.secondaryActionLabel,
-      actionAccent: view.status !== "blocked",
-    });
-  }
+  void callbacks;
   const view = deriveProjectGoalViewModel(state);
-  const currentTask =
-    (state.turnArmedText || "").trim()
-    || (state.nextTask || "").trim()
-    || state.taskPhases
-      .flatMap((phase) => phase.tasks)
-      .find((task) => task.status === "current" && !task.done)?.text
-    || "";
-  let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
-  html += renderDropTaskChoice(state);
-  if (isSidebarGoalCard(view)) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "需要处理的事项",
-      title: view.title,
-      summary: view.summary,
-      footnote: view.nextStep,
-      action: view.action,
-      actionLabel: view.actionLabel,
-      secondaryAction: view.secondaryAction,
-      secondaryActionLabel: view.secondaryActionLabel,
-      actionAccent: view.status !== "blocked",
-    });
-  } else if (currentTask) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "当前任务",
-      title: currentTask,
-      action: state.projectId ? "open-full-plan" : null,
-      actionLabel: state.projectId ? "查看任务" : null,
-    });
-  } else if (state.projectId) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "当前任务",
-      title: "当前没有待处理任务",
-      summary: "可以从任务列表选择下一项，或继续补充当前目标。",
-      action: "open-full-plan",
-      actionLabel: "查看任务",
-    });
-  }
-  html += renderSuggestionStack(state);
-  html += renderTurnSummary(state);
-  html += renderReliabilityStrip(state);
-  return html;
+  // User-facing Now rail: one focus card only. Textbook flow/stage/artifact
+  // dumps and CHG ledgers are agent-internal and must not appear here.
+  return renderNowFocusCard(state, view) + renderDropTaskChoice(state);
 }
 
 function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
@@ -1988,11 +2052,11 @@ function planStatusLabel(state: ProjectPanelState): string {
   if (state.runawayEnabled) {
     if (isRunawayV2(state)) {
       if (state.turnInProgress) return RUNAWAY_STATUS.processing;
-      if (state.runawayBlocked) return state.runawayUserLine || state.runawayStatus || "需要处理";
-      if (state.runawayUserLine) return state.runawayUserLine;
+      if (state.runawayBlocked) return humanizeVisibleText(state.runawayUserLine || state.runawayStatus, "需要处理");
+      if (state.runawayUserLine) return humanizeVisibleText(state.runawayUserLine, RUNAWAY_STATUS.idle);
       return RUNAWAY_STATUS.idle;
     }
-    if (state.runawayStatus) return state.runawayStatus;
+    if (state.runawayStatus) return humanizeVisibleText(state.runawayStatus, RUNAWAY_STATUS.idle);
   }
   if (state.planStatus === "confirmed") {
     if (state.tasksAllDone && state.tasksTotal > 0) {
@@ -2351,17 +2415,6 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 
 function renderChangeBanner(state: ProjectPanelState): string {
   if (state.runawayEnabled) return "";
-  const recentLedger = state.changeTimeline.slice(-3).reverse();
-  const ledgerRows = recentLedger.map((change) => {
-    const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
-    const impact = affected.length > 0 ? `ID: ${affected.join(", ")}` : "ID: none";
-    const stale = change.stale_docs.length > 0 ? `stale: ${change.stale_docs.join(", ")}` : "stale: none";
-    const replan = change.replan_required ? "需要重新规划" : "无需重新规划";
-    return `<div class="sidebar-change-banner-changes"><strong>${escapeHtml(change.change_id)}</strong> · ${escapeHtml(change.paths.join(", "))}<br>${escapeHtml(impact)}<br>${escapeHtml(stale)} · ${replan}</div>`;
-  }).join("");
-  const ledgerHtml = recentLedger.length > 0
-    ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
-    : "";
   // Plan confirmation (draft / plan_dirty with overlay)
   const needsPlanConfirm =
     !state.runawayEnabled && state.planOverlay && state.planStatus !== "confirmed";
@@ -2446,7 +2499,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     </div>`;
   }
 
-  return ledgerHtml;
+  return "";
 }
 
 // ---- project event application (keep compat) ----
@@ -2753,39 +2806,15 @@ export function setupProjectPanel(container: HTMLElement): {
   };
 }
 
-const TERMINAL_STATE_LABELS: Record<string, string> = {
-  starting: "正在启动",
-  running: "运行中",
-  closed: "已关闭",
-  exited: "已退出",
-  lost: "会话已丢失",
-  orphaned: "宿主已断开",
-  unsupported: "当前环境不支持",
-  failed: "启动失败",
-};
-
-function terminalIsActive(session: TerminalSessionItem): boolean {
-  return session.state === "starting" || session.state === "running";
+function terminalStatusLabel(session: TerminalListSession): string {
+  return terminalDisplayStatusLabel(session);
 }
 
-function terminalStatusLabel(session: TerminalSessionItem): string {
-  return TERMINAL_STATE_LABELS[session.state] || session.state || "未知状态";
-}
-
-function terminalStateClass(session: TerminalSessionItem): string {
-  return Object.prototype.hasOwnProperty.call(TERMINAL_STATE_LABELS, session.state)
-    ? session.state
+function terminalStateClass(session: TerminalListSession): string {
+  const display = reconcileTerminalSession(session);
+  return Object.prototype.hasOwnProperty.call(TERMINAL_STATE_LABELS, display.state)
+    ? display.state
     : "unknown";
-}
-
-function terminalActivityLabel(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value || "暂无活动记录";
-  const elapsed = Math.max(0, Date.now() - timestamp);
-  if (elapsed < 60_000) return "刚刚活动";
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前活动`;
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前活动`;
-  return `${Math.floor(elapsed / 86_400_000)} 天前活动`;
 }
 
 function terminalDetailExitLabel(session: TerminalSessionItem): string {
@@ -2796,9 +2825,10 @@ function terminalDetailExitLabel(session: TerminalSessionItem): string {
 }
 
 function renderTerminalDetails(state: ProjectPanelState): string {
-  const session = state.terminalDetails;
-  if (!session) return "";
-  const exitLabel = terminalDetailExitLabel(session);
+  const raw = state.terminalDetails;
+  if (!raw) return "";
+  const session = reconcileTerminalSession(raw);
+  const exitLabel = terminalDetailExitLabel(raw);
   const reason = session.reason
     ? `<div class="sidebar-terminal-detail-reason">${escapeHtml(session.reason)}</div>`
     : "";
@@ -2814,6 +2844,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   const closeButton = terminalIsActive(session)
     ? `<button type="button" class="unified-btn unified-btn-danger" data-action="terminal-close" data-terminal-id="${escapeHtml(session.session_id)}">关闭会话</button>`
     : "";
+  const activity = terminalActivityCaption(session.last_activity_at, { live: terminalIsActive(session) });
   return `<div class="sidebar-terminal-details" id="terminalDetails">
     <div class="sidebar-terminal-details-header">
       <div>
@@ -2823,7 +2854,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
       <button type="button" class="sidebar-terminal-icon-btn" data-action="terminal-details-close" aria-label="关闭终端详情" title="关闭详情">×</button>
     </div>
     <div class="sidebar-terminal-details-command">${escapeHtml(session.command || "未命名命令")}</div>
-    <div class="sidebar-terminal-details-meta">${escapeHtml(session.cwd || ".")} · ${escapeHtml(terminalActivityLabel(session.last_activity_at))}</div>
+    <div class="sidebar-terminal-details-meta">${escapeHtml(session.cwd || ".")} · ${escapeHtml(activity)}</div>
     ${exitLabel || reason ? `<div class="sidebar-terminal-details-meta">${escapeHtml(exitLabel)}${exitLabel && reason ? " · " : ""}${reason}</div>` : ""}
     ${error}
     ${cursorNotice}
@@ -2836,45 +2867,71 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   </div>`;
 }
 
-function renderTerminalsPanel(state: ProjectPanelState): string {
-  const active = state.terminalSessions.filter(terminalIsActive).length;
-  const inactive = state.terminalSessions.length - active;
-  const attention = state.terminalSessions.filter((session) =>
-    ["lost", "orphaned", "failed", "unsupported"].includes(session.state),
-  ).length;
-  const summary = state.terminalSessions.length === 0
-    ? state.terminalsLoading ? "加载中…" : "暂无会话"
-    : [
-        active > 0 ? `${active} 个运行中` : "无运行中",
-        inactive > 0 ? `${inactive} 个已结束` : "",
-        attention > 0 ? `${attention} 个需处理` : "",
-      ].filter(Boolean).join(" · ");
-
-  const rows = state.terminalSessions.length === 0
-    ? `<div class="sidebar-terminals-empty">${state.terminalsLoading ? "正在读取终端会话…" : "暂无终端会话"}</div>`
-    : state.terminalSessions.map((session) => {
-      const status = terminalStatusLabel(session);
-      const command = truncateSummary(session.command || "未命名命令", 64);
-      const cwd = truncateSummary(session.cwd || ".", 72);
-      const activity = terminalActivityLabel(session.last_activity_at);
-      const selected = state.terminalDetails?.session_id === session.session_id;
-      return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(session)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(session.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(session.command || "")}">
+function renderTerminalRow(state: ProjectPanelState, session: TerminalSessionItem): string {
+  const display = reconcileTerminalSession(session);
+  const status = terminalStatusLabel(display);
+  const title = terminalHumanTitle(display.command || "", display.cwd || "");
+  const cwd = terminalCwdLabel(display.cwd || "");
+  const activity = terminalActivityCaption(display.last_activity_at, { live: terminalIsActive(display) });
+  const selected = state.terminalDetails?.session_id === display.session_id;
+  const meta = [cwd, activity].filter(Boolean).join(" · ");
+  return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(display)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(display.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(display.command || title)}">
         <span class="sidebar-terminal-dot" aria-hidden="true"></span>
         <div class="sidebar-terminal-main">
-          <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(command)}</span></div>
-          <div class="sidebar-terminal-meta"><span>${escapeHtml(cwd)}</span><span>· ${escapeHtml(activity)}</span></div>
+          <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(title)}</span></div>
+          <div class="sidebar-terminal-meta">${escapeHtml(meta)}</div>
         </div>
       </button>`;
-    }).join("");
+}
+
+function renderTerminalsPanel(state: ProjectPanelState): string {
+  const grouped = groupTerminalSessions(state.terminalSessions, {
+    selectedId: state.terminalDetails?.session_id,
+    endedCollapsed: state.terminalsEndedCollapsed,
+    endedShowAll: state.terminalsEndedShowAll,
+    endedPreview: TERMINAL_ENDED_PREVIEW,
+  });
+  const summaryParts = terminalsSummaryParts(grouped.active.length, grouped.attention.length, grouped.endedTotal);
+  const summary = state.terminalSessions.length === 0
+    ? (state.terminalsLoading ? "加载中…" : "暂无会话")
+    : (summaryParts.join(" · ") || "暂无会话");
+  const pinnedEnded = state.terminalsEndedCollapsed ? grouped.endedVisible : [];
+  const liveSessions = [...grouped.active, ...grouped.attention, ...pinnedEnded];
+  let liveRows: string;
+  if (state.terminalSessions.length === 0) {
+    liveRows = `<div class="sidebar-terminals-empty">${state.terminalsLoading ? "正在读取终端会话…" : "暂无终端会话"}</div>`;
+  } else if (liveSessions.length === 0 && grouped.endedTotal > 0) {
+    liveRows = `<div class="sidebar-terminals-empty">没有运行中或需处理的会话</div>`;
+  } else {
+    liveRows = liveSessions.map((session) => renderTerminalRow(state, session)).join("");
+  }
+
+  let endedBlock = "";
+  if (grouped.endedTotal > 0) {
+    const endedCollapsed = state.terminalsEndedCollapsed;
+    const endedRows = endedCollapsed
+      ? ""
+      : grouped.endedVisible.map((session) => renderTerminalRow(state, session)).join("");
+    const showAll = !endedCollapsed && !state.terminalsEndedShowAll && grouped.endedHiddenCount > 0
+      ? `<button type="button" class="sidebar-terminals-more" data-action="terminals-show-all-ended">查看全部 ${grouped.endedTotal}</button>`
+      : "";
+    endedBlock = `<div class="sidebar-terminals-ended">
+      <button type="button" class="sidebar-terminals-ended-toggle" data-action="toggle-ended-terminals" aria-expanded="${endedCollapsed ? "false" : "true"}">
+        <span class="sidebar-terminals-toggle-chevron">${endedCollapsed ? "▸" : "▾"}</span>
+        <span>已结束 · ${grouped.endedTotal}</span>
+      </button>
+      <div class="sidebar-terminals-ended-list${endedCollapsed ? " is-collapsed" : ""}">${endedRows}${showAll}</div>
+    </div>`;
+  }
 
   const collapsed = state.terminalsCollapsed;
   const bodyClass = collapsed ? "sidebar-terminals-body is-collapsed" : "sidebar-terminals-body";
   const error = state.terminalsError
     ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalsError)}</div>`
     : "";
-  const toggleLabel = collapsed
-    ? (active > 0 ? `终端 · ${active} 运行中` : "终端")
-    : `终端会话 · ${summary}`;
+  const toggleLabel = summary === "暂无会话" || summary === "加载中…"
+    ? (collapsed ? "终端" : `终端 · ${summary}`)
+    : `终端 · ${summary}`;
   return `<section class="sidebar-terminals" aria-label="终端会话">
     <button type="button" class="sidebar-terminals-toggle" data-action="toggle-terminals" aria-expanded="${collapsed ? "false" : "true"}">
       <span class="sidebar-terminals-toggle-chevron">${collapsed ? "▸" : "▾"}</span>
@@ -2886,7 +2943,8 @@ function renderTerminalsPanel(state: ProjectPanelState): string {
         <button type="button" class="unified-btn" data-action="terminals-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>刷新</button>
       </div>
       ${error}
-      <div class="sidebar-terminals-list">${rows}</div>
+      <div class="sidebar-terminals-list">${liveRows}</div>
+      ${endedBlock}
       ${renderTerminalDetails(state)}
     </div>
   </section>`;
@@ -3010,11 +3068,21 @@ export function renderProjectSidebar(
   els.terminalsPanel.classList.toggle("hidden", !showRuntimeChrome);
   els.servicesPanel.classList.toggle("hidden", !showRuntimeChrome);
   if (showRuntimeChrome) {
-    els.terminalsPanel.innerHTML = renderTerminalsPanel(state);
-    els.servicesPanel.innerHTML = renderServicesPanel(state);
+    patchPanelHtml(
+      els.terminalsPanel,
+      renderTerminalsPanel(state),
+      terminalsPanelFingerprint(state),
+      TERMINAL_SCROLL_SELECTORS,
+    );
+    patchPanelHtml(
+      els.servicesPanel,
+      renderServicesPanel(state),
+      servicesPanelFingerprint(state),
+      SERVICE_SCROLL_SELECTORS,
+    );
   } else {
-    els.terminalsPanel.innerHTML = "";
-    els.servicesPanel.innerHTML = "";
+    clearPanelHtml(els.terminalsPanel);
+    clearPanelHtml(els.servicesPanel);
   }
 
   // --- banner area: single priority chain (UX-026: suggestions live in body — SP-9) ---

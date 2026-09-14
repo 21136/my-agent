@@ -1,6 +1,6 @@
 # 交互终端会话 UI
 
-> 版本 0.2.0 · 2026-09-11 · 状态：M0/M1 已实现，M2 待评估
+> 版本 0.2.1 · 2026-09-14 · 状态：M0/M1 已实现；侧栏默认只显示活动/需处理，已结束折叠；刷新保留滚动位置
 > 关联：`interactive_terminal` · [AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · [TASKS.md](./TASKS.md)
 
 ## 0. 结论
@@ -119,26 +119,35 @@
 ```text
 当前态势
 本回合
-终端会话 · 2 个运行中 · 1 个已退出       [展开]
+终端 · 1 运行中 · 6 需处理               [展开]
+  ● 运行中   python -i
+              workspace/demo · 刚刚活动
+  ● 会话已丢失  python
+              · 5 天前活动
+  ▸ 已结束 · 54
 Services · 1 个运行中                    [展开]
 ```
 
 入口在有会话时必须保留，即使当前没有项目绑定。无会话时显示一行空态，不制造大卡片：`暂无终端会话`。
 
-标题栏只显示运行中数量；存在 `lost/orphaned/failed` 时追加一个警示计数。已退出记录可以保留在展开列表中，但不能混入运行中计数。
+标题栏只显示 **运行中** 与 **需处理**（`lost/orphaned/failed/unsupported`）计数，例如 `1 运行中 · 6 需处理`。已结束数量放在折叠的「已结束」组，不进入默认摘要、也不在默认列表里铺开。
+
+默认列表只渲染 active + attention。已结束默认折叠；展开后最多预览最近 5 条，其余走「查看全部」。完整命令与输出只出现在详情区。
+
+侧栏刷新不得用整段 `innerHTML` 替换列表：无会话数据变化时跳过 DOM 写入，有变化时保留 `.sidebar-terminals-list` / `.sidebar-terminals-ended-list` / `.sidebar-terminal-output` 的 `scrollTop`（Services 列表同样处理）。
 
 ### 4.2 会话行
 
-每行固定三层信息，保证窄侧栏不发生布局跳动：
+每行固定两层信息，保证窄侧栏不发生布局跳动：
 
 ```text
 ● 运行中   python -i
             workspace/demo · 刚刚活动
 ```
 
-- 第一行：状态点、状态文案、命令摘要；命令过长中间截断。
-- 第二行：相对工作目录、最后活动时间。
-- 右侧：详情入口和关闭图标按钮；关闭按钮提供 tooltip 和无障碍名称。
+- 第一行：状态点、状态文案、**短标题**（cwd / 可执行名 / 前几个有意义 token，而不是 `python -u -c "…"` 整行）。
+- 第二行：相对工作目录（末两段）、最后活动时间。
+- 悬停 `title` 可带完整命令；完整 transcript 只在详情抽屉。
 - 不在列表中显示完整环境变量、秘密参数或整段输出。
 
 ### 4.3 详情抽屉
@@ -168,7 +177,8 @@ Services · 1 个运行中                    [展开]
 
 ### 5.2 过期与冲突
 
-- snapshot 带 `last_activity_at`，前端按服务端时间解析，不用本机时间直接判断存活。
+- snapshot 带 `last_activity_at`。`starting`/`running` 且心跳超过 60 分钟（长于 idle/lifetime 上限）在 `terminal.list` 时落盘为 `lost`/`orphaned`，不得继续显示「运行中」。PID 看起来仍活着也不能杀：重启后可能已被别的进程复用。
+- 前端同样按心跳调和：禁止「运行中」与「N 天前活动」并列；失活行用「会话已丢失」+「最后见于 …」。
 - 新 snapshot 的 `session_id` 相同但状态更晚时覆盖旧状态；旧响应不得回写新状态。
 - 详情输出响应必须校验 `session_id` 和请求 cursor，防止切换会话时串流。
 - `lost` 不是“暂时没刷新到”，不能自动改回 `running`；只有新的合法 start 才产生新的 session id。

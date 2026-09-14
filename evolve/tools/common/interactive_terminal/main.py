@@ -31,6 +31,8 @@ _DEFAULT_IDLE_TIMEOUT = 600
 _MAX_IDLE_TIMEOUT = 1800
 _DEFAULT_LIFETIME_TIMEOUT = 1800
 _MAX_LIFETIME_TIMEOUT = 3600
+# Past max idle/lifetime: a starting/running row with this heartbeat is a zombie.
+_STALE_ACTIVE_SEC = 3600
 _REQUEST_TIMEOUT_SEC = 5
 _READ_MAX_CHARS = 64 * 1024
 _MAX_INPUT_CHARS = 64 * 1024
@@ -170,6 +172,29 @@ def _file_lock(path: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
+
+
+def _parse_iso_timestamp(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError, OSError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _active_heartbeat_is_stale(state: dict[str, Any], *, now: float | None = None) -> bool:
+    now_ts = time.time() if now is None else now
+    stamp = _parse_iso_timestamp(state.get("last_activity_at") or state.get("created_at"))
+    if stamp is None:
+        return False
+    return (now_ts - stamp) >= _STALE_ACTIVE_SEC
 
 
 def _pid_alive(pid: Any) -> bool:
@@ -548,15 +573,41 @@ def _read_output(directory: Path, payload: dict[str, Any], state: dict[str, Any]
     return result
 
 
-def _refresh_orphan(directory: Path, state: dict[str, Any]) -> dict[str, Any]:
+def _refresh_orphan(directory: Path, state: dict[str, Any], *, now: float | None = None) -> dict[str, Any]:
+    if state.get("state") not in {"starting", "running"}:
+        return state
     worker_pid = state.get("worker_pid")
-    if worker_pid and state.get("state") in {"starting", "running"} and not _pid_alive(worker_pid):
-        cleanup = _terminate_pid_tree(state.get("pid"), force=True) if state.get("pid") else {"ok": False, "error": "PTY pid missing"}
+    pid_alive = bool(worker_pid) and _pid_alive(worker_pid)
+    stale = _active_heartbeat_is_stale(state, now=now)
+    if pid_alive and not stale:
+        return state
+
+    if worker_pid and not pid_alive:
+        cleanup = (
+            _terminate_pid_tree(state.get("pid"), force=True)
+            if state.get("pid")
+            else {"ok": False, "error": "PTY pid missing"}
+        )
         state["state"] = "lost"
         state["alive"] = False
         state["reason"] = "worker process is no longer alive"
         state["orphan_cleanup"] = cleanup
         _write_state(directory, state)
+        return state
+
+    if not stale:
+        return state
+
+    # Heartbeat is older than any legitimate idle/lifetime window. Do not
+    # signal the recorded PID: after a restart it may have been reused.
+    state["state"] = "lost" if worker_pid else "orphaned"
+    state["alive"] = False
+    state["reason"] = (
+        "session heartbeat is stale; worker is no longer trusted"
+        if worker_pid
+        else "worker pid missing and session heartbeat is stale"
+    )
+    _write_state(directory, state)
     return state
 
 

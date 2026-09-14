@@ -1579,9 +1579,41 @@
 .sidebar-terminals-list {
   display: flex;
   flex-direction: column;
+  gap: 0.28rem;
+}
+.sidebar-terminals-ended {
+  margin-top: 0.35rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--ma-border);
+}
+.sidebar-terminals-ended-toggle,
+.sidebar-terminals-more {
+  display: flex;
+  align-items: center;
   gap: 0.35rem;
-  max-height: 12rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.28rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ma-text-muted);
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-terminals-ended-toggle:hover,
+.sidebar-terminals-more:hover {
+  color: var(--ma-text);
+}
+.sidebar-terminals-ended-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  max-height: 10rem;
   overflow-y: auto;
+}
+.sidebar-terminals-ended-list.is-collapsed {
+  display: none;
 }
 .sidebar-terminal-row {
   display: flex;
@@ -1645,7 +1677,7 @@
 }
 .sidebar-terminal-command {
   color: var(--ma-text);
-  font-family: var(--ma-mono);
+  font-weight: 500;
 }
 .sidebar-terminal-meta {
   color: var(--ma-text-muted);
@@ -3357,6 +3389,41 @@
   justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.65rem;
+}
+
+.now-focus-card {
+  margin: 0.5rem 0.7rem 0.35rem;
+  padding: 0.7rem 0.8rem 0.65rem;
+}
+
+.now-focus-label {
+  color: var(--ma-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.now-focus-next {
+  margin: 0.2rem 0 0;
+  color: var(--ma-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.now-focus-reason {
+  margin: 0.2rem 0 0;
+  color: var(--ma-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.now-focus-block + .now-focus-block {
+  margin-top: 0.55rem;
+}
+
+.now-focus-actions {
+  margin-top: 0.55rem;
 }
 
 .textbook-plan-card-actions .unified-runaway-action {
