@@ -55,16 +55,20 @@ function formatContextTokensShort(tokens: number): string {
   return String(tokens);
 }
 
+/** Closed-state / option label: name only, no ctx/vision dump. */
 function formatModelOptionLabel(item: LlmModelListItem): string {
-  const keySuffix = item.configured ? "" : " (未配置 key)";
-  const ctxSuffix = ` · ${formatContextTokensShort(item.max_input_tokens)} ctx`;
-  const visionSuffix = item.supports_image_input ? " · 视觉" : "";
+  return item.configured ? item.name : `${item.name} · 未配置`;
+}
+
+function formatModelTitle(item: LlmModelListItem): string {
+  const parts = [item.name, `${formatContextTokensShort(item.max_input_tokens)} ctx`];
+  if (item.supports_image_input) parts.push("视觉");
   const vendor = item.vendor.trim();
-  const showVendor =
-    vendor &&
-    !item.name.toLowerCase().includes(vendor.toLowerCase());
-  const label = showVendor ? `${item.name} · ${vendor}` : item.name;
-  return `${label}${ctxSuffix}${visionSuffix}${keySuffix}`;
+  if (vendor && !item.name.toLowerCase().includes(vendor.toLowerCase())) {
+    parts.push(vendor);
+  }
+  if (!item.configured) parts.push("未配置 key");
+  return `切换主 Agent 模型（${parts.join(" · ")}）`;
 }
 
 function renderModelOptions(models: LlmModelListItem[], booting: boolean): string {
@@ -81,6 +85,24 @@ function renderModelOptions(models: LlmModelListItem[], booting: boolean): strin
     .join("");
 }
 
+function bindOverflowMenu(menu: HTMLDetailsElement): void {
+  menu.querySelectorAll<HTMLButtonElement>(".app-chrome-menu-item").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      menu.open = false;
+    });
+  });
+  menu.addEventListener("toggle", () => {
+    if (!menu.open) return;
+    const close = (ev: MouseEvent) => {
+      if (!menu.contains(ev.target as Node)) {
+        menu.open = false;
+        document.removeEventListener("click", close);
+      }
+    };
+    window.setTimeout(() => document.addEventListener("click", close), 0);
+  });
+}
+
 export function mountAppChrome(
   root: HTMLElement,
   handlers: AppChromeHandlers,
@@ -93,27 +115,45 @@ export function mountAppChrome(
 
   root.innerHTML = `
     <header class="app-chrome">
-      <span class="app-chrome-title">my-agent</span>
-      <div class="app-chrome-group">
-        <span class="app-chrome-label">外观</span>
-        <select id="chrome-theme" aria-label="外观">
-          <option value="light">亮色</option>
-          <option value="dark">暗色</option>
-        </select>
+      <div class="app-chrome-leading">
+        <span class="app-chrome-title">my-agent</span>
+        <div class="app-chrome-controls">
+          <label class="app-chrome-field" for="chrome-theme">
+            <span class="app-chrome-label">外观</span>
+            <select id="chrome-theme" aria-label="外观">
+              <option value="light">亮色</option>
+              <option value="dark">暗色</option>
+            </select>
+          </label>
+          <label class="app-chrome-field app-chrome-field-model" for="chrome-model">
+            <span class="app-chrome-label">模型</span>
+            <select id="chrome-model" aria-label="模型">
+              <option value="${FALLBACK_MODEL_ID}">Flash</option>
+            </select>
+          </label>
+        </div>
       </div>
-      <div class="app-chrome-group">
-        <span class="app-chrome-label">模型</span>
-        <select id="chrome-model" aria-label="模型">
-          <option value="${FALLBACK_MODEL_ID}">Flash</option>
-        </select>
+      <div class="app-chrome-center">
+        <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
       </div>
-      <span class="app-chrome-spacer"></span>
-      <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
-      <button type="button" class="app-chrome-btn app-chrome-runaway" id="chrome-runaway" aria-pressed="false" disabled>狂奔：关</button>
-      ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-btn" id="chrome-model-keys">模型密钥</button>' : ""}
-      ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-btn" id="chrome-settings">托管区</button>' : ""}
-      <button type="button" class="app-chrome-btn" id="chrome-pet">伴侣窗</button>
-      <button type="button" class="app-chrome-btn" id="chrome-cli">改用终端 (CLI)</button>
+      <div class="app-chrome-trailing">
+        <button type="button" class="app-chrome-runaway" id="chrome-runaway" role="switch" aria-checked="false" aria-pressed="false" disabled>
+          <span class="app-chrome-runaway-track" aria-hidden="true"><span class="app-chrome-runaway-thumb"></span></span>
+          <span class="app-chrome-runaway-copy">
+            <span class="app-chrome-runaway-name">狂奔</span>
+            <span class="app-chrome-runaway-state" id="chrome-runaway-state">关</span>
+          </span>
+        </button>
+        <details class="app-chrome-menu">
+          <summary class="app-chrome-menu-trigger" aria-label="更多操作">⋯</summary>
+          <div class="app-chrome-menu-panel" role="menu">
+            ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-menu-item" id="chrome-model-keys" role="menuitem">模型密钥</button>' : ""}
+            ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-menu-item" id="chrome-settings" role="menuitem">托管区</button>' : ""}
+            <button type="button" class="app-chrome-menu-item" id="chrome-pet" role="menuitem">伴侣窗</button>
+            <button type="button" class="app-chrome-menu-item" id="chrome-cli" role="menuitem">改用终端 (CLI)</button>
+          </div>
+        </details>
+      </div>
     </header>
   `;
 
@@ -123,8 +163,11 @@ export function mountAppChrome(
   const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
   const runawayBtn = root.querySelector<HTMLButtonElement>("#chrome-runaway")!;
+  const runawayState = root.querySelector<HTMLElement>("#chrome-runaway-state")!;
+  const overflowMenu = root.querySelector<HTMLDetailsElement>(".app-chrome-menu")!;
 
   themeSelect.value = theme;
+  bindOverflowMenu(overflowMenu);
 
   let routeTimer: number | null = null;
   let syncingModel = false;
@@ -135,8 +178,13 @@ export function mountAppChrome(
     runawayEnabled = enabled;
     runawayProjectBound = projectBound;
     runawayBtn.disabled = !projectBound;
-    runawayBtn.textContent = `狂奔：${enabled ? "开" : "关"}`;
+    runawayState.textContent = enabled ? "开" : "关";
     runawayBtn.setAttribute("aria-pressed", String(enabled));
+    runawayBtn.setAttribute("aria-checked", String(enabled));
+    runawayBtn.setAttribute(
+      "aria-label",
+      projectBound ? `狂奔 ${enabled ? "开" : "关"}` : "先打开一个项目才能开启狂奔运行",
+    );
     runawayBtn.title = projectBound
       ? (enabled ? "狂奔运行已开启；点击暂停" : "开启后允许当前项目连续推进")
       : "先打开一个项目才能开启狂奔运行";
@@ -155,9 +203,7 @@ export function mountAppChrome(
     modelSelect.innerHTML = renderModelOptions(models, false);
     modelSelect.value = pickModelId(nextId, models, defaultFlashId);
     const selected = models.find((item) => item.id === modelSelect.value);
-    modelSelect.title = selected
-      ? `切换主 Agent 模型（${selected.name} · ${selected.max_input_tokens.toLocaleString()} ctx）`
-      : "切换主 Agent 模型";
+    modelSelect.title = selected ? formatModelTitle(selected) : "切换主 Agent 模型";
   };
 
   themeSelect.addEventListener("change", () => {
@@ -169,6 +215,8 @@ export function mountAppChrome(
     if (syncingModel) return;
     const next = pickModelId(modelSelect.value, knownModels, defaultFlashId);
     modelSelect.value = next;
+    const selected = knownModels.find((item) => item.id === next);
+    if (selected) modelSelect.title = formatModelTitle(selected);
     handlers.client?.setSessionModel(next);
   });
 
@@ -218,6 +266,8 @@ export function mountAppChrome(
     syncingModel = true;
     if (knownModels.length) {
       modelSelect.value = pickModelId(event.llm_model, knownModels, defaultFlashId);
+      const selected = knownModels.find((item) => item.id === modelSelect.value);
+      if (selected) modelSelect.title = formatModelTitle(selected);
     } else {
       modelSelect.value = event.llm_model || defaultFlashId || FALLBACK_MODEL_ID;
     }
@@ -293,6 +343,8 @@ export function mountAppChrome(
     setModel(model: string): void {
       syncingModel = true;
       modelSelect.value = pickModelId(model, knownModels, defaultFlashId);
+      const selected = knownModels.find((item) => item.id === modelSelect.value);
+      if (selected) modelSelect.title = formatModelTitle(selected);
       syncingModel = false;
     },
   };
