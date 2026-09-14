@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sys
 import tempfile
@@ -45,9 +46,25 @@ VALID_SHELLS = frozenset({"grow", "daily", "govern", "project", "unified"})
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
+ProjectWorkflowStage = Literal[
+    "requirements",
+    "documentation",
+    "design",
+    "implementation",
+    "verification",
+    "release",
+]
+VALID_PROJECT_WORKFLOW_STAGES = frozenset(
+    {"requirements", "documentation", "design", "implementation", "verification", "release"}
+)
+
 ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
+
+ProjectEntry = Literal["", "plan", "direct"]
+DEFAULT_PROJECT_ENTRY: ProjectEntry = ""
+VALID_PROJECT_ENTRIES = frozenset({"", "plan", "direct"})
 
 HarnessKind = Literal["desktop", "terminal"]
 DEFAULT_HARNESS: HarnessKind = "desktop"
@@ -130,10 +147,35 @@ class SessionMeta:
     project_root: str = ""
     project_id: str = ""
     project_plan_status: PlanStatus = ""
+    project_workflow_stage: ProjectWorkflowStage = "requirements"
+    project_design_confirmed_at: str = ""
+    project_active_task_id: str = ""
     project_plan_confirmed_at: str = ""
+    project_scope_confirmed_at: str = ""
+    project_runaway_enabled: bool = False
+    project_runaway_checkpoint: str = ""
+    project_runaway_task_fingerprint: str = ""
+    project_runaway_verification_evidence_fingerprint: str = ""
+    project_runaway_acceptance_passed: bool = False
+    project_runaway_task_done_baseline: int = 0
+    project_runaway_tool_rounds: int = 0
+    project_runaway_repair_count: int = 0
+    project_runaway_last_error: str = ""
+    project_runaway_last_error_fingerprint: str = ""
+    project_runaway_last_verification: str = ""
+    project_runaway_review_blockers_count: int = 0
+    project_runaway_paused_reason: str = ""
+    project_runaway_v2_phase: str = ""
+    project_runaway_v2_mode: str = ""
+    project_runaway_v2_user_line: str = ""
+    project_runaway_v2_blocked: bool = False
+    project_runaway_v2_last_state_fingerprint: str = ""
+    project_runaway_v2_no_progress_turns: int = 0
+    project_runaway_v2_auto_turns: int = 0
     project_phase_fingerprint: str = ""
     project_doc_fingerprint: str = ""
     project_delivery_profile: ProjectDeliveryProfile = DEFAULT_PROJECT_DELIVERY_PROFILE
+    project_entry: ProjectEntry = DEFAULT_PROJECT_ENTRY
     harness: HarnessKind = DEFAULT_HARNESS
     terminal_scope_kind: TerminalScopeKind | Literal[""] = ""
     terminal_cwd: str = ""
@@ -160,10 +202,35 @@ class SessionMeta:
             "project_root": self.project_root,
             "project_id": self.project_id,
             "project_plan_status": self.project_plan_status,
+            "project_workflow_stage": self.project_workflow_stage,
+            "project_design_confirmed_at": self.project_design_confirmed_at,
+            "project_active_task_id": self.project_active_task_id,
             "project_plan_confirmed_at": self.project_plan_confirmed_at,
+            "project_scope_confirmed_at": self.project_scope_confirmed_at,
+            "project_runaway_enabled": self.project_runaway_enabled,
+            "project_runaway_checkpoint": self.project_runaway_checkpoint,
+            "project_runaway_task_fingerprint": self.project_runaway_task_fingerprint,
+            "project_runaway_verification_evidence_fingerprint": self.project_runaway_verification_evidence_fingerprint,
+            "project_runaway_acceptance_passed": self.project_runaway_acceptance_passed,
+            "project_runaway_task_done_baseline": self.project_runaway_task_done_baseline,
+            "project_runaway_tool_rounds": self.project_runaway_tool_rounds,
+            "project_runaway_repair_count": self.project_runaway_repair_count,
+            "project_runaway_last_error": self.project_runaway_last_error,
+            "project_runaway_last_error_fingerprint": self.project_runaway_last_error_fingerprint,
+            "project_runaway_last_verification": self.project_runaway_last_verification,
+            "project_runaway_review_blockers_count": self.project_runaway_review_blockers_count,
+            "project_runaway_paused_reason": self.project_runaway_paused_reason,
+            "project_runaway_v2_phase": self.project_runaway_v2_phase,
+            "project_runaway_v2_mode": self.project_runaway_v2_mode,
+            "project_runaway_v2_user_line": self.project_runaway_v2_user_line,
+            "project_runaway_v2_blocked": self.project_runaway_v2_blocked,
+            "project_runaway_v2_last_state_fingerprint": self.project_runaway_v2_last_state_fingerprint,
+            "project_runaway_v2_no_progress_turns": self.project_runaway_v2_no_progress_turns,
+            "project_runaway_v2_auto_turns": self.project_runaway_v2_auto_turns,
             "project_phase_fingerprint": self.project_phase_fingerprint,
             "project_doc_fingerprint": self.project_doc_fingerprint,
             "project_delivery_profile": self.project_delivery_profile,
+            "project_entry": self.project_entry,
             "harness": self.harness,
             "terminal_scope_kind": self.terminal_scope_kind,
             "terminal_cwd": self.terminal_cwd,
@@ -219,9 +286,104 @@ class SessionMeta:
             plan_raw if plan_raw in VALID_PLAN_STATUSES else ""
         )
 
+        workflow_stage_raw = payload.get("project_workflow_stage", "requirements")
+        project_workflow_stage: ProjectWorkflowStage = (
+            workflow_stage_raw
+            if workflow_stage_raw in VALID_PROJECT_WORKFLOW_STAGES
+            else "requirements"
+        )
+
+        design_confirmed_at = payload.get("project_design_confirmed_at", "")
+        if not isinstance(design_confirmed_at, str):
+            design_confirmed_at = ""
+        active_task_id = payload.get("project_active_task_id", "")
+        if not isinstance(active_task_id, str):
+            active_task_id = ""
+
         confirmed_at = payload.get("project_plan_confirmed_at", "")
         if not isinstance(confirmed_at, str):
             confirmed_at = ""
+
+        scope_confirmed_at = payload.get("project_scope_confirmed_at", "")
+        if not isinstance(scope_confirmed_at, str):
+            scope_confirmed_at = ""
+
+        project_runaway_enabled = bool(payload.get("project_runaway_enabled", False))
+
+        runaway_checkpoint = payload.get("project_runaway_checkpoint", "")
+        if not isinstance(runaway_checkpoint, str):
+            runaway_checkpoint = ""
+        from runaway_flow import normalize_checkpoint
+
+        runaway_checkpoint = normalize_checkpoint(runaway_checkpoint)
+        runaway_task_fingerprint = payload.get("project_runaway_task_fingerprint", "")
+        if not isinstance(runaway_task_fingerprint, str):
+            runaway_task_fingerprint = ""
+        runaway_evidence_fingerprint = payload.get(
+            "project_runaway_verification_evidence_fingerprint", ""
+        )
+        if not isinstance(runaway_evidence_fingerprint, str):
+            runaway_evidence_fingerprint = ""
+        runaway_baseline_raw = payload.get("project_runaway_task_done_baseline", 0)
+        runaway_rounds_raw = payload.get("project_runaway_tool_rounds", 0)
+        try:
+            runaway_task_done_baseline = max(0, int(runaway_baseline_raw or 0))
+        except (TypeError, ValueError):
+            runaway_task_done_baseline = 0
+        try:
+            runaway_tool_rounds = max(0, int(runaway_rounds_raw or 0))
+        except (TypeError, ValueError):
+            runaway_tool_rounds = 0
+        runaway_repair_count_raw = payload.get("project_runaway_repair_count", 0)
+        try:
+            runaway_repair_count = max(0, int(runaway_repair_count_raw or 0))
+        except (TypeError, ValueError):
+            runaway_repair_count = 0
+        runaway_last_error = payload.get("project_runaway_last_error", "")
+        if not isinstance(runaway_last_error, str):
+            runaway_last_error = ""
+        runaway_last_error_fingerprint = payload.get(
+            "project_runaway_last_error_fingerprint", ""
+        )
+        if not isinstance(runaway_last_error_fingerprint, str):
+            runaway_last_error_fingerprint = ""
+        runaway_last_verification = payload.get("project_runaway_last_verification", "")
+        if not isinstance(runaway_last_verification, str):
+            runaway_last_verification = ""
+        runaway_review_blockers_raw = payload.get("project_runaway_review_blockers_count", 0)
+        try:
+            runaway_review_blockers_count = max(0, int(runaway_review_blockers_raw or 0))
+        except (TypeError, ValueError):
+            runaway_review_blockers_count = 0
+        runaway_paused_reason = payload.get("project_runaway_paused_reason", "")
+        if not isinstance(runaway_paused_reason, str):
+            runaway_paused_reason = ""
+
+        runaway_v2_phase = payload.get("project_runaway_v2_phase", "")
+        if not isinstance(runaway_v2_phase, str):
+            runaway_v2_phase = ""
+        runaway_v2_mode = payload.get("project_runaway_v2_mode", "")
+        if not isinstance(runaway_v2_mode, str):
+            runaway_v2_mode = ""
+        runaway_v2_user_line = payload.get("project_runaway_v2_user_line", "")
+        if not isinstance(runaway_v2_user_line, str):
+            runaway_v2_user_line = ""
+
+        runaway_v2_last_state_fingerprint = payload.get(
+            "project_runaway_v2_last_state_fingerprint", ""
+        )
+        if not isinstance(runaway_v2_last_state_fingerprint, str):
+            runaway_v2_last_state_fingerprint = ""
+        runaway_v2_no_progress_raw = payload.get("project_runaway_v2_no_progress_turns", 0)
+        runaway_v2_auto_turns_raw = payload.get("project_runaway_v2_auto_turns", 0)
+        try:
+            runaway_v2_no_progress_turns = max(0, int(runaway_v2_no_progress_raw or 0))
+        except (TypeError, ValueError):
+            runaway_v2_no_progress_turns = 0
+        try:
+            runaway_v2_auto_turns = max(0, int(runaway_v2_auto_turns_raw or 0))
+        except (TypeError, ValueError):
+            runaway_v2_auto_turns = 0
 
         phase_fp = payload.get("project_phase_fingerprint", "")
         if not isinstance(phase_fp, str):
@@ -237,6 +399,11 @@ class SessionMeta:
             profile_raw
             if profile_raw in VALID_PROJECT_DELIVERY_PROFILES
             else DEFAULT_PROJECT_DELIVERY_PROFILE
+        )
+
+        entry_raw = payload.get("project_entry", DEFAULT_PROJECT_ENTRY)
+        project_entry: ProjectEntry = (
+            entry_raw if entry_raw in VALID_PROJECT_ENTRIES else DEFAULT_PROJECT_ENTRY
         )
 
         harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
@@ -277,10 +444,37 @@ class SessionMeta:
             project_root=project_root.strip(),
             project_id=project_id.strip(),
             project_plan_status=project_plan_status,
+            project_workflow_stage=project_workflow_stage,
+            project_design_confirmed_at=design_confirmed_at,
+            project_active_task_id=active_task_id,
             project_plan_confirmed_at=confirmed_at,
+            project_scope_confirmed_at=scope_confirmed_at,
+            project_runaway_enabled=project_runaway_enabled,
+            project_runaway_checkpoint=runaway_checkpoint.strip(),
+            project_runaway_task_fingerprint=runaway_task_fingerprint.strip(),
+            project_runaway_verification_evidence_fingerprint=runaway_evidence_fingerprint.strip(),
+            project_runaway_acceptance_passed=bool(
+                payload.get("project_runaway_acceptance_passed", False)
+            ),
+            project_runaway_task_done_baseline=runaway_task_done_baseline,
+            project_runaway_tool_rounds=runaway_tool_rounds,
+            project_runaway_repair_count=runaway_repair_count,
+            project_runaway_last_error=runaway_last_error.strip(),
+            project_runaway_last_error_fingerprint=runaway_last_error_fingerprint.strip(),
+            project_runaway_last_verification=runaway_last_verification.strip(),
+            project_runaway_review_blockers_count=runaway_review_blockers_count,
+            project_runaway_paused_reason=runaway_paused_reason.strip(),
+            project_runaway_v2_phase=runaway_v2_phase.strip(),
+            project_runaway_v2_mode=runaway_v2_mode.strip(),
+            project_runaway_v2_user_line=runaway_v2_user_line.strip(),
+            project_runaway_v2_blocked=bool(payload.get("project_runaway_v2_blocked", False)),
+            project_runaway_v2_last_state_fingerprint=runaway_v2_last_state_fingerprint.strip(),
+            project_runaway_v2_no_progress_turns=runaway_v2_no_progress_turns,
+            project_runaway_v2_auto_turns=runaway_v2_auto_turns,
             project_phase_fingerprint=phase_fp,
             project_doc_fingerprint=doc_fp,
             project_delivery_profile=project_delivery_profile,
+            project_entry=project_entry,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
             terminal_cwd=terminal_cwd,
@@ -304,10 +498,14 @@ class Session:
     last_review_blockers_count: int = field(default=0, compare=False, repr=False)
     turn_intent: str | None = field(default=None, compare=False, repr=False)
     scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
+    direct_implement_turn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
     corruption_notices: list[str] = field(default_factory=list, compare=False, repr=False)
+    # UI-5972: desktop switch may defer full messages.jsonl load until first turn.
+    messages_total_count: int | None = field(default=None, compare=False, repr=False)
+    _messages_fully_loaded: bool = field(default=True, compare=False, repr=False)
 
     @property
     def goal_path(self) -> Path:
@@ -377,6 +575,7 @@ class Session:
         self.meta.turn_mode = normalize_turn_mode(mode)
 
     def append_message(self, message: dict[str, Any], *, persist: bool = True) -> None:
+        self.ensure_messages_loaded()
         self.messages.append(message)
         if persist:
             self._append_message_line(message)
@@ -388,7 +587,8 @@ class Session:
         self.meta.updated_at = utc_now_iso()
         self.persist_goal()
         _write_meta(self.meta_path, self.meta, agent_root=self.paths.agent_root)
-        _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
+        if self._messages_fully_loaded:
+            _write_messages_snapshot(self.messages_path, self.messages, agent_root=self.paths.agent_root)
         from file_guard import backup_session_files
 
         backup_session_files(self.session_dir, self.paths.agent_root)
@@ -405,8 +605,38 @@ class Session:
         loaded = _read_meta(self.meta_path)
         self.meta.pending_feedback = list(loaded.pending_feedback)
 
+    def ensure_messages_loaded(self) -> None:
+        """Load full messages.jsonl when desktop switch used a deferred load."""
+        if self._messages_fully_loaded:
+            return
+        skipped_lines: list[int] = []
+        messages = _read_messages(self.messages_path, skipped_lines=skipped_lines)
+        from context import repair_tool_messages
+
+        repaired = repair_tool_messages(messages)
+        if repaired != messages:
+            _write_messages_snapshot(
+                self.messages_path,
+                repaired,
+                agent_root=self.paths.agent_root,
+            )
+            messages = repaired
+        if skipped_lines:
+            self.corruption_notices.append(
+                format_messages_corruption_notice(skipped_lines)
+            )
+        self.messages = messages
+        self._messages_fully_loaded = True
+        self.messages_total_count = None
+
     @classmethod
-    def load(cls, paths: AgentPaths, conversation_id: str) -> Session:
+    def load(
+        cls,
+        paths: AgentPaths,
+        conversation_id: str,
+        *,
+        message_cap: int | None = None,
+    ) -> Session:
         session_dir = sessions_root(paths) / conversation_id
         if not session_dir.is_dir():
             raise SessionError(f"session does not exist: {conversation_id}")
@@ -418,20 +648,35 @@ class Session:
         meta_issues: list[str] = []
         meta = _read_meta(session_dir / META_FILENAME, corruption_kinds=meta_issues)
         skipped_lines: list[int] = []
-        messages = _read_messages(
-            session_dir / MESSAGES_FILENAME,
-            skipped_lines=skipped_lines,
-        )
-        from context import repair_tool_messages
-
-        repaired = repair_tool_messages(messages)
-        if repaired != messages:
-            _write_messages_snapshot(
+        messages_total_count: int | None = None
+        messages_fully_loaded = True
+        if message_cap is not None and message_cap <= 0:
+            messages: list[dict[str, Any]] = []
+            messages_total_count = _count_file_newlines(session_dir / MESSAGES_FILENAME)
+            messages_fully_loaded = False
+        elif message_cap is not None and message_cap > 0:
+            messages, messages_total_count = _read_messages_tail(
                 session_dir / MESSAGES_FILENAME,
-                repaired,
-                agent_root=paths.agent_root,
+                message_cap,
+                skipped_lines=skipped_lines,
             )
-            messages = repaired
+            messages_fully_loaded = messages_total_count <= len(messages)
+        else:
+            messages = _read_messages(
+                session_dir / MESSAGES_FILENAME,
+                skipped_lines=skipped_lines,
+            )
+        if messages_fully_loaded:
+            from context import repair_tool_messages
+
+            repaired = repair_tool_messages(messages)
+            if repaired != messages:
+                _write_messages_snapshot(
+                    session_dir / MESSAGES_FILENAME,
+                    repaired,
+                    agent_root=paths.agent_root,
+                )
+                messages = repaired
         notices: list[str] = []
         for kind in meta_issues:
             notices.append(format_meta_corruption_notice(kind))
@@ -445,6 +690,8 @@ class Session:
             messages=messages,
             paths=paths,
             corruption_notices=notices,
+            messages_total_count=messages_total_count,
+            _messages_fully_loaded=messages_fully_loaded,
         )
 
     def _append_message_line(self, message: dict[str, Any]) -> None:
@@ -643,43 +890,99 @@ def list_session_ids(
     return sorted(ids)
 
 
+def _count_file_newlines(path: Path) -> int:
+    try:
+        with path.open("rb") as handle:
+            count = 0
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                count += chunk.count(b"\n")
+            return count
+    except OSError:
+        return 0
+
+
+def _user_text_from_jsonl_line(line: str) -> str:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return ""
+    content = str(msg.get("content", "")).strip()
+    if not content:
+        return ""
+    if any(content.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+        return ""
+    return content
+
+
+def _extract_user_messages_from_lines(lines: list[str]) -> tuple[str, str]:
+    first_user = ""
+    last_user = ""
+    for line in lines:
+        if not line.strip():
+            continue
+        text = _user_text_from_jsonl_line(line)
+        if text and not first_user:
+            first_user = text
+            break
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        text = _user_text_from_jsonl_line(line)
+        if text:
+            last_user = text
+            break
+    return first_user, last_user
+
+
+_JSONL_TAIL_BYTES = 65536
+
+
 def _extract_user_messages(messages_path: Path) -> tuple[str, str, int]:
     """Return (first_user_content, last_user_content, message_count) from a jsonl file.
 
     Skips anchor / kernel / seed prefixes so title and preview are real user messages.
+    UI-5972: tail-read large files instead of loading entire messages.jsonl.
     """
+    if not messages_path.is_file():
+        return "", "", 0
+    msg_count = _count_file_newlines(messages_path)
+    if msg_count == 0:
+        return "", "", 0
     try:
-        text = messages_path.read_text(encoding="utf-8")
+        size = messages_path.stat().st_size
     except OSError:
         return "", "", 0
-
-    lines = [l for l in text.splitlines() if l.strip()]
-    msg_count = len(lines)
-    first_user = ""
-    last_user = ""
-
-    for line in lines:
+    if size <= _JSONL_TAIL_BYTES * 2:
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            content = str(msg.get("content", "")).strip()
-            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
-                first_user = content
-                break
+            text = messages_path.read_text(encoding="utf-8")
+        except OSError:
+            return "", "", 0
+        first_user, last_user = _extract_user_messages_from_lines(text.splitlines())
+        return first_user, last_user, msg_count
 
-    for line in reversed(lines):
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(msg, dict) and msg.get("role") == "user":
-            content = str(msg.get("content", "")).strip()
-            if content and not any(content.startswith(p) for p in _UI_SKIP_USER_PREFIXES):
-                last_user = content
-                break
+    try:
+        head_text = messages_path.read_bytes()[:_JSONL_TAIL_BYTES].decode(
+            "utf-8", errors="replace"
+        )
+        with messages_path.open("rb") as handle:
+            handle.seek(max(0, size - _JSONL_TAIL_BYTES))
+            tail_text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return "", "", msg_count
 
+    head_lines = head_text.splitlines()
+    if head_lines and not head_text.endswith("\n"):
+        head_lines = head_lines[:-1]
+    tail_lines = tail_text.splitlines()
+    if tail_lines and size > _JSONL_TAIL_BYTES and not tail_text.startswith("\n"):
+        tail_lines = tail_lines[1:]
+    first_user, _ = _extract_user_messages_from_lines(head_lines)
+    _, last_user = _extract_user_messages_from_lines(tail_lines)
     return first_user, last_user, msg_count
 
 
@@ -757,7 +1060,10 @@ def list_session_summaries(
             "project_id": project_id,
         })
 
-    # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at
+    # D5/D6: one row per project — prefer project_sessions mapping, else newest updated_at.
+    # Project-bound rows must survive the global limit: a burst of ordinary sessions
+    # (including empty sessions created during reconnects) must not make projects
+    # disappear from the desktop's project-session tab.
     by_project: dict[str, dict[str, Any]] = {}
     unbound: list[dict[str, Any]] = []
     for item in entries:
@@ -780,9 +1086,19 @@ def list_session_summaries(
             if str(item.get("updated_at") or "") > str(existing.get("updated_at") or ""):
                 by_project[pid] = item
 
-    merged = unbound + list(by_project.values())
-    merged.sort(key=lambda e: e["updated_at"], reverse=True)
-    return merged[:limit]
+    if limit <= 0:
+        return []
+
+    project_bound = list(by_project.values())
+    project_bound.sort(key=lambda e: e["updated_at"], reverse=True)
+    unbound.sort(key=lambda e: e["updated_at"], reverse=True)
+
+    # Reserve the first slots for project rows, then fill the remaining capacity
+    # with the newest ordinary conversations. Keep the final result chronological.
+    selected = project_bound[:limit]
+    selected.extend(unbound[: max(0, limit - len(selected))])
+    selected.sort(key=lambda e: e["updated_at"], reverse=True)
+    return selected
 
 
 def _harness_for_session_dir(session_dir: Path) -> HarnessKind:
@@ -864,9 +1180,17 @@ def load_session_for_harness(
     conversation_id: str,
     *,
     expected: HarnessKind,
+    full_messages: bool = False,
 ) -> Session:
-    """Load session and enforce harness match (TM-4)."""
-    session = Session.load(paths, conversation_id)
+    """Load session and enforce harness match (TM-4).
+
+    Desktop UI paths default to deferred messages.jsonl load (UI-5972).
+    Pass ``full_messages=True`` when the caller needs the entire log in RAM.
+    """
+    message_cap: int | None = None
+    if expected == "desktop" and not full_messages:
+        message_cap = desktop_switch_message_cap()
+    session = Session.load(paths, conversation_id, message_cap=message_cap)
     assert_session_harness(session, expected)
     return session
 
@@ -1076,10 +1400,30 @@ def build_seed_message(
 
 
 _UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]", SEED_PREFIX)
+_DEFAULT_SESSION_HISTORY_MAX_ITEMS = 200
+
+
+def session_history_max_items() -> int:
+    """UI-5972 · Desktop session.history window (0 = unlimited)."""
+    raw = os.environ.get(
+        "MY_AGENT_SESSION_HISTORY_MAX_ITEMS",
+        str(_DEFAULT_SESSION_HISTORY_MAX_ITEMS),
+    )
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_SESSION_HISTORY_MAX_ITEMS
 
 
 def build_session_chat_history(session: Session) -> list[dict[str, str]]:
     """User/assistant lines for desktop chat hydration (DESKTOP §5.2 session.history)."""
+    if not session._messages_fully_loaded and session.messages_path.is_file():
+        max_items = session_history_max_items()
+        items, _total = build_session_chat_history_from_path(
+            session.messages_path,
+            max_items=max_items if max_items > 0 else None,
+        )
+        return items
     items: list[dict[str, str]] = []
     last_user: str | None = None
 
@@ -1112,11 +1456,90 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
     return items
 
 
+def build_session_chat_history_from_path(
+    messages_path: Path,
+    *,
+    max_items: int | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Stream jsonl once; return (items, total_ui_item_count). UI-5972 switch fast path."""
+    if not messages_path.is_file():
+        return [], 0
+    items: list[dict[str, str]] = []
+    total = 0
+    last_user: str | None = None
+    try:
+        with messages_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text_line = line.strip()
+                if not text_line:
+                    continue
+                try:
+                    message = json.loads(text_line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role")
+                content = message.get("content")
+                if role == "user":
+                    if not isinstance(content, str):
+                        continue
+                    text = content.strip()
+                    if not text:
+                        continue
+                    if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+                        continue
+                    if text == last_user:
+                        continue
+                    last_user = text
+                    total += 1
+                    items.append({"role": "user", "text": text})
+                    if max_items and max_items > 0 and len(items) > max_items:
+                        items.pop(0)
+                    continue
+                if role == "assistant":
+                    if not isinstance(content, str):
+                        continue
+                    text = content.strip()
+                    if not text:
+                        continue
+                    total += 1
+                    items.append({"role": "assistant", "text": text})
+                    last_user = None
+                    if max_items and max_items > 0 and len(items) > max_items:
+                        items.pop(0)
+    except OSError:
+        return [], 0
+    return items, total
+
+
 def session_history_event(session: Session) -> dict[str, Any]:
-    return {
+    max_items = session_history_max_items()
+    if not session._messages_fully_loaded and session.messages_path.is_file():
+        items, total_items = build_session_chat_history_from_path(
+            session.messages_path,
+            max_items=max_items if max_items > 0 else None,
+        )
+    else:
+        items = build_session_chat_history(session)
+        total_items = len(items)
+    truncated = False
+    omitted_count = 0
+    if max_items > 0 and total_items > max_items:
+        omitted_count = total_items - max_items
+        items = items[-max_items:]
+        truncated = True
+    payload: dict[str, Any] = {
         "type": "session.history",
-        "items": build_session_chat_history(session),
+        "session_id": session.conversation_id,
+        "project_id": session.meta.project_id or None,
+        "items": items,
+        "total_items": total_items,
     }
+    if truncated:
+        payload["truncated"] = True
+        payload["omitted_count"] = omitted_count
+    return payload
 
 
 def prompt_and_set_goal(
@@ -1254,6 +1677,117 @@ def _read_messages(
         elif skipped_lines is not None:
             skipped_lines.append(line_no)
     return messages
+
+
+def _read_messages_tail(
+    messages_path: Path,
+    max_records: int,
+    *,
+    skipped_lines: list[int] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Load trailing jsonl records without reading the whole file into memory."""
+    total = _count_file_newlines(messages_path)
+    if total == 0 or max_records <= 0:
+        return [], total
+    if total <= max_records:
+        return _read_messages(messages_path, skipped_lines=skipped_lines), total
+    try:
+        size = messages_path.stat().st_size
+    except OSError:
+        return [], total
+    chunk_size = 256 * 1024
+    collected: list[str] = []
+    with messages_path.open("rb") as handle:
+        pos = size
+        buffer = ""
+        while pos > 0 and len(collected) < max_records:
+            read_size = min(chunk_size, pos)
+            pos -= read_size
+            handle.seek(pos)
+            chunk = handle.read(read_size).decode("utf-8", errors="replace")
+            buffer = chunk + buffer
+            lines = buffer.split("\n")
+            if pos > 0:
+                buffer = lines[0]
+                lines = lines[1:]
+            else:
+                buffer = ""
+            for line in reversed(lines):
+                stripped = line.strip()
+                if stripped:
+                    collected.append(stripped)
+                    if len(collected) >= max_records:
+                        break
+    collected.reverse()
+    messages: list[dict[str, Any]] = []
+    for line in collected:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            if skipped_lines is not None:
+                skipped_lines.append(-1)
+            continue
+        if isinstance(payload, dict):
+            messages.append(payload)
+    return messages, total
+
+
+def desktop_switch_message_cap() -> int:
+    """0 = defer messages.jsonl load until first turn (UI-5972)."""
+    raw = os.environ.get("MY_AGENT_SWITCH_MESSAGE_CAP", "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def session_summary_for_id(
+    paths: AgentPaths,
+    conversation_id: str,
+) -> dict[str, Any] | None:
+    """Single-session summary for project threads (avoid full list_session_summaries)."""
+    entry = sessions_root(paths) / conversation_id
+    if not entry.is_dir():
+        return None
+    if not ((entry / META_FILENAME).is_file() or (entry / MESSAGES_FILENAME).is_file()):
+        return None
+    goal = ""
+    updated_at = ""
+    project_id = ""
+    meta_path = entry / META_FILENAME
+    harness = DEFAULT_HARNESS
+    if meta_path.is_file():
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                updated_at = str(payload.get("updated_at", "") or "")
+                raw_pid = payload.get("project_id", "")
+                if isinstance(raw_pid, str):
+                    project_id = raw_pid.strip()
+                harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
+        except (OSError, json.JSONDecodeError):
+            pass
+    if harness == "terminal":
+        return None
+    goal_path = entry / GOAL_FILENAME
+    if goal_path.is_file():
+        try:
+            goal = goal_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    first_user, last_user, msg_count = _extract_user_messages(entry / MESSAGES_FILENAME)
+    if project_id:
+        title = project_id
+    else:
+        title = goal[:80] if goal else (first_user[:80] if first_user else conversation_id)
+    return {
+        "session_id": conversation_id,
+        "title": title,
+        "preview": last_user[:120] if last_user else "",
+        "updated_at": updated_at,
+        "message_count": msg_count,
+        "project_id": project_id,
+    }
 
 
 def _write_messages_snapshot(

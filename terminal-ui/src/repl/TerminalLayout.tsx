@@ -1,7 +1,7 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {Box} from 'ink';
-import type {TerminalBlock} from '../types.js';
-import {transcriptRowBudget} from '../perf/virtual-list.js';
+import type {TerminalBlock, TerminalResult} from '../types.js';
+import {transcriptFooterRows, transcriptRowBudget} from '../perf/virtual-list.js';
 import {
   committedTranscriptBlocks,
   filterExpiredNotices,
@@ -14,6 +14,9 @@ import {LiveThinkingPane} from './panes/LiveThinkingPane.js';
 import {LiveAssistantPane} from './panes/LiveAssistantPane.js';
 import {ComposerPane} from './panes/ComposerPane.js';
 import {StatusPane} from './panes/StatusPane.js';
+import type {SlashCommand} from '../slash-commands.js';
+import type {ModelOption} from '../model-picker.js';
+import {MODEL_PICKER_MAX_VISIBLE} from '../model-picker.js';
 
 export type TerminalChrome = {
   working: boolean;
@@ -21,6 +24,7 @@ export type TerminalChrome = {
   activeToolStartedAt?: number;
   planStatus?: string;
   confirm?: {requestId: string; preview: string; allowApproveAll: boolean};
+  result?: TerminalResult;
 };
 
 export type TerminalSession = {
@@ -30,6 +34,7 @@ export type TerminalSession = {
   root: string;
   mascotLines: string[];
   mascotLabel: string;
+  models?: ModelOption[];
 };
 
 export type TerminalLayoutProps = {
@@ -37,11 +42,18 @@ export type TerminalLayoutProps = {
   columns?: number;
   session: TerminalSession;
   chrome: TerminalChrome;
-  blocks: readonly TerminalBlock[];
+  blocks?: readonly TerminalBlock[];
   liveReasoningText?: string;
   liveAssistantText?: string;
   input?: string;
   scrollUpRows?: number;
+  newOutputRows?: number;
+  slashCommands?: readonly SlashCommand[];
+  slashCommandIndex?: number;
+  modelPickerOpen?: boolean;
+  modelOptions?: readonly ModelOption[];
+  modelPickerIndex?: number;
+  currentModel?: string;
 };
 
 const DEMO_BLOCKS: TerminalBlock[] = [
@@ -89,6 +101,13 @@ export function TerminalLayout({
   liveAssistantText = '',
   input = '',
   scrollUpRows = 0,
+  newOutputRows = 0,
+  slashCommands = [],
+  slashCommandIndex = 0,
+  modelPickerOpen = false,
+  modelOptions = [],
+  modelPickerIndex = 0,
+  currentModel = session.model,
 }: TerminalLayoutProps) {
   const [now, setNow] = useState(() => Date.now());
   const visibleBlocks = useMemo(
@@ -107,7 +126,17 @@ export function TerminalLayout({
   }, [hasEphemeralNotices]);
 
   const welcomeCompact = visibleBlocks.length > 0;
-  const transcriptRows = transcriptRowBudget(height, welcomeCompact);
+  const transcriptRows = transcriptRowBudget(
+    height,
+    welcomeCompact,
+    transcriptFooterRows(
+      chrome.working,
+      Boolean(chrome.confirm),
+      scrollUpRows > 0,
+      slashCommands.length +
+        (modelPickerOpen ? Math.min(modelOptions.length, MODEL_PICKER_MAX_VISIBLE) + 4 : 0),
+    ),
+  );
   const assistantLive = trailingAssistantStreaming(
     visibleBlocks,
     chrome.working,
@@ -129,6 +158,18 @@ export function TerminalLayout({
       }),
     [assistantLive, thinkingLive, visibleBlocks],
   );
+  const reviewBlocks = useMemo(() => {
+    if (scrollUpRows === 0) return staticBlocks;
+    const next = [...staticBlocks];
+    if (thinkingLive && liveReasoningText.trim()) {
+      next.push({kind: 'thinking', text: liveReasoningText, collapsed: false});
+    }
+    if (assistantLive && liveAssistantText.trim()) {
+      next.push({kind: 'assistant', name: session.mascotLabel, body: liveAssistantText});
+    }
+    return next;
+  }, [assistantLive, liveAssistantText, liveReasoningText, scrollUpRows, session.mascotLabel, staticBlocks, thinkingLive]);
+  const showLiveOverlay = scrollUpRows === 0;
 
   return (
     <Box
@@ -147,7 +188,7 @@ export function TerminalLayout({
         width="100%"
       >
         <TranscriptPane
-          blocks={staticBlocks}
+          blocks={reviewBlocks}
           columns={columns}
           transcriptRows={transcriptRows}
           scrollUpRows={scrollUpRows}
@@ -155,16 +196,28 @@ export function TerminalLayout({
         <LiveThinkingPane
           text={liveReasoningText}
           columns={columns}
-          active={thinkingLive}
+          active={thinkingLive && showLiveOverlay}
         />
         <LiveAssistantPane
           body={liveAssistantText}
           columns={columns}
-          active={assistantLive}
+          active={assistantLive && showLiveOverlay}
         />
         {scrollUpRows === 0 ? <Box flexGrow={1} /> : null}
       </Box>
-      <ComposerPane input={input} confirm={chrome.confirm} />
+      <ComposerPane
+        input={input}
+        confirm={chrome.confirm}
+        working={chrome.working}
+        scrollUpRows={scrollUpRows}
+        newOutputRows={newOutputRows}
+        slashCommands={slashCommands}
+        slashCommandIndex={slashCommandIndex}
+        modelPickerOpen={modelPickerOpen}
+        modelOptions={modelOptions}
+        modelPickerIndex={modelPickerIndex}
+        currentModel={currentModel}
+      />
       <StatusPane
         model={session.model}
         root={session.root}
@@ -172,6 +225,8 @@ export function TerminalLayout({
         activeTool={chrome.activeTool}
         activeToolStartedAt={chrome.activeToolStartedAt}
         planStatus={chrome.planStatus}
+        result={chrome.result}
+        columns={columns}
       />
     </Box>
   );

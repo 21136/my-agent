@@ -1,0 +1,3 @@
+# Optional dependencies for evolved tools.
+# These packages are not required by the base agent runtime.
+pywinpty>=2.0.13; sys_platform == "win32"

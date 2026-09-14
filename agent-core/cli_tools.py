@@ -1,4 +1,4 @@
-"""CLI for tool invocation without LLM (TASKS T-112)."""
+﻿"""CLI for tool invocation without LLM (TASKS T-112)."""
 
 from __future__ import annotations
 
@@ -126,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Working directory (default: shell cwd)",
     )
+    terminal_cmd.add_argument("--demo", action="store_true", help="Run acceptance checks")
+    terminal_cmd.add_argument(
+        "--clear-lock",
+        action="store_true",
+        help="Remove Terminal session lock without killing the holder process",
+    )
     terminal_cmd.set_defaults(handler=_cmd_terminal)
 
     return parser
@@ -145,7 +151,7 @@ def _cmd_tool_list(args: argparse.Namespace) -> int:
                 "description": tool.description,
                 "status": tool.status,
                 "topics": list(tool.topics),
-                "workspace_only": tool.policy.workspace_only,
+                "allow_approve_all": tool.policy.allow_approve_all,
             }
             for tool in registry.evolved()
         ],
@@ -209,6 +215,10 @@ def _cmd_terminal(args: argparse.Namespace) -> int:
     from cli_terminal import main as terminal_main
 
     argv: list[str] = []
+    if args.demo:
+        argv.append("--demo")
+    if args.clear_lock:
+        argv.append("--clear-lock")
     if args.path:
         argv.append(args.path)
     return terminal_main(argv)

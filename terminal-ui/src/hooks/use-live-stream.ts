@@ -10,7 +10,7 @@ export type LiveStreamController = {
 };
 
 export function useLiveStream(
-  eventType: Extract<TerminalEvent['type'], 'reasoning.delta' | 'assistant.delta'>,
+  eventType: 'reasoning.delta' | 'assistant.delta',
 ): LiveStreamController {
   const bufferRef = useRef('');
   const [text, setText] = useState('');

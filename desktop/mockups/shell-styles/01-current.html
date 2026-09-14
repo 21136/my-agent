@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="current">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01 · 纸面赭石（当前）</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="_shared.css" />
+  <link rel="stylesheet" href="_working.css" />
+  <style>
+    :root {
+      --bg: #f6f3ed;
+      --surface: #ede8df;
+      --sidebar: #ede8df;
+      --flow-a: #ede0c8;
+      --flow-b: #d4a06a;
+      --flow-c: #b4532a;
+      --flow-duration: 5s;
+      --surface-2: #e8e2d8;
+      --text: #2c2925;
+      --muted: #7a746a;
+      --border: #d4cec4;
+      --accent: #b4532a;
+      --accent-soft: rgba(180, 83, 42, 0.1);
+      --danger: #9b4d4d;
+      --radius: 3px;
+      --shadow: none;
+      --font: "DM Sans", "Noto Sans SC", system-ui, sans-serif;
+      --sidebar-w: 272px;
+    }
+    .topbar { border-bottom: 1px solid var(--border); background: var(--surface); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--surface); }
+    .chip, .btn-ghost, select, .input-wrap { border-radius: var(--radius); }
+    .task-card { border: 1px solid var(--border); background: var(--bg); }
+    .msg { border-bottom: 1px solid var(--border); }
+    .process-card { border: 1px solid var(--border); background: var(--surface); }
+    .composer { border-top: 1px solid var(--border); background: var(--surface); }
+  </style>
+</head>
+<body>
+  <div class="app-frame" id="app-frame"></div>
+  <script src="_shared.js"></script>
+</body>
+</html>

@@ -81,6 +81,7 @@ class PlanSubagentTests(unittest.TestCase):
     def test_it200_run_plan_returns_summary_and_proposals(self) -> None:
         """IT-200: plan_partner path returns summary; no full tool transcript in main messages."""
         session = self._session()
+        map_header = self.map_path.read_text(encoding="utf-8").splitlines(keepends=True)[0]
         mock_llm = MagicMock()
         mock_llm.chat.return_value = MagicMock(
             content=json.dumps(
@@ -92,8 +93,8 @@ class PlanSubagentTests(unittest.TestCase):
                             "path": "MAP.md",
                             "replacements": [
                                 {
-                                    "old": "# template MAP.md\n",
-                                    "new": "# template MAP.md\n\n## 蔡岭模块\n",
+                                    "old": map_header,
+                                    "new": f"{map_header}\n## 蔡岭模块\n",
                                 }
                             ],
                             "reason": "add module pointer",
@@ -161,7 +162,7 @@ class PlanSubagentTests(unittest.TestCase):
         assert result.error is not None
         self.assertEqual(result.error.code, ToolErrorCode.PERMISSION_DENIED)
         self.assertTrue((result.error.details or {}).get("plan_domain_gate"))
-        self.assertIn("plan_partner", result.error.message)
+        self.assertIn("方案搭档", result.error.message)
         self.assertEqual(self.map_path.read_text(encoding="utf-8"), before)
 
     def test_it202_block_reason_helper(self) -> None:

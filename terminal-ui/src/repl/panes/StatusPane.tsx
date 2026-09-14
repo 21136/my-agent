@@ -1,5 +1,6 @@
 import React, {memo} from 'react';
 import {StatusBar} from '../../components/StatusBar.js';
+import type {TerminalResult} from '../../types.js';
 
 type Props = {
   model: string;
@@ -8,6 +9,8 @@ type Props = {
   activeTool?: string;
   activeToolStartedAt?: number;
   planStatus?: string;
+  result?: TerminalResult;
+  columns?: number;
 };
 
 export const StatusPane = memo(function StatusPane({
@@ -17,6 +20,8 @@ export const StatusPane = memo(function StatusPane({
   activeTool,
   activeToolStartedAt,
   planStatus,
+  result,
+  columns,
 }: Props) {
   return (
     <StatusBar
@@ -26,6 +31,8 @@ export const StatusPane = memo(function StatusPane({
       toolName={activeTool}
       toolStartedAt={activeToolStartedAt}
       planStatus={planStatus}
+      result={result}
+      columns={columns}
     />
   );
 });

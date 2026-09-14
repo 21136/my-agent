@@ -1,0 +1,55 @@
+[tool]
+name = "search_replace"
+description = """多文件字面量查找替换（agent root 内）。默认 dry_run 只预览；真正写入须确认。
+
+适合批量改字符串；复杂 AST/格式化请用专门工具。与 write_text/patch_file 同属写操作。
+"""
+version = "1.0.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["find", "replace"]
+[schema.input.properties.find]
+type = "string"
+description = "要查找的字面量（非正则）"
+[schema.input.properties.replace]
+type = "string"
+description = "替换为的字面量"
+[schema.input.properties.paths]
+type = "array"
+items = { type = "string" }
+description = "相对 agent root 的文件或目录；空则扫描常见代码目录"
+[schema.input.properties.glob]
+type = "string"
+default = "**/*"
+description = "在目录下匹配的 glob（如 **/*.py）"
+[schema.input.properties.max_files]
+type = "integer"
+default = 200
+description = "最多处理文件数"
+[schema.input.properties.max_replacements]
+type = "integer"
+default = 5000
+description = "最多替换次数（防失控）"
+[schema.input.properties.encoding]
+type = "string"
+default = "utf-8"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = true
+description = "默认 true：只预览不写盘"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 120

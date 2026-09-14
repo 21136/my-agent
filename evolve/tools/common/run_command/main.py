@@ -273,6 +273,10 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "command is required"}
     command = command.strip()
 
+    expected_exit_code = payload.get("expected_exit_code", 0)
+    if isinstance(expected_exit_code, bool) or not isinstance(expected_exit_code, int):
+        return {"ok": False, "error": "expected_exit_code must be an integer"}
+
     timeout_sec, long_tier = _resolve_timeout_sec(command, payload)
 
     dry_run = bool(payload.get("dry_run", False))
@@ -337,6 +341,7 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
                 "command": command,
                 "cwd": cwd_rel,
                 "argv": argv,
+                "expected_exit_code": expected_exit_code,
             }
             if hint:
                 result["hint"] = hint
@@ -358,6 +363,7 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
             "cwd": cwd_rel,
             "timeout_sec": timeout_sec,
             "long_timeout_tier": long_tier,
+            "expected_exit_code": expected_exit_code,
         }
         if env_extra:
             result["env_keys"] = sorted(env_extra)
@@ -411,13 +417,15 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
         "elapsed_ms": elapsed_ms,
         "timeout_sec": timeout_sec,
         "long_timeout_tier": long_tier,
+        "expected_exit_code": expected_exit_code,
     }
+    out["ok"] = exit_code == expected_exit_code
     if stdout_trunc or stderr_trunc:
         out["truncated"] = True
     if hint:
         out["hint"] = hint
-    if exit_code != 0:
-        out["error"] = f"exit_code={exit_code}"
+    if exit_code != expected_exit_code:
+        out["error"] = f"exit_code={exit_code}, expected_exit_code={expected_exit_code}"
     return out
 
 

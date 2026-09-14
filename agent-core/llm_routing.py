@@ -14,6 +14,7 @@ LlmRole = Literal[
     "explore",
     "checker",
     "deliverable_review",
+    "bug_fix",
     "topic_routing",
     "evolve_checkpoint",
     "audit",
@@ -24,6 +25,7 @@ _ROLE_ENV: dict[LlmRole, tuple[str, ...]] = {
     "explore": ("SUBAGENT_EXPLORE_MODEL",),
     "checker": ("CHECKER_MODEL",),
     "deliverable_review": ("DELIVERABLE_REVIEW_MODEL",),
+    "bug_fix": ("BUG_FIX_MODEL", "DELIVERABLE_REVIEW_MODEL"),
     "topic_routing": ("PLAN_SPAWN_MODEL",),
 }
 
@@ -33,6 +35,7 @@ _ROLE_DEFAULT_TIER: dict[LlmRole, str] = {
     "explore": "flash",
     "checker": "flash",
     "deliverable_review": "flash",
+    "bug_fix": "flash",
     "topic_routing": "flash",
     "evolve_checkpoint": "flash",
     "audit": "pro",
@@ -86,7 +89,7 @@ def resolve_model_id_for_role(
         raw = _meta_session_model(session_meta)
     elif role == "plan_partner":
         raw = (session_meta.planning_model or "").strip()
-    elif role in {"explore", "checker", "deliverable_review"}:
+    elif role in {"explore", "checker", "deliverable_review", "bug_fix"}:
         raw = _meta_session_model(session_meta)
     elif role == "topic_routing":
         raw = _meta_session_model(session_meta)

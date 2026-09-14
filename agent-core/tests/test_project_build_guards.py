@@ -6,6 +6,7 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 _AGENT_CORE = Path(__file__).resolve().parents[1]
@@ -13,6 +14,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from project_npm_guard import coalesce_working_dir, redundant_npm_install_error
+from project_mode import project_mode_block_reason
 from tools.executor import (
     ExecutorSession,
     ToolExecutor,
@@ -80,6 +82,33 @@ class ReplBuildBypassTests(unittest.TestCase):
             {"tool_name": "repl", "arguments": {"code": "print(1+1)"}},
         )
         self.assertIsNone(err)
+
+    @patch.dict("os.environ", {"MY_AGENT_RUNAWAY_V2": "1"}, clear=False)
+    def test_v2_active_project_does_not_deadlock_on_l2_stale_manifest(self) -> None:
+        with temporary_agent_paths() as paths:
+            (paths.workspace / "demo" / "src").mkdir(parents=True)
+            with patch(
+                "project_manifest.refresh_project_manifest",
+                return_value={"artifacts": [{"path": "DESIGN.md", "status": "stale"}]},
+            ):
+                reason = project_mode_block_reason(
+                    active_shell="project",
+                    project_root="workspace/demo",
+                    plan_status="confirmed",
+                    tool_name="run_evolved",
+                    arguments={
+                        "tool_name": "write_text",
+                        "arguments": {
+                            "path": "workspace/demo/src/app.py",
+                            "content": "print('ok')\n",
+                        },
+                    },
+                    agent_paths=paths,
+                    workflow_stage="implementation",
+                    runaway_enabled=True,
+                )
+
+            self.assertIsNone(reason)
 
     def test_non_project_shell_allows_npm_in_repl(self) -> None:
         session = ExecutorSession(active_shell="grow", project_root="")

@@ -1,26 +1,51 @@
 import { setAgentBusy } from "../../agent-busy";
 import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
-import { renderMarkdown } from "../../markdown";
+import { hydrateMermaid, renderMarkdown } from "../../markdown";
+import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver } from "../../lazy-markdown";
 import { formatUserMessageHtml } from "../../user-message";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, isThinkingBodyOpen, thinkingTitleLabel, type ChatBlock } from "../chat-state";
+import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
+import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
+import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
+import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
   setupProjectPanel,
   renderProjectSidebar,
+  renderProjectGoalCard,
+  deriveProjectGoalViewModel,
+  deriveHeaderNextStepView,
+  hasProjectBlocker,
+  renderProjectBlockerDetails,
+  getTaskChangeFingerprint,
   renderPlanTaskFlow,
   applyProjectStateEvent,
+  resetProjectScopedState,
+  shouldApplyProjectEvent,
   applyProjectListEvent,
   applyProjectPlanState,
   applyProjectThreadsEvent,
   isViewingArchivedThread,
   parseTasksMarkdown,
-  type OverlayPanel,
+  renderRailStageEmpty,
+  renderProjectsStage,
+  type FlowStage,
   type ProjectPanelState,
   type ProjectPanelCallbacks,
   type TaskItem,
 } from "./project-panel";
+import {
+  displayDocTitle,
+  docCatalogMenuItems,
+  docStem,
+  finalizeDocumentOutline,
+  mountPopupMenu,
+  normalizeNewDocPath,
+  renderDocOutlineHtml,
+  renderDocumentReaderHtml,
+  sortProjectDocs,
+} from "./doc-reading";
 import {
   actionableSuggestions,
   adoptPathFromSuggestion,
@@ -29,13 +54,23 @@ import {
   renderPlanReviewPanel,
   type MainFocus,
 } from "./plan-review";
+import { isRailTab, mainFocusForRail, type RailTab } from "./rail";
+import {
+  adoptPathFromNotice,
+  lastFailedTool,
+  processPillLabel,
+  renderAdoptChip,
+  renderReviewCallout,
+  renderToolFailAlert,
+} from "./output-display";
+import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
+import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
+import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import "./unified.css";
 
 export type Perspective = "default" | "project" | "night";
 
 const FOCUS_TURNS = 2;
-/** Process A-layer: show only the latest N tool lines; earlier ones fold (UX-023). */
-const PROCESS_TOOL_LINES_CAP = 6;
 const RECALL_TURNS = 3;
 
 function isRecallIntent(intent: string, intentLabel: string): boolean {
@@ -100,7 +135,9 @@ export function mountUnifiedShell(
     checkerLabel: "",
     memoryLabel: "",
     projectLabel: "",
+    contextLabel: "",
     sessionCount: 0,
+    headerCtas: [],
   };
 
   let sessionsDropdown: Array<{
@@ -114,8 +151,30 @@ export function mountUnifiedShell(
   let sessionsOpen = false;
   let sessionsTab: "chat" | "project" = "chat";
 
+  function syncTopbarFromProject(): void {
+    if (projectState.projectId) {
+      topbarState.projectLabel = projectState.projectId;
+      topbarState.contextLabel = deriveProjectGoalViewModel(projectState).title;
+      topbarState.headerCtas = deriveHeaderNextStepView(projectState).actions;
+    } else {
+      topbarState.projectLabel = "";
+      topbarState.contextLabel = "";
+      topbarState.headerCtas = [];
+    }
+  }
+
   function refreshTopbar(): void {
-    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+    syncTopbarFromProject();
+    renderTopbar(
+      topbarEl,
+      topbarState,
+      openProposals,
+      handleNewChat,
+      handleOpenSessions,
+      handleNewProject,
+      handleNewThread,
+      handleHeaderNextStepAction,
+    );
   }
 
   const proposalsState: ProposalsState = {
@@ -126,6 +185,7 @@ export function mountUnifiedShell(
 
   const projectState: ProjectPanelState = {
     projectId: "",
+    projectSummary: "",
     planStatus: "",
     tasksMarkdown: "",
     mapMarkdown: "",
@@ -138,30 +198,57 @@ export function mountUnifiedShell(
     switchInProgress: false,
     pendingPickerId: "",
     overlayPanel: null,
+    railTab: "now",
     taskPhases: [],
     planBannerCollapsed: true,
     switchConfirmTarget: null,
     projectSearchQuery: "",
     planChangeLog: [],
+    changeTimeline: [],
+    executionStage: null,
+    workflowStage: null,
+    needsDesignConfirm: false,
+    executionStageStatus: "ready",
+    executionStageReason: "",
+    executionStageBlockers: [],
+    executionStageMissing: [],
+    executionStageWarnings: [],
+    executionStageAffected: [],
+    executionStageDeferred: [],
+    executionStageArtifacts: [],
     taskSnapshot: { lines: new Set(), lineTexts: new Map() },
     highlightChanges: false,
+    changeTimelineExpanded: false,
     highlightedLines: new Set(),
     projectDocs: [],
     currentDocPath: "",
     currentDocContent: "",
     newDocName: "",
+    renamingDocPath: "",
+    renameDraft: "",
+    deleteConfirmPath: "",
+    docView: "preview",
+    docEditDraft: "",
+    docDirty: false,
+    docSaving: false,
     quickAddText: "",
     detectedProject: null,
     planWarnings: [],
+    planWarningsPending: [],
+    dismissedWarningFingerprint: "",
+    planWarningStage: null,
     undoDescription: "",
     undoTimerId: null,
     degradationLevel: "L1",
     degradationLabel: "全功能",
     changesLevel: null,
+    dismissedTaskChangeFingerprint: "",
     autoConfirmTimerId: null,
     externalChanges: false,
     suggestions: [],
     autoFixNotices: [],
+    operationalNotices: [],
+    dismissedOperationalNoticeFingerprint: "",
     partnerNotices: [],
     partnerBusy: false,
     nextTask: null,
@@ -171,6 +258,17 @@ export function mountUnifiedShell(
     servicesError: "",
     servicesLogName: "",
     servicesLogText: "",
+    terminalSessions: [],
+    terminalsLoading: false,
+    terminalsError: "",
+    terminalsCollapsed: true,
+    terminalDetails: null,
+    terminalOutput: "",
+    terminalOutputCursor: 0,
+    terminalOutputLoading: false,
+    terminalOutputError: "",
+    terminalOutputCursorReset: false,
+    terminalOutputTruncated: false,
     turnArmedId: "",
     turnArmedText: "",
     turnEvidence: [],
@@ -194,11 +292,38 @@ export function mountUnifiedShell(
     reviewVerdict: null,
     reviewBlockersCount: 0,
     reviewProgressBlocked: false,
+    scopeConfirmedAt: "",
+    runawayEnabled: false,
+    runawayStatus: "",
+    runawayCheckpoint: "",
+    runawayRepairCount: 0,
+    runawayLastVerification: null,
+    runawayPausedReason: null,
+    runawayAcceptancePassed: false,
+    runawayVerificationEvidence: null,
+    runawayVerificationEvidencePath: null,
+    runawayVersion: 0,
+    runawayPhase: "",
+    runawayUserLine: "",
+    runawayMode: "auto",
+    runawayBlocked: false,
+    runawayChecklist: null,
+    runawayCancelAvailable: false,
+    runawayBlock: null,
+    scopeNeedsReconfirm: false,
+    flowPreviewStage: null,
+    milestoneAccepted: false,
+    milestoneAcceptedAt: null,
+    codeFollowup: null,
+    nextTurnChangeSummary: null,
+    dropTaskPendingId: null,
+    dropTaskPendingWorking: false,
   };
 
   let suggestionAdoptFlashTimerId: number | null = null;
   let pendingAdoptAcceptTimeoutId: number | null = null;
-  let pendingAdoptAccept: { sid: string; path: string } | null = null;
+  let pendingAdoptAccept: { sid: string; path: string; whatChanged: string } | null = null;
+  let acceptedChangeForNextTurn: string | null = null;
   const ADOPT_FLASH_MS = 1500;
   const ADOPT_PENDING_MS = 30000;
 
@@ -206,10 +331,19 @@ export function mountUnifiedShell(
   let cancelledStatusTimer: number | null = null;
   let cancelSafetyTimer: number | null = null;
   let destroyed = false;
-  let thinkingStarted = 0;
-  let thinkingTimer: number | null = null;
   let renderThrottleTimer: number | null = null;
+  let terminalPollTimerId: number | null = null;
+  let terminalRequestTimeoutId: number | null = null;
+  let terminalRequestSerial = 0;
+  let terminalRequestId: string | null = null;
+  let terminalOutputRequestTimeoutId: number | null = null;
+  let terminalOutputRequestSerial = 0;
+  let terminalOutputRequestId: string | null = null;
+  let terminalOutputRequestSessionId: string | null = null;
   let renderedPrints: string[] = [];
+  let renderedSegmentPrints: string[] = [];
+  /** UI-5972 M4: full history load defers markdown; incremental paths render eagerly. */
+  let markdownRenderEager = true;
   /** turnKey → user expanded the folded early tool list (UX-023). */
   const toolsListExpanded = new Set<string>();
   // night perspective state
@@ -236,10 +370,25 @@ export function mountUnifiedShell(
       },
       onHistoryLoaded: () => {
         renderedPrints = [];
+        renderedSegmentPrints = [];
+        resetLazyMarkdownObserver();
+        syncWorkingVisual();
+        if (!chat.model.confirmPending) {
+          setStatus("就绪");
+        }
         scrollChatToBottom();
       },
       onTurnStart: (event) => {
+        projectState.runawayCancelAvailable = false;
+        clearRunawayResumePending();
+        resetProcessJumpCursor();
+        syncWorkingVisual();
         resetTurnCacheStats();
+        if (acceptedChangeForNextTurn) {
+          projectState.nextTurnChangeSummary = acceptedChangeForNextTurn;
+          acceptedChangeForNextTurn = null;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
         topbarState.intentLabel = event.intent_label;
         topbarState.checkerLabel = "";
         if (perspective === "night" && isRecallIntent(event.intent, event.intent_label)) {
@@ -247,17 +396,26 @@ export function mountUnifiedShell(
           renderChat();
           requestAnimationFrame(() => scrollToRecallTurns());
         }
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         setStatus(event.intent_label);
+        syncToolElapsedTimer();
+        requestAnimationFrame(() => scrollToBottomIfNear());
+      },
+      onLlmPending: () => {
+        syncToolElapsedTimer();
+        requestAnimationFrame(() => scrollToBottomIfNear());
       },
       onCheckerVerdict: (event) => {
         topbarState.checkerLabel = checkerVerdictStatusText(event.verdict);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         setStatus(topbarState.checkerLabel);
       },
       onConfirmRequest: () => {
         setComposerEnabled(false);
         setStatus("等待确认…");
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => scrollPendingConfirmIntoView());
+        });
       },
       onConfirmDone: (choice) => {
         setComposerEnabled(choice !== "cancelled");
@@ -287,6 +445,8 @@ export function mountUnifiedShell(
         }
       },
       onTurnEnd: (_ok, finishReason) => {
+        clearRunawayResumePending();
+        syncWorkingVisual();
         clearCancelSafety();
         setComposerEnabled(true);
         if (!chat.model.confirmPending) {
@@ -319,9 +479,19 @@ export function mountUnifiedShell(
     },
   );
 
+  bindLazyMarkdownLookup((turnIndex) => {
+    const block = chat.model.blocks.find(
+      (b) =>
+        (b.kind === "assistant" || b.kind === "assistant-streaming")
+        && b.turnIndex === turnIndex,
+    );
+    if (!block || block.kind === "assistant-streaming") return null;
+    return block.text;
+  });
+
   // ---- DOM layout ----
   root.innerHTML = `
-    <div class="unified-shell" data-perspective="project">
+    <div class="unified-shell" data-perspective="project" data-rail="now">
       <aside class="unified-sidebar" id="unified-sidebar">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <div class="unified-sidebar-header">
@@ -332,19 +502,20 @@ export function mountUnifiedShell(
           </div>
         </div>
         <div class="sidebar-task-flow" id="sidebar-task-flow"></div>
+        <div id="sidebar-terminals"></div>
         <div class="sidebar-services" id="sidebar-services"></div>
         <div class="sidebar-footer" id="sidebar-footer">
           <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
           <div class="sidebar-icon-bar" id="sidebar-icon-bar">
-            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon">◎</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="完整计划"><span class="sidebar-icon">☰</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon">📄</span></button>
+            <button type="button" class="sidebar-icon-btn is-active" data-panel="now" title="当下"><span class="sidebar-icon-label">当下</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="tasks" title="任务"><span class="sidebar-icon-label">任务</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon-label">文档</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
-              <span class="sidebar-icon">⎇</span>
+              <span class="sidebar-icon-label">会话</span>
               <span class="sidebar-icon-badge" id="thread-count-badge">0</span>
             </button>
             <button type="button" class="sidebar-icon-btn" data-panel="projects" title="我的项目" id="icon-btn-projects">
-              <span class="sidebar-icon">▢</span>
+              <span class="sidebar-icon-label">项目</span>
               <span class="sidebar-icon-badge" id="project-count-badge">0</span>
             </button>
             <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
@@ -372,7 +543,7 @@ export function mountUnifiedShell(
           <span class="thread-archive-banner-text">归档线 · 只读回看（不会改回活线）</span>
           <button type="button" class="unified-btn" id="thread-return-active">回到活线</button>
         </div>
-        <section class="unified-expand hidden" id="unified-expand"></section>
+        <section class="unified-context-region hidden" id="unified-goal-card" aria-label="项目上下文"></section>
         <div class="workbench-empty" id="workbench-empty" hidden>
           <div class="workbench-empty-card">
             <h2 class="workbench-empty-title">选择或新建项目</h2>
@@ -386,16 +557,23 @@ export function mountUnifiedShell(
         </div>
         <div class="unified-stage" id="unified-stage">
           <main class="unified-chat" id="unified-chat"></main>
-          <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="计划审阅"></section>
-          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
+          <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="方案变更"></section>
+          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="任务"></section>
+          <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
+          <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
         </div>
-        <div class="unified-status" id="unified-status"></div>
-        <div class="unified-token-bar hidden" id="unified-token-bar"></div>
-        <footer class="unified-composer" id="unified-composer">
-          <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
-          <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入文件…"></textarea>
-          <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
-        </footer>
+        <div class="unified-composer-dock" id="unified-composer-dock">
+          <section class="unified-expand hidden" id="unified-expand"></section>
+          <div class="unified-composer-meta" id="unified-composer-meta">
+            <div class="unified-status" id="unified-status"></div>
+            <div class="unified-token-bar hidden" id="unified-token-bar"></div>
+          </div>
+          <footer class="unified-composer" id="unified-composer">
+            <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
+            <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入/粘贴文件…"></textarea>
+            <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
+          </footer>
+        </div>
       </div>
       <div class="unified-confirm-glass hidden" id="unified-confirm-glass" role="dialog" aria-modal="true"></div>
       <div class="unified-confirm-glass hidden" id="workbench-dialog" role="dialog" aria-modal="true"></div>
@@ -410,10 +588,14 @@ export function mountUnifiedShell(
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
   const planReviewEl = root.querySelector<HTMLElement>("#unified-plan-review")!;
   const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
+  const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
+  const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
   const emptyFreeChatBtn = root.querySelector<HTMLButtonElement>("#empty-free-chat")!;
+  const composerDock = root.querySelector<HTMLElement>("#unified-composer-dock")!;
+  const composerMetaEl = root.querySelector<HTMLElement>("#unified-composer-meta")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
@@ -424,6 +606,7 @@ export function mountUnifiedShell(
   const tokenBar = root.querySelector<HTMLElement>("#unified-token-bar")!;
   const threadArchiveBannerEl = root.querySelector<HTMLElement>("#thread-archive-banner")!;
   const threadReturnActiveBtn = root.querySelector<HTMLButtonElement>("#thread-return-active")!;
+  let planReviewIndex = 0;
 
   let turnCachePromptTotal = 0;
   let turnCacheCachedTotal = 0;
@@ -509,7 +692,7 @@ export function mountUnifiedShell(
 
   function isWorkbenchChatAllowed(): boolean {
     if (isViewingArchivedThread(projectState)) return false;
-    return Boolean(projectState.projectId) || freeChatActive;
+    return true;
   }
 
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
@@ -526,11 +709,11 @@ export function mountUnifiedShell(
       return;
     }
     if (!projectState.projectId) {
-      input.placeholder = "先选择或新建项目…";
+      input.placeholder = "输入消息，或先打开一个项目…";
       return;
     }
     input.placeholder =
-      "输入消息或拖入文件；改计划会自动交给计划搭档";
+      "输入消息或拖入/粘贴文件；改计划会自动交给计划搭档";
   }
 
   function syncArchivedViewUi(): void {
@@ -541,10 +724,9 @@ export function mountUnifiedShell(
   }
 
   function updateWorkbenchEmpty(): void {
-    const showEmpty = !projectState.projectId && !freeChatActive;
-    workbenchEmptyEl.hidden = !showEmpty;
-    chatEl.classList.toggle("is-empty-gated", showEmpty);
-    composer.classList.toggle("is-empty-gated", showEmpty);
+    workbenchEmptyEl.hidden = true;
+    chatEl.classList.remove("is-empty-gated");
+    composer.classList.remove("is-empty-gated");
     updatePlaceholder();
     composerWire.syncSendEnabled();
   }
@@ -552,6 +734,7 @@ export function mountUnifiedShell(
   // ---- file drop + composer ----
   const fileDrop = mountFileDrop({
     composer,
+    pasteTargets: [composer, input],
     client,
     shell: shellId,
     canAccept: () => {
@@ -575,39 +758,154 @@ export function mountUnifiedShell(
     beforeSend: () => {
       topbarState.intentLabel = "";
       setStatus("发送中…");
+      resetUserScrollPin();
     },
   });
 
   // ---- visual sync ----
+  let lastSidebarWorking = false;
+  let runawayResumePending = false;
+  let runawayResumeTimer: number | null = null;
+  let processJumpCursor = -1;
+  let processJumpTurnIndex = -1;
+  let lastRunawayNudgeAt = 0;
+  let runawayIdleResumeTimer: number | null = null;
+
+  const RUNAWAY_IDLE_RESUME_MS = 2500;
+  const RUNAWAY_NUDGE_DEBOUNCE_MS = 4000;
+
+  function clearRunawayIdleResume(): void {
+    if (runawayIdleResumeTimer !== null) {
+      window.clearTimeout(runawayIdleResumeTimer);
+      runawayIdleResumeTimer = null;
+    }
+  }
+
+  function scheduleRunawayIdleResume(): void {
+    clearRunawayIdleResume();
+    const canAutoResume = () => {
+      if (
+        !projectState.runawayEnabled
+        || projectState.runawayBlocked
+        || projectState.runawayCancelAvailable
+        || chat.isWorking()
+      ) {
+        return false;
+      }
+      // Runaway v2 performs continuation in the backend controller. The
+      // legacy desktop idle watchdog must not become a second owner.
+      if (projectState.runawayVersion >= 2) {
+        return false;
+      }
+      return !["paused", "completed", "release_wait"].includes(projectState.runawayCheckpoint);
+    };
+    if (!canAutoResume()) {
+      return;
+    }
+    runawayIdleResumeTimer = window.setTimeout(() => {
+      runawayIdleResumeTimer = null;
+      if (!canAutoResume()) {
+        return;
+      }
+      resumeRunawayFromUi("狂奔待命，正在自动续接…", { force: true });
+    }, RUNAWAY_IDLE_RESUME_MS);
+  }
+
+  function resetProcessJumpCursor(): void {
+    processJumpCursor = -1;
+    processJumpTurnIndex = -1;
+  }
+
+  function clearRunawayResumePending(): void {
+    runawayResumePending = false;
+    if (runawayResumeTimer !== null) {
+      window.clearTimeout(runawayResumeTimer);
+      runawayResumeTimer = null;
+    }
+    clearRunawayIdleResume();
+  }
+
   function syncWorkingVisual(): void {
-    const working = chat.isWorking();
+    const working = chat.isWorking() || runawayResumePending || projectState.runawayCancelAvailable;
+    const workingChanged = lastSidebarWorking !== working;
+    lastSidebarWorking = working;
     projectState.turnInProgress = working;
+    projectEls.goalCard.classList.add("hidden");
+    projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
+    projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
+    statusEl.classList.toggle("is-idle", statusText === "就绪" && !working);
+    syncComposerMetaVisibility();
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
+    if (perspective === "project" && workingChanged) {
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      refreshTopbar();
+    }
+  }
+
+  function sendStopRequest(): void {
+    const activeTurn = chat.isWorking() || chat.model.confirmPending;
+    if (activeTurn) {
+      if (!chat.requestCancel()) return;
+      setComposerEnabled(false);
+      setStatus("正在停止…");
+      clearCancelSafety();
+      cancelSafetyTimer = window.setTimeout(() => {
+        if (chat.model.cancelRequested) {
+          chat.model.cancelRequested = false;
+          chat.model.confirmPending = false;
+          setComposerEnabled(true);
+          setStatus("就绪");
+          syncWorkingVisual();
+        }
+        cancelSafetyTimer = null;
+      }, 3000);
+      try {
+        client.sendTurnCancel();
+      } catch (err) {
+        clearCancelSafety();
+        chat.model.cancelRequested = false;
+        setComposerEnabled(!chat.model.confirmPending);
+        setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
+        syncWorkingVisual();
+      }
+      return;
+    }
+    if (!projectState.runawayCancelAvailable) return;
+    projectState.runawayCancelAvailable = false;
+    syncWorkingVisual();
+    setStatus("正在停止狂奔续接…");
+    try {
+      client.sendTurnCancel();
+    } catch (err) {
+      projectState.runawayCancelAvailable = true;
+      syncWorkingVisual();
+      setStatus(`停止续接失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function useTurnCardLayout(): boolean {
+    return perspective !== "night";
+  }
+
+  function syncComposerMetaVisibility(): void {
+    const statusVisible =
+      !statusEl.hidden && !statusEl.classList.contains("is-idle");
+    const tokenVisible =
+      !tokenBar.hidden && !tokenBar.classList.contains("hidden");
+    const showMeta = statusVisible || tokenVisible;
+    composerMetaEl.classList.toggle("hidden", !showMeta);
+    composerMetaEl.hidden = !showMeta;
   }
 
   function setStatus(text: string): void {
     statusText = text;
-    if (text === "思考中…") {
-      thinkingStarted = Date.now();
-      if (thinkingTimer === null) {
-        thinkingTimer = window.setInterval(() => {
-          if (statusText === "思考中…" && thinkingStarted > 0) {
-            const elapsed = Math.round((Date.now() - thinkingStarted) / 1000);
-            statusEl.textContent = `思考中…（${elapsed}s）`;
-          }
-        }, 1000);
-      }
-    } else {
-      if (thinkingTimer !== null) {
-        window.clearInterval(thinkingTimer);
-        thinkingTimer = null;
-      }
-      thinkingStarted = 0;
-      statusEl.textContent = text;
-    }
+    statusEl.textContent = text;
+    const idle = text === "就绪" && !shellEl.classList.contains("is-working");
+    statusEl.classList.toggle("is-idle", idle);
+    syncComposerMetaVisibility();
   }
 
   function setTurnEndStatus(finishReason: string): void {
@@ -628,11 +926,16 @@ export function mountUnifiedShell(
   }
 
   function updateTokenBar(usage: number | undefined, limit: number | undefined): void {
-    lastTokenUsage = usage;
-    lastTokenLimit = limit;
+    // Ignore spurious zero from backend before deferred messages.jsonl is loaded.
+    if (usage === 0 && lastTokenUsage !== undefined && lastTokenUsage > 0) {
+      usage = lastTokenUsage;
+    }
+    if (usage !== undefined) lastTokenUsage = usage;
+    if (limit !== undefined) lastTokenLimit = limit;
     if (usage === undefined || limit === undefined || limit <= 0) {
       if (lastLlmCacheRatio === undefined && turnCachePromptTotal <= 0) {
         tokenBar.classList.add("hidden");
+        syncComposerMetaVisibility();
         return;
       }
     }
@@ -664,6 +967,7 @@ export function mountUnifiedShell(
       turnRatio !== undefined
         ? `本回合 LLM 累计：${turnCacheCachedTotal} / ${turnCachePromptTotal} prompt tokens 来自缓存`
         : "最近一次 LLM 调用的 prompt 缓存命中率";
+    syncComposerMetaVisibility();
   }
 
   function setComposerEnabled(enabled: boolean): void {
@@ -698,6 +1002,66 @@ export function mountUnifiedShell(
   }
 
   function refreshProjectThreads(): void {
+    if (!projectState.projectId) return;
+    if (refreshProjectThreadsTimer !== null) {
+      window.clearTimeout(refreshProjectThreadsTimer);
+    }
+    refreshProjectThreadsTimer = window.setTimeout(() => {
+      refreshProjectThreadsTimer = null;
+      refreshProjectThreadsNow();
+    }, 0);
+  }
+
+  let refreshProjectThreadsTimer: number | null = null;
+  let listSessionsTimer: number | null = null;
+  let listProjectsTimer: number | null = null;
+  /** UI-5972: suppress redundant list* until switch/open batch finishes (session.history). */
+  let pendingSwitchBatch = false;
+  let hydrationSessionId = "";
+
+  function shortSessionId(sessionId: string): string {
+    const trimmed = sessionId.trim();
+    if (trimmed.length <= 18) return trimmed;
+    return `${trimmed.slice(0, 18)}…`;
+  }
+
+  function startHydrationWait(sessionId: string, label: string): void {
+    hydrationSessionId = sessionId;
+    pendingSwitchBatch = true;
+    projectState.switchInProgress = true;
+    setStatus(`${label} ${shortSessionId(sessionId)}…`);
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function completeHydrationWait(sessionId?: string): void {
+    if (sessionId && hydrationSessionId && sessionId !== hydrationSessionId) return;
+    if (!pendingSwitchBatch && !hydrationSessionId) return;
+    hydrationSessionId = "";
+    pendingSwitchBatch = false;
+    projectState.switchInProgress = false;
+    debouncedListProjects();
+    debouncedListSessions();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function debouncedListSessions(): void {
+    if (pendingSwitchBatch) return;
+    if (listSessionsTimer !== null) window.clearTimeout(listSessionsTimer);
+    listSessionsTimer = window.setTimeout(() => {
+      listSessionsTimer = null;
+      client.listSessions();
+    }, 250);
+  }
+
+  function debouncedListProjects(): void {
+    if (listProjectsTimer !== null) window.clearTimeout(listProjectsTimer);
+    listProjectsTimer = window.setTimeout(() => {
+      listProjectsTimer = null;
+      client.listProjects();
+    }, 250);
+  }
+
+  function refreshProjectThreadsNow(): void {
     if (!projectState.projectId) return;
     projectState.threadsLoading = true;
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -919,7 +1283,7 @@ export function mountUnifiedShell(
     const items = sessionsTab === "project" ? projectItems : chatItems;
     const emptyHint = sessionsDropdown.length
       ? sessionsTab === "project"
-        ? "暂无项目会话"
+        ? "暂无可恢复的项目会话 · 项目目录请从左侧打开"
         : "暂无普通对话"
       : "加载中…";
 
@@ -950,7 +1314,7 @@ export function mountUnifiedShell(
         <div class="unified-expand-title">会话 <button type="button" class="unified-btn" id="unified-sessions-close">关闭</button></div>
         <div class="unified-sessions-tabs" role="tablist">
           <button type="button" class="unified-sessions-tab ${sessionsTab === "chat" ? "is-active" : ""}" data-sessions-tab="chat" role="tab">对话 (${chatItems.length})</button>
-          <button type="button" class="unified-sessions-tab ${sessionsTab === "project" ? "is-active" : ""}" data-sessions-tab="project" role="tab">项目 (${projectItems.length})</button>
+          <button type="button" class="unified-sessions-tab ${sessionsTab === "project" ? "is-active" : ""}" data-sessions-tab="project" role="tab">项目会话 (${projectItems.length})</button>
         </div>
       </div>
       <div class="unified-sessions-list">${listHtml}</div>
@@ -979,7 +1343,7 @@ export function mountUnifiedShell(
           sessionsOpen = false;
           expandEl.classList.add("hidden");
           expandEl.innerHTML = "";
-          setStatus(`打开会话 ${sid}…`);
+          startHydrationWait(sid, "打开会话");
         } catch (err) {
           setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1023,7 +1387,7 @@ export function mountUnifiedShell(
     // also sync topbarState for renderTopbar
     topbarState.proposals = items;
     syncProposalsState();
-    renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+    refreshTopbar();
     renderProposalsPanel();
   }
 
@@ -1051,10 +1415,15 @@ export function mountUnifiedShell(
     },
     onProjectSwitchConfirm: () => {
       if (!projectState.switchOverlay) return;
+      const target = projectState.switchOverlay.projectId;
+      resetProjectScopedState(projectState);
+      projectState.projectId = target;
+      projectState.switchOverlay = null;
+      projectState.pendingPickerId = target;
       projectState.switchInProgress = true;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       try {
-        client.switchProject(projectState.switchOverlay.projectId, {
+        client.switchProject(target, {
           confirm: true,
           requestId: projectState.switchOverlay.requestId,
         });
@@ -1118,10 +1487,12 @@ export function mountUnifiedShell(
         setStatus("助手执行中，请稍后再切换会话线");
         return;
       }
-      closePlanMainFocus();
+      projectState.railTab = "threads";
+      projectState.overlayPanel = null;
+      setMainFocus("chat");
       try {
         client.openSession(sid);
-        setStatus(`打开会话线 ${sid}…`);
+        startHydrationWait(sid, "打开会话线");
       } catch (err) {
         setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1130,6 +1501,39 @@ export function mountUnifiedShell(
       const active = projectState.activeSessionId.trim();
       if (!active) return;
       projectCallbacks.onOpenThread(active);
+    },
+    onOpenProjects: () => {
+      selectRailTab("projects");
+    },
+    onNewProject: () => {
+      handleNewProject();
+    },
+    onScopeConfirm: () => {
+      try {
+        setStatus("正在确认范围…");
+        client.confirmProjectScope();
+      } catch (err) {
+        setStatus(`确认范围失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onDesignConfirm: () => {
+      try {
+        setStatus("正在确认设计…");
+        client.confirmProjectDesign();
+      } catch (err) {
+        setStatus(`确认设计失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onStopTurn: () => {
+      sendStopRequest();
+    },
+    onMilestoneAccept: () => {
+      try {
+        client.acceptProjectRelease();
+        setStatus("正在保存发布确认…");
+      } catch (err) {
+        setStatus(`发布确认失败：${err instanceof Error ? err.message : String(err)}`);
+      }
     },
   };
 
@@ -1141,27 +1545,268 @@ export function mountUnifiedShell(
     return actionableSuggestions(projectState.suggestions);
   }
 
+  let pendingDocAction: "rename" | "delete" | "write" | "create" | null = null;
+  let docLeaveNext: (() => void) | null = null;
+  let docLeavePrompt = false;
+  let destroyDocMenu: (() => void) | null = null;
+
+  function isDocDirty(): boolean {
+    return projectState.docView === "edit" && projectState.docDirty;
+  }
+
+  function resetDocEditState(nextPath = "", content = ""): void {
+    projectState.currentDocPath = nextPath;
+    projectState.currentDocContent = content;
+    projectState.docView = "preview";
+    projectState.docEditDraft = content;
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    docLeaveNext = null;
+    docLeavePrompt = false;
+  }
+
+  function captureDocDraftFromEditor(): void {
+    const editor = documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor");
+    if (editor) projectState.docEditDraft = editor.value;
+    projectState.docDirty = projectState.docEditDraft !== projectState.currentDocContent;
+  }
+
+  function syncDocEditChrome(): void {
+    const saveBtn = documentEl.querySelector<HTMLButtonElement>("[data-action='document-save']");
+    if (saveBtn) {
+      saveBtn.disabled = !projectState.docDirty || projectState.docSaving;
+      saveBtn.textContent = projectState.docSaving ? "保存中…" : "保存";
+    }
+    const discardBtn = documentEl.querySelector<HTMLButtonElement>("[data-action='document-discard']");
+    if (discardBtn) discardBtn.disabled = !projectState.docDirty || projectState.docSaving;
+    documentEl.querySelector(".unified-document-inner")?.classList.toggle("is-dirty", projectState.docDirty);
+    const kicker = documentEl.querySelector(".unified-document-kicker");
+    if (kicker) kicker.textContent = projectState.docDirty ? "项目文档 · 未保存" : "项目文档";
+  }
+
+  function requestLeaveDocument(next: () => void): boolean {
+    if (!isDocDirty()) return true;
+    captureDocDraftFromEditor();
+    docLeaveNext = next;
+    docLeavePrompt = true;
+    if (projectState.mainFocus !== "document") {
+      projectState.mainFocus = "document";
+      projectState.railTab = "docs";
+      shellEl.dataset.rail = "docs";
+      syncMainFocusView();
+    } else {
+      renderDocumentPane();
+    }
+    setStatus("有未保存的更改");
+    return false;
+  }
+
+  function clearDocLeavePrompt(): void {
+    docLeavePrompt = false;
+    docLeaveNext = null;
+  }
+
+  function finishDocLeave(): void {
+    const next = docLeaveNext;
+    clearDocLeavePrompt();
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    next?.();
+  }
+
+  function saveCurrentDoc(after?: () => void): void {
+    const path = projectState.currentDocPath;
+    if (!path) return;
+    captureDocDraftFromEditor();
+    pendingDocAction = "write";
+    projectState.docSaving = true;
+    if (after) docLeaveNext = after;
+    syncDocEditChrome();
+    try {
+      client.writeDoc(path, projectState.docEditDraft);
+      setStatus("正在保存文档…");
+    } catch (err) {
+      projectState.docSaving = false;
+      pendingDocAction = null;
+      syncDocEditChrome();
+      setStatus(`保存失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function refreshDocsSidebar(): void {
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function startRenameDoc(path: string): void {
+    projectState.deleteConfirmPath = "";
+    projectState.renamingDocPath = path;
+    projectState.renameDraft = docStem(path);
+    refreshDocsSidebar();
+    const input = projectEls.overlayBody.querySelector<HTMLInputElement>("#overlay-doc-rename-input");
+    input?.focus();
+    input?.select();
+  }
+
+  function cancelRenameDoc(): void {
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    refreshDocsSidebar();
+  }
+
+  function commitRenameDoc(): void {
+    const path = projectState.renamingDocPath;
+    const title = projectState.renameDraft.trim();
+    if (!path) return;
+    if (!title || title === docStem(path)) {
+      cancelRenameDoc();
+      return;
+    }
+    pendingDocAction = "rename";
+    try {
+      client.renameDoc(path, { title });
+      setStatus("正在重命名…");
+    } catch (err) {
+      pendingDocAction = null;
+      setStatus(`重命名失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    refreshDocsSidebar();
+  }
+
+  function askDeleteDoc(path: string): void {
+    projectState.renamingDocPath = "";
+    projectState.renameDraft = "";
+    projectState.deleteConfirmPath = path;
+    refreshDocsSidebar();
+  }
+
+  function confirmDeleteDoc(): void {
+    const path = projectState.deleteConfirmPath;
+    if (!path) return;
+    pendingDocAction = "delete";
+    try {
+      client.deleteDoc(path);
+      setStatus("正在删除文档…");
+    } catch (err) {
+      pendingDocAction = null;
+      setStatus(`删除失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function showDocCatalogMenu(path: string, x: number, y: number): void {
+    destroyDocMenu?.();
+    destroyDocMenu = mountPopupMenu({
+      x,
+      y,
+      items: docCatalogMenuItems(),
+      onSelect: (id) => {
+        destroyDocMenu = null;
+        if (id === "rename") startRenameDoc(path);
+        else if (id === "delete") askDeleteDoc(path);
+      },
+    });
+  }
+
   function setMainFocus(focus: MainFocus): void {
+    if (
+      projectState.mainFocus === "document" &&
+      focus !== "document" &&
+      !requestLeaveDocument(() => setMainFocus(focus))
+    ) {
+      return;
+    }
+    if (focus !== "document") {
+      projectState.docView = "preview";
+      projectState.docDirty = false;
+      projectState.docSaving = false;
+      docLeavePrompt = false;
+    }
     projectState.mainFocus = focus;
+    if (focus !== "chat") {
+      clearExpandedSurface();
+    }
     if (focus === "chat") {
       projectState.reviewFocusId = null;
     }
     syncMainFocusView();
   }
 
+  function selectRailTab(tab: RailTab): void {
+    if (
+      projectState.railTab === "docs" &&
+      tab !== "docs" &&
+      !requestLeaveDocument(() => selectRailTab(tab))
+    ) {
+      return;
+    }
+    projectState.railTab = tab;
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = tab;
+    if (tab !== "projects") {
+      projectState.switchConfirmTarget = null;
+    }
+    if (tab === "projects") {
+      projectState.projectSearchQuery = "";
+      try { client.listProjects(); } catch { /* ignore */ }
+    }
+    if (tab === "docs") {
+      openDocumentReader();
+      return;
+    }
+    if (tab === "threads") {
+      refreshProjectThreads();
+    }
+    setMainFocus(mainFocusForRail(tab));
+  }
+
+  function showNowChat(): void {
+    if (
+      projectState.mainFocus === "document" &&
+      !requestLeaveDocument(() => showNowChat())
+    ) {
+      return;
+    }
+    projectState.railTab = "now";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "now";
+    setMainFocus("chat");
+  }
+
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
+    const chatFocus = focus === "chat";
     shellEl.dataset.mainFocus = focus;
+    shellEl.dataset.rail = projectState.railTab || "now";
     chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
+    documentEl.classList.toggle("hidden", focus !== "document");
+    projectsEl.classList.toggle("hidden", focus !== "projects");
+    chatEl.hidden = focus !== "chat";
+    planReviewEl.hidden = focus !== "plan_review";
+    planFullEl.hidden = focus !== "plan_full";
+    documentEl.hidden = focus !== "document";
+    projectsEl.hidden = focus !== "projects";
+    composerDock.hidden = false;
+    composer.hidden = false;
+    statusEl.hidden = false;
+    tokenBar.hidden = !chatFocus;
+    syncComposerMetaVisibility();
     if (focus === "plan_review") {
       renderPlanReviewPane();
+      planReviewEl.scrollTop = 0;
     } else if (focus === "plan_full") {
       renderPlanFullPane();
+    } else if (focus === "document") {
+      renderDocumentPane();
+    } else if (focus === "projects") {
+      renderProjectsPane();
     }
+    updateWorkbenchEmpty();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
+
 
   function renderPlanReviewPane(): void {
     const queue = getActionableQueue();
@@ -1171,10 +1816,21 @@ export function mountUnifiedShell(
       suggestions: projectState.suggestions,
       reviewIndex: planReviewIndex,
       adoptPendingId: projectState.adoptPendingId,
+      dropTaskPendingId: projectState.dropTaskPendingId,
+      dropTaskPendingWorking: projectState.dropTaskPendingWorking,
     });
   }
 
   function renderPlanFullPane(): void {
+    if (!projectState.projectId) {
+      planFullEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看任务",
+        copy: "打开项目后，这里会显示任务列表与进度。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
+      return;
+    }
     const highlight =
       projectState.highlightChanges && projectState.highlightedLines.size > 0
         ? projectState.highlightedLines
@@ -1182,30 +1838,329 @@ export function mountUnifiedShell(
     planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
   }
 
-  function openPlanReview(suggestionId?: string): void {
-    const queue = getActionableQueue();
-    if (!queue.length) {
-      setStatus("暂无待采纳提案");
+  function renderProjectsPane(): void {
+    projectsEl.innerHTML = renderProjectsStage(projectState);
+  }
+
+  function renderDocumentPane(): void {
+    if (!projectState.projectId) {
+      documentEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看文档",
+        copy: "打开项目后，这里会显示文档阅读区。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
       return;
     }
-    let index = 0;
-    if (suggestionId) {
-      const found = queue.findIndex((s) => s.id === suggestionId);
-      if (found >= 0) index = found;
+    const path = projectState.currentDocPath;
+    const content = projectState.currentDocContent;
+    const { html, outline } = renderDocumentReaderHtml({
+      docs: projectState.projectDocs,
+      currentPath: path,
+      currentContent: content,
+      renderedHtml: content ? renderMarkdown(content) : "",
+      newDocName: projectState.newDocName,
+      includeCatalog: false,
+      includeBack: false,
+      view: projectState.docView,
+      draft: projectState.docEditDraft,
+      dirty: projectState.docDirty,
+      saving: projectState.docSaving,
+      leavePrompt: docLeavePrompt,
+    });
+    documentEl.innerHTML = html;
+    const reader = documentEl.querySelector(".unified-document-content");
+    let resolved = outline;
+    if (reader && projectState.docView === "preview") {
+      resolved = finalizeDocumentOutline(reader, content);
+      const outlineBody = documentEl.querySelector(".doc-outline-body");
+      if (outlineBody) outlineBody.innerHTML = renderDocOutlineHtml(resolved);
+      const resolvedTitle = path ? displayDocTitle(path, path, content, resolved) : "";
+      const heading = documentEl.querySelector(".unified-document-heading h1");
+      if (heading && resolvedTitle) heading.textContent = resolvedTitle;
+      const currentItem = documentEl.querySelector<HTMLElement>(".doc-catalog-item.is-current .doc-catalog-item-title");
+      if (currentItem && resolvedTitle) currentItem.textContent = resolvedTitle;
     }
-    planReviewIndex = index;
-    projectState.reviewFocusId = queue[index]?.id ?? null;
+    if (projectState.docView === "preview") void hydrateMermaid(documentEl);
+    if (projectState.docView === "edit") {
+      documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor")?.focus();
+    }
+    if (!docLeavePrompt) {
+      const readerPane = documentEl.querySelector<HTMLElement>(".unified-document-reader");
+      if (readerPane) readerPane.scrollTop = 0;
+      else documentEl.scrollTop = 0;
+    }
+  }
+
+  function createProjectDocFromTitle(): void {
+    const name = normalizeNewDocPath(projectState.newDocName);
+    if (!name) return;
+    pendingDocAction = "create";
+    try { client.createDoc(name); } catch { pendingDocAction = null; }
+    projectState.newDocName = "";
+  }
+
+  function openDocument(path: string): void {
+    if (!path) return;
+    const alreadyOpen = projectState.mainFocus === "document"
+      && projectState.currentDocPath === path
+      && Boolean(projectState.currentDocContent);
+    if (path !== projectState.currentDocPath && isDocDirty()) {
+      requestLeaveDocument(() => openDocument(path));
+      return;
+    }
+    projectState.currentDocPath = path;
+    projectState.railTab = "docs";
     projectState.overlayPanel = null;
-    setMainFocus("plan_review");
+    shellEl.dataset.rail = "docs";
+    if (alreadyOpen) {
+      setMainFocus("document");
+      try { client.listDocs(); } catch { /* ignore */ }
+      return;
+    }
+    projectState.currentDocContent = "";
+    projectState.docEditDraft = "";
+    projectState.docView = "preview";
+    projectState.docDirty = false;
+    projectState.docSaving = false;
+    clearDocLeavePrompt();
+    setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
+    try { client.readDoc(path); } catch { /* ignore */ }
+  }
+
+  function openDocumentReader(path?: string): void {
+    projectState.railTab = "docs";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
+    const target = path
+      || projectState.currentDocPath
+      || sortProjectDocs(projectState.projectDocs)[0]?.path
+      || "";
+    if (target) {
+      openDocument(target);
+      return;
+    }
+    setMainFocus("document");
+    try { client.listDocs(); } catch { /* ignore */ }
+  }
+
+  function openPlanReview(suggestionId?: string): void {
+    try {
+      if (
+        projectState.mainFocus === "document" &&
+        !requestLeaveDocument(() => openPlanReview(suggestionId))
+      ) {
+        return;
+      }
+      setStatus("正在读取待处理方案…");
+      const queue = getActionableQueue();
+      if (!queue.length) {
+        setStatus("暂无待采纳提案");
+        return;
+      }
+      let index = 0;
+      if (suggestionId) {
+        const found = queue.findIndex((s) => s.id === suggestionId);
+        if (found >= 0) index = found;
+      }
+      planReviewIndex = index;
+      projectState.reviewFocusId = queue[index]?.id ?? null;
+      projectState.railTab = "now";
+      projectState.overlayPanel = null;
+      shellEl.dataset.rail = "now";
+      setStatus("正在切换主区…");
+      setMainFocus("plan_review");
+      setStatus("方案变更已打开");
+    } catch (err) {
+      setStatus(`方案变更打开失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function handleReviewSuggestionClick(ev: Event): void {
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="review-suggestion"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    openPlanReview(btn.dataset.suggestionId);
   }
 
   function openPlanFull(): void {
+    if (
+      projectState.mainFocus === "document" &&
+      !requestLeaveDocument(() => openPlanFull())
+    ) {
+      return;
+    }
+    projectState.railTab = "tasks";
     projectState.overlayPanel = null;
+    shellEl.dataset.rail = "tasks";
     setMainFocus("plan_full");
   }
 
+  function clearExpandedSurface(): void {
+    sessionsOpen = false;
+    expandEl.classList.add("hidden");
+    expandEl.innerHTML = "";
+  }
+
+  function resumeRunawayFromUi(label = "正在恢复狂奔…", opts?: { force?: boolean }): void {
+    try {
+      if (chat.isWorking()) {
+        setStatus("狂奔已在执行中，请查看活动区");
+        return;
+      }
+      const now = Date.now();
+      if (
+        !opts?.force
+        && projectState.runawayEnabled
+        && !hasProjectBlocker(projectState)
+        && now - lastRunawayNudgeAt < RUNAWAY_NUDGE_DEBOUNCE_MS
+      ) {
+        setStatus("狂奔已开启，系统会自动续接");
+        jumpToCurrentActivity();
+        return;
+      }
+      lastRunawayNudgeAt = now;
+      clearRunawayResumePending();
+      runawayResumePending = true;
+      syncWorkingVisual();
+      client.resumeProjectRunaway();
+      setStatus(label);
+      runawayResumeTimer = window.setTimeout(() => {
+        if (runawayResumePending && !chat.isWorking()) {
+          clearRunawayResumePending();
+          syncWorkingVisual();
+          setStatus("恢复超时：可能被上一回合占用，请点停止或重启桌面端");
+        }
+      }, 12000);
+    } catch (err) {
+      clearRunawayResumePending();
+      syncWorkingVisual();
+      setStatus(`恢复狂奔失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function showBlockerDetails(): void {
+    showNowChat();
+    clearExpandedSurface();
+    expandEl.innerHTML = renderProjectBlockerDetails(projectState);
+    expandEl.classList.remove("hidden");
+    expandEl.querySelector<HTMLButtonElement>('[data-action="resume-runaway"]')?.addEventListener("click", () => {
+      resumeRunawayFromUi();
+    });
+    expandEl.querySelector<HTMLButtonElement>('[data-action="directed-runaway-retry"]')?.addEventListener("click", () => {
+      try {
+        client.resumeProjectRunawayDirected();
+        setStatus("正在定向再试…");
+      } catch (err) {
+        setStatus(`定向再试失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+    expandEl.querySelector<HTMLButtonElement>('[data-action="blocker-details-close"]')?.addEventListener("click", () => {
+      clearExpandedSurface();
+    });
+  }
+
+  function startProjectTaskFromUi(taskId: string): void {
+    const normalizedTaskId = taskId.trim();
+    if (!normalizedTaskId) return;
+    try {
+      setStatus(`正在启动 ${normalizedTaskId}…`);
+      showNowChat();
+      client.startProjectTask(normalizedTaskId);
+    } catch (err) {
+      setStatus(`启动任务失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function startDirectImplementFromUi(): void {
+    // Ordinary M3: same user-visible command as CLI「项目 直接实现」.
+    // On this base the verb is not registered yet (M1 PR #2), so it falls
+    // through to chat and hits is_direct_implement_request →
+    // maybe_auto_confirm_plan_for_direct_implement + implement overlay.
+    // TODO(M1): when project_entry lands, this command sets
+    // project_entry=direct and later turns skip plan_partner. If M1's CLI
+    // only confirms the gate without starting a turn, follow with a short
+    // implement message so the CTA still kicks work.
+    try {
+      setStatus("正在直接实现…");
+      showNowChat();
+      client.sendCommand("项目 直接实现");
+    } catch (err) {
+      setStatus(`直接实现失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function runProjectVerifyFromUi(): void {
+    try {
+      setStatus("正在跑验收…");
+      showNowChat();
+      client.sendCommand("项目 验收");
+    } catch (err) {
+      setStatus(`验收失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function handleHeaderNextStepAction(action: string, taskId?: string): void {
+    switch (action) {
+      case "confirm-plan":
+        void projectCallbacks.onPlanConfirm();
+        return;
+      case "direct-implement":
+        startDirectImplementFromUi();
+        return;
+      case "run-verify":
+        runProjectVerifyFromUi();
+        return;
+      case "start-task":
+        if (taskId?.trim()) {
+          startProjectTaskFromUi(taskId);
+          return;
+        }
+        openPlanFull();
+        return;
+      case "accept-milestone":
+        projectCallbacks.onMilestoneAccept();
+        return;
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "confirm-design":
+        projectCallbacks.onDesignConfirm();
+        return;
+      case "open-plan-review":
+        openPlanReview();
+        return;
+      case "open-full-plan":
+        openPlanFull();
+        return;
+      case "open-projects":
+        projectCallbacks.onOpenProjects();
+        return;
+      case "jump-turn-process":
+        jumpToCurrentTurnProcess();
+        return;
+      case "jump-review-summary":
+        jumpToReviewSummary();
+        return;
+      case "stop-turn":
+        projectCallbacks.onStopTurn();
+        return;
+      case "resume-runaway":
+        resumeRunawayFromUi();
+        return;
+      default:
+        return;
+    }
+  }
+
   function closePlanMainFocus(): void {
-    setMainFocus("chat");
+    selectRailTab("now");
   }
 
   function afterSuggestionQueueChanged(): void {
@@ -1251,13 +2206,13 @@ export function mountUnifiedShell(
 
   function resolvePendingAdopt(): void {
     if (!pendingAdoptAccept) return;
-    const { sid, path } = pendingAdoptAccept;
+    const { sid, path, whatChanged } = pendingAdoptAccept;
     if (projectState.suggestions.some((s) => s.id === sid)) return;
 
     const notices = projectState.partnerNotices.join("\n");
     clearPendingAdopt();
 
-    if (/已撤回|无效提案/i.test(notices)) {
+    if (/已撤回|无效提案|提案已失效|刷新待采纳/i.test(notices)) {
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       if (projectState.mainFocus === "plan_review") {
         renderPlanReviewPane();
@@ -1268,6 +2223,7 @@ export function mountUnifiedShell(
     const match = notices.match(/已采纳写入\s+(\S+)/);
     const adoptPath = match?.[1] || path;
     const moreAfter = projectState.suggestions.some((s) => Boolean(s.action));
+    acceptedChangeForNextTurn = whatChanged;
     startAdoptFlash(`已采纳写入 ${adoptPath}`, !moreAfter);
   }
 
@@ -1290,13 +2246,34 @@ export function mountUnifiedShell(
     }, ADOPT_FLASH_MS);
   }
 
-  function acceptSuggestionById(sid: string): void {
+  function acceptSuggestionById(
+    sid: string,
+    codePolicy?: "plan_only" | "agent_cleanup" | "git_guide",
+  ): void {
     if (projectState.suggestionAdoptFlash || pendingAdoptAccept) return;
     const sug = projectState.suggestions.find((s) => s.id === sid);
     if (!sug?.action) return;
 
+    if (sug.action === "drop_task" && !codePolicy) {
+      projectState.dropTaskPendingId = sid;
+      projectState.dropTaskPendingWorking = chat.isWorking();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      if (projectState.mainFocus === "plan_review") renderPlanReviewPane();
+      return;
+    }
+    if (sug.action === "drop_task") {
+      projectState.dropTaskPendingId = null;
+      projectState.dropTaskPendingWorking = false;
+    }
+
     const path = adoptPathFromSuggestion(sug);
-    pendingAdoptAccept = { sid, path };
+    pendingAdoptAccept = {
+      sid,
+      path,
+      whatChanged: typeof sug.payload?.what_changed === "string" && sug.payload.what_changed.trim()
+        ? sug.payload.what_changed.trim()
+        : "见 diff",
+    };
     projectState.adoptPendingId = sid;
     clearPendingAdoptTimeout();
     pendingAdoptAcceptTimeoutId = window.setTimeout(() => {
@@ -1310,7 +2287,7 @@ export function mountUnifiedShell(
     }, ADOPT_PENDING_MS);
 
     try {
-      client.acceptPlanSuggestion(sid);
+      client.acceptPlanSuggestion(sid, codePolicy);
     } catch {
       clearPendingAdopt();
       return;
@@ -1334,24 +2311,155 @@ export function mountUnifiedShell(
     afterSuggestionQueueChanged();
   }
 
-  function jumpToCurrentTurnProcess(): void {
+  function processMetaForTurnKey(turnKey: string): { index: number; total: number } | undefined {
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, chat.currentTurnIndex());
+    if (segments.length <= 1) return undefined;
+    const idx = segments.findIndex((block) => block.turnKey === turnKey);
+    if (idx < 0) return undefined;
+    return { index: idx + 1, total: segments.length };
+  }
+
+  function pickProcessBlockForJump(): Extract<ChatBlock, { kind: "process" }> | undefined {
+    const turnIndex = chat.currentTurnIndex();
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, turnIndex);
+    if (!segments.length) {
+      return findActiveProcessBlock();
+    }
+    if (chat.isWorking()) {
+      resetProcessJumpCursor();
+      const live = segments.find((block) => isProcessThinkingLive(block, chat.model.currentTurnKey));
+      if (live) return live;
+      const expanded = segments.find((block) => !block.collapsed);
+      if (expanded) return expanded;
+      return segments[segments.length - 1];
+    }
+    if (processJumpTurnIndex !== turnIndex) {
+      processJumpCursor = -1;
+      processJumpTurnIndex = turnIndex;
+    }
+    processJumpCursor = (processJumpCursor + 1) % segments.length;
+    return segments[segments.length - 1 - processJumpCursor];
+  }
+
+  function processJumpStatusLabel(block: Extract<ChatBlock, { kind: "process" }>): string {
+    const turnIndex = chat.currentTurnIndex();
+    const segments = liveTurnCardProcessBlocks(chat.model.blocks, turnIndex);
+    if (segments.length <= 1) return "已定位到当前活动";
+    const idx = segments.findIndex((item) => item.turnKey === block.turnKey);
+    if (idx < 0) return "已定位到当前活动";
+    return `已定位到过程段 ${idx + 1}/${segments.length}`;
+  }
+
+  function findActiveProcessBlock(): Extract<ChatBlock, { kind: "process" }> | undefined {
     const blocks = chat.model.blocks;
+    const currentKey = chat.model.currentTurnKey;
+    if (currentKey) {
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const block = blocks[i];
+        if (block.kind !== "process" || block.turnKey !== currentKey) continue;
+        if (!block.collapsed || isProcessThinkingLive(block, currentKey)) {
+          return block;
+        }
+      }
+    }
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i];
       if (block.kind !== "process") continue;
-      if (block.collapsed) {
-        chat.toggleProcessCollapsed(block.turnKey);
+      if (!block.collapsed && isProcessThinkingLive(block, chat.model.currentTurnKey)) {
+        return block;
       }
+    }
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind === "process" && !block.collapsed) return block;
+    }
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i];
+      if (block.kind === "process") return block;
+    }
+    return undefined;
+  }
+
+  function scrollToActivityElement(el: HTMLElement): void {
+    el.classList.add("is-jump-target");
+    window.setTimeout(() => el.classList.remove("is-jump-target"), 1400);
+    el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    el.querySelector<HTMLElement>(".unified-thinking.is-streaming, .unified-thinking.is-waiting")?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }
+
+  function jumpToLiveTurnCard(): boolean {
+    const card =
+      chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live") ??
+      chatEl.querySelector<HTMLElement>(".unified-turn-card:last-of-type");
+    if (!card) return false;
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    card.classList.add("is-jump-target");
+    window.setTimeout(() => card.classList.remove("is-jump-target"), 1400);
+    return true;
+  }
+
+  function jumpToCurrentActivity(): void {
+    if (projectState.mainFocus !== "chat" || projectState.railTab !== "now") {
+      showNowChat();
+    }
+    if (hasProjectBlocker(projectState)) {
+      showBlockerDetails();
+    }
+    const block = pickProcessBlockForJump();
+    if (!block) {
       requestAnimationFrame(() => {
-        const el = chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${block.turnKey}"]`);
-        el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        renderChat();
+        if (jumpToLiveTurnCard()) {
+          setStatus("已定位到当前回合");
+          return;
+        }
+        scrollChatToBottom();
+        setStatus(chat.isWorking() ? "当前回合尚无活动记录" : "当前没有可查看的活动");
       });
       return;
     }
-    scrollChatToBottom();
+    if (block.collapsed) {
+      chat.toggleProcessCollapsed(block.turnKey);
+    }
+    ensureProcessEntries(block);
+    const streamingThink = block.entries?.find(
+      (e) => e.kind === "think" && e.phase === "streaming" && e.text.trim(),
+    );
+    if (!streamingThink) {
+      chat.openThinking(block.turnKey);
+    }
+    const turnKey = block.turnKey;
+    requestAnimationFrame(() => {
+      renderChat();
+      const card =
+        chatEl.querySelector<HTMLElement>(`.unified-turn-card[data-turn-key="${turnKey}"]`) ??
+        chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live");
+      const el =
+        card?.querySelector<HTMLElement>(`.unified-activity[data-turn="${turnKey}"], .unified-process[data-turn="${turnKey}"]`) ??
+        chatEl.querySelector<HTMLElement>(`.unified-process[data-turn="${turnKey}"]`);
+      if (!el) {
+        if (jumpToLiveTurnCard()) {
+          setStatus("已定位到当前回合");
+        } else {
+          scrollChatToBottom();
+        }
+        return;
+      }
+      scrollToActivityElement(el);
+      setStatus(processJumpStatusLabel(block));
+    });
   }
 
+  const jumpToCurrentTurnProcess = jumpToCurrentActivity;
+
   function jumpToReviewSummary(): void {
+    showNowChat();
+    if (hasProjectBlocker(projectState)) {
+      showBlockerDetails();
+    }
     const blocks = chat.model.blocks;
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i];
@@ -1378,6 +2486,21 @@ export function mountUnifiedShell(
       case "accept": {
         const sid = target.dataset.suggestionId;
         if (sid) acceptSuggestionById(sid);
+        return;
+      }
+      case "confirm-drop-while-working": {
+        const sid = target.dataset.suggestionId;
+        if (sid) {
+          projectState.dropTaskPendingWorking = false;
+          renderPlanReviewPane();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        }
+        return;
+      }
+      case "drop-policy": {
+        const sid = target.dataset.suggestionId;
+        const policy = target.dataset.policy as "plan_only" | "agent_cleanup" | "git_guide" | undefined;
+        if (sid && policy) acceptSuggestionById(sid, policy);
         return;
       }
       case "ignore": {
@@ -1418,12 +2541,37 @@ export function mountUnifiedShell(
     handlePlanReviewAction(btn.dataset.planReviewAction, btn);
   });
 
+  planFullEl.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-action="start-task"]');
+    if (!btn?.dataset.taskId) return;
+    startProjectTaskFromUi(btn.dataset.taskId);
+  });
+
+  function handleRailStageAction(ev: Event): void {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "open-projects") {
+      selectRailTab("projects");
+      return;
+    }
+    if (btn.dataset.action === "new-project") {
+      projectCallbacks.onNewProject();
+      return;
+    }
+    if (btn.dataset.action === "open-now") {
+      selectRailTab("now");
+    }
+  }
+  planFullEl.addEventListener("click", handleRailStageAction);
+  projectsEl.addEventListener("click", handleRailStageAction);
+  documentEl.addEventListener("click", handleRailStageAction);
+
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
-    if (projectState.mainFocus === "chat") return;
+    if (projectState.railTab === "now" && projectState.mainFocus === "chat") return;
     if (document.activeElement === input) return;
     ev.preventDefault();
-    closePlanMainFocus();
+    selectRailTab("now");
   });
 
   function refreshServices(): void {
@@ -1440,89 +2588,129 @@ export function mountUnifiedShell(
     }
   }
 
+  function refreshTerminals(): void {
+    if (projectState.terminalsLoading) return;
+    const requestSerial = ++terminalRequestSerial;
+    const requestId = `terminal-${Date.now()}-${requestSerial}`;
+    terminalRequestId = requestId;
+    projectState.terminalsLoading = true;
+    projectState.terminalsError = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.listTerminals(requestId);
+      if (terminalRequestTimeoutId !== null) window.clearTimeout(terminalRequestTimeoutId);
+      terminalRequestTimeoutId = window.setTimeout(() => {
+        if (requestSerial !== terminalRequestSerial || !projectState.terminalsLoading) return;
+        projectState.terminalsLoading = false;
+        projectState.terminalsError = "读取终端状态超时";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }, 8000);
+    } catch (err) {
+      projectState.terminalsLoading = false;
+      projectState.terminalsError = err instanceof Error ? err.message : String(err);
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  function requestTerminalOutput(sessionId: string, cursor: number): void {
+    if (!sessionId || projectState.terminalDetails?.session_id !== sessionId) return;
+    const requestSerial = ++terminalOutputRequestSerial;
+    const requestId = `terminal-output-${Date.now()}-${requestSerial}`;
+    terminalOutputRequestId = requestId;
+    terminalOutputRequestSessionId = sessionId;
+    projectState.terminalOutputLoading = true;
+    projectState.terminalOutputError = "";
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    try {
+      client.readTerminalOutput(sessionId, cursor, 16_384, requestId);
+      if (terminalOutputRequestTimeoutId !== null) {
+        window.clearTimeout(terminalOutputRequestTimeoutId);
+      }
+      terminalOutputRequestTimeoutId = window.setTimeout(() => {
+        if (
+          requestSerial !== terminalOutputRequestSerial
+          || terminalOutputRequestSessionId !== sessionId
+          || !projectState.terminalOutputLoading
+        ) return;
+        projectState.terminalOutputLoading = false;
+        projectState.terminalOutputError = "读取终端输出超时";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }, 8000);
+    } catch (err) {
+      projectState.terminalOutputLoading = false;
+      projectState.terminalOutputError = err instanceof Error ? err.message : String(err);
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  function openTerminalDetails(sessionId: string): void {
+    const session = projectState.terminalSessions.find((item) => item.session_id === sessionId);
+    if (!session) return;
+    terminalOutputRequestSerial += 1;
+    if (terminalOutputRequestTimeoutId !== null) {
+      window.clearTimeout(terminalOutputRequestTimeoutId);
+      terminalOutputRequestTimeoutId = null;
+    }
+    terminalOutputRequestId = null;
+    terminalOutputRequestSessionId = sessionId;
+    projectState.terminalDetails = session;
+    projectState.terminalOutput = "";
+    projectState.terminalOutputCursor = 0;
+    projectState.terminalOutputLoading = false;
+    projectState.terminalOutputError = "";
+    projectState.terminalOutputCursorReset = false;
+    projectState.terminalOutputTruncated = false;
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    requestTerminalOutput(sessionId, 0);
+  }
+
+  function closeTerminalDetails(): void {
+    terminalOutputRequestSerial += 1;
+    if (terminalOutputRequestTimeoutId !== null) {
+      window.clearTimeout(terminalOutputRequestTimeoutId);
+      terminalOutputRequestTimeoutId = null;
+    }
+    terminalOutputRequestId = null;
+    terminalOutputRequestSessionId = null;
+    projectState.terminalDetails = null;
+    projectState.terminalOutput = "";
+    projectState.terminalOutputCursor = 0;
+    projectState.terminalOutputLoading = false;
+    projectState.terminalOutputError = "";
+    projectState.terminalOutputCursorReset = false;
+    projectState.terminalOutputTruncated = false;
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  function scheduleTerminalPoll(): void {
+    if (terminalPollTimerId !== null) window.clearTimeout(terminalPollTimerId);
+    const delay = projectState.terminalsCollapsed ? 10_000 : 2_000;
+    terminalPollTimerId = window.setTimeout(() => {
+      terminalPollTimerId = null;
+      refreshTerminals();
+      scheduleTerminalPoll();
+    }, delay);
+  }
+
   // ---- chat rendering ----
   function isRecentTurnBlock(turnIndex: number): boolean {
     return turnIndex >= chat.currentTurnIndex() - (FOCUS_TURNS - 1);
   }
 
-  function truncateToolHint(text: string, max = 72): string {
-    const oneLine = text.replace(/\s+/g, " ").trim();
-    if (oneLine.length <= max) return oneLine;
-    return `${oneLine.slice(0, max - 1)}…`;
+  /** One-line tool rows moved to activity-timeline.ts (UX-028 M0). */
+
+  function findThinkEntryForDom(
+    block: Extract<ChatBlock, { kind: "process" }>,
+    thinkId: string,
+  ): ThinkEntry | undefined {
+    ensureProcessEntries(block);
+    return block.entries?.find(
+      (e): e is ThinkEntry => e.kind === "think" && e.id === thinkId,
+    );
   }
 
-  /** One-line tool rows (DESKTOP §3.2.2 A 层); fold older rows when many (UX-023). */
-  function renderCompactToolLines(
-    tools: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>,
-    turnKey: string,
-  ): string {
-    if (!tools.length) return "";
-    const now = Date.now();
-
-    function renderOne(
-      t: NonNullable<Extract<ChatBlock, { kind: "process" }>["tools"]>[number],
-    ): string {
-      const running = t.status === "running";
-      const elapsedMs = running ? now - t.startedAt : (t.endedAt ?? now) - t.startedAt;
-      const mark = running ? "·" : t.status === "ok" ? "✓" : "✗";
-      const elapsedLabel = running
-        ? `运行中… ${formatToolElapsed(elapsedMs)}`
-        : formatToolElapsed(elapsedMs);
-      const progressBit =
-        running && t.progressText
-          ? ` · ${escapeHtml(truncateToolHint(t.progressText, 48))}`
-          : "";
-      const failHint =
-        !running && t.status === "fail" && t.endSummary
-          ? ` · ${escapeHtml(truncateToolHint(t.endSummary, 48))}`
-          : "";
-      const logsBit =
-        !running && t.status === "fail" && t.logsTail
-          ? `<details class="unified-tool-logs-inline"><summary>日志</summary><pre>${escapeHtml(t.logsTail)}</pre></details>`
-          : "";
-      return `<div class="unified-process-line unified-tool-line is-${t.status}" data-tool-call="${escapeHtml(t.callId)}" data-started-at="${t.startedAt}" data-status="${t.status}">
-        <span class="unified-tool-mark">${mark}</span>
-        <span class="unified-tool-name">${escapeHtml(t.tool)}</span>
-        <span class="unified-tool-hint">${escapeHtml(truncateToolHint(t.summary))}</span>
-        <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${failHint}${logsBit}
-      </div>`;
-    }
-
-    const hiddenCount = Math.max(0, tools.length - PROCESS_TOOL_LINES_CAP);
-    const hidden = hiddenCount > 0 ? tools.slice(0, hiddenCount) : [];
-    const visible = hiddenCount > 0 ? tools.slice(hiddenCount) : tools;
-    const failHidden = hidden.filter((t) => t.status === "fail").length;
-    const foldOpen = toolsListExpanded.has(turnKey);
-    const foldBit =
-      hidden.length > 0
-        ? `<details class="unified-tool-fold" data-tools-fold="${escapeHtml(turnKey)}"${foldOpen ? " open" : ""}>
-            <summary>更早 ${hidden.length} 个工具${failHidden > 0 ? ` · ${failHidden} 失败` : ""}</summary>
-            <div class="unified-tool-fold-body">${hidden.map(renderOne).join("")}</div>
-          </details>`
-        : "";
-    return `<div class="unified-tool-lines">${foldBit}${visible.map(renderOne).join("")}</div>`;
-  }
-
-  function renderThinkingAccordion(block: Extract<ChatBlock, { kind: "process" }>): string {
-    const waiting = Boolean(block.llmPending) && !block.reasoning.trim();
-    if (!block.reasoning.trim() && !waiting) return "";
-    if (waiting) {
-      return `<div class="unified-thinking is-waiting is-streaming" data-turn="${escapeHtml(block.turnKey)}">
-        <div class="unified-thinking-summary is-static" aria-expanded="true">思考中…</div>
-      </div>`;
-    }
-    const open = isThinkingBodyOpen(block);
-    const streaming = block.reasoningPhase === "streaming";
-    const title = thinkingTitleLabel(block);
-    const openCls = open ? " is-open" : "";
-    const streamCls = streaming ? " is-streaming" : " is-pinned";
-    const body = open
-      ? `<div class="unified-thinking-body">${escapeHtml(block.reasoning)}</div>`
-      : "";
-    return `<div class="unified-thinking${streamCls}${openCls}" data-turn="${escapeHtml(block.turnKey)}">
-      <button type="button" class="unified-thinking-summary" data-thinking-toggle="${escapeHtml(block.turnKey)}" aria-expanded="${open ? "true" : "false"}">${escapeHtml(title)}</button>
-      ${body}
-    </div>`;
+  function isLiveProcessBlock(block: Extract<ChatBlock, { kind: "process" }>): boolean {
+    return block.turnKey === chat.model.currentTurnKey;
   }
 
   function tickRunningToolElapsed(): void {
@@ -1536,22 +2724,82 @@ export function mountUnifiedShell(
   }
 
   function tickStreamingThinking(): void {
-    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming").forEach((el) => {
+    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming, .unified-thinking.is-waiting").forEach((el) => {
       const turnKey = el.dataset.turn;
+      const thinkId = el.dataset.thinkId;
       if (!turnKey) return;
-      const block = chat.model.blocks.find(
-        (b) => b.kind === "process" && b.turnKey === turnKey,
-      );
-      if (block?.kind !== "process") return;
-      const summary = el.querySelector<HTMLElement>(".unified-thinking-summary");
-      if (summary) summary.textContent = thinkingTitleLabel(block);
-      const body = el.querySelector<HTMLElement>(".unified-thinking-body");
-      if (body) body.scrollTop = body.scrollHeight;
+      const blocks = chat.model.blocks;
+      let block: Extract<ChatBlock, { kind: "process" }> | undefined;
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        const candidate = blocks[i];
+        if (candidate.kind === "process" && candidate.turnKey === turnKey) {
+          block = candidate;
+          break;
+        }
+      }
+      if (!block) return;
+      const waiting =
+        isLiveProcessBlock(block) &&
+        Boolean(block.llmPending) &&
+        thinkId === "pending";
+      if (waiting) {
+        const waitStartedAt = block.llmWaitStartedAt ?? Date.now();
+        const pendingThink: ThinkEntry = {
+          kind: "think",
+          id: "pending",
+          text: "",
+          phase: "streaming",
+          startedAt: waitStartedAt,
+        };
+        syncThinkDom(el, pendingThink, { waiting: true, waitStartedAt });
+        return;
+      }
+      if (!thinkId) return;
+      const entry = findThinkEntryForDom(block, thinkId);
+      if (!entry) return;
+      syncThinkDom(el, entry, { waiting: false, liveTurn: isLiveProcessBlock(block) });
     });
   }
 
+  function syncLiveThinkingDom(): void {
+    for (const block of chat.model.blocks) {
+      if (block.kind !== "process") continue;
+      if (!isLiveProcessBlock(block)) continue;
+      ensureProcessEntries(block);
+      const pendingOnly =
+        Boolean(block.llmPending) &&
+        !block.entries?.some((e) => e.kind === "think" && e.phase === "streaming");
+      if (pendingOnly) {
+        const el = chatEl.querySelector<HTMLElement>(
+          `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="pending"]`,
+        );
+        if (el) {
+          const waitStartedAt = block.llmWaitStartedAt ?? Date.now();
+          const pendingThink: ThinkEntry = {
+            kind: "think",
+            id: "pending",
+            text: "",
+            phase: "streaming",
+            startedAt: waitStartedAt,
+          };
+          syncThinkDom(el, pendingThink, { waiting: true, waitStartedAt });
+        }
+      }
+      for (const entry of block.entries ?? []) {
+        if (entry.kind !== "think") continue;
+        if (entry.phase !== "streaming") continue;
+        const el = chatEl.querySelector<HTMLElement>(
+          `.unified-thinking[data-turn="${block.turnKey}"][data-think-id="${entry.id}"]`,
+        );
+        if (el) syncThinkDom(el, entry, { liveTurn: true });
+      }
+    }
+  }
+
   function scrollStreamingThinkingBodies(): void {
-    chatEl.querySelectorAll<HTMLElement>(".unified-thinking.is-streaming .unified-thinking-body").forEach((body) => {
+    chatEl.querySelectorAll<HTMLElement>(
+      ".unified-thinking.is-streaming .unified-thinking-body, .unified-thinking-stream-text",
+    ).forEach((body) => {
       body.scrollTop = body.scrollHeight;
     });
   }
@@ -1559,20 +2807,78 @@ export function mountUnifiedShell(
   let toolElapsedTimer: number | null = null;
   function syncToolElapsedTimer(): void {
     const hasRunning = chat.model.blocks.some(
-      (b) => b.kind === "process" && b.tools?.some((t) => t.status === "running"),
+      (b) => b.kind === "process" && getProcessTools(b).some((t) => t.status === "running"),
     );
     const hasStreamingThinking = chat.model.blocks.some(
-      (b) => b.kind === "process" && (b.reasoningPhase === "streaming" || b.llmPending),
+      (b) => b.kind === "process" && isProcessThinkingLive(b, chat.model.currentTurnKey),
     );
     if ((hasRunning || hasStreamingThinking) && toolElapsedTimer === null) {
+      const intervalMs = hasStreamingThinking ? 100 : 1000;
       toolElapsedTimer = window.setInterval(() => {
         tickRunningToolElapsed();
         tickStreamingThinking();
-      }, 1000);
+        syncLiveThinkingDom();
+      }, intervalMs);
     } else if (!hasRunning && !hasStreamingThinking && toolElapsedTimer !== null) {
       window.clearInterval(toolElapsedTimer);
       toolElapsedTimer = null;
     }
+  }
+
+  function shouldLazyMarkdown(block: ChatBlock): boolean {
+    if (block.kind === "assistant-streaming") return false;
+    if (block.kind !== "assistant") return false;
+    if (markdownRenderEager) return false;
+    return block.turnIndex < chat.currentTurnIndex() - 1;
+  }
+
+  let activeProcessMeta: Map<string, { index: number; total: number }> | null = null;
+
+  function renderBlocksFlat(blocks: ChatBlock[]): string {
+    const parts: string[] = [];
+    let chipBuf: string[] = [];
+    const flushChips = () => {
+      if (!chipBuf.length) return;
+      parts.push(`<div class="unified-file-chips">${chipBuf.join("")}</div>`);
+      chipBuf = [];
+    };
+    for (const block of blocks) {
+      if (block.kind === "notice") {
+        const path = adoptPathFromNotice(block.text);
+        if (path) {
+          chipBuf.push(renderAdoptChip(path));
+          continue;
+        }
+      }
+      flushChips();
+      parts.push(renderBlock(block));
+    }
+    flushChips();
+    return parts.join("");
+  }
+
+  function renderChatSegment(segment: ChatRenderSegment): string {
+    if (segment.kind === "orphan") {
+      return renderBlocksFlat(segment.blocks);
+    }
+    const live = segment.group.turnIndex === chat.currentTurnIndex() && chat.isWorking();
+    const processBlocks = segment.group.blocks.filter(
+      (block): block is Extract<ChatBlock, { kind: "process" }> => block.kind === "process",
+    );
+    const prevMeta = activeProcessMeta;
+    activeProcessMeta = processBlocks.length > 1
+      ? new Map(processBlocks.map((block, index) => [block.turnKey, { index: index + 1, total: processBlocks.length }]))
+      : null;
+    const inner = renderBlocksFlat(segment.group.blocks);
+    activeProcessMeta = prevMeta;
+    return renderTurnCardShell(segment.group, inner, { live });
+  }
+
+  function renderBlocksGrouped(blocks: ChatBlock[]): string {
+    if (!useTurnCardLayout()) {
+      return renderBlocksFlat(blocks);
+    }
+    return segmentChatBlocks(blocks).map(renderChatSegment).join("");
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -1611,26 +2917,15 @@ export function mountUnifiedShell(
       </article>`;
     }
     if (block.kind === "review-subagent") {
-      const verdictLabel =
-        block.verdict && block.status === "done"
-          ? ` · ${String(block.verdict).toUpperCase()}`
-          : "";
-      const blockers =
-        block.status === "done" && (block.blockersCount ?? 0) > 0
-          ? ` · ${block.blockersCount} 项阻塞`
-          : "";
       const title =
         block.status === "running"
-          ? "交付审查 · 进行中…"
-          : `交付审查 · 完成${verdictLabel}${blockers}`;
+          ? "交付审查"
+          : block.verdict === "pass" ? "交付审查 · 已通过" : "交付审查";
       const detail =
         block.status === "running"
-          ? escapeHtml(block.taskPreview || "正在审查交付物…")
-          : escapeHtml(block.summary || block.taskPreview || "");
-      return `<article class="unified-plan-subagent" data-turn-index="${block.turnIndex}" data-status="${block.status}">
-        <div class="unified-plan-subagent-title">${escapeHtml(title)}</div>
-        <div class="unified-plan-subagent-body">${detail}</div>
-      </article>`;
+          ? block.taskPreview || "正在审查交付物…"
+          : block.summary || block.taskPreview || "";
+      return `<div data-turn-index="${block.turnIndex}">${renderReviewCallout(title, detail, block.status === "running")}</div>`;
     }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
       let cls = "unified-turn unified-turn-assistant";
@@ -1639,31 +2934,63 @@ export function mountUnifiedShell(
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
         if (block.kind === "assistant-streaming") cls += " unified-turn-streaming";
       }
+      const lazy = shouldLazyMarkdown(block);
+      const bodyCls = `unified-turn-body unified-markdown${lazy ? " unified-markdown-lazy" : ""}`;
+      const bodyAttr = lazy ? ` data-lazy-md="${block.turnIndex}"` : "";
+      const bodyHtml = lazy ? escapeHtml(block.text) : renderMarkdown(block.text);
       return `<article class="${cls}" data-turn-index="${block.turnIndex}">
         <div class="unified-turn-label">助手</div>
-        <div class="unified-turn-body unified-markdown">${renderMarkdown(block.text)}</div>
+        <div class="${bodyCls}"${bodyAttr}>${bodyHtml}</div>
       </article>`;
     }
     if (block.kind === "notice") {
-      return `<p class="text-muted">${escapeHtml(block.text)}</p>`;
+      const adoptPath = adoptPathFromNotice(block.text);
+      if (adoptPath) {
+        return `<div class="unified-file-chips">${renderAdoptChip(adoptPath)}</div>`;
+      }
+      if (/^已切换模型至\s+/i.test(block.text)) {
+        return `<p class="unified-sys-line">${escapeHtml(block.text)}</p>`;
+      }
+      return `<p class="unified-sys-line text-muted">${escapeHtml(block.text)}</p>`;
     }
     // night perspective: skip process and confirm blocks (use overlay instead)
     if (block.kind === "process") {
       if (perspective === "night") return "";
-      const thinkingHtml = renderThinkingAccordion(block);
-      const toolsHtml = renderCompactToolLines(block.tools ?? [], block.turnKey);
-      const title = block.tools?.some((t) => t.status === "running") ? "执行中…" : "过程";
-      const toggle = block.collapsed ? "展开" : "收起";
+      ensureProcessEntries(block);
+      const liveTurn = isLiveProcessBlock(block);
+      const timelineHtml = renderActivityTimeline(block, {
+        liveTurn,
+        toolsFoldOpen: toolsListExpanded.has(block.turnKey),
+      });
+      const tools = getProcessTools(block);
+      const meta = activeProcessMeta?.get(block.turnKey);
+      const pill = processPillLabel(block, {
+        expanded: !block.collapsed,
+        segmentIndex: meta?.index,
+        segmentTotal: meta?.total,
+      });
+      const chevron = block.collapsed ? "▸" : "▾";
+      const running = tools.some((t) => t.status === "running");
+      const failAlert = renderToolFailAlert(lastFailedTool(tools));
+      const thinkingLive = isProcessThinkingLive(block, chat.model.currentTurnKey);
+      const processCls = [
+        "unified-process",
+        "unified-activity",
+        block.collapsed ? "collapsed" : "",
+        timelineHasThinking(block, liveTurn) ? "has-thinking" : "",
+        thinkingLive ? "is-thinking-live" : "",
+      ].filter(Boolean).join(" ");
+      const showPillDot = running || thinkingLive;
       return `
-        <div class="unified-process ${block.collapsed ? "collapsed" : ""}" data-turn="${block.turnKey}">
-          <div class="unified-process-header">
-            <span>${title}</span>
-            <button type="button" class="unified-btn" data-process-toggle="${block.turnKey}">${toggle}</button>
-          </div>
+        <div class="${processCls}" data-turn="${block.turnKey}">
+          <button type="button" class="unified-process-pill" data-process-toggle="${block.turnKey}" aria-expanded="${block.collapsed ? "false" : "true"}">
+            ${showPillDot ? '<span class="unified-process-pill-dot" aria-hidden="true"></span>' : ""}
+            <span class="unified-process-pill-text">${escapeHtml(pill)} ${chevron}</span>
+          </button>
           <div class="unified-process-body">
-            ${thinkingHtml}
-            ${toolsHtml}
+            ${timelineHtml}
           </div>
+          ${failAlert}
         </div>`;
     }
     if (block.kind === "confirm") {
@@ -1671,31 +2998,20 @@ export function mountUnifiedShell(
       const disabled = block.resolved ? "disabled" : "";
       const inProgress = isConfirmInProgressLabel(block.resolved);
       const isTerminal = Boolean(block.resolved) && !inProgress;
-      const resolvedCls = block.resolved
-        ? inProgress
-          ? "is-running"
-          : "resolved is-compact"
-        : "";
       // Resolved confirms are already reflected in the process tool lines (DESKTOP §3.2.2).
       if (isTerminal) return "";
-      const resolved = block.resolved
-        ? `<div class="text-muted unified-confirm-status">${escapeHtml(block.resolved)}</div>`
-        : `
-        <div class="unified-expand-actions">
-          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>同意</button>
-          <button type="button" class="unified-btn unified-btn-danger" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
+      const actions = `
+          <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>允许此次</button>
+          <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
           ${
             block.allowApproveAll
-              ? `<button type="button" class="unified-btn" data-confirm="a" data-id="${block.requestId}" ${disabled}>本会话 workspace 均允许</button>`
+              ? `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="a" data-id="${block.requestId}" ${disabled}>本会话均允许</button>`
               : ""
-          }
-        </div>`;
-      return `
-        <div class="unified-surface unified-confirm ${resolvedCls}">
-          <div class="unified-expand-title">工具确认</div>
-          <pre class="unified-confirm-preview">${escapeHtml(block.preview)}</pre>
-          ${resolved}
-        </div>`;
+          }`;
+      if (block.resolved) {
+        return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
+      }
+      return renderConfirmCardHtml(block.preview, actions);
     }
     return "";
   }
@@ -1749,10 +3065,15 @@ export function mountUnifiedShell(
         return `AS${block.turnIndex}:${block.turnKey}:${block.text.length}`;
       case "notice":
         return `N:${block.text.length}`;
-      case "process":
-        return `P${block.turnKey}:${block.lines.length}:${block.reasoning.length}:${block.collapsed ? 1 : 0}:${block.reasoningPhase ?? "idle"}:${block.reasoningUserOpen ? 1 : 0}:${block.llmPending ? 1 : 0}:${(block.tools ?? [])
-          .map((t) => `${t.callId}:${t.status}:${t.endSummary ?? ""}:${t.progressText ?? ""}:${(t.logsTail ?? "").length}`)
-          .join(",")}`;
+      case "process": {
+        ensureProcessEntries(block);
+        const entriesSig = activityEntriesPrint(
+          block.entries ?? [],
+          Boolean(block.llmPending),
+          block.llmWaitStartedAt,
+        );
+        return `P${block.turnKey}:${block.collapsed ? 1 : 0}:${entriesSig}`;
+      }
       case "confirm":
         return `C${block.requestId}:${block.resolved ?? "_"}`;
     }
@@ -1770,7 +3091,8 @@ export function mountUnifiedShell(
       btn.dataset.thinkingBound = "1";
       btn.addEventListener("click", () => {
         const turnKey = btn.dataset.thinkingToggle;
-        if (turnKey) chat.toggleThinkingOpen(turnKey);
+        const thinkId = btn.dataset.thinkId;
+        if (turnKey) chat.toggleThinkingOpen(turnKey, thinkId);
       });
     });
     container.querySelectorAll<HTMLDetailsElement>("[data-tools-fold]:not([data-tools-fold-bound])").forEach((el) => {
@@ -1782,24 +3104,130 @@ export function mountUnifiedShell(
         else toolsListExpanded.delete(turnKey);
       });
     });
+    container.querySelectorAll<HTMLButtonElement>("[data-tool-rename]:not([data-tool-rename-bound])").forEach((btn) => {
+      btn.dataset.toolRenameBound = "1";
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const toolId = btn.dataset.toolRename;
+        if (toolId) openToolDisplayEditor(toolId);
+      });
+    });
   }
 
-  function scrollToBottomIfNear(): void {
-    const distFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
-    if (distFromBottom < 50) {
-      chatEl.scrollTop = chatEl.scrollHeight;
+  /** UX-025 / UX-POLISH §5.2 A2: user scrolled up → stop yanking chat viewport. */
+  let userScrollPinned = false;
+  const SCROLL_PIN_THRESHOLD_PX = 80;
+  const SCROLL_RELEASE_THRESHOLD_PX = 24;
+
+  function resetUserScrollPin(): void {
+    userScrollPinned = false;
+  }
+
+  chatEl.addEventListener(
+    "scroll",
+    () => {
+      const distFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
+      if (distFromBottom > SCROLL_PIN_THRESHOLD_PX) {
+        userScrollPinned = true;
+      } else if (distFromBottom <= SCROLL_RELEASE_THRESHOLD_PX) {
+        userScrollPinned = false;
+      }
+    },
+    { passive: true },
+  );
+
+  function scrollPendingConfirmIntoView(): void {
+    const confirmEl = chatEl.querySelector<HTMLElement>(".unified-confirm:not(.resolved)");
+    if (confirmEl) {
+      confirmEl.scrollIntoView({
+        behavior: motionQuery.matches ? "auto" : "smooth",
+        block: "nearest",
+      });
+      return;
     }
+    scrollUnlessPinned();
+  }
+
+  function scrollUnlessPinned(): void {
+    if (userScrollPinned) return;
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  /** @deprecated alias */
+  function scrollToBottomIfNear(): void {
+    scrollUnlessPinned();
   }
 
   /** UX-025: after session.history — always land on latest messages. */
   function scrollChatToBottom(): void {
+    resetUserScrollPin();
     requestAnimationFrame(() => {
       chatEl.scrollTop = chatEl.scrollHeight;
     });
   }
 
   function doRender(): void {
+    markdownRenderEager = true;
     const curPrints = chat.model.blocks.map(blockPrint);
+
+    if (useTurnCardLayout()) {
+      const segments = segmentChatBlocks(chat.model.blocks);
+      const curSegPrints = segments.map((seg) => segmentPrint(seg, blockPrint));
+
+      if (
+        renderedSegmentPrints.length > 0 &&
+        curSegPrints.length === renderedSegmentPrints.length &&
+        chatEl.children.length === curSegPrints.length
+      ) {
+        const last = curSegPrints.length - 1;
+        let prefixOk = true;
+        for (let i = 0; i < last; i++) {
+          if (curSegPrints[i] !== renderedSegmentPrints[i]) {
+            prefixOk = false;
+            break;
+          }
+        }
+        if (prefixOk && curSegPrints[last] !== renderedSegmentPrints[last]) {
+          chatEl.children[last].outerHTML = renderChatSegment(segments[last]);
+          bindNewProcessToggles(chatEl);
+          setupFocusObserver();
+          scrollToBottomIfNear();
+          renderedSegmentPrints = curSegPrints;
+          renderedPrints = curPrints;
+          return;
+        }
+      }
+
+      if (
+        renderedSegmentPrints.length > 0 &&
+        curSegPrints.length > renderedSegmentPrints.length
+      ) {
+        const prefixOk = renderedSegmentPrints.every((p, i) => p === curSegPrints[i]);
+        if (prefixOk && chatEl.children.length === renderedSegmentPrints.length) {
+          const newSegs = segments.slice(renderedSegmentPrints.length);
+          chatEl.insertAdjacentHTML("beforeend", newSegs.map(renderChatSegment).join(""));
+          bindNewProcessToggles(chatEl);
+          setupFocusObserver();
+          scrollToBottomIfNear();
+          renderedSegmentPrints = curSegPrints;
+          renderedPrints = curPrints;
+          return;
+        }
+      }
+
+      resetLazyMarkdownObserver();
+      markdownRenderEager = false;
+      chatEl.innerHTML = segments.map(renderChatSegment).join("");
+      markdownRenderEager = true;
+      bindNewProcessToggles(chatEl);
+      setupFocusObserver();
+      scrollToBottomIfNear();
+      renderedSegmentPrints = curSegPrints;
+      renderedPrints = curPrints;
+      return;
+    }
+
     // A3-2: pure tail-append — insertAdjacentHTML instead of full innerHTML
     if (renderedPrints.length > 0 && curPrints.length > renderedPrints.length) {
       const isTailAppend = renderedPrints.every(
@@ -1807,7 +3235,7 @@ export function mountUnifiedShell(
       );
       if (isTailAppend) {
         const newBlocks = chat.model.blocks.slice(renderedPrints.length);
-        const newHtml = newBlocks.map(renderBlock).join("");
+        const newHtml = renderBlocksGrouped(newBlocks);
         chatEl.insertAdjacentHTML("beforeend", newHtml);
         bindNewProcessToggles(chatEl);
         setupFocusObserver();
@@ -1915,8 +3343,23 @@ export function mountUnifiedShell(
         if (el) {
           el.classList.toggle("collapsed");
           const btn = el.querySelector<HTMLButtonElement>("[data-process-toggle]");
-          if (btn) {
-            btn.textContent = el.classList.contains("collapsed") ? "展开" : "收起";
+          const block = chat.model.blocks.find(
+            (b) => b.kind === "process" && b.turnKey === collapseToggle,
+          );
+          if (btn && block?.kind === "process") {
+            const collapsed = el.classList.contains("collapsed");
+            block.collapsed = collapsed;
+            const chevron = collapsed ? "▸" : "▾";
+            const textEl = btn.querySelector(".unified-process-pill-text");
+            if (textEl) {
+              const meta = processMetaForTurnKey(collapseToggle);
+              textEl.textContent = `${processPillLabel(block, {
+                expanded: !block.collapsed,
+                segmentIndex: meta?.index,
+                segmentTotal: meta?.total,
+              })} ${chevron}`;
+            }
+            btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
           }
           renderedPrints = curPrints;
           return;
@@ -1925,7 +3368,10 @@ export function mountUnifiedShell(
     }
 
     // full render (initial, or escape hatch for unhandled change patterns)
-    chatEl.innerHTML = chat.model.blocks.map(renderBlock).join("");
+    resetLazyMarkdownObserver();
+    markdownRenderEager = false;
+    chatEl.innerHTML = renderBlocksGrouped(chat.model.blocks);
+    markdownRenderEager = true;
     bindNewProcessToggles(chatEl);
     setupFocusObserver();
     scrollToBottomIfNear();
@@ -1937,12 +3383,18 @@ export function mountUnifiedShell(
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    syncLiveThinkingDom();
+    void hydrateMermaid(chatEl);
+    observeLazyMarkdown(chatEl);
     scrollStreamingThinkingBodies();
     syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
     renderThrottleTimer = window.setTimeout(() => {
       renderThrottleTimer = null;
       doRender();
+      syncLiveThinkingDom();
+      void hydrateMermaid(chatEl);
+      observeLazyMarkdown(chatEl);
       scrollStreamingThinkingBodies();
       syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
@@ -1983,10 +3435,18 @@ export function mountUnifiedShell(
           }
         </div>`;
 
+    const view = summarizeConfirmPreview(confirm.preview);
+    const reasonBlock = view.reason
+      ? `<p class="unified-confirm-reason">${escapeHtml(view.reason)}</p>`
+      : "";
     confirmGlass.innerHTML = `
       <div class="unified-confirm-glass-card ${confirm.resolved ? "resolved" : ""}">
-        <div class="unified-confirm-glass-title">工具确认</div>
-        <pre class="unified-confirm-glass-preview">${escapeHtml(confirm.preview)}</pre>
+        <div class="unified-confirm-kicker">需要确认</div>
+        <div class="unified-confirm-glass-title">${escapeHtml(view.headline)}</div>
+        ${reasonBlock}
+        ${view.compact
+          ? `<details class="unified-confirm-details"><summary class="unified-confirm-details-toggle">查看详情</summary><pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre></details>`
+          : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}
         ${resolved}
       </div>
     `;
@@ -2023,29 +3483,7 @@ export function mountUnifiedShell(
     sendComposerMessage(ev);
   });
   stopBtn.addEventListener("click", () => {
-    if (!chat.requestCancel()) return;
-    setComposerEnabled(false);
-    setStatus("正在停止…");
-    clearCancelSafety();
-    cancelSafetyTimer = window.setTimeout(() => {
-      if (chat.model.cancelRequested) {
-        chat.model.cancelRequested = false;
-        chat.model.confirmPending = false;
-        setComposerEnabled(true);
-        setStatus("就绪");
-        syncWorkingVisual();
-      }
-      cancelSafetyTimer = null;
-    }, 3000);
-    try {
-      client.sendTurnCancel();
-    } catch (err) {
-      clearCancelSafety();
-      chat.model.cancelRequested = false;
-      setComposerEnabled(!chat.model.confirmPending);
-      setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
-      syncWorkingVisual();
-    }
+    sendStopRequest();
   });
   input.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && ev.shiftKey) {
@@ -2064,30 +3502,8 @@ export function mountUnifiedShell(
   document.addEventListener("keydown", (ev) => {
     if (destroyed) return;
     if (ev.key !== "Escape") return;
-    if (!(chat.isWorking() || chat.model.confirmPending)) return;
-    if (!chat.requestCancel()) return;
-    setComposerEnabled(false);
-    setStatus("正在停止…");
-    clearCancelSafety();
-    cancelSafetyTimer = window.setTimeout(() => {
-      if (chat.model.cancelRequested) {
-        chat.model.cancelRequested = false;
-        chat.model.confirmPending = false;
-        setComposerEnabled(true);
-        setStatus("就绪");
-        syncWorkingVisual();
-      }
-      cancelSafetyTimer = null;
-    }, 3000);
-    try {
-      client.sendTurnCancel();
-    } catch (err) {
-      clearCancelSafety();
-      chat.model.cancelRequested = false;
-      setComposerEnabled(!chat.model.confirmPending);
-      setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
-      syncWorkingVisual();
-    }
+    if (!(chat.isWorking() || chat.model.confirmPending || projectState.runawayCancelAvailable)) return;
+    sendStopRequest();
   });
 
   // ---- confirm keyboard shortcuts ----
@@ -2175,34 +3591,13 @@ export function mountUnifiedShell(
 
   // ---- project sidebar events ----
 
-  // Icon bar: switch overlay panel
+  root.addEventListener("click", handleReviewSuggestionClick, true);
+
+  // Icon bar: each tab owns sidebar + main stage
   projectEls.iconBar.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".sidebar-icon-btn");
-    if (!btn?.dataset.panel) return;
-    const panel = btn.dataset.panel;
-    if (panel === "tasks") {
-      projectState.overlayPanel = null;
-      projectState.currentDocPath = "";
-      projectState.currentDocContent = "";
-    } else {
-      projectState.switchConfirmTarget = null;
-      projectState.projectSearchQuery = "";
-      projectState.currentDocPath = "";
-      projectState.currentDocContent = "";
-      if (panel === "plan") {
-        openPlanFull();
-        return;
-      }
-      projectState.overlayPanel = panel as OverlayPanel;
-      // Auto-fetch docs list when entering docs panel
-      if (panel === "docs") {
-        try { client.listDocs(); } catch { /* ignore */ }
-      }
-      if (panel === "threads") {
-        refreshProjectThreads();
-      }
-    }
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    if (!isRailTab(btn?.dataset.panel)) return;
+    selectRailTab(btn.dataset.panel);
   });
 
   // Phase 27 — Services panel actions
@@ -2234,28 +3629,182 @@ export function mountUnifiedShell(
     }
   });
 
+  projectEls.terminalsPanel.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "terminal-open") {
+      const sessionId = btn.dataset.terminalId;
+      if (sessionId) openTerminalDetails(sessionId);
+      return;
+    }
+    if (btn.dataset.action === "terminal-details-close") {
+      closeTerminalDetails();
+      return;
+    }
+    if (btn.dataset.action === "terminal-output-refresh") {
+      const sessionId = btn.dataset.terminalId;
+      if (sessionId && projectState.terminalDetails?.session_id === sessionId) {
+        requestTerminalOutput(sessionId, projectState.terminalOutputCursor);
+      }
+      return;
+    }
+    if (btn.dataset.action === "terminal-copy-output") {
+      const sessionId = btn.dataset.terminalId;
+      if (!sessionId || sessionId !== projectState.terminalDetails?.session_id) return;
+      const text = projectState.terminalOutput;
+      if (!text) return;
+      const write = navigator.clipboard?.writeText(text);
+      if (!write) {
+        setStatus("当前环境不支持复制");
+        return;
+      }
+      void write.then(
+        () => setStatus("已复制终端输出"),
+        () => setStatus("复制终端输出失败"),
+      );
+      return;
+    }
+    if (btn.dataset.action === "terminal-close") {
+      const sessionId = btn.dataset.terminalId;
+      if (!sessionId) return;
+      try {
+        setStatus("等待终端关闭确认…");
+        client.closeTerminal(sessionId, `terminal-close-${Date.now()}`);
+      } catch (err) {
+        projectState.terminalOutputError = err instanceof Error ? err.message : String(err);
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      }
+      return;
+    }
+    if (btn.dataset.action === "toggle-terminals") {
+      projectState.terminalsCollapsed = !projectState.terminalsCollapsed;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      scheduleTerminalPoll();
+      return;
+    }
+    if (btn.dataset.action === "terminals-refresh") {
+      refreshTerminals();
+    }
+  });
+
   // Overlay back button
   projectEls.overlayBackBtn.addEventListener("click", () => {
-    projectState.overlayPanel = null;
-    projectState.switchConfirmTarget = null;
-    projectState.currentDocPath = "";
-    projectState.currentDocContent = "";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    selectRailTab("now");
   });
 
   // Decision surface: plan overlay + suggestion stack + turn summary
+  sidebarEl.addEventListener("click", (ev) => {
+    const target = ev.target;
+    const el = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+    const btn = el?.closest<HTMLButtonElement>('[data-action="jump-turn-process"]');
+    if (!btn || !sidebarEl.contains(btn)) return;
+    ev.preventDefault();
+    jumpToCurrentTurnProcess();
+  });
+
   projectEls.taskFlow.addEventListener("click", (ev) => {
-    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="open-suggestion-review-new"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    setStatus("正在打开方案变更…");
+    openPlanReview(btn.dataset.suggestionId);
+  }, true);
+
+  projectEls.taskFlow.addEventListener("click", (ev) => {
+    const target = ev.target;
+    const btn = target instanceof Element
+      ? target.closest<HTMLButtonElement>('[data-action="open-suggestion-review"]')
+      : null;
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    openPlanReview(btn.dataset.suggestionId);
+  }, true);
+
+  projectEls.taskFlow.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const flowBtn = target.closest<HTMLButtonElement>("[data-flow-stage]");
+    if (flowBtn?.dataset.flowStage) {
+      projectState.flowPreviewStage = flowBtn.dataset.flowStage as FlowStage;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (btn?.dataset.action) {
       switch (btn.dataset.action) {
+        case "open-artifact-doc": {
+          const path = btn.dataset.artifactPath;
+          if (!path) return;
+          openDocument(path);
+          return;
+        }
         case "open-full-plan":
           openPlanFull();
           return;
-        case "jump-turn-process":
-          jumpToCurrentTurnProcess();
+        case "start-task": {
+          const taskId = btn.dataset.taskId?.trim();
+          if (!taskId) return;
+          startProjectTaskFromUi(taskId);
           return;
+        }
+        case "direct-implement":
+          startDirectImplementFromUi();
+          return;
+        case "run-verify":
+          runProjectVerifyFromUi();
+          return;
+        case "confirm-plan":
+          void projectCallbacks.onPlanConfirm();
+          return;
+        case "flow-return":
+          projectState.flowPreviewStage = null;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        case "confirm-scope":
+          projectCallbacks.onScopeConfirm();
+          return;
+        case "confirm-design":
+          projectCallbacks.onDesignConfirm();
+          return;
+        case "open-projects":
+          selectRailTab("projects");
+          return;
+        case "open-now":
+          selectRailTab("now");
+          return;
+        case "new-project":
+          projectCallbacks.onNewProject();
+          return;
+        case "accept-milestone":
+          projectCallbacks.onMilestoneAccept();
+          return;
+        case "stop-turn":
+          projectCallbacks.onStopTurn();
+          return;
+        case "open-plan-review": {
+          const sid = btn.dataset.suggestionId;
+          openPlanReview(sid);
+          return;
+        }
+        case "confirm-drop-while-working":
+          projectState.dropTaskPendingWorking = false;
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          return;
+        case "drop-policy": {
+          const sid = btn.dataset.suggestionId;
+          const policy = btn.dataset.policy as "plan_only" | "agent_cleanup" | "git_guide" | undefined;
+          if (sid && policy) acceptSuggestionById(sid, policy);
+          return;
+        }
         case "jump-review-summary":
           jumpToReviewSummary();
+          return;
+        case "resume-runaway":
+          resumeRunawayFromUi();
           return;
         case "accept-suggestion": {
           const sid = btn.dataset.suggestionId;
@@ -2278,8 +3827,68 @@ export function mountUnifiedShell(
     }
   });
 
-  // Overlay: project search + list + switch confirm
-  projectEls.overlayBody.addEventListener("click", (ev) => {
+  projectEls.goalCard.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    switch (btn.dataset.action) {
+      case "open-projects":
+        projectCallbacks.onOpenProjects();
+        return;
+      case "new-project":
+        projectCallbacks.onNewProject();
+        return;
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "confirm-design":
+        projectCallbacks.onDesignConfirm();
+        return;
+      case "open-scope-doc":
+        openDocument("SCOPE.md");
+        return;
+      case "confirm-plan":
+        void projectCallbacks.onPlanConfirm();
+        return;
+      case "direct-implement":
+        startDirectImplementFromUi();
+        return;
+      case "run-verify":
+        runProjectVerifyFromUi();
+        return;
+      case "start-task": {
+        const taskId = btn.dataset.taskId?.trim();
+        if (taskId) {
+          startProjectTaskFromUi(taskId);
+          return;
+        }
+        openPlanFull();
+        return;
+      }
+      case "open-plan-review":
+        openPlanReview();
+        return;
+      case "open-full-plan":
+        openPlanFull();
+        return;
+      case "jump-turn-process":
+        jumpToCurrentTurnProcess();
+        return;
+      case "jump-review-summary":
+        jumpToReviewSummary();
+        return;
+        case "stop-turn":
+          projectCallbacks.onStopTurn();
+          return;
+        case "resume-runaway":
+          resumeRunawayFromUi();
+          return;
+        default:
+        return;
+    }
+  });
+
+  function handleRailListClick(ev: Event): void {
     const target = ev.target as HTMLElement;
 
     if (target.closest("#overlay-new-thread-btn")) {
@@ -2294,37 +3903,31 @@ export function mountUnifiedShell(
     const threadBtn = target.closest<HTMLButtonElement>(".overlay-thread-item");
     if (threadBtn?.dataset.threadId && !threadBtn.disabled) {
       projectCallbacks.onOpenThread(threadBtn.dataset.threadId);
-      projectState.overlayPanel = null;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Project item click
-    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item");
+    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item:not(.overlay-thread-item)");
     if (projectBtn?.dataset.projectId && !projectBtn.disabled) {
       const pid = projectBtn.dataset.projectId;
       const item = projectState.projects.find((p) => p.id === pid);
       if (item && item.sessionId && !item.isCurrent) {
-        // needs confirm: show inline switch confirm
         projectState.switchConfirmTarget = item;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
       } else {
-        // no session or current: switch directly
         projectCallbacks.onProjectSwitch(pid);
-        projectState.overlayPanel = null;
+        selectRailTab("now");
       }
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Switch confirm actions (inside overlay body)
     if (target.closest("#overlay-switch-confirm")) {
       const confirmBtn = target.closest<HTMLButtonElement>("#overlay-switch-confirm-btn");
       const cancelBtn = target.closest<HTMLButtonElement>("#overlay-switch-cancel-btn");
       if (confirmBtn && projectState.switchConfirmTarget) {
-        projectCallbacks.onProjectSwitch(projectState.switchConfirmTarget.id);
-        projectState.overlayPanel = null;
+        const targetId = projectState.switchConfirmTarget.id;
         projectState.switchConfirmTarget = null;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        projectCallbacks.onProjectSwitch(targetId);
+        selectRailTab("now");
       } else if (cancelBtn) {
         projectState.switchConfirmTarget = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -2332,56 +3935,224 @@ export function mountUnifiedShell(
       return;
     }
 
-    // Document item click
-    const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item");
-    if (docBtn?.dataset.docPath) {
-      projectState.currentDocPath = docBtn.dataset.docPath;
-      projectState.currentDocContent = "";
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      try { client.readDoc(projectState.currentDocPath); } catch { /* ignore */ }
+    if (target.closest("#overlay-doc-rename-input")) return;
+    const deleteConfirm = target.closest<HTMLButtonElement>("[data-action='doc-delete-confirm']");
+    if (deleteConfirm) {
+      confirmDeleteDoc();
       return;
     }
-
-    // New doc button
-    if (target.closest("#overlay-new-doc-btn")) {
-      const name = projectState.newDocName.trim();
-      if (name) {
-        try { client.createDoc(name); } catch { /* ignore */ }
-        projectState.newDocName = "";
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    const deleteCancel = target.closest<HTMLButtonElement>("[data-action='doc-delete-cancel']");
+    if (deleteCancel) {
+      projectState.deleteConfirmPath = "";
+      refreshDocsSidebar();
+      return;
+    }
+    const moreBtn = target.closest<HTMLButtonElement>("[data-doc-more]");
+    if (moreBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".overlay-doc-item")?.dataset.docPath;
+      if (path) {
+        const rect = moreBtn.getBoundingClientRect();
+        showDocCatalogMenu(path, rect.left, rect.bottom + 4);
       }
       return;
     }
-  });
+    const docRow = target.closest<HTMLElement>(".overlay-doc-item, .doc-catalog-item");
+    if (docRow?.dataset.docPath && !docRow.classList.contains("is-renaming")) {
+      openDocument(docRow.dataset.docPath);
+      return;
+    }
 
-  // Overlay: search input + new-doc input
-  projectEls.overlayBody.addEventListener("input", (ev) => {
-    const input = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
-    if (input) {
-      projectState.projectSearchQuery = input.value;
+    if (target.closest("#overlay-new-doc-btn") || target.closest('[data-action="overlay-new-doc"]')) {
+      createProjectDocFromTitle();
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
+  }
+
+  projectEls.overlayBody.addEventListener("click", handleRailListClick);
+  projectEls.taskFlow.addEventListener("click", handleRailListClick);
+
+  documentEl.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement;
+    const moreBtn = target.closest<HTMLButtonElement>("[data-doc-more]");
+    if (moreBtn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const path = moreBtn.dataset.docMore || moreBtn.closest<HTMLElement>(".overlay-doc-item")?.dataset.docPath;
+      if (path) {
+        const rect = moreBtn.getBoundingClientRect();
+        showDocCatalogMenu(path, rect.left, rect.bottom + 4);
+      }
+      return;
+    }
+    const docBtn = target.closest<HTMLElement>(".overlay-doc-item, .doc-catalog-item");
+    if (docBtn?.dataset.docPath && !docBtn.classList.contains("is-renaming")) {
+      openDocument(docBtn.dataset.docPath);
+      return;
+    }
+    const btn = target.closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    const action = btn.dataset.action;
+    if (action === "document-back") {
+      selectRailTab("now");
+      return;
+    }
+    if (action === "create-doc") {
+      createProjectDocFromTitle();
+      renderDocumentPane();
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
-    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
+    if (action === "doc-outline-jump") {
+      const headingId = btn.dataset.headingId;
+      if (!headingId) return;
+      const heading = documentEl.querySelector<HTMLElement>(`#${CSS.escape(headingId)}`);
+      heading?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+    if (action === "document-edit") {
+      clearDocLeavePrompt();
+      projectState.docView = "edit";
+      if (!projectState.docDirty) projectState.docEditDraft = projectState.currentDocContent;
+      renderDocumentPane();
+      return;
+    }
+    if (action === "document-preview") {
+      captureDocDraftFromEditor();
+      if (isDocDirty()) {
+        requestLeaveDocument(() => {
+          projectState.docView = "preview";
+          projectState.docDirty = false;
+          projectState.docEditDraft = projectState.currentDocContent;
+          renderDocumentPane();
+        });
+        return;
+      }
+      projectState.docView = "preview";
+      renderDocumentPane();
+      return;
+    }
+    if (action === "document-save") {
+      saveCurrentDoc();
+      return;
+    }
+    if (action === "document-discard") {
+      projectState.docEditDraft = projectState.currentDocContent;
+      projectState.docDirty = false;
+      clearDocLeavePrompt();
+      renderDocumentPane();
+      return;
+    }
+    if (action === "document-save-leave") {
+      saveCurrentDoc();
+      return;
+    }
+    if (action === "document-discard-leave") {
+      projectState.docEditDraft = projectState.currentDocContent;
+      finishDocLeave();
+      return;
+    }
+    if (action === "document-cancel-leave") {
+      docLeavePrompt = false;
+      docLeaveNext = null;
+      renderDocumentPane();
+    }
+  });
+
+  documentEl.addEventListener("input", (ev) => {
+    const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
+    if (editor) {
+      projectState.docEditDraft = editor.value;
+      const dirty = projectState.docEditDraft !== projectState.currentDocContent;
+      if (dirty !== projectState.docDirty) {
+        projectState.docDirty = dirty;
+        syncDocEditChrome();
+      }
+      return;
+    }
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (docInput) projectState.newDocName = docInput.value;
+  });
+
+  documentEl.addEventListener("keydown", (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+      if (projectState.docView === "edit" && projectState.mainFocus === "document") {
+        ev.preventDefault();
+        saveCurrentDoc();
+      }
+      return;
+    }
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
+    if (!docInput) return;
+    createProjectDocFromTitle();
+    renderDocumentPane();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  });
+
+  // Overlay: search input + new-doc input
+  function handleRailListInput(ev: Event): void {
+    const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
+    if (searchInput) {
+      projectState.projectSearchQuery = searchInput.value;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      return;
+    }
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
     if (docInput) {
       projectState.newDocName = docInput.value;
       return;
     }
-  });
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (renameInput) projectState.renameDraft = renameInput.value;
+  }
 
-  // Overlay: new-doc input Enter key
-  projectEls.overlayBody.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-      const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input");
-      if (docInput) {
-        const name = projectState.newDocName.trim();
-        if (name) {
-          try { client.createDoc(name); } catch { /* ignore */ }
-          projectState.newDocName = "";
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        }
+  function handleRailListKeydown(ev: KeyboardEvent): void {
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (renameInput) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commitRenameDoc();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancelRenameDoc();
       }
+      return;
     }
+    if (ev.key === "F2") {
+      const row = (ev.target as HTMLElement).closest<HTMLElement>(".overlay-doc-item");
+      if (row?.dataset.docPath) {
+        ev.preventDefault();
+        startRenameDoc(row.dataset.docPath);
+      }
+      return;
+    }
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
+    if (!docInput) return;
+    createProjectDocFromTitle();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  projectEls.overlayBody.addEventListener("input", handleRailListInput);
+  projectEls.taskFlow.addEventListener("input", handleRailListInput);
+  projectEls.overlayBody.addEventListener("keydown", handleRailListKeydown);
+  projectEls.taskFlow.addEventListener("keydown", handleRailListKeydown);
+  projectEls.overlayBody.addEventListener("focusout", (ev) => {
+    const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
+    if (!renameInput) return;
+    window.setTimeout(() => {
+      if (projectState.renamingDocPath && document.activeElement !== renameInput) {
+        commitRenameDoc();
+      }
+    }, 0);
+  });
+  projectEls.overlayBody.addEventListener("contextmenu", (ev) => {
+    const row = (ev.target as HTMLElement).closest<HTMLElement>(".overlay-doc-item");
+    if (!row?.dataset.docPath || row.classList.contains("is-renaming")) return;
+    ev.preventDefault();
+    showDocCatalogMenu(row.dataset.docPath, ev.clientX, ev.clientY);
   });
 
   // Change banner actions
@@ -2391,6 +4162,36 @@ export function mountUnifiedShell(
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
     switch (action) {
+      case "toggle-change-timeline":
+        projectState.changeTimelineExpanded = !projectState.changeTimelineExpanded;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "open-plan-review": {
+        const sid = btn.dataset.suggestionId;
+        openPlanReview(sid);
+        return;
+      }
+      case "confirm-scope":
+        projectCallbacks.onScopeConfirm();
+        return;
+      case "stop-turn":
+        projectCallbacks.onStopTurn();
+        return;
+      case "open-code-followup":
+        if (projectState.codeFollowup?.prefill) {
+          input.value = projectState.codeFollowup.prefill;
+          input.focus();
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 200) + "px";
+          showNowChat();
+        }
+        projectState.codeFollowup = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
+      case "dismiss-code-followup":
+        projectState.codeFollowup = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
       case "confirm-plan":
         void projectCallbacks.onPlanConfirm();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -2401,6 +4202,7 @@ export function mountUnifiedShell(
           projectState.autoConfirmTimerId = null;
         }
         projectState.changesLevel = null;
+        projectState.dismissedTaskChangeFingerprint = "";
         try { client.planConfirmChanges(); } catch { /* ignore */ }
         break;
       case "edit-plan":
@@ -2423,6 +4225,9 @@ export function mountUnifiedShell(
       case "collapse-banner":
         projectState.planBannerCollapsed = true;
         projectState.highlightChanges = false;
+        if (projectState.changesLevel === "task") {
+          projectState.dismissedTaskChangeFingerprint = getTaskChangeFingerprint(projectState);
+        }
         if (projectState.autoConfirmTimerId !== null) {
           window.clearInterval(projectState.autoConfirmTimerId);
           projectState.autoConfirmTimerId = null;
@@ -2481,12 +4286,18 @@ export function mountUnifiedShell(
         projectState.autoFixNotices = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
+      case "dismiss-operational-notices":
+        projectState.dismissedOperationalNoticeFingerprint = projectState.operationalNotices.join("\u001f");
+        projectState.operationalNotices = [];
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        return;
       case "dismiss-partner-notice":
         projectState.partnerNotices = [];
         projectState.adoptedFooterMessage = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
       case "dismiss-warnings":
+        projectState.dismissedWarningFingerprint = projectState.planWarnings.join("\u001f");
         projectState.planWarnings = [];
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
@@ -2710,20 +4521,28 @@ export function mountUnifiedShell(
   const off = client.onEvent((event: ServerEvent) => {
     switch (event.type) {
       case "session.banner":
+        if (!shouldApplyProjectEvent(projectState, event.project_id)) break;
+        if ((event.project_id || "") !== projectState.projectId) {
+          resetProjectScopedState(projectState);
+        }
+        if (event.session_id !== chat.model.sessionId) {
+          renderedPrints = [];
+          renderedSegmentPrints = [];
+        }
         chat.handleEvent(event);
         projectState.currentSessionId = event.session_id;
+        if (hydrationSessionId && event.session_id === hydrationSessionId) {
+          setStatus(`加载聊天 ${shortSessionId(hydrationSessionId)}…`);
+        }
         if (event.project_id) {
           projectState.projectId = event.project_id;
-          projectState.planStatus = event.project_plan_status ?? projectState.planStatus;
-          projectState.tasksDone = event.project_tasks_done ?? projectState.tasksDone;
-          projectState.tasksTotal = event.project_tasks_total ?? projectState.tasksTotal;
-          const plan = event.project_plan_label ?? "计划待确认";
-          topbarState.projectLabel = `项目 · ${event.project_id} · ${plan}`;
+          projectState.planStatus = event.project_plan_status ?? "draft";
+          projectState.tasksDone = event.project_tasks_done ?? 0;
+          projectState.tasksTotal = event.project_tasks_total ?? 0;
           syncFreeChatFromSession(true, event.session_id);
           setPerspective("project", "session");
         } else {
           projectState.projectId = "";
-          topbarState.projectLabel = "";
           syncFreeChatFromSession(false, event.session_id);
           setPerspective("project", "session");
         }
@@ -2731,9 +4550,9 @@ export function mountUnifiedShell(
         updateWorkbenchEmpty();
         syncArchivedViewUi();
         setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        client.listSessions();
+        debouncedListSessions();
         if (event.project_id) {
           refreshProjectThreads();
         }
@@ -2742,13 +4561,13 @@ export function mountUnifiedShell(
       case "session.list":
         sessionsDropdown = event.sessions;
         topbarState.sessionCount = event.sessions.length;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        refreshTopbar();
         if (sessionsOpen) renderSessionsDropdown();
         break;
 
       case "session.memory":
         topbarState.memoryLabel = `${event.message_count} 条 · ${event.memory_mode_label}`;
-        renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+        break;
         updateTokenBar(event.token_usage, event.token_limit);
         break;
 
@@ -2760,8 +4579,47 @@ export function mountUnifiedShell(
         handleProposalsEvent(event.items);
         break;
 
+      case "context.switch.request":
+        projectState.switchInProgress = true;
+        projectState.pendingPickerId = (event.project_id || "").trim();
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "context.switch.done":
+        if (event.applied === false || event.choice !== "y") {
+          projectState.switchInProgress = false;
+          projectState.pendingPickerId = "";
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          break;
+        }
+        resetProjectScopedState(projectState);
+        projectState.switchInProgress = false;
+        projectState.switchOverlay = null;
+        projectState.pendingPickerId = "";
+        projectState.projectId = (event.project_id || "").trim();
+        projectState.currentSessionId = event.session_id || "";
+        projectState.railTab = "now";
+        projectState.overlayPanel = null;
+        freeChatActive = !projectState.projectId;
+        client.listProjects();
+        if (projectState.projectId) refreshProjectThreads();
+        setMainFocus("chat");
+        updatePlaceholder();
+        updateWorkbenchEmpty();
+        composerWire.syncSendEnabled();
+        refreshTopbar();
+        setStatus(event.message || "已切换工作上下文");
+        break;
+
+      case "project.release.accepted":
+        projectState.milestoneAccepted = Boolean(event.release_acceptance.accepted);
+        projectState.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        setStatus("发布确认已保存");
+        break;
+
       case "project.state":
-        applyProjectStateEvent(projectState, event);
+        if (!applyProjectStateEvent(projectState, event)) break;
         if (projectState.projectId) {
           freeChatActive = false;
         }
@@ -2769,29 +4627,37 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
+        if (projectState.mainFocus === "plan_full") renderPlanFullPane();
+        if (projectState.mainFocus === "document") renderDocumentPane();
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
-          refreshServices();
-          refreshProjectThreads();
+          refreshTopbar();
+          if (!projectState.adoptPendingId) {
+            refreshServices();
+            refreshProjectThreads();
+          }
         }
         break;
 
       case "project.plan.state":
-        applyProjectPlanState(projectState, event);
+        if (!applyProjectPlanState(projectState, event)) break;
         resolvePendingAdopt();
         projectState.partnerBusy = false;
         if (!perspectiveLocked) setPerspective("project", "session");
         updatePlaceholder();
         if (projectState.mainFocus === "plan_review") {
-          renderPlanReviewPane();
+          if (getActionableQueue().length === 0) {
+            closePlanMainFocus();
+            setStatus("当前没有待处理方案");
+          } else {
+            renderPlanReviewPane();
+          }
         } else if (projectState.mainFocus === "plan_full") {
           renderPlanFullPane();
         }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
 
         // Auto-confirm timer for task-level changes
@@ -2799,7 +4665,10 @@ export function mountUnifiedShell(
           window.clearInterval(projectState.autoConfirmTimerId);
           projectState.autoConfirmTimerId = null;
         }
-        if (projectState.changesLevel === "task") {
+        if (
+          projectState.changesLevel === "task"
+          && getTaskChangeFingerprint(projectState) !== projectState.dismissedTaskChangeFingerprint
+        ) {
           let remaining = 30;
           const countdownInterval = window.setInterval(() => {
             remaining--;
@@ -2807,8 +4676,13 @@ export function mountUnifiedShell(
             if (el) el.textContent = String(remaining);
             if (remaining <= 0) {
               window.clearInterval(countdownInterval);
-              if (projectState.autoConfirmTimerId === countdownInterval as unknown as number) {
+              if (
+                projectState.autoConfirmTimerId === countdownInterval as unknown as number
+                && projectState.changesLevel === "task"
+                && getTaskChangeFingerprint(projectState) !== projectState.dismissedTaskChangeFingerprint
+              ) {
                 projectState.changesLevel = null;
+                projectState.dismissedTaskChangeFingerprint = "";
                 try { client.planConfirmChanges(); } catch { /* */ }
                 renderProjectSidebar(projectEls, projectState, projectCallbacks);
               }
@@ -2818,19 +4692,63 @@ export function mountUnifiedShell(
         }
         break;
 
+      case "project.code_followup":
+        projectState.codeFollowup = {
+          mode: event.mode,
+          prefill: event.prefill,
+          paths: event.paths,
+          droppedBody: event.dropped_body,
+          droppedId: event.dropped_id,
+          guide: event.guide,
+        };
+        if (event.mode === "agent_cleanup" && event.prefill) {
+          input.value = event.prefill;
+          input.style.height = "auto";
+          input.style.height = Math.min(input.scrollHeight, 200) + "px";
+          showNowChat();
+          setStatus("已准备清理请求；请确认内容后发送");
+        } else {
+          setStatus("已准备 git 清理指引；不会自动 revert 或提交");
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
       case "plan.subagent.start":
         projectState.partnerBusy = true;
-        chat.pushPlanSubagentCard("running", { taskPreview: event.task_preview });
+        if (!projectState.runawayEnabled) {
+          chat.pushPlanSubagentCard("running", { taskPreview: event.task_preview });
+        }
         setStatus("计划搭档整理中…");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
+      case "session.history":
+        if (
+          event.session_id
+          && hydrationSessionId
+          && event.session_id !== hydrationSessionId
+        ) break;
+        if (
+          event.session_id
+          && !hydrationSessionId
+          && projectState.currentSessionId
+          && event.session_id !== projectState.currentSessionId
+        ) break;
+        chat.handleEvent(event);
+        if (pendingSwitchBatch || hydrationSessionId) {
+          completeHydrationWait(event.session_id);
+          setStatus("就绪");
+        }
+        break;
+
       case "plan.subagent.done":
         projectState.partnerBusy = false;
-        chat.updatePlanSubagentCard("proposals_ready", {
-          summary: event.summary,
-          proposalCount: event.proposal_count,
-        });
+        if (!projectState.runawayEnabled) {
+          chat.updatePlanSubagentCard("proposals_ready", {
+            summary: event.summary,
+            proposalCount: event.proposal_count,
+          });
+        }
         setStatus("就绪");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
@@ -2864,10 +4782,11 @@ export function mountUnifiedShell(
       case "project.list":
         applyProjectListEvent(projectState, event);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
         break;
 
       case "project.threads":
-        applyProjectThreadsEvent(projectState, event);
+        if (!applyProjectThreadsEvent(projectState, event)) break;
         projectState.currentSessionId = projectState.currentSessionId || event.active_session_id || "";
         syncArchivedViewUi();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -2876,15 +4795,10 @@ export function mountUnifiedShell(
       case "project.thread.new.done":
         projectState.currentSessionId = event.session_id;
         projectState.activeSessionId = event.session_id;
-        if (event.session_replaced) {
-          client.refreshSession();
-        }
-        client.refreshProject();
-        refreshProjectThreads();
+        client.listProjects();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         syncArchivedViewUi();
         updatePlaceholder();
@@ -2910,6 +4824,67 @@ export function mountUnifiedShell(
       case "services.logs.done":
         projectState.servicesLogName = event.name;
         projectState.servicesLogText = event.text || "";
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.list.done":
+        if (event.request_id && event.request_id !== terminalRequestId) break;
+        if (terminalRequestTimeoutId !== null) {
+          window.clearTimeout(terminalRequestTimeoutId);
+          terminalRequestTimeoutId = null;
+        }
+        projectState.terminalsLoading = false;
+        projectState.terminalsError = event.ok ? "" : (event.error || "读取终端状态失败");
+        projectState.terminalSessions = Array.isArray(event.sessions) ? event.sessions : [];
+        if (projectState.terminalDetails) {
+          const current = projectState.terminalSessions.find(
+            (session) => session.session_id === projectState.terminalDetails?.session_id,
+          );
+          if (current) {
+            projectState.terminalDetails = current;
+          } else {
+            closeTerminalDetails();
+            break;
+          }
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.output.done":
+        if (
+          event.request_id
+          && event.request_id !== terminalOutputRequestId
+        ) break;
+        if (
+          event.session_id !== terminalOutputRequestSessionId
+          || event.session_id !== projectState.terminalDetails?.session_id
+        ) break;
+        if (terminalOutputRequestTimeoutId !== null) {
+          window.clearTimeout(terminalOutputRequestTimeoutId);
+          terminalOutputRequestTimeoutId = null;
+        }
+        projectState.terminalOutputLoading = false;
+        projectState.terminalOutputError = event.ok ? "" : (event.error || "输出暂时不可用");
+        projectState.terminalOutputCursorReset = Boolean(event.cursor_reset);
+        projectState.terminalOutputTruncated = Boolean(event.truncated);
+        if (event.ok) {
+          projectState.terminalOutput = event.cursor_reset
+            ? event.output
+            : projectState.terminalOutput + event.output;
+          projectState.terminalOutputCursor = event.next_cursor;
+          if (event.session) projectState.terminalDetails = event.session;
+        }
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "terminal.close.done":
+        if (event.session_id === projectState.terminalDetails?.session_id && !event.ok) {
+          projectState.terminalOutputError = event.error || "关闭终端失败";
+        }
+        if (event.ok) {
+          setStatus("终端关闭请求已提交");
+          refreshTerminals();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -2948,28 +4923,37 @@ export function mountUnifiedShell(
         break;
 
       case "project.switch.done":
-        projectState.switchInProgress = false;
+        if (
+          projectState.pendingPickerId
+          && event.project_id !== projectState.pendingPickerId
+        ) break;
+        resetProjectScopedState(projectState);
+        if (event.session_replaced) {
+          startHydrationWait(event.session_id, "切换项目");
+        } else {
+          completeHydrationWait();
+          debouncedListProjects();
+          debouncedListSessions();
+        }
         projectState.switchOverlay = null;
         projectState.pendingPickerId = "";
         projectState.projectId = event.project_id;
+        projectState.currentSessionId = event.session_id;
         if (event.project_id) {
           freeChatActive = false;
         }
-        if (event.session_replaced) {
-          client.refreshSession();
-        }
-        client.listProjects();
-        client.refreshProject();
-        refreshProjectThreads();
+        // perform_project_switch already emits project.state, session.banner,
+        // session.memory, session.history — avoid duplicate refresh round-trips.
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
-        setStatus(event.message);
+        if (!event.session_replaced) {
+          setStatus(event.message);
+        }
         break;
 
       case "plan.request":
@@ -2994,8 +4978,7 @@ export function mountUnifiedShell(
         }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
-          topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-          renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+          refreshTopbar();
         }
         client.refreshProject();
         break;
@@ -3014,23 +4997,89 @@ export function mountUnifiedShell(
       case "project.plan.confirm_changes.done":
         projectState.planBannerCollapsed = true;
         projectState.changesLevel = null;
+        projectState.dismissedTaskChangeFingerprint = "";
         client.refreshProject();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.list.done":
         projectState.projectDocs = event.docs;
+        if (projectState.deleteConfirmPath && !event.docs.some((doc: { path: string }) => doc.path === projectState.deleteConfirmPath)) {
+          projectState.deleteConfirmPath = "";
+        }
+        if (projectState.mainFocus === "document") {
+          if (!projectState.currentDocPath) {
+            const first = sortProjectDocs(event.docs)[0];
+            if (first) {
+              openDocument(first.path);
+              break;
+            }
+          }
+          renderDocumentPane();
+        }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.read.done":
+        if (projectState.currentDocPath && event.path !== projectState.currentDocPath) break;
+        if (isDocDirty()) break;
+        projectState.currentDocPath = event.path;
         projectState.currentDocContent = event.content;
+        if (projectState.docView === "edit") projectState.docEditDraft = event.content;
+        if (projectState.mainFocus === "document") renderDocumentPane();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.doc.create.done":
         projectState.newDocName = "";
+        pendingDocAction = null;
+        setStatus(`已新建 ${event.name}`);
+        if (event.path && projectState.mainFocus === "document") {
+          openDocument(event.path);
+        }
         client.listDocs();
+        break;
+
+      case "project.doc.write.done":
+        pendingDocAction = null;
+        projectState.docSaving = false;
+        if (event.path === projectState.currentDocPath) {
+          projectState.currentDocContent = projectState.docEditDraft;
+          projectState.docDirty = false;
+        }
+        setStatus("文档已保存");
+        if (docLeaveNext) {
+          finishDocLeave();
+        } else if (projectState.mainFocus === "document") {
+          syncDocEditChrome();
+        }
+        break;
+
+      case "project.doc.rename.done":
+        pendingDocAction = null;
+        projectState.renamingDocPath = "";
+        projectState.renameDraft = "";
+        if (projectState.currentDocPath === event.old_path) {
+          projectState.currentDocPath = event.path;
+          if (projectState.mainFocus === "document") {
+            if (projectState.docView === "edit") captureDocDraftFromEditor();
+            renderDocumentPane();
+          }
+        }
+        setStatus(`已重命名为 ${event.name}`);
+        break;
+
+      case "project.doc.delete.done":
+        pendingDocAction = null;
+        projectState.deleteConfirmPath = "";
+        if (projectState.currentDocPath === event.path) {
+          resetDocEditState();
+          if (projectState.mainFocus === "document" || projectState.railTab === "docs") {
+            openDocumentReader();
+          }
+        }
+        setStatus("文档已删除");
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.task.add.done":
@@ -3056,56 +5105,97 @@ export function mountUnifiedShell(
         setStatus(event.reason);
         break;
 
+      case "execution.state":
+        if (!chat.handleEvent(event)) break;
+        if (event.state === "queued") {
+          setStatus("等待续接…");
+        } else if (event.state === "stopping") {
+          setStatus("正在停止…");
+        } else if (event.state === "running") {
+          setStatus("处理中…");
+        } else if (event.finish_reason) {
+          setTurnEndStatus(event.finish_reason);
+        }
+        syncWorkingVisual();
+        break;
+
       case "tool.start":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         setStatus(`· ${event.tool}`);
         break;
 
       case "llm.pending":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (!chat.model.cancelRequested) {
-          setStatus("思考中…");
+          setStatus("处理中…");
         }
+        syncToolElapsedTimer();
         break;
 
       case "tool.progress":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (typeof event.text === "string" && event.text.trim()) {
           setStatus(event.text.trim());
         }
         break;
 
       case "tool.end":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
+        if (event.tool === "run_evolved" || /interactive_terminal/.test(event.summary || "")) {
+          refreshTerminals();
+        }
         if (!chat.model.confirmPending) {
           setStatus(event.ok ? (chat.isWorking() ? "处理中…" : "就绪") : "工具失败");
         }
         break;
 
       case "reasoning.delta":
-        chat.handleEvent(event);
-        if (!chat.model.cancelRequested) {
-          setStatus("思考中…");
+        if (!chat.handleEvent(event)) break;
+        if (!chat.model.cancelRequested && !statusText.startsWith("·")) {
+          setStatus("处理中…");
         }
         break;
 
       case "assistant.done":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
         if (perspective === "project") {
           client.refreshProject();
         }
         if (!chat.model.cancelRequested && !chat.model.confirmPending) {
-          setStatus("就绪");
+          setStatus(chat.isWorking() ? "处理中…" : "就绪");
         }
+        syncWorkingVisual();
+        break;
+
+      case "turn.notice":
+        if (!chat.handleEvent(event)) break;
+        if (event.text) {
+          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+        }
+        syncWorkingVisual();
         break;
 
       case "turn.end":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
+        setTurnEndStatus(event.finish_reason);
+        syncWorkingVisual();
+        scheduleRunawayIdleResume();
         break;
 
       case "notice":
         chat.model.blocks.push({ kind: "notice", text: event.text });
         renderChat();
+        if (event.runaway_cancel_available !== undefined) {
+          projectState.runawayCancelAvailable = event.runaway_cancel_available;
+          syncWorkingVisual();
+        }
+        if (/狂奔|恢复|租约|续接|占用|启动狂奔/.test(event.text)) {
+          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+          if (/已在执行|占用|超时|租约/.test(event.text)) {
+            clearRunawayResumePending();
+            syncWorkingVisual();
+          }
+        }
         if (
           projectState.planStatus !== "confirmed" &&
           /计划已确认|可以开始写代码/.test(event.text)
@@ -3114,8 +5204,7 @@ export function mountUnifiedShell(
           projectState.planOverlay = null;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           if (projectState.projectId) {
-            topbarState.projectLabel = `项目 · ${projectState.projectId} · ${planStatusLabel()}`;
-            renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+            refreshTopbar();
           }
           client.refreshProject();
         }
@@ -3123,10 +5212,40 @@ export function mountUnifiedShell(
 
       case "confirm.request":
       case "confirm.done":
-        chat.handleEvent(event);
+        if (!chat.handleEvent(event)) break;
+        if (event.type === "confirm.request") {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => scrollPendingConfirmIntoView());
+          });
+        }
         break;
 
       case "error":
+        if (pendingDocAction) {
+          const action = pendingDocAction;
+          pendingDocAction = null;
+          projectState.docSaving = false;
+          const prefix =
+            action === "rename" ? "重命名失败"
+            : action === "delete" ? "删除失败"
+            : action === "write" ? "保存失败"
+            : "新建失败";
+          setStatus(`${prefix}：${event.message}`);
+          if (action === "write" && projectState.mainFocus === "document") syncDocEditChrome();
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          chat.handleEvent(event);
+          break;
+        }
+        if (pendingAdoptAccept) {
+          const adoptError = String(event.message || "unknown error").trim();
+          clearPendingAdopt();
+          projectState.partnerBusy = false;
+          setStatus(`閲囩撼澶辫触锛�${adoptError}`);
+          renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          if (projectState.mainFocus === "plan_review") {
+            renderPlanReviewPane();
+          }
+        }
         if (projectState.servicesLoading) {
           projectState.servicesLoading = false;
           projectState.servicesError = event.message;
@@ -3135,6 +5254,7 @@ export function mountUnifiedShell(
         if (projectState.switchInProgress || projectState.switchOverlay) {
           projectState.switchInProgress = false;
           projectState.pendingPickerId = "";
+          completeHydrationWait();
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
         chat.handleEvent(event);
@@ -3148,18 +5268,33 @@ export function mountUnifiedShell(
   });
 
   function planStatusLabel(): string {
-    if (projectState.planStatus === "confirmed") {
-      if (projectState.tasksAllDone && projectState.tasksTotal > 0) return "全部完成";
-      const open = Math.max(0, projectState.tasksTotal - projectState.tasksDone);
-      return `${open}/${projectState.tasksTotal} 未完成`;
+    if (projectState.runawayEnabled) {
+      if (projectState.runawayVersion >= 2) {
+        if (chat.isWorking()) return "狂奔进行中";
+        if (projectState.runawayBlocked) {
+          return projectState.runawayUserLine || projectState.runawayStatus || "需要处理";
+        }
+        if (projectState.runawayUserLine) return projectState.runawayUserLine;
+        return "狂奔待命";
+      }
+      if (projectState.runawayStatus) return projectState.runawayStatus;
     }
-    if (projectState.planStatus === "plan_dirty") return "计划已变更 · 待确认";
-    return "计划待确认";
+    if (projectState.planStatus === "confirmed") {
+      if (projectState.tasksAllDone && projectState.tasksTotal > 0) {
+        if (projectState.executionStage === "release" && projectState.milestoneAccepted) return "项目已完成";
+        return "交付检查";
+      }
+      return "项目进行中";
+    }
+    if (projectState.planStatus === "plan_dirty") return "方案有变更";
+    return "等待方案确认";
   }
 
   // ---- initial render ----
+  mountToolDisplayEditor();
+  onToolDisplayOverridesChange(() => renderChat());
   updatePlaceholder();
-  renderTopbar(topbarEl, topbarState, openProposals, handleNewChat, handleOpenSessions, handleNewProject, handleNewThread);
+  refreshTopbar();
   renderProposalsPanel();
   renderChat();
   setComposerEnabled(true);
@@ -3168,15 +5303,7 @@ export function mountUnifiedShell(
   // Phase 34: workbench layout + empty gate
   emptyNewBtn.addEventListener("click", () => handleNewProject());
   emptyPickBtn.addEventListener("click", () => {
-    projectState.overlayPanel = "projects";
-    projectState.switchConfirmTarget = null;
-    projectState.projectSearchQuery = "";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
-    try {
-      client.listProjects();
-    } catch {
-      /* ignore */
-    }
+    selectRailTab("projects");
   });
   emptyFreeChatBtn.addEventListener("click", () => {
     void handleFreeChat();
@@ -3189,15 +5316,21 @@ export function mountUnifiedShell(
   } catch {
     /* ignore */
   }
+  refreshTerminals();
+  scheduleTerminalPoll();
 
   return () => {
     destroyed = true;
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
     clearCancelSafety();
-    if (thinkingTimer !== null) window.clearInterval(thinkingTimer);
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
     if (renderThrottleTimer !== null) window.clearTimeout(renderThrottleTimer);
+    if (terminalPollTimerId !== null) window.clearTimeout(terminalPollTimerId);
+    if (terminalRequestTimeoutId !== null) window.clearTimeout(terminalRequestTimeoutId);
+    if (terminalOutputRequestTimeoutId !== null) window.clearTimeout(terminalOutputRequestTimeoutId);
+    terminalOutputRequestSerial += 1;
     renderedPrints = [];
+    renderedSegmentPrints = [];
     focusObserver?.disconnect();
     fileDrop.destroy();
     off();

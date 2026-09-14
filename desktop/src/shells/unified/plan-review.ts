@@ -1,7 +1,7 @@
 import type { PlanSuggestion } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
 
-export type MainFocus = "chat" | "plan_review" | "plan_full";
+export type MainFocus = "chat" | "plan_review" | "plan_full" | "document" | "projects";
 
 export interface PlanReviewUiState {
   mainFocus: MainFocus;
@@ -58,6 +58,8 @@ export function renderPlanReviewPanel(opts: {
   suggestions: PlanSuggestion[];
   reviewIndex: number;
   adoptPendingId?: string | null;
+  dropTaskPendingId?: string | null;
+  dropTaskPendingWorking?: boolean;
 }): string {
   const queue = actionableSuggestions(opts.suggestions);
   const index = clampReviewIndex(opts.reviewIndex, queue.length);
@@ -80,11 +82,19 @@ export function renderPlanReviewPanel(opts: {
     ? `<pre class="unified-plan-review-diff">${escapeHtml(diffRaw)}</pre>`
     : `<pre class="unified-plan-review-diff unified-plan-review-diff-empty">${escapeHtml(item.body)}</pre>`;
 
-  const position = queue.length > 1 ? `计划审阅 · ${index + 1}/${queue.length}` : "计划审阅";
+  const position = queue.length > 1 ? `方案变更 · ${index + 1}/${queue.length}` : "方案变更";
   const statsBadge = stats
     ? `<span class="unified-plan-review-stats">${escapeHtml(stats)}</span>`
     : "";
   const isPending = opts.adoptPendingId === item.id;
+  const whatChanged = item.action && item.action !== "toggle_task"
+    ? `<div class="unified-plan-review-what-changed"><strong>相对上一版：</strong>${escapeHtml(typeof item.payload?.what_changed === "string" && item.payload.what_changed.trim() ? item.payload.what_changed : "见 diff")}</div>`
+    : "";
+  const dropChoice = opts.dropTaskPendingId === item.id
+    ? opts.dropTaskPendingWorking
+      ? `<div class="textbook-drop-warning">助手仍在执行；仍要改计划吗？已写代码不会自动回滚。</div><button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="confirm-drop-while-working" data-suggestion-id="${escapeHtml(item.id)}">仍要改计划</button>`
+      : `<div class="textbook-drop-warning">请选择删除后的代码出口：</div><div class="textbook-drop-actions"><button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="drop-policy" data-policy="plan_only" data-suggestion-id="${escapeHtml(item.id)}">只删计划</button><button type="button" class="unified-btn" data-plan-review-action="drop-policy" data-policy="agent_cleanup" data-suggestion-id="${escapeHtml(item.id)}">让 agent 清理</button><button type="button" class="unified-btn" data-plan-review-action="drop-policy" data-policy="git_guide" data-suggestion-id="${escapeHtml(item.id)}">git / IDE 指引</button></div>`
+    : "";
   const acceptBtnLabel = isPending ? "采纳中…" : acceptLabel(item);
 
   return `<div class="unified-plan-review-inner">
@@ -97,11 +107,12 @@ export function renderPlanReviewPanel(opts: {
       <h2 class="unified-plan-review-title">${escapeHtml(item.title)}</h2>
       ${statsBadge}
       <p class="unified-plan-review-summary">${escapeHtml(item.body)}</p>
+      ${whatChanged}
       ${pathLine}
     </div>
     <div class="unified-plan-review-body">${diffBlock}</div>
     <footer class="unified-plan-review-actions">
-      <button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="accept" data-suggestion-id="${escapeHtml(item.id)}"${isPending ? " disabled" : ""}>${escapeHtml(acceptBtnLabel)}</button>
+      ${dropChoice || `<button type="button" class="unified-btn unified-btn-accent" data-plan-review-action="accept" data-suggestion-id="${escapeHtml(item.id)}"${isPending ? " disabled" : ""}>${escapeHtml(acceptBtnLabel)}</button>`}
       <button type="button" class="unified-btn" data-plan-review-action="ignore" data-suggestion-id="${escapeHtml(item.id)}">忽略</button>
       <button type="button" class="unified-btn" data-plan-review-action="prev"${index <= 0 ? " disabled" : ""}>上一条</button>
       <button type="button" class="unified-btn" data-plan-review-action="next"${index >= queue.length - 1 ? " disabled" : ""}>下一条</button>
@@ -111,8 +122,8 @@ export function renderPlanReviewPanel(opts: {
 
 export function renderPlanFullHeader(): string {
   return `<header class="unified-plan-review-header">
-    <button type="button" class="unified-btn unified-plan-review-back" data-plan-review-action="back">← 返回聊天</button>
-    <span class="unified-plan-review-position">完整计划</span>
+    <span class="unified-plan-review-position">任务</span>
+    <span></span>
     <span></span>
   </header>`;
 }

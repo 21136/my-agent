@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 DEFAULT_TURN_WALL_SEC = 900.0
+DEFAULT_RUNAWAY_WALL_SEC = 86400.0
 DEFAULT_STALL_WATCHDOG_SEC = 0.0
 DEFAULT_WRITE_INLINE_MAX_CHARS = 8192
 DEFAULT_AUTO_DEMO_ON_WRITE_EVOLVE = True
@@ -33,6 +34,16 @@ def turn_wall_sec() -> float:
         value = float(raw)
     except ValueError:
         value = DEFAULT_TURN_WALL_SEC
+    return max(0.0, value)
+
+
+def runaway_wall_sec() -> float:
+    """Maximum wall time for one explicitly authorized runaway run."""
+    raw = os.environ.get("RUNAWAY_WALL_SEC", str(int(DEFAULT_RUNAWAY_WALL_SEC)))
+    try:
+        value = float(raw)
+    except ValueError:
+        value = DEFAULT_RUNAWAY_WALL_SEC
     return max(0.0, value)
 
 

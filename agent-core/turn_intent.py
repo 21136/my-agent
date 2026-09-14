@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Literal
@@ -11,7 +12,7 @@ _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-TurnIntent = Literal["qa", "plan", "execute", "research", "recall"]
+TurnIntent = Literal["qa", "plan", "execute", "research", "recall", "requirements"]
 
 _EXECUTE_KEYWORDS = (
     "造",
@@ -21,12 +22,27 @@ _EXECUTE_KEYWORDS = (
     "更新",
     "添加",
     "创建",
+    "修复",
+    "排查",
+    "定位",
+    "调试",
+    "测试",
+    "验证",
+    "验收",
+    "运行",
+    "执行",
     "build",
     "implement",
     "write",
     "update",
     "create",
     "scaffold",
+    "fix",
+    "debug",
+    "test",
+    "verify",
+    "run",
+    "patch",
 )
 _RESEARCH_ACTION_KEYWORDS = (
     "查",
@@ -95,6 +111,135 @@ _MIXED_RESEARCH_MARKERS = (
     "顺便看看",
 )
 
+_ACTION_COMMAND_PREFIXES = (
+    "开始做",
+    "开始写",
+    "开始实现",
+    "动手",
+    "直接做",
+    "直接写",
+    "先写",
+    "创建项目",
+    "创建工具",
+    "创建代码",
+    "修改文件",
+    "修改代码",
+    "生成项目",
+    "生成代码",
+    "运行测试",
+    "运行命令",
+    "执行测试",
+    "执行命令",
+    "落地实现",
+    "实现一下",
+    "做一下",
+    "please implement",
+    "help me create",
+    "start ",
+    "create ",
+    "modify ",
+    "generate ",
+    "run ",
+    "execute ",
+    "implement ",
+    "build ",
+)
+
+_ACTION_REQUEST_LEADS = (
+    "请",
+    "帮我",
+    "需要你",
+    "希望你",
+    "让你",
+    "直接",
+    "先",
+    "继续",
+    "开始",
+    "现在",
+    "务必",
+    "实际",
+    "please",
+    "help me",
+    "i need you to",
+)
+_ACTION_REQUEST_VERBS = (
+    "修复",
+    "修改",
+    "实现",
+    "写入",
+    "创建",
+    "更新",
+    "运行",
+    "执行",
+    "测试",
+    "验证",
+    "验收",
+    "定位",
+    "排查",
+    "调试",
+    "改",
+    "写",
+    "fix",
+    "debug",
+    "implement",
+    "run",
+    "test",
+    "verify",
+    "patch",
+)
+_NON_EXECUTION_CONNECTORS = (
+    "告诉我",
+    "解释",
+    "说明",
+    "如何",
+    "怎么",
+    "为什么",
+    "是否",
+    "能否",
+    "可否",
+    "能不能",
+    "可不可以",
+    "不要",
+    "不需要",
+    "无需",
+    "不用",
+    "tell me",
+    "explain",
+    "how ",
+    "why ",
+    "whether ",
+    "don't",
+    "do not",
+    "without ",
+)
+_EXPLANATION_PREFIXES = (
+    "请告诉我",
+    "请解释",
+    "请说明",
+    "告诉我",
+    "解释一下",
+    "说明一下",
+    "please tell me",
+    "tell me",
+    "please explain",
+    "explain ",
+    "how ",
+    "what ",
+    "why ",
+)
+
+_REQUIREMENT_HEADINGS = (
+    "项目简介",
+    "需求说明",
+    "项目背景",
+    "产品需求",
+    "功能需求",
+    "系统简介",
+    "project brief",
+    "requirements",
+    "product requirements",
+)
+
 
 def auto_explore_enabled() -> bool:
     return os.environ.get("MY_AGENT_AUTO_EXPLORE", "1").strip() not in {"0", "false", "no"}
@@ -133,12 +278,52 @@ def _has_research_action(text: str, lower: str) -> bool:
     return any(marker in lower for marker in _PATH_MARKERS)
 
 
+def _has_explicit_execution_request(text: str, lower: str) -> bool:
+    """Detect an action request without treating requirement prose as one.
+
+    Long user messages can contain several sentences and project filenames.
+    The request/verb pairing is a stronger signal than either message length
+    or an artifact mention, so it must be checked before the read-only routes.
+    """
+    if any(lower.startswith(prefix) for prefix in _ACTION_COMMAND_PREFIXES):
+        return True
+
+    for lead in _ACTION_REQUEST_LEADS:
+        for verb in _ACTION_REQUEST_VERBS:
+            for match in re.finditer(
+                rf"{re.escape(lead)}.{{0,32}}?{re.escape(verb)}",
+                lower,
+                flags=re.IGNORECASE,
+            ):
+                between = lower[match.start() + len(lead) : match.end() - len(verb)]
+                if any(marker in between for marker in _NON_EXECUTION_CONNECTORS):
+                    continue
+                return True
+    return False
+
+
+def _is_explanation_request(lower: str) -> bool:
+    """Keep how/why questions out of the execution keyword fallback."""
+    stripped = lower.strip()
+    if any(stripped.startswith(prefix) for prefix in _EXPLANATION_PREFIXES):
+        return True
+    return bool(
+        re.match(
+            r"^(?:(?:请|帮我|需要你|希望你|please|help me)\s*)*"
+            r"(?:(?:先|直接)\s*)?(?:告诉我|解释|说明|tell me|explain|describe)",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
     """User-visible one-line label for turn.start (T-905)."""
     if intent == "research" and spawn_explore:
         return "先只读探索"
     labels: dict[TurnIntent, str] = {
         "recall": "根据上文直接回顾，不调工具",
+        "requirements": "需求输入，只读归纳",
         "qa": "直接回答",
         "plan": "整理方案，少动手",
         "research": "先查阅再回答",
@@ -147,17 +332,45 @@ def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
     return labels.get(intent, intent)
 
 
+def is_requirement_input(user_text: str) -> bool:
+    """Recognize pasted project prose without treating it as an execution request."""
+    text = user_text.strip()
+    if len(text) < 120:
+        return False
+    lower = text.casefold()
+    if _has_explicit_execution_request(text, lower) or _is_explanation_request(lower):
+        return False
+    heading = any(marker in text or marker in lower for marker in _REQUIREMENT_HEADINGS)
+    numbered = text.startswith(tuple(f"{index}." for index in range(1, 10)))
+    sentence_count = sum(text.count(mark) for mark in ("。", "！", "？", ".", "!", "?"))
+    return heading or (numbered and sentence_count >= 2) or sentence_count >= 4
+
+
 def _mentions_project_artifacts(text: str, lower: str) -> bool:
     return any(marker in lower for marker in _PROJECT_ARTIFACT_MARKERS)
 
 
 def classify_turn(user_text: str) -> TurnIntent:
     """Classify user line: recall | qa | plan | execute | research."""
+    from exec_reliability import is_runaway_harness_utterance
+
+    if is_runaway_harness_utterance(user_text):
+        return "execute"
+
     text = user_text.strip()
     lower = text.casefold()
 
     if is_recall_turn(text):
         return "recall"
+
+    if _has_explicit_execution_request(text, lower):
+        return "execute"
+
+    if _is_explanation_request(lower):
+        return "qa"
+
+    if is_requirement_input(text):
+        return "requirements"
 
     if lower.startswith(("探索", "调研", "explore ")):
         return "research"

@@ -1,0 +1,65 @@
+[tool]
+name = "interactive_terminal"
+description = "交互式本地终端会话：start/input/read/signal/status/list/close；需要 stdin、增量输出、Ctrl-C 或 attach/resume 时使用。依赖 pywinpty 时启用 Windows PTY；依赖缺失返回 unsupported。"
+version = "0.1.0"
+status = "active"
+topics = ["common"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "start|input|read|signal|status|list|close"
+[schema.input.properties.session_id]
+type = "string"
+description = "start 返回的会话 ID；除 start/list 外必填"
+[schema.input.properties.command]
+type = "string"
+description = "start 必填；要启动的交互式命令，例如 python -i 或 powershell"
+[schema.input.properties.working_dir]
+type = "string"
+description = "start 的工作目录，相对 agent root；默认 agent root"
+[schema.input.properties.cwd]
+type = "string"
+description = "working_dir 的别名"
+[schema.input.properties.text]
+type = "string"
+maxLength = 65536
+description = "input 要写入 stdin 的文本；Windows 会将 LF 转为 CRLF；最大 65536 字符"
+[schema.input.properties.cursor]
+type = "integer"
+default = 0
+description = "read 的逻辑字节游标；返回 next_cursor"
+[schema.input.properties.max_chars]
+type = "integer"
+default = 16384
+description = "read 返回的最大 UTF-8 字符数"
+[schema.input.properties.signal]
+type = "string"
+description = "signal 类型：ctrl_c|eof|terminate；eof 发送 PTY 的 Ctrl-D 输入约定"
+[schema.input.properties.idle_timeout_sec]
+type = "integer"
+default = 600
+description = "start 的空闲超时；范围 30..1800"
+[schema.input.properties.lifetime_timeout_sec]
+type = "integer"
+default = 1800
+description = "start 的总生命周期上限；范围 60..3600"
+[schema.input.properties.force]
+type = "boolean"
+default = false
+description = "close/signal terminate 是否强制结束"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = false
+allow_approve_all = false
+timeout_sec = 30

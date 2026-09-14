@@ -133,11 +133,15 @@ class ProjectLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(self.session.meta.project_plan_status, "confirmed")
 
-    def _run_python_arguments(self) -> dict[str, object]:
+    def _run_command_arguments(self) -> dict[str, object]:
         pid = normalize_project_id(self.project_id)
         return {
-            "tool_name": "run_python",
-            "arguments": {"path": f"{pid}/main.py", "dry_run": True},
+            "tool_name": "run_command",
+            "arguments": {
+                "command": "python main.py",
+                "working_dir": pid,
+                "dry_run": True,
+            },
         }
 
     def _make_executor(self) -> ToolExecutor:
@@ -146,7 +150,7 @@ class ProjectLifecycleTests(unittest.TestCase):
             registry=ToolRegistry.load(self.paths),
             session=ExecutorSession.load(
                 self.session.session_dir,
-                allowed_evolved={"run_python"},
+                allowed_evolved={"run_command"},
             ),
             confirm_fn=lambda _preview, _allow_all: "y",
         )
@@ -176,12 +180,12 @@ class ProjectLifecycleTests(unittest.TestCase):
         self.assertTrue(any("计划已确认" in line for line in outputs))
         self.assertFalse(any(line.startswith("error:") for line in outputs))
 
-    def test_draft_rejects_run_python_plan_gate(self) -> None:
-        """T-1803-03: draft plan blocks run_python via executor plan gate."""
+    def test_draft_rejects_run_command_plan_gate(self) -> None:
+        """T-1803-03: draft plan blocks run_command via executor plan gate."""
         self._run_project_new()
         executor = self._make_executor()
 
-        result = executor.run("run_evolved", self._run_python_arguments())
+        result = executor.run("run_evolved", self._run_command_arguments())
 
         self.assertFalse(result.ok)
         assert result.error is not None
@@ -190,8 +194,8 @@ class ProjectLifecycleTests(unittest.TestCase):
         details = result.error.details or {}
         self.assertEqual(details.get("project_plan_status"), "draft")
 
-    def test_confirmed_allows_run_python(self) -> None:
-        """T-1803-03: confirmed plan passes plan gate; run_python proceeds (mocked)."""
+    def test_confirmed_allows_run_command(self) -> None:
+        """T-1803-03: confirmed plan passes plan gate; run_command proceeds (mocked)."""
         self._run_project_new()
         self._run_project_confirm()
 
@@ -211,7 +215,7 @@ class ProjectLifecycleTests(unittest.TestCase):
             "tools.executor._BUILTIN_RUNNERS",
             {"run_evolved": mock_runner},
         ):
-            result = executor.run("run_evolved", self._run_python_arguments())
+            result = executor.run("run_evolved", self._run_command_arguments())
 
         self.assertTrue(result.ok)
         mock_runner.assert_called_once()

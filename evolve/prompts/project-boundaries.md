@@ -35,13 +35,31 @@
 | `project_plan_status` | 允许 |
 |-----------------------|------|
 | `draft` / `plan_dirty` | 计划域四件套须经 `plan_partner` 提案 + 侧栏采纳；源码仍禁 |
-| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` |
+| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` · `structured_test` |
 
 未确认前 **禁止**写 `src/`、`tests/` 等，禁止 `run_command` 写码类命令。**即使用户催促「开始做/确认」，也须等用户点「确认开工」或 `项目 确认` 后 executor 才放行写码。**
 
 **`draft` 首轮**：必须先写出三件套（至少 `PROJECT.md` + `TASKS.md`），再请用户确认；**不要**等用户确认后才落盘三件套，也**不要**在聊天里假装已写完代码。
 
-用户确认方式：桌面侧栏 **确认开工**、聊天 **`确认` / `确认开工` / `项目 确认`**（等价）。
+用户确认方式：桌面侧栏 **确认开工**、聊天 **`确认` / `确认开工` / `项目 确认`**（等价）。普通模式也可 **`项目 直接实现`**（`project_entry=direct`）：仅需求草稿可跳过计划搭档直接写码；文档整理/设计确认阶段仍须「确认设计」或「开始任务」，不得从这两阶段自动开工。
+
+## 狂奔模式覆盖
+
+仅当动态 overlay 明确包含 `project_runaway_enabled: true` 时生效。狂奔是用户对当前项目的一次连续执行授权，不得把普通模式的确认门重新呈现给用户：
+
+- 自动整理需求、文档和设计，自动采纳 `plan_partner` 提案，并自动进入下一个可执行任务。
+- 项目内安全的 `write_text`、`patch_file`、`run_command` 和测试调用按 executor 授权连续执行，不等待「继续」或计划确认。
+- 仍须暂停：网络、宿主目录、密钥/敏感文件、删除、发布、Git restore/提交/推送，以及重复失败、预算耗尽、状态不一致或真实外部阻塞。
+- 暂停时只说明真实原因和恢复动作；不要把“计划待确认”、任务边界或内部 checkpoint 当作阻塞。
+- 狂奔覆盖本文件中的普通确认、一项一停和源码计划门；开关关闭后立即恢复普通规则。
+
+### verification 出口（`project_workflow_stage: verification`）
+
+当 overlay 含 `project_workflow_stage: verification` 时，**额外**适用：
+
+- checkpoint 以 Harness 磁盘谓词为准（矩阵 + 硬验收 + ENV `quality.commands`）；`deliverable_review` 结论仅参考，**不得**自行声称已交付。
+- 缺 `ENV.md` `quality.commands` 或 PROJECT 验收段时，由 **Harness 代码 bootstrap** 或 **bug-fix 子代理**（`repairing`）写入；**主 Agent 禁止** `write_text` / `patch_file` 直写 `PROJECT.md` / `ENV.md`。
+- `[Harness]` 自动续接回合由编排器处理；主 Agent 勿重复尝试写计划域「脱困」。
 
 ## 路径
 

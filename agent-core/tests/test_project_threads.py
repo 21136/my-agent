@@ -22,6 +22,7 @@ from project_switch import (
     read_project_thread_archive,
     start_new_project_thread,
 )
+from runaway_flow import normalize_checkpoint
 from session import create_new, session_history_event
 
 from tests.isolation_helpers import make_temp_agent_paths
@@ -123,6 +124,19 @@ class ProjectThreadTests(unittest.TestCase):
             read_project_sessions(self.paths).get(normalize_project_id(self.other_project_id)),
             other_live_id,
         )
+
+    def test_new_thread_inherits_workflow_stage_and_active_task(self) -> None:
+        self._open_project()
+        self.session.meta.project_workflow_stage = "verification"
+        self.session.meta.project_active_task_id = "T-003"
+        self.session.save()
+
+        updated, _msg = start_new_project_thread(self.paths, self.session)
+        self._extra_session_ids.append(updated.conversation_id)
+
+        self.assertEqual(updated.meta.project_workflow_stage, "verification")
+        self.assertEqual(updated.meta.project_active_task_id, "T-003")
+        self.assertEqual(normalize_checkpoint(updated.meta.project_runaway_checkpoint), "idle")
 
     def test_cli_new_thread_command(self) -> None:
         self._open_project()

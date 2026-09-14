@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>输出展示 · 现在 vs 改后</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, "Noto Sans SC", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: #111;
+      color: #e8e8e8;
+      min-height: 100vh;
+      padding: 1.25rem 1.5rem 2rem;
+    }
+    header { margin-bottom: 1rem; max-width: 1200px; margin-inline: auto; }
+    h1 { font-size: 1.2rem; font-weight: 600; }
+    .hint { margin-top: 0.35rem; font-size: 0.82rem; color: #888; line-height: 1.55; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      height: calc(100vh - 5.5rem);
+    }
+    @media (max-width: 900px) {
+      .row { grid-template-columns: 1fr; height: auto; }
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+    }
+    .panel-hd {
+      padding: 0.55rem 0.85rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .panel.bad .panel-hd { color: #f87171; background: #221818; }
+    .panel.good .panel-hd { color: #4ade80; background: #152218; }
+    .chat-pane {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1rem 1.1rem 1.25rem;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* ── shared tokens (改后亮色) ── */
+    .good .chat-pane {
+      --bg: #fcfcfc;
+      --surface: #f4f4f5;
+      --text: #1a1a1a;
+      --muted: #71717a;
+      --border: #e4e4e7;
+      --accent: #2563eb;
+      --danger: #dc2626;
+      --danger-bg: #fef2f2;
+      --ok: #16a34a;
+      --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+      --radius: 10px;
+    }
+    .bad .chat-pane {
+      --bg: #f6f3ed;
+      --surface: #ede8df;
+      --text: #2c2925;
+      --muted: #7a746a;
+      --border: #d4cec4;
+      --accent: #b4532a;
+      --danger: #9b4d4d;
+      --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+    }
+
+    /* ═══ 现状样式 ═══ */
+    .old-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.3rem;
+    }
+    .old-body { margin-bottom: 1.1rem; color: var(--text); }
+    .old-process {
+      margin-bottom: 0.75rem;
+      border-left: 3px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      background: color-mix(in srgb, var(--surface) 55%, transparent);
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+    .old-process-hd {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.35rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .old-thinking {
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      font-size: 0.82rem;
+      margin-bottom: 0.4rem;
+    }
+    .old-tool {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      padding: 0.15rem 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .old-tool .fail { color: var(--danger); }
+    .old-review {
+      margin: 0.75rem 0 1rem;
+      padding: 0.75rem;
+      background: #e8d5c4;
+      border: 1px solid #d4b896;
+      font-size: 0.85rem;
+      line-height: 1.55;
+    }
+    .old-review strong { display: block; margin-bottom: 0.35rem; }
+    .old-msg { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.45rem; }
+    .old-msg code {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      padding: 0.1rem 0.25rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    /* ═══ 改后样式 ═══ */
+    .turn { margin-bottom: 1.25rem; }
+    .turn-user {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 0.65rem;
+    }
+    .turn-user .bubble {
+      max-width: 88%;
+      padding: 0.55rem 0.75rem;
+      border-radius: 12px 12px 4px 12px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.88rem;
+    }
+    .turn-assistant {
+      background: #fff;
+      border-radius: var(--radius);
+      padding: 0.85rem 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .lead {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.5rem;
+      line-height: 1.45;
+    }
+    .lead + p { font-size: 0.86rem; color: var(--muted); margin-bottom: 0.65rem; }
+    .file-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0.5rem 0 0.75rem;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.22rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      background: var(--surface);
+      color: var(--accent);
+      cursor: default;
+    }
+    .chip.ok::before { content: "✓"; color: var(--ok); font-size: 0.7rem; }
+    .chip.more { color: var(--muted); }
+
+    .callout {
+      margin: 0.65rem 0;
+      padding: 0.65rem 0.75rem 0.65rem 0.85rem;
+      border-radius: 8px;
+      background: #fff;
+      border-left: 3px solid var(--accent);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .callout-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.35rem;
+    }
+    .callout ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .tag-p0 {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+      background: #fee2e2;
+      color: var(--danger);
+      margin-right: 0.25rem;
+      vertical-align: 0.05em;
+    }
+
+    .process-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: var(--surface);
+      cursor: pointer;
+      border: none;
+      font: inherit;
+    }
+    .process-pill .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse 1.4s ease infinite;
+    }
+    @keyframes pulse { 50% { opacity: 0.35; } }
+
+    .process-expanded {
+      margin-top: 0.55rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      background: var(--surface);
+      font-size: 0.8rem;
+    }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      padding: 0.28rem 0;
+      color: var(--muted);
+    }
+    .step .mark { flex-shrink: 0; width: 1rem; text-align: center; }
+    .step.ok .mark { color: var(--ok); }
+    .step.fail .mark { color: var(--danger); }
+    .step .label { color: var(--text); font-weight: 500; }
+    .step .sub { font-size: 0.75rem; color: var(--muted); }
+
+    .alert-fail {
+      margin-top: 0.55rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: var(--danger-bg);
+      border: none;
+    }
+    .alert-fail .title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--danger);
+      margin-bottom: 0.25rem;
+    }
+    .alert-fail p { font-size: 0.78rem; color: #7f1d1d; margin: 0; line-height: 1.45; }
+    .alert-fail button {
+      margin-top: 0.4rem;
+      font: inherit;
+      font-size: 0.72rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid #fecaca;
+      background: #fff;
+      color: var(--danger);
+      cursor: pointer;
+    }
+
+    .composer-mock {
+      margin-top: auto;
+      padding: 0.65rem 0;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .composer-mock .input {
+      flex: 1;
+      padding: 0.5rem 0.7rem;
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .composer-mock .send {
+      padding: 0.45rem 0.85rem;
+      border-radius: 8px;
+      border: none;
+      background: #1a1a1a;
+      color: #fff;
+      font: inherit;
+      font-size: 0.78rem;
+    }
+    .toggle-demo {
+      margin-top: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font: inherit;
+      padding: 0;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>主聊输出 · 现在 vs 改后</h1>
+    <p class="hint">同一场景：Music Dreamer 实现中 · patch 失败 · 交付审查摘要。右侧：回合卡片、文件 chip、过程折叠、失败告警、摘要去大色块。</p>
+  </header>
+
+  <div class="row">
+    <!-- 现状 -->
+    <div class="panel bad">
+      <div class="panel-hd">✕ 现在</div>
+      <div class="chat-pane">
+        <div class="old-label">你</div>
+        <div class="old-body">继续实现 T-103，把 smoke 测试补上</div>
+
+        <div class="old-label">助手</div>
+        <div class="old-body">正在处理当前任务，已写入多个文档并尝试修补测试文件。</div>
+
+        <div class="old-review">
+          <strong>交付审核摘要</strong>
+          P0 blocker：Agent injected verification shows…<br />
+          验证状态：partial pass · 2 项未通过<br />
+          建议：先修复 smoke.mjs 锚点问题再继续 advance
+        </div>
+
+        <div class="old-process">
+          <div class="old-process-hd">
+            <span>过程</span>
+            <button type="button" style="font:inherit;font-size:0.75rem;border:1px solid var(--border);background:transparent;padding:0.15rem 0.4rem;border-radius:3px">收起</button>
+          </div>
+          <div class="old-thinking">思考中…（190s）</div>
+          <div class="old-tool"><span>✓</span> run_evolved patch_file <span>workspace/music/api/routes.js</span> <span>· 1.2s</span></div>
+          <div class="old-tool"><span>✓</span> run_evolved patch_file <span>workspace/music/api/db.mjs</span> <span>· 0.8s</span></div>
+          <div class="old-tool fail"><span>✗</span> run_evolved patch_file <span>workspace/music/api/smoke.mjs</span> <span>· find anchor not found</span></div>
+          <div class="old-tool" style="color:var(--danger);font-family:inherit;font-size:0.78rem">patch 锚点不唯一：请换 line_range 或更长 find 锚点</div>
+          <div class="old-thinking" style="margin-top:0.4rem">思考中…（3s）</div>
+        </div>
+
+        <div class="old-msg"><strong>系统</strong> · 已切换模型至 <code>0x567-flash</code></div>
+        <div class="old-msg"><strong>已采纳并写入</strong> <code>SCOPE.md</code></div>
+        <div class="old-msg"><strong>已采纳并写入</strong> <code>DESIGN.md</code></div>
+        <div class="old-msg"><strong>已采纳并写入</strong> <code>TECH-DESIGN.md</code></div>
+      </div>
+    </div>
+
+    <!-- 改后 -->
+    <div class="panel good">
+      <div class="panel-hd">✓ 改后</div>
+      <div class="chat-pane">
+        <div class="turn">
+          <div class="turn-user">
+            <div class="bubble">继续实现 T-103，把 smoke 测试补上</div>
+          </div>
+
+          <div class="turn-assistant">
+            <p class="lead">文档已齐，但在修补 smoke 测试时卡住了。</p>
+            <p>routes 和 db 已更新；smoke.mjs 的 patch 锚点找不到，需要先修这个再继续。</p>
+
+            <div class="callout">
+              <div class="callout-title">交付审查</div>
+              <ul>
+                <li><span class="tag-p0">P0</span>验证注入项未全部通过</li>
+                <li>2 项检查仍为 partial</li>
+                <li>建议：修 smoke 锚点后再 advance</li>
+              </ul>
+            </div>
+
+            <div class="file-chips">
+              <span class="chip ok">SCOPE.md</span>
+              <span class="chip ok">DESIGN.md</span>
+              <span class="chip ok">TECH-DESIGN.md</span>
+              <span class="chip more">+2</span>
+            </div>
+
+            <button type="button" class="process-pill" id="toggle-process">
+              <span class="dot"></span>
+              <span id="pill-label">过程 · 4 步 · 进行中 ▸</span>
+            </button>
+
+            <div class="process-expanded hidden" id="process-detail">
+              <div class="step ok">
+                <span class="mark">✓</span>
+                <div><div class="label">写入 routes.js</div><div class="sub">1.2s</div></div>
+              </div>
+              <div class="step ok">
+                <span class="mark">✓</span>
+                <div><div class="label">写入 db.mjs</div><div class="sub">0.8s</div></div>
+              </div>
+              <div class="step fail">
+                <span class="mark">✗</span>
+                <div><div class="label">修补 smoke.mjs 失败</div><div class="sub">锚点未找到</div></div>
+              </div>
+            </div>
+
+            <div class="alert-fail">
+              <div class="title">修补未成功</div>
+              <p>smoke.mjs — patch 锚点不唯一。请换 line_range 或更长的 find 锚点。</p>
+              <button type="button">查看日志</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-mock">
+          <div class="input">输入消息或拖入文件…</div>
+          <button type="button" class="send">发送</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const btn = document.getElementById("toggle-process");
+    const detail = document.getElementById("process-detail");
+    const label = document.getElementById("pill-label");
+    let open = false;
+    btn.addEventListener("click", () => {
+      open = !open;
+      detail.classList.toggle("hidden", !open);
+      label.textContent = open ? "过程 · 4 步 · 进行中 ▾" : "过程 · 4 步 · 进行中 ▸";
+    });
+  </script>
+</body>
+</html>

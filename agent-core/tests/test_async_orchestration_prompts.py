@@ -37,6 +37,19 @@ class AsyncOrchestrationPromptTests(unittest.TestCase):
         self.assertNotIn("ASYNC-ORCHESTRATION", core)
         self.assertNotIn("多服务起服编排", core)
 
+    def test_runaway_prompt_override_is_explicit_and_scoped(self) -> None:
+        core = _CORE.read_text(encoding="utf-8")
+        boundaries = _PROJECT_BOUNDARIES.read_text(encoding="utf-8")
+        safety = (_ROOT / "evolve" / "prompts" / "safety.md").read_text(encoding="utf-8")
+        coding = (_ROOT / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
+        ritual = (_ROOT / "evolve" / "prompts" / "project-delivery-ritual.md").read_text(encoding="utf-8")
+        self.assertIn("project runaway", core)
+        self.assertIn("狂奔模式覆盖", boundaries)
+        self.assertIn("仅当动态 overlay 明确", boundaries)
+        self.assertIn("网络、宿主目录、敏感数据", safety)
+        self.assertIn("狂奔模式已明确授权", coding)
+        self.assertIn("本文件中的“用户采纳计划”", ritual)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
 from agent import Agent, LLMError, ToolLoopExceededError
 from boundaries import UserLineKind, classify_user_line
 from host_scope_cli import HostScopeCommandError, parse_host_scope_command, run_host_scope_command
-from interface_lock import InterfaceLockError, InterfaceLockGuard, read_lock
+from interface_lock import InterfaceLockError, InterfaceLockGuard, clear_terminal_lock_file, read_lock
 from llm_client import LLMCancelledError
 from main import (
     ConversationRepl,
@@ -70,12 +70,17 @@ from terminal_ink_bridge import (
     InkInputLine,
     ink_ui_enabled,
 )
+from terminal_shutdown import TerminalShutdownHooks, cleanup_terminal_session
+from execution_lifecycle import ExecutionLifecycle, ExecutionSnapshot
 
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
 _TURN_MODE_NOTICE = "Terminal 仅 agent 模式"
 _PROJECT_NOTICE = "Terminal 不支持项目命令。"
+_UNSUCCESSFUL_FINISH_REASONS = frozenset(
+    {"cancelled", "timeout", "error", "tool_loop_exceeded"}
+)
 
 
 def _ink_allowed_on_platform() -> bool:
@@ -84,6 +89,14 @@ def _ink_allowed_on_platform() -> bool:
         return True
     raw = os.environ.get("MY_AGENT_TERMINAL_INK_WINDOWS", "1").strip().casefold()
     return raw not in {"0", "false", "no", "off"}
+
+
+def _ink_tty_available() -> bool:
+    """Ink needs both the inherited keyboard and the stderr display TTY."""
+    try:
+        return bool(sys.stdin.isatty() and sys.stderr.isatty())
+    except (AttributeError, OSError):
+        return False
 
 
 @dataclass
@@ -100,6 +113,10 @@ class TerminalRepl(ConversationRepl):
     _ink_confirm_allow_all: bool = field(default=False, repr=False)
     _tty_reader: Any | None = field(default=None, repr=False)
     _uses_builtin_input: bool = field(default=True, repr=False)
+    execution_lifecycle: ExecutionLifecycle = field(
+        default_factory=ExecutionLifecycle,
+        repr=False,
+    )
 
     @classmethod
     def from_terminal_session(
@@ -125,6 +142,7 @@ class TerminalRepl(ConversationRepl):
             repl._uses_builtin_input
             and ink_ui_enabled(paths=paths)
             and _ink_allowed_on_platform()
+            and _ink_tty_available()
         )
         if not use_ink and repl._uses_builtin_input and os.name == "nt":
             if os.environ.get("MY_AGENT_TERMINAL_INK_WINDOWS", "1").strip().casefold() in {
@@ -135,6 +153,11 @@ class TerminalRepl(ConversationRepl):
             }:
                 print(
                     "提示: MY_AGENT_TERMINAL_INK_WINDOWS=0，已使用兼容输入模式（legacy）。",
+                    file=sys.stderr,
+                )
+            elif not _ink_tty_available():
+                print(
+                    "提示: 当前不是交互式 TTY，已使用兼容输入模式（legacy）。",
                     file=sys.stderr,
                 )
             elif not ink_ui_enabled(paths=paths):
@@ -169,6 +192,7 @@ class TerminalRepl(ConversationRepl):
                 resume=True,
             )
             repl._ink_bridge = bridge
+            bridge.cancel_listener = repl._handle_ink_cancel
             repl._tty_reader = None
             repl.terminal_console = console
             repl.output_fn = console.output_fn
@@ -292,6 +316,11 @@ class TerminalRepl(ConversationRepl):
         self._ink_pending_confirm = None
         resolver(choice)
         bridge.emit_confirm_done(request_id=request_id, choice=choice)
+
+    def _handle_ink_cancel(self) -> None:
+        guard = self._turn_cancel_guard
+        if guard is not None and guard.request_cancel():
+            self.output_fn("(cancelling turn…)")
 
     def _run_terminal_loop(self) -> int:
         return self._run_terminal_loop_legacy()
@@ -430,10 +459,10 @@ class TerminalRepl(ConversationRepl):
             self._wire_turn_events()
 
     def _ink_bridge_confirm(self, preview: str, allow_approve_all: bool) -> str:
-        bridge = self._ink_bridge
-        if bridge is None:
+        console = self.terminal_console
+        if not isinstance(console, TerminalInkConsole):
             return "n"
-        return bridge.confirm_fn(preview, allow_approve_all)
+        return console.confirm_fn(preview, allow_approve_all)
 
         if self.terminal_console is not None:
             return
@@ -442,6 +471,8 @@ class TerminalRepl(ConversationRepl):
     def _run_agent_turn(self, text: str):
         guard = self._turn_cancel_guard
         console = self.terminal_console
+        execution = self.execution_lifecycle.start_or_activate("terminal")
+        self._emit_execution_state(execution)
         if console is not None:
             console.begin_user_turn(text)
         if guard is not None:
@@ -451,6 +482,8 @@ class TerminalRepl(ConversationRepl):
         try:
             result = self.agent.run_turn(text)
             finish_reason = result.finish_reason
+            if finish_reason in _UNSUCCESSFUL_FINISH_REASONS:
+                ok = False
             return result
         except LLMCancelledError:
             ok = False
@@ -463,6 +496,22 @@ class TerminalRepl(ConversationRepl):
         finally:
             if guard is not None:
                 guard.end_turn()
+            reason = finish_reason or (
+                "cancelled" if self.agent.cancel_event.is_set() else "error"
+            )
+            final, changed = self.execution_lifecycle.finish(reason, ok=ok)
+            if changed and final is not None:
+                self._emit_execution_state(final)
+
+    def mark_execution_stopping(self) -> None:
+        snapshot, changed = self.execution_lifecycle.request_stop("user")
+        if changed and snapshot is not None:
+            self._emit_execution_state(snapshot)
+
+    def _emit_execution_state(self, snapshot: ExecutionSnapshot) -> None:
+        console = self.terminal_console
+        if isinstance(console, TerminalInkConsole):
+            console.sink.emit(snapshot.to_event())
 
     def handle_line(self, line: str) -> ReplOutcome:
         stripped = line.strip()
@@ -575,7 +624,7 @@ class TerminalRepl(ConversationRepl):
         if self.terminal_console is not None:
             self.terminal_console.end_turn(
                 finish_reason=self.last_turn_finish_reason,
-                ok=True,
+                ok=self.last_turn_finish_reason not in _UNSUCCESSFUL_FINISH_REASONS,
             )
         return "continue"
 
@@ -641,6 +690,13 @@ class TerminalRepl(ConversationRepl):
                     registry.models,
                     current_id=current,
                 )
+            elif self._ink_bridge is not None:
+                for line in format_terminal_models_list(
+                    self.paths,
+                    current_model=current,
+                ):
+                    self.output_fn(line)
+                return "continue"
             elif interactive_choice_available():
                 picked = prompt_model_choice(
                     registry.models,
@@ -780,7 +836,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Working directory (default: shell cwd)",
     )
     parser.add_argument("--demo", action="store_true", help="Run acceptance checks")
+    parser.add_argument(
+        "--clear-lock",
+        action="store_true",
+        help="Remove Terminal session lock file without killing the holder process",
+    )
     return parser
+
+
+def _run_clear_lock(paths: AgentPaths) -> int:
+    try:
+        holder = clear_terminal_lock_file(paths)
+    except InterfaceLockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if holder is None:
+        print("无 Terminal 会话锁。")
+        return 0
+    print(
+        f"已清除 Terminal 会话锁（pid {holder.pid} 仍在运行，未被结束）。"
+        " 现在可以重新启动 Terminal。"
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -791,7 +868,11 @@ def main(argv: list[str] | None = None) -> int:
         return _demo()
 
     paths = AgentPaths.discover()
+    if args.clear_lock:
+        return _run_clear_lock(paths)
+
     lock_guard = InterfaceLockGuard(paths, "terminal")
+    shutdown = TerminalShutdownHooks(lock_guard=lock_guard)
     try:
         lock_guard.acquire(takeover=False, interactive_takeover=False)
     except InterfaceLockError as exc:
@@ -799,12 +880,13 @@ def main(argv: list[str] | None = None) -> int:
         holder = read_lock(paths)
         if holder is not None and holder.ui == "terminal":
             print(
-                "hint: 若已关掉 Terminal 仍提示占用，结束残留 python.exe 后删除 "
-                "data/sessions/.interface.lock 再启动。",
+                "hint: Terminal 窗口已关但锁未释放时，可运行 "
+                "`my-agent terminal --clear-lock`（无需结束 python 进程）。",
                 file=sys.stderr,
             )
         return 1
 
+    shutdown.install()
     try:
         scope_outcome = resolve_terminal_startup(
             paths,
@@ -822,9 +904,10 @@ def main(argv: list[str] | None = None) -> int:
             paths=paths,
             scope_fields=scope_fields_from_meta(session.meta),
         )
+        shutdown.repl_holder[0] = repl
         return repl.run()
     finally:
-        lock_guard.release()
+        cleanup_terminal_session(lock_guard, shutdown.repl_holder[0])
 
 
 def _demo() -> int:

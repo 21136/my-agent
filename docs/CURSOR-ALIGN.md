@@ -196,7 +196,7 @@ C2 留作后续若模型仍乱调再开。
 | E-Q2 | PR / `gh`？ | **M1 defer** |
 | E-Q3 | force-with-lease？ | **禁止** |
 
-**状态（2026-08-02）**：**E M0 done**（`git_branch` · `git_push` · IT-140/141）；PR/`gh` 仍 defer。
+**状态（2026-09-12）**：**E M0 done**（`git_branch` · `git_push` · IT-140/141）；PR 最小集见 evolved **`gh_pr`**（create/view/checks/list；禁 merge/force/delete）。
 
 ---
 

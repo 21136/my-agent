@@ -24,6 +24,7 @@ from llm_models import (
     DEFAULT_PRO_ID,
     ModelEntry,
     get_registry,
+    is_tokeness_gateway,
 )
 from tools.http_client import make_httpx_client
 
@@ -46,8 +47,8 @@ def _api_reasoning_effort(effort: str, vendor: str) -> str:
         if effort in _DEEPSEEK_REASONING_EFFORT_LEVELS:
             return effort
         return "high"
-    if vendor_key == "0x567":
-        # 0x567 gateway (e.g. gpt-5.4) rejects ``max``; cap at high.
+    if vendor_key in {"0x567", "tokeness"}:
+        # OpenAI-compatible gateways (e.g. gpt-5.4 / Tokeness Luna) reject ``max``; cap at high.
         if effort == "max":
             return "high"
     return effort
@@ -56,18 +57,24 @@ def _api_reasoning_effort(effort: str, vendor: str) -> str:
 def _apply_reasoning_effort_to_payload(
     payload: dict[str, Any],
     effort: str,
-    vendor: str,
+    entry: ModelEntry,
+    *,
+    has_tools: bool = False,
 ) -> None:
     """Attach provider-specific reasoning controls to a chat completion payload."""
-    vendor_key = vendor.casefold()
-    resolved = _api_reasoning_effort(effort, vendor)
+    vendor_key = entry.vendor.casefold()
+    resolved = _api_reasoning_effort(effort, entry.vendor)
     if vendor_key in {"deepseek", "sophnet"}:
         payload["thinking"] = {
             "type": "enabled",
             "reasoning_effort": resolved,
         }
         return
-    if vendor_key == "0x567":
+    if vendor_key in {"0x567", "tokeness"} or is_tokeness_gateway(entry):
+        # Tokeness gpt-5.6-luna on /v1/chat/completions rejects tools + reasoning_effort.
+        if is_tokeness_gateway(entry) and has_tools:
+            payload["reasoning_effort"] = "none"
+            return
         # OpenAI-compatible gateway: top-level reasoning_effort, not DeepSeek ``thinking``.
         payload["reasoning_effort"] = resolved
 
@@ -407,12 +414,17 @@ class LLMClient:
             payload["tools"] = tools
         if response_format is not None:
             payload["response_format"] = response_format
+        has_tools_in_payload = bool(payload.get("tools"))
         if reasoning_effort is not None:
             _apply_reasoning_effort_to_payload(
                 payload,
                 reasoning_effort,
-                entry.vendor,
+                entry,
+                has_tools=has_tools_in_payload,
             )
+        elif is_tokeness_gateway(entry) and has_tools_in_payload:
+            # Belt-and-suspenders: Tokeness requires explicit none when tools are present.
+            payload["reasoning_effort"] = "none"
 
         url = entry.chat_completions_url()
         headers = {

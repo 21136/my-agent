@@ -2,7 +2,7 @@
 
 ## 整理类 evolved 工具
 
-以下工具经 `run_evolved` 调用（`status=active` 即可，**不**要求先确认 workflow 主题）。**先 `dry_run: true` 预览**，用户确认后再正式执行。`path` 均相对 **workspace**。  
+以下工具经 `run_evolved` 调用（`status=active` 即可，**不**要求先确认 workflow 主题）。普通模式先 `dry_run: true` 预览并等待用户确认；狂奔模式优先使用项目内安全原语和 `plan_partner` 自动推进，不把文档预览变成人工确认门。`path` 均相对 **workspace**。
 细节也可：`read_file evolve/tool-catalog/buckets/organize.md`。
 
 | 工具 | 作用 |

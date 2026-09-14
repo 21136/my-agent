@@ -1,7 +1,7 @@
----
+﻿---
 id: stab-s15-accept-mem
 topics: [coding]
-status: active
+status: archived
 summary: stab s15 accept
 ---
 

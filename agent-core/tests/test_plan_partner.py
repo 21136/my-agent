@@ -91,7 +91,20 @@ class PlanPartnerTests(unittest.TestCase):
         # empty phase must not appear (no action)
         kinds = {s.get("kind") for s in suggestions}
         self.assertNotIn("empty_phase", kinds)
-        self.assertEqual(state.get("warnings") or [], [])
+        warnings = state.get("warnings") or []
+        self.assertTrue(any("plan_status" in warning for warning in warnings), warnings)
+        self.assertFalse(any("计划审阅" in warning for warning in warnings), warnings)
+
+    def test_ui5911_operational_reminders_stay_out_of_plan_review(self) -> None:
+        self._write_tasks(
+            "## Phase 1\n"
+            "- [ ] This is an intentionally long task description that explains scope, dependencies, implementation details, rollout checks, and evidence expectations in one queue item\n"
+        )
+        state = self.agent.build_state()
+        for _ in range(4):
+            state = self.agent.build_state()
+        self.assertFalse(any(s.get("kind") in {"stale", "split"} for s in state.get("suggestions", [])))
+        self.assertTrue(state.get("operational_notices"))
 
     def test_too_short_accept_deletes(self) -> None:
         self._write_tasks(

@@ -261,6 +261,34 @@ class TerminalEntryTests(unittest.TestCase):
         self.assertIn(desktop_id, ids)
         self.assertNotIn(term_id, ids)
 
+    def test_it_571_project_sessions_survive_unbound_session_limit(self) -> None:
+        from project_cli import bind_project_session
+        from project_mode import create_project
+        from project_switch import record_project_session
+        from session import list_session_summaries
+
+        project_id = f"project-visible-{secrets.token_hex(3)}"
+        create_project(self.paths, project_id)
+        project_session = create_new(
+            self.paths,
+            conversation_id=f"project-session-{secrets.token_hex(3)}",
+        )
+        bind_project_session(project_session, project_id)
+        project_session.save()
+        record_project_session(self.paths, project_id, project_session.conversation_id)
+
+        # Reconnects can leave many newer, empty ordinary sessions behind.
+        for _ in range(55):
+            create_new(
+                self.paths,
+                conversation_id=f"chat-session-{secrets.token_hex(3)}",
+            ).save()
+
+        summaries = list_session_summaries(self.paths, limit=50)
+        project_rows = [item for item in summaries if item["project_id"] == project_id]
+        self.assertEqual(len(project_rows), 1)
+        self.assertLessEqual(len(summaries), 50)
+
     def test_terminal_last_session_written_on_save(self) -> None:
         from session import read_terminal_last_session_id
 

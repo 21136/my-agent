@@ -9,9 +9,9 @@ last_used_at: "2026-08-09T00:41:37.678013Z"
 
 ## 背景
 
-my-agent 是本地可进化的个人 Agent：**Git 为真源**，LLM 仅经 6 个 Builtin 与 `run_evolved` 动手；进化产物在 `evolve/`（prompt / memory / tool）。
+my-agent 是本地可进化的个人 Agent：**Git 为真源**，LLM 仅经当前暴露的已注册 Builtin（基线 12：核心 8 + 编排 4）、扁平原语与 `run_evolved` 动手；进化产物在 `evolve/`（prompt / memory / tool）。
 
-## 建设顺序（已决）
+## 建设顺序（历史 Phase 路线，供参考）
 
 1. **M1a** 工具层（Phase 1，`T-101`～`T-112`）
 2. **M1b** 对话壳 + LLM（Phase 2）

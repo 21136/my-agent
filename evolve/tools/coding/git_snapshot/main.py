@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 _MAX_STAT_CHARS = 32000
+_MAX_DIFF_CHARS = 120000
 
 
 def _agent_root() -> Path:
@@ -52,6 +53,12 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:_MAX_STAT_CHARS] + "\n…(truncated)", True
 
 
+def _truncate_diff(text: str) -> tuple[str, bool]:
+    if len(text) <= _MAX_DIFF_CHARS:
+        return text, False
+    return text[:_MAX_DIFF_CHARS] + "\n…(truncated)", True
+
+
 def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     paths = _load_paths().discover(start=_agent_root())
     root = paths.agent_root
@@ -66,6 +73,12 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "paths must be an array of strings"}
 
     include_staged = bool(payload.get("include_staged", True))
+    include_diff = bool(payload.get("include_diff", False))
+    base_ref = payload.get("base_ref")
+    if base_ref is not None:
+        if not isinstance(base_ref, str) or not base_ref.strip() or base_ref.lstrip().startswith("-") or "\x00" in base_ref:
+            return {"ok": False, "error": "base_ref must be a non-empty git ref"}
+        base_ref = base_ref.strip()
     dry_run = bool(payload.get("dry_run", False))
 
     if dry_run:
@@ -75,6 +88,8 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
             "repo_root": paths.to_agent_relative(root),
             "paths": path_specs,
             "include_staged": include_staged,
+            "include_diff": include_diff,
+            "base_ref": base_ref,
         }
 
     branch_code, branch_out, branch_err = _run_git(
@@ -89,7 +104,10 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     if status_code != 0:
         return {"ok": False, "error": status_err.strip() or "git status failed"}
 
-    diff_args = ["diff", "--stat"]
+    diff_args = ["diff"]
+    if base_ref:
+        diff_args.append(base_ref)
+    diff_args.append("--stat")
     if path_specs:
         diff_args.append("--")
         diff_args.extend(path_specs)
@@ -118,7 +136,34 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
         "status_lines": status_lines,
         "diff_stat": diff_out,
         "staged_diff_stat": staged_out,
+        "untracked_paths": [line[3:] for line in status_lines if line.startswith("?? ")],
     }
+    if include_diff:
+        full_diff_args = ["diff"]
+        if base_ref:
+            full_diff_args.append(base_ref)
+        if path_specs:
+            full_diff_args.append("--")
+            full_diff_args.extend(path_specs)
+        full_code, full_out, full_err = _run_git(full_diff_args, cwd=root)
+        if full_code != 0:
+            return {"ok": False, "error": full_err.strip() or "git diff failed"}
+        full_out, full_trunc = _truncate_diff(full_out)
+        result["diff"] = full_out
+        if include_staged:
+            staged_full_args = ["diff", "--cached"]
+            if path_specs:
+                staged_full_args.append("--")
+                staged_full_args.extend(path_specs)
+            staged_full_code, staged_full_out, staged_full_err = _run_git(staged_full_args, cwd=root)
+            if staged_full_code != 0:
+                return {"ok": False, "error": staged_full_err.strip() or "git staged diff failed"}
+            staged_full_out, staged_full_trunc = _truncate_diff(staged_full_out)
+            result["staged_diff"] = staged_full_out
+        else:
+            staged_full_trunc = False
+        if full_trunc or staged_full_trunc:
+            result["diff_truncated"] = True
     if diff_trunc or staged_trunc:
         result["truncated"] = True
     return result

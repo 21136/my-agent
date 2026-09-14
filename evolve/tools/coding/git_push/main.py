@@ -1,6 +1,7 @@
 """git_push — push current branch only (Phase 32 Track E).
 
 Always confirm (except dry_run). No --force / --force-with-lease.
+Use gh_pr for create/view/checks/list (no merge/force/delete).
 """
 
 from __future__ import annotations

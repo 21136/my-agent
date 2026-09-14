@@ -2,7 +2,7 @@
 name = "git_push"
 description = """受控推送（Phase 32）：仅推送当前分支到 remote（默认 origin）。
 
-永远确认（dry_run 除外）。禁止 --force / --force-with-lease。PR/gh 另 Phase。"""
+永远确认（dry_run 除外）。禁止 --force / --force-with-lease。开 PR 请用 `gh_pr`（create/view/checks/list；禁 merge/force/delete）。"""
 version = "1.0.0"
 status = "active"
 topics = ["coding"]

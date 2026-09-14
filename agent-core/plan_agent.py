@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
@@ -27,6 +28,8 @@ from project_mode import (
     TASKS_ARCHIVE_NAME,
     MILESTONE_PROJECT_COMPLETE_KEY,
     build_suggestion_phase_key_map,
+    classify_stage_documents,
+    compute_execution_stage,
     drop_task_line,
     evaluate_milestone_after_archive,
     migrate_active_milestone_suggestion_keys,
@@ -76,7 +79,7 @@ class UndoEntry:
 
 
 _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划搭档」通道的对话伙伴。
-先理解用户要什么，再决定是否改文件或查跑工具。系统只解析你返回的 JSON；**计划域四件套采纳前不会写盘**。
+先理解用户要什么，再决定是否改文件或查跑工具。系统只解析你返回的 JSON；**计划域文档采纳前不会写盘**。
 你 **看不到** 主 Agent 聊天全文；只吃本通道来回 + 计划域文件真源。
 
 ## 文档角色（先按这个判断「合不合理」）
@@ -85,7 +88,15 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 - **TASKS.archive.md**：已完成/关闭项；侧栏勾选 = 完成并归档。误勾后用 restore，不要当「删了」去 add 重写。
 - **PROJECT.md**：目标/非目标/约束。
 - **ENV.md**：环境与端口约定。
+- **SCOPE.md**：REQ/AC、范围边界与非目标；是需求和验收的依据。
+- **DESIGN.md**：UX 流程、交互状态与异常路径；是设计提案的依据。
+- **TECH-DESIGN.md**：架构、数据模型、API、依赖与技术风险。
+- **VERIFY.md**：AC→V→L1 验证矩阵；不要把缺失证据当作已验证。
+- **RELEASE.md**：迁移、发布、回滚与人工验收清单。
 - **bugs/**：缺陷与修复长文；MAP/TASKS 里最多留一行指针。
+
+标准项目制品以七文件为真源。制品区块是只读上下文；如需修改，必须提出 Plan patch 并等待采纳。
+文档完整度是阶段性检查，不是全项目补齐清单。每次只围绕用户当前请求和一个直接变更包提案；不要因为一个文件的 lint 缺项，自动为所有其它文件生成 patch。后续阶段文档只标记为待完善，不得升级为当前阻塞。
 
 ## 输出
 只输出一个 JSON 对象：
@@ -93,7 +104,7 @@ _PLAN_SYSTEM = """你是 **Plan Agent（计划搭档）**：主输入「计划�
 
 operations 里每条：
 - kind: **patch** | **add** | **restore**
-- path: patch 时必填，且只能是 TASKS.md|MAP.md|PROJECT.md|ENV.md
+- path: patch 时必填，且只能是 PROJECT.md|SCOPE.md|DESIGN.md|TECH-DESIGN.md|TASKS.md|VERIFY.md|RELEASE.md|MAP.md|ENV.md
 - replacements: patch 时 [{ "old": "文件中唯一原文片段", "new": "替换后" }]
 - phase / description: 仅 kind=add
 - phase / task_ids / bodies: 仅 kind=restore（从归档恢复为开放 [ ]）
@@ -104,12 +115,13 @@ restore 示例：
 
 tool_calls（可选；结果只进本通道）：
 - {"name":"read_file"|"list_dir"|"grep"|"web_search"|"fetch_url"|"run_command", "arguments":{...}}
-- **禁止** write_text 等直写 TASKS/MAP/PROJECT/ENV（须 operations 提案）
+- **禁止** write_text 等直写七文件及 MAP/ENV（须 operations 提案）
 - **禁止** 对 TASKS.md / TASKS.archive.md 再 read_file（开放队列与归档切片已在下方 user prompt）；除非读其它业务代码路径
 
 ## 意图分流（先分清）
 - 「合不合理 / 该不该 / 为什么 / 是不是」→ **先 reply 讲清楚**；用户没明确要求改文件时 **operations 必须 []**
 - 「把…改掉 / 整理 / 挪走 / 删掉 Phase 字样」→ reply 可一句 + operations 出 patch
+- 「时序图 / 流程图 / 状态图 / Mermaid / 怎么没有图」→ 视为**文档补齐请求**，不要新增 TASKS；用户明确指定 `TECH-DESIGN.md` / `RELEASE.md` 时必须按指定文件提案，否则按文档职责选择目标，并自动补齐 TASKS.md / VERIFY.md 的稳定 ID 引用
 - 「加一个 / 新增任务」→ add 或 TASKS patch
 - 「恢复 / 找回 / 误勾 / 不见了」→ 看归档切片；优先 kind=restore（phase 或 task_ids），**禁止**用 add 重写已归档文案
 - 「优化 / 夹心 / 跳段」→ 看进度摘要 ⚠；需要改队列再 patch TASKS；并行模块脚手架不是重复
@@ -142,6 +154,24 @@ _PLAN_ADD_PREFIX_RE = re.compile(
 )
 _PLAN_RESTORE_RE = re.compile(
     r"(恢复|找回|误勾|误点|撤销归档|还原|取消完成|搞不见|不见了|误归档|restore)",
+    re.IGNORECASE,
+)
+_DOCUMENT_DIAGRAM_INTENT_RE = re.compile(
+    r"(时序图|时序|sequence\s*diagram|sequenceDiagram|mermaid|流程图|状态图|用例图|"
+    r"缺少.*图|没有.*图|补齐.*图|补.*图)",
+    re.IGNORECASE,
+)
+_DOCUMENT_TARGET_RE = re.compile(
+    r"(?<![\w-])(DESIGN|TECH-DESIGN|RELEASE)\.md\b",
+    re.IGNORECASE,
+)
+_RELEASE_DOCUMENT_HINT_RE = re.compile(
+    r"(部署|发布|迁移|回滚|健康检查|启动顺序|环境变量|密钥|对象存储|release)",
+    re.IGNORECASE,
+)
+_TECH_DOCUMENT_HINT_RE = re.compile(
+    r"(架构|数据模型|API|接口|依赖|技术风险|异步事件|幂等|重试|死信|数据库|MinIO|"
+    r"technical|architecture|idempotency|retry|dead.?letter)",
     re.IGNORECASE,
 )
 _LEGACY_LINE_OPS = frozenset({"move", "rephase", "drop", "skip", "split", "reorder"})
@@ -284,7 +314,7 @@ def looks_like_plan_meta_command(text: str) -> bool:
 def looks_like_new_task_utterance(text: str) -> bool:
     """Heuristic: user is naming a work item to add (safe L2 fallback)."""
     t = (text or "").strip()
-    if not t or looks_like_plan_meta_command(t):
+    if not t or looks_like_plan_meta_command(t) or looks_like_document_diagram_request(t):
         return False
     if _PLAN_MUTATE_RE.search(t):
         return False
@@ -293,6 +323,31 @@ def looks_like_new_task_utterance(text: str) -> bool:
     if _PLAN_ADD_PREFIX_RE.match(t):
         return True
     return len(t) >= 4
+
+
+def looks_like_document_diagram_request(text: str) -> bool:
+    """True when the user asks to add or repair a design diagram/document."""
+    return bool(_DOCUMENT_DIAGRAM_INTENT_RE.search((text or "").strip()))
+
+
+def document_patch_targets(text: str) -> tuple[str, ...]:
+    """Resolve document patch targets from explicit names and document roles."""
+    value = (text or "").strip()
+    explicit = [
+        match.group(1).upper() + ".md"
+        for match in _DOCUMENT_TARGET_RE.finditer(value)
+    ]
+    targets: list[str] = []
+    for target in explicit:
+        if target not in targets:
+            targets.append(target)
+    if targets:
+        return tuple(targets)
+    if _RELEASE_DOCUMENT_HINT_RE.search(value):
+        targets.append("RELEASE.md")
+    if _TECH_DOCUMENT_HINT_RE.search(value):
+        targets.append("TECH-DESIGN.md")
+    return tuple(targets or ["DESIGN.md"])
 
 
 def strip_add_prefix(text: str) -> str:
@@ -442,10 +497,66 @@ def _format_tasks_with_line_numbers(tasks_text: str) -> str:
 
 
 def _clip_doc(text: str, *, limit: int = 6000) -> str:
-    t = text or ""
+    # Prompt context is assembled from filesystem readers, but callers and
+    # tests may provide mapping-like adapters. Never let a non-text value
+    # abort the LLM call while building the prompt.
+    t = text if isinstance(text, str) else (str(text) if text else "")
     if len(t) <= limit:
         return t
     return t[: limit - 20] + "\n\n…(截断)…\n"
+
+
+_PLAN_ARTIFACT_ORDER = (
+    "SCOPE.md",
+    "DESIGN.md",
+    "TECH-DESIGN.md",
+    "VERIFY.md",
+    "RELEASE.md",
+)
+
+
+def _format_plan_artifact_context(
+    artifact_texts: Mapping[str, str] | None,
+    manifest: Mapping[str, Any] | None = None,
+) -> str:
+    """Render standard project artifacts and freshness metadata for Plan LLM."""
+    texts = artifact_texts or {}
+    manifest_by_path = {
+        str(item.get("path")): item
+        for item in (manifest or {}).get("artifacts", [])
+        if isinstance(item, Mapping) and item.get("path")
+    }
+    rows: list[str] = []
+    for name in _PLAN_ARTIFACT_ORDER:
+        item = manifest_by_path.get(name, {})
+        revision = str(item.get("revision") or "unknown")
+        status = str(item.get("status") or "untracked")
+        rows.append(f"- `{name}` · revision `{revision}` · status `{status}`")
+    completeness_rows = [
+        f"- `{name}` · completeness `{str(manifest_by_path.get(name, {}).get('completeness') or 'unknown')}`"
+        for name in _PLAN_ARTIFACT_ORDER
+    ]
+    sections = [
+        "## 标准项目制品（只读参考；提案可引用，修改须走 Plan patch + 采纳）",
+        *rows,
+        *completeness_rows,
+    ]
+    for name in _PLAN_ARTIFACT_ORDER:
+        sections.extend(
+            [
+                f"\n### {name}",
+                _clip_doc(texts.get(name, ""), limit=4000) or "（无）",
+            ]
+        )
+    lint = manifest.get("content_lint") if isinstance(manifest, Mapping) else None
+    if isinstance(lint, Mapping) and lint.get("missing"):
+        sections.extend(
+            [
+                "\n### Document baseline note",
+                "Baseline lint is advisory. Inspect or propose only the user-targeted document and its direct reference, not every missing item.",
+            ]
+        )
+    return "\n".join(sections) + "\n\n"
 
 
 def _build_plan_prompt(
@@ -455,6 +566,8 @@ def _build_plan_prompt(
     map_text: str = "",
     project_text: str = "",
     env_text: str = "",
+    artifact_texts: Mapping[str, str] | None = None,
+    manifest: Mapping[str, Any] | None = None,
     archive_tail: str = "",
     archive_path: "Path | None" = None,
     plan_transcript: list[dict[str, str]] | None = None,
@@ -508,6 +621,11 @@ def _build_plan_prompt(
 
 {_clip_doc(env_text, limit=2000) or "（无）"}
 
+{_format_plan_artifact_context(artifact_texts, manifest)}
+## 文档提案目标（路由约束）
+
+用户明确指定的文件优先：{"、".join(document_patch_targets(user_intent))}。TECH-DESIGN.md 负责架构/API/异步事件/技术风险；RELEASE.md 负责部署/迁移/回滚/健康检查；DESIGN.md 负责用户流程与交互。不得把指定目标改写成 DESIGN.md。除非用户明确要求跨文件同步，否则不要因为目标文件变化递归生成其它制品 patch。
+
 {archive_tail or ""}{tools_block}## 用户说
 
 {user_intent}
@@ -543,6 +661,7 @@ class PlanAgent:
     _undo_stack: list[UndoEntry] = field(default_factory=list)
     _undo_applying: bool = field(default=False, repr=False)
     _degradation_level: DegradationLevel = field(default="L1")
+    _last_gateway_failure: bool = field(default=False, repr=False)
     _last_tasks_snapshot: str = ""  # full TASKS.md text after last mutation
     _stale_task_line: int = -1  # line of current task last seen
     _stale_task_count: int = 0  # consecutive build_state calls with same current
@@ -562,6 +681,8 @@ class PlanAgent:
     # Phase 38 · A11/C4–C6 — in-memory Plan channel only (never messages.jsonl)
     _plan_transcript: list[dict[str, str]] = field(default_factory=list, repr=False)
     _planning_model_id: str = field(default="", repr=False)
+    _state_save_depth: int = field(default=0, init=False, repr=False)
+    _state_save_pending: bool = field(default=False, init=False, repr=False)
 
     def configure_planning_model(self, model_id: str) -> None:
         """Set planning model for this run (Phase 42 · plan_partner role)."""
@@ -629,6 +750,18 @@ class PlanAgent:
         return self.plan_transcript_snapshot()
 
     # ---- persistence ----
+
+    @contextmanager
+    def state_save_batch(self):
+        """Coalesce repeated state writes during one compound mutation."""
+        self._state_save_depth += 1
+        try:
+            yield
+        finally:
+            self._state_save_depth -= 1
+            if self._state_save_depth == 0 and self._state_save_pending:
+                self._state_save_pending = False
+                self._save_state()
 
     @property
     def _state_dir(self) -> Path:
@@ -724,6 +857,9 @@ class PlanAgent:
         return r1 or r2 or r3
 
     def _save_state(self) -> None:
+        if self._state_save_depth:
+            self._state_save_pending = True
+            return
         self._state_dir.mkdir(parents=True, exist_ok=True)
         data = {
             "fingerprint": self._last_fingerprint,
@@ -961,13 +1097,19 @@ class PlanAgent:
 
         result = drop_task_line(self.paths, self.project_id, line)
         removed = result.get("removed", original_content)
+        import re
+        dropped_body = removed.strip()
+        task_id_match = re.search(r"\bT-\d+(?:-\d+)*\b", dropped_body)
         undo = UndoEntry(
             description=f"已删除「{removed.strip()[:30]}」",
             reverse_kind="insert",
             reverse_data={"position": line, "content": original_content},
         )
-        return self._mutate_and_check(result, "drop", removed, reason="drop",
-                                       line=line, undo=undo)
+        updated = self._mutate_and_check(result, "drop", removed, reason="drop",
+                                          line=line, undo=undo)
+        updated["dropped_body"] = dropped_body
+        updated["dropped_id"] = task_id_match.group(0) if task_id_match else dropped_body[:80]
+        return updated
 
     def skip_task(self, line: int) -> dict[str, Any]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -1041,7 +1183,7 @@ class PlanAgent:
             "建议：① git_commit 快照 ② build/test ③ 口语「验收」（只读 review，不挡写码）。",
         ]
         if ev.get("m2") or ev.get("should_remind_m2"):
-            lines.append("全项目开放队列已空；收尾前建议 review + commit。")
+            lines.append("全项目开放队列已空；下一步是验证、review 和发布验收。")
         if normalize_delivery_profile(delivery_profile) == "ritual":
             lines.append(
                 "ritual：建议先 deliverable_review，fail 时会挡 report_progress。"
@@ -1283,6 +1425,42 @@ class PlanAgent:
         self._save_state()
         return sug
 
+    def _prune_invalid_pending_patch_suggestions(self) -> None:
+        """Withdraw persisted patches whose source text no longer exists."""
+        from plan_patch import build_patch_preview
+
+        changed = False
+        for sid, sug in list(self._pending_gated.items()):
+            if sug.get("action") != "apply_patch":
+                continue
+            payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
+            path = str(payload.get("path") or "").strip()
+            replacements = payload.get("replacements")
+            if not path or not isinstance(replacements, list) or not replacements:
+                invalid = True
+            else:
+                try:
+                    build_patch_preview(
+                        self.paths,
+                        self.project_id,
+                        relpath=path,
+                        replacements=replacements,
+                    )
+                except ProjectModeError:
+                    invalid = True
+                else:
+                    invalid = False
+            if not invalid:
+                continue
+            self._pending_gated.pop(sid, None)
+            self._last_suggestions.pop(sid, None)
+            self._ignored_suggestion_ids.add(sid)
+            changed = True
+        if changed:
+            if not self._pending_gated:
+                self._last_partner_notices = []
+            self._save_state()
+
     def _rebase_pending_patch_suggestions_for_path(self, adopted_path: str) -> list[str]:
         """BUG-026 A2 (T-4812): refresh base_hash for other pending patches on same path."""
         from plan_patch import build_patch_preview
@@ -1330,7 +1508,21 @@ class PlanAgent:
             self._save_state()
         return withdrawn
 
-    def accept_suggestion(self, suggestion_id: str) -> dict[str, Any]:
+    def accept_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        code_policy: str = "plan_only",
+    ) -> dict[str, Any]:
+        with self.state_save_batch():
+            return self._accept_suggestion(suggestion_id, code_policy=code_policy)
+
+    def _accept_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        code_policy: str = "plan_only",
+    ) -> dict[str, Any]:
         """Apply a previously emitted suggestion via its action/payload."""
         sid = str(suggestion_id or "").strip()
         sug = self._last_suggestions.get(sid) or self._pending_gated.get(sid)
@@ -1349,12 +1541,23 @@ class PlanAgent:
 
         if action == "apply_patch":
             from plan_patch import apply_plan_patch
+            from project_manifest import (
+                append_change_ledger,
+                ensure_project_manifest,
+                next_change_id,
+                save_manifest,
+                adopt_manifest_change,
+            )
 
             rel = str(payload.get("path") or "").strip()
             reps = payload.get("replacements")
             if not isinstance(reps, list):
                 raise ProjectModeError("apply_patch requires replacements[]")
             base_hash = payload.get("base_hash")
+            project_root = project_dir(self.paths, self.project_id)
+            manifest = ensure_project_manifest(self.paths, self.project_id)
+            before_revision = str(manifest.get("manifest_revision") or "r0")
+            change_id = next_change_id(project_root)
             try:
                 result = apply_plan_patch(
                     self.paths,
@@ -1371,6 +1574,60 @@ class PlanAgent:
                     "summary": f"已撤回无效提案：{exc}",
                     "_next_task": self.next_task_text(),
                 }
+            adopted_path = str(result.get("path") or rel).strip()
+            adopted_level = "L2" if adopted_path in {"PROJECT.md", "SCOPE.md"} else "L1"
+            adopt_manifest_change(
+                manifest,
+                project_root,
+                adopted_path,
+                change_id=change_id,
+                level=adopted_level,
+            )
+            save_manifest(project_root / ".plan-agent" / "manifest.json", manifest)
+            changed_text = ""
+            changed_file = project_root / adopted_path
+            if changed_file.is_file():
+                changed_text = changed_file.read_text(encoding="utf-8")
+
+            def _ids(prefix: str) -> list[str]:
+                return sorted(
+                    set(
+                        re.findall(
+                            rf"\b{prefix}-(?:[A-Z0-9]+-)*\d{{3,}}\b",
+                            changed_text,
+                            re.IGNORECASE,
+                        )
+                    ),
+                    key=str.upper,
+                )
+
+            stale_docs = [
+                str(item.get("path"))
+                for item in manifest.get("artifacts", [])
+                if isinstance(item, dict) and item.get("status") in {"stale", "stale_soft"}
+            ]
+            change_entry = append_change_ledger(
+                project_root,
+                {
+                    "change_id": change_id,
+                    "adopted_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                    "source": "plan_partner",
+                    "proposal_id": sid,
+                    "paths": [adopted_path],
+                    "summary": str(sug.get("title") or f"Accepted patch for {adopted_path}"),
+                    "requirements": _ids("REQ"),
+                    "tasks": _ids("T"),
+                    "acceptance": _ids("AC"),
+                    "verification": _ids("V"),
+                    "stale_docs": stale_docs,
+                    "replan_required": any(
+                        isinstance(item, dict) and item.get("status") == "stale"
+                        for item in manifest.get("artifacts", [])
+                    ),
+                    "before_revision": before_revision,
+                    "after_revision": str(manifest.get("manifest_revision") or before_revision),
+                },
+            )
             self._record_change(
                 "external" if rel != "TASKS.md" else "add",
                 f"patch {rel}",
@@ -1385,6 +1642,16 @@ class PlanAgent:
             return {
                 **result,
                 "summary": notice,
+                "change": change_entry,
+                "impact": {
+                    "paths": change_entry["paths"],
+                    "requirements": change_entry["requirements"],
+                    "tasks": change_entry["tasks"],
+                    "acceptance": change_entry["acceptance"],
+                    "verification": change_entry["verification"],
+                    "stale_docs": change_entry["stale_docs"],
+                    "replan_required": change_entry["replan_required"],
+                },
                 "_next_task": self.next_task_text(),
             }
 
@@ -1466,6 +1733,35 @@ class PlanAgent:
                 raise ProjectModeError("drop_task suggestion missing line")
             result = self.drop_task(line)
             self._mark_suggestion_resolved(sid)
+            policy = code_policy if code_policy in {"plan_only", "agent_cleanup", "git_guide"} else "plan_only"
+            if policy == "agent_cleanup":
+                body = str(result.get("dropped_body") or "the deleted task")
+                result["_code_followup"] = {
+                    "mode": "agent_cleanup",
+                    "prefill": (
+                        f"计划任务已删除：{body}\n"
+                        "请在当前项目中清理与该任务相关的代码产出；不要自动恢复计划任务，完成后返回可接受的变更。"
+                    ),
+                    "paths": [],
+                    "dropped_body": body,
+                    "dropped_id": str(result.get("dropped_id") or ""),
+                }
+            elif policy == "git_guide":
+                body = str(result.get("dropped_body") or "the deleted task")
+                workspace_rel = f"workspace/{self.project_id}"
+                result["_code_followup"] = {
+                    "mode": "git_guide",
+                    "dropped_body": body,
+                    "dropped_id": str(result.get("dropped_id") or ""),
+                    "guide": {
+                        "workspace_rel": workspace_rel,
+                        "commands": [
+                            f"git -C {workspace_rel} status --short",
+                            f"git -C {workspace_rel} diff --stat",
+                        ],
+                        "note": "仅提供可复制的清理指引；不会自动 revert、删除文件或提交。",
+                    },
+                }
             return result
 
         if action == "move_task":
@@ -1626,20 +1922,23 @@ class PlanAgent:
                     payload={"line": i},
                 ))
             elif len(desc) > 120:
-                out.append(self._suggestion(
-                    kind="split",
-                    title="建议拆分任务",
-                    body=(
-                        f"行 {i} 过长（{len(desc)} 字）。"
-                        f"采纳 = 拆成更小步骤；忽略 = 本会话不再提示。"
-                    ),
-                    key=f"long-{i}",
-                    action="split_task",
-                    payload={"line": i},
-                ))
+                continue
 
         # phase_long without a safe auto action — skip (Ignore-only cards banned)
         return out
+
+    def _operational_task_notices(self, tasks_text: str) -> list[str]:
+        notices: list[str] = []
+        for line_number, line in enumerate(tasks_text.splitlines()):
+            match = re.match(r"^\s*-\s*\[[ x]\]\s+(.*)", line)
+            if not match:
+                continue
+            description = match.group(1).strip()
+            if len(description) > 120:
+                notices.append(
+                    f"任务行 {line_number} 描述较长；如需拆分，请明确提出拆分任务。"
+                )
+        return notices
 
     def _suggest_empty_phases(self) -> list[dict[str, Any]]:
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
@@ -1701,8 +2000,166 @@ class PlanAgent:
             "审阅面或侧栏「查看」后可写入 TASKS.md。"
         )
 
+    def _fallback_document_diagram(self, text: str, extra: str = "") -> str:
+        """Turn a diagram request into a gated proposal for the right artifact."""
+        root = project_dir(self.paths, self.project_id)
+        target_path = document_patch_targets(text)[0]
+        target_file = root / target_path
+        tasks_path = root / "TASKS.md"
+        verify_path = root / "VERIFY.md"
+        target_text = target_file.read_text(encoding="utf-8") if target_file.is_file() else ""
+        tasks = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
+        verify = verify_path.read_text(encoding="utf-8") if verify_path.is_file() else ""
+
+        sequence_id = ""
+        for block in re.findall(r"```mermaid\s*(.*?)```", target_text + "\n" + (
+            (root / "TECH-DESIGN.md").read_text(encoding="utf-8")
+            if (root / "TECH-DESIGN.md").is_file()
+            else ""
+        ), flags=re.IGNORECASE | re.DOTALL):
+            if re.search(r"^\s*sequenceDiagram\b", block, flags=re.IGNORECASE | re.MULTILINE):
+                match = re.search(r"\bSEQ-(\d{3,})\b", block, flags=re.IGNORECASE)
+                if match:
+                    sequence_id = f"SEQ-{int(match.group(1)):03d}"
+                    break
+
+        if not sequence_id:
+            ids = [
+                int(value)
+                for value in re.findall(r"\bSEQ-(\d{3,})\b", target_text + "\n" + tasks + "\n" + verify, re.IGNORECASE)
+            ]
+            sequence_id = f"SEQ-{(max(ids) + 1) if ids else 1:03d}"
+
+        operations: list[dict[str, Any]] = []
+        if not re.search(
+            rf"```mermaid\s*(?:(?!```).)*^\s*sequenceDiagram\b(?:(?!```).)*\b{re.escape(sequence_id)}\b(?:(?!```).)*```",
+                target_text,
+                flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+            ):
+            if target_text.strip():
+                target_base = target_text.rstrip()
+                diagram_source = (
+                    "sequenceDiagram\n"
+                    "    autonumber\n"
+                    "    participant U as 用户\n"
+                    "    participant C as 客户端\n"
+                    "    participant S as 服务\n"
+                    "    participant A as 异步处理\n"
+                    "    U->>C: 发起操作\n"
+                    "    C->>S: 提交请求\n"
+                    "    S-->>C: 返回受理结果\n"
+                    "    S-)A: 投递异步任务\n"
+                    "    A-->>S: 完成或失败通知\n"
+                    "    S-->>C: 更新处理状态\n"
+                    "    C-->>U: 展示最终结果\n"
+                )
+                try:
+                    import importlib.util
+
+                    tool_path = _AGENT_CORE.parent / "evolve" / "tools" / "workflow" / "design_diagram" / "main.py"
+                    spec = importlib.util.spec_from_file_location(
+                        "plan_design_diagram_tool", tool_path
+                    )
+                    if spec is None or spec.loader is None:
+                        raise RuntimeError("design_diagram tool could not be loaded")
+                    tool_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(tool_module)
+                    tool_result = tool_module.run_design_diagram(
+                        {
+                            "path": f"workspace/{self.project_id}/.plan-agent/{sequence_id}.mmd",
+                            "diagram_type": "sequence",
+                            "engine": "mermaid",
+                            "title": f"{sequence_id} · 异步操作时序",
+                            "source": diagram_source,
+                            "on_conflict": "skip",
+                            "dry_run": True,
+                        }
+                    )
+                except Exception as exc:
+                    return f"已识别为时序图请求，但现有 design_diagram 工具调用失败：{exc}"
+                if not isinstance(tool_result, dict) or not tool_result.get("ok"):
+                    error = tool_result.get("error") if isinstance(tool_result, dict) else "unknown error"
+                    return f"已识别为时序图请求，但 design_diagram 工具未通过校验：{error}"
+                normalized_source = str(tool_result.get("source") or diagram_source).rstrip()
+                diagram = (
+                    f"\n\n## {sequence_id} · 异步操作时序\n\n"
+                    "以下为根据当前请求补出的最小可审阅版本；具体参与者和失败分支可在采纳后继续细化。\n\n"
+                    "```mermaid\n"
+                    f"{normalized_source}\n"
+                    "```\n\n"
+                    f"- {sequence_id} 覆盖用户发起、同步受理、异步处理和结果回传。\n"
+                )
+                operations.append({
+                    "kind": "patch",
+                    "path": target_path,
+                    "replacements": [{"old": target_base, "new": target_base + diagram}],
+                    "reason": f"按用户的时序图请求补齐 {target_path} 中的独立 Mermaid 时序图",
+                })
+
+        if not re.search(rf"\b{re.escape(sequence_id)}\b", tasks, flags=re.IGNORECASE):
+            design_line = re.search(r"(?im)^(\s*design\s*:\s*.*)$", tasks)
+            if design_line:
+                old_line = design_line.group(1)
+                new_line = old_line.rstrip() + f", {sequence_id}"
+                operations.append({
+                    "kind": "patch",
+                    "path": "TASKS.md",
+                    "replacements": [{"old": old_line, "new": new_line}],
+                    "reason": f"为 {sequence_id} 补充实施关联",
+                })
+            elif tasks.strip():
+                tasks_base = tasks.rstrip()
+                operations.append({
+                    "kind": "patch",
+                    "path": "TASKS.md",
+                    "replacements": [{
+                        "old": tasks_base,
+                        "new": tasks_base + f"\n\n  design: {sequence_id}\n",
+                    }],
+                    "reason": f"为 {sequence_id} 补充 TASKS.md 引用",
+                })
+
+        if not re.search(rf"\b{re.escape(sequence_id)}\b", verify, flags=re.IGNORECASE) and verify.strip():
+            verify_base = verify.rstrip()
+            operations.append({
+                "kind": "patch",
+                "path": "VERIFY.md",
+                "replacements": [{
+                    "old": verify_base,
+                    "new": verify_base + (
+                        f"\n\n## {sequence_id}\n"
+                        "- 验证同步受理、异步处理完成/失败通知和最终状态回传。\n"
+                    ),
+                }],
+                "reason": f"为 {sequence_id} 补充 VERIFY.md 引用",
+            })
+
+        if not operations:
+            return f"已找到现有 {sequence_id} 时序图；没有需要新增的文档提案。"
+
+        applied = self._apply_plan_operations(operations, reason_prefix="自动文档补齐")
+        self._save_state()
+        count = len([item for item in applied if "提案 patch" in item])
+        return (
+            f"已将「{text[:40]}」识别为文档补齐请求，自动生成 {sequence_id} 时序图方案"
+            f"（{count} 个文件提案，未写盘）。请在侧栏审阅后采纳。"
+        )
+
+    def _plan_gateway_failure_reply(self, exc: BaseException) -> str:
+        """Gateway/ pool class LLM failure — no fallback proposals (R7-27)."""
+        self._degradation_level = "L2"
+        self._last_gateway_failure = True
+        self._pending_gated.clear()
+        msg = (
+            f"LLM 调用失败（{exc}）。计划域暂不可写；"
+            "请继续实现与 VERIFY 证据，稍后重试 plan_partner。"
+        )
+        return self._finalize_plan_reply(msg)
+
     def _plan_channel_fallback(self, text: str, extra: str = "") -> str:
         """L2兜底 only — LLM 不可用 / 解析失败时。正常路径应已走 LLM。"""
+        if looks_like_document_diagram_request(text):
+            return self._fallback_document_diagram(text, extra=extra)
         if looks_like_plan_meta_command(text):
             return self._handle_meta_plan_command(text)
         if looks_like_restore_request(text):
@@ -1966,33 +2423,37 @@ class PlanAgent:
         text = (raw or "").strip()
         if not text:
             return [], False, "", []
-        if "```" in text:
-            lines = text.splitlines()
-            json_lines: list[str] = []
-            in_block = False
-            for line in lines:
-                if line.strip().startswith("```"):
-                    if in_block:
-                        break
-                    in_block = True
+        candidates: list[str] = [text]
+        candidates.extend(
+            match.group(1).strip()
+            for match in re.finditer(
+                r"```(?:json)?\s*\n?(.*?)```", text, flags=re.IGNORECASE | re.DOTALL
+            )
+        )
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char in "[{":
+                try:
+                    _, end = decoder.raw_decode(text[index:])
+                except json.JSONDecodeError:
                     continue
-                if in_block:
-                    json_lines.append(line)
-            text = "\n".join(json_lines)
-        try:
-            result = json.loads(text)
-        except (json.JSONDecodeError, AttributeError):
-            return [], False, "", []
-        if isinstance(result, dict):
-            ops = result.get("operations", [])
-            reply = str(result.get("reply") or result.get("notice") or "").strip()
-            tool_calls = result.get("tool_calls") or result.get("tools") or []
-            if not isinstance(tool_calls, list):
-                tool_calls = []
-            clean_tools = [t for t in tool_calls if isinstance(t, dict) and t.get("name")]
-            return (ops if isinstance(ops, list) else []), True, reply, clean_tools
-        if isinstance(result, list):
-            return result, True, "", []
+                candidates.append(text[index : index + end])
+
+        for candidate in candidates:
+            try:
+                result = json.loads(candidate)
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                continue
+            if isinstance(result, dict):
+                ops = result.get("operations", [])
+                reply = str(result.get("reply") or result.get("notice") or "").strip()
+                tool_calls = result.get("tool_calls") or result.get("tools") or []
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
+                clean_tools = [t for t in tool_calls if isinstance(t, dict) and t.get("name")]
+                return (ops if isinstance(ops, list) else []), True, reply, clean_tools
+            if isinstance(result, list):
+                return result, True, "", []
         return [], False, "", []
 
     def _park_file_patch_suggestion(
@@ -2240,14 +2701,23 @@ class PlanAgent:
 
         root = project_dir(self.paths, self.project_id)
         tasks_path = root / "TASKS.md"
-        tasks_text = tasks_path.read_text(encoding="utf-8") if tasks_path.is_file() else ""
-        map_text = (root / "MAP.md").read_text(encoding="utf-8") if (root / "MAP.md").is_file() else ""
-        project_text = (
-            (root / "PROJECT.md").read_text(encoding="utf-8")
-            if (root / "PROJECT.md").is_file()
-            else ""
-        )
-        env_text = (root / "ENV.md").read_text(encoding="utf-8") if (root / "ENV.md").is_file() else ""
+        artifact_texts = read_project_artifacts(self.paths, self.project_id)
+        tasks_text = artifact_texts.get("TASKS.md", "")
+        map_text = artifact_texts.get("MAP.md", "")
+        project_text = artifact_texts.get("PROJECT.md", "")
+        env_text = artifact_texts.get("ENV.md", "")
+        manifest = None
+        try:
+            from project_manifest import lint_project_content, refresh_project_manifest
+
+            manifest = refresh_project_manifest(self.paths, self.project_id)
+            manifest["content_lint"] = lint_project_content(
+                root,
+                tier=str(manifest.get("project", {}).get("tier") or "normal"),
+                change_scope=str(manifest.get("change_scope") or "normal"),
+            )
+        except Exception:
+            pass
         from project_mode import TASKS_ARCHIVE_NAME, format_archive_tail_for_prompt
 
         archive_path = root / TASKS_ARCHIVE_NAME
@@ -2267,6 +2737,8 @@ class PlanAgent:
                             map_text=map_text,
                             project_text=project_text,
                             env_text=env_text,
+                            artifact_texts=artifact_texts,
+                            manifest=manifest,
                             archive_tail=archive_tail,
                             archive_path=archive_path,
                             plan_transcript=self._plan_transcript,
@@ -2280,11 +2752,40 @@ class PlanAgent:
             raw = response.content or ""
             return self._parse_operations_json(raw)
 
-        try:
-            operations, parsed_ok, reply, tool_calls = _one_llm_call()
-        except Exception as exc:
+        self._last_gateway_failure = False
+
+        import time
+
+        from exec_reliability import (
+            is_pool_exhausted_transport_error,
+            llm_transport_backoff_seconds,
+            runaway_pool_exhausted_retries,
+        )
+
+        operations: list[dict[str, Any]] = []
+        parsed_ok = False
+        reply = ""
+        tool_calls: list[dict[str, Any]] = []
+        last_exc: Exception | None = None
+        max_attempts = runaway_pool_exhausted_retries()
+        for attempt in range(max_attempts):
+            try:
+                operations, parsed_ok, reply, tool_calls = _one_llm_call()
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if not is_pool_exhausted_transport_error(exc) or attempt >= max_attempts - 1:
+                    break
+                time.sleep(llm_transport_backoff_seconds(attempt + 1, pool_exhausted=True))
+        if last_exc is not None:
+            if is_pool_exhausted_transport_error(last_exc):
+                return self._plan_gateway_failure_reply(last_exc)
             self._degradation_level = "L2"
-            out = self._plan_channel_fallback(user_text, extra=f"LLM 调用失败（{exc}）")
+            out = self._plan_channel_fallback(
+                user_text,
+                extra=f"LLM 调用失败（{last_exc}）",
+            )
             return self._finalize_plan_reply(out)
 
         from subagent import plan_subagent_tool_rounds
@@ -2301,7 +2802,25 @@ class PlanAgent:
             try:
                 operations, parsed_ok, reply, tool_calls = _one_llm_call()
             except Exception as exc:
-                out = self._plan_channel_fallback(user_text, extra=f"工具后 LLM 失败（{exc}）")
+                if is_pool_exhausted_transport_error(exc):
+                    return self._plan_gateway_failure_reply(exc)
+                self._degradation_level = "L2"
+                out = self._plan_channel_fallback(
+                    user_text,
+                    extra=f"工具后 LLM 失败（{exc}）",
+                )
+                return self._finalize_plan_reply(out)
+
+        if parsed_ok and looks_like_document_diagram_request(user_text):
+            expected_targets = set(document_patch_targets(user_text))
+            has_expected_patch = any(
+                isinstance(op, dict)
+                and str(op.get("kind") or "").strip().lower() == "patch"
+                and str(op.get("path") or "").strip() in expected_targets
+                for op in operations
+            )
+            if not has_expected_patch:
+                out = self._fallback_document_diagram(user_text)
                 return self._finalize_plan_reply(out)
 
         if not parsed_ok:
@@ -2341,8 +2860,12 @@ class PlanAgent:
 
     # ---- state payload ----
 
-    def build_state(self, session: Session | None = None) -> dict[str, Any]:
-        """Build project.plan.state payload. Runs auto_fix + quality_check every time."""
+    def build_state(self, session: Session | None = None, *, light: bool = False) -> dict[str, Any]:
+        """Build project.plan.state payload.
+
+        ``light=True`` (human adopt/ignore): skip auto_fix + full manifest refresh.
+        """
+        self._prune_invalid_pending_patch_suggestions()
         artifacts = read_project_artifacts(self.paths, self.project_id)
         tasks_path = project_dir(self.paths, self.project_id) / "TASKS.md"
         stats = read_task_stats(tasks_path)
@@ -2350,6 +2873,32 @@ class PlanAgent:
         plan_status = ""
         if session is not None:
             plan_status = session.meta.project_plan_status or "draft"
+
+        runaway_enabled = bool(getattr(session.meta, "project_runaway_enabled", False)) if session is not None else False
+        runaway_checkpoint = "idle"
+        runaway_status = "已关闭"
+        runaway_paused_reason = None
+        runaway_acceptance_passed = False
+        runaway_verification_evidence = None
+        runaway_verification_evidence_path = None
+        if session is not None:
+            from runaway_flow import checkpoint_label, normalize_checkpoint
+            from runaway_verification import load_verification_evidence, verification_evidence_path
+
+            runaway_checkpoint = normalize_checkpoint(getattr(session.meta, "project_runaway_checkpoint", ""))
+            runaway_paused_reason = getattr(session.meta, "project_runaway_paused_reason", "") or None
+            runaway_acceptance_passed = bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
+            runaway_verification_evidence = load_verification_evidence(self.paths, self.project_id)
+            evidence_path = verification_evidence_path(self.paths, self.project_id)
+            if evidence_path.is_file():
+                runaway_verification_evidence_path = str(evidence_path.relative_to(self.paths.workspace)).replace("\\", "/")
+            runaway_status = (
+                f"已暂停：{runaway_paused_reason}"
+                if runaway_paused_reason
+                else checkpoint_label(runaway_checkpoint)
+                if runaway_enabled
+                else "已关闭"
+            )
 
         needs_confirm = self.check_plan_dirty()
         pending = self.pending_changes()
@@ -2379,17 +2928,19 @@ class PlanAgent:
         self._last_tasks_snapshot = current_tasks
 
         # Always auto_fix first so suggestion line numbers match post-fix file
-        auto_fix_actions = self.auto_fix()
-        try:
-            from project_mode import migrate_closed_sections_to_archive
+        auto_fix_actions: list[str] = []
+        if not light:
+            auto_fix_actions = self.auto_fix()
+            try:
+                from project_mode import migrate_closed_sections_to_archive
 
-            migrated = migrate_closed_sections_to_archive(self.paths, self.project_id)
-            if migrated:
-                auto_fix_actions = list(auto_fix_actions) + [
-                    f"已将 {migrated} 条「已关闭」区任务迁入 TASKS.archive.md"
-                ]
-        except Exception:
-            pass
+                migrated = migrate_closed_sections_to_archive(self.paths, self.project_id)
+                if migrated:
+                    auto_fix_actions = list(auto_fix_actions) + [
+                        f"已将 {migrated} 条「已关闭」区任务迁入 TASKS.archive.md"
+                    ]
+            except Exception:
+                pass
         if auto_fix_actions and tasks_path.is_file():
             current_tasks = tasks_path.read_text(encoding="utf-8")
             self._last_tasks_snapshot = current_tasks
@@ -2398,6 +2949,7 @@ class PlanAgent:
 
         # Stale task detection + next step (after auto_fix)
         self._suggestions = []
+        operational_notices = self._operational_task_notices(current_tasks)
         import re as _re
         current_line = -1
         next_task_text: str | None = None
@@ -2413,19 +2965,9 @@ class PlanAgent:
             self._stale_task_line = current_line
             self._stale_task_count = 1
         if self._stale_task_count >= 5 and current_line >= 0:
-            stale = self._suggestion(
-                kind="stale",
-                title="耗时提醒",
-                body=(
-                    f"任务「{(next_task_text or '')[:40]}」已保持 "
-                    f"{self._stale_task_count} 轮未完成，是否拆分为更小的子任务？"
-                ),
-                key=f"stale-{current_line}",
-                action="split_task",
-                payload={"line": current_line},
+            operational_notices.append(
+                f"任务「{(next_task_text or '')[:40]}」仍在进行中；如需拆分，请明确提出拆分任务。"
             )
-            if stale["id"] not in self._ignored_suggestion_ids:
-                self._suggestions.append(stale)
 
         self._suggestions.extend(self.quality_suggestions())
         for sug in self._active_milestone_suggestions.values():
@@ -2462,10 +3004,83 @@ class PlanAgent:
         if pruned_legacy:
             self._save_state()
 
+        try:
+            from project_manifest import change_ledger_path, load_change_ledger
+
+            change_timeline = load_change_ledger(
+                change_ledger_path(project_dir(self.paths, self.project_id))
+            )[-50:]
+        except Exception:
+            change_timeline = []
+
+        try:
+            if light:
+                from project_manifest import ensure_project_manifest
+
+                manifest = ensure_project_manifest(self.paths, self.project_id)
+            else:
+                from project_manifest import refresh_project_manifest
+
+                manifest = refresh_project_manifest(self.paths, self.project_id)
+        except Exception:
+            manifest = None
+        stage = compute_execution_stage(
+            project_id=self.project_id,
+            plan_status=plan_status or "draft",
+            task_stats=stats,
+            manifest=manifest,
+            project_root=project_dir(self.paths, self.project_id),
+            review_verdict=getattr(session, "last_review_verdict", None),
+            review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
+            workflow_stage=getattr(session.meta, "project_workflow_stage", "requirements")
+            if session is not None
+            else "requirements",
+        )
+        stage_documents = classify_stage_documents(
+            manifest,
+            stage=str(stage["stage"]),
+            blockers=list(stage.get("blockers", [])),
+        )
+        release_artifact = next(
+            (item for item in (manifest or {}).get("artifacts", [])
+             if isinstance(item, dict) and item.get("path") == "RELEASE.md"),
+            None,
+        )
+        try:
+            from project_release import load_release_acceptance
+
+            release_acceptance = load_release_acceptance(
+                project_dir(self.paths, self.project_id),
+                self.project_id,
+                release_revision=(
+                    str(release_artifact.get("revision"))
+                    if release_artifact and release_artifact.get("status") == "current"
+                    else None
+                ),
+            )
+        except Exception:
+            release_acceptance = {
+                "accepted": False,
+                "accepted_at": None,
+                "release_revision": None,
+                "checklist": {},
+            }
+
         return {
             "type": "project.plan.state",
             "project_id": self.project_id,
             "plan_status": plan_status,
+            "workflow_stage": getattr(session.meta, "project_workflow_stage", "requirements")
+            if session is not None
+            else "requirements",
+            "needs_design_confirm": (
+                getattr(session.meta, "project_workflow_stage", "requirements") == "documentation"
+                if session is not None
+                else False
+            ),
+            "active_task_id": getattr(session.meta, "project_active_task_id", "") or None
+            if session is not None
+            else None,
             "tasks_markdown": current_tasks,
             "map_markdown": artifacts.get("MAP.md", ""),
             "tasks_done": stats.done,
@@ -2476,11 +3091,15 @@ class PlanAgent:
             "changes_level": changes_level,
             "external_changes": external_changes,
             "suggestions": list(self._suggestions),
+            "operational_notices": operational_notices,
             "next_task": next_task_text,
             "next_task_line": current_line if current_line >= 0 else None,
             "degradation_level": self.pulse(),
             "degradation_label": _LEVEL_LABEL.get(self.pulse(), "未知"),
-            "warnings": [],  # actionable items live in suggestions (Phase 22)
+            "warnings": [
+                f"阶段待完善：{item}（不阻塞当前运行）"
+                for item in stage.get("missing", [])
+            ],
             "auto_fix_actions": auto_fix_actions,
             "partner_notices": list(self._last_partner_notices),
             "plan_transcript_len": len(self._plan_transcript),
@@ -2494,6 +3113,38 @@ class PlanAgent:
                     "line": c.line,
                 }
                 for c in self.pending_changes()
+            ],
+            "change_timeline": change_timeline,
+            "execution_stage": stage["stage"],
+            "execution_stage_status": stage["status"],
+            "execution_stage_reason": stage["reason"],
+            "execution_stage_blockers": list(stage["blockers"]),
+            "execution_stage_missing": list(stage.get("missing", stage["blockers"])),
+            "execution_stage_warnings": list(stage.get("warnings", [])),
+            "execution_stage_affected": stage_documents["affected"],
+            "execution_stage_deferred": stage_documents["deferred"],
+            "content_lint": stage.get("content_lint"),
+            "release_acceptance": release_acceptance,
+            "runaway_enabled": runaway_enabled,
+            "runaway_status": runaway_status,
+            "runaway_checkpoint": runaway_checkpoint,
+            "runaway_repair_count": int(getattr(session.meta, "project_runaway_repair_count", 0) or 0) if session is not None else 0,
+            "runaway_last_verification": getattr(session.meta, "project_runaway_last_verification", "") or None if session is not None else None,
+            "runaway_paused_reason": runaway_paused_reason,
+            "runaway_acceptance_passed": runaway_acceptance_passed,
+            "runaway_verification_evidence": runaway_verification_evidence,
+            "runaway_verification_evidence_path": runaway_verification_evidence_path,
+            "execution_stage_artifacts": [
+                {
+                    "path": item.get("path"),
+                    "role": item.get("role"),
+                    "revision": item.get("revision"),
+                    "status": item.get("status"),
+                    "completeness": item.get("completeness"),
+                    "ids": list(item.get("ids") or []),
+                }
+                for item in (manifest or {}).get("artifacts", [])
+                if isinstance(item, dict)
             ],
         }
 

@@ -120,6 +120,17 @@ class MetaCommandHandleLineTests(unittest.TestCase):
         self.assertTrue(kwargs.get("force"))
         self.assertTrue(any("已压缩" in line for line in self.outputs))
 
+    @patch("main.compact_context")
+    def test_slash_compact_meta_command_invokes_compact_context(self, mock_compact) -> None:
+        """M05b · /compact: desktop slash alias routes like 压缩."""
+        mock_compact.return_value = SimpleNamespace(message="已压缩（测试）", compacted=True)
+        outcome = self.repl.handle_line("/compact")
+        self.assertEqual(outcome, "continue")
+        mock_compact.assert_called_once()
+        _args, kwargs = mock_compact.call_args
+        self.assertIs(_args[0], self.repl.session)
+        self.assertTrue(kwargs.get("force"))
+
     def test_project_new_meta_command_creates_workspace_triad(self) -> None:
         """M14 · 项目 新建: handle_line binds project shell and workspace triad."""
         project_id = f"parity-hl-{secrets.token_hex(4)}"
@@ -193,19 +204,36 @@ class WsMetaCommandParityTests(unittest.TestCase):
         self.assertIn("session.banner", self._event_types())
 
     @patch("main.compact_context")
-    def test_user_message_compact_refreshes_session_state(self, mock_compact) -> None:
+    def test_user_message_compact_updates_memory_without_history_refresh(self, mock_compact) -> None:
         mock_compact.return_value = SimpleNamespace(message="digest ok", compacted=True)
         self._dispatch({"type": "user.message", "text": "压缩"})
-        self.assertTrue(_repl_refreshes_session_state("压缩"))
-        self.assertIn("session.banner", self._event_types())
-        self.assertIn("turn.end", self._event_types())
+        self.assertFalse(_repl_refreshes_session_state("压缩"))
+        types = self._event_types()
+        self.assertNotIn("session.history", types)
+        self.assertIn("session.memory", types)
+        self.assertIn("notice", types)
+        self.assertIn("turn.end", types)
         mock_compact.assert_called_once()
 
     @patch("main.compact_context")
-    def test_command_compact_emits_session_state(self, mock_compact) -> None:
+    def test_user_message_slash_compact_updates_memory_without_history_refresh(self, mock_compact) -> None:
+        mock_compact.return_value = SimpleNamespace(message="digest ok", compacted=True)
+        self._dispatch({"type": "user.message", "text": "/compact"})
+        self.assertFalse(_repl_refreshes_session_state("/compact"))
+        types = self._event_types()
+        self.assertNotIn("session.history", types)
+        self.assertIn("session.memory", types)
+        self.assertIn("notice", types)
+        self.assertIn("turn.end", types)
+        mock_compact.assert_called_once()
+
+    @patch("main.compact_context")
+    def test_command_compact_updates_memory_without_history_refresh(self, mock_compact) -> None:
         mock_compact.return_value = SimpleNamespace(message="digest ok", compacted=True)
         self._dispatch({"type": "command", "name": "压缩"})
-        self.assertGreaterEqual(self._event_types().count("session.banner"), 1)
+        types = self._event_types()
+        self.assertNotIn("session.history", types)
+        self.assertIn("session.memory", types)
         mock_compact.assert_called_once()
 
     def test_user_message_project_new_via_run_line(self) -> None:
@@ -358,15 +386,15 @@ class CommandUserMessageEquivalenceTests(unittest.TestCase):
                 )
                 self.assertEqual(snap["plan_status"], "confirmed")
 
-    def test_it11_command_always_pushes_session_state(self) -> None:
-        """WS nuance: command always emit_session_state; user.message only on refresh meta."""
+    def test_it11_command_turn_mode_does_not_force_session_history_refresh(self) -> None:
+        """Turn-mode meta lines update session meta; no session.history refresh on either channel."""
         user_snap, user_events = self._run_meta_channel("user.message", "只聊", label="banner_u")
         cmd_snap, cmd_events = self._run_meta_channel("command", "只聊", label="banner_c")
         self.assertEqual(user_snap["turn_mode"], cmd_snap["turn_mode"])
         self.assertEqual(user_snap["session_banner_count"], 0)
-        self.assertGreaterEqual(cmd_snap["session_banner_count"], 1)
-        self.assertFalse(any(event.get("type") == "session.banner" for event in user_events))
-        self.assertTrue(any(event.get("type") == "session.banner" for event in cmd_events))
+        self.assertEqual(cmd_snap["session_banner_count"], 0)
+        self.assertFalse(any(event.get("type") == "session.history" for event in user_events))
+        self.assertFalse(any(event.get("type") == "session.history" for event in cmd_events))
 
     def test_it11_refresh_meta_both_emit_session_state(self) -> None:
         self.assertTrue(_repl_refreshes_session_state("新会话"))

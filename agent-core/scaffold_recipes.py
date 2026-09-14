@@ -315,7 +315,9 @@ def _exec_step(
             normalize_project_id(pid)
         except Exception:
             pid = target.name
-        env_path = ensure_project_env(paths, pid)
+        quality = step.get("quality")
+        quality_commands = quality.get("commands") if isinstance(quality, dict) else None
+        env_path = ensure_project_env(paths, pid, quality_commands=quality_commands if isinstance(quality_commands, list) else None)
         return {"ok": True, "env_path": _agent_rel(paths, env_path)}
 
     wd = _step_working_dir(target, step)

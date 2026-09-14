@@ -233,7 +233,13 @@ def execute_project_switch(
 
     if plan.action == "load_session":
         assert plan.session_id
-        loaded = Session.load(paths, plan.session_id)
+        from session import desktop_switch_message_cap
+
+        loaded = Session.load(
+            paths,
+            plan.session_id,
+            message_cap=desktop_switch_message_cap(),
+        )
         if (loaded.meta.project_id or "").strip() != plan.project_id:
             _bind(loaded, plan.project_id, plan_status=_resolve_open_plan_status(loaded, plan.project_id))
         elif loaded.meta.active_shell != "project":
@@ -276,6 +282,15 @@ def _inherit_project_meta(fresh: Session, previous: Session, project_id: str) ->
         fresh.meta.project_plan_confirmed_at = previous.meta.project_plan_confirmed_at
     fresh.meta.project_phase_fingerprint = previous.meta.project_phase_fingerprint
     fresh.meta.project_doc_fingerprint = previous.meta.project_doc_fingerprint
+    fresh.meta.project_runaway_enabled = bool(
+        getattr(previous.meta, "project_runaway_enabled", False)
+    )
+    previous_stage = str(getattr(previous.meta, "project_workflow_stage", "") or "").strip()
+    if previous_stage:
+        fresh.meta.project_workflow_stage = previous_stage
+    previous_task = str(getattr(previous.meta, "project_active_task_id", "") or "").strip()
+    if previous_task:
+        fresh.meta.project_active_task_id = previous_task
 
 
 def start_new_project_thread(
@@ -344,19 +359,24 @@ def build_project_threads_payload(
     *,
     project_id: str | None = None,
 ) -> dict[str, Any]:
-    from session import list_session_summaries
-
     pid = normalize_project_id(project_id or session.meta.project_id or "")
     archive = read_project_thread_archive(paths).get(pid, [])
     active = lookup_project_session(paths, pid)
+    from session import session_summary_for_id
+
+    needed_ids: list[str] = []
+    if active:
+        needed_ids.append(active)
+    for sid in archive:
+        if sid != active:
+            needed_ids.append(sid)
     summaries = {
-        item["session_id"]: item
-        for item in list_session_summaries(paths, limit=200, include_internal=True)
-        if isinstance(item.get("session_id"), str)
+        sid: session_summary_for_id(paths, sid)
+        for sid in needed_ids
     }
 
     def _thread_item(sid: str, *, archived: bool) -> dict[str, Any]:
-        summary = summaries.get(sid, {})
+        summary = summaries.get(sid) or {}
         return {
             "session_id": sid,
             "title": summary.get("title") or sid,

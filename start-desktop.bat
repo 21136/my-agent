@@ -3,11 +3,20 @@ REM my-agent desktop launcher (TASKS T-904f). Default entry — Electron + grow 
 setlocal
 cd /d "%~dp0"
 
+REM Default flash model for new sessions / registry (override with your own LLM_MODEL).
+if not defined LLM_MODEL set "LLM_MODEL=tokeness-luna"
+
+REM Runaway v2 controller (Phase 60). Set MY_AGENT_RUNAWAY_V2=0 to use frozen v1 path.
+if not defined MY_AGENT_RUNAWAY_V2 set "MY_AGENT_RUNAWAY_V2=1"
+
+set "MY_AGENT_PYTHON=python"
+if exist "%~dp0.venv\Scripts\python.exe" set "MY_AGENT_PYTHON=%~dp0.venv\Scripts\python.exe"
+
 REM FILE-GUARD: background watcher for session/source truncation
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\file-sentinel\start-sentinel.ps1" >nul 2>&1
 
-where python >nul 2>&1
-if errorlevel 1 (
+if "%MY_AGENT_PYTHON%"=="python" where python >nul 2>&1
+if "%MY_AGENT_PYTHON%"=="python" if errorlevel 1 (
     echo [my-agent] Python not found. Install Python 3.12+ and add it to PATH.
     pause
     exit /b 1

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="codex">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>08 · Codex 去线条（暗色）</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="_shared.css" />
+  <link rel="stylesheet" href="_borderless.css" />
+  <link rel="stylesheet" href="_working.css" />
+  <style>
+    :root {
+      --bg: #212121;
+      --sidebar: #171717;
+      --surface: #171717;
+      --flow-a: #1a2e28;
+      --flow-b: #14532d;
+      --flow-c: #10a37f;
+      --flow-duration: 4.5s;
+      --elevated: #2f2f2f;
+      --hover: rgba(255,255,255,0.06);
+      --text: #ececec;
+      --muted: #9b9b9b;
+      --accent: #10a37f;
+      --accent-soft: rgba(16, 163, 127, 0.14);
+      --danger: #f87171;
+      --danger-soft: rgba(248, 113, 113, 0.1);
+      --radius: 12px;
+      --font: "Inter", "Noto Sans SC", system-ui, sans-serif;
+      --sidebar-w: 252px;
+      --composer-shadow: 0 0 0 1px rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.35);
+    }
+    body { font-size: 14px; background: var(--bg); }
+    .brand { font-weight: 600; letter-spacing: -0.02em; color: var(--text); }
+    .task-card .label { color: var(--muted); text-transform: none; font-weight: 500; }
+    .btn-primary { background: #ececec; color: #171717; border-radius: 999px; font-weight: 500; }
+    .chip.on { color: #6ee7b7; background: var(--accent-soft); }
+    .msg code { background: #383838; }
+    .process-card .icon { border-color: var(--accent); border-top-color: transparent; }
+    .status-dot { background: var(--accent); }
+    .view-process { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="app-frame borderless-layout" id="app-frame"></div>
+  <script src="_shared.js"></script>
+</body>
+</html>

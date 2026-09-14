@@ -50,6 +50,7 @@ class ToolCatalogM3Tests(unittest.TestCase):
         overlay = format_evolved_catalog_overlay(session, registry=self.registry)
         self.assertIn("工具索引", overlay)
         self.assertIn("buckets/write.md", overlay)
+        self.assertIn("buckets/design.md", overlay)
         # Full catalog style lines like "- patch_file: ..." should not dominate
         self.assertNotIn("- patch_file:", overlay)
         self.assertNotIn("## coding（本会话主题）", overlay)

@@ -6,6 +6,8 @@ import hashlib
 import os
 import re
 import shutil
+import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -123,11 +125,23 @@ def atomic_write_text(
             _snapshot_file(path, root)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.{os.getpid()}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    tmp = Path(tmp_name)
     try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(normalized)
-        tmp.replace(path)
+        for attempt in range(8):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         if tmp.is_file():
             try:

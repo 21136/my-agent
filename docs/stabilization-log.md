@@ -1977,6 +1977,63 @@ Phase 18 已解冻（STABILIZATION v1.1.0）。
 
 ---
 
+## 2026-08-14 · Phase 58 M1 targeted regression
+
+- **结果**：`15/15` Tool Catalog 回归通过；`42/42` 项目生命周期、停止/取消、可靠性与 M5 回归通过。
+- **环境**：使用已安装的用户级 `httpx`/`websockets`；测试进程需显式启用用户 site-packages，避免 `python` 的 `PYTHONNOUSERSITE` 路径差异。
+- **旧日志说明**：`test-log.txt` 中的 `827` 测试、`15 failures / 1 error / 3 skipped` 是修复前记录，不代表本次复测结果。
+- **Phase 58 状态**：T-5801～T-5808 代码与 targeted IT 已完成；S-580 仍待真实 Desktop `project` perspective 北极星路径手工验收。
+- **已知后续**：收紧 `getExecutionStage` 的 Gate/L1/后置条件推导，并把 milestone 人工验收从会话状态接入持久化证据闭环。
+
+## 2026-08-14 · IT-5812 document artifact chain
+
+- **结果**：七文件新项目模板与旧四件套一次性迁移通过。
+- **方式**：`python -m unittest agent-core/tests/test_project_artifacts.py -v`
+- **覆盖**：新项目七文件均非空且 manifest 有标准制品；旧 `PROJECT/TASKS/MAP/ENV` 内容进入 SCOPE/DESIGN/TECH-DESIGN/VERIFY，生成 RELEASE 与 `r0` baseline；重复打开不再次改写。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5814 TASKS metadata associations
+
+- **结果**：模板任务、行内字段和缩进元数据字段解析通过。
+- **方式**：`\.venv\Scripts\python.exe -m unittest discover -s agent-core/tests -p test_task_metadata.py -v`
+- **覆盖**：`req`、`ac`、`design`、`verify`、`evidence` 五字段；多值去重；旧项目迁移关联挂到首个任务。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5813 Plan artifact context
+
+- **结果**：Plan Agent prompt 读取 SCOPE、DESIGN、TECH-DESIGN、VERIFY、RELEASE，并携带 manifest revision/status。
+- **方式**：`\.venv\Scripts\python.exe -m unittest discover -s agent-core/tests -p test_plan_channel.py -v`
+- **覆盖**：标准制品内容可被 Plan 提案引用；制品外部变更刷新为 `stale` 后在 prompt 中可见；不注入主聊天内容。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5815 bound L1 evidence
+
+- **结果**：工具证据行携带 `task_id`、`ac_ids`、`verify_ids`；Gate 拒绝跨任务成功工具冒充当前任务证据。
+- **方式**：`\.venv\Scripts\python.exe -m unittest tests/test_progress_gate.py tests/test_task_metadata.py tests/test_plan_channel.py tests/test_exec_observability_m1.py -v`
+- **覆盖**：armed task 从 TASKS 元数据建立合同；执行证据和侧栏事件带 T/AC/V；project API 入口无绑定证据拒绝、有同任务绑定证据接受；旧无元数据 fixture 保持兼容。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5816 CHG ledger and impact timeline
+
+- **结果**：Plan patch 采纳会生成 `CHG-NNN` JSONL，更新 manifest revision/last_adopted_change，传播 L2 stale，并在 Plan 状态中保留最近影响时间线。
+- **方法**：`.venv\Scripts\python.exe -m unittest tests/test_plan_arch_patch.py -v`
+- **覆盖**：CHG §9 必填字段、REQ/T/AC/V 关联、前后 revision、stale 文档、replan_required，以及重载 PlanAgent 后的持久化时间线。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5817 backend-authoritative execution stage
+
+- **结果**：`project.state` 与 `project.plan.state` 现在携带后端计算的五段执行阶段、原因、阻塞项及制品 revision/status；L2 stale 强制回到需求阶段。
+- **方法**：`.venv\Scripts\python.exe -m unittest tests/test_project_stage.py -v`
+- **覆盖**：requirements → design → implementation → verification → release 转移，以及 manifest stale 回退。
+- **BUG**：无。
+
+## 2026-08-15 · IT-5823 侧栏查看入口与 CHG 时间线
+
+- **触发**：有效采纳卡的「查看」仍无可见审阅面；已采纳变更的 `CHG 影响时间线` 长期展开，遮挡侧栏。
+- **修复**：Desktop 根节点统一捕获 `review-suggestion`，按 `suggestion_id` 切换 `plan_review`；时间线保留 ledger 数据，默认显示紧凑摘要，最近三条记录通过「展开/收起」查看。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest discover -s agent-core/tests -p 'test_project_stage_card.py' -v`；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：自动检查通过；S-581 仍需真实 Desktop 手工确认点击路径与视觉占用。
+
 ## 模板（单次详记）
 
 ```markdown
@@ -1986,3 +2043,98 @@ Phase 18 已解冻（STABILIZATION v1.1.0）。
 - S-xx … pass/fail — …
 - 新发现：BUG-NNN 或 无
 ```
+## 2026-08-14 · IT-5819 stage artifact card
+
+- **结果**：阶段计划卡展示当前查看阶段的制品 `path`、`role`、`revision`、`status`，并展示 AC 覆盖、DESIGN/SCOPE 编码依据、VERIFY 证据新鲜度与 RELEASE 人工验收状态。
+- **方式**：前端消费 `execution_stage_artifacts`；后端事件同时保留制品 `ids`，用于需求阶段 AC 覆盖；新增 `agent-core/tests/test_project_stage_card.py` 契约回归。
+- **BUG**：无。
+## 2026-08-14 · IT-5818 persistent release acceptance
+
+- **结果**：milestone 人工验收写入项目 `.plan-agent/release_acceptance.json`，按 `RELEASE.md` revision 绑定；项目重开可恢复，RELEASE revision 变化会自动失效。
+- **方式**：Desktop 通过 `project.release.accept` 请求后端校验权威 release 阶段与发布 checklist，再持久化验收记录；不自动提交或关闭任务。
+- **BUG**：无。
+
+## 2026-08-14 · IT-5820 侧栏提案卡查看入口
+
+- **触发**：Desktop 真实界面中，左侧提案卡的「采纳/忽略」可用，但点击「查看」没有可见反馈。
+- **修复**：`unified` 侧栏在捕获阶段统一接管 `review-suggestion`；计划审阅面同时设置 class 与 `hidden` 属性，并在打开后回到顶部。
+
+## 2026-08-15 · IT-5824 侧栏查看按钮复用稳定审阅入口
+
+- **触发**：侧栏有效采纳卡里「采纳 / 忽略」可用，但「查看」仍偶发无响应；阶段卡自己的「打开审阅面」路径相对稳定。
+- **判断**：`review-suggestion` 仍走一条独立动作分支，而阶段卡已走 `open-plan-review`；两条入口并存时更容易出现“卡片按钮无效、主区未切换”的分叉。
+- **修复**：
+  - 提案卡的「查看」改为直接发 `data-action="open-plan-review"`，并携带同一个 `suggestion_id`。
+  - `taskFlow` / `changeBanner` / 捕获阶段入口统一允许 `open-plan-review` 读取可选 `suggestion_id`，仍兼容旧的 `review-suggestion`。
+  - 这样侧栏卡片与阶段卡复用同一主区切换通路，减少独立事件分支。
+- **验证**：
+  - `agent-core/tests/test_project_stage_card.py`
+  - 预期契约：提案卡使用 `open-plan-review`；捕获阶段仍能按 `suggestion_id` 调 `openPlanReview(...)`。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest discover -s agent-core/tests -p 'test_project_stage_card.py' -v`；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json`。
+- **状态**：自动检查通过；S-581 仍需重启/刷新 Desktop 后手工确认审阅面可见。
+
+## 2026-08-15 · IT-5821 项目恢复保留待采纳卡
+
+- **结论**：同意将未采纳提案视为项目级待办；重开项目或恢复 Desktop 会重新发送 `project.plan.state`，不再只发送 `project.state`。
+- **修复**：项目 open/switch/new-thread、会话恢复均补发 Plan Agent 状态；后端继续从 `.plan-agent/state.json` 恢复 `pending_gated`，采纳/忽略语义不变。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core/tests/test_project_switch.py -v`。
+- **状态**：自动检查通过；S-581 仍待真实 Desktop 手工回归。
+
+## 2026-08-15 · IT-5822 无效 patch 提案不进侧栏
+
+- **触发**：侧栏显示已持久化的 patch 卡，但采纳时返回 `replacements[0].old not found in file`。
+- **修复**：`PlanAgent.build_state()` 在合并 `pending_gated` 前按当前磁盘内容校验 patch；无效提案撤回并加入 ignored 集合，不再发给 Desktop 侧栏。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core/tests/test_plan_arch_patch.py -v`。
+- **状态**：自动检查通过后，S-581 仍待真实 Desktop 手工回归。
+
+## 2026-08-15 · IT-5825 重写侧栏提案卡查看按钮
+
+- **触发**：IT-5824 后真实 Desktop 中「查看」仍无可见反应；通用 `open-plan-review` 同时服务阶段卡、通知条和提案卡，无法继续区分点击链路。
+- **修复**：提案卡改发专用 `data-action="open-suggestion-review"`，由 `taskFlow` 在捕获阶段直接读取 `suggestion_id` 并调用 `openPlanReview`；旧 `review-suggestion` 入口保留兼容，阶段卡/通知条入口不改。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage_card -v`（5/5）；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json --noEmit`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：代码、契约测试、TypeScript 检查与构建通过；桌面控制器因本机权限无法读取窗口，S-581 仍需真实 Desktop 手工确认点击路径。
+
+## 2026-08-15 · IT-5826 新增独立「审阅」按钮
+
+- **决策**：保留旧「查看」按钮及其动作代码，但通过 CSS 隐藏；新增「审阅」按钮作为新的用户入口。
+- **修复**：新按钮使用 `open-suggestion-review-new`，由提案区域捕获，显示“正在打开计划审阅…”状态后调用 `openPlanReview(suggestion_id)`；旧入口不删除，方便后续回溯。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage_card -v`（6/6）；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json --noEmit`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：代码、契约测试、TypeScript 检查与构建通过；S-581 仍需真实 Desktop 手工确认新「审阅」按钮。
+
+## 2026-08-15 · IT-5827 主区审阅面显式切换
+
+- **触发**：新「审阅」按钮能够更新输入框上方状态，但主区仍停留在聊天内容。
+- **修复**：`openPlanReview()` 直接设置 `mainFocus`、切换聊天/审阅/完整计划三个容器的 class 与 `hidden` 属性，渲染审阅内容后显示“计划审阅已打开”；异常则显示具体失败信息。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage_card -v`（6/6）；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json --noEmit`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：代码、契约测试、TypeScript 检查与构建通过；S-581 仍需真实 Desktop 手工确认审阅面可见。
+
+## 2026-08-15 · IT-5830 采纳链路延迟与 pending 卡死
+
+- **触发**：Desktop 采纳短文本提案时，侧栏长时间保持“采纳中”，后端异常时前端缺少明确错误事件。
+- **修复**：PlanAgent 在一笔复合采纳内合并重复状态写入；项目 WS 分发补充普通异常日志与 `error` 事件；Desktop 收到错误时清理 pending、恢复按钮并显示失败原因。
+- **自动检查**：`.venv\Scripts\python.exe -m unittest agent-core.tests.test_plan_arch_patch agent-core.tests.test_plan_channel agent-core.tests.test_project_stage_card`（29/29 pass）；新增 IT-5830 状态写入批处理回归。
+- **备注**：Desktop 仍需在真实项目中手工确认采纳响应速度与失败提示；不执行 git commit。
+
+## 2026-08-15 · T-5831 文档制品内容分档（已决）
+
+- **触发**：用户指出当前七文件虽然具备结构和 manifest，但内容过少，不足以支撑常规或大型软件开发。
+- **内容分档**：`small` 保持最小可追踪；`normal` 默认要求用例边界、主/异常流程、状态变化、关键时序、架构边界、数据/API、依赖与风险；`large` 增加非功能、权限、安全、部署、迁移、可观测性、灾备与回滚。
+- **图示（R10）**：`normal` = 两个独立 Mermaid 硬门槛——(G1) `DESIGN.md` 非时序图含 `UC-*`/`UX-*`；(G2) 独立 `sequenceDiagram` 含 `SEQ-*`；状态图条件强制；图源留在七文件内，渲染只作预览。
+- **完整度（R11–R13）**：`status`（新鲜度）与 `completeness`（skeleton/draft/complete）分离；`content_origin`（migrated/scaffold）表来源；旧项目迁移 `normal + skeleton`，不自动 LLM 补齐。
+- **闸门（R12）**：`change_scope` 与 `project.tier` 分离；`small` 变更不因缺图阻塞；`normal`/`large` 进 implementation 前须 `completeness = complete`。
+- **UX（R14）**：v1 仅侧栏缺项 + Plan 提案 + 审阅采纳；无专用「生成文档基线」按钮。
+- **状态**：文档已决（REAL-RD v0.2.5 · PROJECT-RECIPES · PROJECT-MODE）；编码拆为 T-5832（manifest + linter）、T-5833（侧栏 + Plan 软审查）。
+
+## 2026-08-15 · IT-5829 修复计划审阅索引未声明
+
+- **触发**：真实 Desktop 显示 `计划审阅打开失败：planReviewIndex is not defined`。
+- **修复**：在 unified shell 初始化阶段声明并初始化 `planReviewIndex = 0`，供提案定位、上一条/下一条和队列刷新共同使用。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage_card -v`（6/6）；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json --noEmit`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：代码、契约测试、TypeScript 检查与构建通过；S-581 仍需真实 Desktop 手工确认审阅面可见。
+
+## 2026-08-15 · IT-5828 审阅打开流程错误边界
+
+- **触发**：新「审阅」入口能显示“正在打开”，但后续异常发生在原有错误边界之外，导致状态长期停留且没有失败反馈。
+- **修复**：将提案读取、目标定位、主区切换和审阅渲染全部纳入同一 `try/catch`，并增加“读取待审阅提案 / 切换主区 / 渲染计划审阅”阶段状态。
+- **自动检查**：`\.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage_card -v`（6/6）；`desktop\node_modules\.bin\tsc.cmd -p desktop\tsconfig.node.json --noEmit`；`npm run build`（通过，Vite 有既有 chunk size warning）。
+- **状态**：代码、契约测试、TypeScript 检查与构建通过；S-581 仍需真实 Desktop 手工确认审阅面可见。

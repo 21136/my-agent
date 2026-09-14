@@ -55,6 +55,26 @@ class LlmModelRegistryTests(unittest.TestCase):
         assert resolved is not None
         self.assertEqual(resolved.id, "0x567-pro")
 
+    def test_builtin_includes_tokeness(self) -> None:
+        registry = get_registry()
+        luna = registry.get("tokeness-luna")
+        self.assertIsNotNone(luna)
+        assert luna is not None
+        self.assertEqual(luna.api_key_env, "LLM_tokeness_KEY")
+        self.assertEqual(luna.provider_model, "gpt-5.6-luna")
+        self.assertEqual(
+            luna.chat_completions_url(),
+            "https://n.tokeness.dev/v1/chat/completions",
+        )
+        resolved = registry.resolve("luna")
+        self.assertIsNotNone(resolved)
+        assert resolved is not None
+        self.assertEqual(resolved.id, "tokeness-luna")
+        resolved_tokeness = registry.resolve("tokeness")
+        self.assertIsNotNone(resolved_tokeness)
+        assert resolved_tokeness is not None
+        self.assertEqual(resolved_tokeness.id, "tokeness-luna")
+
     def test_user_json_overrides_model(self) -> None:
         paths = make_temp_agent_paths(self)
         paths.data.mkdir(parents=True, exist_ok=True)
@@ -70,6 +90,7 @@ class LlmModelRegistryTests(unittest.TestCase):
                             "baseUrl": "https://example.com/api",
                             "modelId": "custom-model-v1",
                             "tier": "flash",
+                            "supportsImageInput": True,
                         }
                     ]
                 }
@@ -81,6 +102,7 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertIsNotNone(entry)
         assert entry is not None
         self.assertEqual(entry.provider_model, "custom-model-v1")
+        self.assertTrue(entry.supports_image_input)
         resolved = registry.resolve("custom-flash")
         self.assertIsNotNone(resolved)
         assert resolved is not None
@@ -118,6 +140,7 @@ class LlmModelRegistryTests(unittest.TestCase):
     def test_luna_context_limit(self) -> None:
         from llm_client import resolve_context_limit
 
+        self.assertEqual(resolve_context_limit("tokeness-luna"), 372_000)
         self.assertEqual(resolve_context_limit("0x567-flash"), 372_000)
         self.assertEqual(resolve_context_limit("gpt-5.6-luna"), 372_000)
         self.assertEqual(resolve_context_limit("luna"), 372_000)

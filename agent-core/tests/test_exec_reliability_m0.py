@@ -222,6 +222,60 @@ class CircuitUnitTests(unittest.TestCase):
         self.assertIn(fp, session.circuit_open_fingerprints)
 
 
+class ToolRetryIntegrationTests(unittest.TestCase):
+    def test_same_schema_failure_stops_after_one_correction_attempt(self) -> None:
+        with temporary_agent_paths() as paths:
+            def tool_response(call_id: str) -> LLMResponse:
+                return LLMResponse(
+                    model="mock",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "list_dir", "arguments": "{}"},
+                        }
+                    ],
+                    finish_reason="tool_calls",
+                    usage=None,
+                    raw={},
+                )
+
+            session = Session(
+                conversation_id="_tool_retry_once",
+                session_dir=paths.data / "sessions" / "_tool_retry_once",
+                goal="tool retry",
+                meta=SessionMeta(
+                    topics=[],
+                    llm_model="mock",
+                    updated_at=utc_now_iso(),
+                    phase="S4",
+                    turn_mode="agent",
+                ),
+                messages=[],
+                paths=paths,
+            )
+            session.save()
+            agent = Agent.create(
+                session,
+                llm=_MockLLM([tool_response("bad-1"), tool_response("bad-2")]),
+                confirm_fn=lambda _preview, _allow_all: "y",
+            )
+            failure = tool_fail(
+                "list_dir",
+                ToolErrorCode.VALIDATION_ERROR,
+                "path is required",
+                details={"retry": True},
+            )
+            with patch.object(agent.executor, "run", return_value=failure) as run:
+                result = agent.run_turn("请列目录", spawn_explore=False)
+
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(result.finish_reason, "tool_error")
+            self.assertIn("已停止自动重试", result.assistant_text)
+            self.assertIn("path is required", result.assistant_text)
+
+
 class IT161CircuitBreakerTests(unittest.TestCase):
     def test_it161_third_failure_opens_and_fourth_blocked(self) -> None:
         with temporary_agent_paths() as paths:

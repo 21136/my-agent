@@ -456,7 +456,7 @@ evolve/
 1. **读对照** — `探索 evolve/tools/<scope>/` 里 **宽工具**（如 run_command、write_text），不是克隆窄工具。
 2. **写文件** — `write_evolve`：先 `main.py` 再 `tool.toml`（`status = "draft"`）。细则：`buckets/evolve.md`。
 3. **跑 demo** — 测 **契约与参数组合**（至少 2 组输入），禁止空 `print('ok')`。
-4. **验收晋升** — `验收 <name>`；PASS 后改 `active` + INDEX 一行；须含 **一句话适用范围**。
+4. **验收晋升** — `验收 <name>`；PASS 后改 `active`，更新 INDEX 一行并补对应 `buckets/<桶>.md`；须含 **一句话适用范围**。
 
 ## 硬约束
 

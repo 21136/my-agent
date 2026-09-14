@@ -18,6 +18,7 @@ from project_verify import (
     format_failures_summary,
     parse_pytest_output,
     run_project_tests,
+    suite_command,
 )
 from tests.isolation_helpers import temporary_agent_paths
 from tools.registry import ToolRegistry
@@ -75,6 +76,14 @@ class ProjectVerifyTests(unittest.TestCase):
             self.assertTrue(result.get("ok"))
             self.assertTrue(result.get("dry_run"))
             self.assertIn("command", result)
+
+    def test_pytest_command_runs_from_project_directory(self) -> None:
+        with temporary_agent_paths() as paths:
+            proj = paths.workspace / "pv-command"
+            proj.mkdir(parents=True)
+            command_cwd, argv = suite_command("pytest", proj)
+            self.assertEqual(Path(command_cwd), proj)
+            self.assertEqual(argv[1:3], ["-m", "pytest"])
 
     def test_t4404_failure_summary_and_compact_preview(self) -> None:
         failures = [

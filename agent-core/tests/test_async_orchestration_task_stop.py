@@ -116,6 +116,21 @@ class OrchestrationTaskStopBoundaryTests(unittest.TestCase):
         self.assertIn("orch_boundary:", ritual)
         self.assertIn("report_progress", ritual)
 
+    def test_runaway_overlay_overrides_confirmation_and_task_stop(self) -> None:
+        overlay = format_project_overlay(
+            project_root="workspace/codebase-doctor",
+            project_id="codebase-doctor",
+            plan_status="draft",
+            delivery_profile="ritual",
+            workflow_stage="documentation",
+            runaway_enabled=True,
+        )
+        self.assertIn("project_runaway_enabled: true", overlay)
+        self.assertIn("自动采纳计划", overlay)
+        self.assertIn("不等待用户确认或继续", overlay)
+        self.assertNotIn("用户须「项目 确认」", overlay)
+        self.assertNotIn("task_stop:", overlay)
+
 
 if __name__ == "__main__":
     unittest.main()

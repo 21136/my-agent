@@ -1,6 +1,8 @@
 # my-agent
 
-个人用、可自我进化的**本地 Agent**。Git 为真源；`evolve/` 存 prompt / memory / tool；`data/` 存会话与审计（不进 Git）。
+面向真实软件项目的**本地生产工具**。项目文档、代码和验证结果是交付真源；`evolve/` 与 `data/` 是内部运行能力，不是当前产品主线。
+
+**产品决策真源**：[docs/PRODUCTION-PROJECT-MVP.md](docs/PRODUCTION-PROJECT-MVP.md)（先读；先写文档，再动手）
 
 **进度真源**：[docs/MAP.md](docs/MAP.md) §2 + [docs/TASKS.md](docs/TASKS.md)（勿以本 README 判断代码是否已落地）
 
@@ -12,25 +14,29 @@
 
 | 入口 | 用途 | 文档 |
 |------|------|------|
-| **`start-desktop.bat`**（默认） | 项目工作台 · unified 壳 · LDM 纪律 · 侧栏计划/采纳 | [DESKTOP.md](docs/DESKTOP.md) · [PROJECT-MODE.md](docs/PROJECT-MODE.md) |
-| **`start-terminal.bat`** | Claude 式 **cwd agent** · Ink TUI · 狂野写码 · 自动 plan-execute | [TERMINAL-MODE.md](docs/TERMINAL-MODE.md) **v0.3.2** |
+| **`start-desktop.bat`**（默认） | **主战场** · 只为写 workspace 项目 · unified **project** 纪律 · 教科书流程（闸门+证据） | [DESKTOP-TEXTBOOK-FLOW.md](docs/DESKTOP-TEXTBOOK-FLOW.md) · [DESKTOP.md](docs/DESKTOP.md) |
+| **`start-terminal.bat`** | **狂野挎包** · cwd agent · Ink · auto plan-execute · **功能冻结**（维护/P0） | [TERMINAL-MODE.md](docs/TERMINAL-MODE.md) **v0.3.2** |
 | **`start.bat`** | 轻量 CLI REPL（备用） | [RUNTIME.md](docs/RUNTIME.md) |
 
-Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换界面只能 exit 后在另一入口续接。
+Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换界面只能 exit 后在另一入口续接。  
+**定调**：Desktop = 产品开发焦点；Terminal = 卖点维护态，**独立入口**，不进 Desktop 流程轨。
 
 ---
 
-## 当前摘要（2026-08-13）
+## 当前摘要（2026-09-07）
 
 | 项 | 说明 |
 |----|------|
+| **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal 冻结维护 |
+| **当前产品基线** | [PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md) — 四个核心制品 · 三个硬门槛 |
 | **交付模型** | [LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3 · Pack 1245 M0 done |
 | **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立 `pet` 窗 |
 | **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |
 | **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
 | **Builtin** | 12 个（核心 7 + 编排 5：`explore` · `plan_partner` · `deliverable_review` 等） |
 | **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
-| **下一手工** | S-576 Terminal Ink 全链路 smoke |
+| **狂奔 v2** | Desktop 默认 `MY_AGENT_RUNAWAY_V2=1`；Phase 60 M0/M1 已编码，v2 自动测试 40/40；续接核心已接入，兼容层/指纹与手工试点待收口 |
+| **下一手工** | S-6106 music 试点；另收口 T-6106 v1 兼容、T-6107 续接、Terminal TS build |
 
 ---
 
@@ -38,7 +44,12 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 
 ```powershell
 # 前置：Python 3.12+；桌面 / Terminal Ink 还要 Node.js 20+（LTS 即可）
-pip install -r requirements.txt
+if (-not (Test-Path .venv\Scripts\python.exe)) { python -m venv .venv }
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 开发 / 回归测试：pytest 安装到项目虚拟环境，不属于运行时依赖
+.venv\Scripts\python.exe -m pip install pytest
+.venv\Scripts\python.exe -m pytest agent-core/tests -q
 
 # 桌面（默认；首次自动 npm install）
 .\start-desktop.bat
@@ -96,7 +107,7 @@ my-agent/
 |----|------|------|
 | 0 | **前置** | `python --version` → 3.12+；`node -v` / `npm -v`（桌面与 Terminal） |
 | 1 | **clone** | `git clone <private-url> my-agent` → `cd my-agent` |
-| 2 | **pip** | `pip install -r requirements.txt`（`httpx` + `websockets`） |
+| 2 | **pip** | 创建 `.venv` 后，运行时：`.venv\Scripts\python.exe -m pip install -r requirements.txt`；回归测试：`.venv\Scripts\python.exe -m pip install pytest` |
 | 3 | **密钥** | 设置 `LLM_API_KEY`；无 key 仍可跑 `tool` CLI |
 | 4a | **桌面** | `.\start-desktop.bat` → 自动 `desktop/npm install` |
 | 4b | **Terminal** | `.\start-terminal.bat` → 自动 `terminal-ui/npm install` |
@@ -110,7 +121,8 @@ my-agent/
 | 现象 | 处理 |
 |------|------|
 | `Python not found` / `npm not found` | 安装并加入 PATH |
-| `ModuleNotFoundError: httpx` | 重跑 `pip install -r requirements.txt` |
+| `ModuleNotFoundError: httpx` | 重跑 `.venv\Scripts\python.exe -m pip install -r requirements.txt` |
+| `ModuleNotFoundError: pytest` | `.venv\Scripts\python.exe -m pip install pytest`，再用 `.venv\Scripts\python.exe -m pytest` |
 | 桌面首启卡在 npm | `cd desktop` → `npm install` |
 | Terminal 黑屏或显示 v0.2.1 | 确认 `terminal-ui` 已 `npm install`；或设 `MY_AGENT_TERMINAL_UI=legacy` 排查 |
 | 端口 8765 占用 | 关旧实例或托盘「接管」 |
@@ -141,6 +153,7 @@ my-agent/
 | [docs/ROADMAP-PACK-1245.md](docs/ROADMAP-PACK-1245.md) | Pack 1/2/4/5/6 路线图 |
 | [docs/LOCAL-DELIVERY-MODEL.md](docs/LOCAL-DELIVERY-MODEL.md) | 本地交付模型（LDM） |
 | [docs/PROJECT-MODE.md](docs/PROJECT-MODE.md) | 项目模式 · ENV |
+| [docs/PROJECT-VERIFY.md](docs/PROJECT-VERIFY.md) | 项目测试、结构化验证与 pytest 约定 |
 | [docs/TOOLS.md](docs/TOOLS.md) | Builtin + evolved 工具 |
 | [docs/DESKTOP.md](docs/DESKTOP.md) | 桌面壳 · unified 工作台 |
 | [docs/STABILIZATION.md](docs/STABILIZATION.md) | 稳定化 · smoke · Gate |

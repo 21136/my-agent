@@ -27,7 +27,7 @@ from project_mode import (
     task_stop_block_reason,
 )
 from session import create_new
-from tools.executor import ToolExecutor
+from tools.executor import ToolExecutor, _format_guard_notice
 from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode
 
@@ -59,8 +59,8 @@ class TaskStopAutoContinueTests(unittest.TestCase):
             Path(__file__).resolve().parents[2] / "workspace" / "_template" / "TASKS.md"
         )
         text = template.read_text(encoding="utf-8")
-        self.assertIn("一停", text)
-        self.assertIn("继续", text)
+        self.assertIn("T-001 完成第一项可交付工作", text)
+        self.assertIn("evidence: run_project_tests", text)
 
         prompt = (
             Path(__file__).resolve().parents[2]
@@ -91,18 +91,18 @@ class TaskStopPathAndContinueTests(unittest.TestCase):
         self.assertFalse(is_project_continue_utterance("写 pom.xml"))
 
     def test_first_open_task_and_overlay(self) -> None:
-        text = "# t\n\n- [x] done\n- [ ] next one\n"
-        self.assertEqual(first_open_task_line(text), "- [ ] next one")
+        text = "# t\n\n- [x] T-001 done\n- [ ] T-002 next one\n"
+        self.assertEqual(first_open_task_line(text), "- [ ] T-002 next one")
         overlay = format_project_overlay(
             project_root="workspace/x",
             project_id="x",
             plan_status="confirmed",
             continue_turn=True,
-            next_open_task="- [ ] next one",
+            next_open_task="- [ ] T-002 next one",
             delivery_profile="ritual",
         )
         self.assertIn("continue_turn", overlay)
-        self.assertIn("current_task: - [ ] next one", overlay)
+        self.assertIn("current_task: - [ ] T-002 next one", overlay)
         self.assertIn("task_stop:", overlay)
         self.assertIn("report_progress", overlay)
 
@@ -259,6 +259,16 @@ class TaskStopHardGateTests(unittest.TestCase):
         self.assertIsNotNone(reason)
         assert reason is not None
         self.assertIn("一停", reason)
+
+    def test_task_stop_armed_guard_notice_runaway(self) -> None:
+        ritual = _format_guard_notice("task_stop_armed", {"runaway_enabled": False})
+        runaway = _format_guard_notice("task_stop_armed", {"runaway_enabled": True})
+        self.assertIsNotNone(ritual)
+        self.assertIsNotNone(runaway)
+        assert ritual is not None and runaway is not None
+        self.assertIn("用户「继续」", ritual)
+        self.assertNotIn("用户「继续」", runaway)
+        self.assertIn("狂奔", runaway)
 
         allow_map = task_stop_block_reason(
             active_shell="project",

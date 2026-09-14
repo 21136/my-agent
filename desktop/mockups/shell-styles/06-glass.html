@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-style="glass">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · 毛玻璃</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="_shared.css" />
+  <link rel="stylesheet" href="_working.css" />
+  <style>
+    :root {
+      --bg: transparent;
+      --surface: rgba(255, 255, 255, 0.55);
+      --sidebar: rgba(255, 255, 255, 0.45);
+      --flow-a: rgba(255, 255, 255, 0.35);
+      --flow-b: rgba(200, 180, 255, 0.45);
+      --flow-c: rgba(120, 140, 255, 0.55);
+      --flow-duration: 5s;
+      --surface-2: rgba(255, 255, 255, 0.35);
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --border: rgba(255, 255, 255, 0.45);
+      --accent: #0071e3;
+      --accent-soft: rgba(0, 113, 227, 0.12);
+      --danger: #ff3b30;
+      --radius: 16px;
+      --shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+      --font: "Inter", "Noto Sans SC", system-ui, sans-serif;
+      --sidebar-w: 264px;
+      --blur: blur(20px) saturate(180%);
+    }
+    body {
+      background: linear-gradient(135deg, #a8c0ff 0%, #e2d1f9 35%, #fbc2eb 70%, #a6c1ee 100%) fixed;
+      min-height: 100vh;
+    }
+    .app { padding: 14px; gap: 10px; }
+    .topbar, .main-wrap {
+      background: var(--surface);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .main-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+    .topbar { border-bottom: none; }
+    .sidebar { border: none; background: transparent; }
+    .task-card { border: 1px solid var(--border); background: var(--surface-2); backdrop-filter: var(--blur); border-radius: 12px; }
+    .process-card { border: 1px solid var(--border); background: var(--surface-2); backdrop-filter: var(--blur); border-radius: 12px; }
+    .composer { border: 1px solid var(--border); background: var(--surface-2); backdrop-filter: var(--blur); margin: 0 1rem 1rem; border-radius: 12px; }
+    .context-bar { background: transparent; border-bottom: 1px solid var(--border); }
+    .btn-primary { background: var(--accent); border: none; color: #fff; border-radius: 999px; padding: 0.45rem 1.1rem; }
+    .chip { background: rgba(255,255,255,0.4); backdrop-filter: blur(8px); }
+    .chip.on { background: var(--accent-soft); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="app-frame glass-layout" id="app-frame"></div>
+  <script src="_shared.js"></script>
+</body>
+</html>

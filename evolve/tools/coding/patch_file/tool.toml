@@ -1,7 +1,7 @@
 [tool]
 name = "patch_file"
 description = "按行号范围或唯一锚点替换 agent 根下文本文件片段（docs/agent-core/evolve/workspace）"
-version = "1.0.0"
+version = "2.0.0"
 status = "active"
 topics = ["coding"]
 
@@ -11,12 +11,20 @@ path = "main.py"
 
 [schema.input]
 type = "object"
-required = ["path", "replacement"]
+required = ["path"]
 [schema.input.properties.path]
 type = "string"
 description = "相对 agent 根的文本文件路径"
 [schema.input.properties.replacement]
 type = "string"
+[schema.input.properties.hunks]
+type = "array"
+description = "结构化多 hunk；每项为 {find: 唯一锚点, replacement: 新文本}"
+items = { type = "object" }
+[schema.input.properties.replacements]
+type = "array"
+description = "hunks 的兼容别名"
+items = { type = "object" }
 [schema.input.properties.start_line]
 type = "integer"
 minimum = 1
@@ -27,6 +35,16 @@ minimum = 1
 [schema.input.properties.find]
 type = "string"
 description = "无行号时：替换首次出现的锚点子串（须唯一）"
+[schema.input.properties.base_hash]
+type = "string"
+description = "可选，目标文件当前内容的 SHA-256；不匹配时失败且不落盘"
+[schema.input.properties.patch_id]
+type = "string"
+description = "可选，幂等补丁 ID；重复提交同 ID 会返回 skipped，不重复写盘"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "只校验并返回结果 hash，不落盘"
 
 [schema.output]
 type = "object"
@@ -34,6 +52,9 @@ type = "object"
 path = { type = "string" }
 mode = { type = "string" }
 lines_changed = { type = "integer" }
+patch_id = { type = "string" }
+base_hash = { type = "string" }
+result_hash = { type = "string" }
 
 [policy]
 confirm = true

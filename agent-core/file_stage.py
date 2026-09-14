@@ -20,6 +20,7 @@ from session import Session
 
 MAX_FILES_PER_BATCH = 20
 MAX_FILE_BYTES = 32 * 1024 * 1024
+MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024
 READ_FILE_BYTES = 512 * 1024
 INCOMING_DIRNAME = "_incoming"
 DROPS_DIRNAME = "_drops"
@@ -41,8 +42,26 @@ class StagedAttachment:
     readable_text: bool
     copied: bool
 
+    @property
+    def image_input(self) -> bool:
+        return is_image_mime(self.mime)
+
     def to_item(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["image_input"] = self.image_input
+        return payload
+
+
+IMAGE_INPUT_MIMES = frozenset({
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+})
+
+
+def is_image_mime(mime: str) -> bool:
+    return mime.strip().casefold() in IMAGE_INPUT_MIMES
 
 
 def format_size(size: int) -> str:
@@ -80,6 +99,8 @@ def format_attachment_block(items: list[StagedAttachment]) -> str:
         hint = item.mime or "application/octet-stream"
         if not item.readable_text:
             hint = f"{hint}；不可直接 read_file"
+        if item.image_input:
+            hint = f"{hint}；图片附件"
         lines.append(f"- {item.name} → {item.ref} ({format_size(item.size)}, {hint})")
     return "\n".join(lines)
 

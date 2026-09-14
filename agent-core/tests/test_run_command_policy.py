@@ -13,9 +13,23 @@ if str(_AGENT_CORE) not in sys.path:
 from run_command_policy import (
     classify_run_command,
     is_node_modules_wipe_command,
+    load_quality_command_argv,
+    matches_quality_command,
     run_command_requires_confirm,
     working_dir_under_project,
 )
+from tests.isolation_helpers import temporary_agent_paths
+
+_ENV_QUALITY = """
+tools:
+  node: ""
+quality:
+  commands:
+    - id: ruff
+      cmd: ["python", "-m", "ruff", "check", "."]
+    - id: eslint
+      cmd: ["npm", "run", "lint"]
+"""
 
 
 class RunCommandPolicyTests(unittest.TestCase):
@@ -23,8 +37,11 @@ class RunCommandPolicyTests(unittest.TestCase):
         self.assertEqual(classify_run_command("rm -rf tmp"), "danger")
         self.assertEqual(classify_run_command("npm install"), "install")
         self.assertEqual(classify_run_command("git push origin main"), "network")
+        self.assertEqual(classify_run_command("gh pr create --title demo"), "network")
         self.assertEqual(classify_run_command("npm run build"), "build_test")
         self.assertEqual(classify_run_command("echo hi"), "readonly")
+        self.assertEqual(classify_run_command("python todo.py --help"), "readonly")
+        self.assertEqual(classify_run_command("python todo.py -h"), "readonly")
 
     def test_project_skip(self) -> None:
         self.assertTrue(working_dir_under_project("workspace/a/b", "workspace/a"))
@@ -66,6 +83,91 @@ class RunCommandPolicyTests(unittest.TestCase):
         self.assertFalse(
             is_node_modules_wipe_command('cmd /c "if exist node_modules (echo EXISTS)"')
         )
+
+    def test_quality_whitelist_hit_from_env_text(self) -> None:
+        argv = load_quality_command_argv(env_text=_ENV_QUALITY)
+        self.assertTrue(matches_quality_command("python -m ruff check .", argv))
+        self.assertTrue(matches_quality_command("ruff check . --fix", argv))
+        needs, reason = run_command_requires_confirm(
+            command="python -m ruff check .",
+            working_dir="workspace/demo",
+            project_root="workspace/demo",
+            env_text=_ENV_QUALITY,
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:quality")
+        needs_lint, reason_lint = run_command_requires_confirm(
+            command="npm run lint",
+            working_dir="workspace/demo",
+            project_root="workspace/demo",
+            env_text=_ENV_QUALITY,
+        )
+        self.assertFalse(needs_lint)
+        self.assertEqual(reason_lint, "skip:quality")
+
+    def test_quality_whitelist_reads_project_env_md(self) -> None:
+        with temporary_agent_paths() as paths:
+            proj = paths.workspace / "qa-demo"
+            proj.mkdir(parents=True)
+            (proj / "ENV.md").write_text(_ENV_QUALITY, encoding="utf-8")
+            needs, reason = run_command_requires_confirm(
+                command="ruff check .",
+                working_dir="workspace/qa-demo",
+                project_root="workspace/qa-demo",
+                agent_paths=paths,
+            )
+            self.assertFalse(needs)
+            self.assertEqual(reason, "skip:quality")
+
+    def test_quality_whitelist_misses_still_confirm(self) -> None:
+        cases = [
+            ("npm install", "workspace/demo", "workspace/demo", "install"),
+            ("git push origin main", "workspace/demo", "workspace/demo", "network"),
+            ("gh pr create --fill", "workspace/demo", "workspace/demo", "network"),
+            ("rm -rf dist", "workspace/demo", "workspace/demo", "danger"),
+            ("python app.py", "workspace/demo", "workspace/demo", "other:other"),
+            ("python -m ruff check .", "workspace/other", "workspace/demo", "outside_project"),
+        ]
+        for command, cwd, root, expected in cases:
+            needs, reason = run_command_requires_confirm(
+                command=command,
+                working_dir=cwd,
+                project_root=root,
+                env_text=_ENV_QUALITY,
+            )
+            self.assertTrue(needs, msg=command)
+            self.assertEqual(reason, expected, msg=command)
+
+    def test_quality_list_cannot_override_danger(self) -> None:
+        needs, reason = run_command_requires_confirm(
+            command="rm -rf dist",
+            working_dir="workspace/demo",
+            project_root="workspace/demo",
+            quality_commands=[["rm", "-rf", "dist"]],
+        )
+        self.assertTrue(needs)
+        self.assertEqual(reason, "danger")
+
+    def test_baseline_pytest_and_verify_still_skip(self) -> None:
+        for command in ("pytest -q", "python verify.py", "python workspace/demo/verify.py"):
+            needs, reason = run_command_requires_confirm(
+                command=command,
+                working_dir="workspace/demo",
+                project_root="workspace/demo",
+            )
+            self.assertFalse(needs, msg=command)
+            self.assertTrue(reason.startswith("skip:"), msg=command)
+
+
+    def test_help_flag_is_readonly_and_skips_in_project(self) -> None:
+        self.assertEqual(classify_run_command("python todo.py --help"), "readonly")
+        needs, reason = run_command_requires_confirm(
+            command="python todo.py --help",
+            working_dir="workspace/a",
+            project_root="workspace/a",
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:readonly")
 
 
 if __name__ == "__main__":

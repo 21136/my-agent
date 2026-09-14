@@ -1,13 +1,313 @@
 # 任务清单（TASKS）
 
-> 版本 0.1.2 · 2026-08-13 · 细分到每个 task，**先文档评审再动手**  
-> **新会话**：先读 [MAP.md](./MAP.md)（**§2.2 废止债**）了解目录与当前进度。  
-> **当前焦点**：**Phase 57** — Ink **阶段 0～5 + T-5730～5734 done** · 下一手工 **S-576** · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6  
+> 版本 0.2.1 · 2026-09-07 · 细分到每个 task，**先写文档，再动手**
+> **新会话**：先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再读 [MAP.md](./MAP.md)。
+> **当前焦点**：收口 T-6106 v1 兼容回归、T-6107 续接单真源；S-6106 music 试点已完成，继续推进 UX-029 M2 / UX-030 验收。
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
 **图例**：`状态` = `todo` | `doc` | `done` | `defer` | **`superseded`** | **`cancelled`** | **`wontfix`**  
 **依赖**：必须先完成的 task id
+
+## 产品基线
+
+当前任务必须服从 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)：四个核心制品（`PROJECT.md`、`DESIGN.md`、`TASKS.md`、`VERIFY.md`）和三个硬门槛（开始编码、任务完成、版本发布）。
+
+Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid 硬门槛暂停，不得作为新任务的前置条件。
+
+### 生产项目 MVP：需求输入闸门（先文档，后编码）
+
+> 设计基线：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §5.1–§5.2。T-5901、T-5904、T-5905 已落地，后续阶段按授权继续实现。
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5901 | 需求输入默认只读，不自动进入工具执行 | 意图分类/项目边界设计；未绑定项目的执行拒绝规则 | 粘贴项目简介只得到需求归纳，不产生工具调用或写入 | done |
+| T-5902 | 明确执行授权与项目绑定条件 | 执行前置条件与确认规则 | 无明确动作、无项目绑定或缺少前置制品时停止并说明原因 | done |
+| T-5903 | 工具失败自动修正与熔断 | 参数错误一次修正、重复失败停止、失败结果准确展示 | schema 错误不盲试；失败后不宣称完成 | done |
+| S-5901 | 需求输入回归 | Desktop 项目窗口手工路径 | 粘贴 Music Dreamer 简介，界面保持需求阶段且无写入/工具创建 | todo |
+| T-5904 | 项目阶段权限状态 | requirements/documentation/design/implementation/verification/release 状态定义 | 每阶段工具权限和出口可解释，不能由模型自行升级 | done |
+| T-5905 | 文档整理阶段 | `project organize`/「项目 整理文档」与四个核心制品草稿生成 | 用户明确进入文档整理后，才允许写项目文档，不允许写业务代码 | done |
+| T-5906 | 设计确认阶段 | `项目 确认设计`、`项目 开始任务 <T-ID>`、阶段权限拦截 | 未确认设计时不能进入实现；确认后只开放当前批次 | done |
+| T-5907 | 第一条真实链路 | `workspace/test` Music Dreamer 端到端手工验收 | 需求输入 → 文档 → 设计 → 单任务 → 验证完整通过 | todo |
+| UI-5908 | 未绑定项目入口提示 | Desktop 项目侧栏未绑定态 | 不显示不可用的“确认范围”；明确引导打开或新建项目 | done |
+| UI-5909 | 文档整理期间计划提示降噪 | Desktop 文档批次状态与汇总提示 | 连续生成多个核心文档时不出现重复关闭提示；离开文档阶段后只出现一次去重后的汇总/审阅入口；真实错误仍即时提示 | done |
+| UI-5910 | 阶段阻塞状态与对话结论一致 | 后端阶段出口判定与 Desktop 阶段卡 | lint/skeleton/draft 建议不显示为“本阶段阻塞”；无真实阻塞时侧栏与对话均显示无阻塞 | superseded |
+| UI-5910a | 统一阶段状态快照契约 | `compute_execution_stage` 与 `project.state` / `project.plan.state` | 后端输出统一 `status/blockers/missing/warnings`；文档整理中不误报阻塞；两类状态事件字段语义一致 | done |
+| UI-5911 | 运行提醒不进入计划审阅 | Plan Agent 状态分类与 Desktop 侧栏提醒 | “耗时提醒/粒度建议”只作为非操作提醒展示；不进入 `suggestions`、不显示“打开计划审阅”；明确拆分后才生成审阅提案 | done |
+| UI-5912 | 采纳后阻塞状态刷新 | manifest ID 提取、阶段状态重算与 Desktop 状态事件 | 支持 `REQ-MUSIC-001` / `AC-MUSIC-001` 等复合 ID；采纳或外部编辑后重新计算，已解决阻塞不残留，真实缺失仍可见 | done |
+| UI-5913 | Mermaid 图表预览渲染 | Desktop 统一 Markdown 渲染入口 | `TECH-DESIGN.md` 中的部署/流程/时序 Mermaid 块渲染为 SVG；语法错误保留源码并显示错误，不影响其他正文 | done |
+| UI-5914 | 文档阅读区与左栏职责分离 | Unified 主区焦点与项目文档面板 | 左栏只显示文档列表/状态/摘要；点击后在主区宽版渲染全文、表格和 Mermaid；切换不丢失聊天状态 | done |
+
+### 现代项目交互重设计（先评审，后编码）
+
+> 设计基线：[INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md)。本批次回应真实项目体验反馈：把 Desktop 从“内部状态面板”收敛为“目标驱动的项目工作台”。文档评审通过前不修改 UI 代码。
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| UI-6001 | 项目上下文栏与统一状态 view model | Desktop 上下文栏、独立决策条、状态映射和下一步动作 | 六种状态与快照一致；不显示原始 Markdown 长摘要；设计未确认时不显示“开始实现”，先提供“确认设计”；设计确认后选择开放任务并切换下一目标上下文；聊天焦点保留完整对话区 | in_progress |
+| UI-6002 | 侧栏态势收敛 | 侧栏目标/进度/决策/异常四区 | 不展开完整文档、工具清单和 Services；同一进度只显示一种计数口径 | doc · 信息架构见 UX-026 · **视觉见 UX-029 / [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)** |
+| UI-6003 | 主区焦点导航 | 聊天/方案/文档/任务/验证焦点 | 从侧栏进入文档或任务后主区宽版展示，返回聊天不丢会话状态 | doc |
+| UI-6004 | 决策动作文案与打断治理 | 确认范围、确认方案、开始任务、风险接受、发布确认 | 普通 warning 不弹关闭式提示；决策卡明确对象、影响和动作 | doc |
+| UI-6005 | 文档批次连续体验 | 文档整理进度、去重汇总、错误即时提示 | 四个文档连续生成只出现一个批次进度和一个汇总入口，真实错误立即可见 | doc |
+| UI-6006 | 任务变更提示关闭语义 | 关闭指纹、倒计时生命周期和重新出现规则 | 关闭只隐藏当前提示，不确认变更、不触发自动确认；新变更内容才重新出现 | doc |
+| UI-6007 | 任务清空后的验证发布门 | 任务、验证、审查、发布和人工验收的统一状态文案 | 勾选全部任务只显示“任务已清空 · 待验证”；未完验证/审查/发布验收前不得显示项目完成 | doc |
+| UI-6008 | Harness 与用户交互分层 | 内部阶段/Gate/审查/归档与用户目标/决策/结果的映射规则 | 普通内部状态不进入默认主路径；只有改变用户下一步选择的事实才生成决策条；用户无需逐项关闭内部提示 | doc |
+| UI-6009 | 目标卡收敛为项目上下文栏 | 轻量上下文栏、独立决策条和重复信息清理 | 默认只显示项目名、当前目标、当前进展和必要动作；不再渲染大目标卡；需要决定时单独显示决策条；聊天与任务工作区保留完整可用空间 | in_progress |
+| UI-6010 | 任务完成计数改为验证状态 | 顶部上下文栏与左侧进展区的统一文案 | 全部任务完成后不显示 `25/25 个任务`；统一显示“任务已清空 · 待验证”，并保留验证入口；未全部完成时才显示开放任务进度 | in_progress |
+| UI-6011 | 狂奔项目级自动运行 | 狂奔开关、持久化运行授权、跨任务推进和安全暂停 | 默认关闭；开启后可从一句话连续推进任务、测试、修复和验证；真实歧义/高风险/重复失败/外部发布仍暂停；重启后可恢复运行检查点 | done |
+| UI-6012 | 狂奔后台持续运行 | 单回合边界内续接、全天运行时限、狂奔下隐藏计划确认 | 开启狂奔后用户可以离开；系统不要求确认计划、任务、阶段或“继续”，后台持续推进直到完成、人工取消或命中真实暂停条件；重启后按检查点恢复 | done |
+| UI-6013 | 狂奔一次授权覆盖工具与提案 | 项目内工具自动放行、高风险动作保留暂停、计划提案自动采纳 | 狂奔开启后项目内代码/测试/构建/普通依赖/本地服务不弹确认；`plan_partner` 提案自动采纳；宿主机、敏感文件、删除、推送、外部写入和换线仍暂停 | done |
+| UI-6014 | 狂奔 TASKS 队列净化 | plan 提案与非 `T-*` 行不得进入开放任务调度 | `next_open_task` 与狂奔 advance 只认正式 `T-\d+` 任务；plan 采纳写入 change ledger 或 plan 域，不污染 TASKS 开放队列 | done |
+| UI-6015 | 狂奔 advance 绑定证据 | 任务切换前要求 VERIFY 证据或对口命令成功 | 仅有 TASKS 勾选或 plan patch 不足以切下一项；VERIFY 可记录 partial pass，但不得无证据 advance | done |
+| UI-6016 | 狂奔运行提醒降噪 | API 重试与 advance 通知不刷屏 | 504/重试合并为单条 operational notice；advance 通知绑定具体任务名且去重 | done |
+| UI-6017 | 狂奔 segment 摘要与验证里程碑 | 空 assistant 时有 Harness 摘要；开放正式任务清空后进 verifying | segment 结束输出一句进展摘要；Desktop 显示「任务已清空 · 待验证」（对齐 UI-6010） | done |
+| UI-6018 | 狂奔 plan 越序勾选收口 | active 之后的正式任务不得被 plan 勾选 | implementation 阶段 plan 采纳后 revert 序号大于 active 的 done 勾选 | done |
+| UI-6019 | 狂奔 TASKS 文件级净化 | 非行首 `T-*` 的开放 checkbox 从 TASKS 移除 | plan 采纳后 strip plan 污染开放行（调度层已忽略） | done |
+| UI-6020 | 狂奔 plan 采纳后立即 advance | adopt 后 sanitize TASKS 并尝试 checkpoint advance | `_reconcile_runaway_tasks_after_plan` | done |
+| UI-6021 | 狂奔 patch anchor 段预算 | anchor 参数错误不计段预算 + 内核 nudge | `should_count_segment_failure` · `MY_AGENT_RUNAWAY_SEGMENT_FAILURE_BUDGET=8` | done |
+| UI-6022 | 狂奔 LLM 504 重试 | pool exhausted 指数 backoff 多轮重试 | `runaway_llm_transport_retries` · `MY_AGENT_RUNAWAY_LLM_RETRIES=4` | done |
+| UI-6023 | 狂奔 pool exhausted 长退避 | 503/504 少重试、30～90s backoff | `is_pool_exhausted_error` · `MY_AGENT_RUNAWAY_POOL_RETRIES=2` | done |
+| UI-6024 | 狂奔 LLM 轮间冷却 | tool loop 每轮 LLM 前短 sleep | `MY_AGENT_RUNAWAY_LLM_COOLDOWN_SEC=1.5` | done |
+| UI-6025 | 狂奔 implementing plan 限频 | 每 turn plan_partner ≤1 | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX=1` | done |
+| UI-6026 | 狂奔体验脚本 timeout 续跑 | 默认 180s · timeout 不中断 4 turn | `tools/runaway_experience.py` | done |
+| UI-6027 | 狂奔 segment 空转修复 | duplicate continue_key 不再无限 segment | `_continue_runaway_after_natural_stop` | done |
+| UI-6028 | 体验脚本 Windows 控制台编码 | GBK 下 `✓` 等字符不崩溃 | `_console_text` · UI-6028 | done |
+| UI-6029 | 狂奔 plan_partner 双次预算 | implementing 每 turn ≤2（sanitize + VERIFY） | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX=2` | done |
+| UI-6030 | VERIFY→TASKS Harness 勾选 | 有 VERIFY 证据但 TASKS open 时自动 `[x]` | `sync_runaway_task_checkoff_from_verify` | done |
+| UI-6031 | 体验脚本 turn 上限 | 默认 12 turn · 进 verifying 即停 | `RUNAWAY_EXPERIENCE_MAX_TURNS` | done |
+| UI-6032 | 狂奔 advance 不重置 plan 计数 | 单 turn 内 advance 后 plan cap 仍累计 | `begin_turn(reset_plan_cap=False)` on advance | done |
+| UI-6033 | plan LLM gateway 误报与 fallback | `Insufficient Balance` 长退避重试；失败不 adopt 假提案 | `is_pool_exhausted_transport_error` · `_plan_gateway_failure_reply` | done |
+| UI-6034 | VERIFY batch→TASKS 勾选 | 全部 open 行首 `T-*` 有 VERIFY 证据时 Harness `[x]` | `sync_all_runaway_task_checkoffs_from_verify` | done |
+| UI-6035 | 狂奔 active 聚焦续接 | 续接 prompt 绑定 active；stuck turn 检测 | `_continue_runaway_after_natural_stop` | done |
+| UI-6036 | 体验脚本里程碑停止 | 开放正式队列空或 verifying 即停 | `RUNAWAY_EXPERIENCE_UNTIL=verifying` | done |
+| UI-6037 | gateway plan 失败计入 cap | gateway `tool_fail` 也消耗 plan 预算 | `plan_partner_calls` on upstream_error | done |
+| UI-6038 | repairing plan 风暴 nudge | 连续 gateway fail → 禁 plan、改 write_text | `EXEC_RUNAWAY_PLAN_GATEWAY_NUDGE` | done |
+| UI-6039 | PROJECT.md 验收命令自愈 | hard verify 缺命令时 Harness append | `ensure_project_acceptance_section` | done |
+| **Phase 59 · bug-fix** | | | | |
+| T-5960 | bug-fix 契约文档 | [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · 双轨 · T↔V 矩阵 · 与 plan/review 分工 | DOC-04 矩阵行 + IT/S id 已列 | **doc done** |
+| UI-5961 | T↔V 矩阵 linter M0 | `lint_verify_matrix` · MX-1～MX-3 | 红灯不得 `release_wait`；进入 `verifying` 前预检 | **done** |
+| UI-5962 | 验收 blocker 扫描 M1 | 无 LLM · PROJECT 命令 · 开放 T 缺 V | 与 `parse_acceptance_spec` 对齐 | **done** |
+| UI-5963 | `bug_fix` 子代理 M2 | `subagent.py` · prompt `evolve/subagents/bug_fix.md` | repairing Harness spawn；工具 allowlist §6.2 | **done** |
+| UI-5964 | repairing → bug_fix M3 | Harness 禁 `plan_partner` · 自动 spawn | Round 8 plan 风暴根治路径 | **done** |
+| UI-5965 | implementing 狂奔默认禁 plan | `MY_AGENT_RUNAWAY_PLAN_PARTNER_MAX` 默认 0（bug-fix on） | VERIFY→TASKS 由 Harness；plan 可 env 覆盖 | **done** |
+| UI-5966 | verification 阶段验收命令门 | `project_mode_block_reason` · `_VERIFY_STAGE_EXEC_TOOLS` | `verification`/`release` 允许 `run_command` 等；仍禁业务写码 | **done** |
+| UI-5967 | Harness 真源 checkpoint 对齐 | `_promote_runaway_to_verifying_if_harness_green` | 矩阵+硬验收绿时忽略陈旧 review；不增 repair_count | **done** |
+| UI-5968 | review 去权 + verifying 出口 | `_sync_runaway_harness_truth` · advisory review | review 不单独进 repairing；队列空+硬验收绿 → `release_wait` 并停 segment | **done** |
+| UI-5969 | verification 出口工具面对齐 | `runaway_verification_tool_suppressed` · overlay · experience 提示 | `verifying`/`release_wait` 禁 plan_partner/review；与 Harness 真源一致 | **done** |
+| UI-5970 | verification 出口短接 turn | `runaway_verification_exit_short_circuit` · `_maybe_finish_runaway_verification_exit_turn` | `release_wait`+`acceptance_passed` → 0 LLM；`qa`/`recall` 仍可调模型 | **done** |
+| UI-5971 | 队列空自动进 verifying | `_advance_runaway_checkpoint` · `queue_complete` 旁路 progress 门 | 无 active T-* · 全勾选 → `verifying`（不等本 turn 证据） | **done** |
+| UI-5972 | 项目会话切换性能 | [SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md) · UX-027 | 去重 refresh · history 窗口 · tail 读 jsonl · plan state 去重 | **done** |
+| UI-6040 | 聊天活动轨重设计 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · UX-028 | P0～M2 ActivityEntry 时间线 · Turn Card · 历史/侧栏对齐 | **done** |
+| UI-6041 | 壳层视觉统一（侧栏+顶栏） | [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · UX-029 | M0+M1 done · M2 去重；S-UX-029 · S-6041 手工 | **in_progress** |
+| UI-6041 | 狂奔开头 prep 触发 | [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md) · `_prepare_runaway_project_start` | 狂奔 + 早期 stage 每回合 prep；`project.runaway.set` 同步 prep；不绑长文 requirements intent | **done** |
+| UI-6042 | 狂奔 begin_turn 武装对齐 | `executor.begin_turn` · `next_open_task` / `active_task_id` | 狂奔武装当前/下一依赖满足任务，不用 `first_open_task` | **done** |
+| UI-6043 | 狂奔早期 overlay 与 executor 一致 | `format_project_overlay` | requirements/documentation 明示 stage_gate 禁止业务代码 | **done** |
+| UI-6044 | 狂奔跳过 plan 路由标签 | `activity_router.compute_activity_route` | 狂奔下不显示「计划待确认」 | **done** |
+| UI-6045 | bug-fix repairing 写 ENV | `BUG_FIX_PLAN_WRITE_ALLOWLIST` · `run_bug_fix` | repairing 可 patch ENV.md `quality.commands` + PROJECT 验收段 | **done** |
+| UI-6046 | verification 谓词门 · ENV bootstrap | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · MX-5 · `ensure_env_quality_commands` | 硬验收绿但 MX 红仍 repairing；PROJECT→ENV quality 幂等 bootstrap | **done** |
+| UI-6047 | verification Harness 短接 | `_maybe_short_circuit_runaway_verification_harness_turn` | `[Harness]` + verifying/repairing → 0 主 Agent 轮 | **done** |
+| UI-6048 | verification overlay 消歧 | `format_project_overlay` | verification 禁止 else 分支「可连续写计划域」 | **done** |
+| UI-6049 | verification 跳过 G5 重复勾选 | `progress_gate.report_progress_repeat_block_reason` | runaway + verification 不拦 report_progress 重复 | **done** |
+| UI-6050 | 狂奔续接 verification 文案 | `runaway_chain_user_line` | 队列空 → verification 出口说明，非「下一项任务」 | **done** |
+| UI-6051 | verification prompt 对齐 | `loader` digest_note · project_prompt | 与 Harness 谓词一致；勿教主 Agent 直写 ENV | **done** |
+| UI-6052 | checkpoint 谓词审计 | `agent` · `exec_reliability` | review/report_progress 不驱动 checkpoint | **done** |
+| UI-6053 | 同回合过程段跳转 + 狂奔 idle 侧栏 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) §7.5 · `project-panel.ts` · `index.ts` | S-UX-028h～j；幂等 resume 不刷 notice | **in_progress** |
+
+### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./RUNAWAY-V2.md)）
+
+> **DOC-04**：MAP §2 Phase 60 · 矩阵行「狂奔 v2」· 回归 S-6106 / IT-6101～6106 / **IT-6107**
+> **原则**：Anthropic 外部 checklist + Codex 单 turn + Cursor 薄 harness + Pi profile；**不**再叠 checkpoint / bug-fix 轨 / Harness 短接。续接见 [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6100 | v2 设计文档 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) **v0.2.1** · MAP · 本文 | 失败场景、derive 算法、清单 merge、单 turn 时序、升格、走查、测试矩阵已写清 | **done** |
+| T-6101 | `build_checklist` 生成器 | `runaway_v2/checklist.py` · 复用 `lint_verify_matrix` | IT-6101 MX/T/PROJECT/ENV → checklist 项 | **done** |
+| T-6102 | `RunawayController.run_turn` 单入口 | `runaway_v2/controller.py` · `agent.run_turn` 分流 · `MY_AGENT_RUNAWAY_V2` | IT-6102 不调用 v1 `_maybe_runaway_*` | **done** |
+| T-6103 | turn_end acceptance hook | `runaway_v2/acceptance.py` · command exit code | IT-6103 非 0 不标 passed | **done** |
+| T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
+| T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
+| T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · 文档废止表 | v2 默认 off 时 v1 仍可跑；当前选定 v1 回归 108/112，通过外的 4 项待收口 | **in_progress** |
+| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；兼容 `chain_after_ok` / `plan.should_chain` 待移除；IT-6107-a～g · S-UX-028m | **in_progress**（核心与 IT-6107-a～g 已接入并通过；体验脚本里程碑回归已修；兼容层 / 指纹 / S-UX-028m 待收口） |
+| S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
+
+### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
+
+> **DOC-04**：MAP §2 Phase 61 · 影响面为工具协议、执行可靠性、上下文和 Desktop/Terminal 消费；实现前需补 STABILIZATION 矩阵与独立 IT/S 编号。
+> **当前状态**：缺口盘点、契约补全和提示词矩阵已完成；P0 `interactive_terminal`、Git diff/restore 文件级切片与 `structured_test` 协议适配已验收并 active，`patch_file` v2 仍为 experimental，其余工具尚未开始。
+> **原则**：补齐 Agent 开发原语，不复制完整 IDE；先评估成熟开源组件，再通过适配层复用；优先复用现有 `run_command`、`run_service`、`patch_file`、Git、测试和浏览器入口。开源项目只借鉴设计时，不嵌入完整 Agent runtime。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6200 | 工具体验缺口路线图 | [AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · MAP | 当前能力、P0/P1/P2、狂奔边界和实施顺序写清 | **doc** |
+| T-6201 | P0 终端会话实现切片 | `evolve/tools/common/interactive_terminal/` · `requirements-optional.txt` | IT-6201；PTY/pipe、Windows Ctrl-C、stdin EOF、编码、并发、session lock、孤儿进程、上限、日志保留和重启恢复 | **active**（agent/server 宿主托管 worker；Windows smoke 和跨调用 attach 已通过；服务重启主动恢复待后续） |
+| T-6202 | P0 原子编辑实现切片 | `evolve/tools/coding/patch_file/` · `data/patch-ledger.jsonl` | IT-6202；多 hunk、base hash、dry-run、失败不落盘、patch id、换行/二进制/幂等和多文件失败语义 | **experimental**（单文件结构化 hunk 已实现；统一 diff/跨文件事务待收口） |
+| T-6203 | P0 Git 变更与回退实现切片 | `git_snapshot` diff 扩展 · `git_restore` · `GIT-VENDOR.md` | 文件 diff、文件级局部恢复、用户改动保护、确认卡而非模型 token | **active**（IT-6203 5/5；hunk 级恢复、baseline/ledger 归属待后续收口） |
+| T-6204 | P0 结构化测试协议实现切片 | `agent-core/structured_test.py` · `evolve/tools/project/structured_test/` · `PROJECT-VERIFY.md` | 统一状态、失败 `file:line`、耗时、重跑和缺依赖语义 | **active**（IT-6204 4/4；JUnit/JSON 原生报告适配、取消和真实重跑执行待后续收口） |
+| T-6205 | P1 语言服务原语设计 | `diagnostics` · `symbol` | LSP 发现/启动/缓存、workspace root、缺依赖、不支持语言、只读诊断和受门控重命名 | todo |
+| T-6206 | P1 浏览器检查设计 | `browser_inspect` · [BROWSER.md](./BROWSER.md) | 生命周期、profile/cookie 隔离、截图/trace、网络 allowlist、超时、上传下载和敏感状态清理 | todo |
+| T-6207 | P1 并行隔离工作区设计 | `explore` · `deliverable_review` · worktree contract | 单项目单活线、只读并行、显式隔离写入、输入快照、冲突检测和结果采纳 | todo |
+| T-6208 | P1 变更审查设计 | `change_review` · `git_snapshot` diff · VERIFY | hunk 风险、测试关联、接受/拒绝和审查状态 | todo |
+| T-6209 | P2 生态适配设计 | GitHub/GitLab/CI · container/db · context planner | 只读回链优先，外部写操作与上下文预算边界明确 | defer |
+| IT-6200 | Phase 61 文档一致性检查 | 新文档、MAP、TASKS、现有工具文档 | 不把已有能力误标为缺口；实现前无虚假 done | **done** |
+| IT-6201 | `interactive_terminal` 基础协议回归 | `agent-core/tests/test_interactive_terminal.py` | 缺少 pywinpty 返回 unsupported；输入/EOF/中断/关闭；阻塞 read 不阻塞请求；退出尾部输出；游标重置；孤儿清理记录；宿主跨调用生命周期 | **pass**（9/9；Windows pywinpty 和长期宿主 attach 已通过；服务重启主动恢复待做） |
+| IT-6202 | `patch_file` v2 结构化编辑回归 | `agent-core/tests/test_patch_file_v2.py` · `test_patch_file_crlf.py` | 多 hunk 原子写入；任一 hunk 失败不落盘；base hash 冲突；dry-run；patch id 幂等；旧参数/CRLF 兼容 | **pass**（6/6；统一 diff 与跨文件事务待做） |
+| IT-6203 | `git_snapshot` / `git_restore` 文件级回归 | `agent-core/tests/test_git_tools.py` | 工作树/staged 完整 diff；路径过滤；未跟踪路径；dry-run；worktree/staged 文件恢复；expected hash 冲突；未跟踪文件拒绝；狂奔模式不覆盖恢复确认 | **pass**（5/5；hunk 级恢复和 baseline/ledger 归属待做） |
+| IT-6204 | `structured_test` v1 协议回归 | `agent-core/tests/test_structured_test.py` | passed/failed/blocked/timeout；失败 file:line；rerun 提示；缺依赖阻塞；dry-run 阻塞 | **pass**（4/4；真实测试命令适配沿用 run_project_tests） |
+| T-6210 | 系统提示词装配与分层设计 | `loader.py::build_system_prompt` · `core.txt` · topic/project prompts · INDEX | 静态/动态段、职责边界、feature flag 和禁止重复注入写清 | **doc** |
+| T-6211 | P0 提示词改动矩阵 | `core.txt` · `INDEX.md` · `buckets/{run,write}.md` · `coding.md` · `project-boundaries.md` · `safety.md` | terminal/edit/git/test 每项都有文件、文案、schema、confirm 和狂奔边界 | **doc** |
+| T-6212 | P1/P2 提示词改动矩阵 | discover/browser/integrations buckets 与主题 prompt | diagnostics/browser/隔离/CI/容器/数据库/上下文的注入层和退化路径明确 | **doc** |
+| T-6213 | 提示词与工具 schema 一致性回归设计 | IT-6210～6219 · S-6210～6211 | disabled 工具不出现在 prompt/schema；只聊、draft、狂奔、verification 分支不越权 | **doc** |
+| T-6214 | 变更归属与 baseline/patch ledger 设计 | `git_snapshot` · `git_restore` · `patch_file` v2 | 回合 baseline、Agent patch ledger、用户中途编辑、外部改动、回退/rebase 后的 `unknown`/`mixed` 处理 | **done** |
+| T-6215 | 单活线与隔离 worktree 边界设计 | `PROJECT-THREADS.md` · 狂奔 v2 · Phase 61 | 默认单项目单活线；只读并行可用；写型隔离仅用户显式开启，不自动创建活跃 worktree | **done** |
+| T-6216 | 现行 builtin 数量文案同步 | `docs/TOOLS.md` · `evolve/prompts/coding.md` · registry | 当前规范统一为 12 个 builtin（核心 8 + 编排 4）；历史任务记录不回写 | **done** |
+| T-6220 | 开源优先组件盘点与复用边界 | `AGENT-TOOL-EXPERIENCE.md` §2 | 组件、许可证、官方来源、直接依赖/适配/仅参考分类；OpenHands 等完整 runtime 不直接嵌入 | **done** |
+| T-6221 | 开源依赖引入门设计 | `AGENT-TOOL-EXPERIENCE.md` §2.4 · `GIT-VENDOR.md` | SPDX、NOTICE、传递依赖、Python 3.14/Windows、可选依赖退化、smoke test 和发布前扫描要求明确 | **doc** |
+| T-6222 | P0 开源适配评估 | T-6201～T-6204 · T-6221 | pywinpty/ConPTY、unidiff、Git CLI、JUnit XML/pytest-json-report 逐项完成兼容性和最小回归后再编码 | **in_progress**（pywinpty 适配和缺依赖退化已落地；其余组件待评估） |
+| T-6223 | P1 开源适配评估 | T-6205～T-6208 · T-6221 | Pyright/Tree-sitter/Playwright/LSP 逐项完成许可证、版本、资源隔离和退化路径评估 | todo |
+| T-6224 | 交互终端 UI 设计 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) | 状态真源、列表/详情、输出 cursor、重连、关闭权限和 M0/M1 验收写清 | **doc** |
+| T-6225 | 交互终端 UI 实现 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · `server.py` · `project-panel.ts` | S-6224-a～h；用户可见运行中终端、退出/丢失原因、输出和关闭动作 | todo |
+| T-6230 | 执行生命周期收口 | [execution-lifecycle-design.md](./superpowers/specs/2026-09-11-execution-lifecycle-design.md) · `server.py` · Desktop / Terminal consumers | `queued/running/stopping` 可见；Stop 幂等；同一 `run_id` 唯一收尾；重复租约和取消竞态不留工作态 | **in_progress** |
+| IT-6230 | 执行生命周期回归 | `test_execution_lifecycle.py` · `test_turn_cancel.py` · `reduce-events.test.ts` | 状态机、乱序事件、重复 Stop、queued 取消、重复租约、Desktop/Terminal 收口 | **in_progress** |
+
+
+### 2026-09-07 同步 / 验证记录
+
+| 范围 | 结果 |
+|------|------|
+| 狂奔 v2 自动测试 | **40/40 通过**（checklist / controller / continuation / resume / state / experience harness） |
+| Python 基础验证 | `.venv` 解释器 `F:\my-agent-main\.venv\Scripts\python.exe`；`compileall` 通过；当前环境缺少 `pydantic` / `pytest` |
+| v1 兼容回归选集 | **108/112 通过**；4 项旧 v1 断言待收口，故 T-6106 保持 `in_progress` |
+| Python unittest 全量 | **1079 项**；无断言失败；`3` 项跳过；`2` 项因 `.venv` 缺少 `pytest` 导入错误 |
+| Terminal UI | **64/64 通过**；`npm run build` 仍有 5 个 TypeScript 类型错误 |
+| Desktop | Electron `tsconfig.node.json` 与完整 `npm run build` 通过；生产构建正常退出（修复 Electron 子构建误入 watch） |
+| v2 真实体验复跑 | `workspace/music` 真实 0x567-flash 回合完成；修复 MX-2 多行绑定误报、`[P1] T-*` 正式任务解析和质量配置阻塞后，36/36 任务完成，矩阵与 `AC-PROJECT` 全绿，项目进入 `release_wait`；状态镜像已同步清空 active task 并切到 `release` |
+
+| S-5951 | bug-fix 手工回归 | `workspace/test` repairing → **verifying** 稳态 | 0 plan 风暴 · 矩阵绿 · hard verify 过 | **done** |
+| S-6011 | 狂奔真实 LLM 回归 | `workspace/test` · 0x567-flash · `tools/runaway_experience.py` | mid-queue → **verifying**，0 确认；Round 10b：**verifying 达成** | **done** |
+| S-6001 | 真实项目体验验收 | Music Dreamer Desktop 手工路径 | 新项目输入 → 文档整理 → 方案确认 → 单任务实现 → 验证，全程不要求用户理解内部术语 | todo |
+
+UI-6001～UI-6005 的共同前置：用户评审并采纳 [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md) 的目标、信息架构、提醒分级和迁移策略；未采纳前只允许继续完善设计文档，不允许开始编码。
+
+UI-6001 当前实现：主区目标卡和用户状态映射已接入 Unified；本轮将其收敛为项目上下文栏，并把需要用户决定的内容迁移到独立决策条。任务工作区仍待实施。复用 `project.state` / `project.plan.state` 的统一阶段快照，不新增后端状态。
+
+UI-6009 当前决策：目标信息保留为只读定位信息，但不再使用大目标卡承载它。默认主路径改用轻量项目上下文栏；目标详情、任务列表、文档全文和验证证据分别进入对应主区焦点。
+
+UI-6010 当前决策：`25/25 个任务` 只适合任务列表或历史统计，不适合当前进展。任务队列清空后，用户界面统一使用“任务已清空 · 待验证”，避免制造“已经完成但仍需处理”的数字冲突。
+
+UI-6011 当前决策：新增“狂奔”项目级运行授权，默认关闭。它负责让 Harness 自动跨任务推进，不把内部任务队列和阶段闸门变成用户操作清单；涉及范围变化、风险、外部发布和无法安全修复的失败仍然回到用户决策。
+
+UI-6012 当前决策：狂奔是后台长跑授权，不是连续弹窗确认器。用户只负责一次开启、随时停止和处理真实阻塞；计划采纳、任务切换、验证重试和单回合续接由 Harness 内部完成。
+
+UI-6013 当前决策：确认机制按“用户授权边界”而不是按单个工具调用触发。狂奔授权只覆盖当前项目内可逆、可验证的生产动作；高风险动作仍回到用户决策，但不得把普通项目工具和计划提案混入确认队列。
+
+UI-6014 当前决策：狂奔调度只认正式 `T-\d+` 任务行。`plan_partner` 采纳不得把提案摘要写入 TASKS 开放队列；非任务行进入 change ledger 或 plan 域归档。
+
+UI-6015 当前决策：任务 advance 是 Harness 决策，不是 TASKS 勾选副作用。切换下一项前需当前任务有对口 VERIFY 证据或授权命令成功；partial pass 可记录但不得无证据推进。
+
+UI-6016 当前决策：operational notice（504 重试、advance 提示）按 turn 去重合并，避免每个工具轮次重复 toast。
+
+UI-6017 当前决策：segment 结束若无自然语言 assistant 回复，Harness 补一句进展摘要；正式开放 `T-*` 清空后自动进入 `verifying` 并对齐 UI-6010 文案。
+
+UI-6013 验证：`test_runaway_covers_local_tool_confirmation_but_not_external_or_sensitive` · `test_runaway_auto_adopts_plan_partner_proposals` · `test_runaway_does_not_emit_plan_confirmation_request` · `test_runaway_overlay_overrides_confirmation_and_task_stop`（`agent-core/tests/test_project_artifacts.py` · `test_async_orchestration_task_stop.py`）通过。
+
+UI-6014～UI-6017 验证（2026-09-01 已编码）：`test_next_open_task_skips_non_formal_plan_lines` · `test_advance_runaway_requires_evidence_before_next_task` · `test_runaway_task_has_advance_evidence_accepts_verify_documentation` · `test_runaway_task_has_advance_evidence_accepts_inline_verify_paren` · `test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty`（`agent-core/tests/test_runaway_flow.py`）。
+
+UI-6018～UI-6020 验证：`test_strip_nonformal_open_task_lines` · `test_revert_out_of_order_runaway_checkoffs` · `test_sanitize_runaway_tasks_artifact`（`agent-core/tests/test_runaway_flow.py`）。`workspace/test` 手工 sanitize：strip 2 plan 行 · revert T-007 · advance → T-007。
+
+UI-6023～UI-6027 验证：`test_runaway_reliability` · `test_runaway_duplicate_continue_key_does_not_loop_segments`（`agent-core/tests/test_runaway_reliability.py` · `test_project_artifacts.py` · `ProjectArtifactTests`）。
+
+UI-6028～UI-6031 验证：`test_sync_runaway_task_checkoff_from_verify` · `test_runaway_reliability`（plan cap=2）（`agent-core/tests/test_runaway_flow.py` · `test_runaway_reliability.py`）。
+
+UI-6032～UI-6036 验证（2026-09-01 已编码）：`test_advance_preserves_plan_partner_cap` · `test_sync_all_runaway_task_checkoffs_from_verify` · `test_plan_gateway_failure_summary` · `test_pool_exhausted_error_detection`（`test_runaway_flow.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12。
+
+UI-6037～UI-6039 验证（2026-09-01 已编码）：`test_plan_gateway_tool_failure` · `test_ensure_project_acceptance_section` · `test_runaway_plan_gateway_fail_max_default`（`test_runaway_reliability.py` · `test_runaway_flow.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13。
+
+UI-6041～6045 验证（2026-09-03 已编码）：`test_runaway_startup` · `test_bug_fix_lane_allows_env_write` · `test_bug_fix_executor_allows_env_write_in_verification`（`agent-core/tests/test_runaway_startup.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md)。
+
+UI-6046～6052 验证（2026-09-03 **done**）：`test_runaway_verification_bootstrap` · `test_runaway_verification_orchestrator` · `test_verifying_without_quality_commands_bootstraps_env`（`test_runaway_flow.py`）。设计：[RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)。手工 **S-6046** todo。
+
+Phase 59 **bug-fix**（2026-09-02）：M0～M3 已编码；**UI-5966** verification 阶段允许验收 `run_command`；**UI-5967** Harness 真源 checkpoint 对齐。回归：`test_runaway_verify_matrix` · `test_runaway_reliability` · `test_runaway_flow`（含 IT-5966/5967）。手工：**S-5951 done（Round 10b）** · S-6011 **done（Round 10b → verifying）**。
+
+Harness R3 补丁（2026-09-01 已编码）：implementation 阶段 `_advance_runaway_checkpoint` 不再硬依赖 `task_stop_armed`；`test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty` 通过。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §2.2。
+
+### 分支 `codex/runaway-mode-research` 合入清单（2026-09-01）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| 已提交（3 commits） | done | `feat(runaway)` · `feat(desktop)` · `docs: RUNAWAY` |
+| Harness R3 任务切换 | **WIP 未提交** | `agent.py` + `test_runaway_flow.py` · 见 RUNAWAY-EXPERIENCE §2.2 |
+| 真实 LLM 体验 | done | 0x567-flash 两轮 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) |
+| R7 收口（UI-6014～6017） | **done** | plan 调度过滤 · 证据 advance · 降噪 · segment 摘要 |
+| R7b 收口（UI-6018～6020） | **done** | 越序 revert · strip plan 行 · adopt 后 reconcile+advance |
+| R7c 收口（UI-6023～6027） | **done** | Round 4 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3c · §10 |
+| R7d 收口（UI-6028～6031） | **done** | Round 5/6 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3d · §11 |
+| R7e 收口（UI-6032～6036） | **done** | Round 7 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12 |
+| R7f 收口（UI-6037～6039） | **done** | Round 8 repairing 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13 |
+| **Phase 59 bug-fix** | **done** | T-5960 · UI-5961～5965 · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · S-5951 todo |
+| 手工验收 | todo | S-6011 狂奔 LLM 回归（Round 7：23/25）· S-6001 Desktop 体验 · T-5907 端到端 |
+| 合入目标 | 建议 | `phase-58-textbook-flow`（远端默认开发线；本地无 `main`） |
+
+合入前复跑：`test_runaway_flow` · `test_project_artifacts` · `test_async_orchestration_task_stop`；R7 编码完成后跑 S-6011。
+
+本次链路修复：范围确认必须经过后端 `project.scope.confirm` 路由并收到权威状态回执；失败时不把界面推进到“准备开始下一步”。
+
+T-5905 自动回归：`agent-core/tests/test_project_documentation_stage.py`（未明确整理不写入；明确整理生成四核心制品；文档阶段拒绝确认开工）。
+
+T-5906 自动回归同上测试文件（设计确认停在 `design`；未授权任务时阻止 `run_command`；启动开放任务后进入 `implementation`）。
+
+T-5907 当前进度：`workspace/test` 已完成文档链接、设计确认、未授权拦截、`T-001` 授权、scaffold dry-run/实际生成和 `V-000` 证据；Desktop 手工验收暂阻塞：本机 Electron 开发壳未创建窗口，启动日志显示旧端口/sidecar 复用与 Electron 缓存目录权限异常；已停止本次启动进程，待冷启动环境恢复后复测。
+
+UI-5908 触发原因：需求输入阶段截图显示未绑定项目时仍渲染“确认范围”卡片，按钮因开放任务为 0 而置灰，用户无法判断下一步动作。
+
+UI-5908 验证：未绑定项目时显示“打开项目/新建项目”；绑定项目后才显示“确认范围”。`npm run build` 与需求输入回归 `6/6` 通过。
+
+UI-5909 产品规则：文档整理期间的 completeness/基线 warning 只收集不打断，进入下一阶段后集中汇总；关闭后同一内容不重复出现。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.3。
+
+UI-5909 验证：`documentation` 阶段侧栏只显示批次进度；warning、普通计划搭档结果、质量建议和可采纳卡暂存，离开阶段后按指纹一次性汇总；代码跟进、撤销、权限/写入错误仍即时显示。对应前端契约测试与 `desktop` TypeScript 构建已通过。
+
+UI-5910 产品规则：`content_lint` 只提供待完善建议，阶段卡的“本阶段阻塞”只接受阶段出口缺失、L2 stale、权限失败或真实执行错误。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.4。
+
+UI-5910 状态说明：原始任务由 UI-5910a 的统一阶段状态快照契约完整覆盖，后续以 `status/blockers/missing/warnings` 单一语义为准，不再单独推进两套阻塞判定。
+
+UI-5910a 产品规则：阶段快照由后端单点计算，`project.state` 与 `project.plan.state` 共享 `status/blockers/missing/warnings` 契约；文档整理中的未生成文档只属于进行中或待完善，不得进入 blocker。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.9。
+
+UI-5910a 验证：`.venv\Scripts\python.exe -m unittest agent-core.tests.test_project_stage agent-core.tests.test_project_stage_card` 通过 `13/13`；`desktop` 执行 `npm run build` 通过；文档整理阶段返回 `status=in_progress`、`blockers=[]`，未生成核心制品进入 `missing/warnings`。
+
+UI-5911 产品规则：耗时/粒度属于运行提醒，计划审阅只接收会写入任务或文档的 gated proposal。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.5。
+
+UI-5911 实现契约：计划审阅入口只由带有效 `action` 的 `suggestions` 驱动；`operational_notices`、普通 `partner_notices` 和 `warnings` 不得仅凭文案打开计划审阅。阶段 warning 使用“待完善/不阻塞当前运行”语义，不暗示必须进入计划审阅。
+
+UI-5911 验证：长任务和耗时提醒进入 `operational_notices`，不生成 `stale`/`split` 审阅卡；Desktop 只在存在带有效 `action` 的 `suggestions` 时显示“打开计划审阅”，不再解析“待采纳/待审阅”文案。定向 Python 测试、TypeScript 类型检查和 Desktop 构建通过。
+
+UI-5912 产品规则：阶段状态必须从采纳/编辑后的最新 manifest 和磁盘内容重算；稳定 ID 支持业务域复合格式，不能因旧 manifest 或过窄正则把已完成的 `REQ` / `AC` 持续标为阻塞。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.6。
+
+UI-5912 实现契约：采纳、外部编辑和回合结束后的状态事件均先刷新 manifest，再由统一阶段函数计算 `status/blockers/missing/warnings`，最后发送 `project.state` 与 `project.plan.state`；前端不依据旧快照自行修正阻塞。
+
+UI-5912 验证：复合 `REQ-MUSIC-001` / `AC-MUSIC-001` 可被 manifest 持久化；外部修改 `SCOPE.md` 后重新请求 `project.state` 会清除已解决的 `REQ`/`AC` blocker，真实缺失仍保留。定向 manifest、阶段和 Plan Agent 测试通过。
+
+UI-5913 产品规则：Mermaid 图源必须在统一 Markdown 预览入口渲染为 SVG；失败时回退显示图源和错误状态。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.7。
+
+UI-5913 实现契约：`renderMarkdown()` 只负责把 Mermaid fenced block 转为可 hydration 的占位节点；`hydrateMermaid()` 统一负责 SVG 渲染和错误回退。文档正文、项目制品阅读区、计划/聊天消息和地图覆盖层都必须调用同一套入口，不能维护第二份图片真源。
+
+UI-5913 验证：合法 Mermaid 块进入 SVG hydration；语法错误显示错误信息并保留源码；文档阅读、统一聊天、Pet 聊天和项目覆盖层均接入 hydration。Desktop TypeScript 检查与生产构建通过。
+
+UI-5914 产品规则：左栏只做文档导航，完整正文进入主工作区文档阅读焦点；不得用固定窄栏承载宽表格和部署图。详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4.8。
+
+UI-5914 实现契约：文档覆盖层只提供列表、新建和当前项提示；点击文档后关闭覆盖层并切换到 `mainFocus=document`，主区显示路径、返回聊天、文档列表和完整 Markdown 内容。文档阅读与聊天、计划审阅共享同一主区焦点状态，不复制聊天内容或在左栏展开正文。
+
+UI-5914 验证：文档列表项标注“主区阅读”，主区文档容器支持宽表格和 Mermaid hydration，并提供“返回聊天/文档列表”入口；Desktop TypeScript 检查与生产构建通过。
+
+T-5902 实现契约：项目壳副作用调用统一经过项目模式闸门；`active_shell=project` 且无 `project_root` 时，`run_evolved` 的写入、编码、命令、测试、服务、脚手架和工具创建调用立即返回“未绑定项目”，只读调用不受影响。需求输入仍由 intent 层保持只读。
+
+T-5902 验证：未绑定项目的副作用调用不会进入 runner；未绑定项目的只读调用仍可继续。需求输入、项目阶段、manifest、Plan Agent 和阶段卡定向测试通过。
+
+T-5903 文档契约：参数/schema 错误按回合内指纹最多自动修正一次；同一错误第二次失败立即停止工具循环。命令退出码、权限、取消、超时和用户拒绝不自动重试；所有失败保留统一 `ok=false/error` 结果，助手不得宣称完成。既有同指纹三次执行熔断继续作为更外层保护。
+
+T-5903 验证：新增回合内错误指纹和跨 execute segment 传递；同一 schema 错误第二次失败返回 `finish_reason=tool_error` 与“已停止自动重试”，命令退出码/取消/熔断不进入免费重试。定向可靠性测试通过。
+
+T-5904 验证：阶段定义、阶段出口、文档阶段写入限制、设计确认和单任务授权均已落地；`requirements → documentation → design → implementation → verification → release` 不允许由模型自行升级。项目阶段、文档阶段和生命周期定向测试通过。
+
+T-5901 验证：需求简介被分类为 `requirements`，不启动探索、不向 LLM 暴露工具；即使模型返回伪造工具调用也会被内核拦截并保持只读。`.venv\Scripts\python.exe -m unittest agent-core.tests.test_requirements_input` 通过。
 
 ## done 定义（DOC-03 · [STABILIZATION.md](./STABILIZATION.md) §9.2）
 
@@ -52,6 +352,15 @@
 | **T-1830-01～08**（部分） | `ui.route` · refresh · 流式序等 | **superseded** | IT-X 中与四壳绑定的用例作废；其余仍 defer 维护 |
 
 **仍算真债（勿误删）**：Phase 24 **T-2408** S-70～74 · WORKBENCH M1/M2 · 后端 `active_shell` 收敛 · Phase 44 **T-4408** S-441 · evolve_log 轮转。
+
+## 产品面纪律（surface · [DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) §8）
+
+| 规则 | 说明 |
+|------|------|
+| 新 task 默认 | `surface: desktop` |
+| Terminal | 标 `frozen` / `TERMINAL-MAINT`；仅 **BUG-P0** · **security** 破例 |
+| DOC-04 | 新 Phase 写 `Surface: desktop`；动 Terminal **功能扩展** 须破例理由 |
+| Cursor | 默认不改 `terminal-ui/`、`TERMINAL-MODE` 功能章节 |
 
 ---
 
@@ -1852,6 +2161,77 @@ python turn_intent.py    # 分类用例无回归
 | S-572 | 手工：WT 全屏 TUI smoke（legacy prompt_toolkit） | log | TERMINAL §6.5 | todo |
 | S-573 | 手工：对照 preview HTML 配色（legacy Lexer 路线） | log | TERMINAL §6.4.9 | **superseded** → S-574 |
 | S-574 | 手工：`npm run demo` Ink 配色 smoke | log | TERMINAL §6.6 | todo |
+
+### Phase 58 — Desktop 教科书流程（TEXTBOOK）
+
+> 子文档：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) **v0.1.0** · **仅 Desktop** · Terminal **frozen**  
+> **定调**：默认 project · 流程轨五段 · 出口 = 闸门+证据 · Terminal 独立入口
+
+#### DOC-04 准入
+
+- [x] 矩阵行：Desktop unified project · 侧栏态势 · LDM 栈-D/C（见 DESKTOP-TEXTBOOK-FLOW §4）
+- [x] 回归 ID：**S-580**（北极星手工路径）；M1 实施时补 IT（流程轨状态推导）
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5800 | 产品定调 + 五段出口 + 大厂对照 + 纪律 | DESKTOP-TEXTBOOK-FLOW.md · README · MAP | 评审 | **doc done** |
+| T-5801 | M1：流程轨 UI（侧栏顶 + **阶段计划卡** + 预览切换） | unified shell | S-580 可观测五段 | done |
+| T-5805 | M1：`plan_dirty` / 范围变更与流程轨联动 + **编码中途** banner | project-panel · banner | §6.3.2 · §6.3.8 | done |
+| T-5808 | M1：编码中途采纳 · P1 分级软拦 + **系统展示** `what_changed`/overlay/disarm（禁甩锅核对）· P4 队列 | project-panel · after_turn hook | §6.3.8.4–5 | done |
+| T-5806 | M1：Plan 采纳卡 **「相对上一版」** 变更摘要 | plan-review · project-panel | §6.3.3 | done |
+| T-5802 | M1：默认 perspective=project + 主焦点切换 | unified index | DESKTOP-TEXTBOOK §6 | done |
+| T-5803 | M1：配方默认 verify/quality 命令（本地 CI） | PROJECT-RECIPES · ENV 脚手架 | 新配方带 test | done |
+| T-5804 | M1：发布 milestone checklist UI | project-panel | §7.2 五项 | done |
+| T-5807 | M1：删任务采纳 **三选一**（`drop_task` · `code_policy` · `project.code_followup`） | plan_agent · project_api · project-panel · plan-review · ws · index | §6.3.7–§6.3.8；IT：三 policy + armed disarm | done |
+
+### Phase 58b — Desktop 文档制品链（REAL-RD，暂停执行）
+
+> 子文档：[DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) **v0.2.5** · 历史设计，仅供参考
+> **当前规则**：不以七文件、manifest、completeness 或双 Mermaid 作为硬门槛；以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 为准。
+> **依赖**：Phase 58 M1 done（T-5801～5808）；扩展而非作废 T-5804/5805/5806/5808
+
+#### DOC-04 准入
+
+- [x] 矩阵行：Desktop unified project · 七文件制品链 · manifest stale（见 DESKTOP-REAL-RD-FLOW §2、§6）
+- [ ] 回归 ID：**S-581**（七文件迁移 + 变更 stale + 编码依据 + 发布验收端到端）
+
+| ID | 任务 | 交付物 | 验收 | 状态 |
+|----|------|--------|------|------|
+| T-5810 | M1：七文件角色、稳定 ID 格式、`tier`（small/normal/large） | DESKTOP-REAL-RD-FLOW · PROJECT-MODE · manifest schema | 角色表与 R0～R9 一致 | done |
+| T-5811 | M1：文档 manifest · revision · `current/stale/evidence_stale` · L1/L2 传播 | `.plan-agent/` · project_api | IT-5811：传播表 §6.3 | done |
+| T-5812 | M1：七文件项目模板 + **旧四件套一次性迁移**（§10） | PROJECT-RECIPES · migrate hook | 迁移有内容不空文件 | done |
+| T-5813 | M1：Plan Agent 读取 DESIGN/VERIFY/RELEASE/SCOPE | plan_agent context | Plan 提案可引用制品 | done |
+| T-5814 | M1：TASKS 任务元数据 REQ/AC/DESIGN/V 关联 | TASKS 模板 · parser | T-001 示例可解析 | done |
+| T-5815 | M1：L1 证据绑定任务/AC/V（消跨任务假阳性） | project_api · Gate | 证据行带 T/V id | done |
+| T-5816 | M1：采纳 CHG ledger + 影响时间线（扩展 T-5806） | plan_agent · project-panel | CHG JSON §9 | done |
+| T-5817 | M1：流程阶段后端权威计算（含制品状态） | project_api | 前端不再纯启发式 | done |
+| T-5818 | M1：milestone 验收/发布清单持久化（扩展 T-5804） | project_api · disk | 重开不丢验收 | done |
+| T-5819 | M1：阶段计划卡展示制品+revision+编码依据（扩展 T-5801） | project-panel | §4 阶段卡表 | done |
+| IT-5812 | 自动：七文件模板与旧四件套一次性迁移 | `agent-core/tests/test_project_artifacts.py` | T-5812 | pass |
+| IT-5814 | 自动：TASKS 五字段任务关联 parser | `agent-core/tests/test_task_metadata.py` | T-5814 | pass |
+| IT-5813 | 自动：Plan prompt 读取标准制品与 manifest 状态 | `agent-core/tests/test_plan_channel.py` | T-5813 | pass |
+| IT-5815 | 自动：L1 证据绑定任务/AC/V 与 API Gate | `agent-core/tests/test_progress_gate.py` · `test_plan_channel.py` | T-5815 | pass |
+| IT-5816 | 自动：采纳 patch 持久化 CHG ledger、manifest revision/stale 与重载时间线 | `agent-core/tests/test_plan_arch_patch.py` | T-5816 | pass |
+| IT-5817 | 自动：后端五段阶段判定、制品状态阻塞与 L2 stale 回退 | `agent-core/tests/test_project_stage.py` | T-5817 | pass |
+| IT-5819 | 自动：阶段卡制品摘要、revision、AC/设计/验证/发布依据契约 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5818 | 自动：发布验收记录按 RELEASE revision 持久化并在 revision 变化后失效 | `agent-core/tests/test_project_release.py` | T-5818 | pass |
+| IT-5820 | 自动：侧栏提案卡「查看」捕获并显式切换计划审阅面 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5821 | 自动：项目恢复/重开重新发送持久化待采纳提案 | `agent-core/tests/test_project_switch.py` | T-5819 | pass |
+| IT-5822 | 自动：恢复前过滤 `old not found` 等无效持久化 patch 提案 | `agent-core/tests/test_plan_arch_patch.py` | T-5819 | pass |
+| IT-5823 | 自动：有效采纳卡查看入口统一捕获；CHG 影响时间线默认折叠、可展开 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5824 | 自动：侧栏提案卡「查看」复用 `open-plan-review` 通路，并继续按 `suggestion_id` 定位审阅项 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5825 | 自动：侧栏提案卡「查看」改为专用 `open-suggestion-review` 动作，由提案区域捕获并切换主区审阅面 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5826 | 自动：保留旧「查看」入口但隐藏，新增「审阅」按钮并使用独立动作链路 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5827 | 自动：审阅按钮直接完成主区 plan-review DOM 切换，并显示打开成功/失败状态 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5828 | 自动：审阅打开流程全量纳入错误边界，并提供读取/切换/渲染阶段状态 | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5829 | 自动：补齐计划审阅索引状态，修复 `planReviewIndex is not defined` | `agent-core/tests/test_project_stage_card.py` | T-5819 | pass |
+| IT-5830 | 自动：采纳合并状态写入、项目分发异常回传与前端 pending 清理 | `agent-core/tests/test_plan_arch_patch.py` | T-5816 | pass |
+| T-5831 | doc：按 `small/normal/large` 补齐七文件内容下限、双独立图示硬门槛、`completeness`/`change_scope` | DESKTOP-REAL-RD-FLOW §2.2.1–§2.2.2 · §7 · §10 · R10–R14 | 文档已决 | done |
+| T-5832 | M1：manifest `content_origin`/`completeness`/`change_scope` + tier 内容 linter（L2 硬闸） | project_manifest · project_mode · stage card | IT-5832：skeleton 迁移、small 变更不拦、normal 缺 SEQ 拦 | todo |
+| T-5833 | M1：侧栏「文档基线不完整」缺项展示 + Plan Agent 软审查提示 | project-panel · plan_agent | §7.3 UX 路径 | todo |
+| S-581 | 手工：旧项目迁移→需求变更 L2→编码中途 L1→验证失效→发布验收 | log | DESKTOP-REAL-RD §16 | todo |
+
+**实施顺序**：5810 → 5811 → 5812 → 5814 → 5813 → 5815 → 5816 → 5817 → 5819 → 5818 → S-581
 
 ---
 

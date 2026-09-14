@@ -13,15 +13,17 @@ cd /d "%~dp0"
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
 set PYTHONUTF8=1
+set "MY_AGENT_PYTHON=python"
+if exist "%~dp0.venv\Scripts\python.exe" set "MY_AGENT_PYTHON=%~dp0.venv\Scripts\python.exe"
 
-where python >nul 2>&1
-if errorlevel 1 (
+if "%MY_AGENT_PYTHON%"=="python" where python >nul 2>&1
+if "%MY_AGENT_PYTHON%"=="python" if errorlevel 1 (
     echo [my-agent] Python not found. Install Python 3.12+ and add it to PATH.
     pause
     exit /b 1
 )
 
-python "%~dp0agent-core\main.py" %*
+"%MY_AGENT_PYTHON%" "%~dp0agent-core\main.py" %*
 set EXIT_CODE=%ERRORLEVEL%
 if %EXIT_CODE% neq 0 pause
 exit /b %EXIT_CODE%

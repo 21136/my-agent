@@ -15,7 +15,7 @@
 
 | 约束 | 说明 |
 |------|------|
-| **Builtin 分两类共 11 个** | **核心 7**（观察/执行口）+ **编排 4**（子代理/上下文）；核心长期不随使用增长 |
+| **Builtin 分两类共 12 个** | **核心 8**（观察/执行口）+ **编排 4**（子代理/上下文）；核心长期不随使用增长 |
 | **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `evolve/tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
@@ -38,11 +38,11 @@
 
 ---
 
-## 3. Builtin（11 个 function，不分主题）
+## 3. Builtin（12 个 function，不分主题）
 
-**始终**暴露给 LLM；任何 session 都可用。不按主题过滤。分两类：
+注册表固定为 12 个 function，不按主题过滤；但 LLM 是否在某一轮看到某个 function 仍由 turn mode、项目绑定状态和 verification 策略决定。例如 `ask` 隐藏执行入口，未绑定项目时隐藏项目编排入口。以下是注册基线，实际暴露以 `build_llm_tools()` 和 executor 策略为准。分两类：
 
-### 3.0 核心 7 个（观察 / 执行口）
+### 3.0 核心 8 个（观察 / 执行口）
 
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
@@ -50,6 +50,7 @@
 | `list_dir` | 列目录（可递归一层） | 否 | 否 |
 | `grep` | 在路径下搜**本地**文件内容 | 否 | 否 |
 | `glob_file_search` | 按 glob 列文件（Phase 42 · **done**） | 否 | 否 |
+| `codebase_search` | 在绑定 project_root 下做语义/BM25 代码搜索（只读） | 否 | 否 |
 | `web_search` | **上网**搜索（query → 标题/链接/摘要） | 否 | 否 |
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
@@ -68,7 +69,7 @@ Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
 ### 3.1 观察 vs 执行
 
 ```text
-本地观察：read_file · list_dir · grep · glob_file_search
+本地观察：read_file · list_dir · grep · glob_file_search · codebase_search
 编排：propose_context_switch · plan_partner · deliverable_review · explore
 网络观察：web_search · fetch_url
 动手执行：run_command · write_text · patch_file（扁平原语，Phase 41）
@@ -148,9 +149,11 @@ tool_dirs = ["tools/coding"]
 
 ### 4.3 会话内 LLM 可见的 evolved 导引（Phase 23）
 
+设计文档场景先读 `evolve/tool-catalog/buckets/design.md`，再通过 `run_evolved` 调用 `design_document`；该工具支持 Markdown 与 DOCX。
+
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
-Builtin 恒为 **11** 个 function（核心 7 + 编排 4）；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
+Builtin 恒为 **12** 个 function（核心 8 + 编排 4）；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
 
 - **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
 - **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
@@ -216,7 +219,7 @@ timeout_sec = 60
 
 ```text
 用户输入
-    → LLM 选 Builtin（11 个之一）或 run_evolved / 扁平原语 proxy
+    → LLM 选 Builtin（12 个之一）或 run_evolved / 扁平原语 proxy
     → ToolExecutor.validate（schema、路径、策略）
     → run_evolved：tool_name 须在「本会话清单」或 CLI 显式指定
     → 若 confirm：预览，等待 y/n/a（§6.3）
@@ -576,7 +579,7 @@ evolve/
 
 | # | 议题 | 决议 |
 |---|------|------|
-| 1 | Builtin 数量与名单 | **11 个**：核心 7（read/list/grep/glob/web/fetch/run_evolved）+ 编排 4（context_switch/plan_partner/deliverable_review/explore） |
+| 1 | Builtin 数量与名单 | **12 个**：核心 8（read/list/grep/glob/codebase/web/fetch/run_evolved）+ 编排 4（context_switch/plan_partner/deliverable_review/explore） |
 | 2 | Evolved 暴露 | **仅** `run_evolved`（+ Phase 41 扁平原语）；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
 | 3 | 主题索引 | **`evolve/_index.core.toml` + `_index.user.toml`**（驱动 prompt/memory）；工具目录 = **`tool-catalog/INDEX.md`**（两者并存注入） |
 | 4 | 跨主题工具 | **`evolve/tools/common/`** 仍为目录约定；active 均可调 |
@@ -590,7 +593,7 @@ evolve/
 
 ## 14. 验收（TOOLS 设计阶段）
 
-- [ ] 核心 7 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；编排 4 与子代理文档一致
+- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；编排 4 与子代理文档一致
 - [ ] Evolved 主题目录 + common 规则清楚
 - [ ] 与 `evolve/_index.*.toml`、`tool-catalog/INDEX.md`、MEMORY 主题路由一致
 - [ ] `run_evolved` + 会话清单可实现

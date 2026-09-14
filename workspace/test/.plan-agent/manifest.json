@@ -1,0 +1,347 @@
+{
+  "schema_version": "0.1",
+  "project": {
+    "id": "test",
+    "root": "workspace/test",
+    "tier": "normal",
+    "content_origin": "scaffold"
+  },
+  "change_scope": "normal",
+  "manifest_revision": "r74",
+  "created_at": "2026-08-17T10:14:37Z",
+  "updated_at": "2026-09-07T13:08:09Z",
+  "artifacts": [
+    {
+      "path": "PROJECT.md",
+      "role": "project",
+      "revision": "r12",
+      "status": "current",
+      "completeness": "skeleton",
+      "tier": "normal",
+      "depends_on": [],
+      "last_adopted_change": "CHG-012",
+      "required_for": [
+        "requirements"
+      ],
+      "content_sha256": "78379ef2ad8f802c4c27b1d30302622e8238aa6852b0524afd31e3a131176639",
+      "ids": [
+        "AC-001",
+        "REQ-001"
+      ]
+    },
+    {
+      "path": "SCOPE.md",
+      "role": "scope",
+      "revision": "r15",
+      "status": "current",
+      "completeness": "skeleton",
+      "tier": "normal",
+      "depends_on": [
+        "PROJECT.md"
+      ],
+      "last_adopted_change": "CHG-015",
+      "required_for": [
+        "requirements",
+        "design",
+        "implementation"
+      ],
+      "content_sha256": "e3ad9b5547930ae116a434d7252514d93b0e409f1d23839e405391226a2bff66",
+      "ids": [
+        "AC-001",
+        "AC-002",
+        "AC-003",
+        "AC-004",
+        "AC-005",
+        "AC-006",
+        "REQ-001",
+        "REQ-002",
+        "REQ-003",
+        "REQ-004",
+        "REQ-005",
+        "REQ-006"
+      ]
+    },
+    {
+      "path": "DESIGN.md",
+      "role": "design",
+      "revision": "r65",
+      "status": "current",
+      "completeness": "draft",
+      "tier": "normal",
+      "depends_on": [
+        "SCOPE.md"
+      ],
+      "last_adopted_change": "CHG-065",
+      "required_for": [
+        "design",
+        "implementation"
+      ],
+      "content_sha256": "49001abb6c2d0f1f11776bf66b595bc68d059ea18ecb09b1b502065f624604d4",
+      "ids": [
+        "ADR-001",
+        "SEQ-001",
+        "SEQ-002",
+        "TD-001",
+        "UX-001",
+        "UX-002",
+        "UX-003",
+        "UX-004",
+        "UX-005"
+      ]
+    },
+    {
+      "path": "TECH-DESIGN.md",
+      "role": "tech_design",
+      "revision": "r31",
+      "status": "current",
+      "completeness": "draft",
+      "tier": "normal",
+      "depends_on": [
+        "DESIGN.md"
+      ],
+      "last_adopted_change": "CHG-031",
+      "required_for": [
+        "design",
+        "implementation"
+      ],
+      "content_sha256": "fa35d3fba7f8fe37bc54a9186c6224b2d0448f1be8e3582373366d4b26841a69",
+      "ids": [
+        "TD-001",
+        "TD-002",
+        "TD-003",
+        "TD-004",
+        "TD-005",
+        "TD-006",
+        "TD-007",
+        "TD-008",
+        "TD-009"
+      ]
+    },
+    {
+      "path": "TASKS.md",
+      "role": "tasks",
+      "revision": "r66",
+      "status": "current",
+      "completeness": "draft",
+      "tier": "normal",
+      "depends_on": [
+        "TECH-DESIGN.md"
+      ],
+      "last_adopted_change": "CHG-066",
+      "required_for": [
+        "requirements",
+        "design",
+        "implementation",
+        "verification",
+        "release"
+      ],
+      "content_sha256": "555b4b4e3b210f47356ae695ae2d72e49d88a2ab079e46a7f30732aac953e618",
+      "ids": [
+        "AC-001",
+        "REQ-001",
+        "SEQ-001",
+        "SEQ-002",
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008",
+        "T-009",
+        "T-010",
+        "T-011",
+        "T-012",
+        "T-013",
+        "T-014",
+        "T-015",
+        "T-016",
+        "T-017",
+        "T-021",
+        "T-022",
+        "T-023",
+        "T-024",
+        "T-025",
+        "TD-001",
+        "UX-001",
+        "UX-005",
+        "V-000",
+        "V-011",
+        "V-012",
+        "V-013",
+        "V-014",
+        "V-015",
+        "V-016",
+        "V-017",
+        "V-018",
+        "V-019",
+        "V-020"
+      ]
+    },
+    {
+      "path": "VERIFY.md",
+      "role": "verify",
+      "revision": "r74",
+      "status": "current",
+      "completeness": "draft",
+      "tier": "normal",
+      "depends_on": [
+        "TASKS.md"
+      ],
+      "last_adopted_change": "CHG-074",
+      "required_for": [
+        "verification",
+        "release"
+      ],
+      "content_sha256": "2f7d5937c4fd95c125d26c0fef4d641b2465f51da3ff1aca1ea2c5834cebcee0",
+      "ids": [
+        "AC-001",
+        "AC-002",
+        "AC-003",
+        "AC-004",
+        "AC-005",
+        "AC-006",
+        "REL-001",
+        "REL-002",
+        "REQ-001",
+        "REQ-005",
+        "SEQ-001",
+        "SEQ-002",
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008",
+        "T-009",
+        "T-010",
+        "T-011",
+        "T-012",
+        "T-013",
+        "T-014",
+        "T-015",
+        "T-016",
+        "T-017",
+        "T-018",
+        "T-019",
+        "T-020",
+        "T-021",
+        "T-022",
+        "T-023",
+        "T-024",
+        "T-025",
+        "V-000",
+        "V-001",
+        "V-002",
+        "V-003",
+        "V-004",
+        "V-005",
+        "V-006",
+        "V-007",
+        "V-008",
+        "V-009",
+        "V-010",
+        "V-011",
+        "V-012",
+        "V-013",
+        "V-014",
+        "V-015",
+        "V-016",
+        "V-017",
+        "V-018",
+        "V-019",
+        "V-020",
+        "V-022",
+        "V-023",
+        "V-024",
+        "V-025",
+        "V-026",
+        "V-029",
+        "V-033"
+      ]
+    },
+    {
+      "path": "RELEASE.md",
+      "role": "release",
+      "revision": "r30",
+      "status": "stale_soft",
+      "completeness": "skeleton",
+      "tier": "normal",
+      "depends_on": [
+        "VERIFY.md"
+      ],
+      "last_adopted_change": "CHG-030",
+      "required_for": [
+        "release"
+      ],
+      "content_sha256": "803ca4d2a5b5a534fefdefc8176fbd46dc11b2b8c97428fb9ecc5ffb010f2f4d",
+      "ids": [
+        "REL-001",
+        "REL-002",
+        "REL-003",
+        "REL-004",
+        "REL-005",
+        "V-001",
+        "V-010"
+      ]
+    },
+    {
+      "path": "ENV.md",
+      "role": "environment",
+      "revision": "r13",
+      "status": "current",
+      "completeness": "skeleton",
+      "tier": "normal",
+      "depends_on": [],
+      "last_adopted_change": "CHG-013",
+      "required_for": [
+        "implementation",
+        "verification"
+      ],
+      "content_sha256": "415393077d60b92900d0bd518298880cbc34b9436826029ffede1a912940b115",
+      "ids": []
+    },
+    {
+      "path": "MAP.md",
+      "role": "code_map",
+      "revision": "r73",
+      "status": "current",
+      "completeness": "draft",
+      "tier": "normal",
+      "depends_on": [],
+      "last_adopted_change": "CHG-073",
+      "required_for": [],
+      "content_sha256": "0e19ce260a6a6b7343de7129fe406663ddbac9d66483f510df70ebe1797aaf48",
+      "ids": [
+        "T-001",
+        "T-002",
+        "T-003",
+        "T-004",
+        "T-005",
+        "T-006",
+        "T-007",
+        "T-008",
+        "T-009",
+        "T-010",
+        "T-011",
+        "T-012",
+        "T-013",
+        "T-014",
+        "T-015",
+        "V-014",
+        "V-015",
+        "V-016",
+        "V-017",
+        "V-018",
+        "V-019",
+        "V-020",
+        "V-021",
+        "V-023",
+        "V-024"
+      ]
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import type { AgentWsClient, ServerEvent, ShellId } from "../../api/ws";
 import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import "../../file-drop.css";
-import { renderMarkdown } from "../../markdown";
+import { hydrateMermaid, renderMarkdown } from "../../markdown";
 import { formatUserMessageHtml } from "../../user-message";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, type ChatBlock, type ChatSession } from "../chat-state";
 import {
@@ -310,6 +310,7 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
 
   function renderChat(): void {
     chatEl.innerHTML = visibleBlocks().map(renderTurnBlock).join("");
+    void hydrateMermaid(chatEl);
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
@@ -432,6 +433,7 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
 
   const fileDrop = mountFileDrop({
     composer,
+    pasteTargets: [composer, input],
     client,
     shell: BACKEND_SHELL,
     canAccept: () => bubbleOpen && !chat.model.confirmPending,

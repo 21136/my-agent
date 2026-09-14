@@ -1,0 +1,67 @@
+[tool]
+name = "design_document"
+description = "按统一模板生成需求分析、概要设计、数据库设计或详细设计 Markdown 文档"
+version = "1.0.0"
+status = "active"
+topics = ["workflow", "project"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["path", "doc_type"]
+[schema.input.properties.path]
+type = "string"
+description = "输出 Markdown 路径，相对 agent root；项目内优先使用 workspace/<id>/docs/..."
+[schema.input.properties.doc_type]
+type = "string"
+description = "文档类型"
+enum = ["requirements", "high_level_design", "database_design", "detailed_design"]
+[schema.input.properties.project_name]
+type = "string"
+description = "项目名称"
+default = "未命名项目"
+[schema.input.properties.title]
+type = "string"
+description = "文档标题；省略时按文档类型生成"
+[schema.input.properties.summary]
+type = "string"
+description = "项目或本次设计的背景摘要"
+default = "待补充"
+[schema.input.properties.output_format]
+type = "string"
+description = "输出格式；auto 根据 path 后缀选择，支持 markdown/md 和 docx"
+enum = ["auto", "markdown", "md", "docx"]
+default = "auto"
+[schema.input.properties.on_conflict]
+type = "string"
+description = "目标文件已存在时的处理方式"
+enum = ["skip", "rename", "overwrite"]
+default = "skip"
+[schema.input.properties.dry_run]
+type = "boolean"
+description = "只预览输出路径，不写文件"
+default = false
+
+[schema.input.properties.figures]
+type = "array"
+description = "可选图表列表；图表需先由 render_diagram 生成，DOCX 使用 PNG/JPEG"
+items = { type = "object" }
+
+[schema.output]
+type = "object"
+[schema.output.properties]
+ok = { type = "boolean" }
+path = { type = "string" }
+written = { type = "boolean" }
+doc_type = { type = "string" }
+format = { type = "string" }
+sections = { type = "array" }
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = true
+timeout_sec = 60

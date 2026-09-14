@@ -18,12 +18,18 @@ export type AppChromeApi = {
   setModel: (model: string) => void;
 };
 
-const FALLBACK_MODEL_ID = "deepseek-v4-flash";
+const FALLBACK_MODEL_ID = "tokeness-luna";
 
-function pickModelId(model: string | undefined, models: LlmModelListItem[]): string {
+function pickModelId(
+  model: string | undefined,
+  models: LlmModelListItem[],
+  preferredDefault?: string,
+): string {
   const key = (model || "").trim();
   if (!key) {
-    return models[0]?.id ?? FALLBACK_MODEL_ID;
+    const fallback = preferredDefault?.trim() || FALLBACK_MODEL_ID;
+    if (models.some((item) => item.id === fallback)) return fallback;
+    return models[0]?.id ?? fallback;
   }
   const exact = models.find((item) => item.id === key);
   if (exact) return exact.id;
@@ -52,12 +58,13 @@ function formatContextTokensShort(tokens: number): string {
 function formatModelOptionLabel(item: LlmModelListItem): string {
   const keySuffix = item.configured ? "" : " (未配置 key)";
   const ctxSuffix = ` · ${formatContextTokensShort(item.max_input_tokens)} ctx`;
+  const visionSuffix = item.supports_image_input ? " · 视觉" : "";
   const vendor = item.vendor.trim();
   const showVendor =
     vendor &&
     !item.name.toLowerCase().includes(vendor.toLowerCase());
   const label = showVendor ? `${item.name} · ${vendor}` : item.name;
-  return `${label}${ctxSuffix}${keySuffix}`;
+  return `${label}${ctxSuffix}${visionSuffix}${keySuffix}`;
 }
 
 function renderModelOptions(models: LlmModelListItem[], booting: boolean): string {
@@ -81,6 +88,8 @@ export function mountAppChrome(
   const theme = readTheme();
   let knownModels: LlmModelListItem[] = [];
   let modelsBooting = true;
+  let defaultFlashId = FALLBACK_MODEL_ID;
+  let sessionModelReceived = false;
 
   root.innerHTML = `
     <header class="app-chrome">
@@ -100,6 +109,7 @@ export function mountAppChrome(
       </div>
       <span class="app-chrome-spacer"></span>
       <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
+      <button type="button" class="app-chrome-btn app-chrome-runaway" id="chrome-runaway" aria-pressed="false" disabled>狂奔：关</button>
       ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-btn" id="chrome-model-keys">模型密钥</button>' : ""}
       ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-btn" id="chrome-settings">托管区</button>' : ""}
       <button type="button" class="app-chrome-btn" id="chrome-pet">伴侣窗</button>
@@ -112,19 +122,38 @@ export function mountAppChrome(
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
   const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
+  const runawayBtn = root.querySelector<HTMLButtonElement>("#chrome-runaway")!;
 
   themeSelect.value = theme;
 
   let routeTimer: number | null = null;
   let syncingModel = false;
+  let runawayEnabled = false;
+  let runawayProjectBound = false;
+
+  const syncRunaway = (enabled: boolean, projectBound: boolean): void => {
+    runawayEnabled = enabled;
+    runawayProjectBound = projectBound;
+    runawayBtn.disabled = !projectBound;
+    runawayBtn.textContent = `狂奔：${enabled ? "开" : "关"}`;
+    runawayBtn.setAttribute("aria-pressed", String(enabled));
+    runawayBtn.title = projectBound
+      ? (enabled ? "狂奔运行已开启；点击暂停" : "开启后允许当前项目连续推进")
+      : "先打开一个项目才能开启狂奔运行";
+    runawayBtn.classList.toggle("is-active", enabled);
+  };
 
   const applyModelCatalog = (models: LlmModelListItem[], selectedId?: string) => {
     knownModels = models;
     modelsBooting = false;
     modelSelect.disabled = false;
-    const nextId = pickModelId(selectedId ?? modelSelect.value, models);
+    const nextId = pickModelId(
+      selectedId ?? modelSelect.value,
+      models,
+      defaultFlashId,
+    );
     modelSelect.innerHTML = renderModelOptions(models, false);
-    modelSelect.value = pickModelId(nextId, models);
+    modelSelect.value = pickModelId(nextId, models, defaultFlashId);
     const selected = models.find((item) => item.id === modelSelect.value);
     modelSelect.title = selected
       ? `切换主 Agent 模型（${selected.name} · ${selected.max_input_tokens.toLocaleString()} ctx）`
@@ -138,9 +167,15 @@ export function mountAppChrome(
 
   modelSelect.addEventListener("change", () => {
     if (syncingModel) return;
-    const next = pickModelId(modelSelect.value, knownModels);
+    const next = pickModelId(modelSelect.value, knownModels, defaultFlashId);
     modelSelect.value = next;
     handlers.client?.setSessionModel(next);
+  });
+
+  runawayBtn.addEventListener("click", () => {
+    if (!runawayProjectBound) return;
+    runawayBtn.disabled = true;
+    handlers.client?.setProjectRunaway(!runawayEnabled);
   });
 
   cliBtn.addEventListener("click", () => {
@@ -166,22 +201,55 @@ export function mountAppChrome(
 
   const unsubModels = handlers.client?.onEvent((event) => {
     if (event.type !== "session.models") return;
+    defaultFlashId = event.default_flash_id?.trim() || defaultFlashId;
+    if (!sessionModelReceived) {
+      applyModelCatalog(event.models, defaultFlashId);
+      return;
+    }
     applyModelCatalog(event.models);
   });
 
+  let currentProjectId = "";
+
   const unsubBanner = handlers.client?.onEvent((event) => {
     if (event.type !== "session.banner") return;
+    sessionModelReceived = true;
+    currentProjectId = event.project_id || "";
     syncingModel = true;
     if (knownModels.length) {
-      modelSelect.value = pickModelId(event.llm_model, knownModels);
+      modelSelect.value = pickModelId(event.llm_model, knownModels, defaultFlashId);
     } else {
-      modelSelect.value = event.llm_model || FALLBACK_MODEL_ID;
+      modelSelect.value = event.llm_model || defaultFlashId || FALLBACK_MODEL_ID;
     }
     syncingModel = false;
   });
 
+  const unsubProject = handlers.client?.onEvent((event) => {
+    if (event.type !== "project.state") return;
+    const eventProjectId = event.project_id || "";
+    if (currentProjectId && eventProjectId !== currentProjectId) return;
+    currentProjectId = eventProjectId;
+    syncRunaway(Boolean(event.runaway_enabled), Boolean(event.project_id));
+  });
+
+  const unsubSwitch = handlers.client?.onEvent((event) => {
+    if (event.type === "context.switch.done") {
+      if (event.applied === false || event.choice !== "y") return;
+      currentProjectId = event.project_id || "";
+      syncRunaway(false, Boolean(event.project_id));
+      return;
+    }
+    if (event.type !== "project.switch.done") return;
+    currentProjectId = event.project_id;
+    syncRunaway(false, Boolean(event.project_id));
+  });
+
   void unsubModels;
   void unsubBanner;
+  void unsubProject;
+  void unsubSwitch;
+
+  syncRunaway(false, false);
 
   modelSelect.innerHTML = renderModelOptions([], true);
   modelSelect.disabled = true;
@@ -224,7 +292,7 @@ export function mountAppChrome(
     },
     setModel(model: string): void {
       syncingModel = true;
-      modelSelect.value = pickModelId(model, knownModels);
+      modelSelect.value = pickModelId(model, knownModels, defaultFlashId);
       syncingModel = false;
     },
   };

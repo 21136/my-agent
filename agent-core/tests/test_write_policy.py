@@ -369,7 +369,35 @@ class WritePolicyExecutorTests(unittest.TestCase):
                 active_shell="project",
                 agent_paths=paths,
             )
-            self.assertIn("Write policy: confirm:outside_project", preview)
+            self.assertIn("写入策略：confirm:outside_project", preview)
+
+    def test_confirm_preview_truncates_large_write_body(self) -> None:
+        with temporary_agent_paths(
+            copy_tool_dirs=("common/write_text",),
+        ) as paths:
+            registry = ToolRegistry.load(paths)
+            evolved = registry.get_evolved("write_text")
+            assert evolved is not None
+            body = "# Title\n" + ("line\n" * 80)
+            preview = build_confirm_preview(
+                "run_evolved",
+                {
+                    "tool_name": "write_text",
+                    "arguments": {
+                        "path": "workspace/music/VERIFY.md",
+                        "content": body,
+                        "on_conflict": "overwrite",
+                    },
+                },
+                evolved=evolved,
+                project_root="workspace/music",
+                active_shell="project",
+                agent_paths=paths,
+            )
+            self.assertIn("写入文件：workspace/music/VERIFY.md", preview)
+            self.assertIn("字符", preview)
+            self.assertNotIn("# Title", preview)
+            self.assertNotIn("Arguments:", preview)
 
 
 if __name__ == "__main__":

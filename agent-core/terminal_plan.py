@@ -36,11 +36,22 @@ StepStatus = Literal["pending", "running", "passed", "failed"]
 
 _SKIP_PLAN_MARKERS = (
     "直接改",
+    "直接实现",
+    "直接写",
     "别计划",
     "不要计划",
     "不用计划",
+    "不要只出计划",
+    "不要只给计划",
+    "不要再问我是否开始",
+    "不要问我是否开始",
+    "直接推进",
+    "现在就实际",
+    "实际改文件",
     "skip plan",
     "no plan",
+    "just implement",
+    "implement now",
 )
 _CONTINUE_MARKERS = (
     "继续",

@@ -186,7 +186,7 @@ Prompt（project / 通用 core）须写明：
 
 | 输入 | 行为 |
 |------|------|
-| `项目 新建 <id>` | 直接 create + **新会话绑定**（若当前已绑其他项目 → **必须** session_replaced，禁止改绑） |
+| `项目 新建 <id>` | 仅创建不存在的项目 + **新会话绑定**（若 ID 已存在 → 报错并提示打开/切换；若当前已绑其他项目 → **必须** session_replaced，禁止改绑） |
 | `项目 切换 <id>` | 现有确认策略可保留（跨项目已有卡则复用） |
 | `新会话` | 直接新会话 |
 | `新项目 <id>` | **可选别名** → 同 `项目 新建`（实现期可做；主路径仍是 LLM+卡） |
@@ -197,7 +197,7 @@ Prompt（project / 通用 core）须写明：
 
 | action | 规则 |
 |--------|------|
-| `project.create` | `normalize_project_id`；已存在则改为建议 `project.switch` 或报错重提案；创建三件套骨架；**新 conversation_id**；`record_project_session`；`active_shell=project`；`plan_status=draft`；emit history 替换 |
+| `project.create` | `normalize_project_id`；已存在则报错并建议 `project.switch`/打开，且不改变会话或索引；不存在时创建三件套骨架；**新 conversation_id**；`record_project_session`；`active_shell=project`；`plan_status=draft`；emit history 替换 |
 | `project.switch` | 复用 `switch_to_project` |
 | `shell.switch` | 复用 `switch_shell`；**sticky park**（BUG-020） |
 | `session.new` | 当前壳 `create_new`；更新对应 `shell_sessions` / 或 project 映射按产品选择 |

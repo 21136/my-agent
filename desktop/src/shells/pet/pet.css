@@ -41,6 +41,34 @@ body.pet-body {
   color: #1a1a1a;
 }
 
+.pet-markdown .mermaid-placeholder {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 6px 0;
+  padding: 6px;
+  border: 1px solid rgba(232, 93, 154, 0.25);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  text-align: center;
+}
+
+.pet-markdown .mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.pet-markdown .mermaid-error {
+  color: #a33;
+  text-align: left;
+}
+
+.pet-markdown .mermaid-error pre {
+  overflow-x: auto;
+  text-align: left;
+}
+
 .pet-orb-wrap {
   flex-shrink: 0;
   display: flex;

@@ -92,6 +92,8 @@ def _clear_project_binding(meta: object) -> None:
     meta.project_plan_confirmed_at = ""
     meta.project_phase_fingerprint = ""
     meta.project_doc_fingerprint = ""
+    if hasattr(meta, "project_entry"):
+        meta.project_entry = ""
 
 
 def lookup_shell_owner(paths: AgentPaths, conversation_id: str) -> Literal["grow", "daily"] | None:

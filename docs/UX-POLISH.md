@@ -1,8 +1,8 @@
 # 体验打磨记录（UX-POLISH）
 
-> 版本 **0.2.4** · 2026-08-05  
-> 状态：`in-progress` — 壳合并后持续打磨；UX-001～025 多数 ✅；**第十三轮 UX-026** 文档已签 · 待实施；第五～十二轮见下文  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [output-format.md](./output-format.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [TOOL-RETRY.md](./TOOL-RETRY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)
+> 版本 **0.2.5** · 2026-09-04
+> 状态：`in-progress` — 壳合并后持续打磨；UX-001～025 多数 ✅；**UX-026 M0 done**；**UX-029 壳层 chrome 文档已签 · 待实施**；第五～十二轮见下文
+> 关联：[DESKTOP.md](./DESKTOP.md) · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · [output-format.md](./output-format.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [TOOL-RETRY.md](./TOOL-RETRY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)
 
 ---
 
@@ -195,6 +195,103 @@
 | M0 | 本回合摘要、进度单轨、Services 折叠、去掉 plan-channel 常驻 hint、待采纳堆叠（SP-9）、采纳堆叠位闪绿（SP-10） | **done** |
 | M1 | 项目 `▾` 最近项、待拍板/当前层级 CSS | todo |
 | M2 | 执行中 pulse、顶栏/侧栏头去重 | todo |
+
+---
+
+## 2i. 第十四轮 · 项目会话切换性能（**UI-5972** · 2026-09-02）
+
+> 真源：[SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md)
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-027 | 换项目会话卡数分钟 | 双次 refresh + 全量 jsonl + 全量 markdown 渲染 | Cursor 式：一次 switch 包 · history 窗口 · tail 读 · 视口外懒 markdown | **M0～M4 done** |
+
+### 验收（S-UX-027）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-027a | 1000+ 条会话间切换 | 明显快于改前；无「卡住数分钟」 |
+| S-UX-027b | 历史 >200 条 | 仅加载最近 200；顶部 notice 说明省略条数 |
+| S-UX-027c | 切换后向上滚动历史 | 视口外助手消息先纯文本；滚入视口后渲染 markdown |
+
+---
+
+## 2j. 第十五轮 · 聊天活动轨（**已决 · 待实施** · 2026-09-03）
+
+> 真源：[CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · 延续 [DESKTOP.md](./DESKTOP.md) §3.2.2 D-T1～T7。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-028 | 双「思考中」/ 过程入口重复 / 底栏与聊天区抢戏 | `process` 块可泄漏 live 状态；等待脉冲与灰框 accordion 两套 UI；狂奔连发不收尾旧轮 | **Turn Card + 单一活动轨**：时间线交错思考与工具；**仅当前 turn live**；底栏不再独立思考秒表 | `turn-card-layout.ts` · `activity-state.ts` · `activity-timeline.ts` · `chat-state.ts` · `unified/index.ts` | **M0～M2 done · M3 in_progress** |
+
+### 验收（S-UX-028）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-028a | 狂奔或连发两条用户消息 | 仅最后一轮 live 思考；无双重计时 |
+| S-UX-028b | pending → reasoning → tool | 时间线顺序正确；无双思考 UI |
+| S-UX-028c | 收起活动轨 | 思考 + 工具 + 失败 alert 一起隐藏 |
+| S-UX-028d | `assistant.done` | 活动轨默认折叠 |
+| S-UX-028e | 流式思考（M1） | 底栏无独立思考秒表 |
+| S-UX-028f | 侧栏「查看过程」（M1） | 定位并展开当前活动轨 |
+| S-UX-028g | 切换会话（M2） | 无僵尸思考态 |
+| S-UX-028h | 同回合多段 process · idle 连点「查看过程」 | 新→旧轮询展开；pill `(i/n)` |
+| S-UX-028i | 狂奔已开 idle | 侧栏「续接中」+ 查看过程；无默认继续狂奔 |
+| S-UX-028j | 幂等 resume | 不刷「狂奔已恢复」notice |
+| S-UX-028k | plan_partner 残留提案 | 自动续链直写；不要求审阅采纳 |
+| S-UX-028l | idle 间隙 | 2.5s 内自动续接或可见「手动续接」 |
+| S-UX-028m | 发「继续」 | ≥3 段内链/跨 turn，不单轮静默停；**T-6107 核心已接入，正式手工验收待做**（见 [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+
+### 实施分期
+
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| P0 | `finalizeInFlightProcessBlocks` · live turn 门控 · 统一等待 DOM | **done** |
+| M0 | `ActivityEntry` 时间线 · 单一渲染路径 | **done** |
+| M1 | Turn Card 分组 · 底栏降噪 · `jumpToCurrentActivity` | **done** |
+| M2 | 狂奔/侧栏/历史恢复 · night confirm overlay | **done** |
+| M3 | 多段过程跳转 · idle 侧栏 · 续接止血 T-6055～6056 | **in_progress** |
+| M3+ | 续接收敛 `pending_work` 单真源 | **核心已编码** · 兼容层/指纹与 S-UX-028m 待收口 |
+
+---
+
+## 2k. 第十六轮 · 壳层视觉统一（**已决 · 待实施** · 2026-09-04）
+
+> 真源：[DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · 延续 UX-026 信息架构 · 对齐 UX-028 主聊 token。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-029 | 侧栏/顶栏像 CRUD 后台：灰框按钮横排、`textbook-*` 叠层、黄框套娃、emoji 底栏、与主聊两套视觉 | 顶栏四 `+` 按钮 + `◆` meta 长串；侧栏狂奔面字段 dump + 满宽橙钮；`border-radius: 2px` | **与主聊同一套克制语言**：顶栏项目+菜单；侧栏 **一张态势卡**；圆角 8px；同时最多一层强调；底栏 labeled tabs | `topbar.ts` · `project-panel.ts` · `unified.css` · `app-chrome.css` | **M0+M1 done** |
+
+### 验收（S-UX-029）
+
+| ID | 步骤 | 期望 |
+|----|------|------|
+| S-UX-029a | 绑定项目 · 侧栏常态 | 一张态势卡为 C 位；无 UPPERCASE 微标题；无默认满宽大橙钮 |
+| S-UX-029b | 对比主聊 process 与侧栏按钮 | 圆角/字号档肉眼一致 |
+| S-UX-029c | 顶栏有项目 | 无四按钮横排；`⋯` 菜单可用 |
+| S-UX-029d | processing + plan_dirty | 不同时两个黄框套娃 |
+| S-UX-029e | 底栏图标条 | 文字或 SVG 识别，非裸 emoji |
+| S-UX-029f | 顶栏 meta | 无 `◆`/`■`、无 intent/checker 调试串（M2） |
+| S-UX-029g | 窄窗 ≤720px | ellipsis 与菜单可用 |
+
+### 实施分期
+
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| M0 | 纯 CSS：按钮/卡片/顶栏/底栏/banner 降噪 | **done** |
+| M1 | 顶栏菜单 HTML；`sidebar-status-card` 替换 `textbook-runaway-surface` | **done** |
+| M2 | 顶栏与上下文栏/侧栏头去重；`textbook-*` 类名退役 | todo |
+
+---
+
+## 2l. 第十七轮 · 主聊输出观感（**已决 · M0 实施中** · 2026-09-04）
+
+> 真源：[CHAT-OUTPUT-POLISH.md](./CHAT-OUTPUT-POLISH.md) · 延续 [output-format.md](./output-format.md) · UX-028 活动轨。
+
+| # | 问题 | 现在 | 改后 | 改动点 | 状态 |
+|---|------|------|------|--------|------|
+| UX-030 | 输出糙：破损 `` ` ``、Harness 术语、英文思考标题、嵌套 list / 药丸 code | 思考标题泄露英文；`evolved` 工具名；`AC-PROJECT` 进正文 | **对标 Cursor/Claude**：过程轨折叠中性标题；正文 sanitize + 弱 task ref；后端 segment 人话（M1） | `markdown.ts` · `activity-state.ts` · `output-display.ts` · `unified.css` | **M0** |
 
 ---
 
@@ -1462,7 +1559,7 @@ case "session.history":
 | I1 | `list_session_summaries` 带 `project_id`；项目签去重（每 project 取最新一条） | ✅ |
 | I2 | 下拉 UI：页签 + 列表滚动 + 项目标题 | ✅ |
 | I3 | 顶栏双加号 + D8/D10 确认文案 | ✅ |
-| I4 | 后端硬门：同 project 已有会话则续接而非再建（`项目 新建` 路径） | ✅ |
+| I4 | 后端硬门：`项目 新建` 遇已有 project 必须报错；已有项目仅由打开/切换路径续接 | ✅ |
 | I5 | 「项目 +」接到 `项目 新建 <id>`；普通 + 挂起项目（`create_new` 不改 project_sessions） | ✅ |
 
 #### 与 S-5～S-8 关系

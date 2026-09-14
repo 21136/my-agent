@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
@@ -39,6 +40,25 @@ class FileGuardTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(target, "x = 1\n", agent_root=paths.agent_root)
             self.assertEqual(target.read_text(encoding="utf-8"), "x = 1\n")
+
+    def test_atomic_write_retries_transient_windows_lock(self) -> None:
+        with temporary_agent_paths() as paths:
+            target = paths.evolve / "tools" / "_guard_retry" / "main.py"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            original_replace = Path.replace
+            attempts = {"count": 0}
+
+            def flaky_replace(source: Path, destination: Path) -> Path:
+                if source.name.endswith(".tmp") and attempts["count"] < 2:
+                    attempts["count"] += 1
+                    raise PermissionError(13, "access denied")
+                return original_replace(source, destination)
+
+            with patch.object(Path, "replace", new=flaky_replace):
+                atomic_write_text(target, "retry = True\n", agent_root=paths.agent_root)
+
+            self.assertEqual(attempts["count"], 2)
+            self.assertEqual(target.read_text(encoding="utf-8"), "retry = True\n")
 
 
 if __name__ == "__main__":

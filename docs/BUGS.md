@@ -38,6 +38,8 @@
 | 2026-08-06 | [BUG-026](./bugs/2026-08-06-plan-patch-adopt-base-hash-queue.md) | 同文件多条 patch 第二条起「base_hash mismatch」撤回；前端先闪「已采纳」 | 同轮多提案共享 hash · 首条采纳改盘 · `acceptSuggestionById` 乐观 UI | **fixed**（T-4810+4811 · IT-4813 · **S-481 pass** 2026-08-07） |
 | 2026-08-06 | [BUG-027](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) | 项目模式「你看看」→ explore 读 `docs/TOOLS.md` 非 workspace | `should_spawn_explore` 自动 spawn · task=用户原话 | **fixed**（T-4801～4803+4802 · IT-4804 · **S-480 pass** 2026-08-07） |
 | 2026-08-08 | [BUG-028](./bugs/2026-08-08-terminal-bottom-tui-stale-render.md) | Terminal 答案半截、无法滚/选/复制 | worker 改 Buffer 竞态 · scroll 算法 · win32 鼠标 | **fixed**（待 S-572 手工） |
+| 2026-08-26 | [BUG-029](./bugs/2026-08-26-blocker-reason-noop.md) | 狂奔阻塞卡片「查看原因」无可见反馈 | 主区焦点未切回聊天 · 无过程记录时只滚到底部 · 内部原因码直出 | **fixed** |
+| 2026-08-26 | [BUG-030](./bugs/2026-08-26-runaway-documentation-gate.md) | 狂奔把文档待补齐误判为用户阻塞 | 文档闸门异常直接进入 `paused`，未自动续接文档修复 | **fixed** |
 
 ---
 
@@ -71,6 +73,7 @@
 | 助手反复「文件又乱了 / 重写整个 xxx.vue」；`find anchor not found`；磁盘 `\r\r\r\n` | BUG-025 | **fixed**（T-4252～4254 · IT-99）；大 Vue 仍建议 staging |
 | 侧栏多条 MAP/PROJECT patch；采纳第二条起「base_hash mismatch」撤回 | BUG-026 | **fixed**（S-481 桌面复验 2026-08-07） |
 | 项目里「文档脱节你看看」→ explore 读内核 TOOLS.md | BUG-027 | **fixed**（S-480 桌面复验 2026-08-07） |
+| 狂奔阻塞卡片「查看原因」点了没反应 | BUG-029 | 先切回聊天并定位过程；没有历史卡时展示阻塞详情 |
 
 **改代码后务必**：关掉托盘/Electron → 重新 `start-desktop.bat`（Python sidecar + Vite 均加载新逻辑）。
 

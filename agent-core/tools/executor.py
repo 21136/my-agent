@@ -100,7 +100,19 @@ class ExecutorSession:
     project_root: str = ""
     project_id: str = ""
     project_plan_status: str = ""
+    project_workflow_stage: str = ""
+    # v2 may open a temporary maintenance context for one user turn while
+    # the persisted project remains in release_wait. Tool validation refreshes
+    # meta.json on every call, so retain this explicit per-turn override.
+    runaway_v2_runtime_workflow_stage: str = ""
+    project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
+    runaway_enabled: bool = False
+    bug_fix_lane: bool = False
+    runaway_v2_write_scope: tuple[str, ...] | None = None
+    runaway_v2_forbid_plan_partner: bool = False
+    project_runaway_checkpoint: str = ""
+    project_runaway_acceptance_passed: bool = False
     harness: str = "desktop"
     terminal_scope_kind: str = ""
     terminal_cwd: str = ""
@@ -113,7 +125,9 @@ class ExecutorSession:
     task_done_baseline: int | None = None
     armed_task_id: str = ""
     armed_task_text: str = ""
+    armed_task_contract: dict[str, Any] = field(default_factory=dict)
     turn_evidence: list[dict[str, Any]] = field(default_factory=list)
+    llm_retry_notice_emitted: bool = False
     # G14 / EXEC-RELIABILITY M0 — segment-scoped circuit breaker
     failure_streak_fp: str = ""
     failure_streak_count: int = 0
@@ -135,6 +149,8 @@ class ExecutorSession:
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
     plan_partner_calls: int = 0
+    plan_partner_gateway_streak: int = 0
+    plan_gateway_nudge_emitted: bool = False
     deliverable_review_calls: int = 0
     explore_builtin_calls: int = 0
     explore_continue_used: bool = False
@@ -151,7 +167,10 @@ class ExecutorSession:
         project_root = ""
         project_id = ""
         project_plan_status = ""
+        project_workflow_stage = ""
+        project_active_task_id = ""
         project_delivery_profile = "solo"
+        runaway_enabled = False
         harness = "desktop"
         terminal_scope_kind = ""
         terminal_cwd = ""
@@ -170,11 +189,14 @@ class ExecutorSession:
                     project_root = str(payload.get("project_root", "") or "").strip()
                     project_id = str(payload.get("project_id", "") or "").strip()
                     project_plan_status = str(payload.get("project_plan_status", "") or "")
+                    project_workflow_stage = str(payload.get("project_workflow_stage", "") or "")
+                    project_active_task_id = str(payload.get("project_active_task_id", "") or "")
                     from project_mode import normalize_delivery_profile
 
                     project_delivery_profile = normalize_delivery_profile(
                         payload.get("project_delivery_profile", "solo")
                     )
+                    runaway_enabled = bool(payload.get("project_runaway_enabled", False))
                     from session import normalize_harness, normalize_terminal_path_field
 
                     harness = normalize_harness(payload.get("harness", "desktop"))
@@ -196,7 +218,10 @@ class ExecutorSession:
             project_root=project_root,
             project_id=project_id,
             project_plan_status=project_plan_status,
+            project_workflow_stage=project_workflow_stage,
+            project_active_task_id=project_active_task_id,
             project_delivery_profile=project_delivery_profile,
+            runaway_enabled=runaway_enabled,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
             terminal_cwd=terminal_cwd,
@@ -221,11 +246,17 @@ class ExecutorSession:
         self.project_root = str(payload.get("project_root", "") or "").strip()
         self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
+        persisted_stage = str(payload.get("project_workflow_stage", "") or "")
+        self.project_workflow_stage = (
+            self.runaway_v2_runtime_workflow_stage.strip() or persisted_stage
+        )
+        self.project_active_task_id = str(payload.get("project_active_task_id", "") or "")
         from project_mode import normalize_delivery_profile
 
         self.project_delivery_profile = normalize_delivery_profile(
             payload.get("project_delivery_profile", "solo")
         )
+        self.runaway_enabled = bool(payload.get("project_runaway_enabled", False))
         from session import normalize_harness, normalize_terminal_path_field
 
         self.harness = normalize_harness(payload.get("harness", "desktop"))
@@ -519,11 +550,21 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
         tool_name = fields.get("tool_name", "?")
         return f"[guard] 已拒调 run_python demo · {tool_name}（本 segment 已有自动 demo 结果）"
     if guard_type == "task_stop_armed":
+        if fields.get("runaway_enabled"):
+            return (
+                "[guard] 本轮已勾选完成一条 TASK；"
+                "狂奔将自动进入下一项，请继续写码（本回合勿再次 report_progress）。"
+            )
         return "[guard] 本轮已勾选完成一条 TASK；请停下，等用户「继续」再做下一项"
     if guard_type == "task_stop":
         message = fields.get("message")
         if isinstance(message, str) and message.strip():
             return message
+        if fields.get("runaway_enabled"):
+            return (
+                "[guard] task 一停门：本回合已勾选一条 TASK，"
+                "狂奔下可继续写下一项产物（勿同回合再 report_progress）。"
+            )
         return "[guard] task 一停门：请先结束本回合，用户回复「继续」后再写下一产物"
     if guard_type == "exec_circuit":
         fp = fields.get("fingerprint", "")
@@ -665,6 +706,8 @@ def _validate_project_mode_call(
     session: ExecutorSession,
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    agent_paths: AgentPaths | None = None,
 ) -> ToolResult | None:
     from project_mode import project_mode_block_reason
 
@@ -672,8 +715,13 @@ def _validate_project_mode_call(
         active_shell=session.active_shell,
         project_root=session.project_root,
         plan_status=session.project_plan_status,
+        workflow_stage=session.project_workflow_stage,
+        runaway_enabled=session.runaway_enabled,
         tool_name=tool_name,
         arguments=arguments,
+        agent_paths=agent_paths,
+        bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
+        runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
     )
     if reason is None:
         return None
@@ -689,6 +737,8 @@ def _validate_project_mode_call(
             project_root=session.project_root,
             tool_name=tool_name,
             arguments=arguments,
+            bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
+            runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
         )
         == PLAN_DOMAIN_WRITE_BLOCK_MSG
     ):
@@ -867,6 +917,8 @@ def _validate_task_stop_write(
         report_progress_done_this_turn=session.report_progress_done_this_turn,
         tool_name=tool_name,
         arguments=arguments,
+        runaway_enabled=bool(session.runaway_enabled),
+        workflow_stage=str(getattr(session, "project_workflow_stage", "") or ""),
     )
     if repeat is not None:
         session.progress_gate_notice = build_progress_gate_notice(
@@ -893,6 +945,7 @@ def _validate_task_stop_write(
         tool_name=tool_name,
         arguments=arguments,
         delivery_profile=session.project_delivery_profile,
+        runaway_enabled=session.runaway_enabled,
     )
     if reason is None:
         return None
@@ -906,6 +959,22 @@ def _validate_task_stop_write(
             "project_root": session.project_root,
         },
     )
+
+
+def _session_requires_ac_progress_binding(session: ExecutorSession) -> bool:
+    """Standard projects keep AC+VERIFY binding; light only needs VERIFY."""
+    pid = (getattr(session, "project_id", "") or "").strip()
+    session_dir = getattr(session, "session_dir", None)
+    if not pid or session_dir is None:
+        return True
+    try:
+        from paths import AgentPaths
+        from project_mode import read_project_template
+
+        paths = AgentPaths.from_root(Path(session_dir).parents[2])
+        return read_project_template(paths, pid) != "light"
+    except Exception:
+        return True
 
 
 def _validate_progress_gate_evidence(
@@ -955,6 +1024,11 @@ def _validate_progress_gate_evidence(
         armed_task_text=session.armed_task_text or "",
         turn_evidence=list(session.turn_evidence or []),
         delivery_profile=session.project_delivery_profile,
+        task_id=session.armed_task_id or "",
+        expected_ac_ids=list((session.armed_task_contract or {}).get("ac_ids") or []),
+        expected_verify_ids=list((session.armed_task_contract or {}).get("verify_ids") or []),
+        require_binding=bool((session.armed_task_contract or {}).get("metadata_present")),
+        require_ac_binding=_session_requires_ac_progress_binding(session),
     )
     if reason is None:
         return None
@@ -1089,7 +1163,7 @@ class ToolExecutor:
 
         clear_circuit_state(self.session)
 
-    def begin_turn(self) -> None:
+    def begin_turn(self, *, reset_plan_cap: bool = True) -> None:
         """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
         from exec_reliability import clear_inline_write_guard
 
@@ -1099,12 +1173,17 @@ class ToolExecutor:
         self.session.task_done_baseline = None
         self.session.armed_task_id = ""
         self.session.armed_task_text = ""
+        self.session.armed_task_contract = {}
         self.session.turn_evidence = []
+        self.session.llm_retry_notice_emitted = False
         self.session.service_postcondition = ""
         self.session.postcondition_claim_blocked = False
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
-        self.session.plan_partner_calls = 0
+        if reset_plan_cap:
+            self.session.plan_partner_calls = 0
+        self.session.plan_partner_gateway_streak = 0
+        self.session.plan_gateway_nudge_emitted = False
         self.session.deliverable_review_calls = 0
         self.session.explore_builtin_calls = 0
         self.session.explore_continue_used = False
@@ -1113,6 +1192,7 @@ class ToolExecutor:
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
+        from progress_gate import task_evidence_contract
         from project_mode import first_open_task, project_id_from_root, read_task_stats
 
         pid = (self.session.project_id or "").strip() or project_id_from_root(
@@ -1125,9 +1205,36 @@ class ToolExecutor:
         stats = read_task_stats(tasks_path)
         self.session.task_done_baseline = stats.done
         if tasks_path.is_file():
-            _, body, tid = first_open_task(tasks_path.read_text(encoding="utf-8"))
+            tasks_text = tasks_path.read_text(encoding="utf-8")
+            from project_mode import next_open_task
+
+            active_id = (self.session.project_active_task_id or "").strip().upper()
+            if self.session.runaway_enabled and active_id:
+                from project_mode import parse_tasks_metadata
+
+                task_line = -1
+                body = ""
+                tid = active_id
+                for task in parse_tasks_metadata(tasks_text):
+                    if str(task.get("id") or "").upper() != active_id:
+                        continue
+                    task_line = int(task.get("line", -1))
+                    body = str(task.get("text") or "").strip()
+                    break
+            elif self.session.runaway_enabled:
+                task_line, body, tid = next_open_task(tasks_text)
+            else:
+                task_line, body, tid = first_open_task(tasks_text)
             self.session.armed_task_id = tid or ""
             self.session.armed_task_text = body or ""
+            resolved_line = task_line if isinstance(task_line, int) else None
+            contract = task_evidence_contract(
+                tasks_text,
+                task_id=tid,
+                task_line=resolved_line if resolved_line is not None and resolved_line >= 0 else None,
+            )
+            if contract is not None:
+                self.session.armed_task_contract = contract
         self._emit_turn_evidence()
 
     def _emit_turn_evidence(self) -> None:
@@ -1139,7 +1246,11 @@ class ToolExecutor:
             label = str(entry.get("evolved_name") or entry.get("tool") or "").strip()
             if not label:
                 continue
-            items.append({"tool": label, "ok": bool(entry.get("ok"))})
+            item = {"tool": label, "ok": bool(entry.get("ok"))}
+            for key in ("task_id", "ac_ids", "verify_ids"):
+                if entry.get(key):
+                    item[key] = entry[key]
+            items.append(item)
 
         if self.session.postcondition_claim_blocked:
             postcondition = "blocked"
@@ -1322,6 +1433,7 @@ class ToolExecutor:
             fields = dict(payload)
 
         fields.pop("guard_type", None)
+        fields["runaway_enabled"] = bool(self.session.runaway_enabled)
 
         if self.evolve_log is not None:
             self.evolve_log.log_guard_event(
@@ -1383,7 +1495,10 @@ class ToolExecutor:
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
-            confirm_decision = self._ask_confirm(name, args, evolved_target)
+            if self._runaway_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
+                confirm_decision = "runaway"
+            else:
+                confirm_decision = self._ask_confirm(name, args, evolved_target)
             if confirm_decision == "n":
                 result = tool_fail(
                     name,
@@ -1461,6 +1576,7 @@ class ToolExecutor:
             record_circuit_failure,
             record_circuit_success,
             record_segment_failure,
+            should_count_segment_failure,
         )
 
         insight = classify_failure(result)
@@ -1499,7 +1615,8 @@ class ToolExecutor:
             if result.ok and insight.failure_class == "A":
                 record_circuit_success(self.session)
             return
-        record_segment_failure(self.session)
+        if should_count_segment_failure(result, self.session):
+            record_segment_failure(self.session)
         opened = record_circuit_failure(self.session, fp)
         if opened:
             self._record_guard_event(
@@ -1726,6 +1843,7 @@ class ToolExecutor:
         """Spawn Plan subagent (Phase 39 · PLAN-SUBAGENT §4.1)."""
         from session import Session
         from subagent import SubagentRunner, plan_partner_max_per_turn
+        from exec_reliability import runaway_plan_partner_max_per_turn
 
         name = "plan_partner"
         task = str(arguments.get("task") or "").strip()
@@ -1754,7 +1872,49 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
+        from runaway_flow import normalize_checkpoint
+        from exec_reliability import (
+            runaway_plan_partner_blocked,
+            runaway_plan_partner_max_per_turn,
+        )
+
+        checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
+        stage = (self.session.project_workflow_stage or "").strip()
+        if runaway_plan_partner_blocked(
+            runaway_enabled=bool(self.session.runaway_enabled),
+            workflow_stage=stage,
+            checkpoint=checkpoint,
+            runaway_v2_forbid_plan_partner=bool(
+                getattr(self.session, "runaway_v2_forbid_plan_partner", False)
+            ),
+        ):
+            if checkpoint in {"verifying", "release_wait"}:
+                message = (
+                    "verification/release_wait 阶段禁止 plan_partner；"
+                    "Harness 硬验收为真源，勿再改 PROJECT/TASKS"
+                )
+            else:
+                message = (
+                    "repairing 阶段禁止 plan_partner；"
+                    "请由 Harness bug-fix 轨或直接 write_text 修复"
+                )
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                message,
+                duration_ms=_elapsed_ms(started),
+                details={"checkpoint": checkpoint},
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
         cap = plan_partner_max_per_turn()
+        if self.session.runaway_enabled and stage in {
+            "implementation",
+            "verification",
+            "release",
+        }:
+            cap = min(cap, runaway_plan_partner_max_per_turn())
         if self.session.plan_partner_calls >= cap:
             result = tool_fail(
                 name,
@@ -1839,12 +1999,48 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
-        self.session.plan_partner_calls += 1
-
-        from project_api import project_state_payload
+        from exec_reliability import is_plan_gateway_failure_summary
         from plan_agent import get_plan_agent
+        from project_api import project_state_payload
 
         agent = get_plan_agent(paths, pid)
+        if getattr(agent, "_last_gateway_failure", False) or is_plan_gateway_failure_summary(
+            sub_result.summary
+        ):
+            agent._last_gateway_failure = False
+            self.session.plan_partner_calls += 1
+            self.session.plan_partner_gateway_streak += 1
+            result = tool_fail(
+                name,
+                "upstream_error",
+                sub_result.summary,
+                duration_ms=_elapsed_ms(started),
+                details={"retryable": True, "plan_gateway_failure": True},
+            )
+            self._emit_event(
+                "plan.subagent.done",
+                {
+                    "summary": sub_result.summary,
+                    "proposal_count": 0,
+                    "ok": False,
+                    "call_id": call_id,
+                },
+            )
+            self._emit_event(
+                "tool.end",
+                {
+                    "tool": name,
+                    "call_id": call_id,
+                    "ok": False,
+                    "summary": _tool_result_summary(result),
+                },
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        self.session.plan_partner_calls += 1
+        self.session.plan_partner_gateway_streak = 0
+
         state_events: list[dict[str, Any]] = [
             project_state_payload(session, paths),
             agent.build_state(session),
@@ -1918,6 +2114,26 @@ class ToolExecutor:
                 ToolErrorCode.VALIDATION_ERROR,
                 "deliverable_review requires a bound project",
                 duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
+        from exec_reliability import runaway_deliverable_review_blocked
+        from runaway_flow import normalize_checkpoint
+
+        review_checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
+        if runaway_deliverable_review_blocked(
+            runaway_enabled=bool(self.session.runaway_enabled),
+            workflow_stage=(self.session.project_workflow_stage or "").strip(),
+            checkpoint=review_checkpoint,
+            acceptance_passed=bool(self.session.project_runaway_acceptance_passed),
+        ):
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                "Harness 硬验收为真源，verification 出口禁止 deliverable_review",
+                duration_ms=_elapsed_ms(started),
+                details={"checkpoint": review_checkpoint},
             )
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
@@ -2528,7 +2744,12 @@ class ToolExecutor:
                 return host_block
             return None
 
-        project_error = _validate_project_mode_call(self.session, name, arguments)
+        project_error = _validate_project_mode_call(
+            self.session,
+            name,
+            arguments,
+            agent_paths=self.registry.agent_paths,
+        )
         if project_error is not None:
             return project_error
 
@@ -2635,12 +2856,16 @@ class ToolExecutor:
         if data.get("background") is True or data.get("escalated") is True:
             return
         paths = extract_run_evolved_paths(tool_name, arguments)
+        contract = self.session.armed_task_contract or {}
         self.session.turn_evidence.append(
             make_evidence_entry(
                 tool_name=tool_name,
                 evolved_name=evolved or tool_name,
                 ok=bool(result.ok),
                 paths=paths,
+                task_id=str(contract.get("task_id") or self.session.armed_task_id or ""),
+                ac_ids=list(contract.get("ac_ids") or []),
+                verify_ids=list(contract.get("verify_ids") or []),
             )
         )
 
@@ -2666,7 +2891,10 @@ class ToolExecutor:
 
         from project_mode import normalize_delivery_profile
 
-        if normalize_delivery_profile(self.session.project_delivery_profile) == "solo":
+        if (
+            normalize_delivery_profile(self.session.project_delivery_profile) == "solo"
+            and not self.session.runaway_enabled
+        ):
             return
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             return
@@ -2843,6 +3071,9 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             if bool(inner.get("dry_run")):
                 return False
+        # git_snapshot / git_diff are read-only — never confirm.
+        if evolved is not None and evolved.name in {"git_snapshot", "git_diff"}:
+            return False
         # git_branch: list + dry_run skip confirm; create/switch confirm.
         if evolved is not None and evolved.name == "git_branch":
             from tools.builtin import run_evolved as _run_evolved_mod
@@ -2850,6 +3081,42 @@ class ToolExecutor:
             inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
             action = str(inner.get("action") or "").strip().lower()
             if action == "list" or bool(inner.get("dry_run")):
+                return False
+        # gh_pr: view/checks/list + dry_run skip; create confirms.
+        if evolved is not None and evolved.name == "gh_pr":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            action = str(inner.get("action") or "").strip().lower()
+            if action in {"view", "checks", "list"} or bool(inner.get("dry_run")):
+                return False
+        # search_replace: default dry_run preview skips confirm; write confirms.
+        if evolved is not None and evolved.name == "search_replace":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            raw_dry = inner.get("dry_run", arguments.get("dry_run"))
+            if raw_dry is None or raw_dry is True:
+                return False
+        # local_preview: dry_run skip; loopback open without start_command like browser_open.
+        if evolved is not None and evolved.name == "local_preview":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            if bool(inner.get("dry_run")):
+                return False
+            start_cmd = inner.get("start_command")
+            has_start = isinstance(start_cmd, str) and start_cmd.strip()
+            if not has_start and not _browser_open_needs_confirm({"url": inner.get("url")}):
+                return False
+
+        # git_restore defaults to a preview; only an explicit dry_run=false may discard.
+        if evolved is not None and evolved.name == "git_restore":
+            from tools.builtin import run_evolved as _run_evolved_mod
+
+            inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+            raw_dry_run = inner.get("dry_run", arguments.get("dry_run"))
+            if raw_dry_run is None or raw_dry_run is True:
                 return False
         # db_query: readonly SELECT path skips confirm; write=true requires confirm.
         if evolved is not None and evolved.name == "db_query":
@@ -2898,6 +3165,7 @@ class ToolExecutor:
                 working_dir=working,
                 project_root=self.session.project_root or "",
                 background=bool(inner.get("background")),
+                agent_paths=self.registry.agent_paths,
             )
             if not needs:
                 return False
@@ -2930,6 +3198,87 @@ class ToolExecutor:
         ):
             return False
         return True
+
+    def _runaway_confirm_is_covered(
+        self,
+        builtin: BuiltinTool,
+        evolved: EvolvedTool | None,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> bool:
+        """Apply the one-time project runaway authorization to safe local work."""
+        if not self.session.runaway_enabled or self.session.active_shell != "project":
+            return False
+        if evolved is None or _arguments_use_host_scope(arguments):
+            return False
+
+        name = evolved.name
+        if name in {"git_restore", "git_push", "git_clone", "http_request", "browser_open", "gh_pr", "local_preview"}:
+            return False
+
+        from tools.builtin import run_evolved as _run_evolved_mod
+
+        inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+        if name in {"write_text", "patch_file", "search_replace"}:
+            from write_policy import is_sensitive_write_path, path_under_project
+            from project_mode import (
+                BUG_FIX_PLAN_WRITE_ALLOWLIST,
+                _path_matches_write_scope,
+                project_path_rel,
+            )
+
+            if name == "search_replace":
+                raw_paths = inner.get("paths")
+                if not isinstance(raw_paths, list) or not raw_paths:
+                    return False  # default broad scan not covered by runaway grant
+                for item in raw_paths:
+                    path = str(item or "").strip()
+                    if not path or not path_under_project(path, self.session.project_root):
+                        return False
+                    if is_sensitive_write_path(path):
+                        return False
+                    rel = project_path_rel(path, self.session.project_root)
+                    runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
+                    if runaway_scope and rel and not _path_matches_write_scope(rel, runaway_scope):
+                        return False
+                return True
+
+            path = str(inner.get("path") or "").strip()
+            if not path or not path_under_project(path, self.session.project_root):
+                return False
+            rel = project_path_rel(path, self.session.project_root)
+            runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
+            if runaway_scope and rel and _path_matches_write_scope(rel, runaway_scope):
+                return True
+            if bool(getattr(self.session, "bug_fix_lane", False)) and rel:
+                if rel in BUG_FIX_PLAN_WRITE_ALLOWLIST:
+                    return True
+            return not is_sensitive_write_path(path)
+
+        if name == "run_command":
+            from run_command_policy import classify_run_command, working_dir_under_project
+
+            command = str(inner.get("command") or "")
+            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
+            if not working_dir.strip() and self.session.project_root:
+                working_dir = self.session.project_root
+            kind = classify_run_command(command)
+            return bool(
+                kind not in {"danger", "network"}
+                and working_dir_under_project(working_dir, self.session.project_root)
+            )
+
+        if name in {"run_service", "dev_start", "pip_install", "repair_node_modules", "git_commit", "git_branch"}:
+            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
+            return bool(
+                not working_dir
+                or working_dir == self.session.project_root
+                or working_dir.startswith(self.session.project_root.rstrip("/") + "/")
+            )
+
+        # Evolved tools explicitly scoped to the project are covered by the grant.
+        return evolved.scope == "project"
 
     def _resolve_evolved_target(self, tool_name: str, arguments: dict[str, Any]) -> EvolvedTool | None:
         if tool_name != "run_evolved":
@@ -3401,6 +3750,86 @@ def resolve_write_confirm(
     )
 
 
+def _preview_text_field(value: str, *, label: str, head: int = 80) -> str:
+    """One-line summary for large text fields in confirm previews."""
+    lines = value.count("\n") + 1
+    if len(value) <= head and lines <= 3:
+        snippet = value.replace("\n", " ").strip()
+        return f"{label}：{snippet}"
+    return f"{label}：{len(value)} 字符 · {lines} 行"
+
+
+def _summarize_confirm_inner(evolved_name: str, inner: dict[str, Any]) -> list[str]:
+    """Compact human lines for evolved tool confirm — never dump full file bodies."""
+    from tool_display import display_tool_name
+
+    name = (evolved_name or "").strip()
+    if name == "write_text" and isinstance(inner, dict):
+        path = inner.get("path") or inner.get("file") or "?"
+        lines = [f"{display_tool_name('write_text')}：{path}"]
+        content = inner.get("content")
+        if isinstance(content, str) and content:
+            lines.append(_preview_text_field(content, label="内容"))
+        on_conflict = inner.get("on_conflict")
+        if on_conflict:
+            lines.append(f"冲突处理：{on_conflict}")
+        return lines
+    if name == "patch_file" and isinstance(inner, dict):
+        path = inner.get("path") or inner.get("file") or "?"
+        lines = [f"{display_tool_name('patch_file')}：{path}"]
+        find = inner.get("find")
+        if isinstance(find, str) and find:
+            lines.append(_preview_text_field(find, label="查找", head=72))
+        replace = inner.get("replace")
+        if isinstance(replace, str) and replace:
+            lines.append(_preview_text_field(replace, label="替换为", head=72))
+        return lines
+    if name == "search_replace" and isinstance(inner, dict):
+        lines = [f"{display_tool_name('search_replace')}：多文件字面量替换"]
+        find = inner.get("find")
+        if isinstance(find, str) and find:
+            lines.append(_preview_text_field(find, label="查找", head=72))
+        replace = inner.get("replace")
+        if isinstance(replace, str) and replace:
+            lines.append(_preview_text_field(replace, label="替换为", head=72))
+        paths = inner.get("paths")
+        if isinstance(paths, list) and paths:
+            lines.append(f"路径数：{len(paths)}")
+        return lines
+    if name == "gh_pr" and isinstance(inner, dict):
+        action = str(inner.get("action") or "?").strip()
+        lines = [f"{display_tool_name('gh_pr')}：{action}"]
+        title = inner.get("title")
+        if isinstance(title, str) and title.strip():
+            lines.append(_preview_text_field(title, label="标题", head=96))
+        return lines
+    if name == "local_preview" and isinstance(inner, dict):
+        url = inner.get("url") or "?"
+        lines = [f"{display_tool_name('local_preview')}：{url}"]
+        start = inner.get("start_command")
+        if isinstance(start, str) and start.strip():
+            lines.append(_preview_text_field(start, label="启动命令", head=96))
+        return lines
+    if name == "run_command" and isinstance(inner, dict):
+        cmd = inner.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            cmd_line = _preview_text_field(cmd, label="命令", head=96)
+            lines = [f"运行命令：{cmd_line.removeprefix('命令：')}"]
+            cwd = inner.get("cwd")
+            if isinstance(cwd, str) and cwd.strip():
+                lines.append(f"工作目录：{cwd}")
+            return lines
+    preview_inner: dict[str, Any] = dict(inner)
+    for key in ("content", "text", "new_text", "find", "replace", "patch", "command"):
+        val = preview_inner.get(key)
+        if isinstance(val, str) and len(val) > 120:
+            preview_inner[key] = f"({len(val)} 字符)"
+    b64 = preview_inner.get("content_base64")
+    if isinstance(b64, str) and len(b64) > 64:
+        preview_inner["content_base64"] = f"{b64[:48]}…({len(b64)} chars)"
+    return [f"参数：{json.dumps(preview_inner, ensure_ascii=False, sort_keys=True)}"]
+
+
 def build_confirm_preview(
     tool_name: str,
     arguments: dict[str, Any],
@@ -3411,31 +3840,29 @@ def build_confirm_preview(
     agent_paths: AgentPaths | None = None,
 ) -> str:
     """Human-readable preview shown before confirm."""
-    lines = [f"Tool: {tool_name}"]
+    lines: list[str] = []
     if tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
-        lines.append(f"Evolved: {evolved_name}")
         inner = run_evolved.coalesce_tool_arguments(arguments)
-        if isinstance(inner, dict) and inner:
-            preview_inner = dict(inner)
-            b64 = preview_inner.get("content_base64")
-            if isinstance(b64, str) and len(b64) > 64:
-                preview_inner["content_base64"] = f"{b64[:48]}…({len(b64)} chars)"
-            lines.append(f"Arguments: {json.dumps(preview_inner, ensure_ascii=False, sort_keys=True)}")
+        if isinstance(evolved_name, str) and evolved_name.strip():
+            lines.extend(_summarize_confirm_inner(evolved_name, inner if isinstance(inner, dict) else {}))
+        elif isinstance(inner, dict) and inner:
+            lines.extend(_summarize_confirm_inner("", inner))
         if arguments.get("dry_run"):
-            lines.append("Mode: dry_run")
+            lines.append("模式：dry_run")
         if evolved is not None:
-            lines.append(f"Policy: allow_approve_all={evolved.policy.allow_approve_all}")
+            if evolved.policy.allow_approve_all:
+                lines.append("可本会话一键放行：是")
             if evolved.name == "run_command" and isinstance(inner, dict):
                 if bool(inner.get("background")):
-                    lines.append("Mode: background → escalate to run_service start")
+                    lines.append("模式：后台 → 转为 run_service")
                 else:
-                    lines.append("Note: exits when done; long-lived processes use run_service (or background:true)")
+                    lines.append("说明：结束后退出；长驻进程请用 run_service")
                 try:
                     from run_command_policy import classify_run_command
 
                     cmd = inner.get("command") if isinstance(inner.get("command"), str) else ""
-                    lines.append(f"Command class: {classify_run_command(cmd)}")
+                    lines.append(f"命令类型：{classify_run_command(cmd)}")
                 except Exception:
                     pass
             if (
@@ -3454,7 +3881,7 @@ def build_confirm_preview(
                         session=session,
                         agent_paths=agent_paths,
                     )
-                    lines.append(f"Write policy: {reason}")
+                    lines.append(f"写入策略：{reason}")
                 except Exception:
                     pass
             if evolved.name == "browser_open" and isinstance(inner, dict):

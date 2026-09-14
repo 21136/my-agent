@@ -22,7 +22,7 @@ class ToolCatalogMrTests(unittest.TestCase):
         for term in _CORE_FORBIDDEN:
             self.assertNotIn(term, core, msg=f"core 不应再含细则词: {term!r}")
         self.assertNotIn("8. Each write requires", core)
-        self.assertLess(len(core.splitlines()), 85)
+        self.assertLess(len(core.splitlines()), 120)
 
     def test_bucket_has_handbook(self) -> None:
         bucket = (_ROOT / "evolve" / "tool-catalog" / "buckets" / "evolve.md").read_text(

@@ -19,8 +19,28 @@ import {
 import {throttle} from './perf/throttle.js';
 import {reduceTerminalInput} from './input.js';
 import {
+  appendInputHistory,
+  navigateInputHistory,
+  type InputHistoryCursor,
+} from './input-history.js';
+import {
+  completeSlashCommand,
+  nextSlashCommandIndex,
+  slashCommandCandidates,
+} from './slash-commands.js';
+import {
+  isModelPickerTrigger,
+  MODEL_PICKER_MAX_VISIBLE,
+  modelPickerStartIndex,
+  nextModelPickerIndex,
+} from './model-picker.js';
+import {
+  estimateTranscriptRows,
+  estimateLiveTranscriptRows,
   maxTranscriptScrollUp,
+  reviewNewOutputRows,
   scrollTranscriptRows,
+  transcriptFooterRows,
   transcriptRowBudget,
 } from './perf/virtual-list.js';
 import {useMouseWheelScroll} from './input/use-mouse-wheel-scroll.js';
@@ -72,6 +92,7 @@ function sessionFromState(state: TerminalUiState): TerminalSession {
     root: state.root,
     mascotLines: state.mascotLines,
     mascotLabel: state.mascotLabel,
+    models: state.models,
   };
 }
 
@@ -81,6 +102,7 @@ function chromeFromState(state: TerminalUiState): TerminalChrome {
     activeTool: state.activeTool,
     activeToolStartedAt: state.activeToolStartedAt,
     planStatus: state.planStatus,
+    result: state.result,
     confirm: state.confirm,
   };
 }
@@ -88,7 +110,18 @@ function chromeFromState(state: TerminalUiState): TerminalChrome {
 type InkPipeAppProps = {
   eventPort?: number;
   eventsOnStdin?: boolean;
+  clearScreen?: () => void;
 };
+
+type ExtendedInputKey = {home?: boolean; end?: boolean};
+
+function isHomeKey(input: string, key: ExtendedInputKey): boolean {
+  return Boolean(key.home) || input === '\u001b[H' || input === '\u001bOH';
+}
+
+function isEndKey(input: string, key: ExtendedInputKey): boolean {
+  return Boolean(key.end) || input === '\u001b[F' || input === '\u001bOF';
+}
 
 function useEventStream(
   eventPort: number | undefined,
@@ -129,7 +162,7 @@ function useEventStream(
   }, [eventPort, eventsOnStdin, onEvents]);
 }
 
-function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
+function InkPipeApp({eventPort, eventsOnStdin = false, clearScreen}: InkPipeAppProps) {
   const {stdout} = useStdout();
   const rows = Math.max(process.stderr.rows ?? 0, stdout.rows ?? 0, 24);
   const columns = Math.max(process.stderr.columns ?? 0, stdout.columns ?? 0, 80);
@@ -140,7 +173,47 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
   const [chrome, setChrome] = useState<TerminalChrome>(() => chromeFromState(createInitialState()));
   const [blocks, setBlocks] = useState<TerminalBlock[]>([]);
   const [inputText, setInputText] = useState('');
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<InputHistoryCursor>({index: -1, draft: ''});
   const [scrollUpRows, setScrollUpRows] = useState(0);
+  const [slashCommandIndex, setSlashCommandIndex] = useState(0);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelPickerIndex, setModelPickerIndex] = useState(0);
+  const [screenRevision, setScreenRevision] = useState(0);
+  const reviewBaselineRowsRef = useRef<number | null>(null);
+  const reviewTotalRowsRef = useRef<number | null>(null);
+  const reviewUserMovedRef = useRef(false);
+
+  const slashCommands = useMemo(() => slashCommandCandidates(inputText), [inputText]);
+  const selectedSlashCommand = slashCommands[Math.min(slashCommandIndex, Math.max(0, slashCommands.length - 1))];
+  const modelOptions = session.models ?? [];
+
+  const openModelPicker = useCallback(() => {
+    if (modelOptions.length === 0) return false;
+    setModelPickerOpen(true);
+    setModelPickerIndex(modelPickerStartIndex(modelOptions, session.model));
+    setSlashCommandIndex(0);
+    return true;
+  }, [modelOptions, session.model]);
+
+  const closeModelPicker = useCallback(() => {
+    setModelPickerOpen(false);
+    setModelPickerIndex(0);
+  }, []);
+
+  const submitModelChoice = useCallback(
+    (modelId: string) => {
+      const submittedText = `/model ${modelId}`;
+      send({type: 'input.line', text: submittedText});
+      setInputHistory((current) => appendInputHistory(current, submittedText));
+      setHistoryCursor({index: -1, draft: ''});
+      setSlashCommandIndex(0);
+      setScrollUpRows(0);
+      closeModelPicker();
+      setInputText('');
+    },
+    [closeModelPicker],
+  );
 
   const {
     text: liveReasoningText,
@@ -156,11 +229,34 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
   } = useLiveStream('assistant.delta');
 
   const welcomeCompact = blocks.length > 0;
-  const transcriptRows = transcriptRowBudget(rows, welcomeCompact);
-  const maxScrollUp = useMemo(
-    () => maxTranscriptScrollUp(blocks, transcriptRows, columns),
-    [blocks, transcriptRows, columns],
+  const liveTranscriptRows = estimateLiveTranscriptRows(
+    liveReasoningText,
+    liveAssistantText,
+    columns,
   );
+  const transcriptRows = transcriptRowBudget(
+    rows,
+    welcomeCompact,
+    transcriptFooterRows(
+      Boolean(chrome.working),
+      Boolean(chrome.confirm),
+      scrollUpRows > 0,
+      slashCommands.length +
+        (modelPickerOpen ? Math.min(modelOptions.length, MODEL_PICKER_MAX_VISIBLE) + 4 : 0),
+    ),
+  );
+  const maxScrollUp = useMemo(
+    () => maxTranscriptScrollUp(blocks, transcriptRows, columns, liveTranscriptRows),
+    [blocks, liveTranscriptRows, transcriptRows, columns],
+  );
+  const newOutputRows =
+    scrollUpRows > 0 && reviewBaselineRowsRef.current !== null
+      ? reviewNewOutputRows(
+          estimateTranscriptRows(blocks, columns) + liveTranscriptRows,
+          reviewBaselineRowsRef.current,
+        )
+      : 0;
+  const reviewTotalRows = estimateTranscriptRows(blocks, columns) + liveTranscriptRows;
 
   const assistantLiveRef = useRef(false);
 
@@ -262,13 +358,52 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
     setScrollUpRows((current) => Math.min(current, maxScrollUp));
   }, [maxScrollUp]);
 
+  useEffect(() => {
+    if (scrollUpRows === 0) {
+      reviewBaselineRowsRef.current = null;
+      reviewTotalRowsRef.current = null;
+      reviewUserMovedRef.current = false;
+      return;
+    }
+    const previousRows = reviewTotalRowsRef.current;
+    if (
+      previousRows !== null &&
+      reviewTotalRows > previousRows &&
+      !reviewUserMovedRef.current
+    ) {
+      const addedRows = reviewTotalRows - previousRows;
+      setScrollUpRows((current) =>
+        current > 0 ? Math.min(maxScrollUp, current + addedRows) : current,
+      );
+    }
+    if (reviewBaselineRowsRef.current === null) {
+      reviewBaselineRowsRef.current = reviewTotalRows;
+    }
+    reviewTotalRowsRef.current = reviewTotalRows;
+  }, [maxScrollUp, reviewTotalRows, scrollUpRows]);
+
   const inputActive = eventPort !== undefined ? Boolean(stdout.isTTY) : false;
   const scrollStep = Math.max(3, Math.floor(transcriptRows / 2));
   const applyScrollLines = useCallback(
     (deltaLines: number) => {
-      setScrollUpRows((current) => scrollTranscriptRows(current, deltaLines, maxScrollUp));
+      setScrollUpRows((current) => {
+        const next = scrollTranscriptRows(current, deltaLines, maxScrollUp);
+        if (current === 0 && next > 0) {
+          reviewBaselineRowsRef.current =
+            estimateTranscriptRows(blocks, columns) + liveTranscriptRows;
+          reviewUserMovedRef.current = false;
+        } else if (current > 0 && next !== current) {
+          reviewUserMovedRef.current = true;
+        }
+        if (next === 0) {
+          reviewBaselineRowsRef.current = null;
+          reviewTotalRowsRef.current = null;
+          reviewUserMovedRef.current = false;
+        }
+        return next;
+      });
     },
-    [maxScrollUp],
+    [blocks, columns, liveTranscriptRows, maxScrollUp],
   );
 
   useMouseWheelScroll({
@@ -279,6 +414,47 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
 
   useInput(
     (input, key) => {
+      const navigationKey = key as typeof key & ExtendedInputKey;
+      if (key.ctrl && input.toLowerCase() === 'l') {
+        clearScreen?.();
+        setScreenRevision((current) => current + 1);
+        return;
+      }
+      if (modelPickerOpen && !confirmRef.current) {
+        if (key.escape) {
+          closeModelPicker();
+          return;
+        }
+        if (key.upArrow || key.downArrow) {
+          setModelPickerIndex((current) =>
+            nextModelPickerIndex(current, key.upArrow ? -1 : 1, modelOptions.length),
+          );
+          return;
+        }
+        if (key.return) {
+          const selected = modelOptions[modelPickerIndex];
+          if (selected) submitModelChoice(selected.id);
+          return;
+        }
+        return;
+      }
+      if (!confirmRef.current && slashCommands.length > 0) {
+        if (key.upArrow || key.downArrow) {
+          setSlashCommandIndex((current) =>
+            nextSlashCommandIndex(current, key.upArrow ? -1 : 1, slashCommands.length),
+          );
+          return;
+        }
+        if (key.tab && selectedSlashCommand) {
+          setInputText(completeSlashCommand(selectedSlashCommand));
+          setSlashCommandIndex(0);
+          return;
+        }
+        if (key.escape) {
+          setSlashCommandIndex(0);
+          return;
+        }
+      }
       if (!confirmRef.current) {
         if (key.pageUp) {
           applyScrollLines(scrollStep);
@@ -288,15 +464,28 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
           applyScrollLines(-scrollStep);
           return;
         }
-        if (!inputText) {
-          if (key.upArrow) {
-            applyScrollLines(3);
+        if (isHomeKey(input, navigationKey)) {
+          applyScrollLines(maxScrollUp);
+          return;
+        }
+        if (isEndKey(input, navigationKey)) {
+          applyScrollLines(-maxScrollUp);
+          return;
+        }
+        if (key.upArrow || key.downArrow) {
+          if (inputHistory.length > 0) {
+            const next = navigateInputHistory(
+              inputHistory,
+              historyCursor,
+              key.upArrow ? -1 : 1,
+              inputText,
+            );
+            setInputText(next.text);
+            setHistoryCursor(next.cursor);
             return;
           }
-          if (key.downArrow) {
-            applyScrollLines(-3);
-            return;
-          }
+          applyScrollLines(key.upArrow ? 3 : -3);
+          return;
         }
       }
 
@@ -314,10 +503,31 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
           choice: result.action.choice,
         });
       } else if (result.action.type === 'submit') {
-        send({type: 'input.line', text: result.action.text});
+        const submittedText = result.action.text;
+        if (isModelPickerTrigger(submittedText) && openModelPicker()) {
+          setInputText('');
+          setHistoryCursor({index: -1, draft: ''});
+          setSlashCommandIndex(0);
+          setScrollUpRows(0);
+          return;
+        }
+        send({type: 'input.line', text: submittedText});
+        setInputHistory((current) => appendInputHistory(current, submittedText));
+        setHistoryCursor({index: -1, draft: ''});
+        setSlashCommandIndex(0);
         setScrollUpRows(0);
       } else if (result.action.type === 'cancel') {
         send({type: 'turn.cancel'});
+      } else if (
+        result.action.type === 'exit' &&
+        !chrome.working &&
+        inputText.trim() === ''
+      ) {
+        process.exit(0);
+      }
+      if (result.action.type !== 'submit' && (input || key.backspace || key.delete)) {
+        setHistoryCursor({index: -1, draft: result.state.text});
+        setSlashCommandIndex(0);
       }
       setInputText(result.action.type === 'submit' ? '' : result.state.text);
     },
@@ -333,6 +543,7 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
 
   return (
     <Repl
+      key={screenRevision}
       height={rows}
       columns={columns}
       greet={session.greet}
@@ -351,13 +562,24 @@ function InkPipeApp({eventPort, eventsOnStdin = false}: InkPipeAppProps) {
       confirm={chrome.confirm}
       input={inputText}
       scrollUpRows={scrollUpRows}
+      newOutputRows={newOutputRows}
+      slashCommands={slashCommands}
+      slashCommandIndex={slashCommandIndex}
+      modelPickerOpen={modelPickerOpen}
+      modelOptions={modelOptions}
+      modelPickerIndex={modelPickerIndex}
+      currentModel={session.model}
     />
   );
 }
 
-function renderInkApp(app: React.ReactElement) {
+function renderInkApp(appFactory: (clearScreen: () => void) => React.ReactElement) {
   enableTrueColor(process.stderr);
-  render(app, {stdout: process.stderr, exitOnCtrlC: false});
+  let instance: ReturnType<typeof render> | undefined;
+  instance = render(appFactory(() => instance?.clear()), {
+    stdout: process.stderr,
+    exitOnCtrlC: false,
+  });
 }
 
 const fixtureArg = process.argv[2];
@@ -381,9 +603,9 @@ if (fixtureArg) {
     />,
   );
 } else if (eventPort !== undefined) {
-  renderInkApp(<InkPipeApp eventPort={eventPort} />);
+  renderInkApp((clearScreen) => <InkPipeApp eventPort={eventPort} clearScreen={clearScreen} />);
 } else if (legacyStdinPipe) {
-  renderInkApp(<InkPipeApp eventsOnStdin />);
+  renderInkApp((clearScreen) => <InkPipeApp eventsOnStdin clearScreen={clearScreen} />);
 } else {
   render(<Repl />);
 }

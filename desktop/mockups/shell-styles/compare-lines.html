@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>线条对比 · 多 vs 少</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Noto+Sans+SC:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Inter, "Noto Sans SC", system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    h1 { font-size: 1.25rem; margin-bottom: 0.35rem; }
+    .hint { color: #888; font-size: 0.85rem; margin-bottom: 1rem; max-width: 40rem; line-height: 1.5; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      height: calc(100vh - 5rem);
+    }
+    @media (max-width: 900px) { .row { grid-template-columns: 1fr; height: auto; } }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1a1a1a;
+    }
+    .panel h2 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.65rem 1rem;
+      background: #222;
+      color: #aaa;
+    }
+    .panel.bad h2 { color: #f87171; }
+    .panel.good h2 { color: #4ade80; }
+    iframe { flex: 1; width: 100%; border: 0; min-height: 420px; }
+    a.back {
+      display: inline-block;
+      margin-top: 1rem;
+      color: #888;
+      font-size: 0.82rem;
+    }
+    ul.principles {
+      margin: 0.75rem 0 1rem;
+      padding-left: 1.2rem;
+      font-size: 0.82rem;
+      color: #999;
+      line-height: 1.65;
+      max-width: 52rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>同布局 · 线条多 vs 线条少</h1>
+  <p class="hint">左：当前 my-agent 思路（边框画格子）。右：Cursor/Codex 思路（色阶 + 留白 + 浮动输入框）。</p>
+  <ul class="principles">
+    <li>去掉侧栏竖线、顶栏横线、消息间分割线、输入区顶线</li>
+    <li>侧栏与主区只靠 <strong>背景色差 4～8%</strong> 区分</li>
+    <li>卡片和输入框用 <strong>浅阴影 / 圆角块</strong>，不用描边</li>
+    <li>按钮默认无边框，只有主按钮填色</li>
+  </ul>
+  <div class="row">
+    <div class="panel bad">
+      <h2>✕ 线条多（01 现状）</h2>
+      <iframe src="01-current.html" title="多线条"></iframe>
+    </div>
+    <div class="panel good">
+      <h2>✓ 线条少（07 Cursor 亮色）</h2>
+      <iframe src="07-cursor.html" title="少线条"></iframe>
+    </div>
+  </div>
+  <a class="back" href="index.html">← 返回全部风格</a>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 > 版本 **0.4.2** · 2026-08-04  
 > 状态：`doc` — **当前 UI 真源 = `shells/unified/`**（perspective: default | project | night）+ **`shells/pet/`**；旧 grow/daily/project/govern **已删除**。历史章节保留作设计溯源，标 **deprecated**。  
-> 关联：[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
+> 关联：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)（**产品定调 · 教科书流程**） · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [UX-POLISH.md](./UX-POLISH.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [RUNTIME.md](./RUNTIME.md) · [BUGS.md](./BUGS.md) · `TASKS.md`
 
 ---
 
@@ -11,7 +11,7 @@
 | 表面 | 路径 | 说明 |
 |------|------|------|
 | **统一聊天壳** | `desktop/src/shells/unified/` | 唯一全功能工作台；`shell-router` 只挂载此壳 |
-| **视角** | `data-perspective` | `default`（车间+过程块）· `project`（侧栏任务流）· `night`（暗色/Amp 手感，可选 starfield） |
+| **视角** | `data-perspective` | **`project`（默认 · 只为写项目）** · `default`（车间+过程块）· `night`（暗色/Amp 手感，可选 starfield） |
 | **伴侣窗** | `desktop/src/shells/pet/` | 默认入口；独立窗；backend 会话线仍可标 `daily` |
 | **皮肤** | `desktop/src/skins/starfield/` | 自旧 daily 迁出 |
 | **不再存在** | `shells/grow|daily|project|govern` | 代码已删；勿再引用为实现路径 |
@@ -177,6 +177,8 @@ desktop/src/skins/
 协议层仍发 `confirm.response` + `y|n|a` + `request_id`（§5.1）；仅 **呈现** 改为点击。
 
 #### 3.2.2 过程可见 · 思考展示（**已定：要，两层** · B 层对齐 Cursor · 2026-08-04）
+
+> **2026-09-03 收束**：双「思考中」与过程入口重复 → [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md)（**UX-028** / **UI-6040**）。D-T1～T7 **不变**；呈现合并为 **单一活动轨**，实施分 P0（热修）/ M0～M2。
 
 空等整段回复会显得闷；桌面壳在 **同一轮助手回复区域** 内展示 **过程**，仍不是仪表盘。
 
@@ -779,6 +781,7 @@ data/sessions/.interface.lock   # { "ui": "electron"|"cli"|"terminal", "pid": N,
 | 包含 | `role: user` / `assistant` 且 `content` 非空 |
 | 跳过 | 锚定块 `[本次会议上下文]` · `[内核]…` · `role: tool` · 仅 `tool_calls` 无文字的 assistant |
 | 去重 | **连续**相同 user 文本只保留一条（重连重复发送） |
+| 窗口 | **UI-5972**：默认最近 `MY_AGENT_SESSION_HISTORY_MAX_ITEMS`（200）条；超出时 `truncated` + `omitted_count` |
 | 不含 | tool 过程行、reasoning 流（历史轮过程默认不恢复；见 §3.2.2） |
 
 与 `session.memory` 分工：**memory** = 条数/压缩元数据（顶栏）；**history** = 用户可见对话正文（聊天区）。

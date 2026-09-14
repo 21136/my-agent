@@ -1,8 +1,9 @@
 # my-agent 项目地图（MAP）
 
-> 版本 **2026-08-13** · **新会话请先读本文 + `TASKS.md`**（含 **DOC-05 废止债**）  
+> 版本 **2026-09-07** · **新会话先读 `PRODUCTION-PROJECT-MVP.md`，再读本文 + `TASKS.md`**（含 **DOC-05 废止债**）
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
-> **当前焦点**：**Phase 57** — Ink **阶段 0～5 + T-5730～5734 done** · [TERMINAL-MODE.md](./TERMINAL-MODE.md) **v0.3.2** §6.6 · **下一手工**：S-576  
+> **产品定调**：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) — Desktop **主战场**（project · 闸门+证据流程轨）· Terminal **冻结维护**（独立入口）  
+> **当前焦点**：收口 v1 兼容回归、T-6107 续接单真源和 S-6106 music 试点；同步推进 UX-029 M2 / UX-030 验收。Phase 58b 七文件方案仍暂停，详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
 
@@ -10,7 +11,7 @@
 
 ## 1. 一句话
 
-个人用、可进化的本地 Agent：**Git 为真源**，LLM 只能通过 **6 个 Builtin + `run_evolved`** 动手；写路径默认 **agent root**（deny-list 精确拦截）；进化产物在 `evolve/`（prompt / memory / tool），**M1 不做 skill**。
+面向真实软件项目的本地生产工具：以 **`PROJECT.md`、`DESIGN.md`、`TASKS.md`、`VERIFY.md`** 组织需求、设计、实现和验证；Git 为真源，LLM 只能通过注册工具动手。个人进化层和 Terminal 是内部/维护能力，不是当前产品主线。
 
 ---
 
@@ -66,7 +67,13 @@
 | **Phase 47** | **交付审查**（`deliverable_review` · `solo`/`ritual` profile · prompt registry） | **代码 done**（[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · T-4701～4712 · S-470 todo） |
 | **Phase 47+** | **本地交付模型**（栈-A/B/C/D · 源-L · LDM-1～9 · 里程碑） | **done**（[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) **v0.3.3** · T-4714～4719 · **S-472 done**） |
 | **Phase 51～55** | **Pack 1/2/4/5/6**（收口 · 路由 · phase_key · 语义搜 · 编排） | **M0 done**（[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md)） |
-| **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5** · auto plan-execute） | **legacy M1 done · Ink 阶段 0～5 done · T-5730～5734 done**（TERMINAL v0.3.2 · S-576 手工待做） |
+| **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5** · auto plan-execute） | **legacy M1 done · Ink 阶段 0～5 done · T-5730～5734 done**（TERMINAL v0.3.2 · **frozen** · S-576 手工待做） |
+| **Phase 58** | **Desktop 教科书流程**（产品定调 · 流程轨五段 · 阶段计划卡） | **M1 done**（[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · T-5801～5808 · S-580 todo） |
+| **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
+| **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
+| **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
+| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 自动测试 40/40；T-6106 v1 兼容回归 108/112 待收口 · T-6107 续接核心已接入，兼容层/指纹与手工体验待收口 · S-6106 手工待做**（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+| **Phase 61** | **Agent 工具体验路线图**（终端会话 · 原子编辑 · Git diff/restore · 结构化测试 · 诊断 · 浏览器检查 · 并行隔离 · 开源优先适配） | **P0 终端会话、Git 文件级回退和 structured_test 已 active；终端会话 UI 进入设计，原子编辑仍 experimental，其余工具未开始**（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · T-6200～T-6225） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
 | **Phase 50** | **Explore 作用域分轨**（general=内核 · project=workspace · 保留 auto explore） | **M0 done**（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) · S-500/S-501 手工） |
@@ -84,7 +91,7 @@
 | **冻结** | **已解除** — 可开新功能 Phase |
 | **解冻后准入** | 新 Phase 必须满足 [TASKS.md](./TASKS.md) **DOC-04**（[STABILIZATION.md](./STABILIZATION.md) §9.3）：写明影响的 §3 矩阵行 + 回归 S-/IT- ID；缺省 = 评审驳回 |
 | **放行后债** | STD-001 → [BUG-020](./bugs/2026-07-18-shell-sessions-park-pollution.md) **fixed**；M2-I（T-1830 IT-X）部分条目已 **废止**（见 §2.2） |
-| **下一焦点** | **Pack 4/5** [ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md) v0.2.2 · **Pack 1/2/6 M0 done** → **54 T-5401** → 55 |
+| **下一焦点** | v1 兼容回归（T-6106）· 续接收敛（T-6107）· music 试点（S-6106）· UX-029 M2 / UX-030 验收 |
 
 **远端**：https://github.com/21136/my-agent（private，默认分支 `main`）。**仍开放的可选债**：`T-601b` governance tool · `T-804` 外挂扩展 · `T-4103` 模型路由。
 
@@ -372,6 +379,12 @@ flowchart TD
 | `CHECKER_AUTO_ON_SCAFFOLD` | grow scaffold 后自动 checker（M1 T-1620） | `0`（设 `1` 开启） |
 | `CHECKER_MODEL` | checker 模型覆盖（空=跟 session） | 空 |
 | `LLM_CONTEXT_LIMIT` | context 上限（可选覆盖） | flash `128000` / pro `1000000` |
+| `LLM_tokeness_KEY` | Tokeness 自定义 API Key（[文档](https://docs.tokeness.ai/zh/integrations/custom-api-key)） | — |
+| `LLM_TOKENESS_KEY` | Tokeness Key 备用名（同 `LLM_tokeness_KEY`） | — |
+| `TOKENESS_BASE_URL` | Tokeness OpenAI 兼容端点（勿重复 `/v1`） | `https://n.tokeness.dev` |
+| `TOKENESS_MODEL_LUNA` | Tokeness Luna 市场全名 | `gpt-5.6-luna` |
+
+Tokeness Luna 在 `/v1/chat/completions` 下 **tools 与 reasoning_effort 不可同用**；agent 带工具调用时会自动发 `reasoning_effort: none`（见 `llm_client.py`）。与 0x567 对照见 [LLM-LUNA-GATEWAYS.md](./LLM-LUNA-GATEWAYS.md)。
 | `SUBAGENT_EXPLORE_MAX` | explore 子代理 tool 轮次上限 | `16` |
 | `REVIEW_SUBAGENT_MAX_ROUNDS` | deliverable_review tool 轮 | `16` |
 | `PLAN_SUBAGENT_TOOL_ROUNDS` | plan_partner 查跑 loop | `4` |

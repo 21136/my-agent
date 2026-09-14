@@ -70,6 +70,19 @@ class RunCommandIT100Tests(unittest.TestCase):
             self.assertTrue(out.get("dry_run"))
             self.assertIn("command", out)
 
+    def test_expected_nonzero_exit_code_is_success(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("common/run_command",)) as paths:
+            main_py = paths.evolve / "tools" / "common" / "run_command" / "main.py"
+            mod = _load_run_command(main_py)
+            mod._agent_root = lambda: paths.agent_root  # type: ignore[method-assign]
+
+            out = mod.run_command({"command": "exit 7", "expected_exit_code": 7})
+
+            self.assertTrue(out.get("ok"), out)
+            self.assertEqual(out.get("exit_code"), 7)
+            self.assertEqual(out.get("expected_exit_code"), 7)
+            self.assertNotIn("error", out)
+
     def test_env_deny(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/run_command",)) as paths:
             main_py = paths.evolve / "tools" / "common" / "run_command" / "main.py"

@@ -28,5 +28,5 @@
 
 ## 落盘后
 
-- 新工具 `status→active` 后：更新本目录对应桶 + 必要时改 `INDEX.md` 一行。
+- 新工具 `status→active` 后：必须更新 `evolve/tool-catalog/INDEX.md` 的主索引行，并新增/更新对应 `buckets/<桶>.md`，写清参数、输出、示例和适用范围；至少验证一次 `INDEX → bucket → run_evolved` 链路。
 - 可用 `run_demo` / checker 验收后再标 active。

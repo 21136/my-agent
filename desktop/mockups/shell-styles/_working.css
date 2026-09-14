@@ -1,0 +1,202 @@
+/* 对齐真代码：渐变在 shell / frame 层，侧栏实色挡住，主区半透明透出 */
+
+.app-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.app-frame.is-agent-busy::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    125deg,
+    var(--bg) 0%,
+    var(--flow-a) 22%,
+    var(--flow-b) 48%,
+    var(--flow-c) 72%,
+    var(--bg) 100%
+  );
+  background-size: 360% 360%;
+  animation: shell-gradient-flow var(--flow-duration, 4.5s) ease-in-out infinite;
+}
+
+.app-frame.is-agent-busy::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  animation: shell-inner-glow 2.4s ease-in-out infinite;
+}
+
+.app-frame.is-agent-busy > * {
+  position: relative;
+  z-index: 1;
+}
+
+.app-frame.is-agent-busy .app-chrome {
+  background: color-mix(in srgb, var(--surface) 18%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 28px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* ── unified-shell（与 unified.css 同层）── */
+.unified-shell {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: var(--sidebar-w, 272px) 1fr;
+  background-color: var(--bg);
+  overflow: hidden;
+}
+
+.unified-shell.is-working {
+  animation: shell-gradient-flow var(--flow-duration, 4.5s) ease-in-out infinite;
+  background-color: var(--flow-b);
+  background-image: linear-gradient(
+    125deg,
+    var(--bg) 0%,
+    var(--flow-a) 22%,
+    var(--flow-b) 48%,
+    var(--flow-c) 72%,
+    var(--bg) 100%
+  );
+  background-size: 320% 320%;
+}
+
+.unified-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  background: linear-gradient(
+    125deg,
+    color-mix(in srgb, var(--flow-a) 85%, white) 0%,
+    color-mix(in srgb, var(--flow-b) 88%, white) 35%,
+    color-mix(in srgb, var(--flow-c) 82%, white) 68%,
+    color-mix(in srgb, var(--flow-a) 85%, white) 100%
+  );
+  background-size: 320% 320%;
+}
+
+.unified-shell.is-working::before {
+  opacity: 0.38;
+  animation: shell-gradient-flow var(--flow-duration, 4.5s) ease-in-out infinite reverse;
+}
+
+.unified-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.unified-shell.is-working::after {
+  opacity: 1;
+  animation: shell-inner-glow 2.4s ease-in-out infinite;
+}
+
+.unified-shell > * {
+  position: relative;
+  z-index: 1;
+  transition: background 0.45s ease, border-color 0.45s ease, box-shadow 0.45s ease;
+}
+
+@keyframes shell-gradient-flow {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes shell-inner-glow {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 44px color-mix(in srgb, var(--accent) 16%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--flow-c) 38%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 60px color-mix(in srgb, var(--accent) 26%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--flow-c) 58%, transparent);
+  }
+}
+
+/* 侧栏：实色，无 is-working 规则 — 挡住底层渐变 */
+.unified-sidebar {
+  background: var(--surface) !important;
+  backdrop-filter: none !important;
+}
+
+.unified-shell.is-working .unified-sidebar {
+  background: var(--surface) !important;
+}
+
+/* 主区子元素：半透明，渐变从这里透出（对齐 unified.css） */
+.unified-shell.is-working .unified-topbar {
+  background: color-mix(in srgb, var(--surface) 16%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.unified-shell.is-working .unified-chat {
+  background: transparent;
+}
+
+.unified-shell.is-working .unified-process {
+  background: color-mix(in srgb, var(--surface) 18%, transparent);
+  border-left-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.unified-shell.is-working .unified-composer {
+  background: color-mix(in srgb, var(--surface) 12%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 -6px 24px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.unified-shell.is-working .unified-input-wrap {
+  background: color-mix(in srgb, var(--bg) 28%, transparent);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.work-toggle {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  z-index: 100;
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0.42rem 0.8rem;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+.work-toggle.is-idle {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-frame.is-agent-busy::before,
+  .unified-shell.is-working,
+  .unified-shell.is-working::before {
+    animation: none;
+  }
+}

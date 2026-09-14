@@ -48,6 +48,9 @@ const electronBuildWatch = {
     ],
   },
 };
+const electronBuildOnce = {
+  emptyOutDir: false as const,
+};
 /** Must match `DEV_USER_QUIT_CODE` in electron/main.ts — user closed the window. */
 const DEV_USER_QUIT_CODE = 100;
 
@@ -128,41 +131,47 @@ async function runElectron(startup: (argv?: string[]) => Promise<void>): Promise
   }
 }
 
-export default defineConfig({
-  cacheDir: path.join(localCacheRoot, "vite-cache"),
-  plugins: [
-    electron({
-      main: {
-        entry: "electron/main.ts",
-        vite: {
-          build: electronBuildWatch,
+export default defineConfig(({ command }) => {
+  // Electron sub-builds must watch only during `vite serve`; a production
+  // build should finish instead of leaving Rollup watchers alive.
+  const electronBuild = command === "serve" ? electronBuildWatch : electronBuildOnce;
+
+  return {
+    cacheDir: path.join(localCacheRoot, "vite-cache"),
+    plugins: [
+      electron({
+        main: {
+          entry: "electron/main.ts",
+          vite: {
+            build: electronBuild,
+          },
+          onstart({ startup }) {
+            launchElectron(startup);
+          },
         },
-        onstart({ startup }) {
-          launchElectron(startup);
+        preload: {
+          input: "electron/preload.ts",
+          vite: {
+            build: electronBuild,
+          },
         },
-      },
-      preload: {
-        input: "electron/preload.ts",
-        vite: {
-          build: electronBuildWatch,
+        renderer: {},
+      }),
+    ],
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, "index.html"),
+          pet: path.resolve(__dirname, "pet.html"),
         },
-      },
-      renderer: {},
-    }),
-  ],
-  build: {
-    rollupOptions: {
-      input: {
-        main: path.resolve(__dirname, "index.html"),
-        pet: path.resolve(__dirname, "pet.html"),
       },
     },
-  },
-  server: {
-    port: 5173,
-    strictPort: false,
-    watch: {
-      ignored: devWatchIgnored,
+    server: {
+      port: 5173,
+      strictPort: false,
+      watch: {
+        ignored: devWatchIgnored,
+      },
     },
-  },
+  };
 });

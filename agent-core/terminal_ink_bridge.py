@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import queue
+import signal
 import socket
 import subprocess
 import sys
@@ -24,6 +25,40 @@ from paths import AgentPaths
 from terminal_ui import build_time_greeting_lines, build_welcome, reasoning_enabled
 
 OutputFn = Callable[[str], None]
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate an Ink launcher and descendants without relying on shell state."""
+    if process.poll() is not None:
+        return
+
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return
+
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        try:
+            process.terminate()
+        except OSError:
+            pass
 
 
 @dataclass(frozen=True)
@@ -117,6 +152,8 @@ def session_init_payload(
 ) -> dict[str, Any]:
     from welcome_mascot import SPRITE_LABEL, sprite_lines
 
+    from llm_models import get_registry
+
     panel = build_welcome(
         session=session,
         paths=paths,
@@ -135,6 +172,7 @@ def session_init_payload(
         "root": panel.effective_root,
         "mascotLines": list(sprite_lines()),
         "mascotLabel": SPRITE_LABEL,
+        "models": get_registry(paths).list_for_ui(paths),
     }
 
 
@@ -144,17 +182,31 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(event_type, str):
         return []
 
+    def with_run_id(payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = event.get("run_id")
+        if isinstance(run_id, str) and run_id.strip():
+            payload["run_id"] = run_id.strip()
+        return payload
+
     if event_type == "turn.start":
-        out: list[dict[str, Any]] = [{"type": "turn.start"}]
+        out: list[dict[str, Any]] = [with_run_id({"type": "turn.start"})]
         if event.get("turnKey") is not None:
             out[0]["turnKey"] = event["turnKey"]
-        out.append({"type": "status.working", "active": True})
+        out.append(with_run_id({"type": "status.working", "active": True}))
         return out
+
+    if event_type == "execution.state":
+        state = str(event.get("state", "")).strip()
+        if state in {"queued", "running", "stopping"}:
+            return [dict(event), with_run_id({"type": "status.working", "active": True})]
+        if state in {"settled", "paused", "failed"}:
+            return [dict(event), with_run_id({"type": "status.working", "active": False})]
+        return []
 
     if event_type == "turn.end":
         return [
-            {"type": "tool.clear"},
-            {"type": "status.working", "active": False},
+            with_run_id({"type": "tool.clear"}),
+            with_run_id({"type": "status.working", "active": False}),
         ]
 
     if event_type == "confirm.request":
@@ -163,12 +215,14 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
         if not request_id or not preview:
             return []
         return [
-            {
-                "type": "confirm.request",
-                "request_id": request_id,
-                "preview": preview,
-                "allow_approve_all": bool(event.get("allow_approve_all", False)),
-            }
+            with_run_id(
+                {
+                    "type": "confirm.request",
+                    "request_id": request_id,
+                    "preview": preview,
+                    "allow_approve_all": bool(event.get("allow_approve_all", False)),
+                }
+            )
         ]
 
     if event_type == "confirm.done":
@@ -176,11 +230,13 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
         if not request_id:
             return []
         return [
-            {
-                "type": "confirm.done",
-                "request_id": request_id,
-                "choice": str(event.get("choice", "n")),
-            }
+            with_run_id(
+                {
+                    "type": "confirm.done",
+                    "request_id": request_id,
+                    "choice": str(event.get("choice", "n")),
+                }
+            )
         ]
 
     if event_type == "transcript.clear":
@@ -193,21 +249,21 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         if level == "warn" and not text.startswith("⚠"):
             text = f"⚠ {text}"
-        return [{"type": "notice", "text": text}]
+        return [with_run_id({"type": "notice", "text": text})]
 
     if event_type == "assistant.delta":
-        return [{"type": "assistant.delta", "text": str(event.get("text", ""))}]
+        return [with_run_id({"type": "assistant.delta", "text": str(event.get("text", ""))})]
 
     if event_type == "assistant.done":
-        return [{"type": "assistant.done", "text": str(event.get("text", ""))}]
+        return [with_run_id({"type": "assistant.done", "text": str(event.get("text", ""))})]
 
     if event_type == "reasoning.delta":
         if not reasoning_enabled():
             return []
-        return [{"type": "reasoning.delta", "text": str(event.get("text", ""))}]
+        return [with_run_id({"type": "reasoning.delta", "text": str(event.get("text", ""))})]
 
     if event_type == "tool.end":
-        return [{"type": "tool.clear"}]
+        return [with_run_id({"type": "tool.clear"})]
 
     if event_type == "tool.progress":
         text = str(event.get("text", "")).strip()
@@ -215,21 +271,21 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
         if not text:
             return []
         label = f"{tool} · {text}" if tool else text
-        return [{"type": "activity.update", "text": label}]
+        return [with_run_id({"type": "activity.update", "text": label})]
 
     if event_type == "activity.update":
         text = str(event.get("text", "")).strip()
-        return [{"type": "activity.update", "text": text}] if text else []
+        return [with_run_id({"type": "activity.update", "text": text})] if text else []
 
     if event_type == "llm.pending":
-        return [{"type": "activity.update", "text": "等待模型响应…"}]
+        return [with_run_id({"type": "activity.update", "text": "等待模型响应…"})]
 
     if event_type == "tool.start":
         tool = str(event.get("tool", "tool"))
         return [
-            {"type": "tool.active", "name": tool},
-            {"type": "activity.update", "text": f"{tool} · 执行中…"},
-            {"type": "status.working", "active": True},
+            with_run_id({"type": "tool.active", "name": tool}),
+            with_run_id({"type": "activity.update", "text": f"{tool} · 执行中…"}),
+            with_run_id({"type": "status.working", "active": True}),
         ]
 
     if event_type == "terminal.plan.state":
@@ -237,7 +293,7 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
 
         mode = str(event.get("mode", "")).strip()
         if mode.casefold() in {"", "cleared"}:
-            return [{"type": "plan.state", "status": ""}]
+            return [with_run_id({"type": "plan.state", "status": ""})]
         status = plan_status_segment(
             mode=mode,
             model=str(event.get("model", "")),
@@ -259,15 +315,15 @@ def translate_agent_event_to_ink(event: dict[str, Any]) -> list[dict[str, Any]]:
         }
         if event.get("degraded"):
             payload["degraded"] = True
-        return [payload]
+        return [with_run_id(payload)]
 
     if event_type == "notice":
         text = str(event.get("text", "")).strip()
-        return [{"type": "notice", "text": text}] if text else []
+        return [with_run_id({"type": "notice", "text": text})] if text else []
 
     if event_type == "error":
         text = str(event.get("message", "")).strip()
-        return [{"type": "notice", "text": text}] if text else []
+        return [{"type": "notice", "level": "error", "text": text}] if text else []
 
     return []
 
@@ -285,6 +341,8 @@ class TerminalInkBridge:
     _event_server: socket.socket | None = field(default=None, repr=False)
     _event_conn: socket.socket | None = field(default=None, repr=False)
     _event_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _cancel_requested: threading.Event = field(default_factory=threading.Event, repr=False)
+    cancel_listener: Callable[[], None] | None = field(default=None, repr=False)
 
     @classmethod
     def start(cls, paths: AgentPaths) -> TerminalInkBridge:
@@ -309,19 +367,26 @@ class TerminalInkBridge:
         env.setdefault("FORCE_COLOR", "3")
         env.setdefault("COLORTERM", "truecolor")
 
-        bridge.process = subprocess.Popen(
-            bridge._argv,
-            env=env,
-            stdin=None,
-            stdout=subprocess.PIPE,
-            # Ink renders the full-screen UI to stderr — must inherit the TTY, not a pipe.
-            stderr=None,
-            bufsize=1,
-            text=True,
-            encoding="utf-8",
-        )
+        try:
+            bridge.process = subprocess.Popen(
+                bridge._argv,
+                env=env,
+                stdin=None,
+                stdout=subprocess.PIPE,
+                # Ink renders the full-screen UI to stderr — must inherit the TTY, not a pipe.
+                stderr=None,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                start_new_session=os.name != "nt",
+            )
+        except BaseException:
+            bridge.close()
+            raise
         if bridge.process.stdout is None:
+            bridge.close()
             raise RuntimeError("Ink child stdout pipe unavailable")
+        bridge._stdout = bridge.process.stdout
 
         accept_error: list[BaseException] = []
 
@@ -346,16 +411,17 @@ class TerminalInkBridge:
             time.sleep(0.05)
         accept_thread.join(timeout=0.2)
         if accept_error:
+            bridge.close()
             raise RuntimeError(f"Ink event socket accept failed: {accept_error[0]}") from accept_error[0]
         if bridge._event_conn is None:
             proc = bridge.process
             code = proc.poll() if proc is not None else None
+            bridge.close()
             raise RuntimeError(
                 f"Ink child did not connect to event socket"
                 + (f" (exit {code})" if code is not None else "")
             )
 
-        bridge._stdout = bridge.process.stdout
         bridge._reader = threading.Thread(
             target=bridge._read_inputs,
             name="terminal-ink-input",
@@ -376,6 +442,12 @@ class TerminalInkBridge:
                     continue
                 parsed = self._parse_input(message)
                 if parsed is not None:
+                    if isinstance(parsed, InkCancelRequest):
+                        self._cancel_requested.set()
+                        listener = self.cancel_listener
+                        if listener is not None:
+                            listener()
+                            continue
                     self._inputs.put(parsed)
         finally:
             self._inputs.put(None)
@@ -402,17 +474,41 @@ class TerminalInkBridge:
         return None
 
     def next_input(self, timeout: float | None = None) -> InkInput | None:
+        poll_seconds = 0.25 if timeout is None else timeout
+        while True:
+            try:
+                return self._inputs.get(timeout=poll_seconds)
+            except KeyboardInterrupt:
+                self._inputs.put(None)
+                return None
+            except queue.Empty:
+                if self._ink_child_exited():
+                    self.signal_shutdown()
+                    return None
+                if timeout is not None:
+                    return None
+
+    def _ink_child_exited(self) -> bool:
+        proc = self.process
+        return proc is not None and proc.poll() is not None
+
+    def signal_shutdown(self) -> None:
+        """Unblock :meth:`next_input` waiters during console close."""
         try:
-            return self._inputs.get(timeout=timeout)
-        except KeyboardInterrupt:
-            self._inputs.put(None)
-            return None
-        except queue.Empty:
-            return None
+            self._inputs.put_nowait(None)
+        except queue.Full:
+            pass
+
+    def clear_cancel_request(self) -> None:
+        self._cancel_requested.clear()
 
     def wait_confirm(self, request_id: str, allow_approve_all: bool) -> str:
         while True:
-            message = self.next_input()
+            if self._cancel_requested.is_set():
+                self._cancel_requested.clear()
+                self.emit_confirm_done(request_id=request_id, choice="n")
+                return "n"
+            message = self.next_input(timeout=0.1)
             if message is None:
                 return "n"
             if not isinstance(message, InkConfirmResponse):
@@ -484,6 +580,7 @@ class TerminalInkBridge:
         self.write_event({"type": "transcript.clear"})
 
     def close(self) -> None:
+        self.signal_shutdown()
         if self._event_conn is not None:
             try:
                 self._event_conn.shutdown(socket.SHUT_RDWR)
@@ -500,18 +597,32 @@ class TerminalInkBridge:
             except OSError:
                 pass
             self._event_server = None
-        if self._stdout is not None:
+        stdout = self._stdout
+        reader = self._reader
+        process = self.process
+        self._stdout = None
+        self._reader = None
+        self.process = None
+        if process is not None:
+            _terminate_process_tree(process)
             try:
-                self._stdout.close()
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+        if reader is not None and reader.is_alive():
+            reader.join(timeout=1)
+        if stdout is not None and (reader is None or not reader.is_alive()):
+            try:
+                stdout.close()
             except OSError:
                 pass
-            self._stdout = None
-        if self.process is not None:
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-            self.process = None
 
 
 @dataclass
@@ -520,6 +631,7 @@ class TerminalInkEventSink:
 
     bridge: TerminalInkBridge
     _pending_user_text: str = ""
+    _active_run_id: str | None = field(default=None, repr=False)
     status_listener: Callable[[str], None] | None = field(default=None, repr=False)
 
     def set_pending_user_text(self, text: str) -> None:
@@ -527,6 +639,26 @@ class TerminalInkEventSink:
 
     def emit(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
+        scoped_event = dict(event)
+        event_run_id = scoped_event.get("run_id")
+        if isinstance(event_run_id, str) and event_run_id.strip():
+            self._active_run_id = event_run_id.strip()
+        elif self._active_run_id and event_type in {
+            "turn.start",
+            "turn.end",
+            "assistant.delta",
+            "assistant.done",
+            "reasoning.delta",
+            "activity.update",
+            "llm.pending",
+            "tool.start",
+            "tool.end",
+            "tool.progress",
+            "status.working",
+            "tool.clear",
+        }:
+            scoped_event["run_id"] = self._active_run_id
+
         if event_type == "turn.start":
             pending = self._pending_user_text.strip()
             if pending:
@@ -537,7 +669,7 @@ class TerminalInkEventSink:
         elif event_type == "turn.end" and self.status_listener is not None:
             self.status_listener("idle")
 
-        for ink_event in translate_agent_event_to_ink(event):
+        for ink_event in translate_agent_event_to_ink(scoped_event):
             self.bridge.write_event(ink_event)
 
     def on_executor_event(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -600,6 +732,17 @@ class TerminalInkConsole:
     def emit_meta_notice(self, text: str) -> None:
         self.output_fn(text)
 
+    def bind_context(self, session: Any, paths: AgentPaths, scope_fields: Any) -> None:
+        """Refresh Ink session metadata after a slash command changes context."""
+        self.session = session
+        self.paths = paths
+        self.scope_fields = scope_fields
+        self.bridge.emit_session_init(
+            session=session,
+            scope_fields=scope_fields,
+            resume=True,
+        )
+
     def wire_repl(self, repl: Any) -> None:
         repl.stream_handlers = self.sink.stream_handlers()
         repl.agent.stream_handlers = repl.stream_handlers
@@ -628,6 +771,7 @@ class TerminalInkConsole:
         return self.bridge.wait_confirm(request_id, allow_approve_all)
 
     def begin_user_turn(self, text: str) -> None:
+        self.bridge.clear_cancel_request()
         self.sink.set_pending_user_text(text)
 
     def clear_transcript(self) -> None:

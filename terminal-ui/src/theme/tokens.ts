@@ -47,6 +47,8 @@ export const tokens = {
     muted: '#71717a',
     model: '#e4e4e7',
     working: '#fbbf24',
+    failed: '#f87171',
+    cancelled: '#a1a1aa',
     toolName: '#c084fc',
     root: '#38bdf8',
     sep: '#3f3f46',

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass
@@ -17,30 +18,65 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
+from project_manifest import (
+    DEFAULT_PROJECT_TEMPLATE,
+    LIGHT_SCAFFOLD_ARTIFACTS,
+    STANDARD_ARTIFACTS,
+    is_light_project_template,
+    lint_project_content,
+    normalize_project_template,
+    project_template_of,
+)
 
 ShellId = Literal["grow", "daily", "govern", "project"]
 PlanStatus = Literal["", "draft", "confirmed", "plan_dirty"]
+ProjectWorkflowStage = Literal[
+    "requirements",
+    "documentation",
+    "design",
+    "implementation",
+    "verification",
+    "release",
+]
 ProjectDeliveryProfile = Literal["solo", "ritual"]
 DEFAULT_PROJECT_DELIVERY_PROFILE: ProjectDeliveryProfile = "solo"
 VALID_PROJECT_DELIVERY_PROFILES = frozenset({"solo", "ritual"})
 VALID_SHELLS = frozenset({"grow", "daily", "govern", "project"})
 VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 
-PROJECT_ARTIFACTS = frozenset({"PROJECT.md", "MAP.md", "TASKS.md"})
-PLAN_DOMAIN_FILES = frozenset({"TASKS.md", "MAP.md", "PROJECT.md", "ENV.md"})
+STANDARD_PROJECT_ARTIFACTS = STANDARD_ARTIFACTS
+PROJECT_ARTIFACTS = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
+PLAN_DOMAIN_FILES = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
 PLAN_DOMAIN_WRITE_BLOCK_MSG = (
-    "计划域文件须通过 plan_partner 提案 + 侧栏采纳；"
-    "或使用 report_progress 勾选已完成任务。"
+    "不能直接修改该计划文件。"
+    "非狂奔时请用侧栏「方案搭档」提案并采纳；"
+    "狂奔时请确认当前验收项是否允许修改该文件。"
 )
 TASKS_ARCHIVE_NAME = "TASKS.archive.md"
 TASKS_INJECTION_OPEN_CAP = 20
+CORE_PROJECT_ARTIFACTS = ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
 CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
 _TEMPLATE_DIRNAME = "_template"
+_TEMPLATE_FILES = (*STANDARD_PROJECT_ARTIFACTS, "MAP.md")
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
 _TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
 _TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
+_TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
+# Priority/label prefixes are allowed before the task id (for example
+# ``[P1] T-1007``), while descriptive plan lines such as ``plan: T-1007``
+# remain non-formal because the task id is not the leading token.
+_FORMAL_TASK_LEAD_RE = re.compile(
+    r"^(?:\[[^\]\r\n]+\]\s+)*(T-\d+(?:-\d+)*)\b",
+    re.IGNORECASE,
+)
+_VERIFY_ID_INLINE_RE = re.compile(r"\bV-\d+(?:-\d+)*\b", re.IGNORECASE)
 _TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
+_TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence", "depends_on")
+_TASK_METADATA_FIELD_RE = re.compile(
+    r"(?<![\w-])(req|ac|design|verify|evidence|depends_on)\s*:",
+    re.IGNORECASE,
+)
 _CLOSED_SECTION_TITLE_RE = re.compile(
     r"^(?:[\d.]+\s*)?(已关闭|归档|archive|closed|archives)\b",
     re.IGNORECASE,
@@ -53,6 +89,17 @@ _CODING_TOOLS = frozenset(
     {"run_python", "run_command", "run_tests", "run_demo", "patch_file"}
 )
 _WRITE_TOOLS = frozenset({"write_text", "append_text", "copy_move", "move_to_trash"})
+# verification / release：只读验收执行，不算「写业务代码」（Phase 59 · UI-5966）
+_VERIFY_STAGE_EXEC_TOOLS = frozenset(
+    {
+        "run_command",
+        "run_tests",
+        "run_python",
+        "run_demo",
+        "run_project_tests",
+        "run_quality",
+    }
+)
 
 
 class ProjectModeError(Exception):
@@ -73,11 +120,244 @@ class TaskStats:
         return self.total > 0 and self.open_count == 0
 
 
+EXECUTION_STAGES = ("requirements", "documentation", "design", "implementation", "verification", "release")
+
+
+def classify_stage_documents(
+    manifest: dict[str, Any] | None,
+    *,
+    stage: str,
+    blockers: list[str] | tuple[str, ...] = (),
+) -> dict[str, list[str]]:
+    """Separate affected and future documents from current stage blockers."""
+    if not manifest or stage not in EXECUTION_STAGES:
+        return {"affected": [], "deferred": []}
+    stage_index = EXECUTION_STAGES.index(stage)
+    blocker_paths = {str(item) for item in blockers if str(item).endswith(".md")}
+    affected: list[str] = []
+    deferred: list[str] = []
+    for raw in manifest.get("artifacts", []):
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path") or "")
+        if not path or path in blocker_paths:
+            continue
+        status = str(raw.get("status") or "current")
+        required_for = {
+            str(item) for item in (raw.get("required_for") or []) if str(item) in EXECUTION_STAGES
+        }
+        if status in {"stale_soft", "evidence_stale"}:
+            affected.append(path)
+            continue
+        if (
+            raw.get("completeness") != "complete"
+            and stage not in required_for
+            and any(EXECUTION_STAGES.index(item) > stage_index for item in required_for)
+        ):
+            deferred.append(path)
+    return {
+        "affected": sorted(set(affected)),
+        "deferred": sorted(set(deferred)),
+    }
+
+
+def _compute_execution_stage(
+    *,
+    project_id: str,
+    plan_status: str,
+    task_stats: TaskStats,
+    manifest: dict[str, Any] | None,
+    project_root: Path | str | None = None,
+    review_verdict: str | None = None,
+    review_blockers_count: int = 0,
+    workflow_stage: str = "requirements",
+) -> dict[str, Any]:
+    """Compute the authoritative workflow stage from disk-backed inputs."""
+    if not project_id:
+        return {"stage": "requirements", "reason": "no_project", "blockers": []}
+    if workflow_stage == "documentation":
+        return {
+            "stage": "documentation",
+            "reason": "documentation_in_progress",
+            "blockers": list(CORE_PROJECT_ARTIFACTS),
+        }
+    if manifest is None:
+        return {
+            "stage": "requirements",
+            "reason": "manifest_unavailable",
+            "blockers": [".plan-agent/manifest.json"],
+        }
+
+    artifacts = {
+        str(item.get("path")): item
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("path")
+    }
+    light = is_light_project_template(manifest)
+    l2_stale = [
+        path
+        for path, item in artifacts.items()
+        if item.get("status") == "stale"
+    ]
+    if l2_stale and not light:
+        return {
+            "stage": "requirements",
+            "reason": "l2_stale",
+            "blockers": sorted(l2_stale),
+        }
+    if workflow_stage == "requirements" and plan_status != "confirmed":
+        return {
+            "stage": "requirements",
+            "reason": "plan_not_confirmed",
+            "blockers": ["plan_status"],
+        }
+
+    if not light:
+        scope = artifacts.get("SCOPE.md") or {}
+        scope_ids = set(scope.get("ids") or [])
+        scope_blockers: list[str] = []
+        if scope.get("status") != "current":
+            scope_blockers.append("SCOPE.md")
+        if not any(str(value).startswith("REQ-") for value in scope_ids):
+            scope_blockers.append("REQ")
+        if not any(str(value).startswith("AC-") for value in scope_ids):
+            scope_blockers.append("AC")
+        if scope_blockers:
+            return {
+                "stage": "requirements",
+                "reason": "scope_incomplete",
+                "blockers": scope_blockers,
+            }
+    if task_stats.total == 0:
+        return {
+            "stage": "requirements",
+            "reason": "no_executable_tasks",
+            "blockers": ["TASKS.md"],
+        }
+
+    if not light:
+        design_blockers = [
+            path
+            for path in ("DESIGN.md", "TECH-DESIGN.md")
+            if (artifacts.get(path) or {}).get("status") != "current"
+        ]
+        if design_blockers:
+            return {
+                "stage": "design",
+                "reason": "design_incomplete",
+                "blockers": design_blockers,
+            }
+    change_scope = str(manifest.get("change_scope") or manifest.get("project", {}).get("tier") or "normal")
+    content_lint: dict[str, Any] | None = None
+    if not light:
+        if project_root is not None and change_scope != "small":
+            content_lint = lint_project_content(
+                project_root,
+                tier=str(manifest.get("project", {}).get("tier") or "normal"),
+                change_scope=change_scope,
+            )
+        elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
+            content_lint = manifest["content_lint"]
+    if not task_stats.all_done:
+        if task_stats.done == 0:
+            return {"stage": "design", "reason": "tasks_not_started", "blockers": [], "content_lint": content_lint}
+        return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": [], "content_lint": content_lint}
+
+    verification_names = ("VERIFY.md",) if light else ("VERIFY.md", "RELEASE.md")
+    verification_blockers = [
+        path
+        for path in verification_names
+        if (artifacts.get(path) or {}).get("status") != "current"
+    ]
+    if verification_blockers:
+        return {
+            "stage": "verification",
+            "reason": "verification_artifact_stale",
+            "blockers": verification_blockers,
+        }
+    verdict = str(review_verdict or "").strip().casefold()
+    if verdict != "pass" or int(review_blockers_count or 0) > 0:
+        blockers = ["review"]
+        if int(review_blockers_count or 0) > 0:
+            blockers.append("review_blockers")
+        return {"stage": "verification", "reason": "verification_pending", "blockers": blockers}
+    return {"stage": "release", "reason": "verification_passed", "blockers": []}
+
+
+def compute_execution_stage(
+    *,
+    project_id: str,
+    plan_status: str,
+    task_stats: TaskStats,
+    manifest: dict[str, Any] | None,
+    project_root: Path | str | None = None,
+    review_verdict: str | None = None,
+    review_blockers_count: int = 0,
+    workflow_stage: str = "requirements",
+) -> dict[str, Any]:
+    """Return the backend-authoritative stage snapshot consumed by every UI surface.
+
+    ``_compute_execution_stage`` keeps the existing gate decisions. This wrapper
+    adds the shared status vocabulary so a warning or in-progress document batch
+    cannot be mistaken for an execution blocker.
+    """
+    result = _compute_execution_stage(
+        project_id=project_id,
+        plan_status=plan_status,
+        task_stats=task_stats,
+        manifest=manifest,
+        project_root=project_root,
+        review_verdict=review_verdict,
+        review_blockers_count=review_blockers_count,
+        workflow_stage=workflow_stage,
+    )
+    blockers = [str(item) for item in result.get("blockers", []) if str(item).strip()]
+    warnings = [str(item) for item in result.get("warnings", []) if str(item).strip()]
+    missing = [str(item) for item in result.get("missing", blockers) if str(item).strip()]
+
+    if result.get("stage") == "documentation":
+        artifacts = {
+            str(item.get("path")): item
+            for item in (manifest or {}).get("artifacts", [])
+            if isinstance(item, dict) and item.get("path")
+        }
+        missing = [
+            path
+            for path in CORE_PROJECT_ARTIFACTS
+            if (artifacts.get(path) or {}).get("status") != "current"
+        ]
+        blockers = []
+        warnings.extend(f"文档整理中：{path}" for path in missing)
+
+    content_lint = result.get("content_lint")
+    if isinstance(content_lint, dict):
+        warnings.extend(
+            f"文档待完善：{item}"
+            for item in (content_lint.get("missing") or [])
+            if str(item).strip()
+        )
+    warnings = sorted(set(warnings))
+    return {
+        **result,
+        "status": "blocked" if blockers else (
+            "in_progress" if result.get("stage") == "documentation" else "ready"
+        ),
+        "blockers": sorted(set(blockers)),
+        "missing": sorted(set(missing)),
+        "warnings": warnings,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class AcceptanceSpec:
     display: str
-    script_rel: str
+    script_rel: str = ""
     expected_exit_code: int = 0
+    argv: tuple[str, ...] = ()
+
+    @property
+    def is_python(self) -> bool:
+        return bool((self.script_rel or "").strip())
 
 
 def utc_now_iso() -> str:
@@ -125,14 +405,96 @@ def list_projects(paths: AgentPaths) -> list[str]:
 
 def ensure_template(paths: AgentPaths) -> Path:
     target = template_dir(paths)
-    if target.is_dir() and (target / "TASKS.md").is_file():
-        return target
     target.mkdir(parents=True, exist_ok=True)
-    for name in sorted(PROJECT_ARTIFACTS):
+    for name in _TEMPLATE_FILES:
         dest = target / name
-        if not dest.is_file():
-            dest.write_text(f"# template {name}\n", encoding="utf-8")
+        existing = ""
+        if dest.is_file():
+            try:
+                existing = dest.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+        if not existing.strip() or existing.strip() == f"# template {name}":
+            dest.write_text(_template_body(name, "template"), encoding="utf-8")
     return target
+
+
+def _template_body(name: str, project_id: str) -> str:
+    bodies = {
+        "PROJECT.md": (
+            "# {{project_id}} · 项目章程\n\n"
+            "## 目标\n\n- 待填写项目目标与用户价值。\n\n"
+            "## 用户与场景\n\n- 待填写主要用户和使用场景。\n\n"
+            "## 范围摘要\n\n- 第一轮范围见 `SCOPE.md`。\n\n"
+            "## 非目标\n\n- 待填写本阶段明确不做的内容。\n"
+        ),
+        "SCOPE.md": (
+            "# {{project_id}} · 范围与验收\n\n"
+            "## REQ-001\n\n- 待填写用户故事、范围和边界。\n\n"
+            "## AC-001\n\n- 待填写可验证的验收标准。\n\n"
+            "## 边界\n\n- 待填写约束、非目标和风险。\n"
+        ),
+        "DESIGN.md": (
+            "# {{project_id}} · UX 设计\n\n"
+            "## UX-001\n\n- 待填写页面流程、交互状态和异常路径。\n"
+        ),
+        "TECH-DESIGN.md": (
+            "# {{project_id}} · 技术设计\n\n"
+            "## TD-001\n\n- 待填写架构、数据模型、API、依赖和技术风险。\n"
+        ),
+        "TASKS.md": (
+            "# {{project_id}} · 执行队列\n\n"
+            "- [ ] T-001 完成第一项可交付工作\n"
+            "  req: REQ-001\n"
+            "  ac: AC-001\n"
+            "  design: UX-001, TD-001\n"
+            "  verify: V-001\n"
+            "  evidence: run_project_tests\n"
+        ),
+        "VERIFY.md": (
+            "# {{project_id}} · 验证矩阵\n\n"
+            "| V-001 | AC-001 | 待填写测试/Gate | 待填写 L1 证据 |\n"
+            "|---|---|---|---|\n"
+        ),
+        "RELEASE.md": (
+            "# {{project_id}} · 发布\n\n"
+            "## REL-001\n\n- 待填写发布、迁移、回滚和人工验收清单。\n"
+        ),
+        "MAP.md": (
+            "# {{project_id}} · 代码地图\n\n"
+            "## 入口\n\n- 待补充源码入口和模块指针。\n"
+        ),
+    }
+    return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
+
+
+def _light_template_body(name: str, project_id: str) -> str:
+    bodies = {
+        "PROJECT.md": (
+            "# {{project_id}} · 项目\n\n"
+            "## 目标\n\n- 待填写本轮要交付的结果。\n\n"
+            "## 验证\n\n- 对口证据见 `VERIFY.md`；勾选 TASKS 前须留下验证记录。\n"
+        ),
+        "TASKS.md": (
+            "# {{project_id}} · 任务\n\n"
+            "- [ ] T-001 完成第一项可交付工作\n"
+            "  verify: V-001\n"
+            "  evidence: run_project_tests\n"
+        ),
+        "VERIFY.md": (
+            "# {{project_id}} · 验证\n\n"
+            "## V-001 · T-001\n\n"
+            "- 方法：运行与 T-001 对口的测试或验收命令。\n"
+            "- 证据：待执行。\n"
+        ),
+    }
+    return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
+
+
+def _copy_template_file(src: Path, dest: Path, project_id: str) -> None:
+    body = src.read_text(encoding="utf-8")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(body.replace("{{project_id}}", project_id), encoding="utf-8")
 
 
 def create_project(
@@ -140,35 +502,402 @@ def create_project(
     project_id: str,
     *,
     template: str | None = None,
+    project_template: str | None = None,
 ) -> Path:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
     if dest.exists() and any(dest.iterdir()):
         raise ProjectModeError(f"project already exists: workspace/{pid}")
-    src = ensure_template(paths)
+    recipe_id = (template or "").strip()
+    selected_template = normalize_project_template(project_template)
+    if recipe_id in {"light", "standard", "lite", "full"}:
+        selected_template = normalize_project_template(recipe_id)
+        recipe_id = ""
     dest.mkdir(parents=True, exist_ok=True)
-    for name in (*PROJECT_ARTIFACTS, TASKS_ARCHIVE_NAME):
-        src_file = src / name
-        if src_file.is_file():
-            shutil.copy2(src_file, dest / name)
-        elif name in PROJECT_ARTIFACTS:
-            (dest / name).write_text(f"# {pid} · {name}\n", encoding="utf-8")
+    if selected_template == "light":
+        for name in LIGHT_SCAFFOLD_ARTIFACTS:
+            (dest / name).write_text(_light_template_body(name, pid), encoding="utf-8")
+    else:
+        src = ensure_template(paths)
+        for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+            src_file = src / name
+            if src_file.is_file():
+                _copy_template_file(src_file, dest / name, pid)
+            elif name in _TEMPLATE_FILES:
+                (dest / name).write_text(_template_body(name, pid), encoding="utf-8")
     try:
         from project_env import ensure_project_env
 
         ensure_project_env(paths, pid)
     except Exception:
         pass
-    template_id = (template or "").strip()
-    if template_id:
+    if recipe_id:
         from scaffold_recipes import run_scaffold_after_create
 
-        result = run_scaffold_after_create(paths, pid, template_id)
+        result = run_scaffold_after_create(paths, pid, recipe_id)
         if not result.get("ok"):
             failed = result.get("failed_step") or "unknown"
             err = result.get("error") or f"scaffold step {failed} failed"
-            raise ProjectModeError(f"scaffold {template_id!r} failed: {err}")
+            raise ProjectModeError(f"scaffold {recipe_id!r} failed: {err}")
+    from project_manifest import bootstrap_manifest
+
+    bootstrap_manifest(dest, pid, project_template=selected_template)
     return dest
+
+
+def read_project_template(paths: AgentPaths, project_id: str) -> str:
+    """Return the durable project artifact template (``light`` | ``standard``)."""
+    from project_manifest import load_manifest, manifest_path
+
+    try:
+        pid = normalize_project_id(project_id)
+    except ProjectModeError:
+        return DEFAULT_PROJECT_TEMPLATE
+    try:
+        manifest = load_manifest(manifest_path(project_dir(paths, pid)))
+    except Exception:
+        return DEFAULT_PROJECT_TEMPLATE
+    return project_template_of(manifest)
+
+
+def upgrade_project_to_standard(paths: AgentPaths, project_id: str) -> dict[str, Any]:
+    """Backfill missing seven-file artifacts and re-enable standard L2 gates."""
+    from project_manifest import build_manifest, manifest_path, save_manifest
+
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+    previous = read_project_template(paths, pid)
+    created: list[str] = []
+    src = ensure_template(paths)
+    for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+        dest = root / name
+        existing = ""
+        if dest.is_file():
+            try:
+                existing = dest.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+        if existing.strip():
+            continue
+        src_file = src / name
+        if src_file.is_file():
+            _copy_template_file(src_file, dest, pid)
+        elif name in _TEMPLATE_FILES:
+            dest.write_text(_template_body(name, pid), encoding="utf-8")
+        else:
+            continue
+        created.append(name)
+    try:
+        from project_env import ensure_project_env
+
+        ensure_project_env(paths, pid)
+    except Exception:
+        pass
+    manifest = build_manifest(root, pid, project_template="standard")
+    save_manifest(manifest_path(root), manifest)
+    return {
+        "project_id": pid,
+        "previous_template": previous,
+        "template": "standard",
+        "created": created,
+        "already_standard": previous == "standard" and not created,
+    }
+
+
+def _is_template_document(name: str, project_id: str, text: str) -> bool:
+    normalized = text.strip()
+    return (
+        not normalized
+        or normalized == f"# template {name}"
+        or normalized == _template_body(name, project_id).strip()
+        or normalized == _template_body(name, "template").strip()
+    )
+
+
+def organize_project_documents(paths: AgentPaths, project_id: str) -> dict[str, Any]:
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+
+    documents = {
+        "PROJECT.md": (
+            f"# {pid} · 项目章程\n\n"
+            "## 目标\n\n"
+            "说明要解决的问题、目标用户和可衡量结果。\n\n"
+            "## 范围\n\n"
+            "- REQ-001：本轮要交付的用户价值。\n"
+            "- AC-001：用户可以通过明确步骤验证结果。\n\n"
+            "## 非目标\n\n"
+            "- 本轮不包含未在范围中确认的功能、重构或基础设施。\n\n"
+            "## 待确认问题\n\n"
+            "- 用户、数据、合规和发布约束待确认。\n"
+        ),
+        "DESIGN.md": (
+            f"# {pid} · 需求与设计\n\n"
+            "## 用户流程\n\n"
+            "- UX-001：描述主流程、关键状态、异常路径和空状态。\n\n"
+            "## 技术方案\n\n"
+            "- TD-001：描述模块边界、数据流、接口、依赖和失败处理。\n\n"
+            "## 关键决策\n\n"
+            "- ADR-001：记录方案选择、替代方案和取舍。\n\n"
+            "## 设计验收\n\n"
+            "- AC-001：设计能够支撑一个小任务独立实现和验证。\n"
+        ),
+        "TASKS.md": (
+            f"# {pid} · 执行队列\n\n"
+            "- [ ] T-001 实现第一条可交付用户流程\n"
+            "  req: REQ-001\n"
+            "  ac: AC-001\n"
+            "  design: UX-001, TD-001\n"
+            "  verify: V-001\n"
+            "  evidence: 按 VERIFY.md 执行对口验证\n"
+        ),
+        "VERIFY.md": (
+            f"# {pid} · 验证计划与证据\n\n"
+            "## V-001 · 第一条用户流程\n\n"
+            "- 对应验收：AC-001\n"
+            "- 验证方法：运行与 T-001 对口的测试或人工验收步骤。\n"
+            "- 预期结果：主流程、异常路径和数据结果符合 DESIGN.md。\n"
+            "- 实际证据：待执行。\n\n"
+            "## 发布检查\n\n"
+            "- 测试结果、迁移/回滚影响和人工发布确认：待补充。\n"
+        ),
+    }
+    generated: list[str] = []
+    preserved: list[str] = []
+    for name, content in documents.items():
+        path = root / name
+        existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if _is_template_document(name, pid, existing):
+            path.write_text(content, encoding="utf-8")
+            generated.append(name)
+        else:
+            preserved.append(name)
+    return {
+        "project_id": pid,
+        "generated": generated,
+        "preserved": preserved,
+        "artifacts": list(CORE_PROJECT_ARTIFACTS),
+    }
+
+
+def documentation_ready_for_design(paths: AgentPaths, project_id: str) -> tuple[bool, list[str]]:
+    artifacts = read_project_artifacts(paths, project_id)
+    checks = {
+        "PROJECT.md": all(token in artifacts.get("PROJECT.md", "") for token in ("REQ-", "AC-")),
+        "DESIGN.md": all(token in artifacts.get("DESIGN.md", "") for token in ("UX-", "TD-")),
+        "TASKS.md": "T-" in artifacts.get("TASKS.md", "") and "- [ ]" in artifacts.get("TASKS.md", ""),
+        "VERIFY.md": all(token in artifacts.get("VERIFY.md", "") for token in ("V-", "AC-")),
+    }
+    return all(checks.values()), [name for name, ok in checks.items() if not ok]
+
+
+def _read_project_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError:
+        return ""
+
+
+def _first_stable_id(text: str, prefix: str, default: str) -> str:
+    match = re.search(rf"\b{re.escape(prefix)}-\d{{3,}}\b", text, re.IGNORECASE)
+    return match.group(0).upper() if match else default
+
+
+def _migration_excerpt(text: str, limit: int = 8000) -> str:
+    excerpt = text.strip()
+    if len(excerpt) > limit:
+        return excerpt[:limit] + "\n…（迁移摘录已截断）"
+    return excerpt or "（旧项目未提供此内容，待补充）"
+
+
+def _write_migration_file(path: Path, body: str) -> bool:
+    if path.is_file() and _read_project_text(path).strip():
+        return False
+    path.write_text(body.rstrip() + "\n", encoding="utf-8")
+    return True
+
+
+def migrate_legacy_project(paths: AgentPaths, project_id: str) -> bool:
+    """Migrate a pre-58b project to the seven-artifact baseline once."""
+    pid = normalize_project_id(project_id)
+    root = project_dir(paths, pid)
+    if not root.is_dir():
+        raise ProjectModeError(f"project not found: workspace/{pid}")
+    from project_manifest import manifest_path
+
+    if manifest_path(root).is_file():
+        return False
+
+    project_text = _read_project_text(root / "PROJECT.md")
+    map_text = _read_project_text(root / "MAP.md")
+    env_text = _read_project_text(root / "ENV.md")
+    req_id = _first_stable_id(project_text, "REQ", "REQ-001")
+    ac_id = _first_stable_id(project_text, "AC", "AC-001")
+    changed = False
+    changed |= _write_migration_file(
+        root / "PROJECT.md",
+        _template_body("PROJECT.md", pid) + "\n## 迁移备注\n\n- 该项目由旧计划域迁移，原内容保持不变或待补充。\n",
+    )
+    changed |= _write_migration_file(
+        root / "SCOPE.md",
+        (
+            f"# {pid} · 范围与验收\n\n"
+            f"## {req_id}\n\n- 从旧 `PROJECT.md` 迁移的需求范围，待用户确认。\n\n"
+            f"## {ac_id}\n\n- 从旧项目验收内容迁移；缺失部分待补充为可验证条件。\n\n"
+            "## 边界\n\n- 旧项目边界从原计划域迁移，新增范围须重新规划。\n\n"
+            "## 旧 PROJECT.md 摘录\n\n"
+            f"{_migration_excerpt(project_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "DESIGN.md",
+        (
+            f"# {pid} · UX 设计\n\n## UX-001\n\n"
+            "- 从旧项目代码地图推断的设计入口；细节待确认。\n\n"
+            "## 旧 MAP.md 摘录\n\n"
+            f"{_migration_excerpt(map_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "TECH-DESIGN.md",
+        (
+            f"# {pid} · 技术设计\n\n## TD-001\n\n"
+            "- 从旧项目代码地图保留技术入口；架构、API 和风险待确认。\n\n"
+            "## 旧 MAP.md 摘录\n\n"
+            f"{_migration_excerpt(map_text)}\n"
+        ),
+    )
+    tasks_text = _read_project_text(root / "TASKS.md")
+    if not tasks_text.strip():
+        tasks_text = _template_body("TASKS.md", pid)
+    if not re.search(r"\breq\s*:", tasks_text, re.IGNORECASE):
+        association = (
+            f"  req: {req_id}\n  ac: {ac_id}\n  design: UX-001, TD-001\n"
+            "  verify: V-001\n  evidence: 待补充"
+        )
+        task_lines = tasks_text.splitlines()
+        task_index = next(
+            (index for index, line in enumerate(task_lines) if _TASK_CHECKBOX_RE.match(line)),
+            None,
+        )
+        if task_index is None:
+            tasks_text = tasks_text.rstrip() + "\n\n" + association + "\n"
+        else:
+            task_lines[task_index + 1 : task_index + 1] = association.splitlines()
+            tasks_text = "\n".join(task_lines) + "\n"
+        tasks_path = root / "TASKS.md"
+        tasks_path.write_text(tasks_text.rstrip() + "\n", encoding="utf-8")
+        changed = True
+    else:
+        changed |= _write_migration_file(root / "TASKS.md", tasks_text)
+    changed |= _write_migration_file(
+        root / "VERIFY.md",
+        (
+            f"# {pid} · 验证矩阵\n\n"
+            "| V-001 | "
+            f"{ac_id} | 旧项目验收与 ENV 质量命令 | 待重跑 L1 证据 |\n"
+            "|---|---|---|---|\n\n"
+            "## ENV.md 摘录\n\n"
+            f"{_migration_excerpt(env_text)}\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "RELEASE.md",
+        (
+            f"# {pid} · 发布\n\n## REL-001\n\n"
+            "- 迁移基线：发布前重跑 VERIFY 中的 L1 命令。\n"
+            "- 迁移/回滚：待根据项目技术设计补充。\n"
+            "- 人工验收：待用户确认。\n"
+        ),
+    )
+    changed |= _write_migration_file(
+        root / "MAP.md",
+        f"# {pid} · 代码地图\n\n## 入口\n\n{_migration_excerpt(map_text)}\n",
+    )
+    if not (root / "ENV.md").is_file():
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, pid)
+            changed = True
+        except Exception:
+            pass
+    from project_manifest import bootstrap_manifest
+
+    if not manifest_path(root).is_file():
+        bootstrap_manifest(root, pid, tier="normal", content_origin="migrated", change_scope="normal")
+    return changed
+
+
+def _empty_task_metadata() -> dict[str, list[str]]:
+    return {key: [] for key in _TASK_METADATA_KEYS}
+
+
+def _split_task_metadata_values(raw: str) -> list[str]:
+    values: list[str] = []
+    for item in re.split(r"[,，;；|]", raw):
+        value = item.strip().lstrip("- ").strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _collect_task_metadata(text: str, metadata: dict[str, list[str]]) -> None:
+    matches = list(_TASK_METADATA_FIELD_RE.finditer(text))
+    for index, match in enumerate(matches):
+        key = match.group(1).lower()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        raw = text[match.end() : end].strip().strip(";|,")
+        for value in _split_task_metadata_values(raw):
+            if value not in metadata[key]:
+                metadata[key].append(value)
+
+
+def parse_task_metadata(task_text: str) -> dict[str, list[str]]:
+    """Parse the five fixed association fields from one task or task block."""
+    metadata = _empty_task_metadata()
+    _collect_task_metadata(task_text, metadata)
+    return metadata
+
+
+def parse_tasks_metadata(tasks_text: str) -> list[dict[str, Any]]:
+    """Parse task checkboxes and their inline/indented artifact associations."""
+    parsed: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for line_number, line in enumerate((tasks_text or "").splitlines()):
+        task_match = _TASK_CHECKBOX_RE.match(line)
+        if task_match:
+            if current is not None:
+                parsed.append(current)
+            body = task_match.group(1).strip()
+            id_match = _TASK_FULL_ID_RE.search(body)
+            field_match = _TASK_METADATA_FIELD_RE.search(body)
+            description = body[: field_match.start() if field_match else len(body)].strip()
+            if id_match:
+                description = (description[: id_match.start()] + description[id_match.end() :]).strip(" -:;")
+            current = {
+                "line": line_number,
+                "id": id_match.group(0).upper() if id_match else None,
+                "text": description,
+                **_empty_task_metadata(),
+            }
+            _collect_task_metadata(body, current)
+            continue
+        if current is None:
+            continue
+        if line.startswith((" ", "\t")) and line.strip():
+            _collect_task_metadata(line, current)
+            continue
+        if line.strip().startswith("#") or line.strip():
+            parsed.append(current)
+            current = None
+    if current is not None:
+        parsed.append(current)
+    return parsed
 
 
 def read_task_stats(tasks_path: Path) -> TaskStats:
@@ -189,6 +918,18 @@ def read_task_stats(tasks_path: Path) -> TaskStats:
     )
     done = legacy_done + archive_done
     return TaskStats(done=done, total=done + open_count)
+
+
+def read_formal_task_stats(tasks_path: Path) -> TaskStats:
+    """Runaway scheduling stats: formal ``T-*`` tasks only."""
+    if not tasks_path.is_file():
+        return TaskStats(done=0, total=0)
+    text = tasks_path.read_text(encoding="utf-8")
+    archive_done = count_archive_entries(
+        tasks_path.parent / TASKS_ARCHIVE_NAME,
+        reason="done",
+    )
+    return formal_task_stats(text, archive_done=archive_done)
 
 
 def normalize_close_reason(reason: str) -> str:
@@ -241,7 +982,7 @@ def count_archive_entries(archive_path: Path, *, reason: str | None = None) -> i
         return 0
     try:
         text = archive_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return 0
     n = 0
     want = f"closed:{reason}" if reason else None
@@ -299,8 +1040,12 @@ def parse_archive_entry_line(line: str) -> dict[str, str] | None:
 def list_archive_entries(archive_path: Path) -> list[dict[str, str]]:
     if not archive_path.is_file():
         return []
+    try:
+        text = archive_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return []
     out: list[dict[str, str]] = []
-    for line in archive_path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         entry = parse_archive_entry_line(line)
         if entry:
             out.append(entry)
@@ -1136,6 +1881,122 @@ def plan_allows_code_writes(plan_status: str) -> bool:
     return plan_status == "confirmed"
 
 
+_DIRECT_IMPLEMENT_EXTRA_MARKERS = (
+    "直接实现",
+    "直接写代码",
+    "直接推进",
+    "不要只出计划",
+    "不要只给计划",
+    "不要再问我是否开始",
+    "不要问我是否开始",
+    "现在就实际",
+    "实际改文件",
+    "写出可运行代码",
+    "just implement",
+    "implement now",
+)
+
+_DIRECT_IMPLEMENT_BLOCKED_STAGES = frozenset(
+    {"documentation", "design", "verification", "release"}
+)
+VALID_PROJECT_ENTRIES = frozenset({"", "plan", "direct"})
+
+
+def normalize_project_entry(value: object) -> str:
+    """Persistable ordinary-mode entry: ``""`` | ``plan`` | ``direct``."""
+    text = str(value or "").strip()
+    return text if text in VALID_PROJECT_ENTRIES else ""
+
+
+def is_direct_implement_request(user_text: str) -> bool:
+    """True when the user explicitly wants code now, not another plan round."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    try:
+        from terminal_plan import is_skip_plan_turn
+
+        if is_skip_plan_turn(text):
+            return True
+    except Exception:
+        pass
+    lower = text.casefold()
+    return any(marker.casefold() in lower for marker in _DIRECT_IMPLEMENT_EXTRA_MARKERS)
+
+
+def ordinary_direct_implement_draft_allowed(session: object) -> bool:
+    """True when ordinary project draft may auto-enter coding (requirements only)."""
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return False
+    if bool(getattr(meta, "project_runaway_enabled", False)):
+        return False
+    if (getattr(meta, "active_shell", "") or "") != "project":
+        return False
+    if not (getattr(meta, "project_id", "") or "").strip():
+        return False
+    if not (getattr(meta, "project_root", "") or "").strip():
+        return False
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    if status not in {"draft", "plan_dirty"}:
+        return False
+    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
+    return stage == "requirements"
+
+
+def should_treat_ordinary_direct_implement(session: object, user_text: str = "") -> bool:
+    """Ordinary-mode turn gate: explicit ``project_entry=direct`` or phrase fallback.
+
+    Never auto-enters coding from documentation/design. Phrase path only when
+    ``project_entry`` is unset. Sticky ``direct`` also applies after that entry
+    already confirmed the plan (implementation / confirmed).
+    """
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return False
+    if bool(getattr(meta, "project_runaway_enabled", False)):
+        return False
+    if (getattr(meta, "active_shell", "") or "") != "project":
+        return False
+    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
+    if stage in _DIRECT_IMPLEMENT_BLOCKED_STAGES:
+        return False
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
+    if entry == "direct":
+        if stage == "requirements" and status in {"draft", "plan_dirty"}:
+            return True
+        return status == "confirmed" or stage == "implementation"
+    if entry:
+        return False
+    if not is_direct_implement_request(user_text):
+        return False
+    if stage == "requirements" and status in {"draft", "plan_dirty"}:
+        return True
+    return status == "confirmed" or stage == "implementation"
+
+
+def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
+    """Ordinary mode: open the plan gate when the user asked to implement directly.
+
+    Returns a short notice when confirmation was applied; None when unchanged.
+    Only requirements + draft/plan_dirty (never documentation/design).
+    """
+    if not ordinary_direct_implement_draft_allowed(session):
+        return None
+    from project_cli import ProjectModeError, confirm_project_plan
+
+    try:
+        message = confirm_project_plan(session)  # type: ignore[arg-type]
+    except ProjectModeError as exc:
+        return f"直接实现请求未能自动确认计划：{exc}"
+    save = getattr(session, "save", None)
+    if callable(save):
+        save()
+    return f"[项目] 检测到直接实现意图，已自动确认计划。{message}"
+
+
+
 def is_under_project_root(path: str, project_root: str) -> bool:
     return project_path_rel(path, project_root) is not None
 
@@ -1160,11 +2021,35 @@ def is_plan_domain_path(path: str, project_root: str) -> bool:
     return rel in PLAN_DOMAIN_FILES or rel == TASKS_ARCHIVE_NAME
 
 
+# bug-fix repairing lane may patch plan/quality config (BF3); MAP + archive stay forbidden.
+BUG_FIX_PLAN_WRITE_ALLOWLIST = frozenset(
+    {"PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md", "ENV.md"}
+)
+_BUG_FIX_ALLOWED_PLAN_WRITES = BUG_FIX_PLAN_WRITE_ALLOWLIST
+_BUG_FIX_FORBIDDEN_PLAN_WRITES = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
+_BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG = "bug-fix 轨禁止修改 MAP 或 TASKS.archive"
+
+
+def _path_matches_write_scope(rel_path: str, write_scope: tuple[str, ...]) -> bool:
+    import fnmatch
+
+    rel = rel_path.replace("\\", "/")
+    for pattern in write_scope:
+        pat = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(rel, pat):
+            return True
+        if fnmatch.fnmatch(rel.split("/")[-1], pat):
+            return True
+    return False
+
+
 def main_agent_plan_domain_write_block(
     *,
     project_root: str,
     tool_name: str,
     arguments: dict[str, object],
+    bug_fix_lane: bool = False,
+    runaway_v2_write_scope: tuple[str, ...] | None = None,
 ) -> str | None:
     """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly."""
     root = project_root.strip()
@@ -1175,10 +2060,30 @@ def main_agent_plan_domain_write_block(
     if evolved_name in _WRITE_TOOLS:
         for path in extract_run_evolved_paths(tool_name, arguments):
             if path and (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
+                if bug_fix_lane:
+                    rel = project_path_rel(path, root)
+                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
+                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
+                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                        continue
+                if runaway_v2_write_scope:
+                    rel = project_path_rel(path, root)
+                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
+                        continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     if evolved_name == "patch_file":
         for path in extract_run_evolved_paths(tool_name, arguments):
             if path and is_plan_domain_path(path, root):
+                if bug_fix_lane:
+                    rel = project_path_rel(path, root)
+                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
+                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
+                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                        continue
+                if runaway_v2_write_scope:
+                    rel = project_path_rel(path, root)
+                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
+                        continue
                 return PLAN_DOMAIN_WRITE_BLOCK_MSG
     return None
 
@@ -1207,22 +2112,124 @@ def is_project_continue_utterance(text: str) -> bool:
     return False
 
 
+def formal_task_id_from_checkbox_line(line: str) -> str | None:
+    """Return ``T-*`` id for a checkbox line when the body *starts* with ``T-*``."""
+    match = _TASK_CHECKBOX_RE.match(line or "")
+    if not match:
+        return None
+    return formal_task_id(None, match.group(1))
+
+
+def formal_task_id(task_id: str | None, body: str | None = None) -> str | None:
+    """Normalize to a formal queue ``T-*`` id only when it leads the task body."""
+    body_text = (body or "").strip()
+    if not body_text:
+        return None
+    lead = _FORMAL_TASK_LEAD_RE.match(body_text)
+    if not lead:
+        return None
+    return lead.group(1).upper()
+
+
+def inline_verify_ids(task_text: str) -> list[str]:
+    """Extract ``V-*`` ids from inline task text such as ``（V-015）``."""
+    return sorted({match.upper() for match in _VERIFY_ID_INLINE_RE.findall(task_text or "")})
+
+
 def first_open_task_line(tasks_text: str) -> str | None:
     for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
-        if _TASK_OPEN_RE.match(line):
+        if _TASK_OPEN_RE.match(line) and formal_task_id_from_checkbox_line(line):
             return line.strip()
     return None
 
 
 def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
-    """Return (line_idx, body, tid) for the first open checkbox, else (None, None, None)."""
+    """Return (line_idx, body, tid) for the first open formal task, else (None, None, None)."""
     for i, line in iter_tasks_lines_skipping_closed(tasks_text):
         if not _TASK_OPEN_RE.match(line):
             continue
         m = _TASK_CHECKBOX_RE.match(line)
         body = m.group(1).strip() if m else line.strip()
-        return i, body, extract_task_id(body)
+        task_id = formal_task_id(None, body)
+        if not task_id:
+            continue
+        return i, body, task_id
     return None, None, None
+
+
+def next_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
+    """Return the first open task whose ``depends_on`` IDs are complete."""
+    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
+    tasks = parse_tasks_metadata(tasks_text)
+    done_ids = {
+        str(task.get("id") or "").upper()
+        for task in tasks
+        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
+    }
+    for task in tasks:
+        line_index = int(task.get("line", -1))
+        line = visible.get(line_index, "")
+        if not line or not _TASK_OPEN_RE.match(line):
+            continue
+        dependencies = {
+            value.upper()
+            for value in task.get("depends_on", [])
+            if str(value).strip()
+        }
+        if dependencies and not dependencies.issubset(done_ids):
+            continue
+        body_match = _TASK_CHECKBOX_RE.match(line)
+        body = body_match.group(1).strip() if body_match else line.strip()
+        task_id = formal_task_id(task.get("id"), body)
+        if not task_id:
+            continue
+        return line_index, body, task_id
+    return None, None, None
+
+
+def formal_task_stats(tasks_text: str, *, archive_done: int = 0) -> TaskStats:
+    """Count only formal ``T-*`` checkbox tasks (ignores plan/noise open items)."""
+    open_count = 0
+    done_count = 0
+    for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
+        if not formal_task_id_from_checkbox_line(line):
+            continue
+        if _TASK_OPEN_RE.match(line):
+            open_count += 1
+        elif _TASK_DONE_RE.match(line):
+            done_count += 1
+    done = done_count + max(0, int(archive_done or 0))
+    return TaskStats(done=done, total=done + open_count)
+
+
+def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
+    """Return unresolved dependency IDs for each currently open task."""
+    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
+    tasks = parse_tasks_metadata(tasks_text)
+    done_ids = {
+        str(task.get("id") or "").upper()
+        for task in tasks
+        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
+    }
+    blockers: dict[str, list[str]] = {}
+    for task in tasks:
+        task_id = str(task.get("id") or "").upper()
+        line = visible.get(int(task.get("line", -1)), "")
+        # ``formal_task_id`` validates the task body as well as the id.  Here
+        # the parsed id is all we have, so pass it as the body too; calling it
+        # with the default empty body silently rejected every dependency task.
+        if not task_id or not formal_task_id(task_id, task_id) or not _TASK_OPEN_RE.match(line):
+            continue
+        missing = sorted(
+            {
+                value.upper()
+                for value in task.get("depends_on", [])
+                if str(value).strip() and value.upper() not in done_ids
+            }
+        )
+        if missing:
+            blockers[task_id] = missing
+    return blockers
 
 
 def is_closed_section_title(title: str) -> bool:
@@ -1471,9 +2478,10 @@ def task_stop_block_reason(
     tool_name: str,
     arguments: dict[str, object],
     delivery_profile: str = "ritual",
+    runaway_enabled: bool = False,
 ) -> str | None:
     """Block product writes after a TASKS checkbox was completed this turn (S5/S10)."""
-    if normalize_delivery_profile(delivery_profile) == "solo":
+    if runaway_enabled or normalize_delivery_profile(delivery_profile) == "solo":
         return None
     if not task_stop_armed or active_shell != "project":
         return None
@@ -1527,11 +2535,23 @@ def project_mode_block_reason(
     plan_status: str,
     tool_name: str,
     arguments: dict[str, object],
+    agent_paths: AgentPaths | None = None,
+    workflow_stage: str = "",
+    runaway_enabled: bool = False,
+    bug_fix_lane: bool = False,
+    runaway_v2_write_scope: tuple[str, ...] | None = None,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+    effective_stage = workflow_stage or (
+        "implementation"
+        if plan_status == "confirmed"
+        else "preparing"
+        if runaway_enabled and active_shell == "project"
+        else ""
+    )
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
         return (
@@ -1545,18 +2565,93 @@ def project_mode_block_reason(
         if isinstance(inner, dict) and inner.get("target") == "evolve_tools":
             return "project 模式禁止向 evolve/tools clone；请切换到 grow 壳沉淀能力"
 
+    if active_shell == "project" and not root:
+        if tool_name == "run_evolved" and (
+            evolved_name in _CODING_TOOLS
+            or evolved_name in _WRITE_TOOLS
+            or evolved_name in {"git_clone", "write_evolve"}
+        ):
+            return (
+                "当前项目窗口未绑定项目；已停止副作用操作。"
+                "请先打开或新建项目，再执行写入、运行、测试或创建工具。"
+            )
+
     if not root:
         return None
+
+    if (
+        active_shell == "project"
+        and effective_stage in {"verification", "release"}
+        and tool_name == "run_evolved"
+        and evolved_name in _VERIFY_STAGE_EXEC_TOOLS
+    ):
+        return None
+
+    if (
+        active_shell == "project"
+        and effective_stage
+        and effective_stage != "implementation"
+        and not (bug_fix_lane and effective_stage in {"verification", "release"})
+    ):
+        code_write = evolved_name in _CODING_TOOLS and evolved_name != "patch_file"
+        if evolved_name == "patch_file" or evolved_name in _WRITE_TOOLS:
+            code_write = any(
+                path
+                and is_under_project_root(path, project_root)
+                and not is_project_artifact_path(path, project_root)
+                for path in extract_run_evolved_paths(tool_name, arguments)
+            )
+        if runaway_enabled and effective_stage in {
+            "requirements",
+            "preparing",
+            "documentation",
+            "design",
+        } and code_write:
+            return "狂奔正在准备项目流程，当前阶段不能修改业务代码"
+        if code_write and (effective_stage in {"documentation", "design"} or plan_status == "confirmed"):
+            if effective_stage == "documentation":
+                return "当前处于 documentation：只允许整理项目文档，不能修改业务代码"
+            if effective_stage == "design":
+                return "当前处于 design：请先「项目 开始任务 <T-ID>」授权一个实现任务"
+            return "当前项目尚未进入 implementation，不能修改业务代码"
 
     plan_domain_block = main_agent_plan_domain_write_block(
         project_root=root,
         tool_name=tool_name,
         arguments=arguments,
+        bug_fix_lane=bug_fix_lane,
+        runaway_v2_write_scope=runaway_v2_write_scope,
     )
     if plan_domain_block:
         return plan_domain_block
 
-    if plan_allows_code_writes(plan_status):
+    plan_is_effectively_confirmed = plan_allows_code_writes(plan_status) or (
+        runaway_enabled and active_shell == "project"
+    )
+    if plan_is_effectively_confirmed:
+        if agent_paths is not None and active_shell == "project":
+            from project_manifest import manifest_blocks_on_l2_stale, refresh_project_manifest
+
+            pid = project_id_from_root(project_root)
+            if pid:
+                manifest = refresh_project_manifest(agent_paths, pid)
+                if manifest_blocks_on_l2_stale(manifest) and (
+                    evolved_name in _CODING_TOOLS
+                    or evolved_name == "patch_file"
+                    or (
+                        evolved_name in _WRITE_TOOLS
+                        and any(
+                            path
+                            and is_under_project_root(path, project_root)
+                            and not is_project_artifact_path(path, project_root)
+                            for path in extract_run_evolved_paths(tool_name, arguments)
+                        )
+                    )
+                ):
+                    from runaway_v2.config import runaway_v2_env_enabled
+
+                    if not (runaway_enabled and runaway_v2_env_enabled()):
+                        return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
         if tool_name == "run_evolved" and evolved_name == "patch_file":
             for path in extract_run_evolved_paths(tool_name, arguments):
                 if path and not is_under_project_root(path, project_root):
@@ -1565,7 +2660,7 @@ def project_mode_block_reason(
         return None
 
     # Plan gate: any session bound to project_root — even if router switched shell.
-    if tool_name == "run_evolved":
+    if tool_name == "run_evolved" and not plan_is_effectively_confirmed:
         if evolved_name in _CODING_TOOLS:
             return (
                 f"计划未确认（{plan_status or 'draft'}）；"
@@ -1648,6 +2743,11 @@ def format_project_overlay(
     open_tasks_slice: str | None = None,
     delivery_profile: str = DEFAULT_PROJECT_DELIVERY_PROFILE,
     milestone_review_suggested: str | None = None,
+    workflow_stage: str = "",
+    active_task_id: str | None = None,
+    runaway_enabled: bool = False,
+    runaway_checkpoint: str = "",
+    runaway_acceptance_passed: bool = False,
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -1657,32 +2757,114 @@ def format_project_overlay(
         f"project_plan_status: {plan_status or 'draft'}",
         f"project_delivery_profile: {profile}",
     ]
-    if plan_status != "confirmed":
-        lines.append(
-            "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
-        )
-    else:
-        lines.append("plan_gate: 已确认 — 可写项目内代码")
-        if profile == "solo":
+    if workflow_stage:
+        lines.append(f"project_workflow_stage: {workflow_stage}")
+    if active_task_id:
+        lines.append(f"project_active_task_id: {active_task_id}")
+    if runaway_enabled:
+        lines.append("project_runaway_enabled: true")
+        lines.append("runaway_policy: 自动采纳计划、自动推进任务、自动验证和修复；不等待用户确认或继续")
+        lines.append("runaway_scope: 仅当前项目内安全写入、执行和测试；网络、宿主目录、敏感/删除/发布/Git 操作须暂停")
+        if workflow_stage == "documentation":
+            lines.append("stage_gate: 狂奔自动整理四个核心制品，完成后进入设计；不向用户展示计划确认门")
+        elif workflow_stage == "requirements":
             lines.append(
-                "delivery: 完成以构建/测试为准；TASKS 为视图；"
-                "验收口语可 spawn deliverable_review"
+                "stage_gate: 狂奔准备中 — 自动整理文档→设计→首项任务；"
+                "此阶段禁止写业务代码（计划域制品除外）"
             )
+        elif workflow_stage == "design":
+            lines.append("stage_gate: 狂奔自动完成设计并授权下一个可执行 T-* 任务；不等待用户确认")
+        elif workflow_stage == "implementation" and active_task_id:
+            lines.append(f"batch_scope: 狂奔模式正在实现 {active_task_id}；完成后自动验证并启动下一任务")
+        elif workflow_stage in {"verification", "release"}:
+            from runaway_flow import normalize_checkpoint
+
+            cp = normalize_checkpoint(runaway_checkpoint)
+            if cp:
+                lines.append(f"project_runaway_checkpoint: {cp}")
+            if runaway_acceptance_passed:
+                lines.append(
+                    "harness_truth: 矩阵与硬验收已通过（真源）；勿根据陈旧 review 声称缺 PROJECT 验收段"
+                )
+            if cp == "release_wait":
+                lines.append(
+                    "stage_gate: verification 出口 — Harness 已收尾；"
+                    "禁止 plan_partner / deliverable_review；"
+                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
+                )
+                lines.append(
+                    "plan_gate: verification 出口 — 计划域由 Harness/bug-fix 负责；"
+                    "主 Agent 勿调 plan_partner"
+                )
+            elif cp == "verifying":
+                lines.append(
+                    "stage_gate: verification — 硬验收已通过，Harness 正在推进 release_wait；"
+                    "禁止 plan_partner / deliverable_review；"
+                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
+                )
+                lines.append(
+                    "plan_gate: verification — 计划域由 Harness/bug-fix 负责；"
+                    "主 Agent 勿调 plan_partner"
+                )
+            elif cp == "repairing":
+                lines.append(
+                    "stage_gate: repairing — Harness bug-fix 轨修复验收；"
+                    "禁止 plan_partner / deliverable_review；主 Agent 勿写业务代码"
+                )
+                lines.append(
+                    "plan_gate: repairing — bug-fix 可写 PROJECT.md 验收段、"
+                    "ENV.md quality.commands、VERIFY 证据；"
+                    "主 Agent 禁止 write_text/patch_file 计划域文件"
+                )
+            else:
+                lines.append(
+                    "stage_gate: verification — 仅允许 run_command / run_quality / "
+                    "run_project_tests 等验收执行；禁止主 Agent 写业务代码"
+                )
+                lines.append(
+                    "plan_gate: verification — 计划域（PROJECT/ENV/TASKS/VERIFY）"
+                    "由 Harness bootstrap 或 bug-fix 写入；主 Agent 禁止直写；勿 plan_partner"
+                )
+        else:
+            lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
+            lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
+    else:
+        if workflow_stage == "documentation":
+            lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
+        elif workflow_stage == "design":
+            lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
+        elif workflow_stage == "implementation" and active_task_id:
+            lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+        if workflow_stage == "documentation":
+            lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
+        elif workflow_stage == "design":
+            lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
+        elif plan_status != "confirmed":
             lines.append(
-                "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
-                "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+                "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
             )
         else:
-            lines.append(
-                "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
-            )
-            lines.append(
-                "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
-            )
-            lines.append(
-                "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
-                "仅 report_progress 成功勾选后 Task 一停"
-            )
+            lines.append("plan_gate: 已确认 — 可写项目内代码")
+            if profile == "solo":
+                lines.append(
+                    "delivery: 完成以构建/测试为准；TASKS 为视图；"
+                    "验收口语可 spawn deliverable_review"
+                )
+                lines.append(
+                    "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
+                    "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+                )
+            else:
+                lines.append(
+                    "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
+                )
+                lines.append(
+                    "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
+                )
+                lines.append(
+                    "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
+                    "仅 report_progress 成功勾选后 Task 一停"
+                )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
     if plan_status == "confirmed":
@@ -1714,7 +2896,13 @@ def format_project_overlay(
                 "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
             )
     milestone_key = (milestone_review_suggested or "").strip()
-    if milestone_key:
+    suppress_milestone = False
+    if runaway_enabled and workflow_stage in {"verification", "release"}:
+        from runaway_flow import normalize_checkpoint
+
+        cp = normalize_checkpoint(runaway_checkpoint)
+        suppress_milestone = cp in {"verifying", "release_wait", "repairing"}
+    if milestone_key and not suppress_milestone:
         lines.append(f"milestone_review_suggested: {milestone_key}")
     return "\n".join(lines)
 
@@ -1786,26 +2974,53 @@ def _acceptance_section(project_md: str) -> str:
     return project_md[idx:]
 
 
+def acceptance_command_to_argv(display: str) -> list[str]:
+    """Split PROJECT acceptance display into argv (python, powershell, etc.)."""
+    text = (display or "").strip()
+    if not text:
+        return []
+    if sys.platform == "win32":
+        return shlex.split(text, posix=False)
+    return shlex.split(text, posix=True)
+
+
+def parse_acceptance_command_display(project_md: str) -> str | None:
+    """First executable ``命令：`…` `` under ## 验收标准 (any shell, not only python)."""
+    section = _acceptance_section(project_md)
+    for line in section.splitlines():
+        match = _ACCEPT_CMD_RE.search(line)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
 def parse_acceptance_spec(project_md: str) -> AcceptanceSpec | None:
-    """Parse first `命令：`…`` line under ## 验收标准."""
+    """Parse first executable ``命令：`…` `` under ## 验收标准 (python or shell)."""
     section = _acceptance_section(project_md)
     for line in section.splitlines():
         match = _ACCEPT_CMD_RE.search(line)
         if not match:
             continue
         command = match.group(1).strip()
-        script_match = _PYTHON_SCRIPT_RE.search(command)
-        if not script_match:
-            continue
-        script = script_match.group(1).strip().replace("\\", "/").lstrip("/")
-        if script.startswith("workspace/"):
-            script = script.removeprefix("workspace/")
         exit_match = _ACCEPT_EXIT_RE.search(line)
         expected = int(exit_match.group(1)) if exit_match else 0
+        script_match = _PYTHON_SCRIPT_RE.search(command)
+        if script_match:
+            script = script_match.group(1).strip().replace("\\", "/").lstrip("/")
+            if script.startswith("workspace/"):
+                script = script.removeprefix("workspace/")
+            return AcceptanceSpec(
+                display=command,
+                script_rel=script,
+                expected_exit_code=expected,
+            )
+        argv = tuple(acceptance_command_to_argv(command))
+        if not argv:
+            continue
         return AcceptanceSpec(
             display=command,
-            script_rel=script,
             expected_exit_code=expected,
+            argv=argv,
         )
     return None
 
@@ -1819,8 +3034,24 @@ def acceptance_workspace_path(project_id: str, spec: AcceptanceSpec) -> str:
 
 
 def acceptance_script_exists(paths: AgentPaths, project_id: str, spec: AcceptanceSpec) -> bool:
-    rel = acceptance_workspace_path(project_id, spec)
-    return (paths.workspace / rel).is_file()
+    if spec.is_python:
+        rel = acceptance_workspace_path(project_id, spec)
+        return (paths.workspace / rel).is_file()
+    root = project_dir(paths, project_id)
+    argv = list(spec.argv) or acceptance_command_to_argv(spec.display)
+    for index, arg in enumerate(argv):
+        lowered = arg.lower()
+        if lowered in {"-file", "/file"} and index + 1 < len(argv):
+            candidate = root / argv[index + 1].replace("\\", "/").lstrip("/")
+            return candidate.is_file()
+        if lowered.endswith((".py", ".ps1", ".bat", ".cmd", ".sh")):
+            rel = arg.replace("\\", "/").lstrip("/")
+            if (root / rel).is_file():
+                return True
+            workspace_rel = f"{normalize_project_id(project_id)}/{rel}"
+            if (paths.workspace / workspace_rel).is_file():
+                return True
+    return bool(argv)
 
 
 def run_acceptance_check(
@@ -1828,33 +3059,37 @@ def run_acceptance_check(
     project_id: str,
     spec: AcceptanceSpec,
 ) -> dict[str, Any]:
-    """Run PROJECT.md acceptance via run_command (python script)."""
+    """Run PROJECT.md acceptance via run_command (python script or shell command)."""
     import sys
 
     from tools.builtin.run_evolved import run
     from tools.registry import ToolRegistry
 
-    rel = acceptance_workspace_path(project_id, spec)
-    script_path = paths.workspace / rel
-    if not script_path.is_file():
-        return {
-            "ok": False,
-            "passed": False,
-            "error": f"验收脚本不存在：workspace/{rel}",
-            "command": spec.display,
-            "path": f"workspace/{rel}",
-            "expected_exit_code": spec.expected_exit_code,
-        }
-
     pid = normalize_project_id(project_id)
     registry = ToolRegistry.load(paths)
-    # Prefer quoting that works under PowerShell -Command and bash -lc.
-    script_abs = str(script_path.resolve())
-    py = sys.executable
-    if sys.platform == "win32":
-        command = f'& "{py}" "{script_abs}"'
+    if spec.is_python:
+        rel = acceptance_workspace_path(project_id, spec)
+        script_path = paths.workspace / rel
+        if not script_path.is_file():
+            return {
+                "ok": False,
+                "passed": False,
+                "error": f"验收脚本不存在：workspace/{rel}",
+                "command": spec.display,
+                "path": f"workspace/{rel}",
+                "expected_exit_code": spec.expected_exit_code,
+            }
+        script_abs = str(script_path.resolve())
+        py = sys.executable
+        if sys.platform == "win32":
+            command = f'& "{py}" "{script_abs}"'
+        else:
+            command = f'"{py}" "{script_abs}"'
+        path = f"workspace/{rel}"
     else:
-        command = f'"{py}" "{script_abs}"'
+        command = spec.display
+        path = f"workspace/{pid}"
+
     tool_result = run(
         {
             "tool_name": "run_command",
@@ -1872,7 +3107,7 @@ def run_acceptance_check(
             "passed": False,
             "error": message,
             "command": spec.display,
-            "path": f"workspace/{rel}",
+            "path": path,
             "expected_exit_code": spec.expected_exit_code,
         }
 
@@ -1885,7 +3120,7 @@ def run_acceptance_check(
         "exit_code": exit_code,
         "expected_exit_code": spec.expected_exit_code,
         "command": spec.display,
-        "path": f"workspace/{rel}",
+        "path": path,
         "stdout": data.get("stdout", ""),
         "stderr": data.get("stderr", ""),
     }
@@ -2217,14 +3452,112 @@ def skip_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, A
     }
 
 
+_DOC_LIST_SKIP_DIRS = frozenset({
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".cursor",
+})
+
+
+def _catalog_skips_rel(rel: str) -> bool:
+    parts = rel.replace("\\", "/").split("/")
+    return any(part in _DOC_LIST_SKIP_DIRS for part in parts[:-1])
+
+
+def _iter_project_markdown(root: Path):
+    """Yield markdown files under *root*, skipping vendor/cache directories."""
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            name = entry.name
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                if name in _DOC_LIST_SKIP_DIRS:
+                    continue
+                stack.append(entry)
+                continue
+            if entry.suffix.lower() == ".md":
+                yield entry
+
+
+def _resolve_project_doc_path(
+    root: Path,
+    doc_path: str,
+    *,
+    add_md: bool = False,
+) -> tuple[str, Path]:
+    raw = str(doc_path or "").replace("\\", "/").strip().lstrip("/")
+    if not raw or raw in {".", ".."}:
+        raise ProjectModeError("文档路径无效")
+    if add_md and not raw.lower().endswith(".md"):
+        raw = f"{raw}.md"
+    root_resolved = root.resolve()
+    full = (root / raw).resolve()
+    try:
+        rel = full.relative_to(root_resolved).as_posix()
+    except ValueError as exc:
+        raise ProjectModeError(f"路径超出项目目录：{doc_path}") from exc
+    if rel in {".", ""}:
+        raise ProjectModeError("文档路径无效")
+    if _catalog_skips_rel(rel):
+        raise ProjectModeError("该路径不在项目文档目录中")
+    if not rel.lower().endswith(".md"):
+        raise ProjectModeError("只能操作 Markdown 文档")
+    if Path(rel).name.lower() == ".md":
+        raise ProjectModeError("文档名不能为空")
+    return rel, full
+
+
+def _write_project_markdown(full: Path, content: str) -> str:
+    from evolve_tool_io import normalize_newlines, write_utf8_text
+
+    text = normalize_newlines(content)
+    write_utf8_text(full, text)
+    return text
+
+
+def _rel_from_title(old_rel: str, title: str) -> str:
+    raw = str(title or "").replace("\\", "/").strip().strip("/")
+    if not raw or raw in {".", ".."}:
+        raise ProjectModeError("文档名不能为空")
+    if "/" in raw:
+        rel = raw
+    else:
+        parent = Path(old_rel).parent.as_posix()
+        rel = raw if parent in {".", ""} else f"{parent}/{raw}"
+    if not rel.lower().endswith(".md"):
+        rel += ".md"
+    return rel
+
+
 def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]]:
-    """List all .md files in the project directory."""
+    """List project-root markdown files, skipping vendor/cache trees."""
     root = project_dir(paths, project_id)
     if not root.is_dir():
         return []
     docs: list[dict[str, Any]] = []
-    for fpath in sorted(root.rglob("*.md")):
-        rel = str(fpath.relative_to(root)).replace("\\", "/")
+    for fpath in sorted(_iter_project_markdown(root), key=lambda item: item.as_posix().lower()):
+        try:
+            rel = fpath.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if _catalog_skips_rel(rel):
+            continue
         try:
             size = fpath.stat().st_size
         except OSError:
@@ -2241,12 +3574,9 @@ def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]
 def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
     """Read a single .md file from the project directory. Returns {type, path, content}."""
     root = project_dir(paths, project_id)
-    safe_path = doc_path.replace("\\", "/").lstrip("/")
-    full = (root / safe_path).resolve()
-    if not str(full).startswith(str(root.resolve())):
-        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
     if not full.is_file():
-        raise ProjectModeError(f"document not found: {doc_path}")
+        raise ProjectModeError(f"找不到文档：{doc_path}")
     content = full.read_text(encoding="utf-8")
     return {
         "type": "project.doc.read.done",
@@ -2259,21 +3589,85 @@ def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[
 def create_project_doc(paths: AgentPaths, project_id: str, doc_path: str, content: str = "") -> dict[str, Any]:
     """Create a new .md file in the project directory."""
     root = project_dir(paths, project_id)
-    safe_path = doc_path.replace("\\", "/").lstrip("/")
-    if not safe_path.endswith(".md"):
-        safe_path += ".md"
-    full = (root / safe_path).resolve()
-    if not str(full).startswith(str(root.resolve())):
-        raise ProjectModeError(f"path escapes project directory: {doc_path}")
+    safe_path, full = _resolve_project_doc_path(root, doc_path, add_md=True)
     if full.exists():
-        raise ProjectModeError(f"document already exists: {safe_path}")
+        raise ProjectModeError(f"已有同名文档：{safe_path}")
     full.parent.mkdir(parents=True, exist_ok=True)
     default_content = content if content else f"# {full.stem}\n\n"
-    full.write_text(default_content, encoding="utf-8")
+    _write_project_markdown(full, default_content)
     return {
         "type": "project.doc.create.done",
         "path": safe_path,
         "name": full.name,
+    }
+
+
+def write_project_doc(
+    paths: AgentPaths,
+    project_id: str,
+    doc_path: str,
+    content: str,
+) -> dict[str, Any]:
+    """Overwrite an existing project markdown document."""
+    root = project_dir(paths, project_id)
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
+    if not full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    text = _write_project_markdown(full, content)
+    return {
+        "type": "project.doc.write.done",
+        "path": safe_path,
+        "name": full.name,
+        "size": len(text),
+    }
+
+
+def rename_project_doc(
+    paths: AgentPaths,
+    project_id: str,
+    doc_path: str,
+    *,
+    title: str = "",
+    new_path: str = "",
+) -> dict[str, Any]:
+    """Rename a project markdown file by title (stem) or explicit new path."""
+    root = project_dir(paths, project_id)
+    old_rel, old_full = _resolve_project_doc_path(root, doc_path)
+    if not old_full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    target_raw = str(new_path or "").strip() or _rel_from_title(old_rel, title)
+    new_rel, new_full = _resolve_project_doc_path(root, target_raw, add_md=True)
+    if new_rel == old_rel:
+        return {
+            "type": "project.doc.rename.done",
+            "path": new_rel,
+            "old_path": old_rel,
+            "name": new_full.name,
+        }
+    if new_full.exists():
+        raise ProjectModeError(f"已有同名文档：{new_rel}")
+    new_full.parent.mkdir(parents=True, exist_ok=True)
+    old_full.rename(new_full)
+    return {
+        "type": "project.doc.rename.done",
+        "path": new_rel,
+        "old_path": old_rel,
+        "name": new_full.name,
+    }
+
+
+def delete_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
+    """Permanently delete a project markdown file (no trash)."""
+    root = project_dir(paths, project_id)
+    safe_path, full = _resolve_project_doc_path(root, doc_path)
+    if not full.is_file():
+        raise ProjectModeError(f"找不到文档：{doc_path}")
+    full.unlink()
+    return {
+        "type": "project.doc.delete.done",
+        "path": safe_path,
+        "name": full.name,
+        "is_standard": safe_path in PROJECT_ARTIFACTS,
     }
 
 

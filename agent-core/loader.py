@@ -615,6 +615,10 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
         lines.append(
             "turn_intent: recall — 根据上文直接回顾；父循环不调工具（T-905）。"
         )
+    elif session.turn_intent == "requirements":
+        lines.append(
+            "turn_intent: requirements — 当前是需求输入；只做归纳回答，不调用工具、不写盘、不自动探索。"
+        )
     elif session.turn_intent in {"execute", "research"}:
         lines.append(
             f"turn_intent: {session.turn_intent} — 深调研应由子代理完成；可说 `探索 …` 或等待自动 explore。"
@@ -652,7 +656,7 @@ _TOOL_WORKSHOP_FALLBACK = """# 工具工坊（Tool Workshop）
 你在工具工坊会话：沉淀可复用、够广的 evolved 工具。
 先查 evolve/tool-catalog/INDEX.md 能否用现有工具覆盖；能则不新建。
 写文件只用 write_evolve（先 main.py 再 tool.toml，status=draft）；细则见 buckets/evolve.md。
-验收：验收 <name>；PASS 后改 active + INDEX。"""
+验收：验收 <name>；PASS 后改 active + INDEX，并补对应 buckets/<桶>.md；验证 INDEX → bucket → run_evolved。"""
 
 
 def load_evolve_prompt_file(evolve_dir: Path, relative: str, *, fallback: str) -> str:
@@ -903,31 +907,15 @@ def format_tool_loop_user_message(
     total_tool_rounds: int | None = None,
 ) -> str:
     """User-facing message when the tool inner loop hits its cap without progress."""
-    reg = registry or ToolRegistry.load(session.paths)
-    allowed = sorted(session_evolved_allowlist(session, registry=reg))
-    topics = session.meta.topics
-    topic_label = "、".join(topics) if topics else "（未确认）"
-    tools_label = ", ".join(allowed) if allowed else "（无）"
+    from user_copy import format_tool_loop_exceeded_message
 
-    segment_note = ""
-    if segment is not None and segment > 1:
-        segment_note = f"（execute segment {segment}"
-        if total_tool_rounds is not None:
-            segment_note += f"，累计 {total_tool_rounds} 轮"
-        segment_note += "）"
-
-    return (
-        f"本条消息的 segment 工具预算已用尽（本 segment 上限 {tool_loop_max} 轮"
-        f"{segment_note}，已执行 {tool_rounds} 轮），未能得到最终文字回复，且本段无可见进展。\n\n"
-        "每条用户消息都会重新计算工具预算；若任务未完成，请发新消息（如「继续」）再试。\n\n"
-        "常见原因：\n"
-        "1. 任务需要的能力尚无对应 evolved 工具（或工具 status 非 active）\n"
-        "2. 在反复观察（read_file / grep / list_dir / glob_file_search）而未收敛到结论\n"
-        "3. 子代理/编排 builtin 预算用尽，或 segment 内无可见进展\n\n"
-        f"本会话可用 evolved（凡 active）：{tools_label}\n"
-        f"当前主题（管 prompt/memory，不管工具锁）：{topic_label}\n\n"
-        "建议：简化问题后重试；查阅 evolve/tool-catalog/INDEX.md 或对应 buckets；"
-        "若长期缺工具，可说「记住」提交 tool 建议。"
+    return format_tool_loop_exceeded_message(
+        session,
+        tool_rounds=tool_rounds,
+        tool_loop_max=tool_loop_max,
+        registry=registry,
+        segment=segment,
+        total_tool_rounds=total_tool_rounds,
     )
 
 
@@ -938,18 +926,13 @@ def format_segment_pause_message(
     auto_continue: bool,
 ) -> str:
     """Message when execute segment cap hit with progress (T-705)."""
-    lines = [
-        f"本条消息的工具预算已用尽（segment {segment}，本消息累计 {total_tool_rounds} 轮），已有进展。",
-        "",
-        "已完成部分：见上文 tool 结果与 assistant 回复。",
-    ]
-    if auto_continue:
-        lines.append("")
-        lines.append("将自动继续下一 segment。")
-    else:
-        lines.append("")
-        lines.append("请发一条新消息（如「继续」）以开始下一轮工具预算。")
-    return "\n".join(lines)
+    from user_copy import format_segment_pause_message as _format
+
+    return _format(
+        segment=segment,
+        total_tool_rounds=total_tool_rounds,
+        auto_continue=auto_continue,
+    )
 
 
 TASK_PAUSED_MARKER = "本项已完成。回复「继续」开始下一项。"
@@ -1291,6 +1274,15 @@ def build_system_prompt(
                 open_tasks_slice=open_slice or None,
                 delivery_profile=profile,
                 milestone_review_suggested=milestone_key,
+                workflow_stage=getattr(session.meta, "project_workflow_stage", ""),
+                active_task_id=getattr(session.meta, "project_active_task_id", "") or None,
+                runaway_enabled=bool(getattr(session.meta, "project_runaway_enabled", False)),
+                runaway_checkpoint=str(
+                    getattr(session.meta, "project_runaway_checkpoint", "") or ""
+                ),
+                runaway_acceptance_passed=bool(
+                    getattr(session.meta, "project_runaway_acceptance_passed", False)
+                ),
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (
@@ -1299,6 +1291,16 @@ def build_system_prompt(
                 overlay += (
                     "\ndigest_profile_note: solo — 忽略 digest 中与一停/"
                     "强制 report_progress 冲突的旧叙述"
+                )
+            workflow_stage = str(getattr(session.meta, "project_workflow_stage", "") or "")
+            if (
+                bool(getattr(session.meta, "project_runaway_enabled", False))
+                and workflow_stage == "verification"
+                and digest_text
+            ):
+                overlay += (
+                    "\ndigest_profile_note: verification — 忽略 digest 中"
+                    "「直写 ENV/PROJECT 验收」「report_progress 脱困」等与 Harness 谓词冲突的旧叙述"
                 )
             sections.append(
                 (
