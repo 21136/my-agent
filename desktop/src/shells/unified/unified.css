@@ -2469,6 +2469,9 @@
   border-bottom: 1px solid var(--ma-chrome-border);
   background: var(--ma-bg);
 }
+.unified-document-header .unified-document-heading {
+  flex: 1;
+}
 .unified-document-heading {
   min-width: 0;
   text-align: left;
@@ -2497,6 +2500,40 @@
   flex: 1;
   min-height: 0;
   background: var(--ma-bg);
+}
+.unified-document-shell.is-sidebar-catalog {
+  grid-template-columns: minmax(0, 1fr) minmax(156px, 196px);
+}
+.unified-projects {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.5rem 2rem;
+  background: var(--ma-bg);
+}
+.rail-stage-empty {
+  max-width: 28rem;
+  margin: 2.5rem auto 0;
+  text-align: left;
+}
+.rail-stage-empty-title {
+  margin: 0 0 0.45rem;
+  font-size: 1.2rem;
+  font-weight: 650;
+}
+.rail-stage-empty-copy,
+.rail-stage-empty-meta {
+  margin: 0 0 0.85rem;
+  color: var(--ma-text-muted);
+  line-height: 1.5;
+}
+.rail-project-chip {
+  margin: 0.15rem 0.15rem 0.65rem;
+  padding: 0.28rem 0.45rem;
+  border-radius: var(--ma-chrome-radius-sm, 8px);
+  background: color-mix(in srgb, var(--ma-text) 5%, transparent);
+  color: var(--ma-text-muted);
+  font-size: 0.75rem;
 }
 .unified-document-catalog,
 .unified-document-outline {
@@ -2552,12 +2589,16 @@
   .unified-document-shell {
     grid-template-columns: minmax(156px, 188px) minmax(0, 1fr);
   }
+  .unified-document-shell.is-sidebar-catalog {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .unified-document-outline {
     display: none;
   }
 }
 @media (max-width: 720px) {
-  .unified-document-shell {
+  .unified-document-shell,
+  .unified-document-shell.is-sidebar-catalog {
     grid-template-columns: minmax(0, 1fr);
   }
   .unified-document-catalog {
@@ -3117,16 +3158,9 @@
   50%      { opacity: 0.4; }
 }
 
-/* ---- overlay panel (slides over task flow) ---- */
+/* ---- overlay panel (legacy; rail tabs own the sidebar body) ---- */
 .sidebar-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  background: var(--ma-surface);
-  transform: translateX(0);
-  transition: transform 0.2s ease;
+  display: none !important;
 }
 .sidebar-overlay.hidden {
   transform: translateX(105%);

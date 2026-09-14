@@ -28,7 +28,8 @@ import {
   applyProjectThreadsEvent,
   isViewingArchivedThread,
   parseTasksMarkdown,
-  type OverlayPanel,
+  renderRailStageEmpty,
+  renderProjectsStage,
   type FlowStage,
   type ProjectPanelState,
   type ProjectPanelCallbacks,
@@ -50,6 +51,7 @@ import {
   renderPlanReviewPanel,
   type MainFocus,
 } from "./plan-review";
+import { isRailTab, mainFocusForRail, type RailTab } from "./rail";
 import {
   adoptPathFromNotice,
   lastFailedTool,
@@ -193,6 +195,7 @@ export function mountUnifiedShell(
     switchInProgress: false,
     pendingPickerId: "",
     overlayPanel: null,
+    railTab: "now",
     taskPhases: [],
     planBannerCollapsed: true,
     switchConfirmTarget: null,
@@ -478,7 +481,7 @@ export function mountUnifiedShell(
 
   // ---- DOM layout ----
   root.innerHTML = `
-    <div class="unified-shell" data-perspective="project">
+    <div class="unified-shell" data-perspective="project" data-rail="now">
       <aside class="unified-sidebar" id="unified-sidebar">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <div class="unified-sidebar-header">
@@ -494,8 +497,8 @@ export function mountUnifiedShell(
         <div class="sidebar-footer" id="sidebar-footer">
           <div class="sidebar-change-banner hidden" id="sidebar-change-banner"></div>
           <div class="sidebar-icon-bar" id="sidebar-icon-bar">
-            <button type="button" class="sidebar-icon-btn is-active" data-panel="tasks" title="当下"><span class="sidebar-icon-label">当下</span></button>
-            <button type="button" class="sidebar-icon-btn" data-panel="plan" title="任务"><span class="sidebar-icon-label">任务</span></button>
+            <button type="button" class="sidebar-icon-btn is-active" data-panel="now" title="当下"><span class="sidebar-icon-label">当下</span></button>
+            <button type="button" class="sidebar-icon-btn" data-panel="tasks" title="任务"><span class="sidebar-icon-label">任务</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="docs" title="文档"><span class="sidebar-icon-label">文档</span></button>
             <button type="button" class="sidebar-icon-btn" data-panel="threads" title="会话线" id="icon-btn-threads">
               <span class="sidebar-icon-label">会话</span>
@@ -545,8 +548,9 @@ export function mountUnifiedShell(
         <div class="unified-stage" id="unified-stage">
           <main class="unified-chat" id="unified-chat"></main>
           <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="方案变更"></section>
-          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="完整计划"></section>
+          <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="任务"></section>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
+          <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
         </div>
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
@@ -575,6 +579,7 @@ export function mountUnifiedShell(
   const planReviewEl = root.querySelector<HTMLElement>("#unified-plan-review")!;
   const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
+  const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
@@ -677,7 +682,7 @@ export function mountUnifiedShell(
 
   function isWorkbenchChatAllowed(): boolean {
     if (isViewingArchivedThread(projectState)) return false;
-    return Boolean(projectState.projectId) || freeChatActive;
+    return true;
   }
 
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
@@ -694,7 +699,7 @@ export function mountUnifiedShell(
       return;
     }
     if (!projectState.projectId) {
-      input.placeholder = "先选择或新建项目…";
+      input.placeholder = "输入消息，或先打开一个项目…";
       return;
     }
     input.placeholder =
@@ -709,11 +714,9 @@ export function mountUnifiedShell(
   }
 
   function updateWorkbenchEmpty(): void {
-    const reading = projectState.mainFocus === "document";
-    const showEmpty = !projectState.projectId && !freeChatActive && !reading;
-    workbenchEmptyEl.hidden = !showEmpty;
-    chatEl.classList.toggle("is-empty-gated", showEmpty);
-    composer.classList.toggle("is-empty-gated", showEmpty);
+    workbenchEmptyEl.hidden = true;
+    chatEl.classList.remove("is-empty-gated");
+    composer.classList.remove("is-empty-gated");
     updatePlaceholder();
     composerWire.syncSendEnabled();
   }
@@ -817,7 +820,10 @@ export function mountUnifiedShell(
     const workingChanged = lastSidebarWorking !== working;
     lastSidebarWorking = working;
     projectState.turnInProgress = working;
-    projectEls.goalCard.classList.toggle("hidden", !projectState.projectId);
+    projectEls.goalCard.classList.toggle(
+      "hidden",
+      !projectState.projectId || projectState.railTab !== "now",
+    );
     projectEls.goalCard.dataset.goalStatus = deriveProjectGoalViewModel(projectState).status;
     projectEls.goalCard.innerHTML = renderProjectGoalCard(projectState);
     shellEl.classList.toggle("is-working", working);
@@ -1474,7 +1480,9 @@ export function mountUnifiedShell(
         setStatus("助手执行中，请稍后再切换会话线");
         return;
       }
-      closePlanMainFocus();
+      projectState.railTab = "threads";
+      projectState.overlayPanel = null;
+      setMainFocus("chat");
       try {
         client.openSession(sid);
         startHydrationWait(sid, "打开会话线");
@@ -1488,11 +1496,7 @@ export function mountUnifiedShell(
       projectCallbacks.onOpenThread(active);
     },
     onOpenProjects: () => {
-      projectState.overlayPanel = "projects";
-      projectState.switchConfirmTarget = null;
-      projectState.projectSearchQuery = "";
-      try { client.listProjects(); } catch { /* ignore */ }
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      selectRailTab("projects");
     },
     onNewProject: () => {
       handleNewProject();
@@ -1545,23 +1549,52 @@ export function mountUnifiedShell(
     syncMainFocusView();
   }
 
+  function selectRailTab(tab: RailTab): void {
+    projectState.railTab = tab;
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = tab;
+    if (tab !== "projects") {
+      projectState.switchConfirmTarget = null;
+    }
+    if (tab === "projects") {
+      projectState.projectSearchQuery = "";
+      try { client.listProjects(); } catch { /* ignore */ }
+    }
+    if (tab === "docs") {
+      openDocumentReader();
+      return;
+    }
+    if (tab === "threads") {
+      refreshProjectThreads();
+    }
+    setMainFocus(mainFocusForRail(tab));
+  }
+
+  function showNowChat(): void {
+    projectState.railTab = "now";
+    projectState.overlayPanel = null;
+    shellEl.dataset.rail = "now";
+    setMainFocus("chat");
+  }
+
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
     const chatFocus = focus === "chat";
-    const documentFocus = focus === "document";
-    const runtimeSurface = chatFocus || documentFocus || chat.isWorking() || chat.model.confirmPending;
     shellEl.dataset.mainFocus = focus;
+    shellEl.dataset.rail = projectState.railTab || "now";
     chatEl.classList.toggle("hidden", focus !== "chat");
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
     documentEl.classList.toggle("hidden", focus !== "document");
+    projectsEl.classList.toggle("hidden", focus !== "projects");
     chatEl.hidden = focus !== "chat";
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
-    composerDock.hidden = !runtimeSurface;
-    composer.hidden = !runtimeSurface;
-    statusEl.hidden = !runtimeSurface;
+    projectsEl.hidden = focus !== "projects";
+    composerDock.hidden = false;
+    composer.hidden = false;
+    statusEl.hidden = false;
     tokenBar.hidden = !chatFocus;
     syncComposerMetaVisibility();
     if (focus === "plan_review") {
@@ -1571,6 +1604,8 @@ export function mountUnifiedShell(
       renderPlanFullPane();
     } else if (focus === "document") {
       renderDocumentPane();
+    } else if (focus === "projects") {
+      renderProjectsPane();
     }
     updateWorkbenchEmpty();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -1591,6 +1626,15 @@ export function mountUnifiedShell(
   }
 
   function renderPlanFullPane(): void {
+    if (!projectState.projectId) {
+      planFullEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看任务",
+        copy: "打开项目后，这里会显示任务列表与进度。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
+      return;
+    }
     const highlight =
       projectState.highlightChanges && projectState.highlightedLines.size > 0
         ? projectState.highlightedLines
@@ -1598,7 +1642,20 @@ export function mountUnifiedShell(
     planFullEl.innerHTML = `${renderPlanFullHeader()}<div class="unified-plan-full-body">${renderPlanTaskFlow(projectState, highlight)}</div>`;
   }
 
+  function renderProjectsPane(): void {
+    projectsEl.innerHTML = renderProjectsStage(projectState);
+  }
+
   function renderDocumentPane(): void {
+    if (!projectState.projectId) {
+      documentEl.innerHTML = renderRailStageEmpty({
+        title: "绑定项目后查看文档",
+        copy: "打开项目后，这里会显示文档阅读区。",
+        action: "open-projects",
+        actionLabel: "打开项目",
+      });
+      return;
+    }
     const path = projectState.currentDocPath;
     const content = projectState.currentDocContent;
     const { html, outline } = renderDocumentReaderHtml({
@@ -1607,6 +1664,8 @@ export function mountUnifiedShell(
       currentContent: content,
       renderedHtml: content ? renderMarkdown(content) : "",
       newDocName: projectState.newDocName,
+      includeCatalog: false,
+      includeBack: false,
     });
     documentEl.innerHTML = html;
     const reader = documentEl.querySelector(".unified-document-content");
@@ -1640,7 +1699,9 @@ export function mountUnifiedShell(
       && projectState.currentDocPath === path
       && Boolean(projectState.currentDocContent);
     projectState.currentDocPath = path;
+    projectState.railTab = "docs";
     projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
     if (alreadyOpen) {
       setMainFocus("document");
       try { client.listDocs(); } catch { /* ignore */ }
@@ -1653,7 +1714,9 @@ export function mountUnifiedShell(
   }
 
   function openDocumentReader(path?: string): void {
+    projectState.railTab = "docs";
     projectState.overlayPanel = null;
+    shellEl.dataset.rail = "docs";
     const target = path
       || projectState.currentDocPath
       || sortProjectDocs(projectState.projectDocs)[0]?.path
@@ -1681,21 +1744,11 @@ export function mountUnifiedShell(
       }
       planReviewIndex = index;
       projectState.reviewFocusId = queue[index]?.id ?? null;
+      projectState.railTab = "now";
       projectState.overlayPanel = null;
+      shellEl.dataset.rail = "now";
       setStatus("正在切换主区…");
-      projectState.mainFocus = "plan_review";
-      projectState.reviewFocusId = queue[index]?.id ?? null;
-      shellEl.dataset.mainFocus = "plan_review";
-      chatEl.classList.add("hidden");
-      chatEl.hidden = true;
-      planFullEl.classList.add("hidden");
-      planFullEl.hidden = true;
-      planReviewEl.classList.remove("hidden");
-      planReviewEl.hidden = false;
-      setStatus("正在打开方案变更…");
-      renderPlanReviewPane();
-      planReviewEl.scrollTop = 0;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      setMainFocus("plan_review");
       setStatus("方案变更已打开");
     } catch (err) {
       setStatus(`方案变更打开失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1715,7 +1768,9 @@ export function mountUnifiedShell(
   }
 
   function openPlanFull(): void {
+    projectState.railTab = "tasks";
     projectState.overlayPanel = null;
+    shellEl.dataset.rail = "tasks";
     setMainFocus("plan_full");
   }
 
@@ -1763,7 +1818,7 @@ export function mountUnifiedShell(
   }
 
   function showBlockerDetails(): void {
-    setMainFocus("chat");
+    showNowChat();
     clearExpandedSurface();
     expandEl.innerHTML = renderProjectBlockerDetails(projectState);
     expandEl.classList.remove("hidden");
@@ -1788,7 +1843,7 @@ export function mountUnifiedShell(
     if (!normalizedTaskId) return;
     try {
       setStatus(`正在启动 ${normalizedTaskId}…`);
-      setMainFocus("chat");
+      showNowChat();
       client.startProjectTask(normalizedTaskId);
     } catch (err) {
       setStatus(`启动任务失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1806,7 +1861,7 @@ export function mountUnifiedShell(
     // implement message so the CTA still kicks work.
     try {
       setStatus("正在直接实现…");
-      setMainFocus("chat");
+      showNowChat();
       client.sendCommand("项目 直接实现");
     } catch (err) {
       setStatus(`直接实现失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1816,7 +1871,7 @@ export function mountUnifiedShell(
   function runProjectVerifyFromUi(): void {
     try {
       setStatus("正在跑验收…");
-      setMainFocus("chat");
+      showNowChat();
       client.sendCommand("项目 验收");
     } catch (err) {
       setStatus(`验收失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1877,7 +1932,7 @@ export function mountUnifiedShell(
   }
 
   function closePlanMainFocus(): void {
-    setMainFocus("chat");
+    selectRailTab("now");
   }
 
   function afterSuggestionQueueChanged(): void {
@@ -2119,8 +2174,8 @@ export function mountUnifiedShell(
   }
 
   function jumpToCurrentActivity(): void {
-    if (projectState.mainFocus !== "chat") {
-      setMainFocus("chat");
+    if (projectState.mainFocus !== "chat" || projectState.railTab !== "now") {
+      showNowChat();
     }
     if (hasProjectBlocker(projectState)) {
       showBlockerDetails();
@@ -2173,7 +2228,7 @@ export function mountUnifiedShell(
   const jumpToCurrentTurnProcess = jumpToCurrentActivity;
 
   function jumpToReviewSummary(): void {
-    setMainFocus("chat");
+    showNowChat();
     if (hasProjectBlocker(projectState)) {
       showBlockerDetails();
     }
@@ -2264,12 +2319,31 @@ export function mountUnifiedShell(
     startProjectTaskFromUi(btn.dataset.taskId);
   });
 
+  function handleRailStageAction(ev: Event): void {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!btn?.dataset.action) return;
+    if (btn.dataset.action === "open-projects") {
+      selectRailTab("projects");
+      return;
+    }
+    if (btn.dataset.action === "new-project") {
+      projectCallbacks.onNewProject();
+      return;
+    }
+    if (btn.dataset.action === "open-now") {
+      selectRailTab("now");
+    }
+  }
+  planFullEl.addEventListener("click", handleRailStageAction);
+  projectsEl.addEventListener("click", handleRailStageAction);
+  documentEl.addEventListener("click", handleRailStageAction);
+
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
-    if (projectState.mainFocus === "chat") return;
+    if (projectState.railTab === "now" && projectState.mainFocus === "chat") return;
     if (document.activeElement === input) return;
     ev.preventDefault();
-    closePlanMainFocus();
+    selectRailTab("now");
   });
 
   function refreshServices(): void {
@@ -3291,37 +3365,11 @@ export function mountUnifiedShell(
 
   root.addEventListener("click", handleReviewSuggestionClick, true);
 
-  // Icon bar: switch overlay panel
+  // Icon bar: each tab owns sidebar + main stage
   projectEls.iconBar.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".sidebar-icon-btn");
-    if (!btn?.dataset.panel) return;
-    const panel = btn.dataset.panel;
-    if (panel === "tasks") {
-      projectState.overlayPanel = null;
-      setMainFocus("chat");
-    } else {
-      projectState.switchConfirmTarget = null;
-      projectState.projectSearchQuery = "";
-      if (panel === "plan") {
-        openPlanFull();
-        return;
-      }
-      if (panel === "docs") {
-        if (projectState.mainFocus === "document") {
-          projectState.overlayPanel = null;
-          setMainFocus("chat");
-          renderProjectSidebar(projectEls, projectState, projectCallbacks);
-          return;
-        }
-        openDocumentReader();
-        return;
-      }
-      projectState.overlayPanel = panel as OverlayPanel;
-      if (panel === "threads") {
-        refreshProjectThreads();
-      }
-    }
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    if (!isRailTab(btn?.dataset.panel)) return;
+    selectRailTab(btn.dataset.panel);
   });
 
   // Phase 27 — Services panel actions
@@ -3413,9 +3461,7 @@ export function mountUnifiedShell(
 
   // Overlay back button
   projectEls.overlayBackBtn.addEventListener("click", () => {
-    projectState.overlayPanel = null;
-    projectState.switchConfirmTarget = null;
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    selectRailTab("now");
   });
 
   // Decision surface: plan overlay + suggestion stack + turn summary
@@ -3497,7 +3543,10 @@ export function mountUnifiedShell(
           projectCallbacks.onDesignConfirm();
           return;
         case "open-projects":
-          projectCallbacks.onOpenProjects();
+          selectRailTab("projects");
+          return;
+        case "open-now":
+          selectRailTab("now");
           return;
         case "new-project":
           projectCallbacks.onNewProject();
@@ -3611,8 +3660,7 @@ export function mountUnifiedShell(
     }
   });
 
-  // Overlay: project search + list + switch confirm
-  projectEls.overlayBody.addEventListener("click", (ev) => {
+  function handleRailListClick(ev: Event): void {
     const target = ev.target as HTMLElement;
 
     if (target.closest("#overlay-new-thread-btn")) {
@@ -3627,37 +3675,31 @@ export function mountUnifiedShell(
     const threadBtn = target.closest<HTMLButtonElement>(".overlay-thread-item");
     if (threadBtn?.dataset.threadId && !threadBtn.disabled) {
       projectCallbacks.onOpenThread(threadBtn.dataset.threadId);
-      projectState.overlayPanel = null;
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Project item click
-    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item");
+    const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item:not(.overlay-thread-item)");
     if (projectBtn?.dataset.projectId && !projectBtn.disabled) {
       const pid = projectBtn.dataset.projectId;
       const item = projectState.projects.find((p) => p.id === pid);
       if (item && item.sessionId && !item.isCurrent) {
-        // needs confirm: show inline switch confirm
         projectState.switchConfirmTarget = item;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
       } else {
-        // no session or current: switch directly
         projectCallbacks.onProjectSwitch(pid);
-        projectState.overlayPanel = null;
+        selectRailTab("now");
       }
-      renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
 
-    // Switch confirm actions (inside overlay body)
     if (target.closest("#overlay-switch-confirm")) {
       const confirmBtn = target.closest<HTMLButtonElement>("#overlay-switch-confirm-btn");
       const cancelBtn = target.closest<HTMLButtonElement>("#overlay-switch-cancel-btn");
       if (confirmBtn && projectState.switchConfirmTarget) {
-        projectCallbacks.onProjectSwitch(projectState.switchConfirmTarget.id);
-        projectState.overlayPanel = null;
+        const targetId = projectState.switchConfirmTarget.id;
         projectState.switchConfirmTarget = null;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        projectCallbacks.onProjectSwitch(targetId);
+        selectRailTab("now");
       } else if (cancelBtn) {
         projectState.switchConfirmTarget = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -3665,20 +3707,20 @@ export function mountUnifiedShell(
       return;
     }
 
-    // Document item click
-    const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item");
+    const docBtn = target.closest<HTMLButtonElement>(".overlay-doc-item, .doc-catalog-item");
     if (docBtn?.dataset.docPath) {
       openDocument(docBtn.dataset.docPath);
       return;
     }
 
-    // New doc button
     if (target.closest("#overlay-new-doc-btn") || target.closest('[data-action="overlay-new-doc"]')) {
       createProjectDocFromTitle();
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      return;
     }
-  });
+  }
+
+  projectEls.overlayBody.addEventListener("click", handleRailListClick);
+  projectEls.taskFlow.addEventListener("click", handleRailListClick);
 
   documentEl.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement;
@@ -3690,7 +3732,7 @@ export function mountUnifiedShell(
     const btn = target.closest<HTMLButtonElement>("[data-action]");
     if (!btn?.dataset.action) return;
     if (btn.dataset.action === "document-back") {
-      setMainFocus("chat");
+      selectRailTab("now");
       return;
     }
     if (btn.dataset.action === "create-doc") {
@@ -3722,30 +3764,29 @@ export function mountUnifiedShell(
   });
 
   // Overlay: search input + new-doc input
-  projectEls.overlayBody.addEventListener("input", (ev) => {
-    const input = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
-    if (input) {
-      projectState.projectSearchQuery = input.value;
+  function handleRailListInput(ev: Event): void {
+    const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
+    if (searchInput) {
+      projectState.projectSearchQuery = searchInput.value;
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       return;
     }
     const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
-    if (docInput) {
-      projectState.newDocName = docInput.value;
-      return;
-    }
-  });
+    if (docInput) projectState.newDocName = docInput.value;
+  }
 
-  // Overlay: new-doc input Enter key
-  projectEls.overlayBody.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-      const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
-      if (docInput) {
-        createProjectDocFromTitle();
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-      }
-    }
-  });
+  function handleRailListKeydown(ev: KeyboardEvent): void {
+    if (ev.key !== "Enter") return;
+    const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
+    if (!docInput) return;
+    createProjectDocFromTitle();
+    renderProjectSidebar(projectEls, projectState, projectCallbacks);
+  }
+
+  projectEls.overlayBody.addEventListener("input", handleRailListInput);
+  projectEls.taskFlow.addEventListener("input", handleRailListInput);
+  projectEls.overlayBody.addEventListener("keydown", handleRailListKeydown);
+  projectEls.taskFlow.addEventListener("keydown", handleRailListKeydown);
 
   // Change banner actions
   projectEls.changeBanner.addEventListener("click", (ev) => {
@@ -3775,7 +3816,7 @@ export function mountUnifiedShell(
           input.focus();
           input.style.height = "auto";
           input.style.height = Math.min(input.scrollHeight, 200) + "px";
-          setMainFocus("chat");
+          showNowChat();
         }
         projectState.codeFollowup = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -4190,10 +4231,12 @@ export function mountUnifiedShell(
         projectState.pendingPickerId = "";
         projectState.projectId = (event.project_id || "").trim();
         projectState.currentSessionId = event.session_id || "";
+        projectState.railTab = "now";
+        projectState.overlayPanel = null;
         freeChatActive = !projectState.projectId;
         client.listProjects();
         if (projectState.projectId) refreshProjectThreads();
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        setMainFocus("chat");
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
@@ -4217,6 +4260,9 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
+        if (projectState.mainFocus === "plan_full") renderPlanFullPane();
+        if (projectState.mainFocus === "document") renderDocumentPane();
         if (projectState.projectId) {
           refreshTopbar();
           if (!projectState.adoptPendingId) {
@@ -4292,7 +4338,7 @@ export function mountUnifiedShell(
           input.value = event.prefill;
           input.style.height = "auto";
           input.style.height = Math.min(input.scrollHeight, 200) + "px";
-          setMainFocus("chat");
+          showNowChat();
           setStatus("已准备清理请求；请确认内容后发送");
         } else {
           setStatus("已准备 git 清理指引；不会自动 revert 或提交");
@@ -4369,6 +4415,7 @@ export function mountUnifiedShell(
       case "project.list":
         applyProjectListEvent(projectState, event);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        if (projectState.mainFocus === "projects") renderProjectsPane();
         break;
 
       case "project.threads":
@@ -4823,15 +4870,7 @@ export function mountUnifiedShell(
   // Phase 34: workbench layout + empty gate
   emptyNewBtn.addEventListener("click", () => handleNewProject());
   emptyPickBtn.addEventListener("click", () => {
-    projectState.overlayPanel = "projects";
-    projectState.switchConfirmTarget = null;
-    projectState.projectSearchQuery = "";
-    renderProjectSidebar(projectEls, projectState, projectCallbacks);
-    try {
-      client.listProjects();
-    } catch {
-      /* ignore */
-    }
+    selectRailTab("projects");
   });
   emptyFreeChatBtn.addEventListener("click", () => {
     void handleFreeChat();

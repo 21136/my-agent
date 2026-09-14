@@ -207,8 +207,12 @@ export function renderDocumentReaderHtml(args: {
   currentContent: string;
   renderedHtml: string;
   newDocName: string;
+  includeCatalog?: boolean;
+  includeBack?: boolean;
 }): { html: string; outline: DocOutlineItem[] } {
   const outline = extractDocOutline(args.currentContent);
+  const includeCatalog = args.includeCatalog !== false;
+  const includeBack = Boolean(args.includeBack);
   const title = args.currentPath
     ? humanDocTitle(args.currentPath, docBasename(args.currentPath), args.currentContent)
     : "选择一篇文档";
@@ -220,23 +224,27 @@ export function renderDocumentReaderHtml(args: {
       ? args.renderedHtml
       : `<p class="doc-reader-empty">正在打开…</p>`)
     : `<p class="doc-reader-empty">从左侧打开一篇文档，在这里阅读全文。</p>`;
+  const back = includeBack
+    ? `<button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>`
+    : "";
+  const catalog = includeCatalog
+    ? `<aside class="unified-document-catalog">${renderDocCatalogHtml(args.docs, args.currentPath, {
+      newDocName: args.newDocName,
+      currentContent: args.currentContent,
+      inputId: "doc-reader-new-input",
+      createAction: "create-doc",
+    })}</aside>`
+    : "";
   const html = `<div class="unified-document-inner">
     <header class="unified-document-header">
-      <button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>
+      ${back}
       <div class="unified-document-heading">
         <h1>${escapeHtml(title)}</h1>
         ${pathLine}
       </div>
     </header>
-    <div class="unified-document-shell">
-      <aside class="unified-document-catalog">
-        ${renderDocCatalogHtml(args.docs, args.currentPath, {
-          newDocName: args.newDocName,
-          currentContent: args.currentContent,
-          inputId: "doc-reader-new-input",
-          createAction: "create-doc",
-        })}
-      </aside>
+    <div class="unified-document-shell${includeCatalog ? "" : " is-sidebar-catalog"}">
+      ${catalog}
       <article class="unified-document-reader">
         <div class="unified-document-content unified-markdown">${body}</div>
       </article>
