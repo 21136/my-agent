@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,11 +38,12 @@ class InteractiveTerminalUiTests(unittest.TestCase):
                         "cwd_absolute": str(paths.workspace / "demo"),
                         "state": "running",
                         "alive": True,
+                        "worker_pid": os.getpid(),
                         "exit_code": None,
                         "signal": None,
                         "reason": None,
-                        "created_at": "2026-09-09T00:00:00+00:00",
-                        "last_activity_at": "2026-09-09T00:01:00+00:00",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "last_activity_at": datetime.now(timezone.utc).isoformat(),
                         "output_start": 0,
                         "output_bytes": 21,
                     }
@@ -91,6 +94,58 @@ class InteractiveTerminalUiTests(unittest.TestCase):
 
         assert snapshot is not None
         self.assertFalse(snapshot["alive"])
+
+    def test_terminal_snapshot_marks_stale_running_as_lost(self) -> None:
+        from terminal_api import _snapshot
+
+        now = datetime(2026, 9, 14, 12, tzinfo=timezone.utc).timestamp()
+        snapshot = _snapshot(
+            {
+                "session_id": "it-0123456789abcdef",
+                "state": "running",
+                "alive": True,
+                "command": "python -i",
+                "last_activity_at": "2026-09-09T12:00:00+00:00",
+            },
+            now=now,
+        )
+
+        assert snapshot is not None
+        self.assertEqual(snapshot["state"], "lost")
+        self.assertFalse(snapshot["alive"])
+        self.assertIn("stale", snapshot["reason"] or "")
+
+    def test_terminal_list_persists_stale_running_session(self) -> None:
+        from terminal_api import dispatch_terminal_message
+
+        with temporary_agent_paths(copy_tool_dirs=("common/interactive_terminal",)) as paths:
+            session_dir = paths.data / "interactive-terminals" / "it-0123456789abcdef"
+            session_dir.mkdir(parents=True)
+            (session_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "session_id": "it-0123456789abcdef",
+                        "command": "python -i",
+                        "cwd": "workspace/demo",
+                        "state": "running",
+                        "alive": True,
+                        "created_at": "2026-09-09T12:00:00+00:00",
+                        "last_activity_at": "2026-09-09T12:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            listed = dispatch_terminal_message(
+                paths,
+                {"type": "terminal.list", "request_id": "stale-list-1"},
+            )
+            saved = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(listed["ok"])
+        self.assertEqual(listed["sessions"][0]["state"], "orphaned")
+        self.assertFalse(listed["sessions"][0]["alive"])
+        self.assertEqual(saved["state"], "orphaned")
+        self.assertFalse(saved["alive"])
 
     def test_terminal_output_preserves_cursor_contract(self) -> None:
         from terminal_api import dispatch_terminal_message

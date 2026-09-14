@@ -1,6 +1,19 @@
 /** Sidebar terminal list grouping, titles, and DOM patch helpers. */
 
 export const TERMINAL_ENDED_PREVIEW = 5;
+/** Match backend `_STALE_ACTIVE_SEC`: starting/running older than this is a zombie. */
+export const TERMINAL_STALE_ACTIVE_MS = 60 * 60 * 1000;
+
+export const TERMINAL_STATE_LABELS: Record<string, string> = {
+  starting: "正在启动",
+  running: "运行中",
+  closed: "已关闭",
+  exited: "已退出",
+  lost: "会话已丢失",
+  orphaned: "宿主已断开",
+  unsupported: "当前环境不支持",
+  failed: "启动失败",
+};
 
 export const TERMINAL_SCROLL_SELECTORS = [
   ".sidebar-terminals-list",
@@ -70,6 +83,29 @@ export function terminalIsActive(session: { state: string }): boolean {
   return session.state === "starting" || session.state === "running";
 }
 
+export function isStaleActiveHeartbeat(lastActivityAt: string | undefined, nowMs = Date.now()): boolean {
+  const parsed = Date.parse(lastActivityAt || "");
+  if (!Number.isFinite(parsed)) return false;
+  return nowMs - parsed >= TERMINAL_STALE_ACTIVE_MS;
+}
+
+export function reconcileTerminalSession(
+  session: TerminalListSession,
+  nowMs = Date.now(),
+): TerminalListSession {
+  if (!terminalIsActive(session)) return session;
+  const stale = isStaleActiveHeartbeat(session.last_activity_at, nowMs);
+  const dead = session.alive === false;
+  if (!stale && !dead) return session;
+  return {
+    ...session,
+    state: "lost",
+    alive: false,
+    reason: session.reason
+      || (stale ? "会话心跳过期，可能已断开" : "进程已不在运行"),
+  };
+}
+
 export function terminalNeedsAttention(session: { state: string }): boolean {
   return ATTENTION_STATES.has(session.state);
 }
@@ -78,6 +114,32 @@ export function terminalBucket(session: { state: string }): TerminalBucket {
   if (terminalIsActive(session)) return "active";
   if (terminalNeedsAttention(session)) return "attention";
   return "ended";
+}
+
+export function terminalDisplayStatusLabel(session: TerminalListSession, nowMs = Date.now()): string {
+  const display = reconcileTerminalSession(session, nowMs);
+  return TERMINAL_STATE_LABELS[display.state] || display.state || "未知状态";
+}
+
+export function terminalActivityCaption(
+  value: string | undefined,
+  options: { live?: boolean; nowMs?: number } = {},
+): string {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return value || "暂无活动记录";
+  const elapsed = Math.max(0, (options.nowMs ?? Date.now()) - timestamp);
+  const live = options.live !== false;
+  if (elapsed < 60_000) return live ? "刚刚活动" : "刚刚断开";
+  if (elapsed < 3_600_000) {
+    const mins = Math.floor(elapsed / 60_000);
+    return live ? `${mins} 分钟前活动` : `最后见于 ${mins} 分钟前`;
+  }
+  if (elapsed < 86_400_000) {
+    const hours = Math.floor(elapsed / 3_600_000);
+    return live ? `${hours} 小时前活动` : `最后见于 ${hours} 小时前`;
+  }
+  const days = Math.floor(elapsed / 86_400_000);
+  return live ? `${days} 天前活动` : `最后见于 ${days} 天前`;
 }
 
 function tokenizeCommand(command: string): string[] {
@@ -170,12 +232,13 @@ function byRecentThenId(a: TerminalListSession, b: TerminalListSession): number 
 }
 
 export function groupTerminalSessions(
-  sessions: TerminalListSession[],
+  rawSessions: TerminalListSession[],
   options: {
     selectedId?: string | null;
     endedCollapsed: boolean;
     endedShowAll: boolean;
     endedPreview?: number;
+    nowMs?: number;
   },
 ): {
   active: TerminalListSession[];
@@ -185,6 +248,8 @@ export function groupTerminalSessions(
   endedTotal: number;
   endedHiddenCount: number;
 } {
+  const nowMs = options.nowMs ?? Date.now();
+  const sessions = rawSessions.map((session) => reconcileTerminalSession(session, nowMs));
   const active = sessions.filter((session) => terminalBucket(session) === "active").sort(byRecentThenId);
   const attention = sessions.filter((session) => terminalBucket(session) === "attention").sort(byRecentThenId);
   const ended = sessions.filter((session) => terminalBucket(session) === "ended").sort(byRecentThenId);
@@ -226,6 +291,7 @@ function sessionFingerprint(session: TerminalListSession | null): unknown {
     session.exit_code ?? null,
     session.signal ?? null,
     session.reason ?? null,
+    terminalIsActive(session) && isStaleActiveHeartbeat(session.last_activity_at),
   ];
 }
 

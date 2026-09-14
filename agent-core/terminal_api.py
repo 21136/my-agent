@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,6 +35,9 @@ def _load_interactive_terminal(paths: AgentPaths):
     return module
 
 
+_STALE_ACTIVE_SEC = 3600
+
+
 def _int_or_none(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -42,7 +47,35 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _snapshot(raw: Any) -> dict[str, Any] | None:
+def _parse_iso_timestamp(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError, OSError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _active_heartbeat_is_stale(
+    last_activity_at: Any,
+    created_at: Any = "",
+    *,
+    now: float | None = None,
+) -> bool:
+    now_ts = time.time() if now is None else now
+    stamp = _parse_iso_timestamp(last_activity_at or created_at)
+    if stamp is None:
+        return False
+    return (now_ts - stamp) >= _STALE_ACTIVE_SEC
+
+
+def _snapshot(raw: Any, *, now: float | None = None) -> dict[str, Any] | None:
     """Flatten the evolved tool's nested result without exposing process paths."""
     if not isinstance(raw, dict):
         return None
@@ -56,6 +89,21 @@ def _snapshot(raw: Any) -> dict[str, Any] | None:
     if not isinstance(state_name, str) or not state_name.strip():
         state_name = "unknown"
     state_name = state_name.strip()
+    reason = state.get("reason") if isinstance(state.get("reason"), str) else None
+    if state_name in {"starting", "running"}:
+        stale = _active_heartbeat_is_stale(
+            state.get("last_activity_at"),
+            state.get("created_at"),
+            now=now,
+        )
+        if stale or not bool(state.get("alive")):
+            state_name = "lost"
+            if not reason:
+                reason = (
+                    "session heartbeat is stale; worker is no longer trusted"
+                    if stale
+                    else "worker process is no longer alive"
+                )
     return {
         "session_id": session_id.strip(),
         "command": str(state.get("command") or ""),
@@ -64,7 +112,7 @@ def _snapshot(raw: Any) -> dict[str, Any] | None:
         "alive": bool(state.get("alive")) and state_name in {"starting", "running"},
         "exit_code": _int_or_none(state.get("exit_code")),
         "signal": state.get("signal") if isinstance(state.get("signal"), str) else None,
-        "reason": state.get("reason") if isinstance(state.get("reason"), str) else None,
+        "reason": reason,
         "created_at": str(state.get("created_at") or ""),
         "last_activity_at": str(state.get("last_activity_at") or ""),
         "output_bytes": _int_or_none(state.get("output_bytes")) or 0,

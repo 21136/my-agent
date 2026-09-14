@@ -260,6 +260,57 @@ class InteractiveTerminalTests(unittest.TestCase):
             self.assertEqual(current["orphan_cleanup"], {"ok": True, "exit_code": 0})
             cleanup.assert_called_once_with(202, force=True)
 
+    def test_stale_running_session_with_reused_pid_is_lost_without_killing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            state = {
+                "session_id": "it-0000000000000001",
+                "worker_pid": os.getpid(),
+                "pid": os.getpid(),
+                "state": "running",
+                "alive": True,
+                "last_activity_at": "2020-01-01T00:00:00+00:00",
+            }
+            with patch.object(self.mod, "_terminate_pid_tree") as cleanup:
+                current = self.mod._refresh_orphan(directory, state)
+            self.assertEqual(current["state"], "lost")
+            self.assertFalse(current["alive"])
+            self.assertIn("stale", current["reason"])
+            cleanup.assert_not_called()
+            self.assertTrue(self.mod._pid_alive(os.getpid()))
+            saved = json.loads((directory / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["state"], "lost")
+
+    def test_stale_running_session_without_worker_pid_is_orphaned(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            current = self.mod._refresh_orphan(
+                directory,
+                {
+                    "session_id": "it-0000000000000001",
+                    "state": "running",
+                    "alive": True,
+                    "last_activity_at": "2020-01-01T00:00:00+00:00",
+                },
+            )
+            self.assertEqual(current["state"], "orphaned")
+            self.assertFalse(current["alive"])
+            self.assertIn("stale", current["reason"])
+
+    def test_fresh_running_session_with_live_worker_stays_running(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            state = {
+                "session_id": "it-0000000000000001",
+                "worker_pid": os.getpid(),
+                "state": "running",
+                "alive": True,
+                "last_activity_at": self.mod._utc_now(),
+            }
+            current = self.mod._refresh_orphan(directory, state)
+            self.assertEqual(current["state"], "running")
+            self.assertTrue(current["alive"])
+
     @unittest.skipUnless(os.name == "nt", "requires Windows process liveness semantics")
     def test_pid_alive_uses_windows_process_query(self) -> None:
         self.assertTrue(self.mod._pid_alive(os.getpid()))

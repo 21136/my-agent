@@ -9,15 +9,20 @@ import {
   SERVICE_SCROLL_SELECTORS,
   TERMINAL_ENDED_PREVIEW,
   TERMINAL_SCROLL_SELECTORS,
+  TERMINAL_STATE_LABELS,
   clearPanelHtml,
   groupTerminalSessions,
   patchPanelHtml,
+  reconcileTerminalSession,
   servicesPanelFingerprint,
+  terminalActivityCaption,
   terminalCwdLabel,
+  terminalDisplayStatusLabel,
   terminalHumanTitle,
   terminalIsActive,
   terminalsPanelFingerprint,
   terminalsSummaryParts,
+  type TerminalListSession,
 } from "./terminal-list";
 
 export type { RailTab };
@@ -2801,35 +2806,15 @@ export function setupProjectPanel(container: HTMLElement): {
   };
 }
 
-const TERMINAL_STATE_LABELS: Record<string, string> = {
-  starting: "正在启动",
-  running: "运行中",
-  closed: "已关闭",
-  exited: "已退出",
-  lost: "会话已丢失",
-  orphaned: "宿主已断开",
-  unsupported: "当前环境不支持",
-  failed: "启动失败",
-};
-
-function terminalStatusLabel(session: TerminalSessionItem): string {
-  return TERMINAL_STATE_LABELS[session.state] || session.state || "未知状态";
+function terminalStatusLabel(session: TerminalListSession): string {
+  return terminalDisplayStatusLabel(session);
 }
 
-function terminalStateClass(session: TerminalSessionItem): string {
-  return Object.prototype.hasOwnProperty.call(TERMINAL_STATE_LABELS, session.state)
-    ? session.state
+function terminalStateClass(session: TerminalListSession): string {
+  const display = reconcileTerminalSession(session);
+  return Object.prototype.hasOwnProperty.call(TERMINAL_STATE_LABELS, display.state)
+    ? display.state
     : "unknown";
-}
-
-function terminalActivityLabel(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return value || "暂无活动记录";
-  const elapsed = Math.max(0, Date.now() - timestamp);
-  if (elapsed < 60_000) return "刚刚活动";
-  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前活动`;
-  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前活动`;
-  return `${Math.floor(elapsed / 86_400_000)} 天前活动`;
 }
 
 function terminalDetailExitLabel(session: TerminalSessionItem): string {
@@ -2840,9 +2825,10 @@ function terminalDetailExitLabel(session: TerminalSessionItem): string {
 }
 
 function renderTerminalDetails(state: ProjectPanelState): string {
-  const session = state.terminalDetails;
-  if (!session) return "";
-  const exitLabel = terminalDetailExitLabel(session);
+  const raw = state.terminalDetails;
+  if (!raw) return "";
+  const session = reconcileTerminalSession(raw);
+  const exitLabel = terminalDetailExitLabel(raw);
   const reason = session.reason
     ? `<div class="sidebar-terminal-detail-reason">${escapeHtml(session.reason)}</div>`
     : "";
@@ -2858,6 +2844,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   const closeButton = terminalIsActive(session)
     ? `<button type="button" class="unified-btn unified-btn-danger" data-action="terminal-close" data-terminal-id="${escapeHtml(session.session_id)}">关闭会话</button>`
     : "";
+  const activity = terminalActivityCaption(session.last_activity_at, { live: terminalIsActive(session) });
   return `<div class="sidebar-terminal-details" id="terminalDetails">
     <div class="sidebar-terminal-details-header">
       <div>
@@ -2867,7 +2854,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
       <button type="button" class="sidebar-terminal-icon-btn" data-action="terminal-details-close" aria-label="关闭终端详情" title="关闭详情">×</button>
     </div>
     <div class="sidebar-terminal-details-command">${escapeHtml(session.command || "未命名命令")}</div>
-    <div class="sidebar-terminal-details-meta">${escapeHtml(session.cwd || ".")} · ${escapeHtml(terminalActivityLabel(session.last_activity_at))}</div>
+    <div class="sidebar-terminal-details-meta">${escapeHtml(session.cwd || ".")} · ${escapeHtml(activity)}</div>
     ${exitLabel || reason ? `<div class="sidebar-terminal-details-meta">${escapeHtml(exitLabel)}${exitLabel && reason ? " · " : ""}${reason}</div>` : ""}
     ${error}
     ${cursorNotice}
@@ -2881,13 +2868,14 @@ function renderTerminalDetails(state: ProjectPanelState): string {
 }
 
 function renderTerminalRow(state: ProjectPanelState, session: TerminalSessionItem): string {
-  const status = terminalStatusLabel(session);
-  const title = terminalHumanTitle(session.command || "", session.cwd || "");
-  const cwd = terminalCwdLabel(session.cwd || "");
-  const activity = terminalActivityLabel(session.last_activity_at);
-  const selected = state.terminalDetails?.session_id === session.session_id;
+  const display = reconcileTerminalSession(session);
+  const status = terminalStatusLabel(display);
+  const title = terminalHumanTitle(display.command || "", display.cwd || "");
+  const cwd = terminalCwdLabel(display.cwd || "");
+  const activity = terminalActivityCaption(display.last_activity_at, { live: terminalIsActive(display) });
+  const selected = state.terminalDetails?.session_id === display.session_id;
   const meta = [cwd, activity].filter(Boolean).join(" · ");
-  return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(session)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(session.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(session.command || title)}">
+  return `<button type="button" class="sidebar-terminal-row is-${terminalStateClass(display)}${selected ? " is-selected" : ""}" data-action="terminal-open" data-terminal-id="${escapeHtml(display.session_id)}" aria-pressed="${selected ? "true" : "false"}" title="${escapeHtml(display.command || title)}">
         <span class="sidebar-terminal-dot" aria-hidden="true"></span>
         <div class="sidebar-terminal-main">
           <div class="sidebar-terminal-primary"><span class="sidebar-terminal-status">${escapeHtml(status)}</span><span class="sidebar-terminal-command">${escapeHtml(title)}</span></div>

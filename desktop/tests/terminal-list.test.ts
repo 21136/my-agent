@@ -3,25 +3,32 @@ import {
   clearPanelHtml,
   groupTerminalSessions,
   patchPanelHtml,
+  reconcileTerminalSession,
+  terminalActivityCaption,
   terminalCwdLabel,
+  terminalDisplayStatusLabel,
   terminalHumanTitle,
   terminalsPanelFingerprint,
   terminalsSummaryParts,
 } from "../src/shells/unified/terminal-list.ts";
 
-function session(partial: Record<string, string>): {
+const NOW = Date.parse("2026-09-14T12:00:00Z");
+
+function session(partial: Record<string, string> & { alive?: boolean }): {
   session_id: string;
   command: string;
   cwd: string;
   state: string;
   last_activity_at: string;
+  alive?: boolean;
 } {
   return {
     session_id: partial.session_id || "it-1",
     command: partial.command || "python -i",
     cwd: partial.cwd || "workspace/demo",
     state: partial.state || "running",
-    last_activity_at: partial.last_activity_at || "2026-09-14T00:00:00Z",
+    last_activity_at: partial.last_activity_at || "2026-09-14T11:59:00Z",
+    ...(partial.alive === undefined ? {} : { alive: partial.alive }),
   };
 }
 
@@ -43,11 +50,11 @@ const grouped = groupTerminalSessions(
   [
     session({ session_id: "ended-old", state: "closed", last_activity_at: "2026-09-01T00:00:00Z" }),
     session({ session_id: "lost", state: "lost", last_activity_at: "2026-09-10T00:00:00Z" }),
-    session({ session_id: "run", state: "running", last_activity_at: "2026-09-14T00:00:00Z" }),
+    session({ session_id: "run", state: "running", last_activity_at: "2026-09-14T11:59:00Z" }),
     session({ session_id: "ended-new", state: "exited", last_activity_at: "2026-09-12T00:00:00Z" }),
     session({ session_id: "failed", state: "failed", last_activity_at: "2026-09-11T00:00:00Z" }),
   ],
-  { endedCollapsed: true, endedShowAll: false },
+  { endedCollapsed: true, endedShowAll: false, nowMs: NOW },
 );
 assert.deepEqual(grouped.active.map((item) => item.session_id), ["run"]);
 assert.deepEqual(grouped.attention.map((item) => item.session_id), ["failed", "lost"]);
@@ -60,7 +67,7 @@ const preview = groupTerminalSessions(
     state: "closed",
     last_activity_at: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
   })),
-  { endedCollapsed: false, endedShowAll: false, endedPreview: 5 },
+  { endedCollapsed: false, endedShowAll: false, endedPreview: 5, nowMs: NOW },
 );
 assert.equal(preview.endedVisible.length, 5);
 assert.equal(preview.endedHiddenCount, 3);
@@ -70,12 +77,43 @@ const selected = groupTerminalSessions(
     session({ session_id: "ended-a", state: "closed" }),
     session({ session_id: "ended-b", state: "exited" }),
   ],
-  { selectedId: "ended-b", endedCollapsed: true, endedShowAll: false },
+  { selectedId: "ended-b", endedCollapsed: true, endedShowAll: false, nowMs: NOW },
 );
 assert.deepEqual(selected.endedVisible.map((item) => item.session_id), ["ended-b"]);
 
 assert.deepEqual(terminalsSummaryParts(1, 6, 54), ["1 运行中", "6 需处理"]);
 assert.deepEqual(terminalsSummaryParts(0, 0, 54), ["无活动会话"]);
+
+const staleRunning = session({
+  session_id: "zombie",
+  state: "running",
+  last_activity_at: "2026-09-09T12:00:00Z",
+  alive: true,
+});
+const reconciledZombie = reconcileTerminalSession(staleRunning, NOW);
+assert.equal(reconciledZombie.state, "lost");
+assert.equal(reconciledZombie.alive, false);
+assert.equal(terminalDisplayStatusLabel(staleRunning, NOW), "会话已丢失");
+assert.match(terminalActivityCaption(staleRunning.last_activity_at, { live: false, nowMs: NOW }), /最后见于 5 天前/);
+assert.notEqual(terminalDisplayStatusLabel(staleRunning, NOW), "运行中");
+
+const staleGrouped = groupTerminalSessions(
+  [
+    session({ session_id: "fresh", state: "running", last_activity_at: "2026-09-14T11:50:00Z" }),
+    staleRunning,
+  ],
+  { endedCollapsed: true, endedShowAll: false, nowMs: NOW },
+);
+assert.deepEqual(staleGrouped.active.map((item) => item.session_id), ["fresh"]);
+assert.deepEqual(staleGrouped.attention.map((item) => item.session_id), ["zombie"]);
+assert.deepEqual(terminalsSummaryParts(staleGrouped.active.length, staleGrouped.attention.length, staleGrouped.endedTotal), [
+  "1 运行中",
+  "1 需处理",
+]);
+
+const freshLive = session({ session_id: "fresh-live", last_activity_at: "2026-09-14T11:59:30Z" });
+assert.equal(terminalDisplayStatusLabel(freshLive, NOW), "运行中");
+assert.equal(terminalActivityCaption(freshLive.last_activity_at, { live: true, nowMs: NOW }), "刚刚活动");
 
 const fingerprintA = terminalsPanelFingerprint({
   terminalSessions: [session({ session_id: "run", last_activity_at: "2026-09-14T00:00:00Z" })],

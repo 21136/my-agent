@@ -177,7 +177,8 @@ Services · 1 个运行中                    [展开]
 
 ### 5.2 过期与冲突
 
-- snapshot 带 `last_activity_at`，前端按服务端时间解析，不用本机时间直接判断存活。
+- snapshot 带 `last_activity_at`。`starting`/`running` 且心跳超过 60 分钟（长于 idle/lifetime 上限）在 `terminal.list` 时落盘为 `lost`/`orphaned`，不得继续显示「运行中」。PID 看起来仍活着也不能杀：重启后可能已被别的进程复用。
+- 前端同样按心跳调和：禁止「运行中」与「N 天前活动」并列；失活行用「会话已丢失」+「最后见于 …」。
 - 新 snapshot 的 `session_id` 相同但状态更晚时覆盖旧状态；旧响应不得回写新状态。
 - 详情输出响应必须校验 `session_id` 和请求 cursor，防止切换会话时串流。
 - `lost` 不是“暂时没刷新到”，不能自动改回 `running`；只有新的合法 start 才产生新的 session id。
