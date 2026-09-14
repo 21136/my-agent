@@ -662,18 +662,51 @@ const USER_BLOCKER_LABELS: Record<string, string> = {
   plan_status: "方案确认",
   review: "交付检查",
   review_blockers: "交付检查中的问题",
+  ".plan-agent/manifest.json": "项目状态清单",
 };
 
 const USER_BLOCKER_REASON_LABELS: Record<string, string> = {
   documentation_in_progress: "项目文档正在整理中，当前还没有进入实现阶段。",
   design_not_confirmed: "项目设计尚未完成，当前还不能进入实现阶段。",
+  design_incomplete: "项目设计还不完整。",
   plan_not_confirmed: "项目方案尚未确认，当前还不能开始实现。",
   scope_incomplete: "项目范围或验收标准还不完整。",
   no_executable_tasks: "当前没有满足依赖条件的可执行任务。",
+  no_project: "还没有绑定项目。",
   manifest_unavailable: "项目状态清单暂时不可用，无法安全继续。",
   l2_stale: "项目文档与当前变更不一致，需要先更新受影响内容。",
   review_blocked: "交付检查没有通过，仍有问题需要处理。",
+  tasks_not_started: "任务还没有开始。",
+  tasks_in_progress: "任务正在实现中。",
+  verification_pending: "任务已经做完，交付结果还在等待检查。",
+  verification_artifact_stale: "验证相关文档需要先更新。",
+  verification_passed: "验证已经通过。",
 };
+
+const USER_FAILURE_CLASS_LABELS: Record<string, string> = {
+  A: "最近一次执行没有给出可用结果。",
+  B: "环境或依赖没有就绪。",
+  C: "测试或构建没有通过。",
+  D: "权限或路径不允许这次操作。",
+  E: "这次执行出错，需要换一种做法。",
+  F: "输出不完整，无法确认结果。",
+};
+
+function looksLikeInternalToken(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) return false;
+  if (/^[A-F]$/.test(normalized)) return true;
+  return /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+$/.test(normalized);
+}
+
+function humanizeVisibleText(value: string, fallback: string): string {
+  const normalized = value.trim();
+  if (!normalized) return fallback;
+  return USER_BLOCKER_REASON_LABELS[normalized]
+    || USER_FAILURE_CLASS_LABELS[normalized]
+    || USER_BLOCKER_LABELS[normalized]
+    || (looksLikeInternalToken(normalized) ? fallback : normalized);
+}
 
 export interface ProjectBlockerDetails {
   reason: string;
@@ -683,14 +716,15 @@ export interface ProjectBlockerDetails {
 }
 
 function userFacingBlockerReason(reason: string): string {
+  const fallback = "当前还不能继续，请查看原因。";
   const normalized = reason.trim();
-  if (!normalized) return "当前阶段出口尚未满足，系统已暂停继续推进。";
-  return USER_BLOCKER_REASON_LABELS[normalized]
-    || (normalized.includes("documentation_in_progress")
-      ? USER_BLOCKER_REASON_LABELS.documentation_in_progress
-      : normalized.includes("design_not_confirmed")
-        ? USER_BLOCKER_REASON_LABELS.design_not_confirmed
-        : normalized);
+  if (!normalized) return fallback;
+  if (USER_BLOCKER_REASON_LABELS[normalized]) return USER_BLOCKER_REASON_LABELS[normalized];
+  if (normalized.includes("verification_pending")) return USER_BLOCKER_REASON_LABELS.verification_pending;
+  if (normalized.includes("documentation_in_progress")) return USER_BLOCKER_REASON_LABELS.documentation_in_progress;
+  if (normalized.includes("design_not_confirmed")) return USER_BLOCKER_REASON_LABELS.design_not_confirmed;
+  if (normalized.includes("verification_artifact_stale")) return USER_BLOCKER_REASON_LABELS.verification_artifact_stale;
+  return humanizeVisibleText(normalized, fallback);
 }
 
 function userFacingBlockerSummary(state: ProjectPanelState): string {
@@ -701,7 +735,8 @@ function userFacingBlockerSummary(state: ProjectPanelState): string {
     return userFacingBlockerReason(state.executionStageReason);
   }
   const labels = Array.from(new Set(
-    state.executionStageBlockers.map((item) => USER_BLOCKER_LABELS[item] || item)
+    state.executionStageBlockers
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
       .filter(Boolean),
   ));
   return labels.length > 0
@@ -730,7 +765,7 @@ export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerD
   const stageLabel = USER_STAGE_LABELS[getExecutionStage(state)] || "当前阶段";
   const blockerLabels = Array.from(new Set(
     [...state.executionStageBlockers, ...state.executionStageMissing]
-      .map((item) => USER_BLOCKER_LABELS[item] || item)
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
       .filter(Boolean),
   ));
   const impact = reviewBlocked
@@ -898,9 +933,21 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
   const executionStage = getExecutionStage(state);
   const stageLabel = USER_STAGE_LABELS[executionStage];
   const blocker = userFacingBlockerSummary(state);
+  const reasonKey = state.executionStageReason.trim();
+  if (hasActualProjectBlocker(state) && reasonKey === "verification_pending" && !state.reviewProgressBlocked) {
+    return {
+      status: "decision",
+      statusLabel: "待验证",
+      title: "交付结果待检查",
+      summary: USER_BLOCKER_REASON_LABELS.verification_pending,
+      nextStep: "先跑验收并查看验证证据。",
+      action: "run-verify",
+      actionLabel: "跑验收",
+    };
+  }
   if (hasActualProjectBlocker(state)) {
     const title = isRunawayV2(state) && state.runawayUserLine
-      ? state.runawayUserLine
+      ? humanizeVisibleText(state.runawayUserLine, "需要你的处理")
       : (state.runawayEnabled ? "需要你的处理" : "当前无法继续");
     return {
       status: "blocked",
@@ -938,7 +985,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       status: "failed",
       statusLabel: "验证未通过",
       title: "上一步没有完成",
-      summary: state.turnFailureClass || "最近一次执行或验证没有通过。",
+      summary: humanizeVisibleText(state.turnFailureClass, "最近一次执行或验证没有通过。"),
       nextStep: "查看失败原因，再决定修复、重试或调整方案。",
       action: "jump-turn-process",
       actionLabel: "查看失败原因",
@@ -1288,6 +1335,12 @@ function renderStageBasis(state: ProjectPanelState, stage: FlowStage): string {
     case "release":
       lines = [`清单：RELEASE@${revision("RELEASE.md")}`, `人工验收：${state.milestoneAccepted ? "已记录" : "待人工验收"}`];
       break;
+    case "documentation":
+      lines = ["资料正在整理，完成后会汇总待完善项。"];
+      break;
+    default:
+      lines = [];
+      break;
   }
   return `<div class="textbook-stage-basis"><div class="textbook-section-label">阶段依据</div>${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`;
 }
@@ -1343,9 +1396,14 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
         : `<button type="button" class="unified-btn unified-btn-accent" data-action="accept-milestone">本 milestone 验收</button>`;
       break;
   }
-  const renderDocumentGroup = (label: string, items: string[], tone: string): string => items.length
-    ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${items.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
-    : "";
+  const renderDocumentGroup = (label: string, items: string[], tone: string): string => {
+    const chips = items
+      .map((item) => USER_BLOCKER_LABELS[item] || (looksLikeInternalToken(item) ? "" : item))
+      .filter(Boolean);
+    return chips.length
+      ? `<div class="textbook-stage-group is-${tone}"><div class="textbook-section-label">${label}</div><div>${chips.map((item) => `<span class="textbook-missing-chip">${escapeHtml(item)}</span>`).join("")}</div></div>`
+      : "";
+  };
   const actualBlocker = hasActualProjectBlocker(state);
   const blockerSummary = actualBlocker
     ? userFacingBlockerSummary(state)
@@ -1370,7 +1428,7 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
   const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
   const reviewPassed = state.reviewVerdict === "pass" && state.reviewBlockersCount === 0;
   const runawayStatus = state.runawayEnabled && state.runawayStatus
-    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(state.runawayStatus)}</div>`
+    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(humanizeVisibleText(state.runawayStatus, "进行中"))}</div>`
     : "";
   let goal = "系统会在这里告诉你当前进展。";
   let stat = "";
@@ -1829,10 +1887,54 @@ export function renderProjectsStage(state: ProjectPanelState): string {
   </div>`;
 }
 
+function nowStuckReason(state: ProjectPanelState, view: ProjectGoalViewModel): string {
+  if (view.status === "failed") {
+    return humanizeVisibleText(view.summary, "最近一次执行或验证没有通过。");
+  }
+  if (view.status === "blocked" || hasActualProjectBlocker(state)) {
+    return userFacingBlockerSummary(state);
+  }
+  if (view.status === "decision" && (state.tasksAllDone || view.action === "run-verify")) {
+    return USER_BLOCKER_REASON_LABELS.verification_pending;
+  }
+  return "";
+}
+
+function renderNowFocusCard(state: ProjectPanelState, view: ProjectGoalViewModel): string {
+  const currentTask = (state.turnArmedText || state.nextTask || "").trim();
+  const nextStep = view.status === "processing" && currentTask
+    ? currentTask
+    : (view.nextStep || view.title);
+  const stuck = nowStuckReason(state, view);
+  const stuckHtml = stuck
+    ? `<div class="now-focus-block">
+        <div class="now-focus-label">为什么卡住</div>
+        <p class="now-focus-reason">${escapeHtml(stuck)}</p>
+      </div>`
+    : "";
+  const primary = view.action && view.actionLabel
+    ? `<button type="button" class="unified-btn${view.status === "blocked" ? "" : " unified-btn-accent"}" data-action="${escapeHtml(view.action)}">${escapeHtml(view.actionLabel)}</button>`
+    : "";
+  const secondary = view.secondaryAction && view.secondaryActionLabel
+    ? `<button type="button" class="unified-btn" data-action="${escapeHtml(view.secondaryAction)}">${escapeHtml(view.secondaryActionLabel)}</button>`
+    : "";
+  const actions = primary || secondary
+    ? `<div class="sidebar-status-card-actions now-focus-actions">${primary}${secondary}</div>`
+    : "";
+  return `<section class="sidebar-status-card now-focus-card" aria-label="当下焦点">
+    <div class="now-focus-block">
+      <div class="now-focus-label">下一步</div>
+      <p class="now-focus-next">${escapeHtml(nextStep)}</p>
+    </div>
+    ${stuckHtml}
+    ${actions}
+  </section>`;
+}
+
 function renderNowRailSidebar(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (!state.projectId && !state.switchInProgress) {
     if (state.detectedProject) return "";
-    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步。");
   }
   return renderDecisionSurface(state, callbacks);
 }
@@ -1906,72 +2008,13 @@ function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanel
     });
   }
   if (!state.projectId) {
-    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步、进展和阻塞。");
+    return renderRailBindEmpty("先打开或新建一个项目", "绑定项目后，这里会显示下一步。");
   }
-  if (state.runawayEnabled) {
-    const view = deriveProjectGoalViewModel(state);
-    const currentTask = (state.turnArmedText || state.nextTask || "").trim();
-    let summary = view.summary || "系统正在处理当前目标。";
-    if (isRunawayV2(state) && state.runawayChecklist && state.runawayChecklist.total > 0) {
-      const checklist = `验收 ${state.runawayChecklist.passed}/${state.runawayChecklist.total}`;
-      if (!summary.includes("验收")) summary = `${summary} · ${checklist}`;
-    }
-    const showFootnote = view.status === "blocked" || view.status === "decision" || view.status === "failed";
-    return renderSidebarStatusCard({
-      ariaLabel: "自动执行进展",
-      title: view.title,
-      summary,
-      detail: currentTask && view.status === "processing" ? currentTask : undefined,
-      footnote: showFootnote ? view.nextStep : (view.status === "processing" ? view.nextStep : undefined),
-      action: view.action,
-      actionLabel: view.actionLabel,
-      secondaryAction: view.secondaryAction,
-      secondaryActionLabel: view.secondaryActionLabel,
-      actionAccent: view.status !== "blocked",
-    });
-  }
+  void callbacks;
   const view = deriveProjectGoalViewModel(state);
-  const currentTask =
-    (state.turnArmedText || "").trim()
-    || (state.nextTask || "").trim()
-    || state.taskPhases
-      .flatMap((phase) => phase.tasks)
-      .find((task) => task.status === "current" && !task.done)?.text
-    || "";
-  let html = renderFlowRail(state) + renderStagePlanCard(state, callbacks);
-  html += renderDropTaskChoice(state);
-  if (isSidebarGoalCard(view)) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "需要处理的事项",
-      title: view.title,
-      summary: view.summary,
-      footnote: view.nextStep,
-      action: view.action,
-      actionLabel: view.actionLabel,
-      secondaryAction: view.secondaryAction,
-      secondaryActionLabel: view.secondaryActionLabel,
-      actionAccent: view.status !== "blocked",
-    });
-  } else if (currentTask) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "当前任务",
-      title: currentTask,
-      action: state.projectId ? "open-full-plan" : null,
-      actionLabel: state.projectId ? "查看任务" : null,
-    });
-  } else if (state.projectId) {
-    html += renderSidebarStatusCard({
-      ariaLabel: "当前任务",
-      title: "当前没有待处理任务",
-      summary: "可以从任务列表选择下一项，或继续补充当前目标。",
-      action: "open-full-plan",
-      actionLabel: "查看任务",
-    });
-  }
-  html += renderSuggestionStack(state);
-  html += renderTurnSummary(state);
-  html += renderReliabilityStrip(state);
-  return html;
+  // User-facing Now rail: one focus card only. Textbook flow/stage/artifact
+  // dumps and CHG ledgers are agent-internal and must not appear here.
+  return renderNowFocusCard(state, view) + renderDropTaskChoice(state);
 }
 
 function renderDetailedReviewProgressBanner(state: ProjectPanelState): string {
@@ -1988,11 +2031,11 @@ function planStatusLabel(state: ProjectPanelState): string {
   if (state.runawayEnabled) {
     if (isRunawayV2(state)) {
       if (state.turnInProgress) return RUNAWAY_STATUS.processing;
-      if (state.runawayBlocked) return state.runawayUserLine || state.runawayStatus || "需要处理";
-      if (state.runawayUserLine) return state.runawayUserLine;
+      if (state.runawayBlocked) return humanizeVisibleText(state.runawayUserLine || state.runawayStatus, "需要处理");
+      if (state.runawayUserLine) return humanizeVisibleText(state.runawayUserLine, RUNAWAY_STATUS.idle);
       return RUNAWAY_STATUS.idle;
     }
-    if (state.runawayStatus) return state.runawayStatus;
+    if (state.runawayStatus) return humanizeVisibleText(state.runawayStatus, RUNAWAY_STATUS.idle);
   }
   if (state.planStatus === "confirmed") {
     if (state.tasksAllDone && state.tasksTotal > 0) {
@@ -2351,17 +2394,6 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 
 function renderChangeBanner(state: ProjectPanelState): string {
   if (state.runawayEnabled) return "";
-  const recentLedger = state.changeTimeline.slice(-3).reverse();
-  const ledgerRows = recentLedger.map((change) => {
-    const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
-    const impact = affected.length > 0 ? `ID: ${affected.join(", ")}` : "ID: none";
-    const stale = change.stale_docs.length > 0 ? `stale: ${change.stale_docs.join(", ")}` : "stale: none";
-    const replan = change.replan_required ? "需要重新规划" : "无需重新规划";
-    return `<div class="sidebar-change-banner-changes"><strong>${escapeHtml(change.change_id)}</strong> · ${escapeHtml(change.paths.join(", "))}<br>${escapeHtml(impact)}<br>${escapeHtml(stale)} · ${replan}</div>`;
-  }).join("");
-  const ledgerHtml = recentLedger.length > 0
-    ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
-    : "";
   // Plan confirmation (draft / plan_dirty with overlay)
   const needsPlanConfirm =
     !state.runawayEnabled && state.planOverlay && state.planStatus !== "confirmed";
@@ -2446,7 +2478,7 @@ function renderChangeBanner(state: ProjectPanelState): string {
     </div>`;
   }
 
-  return ledgerHtml;
+  return "";
 }
 
 // ---- project event application (keep compat) ----
