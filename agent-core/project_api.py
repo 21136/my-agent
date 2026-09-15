@@ -228,10 +228,13 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             not bool(getattr(session.meta, "project_runaway_enabled", False))
             and plan_status in {"draft", "plan_dirty"}
             and workflow_stage == "requirements"
+            and str(getattr(session.meta, "project_entry", "") or "") != "direct"
         ),
         "needs_design_confirm": (
             not bool(getattr(session.meta, "project_runaway_enabled", False))
             and workflow_stage == "documentation"
+            and str(getattr(session.meta, "project_entry", "") or "") != "direct"
+            and project_template_of(manifest) != "light"
         ),
         "needs_documentation": (
             not bool(getattr(session.meta, "project_runaway_enabled", False))

@@ -466,6 +466,18 @@ def is_runaway_harness_utterance(text: str) -> bool:
     return bool(_RUNAWAY_HARNESS_UTTERANCE_RE.search(text or ""))
 
 
+def is_internal_harness_chat_line(text: str) -> bool:
+    """True for harness/runaway routing lines that must not appear in ordinary chat."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if is_runaway_harness_utterance(stripped):
+        return True
+    if stripped.startswith("[狂奔续接]") or "[狂奔续接]" in stripped[:32]:
+        return True
+    return False
+
+
 _RUNAWAY_CONTINUE_EXACT = frozenset(
     {
         "继续",

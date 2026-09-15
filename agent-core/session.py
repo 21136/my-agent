@@ -499,6 +499,7 @@ class Session:
     turn_intent: str | None = field(default=None, compare=False, repr=False)
     scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
     direct_implement_turn: bool = field(default=False, compare=False, repr=False)
+    skip_ordinary_plan_spawn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
@@ -915,6 +916,8 @@ def _user_text_from_jsonl_line(line: str) -> str:
     if not content:
         return ""
     if any(content.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+        return ""
+    if _ui_skip_chat_text(content):
         return ""
     return content
 
@@ -1377,6 +1380,7 @@ def build_anchor_message(session: Session) -> dict[str, str]:
 
 
 SEED_PREFIX = "[上下文衔接]"
+_UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]", SEED_PREFIX, "[Harness]")
 
 
 def build_seed_message(
@@ -1399,7 +1403,20 @@ def build_seed_message(
     return {"role": "user", "content": "\n".join(parts)}
 
 
-_UI_SKIP_USER_PREFIXES = (ANCHOR_HEADER, "[内核]", SEED_PREFIX)
+def _ui_skip_chat_text(text: str) -> bool:
+    """Hide kernel/harness routing lines from Desktop chat history."""
+    if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+        return True
+    if text.startswith("狂奔模式：") or text.startswith("狂奔模式:"):
+        return True
+    try:
+        from exec_reliability import is_internal_harness_chat_line
+
+        if is_internal_harness_chat_line(text):
+            return True
+    except Exception:
+        pass
+    return False
 _DEFAULT_SESSION_HISTORY_MAX_ITEMS = 200
 
 
@@ -1436,7 +1453,7 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
             text = content.strip()
             if not text:
                 continue
-            if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+            if _ui_skip_chat_text(text):
                 continue
             if text == last_user:
                 continue
@@ -1449,6 +1466,8 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
                 continue
             text = content.strip()
             if not text:
+                continue
+            if _ui_skip_chat_text(text):
                 continue
             items.append({"role": "assistant", "text": text})
             last_user = None
@@ -1487,7 +1506,7 @@ def build_session_chat_history_from_path(
                     text = content.strip()
                     if not text:
                         continue
-                    if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
+                    if _ui_skip_chat_text(text):
                         continue
                     if text == last_user:
                         continue
@@ -1502,6 +1521,8 @@ def build_session_chat_history_from_path(
                         continue
                     text = content.strip()
                     if not text:
+                        continue
+                    if _ui_skip_chat_text(text):
                         continue
                     total += 1
                     items.append({"role": "assistant", "text": text})

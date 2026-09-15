@@ -1216,6 +1216,7 @@ def build_system_prompt(
                 format_project_overlay,
                 get_delivery_profile,
                 is_project_continue_utterance,
+                ordinary_skip_stage_walls,
                 project_dir,
                 read_milestone_review_overlay_key,
                 read_task_stats,
@@ -1283,6 +1284,8 @@ def build_system_prompt(
                 runaway_acceptance_passed=bool(
                     getattr(session.meta, "project_runaway_acceptance_passed", False)
                 ),
+                skip_stage_walls=ordinary_skip_stage_walls(session),
+                project_entry=str(getattr(session.meta, "project_entry", "") or ""),
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

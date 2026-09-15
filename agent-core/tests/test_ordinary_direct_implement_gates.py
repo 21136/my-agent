@@ -108,31 +108,51 @@ class ProjectEntryTreatTests(unittest.TestCase):
         )
         self.assertTrue(should_treat_ordinary_direct_implement(session, "继续改文件"))
 
-    def test_blocked_stages_never_treat(self) -> None:
-        for stage in ("documentation", "design"):
+    def test_entry_direct_skips_stage_walls(self) -> None:
+        for stage in ("documentation", "design", "verification"):
             session = self._bound(project_entry="direct", project_workflow_stage=stage)
-            self.assertFalse(
-                should_treat_ordinary_direct_implement(session, "直接实现"),
+            self.assertTrue(
+                should_treat_ordinary_direct_implement(session, "继续改文件"),
                 msg=stage,
             )
-            phrase = self._bound(project_workflow_stage=stage)
-            self.assertFalse(
-                should_treat_ordinary_direct_implement(phrase, "不要只出计划，直接实现"),
-                msg=f"phrase-{stage}",
-            )
 
-    def test_phrase_fallback_off_when_entry_is_plan(self) -> None:
+    def test_phrase_fallback_off_when_entry_is_plan_unless_explicit(self) -> None:
         session = self._bound(project_entry="plan")
-        self.assertFalse(should_treat_ordinary_direct_implement(session, "直接实现 T-001"))
+        self.assertFalse(should_treat_ordinary_direct_implement(session, "帮我修个登录 bug"))
+        self.assertTrue(
+            should_treat_ordinary_direct_implement(session, "不要只出计划，直接实现 T-001")
+        )
+
+    def test_execute_intent_treats_unset_entry_as_direct(self) -> None:
+        session = self._bound()
+        self.assertTrue(
+            should_treat_ordinary_direct_implement(
+                session, "帮我把登录改成 JWT", turn_intent="execute"
+            )
+        )
+        self.assertFalse(
+            should_treat_ordinary_direct_implement(
+                session, "先规划一下整体架构", turn_intent="plan"
+            )
+        )
 
     def test_runaway_never_treats_ordinary_direct(self) -> None:
         session = self._bound(project_entry="direct", project_runaway_enabled=True)
         self.assertFalse(should_treat_ordinary_direct_implement(session, "直接实现"))
 
-    def test_auto_confirm_skips_documentation_and_design(self) -> None:
+    def test_auto_confirm_from_documentation_and_design(self) -> None:
         for stage in ("documentation", "design"):
             session = self._bound(project_workflow_stage=stage)
-            self.assertIsNone(maybe_auto_confirm_plan_for_direct_implement(session))
+            tasks = session.paths.workspace / "demo" / "TASKS.md"
+            tasks.parent.mkdir(parents=True, exist_ok=True)
+            tasks.write_text("- [ ] T-001 demo\n", encoding="utf-8")
+            notice = maybe_auto_confirm_plan_for_direct_implement(session)
+            self.assertIsNotNone(notice, msg=stage)
+            assert notice is not None
+            self.assertNotIn("未能自动确认", notice, msg=stage)
+            self.assertEqual(session.meta.project_entry, "direct", msg=stage)
+            self.assertEqual(session.meta.project_plan_status, "confirmed", msg=stage)
+            self.assertEqual(session.meta.project_workflow_stage, "implementation", msg=stage)
 
 
 class ProjectDirectImplementCliTests(unittest.TestCase):
@@ -216,9 +236,9 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         self.assertNotEqual(session.meta.project_entry, "direct")
         self.assertEqual(session.meta.project_plan_status, "draft")
 
-    def test_reject_documentation_and_design(self) -> None:
-        session, paths = self._new_project("stage-block")
-        for stage, needle in (("documentation", "文档整理"), ("design", "设计阶段")):
+    def test_direct_implement_from_documentation_and_design(self) -> None:
+        session, paths = self._new_project("stage-direct")
+        for stage in ("documentation", "design"):
             session.meta.project_workflow_stage = stage
             session.meta.project_plan_status = "draft"
             session.meta.project_entry = ""
@@ -226,12 +246,12 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
             assert command is not None
             outputs: list[str] = []
             result = run_project_command(session, paths, command, output_fn=outputs.append)
-            self.assertFalse(result.meta_changed, stage)
-            self.assertTrue(any(line.startswith("error:") and needle in line for line in outputs), outputs)
-            self.assertEqual(session.meta.project_plan_status, "draft", stage)
-            self.assertEqual(session.meta.project_entry, "", stage)
+            self.assertTrue(result.meta_changed, stage)
+            self.assertEqual(session.meta.project_entry, "direct", stage)
+            self.assertEqual(session.meta.project_plan_status, "confirmed", stage)
+            self.assertEqual(session.meta.project_workflow_stage, "implementation", stage)
 
-    def test_reject_already_confirmed(self) -> None:
+    def test_already_confirmed_switches_to_direct_entry(self) -> None:
         session, paths = self._new_project("already-confirmed")
         run_project_command(
             session,
@@ -240,6 +260,7 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
             output_fn=lambda _line: None,
         )
         self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertEqual(session.meta.project_entry, "plan")
         outputs: list[str] = []
         result = run_project_command(
             session,
@@ -247,9 +268,9 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
             parse_project_command("项目 直接实现"),  # type: ignore[arg-type]
             output_fn=outputs.append,
         )
-        self.assertFalse(result.meta_changed)
-        self.assertTrue(any("draft/plan_dirty" in line or "阶段" in line for line in outputs))
-        self.assertEqual(session.meta.project_entry, "plan")
+        self.assertTrue(result.meta_changed)
+        self.assertEqual(session.meta.project_entry, "direct")
+        self.assertEqual(session.meta.project_plan_status, "confirmed")
 
 
 class DirectImplementToolFilterTests(unittest.TestCase):
