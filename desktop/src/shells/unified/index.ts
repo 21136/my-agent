@@ -22,6 +22,7 @@ import {
   renderPlanTaskFlow,
   applyProjectStateEvent,
   resetProjectScopedState,
+  beginAtomicProjectSwitch,
   shouldApplyProjectEvent,
   applyProjectListEvent,
   applyProjectPlanState,
@@ -55,6 +56,7 @@ import {
   type MainFocus,
 } from "./plan-review";
 import { isRailTab, mainFocusForRail, type RailTab } from "./rail";
+import { isCrossProjectSession } from "./project-switch-state";
 import {
   adoptPathFromNotice,
   lastFailedTool,
@@ -556,6 +558,9 @@ export function mountUnifiedShell(
           </div>
         </div>
         <div class="unified-stage" id="unified-stage">
+          <div class="unified-switch-mask hidden" id="unified-switch-mask" aria-live="polite">
+            <div class="unified-switch-mask-card">正在加载项目会话…</div>
+          </div>
           <main class="unified-chat" id="unified-chat"></main>
           <section class="unified-plan-review hidden" id="unified-plan-review" aria-label="方案变更"></section>
           <section class="unified-plan-full hidden" id="unified-plan-full" aria-label="任务"></section>
@@ -590,6 +595,7 @@ export function mountUnifiedShell(
   const planFullEl = root.querySelector<HTMLElement>("#unified-plan-full")!;
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
+  const switchMaskEl = root.querySelector<HTMLElement>("#unified-switch-mask")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
   const emptyPickBtn = root.querySelector<HTMLButtonElement>("#empty-pick-project")!;
@@ -1028,20 +1034,83 @@ export function mountUnifiedShell(
   function startHydrationWait(sessionId: string, label: string): void {
     hydrationSessionId = sessionId;
     pendingSwitchBatch = true;
-    projectState.switchInProgress = true;
     setStatus(`${label} ${shortSessionId(sessionId)}…`);
+    syncSessionSwitchMask();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
 
   function completeHydrationWait(sessionId?: string): void {
     if (sessionId && hydrationSessionId && sessionId !== hydrationSessionId) return;
-    if (!pendingSwitchBatch && !hydrationSessionId) return;
+    const wasProjectSwitch = projectState.switchInProgress;
     hydrationSessionId = "";
     pendingSwitchBatch = false;
     projectState.switchInProgress = false;
+    projectState.pendingPickerId = "";
+    projectState.switchOverlay = null;
+    syncSessionSwitchMask();
     debouncedListProjects();
     debouncedListSessions();
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    refreshTopbar();
+    if (wasProjectSwitch && projectState.projectId) {
+      refreshServices();
+      refreshTerminals();
+    }
+  }
+
+  function syncSessionSwitchMask(): void {
+    const switching = Boolean(
+      projectState.switchInProgress
+      || projectState.switchOverlay
+      || hydrationSessionId,
+    );
+    switchMaskEl.classList.toggle("hidden", !switching);
+    shellEl.classList.toggle("is-session-switching", switching);
+    const target = (
+      projectState.pendingPickerId
+      || projectState.switchOverlay?.projectId
+      || projectState.projectId
+      || "会话"
+    ).trim();
+    const card = switchMaskEl.querySelector(".unified-switch-mask-card");
+    if (card) {
+      card.textContent = projectState.switchOverlay
+        ? `切换到 ${target} 需要确认`
+        : `正在加载 ${target}…`;
+    }
+  }
+
+  function clearChatForSwitch(): void {
+    chat.model.blocks = [];
+    chat.model.sessionId = "";
+    chat.model.turnCounter = 0;
+    chat.model.currentTurnKey = "";
+    chat.model.assistantBuffer = "";
+    chat.model.confirmPending = false;
+    chat.model.confirmSubmitting = false;
+    chat.model.cancelRequested = false;
+    chat.model.confirmOverlay = null;
+    chat.model.executionRunId = "";
+    chat.model.executionState = "idle";
+    chat.model.executionSequence = 0;
+    chat.model.executionFinishReason = null;
+    renderedPrints = [];
+    renderedSegmentPrints = [];
+    renderChat();
+  }
+
+  function beginBoundSessionSwitch(sessionId: string, projectId: string, label: string): void {
+    const sid = sessionId.trim();
+    const pid = projectId.trim();
+    if (pid && isCrossProjectSession(projectState.projectId, pid)) {
+      beginAtomicProjectSwitch(projectState, pid);
+      clearChatForSwitch();
+      setMainFocus("chat");
+      refreshTopbar();
+    } else if (sid && sid !== chat.model.sessionId) {
+      clearChatForSwitch();
+    }
+    startHydrationWait(sid, label);
   }
 
   function debouncedListSessions(): void {
@@ -1338,13 +1407,15 @@ export function mountUnifiedShell(
       btn.addEventListener("click", () => {
         const sid = btn.dataset.openSession;
         if (!sid) return;
+        const item = sessionsDropdown.find((s) => s.session_id === sid);
         try {
+          beginBoundSessionSwitch(sid, item?.project_id || "", "打开会话");
           client.openSession(sid);
           sessionsOpen = false;
           expandEl.classList.add("hidden");
           expandEl.innerHTML = "";
-          startHydrationWait(sid, "打开会话");
         } catch (err) {
+          completeHydrationWait();
           setStatus(`打开失败：${err instanceof Error ? err.message : String(err)}`);
         }
       });
@@ -1395,49 +1466,66 @@ export function mountUnifiedShell(
   const projectCallbacks: ProjectPanelCallbacks = {
     onProjectSwitch: (projectId: string) => {
       const target = projectId.trim();
-      if (!target || target === projectState.projectId) return;
+      if (!target || (target === projectState.projectId && !projectState.switchOverlay)) return;
       if (chat.isWorking()) {
         setStatus("助手执行中，请稍后再切换项目");
         return;
       }
       closePlanMainFocus();
-      projectState.switchInProgress = true;
-      projectState.pendingPickerId = target;
+      beginAtomicProjectSwitch(projectState, target);
+      clearChatForSwitch();
+      pendingSwitchBatch = true;
+      setMainFocus("chat");
+      syncSessionSwitchMask();
+      refreshTopbar();
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       try {
-        client.switchProject(target);
+        client.switchProject(target, { confirm: true });
       } catch (err) {
         projectState.switchInProgress = false;
         projectState.pendingPickerId = "";
+        pendingSwitchBatch = false;
+        syncSessionSwitchMask();
         setStatus(`切换失败：${err instanceof Error ? err.message : String(err)}`);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        refreshTopbar();
       }
     },
     onProjectSwitchConfirm: () => {
       if (!projectState.switchOverlay) return;
-      const target = projectState.switchOverlay.projectId;
-      resetProjectScopedState(projectState);
-      projectState.projectId = target;
-      projectState.switchOverlay = null;
-      projectState.pendingPickerId = target;
-      projectState.switchInProgress = true;
+      const overlay = projectState.switchOverlay;
+      const target = overlay.projectId;
+      const requestId = overlay.requestId;
+      beginAtomicProjectSwitch(projectState, target);
+      clearChatForSwitch();
+      pendingSwitchBatch = true;
+      setMainFocus("chat");
+      syncSessionSwitchMask();
+      refreshTopbar();
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
       try {
         client.switchProject(target, {
           confirm: true,
-          requestId: projectState.switchOverlay.requestId,
+          requestId,
         });
       } catch (err) {
         projectState.switchInProgress = false;
+        pendingSwitchBatch = false;
+        syncSessionSwitchMask();
         setStatus(`切换失败：${err instanceof Error ? err.message : String(err)}`);
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        refreshTopbar();
       }
     },
     onProjectSwitchCancel: () => {
       projectState.switchOverlay = null;
       projectState.switchInProgress = false;
       projectState.pendingPickerId = "";
+      pendingSwitchBatch = false;
+      hydrationSessionId = "";
+      syncSessionSwitchMask();
       renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      refreshTopbar();
     },
     onPlanConfirm: async () => {
       const overlay = projectState.planOverlay;
@@ -1491,9 +1579,10 @@ export function mountUnifiedShell(
       projectState.overlayPanel = null;
       setMainFocus("chat");
       try {
+        beginBoundSessionSwitch(sid, projectState.projectId, "打开会话线");
         client.openSession(sid);
-        startHydrationWait(sid, "打开会话线");
       } catch (err) {
+        completeHydrationWait();
         setStatus(`打开会话线失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
@@ -3915,7 +4004,7 @@ export function mountUnifiedShell(
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
       } else {
         projectCallbacks.onProjectSwitch(pid);
-        selectRailTab("now");
+        return;
       }
       return;
     }
@@ -3927,10 +4016,11 @@ export function mountUnifiedShell(
         const targetId = projectState.switchConfirmTarget.id;
         projectState.switchConfirmTarget = null;
         projectCallbacks.onProjectSwitch(targetId);
-        selectRailTab("now");
+      } else if (confirmBtn && projectState.switchOverlay) {
+        projectCallbacks.onProjectSwitchConfirm();
       } else if (cancelBtn) {
         projectState.switchConfirmTarget = null;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        projectCallbacks.onProjectSwitchCancel();
       }
       return;
     }
@@ -4912,6 +5002,28 @@ export function mountUnifiedShell(
         break;
 
       case "project.switch.request":
+        if (
+          projectState.pendingPickerId
+          && event.project_id === projectState.pendingPickerId
+        ) {
+          // User already chose this project; finish the switch instead of a second confirm.
+          try {
+            client.switchProject(event.project_id, {
+              confirm: true,
+              requestId: event.request_id,
+            });
+          } catch (err) {
+            projectState.switchInProgress = false;
+            projectState.pendingPickerId = "";
+            pendingSwitchBatch = false;
+            syncSessionSwitchMask();
+            setStatus(`切换失败：${err instanceof Error ? err.message : String(err)}`);
+            renderProjectSidebar(projectEls, projectState, projectCallbacks);
+            refreshTopbar();
+          }
+          break;
+        }
+        beginAtomicProjectSwitch(projectState, event.project_id);
         projectState.switchInProgress = false;
         projectState.switchOverlay = {
           requestId: event.request_id,
@@ -4919,6 +5031,10 @@ export function mountUnifiedShell(
           message: event.message,
           action: event.action,
         };
+        clearChatForSwitch();
+        setMainFocus("chat");
+        syncSessionSwitchMask();
+        refreshTopbar();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -4928,22 +5044,19 @@ export function mountUnifiedShell(
           && event.project_id !== projectState.pendingPickerId
         ) break;
         resetProjectScopedState(projectState);
+        projectState.switchOverlay = null;
+        projectState.projectId = event.project_id;
+        projectState.pendingPickerId = event.project_id;
+        projectState.currentSessionId = event.session_id;
+        projectState.switchInProgress = true;
+        if (event.project_id) {
+          freeChatActive = false;
+        }
         if (event.session_replaced) {
           startHydrationWait(event.session_id, "切换项目");
         } else {
           completeHydrationWait();
-          debouncedListProjects();
-          debouncedListSessions();
         }
-        projectState.switchOverlay = null;
-        projectState.pendingPickerId = "";
-        projectState.projectId = event.project_id;
-        projectState.currentSessionId = event.session_id;
-        if (event.project_id) {
-          freeChatActive = false;
-        }
-        // perform_project_switch already emits project.state, session.banner,
-        // session.memory, session.history — avoid duplicate refresh round-trips.
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         if (projectState.projectId) {
           refreshTopbar();
@@ -4951,6 +5064,7 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
+        syncSessionSwitchMask();
         if (!event.session_replaced) {
           setStatus(event.message);
         }
@@ -5255,7 +5369,9 @@ export function mountUnifiedShell(
           projectState.switchInProgress = false;
           projectState.pendingPickerId = "";
           completeHydrationWait();
+          syncSessionSwitchMask();
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
+          refreshTopbar();
         }
         chat.handleEvent(event);
         setStatus("错误");
