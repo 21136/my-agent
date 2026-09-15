@@ -5,6 +5,11 @@ import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
 import { RAIL_TAB_LABELS, type RailTab } from "./rail";
+import {
+  expectedProjectIdForEvents,
+  shouldApplyProjectEvent as shouldApplyProjectEventForFilter,
+  type ProjectSwitchFilterState,
+} from "./project-switch-state";
 
 export type { RailTab };
 
@@ -460,7 +465,9 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.tasksTotal = 0;
   state.tasksAllDone = false;
   state.planOverlay = null;
+  state.switchOverlay = null;
   state.switchConfirmTarget = null;
+  state.projectDocs = [];
   state.taskPhases = [];
   state.taskSnapshot = { lines: new Set(), lineTexts: new Map() };
   state.planChangeLog = [];
@@ -505,10 +512,21 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.partnerBusy = false;
   state.nextTask = null;
   state.nextTaskLine = null;
+  state.services = [];
   state.servicesLoading = false;
   state.servicesError = "";
   state.servicesLogName = "";
   state.servicesLogText = "";
+  state.terminalSessions = [];
+  state.terminalsLoading = false;
+  state.terminalsError = "";
+  state.terminalDetails = null;
+  state.terminalOutput = "";
+  state.terminalOutputCursor = 0;
+  state.terminalOutputLoading = false;
+  state.terminalOutputError = "";
+  state.terminalOutputCursorReset = false;
+  state.terminalOutputTruncated = false;
   state.turnArmedId = "";
   state.turnArmedText = "";
   state.turnEvidence = [];
@@ -561,17 +579,49 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.dropTaskPendingWorking = false;
 }
 
+function switchFilterState(state: ProjectPanelState): ProjectSwitchFilterState {
+  return {
+    projectId: state.projectId,
+    switchInProgress: state.switchInProgress,
+    pendingPickerId: state.pendingPickerId,
+    switchOverlayProjectId: state.switchOverlay?.projectId || "",
+  };
+}
+
 export function shouldApplyProjectEvent(
   state: ProjectPanelState,
   eventProjectId: string | null | undefined,
 ): boolean {
-  const incomingProjectId = (eventProjectId || "").trim();
-  const pendingProjectId = state.switchInProgress
-    ? (state.pendingPickerId || state.switchOverlay?.projectId || "").trim()
-    : "";
-  if (pendingProjectId && incomingProjectId !== pendingProjectId) return false;
-  if (state.projectId && incomingProjectId !== state.projectId) return false;
-  return true;
+  return shouldApplyProjectEventForFilter(switchFilterState(state), eventProjectId);
+}
+
+export function beginAtomicProjectSwitch(state: ProjectPanelState, projectId: string): void {
+  const target = projectId.trim();
+  resetProjectScopedState(state);
+  if (target) {
+    state.projectId = target;
+    state.pendingPickerId = target;
+  }
+  state.switchInProgress = true;
+  state.switchOverlay = null;
+  state.switchConfirmTarget = null;
+}
+
+export function projectSwitchHeaderMeta(state: ProjectPanelState): { title: string; meta: string } | null {
+  const pending = expectedProjectIdForEvents(switchFilterState(state));
+  if (state.switchInProgress) {
+    return {
+      title: pending || state.projectId || "项目",
+      meta: "正在加载…",
+    };
+  }
+  if (state.switchOverlay) {
+    return {
+      title: state.switchOverlay.projectId || pending || state.projectId || "项目",
+      meta: "等待确认切换",
+    };
+  }
+  return null;
 }
 
 export function getTaskChangeFingerprint(state: ProjectPanelState): string {
@@ -1882,6 +1932,15 @@ function renderProjectsRailSidebar(state: ProjectPanelState): string {
 }
 
 function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
+  if (state.switchInProgress) {
+    return renderSwitchLoadingHtml(state);
+  }
+  if (state.switchOverlay) {
+    return renderSwitchConfirmHtml({
+      projectId: state.switchOverlay.projectId,
+      message: state.switchOverlay.message,
+    });
+  }
   switch (state.railTab) {
     case "tasks":
       return renderTasksRailSidebar(state);
@@ -1899,10 +1958,12 @@ function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanel
 
 function renderDecisionSurface(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (state.switchInProgress) {
-    return renderSidebarStatusCard({
-      ariaLabel: "项目切换中",
-      title: `正在加载 ${state.projectId || "目标项目"}`,
-      summary: "旧项目内容已暂时隐藏，等待新项目状态加载完成。",
+    return renderSwitchLoadingHtml(state);
+  }
+  if (state.switchOverlay) {
+    return renderSwitchConfirmHtml({
+      projectId: state.switchOverlay.projectId,
+      message: state.switchOverlay.message,
     });
   }
   if (!state.projectId) {
@@ -2222,20 +2283,36 @@ function renderDocsOverlay(state: ProjectPanelState): string {
   });
 }
 
-function renderProjectsOverlay(state: ProjectPanelState): string {
-  // If switch confirm target is set, show confirm instead of list
-  if (state.switchConfirmTarget) {
-    const item = state.switchConfirmTarget;
-    return `<div class="overlay-switch-confirm" id="overlay-switch-confirm">
-      <div class="overlay-switch-confirm-title">切换到 · ${escapeHtml(item.id)}</div>
-      <div class="overlay-switch-confirm-text">
-        将恢复已有会话。当前会话已自动保存。
-      </div>
+export function renderSwitchConfirmHtml(params: {
+  projectId: string;
+  message: string;
+}): string {
+  return `<div class="overlay-switch-confirm" id="overlay-switch-confirm">
+      <div class="overlay-switch-confirm-title">切换到 · ${escapeHtml(params.projectId)}</div>
+      <div class="overlay-switch-confirm-text">${escapeHtml(params.message)}</div>
       <div class="overlay-switch-confirm-actions">
         <button type="button" class="unified-btn unified-btn-accent" id="overlay-switch-confirm-btn">确认切换</button>
         <button type="button" class="unified-btn" id="overlay-switch-cancel-btn">取消</button>
       </div>
     </div>`;
+}
+
+function renderSwitchLoadingHtml(state: ProjectPanelState): string {
+  const target = expectedProjectIdForEvents(switchFilterState(state)) || state.projectId || "目标项目";
+  return renderSidebarStatusCard({
+    ariaLabel: "项目切换中",
+    title: `正在加载 ${target}`,
+    summary: "旧项目内容已暂时隐藏，等待新项目状态加载完成。",
+  });
+}
+
+function renderProjectsOverlay(state: ProjectPanelState): string {
+  if (state.switchConfirmTarget) {
+    const item = state.switchConfirmTarget;
+    return renderSwitchConfirmHtml({
+      projectId: item.id,
+      message: "将恢复已有会话。当前会话已自动保存。",
+    });
   }
 
   let html = `<input type="text" class="overlay-search-input" id="overlay-project-search" placeholder="搜索项目…" value="${escapeHtml(state.projectSearchQuery)}">`;
@@ -2974,7 +3051,12 @@ export function renderProjectSidebar(
 
   const rail = state.railTab || "now";
   const railMeta = RAIL_TAB_LABELS[rail];
-  if (rail === "now") {
+  const switchHeader = projectSwitchHeaderMeta(state);
+  if (switchHeader) {
+    els.sidebarTitle.textContent = switchHeader.title;
+    els.sidebarMeta.textContent = switchHeader.meta;
+    els.sidebarProgressWrap.classList.add("hidden");
+  } else if (rail === "now") {
     if (state.projectId) {
       els.sidebarTitle.textContent = state.projectId;
       els.sidebarMeta.textContent = sidebarOpenTasksLabel(state);
@@ -3006,7 +3088,7 @@ export function renderProjectSidebar(
     els.sidebarProgressWrap.classList.add("hidden");
   }
 
-  const showRuntimeChrome = rail === "now";
+  const showRuntimeChrome = rail === "now" && !state.switchInProgress && !state.switchOverlay;
   els.terminalsPanel.classList.toggle("hidden", !showRuntimeChrome);
   els.servicesPanel.classList.toggle("hidden", !showRuntimeChrome);
   if (showRuntimeChrome) {
@@ -3162,13 +3244,12 @@ function updateCompatElements(
     els.planPreview.textContent = state.tasksMarkdown.slice(0, 1200) || "（等待助手生成 TASKS.md）";
   }
 
-  // Switch card (hidden, used by switchOverlay logic in index.ts)
+  // Compat switch card stays hidden; confirm chrome lives in the sidebar body above the rail.
+  els.switchCard.classList.add("hidden");
   if (state.switchOverlay) {
-    els.switchCard.classList.remove("hidden");
     els.switchTitle.textContent = `切换到 · ${state.switchOverlay.projectId}`;
     els.switchMessage.textContent = state.switchOverlay.message;
   } else {
-    els.switchCard.classList.add("hidden");
     els.switchMessage.textContent = "";
   }
 

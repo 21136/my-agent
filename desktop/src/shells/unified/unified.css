@@ -2441,6 +2441,30 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+.unified-switch-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ma-bg) 86%, transparent);
+  pointer-events: none;
+}
+.unified-switch-mask.hidden {
+  display: none !important;
+}
+.unified-switch-mask-card {
+  padding: 0.7rem 1rem;
+  border-radius: var(--ma-chrome-radius-sm, 8px);
+  background: var(--ma-surface);
+  border: 1px solid var(--ma-border);
+  color: var(--ma-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ma-text) 10%, transparent);
 }
 .unified-plan-review,
 .unified-plan-full,
@@ -3091,6 +3115,19 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
+  z-index: 3;
+}
+
+/* Compat wiring only — never paint under the rail. */
+#project-switch-card,
+#project-plan-card,
+#project-picker-list,
+#project-picker-refresh,
+#project-sidebar-tabs,
+#project-panel-tasks,
+#project-panel-map {
+  display: none !important;
 }
 
 .sidebar-change-banner {
