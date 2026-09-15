@@ -148,6 +148,15 @@ export function clearSessionEphemeralState(model: ChatSessionModel): void {
   model._toolTimers.clear();
 }
 
+export function isHarnessChatText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("[Harness]") || trimmed.startsWith("狂奔模式：") || trimmed.startsWith("狂奔模式:")) {
+    return true;
+  }
+  return trimmed.startsWith("[狂奔续接]") || trimmed.slice(0, 40).includes("[狂奔续接]");
+}
+
 export function historyFromItems(
   items: Array<{ role: "user" | "assistant"; text: string }>,
 ): { blocks: ChatBlock[]; turnCounter: number; seeds: HistoryStarSeed[] } {
@@ -157,10 +166,18 @@ export function historyFromItems(
 
   for (const item of items) {
     if (item.role === "user") {
+      const text = item.text.trim();
+      if (isHarnessChatText(text)) {
+        continue;
+      }
       turnIndex += 1;
       blocks.push({ kind: "user", text: item.text, turnIndex });
       seeds.push({ role: "user", turnIndex });
     } else {
+      const text = item.text.trim();
+      if (isHarnessChatText(text)) {
+        continue;
+      }
       const assistantTurn = turnIndex || 1;
       blocks.push({ kind: "assistant", text: item.text, turnIndex: assistantTurn });
       seeds.push({ role: "assistant", turnIndex: assistantTurn });
@@ -897,7 +914,13 @@ export function createChatSession(
         }
         const streaming = ensureStreamingAssistant();
         streaming.text += event.text;
-        model.assistantBuffer = streaming.text;
+        if (isHarnessChatText(streaming.text)) {
+          const idx = model.blocks.lastIndexOf(streaming);
+          if (idx >= 0) model.blocks.splice(idx, 1);
+          model.assistantBuffer = "";
+        } else {
+          model.assistantBuffer = streaming.text;
+        }
         notify();
         break;
       }
@@ -918,7 +941,7 @@ export function createChatSession(
             model.blocks.splice(i, 1);
           }
         }
-        if (finalText) {
+        if (finalText && !isHarnessChatText(finalText)) {
           const last = model.blocks[model.blocks.length - 1];
           // Idempotent: duplicate assistant.done must not create a second identical bubble.
           const dup =

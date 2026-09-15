@@ -206,6 +206,13 @@ def _compute_execution_stage(
             "blockers": sorted(l2_stale),
         }
     if workflow_stage == "requirements" and plan_status != "confirmed":
+        if light:
+            return {
+                "stage": "requirements",
+                "reason": "plan_not_confirmed",
+                "blockers": [],
+                "warnings": ["plan_status"],
+            }
         return {
             "stage": "requirements",
             "reason": "plan_not_confirmed",
@@ -277,10 +284,18 @@ def _compute_execution_stage(
         }
     verdict = str(review_verdict or "").strip().casefold()
     if verdict != "pass" or int(review_blockers_count or 0) > 0:
-        blockers = ["review"]
+        # Ordinary mode: pending review is optional wrap-up, not a hard
+        # execution wall. Runaway still enforces verification via its own
+        # checkpoint / write gate, not this snapshot status.
+        wrap_warnings = ["review"]
         if int(review_blockers_count or 0) > 0:
-            blockers.append("review_blockers")
-        return {"stage": "verification", "reason": "verification_pending", "blockers": blockers}
+            wrap_warnings.append("review_blockers")
+        return {
+            "stage": "verification",
+            "reason": "verification_pending",
+            "blockers": [],
+            "warnings": wrap_warnings,
+        }
     return {"stage": "release", "reason": "verification_passed", "blockers": []}
 
 
@@ -1895,10 +1910,6 @@ _DIRECT_IMPLEMENT_EXTRA_MARKERS = (
     "just implement",
     "implement now",
 )
-
-_DIRECT_IMPLEMENT_BLOCKED_STAGES = frozenset(
-    {"documentation", "design", "verification", "release"}
-)
 VALID_PROJECT_ENTRIES = frozenset({"", "plan", "direct"})
 
 
@@ -1924,12 +1935,12 @@ def is_direct_implement_request(user_text: str) -> bool:
     return any(marker.casefold() in lower for marker in _DIRECT_IMPLEMENT_EXTRA_MARKERS)
 
 
-def ordinary_direct_implement_draft_allowed(session: object) -> bool:
-    """True when ordinary project draft may auto-enter coding (requirements only)."""
-    meta = getattr(session, "meta", None)
+def ordinary_project_session(session: object) -> bool:
+    """True when this is an ordinary (non-runaway) bound project session."""
+    meta = getattr(session, "meta", session)
     if meta is None:
         return False
-    if bool(getattr(meta, "project_runaway_enabled", False)):
+    if bool(getattr(meta, "runaway_enabled", getattr(meta, "project_runaway_enabled", False))):
         return False
     if (getattr(meta, "active_shell", "") or "") != "project":
         return False
@@ -1937,59 +1948,122 @@ def ordinary_direct_implement_draft_allowed(session: object) -> bool:
         return False
     if not (getattr(meta, "project_root", "") or "").strip():
         return False
+    return True
+
+
+def ordinary_skip_stage_walls(
+    session: object,
+    *,
+    agent_paths: AgentPaths | None = None,
+) -> bool:
+    """Light template or ``project_entry=direct``: textbook stages must not hard-stop writes.
+
+    「规划后开工」(``project_entry=plan``) on a standard project keeps stage walls.
+    Light projects skip walls even if the user later confirmed the plan.
+    """
+    if not ordinary_project_session(session):
+        return False
+    meta = getattr(session, "meta", session)
+    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
+    if entry == "direct":
+        return True
+    paths = agent_paths or getattr(session, "paths", None)
+    pid = str(getattr(meta, "project_id", "") or "").strip()
+    if paths is not None and pid:
+        try:
+            if read_project_template(paths, pid) == "light":
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def ordinary_direct_implement_draft_allowed(session: object) -> bool:
+    """True when ordinary project draft may auto-enter coding.
+
+    Direct / light paths skip textbook documentation/design walls. Plan entry
+    still refuses auto-confirm so 「规划后开工」 stays an explicit gate.
+    """
+    if not ordinary_project_session(session):
+        return False
+    meta = getattr(session, "meta", None)
     status = str(getattr(meta, "project_plan_status", "") or "draft")
     if status not in {"draft", "plan_dirty"}:
         return False
-    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
-    return stage == "requirements"
-
-
-def should_treat_ordinary_direct_implement(session: object, user_text: str = "") -> bool:
-    """Ordinary-mode turn gate: explicit ``project_entry=direct`` or phrase fallback.
-
-    Never auto-enters coding from documentation/design. Phrase path only when
-    ``project_entry`` is unset. Sticky ``direct`` also applies after that entry
-    already confirmed the plan (implementation / confirmed).
-    """
-    meta = getattr(session, "meta", None)
-    if meta is None:
-        return False
-    if bool(getattr(meta, "project_runaway_enabled", False)):
-        return False
-    if (getattr(meta, "active_shell", "") or "") != "project":
-        return False
-    stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
-    if stage in _DIRECT_IMPLEMENT_BLOCKED_STAGES:
-        return False
-    status = str(getattr(meta, "project_plan_status", "") or "draft")
     entry = normalize_project_entry(getattr(meta, "project_entry", ""))
-    if entry == "direct":
-        if stage == "requirements" and status in {"draft", "plan_dirty"}:
-            return True
-        return status == "confirmed" or stage == "implementation"
-    if entry:
+    if entry == "plan":
         return False
-    if not is_direct_implement_request(user_text):
+    return True
+
+
+def should_treat_ordinary_direct_implement(
+    session: object,
+    user_text: str = "",
+    *,
+    turn_intent: str = "",
+) -> bool:
+    """Ordinary-mode turn gate: ``project_entry=direct``, phrase, or execute intent.
+
+    ``project_entry=plan`` keeps the plan confirm gate unless this turn is an
+    explicit「直接实现」switch. Stages no longer veto the direct path.
+    """
+    if not ordinary_project_session(session):
         return False
-    if stage == "requirements" and status in {"draft", "plan_dirty"}:
+    meta = getattr(session, "meta", None)
+    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
+    explicit = is_direct_implement_request(user_text)
+    execute = (turn_intent or "").strip() == "execute"
+    if entry == "plan" and not explicit:
+        return False
+    if entry == "direct" or explicit or execute:
         return True
-    return status == "confirmed" or stage == "implementation"
+    return False
+
+
+def should_skip_ordinary_plan_spawn(
+    session: object,
+    user_text: str = "",
+    *,
+    turn_intent: str = "",
+) -> bool:
+    """Do not pre-spawn plan_partner when the user is implementing, not planning."""
+    if not ordinary_project_session(session):
+        return False
+    intent = (turn_intent or "").strip()
+    if intent in {"plan", "requirements"}:
+        return False
+    if should_treat_ordinary_direct_implement(session, user_text, turn_intent=intent):
+        return True
+    return intent == "execute"
 
 
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
     """Ordinary mode: open the plan gate when the user asked to implement directly.
 
     Returns a short notice when confirmation was applied; None when unchanged.
-    Only requirements + draft/plan_dirty (never documentation/design).
+    Direct / light paths skip textbook documentation/design walls. Caller must
+    already have decided this turn is a direct-implement path.
     """
-    if not ordinary_direct_implement_draft_allowed(session):
+    if not ordinary_project_session(session):
+        return None
+    meta = getattr(session, "meta", None)
+    if meta is None:
+        return None
+    status = str(getattr(meta, "project_plan_status", "") or "draft")
+    if status not in {"draft", "plan_dirty"}:
+        if normalize_project_entry(getattr(meta, "project_entry", "")) != "direct":
+            meta.project_entry = "direct"
+            save = getattr(session, "save", None)
+            if callable(save):
+                save()
         return None
     from project_cli import ProjectModeError, confirm_project_plan
 
     try:
-        message = confirm_project_plan(session)  # type: ignore[arg-type]
+        message = confirm_project_plan(session, skip_stage_walls=True)  # type: ignore[arg-type]
     except ProjectModeError as exc:
         return f"直接实现请求未能自动确认计划：{exc}"
+    meta.project_entry = "direct"
     save = getattr(session, "save", None)
     if callable(save):
         save()
@@ -2540,6 +2614,7 @@ def project_mode_block_reason(
     runaway_enabled: bool = False,
     bug_fix_lane: bool = False,
     runaway_v2_write_scope: tuple[str, ...] | None = None,
+    skip_stage_walls: bool = False,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
@@ -2587,11 +2662,16 @@ def project_mode_block_reason(
     ):
         return None
 
+    ordinary_verification_wrapup = (
+        not runaway_enabled and effective_stage in {"verification", "release"}
+    )
     if (
         active_shell == "project"
         and effective_stage
         and effective_stage != "implementation"
         and not (bug_fix_lane and effective_stage in {"verification", "release"})
+        and not ordinary_verification_wrapup
+        and not (skip_stage_walls and not runaway_enabled)
     ):
         code_write = evolved_name in _CODING_TOOLS and evolved_name != "patch_file"
         if evolved_name == "patch_file" or evolved_name in _WRITE_TOOLS:
@@ -2748,6 +2828,8 @@ def format_project_overlay(
     runaway_enabled: bool = False,
     runaway_checkpoint: str = "",
     runaway_acceptance_passed: bool = False,
+    skip_stage_walls: bool = False,
+    project_entry: str = "",
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -2829,22 +2911,55 @@ def format_project_overlay(
             lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
             lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
     else:
-        if workflow_stage == "documentation":
-            lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
-        elif workflow_stage == "design":
-            lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
-        elif workflow_stage == "implementation" and active_task_id:
-            lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-        if workflow_stage == "documentation":
-            lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
-        elif workflow_stage == "design":
-            lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
-        elif plan_status != "confirmed":
-            lines.append(
-                "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
-            )
+        entry = normalize_project_entry(project_entry)
+        light_or_direct = skip_stage_walls or entry == "direct"
+        if light_or_direct:
+            if workflow_stage in {"documentation", "design"}:
+                lines.append(
+                    "stage_gate: 轻量/直接实现路径 — 教科书阶段不阻挡写码；"
+                    "立即用 write_text/patch_file 改业务代码"
+                )
+            elif workflow_stage == "implementation" and active_task_id:
+                lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+            elif workflow_stage in {"verification", "release"}:
+                lines.append(
+                    "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
+                    "可以先跑验收，也可以继续实现"
+                )
+            if entry == "plan" and plan_status != "confirmed":
+                lines.append(
+                    "plan_gate: 用户选了规划后开工 — 仍须「项目 确认」后写源码；"
+                    "不要再调 plan_partner 重复出计划"
+                )
+            elif plan_status != "confirmed" and entry != "direct":
+                lines.append(
+                    "plan_gate: 未确认 — 用户若要写码请走直接实现；"
+                    "禁止再调用 plan_partner / 要求「确认开工」作为写码前提"
+                )
+            else:
+                lines.append("plan_gate: 已确认或直接实现 — 可写项目内代码；禁止再调用 plan_partner")
         else:
-            lines.append("plan_gate: 已确认 — 可写项目内代码")
+            if workflow_stage == "documentation":
+                lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
+            elif workflow_stage == "design":
+                lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
+            elif workflow_stage == "implementation" and active_task_id:
+                lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+            elif workflow_stage in {"verification", "release"}:
+                lines.append(
+                    "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
+                    "可以先跑验收，也可以继续实现"
+                )
+            if workflow_stage == "documentation":
+                lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
+            elif workflow_stage == "design":
+                lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
+            elif plan_status != "confirmed":
+                lines.append(
+                    "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
+                )
+            else:
+                lines.append("plan_gate: 已确认 — 可写项目内代码")
             if profile == "solo":
                 lines.append(
                     "delivery: 完成以构建/测试为准；TASKS 为视图；"
