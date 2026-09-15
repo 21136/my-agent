@@ -81,6 +81,7 @@ export interface ProjectPanelState {
   projectId: string;
   projectSummary: string;
   planStatus: string;
+  projectEntry: string;
   tasksMarkdown: string;
   mapMarkdown: string;
   tasksDone: number;
@@ -454,6 +455,7 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   }
   state.projectSummary = "";
   state.planStatus = "";
+  state.projectEntry = "";
   state.tasksMarkdown = "";
   state.mapMarkdown = "";
   state.tasksDone = 0;
@@ -1057,7 +1059,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0))) {
+  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0)) && state.projectEntry !== "direct") {
     return {
       status: "decision",
       statusLabel: "等你决定",
@@ -1083,7 +1085,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.needsDesignConfirm || state.workflowStage === "documentation") {
+  if (state.needsDesignConfirm) {
     return {
       status: "decision",
       statusLabel: "等你决定",
@@ -1119,7 +1121,7 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
   if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
     return { kind: "none", actions: [] };
   }
-  if (state.planStatus === "draft" || state.planStatus === "plan_dirty") {
+  if ((state.planStatus === "draft" || state.planStatus === "plan_dirty") && state.projectEntry !== "direct") {
     return {
       kind: "dual-draft",
       actions: [
@@ -2478,6 +2480,7 @@ export function applyProjectStateEvent(
   state.projectId = nextProjectId;
   state.projectSummary = event.project_summary ?? state.projectSummary;
   state.planStatus = event.plan_status ?? "draft";
+  state.projectEntry = event.project_entry ?? state.projectEntry;
   state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
   state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;

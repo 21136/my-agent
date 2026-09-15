@@ -187,6 +187,7 @@ export function mountUnifiedShell(
     projectId: "",
     projectSummary: "",
     planStatus: "",
+    projectEntry: "",
     tasksMarkdown: "",
     mapMarkdown: "",
     tasksDone: 0,
@@ -2079,14 +2080,6 @@ export function mountUnifiedShell(
   }
 
   function startDirectImplementFromUi(): void {
-    // Ordinary M3: same user-visible command as CLI「项目 直接实现」.
-    // On this base the verb is not registered yet (M1 PR #2), so it falls
-    // through to chat and hits is_direct_implement_request →
-    // maybe_auto_confirm_plan_for_direct_implement + implement overlay.
-    // TODO(M1): when project_entry lands, this command sets
-    // project_entry=direct and later turns skip plan_partner. If M1's CLI
-    // only confirms the gate without starting a turn, follow with a short
-    // implement message so the CTA still kicks work.
     try {
       setStatus("正在直接实现…");
       showNowChat();

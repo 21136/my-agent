@@ -440,37 +440,26 @@ def confirm_direct_implement(session: Session) -> str:
     pid = (session.meta.project_id or "").strip()
     if not root or not pid:
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
-    stage = str(getattr(session.meta, "project_workflow_stage", "requirements") or "requirements")
     status = str(session.meta.project_plan_status or "draft")
-    if stage == "documentation":
-        raise ProjectModeError(
-            "文档整理阶段不能直接实现；请先「项目 确认设计」后再「项目 开始任务」。"
-        )
-    if stage == "design":
-        raise ProjectModeError("设计阶段不能直接实现；请使用「项目 开始任务 <T-ID>」。")
-    if stage != "requirements":
-        raise ProjectModeError(
-            f"当前阶段为 {stage}，「项目 直接实现」仅在 requirements 且计划为草稿时可用。"
-        )
-    if status not in {"draft", "plan_dirty"}:
-        raise ProjectModeError(
-            f"当前计划状态为 {status}，「项目 直接实现」仅在 draft/plan_dirty 可用。"
-        )
-    message = confirm_project_plan(session)
+    if status in {"draft", "plan_dirty"}:
+        message = confirm_project_plan(session, skip_stage_walls=True)
+        session.meta.project_entry = "direct"
+        return f"已选择直接实现入口（project_entry=direct）。{message}"
     session.meta.project_entry = "direct"
-    return f"已选择直接实现入口（project_entry=direct）。{message}"
+    return "已选择直接实现入口（project_entry=direct）。计划已确认，继续写代码。"
 
 
-def confirm_project_plan(session: Session) -> str:
+def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) -> str:
     root = (session.meta.project_root or "").strip()
     pid = (session.meta.project_id or "").strip()
     if not root or not pid or session.meta.active_shell != "project":
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements")
-    if workflow_stage == "documentation":
-        raise ProjectModeError("文档整理尚未完成设计确认；当前不能开始写代码")
-    if workflow_stage == "design":
-        raise ProjectModeError("设计已确认；请使用「项目 开始任务 <T-ID>」授权实现批次")
+    if not skip_stage_walls:
+        if workflow_stage == "documentation":
+            raise ProjectModeError("文档整理尚未完成设计确认；当前不能开始写代码")
+        if workflow_stage == "design":
+            raise ProjectModeError("设计已确认；请使用「项目 开始任务 <T-ID>」授权实现批次")
 
     tasks_path = project_dir(session.paths, pid) / "TASKS.md"
     if not tasks_path.is_file():
