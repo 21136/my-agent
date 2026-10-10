@@ -696,6 +696,11 @@
 .unified-tool-step-sub {
   font-family: var(--ma-font);
   font-size: 0.75rem;
+  color: var(--ma-text-muted);
+}
+
+.unified-tool-step-sub.is-fail,
+.unified-tool-line.is-fail .unified-tool-step-sub {
   color: color-mix(in srgb, #c44 75%, var(--ma-text-muted));
 }
 

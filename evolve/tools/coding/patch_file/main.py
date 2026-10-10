@@ -261,14 +261,10 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
                 "base_hash": previous.get("base_hash"),
                 "result_hash": result_hash,
             }
-        return {
-            "ok": False,
-            "error": "patch_id was already applied but the file now has a different hash",
-            "path": rel,
-            "patch_id": patch_id,
-            "current_hash": current_hash,
-            "expected_hash": result_hash,
-        }
+        # The same edit was recorded, but the file is no longer the patched
+        # bytes (the user reverted it, or edited it again). Fall through and
+        # apply when the old text is present. The ledger only skips a second
+        # apply onto an already-patched file.
     if base_hash is not None and base_hash != current_hash:
         return {
             "ok": False,
