@@ -14,15 +14,17 @@ PROXY_EVOLVED_TOOL_NAMES: tuple[str, ...] = (
 _PROXY_DESCRIPTIONS: dict[str, str] = {
     "run_command": (
         "Run a one-shot shell command under agent root; captures stdout/stderr/exit. "
-        "Prefer over nested run_evolved for builds and tests."
+        "Call this function directly. Do not wrap it in run_evolved."
     ),
     "write_text": (
-        "Write a text file under agent root (deny-list excepted). "
-        "Prefer over run_evolved for new/overwrite file content."
+        "Create or overwrite a text file under agent root (deny-list excepted). "
+        "Call this function directly so the user sees the path and the new text. "
+        "Do not wrap it in run_evolved."
     ),
     "patch_file": (
         "Patch a text file by line range or unique anchor substring. "
-        "Prefer over run_evolved for surgical edits."
+        "Call this function directly so the user sees the path and the edit. "
+        "Do not wrap it in run_evolved."
     ),
 }
 

@@ -845,13 +845,24 @@ def format_session_evolved_catalog(
             by_name.setdefault(tool.name, tool)
     session_tools = tuple(by_name[name] for name in sorted(by_name))
 
+    from tool_proxies import PROXY_EVOLVED_TOOL_NAMES
+
+    flat_names = set(PROXY_EVOLVED_TOOL_NAMES)
     by_scope: dict[str, list[str]] = {}
     for tool in session_tools:
-        label = f"- {tool.name}: {tool.description}"
+        if tool.name in flat_names:
+            label = (
+                f"- {tool.name}: 扁平原语，直接调用同名函数，不要套 run_evolved。"
+                f"{tool.description}"
+            )
+        else:
+            label = f"- {tool.name}: {tool.description}"
         by_scope.setdefault(tool.scope, []).append(label)
 
     lines = [
-        "[本会话可用 evolved 工具]（调用 run_evolved.tool_name）",
+        "[本会话可用 evolved 工具]",
+        "write_text、patch_file、run_command 是扁平原语：直接调用同名函数，不要套 run_evolved。",
+        "其余名字才用 run_evolved，tool_name 填该名字。",
     ]
     for scope in ("common", *sorted(key for key in by_scope if key != "common")):
         if scope not in by_scope:
@@ -878,11 +889,13 @@ def format_capability_hints(
     _ = registry  # retained for call-site compatibility
     lines = [
         "[能力提示]",
-        "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
+        "- 工具怎么选：`read_file` / `write_text` / `patch_file` / `run_command` 看本提示即可，不要读 bucket。"
+        "其它 evolved 的参数细节才 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
         "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file` 优先扁平原语，"
         "其余 evolved 经 `run_evolved`（`status=archived` 不可调，见 docs/ARCHIVED-TOOLS.md）。",
         "- 只读：read_file · list_dir · glob_file_search · grep（本地）；web_search · fetch_url（网络）",
-        "- 写/改：write_text（新建）/ patch_file（改已有）；或 run_evolved → copy_move / move_to_trash；先试 dry_run",
+        "- 写/改：已有文件用 patch_file（先 read_file，再用唯一 find）；write_text 只用于新建或几乎整文件重写。"
+        "copy_move / move_to_trash 才 run_evolved，先试 dry_run",
         "- 执行：run_command（一次性 shell）；长驻 run_evolved → run_service 或 run_command background:true",
         "- 查项目/跨会话：run_evolved → project_catalog；再 read_file data/sessions/<id>/messages.jsonl"
         "（读**其他**会话须 confirm）",
@@ -1213,6 +1226,7 @@ def build_system_prompt(
                 build_tasks_injection_slice,
                 extract_task_id,
                 first_open_task_line,
+                existing_plan_files,
                 format_project_overlay,
                 get_delivery_profile,
                 is_project_continue_utterance,
@@ -1286,6 +1300,11 @@ def build_system_prompt(
                 ),
                 skip_stage_walls=ordinary_skip_stage_walls(session),
                 project_entry=str(getattr(session.meta, "project_entry", "") or ""),
+                plan_files=existing_plan_files(
+                    session.paths, session.meta.project_id
+                )
+                if session.meta.project_id
+                else [],
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

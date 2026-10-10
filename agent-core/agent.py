@@ -276,19 +276,24 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = tuple(tool.name for tool in BUILTIN_TOOLS)
 _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     "read_file": (
         "Read a text file under agent root or workspace (max 512KB, UTF-8). "
-        "Use for docs, workspace files, evolve/memories, and spilled tool outputs."
+        "Use for docs, workspace files, evolve/memories, and spilled tool outputs. "
+        "A path that does not exist yet returns exists=false and is not an error; "
+        "do not probe-read a file you are about to create."
     ),
     "list_dir": (
         "List directory entries under agent root. "
-        "Set recursive=true to include one level of children."
+        "Set recursive=true to include one level of children. "
+        "Agent bookkeeping is omitted unless path is that directory or file."
     ),
     "grep": (
         "Search local file contents under agent root by regex pattern. "
-        "Prefer ripgrep when available."
+        "Prefer ripgrep when available. "
+        "Agent bookkeeping is omitted unless path names that directory or file."
     ),
     "glob_file_search": (
         "Find files by glob pattern (e.g. '**/*.py', '**/test_*.ts') under a directory. "
-        "Use before read_file when you need paths by name; use grep for content search."
+        "Use before read_file when you need paths by name; use grep for content search. "
+        "Agent bookkeeping is omitted unless path or pattern names it."
     ),
     "codebase_search": (
         "Semantic/BM25 search for code chunks in the bound project. "
@@ -1890,126 +1895,147 @@ class Agent:
                 )
                 recall_injected = True
 
-            try:
-                if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
-                    self.executor.session, "inline_write_guard_blocked", False
-                ):
-                    tools_payload = None
-                self._emit_turn_event({"type": "llm.pending"})
-                response = self.llm.chat(
-                    build_chat_messages(
-                        working,
-                        system_prompt=full_system,
-                        static_system=static_system,
-                        dynamic_system=dynamic_system,
-                        vendor=vendor,
-                    ),
-                    model=model,
-                    tools=tools_payload,
-                    temperature=MAIN_LOOP_TEMPERATURE,
-                    reasoning_effort=self.session.meta.reasoning_effort,
-                    stream=self.stream_handlers,
-                )
-                usage_event = llm_usage_event(response.usage)
-                if usage_event is not None:
-                    self._emit_turn_event(usage_event)
-            except LLMCancelledError:
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason=self._interrupt_finish_reason(),
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
-            except (LLMApiError, LLMNetworkError) as exc:
-                from exec_reliability import (
-                    is_pool_exhausted_transport_error,
-                    llm_transport_backoff_seconds,
-                    llm_transport_user_hint,
-                    runaway_llm_transport_retries,
-                    runaway_pool_exhausted_retries,
-                )
-
-                runaway = getattr(self.session.meta, "project_runaway_enabled", False)
-                pool_exhausted = is_pool_exhausted_transport_error(exc)
-                if runaway and pool_exhausted:
-                    max_transport_retries = runaway_pool_exhausted_retries()
-                elif runaway:
-                    max_transport_retries = runaway_llm_transport_retries()
-                else:
-                    max_transport_retries = 2
-                llm_transport_attempts += 1
-                if llm_transport_attempts < max_transport_retries:
-                    if not self.executor.session.llm_retry_notice_emitted:
-                        err_kind = (
-                            type(exc).__name__.replace("LLM", "").replace("Error", "").lower()
-                        )
-                        self.executor.session.llm_retry_notice_emitted = True
-                        attempt_note = (
-                            f"（{llm_transport_attempts + 1}/{max_transport_retries}）"
-                            if runaway
-                            else ""
-                        )
-                        backoff_hint = (
-                            f"，{int(llm_transport_backoff_seconds(llm_transport_attempts, pool_exhausted=pool_exhausted))}s 后重试"
-                            if runaway
-                            else ""
-                        )
-                        self._emit_turn_event(
-                            {
-                                "type": "turn.notice",
-                                "level": "warn",
-                                "text": (
-                                    f"LLM {err_kind}，正在重试{attempt_note}{backoff_hint}…"
-                                    f"（{llm_transport_user_hint(exc)}）"
-                                ),
-                            }
-                        )
-                    time.sleep(
-                        llm_transport_backoff_seconds(
-                            llm_transport_attempts,
-                            pool_exhausted=pool_exhausted,
-                        )
+            while True:
+                try:
+                    if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
+                        self.executor.session, "inline_write_guard_blocked", False
+                    ):
+                        tools_payload = None
+                    self._emit_turn_event({"type": "llm.pending"})
+                    response = self.llm.chat(
+                        build_chat_messages(
+                            working,
+                            system_prompt=full_system,
+                            static_system=static_system,
+                            dynamic_system=dynamic_system,
+                            vendor=vendor,
+                        ),
+                        model=model,
+                        tools=tools_payload,
+                        temperature=MAIN_LOOP_TEMPERATURE,
+                        reasoning_effort=self.session.meta.reasoning_effort,
+                        stream=self.stream_handlers,
                     )
-                    continue
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason="error",
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
-            except LLMTimeoutError:
-                timeout_sec = int(load_config().timeout_sec)
-                self._emit_turn_event(
-                    {
-                        "type": "turn.notice",
-                        "level": "warn",
-                        "text": f"LLM 请求超时（{timeout_sec}s），本回合已停止。",
-                    }
-                )
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason="timeout",
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
+                    usage_event = llm_usage_event(response.usage)
+                    if usage_event is not None:
+                        self._emit_turn_event(usage_event)
+                    break
+                except LLMCancelledError:
+                    return ToolLoopSegmentResult(
+                        final_text="",
+                        tool_rounds=tool_rounds,
+                        finish_reason=self._interrupt_finish_reason(),
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
+                except (LLMApiError, LLMNetworkError) as exc:
+                    from exec_reliability import (
+                        is_pool_exhausted_transport_error,
+                        llm_provider_failure_message,
+                        llm_transport_backoff_seconds,
+                        llm_transport_failure_kind,
+                        runaway_llm_transport_retries,
+                        runaway_pool_exhausted_retries,
+                    )
+
+                    runaway = getattr(self.session.meta, "project_runaway_enabled", False)
+                    pool_exhausted = is_pool_exhausted_transport_error(exc)
+                    failure_kind = llm_transport_failure_kind(exc)
+                    if runaway and pool_exhausted:
+                        max_transport_retries = runaway_pool_exhausted_retries()
+                    elif runaway:
+                        max_transport_retries = runaway_llm_transport_retries()
+                    elif failure_kind == "session_limit":
+                        # The cap clears after idle minutes, so a short retry cannot help.
+                        max_transport_retries = 1
+                    else:
+                        max_transport_retries = 2
+                    llm_transport_attempts += 1
+                    if llm_transport_attempts < max_transport_retries:
+                        if not self.executor.session.llm_retry_notice_emitted:
+                            self.executor.session.llm_retry_notice_emitted = True
+                            hint = llm_provider_failure_message(exc).rstrip("。")
+                            if runaway:
+                                backoff = int(
+                                    llm_transport_backoff_seconds(
+                                        llm_transport_attempts,
+                                        pool_exhausted=pool_exhausted,
+                                    )
+                                )
+                                notice_text = (
+                                    f"{hint}，正在重试"
+                                    f"（{llm_transport_attempts + 1}/{max_transport_retries}），"
+                                    f"{backoff}s 后重试…"
+                                )
+                            else:
+                                notice_text = f"{hint}，正在重试…"
+                            self._emit_turn_event(
+                                {
+                                    "type": "turn.notice",
+                                    "level": "warn",
+                                    "text": notice_text,
+                                }
+                            )
+                        time.sleep(
+                            llm_transport_backoff_seconds(
+                                llm_transport_attempts,
+                                pool_exhausted=pool_exhausted,
+                            )
+                        )
+                        if self.cancel_event.is_set():
+                            return ToolLoopSegmentResult(
+                                final_text="",
+                                tool_rounds=tool_rounds,
+                                finish_reason=self._interrupt_finish_reason(),
+                                exceeded=False,
+                                had_progress=segment_messages_show_progress(
+                                    self.session.messages,
+                                    segment_start_index,
+                                ),
+                                qa_soft_reminder_injected=reminder_injected,
+                                action_announce_nudge_injected=action_nudge_injected,
+                            )
+                        continue
+                    final_text = llm_provider_failure_message(exc)
+                    self.session.append_message({"role": "assistant", "content": final_text})
+                    return ToolLoopSegmentResult(
+                        final_text=final_text,
+                        tool_rounds=tool_rounds,
+                        finish_reason="provider_error",
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
+                except LLMTimeoutError:
+                    timeout_sec = int(load_config().timeout_sec)
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": f"LLM 请求超时（{timeout_sec}s），本回合已停止。",
+                        }
+                    )
+                    return ToolLoopSegmentResult(
+                        final_text="",
+                        tool_rounds=tool_rounds,
+                        finish_reason="timeout",
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
             # after SSE stream returns, check cancel before processing tool calls
             if self.cancel_event.is_set():
                 return ToolLoopSegmentResult(
@@ -2686,7 +2712,7 @@ class Agent:
         if (
             getattr(self.session.meta, "project_runaway_enabled", False)
             and not (final_text or "").strip()
-            and finish_reason not in {"cancelled", "timeout", "error", "context_switched"}
+            and finish_reason not in {"cancelled", "timeout", "error", "provider_error", "context_switched"}
         ):
             final_text = self._runaway_harness_segment_summary()
 
@@ -2719,7 +2745,7 @@ class Agent:
             return False
         if self.session.meta.active_shell != "project":
             return False
-        if finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             return False
         from runaway_flow import normalize_checkpoint
 
@@ -2842,6 +2868,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "context_switched",
             "runaway_paused",
             "runaway_duplicate",
@@ -2895,6 +2922,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "context_switched",
             "runaway_paused",
             "runaway_duplicate",
@@ -2904,6 +2932,7 @@ class Agent:
                 "cancelled": "本回合已停止",
                 "timeout": "本回合已超时",
                 "error": "本回合运行异常",
+                "provider_error": "模型服务暂时不可用",
                 "runaway_paused": "狂奔已暂停",
                 "runaway_duplicate": "狂奔通道被占用",
             }
@@ -3572,6 +3601,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "tool_loop_exceeded",
             "total_cap_exceeded",
             "segment_cap_pause",
@@ -3977,7 +4007,7 @@ class Agent:
             self._set_terminal_plan_phase("")
             self.session.subagent_overlay = None
 
-        if loop_result.finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if loop_result.finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             self.session.save()
             return TurnResult(
                 assistant_text=loop_result.final_text or "",
@@ -4245,6 +4275,7 @@ class Agent:
         self.executor._ensure_project_scope_tools_allowed()
         self.session.subagent_overlay = None
         self.session.turn_intent = None
+        self.session.plan_files_fingerprint_at_turn_start = None
         self.session.scaffold_tool_turn = False
         self.session.direct_implement_turn = False
         self.session.skip_ordinary_plan_spawn = False
@@ -4264,6 +4295,15 @@ class Agent:
 
         intent = classify_turn(user_text)
         self.session.turn_intent = intent
+        if (
+            (getattr(self.session.meta, "active_shell", "") or "") == "project"
+            and (self.session.meta.project_id or "").strip()
+        ):
+            from project_mode import plan_files_fingerprint
+
+            self.session.plan_files_fingerprint_at_turn_start = plan_files_fingerprint(
+                self.session.paths, self.session.meta.project_id
+            )
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
 
@@ -4592,7 +4632,7 @@ class Agent:
         subagent_tool_rounds: int,
     ) -> TurnResult:
         """Complete ask/recall parent short loop (T-702 / T-905)."""
-        if loop_result.finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if loop_result.finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             self.session.save()
             return TurnResult(
                 assistant_text=loop_result.final_text or "",

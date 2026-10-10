@@ -35,6 +35,7 @@ from project_mode import (
     rename_project_doc,
     run_acceptance_check,
     snapshot_plan_fingerprints,
+    should_skip_ordinary_plan_request,
     sync_plan_dirty_if_structure_changed,
     write_project_doc,
 )
@@ -390,10 +391,22 @@ def emit_project_session_bundle(session: Session, paths: AgentPaths, emit: EmitF
             emit(plan_state)
 
 
-def maybe_emit_plan_request(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
+def maybe_emit_plan_request(
+    session: Session,
+    paths: AgentPaths,
+    emit: EmitFn,
+    *,
+    plan_structure_changed: bool = False,
+) -> None:
     if bool(getattr(session.meta, "project_runaway_enabled", False)):
         return
-    sync_plan_dirty_if_structure_changed(session, paths)
+    changed = plan_structure_changed or sync_plan_dirty_if_structure_changed(session, paths)
+    # Questions, reply-only lines, and recalls do not re-open 「方案待确认」.
+    # A turn that actually edits the plan still emits.
+    if should_skip_ordinary_plan_request(
+        session, paths, plan_structure_changed=changed
+    ):
+        return
     payload = build_plan_request_payload(session, paths)
     if payload is not None:
         emit(payload)
@@ -409,8 +422,10 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
     # v2 derives its phase from the external checklist and owns the project
     # transition. The legacy fingerprint watcher must not reopen prepare after
     # v2 has already reached release_wait.
+    plan_structure_changed = False
     if not runaway_v2_enabled(session) and sync_plan_dirty_if_structure_changed(session, paths):
         session.save()
+        plan_structure_changed = True
     emit(project_state_payload(session, paths))
     emit(session_banner_event(session))
 
@@ -422,7 +437,9 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
             emit({"type": "notice", "text": action})
         emit(plan_state)
 
-    maybe_emit_plan_request(session, paths, emit)
+    maybe_emit_plan_request(
+        session, paths, emit, plan_structure_changed=plan_structure_changed
+    )
 
 
 # Track which sessions have already received a project.detect notice

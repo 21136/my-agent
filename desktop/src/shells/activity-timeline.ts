@@ -104,7 +104,7 @@ function renderPinnedThinkFold(
 function renderToolEntry(tool: ToolEntry, now: number): string {
   const running = tool.status === "running";
   const elapsedMs = running ? now - tool.startedAt : (tool.endedAt ?? now) - tool.startedAt;
-  const mark = running ? "·" : tool.status === "ok" ? "✓" : "✗";
+  const mark = running || tool.status === "note" ? "·" : tool.status === "ok" ? "✓" : "✗";
   const elapsedLabel = running
     ? `运行中… ${formatToolElapsed(elapsedMs)}`
     : formatToolElapsed(elapsedMs);
@@ -126,7 +126,7 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
         <span class="unified-tool-step-label">${escapeHtml(label)}</span>
         <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(canonical)}」的显示名称">改名</button>
       </span>
-      ${sub ? `<span class="unified-tool-step-sub">${escapeHtml(sub)}</span>` : ""}
+      ${sub ? `<span class="unified-tool-step-sub is-${tool.status}">${escapeHtml(sub)}</span>` : ""}
     </span>
     <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${logsBit}
   </div>`;

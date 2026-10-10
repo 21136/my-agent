@@ -148,14 +148,14 @@ class WritePolicyTests(unittest.TestCase):
         self.assertTrue(needs)
         self.assertEqual(reason, "confirm:plan_domain")
 
-    def test_it4214_unknown_exists_confirms(self) -> None:
+    def test_it4214_unknown_exists_skips_in_project(self) -> None:
         needs, reason = self._confirm(
             tool="write_text",
             path="workspace/demo/new.py",
             file_exists=None,
         )
-        self.assertTrue(needs)
-        self.assertEqual(reason, "confirm:new_file")
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:project_write")
 
     def test_dry_run_skips(self) -> None:
         needs, reason = write_requires_confirm(

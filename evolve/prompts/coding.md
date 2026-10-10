@@ -11,7 +11,7 @@
 
 ### A. 用户项目（`workspace/<id>/` · 项目窗口）
 
-- 跟项目三件套（`PROJECT.md` / `MAP.md` / `TASKS.md`）与侧栏计划，**不要**把 my-agent 仓库的 `docs/MAP.md` / `docs/TASKS.md` 当成该项目的任务清单。
+- 跟 overlay `plan_files` 列出的计划文档与侧栏计划，**不要**把 my-agent 仓库的 `docs/MAP.md` / `docs/TASKS.md` 当成该项目的任务清单，也不要读取未列出的计划文档。工作区里的源码、笔记和用户点名的文件随时可以 `read_file`。
 - 小步交付、验收命令以该项目自己的约定为准；一次性构建/测试优先 `run_command`；长驻用 `run_service`（或 `run_command` + `background:true`）；给人看本地页用 `browser_open`。
 
 ### B. 维护 my-agent 内核（改 agent-core / evolve / docs）
@@ -64,9 +64,11 @@
 
 动手只通过当前暴露的已注册 builtin、扁平原语和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。当前 builtin 基线为 12 个（核心 8 + 编排 4），不把 evolved 工具误写成 builtin。
 
-**common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
+**common 文件工具**：改已有文件用 `patch_file`（先 `read_file`，再用唯一 find）；`write_text` 只用于新建或几乎整文件重写。直接调用同名函数，**不要**套 `run_evolved`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。不要为 `read_file` / `write_text` / `patch_file` / `run_command` 去读 `evolve/tool-catalog/buckets/`。
 
-**写盘纪律（BUG-025）**：细节与大文件写入规范见 `evolve/tool-catalog/buckets/evolve.md`。
+**写盘纪律（BUG-025）**：大文件 staging 才见 `evolve/tool-catalog/buckets/evolve.md`。日常改文件不必读 bucket。
+
+**先读再断言**：声称文件里已经是目标内容，或这次不用改，之前必须在本回合 `read_file`。上一回合读过不算，用户可能已经改过磁盘上的文件。纯问答、且不断言文件内容时，不要为了这条再读一次。准备新建、且不指望文件已经存在时，不必先 `read_file` 探一次。读完之后改已有文件仍用 `patch_file`，不要改成整文件 `write_text`。
 
 ## 与本仓库记忆
 

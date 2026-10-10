@@ -1,6 +1,6 @@
 [tool]
 name = "write_text"
-description = "向 agent root 写文本（除 deny-list）；path 相对 agent root 或 host:<id>/…；冲突默认 skip"
+description = "新建文本，或几乎整文件重写。改已有文件用 patch_file。path 相对 agent root；冲突默认 skip"
 version = "1.0.0"
 status = "active"
 topics = ["common"]

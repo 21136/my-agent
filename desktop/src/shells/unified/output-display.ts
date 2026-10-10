@@ -1,10 +1,11 @@
 import { escapeHtml } from "../chat-state";
 import { displayToolName, formatToolActionLabel } from "../../copy/tool-display";
+import type { ToolStepStatus } from "../tool-outcome";
 
 type ProcessTool = {
   tool: string;
   summary: string;
-  status: "running" | "ok" | "fail";
+  status: ToolStepStatus;
   endSummary?: string;
   logsTail?: string;
   callId: string;
@@ -38,16 +39,56 @@ export function humanizeToolAction(tool: string, summary: string, endSummary?: s
 
 export { displayToolName, formatToolActionLabel, resolveEffectiveToolName } from "../../copy/tool-display";
 
+const TOOL_ERROR_RULES: Array<[RegExp, string]> = [
+  [/find anchor not found/i, "没有找到要替换的原文"],
+  [/anchor not found/i, "没有找到要替换的原文"],
+  [/anchor matched \d+ times/i, "原文出现了多处，无法确定改哪一处"],
+  [/must be unique/i, "原文不唯一，无法确定改哪一处"],
+  [/patch_id was already applied but the file now has a different hash/i, "文件内容和上次修改后不一致，请重新读取再改"],
+  [/base_hash mismatch/i, "文件在准备修改之后又变了，请先重新读取"],
+  [/file changed while patch was being prepared/i, "写入前文件又变了，请重新读取再改"],
+  [/patch_id already belongs to/i, "这个修改编号已经用在别的文件上"],
+  [/patch_id is already associated with a different patch payload/i, "这个修改编号对应另一处改动"],
+  [/patch_id ledger conflict/i, "修改记录冲突，请重试"],
+  [/patch or ledger write failed/i, "写入失败"],
+  [/binary file not supported/i, "不能修改二进制文件"],
+  [/file is not valid UTF-8/i, "文件不是 UTF-8 文本"],
+  [/file exceeds limit/i, "文件太大，没法修改"],
+  [/result exceeds limit/i, "改完的文件太大"],
+  [/path is required/i, "缺少文件路径"],
+  [/not a file:/i, "这不是一个文件"],
+  [/replacement is required/i, "缺少要写入的新内容"],
+  [/provide start_line\+end_line or find/i, "请指定要改的行，或给出要查找的原文"],
+  [/hunks cannot be combined/i, "不能同时用多种改法"],
+];
+
+function latinRatio(text: string): number {
+  const letters = text.match(/[A-Za-z]/g)?.length ?? 0;
+  return letters / Math.max(text.length, 1);
+}
+
+/** Tool-card failure text. Known internal English becomes a short Chinese line. */
+export function userFacingToolError(raw: string): string {
+  const text = raw.trim();
+  if (!text) return "";
+  for (const [pattern, message] of TOOL_ERROR_RULES) {
+    if (pattern.test(text)) return message;
+  }
+  if (latinRatio(text) > 0.45) {
+    const path = text.match(/(workspace[/\\][^\s,;]+)/);
+    return path ? `这一步没有完成（${path[1]}）` : "这一步没有完成";
+  }
+  return text.slice(0, 160);
+}
+
 export function humanizeToolSubline(
   status: ProcessTool["status"],
   endSummary?: string,
 ): string {
-  if (status === "fail" && endSummary) {
-    return endSummary
-      .replace(/^find anchor not found/i, "锚点未找到")
-      .replace(/^patch\s+/i, "")
-      .slice(0, 120);
-  }
+  const text = (endSummary || "").trim();
+  if (!text || text === "ok" || text === "完成") return "";
+  if (status === "fail") return userFacingToolError(text).slice(0, 160);
+  if (status === "ok" || status === "note") return text.slice(0, 160);
   return "";
 }
 

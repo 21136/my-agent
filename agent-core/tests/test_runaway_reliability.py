@@ -15,7 +15,9 @@ from exec_reliability import (
     is_plan_gateway_tool_failure,
     is_plan_gateway_failure_summary,
     is_pool_exhausted_transport_error,
+    llm_provider_failure_message,
     llm_transport_backoff_seconds,
+    llm_transport_user_hint,
     runaway_bug_fix_enabled,
     runaway_llm_round_cooldown_seconds,
     runaway_llm_transport_retries,
@@ -25,6 +27,7 @@ from exec_reliability import (
     segment_failure_budget,
     should_count_segment_failure,
 )
+from llm_client import LLMApiError, LLMNetworkError
 from tools.executor import ExecutorSession
 from tools.schema import tool_fail, tool_ok
 from session import create_new
@@ -47,6 +50,18 @@ class RunawayReliabilityTests(unittest.TestCase):
         )
         self.assertTrue(is_patch_anchor_param_failure(result))
         self.assertFalse(should_count_segment_failure(result, session))
+        localized = tool_fail(
+            "patch_file",
+            "validation_error",
+            "没有找到要替换的原文",
+        )
+        self.assertTrue(is_patch_anchor_param_failure(localized))
+        ambiguous = tool_fail(
+            "patch_file",
+            "VALIDATION_ERROR",
+            "原文出现了 2 处，无法确定改哪一处",
+        )
+        self.assertTrue(is_patch_anchor_param_failure(ambiguous))
 
     def test_command_failure_still_counted_in_runaway(self) -> None:
         session = ExecutorSession(runaway_enabled=True)
@@ -71,6 +86,32 @@ class RunawayReliabilityTests(unittest.TestCase):
         self.assertTrue(is_pool_exhausted_transport_error(RuntimeError("pool exhausted: all accounts")))
         self.assertTrue(is_pool_exhausted_transport_error(RuntimeError("Insufficient Balance")))
         self.assertFalse(is_pool_exhausted_transport_error(RuntimeError("validation failed")))
+        session_limit = LLMApiError(
+            "Active session limit reached: 15 sessions, limit 15",
+            status_code=429,
+        )
+        self.assertFalse(is_pool_exhausted_transport_error(session_limit))
+        self.assertEqual(
+            llm_provider_failure_message(session_limit),
+            "模型服务达到并发上限，请稍后重试。",
+        )
+        self.assertNotIn("Active session", llm_transport_user_hint(session_limit))
+        self.assertEqual(
+            llm_provider_failure_message(LLMApiError("rate limit exceeded", status_code=429)),
+            "模型服务请求过于频繁，请稍后重试。",
+        )
+        self.assertEqual(
+            llm_provider_failure_message(LLMApiError("invalid api key", status_code=401)),
+            "模型服务鉴权失败，请检查配置后再试。",
+        )
+        self.assertEqual(
+            llm_provider_failure_message(LLMNetworkError("connection refused")),
+            "模型服务暂时连不上，请稍后重试。",
+        )
+        self.assertEqual(
+            llm_provider_failure_message(LLMApiError("internal error", status_code=500)),
+            "模型服务暂时不可用，请稍后重试。",
+        )
 
     def test_plan_gateway_failure_summary(self) -> None:
         self.assertTrue(

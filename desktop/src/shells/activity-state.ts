@@ -1,12 +1,13 @@
 /** UX-028 M0 — activity timeline entries (source of truth for process blocks). */
 
 import { reasoningSummaryLine, shouldNeutralizeReasoningSummary } from "./unified/output-display";
+import type { ToolStepStatus } from "./tool-outcome";
 
 export type ProcessToolCard = {
   callId: string;
   tool: string;
   summary: string;
-  status: "running" | "ok" | "fail";
+  status: ToolStepStatus;
   startedAt: number;
   endedAt?: number;
   endSummary?: string;
@@ -56,7 +57,9 @@ function nextThinkId(): string {
 }
 
 export function ensureProcessEntries(proc: ProcessActivityBlock): ActivityEntry[] {
-  if (proc.entries && proc.entries.length > 0) {
+  // An existing array, even empty, is the source of truth. Replacing it drops
+  // a tool push that still holds the previous array (a fast tool with no reasoning).
+  if (proc.entries) {
     return proc.entries;
   }
   const entries: ActivityEntry[] = [];
@@ -197,10 +200,10 @@ export function addToolStart(
   proc: ProcessActivityBlock,
   tool: ProcessToolCard,
 ): void {
-  const entries = ensureProcessEntries(proc);
+  ensureProcessEntries(proc);
   pinOpenThink(proc);
   proc.llmPending = false;
-  entries.push({ kind: "tool", ...tool });
+  ensureProcessEntries(proc).push({ kind: "tool", ...tool });
   syncProcessLegacyFields(proc);
 }
 

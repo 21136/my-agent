@@ -16,6 +16,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths, PathOutOfBoundsError
 from tools.builtin.read_file import resolve_read_path
+from tools.listing_privacy import hide_from_listing, request_names_internal
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 TOOL_NAME = "glob_file_search"
@@ -84,8 +85,10 @@ def _matches_gitignore_pattern(rel_posix: str, pattern: str) -> bool:
     return False
 
 
-def _is_ignored_path(rel_posix: str, *, search_root: Path) -> bool:
+def _is_ignored_path(rel_posix: str, *, search_root: Path, explicit: str = "") -> bool:
     if _path_has_ignored_segment(rel_posix):
+        return True
+    if hide_from_listing(rel_posix, explicit=explicit):
         return True
     for pattern in _load_gitignore_patterns(search_root):
         if _matches_gitignore_pattern(rel_posix, pattern):
@@ -143,7 +146,10 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
                 ignore_case=ignore_case,
                 max_results=max_results,
             )
-        rel_paths = [p for p in rel_paths if not _is_ignored_path(p, search_root=search_root)]
+        explicit = f"{path_arg} {glob_pattern}"
+        rel_paths = [
+            p for p in rel_paths if not _is_ignored_path(p, search_root=search_root, explicit=explicit)
+        ]
     except OSError as exc:
         return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
     except subprocess.SubprocessError as exc:
@@ -176,6 +182,8 @@ def _glob_rg(
         return [], False
 
     cmd = ["rg", "--files", "-g", pattern, str(root)]
+    if request_names_internal(pattern):
+        cmd.insert(1, "--hidden")
     if ignore_case:
         cmd.insert(1, "--glob-case-insensitive")
     proc = subprocess.run(
@@ -234,7 +242,7 @@ def _glob_python(
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
-        if _path_has_ignored_segment(rel):
+        if _path_has_ignored_segment(rel) or hide_from_listing(rel, explicit=pattern):
             continue
         if not _path_matches_glob(rel, pattern, ignore_case=ignore_case):
             continue

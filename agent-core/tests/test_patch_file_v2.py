@@ -103,6 +103,54 @@ class PatchFileV2Tests(unittest.TestCase):
             message = conflict.error.message if conflict.error else ""
             self.assertIn("base_hash mismatch", message)
 
+    def test_reapply_after_revert_uses_the_old_text(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/patch_file",)) as paths:
+            registry = ToolRegistry.load(paths)
+            target = paths.workspace / "README.md"
+            original = "# scratch\n\n旧简介\n"
+            target.write_text(original, encoding="utf-8")
+            args = {
+                "path": "workspace/README.md",
+                "find": "旧简介",
+                "replacement": "新简介",
+            }
+            first = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
+            self.assertTrue(first.ok, first.error)
+            self.assertIn("新简介", target.read_text(encoding="utf-8"))
+
+            again = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
+            self.assertTrue(again.ok, again.error)
+            self.assertTrue(again.data.get("idempotent"))
+            self.assertIn("新简介", target.read_text(encoding="utf-8"))
+
+            target.write_text(original, encoding="utf-8")
+            redone = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
+            self.assertTrue(redone.ok, redone.error)
+            self.assertFalse(redone.data.get("idempotent"))
+            self.assertEqual(target.read_text(encoding="utf-8"), "# scratch\n\n新简介\n")
+            message = (redone.error.message if redone.error else "") or ""
+            self.assertNotIn("different hash", message)
+
+    def test_missing_old_text_is_an_anchor_miss_not_a_ledger_hash_error(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/patch_file",)) as paths:
+            registry = ToolRegistry.load(paths)
+            target = paths.workspace / "README.md"
+            target.write_text("旧简介\n", encoding="utf-8")
+            args = {
+                "path": "workspace/README.md",
+                "find": "旧简介",
+                "replacement": "新简介",
+            }
+            first = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
+            self.assertTrue(first.ok, first.error)
+            target.write_text("完全不同的内容\n", encoding="utf-8")
+            redone = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
+            self.assertFalse(redone.ok)
+            message = redone.error.message if redone.error else ""
+            self.assertIn("没有找到要替换的原文", message)
+            self.assertNotIn("different hash", message)
+            self.assertEqual(target.read_text(encoding="utf-8"), "完全不同的内容\n")
+
 
 if __name__ == "__main__":
     unittest.main()

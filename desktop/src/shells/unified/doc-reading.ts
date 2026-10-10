@@ -126,9 +126,17 @@ export function displayDocTitle(
   return title;
 }
 
+const INTERNAL_DOC_RE = /(^|\/)(\.plan-agent|\.agent)(\/|$)|(^|\/)RUNAWAY-PROGRESS\.md$/;
+
+/** Agent bookkeeping is not a user document, even if a listing still contains it. */
+export function isInternalProjectDoc(path: string): boolean {
+  return INTERNAL_DOC_RE.test(path.replace(/\\/g, "/"));
+}
+
 export function sortProjectDocs(docs: ProjectDocItem[]): ProjectDocItem[] {
   const rank = new Map<string, number>(STANDARD_DOC_ORDER.map((file, index) => [file, index]));
-  return [...docs].sort((a, b) => {
+  const visible = docs.filter((doc) => !isInternalProjectDoc(doc.path));
+  return visible.sort((a, b) => {
     const aKey = docBasename(a.path);
     const bKey = docBasename(b.path);
     const aRank = rank.get(aKey);

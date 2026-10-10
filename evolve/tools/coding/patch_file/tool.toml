@@ -1,6 +1,6 @@
 [tool]
 name = "patch_file"
-description = "按行号范围或唯一锚点替换 agent 根下文本文件片段（docs/agent-core/evolve/workspace）"
+description = "改已有文本的默认方式：先 read_file，再用唯一 find 锚点。不要改用 write_text 整文件覆盖"
 version = "2.0.0"
 status = "active"
 topics = ["coding"]

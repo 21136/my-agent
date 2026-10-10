@@ -140,6 +140,8 @@ export type ServerEvent =
       call_id: string;
       ok: boolean;
       summary: string;
+      /** "absent" — a read found the path does not exist yet. Not a failure. */
+      note?: string;
       output_path?: string;
       logs_tail?: string;
       run_id?: string;

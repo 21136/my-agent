@@ -115,6 +115,7 @@ function panel(overrides: Partial<ProjectPanelState> = {}): ProjectPanelState {
     turnCircuitOpen: [],
     turnPlaybookId: "",
     turnFailureClass: "",
+    lastTurnFinishReason: "",
     activeSessionId: "",
     threads: [],
     threadsLoading: false,
@@ -233,6 +234,131 @@ test("draft decision is one surface after a reply-only turn", () => {
   assert.equal(banner.includes("方案待确认"), false);
   assert.equal(banner.includes("确认开工"), false);
   assert.equal(banner.includes("修改计划"), false);
+});
+
+test("direct-entry draft still shows a plan banner when a confirm request arrives", () => {
+  const state = panel({
+    planStatus: "draft",
+    projectEntry: "direct",
+    planOverlay: {
+      requestId: "req-direct",
+      title: "计划待确认",
+      summary: "music-player",
+      tasksPreview: "- [ ] T-001",
+      planStatus: "draft",
+    },
+  });
+  assert.equal(ordinaryDraftDecisionVisible(state), false);
+  const banner = renderChangeBanner(state);
+  assert.equal(banner.includes("方案待确认"), true);
+  assert.equal(banner.includes("确认开工"), true);
+});
+
+test("change banner does not render the CHG ledger", () => {
+  const state = panel({
+    planStatus: "confirmed",
+    changeTimeline: [
+      {
+        change_id: "CHG-001",
+        adopted_at: "2026-10-10T00:00:00Z",
+        source: "adopt",
+        proposal_id: "p-1",
+        paths: ["src/app.py"],
+        summary: "internal",
+        requirements: ["REQ-001"],
+        tasks: ["T-001"],
+        acceptance: [],
+        verification: [],
+        stale_docs: [],
+        replan_required: false,
+        before_revision: "r1",
+        after_revision: "r2",
+      },
+    ],
+  });
+  const banner = renderChangeBanner(state);
+  assert.equal(banner.includes("CHG"), false);
+  assert.equal(banner.includes("影响时间线"), false);
+  assert.equal(banner.includes("toggle-change-timeline"), false);
+});
+
+test("a failed tool inside a completed ordinary turn does not fail the project", () => {
+  const state = panel({
+    turnInProgress: false,
+    lastTurnFinishReason: "stop",
+    turnFailureClass: "A",
+    turnEvidence: [
+      { tool: "patch_file", ok: false },
+      { tool: "read_file", ok: true },
+    ],
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  const view = deriveProjectGoalViewModel(state);
+  assert.notEqual(view.status, "failed");
+  assert.notEqual(view.title, "上一步没有完成");
+  assert.doesNotMatch(view.nextStep, /查看失败原因/);
+  const header = deriveHeaderNextStepView(state);
+  assert.equal(header.actions.some((item) => item.label === "查看失败原因"), false);
+});
+
+test("an aborted or failed ordinary turn still marks the project failed", () => {
+  for (const reason of ["error", "cancelled", "timeout", "tool_loop_exceeded"]) {
+    const state = panel({
+      turnInProgress: false,
+      lastTurnFinishReason: reason,
+      turnEvidence: [{ tool: "patch_file", ok: false }],
+      executionStage: "implementation",
+      workflowStage: "implementation",
+    });
+    const view = deriveProjectGoalViewModel(state);
+    assert.equal(view.title, "上一步没有完成", reason);
+    assert.match(view.nextStep, /查看失败原因/);
+  }
+  const stageFailed = panel({
+    lastTurnFinishReason: "stop",
+    executionStageStatus: "failed",
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  assert.equal(deriveProjectGoalViewModel(stageFailed).title, "上一步没有完成");
+  const postcondition = panel({
+    lastTurnFinishReason: "stop",
+    turnPostcondition: "fail",
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  assert.equal(deriveProjectGoalViewModel(postcondition).title, "上一步没有完成");
+});
+
+test("a model-service error leaves the ordinary project goal unchanged", () => {
+  const base = {
+    turnInProgress: false,
+    planStatus: "draft" as const,
+    tasksTotal: 1,
+    tasksDone: 0,
+    tasksAllDone: false,
+    projectEntry: "",
+    executionStage: "requirements",
+    workflowStage: "requirements",
+    executionStageStatus: "ready",
+    turnFailureClass: "",
+  };
+  const live = deriveProjectGoalViewModel(panel({
+    ...base,
+    lastTurnFinishReason: "provider_error",
+  }));
+  const reloaded = deriveProjectGoalViewModel(panel({
+    ...base,
+    lastTurnFinishReason: "",
+  }));
+  assert.equal(live.title, reloaded.title);
+  assert.equal(live.nextStep, reloaded.nextStep);
+  assert.equal(live.summary, reloaded.summary);
+  assert.equal(live.status, reloaded.status);
+  assert.equal(live.title, "方案已准备好");
+  assert.doesNotMatch(live.summary, /最近一次执行或验证没有通过/);
+  assert.doesNotMatch(live.nextStep, /查看失败原因/);
 });
 
 test("docs requests and error status stay useful without a project", () => {

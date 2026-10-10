@@ -8,6 +8,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
+import { settledToolStatus } from "../tool-outcome";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
@@ -290,6 +291,7 @@ export function mountUnifiedShell(
     turnCircuitOpen: [],
     turnPlaybookId: "",
     turnFailureClass: "",
+    lastTurnFinishReason: "",
     activeSessionId: "",
     threads: [],
     threadsLoading: false,
@@ -4277,10 +4279,6 @@ export function mountUnifiedShell(
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
     switch (action) {
-      case "toggle-change-timeline":
-        projectState.changeTimelineExpanded = !projectState.changeTimelineExpanded;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        return;
       case "open-plan-review": {
         const sid = btn.dataset.suggestionId;
         openPlanReview(sid);
@@ -5251,8 +5249,10 @@ export function mountUnifiedShell(
         } else if (event.state === "stopping") {
           setStatus("正在停止…");
         } else if (event.state === "running") {
+          projectState.lastTurnFinishReason = "";
           setStatus("处理中…");
         } else if (event.finish_reason) {
+          projectState.lastTurnFinishReason = event.finish_reason;
           setTurnEndStatus(event.finish_reason);
         }
         syncWorkingVisual();
@@ -5284,7 +5284,8 @@ export function mountUnifiedShell(
           refreshTerminals();
         }
         if (!chat.model.confirmPending) {
-          setStatus(event.ok ? (chat.isWorking() ? "处理中…" : "就绪") : "工具失败");
+          const step = settledToolStatus(event.ok, event.summary, event.note);
+          setStatus(step === "fail" ? "工具失败" : chat.isWorking() ? "处理中…" : "就绪");
         }
         break;
 
@@ -5316,6 +5317,7 @@ export function mountUnifiedShell(
 
       case "turn.end":
         if (!chat.handleEvent(event)) break;
+        projectState.lastTurnFinishReason = event.finish_reason || "";
         setTurnEndStatus(event.finish_reason);
         syncWorkingVisual();
         scheduleRunawayIdleResume();
