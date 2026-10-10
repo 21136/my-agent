@@ -618,6 +618,8 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
     elif session.turn_intent == "requirements":
         lines.append(
             "turn_intent: requirements — 当前是需求输入；只做归纳回答，不调用工具、不写盘、不自动探索。"
+            "本轮按设计不提供工具，这不是故障：不要说工具调用异常、工具不可用或写入失败；"
+            "需要动手时，请用户回一句「直接改」。"
         )
     elif session.turn_intent in {"execute", "research"}:
         lines.append(

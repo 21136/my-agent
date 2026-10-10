@@ -372,6 +372,60 @@ def _has_explicit_execution_request(text: str, lower: str) -> bool:
     return False
 
 
+# Bug reports and fix/feature asks. A long complaint such as
+# 「delete 不存在的 id 直接崩了…帮我都看一下」 is a work request, not pasted
+# requirement prose, so it must keep its tools.
+_BUG_REPORT_RE = re.compile(
+    r"(?:崩|报错|出错|报了?\s*[A-Za-z]*(?:Error|Exception)|bug|traceback|crash|"
+    r"不对|失败|跑不起来|跑不通|不工作|不生效|没反应)",
+    re.IGNORECASE,
+)
+_ACTION_ASK_RE = re.compile(
+    r"(?:帮我|帮忙|麻烦你?|请你?|你直接|你就|你来|直接)"
+    r"([^。？?！!\n]{0,12}?)"
+    r"(?:修|改|处理|弄|解决|加|看一下|看下|看看|查一下|查查)"
+)
+_FEATURE_ASK_RE = re.compile(
+    r"(?:^|[\s，,。；;：:])(?:再|也|还|顺便|另外)?(?:给[^。？?\n]{0,16}?)?"
+    r"(?:加一个|加个|加上|再加|增加|新增)"
+)
+_NO_CHANGE_RE = re.compile(r"(?:不要|别|不用|无需|不需要|先别)\s*(?:动|改|修改|写)")
+
+
+_CHANGE_VERB_TAIL_RE = re.compile(r"(?:修|改|处理|弄|解决|加)$")
+
+
+def has_action_intent(user_text: str) -> bool:
+    """True for a bug report or fix/feature ask that needs tools.
+
+    「帮我都看一下」 after a crash report, 「你直接改吧」, 「再加一个 --overdue」.
+    「帮我看看 X」 alone stays a lookup. Lines that say not to change anything,
+    and how/why explanations, stay out.
+    """
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    if _NO_CHANGE_RE.search(text) or _is_explanation_request(text.casefold()):
+        return False
+    bug_report = bool(_BUG_REPORT_RE.search(text))
+    for match in _ACTION_ASK_RE.finditer(text):
+        between = match.group(1).casefold()
+        if any(marker in between for marker in _NON_EXECUTION_CONNECTORS):
+            continue
+        if bug_report or _CHANGE_VERB_TAIL_RE.search(match.group(0)):
+            return True
+    return bool(_FEATURE_ASK_RE.search(text)) and not _is_inquiry(text)
+
+
+# Dots inside paths, filenames, versions and numbers are not sentence ends.
+_INNER_DOT_RE = re.compile(r"(?<=[\w/\-])\.(?=[\w/])")
+
+
+def _sentence_count(text: str) -> int:
+    cleaned = _INNER_DOT_RE.sub("", text)
+    return sum(cleaned.count(mark) for mark in ("。", "！", "？", ".", "!", "?"))
+
+
 def _is_explanation_request(lower: str) -> bool:
     """Keep how/why questions out of the execution keyword fallback."""
     stripped = lower.strip()
@@ -410,9 +464,11 @@ def is_requirement_input(user_text: str) -> bool:
     lower = text.casefold()
     if _has_explicit_execution_request(text, lower) or _is_explanation_request(lower):
         return False
+    if has_action_intent(text):
+        return False
     heading = any(marker in text or marker in lower for marker in _REQUIREMENT_HEADINGS)
     numbered = text.startswith(tuple(f"{index}." for index in range(1, 10)))
-    sentence_count = sum(text.count(mark) for mark in ("。", "！", "？", ".", "!", "?"))
+    sentence_count = _sentence_count(text)
     return heading or (numbered and sentence_count >= 2) or sentence_count >= 4
 
 
@@ -437,6 +493,9 @@ def classify_turn(user_text: str) -> TurnIntent:
         return "qa"
 
     if _has_explicit_execution_request(text, lower):
+        return "execute"
+
+    if has_action_intent(text):
         return "execute"
 
     if _is_explanation_request(lower):

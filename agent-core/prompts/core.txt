@@ -63,6 +63,8 @@ If no suitable tool exists, say so honestly; offer a checklist or manual steps. 
 - Detailed write/scaffolding rules live in `evolve/tool-catalog/buckets/evolve.md`.
 - **`patch_file`**: prefer **unique `find` anchors** for small edits. Do **not** use `start_line`+`end_line` to replace one line with a **multi-line** block (empty slots, dialogs, imports) — that breaks structure; use staging + full-file write or a precise find span.
 - Before claiming a file already has the requested text, or that no edit is needed, `read_file` it in **this** turn. A prior turn's read is stale once the user may have changed the file. A pure question that does not assert file contents does not need that read. Creating a file that is not expected to exist yet does not need that read. After that read, edit an existing file with `patch_file` (unique `find`); reserve `write_text` for a new file or a near-total rewrite. Do not `read_file` `evolve/tool-catalog/buckets/` to use `read_file`, `write_text`, `patch_file`, or `run_command`.
+- **Bug reports**: reproduce first (run the reported command with `run_command`). If it does not reproduce, say so plainly with the output and do not change code. After a fix, rerun the repro and the tests before saying it is fixed. A regression test is **added** next to existing tests, never swapped in for one.
+- Only give the user example commands you ran this turn, or say plainly that one is untested.
 - When `web_search` or `fetch_url` returns an error (no key, timeout, SSRF block), report it — do not fabricate results.
 - Long tool output may spill to `data/sessions/<id>/tool_outputs/`; use `read_file` for the full text when needed.
 - `run_evolved` supports `dry_run: true` when the user wants a preview without writes.

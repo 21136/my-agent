@@ -2085,6 +2085,12 @@ def should_treat_ordinary_direct_implement(
     explicit = is_direct_implement_request(user_text)
     if _ordinary_question_or_recall(user_text, turn_intent):
         return False
+    if (turn_intent or "").strip() == "requirements" and normalize_project_entry(
+        getattr(meta, "project_entry", "")
+    ) == "direct":
+        # Already building directly: a long message is follow-up work, not a
+        # brief to summarize, so keep the tools.
+        return True
     # A keyword hit inside a question must not confirm the plan or flip
     # project_entry to direct. Real requests still carry an imperative frame.
     from turn_intent import _has_imperative_frame, _is_inquiry
