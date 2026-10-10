@@ -1933,16 +1933,21 @@ class Agent:
                         is_pool_exhausted_transport_error,
                         llm_provider_failure_message,
                         llm_transport_backoff_seconds,
+                        llm_transport_failure_kind,
                         runaway_llm_transport_retries,
                         runaway_pool_exhausted_retries,
                     )
 
                     runaway = getattr(self.session.meta, "project_runaway_enabled", False)
                     pool_exhausted = is_pool_exhausted_transport_error(exc)
+                    failure_kind = llm_transport_failure_kind(exc)
                     if runaway and pool_exhausted:
                         max_transport_retries = runaway_pool_exhausted_retries()
                     elif runaway:
                         max_transport_retries = runaway_llm_transport_retries()
+                    elif failure_kind == "session_limit":
+                        # The cap clears after idle minutes, so a short retry cannot help.
+                        max_transport_retries = 1
                     else:
                         max_transport_retries = 2
                     llm_transport_attempts += 1
@@ -1996,7 +2001,7 @@ class Agent:
                     return ToolLoopSegmentResult(
                         final_text=final_text,
                         tool_rounds=tool_rounds,
-                        finish_reason="error",
+                        finish_reason="provider_error",
                         exceeded=False,
                         had_progress=segment_messages_show_progress(
                             self.session.messages,
@@ -2702,7 +2707,7 @@ class Agent:
         if (
             getattr(self.session.meta, "project_runaway_enabled", False)
             and not (final_text or "").strip()
-            and finish_reason not in {"cancelled", "timeout", "error", "context_switched"}
+            and finish_reason not in {"cancelled", "timeout", "error", "provider_error", "context_switched"}
         ):
             final_text = self._runaway_harness_segment_summary()
 
@@ -2735,7 +2740,7 @@ class Agent:
             return False
         if self.session.meta.active_shell != "project":
             return False
-        if finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             return False
         from runaway_flow import normalize_checkpoint
 
@@ -2858,6 +2863,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "context_switched",
             "runaway_paused",
             "runaway_duplicate",
@@ -2911,6 +2917,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "context_switched",
             "runaway_paused",
             "runaway_duplicate",
@@ -2920,6 +2927,7 @@ class Agent:
                 "cancelled": "本回合已停止",
                 "timeout": "本回合已超时",
                 "error": "本回合运行异常",
+                "provider_error": "模型服务暂时不可用",
                 "runaway_paused": "狂奔已暂停",
                 "runaway_duplicate": "狂奔通道被占用",
             }
@@ -3588,6 +3596,7 @@ class Agent:
             "cancelled",
             "timeout",
             "error",
+            "provider_error",
             "tool_loop_exceeded",
             "total_cap_exceeded",
             "segment_cap_pause",
@@ -3993,7 +4002,7 @@ class Agent:
             self._set_terminal_plan_phase("")
             self.session.subagent_overlay = None
 
-        if loop_result.finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if loop_result.finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             self.session.save()
             return TurnResult(
                 assistant_text=loop_result.final_text or "",
@@ -4618,7 +4627,7 @@ class Agent:
         subagent_tool_rounds: int,
     ) -> TurnResult:
         """Complete ask/recall parent short loop (T-702 / T-905)."""
-        if loop_result.finish_reason in {"cancelled", "timeout", "error", "context_switched"}:
+        if loop_result.finish_reason in {"cancelled", "timeout", "error", "provider_error", "context_switched"}:
             self.session.save()
             return TurnResult(
                 assistant_text=loop_result.final_text or "",

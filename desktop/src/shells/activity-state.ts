@@ -56,7 +56,9 @@ function nextThinkId(): string {
 }
 
 export function ensureProcessEntries(proc: ProcessActivityBlock): ActivityEntry[] {
-  if (proc.entries && proc.entries.length > 0) {
+  // An existing array, even empty, is the source of truth. Replacing it drops
+  // a tool push that still holds the previous array (a fast tool with no reasoning).
+  if (proc.entries) {
     return proc.entries;
   }
   const entries: ActivityEntry[] = [];
@@ -197,10 +199,10 @@ export function addToolStart(
   proc: ProcessActivityBlock,
   tool: ProcessToolCard,
 ): void {
-  const entries = ensureProcessEntries(proc);
+  ensureProcessEntries(proc);
   pinOpenThink(proc);
   proc.llmPending = false;
-  entries.push({ kind: "tool", ...tool });
+  ensureProcessEntries(proc).push({ kind: "tool", ...tool });
   syncProcessLegacyFields(proc);
 }
 

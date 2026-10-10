@@ -36,6 +36,10 @@ class OrdinaryFileWritePromptTests(unittest.TestCase):
         self.assertNotIn("`run_evolved` → `write_text`", table)
         self.assertNotIn("`run_evolved` → `run_command`", table)
         self.assertLess(len(core.splitlines()), 120)
+        self.assertIn("read_file` it in **this** turn", core)
+        coding = (_ROOT / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
+        self.assertIn("先读再断言", coding)
+        self.assertIn("本回合 `read_file`", coding)
 
     def test_evolved_catalog_does_not_nest_flat_writes(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:

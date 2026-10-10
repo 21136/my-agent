@@ -905,6 +905,8 @@ const ORDINARY_TURN_ABORT_REASONS = new Set([
   "total_cap_exceeded",
   "segment_cap_pause",
 ]);
+// provider_error is a model-service miss. The chat reply already explains it,
+// and it is not stored on the project, so the goal must stay as it is after reload.
 
 /** A finished ordinary turn failed or aborted. A tool miss inside a normal stop does not. */
 export function ordinaryProjectTurnFailed(state: ProjectPanelState): boolean {

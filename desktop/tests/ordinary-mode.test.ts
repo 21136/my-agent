@@ -331,6 +331,36 @@ test("an aborted or failed ordinary turn still marks the project failed", () => 
   assert.equal(deriveProjectGoalViewModel(postcondition).title, "上一步没有完成");
 });
 
+test("a model-service error leaves the ordinary project goal unchanged", () => {
+  const base = {
+    turnInProgress: false,
+    planStatus: "draft" as const,
+    tasksTotal: 1,
+    tasksDone: 0,
+    tasksAllDone: false,
+    projectEntry: "",
+    executionStage: "requirements",
+    workflowStage: "requirements",
+    executionStageStatus: "ready",
+    turnFailureClass: "",
+  };
+  const live = deriveProjectGoalViewModel(panel({
+    ...base,
+    lastTurnFinishReason: "provider_error",
+  }));
+  const reloaded = deriveProjectGoalViewModel(panel({
+    ...base,
+    lastTurnFinishReason: "",
+  }));
+  assert.equal(live.title, reloaded.title);
+  assert.equal(live.nextStep, reloaded.nextStep);
+  assert.equal(live.summary, reloaded.summary);
+  assert.equal(live.status, reloaded.status);
+  assert.equal(live.title, "方案已准备好");
+  assert.doesNotMatch(live.summary, /最近一次执行或验证没有通过/);
+  assert.doesNotMatch(live.nextStep, /查看失败原因/);
+});
+
 test("docs requests and error status stay useful without a project", () => {
   assert.equal(canRequestProjectDocs(""), false);
   assert.equal(canRequestProjectDocs("  "), false);

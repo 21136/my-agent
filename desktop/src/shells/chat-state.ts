@@ -301,6 +301,8 @@ export function createChatSession(
   };
 
   let cancelWatchdog: ReturnType<typeof setTimeout> | null = null;
+  let deferredHistory: Extract<ServerEvent, { type: "session.history" }> | null = null;
+  const acceptedCallIds = new Set<string>();
 
   function notify(): void {
     hooks.onChange?.();
@@ -373,6 +375,95 @@ export function createChatSession(
     model.toolsRunning = 0;
     model.confirmSubmitting = false;
     model.cancelRequested = false;
+  }
+
+  function turnIsBusy(): boolean {
+    return (
+      model.turnActive
+      || model.toolsRunning > 0
+      || model.executionState === "queued"
+      || model.executionState === "running"
+      || model.executionState === "stopping"
+    );
+  }
+
+  function latestTooledProcess(): (ChatBlock & { kind: "process" }) | undefined {
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind !== "process") continue;
+      const hasTool =
+        (block.tools?.length ?? 0) > 0
+        || (block.entries ?? []).some((entry) => entry.kind === "tool");
+      if (hasTool) return block;
+    }
+    return undefined;
+  }
+
+  function findProcessByCallId(callId: string): (ChatBlock & { kind: "process" }) | undefined {
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind !== "process") continue;
+      if (findToolEntry(block, callId)) return block;
+    }
+    return undefined;
+  }
+
+  function applySessionHistory(event: Extract<ServerEvent, { type: "session.history" }>): void {
+    const sameSession =
+      !event.session_id || !model.sessionId || event.session_id === model.sessionId;
+    const keptProcess = sameSession ? latestTooledProcess() : undefined;
+    const liveTurn = model.turnCounter;
+    const keptUsers = sameSession
+      ? model.blocks.filter(
+          (block): block is ChatBlock & { kind: "user" } =>
+            block.kind === "user" && block.turnIndex === liveTurn,
+        )
+      : [];
+    const keptAssistants = sameSession
+      ? model.blocks.filter(
+          (block): block is ChatBlock & { kind: "assistant" } =>
+            block.kind === "assistant" && block.turnIndex === liveTurn,
+        )
+      : [];
+    resetTurnActivity();
+    model.confirmPending = false;
+    model.confirmSubmitting = false;
+    model.cancelRequested = false;
+    model.executionRunId = "";
+    model.executionState = "idle";
+    model.executionSequence = 0;
+    model.executionFinishReason = null;
+    model.confirmOverlay = null;
+    const loaded = historyFromItems(event.items);
+    model.blocks = sanitizeChatBlocksForHistory(loaded.blocks);
+    model.turnCounter = loaded.turnCounter;
+    model.currentTurnKey = "";
+    model.assistantBuffer = "";
+    model._toolTimers.clear();
+    if (event.truncated && (event.omitted_count ?? 0) > 0) {
+      model.blocks.unshift({
+        kind: "notice",
+        text: `仅显示最近 ${event.items.length} 条对话（另有 ${event.omitted_count} 条未加载）。`,
+      });
+    }
+    for (const user of keptUsers) {
+      const present = model.blocks.some(
+        (block) => block.kind === "user" && block.text === user.text,
+      );
+      if (!present) model.blocks.push(user);
+    }
+    if (keptProcess) {
+      model.blocks.push(keptProcess);
+      model.currentTurnKey = keptProcess.turnKey;
+    }
+    for (const assistant of keptAssistants) {
+      const present = model.blocks.some(
+        (block) => block.kind === "assistant" && block.text === assistant.text,
+      );
+      if (!present) model.blocks.push(assistant);
+    }
+    hooks.onHistoryLoaded?.(loaded);
+    notify();
   }
 
   function isWorking(): boolean {
@@ -649,6 +740,12 @@ export function createChatSession(
   }
 
   function isStaleRunEvent(event: ServerEvent): boolean {
+    if (
+      (event.type === "tool.end" || event.type === "tool.progress" || event.type === "tool.start")
+      && acceptedCallIds.has(event.call_id)
+    ) {
+      return false;
+    }
     const currentRunId = normalizedRunId(model.executionRunId);
     const eventRunId = [
       "execution.state",
@@ -681,6 +778,12 @@ export function createChatSession(
     switch (event.type) {
       case "session.banner": {
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
+        if (!sessionChanged && turnIsBusy()) {
+          model.sessionId = event.session_id;
+          hooks.onSessionBanner?.(event.session_id);
+          notify();
+          break;
+        }
         resetTurnActivity();
         model.confirmPending = false;
         model.confirmSubmitting = false;
@@ -699,29 +802,12 @@ export function createChatSession(
         break;
       }
       case "session.history": {
-        resetTurnActivity();
-        model.confirmPending = false;
-        model.confirmSubmitting = false;
-        model.cancelRequested = false;
-        model.executionRunId = "";
-        model.executionState = "idle";
-        model.executionSequence = 0;
-        model.executionFinishReason = null;
-        model.confirmOverlay = null;
-        const loaded = historyFromItems(event.items);
-        model.blocks = sanitizeChatBlocksForHistory(loaded.blocks);
-        model.turnCounter = loaded.turnCounter;
-        model.currentTurnKey = "";
-        model.assistantBuffer = "";
-        model._toolTimers.clear();
-        if (event.truncated && (event.omitted_count ?? 0) > 0) {
-          model.blocks.unshift({
-            kind: "notice",
-            text: `仅显示最近 ${event.items.length} 条对话（另有 ${event.omitted_count} 条未加载）。`,
-          });
+        if (turnIsBusy()) {
+          deferredHistory = event;
+          break;
         }
-        hooks.onHistoryLoaded?.(loaded);
-        notify();
+        deferredHistory = null;
+        applySessionHistory(event);
         break;
       }
       case "execution.state": {
@@ -749,8 +835,15 @@ export function createChatSession(
       }
       case "turn.start": {
         const runId = normalizedRunId(event.run_id);
-        if (runId) model.executionRunId = runId;
-        beginServerProcessTurn();
+        const existing = model.currentTurnKey ? findProcessBlock(model.currentTurnKey) : undefined;
+        const reuse = model.turnActive && Boolean(existing);
+        if (reuse && existing) {
+          existing.collapsed = false;
+          beginTurnActivity();
+        } else {
+          if (runId) model.executionRunId = runId;
+          beginServerProcessTurn();
+        }
         if (options.showProcess) {
           markLlmPending(prepareProcessForLlmRound());
         }
@@ -806,6 +899,11 @@ export function createChatSession(
         model._toolTimers.clear();
         model.confirmPending = false;
         model.confirmSubmitting = false;
+        const pendingHistory = deferredHistory;
+        deferredHistory = null;
+        if (pendingHistory) {
+          applySessionHistory(pendingHistory);
+        }
         hooks.onTurnEnd?.(event.ok, event.finish_reason);
         notify();
         break;
@@ -821,10 +919,15 @@ export function createChatSession(
         hooks.onCheckerVerdict?.(event);
         notify();
         break;
-      case "tool.start":
-        model.toolsRunning += 1;
-        model._toolTimers.set(event.call_id, Date.now());
-        if (options.showProcess) {
+      case "tool.start": {
+        const seen = acceptedCallIds.has(event.call_id);
+        acceptedCallIds.add(event.call_id);
+        if (!seen) {
+          model.toolsRunning += 1;
+          model._toolTimers.set(event.call_id, Date.now());
+        }
+        const owner = findProcessByCallId(event.call_id);
+        if (options.showProcess && !owner) {
           const proc = ensureActiveProcessBlock();
           addToolStart(proc, {
             callId: event.call_id,
@@ -837,13 +940,15 @@ export function createChatSession(
         hooks.onToolStart?.(currentTurnIndex());
         notify();
         break;
+      }
       case "tool.end":
+        acceptedCallIds.add(event.call_id);
         model.toolsRunning = Math.max(0, model.toolsRunning - 1);
         if (options.showProcess) {
           const startTime = model._toolTimers.get(event.call_id);
           const now = Date.now();
           const started = startTime ?? now;
-          const proc = ensureActiveProcessBlock();
+          const proc = findProcessByCallId(event.call_id) ?? ensureActiveProcessBlock();
           let card = findToolEntry(proc, event.call_id);
           if (!card) {
             addToolStart(proc, {

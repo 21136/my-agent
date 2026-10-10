@@ -62,6 +62,7 @@ If no suitable tool exists, say so honestly; offer a checklist or manual steps. 
 - Scaffolding details (staging / base64 / conflicts / confirm): **`read_file evolve/tool-catalog/buckets/evolve.md`** before calling `write_evolve`.
 - Detailed write/scaffolding rules live in `evolve/tool-catalog/buckets/evolve.md`.
 - **`patch_file`**: prefer **unique `find` anchors** for small edits. Do **not** use `start_line`+`end_line` to replace one line with a **multi-line** block (empty slots, dialogs, imports) — that breaks structure; use staging + full-file write or a precise find span.
+- Before claiming a file already has the requested text, or that no edit is needed, `read_file` it in **this** turn. A prior turn's read is stale once the user may have changed the file. A pure question that does not assert file contents does not need that read.
 - When `web_search` or `fetch_url` returns an error (no key, timeout, SSRF block), report it — do not fabricate results.
 - Long tool output may spill to `data/sessions/<id>/tool_outputs/`; use `read_file` for the full text when needed.
 - `run_evolved` supports `dry_run: true` when the user wants a preview without writes.

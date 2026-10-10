@@ -68,6 +68,8 @@
 
 **写盘纪律（BUG-025）**：细节与大文件写入规范见 `evolve/tool-catalog/buckets/evolve.md`。
 
+**先读再断言**：声称文件里已经是目标内容，或这次不用改，之前必须在本回合 `read_file`。上一回合读过不算，用户可能已经改过磁盘上的文件。纯问答、且不断言文件内容时，不要为了这条再读一次。
+
 ## 与本仓库记忆
 
 记忆三件套：`prompts/coding.md`（本文件）+ `memories/coding/*.md` 索引 + session `goal.md`。加载本主题后见 system 中的 `[久远记忆]` 与 `topic_prompt:coding`。

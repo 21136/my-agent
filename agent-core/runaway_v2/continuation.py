@@ -22,6 +22,7 @@ _FATAL_FINISH_REASONS = frozenset(
         "cancelled",
         "timeout",
         "error",
+        "provider_error",
         "context_switched",
         "runaway_paused",
         "runaway_duplicate",
