@@ -889,11 +889,13 @@ def format_capability_hints(
     _ = registry  # retained for call-site compatibility
     lines = [
         "[能力提示]",
-        "- 工具怎么选：先看上方工具索引；细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
+        "- 工具怎么选：`read_file` / `write_text` / `patch_file` / `run_command` 看本提示即可，不要读 bucket。"
+        "其它 evolved 的参数细节才 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
         "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file` 优先扁平原语，"
         "其余 evolved 经 `run_evolved`（`status=archived` 不可调，见 docs/ARCHIVED-TOOLS.md）。",
         "- 只读：read_file · list_dir · glob_file_search · grep（本地）；web_search · fetch_url（网络）",
-        "- 写/改：write_text（新建）/ patch_file（改已有）；或 run_evolved → copy_move / move_to_trash；先试 dry_run",
+        "- 写/改：已有文件用 patch_file（先 read_file，再用唯一 find）；write_text 只用于新建或几乎整文件重写。"
+        "copy_move / move_to_trash 才 run_evolved，先试 dry_run",
         "- 执行：run_command（一次性 shell）；长驻 run_evolved → run_service 或 run_command background:true",
         "- 查项目/跨会话：run_evolved → project_catalog；再 read_file data/sessions/<id>/messages.jsonl"
         "（读**其他**会话须 confirm）",

@@ -65,7 +65,7 @@
 
 - 工具路径相对 agent 根；项目内写作优先 `workspace/<id>/…`。
 - `patch_file` 仅用于当前 `project_root` 下已有文本文件。
-- **前端页面**（`*.vue` 等）：大改走 `_staging` + `content_workspace_path`；小改用 `patch_file` **find** 锚点。勿 `start_line` 单行替多行（易结构损坏）。详见 `evolve/tool-catalog/buckets/write.md`。
+- **前端页面**（`*.vue` 等）：大改走 `_staging` + `content_workspace_path`；小改用 `patch_file` **find** 锚点。勿 `start_line` 单行替多行（易结构损坏）。只有这种大文件 staging 才看 `evolve/tool-catalog/buckets/write.md`；普通 `read_file` / `patch_file` / `write_text` / `run_command` 不必读它。
 
 ## 本机工具链（ENV.md）
 

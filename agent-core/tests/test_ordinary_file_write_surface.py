@@ -12,7 +12,7 @@ _ROOT = _AGENT_CORE.parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from loader import format_session_evolved_catalog
+from loader import format_capability_hints, format_session_evolved_catalog
 from project_mode import create_project
 from tests.isolation_helpers import temporary_agent_paths
 from tool_proxies import rewrite_proxy_tool_call
@@ -37,9 +37,45 @@ class OrdinaryFileWritePromptTests(unittest.TestCase):
         self.assertNotIn("`run_evolved` → `run_command`", table)
         self.assertLess(len(core.splitlines()), 120)
         self.assertIn("read_file` it in **this** turn", core)
+        self.assertIn("edit an existing file with `patch_file`", core)
+        self.assertIn("reserve `write_text` for a new file or a near-total rewrite", core)
+        self.assertIn("Do not `read_file` `evolve/tool-catalog/buckets/`", core)
         coding = (_ROOT / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
         self.assertIn("先读再断言", coding)
         self.assertIn("本回合 `read_file`", coding)
+        self.assertIn("读完之后改已有文件仍用 `patch_file`", coding)
+        self.assertIn("不要为 `read_file` / `write_text` / `patch_file` / `run_command`", coding)
+
+    def test_catalog_does_not_send_basic_tools_to_bucket_notes(self) -> None:
+        index = (_ROOT / "evolve" / "tool-catalog" / "INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("不要**为它们读 bucket", index)
+        self.assertIn("patch_file", index)
+        self.assertLess(len(index), 2048)
+        write_row = next(line for line in index.splitlines() if "buckets/write.md" in line)
+        run_row = next(line for line in index.splitlines() if "buckets/run.md" in line)
+        self.assertNotIn("write_text", write_row)
+        self.assertNotIn("patch_file", write_row)
+        self.assertNotIn("run_command", run_row)
+
+        class _Meta:
+            topics: list[str] = []
+
+        class _Session:
+            meta = _Meta()
+
+        hints = format_capability_hints(_Session())
+        self.assertIn("不要读 bucket", hints)
+        self.assertIn("已有文件用 patch_file", hints)
+        self.assertIn("write_text 只用于新建或几乎整文件重写", hints)
+        self.assertNotIn("细节 `read_file evolve/tool-catalog/buckets/<桶>.md`。执行面", hints)
+
+        with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:
+            registry = ToolRegistry.load(paths)
+            catalog = format_session_evolved_catalog(["coding"], registry=registry)
+        write_line = next(line for line in catalog.splitlines() if line.startswith("- write_text:"))
+        patch_line = next(line for line in catalog.splitlines() if line.startswith("- patch_file:"))
+        self.assertIn("改已有文件用 patch_file", write_line)
+        self.assertIn("不要改用 write_text", patch_line)
 
     def test_evolved_catalog_does_not_nest_flat_writes(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:

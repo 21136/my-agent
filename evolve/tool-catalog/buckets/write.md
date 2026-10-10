@@ -1,7 +1,7 @@
 # 写文件（write）
 
 > L1 · Phase 23 M4 · Phase 30 收敛。  
-> **调用**：`write_text` / `patch_file` 扁平原语（优先）；或 `run_evolved` · `tool_name=<名>`。
+> **调用**：日常改已有文件不要打开本页，直接 `patch_file`；`write_text` 只用于新建或几乎整文件重写。本页只补充搬移、回收站和 staging。
 
 | 工具 | 作用 |
 |------|------|
