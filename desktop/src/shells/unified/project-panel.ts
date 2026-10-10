@@ -107,6 +107,7 @@ export interface ProjectPanelState {
   projectSummary: string;
   planStatus: string;
   projectEntry: string;
+  projectTemplate: string;
   tasksMarkdown: string;
   mapMarkdown: string;
   tasksDone: number;
@@ -485,6 +486,7 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.projectSummary = "";
   state.planStatus = "";
   state.projectEntry = "";
+  state.projectTemplate = "";
   state.tasksMarkdown = "";
   state.mapMarkdown = "";
   state.tasksDone = 0;
@@ -2667,6 +2669,7 @@ export function applyProjectStateEvent(
   state.projectSummary = event.project_summary ?? state.projectSummary;
   state.planStatus = event.plan_status ?? "draft";
   state.projectEntry = event.project_entry ?? state.projectEntry;
+  state.projectTemplate = event.project_template ?? state.projectTemplate;
   state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
   state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;

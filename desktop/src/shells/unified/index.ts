@@ -199,6 +199,7 @@ export function mountUnifiedShell(
     projectSummary: "",
     planStatus: "",
     projectEntry: "",
+    projectTemplate: "",
     tasksMarkdown: "",
     mapMarkdown: "",
     tasksDone: 0,
@@ -729,6 +730,10 @@ export function mountUnifiedShell(
     }
     if (!projectState.projectId) {
       input.placeholder = "输入消息，或先打开一个项目…";
+      return;
+    }
+    if (projectState.projectEntry === "direct" || projectState.projectTemplate === "light") {
+      input.placeholder = "输入消息或拖入/粘贴文件…";
       return;
     }
     input.placeholder =
@@ -1314,7 +1319,7 @@ export function mountUnifiedShell(
       return;
     }
     try {
-      client.sendCommand(`项目 新建 ${id}`);
+      client.sendCommand(`项目 新建 ${id} --light`);
       setStatus(`新建项目 ${id}…`);
     } catch (err) {
       setStatus(`新建项目失败：${err instanceof Error ? err.message : String(err)}`);

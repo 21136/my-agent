@@ -199,6 +199,28 @@ def _inject_seed(fresh: Session, previous: Session, reason: str) -> None:
     fresh.save()
 
 
+
+def _bind_ordinary_light_entry(session: Session, paths: AgentPaths, project_id: str) -> None:
+    """Light ordinary creates skip the plan-confirm chrome and open as direct implement."""
+    from project_cli import confirm_project_plan
+    from project_mode import read_project_template
+
+    try:
+        if read_project_template(paths, project_id) != "light":
+            return
+    except Exception:
+        return
+    session.meta.project_entry = "direct"
+    status = str(getattr(session.meta, "project_plan_status", "") or "draft")
+    if status in {"draft", "plan_dirty"}:
+        try:
+            confirm_project_plan(session, skip_stage_walls=True)
+        except Exception:
+            session.meta.project_plan_status = "confirmed"
+            session.meta.project_workflow_stage = "implementation"
+    session.save()
+
+
 def _apply_project_create(
     paths: AgentPaths,
     session: Session,
@@ -260,6 +282,7 @@ def _apply_project_create(
 
         bind_project_session(session, pid, plan_status="draft")
         session.save()
+        _bind_ordinary_light_entry(session, paths, pid)
         record_project_session(paths, pid, session.conversation_id)
         write_last_conversation_id(paths, session.conversation_id)
         try:
@@ -268,7 +291,10 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        return session, f"已创建并打开项目 workspace/{pid}（计划待确认{_create_template_note(template, project_template)}）"
+        note = _create_template_note(template, project_template)
+        if str(getattr(session.meta, "project_entry", "") or "") == "direct":
+            return session, f"已创建并打开项目 workspace/{pid}（可直接写代码{note}）"
+        return session, f"已创建并打开项目 workspace/{pid}（计划待确认{note}）"
 
     fresh = create_new(paths)
     _inject_seed(fresh, session, reason=f"切换到项目 {pid}")
@@ -276,6 +302,7 @@ def _apply_project_create(
 
     bind_project_session(fresh, pid, plan_status="draft")
     fresh.save()
+    _bind_ordinary_light_entry(fresh, paths, pid)
     record_project_session(paths, pid, fresh.conversation_id)
     write_last_conversation_id(paths, fresh.conversation_id)
     try:
@@ -284,7 +311,10 @@ def _apply_project_create(
         ensure_project_env(paths, pid)
     except Exception:
         pass
-    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认{_create_template_note(template, project_template)}）"
+    note = _create_template_note(template, project_template)
+    if str(getattr(fresh.meta, "project_entry", "") or "") == "direct":
+        return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 可直接写代码{note}）"
+    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认{note}）"
 
 
 def _create_template_note(template: str | None, project_template: str | None) -> str:

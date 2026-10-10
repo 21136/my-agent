@@ -196,6 +196,7 @@ export type ServerEvent =
       project_root: string | null;
       plan_status: string;
       project_entry?: string;
+      project_template?: string;
       tasks_markdown: string;
       map_markdown: string;
       tasks_done: number;

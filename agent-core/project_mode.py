@@ -488,21 +488,16 @@ def _template_body(name: str, project_id: str) -> str:
 def _light_template_body(name: str, project_id: str) -> str:
     bodies = {
         "PROJECT.md": (
-            "# {{project_id}} · 项目\n\n"
-            "## 目标\n\n- 待填写本轮要交付的结果。\n\n"
-            "## 验证\n\n- 对口证据见 `VERIFY.md`；勾选 TASKS 前须留下验证记录。\n"
+            "# {{project_id}}\n\n"
+            "直接写代码即可。需要拆任务或补文档时再说。\n"
         ),
         "TASKS.md": (
             "# {{project_id}} · 任务\n\n"
-            "- [ ] T-001 完成第一项可交付工作\n"
-            "  verify: V-001\n"
-            "  evidence: run_project_tests\n"
+            "（暂无任务）\n"
         ),
         "VERIFY.md": (
             "# {{project_id}} · 验证\n\n"
-            "## V-001 · T-001\n\n"
-            "- 方法：运行与 T-001 对口的测试或验收命令。\n"
-            "- 证据：待执行。\n"
+            "（暂无验证项）\n"
         ),
     }
     return bodies.get(name, f"# {project_id} · {name}\n").replace("{{project_id}}", project_id)
@@ -630,6 +625,8 @@ def _is_template_document(name: str, project_id: str, text: str) -> bool:
         or normalized == f"# template {name}"
         or normalized == _template_body(name, project_id).strip()
         or normalized == _template_body(name, "template").strip()
+        or normalized == _light_template_body(name, project_id).strip()
+        or normalized == _light_template_body(name, "template").strip()
     )
 
 
@@ -2159,7 +2156,17 @@ def should_skip_ordinary_plan_request(
             user_text = msg["content"]
             break
     intent = str(getattr(session, "turn_intent", "") or "")
-    return _ordinary_question_or_recall(user_text, intent)
+    if _ordinary_question_or_recall(user_text, intent):
+        return True
+    if normalize_project_entry(getattr(meta, "project_entry", "")) == "direct":
+        return True
+    if pid:
+        try:
+            if read_project_template(paths, pid) == "light":
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
@@ -3807,10 +3814,20 @@ def _rel_from_title(old_rel: str, title: str) -> str:
 
 
 def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]]:
-    """List project-root markdown files, skipping vendor/cache trees."""
+    """List project-root markdown files, skipping vendor/cache trees.
+
+    Untouched light-scaffold placeholders stay hidden so an ordinary empty
+    project does not look like a pile of template docs.
+    """
     root = project_dir(paths, project_id)
     if not root.is_dir():
         return []
+    pid = normalize_project_id(project_id)
+    hide_light_placeholders = False
+    try:
+        hide_light_placeholders = read_project_template(paths, pid) == "light"
+    except Exception:
+        hide_light_placeholders = False
     docs: list[dict[str, Any]] = []
     for fpath in sorted(_iter_project_markdown(root), key=lambda item: item.as_posix().lower()):
         try:
@@ -3819,6 +3836,13 @@ def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]
             continue
         if _catalog_skips_rel(rel):
             continue
+        if hide_light_placeholders and "/" not in rel:
+            try:
+                body = fpath.read_text(encoding="utf-8")
+            except OSError:
+                body = ""
+            if _is_template_document(rel, pid, body):
+                continue
         try:
             size = fpath.stat().st_size
         except OSError:

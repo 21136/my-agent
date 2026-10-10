@@ -349,6 +349,15 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
         return None
     if bool(getattr(session.meta, "project_runaway_enabled", False)):
         return None
+    # Ordinary direct / light projects never open the plan-confirm banner.
+    entry = str(getattr(session.meta, "project_entry", "") or "").strip()
+    if entry == "direct":
+        return None
+    try:
+        if read_project_template(paths, pid) == "light":
+            return None
+    except Exception:
+        pass
     plan_status = session.meta.project_plan_status or "draft"
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
     if workflow_stage != "requirements":
@@ -359,10 +368,12 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
     tasks_md = artifacts.get("TASKS.md", "")
     if not tasks_md.strip():
         return None
+    stats = read_task_stats(project_dir(paths, pid) / "TASKS.md")
+    if stats.total == 0:
+        return None
     preview = tasks_md
     if len(preview) > _PLAN_PREVIEW_MAX:
         preview = preview[:_PLAN_PREVIEW_MAX] + "\n…(truncated)"
-    stats = read_task_stats(project_dir(paths, pid) / "TASKS.md")
     title = "计划已变更 · 请确认" if plan_status == "plan_dirty" else "计划待确认"
     return {
         "type": "plan.request",

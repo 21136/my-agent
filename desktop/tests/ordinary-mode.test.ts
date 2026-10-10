@@ -133,6 +133,7 @@ function panel(overrides: Partial<ProjectPanelState> = {}): ProjectPanelState {
     reviewProgressBlocked: false,
     scopeConfirmedAt: "",
     projectEntry: "",
+    projectTemplate: "",
     runawayEnabled: false,
     runawayStatus: "",
     runawayCheckpoint: "",
@@ -216,6 +217,7 @@ test("draft decision is one surface after a reply-only turn", () => {
   const state = panel({
     planStatus: "draft",
     projectEntry: "",
+    projectTemplate: "",
     tasksTotal: 1,
     executionStage: "requirements",
     workflowStage: "requirements",
@@ -240,6 +242,7 @@ test("direct-entry draft still shows a plan banner when a confirm request arrive
   const state = panel({
     planStatus: "draft",
     projectEntry: "direct",
+    projectTemplate: "",
     planOverlay: {
       requestId: "req-direct",
       title: "计划待确认",
@@ -339,6 +342,7 @@ test("a model-service error leaves the ordinary project goal unchanged", () => {
     tasksDone: 0,
     tasksAllDone: false,
     projectEntry: "",
+    projectTemplate: "",
     executionStage: "requirements",
     workflowStage: "requirements",
     executionStageStatus: "ready",

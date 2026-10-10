@@ -303,7 +303,11 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         mode = "find"
-        lines_changed = 1
+        old_lines = text.count("\n") + (1 if text else 0)
+        new_lines = new_text.count("\n") + (1 if new_text else 0)
+        find_lines = find.count("\n") + 1
+        # Prefer the size of the matched span; fall back to net line delta.
+        lines_changed = max(find_lines, abs(new_lines - old_lines), 1)
     else:
         return {"ok": False, "error": "provide start_line+end_line or find"}
 
