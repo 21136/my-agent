@@ -76,7 +76,10 @@ class ProjectThreadTests(unittest.TestCase):
         self.assertNotEqual(updated.conversation_id, old_id)
         self.assertEqual(updated.meta.project_id, normalize_project_id(self.project_id))
         self.assertEqual(updated.messages, [])
-        self.assertIn(old_id, message)
+        self.assertIn("已归档", message)
+        self.assertIn("新开", message)
+        self.assertNotIn(old_id, message)
+        self.assertNotIn(updated.conversation_id, message)
 
         pid = normalize_project_id(self.project_id)
         archive = read_project_thread_archive(self.paths)

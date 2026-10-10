@@ -4,6 +4,7 @@ import { escapeHtml } from "../chat-state";
 import type { MainFocus } from "./plan-review";
 import { acceptLabel, truncateSummary, diffStats } from "./plan-review";
 import { humanDocTitle, renderDocCatalogHtml } from "./doc-reading";
+import { userFacingThreadTitle } from "./ordinary-guards";
 import { RAIL_TAB_LABELS, type RailTab } from "./rail";
 
 export type { RailTab };
@@ -869,6 +870,16 @@ function isSidebarGoalCard(view: ProjectGoalViewModel): boolean {
     || view.title === "交付结果待检查";
 }
 
+/** First-round scope confirm is only for a plan that has not been accepted yet. */
+function pastFirstRoundScope(state: ProjectPanelState): boolean {
+  if (state.planStatus === "confirmed" || Boolean(state.scopeConfirmedAt)) return true;
+  const stage = state.workflowStage || state.executionStage;
+  return stage === "design"
+    || stage === "implementation"
+    || stage === "verification"
+    || stage === "release";
+}
+
 export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoalViewModel {
   if (!state.projectId) {
     return {
@@ -1060,7 +1071,10 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.scopeNeedsReconfirm || (!state.scopeConfirmedAt && state.tasksTotal > 0)) {
+  if (
+    !pastFirstRoundScope(state)
+    && (state.scopeNeedsReconfirm || (!state.scopeConfirmedAt && state.tasksTotal > 0))
+  ) {
     return {
       status: "decision",
       statusLabel: "等你决定",
@@ -1308,11 +1322,14 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
         body = `<div class="textbook-plan-goal">请先打开或新建项目</div><div class="textbook-plan-stat">绑定项目后才能确认范围并进入文档整理。</div>`;
         action = `<button type="button" class="unified-btn" data-action="open-projects">打开项目</button><button type="button" class="unified-btn unified-btn-accent" data-action="new-project">新建项目</button>`;
       } else {
-        body = `<div class="textbook-plan-goal">项目 ${escapeHtml(state.projectId)}：先让第一轮有可执行交付物。</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
+        const scopeSoft = Boolean(state.scopeConfirmedAt) && state.planStatus !== "confirmed";
+        body = `<div class="textbook-plan-goal">项目 ${escapeHtml(state.projectId)}：${pastFirstRoundScope(state) && !scopeSoft ? "可以继续当前这一轮。" : "先让第一轮有可执行交付物。"}</div><div class="textbook-plan-stat">开放任务 ${openCount} 条${state.scopeNeedsReconfirm ? " · 范围已变" : ""}</div>`;
         action = state.runawayEnabled
           ? `<span class="textbook-soft-signal">${RUNAWAY_STAGE.preparingProject}</span>`
-          : state.scopeConfirmedAt
+          : scopeSoft
           ? `<span class="textbook-soft-signal">范围已确认</span>`
+          : pastFirstRoundScope(state)
+          ? `<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>`
           : `<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope" ${openCount === 0 ? "disabled" : ""}>确认范围</button>`;
       }
       break;
@@ -1364,7 +1381,7 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
   return `<section class="textbook-plan-card" aria-label="阶段计划卡"><div class="textbook-plan-card-header"><span>阶段计划 · ${escapeHtml(FLOW_STAGES.find((item) => item.id === stage)?.label || "需求")}</span>${stage !== execution ? `<span class="textbook-preview-badge">预览中</span>` : ""}</div><div class="textbook-plan-card-body">${body}</div><div class="textbook-plan-card-actions">${action}</div></section>`;
 }
 
-function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
+export function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelCallbacks): string {
   void callbacks;
   const stage = getExecutionStage(state);
   const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
@@ -1376,15 +1393,28 @@ function renderStagePlanCard(state: ProjectPanelState, callbacks?: ProjectPanelC
   let stat = "";
   let action = "";
   switch (stage) {
-    case "requirements":
-      goal = state.projectId ? "先确认这一轮要做什么。" : "先打开或新建一个项目。";
-      stat = state.projectId ? "先确认这一轮的范围。" : "绑定项目后才能继续。";
+    case "requirements": {
+      const scopeSoft = Boolean(state.projectId && state.scopeConfirmedAt) && state.planStatus !== "confirmed";
+      const scopeSettled = Boolean(state.projectId) && pastFirstRoundScope(state) && !scopeSoft;
+      goal = !state.projectId
+        ? "先打开或新建一个项目。"
+        : scopeSettled
+          ? "可以继续当前项目。"
+          : "先确认这一轮要做什么。";
+      stat = !state.projectId
+        ? "绑定项目后才能继续。"
+        : scopeSettled
+          ? "选择一个开放任务，或直接说明要做什么。"
+          : "先确认这一轮的范围。";
       action = !state.projectId
         ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-projects">打开项目</button>'
-        : state.scopeConfirmedAt
+        : scopeSoft
           ? '<span class="textbook-soft-signal">范围已确认</span>'
-          : '<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope">确认范围</button>';
+          : scopeSettled
+            ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-full-plan">选择任务</button>'
+            : '<button type="button" class="unified-btn unified-btn-accent" data-action="confirm-scope">确认范围</button>';
       break;
+    }
     case "documentation":
       goal = "系统正在整理项目资料。";
       stat = "资料准备好后，会请你确认方案。";
@@ -2667,7 +2697,7 @@ export function applyProjectThreadsEvent(
   state.activeSessionId = event.active_session_id || "";
   state.threads = (event.threads || []).map((item) => ({
     sessionId: item.session_id,
-    title: item.title || item.session_id,
+    title: userFacingThreadTitle(item.title || "", item.session_id),
     preview: item.preview || "",
     updatedAt: item.updated_at || "",
     archived: Boolean(item.archived),

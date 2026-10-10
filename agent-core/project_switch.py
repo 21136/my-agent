@@ -150,7 +150,7 @@ def plan_project_open(paths: AgentPaths, session: Session, project_id: str) -> P
         and session_exists(paths, mapped)
     ):
         raise ProjectModeError(
-            f"项目 {pid} 已有专用会话 {mapped}；请用「项目 切换 {pid}」续接"
+            f"项目 {pid} 已有专用会话；请用「项目 切换 {pid}」续接"
         )
 
     return ProjectSwitchPlan(
@@ -194,7 +194,7 @@ def plan_project_switch(paths: AgentPaths, session: Session, project_id: str) ->
             action="load_session",
             project_id=pid,
             session_id=mapped,
-            message=f"续接项目 {pid} 的专用会话 {mapped}",
+            message=f"已续接项目 {pid}",
         )
 
     return ProjectSwitchPlan(
@@ -318,7 +318,7 @@ def start_new_project_thread(
     old_cid = session.conversation_id
     if mapped and mapped != old_cid:
         raise ProjectModeError(
-            f"当前不是项目 {pid} 的活线（活线为 {mapped}）；请先切回活线再新开线"
+            f"当前不是项目 {pid} 的活线；请先切回活线再新开线"
         )
 
     fresh = create_new(paths)
@@ -348,8 +348,7 @@ def start_new_project_thread(
 
     return (
         fresh,
-        f"已为项目 {pid} 新开线（{fresh.conversation_id}）；"
-        f"上一线 {old_cid} 已归档，可回看",
+        f"已为项目 {pid} 新开一条会话；上一条已归档，可在会话列表回看",
     )
 
 

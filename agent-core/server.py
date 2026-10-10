@@ -843,7 +843,7 @@ async def _run_line(
                 repl.agent._pause_runaway(reason)
             repl.session.save()
         elif outcome == "stop":
-            bridge.emit({"type": "notice", "text": f"session saved: {repl.session.conversation_id}"})
+            bridge.emit({"type": "notice", "text": "会话已保存"})
             finish_reason = "cancelled"
             ok = False
             if getattr(repl.session.meta, "project_runaway_enabled", False):

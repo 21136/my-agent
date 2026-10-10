@@ -212,7 +212,9 @@ def _compute_execution_stage(
             "blockers": ["plan_status"],
         }
 
-    if not light:
+    # A workflow that has already left requirements must not rewind to the
+    # first-round scope card just because SCOPE.md ids are still empty.
+    if not light and workflow_stage not in {"design", "implementation", "verification", "release"}:
         scope = artifacts.get("SCOPE.md") or {}
         scope_ids = set(scope.get("ids") or [])
         scope_blockers: list[str] = []
@@ -1961,6 +1963,14 @@ def should_treat_ordinary_direct_implement(session: object, user_text: str = "")
     stage = str(getattr(meta, "project_workflow_stage", "requirements") or "requirements")
     if stage in _DIRECT_IMPLEMENT_BLOCKED_STAGES:
         return False
+    text = (user_text or "").strip()
+    # Empty text keeps the sticky tool filter (hide plan_partner). A plain
+    # question or reply-only line must not auto-confirm or inject a coding turn.
+    if text and not is_direct_implement_request(text):
+        from turn_intent import classify_turn
+
+        if classify_turn(text) in {"qa", "recall"}:
+            return False
     status = str(getattr(meta, "project_plan_status", "") or "draft")
     entry = normalize_project_entry(getattr(meta, "project_entry", ""))
     if entry == "direct":

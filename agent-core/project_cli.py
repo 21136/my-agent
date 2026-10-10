@@ -479,6 +479,8 @@ def confirm_project_plan(session: Session) -> str:
     session.meta.project_plan_status = "confirmed"
     session.meta.project_workflow_stage = "implementation"
     session.meta.project_plan_confirmed_at = utc_now_iso()
+    if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
+        session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     snapshot_plan_fingerprints(session, session.paths, pid)
     session.set_goal(
         build_project_goal(project_root=root, plan_status="confirmed"),
@@ -529,6 +531,8 @@ def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str
     session.meta.project_workflow_stage = "implementation"
     session.meta.project_plan_status = "confirmed"
     session.meta.project_plan_confirmed_at = utc_now_iso()
+    if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
+        session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     session.meta.project_active_task_id = normalized_task
     session.set_goal(build_project_goal(project_root=root, plan_status="confirmed"), phase="S4")
     session.meta.updated_at = utc_now_iso()
@@ -611,10 +615,10 @@ def run_project_command(
             else:
                 sid = lookup_project_session(paths, item_id)
                 if sid:
-                    marker = f" · 会话 {sid}"
+                    marker = " · 可续接"
             output_fn(f"  - {item_id} ({stats.done}/{stats.total}){marker}")
         if current:
-            output_fn(f"当前会话：{session.conversation_id} → {current}")
+            output_fn(f"当前项目：{current}")
         return ProjectCommandResult()
 
     if command.kind == "new":

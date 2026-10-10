@@ -245,6 +245,35 @@ def auto_explore_enabled() -> bool:
     return os.environ.get("MY_AGENT_AUTO_EXPLORE", "1").strip() not in {"0", "false", "no"}
 
 
+_REPLY_ONLY_MARKERS = (
+    "只回复",
+    "只用一句",
+    "只说一句",
+    "只回答",
+    "只需回复",
+    "只要回复",
+    "不要调用任何工具",
+    "不要调用工具",
+    "不要使用任何工具",
+    "不要使用工具",
+    "reply with only",
+    "only reply",
+    "do not call any tool",
+    "do not use any tool",
+    "don't use any tool",
+    "don't call any tool",
+)
+
+
+def is_reply_only_turn(user_text: str) -> bool:
+    """True when the user asked for a spoken answer and not a work turn."""
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    return any(marker.casefold() in folded for marker in _REPLY_ONLY_MARKERS)
+
+
 def is_recall_turn(user_text: str) -> bool:
     """Session-local recap: answer from thread context only (TURN-FEEDBACK §4)."""
     text = user_text.strip()
@@ -362,6 +391,9 @@ def classify_turn(user_text: str) -> TurnIntent:
 
     if is_recall_turn(text):
         return "recall"
+
+    if is_reply_only_turn(text) and not _has_explicit_execution_request(text, lower):
+        return "qa"
 
     if _has_explicit_execution_request(text, lower):
         return "execute"

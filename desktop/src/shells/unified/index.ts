@@ -11,6 +11,14 @@ import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusT
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
+  canRequestProjectDocs,
+  noticeMirrorsToStatus,
+  sessionBannerStatus,
+  sessionListMeta,
+  userFacingContextStatus,
+  userFacingErrorStatus,
+} from "./ordinary-guards";
+import {
   setupProjectPanel,
   renderProjectSidebar,
   renderProjectGoalCard,
@@ -1019,17 +1027,11 @@ export function mountUnifiedShell(
   let pendingSwitchBatch = false;
   let hydrationSessionId = "";
 
-  function shortSessionId(sessionId: string): string {
-    const trimmed = sessionId.trim();
-    if (trimmed.length <= 18) return trimmed;
-    return `${trimmed.slice(0, 18)}…`;
-  }
-
   function startHydrationWait(sessionId: string, label: string): void {
     hydrationSessionId = sessionId;
     pendingSwitchBatch = true;
     projectState.switchInProgress = true;
-    setStatus(`${label} ${shortSessionId(sessionId)}…`);
+    setStatus(`${label}…`);
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
   }
 
@@ -1303,7 +1305,7 @@ export function mountUnifiedShell(
         listHtml += `<div class="unified-expand-item ${isCurrent ? "is-current" : ""}">
           <span class="unified-expand-item-title">${escapeHtml(s.title)}</span>
           ${preview}
-          <span class="unified-expand-item-meta">${escapeHtml(meta || s.session_id)}</span>
+          <span class="unified-expand-item-meta">${escapeHtml(sessionListMeta(meta, s.session_id))}</span>
           <button type="button" class="unified-btn" data-open-session="${escapeHtml(s.session_id)}" ${isCurrent ? "disabled" : ""}>${isCurrent ? "当前" : "打开"}</button>
         </div>`;
       }
@@ -1900,6 +1902,16 @@ export function mountUnifiedShell(
     projectState.newDocName = "";
   }
 
+  function requestDocList(): void {
+    if (!canRequestProjectDocs(projectState.projectId)) return;
+    try { client.listDocs(); } catch { /* ignore */ }
+  }
+
+  function requestDocRead(path: string): void {
+    if (!path || !canRequestProjectDocs(projectState.projectId)) return;
+    try { client.readDoc(path); } catch { /* ignore */ }
+  }
+
   function openDocument(path: string): void {
     if (!path) return;
     const alreadyOpen = projectState.mainFocus === "document"
@@ -1915,7 +1927,7 @@ export function mountUnifiedShell(
     shellEl.dataset.rail = "docs";
     if (alreadyOpen) {
       setMainFocus("document");
-      try { client.listDocs(); } catch { /* ignore */ }
+      requestDocList();
       return;
     }
     projectState.currentDocContent = "";
@@ -1925,8 +1937,8 @@ export function mountUnifiedShell(
     projectState.docSaving = false;
     clearDocLeavePrompt();
     setMainFocus("document");
-    try { client.listDocs(); } catch { /* ignore */ }
-    try { client.readDoc(path); } catch { /* ignore */ }
+    requestDocList();
+    requestDocRead(path);
   }
 
   function openDocumentReader(path?: string): void {
@@ -1937,12 +1949,17 @@ export function mountUnifiedShell(
       || projectState.currentDocPath
       || sortProjectDocs(projectState.projectDocs)[0]?.path
       || "";
+    if (!canRequestProjectDocs(projectState.projectId)) {
+      setMainFocus("document");
+      setStatus("请先打开项目");
+      return;
+    }
     if (target) {
       openDocument(target);
       return;
     }
     setMainFocus("document");
-    try { client.listDocs(); } catch { /* ignore */ }
+    requestDocList();
   }
 
   function openPlanReview(suggestionId?: string): void {
@@ -4532,7 +4549,7 @@ export function mountUnifiedShell(
         chat.handleEvent(event);
         projectState.currentSessionId = event.session_id;
         if (hydrationSessionId && event.session_id === hydrationSessionId) {
-          setStatus(`加载聊天 ${shortSessionId(hydrationSessionId)}…`);
+          setStatus("正在加载会话…");
         }
         if (event.project_id) {
           projectState.projectId = event.project_id;
@@ -4549,7 +4566,7 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         syncArchivedViewUi();
-        setStatus(`会话 ${event.session_id} · ${event.llm_model_label || "Flash"} · ${event.turn_mode_label}`);
+        setStatus(sessionBannerStatus(event.llm_model_label || "Flash", event.turn_mode_label || ""));
         refreshTopbar();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         debouncedListSessions();
@@ -4608,7 +4625,7 @@ export function mountUnifiedShell(
         updateWorkbenchEmpty();
         composerWire.syncSendEnabled();
         refreshTopbar();
-        setStatus(event.message || "已切换工作上下文");
+        setStatus(userFacingContextStatus(event.message));
         break;
 
       case "project.release.accepted":
@@ -5037,7 +5054,7 @@ export function mountUnifiedShell(
         if (event.path && projectState.mainFocus === "document") {
           openDocument(event.path);
         }
-        client.listDocs();
+        requestDocList();
         break;
 
       case "project.doc.write.done":
@@ -5189,7 +5206,7 @@ export function mountUnifiedShell(
           projectState.runawayCancelAvailable = event.runaway_cancel_available;
           syncWorkingVisual();
         }
-        if (/狂奔|恢复|租约|续接|占用|启动狂奔/.test(event.text)) {
+        if (noticeMirrorsToStatus(event.text)) {
           setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
           if (/已在执行|占用|超时|租约/.test(event.text)) {
             clearRunawayResumePending();
@@ -5220,7 +5237,10 @@ export function mountUnifiedShell(
         }
         break;
 
-      case "error":
+      case "error": {
+        const rawMessage = String(event.message || "").trim();
+        const noProject = /no active project session/i.test(rawMessage);
+        let statusHandled = false;
         if (pendingDocAction) {
           const action = pendingDocAction;
           pendingDocAction = null;
@@ -5230,17 +5250,18 @@ export function mountUnifiedShell(
             : action === "delete" ? "删除失败"
             : action === "write" ? "保存失败"
             : "新建失败";
-          setStatus(`${prefix}：${event.message}`);
+          setStatus(noProject ? "请先打开项目" : `${prefix}：${rawMessage}`);
           if (action === "write" && projectState.mainFocus === "document") syncDocEditChrome();
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
-          chat.handleEvent(event);
+          if (!noProject) chat.handleEvent(event);
           break;
         }
         if (pendingAdoptAccept) {
-          const adoptError = String(event.message || "unknown error").trim();
+          const adoptError = rawMessage || "unknown error";
           clearPendingAdopt();
           projectState.partnerBusy = false;
-          setStatus(`閲囩撼澶辫触锛�${adoptError}`);
+          setStatus(`采纳失败：${adoptError}`);
+          statusHandled = true;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
           if (projectState.mainFocus === "plan_review") {
             renderPlanReviewPane();
@@ -5248,7 +5269,7 @@ export function mountUnifiedShell(
         }
         if (projectState.servicesLoading) {
           projectState.servicesLoading = false;
-          projectState.servicesError = event.message;
+          projectState.servicesError = noProject ? "请先打开项目" : rawMessage;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
         if (projectState.switchInProgress || projectState.switchOverlay) {
@@ -5257,9 +5278,10 @@ export function mountUnifiedShell(
           completeHydrationWait();
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
         }
-        chat.handleEvent(event);
-        setStatus("错误");
+        if (!noProject) chat.handleEvent(event);
+        if (!statusHandled) setStatus(userFacingErrorStatus(rawMessage));
         break;
+      }
 
       default:
         chat.handleEvent(event);

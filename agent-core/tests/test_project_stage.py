@@ -121,6 +121,20 @@ class ProjectStageTests(unittest.TestCase):
         self.assertIn("REQ", result["blockers"])
         self.assertIn("AC", result["blockers"])
 
+    def test_advanced_workflow_does_not_rewind_to_scope_confirm(self) -> None:
+        scope = next(item for item in self.manifest["artifacts"] if item["path"] == "SCOPE.md")
+        scope["ids"] = []
+        scope["status"] = "skeleton"
+        result = compute_execution_stage(
+            project_id="demo",
+            plan_status="confirmed",
+            task_stats=TaskStats(done=0, total=1),
+            manifest=self.manifest,
+            workflow_stage="implementation",
+        )
+        self.assertNotEqual(result["reason"], "scope_incomplete")
+        self.assertNotEqual(result["stage"], "requirements")
+
     def test_t5834_future_documents_are_not_current_blockers(self) -> None:
         result = classify_stage_documents(
             self.manifest,
