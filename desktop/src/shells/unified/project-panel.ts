@@ -2111,7 +2111,13 @@ function renderDocsRailSidebar(state: ProjectPanelState): string {
     return `<p class="overlay-empty">绑定项目后，这里会列出文档目录。</p>`;
   }
   const chip = `<div class="rail-project-chip">${escapeHtml(state.projectId)}</div>`;
-  return chip + renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
+  const undo = state.undoDescription
+    ? `<div class="sidebar-undo-toast">
+      <span>${escapeHtml(state.undoDescription)}</span>
+      <button type="button" class="unified-btn" data-action="undo-last" style="font-size:0.75rem;">撤销</button>
+    </div>`
+    : "";
+  return chip + undo + renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
     newDocName: state.newDocName,
     newDocFolder: state.newDocFolder,
     currentContent: state.currentDocContent,
