@@ -14,9 +14,20 @@ CommandClass = Literal["danger", "install", "network", "build_test", "readonly",
 
 _PYTHON_LAUNCHERS = ("python", "python3", "py")
 
+_ANY_DELETE_RE = re.compile(r"(?is)(?:^|[\s;&|(])(?:rm|del|erase|rmdir|unlink)\s")
+_RM_FORCE_RE = re.compile(r"(?is)\brm\s+-[a-z]*f[a-z]*\b")
+
 _DANGER_RE = re.compile(
     r"(?is)"
-    r"\brm\s+-[a-z]*f[a-z]*\b"
+    r"\bsudo\b"
+    r"|\bsu\s+-"
+    r"|--no-preserve-root"
+    r"|\bchmod\s+-R\b"
+    r"|\bchown\s+-R\b"
+    r"|>\s*/dev/(?:sd|nvme|hd|disk)"
+    r"|:\(\)\s*\{"
+    r"|\bgit\s+clean\s+-[a-z]*[fdx]"
+    r"|\bgit\s+reset\s+--hard\b"
     r"|Remove-Item\b[^\n]*(-Recurse|-Force)"
     r"|\bformat\s+[a-z]:"
     r"|\bmkfs\."
@@ -80,12 +91,79 @@ _HELP_RE = re.compile(
 )
 
 
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+_UNSAFE_RM_TARGET_RE = re.compile(r"[$`~]|^\*+$|^\.{1,2}/?$|(?:^|/)\.\.(?:/|$)")
+
+
+def _rm_segment_is_workspace_temp_cleanup(segment: str) -> bool:
+    """``rm -f a.json b.tmp`` on plain relative files inside cwd — not destructive.
+
+    Conservative: any recursive flag, absolute / home / parent / variable /
+    bare-wildcard target, or unparsable segment stays dangerous.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(segment, posix=True)
+    except ValueError:
+        return False
+    if not tokens:
+        return True
+    try:
+        idx = tokens.index("rm")
+    except ValueError:
+        return False
+    if any(tok not in {"env", "command"} for tok in tokens[:idx]):
+        return False
+    targets: list[str] = []
+    flags_done = False
+    for tok in tokens[idx + 1 :]:
+        if not flags_done and tok == "--":
+            flags_done = True
+            continue
+        if not flags_done and tok.startswith("-"):
+            letters = tok.lstrip("-").lower()
+            if tok.startswith("--"):
+                if letters not in {"force", "verbose"}:
+                    return False
+                continue
+            if set(letters) - {"f", "v"}:
+                return False  # -r / -R / -d / -i combos etc.
+            continue
+        targets.append(tok)
+    if not targets:
+        return False
+    for target in targets:
+        norm = target.replace("\\", "/")
+        if norm.startswith("/") or re.match(r"^[A-Za-z]:", norm):
+            return False
+        if _UNSAFE_RM_TARGET_RE.search(norm):
+            return False
+    return True
+
+
+def _has_dangerous_rm(text: str) -> bool:
+    if not _RM_FORCE_RE.search(text):
+        return False
+    joined = re.sub(r"\\\r?\n", " ", text)
+    for segment in _SEGMENT_SPLIT_RE.split(joined):
+        if not _RM_FORCE_RE.search(segment):
+            continue
+        if not _rm_segment_is_workspace_temp_cleanup(segment.strip()):
+            return True
+    return False
+
+
 def classify_run_command(command: str) -> CommandClass:
     text = (command or "").strip()
     if not text:
         return "other"
-    if _DANGER_RE.search(text):
+    if _DANGER_RE.search(text) or _has_dangerous_rm(text):
         return "danger"
+    if _ANY_DELETE_RE.search(text):
+        # Workspace temp cleanup is not "danger", but it still deletes files:
+        # never let it ride a readonly / build_test / quality skip.
+        return "other"
     if _INSTALL_RE.search(text):
         return "install"
     if _NETWORK_WRITE_RE.search(text):
@@ -214,6 +292,8 @@ def run_command_requires_confirm(
     if kind == "network":
         return True, "network"
     in_project = working_dir_under_project(working_dir, project_root)
+    if _ANY_DELETE_RE.search((command or "").strip()):
+        return True, "other:delete" if in_project else "outside_project"
     quality_argv = load_quality_command_argv(
         quality_commands=quality_commands,
         env_text=env_text,

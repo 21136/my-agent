@@ -64,6 +64,31 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
     };
   }
 
+  const runLine = lines.find((l) => l.startsWith("运行命令："));
+  const kindLine = lines.find((l) => l.startsWith("命令类型："));
+  const fullIdx = lines.findIndex((l) => l === "命令全文：");
+  if (runLine) {
+    const cmdHead = runLine.replace(/^运行命令：/, "").trim();
+    const reasonParts: string[] = [];
+    if (kindLine) {
+      const kind = kindLine.replace(/^命令类型：/, "").trim();
+      if (kind === "danger") reasonParts.push("高风险命令，请仔细核对");
+      else if (kind) reasonParts.push(`类型：${kind}`);
+    }
+    reasonParts.push("执行前需要你同意");
+    const detail =
+      fullIdx >= 0
+        ? lines.slice(fullIdx).join("\n").replace(/^命令全文：\n?/, "")
+        : text;
+    const long = detail.length > 400 || detail.split("\n").length > 8;
+    return {
+      headline: cmdHead ? `运行 ${cmdHead.slice(0, 100)}` : "运行命令",
+      reason: reasonParts.join(" · "),
+      detail,
+      compact: long,
+    };
+  }
+
   const compact = text.length > 240 || lines.some((l) => l.length > 180);
   const headline = lines[0]?.slice(0, 120) ?? "工具确认";
   return {

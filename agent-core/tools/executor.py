@@ -3933,6 +3933,33 @@ def _preview_text_field(value: str, *, label: str, head: int = 80) -> str:
     return f"{label}：{len(value)} 字符 · {lines} 行"
 
 
+RUN_COMMAND_FULL_PREVIEW_MAX = 8000
+RUN_COMMAND_FULL_MARKER = "命令全文："
+
+
+def _run_command_headline(command: str, *, head: int = 120) -> str:
+    """First line of the command (never just a char count) so cards are not blind."""
+    text = command.strip()
+    first = text.splitlines()[0].strip() if text else ""
+    extra_lines = len(text.splitlines()) - 1
+    if len(first) > head:
+        first = first[:head].rstrip() + "…"
+    elif extra_lines > 0:
+        first = f"{first} …"
+    if extra_lines > 0 or len(text) > head:
+        first = f"{first}（共 {len(text)} 字符 · {extra_lines + 1} 行）"
+    return first
+
+
+def _run_command_full_block(command: str) -> str:
+    """Full command text appended to confirm previews (capped, never summarized away)."""
+    text = command.strip()
+    if len(text) > RUN_COMMAND_FULL_PREVIEW_MAX:
+        cut = len(text) - RUN_COMMAND_FULL_PREVIEW_MAX
+        text = text[:RUN_COMMAND_FULL_PREVIEW_MAX] + f"\n…（其余 {cut} 字符未显示）"
+    return f"{RUN_COMMAND_FULL_MARKER}\n{text}"
+
+
 def _summarize_confirm_inner(evolved_name: str, inner: dict[str, Any]) -> list[str]:
     """Compact human lines for evolved tool confirm — never dump full file bodies."""
     from tool_display import display_tool_name
@@ -3987,8 +4014,7 @@ def _summarize_confirm_inner(evolved_name: str, inner: dict[str, Any]) -> list[s
     if name == "run_command" and isinstance(inner, dict):
         cmd = inner.get("command")
         if isinstance(cmd, str) and cmd.strip():
-            cmd_line = _preview_text_field(cmd, label="命令", head=96)
-            lines = [f"运行命令：{cmd_line.removeprefix('命令：')}"]
+            lines = [f"运行命令：{_run_command_headline(cmd)}"]
             cwd = inner.get("cwd")
             if isinstance(cwd, str) and cwd.strip():
                 lines.append(f"工作目录：{cwd}")
@@ -4094,6 +4120,12 @@ def build_confirm_preview(
         path_arg = arguments.get("path")
         if isinstance(path_arg, str) and path_arg.strip().replace("\\", "/").startswith("data/sessions/"):
             lines.append("Cross-session peek (grep under data/sessions/)")
+    if tool_name == "run_evolved" and str(arguments.get("tool_name") or "").strip() == "run_command":
+        inner_cmd = run_evolved.coalesce_tool_arguments(arguments)
+        cmd_text = inner_cmd.get("command") if isinstance(inner_cmd, dict) else None
+        if isinstance(cmd_text, str) and cmd_text.strip():
+            # Full command last so the card never asks the user to approve blind.
+            lines.append(_run_command_full_block(cmd_text))
     return "\n".join(lines)
 
 
