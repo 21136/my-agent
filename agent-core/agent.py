@@ -1890,126 +1890,142 @@ class Agent:
                 )
                 recall_injected = True
 
-            try:
-                if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
-                    self.executor.session, "inline_write_guard_blocked", False
-                ):
-                    tools_payload = None
-                self._emit_turn_event({"type": "llm.pending"})
-                response = self.llm.chat(
-                    build_chat_messages(
-                        working,
-                        system_prompt=full_system,
-                        static_system=static_system,
-                        dynamic_system=dynamic_system,
-                        vendor=vendor,
-                    ),
-                    model=model,
-                    tools=tools_payload,
-                    temperature=MAIN_LOOP_TEMPERATURE,
-                    reasoning_effort=self.session.meta.reasoning_effort,
-                    stream=self.stream_handlers,
-                )
-                usage_event = llm_usage_event(response.usage)
-                if usage_event is not None:
-                    self._emit_turn_event(usage_event)
-            except LLMCancelledError:
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason=self._interrupt_finish_reason(),
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
-            except (LLMApiError, LLMNetworkError) as exc:
-                from exec_reliability import (
-                    is_pool_exhausted_transport_error,
-                    llm_transport_backoff_seconds,
-                    llm_transport_user_hint,
-                    runaway_llm_transport_retries,
-                    runaway_pool_exhausted_retries,
-                )
-
-                runaway = getattr(self.session.meta, "project_runaway_enabled", False)
-                pool_exhausted = is_pool_exhausted_transport_error(exc)
-                if runaway and pool_exhausted:
-                    max_transport_retries = runaway_pool_exhausted_retries()
-                elif runaway:
-                    max_transport_retries = runaway_llm_transport_retries()
-                else:
-                    max_transport_retries = 2
-                llm_transport_attempts += 1
-                if llm_transport_attempts < max_transport_retries:
-                    if not self.executor.session.llm_retry_notice_emitted:
-                        err_kind = (
-                            type(exc).__name__.replace("LLM", "").replace("Error", "").lower()
-                        )
-                        self.executor.session.llm_retry_notice_emitted = True
-                        attempt_note = (
-                            f"（{llm_transport_attempts + 1}/{max_transport_retries}）"
-                            if runaway
-                            else ""
-                        )
-                        backoff_hint = (
-                            f"，{int(llm_transport_backoff_seconds(llm_transport_attempts, pool_exhausted=pool_exhausted))}s 后重试"
-                            if runaway
-                            else ""
-                        )
-                        self._emit_turn_event(
-                            {
-                                "type": "turn.notice",
-                                "level": "warn",
-                                "text": (
-                                    f"LLM {err_kind}，正在重试{attempt_note}{backoff_hint}…"
-                                    f"（{llm_transport_user_hint(exc)}）"
-                                ),
-                            }
-                        )
-                    time.sleep(
-                        llm_transport_backoff_seconds(
-                            llm_transport_attempts,
-                            pool_exhausted=pool_exhausted,
-                        )
+            while True:
+                try:
+                    if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
+                        self.executor.session, "inline_write_guard_blocked", False
+                    ):
+                        tools_payload = None
+                    self._emit_turn_event({"type": "llm.pending"})
+                    response = self.llm.chat(
+                        build_chat_messages(
+                            working,
+                            system_prompt=full_system,
+                            static_system=static_system,
+                            dynamic_system=dynamic_system,
+                            vendor=vendor,
+                        ),
+                        model=model,
+                        tools=tools_payload,
+                        temperature=MAIN_LOOP_TEMPERATURE,
+                        reasoning_effort=self.session.meta.reasoning_effort,
+                        stream=self.stream_handlers,
                     )
-                    continue
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason="error",
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
-            except LLMTimeoutError:
-                timeout_sec = int(load_config().timeout_sec)
-                self._emit_turn_event(
-                    {
-                        "type": "turn.notice",
-                        "level": "warn",
-                        "text": f"LLM 请求超时（{timeout_sec}s），本回合已停止。",
-                    }
-                )
-                return ToolLoopSegmentResult(
-                    final_text="",
-                    tool_rounds=tool_rounds,
-                    finish_reason="timeout",
-                    exceeded=False,
-                    had_progress=segment_messages_show_progress(
-                        self.session.messages,
-                        segment_start_index,
-                    ),
-                    qa_soft_reminder_injected=reminder_injected,
-                    action_announce_nudge_injected=action_nudge_injected,
-                )
+                    usage_event = llm_usage_event(response.usage)
+                    if usage_event is not None:
+                        self._emit_turn_event(usage_event)
+                    break
+                except LLMCancelledError:
+                    return ToolLoopSegmentResult(
+                        final_text="",
+                        tool_rounds=tool_rounds,
+                        finish_reason=self._interrupt_finish_reason(),
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
+                except (LLMApiError, LLMNetworkError) as exc:
+                    from exec_reliability import (
+                        is_pool_exhausted_transport_error,
+                        llm_provider_failure_message,
+                        llm_transport_backoff_seconds,
+                        runaway_llm_transport_retries,
+                        runaway_pool_exhausted_retries,
+                    )
+
+                    runaway = getattr(self.session.meta, "project_runaway_enabled", False)
+                    pool_exhausted = is_pool_exhausted_transport_error(exc)
+                    if runaway and pool_exhausted:
+                        max_transport_retries = runaway_pool_exhausted_retries()
+                    elif runaway:
+                        max_transport_retries = runaway_llm_transport_retries()
+                    else:
+                        max_transport_retries = 2
+                    llm_transport_attempts += 1
+                    if llm_transport_attempts < max_transport_retries:
+                        if not self.executor.session.llm_retry_notice_emitted:
+                            self.executor.session.llm_retry_notice_emitted = True
+                            hint = llm_provider_failure_message(exc).rstrip("。")
+                            if runaway:
+                                backoff = int(
+                                    llm_transport_backoff_seconds(
+                                        llm_transport_attempts,
+                                        pool_exhausted=pool_exhausted,
+                                    )
+                                )
+                                notice_text = (
+                                    f"{hint}，正在重试"
+                                    f"（{llm_transport_attempts + 1}/{max_transport_retries}），"
+                                    f"{backoff}s 后重试…"
+                                )
+                            else:
+                                notice_text = f"{hint}，正在重试…"
+                            self._emit_turn_event(
+                                {
+                                    "type": "turn.notice",
+                                    "level": "warn",
+                                    "text": notice_text,
+                                }
+                            )
+                        time.sleep(
+                            llm_transport_backoff_seconds(
+                                llm_transport_attempts,
+                                pool_exhausted=pool_exhausted,
+                            )
+                        )
+                        if self.cancel_event.is_set():
+                            return ToolLoopSegmentResult(
+                                final_text="",
+                                tool_rounds=tool_rounds,
+                                finish_reason=self._interrupt_finish_reason(),
+                                exceeded=False,
+                                had_progress=segment_messages_show_progress(
+                                    self.session.messages,
+                                    segment_start_index,
+                                ),
+                                qa_soft_reminder_injected=reminder_injected,
+                                action_announce_nudge_injected=action_nudge_injected,
+                            )
+                        continue
+                    final_text = llm_provider_failure_message(exc)
+                    self.session.append_message({"role": "assistant", "content": final_text})
+                    return ToolLoopSegmentResult(
+                        final_text=final_text,
+                        tool_rounds=tool_rounds,
+                        finish_reason="error",
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
+                except LLMTimeoutError:
+                    timeout_sec = int(load_config().timeout_sec)
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": f"LLM 请求超时（{timeout_sec}s），本回合已停止。",
+                        }
+                    )
+                    return ToolLoopSegmentResult(
+                        final_text="",
+                        tool_rounds=tool_rounds,
+                        finish_reason="timeout",
+                        exceeded=False,
+                        had_progress=segment_messages_show_progress(
+                            self.session.messages,
+                            segment_start_index,
+                        ),
+                        qa_soft_reminder_injected=reminder_injected,
+                        action_announce_nudge_injected=action_nudge_injected,
+                    )
             # after SSE stream returns, check cancel before processing tool calls
             if self.cancel_event.is_set():
                 return ToolLoopSegmentResult(

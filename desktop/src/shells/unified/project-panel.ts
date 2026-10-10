@@ -185,6 +185,8 @@ export interface ProjectPanelState {
   turnCircuitOpen: string[];
   turnPlaybookId: string;
   turnFailureClass: string;
+  /** Finish reason of the latest turn. Empty while a turn is starting. */
+  lastTurnFinishReason: string;
   // Phase 36 — project threads (live + archive)
   activeSessionId: string;
   threads: ProjectThreadItem[];
@@ -520,6 +522,7 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.turnCircuitOpen = [];
   state.turnPlaybookId = "";
   state.turnFailureClass = "";
+  state.lastTurnFinishReason = "";
   state.activeSessionId = "";
   state.threads = [];
   state.threadsLoading = false;
@@ -893,6 +896,22 @@ function pastFirstRoundScope(state: ProjectPanelState): boolean {
     || stage === "release";
 }
 
+const ORDINARY_TURN_ABORT_REASONS = new Set([
+  "error",
+  "cancelled",
+  "timeout",
+  "tool_error",
+  "tool_loop_exceeded",
+  "total_cap_exceeded",
+  "segment_cap_pause",
+]);
+
+/** A finished ordinary turn failed or aborted. A tool miss inside a normal stop does not. */
+export function ordinaryProjectTurnFailed(state: ProjectPanelState): boolean {
+  if (state.executionStageStatus === "failed" || state.turnPostcondition === "fail") return true;
+  return ORDINARY_TURN_ABORT_REASONS.has((state.lastTurnFinishReason || "").trim());
+}
+
 export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoalViewModel {
   if (!state.projectId) {
     return {
@@ -949,15 +968,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  const hasFailedEvidence = !state.runawayEnabled && state.turnEvidence.some((item) => !item.ok);
-  if (
-    !state.runawayEnabled && (
-      state.executionStageStatus === "failed"
-      || state.turnPostcondition === "fail"
-      || Boolean(state.turnFailureClass)
-    )
-    || (hasFailedEvidence && !state.turnInProgress)
-  ) {
+  if (!state.runawayEnabled && !state.turnInProgress && ordinaryProjectTurnFailed(state)) {
     return {
       status: "failed",
       statusLabel: "验证未通过",

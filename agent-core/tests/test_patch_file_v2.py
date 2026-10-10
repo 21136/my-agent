@@ -147,7 +147,7 @@ class PatchFileV2Tests(unittest.TestCase):
             redone = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
             self.assertFalse(redone.ok)
             message = redone.error.message if redone.error else ""
-            self.assertIn("anchor not found", message)
+            self.assertIn("没有找到要替换的原文", message)
             self.assertNotIn("different hash", message)
             self.assertEqual(target.read_text(encoding="utf-8"), "完全不同的内容\n")
 

@@ -115,6 +115,7 @@ function panel(overrides: Partial<ProjectPanelState> = {}): ProjectPanelState {
     turnCircuitOpen: [],
     turnPlaybookId: "",
     turnFailureClass: "",
+    lastTurnFinishReason: "",
     activeSessionId: "",
     threads: [],
     threadsLoading: false,
@@ -279,6 +280,55 @@ test("change banner does not render the CHG ledger", () => {
   assert.equal(banner.includes("CHG"), false);
   assert.equal(banner.includes("影响时间线"), false);
   assert.equal(banner.includes("toggle-change-timeline"), false);
+});
+
+test("a failed tool inside a completed ordinary turn does not fail the project", () => {
+  const state = panel({
+    turnInProgress: false,
+    lastTurnFinishReason: "stop",
+    turnFailureClass: "A",
+    turnEvidence: [
+      { tool: "patch_file", ok: false },
+      { tool: "read_file", ok: true },
+    ],
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  const view = deriveProjectGoalViewModel(state);
+  assert.notEqual(view.status, "failed");
+  assert.notEqual(view.title, "上一步没有完成");
+  assert.doesNotMatch(view.nextStep, /查看失败原因/);
+  const header = deriveHeaderNextStepView(state);
+  assert.equal(header.actions.some((item) => item.label === "查看失败原因"), false);
+});
+
+test("an aborted or failed ordinary turn still marks the project failed", () => {
+  for (const reason of ["error", "cancelled", "timeout", "tool_loop_exceeded"]) {
+    const state = panel({
+      turnInProgress: false,
+      lastTurnFinishReason: reason,
+      turnEvidence: [{ tool: "patch_file", ok: false }],
+      executionStage: "implementation",
+      workflowStage: "implementation",
+    });
+    const view = deriveProjectGoalViewModel(state);
+    assert.equal(view.title, "上一步没有完成", reason);
+    assert.match(view.nextStep, /查看失败原因/);
+  }
+  const stageFailed = panel({
+    lastTurnFinishReason: "stop",
+    executionStageStatus: "failed",
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  assert.equal(deriveProjectGoalViewModel(stageFailed).title, "上一步没有完成");
+  const postcondition = panel({
+    lastTurnFinishReason: "stop",
+    turnPostcondition: "fail",
+    executionStage: "implementation",
+    workflowStage: "implementation",
+  });
+  assert.equal(deriveProjectGoalViewModel(postcondition).title, "上一步没有完成");
 });
 
 test("docs requests and error status stay useful without a project", () => {

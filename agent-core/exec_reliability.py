@@ -296,6 +296,72 @@ def is_tokeness_reasoning_tools_error(exc: BaseException) -> bool:
     return "reasoning_effort" in message and "function tools" in message
 
 
+def _transport_status_code(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def llm_transport_failure_kind(exc: BaseException) -> str:
+    """Classify provider/API failures. Session limits are not pool exhaustion."""
+    message = str(exc or "")
+    lower = message.lower()
+    status = _transport_status_code(exc)
+    if (
+        "session limit" in lower
+        or "active session" in lower
+        or "too many sessions" in lower
+        or "concurrent session" in lower
+        or "concurrency limit" in lower
+        or "并发上限" in message
+    ):
+        return "session_limit"
+    if status == 429 or "rate limit" in lower or "too many requests" in lower:
+        return "rate_limit"
+    if status in {401, 403} or any(
+        token in lower
+        for token in (
+            "unauthorized",
+            "forbidden",
+            "invalid api key",
+            "invalid_api_key",
+            "authentication",
+            "auth failed",
+        )
+    ):
+        return "auth"
+    type_name = type(exc).__name__.lower()
+    if type_name == "llmnetworkerror" or any(
+        token in lower
+        for token in (
+            "connection error",
+            "connection refused",
+            "network",
+            "name or service not known",
+            "connecterror",
+            "dns",
+        )
+    ):
+        return "network"
+    return "unavailable"
+
+
+def llm_provider_failure_message(exc: BaseException) -> str:
+    """Chinese reply for a provider/API failure. Never the tool-budget copy."""
+    kind = llm_transport_failure_kind(exc)
+    if kind == "session_limit":
+        return "模型服务达到并发上限，请稍后重试。"
+    if kind == "rate_limit":
+        return "模型服务请求过于频繁，请稍后重试。"
+    if kind == "auth":
+        return "模型服务鉴权失败，请检查配置后再试。"
+    if kind == "network":
+        return "模型服务暂时连不上，请稍后重试。"
+    return "模型服务暂时不可用，请稍后重试。"
+
+
 def llm_transport_user_hint(exc: BaseException) -> str:
     """Short user-facing hint; keep raw exception in logs elsewhere."""
     if is_tokeness_reasoning_tools_error(exc):
@@ -307,9 +373,7 @@ def llm_transport_user_hint(exc: BaseException) -> str:
     lower = message.lower()
     if "temporarily_unavailable" in lower or "可用渠道" in message:
         return "Tokeness Luna 上游渠道暂时不可用，可稍后重试或切换 0x567-flash"
-    if is_pool_exhausted_transport_error(exc):
-        return "模型网关繁忙或超时"
-    return message[:240]
+    return llm_provider_failure_message(exc)
 
 
 def is_plan_gateway_failure_summary(summary: str) -> bool:
@@ -558,7 +622,7 @@ def llm_transport_backoff_seconds(attempt: int, *, pool_exhausted: bool = False)
 
 
 def is_patch_anchor_param_failure(result: Any) -> bool:
-    """patch_file find anchor not found / ambiguous — param error, not env failure."""
+    """patch_file missed or ambiguous find text — param error, not env failure."""
     if getattr(result, "ok", None) is not False:
         return False
     error = getattr(result, "error", None)
@@ -567,9 +631,12 @@ def is_patch_anchor_param_failure(result: Any) -> bool:
     code = str(getattr(error, "code", "") or "")
     if code not in {"validation_error", "VALIDATION_ERROR"}:
         return False
-    message = str(getattr(error, "message", "") or "").lower()
-    return "anchor" in message and (
-        "not found" in message or "must be unique" in message or "matched" in message
+    message = str(getattr(error, "message", "") or "")
+    if "没有找到要替换的原文" in message or "无法确定改哪一处" in message:
+        return True
+    lower = message.lower()
+    return "anchor" in lower and (
+        "not found" in lower or "must be unique" in lower or "matched" in lower
     )
 
 
