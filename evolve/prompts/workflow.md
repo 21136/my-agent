@@ -17,4 +17,4 @@
 
 ## common 文件工具
 
-`write_text` 写整文件 · `patch_file` 改已有 · `copy_move` 复制/移动 · `move_to_trash` 软删除到 `_trash/`。`append_text` 已归档。
+`write_text` 写整文件 · `patch_file` 改已有：直接调用同名函数，不要套 `run_evolved`。`copy_move` 复制/移动 · `move_to_trash` 软删除到 `_trash/` 才经 `run_evolved`。`append_text` 已归档。

@@ -90,11 +90,24 @@ const TOOL_ACTION_VERBS: Record<string, string> = {
 
 const FILE_EXT_RE = /([\w.-]+\.(?:md|mjs|js|ts|tsx|py|json|css|html|vue|toml|yaml|yml|ps1|sh|bat))(?:\s|$)/i;
 const WORKSPACE_RE = /(workspace[/\\][^\s,;]+)/;
+const KNOWN_INNER_TOOLS = new Set([
+  "write_text",
+  "patch_file",
+  "run_command",
+  "write_evolve",
+  "copy_move",
+  "move_to_trash",
+  "append_text",
+  "run_service",
+  "search_replace",
+]);
 
 export function parseEvolvedToolFromSummary(summary: string): string | null {
   const trimmed = summary.trim();
   const colon = trimmed.match(/^([a-z][\w]*)\s*:\s*/i);
   if (colon) return colon[1].toLowerCase();
+  const head = trimmed.split(/[\s·]/)[0]?.toLowerCase() ?? "";
+  if (KNOWN_INNER_TOOLS.has(head)) return head;
   return null;
 }
 

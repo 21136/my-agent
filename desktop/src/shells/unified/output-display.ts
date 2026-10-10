@@ -42,12 +42,15 @@ export function humanizeToolSubline(
   status: ProcessTool["status"],
   endSummary?: string,
 ): string {
-  if (status === "fail" && endSummary) {
-    return endSummary
+  const text = (endSummary || "").trim();
+  if (!text || text === "ok" || text === "完成") return "";
+  if (status === "fail") {
+    return text
       .replace(/^find anchor not found/i, "锚点未找到")
       .replace(/^patch\s+/i, "")
-      .slice(0, 120);
+      .slice(0, 160);
   }
+  if (status === "ok") return text.slice(0, 160);
   return "";
 }
 

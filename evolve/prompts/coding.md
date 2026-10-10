@@ -64,7 +64,7 @@
 
 动手只通过当前暴露的已注册 builtin、扁平原语和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。当前 builtin 基线为 12 个（核心 8 + 编排 4），不把 evolved 工具误写成 builtin。
 
-**common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）· `copy_move` · `move_to_trash`（先试 `dry_run`）。`append_text` 已归档。
+**common 文件工具**：`write_text`（新建/覆盖）· `patch_file`（改已有）直接调用同名函数，**不要**套 `run_evolved`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。
 
 **写盘纪律（BUG-025）**：细节与大文件写入规范见 `evolve/tool-catalog/buckets/evolve.md`。
 

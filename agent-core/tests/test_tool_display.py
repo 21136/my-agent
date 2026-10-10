@@ -38,6 +38,16 @@ class ToolDisplayTests(unittest.TestCase):
         self.assertEqual(display_tool_name("grep"), "搜索内容")
         self.assertEqual(display_tool_name("plan_partner"), "整理计划")
 
+    def test_bare_write_text_summary_is_not_extension_tool(self) -> None:
+        self.assertEqual(resolve_effective_tool_name("run_evolved", "write_text"), "write_text")
+        label = format_tool_action_label(
+            "run_evolved",
+            "write_text",
+            "workspace/scratch-readme/README.md · 写入 1 行：一句简介",
+        )
+        self.assertEqual(label, "写入 README.md")
+        self.assertNotIn("扩展工具", label)
+
 
 if __name__ == "__main__":
     unittest.main()

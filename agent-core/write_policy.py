@@ -100,11 +100,14 @@ def write_requires_confirm(
         return False, "skip:project_patch"
 
     if tool == "write_text":
+        # Safe in-project writes (new, overwrite, rename, or unknown stat) do not
+        # ask again. Sensitive, plan-domain, host, and outside-project paths
+        # already returned above.
         conflict = (on_conflict or "skip").strip().lower()
         if file_exists is True and conflict == "overwrite":
             return False, "skip:project_overwrite"
         if file_exists is False:
             return False, "skip:project_new_file"
-        return True, "confirm:new_file"
+        return False, "skip:project_write"
 
     return True, "confirm:other"

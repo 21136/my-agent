@@ -845,13 +845,24 @@ def format_session_evolved_catalog(
             by_name.setdefault(tool.name, tool)
     session_tools = tuple(by_name[name] for name in sorted(by_name))
 
+    from tool_proxies import PROXY_EVOLVED_TOOL_NAMES
+
+    flat_names = set(PROXY_EVOLVED_TOOL_NAMES)
     by_scope: dict[str, list[str]] = {}
     for tool in session_tools:
-        label = f"- {tool.name}: {tool.description}"
+        if tool.name in flat_names:
+            label = (
+                f"- {tool.name}: 扁平原语，直接调用同名函数，不要套 run_evolved。"
+                f"{tool.description}"
+            )
+        else:
+            label = f"- {tool.name}: {tool.description}"
         by_scope.setdefault(tool.scope, []).append(label)
 
     lines = [
-        "[本会话可用 evolved 工具]（调用 run_evolved.tool_name）",
+        "[本会话可用 evolved 工具]",
+        "write_text、patch_file、run_command 是扁平原语：直接调用同名函数，不要套 run_evolved。",
+        "其余名字才用 run_evolved，tool_name 填该名字。",
     ]
     for scope in ("common", *sorted(key for key in by_scope if key != "common")):
         if scope not in by_scope:

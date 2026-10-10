@@ -590,10 +590,11 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
 
 
 def _merged_evolved_arguments(arguments: dict[str, Any], evolved_name: str) -> dict[str, Any]:
-    if evolved_name == "write_evolve":
-        return run_evolved.coalesce_tool_arguments(arguments)
-    inner = arguments.get("arguments")
-    return inner if isinstance(inner, dict) else {}
+    payload = dict(arguments)
+    raw_name = payload.get("tool_name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        payload["tool_name"] = evolved_name
+    return run_evolved.coalesce_tool_arguments(payload)
 
 
 def _write_evolve_content_guard(
@@ -1543,10 +1544,11 @@ class ToolExecutor:
                 self._approve_workspace_evolved(evolved_target)
 
         call_id = str(uuid.uuid4())
+        card_tool = _card_tool_name(name, args)
         self._emit_event(
             "tool.start",
             {
-                "tool": name,
+                "tool": card_tool,
                 "call_id": call_id,
                 "summary": _tool_event_summary(name, args, evolved_target),
                 "arguments": _tool_event_args(name, args),
@@ -1569,7 +1571,7 @@ class ToolExecutor:
             stop_hb.set()
             hb_thread.join(timeout=0.2)
         end_payload: dict[str, Any] = {
-            "tool": name,
+            "tool": card_tool,
             "call_id": call_id,
             "ok": result.ok,
             "summary": _tool_result_summary(result),
@@ -3683,6 +3685,26 @@ def _tool_event_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any
     return dict(arguments)
 
 
+_CARD_FILE_TOOLS = frozenset({"write_text", "patch_file"})
+
+
+def _card_tool_name(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Surface file edits as the flat tool so the card is not 「扩展工具」."""
+    if tool_name != "run_evolved":
+        return tool_name
+    raw = arguments.get("tool_name")
+    if isinstance(raw, str) and raw.strip() in _CARD_FILE_TOOLS:
+        return raw.strip()
+    return tool_name
+
+
+def _clip_summary(text: str, limit: int = 180) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1] + "…"
+
+
 def _tool_event_summary(
     tool_name: str,
     arguments: dict[str, Any],
@@ -3691,20 +3713,42 @@ def _tool_event_summary(
     if tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
         inner = run_evolved.coalesce_tool_arguments(arguments)
-        path = inner.get("path") if isinstance(inner, dict) else None
+        path = ""
+        if isinstance(inner, dict):
+            raw_path = inner.get("path") or inner.get("file") or inner.get("dest")
+            if isinstance(raw_path, str):
+                path = raw_path.strip()
         label = (
             evolved_name.strip()
             if isinstance(evolved_name, str) and evolved_name.strip()
             else "run_evolved"
         )
-        if isinstance(path, str) and path.strip():
-            return f"{label}: {path.strip()}"
+        if path:
+            return f"{label}: {path}"
         return label
     for key in ("path", "query", "url", "pattern"):
         value = arguments.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return tool_name
+
+
+def _result_change_line(data: dict[str, Any]) -> str:
+    path = ""
+    for key in ("path", "written", "would_write"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            path = value.strip()
+            break
+    change = data.get("change_summary")
+    change_text = change.strip() if isinstance(change, str) else ""
+    if path and change_text:
+        return _clip_summary(f"{path} · {change_text}")
+    if path:
+        return _clip_summary(path)
+    if change_text:
+        return _clip_summary(change_text)
+    return ""
 
 
 def _tool_result_summary(result: ToolResult) -> str:
@@ -3727,11 +3771,14 @@ def _tool_result_summary(result: ToolResult) -> str:
                 combined = f"{base} · {last}"
                 return combined[:120] + ("…" if len(combined) > 120 else "")
         return base
-    for key in ("path", "message", "preview"):
+    change_line = _result_change_line(data)
+    if change_line:
+        return change_line
+    for key in ("path", "written", "would_write", "message", "preview"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             text = value.strip()
-            return text[:120] + ("…" if len(text) > 120 else "")
+            return text[:180] + ("…" if len(text) > 180 else "")
     if data.get("ready") is False and data.get("action") in {"start", "restart", "wait"}:
         return "started but not ready"
     return "ok" if result.ok else "failed"

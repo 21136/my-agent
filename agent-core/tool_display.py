@@ -46,6 +46,17 @@ _TOOL_ACTION_VERBS: dict[str, str] = {
 }
 
 _EVOLVED_SUMMARY_RE = re.compile(r"^([a-z][\w]*)\s*:\s*", re.IGNORECASE)
+_KNOWN_INNER_TOOLS = frozenset({
+    "write_text",
+    "patch_file",
+    "run_command",
+    "write_evolve",
+    "copy_move",
+    "move_to_trash",
+    "append_text",
+    "run_service",
+    "search_replace",
+})
 _FILE_HINT_RE = re.compile(
     r"([\w.-]+\.(?:md|mjs|js|ts|tsx|py|json|css|html|vue|toml|yaml|yml|ps1|sh|bat))(?:\s|$)",
     re.IGNORECASE,
@@ -53,8 +64,14 @@ _FILE_HINT_RE = re.compile(
 
 
 def parse_evolved_tool_from_summary(summary: str) -> str | None:
-    match = _EVOLVED_SUMMARY_RE.match(summary.strip())
-    return match.group(1).lower() if match else None
+    trimmed = summary.strip()
+    match = _EVOLVED_SUMMARY_RE.match(trimmed)
+    if match:
+        return match.group(1).lower()
+    head = re.split(r"[\s·]", trimmed, maxsplit=1)[0].lower()
+    if head in _KNOWN_INNER_TOOLS:
+        return head
+    return None
 
 
 def resolve_effective_tool_name(tool: str, summary: str = "") -> str:

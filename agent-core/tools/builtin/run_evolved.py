@@ -35,19 +35,80 @@ WRITE_EVOLVE_TOP_KEYS: tuple[str, ...] = (
 )
 
 
+# Models sometimes copy the write_evolve shape and put path/content next to tool_name.
+_FILE_TOOL_TOP_KEYS: dict[str, tuple[str, ...]] = {
+    "write_text": ("path", "file", "content", "on_conflict"),
+    "patch_file": ("path", "file", "replacement", "find", "start_line", "end_line"),
+    "append_text": ("path", "file", "content"),
+}
+
+
 def coalesce_tool_arguments(outer: dict[str, Any]) -> dict[str, Any]:
-    """Merge top-level write_evolve shortcut fields into the inner arguments object."""
+    """Merge top-level shortcut fields into the inner arguments object."""
     tool_name = outer.get("tool_name")
     inner = outer.get("arguments")
-    if not isinstance(inner, dict):
+    if isinstance(inner, str):
+        try:
+            parsed = json.loads(inner)
+        except json.JSONDecodeError:
+            parsed = None
+        inner = parsed if isinstance(parsed, dict) else {}
+    elif not isinstance(inner, dict):
         inner = {}
-    if not isinstance(tool_name, str) or tool_name.strip() != "write_evolve":
+    name = tool_name.strip() if isinstance(tool_name, str) else ""
+    if name == "write_evolve":
+        merged = dict(inner)
+        for key in WRITE_EVOLVE_TOP_KEYS:
+            if key in outer and outer[key] is not None and key not in merged:
+                merged[key] = outer[key]
+        return merged
+    keys = _FILE_TOOL_TOP_KEYS.get(name)
+    if not keys:
         return inner
     merged = dict(inner)
-    for key in WRITE_EVOLVE_TOP_KEYS:
+    for key in keys:
         if key in outer and outer[key] is not None and key not in merged:
             merged[key] = outer[key]
+    if not isinstance(merged.get("path"), str) or not str(merged.get("path") or "").strip():
+        file_path = merged.get("file")
+        if isinstance(file_path, str) and file_path.strip():
+            merged["path"] = file_path.strip()
     return merged
+
+
+def _annotate_file_change(data: dict[str, Any], tool_name: str, tool_args: dict[str, Any]) -> None:
+    """Attach path + a short change line so UI cards are not a bare ok."""
+    if tool_name not in {"write_text", "patch_file", "append_text"}:
+        return
+    path = data.get("path") or data.get("written") or data.get("would_write")
+    if not isinstance(path, str) or not path.strip():
+        raw = tool_args.get("path") or tool_args.get("file")
+        path = raw.strip() if isinstance(raw, str) else ""
+    if isinstance(path, str) and path.strip():
+        data.setdefault("path", path.strip())
+    if isinstance(data.get("change_summary"), str) and data["change_summary"].strip():
+        return
+    if data.get("dry_run"):
+        data["change_summary"] = "预览，未写入"
+        return
+    if data.get("skipped"):
+        data["change_summary"] = "未改（目标已存在，已跳过）"
+        return
+    if tool_name == "patch_file":
+        lines = data.get("lines_changed")
+        if isinstance(lines, int):
+            data["change_summary"] = f"修改 {lines} 行"
+            return
+    content = tool_args.get("content") if isinstance(tool_args.get("content"), str) else ""
+    replacement = tool_args.get("replacement") if isinstance(tool_args.get("replacement"), str) else ""
+    body = content or replacement
+    if body.strip():
+        first = body.strip().splitlines()[0][:60]
+        nlines = body.count("\n") + 1
+        verb = "写入" if tool_name == "write_text" else "替换为"
+        data["change_summary"] = f"{verb} {nlines} 行：{first}"
+    elif path:
+        data["change_summary"] = "已写入"
 
 
 def run(
@@ -176,6 +237,7 @@ def run(
             continue
         data[key] = value
 
+    _annotate_file_change(data, tool.name, tool_args if isinstance(tool_args, dict) else {})
     return tool_ok(TOOL_NAME, data, duration_ms=_elapsed_ms(started))
 
 
