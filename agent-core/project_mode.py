@@ -3143,9 +3143,16 @@ def format_project_overlay(
         shown = ", ".join(plan_files) if plan_files else "(none)"
         lines.append(f"plan_files: {shown}")
         lines.append(
-            "plan_read: 这些是本项目实际有的计划文档。"
-            "未列出的文件不存在，不要 read_file，也不要为了补齐模板去创建。"
+            "plan_read: 上面这些是本项目已有的计划文档。"
+            "没列出的计划文档不要 read_file，也不要为了补齐模板去创建。"
+            "工作区里的其它文件随时可以读、可以查看，包括用户点名但还不存在的文件。"
+            "计划用来决定做什么，不限制读取。"
         )
+        if not runaway_enabled:
+            lines.append(
+                "ordinary_scope: 普通模式。用户要求读取或查看工作区里的任何文件时，直接 read_file，"
+                "不要以计划范围为由拒绝。计划外的修改最多先说明一句，不要拒绝。"
+            )
     return "\n".join(lines)
 
 

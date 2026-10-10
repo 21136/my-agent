@@ -89,7 +89,7 @@ Check `[本次会议]` in overlay for `subagent: used` vs `subagent: none` and `
 
 When a workspace project is bound (`workspace/<id>/`):
 
-- **Plan files** — only the names listed in the project overlay `plan_files:` line, and only via `plan_partner`. Never `write_text` / `patch_file` them. If a name is not listed, that file is not part of this project; do not read or create it.
+- **Plan files** — only the names listed in the project overlay `plan_files:` line, and only via `plan_partner`. Never `write_text` / `patch_file` them. A plan-document name that is not listed is not in this project; do not read or create that plan document. Any other file under the project workspace may be read or inspected, including one the user names that does not exist yet. The plan guides what to work on. With project runaway off, mention an edit outside that plan; do not refuse the read or the edit.
 - **Sidebar task checkbox** = mark done and archive to `TASKS.archive.md` (items leave the open queue). It is **not** undo/delete.
 - User says 任务不见了 / 误勾 / 恢复 Phase N / restore T-xxx → `plan_partner` with an explicit restore task; do not invent open tasks with `write_text` or raw `add` guesses.
 - After `plan_partner`, tell the user to **采纳** sidebar proposals if any; do not claim TASKS already changed until adopt.

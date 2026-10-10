@@ -23,9 +23,9 @@
 3. 调用 **`deliverable_review`**，`task` 写清范围，例如：`验收 {project_id}：三件套与源码是否一致，还缺什么才能交付`；把 L1 结果放进 `facts`。子代理只读，不自行跑重命令。
 4. 向用户合成**一条**人话总结（blockers / warnings / 建议下一步）；**禁止**新增侧栏验收按钮。
 
-### 读盘范围（硬）
+### 验收对账读哪些
 
-- 对账、验收、脱节类问题：**只读 `workspace/{project_id}/` 下** TASKS/MAP/PROJECT/源码/ENV。
+- 对账、验收、脱节类问题：在 `workspace/{project_id}/` 里对计划文档、源码和 ENV 对账。用户点名要读的文件不在此限，直接 `read_file`。
 - **禁止**用 `read_file docs/TOOLS.md` 或 agent 根 `docs/` 回答项目交付问题（那是内核文档，不是用户项目）。
 - **禁止**假设 `backend/src/main/java/...` 等模板路径；先 `list_dir workspace/{project_id}` 再读具体文件。
 
@@ -39,7 +39,7 @@
 - **禁止**每 task 用固定 magic-word 收口要求用户发「继续」（ritual 专用句式；solo 不必）
 - **禁止**口述「请点采纳」「去侧栏点采纳」等按钮名（过程卡承担入口）。
 - **禁止**因 TASKS 未勾就声称「不能写代码」——除非计划未 `confirmed`。
-- **禁止**用户说「看看/查一下」时自己在父循环盲读盘代替 `deliverable_review`；深调研用父写 task 的 **`explore`** builtin（非内核自动 explore）。
+- **禁止**把「验收 / 是否对齐 / 你看看整体」做成父循环连读十几个文件；这类对账用 **`deliverable_review`**。用户要读一个点名的文件时，直接 `read_file`。深调研用父写 task 的 **`explore`** builtin（非内核自动 explore）。
 
 ## 口语路由（简表）
 

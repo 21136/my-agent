@@ -391,6 +391,61 @@ class LightPlanFilePromptTests(unittest.TestCase):
         self.assertIn("plan_files", user_project)
         self.assertIn("未列出", user_project)
 
+    def test_ordinary_scope_does_not_forbid_workspace_reads(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        core = (root / "agent-core" / "prompts" / "core.txt").read_text(encoding="utf-8")
+        boundaries = (root / "evolve" / "prompts" / "project-boundaries.md").read_text(
+            encoding="utf-8"
+        )
+        solo = (root / "evolve" / "prompts" / "project-delivery-solo.md").read_text(
+            encoding="utf-8"
+        )
+        coding = (root / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
+        project_section = core.split("## Project mode", 1)[1].split("## Memory", 1)[0]
+        ordinary_text = "\n".join((project_section, boundaries, solo, coding))
+        self.assertNotIn("不能读取", ordinary_text)
+        self.assertNotIn("do not read or create it", project_section)
+        self.assertNotIn("未列出的文件不存在", ordinary_text)
+        self.assertNotIn("只读 `plan_files` 列出的计划文档；未列出的不要读", boundaries)
+        self.assertIn("may be read or inspected", project_section)
+        self.assertIn("do not refuse the read or the edit", project_section)
+        self.assertIn("其它文件随时可以读", boundaries)
+        self.assertIn("未列出的计划文档不要读、不要创建", boundaries)
+        self.assertIn("狂奔模式覆盖", boundaries)
+        self.assertIn("直接 `read_file`", solo)
+        self.assertNotIn("看看/查一下", solo)
+
+        with temporary_agent_paths() as paths:
+            create_project(paths, "lite-read", project_template="light")
+            files = existing_plan_files(paths, "lite-read")
+            overlay = format_project_overlay(
+                project_root="workspace/lite-read",
+                project_id="lite-read",
+                plan_status="draft",
+                plan_files=files,
+                runaway_enabled=False,
+            )
+            self.assertIn("随时可以读", overlay)
+            self.assertIn("直接 read_file", overlay)
+            self.assertIn("不要以计划范围为由拒绝", overlay)
+            self.assertNotIn("不能读取", overlay)
+            self.assertNotIn("未列出的文件不存在", overlay)
+            for name in self._SKIPPED:
+                self.assertNotIn(name, overlay)
+
+            runaway = format_project_overlay(
+                project_root="workspace/lite-read",
+                project_id="lite-read",
+                plan_status="confirmed",
+                workflow_stage="requirements",
+                plan_files=files,
+                runaway_enabled=True,
+            )
+            self.assertIn("runaway_scope: 仅当前项目内安全写入", runaway)
+            self.assertIn("禁止写业务代码", runaway)
+            self.assertNotIn("ordinary_scope:", runaway)
+            self.assertIn("随时可以读", runaway)
+
 
 if __name__ == "__main__":
     unittest.main()

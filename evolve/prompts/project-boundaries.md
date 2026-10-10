@@ -6,7 +6,7 @@
 
 - **只做产物**：代码与文档写在 `meta.project_root`（`workspace/<id>/`）内。
 - **不养 agent**：禁止 `write_evolve`、禁止向 `evolve/tools/` **git_clone**；要沉淀能力须用户回到**普通窗口**（非项目视角）再做。
-- **不猜进度**：续做、压缩后先 `read_file` overlay `plan_files` 里的 `TASKS.md`（开放队列）。只读 `plan_files` 列出的计划文档；未列出的不要读、不要创建。已完成项在 `TASKS.archive.md`，**不要**默认整文件读进上下文。
+- **不猜进度**：续做、压缩后先 `read_file` overlay `plan_files` 里的 `TASKS.md`（开放队列）。计划文档只认 `plan_files` 列出的那些；未列出的计划文档不要读、不要创建。工作区里的其它文件随时可以读、可以查看。已完成项在 `TASKS.archive.md`，**不要**默认整文件读进上下文。
 
 ## 换线（新项目 / 换项目 / 新会话 / 新开线）
 
@@ -24,7 +24,7 @@
 
 ## 计划域纪律（硬 · Phase 39 B5/B7）
 
-1. 改 overlay `plan_files` 列出的计划文档 → **必须** `plan_partner`，**不得** `write_text` / `patch_file` 直写。未列出的计划文档本项目没有，不要读、不要创建。
+1. 改 overlay `plan_files` 列出的计划文档 → **必须** `plan_partner`，**不得** `write_text` / `patch_file` 直写。未列出的计划文档本项目没有，不要读、不要创建那些计划文档。这不限制读取或查看工作区里的其它文件。普通模式（overlay 没有 `project_runaway_enabled: true`）下，计划外的修改最多先说明一句，不要拒绝。
 2. 代码任务做完 → 视 profile 用 `report_progress` 或侧栏勾选（ritual 为主通道；solo 可选）。
 3. 用户说「规划 / 补文档 / 排任务」→ 先 `plan_partner`，再视审阅结果决定是否写代码。
 4. `plan_partner` 返回后：向用户 **简短说明** 提案改了什么（文件/意图即可）。  
