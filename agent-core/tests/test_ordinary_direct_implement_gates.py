@@ -93,8 +93,12 @@ class ProjectEntryTreatTests(unittest.TestCase):
 
     def test_entry_direct_matches_phrase_gating(self) -> None:
         session = self._bound(project_entry="direct")
-        self.assertTrue(should_treat_ordinary_direct_implement(session, "随便写点什么"))
+        # Empty text stays sticky so the tool filter can hide plan_partner.
         self.assertTrue(should_treat_ordinary_direct_implement(session, ""))
+        self.assertTrue(should_treat_ordinary_direct_implement(session, "继续改 app.py"))
+        self.assertTrue(should_treat_ordinary_direct_implement(session, "随便写点什么"))
+        self.assertFalse(should_treat_ordinary_direct_implement(session, "请只回复一句：巡检正常"))
+        self.assertFalse(should_treat_ordinary_direct_implement(session, "你好"))
 
         phrase = self._bound()
         self.assertTrue(should_treat_ordinary_direct_implement(phrase, "不要只出计划，直接实现 T-001"))
@@ -107,6 +111,9 @@ class ProjectEntryTreatTests(unittest.TestCase):
             project_workflow_stage="implementation",
         )
         self.assertTrue(should_treat_ordinary_direct_implement(session, "继续改文件"))
+        self.assertFalse(
+            should_treat_ordinary_direct_implement(session, "请只回复一句：巡检正常")
+        )
 
     def test_entry_direct_skips_stage_walls(self) -> None:
         for stage in ("documentation", "design", "verification"):
@@ -199,6 +206,7 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         reloaded = Session.load(paths, session.conversation_id)
         self.assertEqual(reloaded.meta.project_entry, "direct")
         self.assertEqual(reloaded.meta.project_plan_status, "confirmed")
+        self.assertTrue(str(reloaded.meta.project_scope_confirmed_at or "").strip())
 
     def test_confirm_sets_plan_entry_when_empty(self) -> None:
         session, paths = self._new_project("plan-ok")
@@ -271,6 +279,33 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         self.assertTrue(result.meta_changed)
         self.assertEqual(session.meta.project_entry, "direct")
         self.assertEqual(session.meta.project_plan_status, "confirmed")
+
+
+    def test_reply_only_sticky_direct_does_not_open_plan_gate(self) -> None:
+        from turn_intent import classify_turn
+
+        session, _paths = self._new_project("reply-only")
+        session.meta.project_entry = "direct"
+        patrol = "巡检测试：请只用一句中文回复「巡检正常」，不要调用任何工具，也不要修改文件。"
+        short = "请只回复一句：巡检正常"
+        for text in (patrol, short, "你好"):
+            self.assertEqual(classify_turn(text), "qa", text)
+            self.assertFalse(should_treat_ordinary_direct_implement(session, text), text)
+        self.assertEqual(session.meta.project_plan_status, "draft")
+        self.assertFalse(str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip())
+
+    def test_explicit_phrase_auto_confirm_stamps_scope(self) -> None:
+        session, _paths = self._new_project("stamp-scope")
+        session.meta.project_entry = "direct"
+        phrase = "不要只出计划，直接实现"
+        self.assertTrue(should_treat_ordinary_direct_implement(session, phrase))
+        notice = maybe_auto_confirm_plan_for_direct_implement(session)
+        self.assertIsNotNone(notice)
+        assert notice is not None
+        self.assertIn("已自动确认计划", notice)
+        self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertEqual(session.meta.project_workflow_stage, "implementation")
+        self.assertTrue(str(session.meta.project_scope_confirmed_at or "").strip())
 
 
 class DirectImplementToolFilterTests(unittest.TestCase):

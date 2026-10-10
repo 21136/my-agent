@@ -219,7 +219,9 @@ def _compute_execution_stage(
             "blockers": ["plan_status"],
         }
 
-    if not light:
+    # A workflow that has already left requirements must not rewind to the
+    # first-round scope card just because SCOPE.md ids are still empty.
+    if not light and workflow_stage not in {"design", "implementation", "verification", "release"}:
         scope = artifacts.get("SCOPE.md") or {}
         scope_ids = set(scope.get("ids") or [])
         scope_blockers: list[str] = []
@@ -1996,6 +1998,21 @@ def ordinary_direct_implement_draft_allowed(session: object) -> bool:
     return True
 
 
+def _ordinary_question_or_recall(user_text: str, turn_intent: str = "") -> bool:
+    """True when this message is a question or recall, not an implement request."""
+    if is_direct_implement_request(user_text):
+        return False
+    labeled = (turn_intent or "").strip()
+    if labeled in {"qa", "recall"}:
+        return True
+    text = (user_text or "").strip()
+    if not text:
+        return False
+    from turn_intent import classify_turn
+
+    return classify_turn(text) in {"qa", "recall"}
+
+
 def should_treat_ordinary_direct_implement(
     session: object,
     user_text: str = "",
@@ -2006,12 +2023,16 @@ def should_treat_ordinary_direct_implement(
 
     ``project_entry=plan`` keeps the plan confirm gate unless this turn is an
     explicit「直接实现」switch. Stages no longer veto the direct path.
+    A question or recall that is not an explicit 直接实现 request does not count.
+    Empty text stays sticky so the tool filter can hide plan_partner.
     """
     if not ordinary_project_session(session):
         return False
     meta = getattr(session, "meta", None)
-    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
     explicit = is_direct_implement_request(user_text)
+    if _ordinary_question_or_recall(user_text, turn_intent):
+        return False
+    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
     execute = (turn_intent or "").strip() == "execute"
     if entry == "plan" and not explicit:
         return False
@@ -2030,6 +2051,10 @@ def should_skip_ordinary_plan_spawn(
     if not ordinary_project_session(session):
         return False
     intent = (turn_intent or "").strip()
+    # Questions and reply-only lines are answered directly. Do not pre-spawn
+    # plan_partner, even when project_entry is still direct.
+    if _ordinary_question_or_recall(user_text, intent):
+        return True
     if intent in {"plan", "requirements"}:
         return False
     if should_treat_ordinary_direct_implement(session, user_text, turn_intent=intent):

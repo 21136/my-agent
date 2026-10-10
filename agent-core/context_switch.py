@@ -252,7 +252,7 @@ def _apply_project_create(
             ensure_project_env(paths, pid)
         except Exception:
             pass
-        return loaded, f"已创建并续接项目 workspace/{pid}（会话 {mapped}）"
+        return loaded, f"已续接项目 {pid}"
 
     # Unbound session may bind in place; bound to another project → new session for NEW project only.
     if not current_pid:

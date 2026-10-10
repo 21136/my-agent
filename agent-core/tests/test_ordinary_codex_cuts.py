@@ -72,6 +72,28 @@ class OrdinaryPlanSpawnCutTests(unittest.TestCase):
         session = self._bound(project_entry="direct")
         self.assertTrue(should_skip_ordinary_plan_spawn(session, "继续", turn_intent="execute"))
 
+    def test_question_and_reply_only_skip_plan_partner(self) -> None:
+        from turn_intent import classify_turn
+
+        session = self._bound()
+        patrol = "巡检测试：请只用一句中文回复「巡检正常」，不要调用任何工具，也不要修改文件。"
+        progress = "这个项目现在进度怎么样？一句话说。"
+        for text in (patrol, progress):
+            self.assertEqual(classify_turn(text), "qa", text)
+            self.assertTrue(
+                should_skip_ordinary_plan_spawn(session, text, turn_intent="qa"),
+                text,
+            )
+            self.assertTrue(should_skip_ordinary_plan_spawn(session, text), text)
+            self.assertFalse(
+                should_treat_ordinary_direct_implement(session, text, turn_intent="qa"),
+                text,
+            )
+
+        direct = self._bound(project_entry="direct")
+        self.assertTrue(should_skip_ordinary_plan_spawn(direct, patrol, turn_intent="qa"))
+        self.assertFalse(should_treat_ordinary_direct_implement(direct, progress, turn_intent="qa"))
+
     def test_unset_entry_implement_phrase_skips_spawn(self) -> None:
         from turn_intent import classify_turn
 
