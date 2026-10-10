@@ -4172,10 +4172,6 @@ export function mountUnifiedShell(
     if (!btn?.dataset.action) return;
     const action = btn.dataset.action;
     switch (action) {
-      case "toggle-change-timeline":
-        projectState.changeTimelineExpanded = !projectState.changeTimelineExpanded;
-        renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        return;
       case "open-plan-review": {
         const sid = btn.dataset.suggestionId;
         openPlanReview(sid);

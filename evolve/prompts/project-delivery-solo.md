@@ -6,7 +6,7 @@
 
 - **L0**：源码、配置、`database/init.sql`、迁移脚本可运行。
 - **L1**：`verify_build` · `run_project_tests` · `ENV.md` 验收命令通过。
-- **L4**（`TASKS.md` / `MAP.md` / `PROJECT.md`）是**视图**；可与 L0/L1 暂时不一致。以构建/测试为准，不以勾选为唯一真源。
+- **L4**（`TASKS.md` / `PROJECT.md`，以及 overlay `plan_files` 里的其他计划文档）是**视图**；可与 L0/L1 暂时不一致。以构建/测试为准，不以勾选为唯一真源。
 
 ## 连续推进
 

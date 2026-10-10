@@ -2406,20 +2406,10 @@ export function ordinaryDraftDecisionVisible(state: ProjectPanelState): boolean 
 
 export function renderChangeBanner(state: ProjectPanelState): string {
   if (state.runawayEnabled) return "";
-  const recentLedger = state.changeTimeline.slice(-3).reverse();
-  const ledgerRows = recentLedger.map((change) => {
-    const affected = [...change.requirements, ...change.tasks, ...change.acceptance, ...change.verification];
-    const impact = affected.length > 0 ? `ID: ${affected.join(", ")}` : "ID: none";
-    const stale = change.stale_docs.length > 0 ? `stale: ${change.stale_docs.join(", ")}` : "stale: none";
-    const replan = change.replan_required ? "需要重新规划" : "无需重新规划";
-    return `<div class="sidebar-change-banner-changes"><strong>${escapeHtml(change.change_id)}</strong> · ${escapeHtml(change.paths.join(", "))}<br>${escapeHtml(impact)}<br>${escapeHtml(stale)} · ${replan}</div>`;
-  }).join("");
-  const ledgerHtml = recentLedger.length > 0
-    ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
-    : "";
   // Plan confirmation (draft / plan_dirty with overlay).
-  // The header already offers 规划后开工 / 直接实现 for that same draft, so the
-  // older 「方案待确认 · 确认开工」 banner would be a second decision surface.
+  // The header already offers 规划后开工 / 直接实现 for a non-direct draft, so
+  // that banner would be a second decision surface. Direct-entry questions are
+  // suppressed at plan.request; a request that still arrives is a real plan change.
   const needsPlanConfirm =
     !state.runawayEnabled
     && state.planOverlay
@@ -2506,7 +2496,7 @@ export function renderChangeBanner(state: ProjectPanelState): string {
     </div>`;
   }
 
-  return ledgerHtml;
+  return "";
 }
 
 // ---- project event application (keep compat) ----

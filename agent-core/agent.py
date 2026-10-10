@@ -4245,6 +4245,7 @@ class Agent:
         self.executor._ensure_project_scope_tools_allowed()
         self.session.subagent_overlay = None
         self.session.turn_intent = None
+        self.session.plan_files_fingerprint_at_turn_start = None
         self.session.scaffold_tool_turn = False
         self.session.direct_implement_turn = False
         self.session.skip_ordinary_plan_spawn = False
@@ -4264,6 +4265,15 @@ class Agent:
 
         intent = classify_turn(user_text)
         self.session.turn_intent = intent
+        if (
+            (getattr(self.session.meta, "active_shell", "") or "") == "project"
+            and (self.session.meta.project_id or "").strip()
+        ):
+            from project_mode import plan_files_fingerprint
+
+            self.session.plan_files_fingerprint_at_turn_start = plan_files_fingerprint(
+                self.session.paths, self.session.meta.project_id
+            )
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
 

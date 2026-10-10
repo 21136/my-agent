@@ -11,7 +11,7 @@
 
 ### A. 用户项目（`workspace/<id>/` · 项目窗口）
 
-- 跟项目三件套（`PROJECT.md` / `MAP.md` / `TASKS.md`）与侧栏计划，**不要**把 my-agent 仓库的 `docs/MAP.md` / `docs/TASKS.md` 当成该项目的任务清单。
+- 跟 overlay `plan_files` 列出的计划文档与侧栏计划，**不要**把 my-agent 仓库的 `docs/MAP.md` / `docs/TASKS.md` 当成该项目的任务清单，也不要读取未列出的计划文档。
 - 小步交付、验收命令以该项目自己的约定为准；一次性构建/测试优先 `run_command`；长驻用 `run_service`（或 `run_command` + `background:true`）；给人看本地页用 `browser_open`。
 
 ### B. 维护 my-agent 内核（改 agent-core / evolve / docs）

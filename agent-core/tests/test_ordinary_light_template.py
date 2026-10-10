@@ -23,8 +23,11 @@ from project_manifest import (
 )
 from project_mode import (
     TaskStats,
+    build_project_goal,
     compute_execution_stage,
     create_project,
+    existing_plan_files,
+    format_project_overlay,
     project_dir,
     project_mode_block_reason,
     read_project_template,
@@ -280,6 +283,74 @@ class LightUpgradeTests(unittest.TestCase):
                 output_fn=second.append,
             )
             self.assertTrue(any("无需升档" in line for line in second))
+
+
+class LightPlanFilePromptTests(unittest.TestCase):
+    _SKIPPED = ("MAP.md", "SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "RELEASE.md")
+
+    def test_light_overlay_and_goal_omit_files_the_template_skips(self) -> None:
+        with temporary_agent_paths() as paths:
+            create_project(paths, "lite-prompt", project_template="light")
+            files = existing_plan_files(paths, "lite-prompt")
+            for name in ("PROJECT.md", "TASKS.md", "VERIFY.md", "ENV.md"):
+                self.assertIn(name, files)
+            for name in self._SKIPPED:
+                self.assertNotIn(name, files)
+            overlay = format_project_overlay(
+                project_root="workspace/lite-prompt",
+                project_id="lite-prompt",
+                plan_status="draft",
+                plan_files=files,
+            )
+            goal = build_project_goal(
+                project_root="workspace/lite-prompt",
+                plan_status="draft",
+                plan_files=files,
+            )
+            self.assertIn("plan_files: PROJECT.md, TASKS.md, VERIFY.md, ENV.md", overlay)
+            for name in self._SKIPPED:
+                self.assertNotIn(name, overlay)
+                self.assertNotIn(name, goal)
+            self.assertNotIn("地图：", goal)
+
+    def test_standard_overlay_mentions_map_when_the_file_exists(self) -> None:
+        with temporary_agent_paths() as paths:
+            create_project(paths, "std-prompt")
+            files = existing_plan_files(paths, "std-prompt")
+            self.assertIn("MAP.md", files)
+            for name in ("SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "RELEASE.md"):
+                self.assertIn(name, files)
+            overlay = format_project_overlay(
+                project_root="workspace/std-prompt",
+                project_id="std-prompt",
+                plan_status="draft",
+                plan_files=files,
+            )
+            goal = build_project_goal(
+                project_root="workspace/std-prompt",
+                plan_status="draft",
+                plan_files=files,
+            )
+            self.assertIn("MAP.md", overlay)
+            self.assertIn("地图：workspace/std-prompt/MAP.md", goal)
+
+    def test_static_prompts_do_not_require_map_for_every_project(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        core = (root / "agent-core" / "prompts" / "core.txt").read_text(encoding="utf-8")
+        project_section = core.split("## Project mode", 1)[1].split("## Memory", 1)[0]
+        self.assertNotIn("MAP.md", project_section)
+        self.assertIn("plan_files:", project_section)
+        boundaries = (root / "evolve" / "prompts" / "project-boundaries.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("MAP.md", boundaries)
+        self.assertIn("plan_files", boundaries)
+        coding = (root / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
+        user_project = coding.split("### A. 用户项目", 1)[1].split("### B.", 1)[0]
+        self.assertNotIn("`PROJECT.md` / `MAP.md`", user_project)
+        self.assertIn("docs/MAP.md", user_project)
+        self.assertIn("plan_files", user_project)
+        self.assertIn("未列出", user_project)
 
 
 if __name__ == "__main__":

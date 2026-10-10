@@ -157,17 +157,15 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn('let planReviewIndex = 0;', index)
         self.assertIn('[data-action="open-suggestion-review"]', css)
 
-    def test_it5823_change_timeline_is_collapsed_until_requested(self) -> None:
+    def test_it5823_change_timeline_is_not_rendered(self) -> None:
+        """CHG ledger stays internal. The sidebar must not render it."""
         panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
             encoding="utf-8"
         )
-        index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("changeTimelineExpanded: boolean", panel)
-        self.assertIn("state.changeTimelineExpanded ? ledgerRows : \"\"", panel)
-        self.assertIn('data-action="toggle-change-timeline"', panel)
-        self.assertIn('case "toggle-change-timeline":', index)
+        self.assertNotIn("CHG 影响时间线", panel)
+        self.assertNotIn("sidebar-change-timeline", panel)
+        self.assertNotIn('data-action="toggle-change-timeline"', panel)
+        self.assertNotIn("ledgerRows", panel)
 
 
 if __name__ == "__main__":

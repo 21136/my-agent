@@ -497,6 +497,9 @@ class Session:
     last_review_verdict: str | None = field(default=None, compare=False, repr=False)
     last_review_blockers_count: int = field(default=0, compare=False, repr=False)
     turn_intent: str | None = field(default=None, compare=False, repr=False)
+    plan_files_fingerprint_at_turn_start: str | None = field(
+        default=None, compare=False, repr=False
+    )
     scaffold_tool_turn: bool = field(default=False, compare=False, repr=False)
     direct_implement_turn: bool = field(default=False, compare=False, repr=False)
     skip_ordinary_plan_spawn: bool = field(default=False, compare=False, repr=False)

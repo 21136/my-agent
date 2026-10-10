@@ -235,6 +235,52 @@ test("draft decision is one surface after a reply-only turn", () => {
   assert.equal(banner.includes("修改计划"), false);
 });
 
+test("direct-entry draft still shows a plan banner when a confirm request arrives", () => {
+  const state = panel({
+    planStatus: "draft",
+    projectEntry: "direct",
+    planOverlay: {
+      requestId: "req-direct",
+      title: "计划待确认",
+      summary: "music-player",
+      tasksPreview: "- [ ] T-001",
+      planStatus: "draft",
+    },
+  });
+  assert.equal(ordinaryDraftDecisionVisible(state), false);
+  const banner = renderChangeBanner(state);
+  assert.equal(banner.includes("方案待确认"), true);
+  assert.equal(banner.includes("确认开工"), true);
+});
+
+test("change banner does not render the CHG ledger", () => {
+  const state = panel({
+    planStatus: "confirmed",
+    changeTimeline: [
+      {
+        change_id: "CHG-001",
+        adopted_at: "2026-10-10T00:00:00Z",
+        source: "adopt",
+        proposal_id: "p-1",
+        paths: ["src/app.py"],
+        summary: "internal",
+        requirements: ["REQ-001"],
+        tasks: ["T-001"],
+        acceptance: [],
+        verification: [],
+        stale_docs: [],
+        replan_required: false,
+        before_revision: "r1",
+        after_revision: "r2",
+      },
+    ],
+  });
+  const banner = renderChangeBanner(state);
+  assert.equal(banner.includes("CHG"), false);
+  assert.equal(banner.includes("影响时间线"), false);
+  assert.equal(banner.includes("toggle-change-timeline"), false);
+});
+
 test("docs requests and error status stay useful without a project", () => {
   assert.equal(canRequestProjectDocs(""), false);
   assert.equal(canRequestProjectDocs("  "), false);

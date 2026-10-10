@@ -19,6 +19,7 @@ from project_mode import (
     ProjectModeError,
     acceptance_script_exists,
     build_project_goal,
+    existing_plan_files,
     list_projects,
     normalize_project_id,
     parse_acceptance_spec,
@@ -35,6 +36,17 @@ from project_mode import (
     utc_now_iso,
 )
 from session import Session, utc_now_iso
+
+def _set_project_goal(session: Session, root: str, plan_status: str) -> None:
+    pid = (session.meta.project_id or "").strip()
+    files = existing_plan_files(session.paths, pid) if pid else []
+    session.set_goal(
+        build_project_goal(
+            project_root=root, plan_status=plan_status, plan_files=files
+        ),
+        phase="S4",
+    )
+
 
 ProjectCommandKind = Literal[
     "list",
@@ -421,7 +433,7 @@ def bind_project_session(
         )
     if plan_status == "confirmed":
         session.meta.project_plan_confirmed_at = utc_now_iso()
-    session.set_goal(build_project_goal(project_root=root, plan_status=plan_status), phase="S4")
+    _set_project_goal(session, root, plan_status)
     _ensure_coding_topic(session)
     session.meta.updated_at = utc_now_iso()
     from project_switch import record_project_session
@@ -471,10 +483,7 @@ def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) ->
     if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
         session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     snapshot_plan_fingerprints(session, session.paths, pid)
-    session.set_goal(
-        build_project_goal(project_root=root, plan_status="confirmed"),
-        phase="S4",
-    )
+    _set_project_goal(session, root, "confirmed")
     session.meta.updated_at = utc_now_iso()
     stats = read_task_stats(tasks_path)
     return (
@@ -523,7 +532,7 @@ def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str
     if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
         session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     session.meta.project_active_task_id = normalized_task
-    session.set_goal(build_project_goal(project_root=root, plan_status="confirmed"), phase="S4")
+    _set_project_goal(session, root, "confirmed")
     session.meta.updated_at = utc_now_iso()
     session.save()
     return f"已授权实现 {normalized_task}：仅限当前任务范围；完成后必须按 VERIFY.md 验证。"
@@ -541,7 +550,7 @@ def organize_project_plan(session: Session, paths: AgentPaths) -> str:
     session.meta.project_workflow_stage = "documentation"
     session.meta.project_plan_status = "draft"
     session.meta.project_plan_confirmed_at = ""
-    session.set_goal(build_project_goal(project_root=root, plan_status="draft"), phase="S4")
+    _set_project_goal(session, root, "draft")
     session.meta.updated_at = utc_now_iso()
     generated = ", ".join(result["generated"]) or "无（已有内容已保留）"
     return f"文档整理已开始：{root}；生成/保留四个核心制品。新生成：{generated}。请确认设计后再进入实现。"

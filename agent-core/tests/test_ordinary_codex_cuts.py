@@ -13,12 +13,15 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from context import build_llm_messages
+from project_api import after_turn_project_hooks
 from project_mode import (
     TaskStats,
     compute_execution_stage,
     create_project,
     format_project_overlay,
     ordinary_skip_stage_walls,
+    plan_files_fingerprint,
+    project_dir,
     project_mode_block_reason,
     should_skip_ordinary_plan_spawn,
     should_treat_ordinary_direct_implement,
@@ -334,6 +337,71 @@ class OrdinaryConfirmBudgetTests(unittest.TestCase):
                     tool_name="run_evolved",
                 )
             )
+
+
+class OrdinaryPlanRequestTests(unittest.TestCase):
+    def _bind(self, paths, pid: str, entry: str):
+        session = create_new(paths, conversation_id=f"plan-req-{pid}")
+        session.meta.active_shell = "project"
+        session.meta.project_id = pid
+        session.meta.project_root = f"workspace/{pid}"
+        session.meta.project_plan_status = "draft"
+        session.meta.project_workflow_stage = "requirements"
+        session.meta.project_runaway_enabled = False
+        session.meta.project_entry = entry
+        session.plan_files_fingerprint_at_turn_start = plan_files_fingerprint(paths, pid)
+        return session
+
+    def _emit(self, session, paths, text: str, *, intent: str | None = None) -> list[dict]:
+        session.turn_intent = intent
+        session.messages.append({"role": "user", "content": text})
+        events: list[dict] = []
+        after_turn_project_hooks(session, paths, events.append)
+        return [event for event in events if event.get("type") == "plan.request"]
+
+    def test_question_reply_and_recall_skip_plan_request_for_both_entries(self) -> None:
+        turns = (
+            ("这个项目现在进度怎么样？一句话说。", None),
+            ("请只回复一句：巡检正常", None),
+            ("刚刚我们说了什么", "recall"),
+        )
+        for entry in ("plan", "direct"):
+            for text, intent in turns:
+                with self.subTest(entry=entry, text=text):
+                    with temporary_agent_paths() as paths:
+                        pid = f"ask-{entry}"
+                        create_project(paths, pid)
+                        session = self._bind(paths, pid, entry)
+                        self.assertEqual(self._emit(session, paths, text, intent=intent), [])
+
+    def test_plan_turn_still_emits_for_both_entries(self) -> None:
+        for entry in ("plan", "direct"):
+            with self.subTest(entry=entry):
+                with temporary_agent_paths() as paths:
+                    pid = f"plan-{entry}"
+                    create_project(paths, pid)
+                    session = self._bind(paths, pid, entry)
+                    requests = self._emit(
+                        session, paths, "先规划一下鉴权方案", intent="plan"
+                    )
+                    self.assertEqual(len(requests), 1)
+                    self.assertEqual(requests[0]["plan_status"], "draft")
+
+    def test_question_that_changes_the_plan_still_emits_for_both_entries(self) -> None:
+        for entry in ("plan", "direct"):
+            with self.subTest(entry=entry):
+                with temporary_agent_paths() as paths:
+                    pid = f"dirty-{entry}"
+                    create_project(paths, pid)
+                    session = self._bind(paths, pid, entry)
+                    tasks = project_dir(paths, pid) / "TASKS.md"
+                    tasks.write_text(
+                        tasks.read_text(encoding="utf-8") + "\n## Phase 9\n- [ ] T-009 extra\n",
+                        encoding="utf-8",
+                    )
+                    requests = self._emit(session, paths, "这个项目现在进度怎么样？")
+                    self.assertEqual(len(requests), 1)
+                    self.assertEqual(requests[0]["project_id"], pid)
 
 
 class OrdinaryDesktopContractTests(unittest.TestCase):

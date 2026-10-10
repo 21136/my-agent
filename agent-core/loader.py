@@ -1213,6 +1213,7 @@ def build_system_prompt(
                 build_tasks_injection_slice,
                 extract_task_id,
                 first_open_task_line,
+                existing_plan_files,
                 format_project_overlay,
                 get_delivery_profile,
                 is_project_continue_utterance,
@@ -1286,6 +1287,11 @@ def build_system_prompt(
                 ),
                 skip_stage_walls=ordinary_skip_stage_walls(session),
                 project_entry=str(getattr(session.meta, "project_entry", "") or ""),
+                plan_files=existing_plan_files(
+                    session.paths, session.meta.project_id
+                )
+                if session.meta.project_id
+                else [],
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

@@ -1829,16 +1829,69 @@ def migrate_closed_sections_to_archive(paths: AgentPaths, project_id: str) -> in
     return moved
 
 
-def build_project_goal(*, project_root: str, plan_status: str) -> str:
-    return "\n".join(
-        [
-            f"项目根：{project_root}",
-            f"进度真源：{project_root}/TASKS.md（开放队列）",
-            f"归档：{project_root}/TASKS.archive.md",
-            f"地图：{project_root}/MAP.md",
-            f"计划状态：{plan_status or 'draft'}",
-        ]
-    )
+# Stable order for prompts and goals. Light scaffolds omit the standard-only docs.
+_CONTEXT_PLAN_FILES = (
+    "PROJECT.md",
+    "TASKS.md",
+    "VERIFY.md",
+    "ENV.md",
+    "MAP.md",
+    "SCOPE.md",
+    "DESIGN.md",
+    "TECH-DESIGN.md",
+    "RELEASE.md",
+)
+
+
+def existing_plan_files(paths: AgentPaths, project_id: str) -> list[str]:
+    """Plan documents that exist for this project, in a stable order."""
+    try:
+        root = project_dir(paths, project_id)
+    except ProjectModeError:
+        return []
+    return [name for name in _CONTEXT_PLAN_FILES if (root / name).is_file()]
+
+
+def plan_files_fingerprint(paths: AgentPaths, project_id: str) -> str:
+    """Content hash of plan documents, including files that are absent."""
+    try:
+        root = project_dir(paths, project_id)
+    except ProjectModeError:
+        return ""
+    digest = hashlib.sha256()
+    for name in _CONTEXT_PLAN_FILES:
+        digest.update(name.encode("utf-8"))
+        path = root / name
+        if path.is_file():
+            digest.update(b"\x01")
+            try:
+                digest.update(path.read_bytes())
+            except OSError:
+                digest.update(b"\x00")
+        else:
+            digest.update(b"\x00")
+    return digest.hexdigest()
+
+
+def build_project_goal(
+    *,
+    project_root: str,
+    plan_status: str,
+    plan_files: list[str] | None = None,
+) -> str:
+    lines = [
+        f"项目根：{project_root}",
+        f"进度真源：{project_root}/TASKS.md（开放队列）",
+        f"归档：{project_root}/TASKS.archive.md",
+    ]
+    names = list(plan_files) if plan_files is not None else ["MAP.md"]
+    if "MAP.md" in names:
+        lines.append(f"地图：{project_root}/MAP.md")
+    if plan_files is not None:
+        shown = "、".join(names) if names else "（无）"
+        lines.append(f"计划文件：{shown}")
+    lines.append(f"计划状态：{plan_status or 'draft'}")
+    return "\n".join(lines)
 
 
 def normalize_meta_path(path: str) -> str:
@@ -2060,6 +2113,36 @@ def should_skip_ordinary_plan_spawn(
     if should_treat_ordinary_direct_implement(session, user_text, turn_intent=intent):
         return True
     return intent == "execute"
+
+
+def should_skip_ordinary_plan_request(
+    session: object,
+    paths: AgentPaths,
+    *,
+    plan_structure_changed: bool = False,
+) -> bool:
+    """Ordinary questions must not re-open the plan-confirm banner.
+
+    Question, reply-only, and recall turns skip ``plan.request``. A turn that
+    changed plan documents, or that marked the plan dirty, still emits.
+    """
+    if plan_structure_changed:
+        return False
+    if not ordinary_project_session(session):
+        return False
+    meta = getattr(session, "meta", None)
+    pid = str(getattr(meta, "project_id", "") or "").strip()
+    start = getattr(session, "plan_files_fingerprint_at_turn_start", None)
+    if start and pid and plan_files_fingerprint(paths, pid) != start:
+        return False
+    messages = getattr(session, "messages", None) or []
+    user_text = ""
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            user_text = msg["content"]
+            break
+    intent = str(getattr(session, "turn_intent", "") or "")
+    return _ordinary_question_or_recall(user_text, intent)
 
 
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
@@ -2855,6 +2938,7 @@ def format_project_overlay(
     runaway_acceptance_passed: bool = False,
     skip_stage_walls: bool = False,
     project_entry: str = "",
+    plan_files: list[str] | None = None,
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -3044,6 +3128,13 @@ def format_project_overlay(
         suppress_milestone = cp in {"verifying", "release_wait", "repairing"}
     if milestone_key and not suppress_milestone:
         lines.append(f"milestone_review_suggested: {milestone_key}")
+    if plan_files is not None:
+        shown = ", ".join(plan_files) if plan_files else "(none)"
+        lines.append(f"plan_files: {shown}")
+        lines.append(
+            "plan_read: 这些是本项目实际有的计划文档。"
+            "未列出的文件不存在，不要 read_file，也不要为了补齐模板去创建。"
+        )
     return "\n".join(lines)
 
 
