@@ -68,15 +68,82 @@ export function deleteConfirmCopy(doc: { path: string; name?: string; is_standar
   if (isPipelineDoc(doc.path, doc.is_standard)) {
     return {
       title: `删除「${title}」`,
-      body: `这是项目标准文档（${file}）。删除后无法恢复，项目流程也可能不完整。确定永久删除？`,
-      confirmLabel: "永久删除",
+      body: `这是项目标准文档（${file}）。将移入回收站，可撤销；流程可能暂时不完整。确定删除？`,
+      confirmLabel: "移入回收站",
     };
   }
   return {
     title: `删除「${title}」`,
-    body: `将永久删除这份文档，无法恢复。确定删除？`,
-    confirmLabel: "删除",
+    body: `将移入回收站，稍后可撤销。确定删除？`,
+    confirmLabel: "移入回收站",
   };
+}
+
+export function renameDraftForDoc(path: string, name?: string): string {
+  const mapped = STANDARD_DOC_TITLES[docBasename(path)];
+  if (mapped) return mapped;
+  return docStem(path) || name || "";
+}
+
+export function standardRenameWarning(path: string): string {
+  if (!isPipelineDoc(path)) return "";
+  const file = docBasename(path);
+  const title = STANDARD_DOC_TITLES[file] || file;
+  return `「${title}」是标准文档（${file}）。重命名后流程可能找不到它。`;
+}
+
+export function formatDocMtime(mtime?: number): string {
+  if (!mtime || !Number.isFinite(mtime) || mtime <= 0) return "";
+  const ms = mtime < 1e12 ? mtime * 1000 : mtime;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = Date.now();
+  const diff = Math.max(0, now - d.getTime());
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  if (y === new Date().getFullYear()) return `${m}-${day} ${hh}:${mm}`;
+  return `${y}-${m}-${day}`;
+}
+
+export function docFolderOf(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(0, slash) : "";
+}
+
+export function filterProjectDocs(
+  docs: ProjectDocItem[],
+  query: string,
+): ProjectDocItem[] {
+  const q = query.trim().toLowerCase();
+  const sorted = sortProjectDocs(docs);
+  if (!q) return sorted;
+  return sorted.filter((doc) => {
+    const title = humanDocTitle(doc.path, doc.name).toLowerCase();
+    return title.includes(q) || doc.path.toLowerCase().includes(q);
+  });
+}
+
+export function groupDocsByFolder(docs: ProjectDocItem[]): Array<{ folder: string; docs: ProjectDocItem[] }> {
+  const map = new Map<string, ProjectDocItem[]>();
+  for (const doc of docs) {
+    const folder = docFolderOf(doc.path);
+    const list = map.get(folder) || [];
+    list.push(doc);
+    map.set(folder, list);
+  }
+  const folders = Array.from(map.keys()).sort((a, b) => {
+    if (!a) return -1;
+    if (!b) return 1;
+    return a.localeCompare(b, "zh");
+  });
+  return folders.map((folder) => ({ folder, docs: map.get(folder) || [] }));
 }
 
 export function docCatalogMenuItems(): PopupMenuItem[] {
@@ -222,21 +289,40 @@ export function renderDocCatalogHtml(
   currentPath: string,
   options: {
     newDocName?: string;
+    newDocFolder?: string;
     currentContent?: string;
     inputId: string;
     createAction: string;
     renamingDocPath?: string;
     renameDraft?: string;
     deleteConfirmPath?: string;
+    searchQuery?: string;
+    searchInputId?: string;
+    recentlyChanged?: Set<string> | string[];
+    placeholderCount?: number;
+    showFolderField?: boolean;
   } = {
     inputId: "overlay-new-doc-input",
     createAction: "overlay-new-doc",
   },
 ): string {
   const newValue = options.newDocName || "";
-  let html = `<div class="doc-catalog-new">
+  const folderValue = options.newDocFolder || "";
+  const searchValue = options.searchQuery || "";
+  const searchId = options.searchInputId || "doc-catalog-search";
+  const recent = options.recentlyChanged instanceof Set
+    ? options.recentlyChanged
+    : new Set(options.recentlyChanged || []);
+  let html = `<div class="doc-catalog-toolbar">
+    <input type="search" class="overlay-search-input doc-catalog-search" id="${escapeHtml(searchId)}" placeholder="搜索文档…" value="${escapeHtml(searchValue)}" aria-label="搜索文档">
+  </div>`;
+  html += `<div class="doc-catalog-new">
     <input type="text" class="overlay-search-input doc-catalog-new-input" id="${escapeHtml(options.inputId)}" placeholder="文档标题，例如：需求分析" value="${escapeHtml(newValue)}">
+    ${options.showFolderField
+      ? `<input type="text" class="overlay-search-input doc-catalog-folder-input" id="${escapeHtml(options.inputId)}-folder" placeholder="文件夹（可选）" value="${escapeHtml(folderValue)}" aria-label="新建文档文件夹">`
+      : ""}
     <button type="button" class="unified-btn unified-btn-accent doc-catalog-new-btn" data-action="${escapeHtml(options.createAction)}">新建</button>
+    <button type="button" class="unified-btn doc-catalog-ai-btn" data-action="doc-ai-draft" title="在聊天里让 AI 起草">让 AI 起草</button>
   </div>`;
   if (options.deleteConfirmPath) {
     const doc = findProjectDoc(docs, options.deleteConfirmPath);
@@ -255,31 +341,50 @@ export function renderDocCatalogHtml(
     </div>`;
     return html;
   }
-  if (!docs.length) {
-    html += `<p class="doc-catalog-empty">还没有文档。输入标题后点新建。</p>`;
+  const filtered = filterProjectDocs(docs, searchValue);
+  if (!filtered.length) {
+    html += `<p class="doc-catalog-empty">${searchValue ? "没有匹配的文档。" : "还没有文档。输入标题后点新建。"}</p>`;
+    if ((options.placeholderCount || 0) > 0) {
+      html += `<p class="doc-catalog-placeholder-hint">未填写模板 ${options.placeholderCount} 篇（已折叠）</p>`;
+    }
     return html;
   }
+  const groups = groupDocsByFolder(filtered);
   html += `<nav class="doc-catalog-list" aria-label="文档目录">`;
-  for (const doc of sortProjectDocs(docs)) {
-    const content = doc.path === currentPath ? options.currentContent : undefined;
-    const title = humanDocTitle(doc.path, doc.name, content);
-    const active = doc.path === currentPath ? " is-current" : "";
-    const renaming = options.renamingDocPath === doc.path;
-    if (renaming) {
-      html += `<div class="doc-catalog-item overlay-doc-item is-renaming${active}" data-doc-path="${escapeHtml(doc.path)}">
-        <input type="text" class="overlay-doc-rename-input" id="overlay-doc-rename-input" value="${escapeHtml(options.renameDraft || "")}" aria-label="重命名文档">
-      </div>`;
-      continue;
+  for (const group of groups) {
+    if (group.folder) {
+      html += `<div class="doc-catalog-folder-label">${escapeHtml(group.folder)}/</div>`;
+    } else if (groups.length > 1) {
+      html += `<div class="doc-catalog-folder-label">项目根目录</div>`;
     }
-    html += `<div class="doc-catalog-item overlay-doc-item${active}" role="button" tabindex="0" data-doc-path="${escapeHtml(doc.path)}" title="${escapeHtml(doc.path)}">
-      <span class="doc-catalog-item-copy">
-        <span class="doc-catalog-item-title">${escapeHtml(title)}</span>
-        <span class="doc-catalog-item-path">${escapeHtml(doc.path)}</span>
-      </span>
-      <button type="button" class="overlay-doc-item-more" data-doc-more="${escapeHtml(doc.path)}" aria-label="文档操作" title="文档操作">•••</button>
-    </div>`;
+    for (const doc of group.docs) {
+      const content = doc.path === currentPath ? options.currentContent : undefined;
+      const title = humanDocTitle(doc.path, doc.name, content);
+      const active = doc.path === currentPath ? " is-current" : "";
+      const recentCls = recent.has(doc.path) ? " is-recent" : "";
+      const renaming = options.renamingDocPath === doc.path;
+      const mtimeLabel = formatDocMtime(doc.mtime);
+      if (renaming) {
+        const warn = standardRenameWarning(doc.path);
+        html += `<div class="doc-catalog-item overlay-doc-item is-renaming${active}" data-doc-path="${escapeHtml(doc.path)}">
+          <input type="text" class="overlay-doc-rename-input" id="overlay-doc-rename-input" value="${escapeHtml(options.renameDraft || "")}" aria-label="重命名文档">
+          ${warn ? `<div class="doc-catalog-rename-warn">${escapeHtml(warn)}</div>` : ""}
+        </div>`;
+        continue;
+      }
+      html += `<div class="doc-catalog-item overlay-doc-item${active}${recentCls}" role="button" tabindex="0" data-doc-path="${escapeHtml(doc.path)}" title="${escapeHtml(doc.path)}">
+        <span class="doc-catalog-item-copy">
+          <span class="doc-catalog-item-title">${escapeHtml(title)}${recent.has(doc.path) ? '<span class="doc-catalog-recent-badge">刚更新</span>' : ""}</span>
+          <span class="doc-catalog-item-meta"><span class="doc-catalog-item-path">${escapeHtml(doc.path)}</span>${mtimeLabel ? `<span class="doc-catalog-item-mtime">${escapeHtml(mtimeLabel)}</span>` : ""}</span>
+        </span>
+        <button type="button" class="overlay-doc-item-more" data-doc-more="${escapeHtml(doc.path)}" aria-label="文档操作" title="文档操作">•••</button>
+      </div>`;
+    }
   }
   html += `</nav>`;
+  if ((options.placeholderCount || 0) > 0) {
+    html += `<p class="doc-catalog-placeholder-hint">未填写模板 ${options.placeholderCount} 篇（已折叠）</p>`;
+  }
   return html;
 }
 
@@ -306,6 +411,13 @@ export function renderDocumentReaderHtml(args: {
   dirty?: boolean;
   saving?: boolean;
   leavePrompt?: boolean;
+  conflictPrompt?: boolean;
+  splitEditPreview?: boolean;
+  docsChatSplit?: boolean;
+  recentlyChanged?: Set<string> | string[];
+  placeholderCount?: number;
+  searchQuery?: string;
+  newDocFolder?: string;
 }): { html: string; outline: DocOutlineItem[] } {
   const view = args.view || "preview";
   const outlineSource = view === "edit" ? (args.draft ?? args.currentContent) : args.currentContent;
@@ -329,17 +441,55 @@ export function renderDocumentReaderHtml(args: {
         </div>
       </div>`
     : "";
-  const editor = view === "edit"
+  const conflictBanner = args.conflictPrompt
+    ? `<div class="unified-document-conflict" role="status">
+        <span>文档已被修改（可能是助手刚改过）。重新载入，还是仍要覆盖？</span>
+        <div class="unified-document-unsaved-actions">
+          <button type="button" class="unified-btn unified-btn-accent" data-action="document-conflict-reload">重新载入</button>
+          <button type="button" class="unified-btn unified-btn-danger" data-action="document-conflict-overwrite">仍要覆盖</button>
+          <button type="button" class="unified-btn" data-action="document-conflict-cancel">取消</button>
+        </div>
+      </div>`
+    : "";
+  const toolbar = args.currentPath && view === "edit"
+    ? `<div class="unified-document-md-toolbar" role="toolbar" aria-label="编辑工具">
+        <button type="button" class="unified-btn" data-action="doc-md-heading" title="标题">H</button>
+        <button type="button" class="unified-btn" data-action="doc-md-bold" title="加粗"><strong>B</strong></button>
+        <button type="button" class="unified-btn" data-action="doc-md-list" title="列表">• 列表</button>
+        <button type="button" class="unified-btn" data-action="doc-md-code" title="代码">代码</button>
+        <button type="button" class="unified-btn" data-action="doc-md-link" title="链接">链接</button>
+        <button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>
+      </div>`
+    : (args.currentPath && view === "preview"
+      ? `<div class="unified-document-md-toolbar" role="toolbar" aria-label="阅读工具">
+          <button type="button" class="unified-btn" data-action="doc-selection-to-ai" title="把选中文字交给 AI">交给 AI</button>
+        </div>`
+      : "");
+  const split = Boolean(args.splitEditPreview) && view === "edit" && Boolean(args.currentPath);
+  const editorPane = view === "edit"
     ? `<textarea class="unified-document-editor" spellcheck="false" aria-label="文档正文">${escapeHtml(args.draft || "")}</textarea>`
-    : `<div class="unified-document-content unified-markdown">${
+    : "";
+  const previewPane = (view === "preview" || split)
+    ? `<div class="unified-document-content unified-markdown">${
       args.currentPath
-        ? (args.currentContent
-          ? args.renderedHtml
+        ? ((split ? (args.draft || args.currentContent) : args.currentContent)
+          ? (split ? "" : args.renderedHtml)  /* split preview filled by caller live */
           : `<p class="doc-reader-empty">正在打开…</p>`)
         : `<p class="doc-reader-empty">从左侧打开一篇文档，在这里阅读全文。</p>`
-    }</div>`;
+    }</div>`
+    : "";
+  // For split mode, show textarea + live preview side by side
+  const editor = split
+    ? `<div class="unified-document-split-edit">
+        <div class="unified-document-split-pane is-editor">${editorPane}</div>
+        <div class="unified-document-split-pane is-preview"><div class="unified-document-content unified-markdown" data-live-preview="1">${args.renderedHtml || `<p class="doc-reader-empty">开始编辑以预览</p>`}</div></div>
+      </div>`
+    : (view === "edit" ? editorPane : previewPane);
   const back = includeBack
     ? `<button type="button" class="unified-btn" data-action="document-back">← 返回聊天</button>`
+    : "";
+  const splitToggle = args.currentPath
+    ? `<button type="button" class="unified-btn" data-action="toggle-docs-chat-split" title="文档与聊天并排">${args.docsChatSplit ? "仅文档" : "与聊天并排"}</button>`
     : "";
   const editActions = args.currentPath && view === "edit"
     ? `<button type="button" class="unified-btn unified-btn-accent" data-action="document-save"${saveDisabled ? " disabled" : ""}>${args.saving ? "保存中…" : "保存"}</button>
@@ -354,9 +504,14 @@ export function renderDocumentReaderHtml(args: {
   const catalog = includeCatalog
     ? `<aside class="unified-document-catalog">${renderDocCatalogHtml(args.docs, args.currentPath, {
       newDocName: args.newDocName,
+      newDocFolder: args.newDocFolder,
       currentContent: args.currentContent,
       inputId: "doc-reader-new-input",
       createAction: "create-doc",
+      searchQuery: args.searchQuery,
+      recentlyChanged: args.recentlyChanged,
+      placeholderCount: args.placeholderCount,
+      showFolderField: true,
     })}</aside>`
     : "";
   const html = `<div class="unified-document-inner${args.dirty ? " is-dirty" : ""}">
@@ -368,11 +523,14 @@ export function renderDocumentReaderHtml(args: {
         ${pathLine}
       </div>
       <div class="unified-document-actions">
+        ${splitToggle}
         ${viewToggle}
         ${editActions}
       </div>
     </header>
     ${leaveBanner}
+    ${conflictBanner}
+    ${toolbar}
     <div class="unified-document-shell${includeCatalog ? "" : " is-sidebar-catalog"}">
       ${catalog}
       <article class="unified-document-reader">

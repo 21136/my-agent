@@ -968,6 +968,12 @@ export function createChatSession(
             if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {
               card.logsTail = event.logs_tail.trim();
             }
+            if (typeof (event as { path?: string }).path === "string" && (event as { path?: string }).path!.trim()) {
+              card.path = (event as { path: string }).path.trim();
+            }
+            if (typeof (event as { diff?: string }).diff === "string" && (event as { diff?: string }).diff!.trim()) {
+              card.diff = (event as { diff: string }).diff;
+            }
             syncProcessLegacyFields(proc);
           }
           model._toolTimers.delete(event.call_id);

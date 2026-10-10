@@ -75,6 +75,13 @@ def run_write(payload: dict[str, Any]) -> dict[str, Any]:
     if dry_run:
         return {"ok": True, "dry_run": True, "would_write": rel_written, "skipped": False}
 
+    before = ""
+    if target.exists():
+        try:
+            before = target.read_text(encoding="utf-8")
+        except OSError:
+            before = ""
+
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         from evolve_tool_io import write_utf8_text
@@ -83,7 +90,42 @@ def run_write(payload: dict[str, Any]) -> dict[str, Any]:
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
 
-    return {"ok": True, "written": rel_written, "skipped": False}
+    diff_text = ""
+    try:
+        import difflib
+
+        before_lines = before.splitlines(keepends=True)
+        normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+        after_lines = normalized.splitlines(keepends=True)
+        diff = list(
+            difflib.unified_diff(
+                before_lines,
+                after_lines,
+                fromfile=f"a/{rel_written}",
+                tofile=f"b/{rel_written}",
+                n=2,
+            )
+        )
+        if len(diff) > 80:
+            diff = diff[:80] + [f"... ({len(diff) - 80} more lines)\n"]
+        diff_text = "".join(diff)
+    except Exception:
+        diff_text = ""
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "written": rel_written,
+        "path": rel_written,
+        "skipped": False,
+    }
+    if diff_text:
+        result["unified_diff"] = diff_text
+    nlines = content.count("\n") + (1 if content else 0)
+    first = content.strip().splitlines()[0][:60] if content.strip() else ""
+    result["change_summary"] = (
+        f"写入 {nlines} 行：{first}" if first else f"写入 {nlines} 行"
+    )
+    return result
 
 
 def _renamed_target(target: Path) -> Path:

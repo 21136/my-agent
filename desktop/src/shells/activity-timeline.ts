@@ -9,6 +9,7 @@ import {
   thinkEntryTitle,
 } from "./activity-state";
 import { escapeHtml, formatToolElapsed } from "./chat-state";
+import { diffStats } from "./unified/plan-review";
 import {
   formatReasoningDisplay,
   humanizeToolAction,
@@ -101,6 +102,13 @@ function renderPinnedThinkFold(
   </details>`;
 }
 
+function extractToolPath(tool: ToolEntry): string {
+  if (tool.path && tool.path.trim()) return tool.path.trim();
+  const blob = `${tool.summary || ""} ${tool.endSummary || ""}`;
+  const m = blob.match(/(workspace[/\\][^\s,;]+|[\w./-]+\.(?:md|mjs|js|ts|tsx|py|json|css|html|vue|toml|yaml|yml|ps1|sh|bat))/i);
+  return m?.[1] || "";
+}
+
 function renderToolEntry(tool: ToolEntry, now: number): string {
   const running = tool.status === "running";
   const elapsedMs = running ? now - tool.startedAt : (tool.endedAt ?? now) - tool.startedAt;
@@ -119,14 +127,29 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const label = humanizeToolAction(tool.tool, tool.summary, tool.endSummary);
   const sub = humanizeToolSubline(tool.status, tool.endSummary);
   const canonical = resolveEffectiveToolName(tool.tool, tool.summary);
+  const filePath = extractToolPath(tool);
+  const isMd = /\.md$/i.test(filePath);
+  const pathBit = filePath
+    ? (isMd
+      ? `<button type="button" class="unified-tool-path-link" data-action="open-agent-doc" data-doc-path="${escapeHtml(filePath)}" title="在文档阅读器中打开">${escapeHtml(filePath.split(/[/\\]/).pop() || filePath)}</button>`
+      : `<span class="unified-tool-path-text" title="${escapeHtml(filePath)}">${escapeHtml(filePath.split(/[/\\]/).pop() || filePath)}</span>`)
+    : "";
+  const diffRaw = (tool.diff || "").trim();
+  const stats = diffRaw ? diffStats(diffRaw) : "";
+  const statsBit = stats ? `<span class="unified-tool-diff-stats">${escapeHtml(stats)}</span>` : "";
+  const diffBit = diffRaw
+    ? `<details class="unified-tool-diff-inline"><summary>查看改动${stats ? ` · ${escapeHtml(stats)}` : ""}</summary><pre class="unified-plan-review-diff">${escapeHtml(diffRaw)}</pre></details>`
+    : "";
   return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}" title="${escapeHtml(canonical)}">
     <span class="unified-tool-mark">${mark}</span>
     <span class="unified-tool-step">
       <span class="unified-tool-step-head">
         <span class="unified-tool-step-label">${escapeHtml(label)}</span>
+        ${pathBit}${statsBit}
         <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(canonical)}」的显示名称">改名</button>
       </span>
       ${sub ? `<span class="unified-tool-step-sub is-${tool.status}">${escapeHtml(sub)}</span>` : ""}
+      ${diffBit}
     </span>
     <span class="unified-tool-elapsed">${escapeHtml(elapsedLabel)}</span>${progressBit}${logsBit}
   </div>`;

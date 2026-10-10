@@ -75,10 +75,14 @@ class OrdinaryEmptyCreateTests(unittest.TestCase):
             self.assertGreater(payload["tasks_total"], 0)
             root = project_dir(paths, "std-plan")
             self.assertIn("T-001", (root / "TASKS.md").read_text(encoding="utf-8"))
+            # Untouched standard templates are collapsed in the catalog.
             docs = list_project_docs(paths, "std-plan")
             names = {item["name"] for item in docs}
-            self.assertIn("PROJECT.md", names)
-            self.assertIn("DESIGN.md", names)
+            self.assertNotIn("PROJECT.md", names)
+            from project_mode import count_untouched_template_docs
+            self.assertGreaterEqual(count_untouched_template_docs(paths, "std-plan"), 4)
+            self.assertTrue((root / "PROJECT.md").is_file())
+            self.assertTrue((root / "DESIGN.md").is_file())
 
 
 if __name__ == "__main__":

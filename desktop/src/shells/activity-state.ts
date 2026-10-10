@@ -13,6 +13,8 @@ export type ProcessToolCard = {
   endSummary?: string;
   progressText?: string;
   logsTail?: string;
+  path?: string;
+  diff?: string;
 };
 
 export type ThinkEntry = {
@@ -324,7 +326,7 @@ export function activityEntriesPrint(entries: ActivityEntry[], llmPending: boole
     if (e.kind === "think") {
       return `T:${e.id}:${e.phase}:${e.text.length}:${e.userOpen ? 1 : 0}`;
     }
-    return `U:${e.callId}:${e.status}:${e.endSummary ?? ""}:${e.progressText ?? ""}:${(e.logsTail ?? "").length}`;
+    return `U:${e.callId}:${e.status}:${e.endSummary ?? ""}:${e.progressText ?? ""}:${(e.logsTail ?? "").length}:${e.path ?? ""}:${(e.diff ?? "").length}`;
   });
   const waitBit = llmWaitStartedAt ? `:W${llmWaitStartedAt}` : "";
   return `${parts.join(",")}:${llmPending ? 1 : 0}${waitBit}`;

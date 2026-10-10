@@ -157,6 +157,16 @@ export function formatToolActionLabel(tool: string, summary: string, endSummary?
   const effective = resolveEffectiveToolName(tool, summary || endSummary);
   const override = getToolDisplayOverride(effective);
   const file = extractFileHint(blob);
+  if (override && !(override === "扩展工具" && file)) {
+    return file ? `${override} ${file}` : override;
+  }
+  if ((effective === "run_evolved" || effective === "evolved" || override === "扩展工具") && file) {
+    const lower = blob.toLowerCase();
+    if (/trash|回收站|move_to_trash/.test(lower)) return `移入回收站 ${file}`;
+    if (/copy_move|host_copy_move/.test(lower) && /move|移动/.test(lower)) return `移动 ${file}`;
+    if (/copy_move|host_copy_move|复制/.test(lower)) return `复制 ${file}`;
+    return `文件 ${file}`;
+  }
   if (override) return file ? `${override} ${file}` : override;
   const verb = TOOL_ACTION_VERBS[effective];
   if (verb && file) return `${verb} ${file}`;

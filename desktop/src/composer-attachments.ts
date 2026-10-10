@@ -19,8 +19,16 @@ export function wireComposerAttachments(options: {
   beforeSend?: () => void;
   /** Extra gate (e.g. workbench empty state requires a project). */
   allowSend?: () => boolean;
+  /** Optional per-send extras (active doc context, etc.). */
+  messageOpts?: () => {
+    forceAgent?: boolean;
+    forcePlan?: boolean;
+    autoRoutePlan?: boolean;
+    activeDoc?: string;
+    activeDocSelection?: string;
+  } | undefined;
 }): ComposerAttachmentWire {
-  const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend, allowSend } = options;
+  const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend, allowSend, messageOpts } = options;
 
   function canSend(): boolean {
     if (allowSend && !allowSend()) return false;
@@ -50,7 +58,11 @@ export function wireComposerAttachments(options: {
     );
     fileDrop.clearAttachments();
     try {
-      client.sendMessage(text, attachmentIds.length ? attachmentIds : undefined);
+      client.sendMessage(
+        text,
+        attachmentIds.length ? attachmentIds : undefined,
+        messageOpts?.(),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       onStatus?.(`发送失败：${message}`);

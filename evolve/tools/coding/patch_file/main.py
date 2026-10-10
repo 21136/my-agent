@@ -61,6 +61,30 @@ def _write_text_lines(target: Path, lines: list[str]) -> None:
     write_utf8_text(target, "".join(lines))
 
 
+
+def _unified_diff(path: str, before: str, after: str, max_lines: int = 80) -> str:
+    """Short unified diff for UI tool cards (truncated)."""
+    import difflib
+    before_lines = before.splitlines(keepends=True)
+    after_lines = after.splitlines(keepends=True)
+    diff = list(
+        difflib.unified_diff(
+            before_lines,
+            after_lines,
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+            n=2,
+        )
+    )
+    if not diff:
+        return ""
+    if len(diff) > max_lines:
+        head = diff[:max_lines]
+        head.append(f"... ({len(diff) - max_lines} more lines)\n")
+        diff = head
+    return "".join(diff)
+
+
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -390,6 +414,7 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
     except OSError as exc:
         return {"ok": False, "error": f"patch or ledger write failed: {exc}", "patch_id": patch_id}
 
+    diff_text = _unified_diff(rel, text, new_text)
     return {
         "ok": True,
         "path": rel,
@@ -399,6 +424,7 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "lines_changed": lines_changed,
         "hunks_applied": lines_changed if mode == "hunks" else None,
+        "unified_diff": diff_text,
     }
 
 

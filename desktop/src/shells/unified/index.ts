@@ -54,6 +54,7 @@ import {
   normalizeNewDocPath,
   renderDocOutlineHtml,
   renderDocumentReaderHtml,
+  renameDraftForDoc,
   sortProjectDocs,
 } from "./doc-reading";
 import {
@@ -236,7 +237,11 @@ export function mountUnifiedShell(
     projectDocs: [],
     currentDocPath: "",
     currentDocContent: "",
+    currentDocMtime: 0,
+    currentDocHash: "",
     newDocName: "",
+    newDocFolder: "",
+    docSearchQuery: "",
     renamingDocPath: "",
     renameDraft: "",
     deleteConfirmPath: "",
@@ -244,6 +249,11 @@ export function mountUnifiedShell(
     docEditDraft: "",
     docDirty: false,
     docSaving: false,
+    docConflictPrompt: false,
+    docsChatSplit: true,
+    docPlaceholderCount: 0,
+    recentlyChangedDocs: new Set<string>(),
+    pendingDocUndo: null,
     quickAddText: "",
     detectedProject: null,
     planWarnings: [],
@@ -771,6 +781,16 @@ export function mountUnifiedShell(
     onNotice: (text) => setStatus(text),
   });
 
+  function currentDocSelection(): string {
+    const sel = window.getSelection()?.toString() || "";
+    if (sel.trim()) return sel;
+    const editor = documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor");
+    if (editor && editor.selectionStart !== editor.selectionEnd) {
+      return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+    }
+    return "";
+  }
+
   const composerWire = wireComposerAttachments({
     input,
     sendBtn,
@@ -783,6 +803,15 @@ export function mountUnifiedShell(
       topbarState.intentLabel = "";
       setStatus("发送中…");
       resetUserScrollPin();
+    },
+    messageOpts: () => {
+      const path = projectState.currentDocPath || "";
+      if (!path) return undefined;
+      const selection = currentDocSelection();
+      return {
+        activeDoc: path,
+        activeDocSelection: selection || undefined,
+      };
     },
   });
 
@@ -1716,16 +1745,21 @@ export function mountUnifiedShell(
     next?.();
   }
 
-  function saveCurrentDoc(after?: () => void): void {
+  function saveCurrentDoc(after?: () => void, force = false): void {
     const path = projectState.currentDocPath;
     if (!path) return;
     captureDocDraftFromEditor();
     pendingDocAction = "write";
     projectState.docSaving = true;
+    projectState.docConflictPrompt = false;
     if (after) docLeaveNext = after;
     syncDocEditChrome();
     try {
-      client.writeDoc(path, projectState.docEditDraft);
+      client.writeDoc(path, projectState.docEditDraft, {
+        baseMtime: projectState.currentDocMtime || undefined,
+        baseHash: projectState.currentDocHash || undefined,
+        force,
+      });
       setStatus("正在保存文档…");
     } catch (err) {
       projectState.docSaving = false;
@@ -1742,7 +1776,7 @@ export function mountUnifiedShell(
   function startRenameDoc(path: string): void {
     projectState.deleteConfirmPath = "";
     projectState.renamingDocPath = path;
-    projectState.renameDraft = docStem(path);
+    projectState.renameDraft = renameDraftForDoc(path);
     refreshDocsSidebar();
     const input = projectEls.overlayBody.querySelector<HTMLInputElement>("#overlay-doc-rename-input");
     input?.focus();
@@ -1877,15 +1911,17 @@ export function mountUnifiedShell(
 
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
-    const chatFocus = focus === "chat";
-    shellEl.dataset.mainFocus = focus;
+    const splitDocs = focus === "document" && projectState.docsChatSplit;
+    const chatFocus = focus === "chat" || splitDocs;
+    shellEl.dataset.mainFocus = splitDocs ? "docs-split" : focus;
     shellEl.dataset.rail = projectState.railTab || "now";
-    chatEl.classList.toggle("hidden", focus !== "chat");
+    shellEl.classList.toggle("is-docs-split", splitDocs);
+    chatEl.classList.toggle("hidden", !(focus === "chat" || splitDocs));
     planReviewEl.classList.toggle("hidden", focus !== "plan_review");
     planFullEl.classList.toggle("hidden", focus !== "plan_full");
     documentEl.classList.toggle("hidden", focus !== "document");
     projectsEl.classList.toggle("hidden", focus !== "projects");
-    chatEl.hidden = focus !== "chat";
+    chatEl.hidden = !(focus === "chat" || splitDocs);
     planReviewEl.hidden = focus !== "plan_review";
     planFullEl.hidden = focus !== "plan_full";
     documentEl.hidden = focus !== "document";
@@ -1956,12 +1992,16 @@ export function mountUnifiedShell(
     }
     const path = projectState.currentDocPath;
     const content = projectState.currentDocContent;
+    const previewSource = projectState.docView === "edit"
+      ? (projectState.docEditDraft || content)
+      : content;
     const { html, outline } = renderDocumentReaderHtml({
       docs: projectState.projectDocs,
       currentPath: path,
       currentContent: content,
-      renderedHtml: content ? renderMarkdown(content) : "",
+      renderedHtml: previewSource ? renderMarkdown(previewSource) : "",
       newDocName: projectState.newDocName,
+      newDocFolder: projectState.newDocFolder,
       includeCatalog: false,
       includeBack: false,
       view: projectState.docView,
@@ -1969,6 +2009,12 @@ export function mountUnifiedShell(
       dirty: projectState.docDirty,
       saving: projectState.docSaving,
       leavePrompt: docLeavePrompt,
+      conflictPrompt: projectState.docConflictPrompt,
+      splitEditPreview: true,
+      docsChatSplit: projectState.docsChatSplit,
+      recentlyChanged: projectState.recentlyChangedDocs,
+      placeholderCount: projectState.docPlaceholderCount,
+      searchQuery: projectState.docSearchQuery,
     });
     documentEl.innerHTML = html;
     const reader = documentEl.querySelector(".unified-document-content");
@@ -1997,9 +2043,12 @@ export function mountUnifiedShell(
   function createProjectDocFromTitle(): void {
     const name = normalizeNewDocPath(projectState.newDocName);
     if (!name) return;
+    const folder = (projectState.newDocFolder || "").trim().replace(/^\/+|\/+$/g, "");
+    const path = folder ? `${folder}/${name}` : name;
     pendingDocAction = "create";
-    try { client.createDoc(name); } catch { pendingDocAction = null; }
+    try { client.createDoc(path); } catch { pendingDocAction = null; }
     projectState.newDocName = "";
+    projectState.newDocFolder = "";
   }
 
   function requestDocList(): void {
@@ -2012,12 +2061,28 @@ export function mountUnifiedShell(
     try { client.readDoc(path); } catch { /* ignore */ }
   }
 
+  function normalizeAgentDocPath(raw: string): string {
+    let rel = (raw || "").replace(/\\/g, "/").trim();
+    if (!rel) return "";
+    const pid = projectState.projectId;
+    if (pid) {
+      const marker = `workspace/${pid}/`;
+      const idx = rel.indexOf(marker);
+      if (idx >= 0) rel = rel.slice(idx + marker.length);
+      else if (rel.startsWith(`workspace/${pid}`)) rel = rel.slice(`workspace/${pid}`.length).replace(/^\/+/, "");
+    }
+    if (rel.startsWith("workspace/") && pid) {
+      const parts = rel.split("/");
+      if (parts.length >= 3 && parts[1] === pid) rel = parts.slice(2).join("/");
+    }
+    return rel;
+  }
+
   function openDocument(path: string): void {
+    path = normalizeAgentDocPath(path);
     if (!path) return;
-    const alreadyOpen = projectState.mainFocus === "document"
-      && projectState.currentDocPath === path
-      && Boolean(projectState.currentDocContent);
-    if (path !== projectState.currentDocPath && isDocDirty()) {
+    const samePath = projectState.currentDocPath === path;
+    if (!samePath && isDocDirty()) {
       requestLeaveDocument(() => openDocument(path));
       return;
     }
@@ -2025,20 +2090,21 @@ export function mountUnifiedShell(
     projectState.railTab = "docs";
     projectState.overlayPanel = null;
     shellEl.dataset.rail = "docs";
-    if (alreadyOpen) {
-      setMainFocus("document");
-      requestDocList();
-      return;
+    if (!samePath) {
+      projectState.currentDocContent = "";
+      projectState.docEditDraft = "";
+      projectState.docView = "preview";
+      projectState.docDirty = false;
+      projectState.docSaving = false;
+      projectState.docConflictPrompt = false;
+      projectState.currentDocMtime = 0;
+      projectState.currentDocHash = "";
+      clearDocLeavePrompt();
     }
-    projectState.currentDocContent = "";
-    projectState.docEditDraft = "";
-    projectState.docView = "preview";
-    projectState.docDirty = false;
-    projectState.docSaving = false;
-    clearDocLeavePrompt();
     setMainFocus("document");
     requestDocList();
-    requestDocRead(path);
+    // Always re-read so Agent edits / external changes show up.
+    if (!isDocDirty()) requestDocRead(path);
   }
 
   function openDocumentReader(path?: string): void {
@@ -3510,6 +3576,12 @@ export function mountUnifiedShell(
   }
 
   chatEl.addEventListener("click", (ev) => {
+    const docLink = (ev.target as HTMLElement).closest<HTMLElement>('[data-action="open-agent-doc"]');
+    if (docLink?.dataset.docPath) {
+      ev.preventDefault();
+      openDocument(docLink.dataset.docPath);
+      return;
+    }
     const card = (ev.target as HTMLElement).closest<HTMLElement>(".unified-plan-subagent.is-clickable");
     if (!card || card.dataset.status !== "proposals_ready") return;
     openPlanReview();
@@ -4179,8 +4251,101 @@ export function mountUnifiedShell(
       docLeavePrompt = false;
       docLeaveNext = null;
       renderDocumentPane();
+      return;
+    }
+    if (action === "document-conflict-reload") {
+      projectState.docConflictPrompt = false;
+      projectState.docDirty = false;
+      projectState.docEditDraft = "";
+      requestDocRead(projectState.currentDocPath);
+      return;
+    }
+    if (action === "document-conflict-overwrite") {
+      saveCurrentDoc(undefined, true);
+      return;
+    }
+    if (action === "document-conflict-cancel") {
+      projectState.docConflictPrompt = false;
+      renderDocumentPane();
+      return;
+    }
+    if (action === "toggle-docs-chat-split") {
+      projectState.docsChatSplit = !projectState.docsChatSplit;
+      syncMainFocusView();
+      renderDocumentPane();
+      return;
+    }
+    if (action === "doc-ai-draft") {
+      const title = projectState.newDocName.trim() || "新文档";
+      const folder = projectState.newDocFolder.trim();
+      const hint = folder ? `写到 ${folder}/` : "写到项目根目录";
+      input.value = `请起草一篇文档「${title}」（${hint}），用 Markdown，写完保存到项目里。`;
+      input.focus();
+      showNowChat();
+      return;
+    }
+    if (action === "doc-selection-to-ai") {
+      const selection = currentDocSelection().trim();
+      const path = projectState.currentDocPath;
+      if (!path) return;
+      if (!selection) {
+        setStatus("先选中一段文字，再点「交给 AI」");
+        return;
+      }
+      input.value = `关于文档 ${path} 中的这段：\n\n> ${selection.split("\n").join("\n> ")}\n\n请帮我：`;
+      input.focus();
+      if (projectState.docsChatSplit) {
+        syncMainFocusView();
+      } else {
+        showNowChat();
+      }
+      return;
+    }
+    if (action === "doc-md-heading") {
+      wrapDocSelection("\n## ", "\n");
+      return;
+    }
+    if (action === "doc-md-bold") {
+      wrapDocSelection("**", "**");
+      return;
+    }
+    if (action === "doc-md-list") {
+      wrapDocSelection("\n- ", "");
+      return;
+    }
+    if (action === "doc-md-code") {
+      wrapDocSelection("`", "`");
+      return;
+    }
+    if (action === "doc-md-link") {
+      wrapDocSelection("[", "](https://)");
+      return;
     }
   });
+
+  function wrapDocSelection(before: string, after: string): void {
+    const editor = documentEl.querySelector<HTMLTextAreaElement>(".unified-document-editor");
+    if (!editor) return;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const value = editor.value;
+    const selected = value.slice(start, end) || "文本";
+    editor.value = value.slice(0, start) + before + selected + after + value.slice(end);
+    projectState.docEditDraft = editor.value;
+    projectState.docDirty = projectState.docEditDraft !== projectState.currentDocContent;
+    syncDocEditChrome();
+    const live = documentEl.querySelector<HTMLElement>("[data-live-preview]");
+    if (live) {
+      void import("../../markdown").then(({ renderMarkdown }) => {
+        live.innerHTML = renderMarkdown(editor.value);
+      }).catch(() => {
+        /* ignore */
+      });
+    }
+    editor.focus();
+    editor.selectionStart = start + before.length;
+    editor.selectionEnd = start + before.length + selected.length;
+  }
 
   documentEl.addEventListener("input", (ev) => {
     const editor = (ev.target as HTMLElement).closest<HTMLTextAreaElement>(".unified-document-editor");
@@ -4191,10 +4356,25 @@ export function mountUnifiedShell(
         projectState.docDirty = dirty;
         syncDocEditChrome();
       }
+      const live = documentEl.querySelector<HTMLElement>("[data-live-preview]");
+      if (live) {
+        try {
+          // renderMarkdown is already in scope in this module
+          live.innerHTML = renderMarkdown(editor.value) || `<p class="doc-reader-empty">开始编辑以预览</p>`;
+        } catch { /* ignore */ }
+      }
       return;
     }
     const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input");
     if (docInput) projectState.newDocName = docInput.value;
+    const folderInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#doc-reader-new-input-folder");
+    if (folderInput) projectState.newDocFolder = folderInput.value;
+    const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>(".doc-catalog-search");
+    if (searchInput) {
+      projectState.docSearchQuery = searchInput.value;
+      // debounce-ish: re-render sidebar catalog only
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    }
   });
 
   documentEl.addEventListener("keydown", (ev) => {
@@ -4224,6 +4404,18 @@ export function mountUnifiedShell(
     const docInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input, #doc-reader-new-input");
     if (docInput) {
       projectState.newDocName = docInput.value;
+      return;
+    }
+    const folderInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-new-doc-input-folder, #doc-reader-new-input-folder");
+    if (folderInput) {
+      projectState.newDocFolder = folderInput.value;
+      return;
+    }
+    const docSearch = (ev.target as HTMLElement).closest<HTMLInputElement>(".doc-catalog-search");
+    if (docSearch) {
+      projectState.docSearchQuery = docSearch.value;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+      if (projectState.mainFocus === "document") renderDocumentPane();
       return;
     }
     const renameInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-doc-rename-input");
@@ -4364,12 +4556,19 @@ export function mountUnifiedShell(
         projectState.detectedProject = null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         return;
-      case "undo-last":
+      case "undo-last": {
+        const docUndo = projectState.pendingDocUndo;
         projectState.undoDescription = "";
+        projectState.pendingDocUndo = null;
         if (projectState.undoTimerId) { window.clearTimeout(projectState.undoTimerId); projectState.undoTimerId = null; }
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        try { client.undoLastPlanOp(); } catch { /* ignore */ }
+        if (docUndo) {
+          try { client.undoDoc(docUndo); } catch { /* ignore */ }
+        } else {
+          try { client.undoLastPlanOp(); } catch { /* ignore */ }
+        }
         return;
+      }
       case "toggle-degrade-info":
         setStatus(`项目管理器状态: ${projectState.degradationLabel} (${projectState.degradationLevel})`);
         return;
@@ -5146,6 +5345,9 @@ export function mountUnifiedShell(
 
       case "project.doc.list.done":
         projectState.projectDocs = event.docs;
+        if (typeof event.placeholder_count === "number") {
+          projectState.docPlaceholderCount = event.placeholder_count;
+        }
         if (projectState.deleteConfirmPath && !event.docs.some((doc: { path: string }) => doc.path === projectState.deleteConfirmPath)) {
           projectState.deleteConfirmPath = "";
         }
@@ -5167,6 +5369,9 @@ export function mountUnifiedShell(
         if (isDocDirty()) break;
         projectState.currentDocPath = event.path;
         projectState.currentDocContent = event.content;
+        projectState.currentDocMtime = typeof event.mtime === "number" ? event.mtime : 0;
+        projectState.currentDocHash = typeof event.content_hash === "string" ? event.content_hash : "";
+        projectState.docConflictPrompt = false;
         if (projectState.docView === "edit") projectState.docEditDraft = event.content;
         if (projectState.mainFocus === "document") renderDocumentPane();
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
@@ -5185,9 +5390,12 @@ export function mountUnifiedShell(
       case "project.doc.write.done":
         pendingDocAction = null;
         projectState.docSaving = false;
+        projectState.docConflictPrompt = false;
         if (event.path === projectState.currentDocPath) {
           projectState.currentDocContent = projectState.docEditDraft;
           projectState.docDirty = false;
+          if (typeof event.mtime === "number") projectState.currentDocMtime = event.mtime;
+          if (typeof event.content_hash === "string") projectState.currentDocHash = event.content_hash;
         }
         setStatus("文档已保存");
         if (docLeaveNext) {
@@ -5195,6 +5403,22 @@ export function mountUnifiedShell(
         } else if (projectState.mainFocus === "document") {
           syncDocEditChrome();
         }
+        break;
+
+      case "project.doc.write.conflict":
+        pendingDocAction = null;
+        projectState.docSaving = false;
+        projectState.docConflictPrompt = true;
+        setStatus("文档已被修改，请选择重新载入或仍要覆盖");
+        if (projectState.mainFocus === "document") renderDocumentPane();
+        break;
+
+      case "project.doc.restore.done":
+        projectState.pendingDocUndo = null;
+        projectState.undoDescription = "";
+        setStatus(`已恢复 ${event.name || event.path}`);
+        requestDocList();
+        if (event.path) openDocument(event.path);
         break;
 
       case "project.doc.rename.done":
@@ -5220,7 +5444,7 @@ export function mountUnifiedShell(
             openDocumentReader();
           }
         }
-        setStatus("文档已删除");
+        setStatus("文档已移入回收站");
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -5231,12 +5455,16 @@ export function mountUnifiedShell(
 
       case "project.undo.available":
         projectState.undoDescription = event.description;
+        if (event.undo_kind === "restore_doc" && event.undo_payload) {
+          projectState.pendingDocUndo = event.undo_payload as Record<string, unknown>;
+        }
         if (projectState.undoTimerId) { window.clearTimeout(projectState.undoTimerId); }
         projectState.undoTimerId = window.setTimeout(() => {
           projectState.undoDescription = "";
+          projectState.pendingDocUndo = null;
           projectState.undoTimerId = null;
           renderProjectSidebar(projectEls, projectState, projectCallbacks);
-        }, 3000) as unknown as number;
+        }, 8000) as unknown as number;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
@@ -5288,6 +5516,29 @@ export function mountUnifiedShell(
         if (event.tool === "run_evolved" || /interactive_terminal/.test(event.summary || "")) {
           refreshTerminals();
         }
+        if (event.ok) {
+          const pathHint = typeof (event as { path?: string }).path === "string"
+            ? (event as { path: string }).path
+            : "";
+          const blob = `${event.summary || ""} ${pathHint}`;
+          const mdMatch = blob.match(/([\w./-]+\.md)\b/i) || blob.match(/(workspace[/\\][^\s,;]+\.md)/i);
+          if (mdMatch) {
+            let rel = mdMatch[1].replace(/\\/g, "/");
+            const marker = `workspace/${projectState.projectId}/`;
+            if (rel.includes(marker)) rel = rel.slice(rel.indexOf(marker) + marker.length);
+            else if (rel.startsWith("workspace/") && projectState.projectId) {
+              const parts = rel.split("/");
+              if (parts.length >= 3 && parts[1] === projectState.projectId) {
+                rel = parts.slice(2).join("/");
+              }
+            }
+            if (rel.endsWith(".md")) {
+              projectState.recentlyChangedDocs.add(rel);
+              renderProjectSidebar(projectEls, projectState, projectCallbacks);
+              if (projectState.mainFocus === "document") renderDocumentPane();
+            }
+          }
+        }
         if (!chat.model.confirmPending) {
           const step = settledToolStatus(event.ok, event.summary, event.note);
           setStatus(step === "fail" ? "工具失败" : chat.isWorking() ? "处理中…" : "就绪");
@@ -5326,6 +5577,13 @@ export function mountUnifiedShell(
         setTurnEndStatus(event.finish_reason);
         syncWorkingVisual();
         scheduleRunawayIdleResume();
+        // Refresh doc list / open doc so Agent writes are visible.
+        if (projectState.projectId) {
+          requestDocList();
+          if (projectState.currentDocPath && !isDocDirty() && !projectState.docConflictPrompt) {
+            requestDocRead(projectState.currentDocPath);
+          }
+        }
         break;
 
       case "notice":

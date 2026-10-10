@@ -1139,8 +1139,18 @@ class WsSessionHandler:
                             "text": "当前模型不支持识图，请切换到支持视觉的模型。",
                         }
                     )
+            active_doc = message.get("active_doc")
+            repl.session._turn_active_doc = (
+                active_doc.strip() if isinstance(active_doc, str) else ""
+            )
+            active_sel = message.get("active_doc_selection")
+            repl.session._turn_active_doc_selection = (
+                active_sel if isinstance(active_sel, str) else ""
+            )
             # TURN_LOCK is held by _handle_incoming for user.message / command.
             await _run_line(repl, bridge, line, self.paths, lock_held=True)
+            repl.session._turn_active_doc = ""
+            repl.session._turn_active_doc_selection = ""
             if _repl_refreshes_session_state(line):
                 bridge.emit_session_state(repl.session)
                 _emit_session_list(bridge, self.paths)

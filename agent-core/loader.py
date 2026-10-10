@@ -1307,6 +1307,10 @@ def build_system_prompt(
                 )
                 if session.meta.project_id
                 else [],
+                active_doc=str(getattr(session, "_turn_active_doc", "") or ""),
+                active_doc_selection=str(
+                    getattr(session, "_turn_active_doc_selection", "") or ""
+                ),
             )
             digest_text = load_digest(session) or ""
             if profile == "solo" and digest_text and (

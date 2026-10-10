@@ -18,6 +18,7 @@ from project_mode import (
     acceptance_script_exists,
     acceptance_workspace_path,
     add_task_to_tasks_md,
+    count_untouched_template_docs,
     create_project_doc,
     compute_execution_stage,
     delete_project_doc,
@@ -33,6 +34,7 @@ from project_mode import (
     read_project_template,
     read_task_stats,
     rename_project_doc,
+    restore_project_doc_from_trash,
     run_acceptance_check,
     snapshot_plan_fingerprints,
     should_skip_ordinary_plan_request,
@@ -899,6 +901,14 @@ def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
     return {"_events": events}
 
 
+def _doc_list_event(paths: AgentPaths, pid: str) -> dict[str, Any]:
+    return {
+        "type": "project.doc.list.done",
+        "docs": list_project_docs(paths, pid),
+        "placeholder_count": count_untouched_template_docs(paths, pid),
+    }
+
+
 def dispatch_doc_message(
     session: Session,
     paths: AgentPaths,
@@ -911,8 +921,7 @@ def dispatch_doc_message(
 
     try:
         if msg_type == "project.doc.list":
-            docs = list_project_docs(paths, pid)
-            return {"type": "project.doc.list.done", "docs": docs}
+            return _doc_list_event(paths, pid)
 
         if msg_type == "project.doc.read":
             doc_path = str(message.get("path", ""))
@@ -928,12 +937,7 @@ def dispatch_doc_message(
             if not doc_path:
                 raise ProjectApiError("project.doc.create requires path")
             result = create_project_doc(paths, pid, doc_path, content)
-            return {
-                "_events": [
-                    result,
-                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
-                ]
-            }
+            return {"_events": [result, _doc_list_event(paths, pid)]}
 
         if msg_type in {"project.doc.write", "project.doc.save"}:
             doc_path = str(message.get("path", ""))
@@ -942,13 +946,24 @@ def dispatch_doc_message(
             content = message.get("content")
             if content is None:
                 raise ProjectApiError("project.doc.write requires content")
-            result = write_project_doc(paths, pid, doc_path, str(content))
-            return {
-                "_events": [
-                    result,
-                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
-                ]
-            }
+            base_mtime = message.get("base_mtime")
+            base_hash = message.get("base_hash")
+            force = bool(message.get("force"))
+            try:
+                base_mtime_f = float(base_mtime) if base_mtime is not None else None
+            except (TypeError, ValueError):
+                base_mtime_f = None
+            base_hash_s = str(base_hash).strip() if isinstance(base_hash, str) else None
+            result = write_project_doc(
+                paths,
+                pid,
+                doc_path,
+                str(content),
+                base_mtime=base_mtime_f,
+                base_hash=base_hash_s,
+                force=force,
+            )
+            return {"_events": [result, _doc_list_event(paths, pid)]}
 
         if msg_type == "project.doc.rename":
             doc_path = str(message.get("path", ""))
@@ -961,26 +976,51 @@ def dispatch_doc_message(
             result = rename_project_doc(
                 paths, pid, doc_path, title=title, new_path=new_path
             )
-            return {
-                "_events": [
-                    result,
-                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
-                ]
-            }
+            return {"_events": [result, _doc_list_event(paths, pid)]}
 
         if msg_type == "project.doc.delete":
             doc_path = str(message.get("path", ""))
             if not doc_path:
                 raise ProjectApiError("project.doc.delete requires path")
             result = delete_project_doc(paths, pid, doc_path)
-            return {
-                "_events": [
-                    result,
-                    {"type": "project.doc.list.done", "docs": list_project_docs(paths, pid)},
-                ]
-            }
+            events: list[dict[str, Any]] = [result, _doc_list_event(paths, pid)]
+            undo = result.get("undo") if isinstance(result, dict) else None
+            if isinstance(undo, dict):
+                events.append({
+                    "type": "project.undo.available",
+                    "description": f"已移入回收站：{result.get('name') or doc_path}",
+                    "undo_kind": "restore_doc",
+                    "undo_payload": undo,
+                })
+            return {"_events": events}
+
+        if msg_type == "project.doc.undo":
+            payload = message.get("undo_payload") or message.get("payload") or {}
+            if not isinstance(payload, dict):
+                raise ProjectApiError("project.doc.undo requires undo_payload")
+            path = str(payload.get("path") or "")
+            if not path:
+                raise ProjectApiError("project.doc.undo requires path")
+            result = restore_project_doc_from_trash(
+                paths,
+                pid,
+                path=path,
+                trash_path=str(payload.get("trash_path") or ""),
+                content=str(payload.get("content") or ""),
+            )
+            return {"_events": [result, _doc_list_event(paths, pid)]}
 
     except ProjectModeError as exc:
+        if getattr(exc, "code", "") == "doc_conflict":
+            details = getattr(exc, "details", {}) or {}
+            return {
+                "type": "project.doc.write.conflict",
+                "message": str(exc),
+                "path": details.get("path", ""),
+                "mtime": details.get("mtime", 0),
+                "content_hash": details.get("content_hash", ""),
+                "size": details.get("size", 0),
+            }
         return {"type": "error", "message": str(exc)}
 
     raise ProjectApiError(f"unknown doc message type: {msg_type}")

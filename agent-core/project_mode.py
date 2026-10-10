@@ -53,6 +53,13 @@ PLAN_DOMAIN_WRITE_BLOCK_MSG = (
     "狂奔时请确认当前验收项是否允许修改该文件。"
 )
 TASKS_ARCHIVE_NAME = "TASKS.archive.md"
+# Ordinary / direct: Agent may write the nine standard docs; MAP + archive stay protected.
+ORDINARY_PLAN_WRITE_ALLOWLIST = frozenset((*STANDARD_PROJECT_ARTIFACTS, "ENV.md"))
+ORDINARY_PLAN_WRITE_PROTECTED = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
+ORDINARY_PROTECTED_WRITE_BLOCK_MSG = (
+    "不能直接修改 MAP.md 或任务归档。"
+    "请用侧栏「方案搭档」提案，或在狂奔验收授权后再改。"
+)
 TASKS_INJECTION_OPEN_CAP = 20
 CORE_PROJECT_ARTIFACTS = ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
 CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
@@ -104,6 +111,17 @@ _VERIFY_STAGE_EXEC_TOOLS = frozenset(
 
 class ProjectModeError(Exception):
     """Invalid project id or state."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,8 +449,13 @@ def ensure_template(paths: AgentPaths) -> Path:
                 existing = dest.read_text(encoding="utf-8")
             except OSError:
                 existing = ""
-        if not existing.strip() or existing.strip() == f"# template {name}":
-            dest.write_text(_template_body(name, "template"), encoding="utf-8")
+        if (
+            not existing.strip()
+            or existing.strip() == f"# template {name}"
+            or existing.strip() == _template_body(name, "template").strip()
+        ):
+            # Keep {{project_id}} so create_project can substitute the real id.
+            dest.write_text(_template_body(name, "{{project_id}}"), encoding="utf-8")
     return target
 
 
@@ -506,7 +529,12 @@ def _light_template_body(name: str, project_id: str) -> str:
 def _copy_template_file(src: Path, dest: Path, project_id: str) -> None:
     body = src.read_text(encoding="utf-8")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(body.replace("{{project_id}}", project_id), encoding="utf-8")
+    filled = (
+        body.replace("{{project_id}}", project_id)
+        .replace("# template ·", f"# {project_id} ·")
+        .replace("# template ", f"# {project_id} ")
+    )
+    dest.write_text(filled, encoding="utf-8")
 
 
 def create_project(
@@ -2246,41 +2274,55 @@ def main_agent_plan_domain_write_block(
     arguments: dict[str, object],
     bug_fix_lane: bool = False,
     runaway_v2_write_scope: tuple[str, ...] | None = None,
+    allow_ordinary_plan_writes: bool = False,
 ) -> str | None:
-    """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly."""
+    """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly.
+
+    Ordinary / direct (non-runaway) may write the nine standard docs; MAP and
+    TASKS.archive stay protected.
+    """
     root = project_root.strip()
     if not root or tool_name != "run_evolved":
         return None
     evolved = arguments.get("tool_name")
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+
+    def _block_for(path: str, *, patch_only_plan: bool) -> str | None:
+        if not path:
+            return None
+        if patch_only_plan:
+            if not is_plan_domain_path(path, root):
+                return None
+        elif not (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
+            return None
+        rel = project_path_rel(path, root)
+        if bug_fix_lane:
+            if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
+                return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
+            if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
+                return None
+        if runaway_v2_write_scope:
+            if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
+                return None
+        if allow_ordinary_plan_writes:
+            if rel and rel in ORDINARY_PLAN_WRITE_PROTECTED:
+                return ORDINARY_PROTECTED_WRITE_BLOCK_MSG
+            if rel and rel in ORDINARY_PLAN_WRITE_ALLOWLIST:
+                return None
+            if rel == TASKS_ARCHIVE_NAME:
+                return ORDINARY_PROTECTED_WRITE_BLOCK_MSG
+        return PLAN_DOMAIN_WRITE_BLOCK_MSG
+
     if evolved_name in _WRITE_TOOLS:
         for path in extract_run_evolved_paths(tool_name, arguments):
-            if path and (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
-                if bug_fix_lane:
-                    rel = project_path_rel(path, root)
-                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
-                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
-                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
-                        continue
-                if runaway_v2_write_scope:
-                    rel = project_path_rel(path, root)
-                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
-                        continue
-                return PLAN_DOMAIN_WRITE_BLOCK_MSG
+            blocked = _block_for(path, patch_only_plan=False)
+            if blocked:
+                return blocked
     if evolved_name == "patch_file":
         for path in extract_run_evolved_paths(tool_name, arguments):
-            if path and is_plan_domain_path(path, root):
-                if bug_fix_lane:
-                    rel = project_path_rel(path, root)
-                    if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
-                        return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
-                    if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
-                        continue
-                if runaway_v2_write_scope:
-                    rel = project_path_rel(path, root)
-                    if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
-                        continue
-                return PLAN_DOMAIN_WRITE_BLOCK_MSG
+            blocked = _block_for(path, patch_only_plan=True)
+            if blocked:
+                return blocked
     return None
 
 
@@ -2823,6 +2865,7 @@ def project_mode_block_reason(
         arguments=arguments,
         bug_fix_lane=bug_fix_lane,
         runaway_v2_write_scope=runaway_v2_write_scope,
+        allow_ordinary_plan_writes=bool(skip_stage_walls and not runaway_enabled),
     )
     if plan_domain_block:
         return plan_domain_block
@@ -2953,6 +2996,8 @@ def format_project_overlay(
     skip_stage_walls: bool = False,
     project_entry: str = "",
     plan_files: list[str] | None = None,
+    active_doc: str = "",
+    active_doc_selection: str = "",
 ) -> str:
     profile = normalize_delivery_profile(delivery_profile)
     lines = [
@@ -3155,6 +3200,28 @@ def format_project_overlay(
             lines.append(
                 "ordinary_scope: 普通模式。用户要求读取或查看工作区里的任何文件时，直接 read_file，"
                 "不要以计划范围为由拒绝。计划外的修改最多先说明一句，不要拒绝。"
+            )
+    if skip_stage_walls and not runaway_enabled:
+        lines.append(
+            "ordinary_plan_write: 普通/直接实现 — 可用 write_text/patch_file 直接改 "
+            "PROJECT/SCOPE/DESIGN/TECH-DESIGN/TASKS/VERIFY/RELEASE/ENV；"
+            "禁止直写 MAP.md 与 TASKS.archive.md；勿再调 plan_partner 改这些标准文档。"
+        )
+    active = (active_doc or "").strip()
+    if active:
+        lines.append(f"active_doc: {active}")
+        lines.append(
+            "active_doc_hint: 用户正在文档阅读器中打开上面这篇。"
+            "「这篇 / 这个文档 / 当前文档」即指它；改短、改标题、补一段时优先 patch_file 该路径。"
+        )
+        selection = (active_doc_selection or "").strip()
+        if selection:
+            clipped = selection if len(selection) <= 1200 else selection[:1199] + "…"
+            lines.append("active_doc_selection: |")
+            for line in clipped.splitlines() or [clipped]:
+                lines.append(f"  {line}")
+            lines.append(
+                "active_doc_selection_hint: 用户选中了上述片段；「这段 / 选中内容」即指它。"
             )
     return "\n".join(lines)
 
@@ -3717,6 +3784,7 @@ _DOC_LIST_SKIP_DIRS = frozenset({
     ".cursor",
     ".plan-agent",
     ".agent",
+    "_trash",
 })
 
 
@@ -3806,18 +3874,14 @@ def _rel_from_title(old_rel: str, title: str) -> str:
 def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]]:
     """List project-root markdown files, skipping vendor/cache trees.
 
-    Untouched light-scaffold placeholders stay hidden so an ordinary empty
-    project does not look like a pile of template docs.
+    Untouched scaffold placeholders (light or standard) stay hidden so an
+    ordinary empty project does not look like a pile of template docs.
+    Use ``count_untouched_template_docs`` when the UI needs a collapse hint.
     """
     root = project_dir(paths, project_id)
     if not root.is_dir():
         return []
     pid = normalize_project_id(project_id)
-    hide_light_placeholders = False
-    try:
-        hide_light_placeholders = read_project_template(paths, pid) == "light"
-    except Exception:
-        hide_light_placeholders = False
     docs: list[dict[str, Any]] = []
     for fpath in sorted(_iter_project_markdown(root), key=lambda item: item.as_posix().lower()):
         try:
@@ -3826,7 +3890,7 @@ def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]
             continue
         if _catalog_skips_rel(rel):
             continue
-        if hide_light_placeholders and "/" not in rel:
+        if "/" not in rel:
             try:
                 body = fpath.read_text(encoding="utf-8")
             except OSError:
@@ -3834,16 +3898,48 @@ def list_project_docs(paths: AgentPaths, project_id: str) -> list[dict[str, Any]
             if _is_template_document(rel, pid, body):
                 continue
         try:
-            size = fpath.stat().st_size
+            st = fpath.stat()
+            size = st.st_size
+            mtime = float(st.st_mtime)
         except OSError:
             size = 0
+            mtime = 0.0
         docs.append({
             "path": rel,
             "name": fpath.name,
             "size": size,
+            "mtime": mtime,
             "is_standard": rel in PROJECT_ARTIFACTS,
         })
     return docs
+
+
+def count_untouched_template_docs(paths: AgentPaths, project_id: str) -> int:
+    """How many root-level scaffold placeholders are currently hidden from the catalog."""
+    root = project_dir(paths, project_id)
+    if not root.is_dir():
+        return 0
+    pid = normalize_project_id(project_id)
+    count = 0
+    for fpath in _iter_project_markdown(root):
+        try:
+            rel = fpath.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if "/" in rel or _catalog_skips_rel(rel):
+            continue
+        try:
+            body = fpath.read_text(encoding="utf-8")
+        except OSError:
+            body = ""
+        if _is_template_document(rel, pid, body):
+            count += 1
+    return count
+
+
+def _doc_content_hash(content: str) -> str:
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
@@ -3853,11 +3949,17 @@ def read_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[
     if not full.is_file():
         raise ProjectModeError(f"找不到文档：{doc_path}")
     content = full.read_text(encoding="utf-8")
+    try:
+        mtime = float(full.stat().st_mtime)
+    except OSError:
+        mtime = 0.0
     return {
         "type": "project.doc.read.done",
         "path": safe_path,
         "content": content,
         "size": len(content),
+        "mtime": mtime,
+        "content_hash": _doc_content_hash(content),
     }
 
 
@@ -3882,18 +3984,60 @@ def write_project_doc(
     project_id: str,
     doc_path: str,
     content: str,
+    *,
+    base_mtime: float | None = None,
+    base_hash: str | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
-    """Overwrite an existing project markdown document."""
+    """Overwrite an existing project markdown document.
+
+    When ``base_mtime`` or ``base_hash`` is provided and the on-disk file no
+    longer matches, raise ``ProjectModeError`` with a conflict payload unless
+    ``force`` is true.
+    """
     root = project_dir(paths, project_id)
     safe_path, full = _resolve_project_doc_path(root, doc_path)
     if not full.is_file():
         raise ProjectModeError(f"找不到文档：{doc_path}")
-    text = _write_project_markdown(full, content)
+    current = full.read_text(encoding="utf-8")
+    try:
+        current_mtime = float(full.stat().st_mtime)
+    except OSError:
+        current_mtime = 0.0
+    current_hash = _doc_content_hash(current)
+    if not force:
+        mismatched = False
+        if base_hash is not None and str(base_hash).strip() and str(base_hash).strip() != current_hash:
+            mismatched = True
+        elif base_mtime is not None:
+            try:
+                if abs(float(base_mtime) - current_mtime) > 0.001:
+                    mismatched = True
+            except (TypeError, ValueError):
+                mismatched = True
+        if mismatched:
+            raise ProjectModeError(
+                "文档已被修改",
+                code="doc_conflict",
+                details={
+                    "path": safe_path,
+                    "mtime": current_mtime,
+                    "content_hash": current_hash,
+                    "size": len(current),
+                },
+            )
+    written = _write_project_markdown(full, content)
+    try:
+        new_mtime = float(full.stat().st_mtime)
+    except OSError:
+        new_mtime = current_mtime
     return {
         "type": "project.doc.write.done",
         "path": safe_path,
         "name": full.name,
-        "size": len(text),
+        "size": len(written),
+        "mtime": new_mtime,
+        "content_hash": _doc_content_hash(written),
     }
 
 
@@ -3931,18 +4075,90 @@ def rename_project_doc(
     }
 
 
+def _project_trash_dir(root: Path) -> Path:
+    return root / "_trash"
+
+
+def _unique_trash_target(trash_root: Path, source: Path) -> Path:
+    candidate = trash_root / source.name
+    if not candidate.exists():
+        return candidate
+    stem = source.stem if source.suffix else source.name
+    suffix = source.suffix
+    index = 1
+    while True:
+        alt = trash_root / f"{stem}-{index}{suffix}"
+        if not alt.exists():
+            return alt
+        index += 1
+
+
 def delete_project_doc(paths: AgentPaths, project_id: str, doc_path: str) -> dict[str, Any]:
-    """Permanently delete a project markdown file (no trash)."""
+    """Move a project markdown file into the project ``_trash`` folder (undoable)."""
     root = project_dir(paths, project_id)
     safe_path, full = _resolve_project_doc_path(root, doc_path)
     if not full.is_file():
         raise ProjectModeError(f"找不到文档：{doc_path}")
-    full.unlink()
+    content = full.read_text(encoding="utf-8")
+    trash_root = _project_trash_dir(root)
+    trash_root.mkdir(parents=True, exist_ok=True)
+    target = _unique_trash_target(trash_root, full)
+    full.rename(target)
+    try:
+        trash_rel = target.relative_to(root).as_posix()
+    except ValueError:
+        trash_rel = target.name
     return {
         "type": "project.doc.delete.done",
         "path": safe_path,
         "name": full.name,
         "is_standard": safe_path in PROJECT_ARTIFACTS,
+        "trash_path": trash_rel,
+        "undo": {
+            "kind": "restore_doc",
+            "path": safe_path,
+            "trash_path": trash_rel,
+            "content": content,
+        },
+    }
+
+
+def restore_project_doc_from_trash(
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    path: str,
+    trash_path: str = "",
+    content: str = "",
+) -> dict[str, Any]:
+    """Restore a document deleted via ``delete_project_doc``."""
+    root = project_dir(paths, project_id)
+    safe_path, full = _resolve_project_doc_path(root, path, add_md=True)
+    if full.exists():
+        raise ProjectModeError(f"已有同名文档：{safe_path}")
+    restored = False
+    if trash_path:
+        trash_rel = str(trash_path or "").replace("\\", "/").strip().lstrip("/")
+        trash_full = None
+        if trash_rel:
+            candidate = (root / trash_rel).resolve()
+            try:
+                candidate.relative_to(root.resolve())
+            except ValueError:
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                trash_full = candidate
+        if trash_full is not None:
+            full.parent.mkdir(parents=True, exist_ok=True)
+            trash_full.rename(full)
+            restored = True
+    if not restored:
+        full.parent.mkdir(parents=True, exist_ok=True)
+        _write_project_markdown(full, content if isinstance(content, str) else "")
+    return {
+        "type": "project.doc.restore.done",
+        "path": safe_path,
+        "name": full.name,
     }
 
 

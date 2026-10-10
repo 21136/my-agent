@@ -748,18 +748,21 @@ def _validate_project_mode_call(
         "active_shell": session.active_shell,
         "project_plan_status": session.project_plan_status or "draft",
     }
-    from project_mode import PLAN_DOMAIN_WRITE_BLOCK_MSG, main_agent_plan_domain_write_block
+    from project_mode import (
+        ORDINARY_PROTECTED_WRITE_BLOCK_MSG,
+        PLAN_DOMAIN_WRITE_BLOCK_MSG,
+        main_agent_plan_domain_write_block,
+    )
 
-    if (
-        main_agent_plan_domain_write_block(
-            project_root=session.project_root,
-            tool_name=tool_name,
-            arguments=arguments,
-            bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
-            runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
-        )
-        == PLAN_DOMAIN_WRITE_BLOCK_MSG
-    ):
+    plan_block = main_agent_plan_domain_write_block(
+        project_root=session.project_root,
+        tool_name=tool_name,
+        arguments=arguments,
+        bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
+        runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
+        allow_ordinary_plan_writes=bool(skip_walls and not session.runaway_enabled),
+    )
+    if plan_block in {PLAN_DOMAIN_WRITE_BLOCK_MSG, ORDINARY_PROTECTED_WRITE_BLOCK_MSG}:
         code = ToolErrorCode.PERMISSION_DENIED
         details["plan_domain_gate"] = True
     return tool_fail(
@@ -1583,6 +1586,19 @@ class ToolExecutor:
         logs_tail = _result_logs_tail(result)
         if logs_tail:
             end_payload["logs_tail"] = logs_tail
+        data = result.data if isinstance(result.data, dict) else {}
+        path_hint = (
+            data.get("path")
+            or data.get("written")
+            or data.get("would_write")
+            or data.get("source")
+            or data.get("dest")
+        )
+        if isinstance(path_hint, str) and path_hint.strip():
+            end_payload["path"] = path_hint.strip()
+        diff = data.get("unified_diff") or data.get("diff")
+        if isinstance(diff, str) and diff.strip():
+            end_payload["diff"] = diff if len(diff) <= 8000 else diff[:7999] + "…"
         self._emit_event("tool.end", end_payload)
         if name == "read_file" and result.ok and end_note != "absent":
             self._maybe_record_memory_entity_used(args, result)

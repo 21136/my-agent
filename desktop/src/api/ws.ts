@@ -611,6 +611,8 @@ export type ProjectDocItem = {
   name: string;
   size: number;
   is_standard: boolean;
+  mtime?: number;
+  recently_changed?: boolean;
 };
 
 export type PlanChangeItem = {
@@ -766,7 +768,13 @@ export class AgentWsClient {
   sendMessage(
     text: string,
     attachmentIds?: string[],
-    opts?: { forceAgent?: boolean; forcePlan?: boolean; autoRoutePlan?: boolean },
+    opts?: {
+      forceAgent?: boolean;
+      forcePlan?: boolean;
+      autoRoutePlan?: boolean;
+      activeDoc?: string;
+      activeDocSelection?: string;
+    },
   ): void {
     const payload: Record<string, unknown> = {
       type: "user.message",
@@ -778,6 +786,8 @@ export class AgentWsClient {
     if (opts?.forceAgent) payload.force_agent = true;
     if (opts?.forcePlan) payload.force_plan = true;
     if (opts?.autoRoutePlan === false) payload.auto_route_plan = false;
+    if (opts?.activeDoc) payload.active_doc = opts.activeDoc;
+    if (opts?.activeDocSelection) payload.active_doc_selection = opts.activeDocSelection;
     this.send(payload);
   }
 
@@ -932,8 +942,20 @@ export class AgentWsClient {
     this.send({ type: "project.doc.create", path, content: content ?? "" });
   }
 
-  writeDoc(path: string, content: string): void {
-    this.send({ type: "project.doc.write", path, content });
+  writeDoc(
+    path: string,
+    content: string,
+    opts?: { baseMtime?: number; baseHash?: string; force?: boolean },
+  ): void {
+    const payload: Record<string, unknown> = { type: "project.doc.write", path, content };
+    if (opts?.baseMtime != null) payload.base_mtime = opts.baseMtime;
+    if (opts?.baseHash) payload.base_hash = opts.baseHash;
+    if (opts?.force) payload.force = true;
+    this.send(payload);
+  }
+
+  undoDoc(payload: Record<string, unknown>): void {
+    this.send({ type: "project.doc.undo", undo_payload: payload });
   }
 
   renameDoc(path: string, opts: { title?: string; newPath?: string }): void {

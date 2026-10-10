@@ -146,7 +146,11 @@ export interface ProjectPanelState {
   projectDocs: ProjectDocItem[];
   currentDocPath: string;
   currentDocContent: string;
+  currentDocMtime: number;
+  currentDocHash: string;
   newDocName: string;
+  newDocFolder: string;
+  docSearchQuery: string;
   renamingDocPath: string;
   renameDraft: string;
   deleteConfirmPath: string;
@@ -154,6 +158,11 @@ export interface ProjectPanelState {
   docEditDraft: string;
   docDirty: boolean;
   docSaving: boolean;
+  docConflictPrompt: boolean;
+  docsChatSplit: boolean;
+  docPlaceholderCount: number;
+  recentlyChangedDocs: Set<string>;
+  pendingDocUndo: Record<string, unknown> | null;
   // task add
   quickAddText: string;
   // auto-detect
@@ -515,7 +524,11 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.highlightedLines = new Set();
   state.currentDocPath = "";
   state.currentDocContent = "";
+  state.currentDocMtime = 0;
+  state.currentDocHash = "";
   state.newDocName = "";
+  state.newDocFolder = "";
+  state.docSearchQuery = "";
   state.renamingDocPath = "";
   state.renameDraft = "";
   state.deleteConfirmPath = "";
@@ -523,6 +536,11 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.docEditDraft = "";
   state.docDirty = false;
   state.docSaving = false;
+  state.docConflictPrompt = false;
+  state.docsChatSplit = true;
+  state.docPlaceholderCount = 0;
+  state.recentlyChangedDocs = new Set();
+  state.pendingDocUndo = null;
   state.quickAddText = "";
   resetPlanWarningState(state);
   state.undoDescription = "";
@@ -2095,12 +2113,17 @@ function renderDocsRailSidebar(state: ProjectPanelState): string {
   const chip = `<div class="rail-project-chip">${escapeHtml(state.projectId)}</div>`;
   return chip + renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
     newDocName: state.newDocName,
+    newDocFolder: state.newDocFolder,
     currentContent: state.currentDocContent,
     inputId: "overlay-new-doc-input",
     createAction: "overlay-new-doc",
     renamingDocPath: state.renamingDocPath,
     renameDraft: state.renameDraft,
     deleteConfirmPath: state.deleteConfirmPath,
+    searchQuery: state.docSearchQuery,
+    recentlyChanged: state.recentlyChangedDocs,
+    placeholderCount: state.docPlaceholderCount,
+    showFolderField: true,
   });
 }
 
@@ -2399,12 +2422,17 @@ export function renderPlanTaskFlow(
 function renderDocsOverlay(state: ProjectPanelState): string {
   return renderDocCatalogHtml(state.projectDocs, state.currentDocPath, {
     newDocName: state.newDocName,
+    newDocFolder: state.newDocFolder,
     currentContent: state.currentDocContent,
     inputId: "overlay-new-doc-input",
     createAction: "overlay-new-doc",
     renamingDocPath: state.renamingDocPath,
     renameDraft: state.renameDraft,
     deleteConfirmPath: state.deleteConfirmPath,
+    searchQuery: state.docSearchQuery,
+    recentlyChanged: state.recentlyChangedDocs,
+    placeholderCount: state.docPlaceholderCount,
+    showFolderField: true,
   });
 }
 
