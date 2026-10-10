@@ -101,6 +101,7 @@ class ExecutorSession:
     project_id: str = ""
     project_plan_status: str = ""
     project_workflow_stage: str = ""
+    project_entry: str = ""
     # v2 may open a temporary maintenance context for one user turn while
     # the persisted project remains in release_wait. Tool validation refreshes
     # meta.json on every call, so retain this explicit per-turn override.
@@ -159,6 +160,7 @@ class ExecutorSession:
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
     progress_gate_notice: str = ""
+    ordinary_visible_confirms_this_turn: int = 0
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -168,6 +170,7 @@ class ExecutorSession:
         project_id = ""
         project_plan_status = ""
         project_workflow_stage = ""
+        project_entry = ""
         project_active_task_id = ""
         project_delivery_profile = "solo"
         runaway_enabled = False
@@ -190,6 +193,7 @@ class ExecutorSession:
                     project_id = str(payload.get("project_id", "") or "").strip()
                     project_plan_status = str(payload.get("project_plan_status", "") or "")
                     project_workflow_stage = str(payload.get("project_workflow_stage", "") or "")
+                    project_entry = str(payload.get("project_entry", "") or "")
                     project_active_task_id = str(payload.get("project_active_task_id", "") or "")
                     from project_mode import normalize_delivery_profile
 
@@ -219,6 +223,7 @@ class ExecutorSession:
             project_id=project_id,
             project_plan_status=project_plan_status,
             project_workflow_stage=project_workflow_stage,
+            project_entry=project_entry,
             project_active_task_id=project_active_task_id,
             project_delivery_profile=project_delivery_profile,
             runaway_enabled=runaway_enabled,
@@ -250,6 +255,7 @@ class ExecutorSession:
         self.project_workflow_stage = (
             self.runaway_v2_runtime_workflow_stage.strip() or persisted_stage
         )
+        self.project_entry = str(payload.get("project_entry", "") or "")
         self.project_active_task_id = str(payload.get("project_active_task_id", "") or "")
         from project_mode import normalize_delivery_profile
 
@@ -711,6 +717,16 @@ def _validate_project_mode_call(
 ) -> ToolResult | None:
     from project_mode import project_mode_block_reason
 
+    from project_mode import ordinary_skip_stage_walls
+
+    skip_walls = False
+    if not session.runaway_enabled:
+        skip_walls = ordinary_skip_stage_walls(
+            session,
+            agent_paths=agent_paths,
+        )
+        if not skip_walls and str(getattr(session, "project_entry", "") or "") == "direct":
+            skip_walls = True
     reason = project_mode_block_reason(
         active_shell=session.active_shell,
         project_root=session.project_root,
@@ -722,6 +738,7 @@ def _validate_project_mode_call(
         agent_paths=agent_paths,
         bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
         runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
+        skip_stage_walls=skip_walls,
     )
     if reason is None:
         return None
@@ -1189,6 +1206,7 @@ class ToolExecutor:
         self.session.explore_continue_used = False
         self.session.subagent_overlay_pending = None
         self.session.progress_gate_notice = ""
+        self.session.ordinary_visible_confirms_this_turn = 0
         if self.session.active_shell != "project" or not self.session.project_root.strip():
             self._emit_turn_evidence()
             return
@@ -1497,8 +1515,21 @@ class ToolExecutor:
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
             if self._runaway_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
                 confirm_decision = "runaway"
+            elif self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
+                confirm_decision = "ordinary_budget"
             else:
                 confirm_decision = self._ask_confirm(name, args, evolved_target)
+                if (
+                    confirm_decision in {"y", "a"}
+                    and not self._ordinary_confirm_is_destructive(
+                        builtin, evolved_target, args, tool_name=name
+                    )
+                ):
+                    self.session.ordinary_visible_confirms_this_turn = min(
+                        int(getattr(self.session, "ordinary_visible_confirms_this_turn", 0) or 0)
+                        + 1,
+                        99,
+                    )
             if confirm_decision == "n":
                 result = tool_fail(
                     name,
@@ -3198,6 +3229,86 @@ class ToolExecutor:
         ):
             return False
         return True
+
+    def _ordinary_confirm_is_destructive(
+        self,
+        builtin: BuiltinTool,
+        evolved: EvolvedTool | None,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> bool:
+        """True for danger/network/host/outside-project work that must always confirm."""
+        if evolved is None:
+            return bool(getattr(builtin, "confirm", False))
+        name = evolved.name
+        if name in {
+            "git_push",
+            "git_clone",
+            "git_restore",
+            "gh_pr",
+            "pip_install",
+            "http_request",
+            "browser_open",
+            "local_preview",
+        }:
+            return True
+        if _arguments_use_host_scope(arguments):
+            return True
+        from tools.builtin import run_evolved as _run_evolved_mod
+
+        inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+        if name == "run_command":
+            from run_command_policy import classify_run_command, run_command_requires_confirm
+
+            command = inner.get("command") if isinstance(inner.get("command"), str) else ""
+            kind = classify_run_command(command)
+            if kind in {"danger", "install", "network"}:
+                return True
+            working = ""
+            for key in ("working_dir", "cwd"):
+                raw = inner.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    working = raw.strip()
+                    break
+            _needs, reason = run_command_requires_confirm(
+                command=command,
+                working_dir=working,
+                project_root=self.session.project_root or "",
+                background=bool(inner.get("background")),
+                agent_paths=self.registry.agent_paths,
+            )
+            return reason in {"danger", "install", "network", "background", "outside_project"}
+        if name in {"write_text", "patch_file", "search_replace"}:
+            from write_policy import is_sensitive_write_path, path_under_project
+
+            raw_path = inner.get("path")
+            path = raw_path.strip() if isinstance(raw_path, str) else ""
+            if not path:
+                return True
+            if is_sensitive_write_path(path):
+                return True
+            if not path_under_project(path, self.session.project_root or ""):
+                return True
+        return False
+
+    def _ordinary_confirm_is_covered(
+        self,
+        builtin: BuiltinTool,
+        evolved: EvolvedTool | None,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> bool:
+        """Ordinary mode: at most one user-visible confirm per turn for safe work."""
+        if self.session.runaway_enabled or self.session.active_shell != "project":
+            return False
+        if self._ordinary_confirm_is_destructive(
+            builtin, evolved, arguments, tool_name=tool_name
+        ):
+            return False
+        shown = int(getattr(self.session, "ordinary_visible_confirms_this_turn", 0) or 0)
+        return shown >= 1
 
     def _runaway_confirm_is_covered(
         self,

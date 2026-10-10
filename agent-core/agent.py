@@ -713,7 +713,7 @@ def build_llm_tools(
 
         hide_plan_tools = bool(getattr(session, "direct_implement_turn", False)) or (
             should_treat_ordinary_direct_implement(session, "")
-        )
+        ) or bool(getattr(session, "skip_ordinary_plan_spawn", False))
         if hide_plan_tools:
             # Ordinary direct-implement: plan already auto-confirmed; don't re-enter plan_partner.
             blocked_direct = {"plan_partner", "deliverable_review"}
@@ -910,6 +910,9 @@ class Agent:
         self.executor.session.project_plan_status = self.session.meta.project_plan_status
         self.executor.session.project_workflow_stage = getattr(
             self.session.meta, "project_workflow_stage", ""
+        )
+        self.executor.session.project_entry = str(
+            getattr(self.session.meta, "project_entry", "") or ""
         )
         self.executor.session.project_active_task_id = getattr(
             self.session.meta, "project_active_task_id", ""
@@ -4123,6 +4126,14 @@ class Agent:
         """Kernel pre-spawn Plan subagent when LLM classifies plan-domain intent (T-3905)."""
         if force_skip:
             return None
+        from project_mode import should_skip_ordinary_plan_spawn
+
+        if should_skip_ordinary_plan_spawn(
+            self.session,
+            user_text,
+            turn_intent=str(getattr(self.session, "turn_intent", "") or ""),
+        ):
+            return None
         pid = (self.session.meta.project_id or "").strip()
         if not pid:
             return None
@@ -4236,6 +4247,7 @@ class Agent:
         self.session.turn_intent = None
         self.session.scaffold_tool_turn = False
         self.session.direct_implement_turn = False
+        self.session.skip_ordinary_plan_spawn = False
         self.session.scaffold_check_status = None
         self.session.scaffold_check_tool = None
 
@@ -4264,7 +4276,9 @@ class Agent:
         if (
             intent == "requirements"
             and not runaway_requirements_turn
-            and should_treat_ordinary_direct_implement(self.session, user_text)
+            and should_treat_ordinary_direct_implement(
+                self.session, user_text, turn_intent=intent
+            )
         ):
             # Ordinary mode: explicit entry or phrase asked to implement now.
             intent = "execute"
@@ -4323,10 +4337,13 @@ class Agent:
         direct_implement = False
         from project_mode import (
             maybe_auto_confirm_plan_for_direct_implement,
+            should_skip_ordinary_plan_spawn,
             should_treat_ordinary_direct_implement,
         )
 
-        if not terminal and should_treat_ordinary_direct_implement(self.session, user_text):
+        if not terminal and should_treat_ordinary_direct_implement(
+            self.session, user_text, turn_intent=intent
+        ):
             direct_implement = True
             self.session.direct_implement_turn = True
             notice = maybe_auto_confirm_plan_for_direct_implement(self.session)
@@ -4347,6 +4364,11 @@ class Agent:
             if intent == "requirements":
                 intent = "execute"
                 self.session.turn_intent = intent
+            force_skip_plan_spawn = True
+        elif not terminal and should_skip_ordinary_plan_spawn(
+            self.session, user_text, turn_intent=intent
+        ):
+            self.session.skip_ordinary_plan_spawn = True
             force_skip_plan_spawn = True
 
         if getattr(self.session.meta, "project_runaway_enabled", False):
@@ -4439,6 +4461,7 @@ class Agent:
             and not terminal
             and not runaway_requirements_turn
             and not bool(getattr(self.session.meta, "project_runaway_enabled", False))
+            and not direct_implement
         ):
             self._emit_turn_event(
                 {

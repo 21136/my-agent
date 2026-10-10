@@ -42,7 +42,7 @@ _PATH_HINT_RE = re.compile(
     r"(?:md|py|ts|tsx|json|toml|css|html|bat))\b",
     re.IGNORECASE,
 )
-_SKIP_DIGEST_USER_PREFIXES = ("[本次会议上下文]", "[内核]", "[附件]")
+_SKIP_DIGEST_USER_PREFIXES = ("[本次会议上下文]", "[内核]", "[附件]", "[Harness]")
 _ATTACHMENT_LINE_RE = re.compile(r"^- .+? → (.+?) \((.+)\)$")
 FIRST_COMPACT_USER_MESSAGE = (
     "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
@@ -512,7 +512,24 @@ def build_llm_messages(
             result = repair_tool_messages([anchor, *messages[start:]])
     else:
         result = repair_tool_messages(messages[start:])
+    if not bool(getattr(session.meta, "project_runaway_enabled", False)):
+        result = _drop_harness_chat_messages(result)
     return _attach_multimodal_images(session, result) if include_images else result
+
+
+def _drop_harness_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ordinary mode: do not feed [Harness]/狂奔续接 routing lines to the main model."""
+    from exec_reliability import is_internal_harness_chat_line
+
+    kept: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str):
+            if is_internal_harness_chat_line(content):
+                continue
+        kept.append(message)
+    return kept
 
 
 def should_auto_compact(

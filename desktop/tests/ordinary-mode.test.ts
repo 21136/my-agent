@@ -5,6 +5,8 @@ import {
   applyProjectThreadsEvent,
   deriveHeaderNextStepView,
   deriveProjectGoalViewModel,
+  ordinaryDraftDecisionVisible,
+  renderChangeBanner,
   renderStagePlanCard,
   type ProjectPanelState,
 } from "../src/shells/unified/project-panel.ts";
@@ -129,6 +131,7 @@ function panel(overrides: Partial<ProjectPanelState> = {}): ProjectPanelState {
     reviewBlockersCount: 0,
     reviewProgressBlocked: false,
     scopeConfirmedAt: "",
+    projectEntry: "",
     runawayEnabled: false,
     runawayStatus: "",
     runawayCheckpoint: "",
@@ -206,6 +209,30 @@ test("stamped scope on a draft plan stays a soft signal", () => {
   const card = renderStagePlanCard(state);
   assert.equal(card.includes("范围已确认"), true);
   assert.equal(card.includes('data-action="confirm-scope"'), false);
+});
+
+test("draft decision is one surface after a reply-only turn", () => {
+  const state = panel({
+    planStatus: "draft",
+    projectEntry: "",
+    tasksTotal: 1,
+    executionStage: "requirements",
+    workflowStage: "requirements",
+    planOverlay: {
+      requestId: "req-1",
+      title: "计划待确认",
+      summary: "music-player",
+      tasksPreview: "- [ ] T-001",
+      planStatus: "draft",
+    },
+  });
+  assert.equal(ordinaryDraftDecisionVisible(state), true);
+  const header = deriveHeaderNextStepView(state);
+  assert.deepEqual(header.actions.map((item) => item.label), ["规划后开工", "直接实现"]);
+  const banner = renderChangeBanner(state);
+  assert.equal(banner.includes("方案待确认"), false);
+  assert.equal(banner.includes("确认开工"), false);
+  assert.equal(banner.includes("修改计划"), false);
 });
 
 test("docs requests and error status stay useful without a project", () => {

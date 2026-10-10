@@ -82,6 +82,7 @@ export interface ProjectPanelState {
   projectId: string;
   projectSummary: string;
   planStatus: string;
+  projectEntry: string;
   tasksMarkdown: string;
   mapMarkdown: string;
   tasksDone: number;
@@ -455,6 +456,7 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   }
   state.projectSummary = "";
   state.planStatus = "";
+  state.projectEntry = "";
   state.tasksMarkdown = "";
   state.mapMarkdown = "";
   state.tasksDone = 0;
@@ -674,6 +676,7 @@ const USER_BLOCKER_REASON_LABELS: Record<string, string> = {
   manifest_unavailable: "项目状态清单暂时不可用，无法安全继续。",
   l2_stale: "项目文档与当前变更不一致，需要先更新受影响内容。",
   review_blocked: "交付检查没有通过，仍有问题需要处理。",
+  verification_pending: "可以先收尾验收；这不是继续改代码的硬阻挡。",
 };
 
 export interface ProjectBlockerDetails {
@@ -710,7 +713,16 @@ function userFacingBlockerSummary(state: ProjectPanelState): string {
     : "当前还不能继续，请查看原因。";
 }
 
+function isOrdinaryVerificationWrapUp(state: ProjectPanelState): boolean {
+  // Ordinary mode: tasks cleared / review pending is optional wrap-up.
+  // Runaway keeps its own hard verification path.
+  return !state.runawayEnabled && state.executionStageReason === "verification_pending";
+}
+
 function hasActualProjectBlocker(state: ProjectPanelState): boolean {
+  if (isOrdinaryVerificationWrapUp(state)) {
+    return state.reviewProgressBlocked;
+  }
   if (state.reviewProgressBlocked) return true;
   if (state.runawayEnabled) {
     if (isRunawayV2(state)) return state.runawayBlocked;
@@ -867,6 +879,7 @@ function isSidebarGoalCard(view: ProjectGoalViewModel): boolean {
   return view.status === "blocked"
     || view.status === "failed"
     || view.action === "run-verify"
+    || view.title === "可以先收尾验收"
     || view.title === "交付结果待检查";
 }
 
@@ -1049,15 +1062,15 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     return {
       status: "decision",
       statusLabel: "待验证",
-      title: "交付结果待检查",
+      title: "可以先收尾验收",
       summary: goal,
-      nextStep: "先跑验收并查看验证证据；任务清空本身不代表项目完成。",
+      nextStep: "跑验收是可选收尾，不是继续改代码的前提；任务清空本身不代表项目完成。",
       action: "run-verify",
       actionLabel: "跑验收",
     };
   }
 
-  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0))) {
+  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0)) && state.projectEntry !== "direct") {
     return {
       status: "decision",
       statusLabel: "等你决定",
@@ -1086,7 +1099,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (state.needsDesignConfirm || state.workflowStage === "documentation") {
+  if (state.needsDesignConfirm) {
     return {
       status: "decision",
       statusLabel: "等你决定",
@@ -1106,7 +1119,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
       : executionStage === "design" ? "选择下一条任务" : "准备开始下一步",
     summary: goal,
     nextStep: executionStage === "verification"
-      ? "跑验收并查看本回合证据，确认结果是否满足验收。"
+      ? "可以先收尾验收并查看本回合证据，也可以继续改代码。"
       : "选择一个开放任务，或继续补充当前目标。",
     action: executionStage === "verification" ? "run-verify" : "open-full-plan",
     actionLabel: executionStage === "verification" ? "跑验收" : "选择任务",
@@ -1122,7 +1135,7 @@ export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextSt
   if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
     return { kind: "none", actions: [] };
   }
-  if (state.planStatus === "draft" || state.planStatus === "plan_dirty") {
+  if ((state.planStatus === "draft" || state.planStatus === "plan_dirty") && state.projectEntry !== "direct") {
     return {
       kind: "dual-draft",
       actions: [
@@ -1438,9 +1451,13 @@ export function renderStagePlanCard(state: ProjectPanelState, callbacks?: Projec
         : '<span class="textbook-soft-signal">完成后会展示结果和验证入口</span>';
       break;
     case "verification":
-      goal = "任务已经收口，系统正在检查交付结果。";
+      goal = state.runawayEnabled
+        ? "任务已经收口，系统正在检查交付结果。"
+        : "任务已经收口。可以先收尾验收，也可以继续改代码。";
       stat = state.turnEvidence.length > 0 ? "验证结果已经产生，等待你查看。" : "正在准备验证结果。";
-      action = '<button type="button" class="unified-btn unified-btn-accent" data-action="jump-turn-process">查看验证结果</button>';
+      action = state.runawayEnabled
+        ? '<button type="button" class="unified-btn unified-btn-accent" data-action="jump-turn-process">查看验证结果</button>'
+        : '<button type="button" class="unified-btn unified-btn-accent" data-action="run-verify">跑验收</button>';
       break;
     case "release":
       goal = state.milestoneAccepted ? "发布确认已经记录。" : "交付结果已经准备好，请完成发布前检查。";
@@ -2379,7 +2396,15 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 
 // ---- change banner / plan confirmation inline ----
 
-function renderChangeBanner(state: ProjectPanelState): string {
+/** Header already shows 规划后开工 / 直接实现 for this draft. */
+export function ordinaryDraftDecisionVisible(state: ProjectPanelState): boolean {
+  return !state.runawayEnabled
+    && Boolean(state.projectId)
+    && state.projectEntry !== "direct"
+    && (state.planStatus === "draft" || state.planStatus === "plan_dirty");
+}
+
+export function renderChangeBanner(state: ProjectPanelState): string {
   if (state.runawayEnabled) return "";
   const recentLedger = state.changeTimeline.slice(-3).reverse();
   const ledgerRows = recentLedger.map((change) => {
@@ -2392,9 +2417,14 @@ function renderChangeBanner(state: ProjectPanelState): string {
   const ledgerHtml = recentLedger.length > 0
     ? `<div class="sidebar-change-banner sidebar-change-timeline" style="border-color:#6b7cff;background:color-mix(in srgb, #6b7cff 6%, var(--ma-surface));"><div class="sidebar-change-banner-title" style="display:flex;align-items:center;justify-content:space-between;gap:0.35rem;">CHG 影响时间线 · ${state.changeTimeline.length} 条<button type="button" class="unified-btn" data-action="toggle-change-timeline" aria-expanded="${state.changeTimelineExpanded ? "true" : "false"}" style="font-size:0.68rem;padding:0.12rem 0.35rem;">${state.changeTimelineExpanded ? "收起" : "展开"}</button></div>${state.changeTimelineExpanded ? ledgerRows : ""}</div>`
     : "";
-  // Plan confirmation (draft / plan_dirty with overlay)
+  // Plan confirmation (draft / plan_dirty with overlay).
+  // The header already offers 规划后开工 / 直接实现 for that same draft, so the
+  // older 「方案待确认 · 确认开工」 banner would be a second decision surface.
   const needsPlanConfirm =
-    !state.runawayEnabled && state.planOverlay && state.planStatus !== "confirmed";
+    !state.runawayEnabled
+    && state.planOverlay
+    && state.planStatus !== "confirmed"
+    && !(state.planStatus === "draft" && ordinaryDraftDecisionVisible(state));
   const needsPlanDirtyBanner =
     !state.runawayEnabled && state.planStatus === "plan_dirty" && !needsPlanConfirm;
   const isTaskLevelChange =
@@ -2493,6 +2523,7 @@ export function applyProjectStateEvent(
   state.projectId = nextProjectId;
   state.projectSummary = event.project_summary ?? state.projectSummary;
   state.planStatus = event.plan_status ?? "draft";
+  state.projectEntry = event.project_entry ?? state.projectEntry;
   state.workflowStage = isFlowStage(event.workflow_stage) ? event.workflow_stage : state.workflowStage;
   state.needsDesignConfirm = Boolean(event.needs_design_confirm);
   state.executionStage = isFlowStage(event.execution_stage) ? event.execution_stage : state.executionStage;
