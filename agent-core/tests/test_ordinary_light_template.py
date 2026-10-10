@@ -285,6 +285,45 @@ class LightUpgradeTests(unittest.TestCase):
             self.assertTrue(any("无需升档" in line for line in second))
 
 
+class LightPlanPartnerContextTests(unittest.TestCase):
+    def test_plan_partner_prompt_omits_files_the_light_template_skips(self) -> None:
+        from plan_agent import _build_plan_prompt, plan_files_constraint
+        from project_mode import read_project_artifacts
+
+        with temporary_agent_paths() as paths:
+            root = create_project(paths, "lite-plan", project_template="light")
+            artifacts = read_project_artifacts(paths, "lite-plan")
+            present_constraint = plan_files_constraint(
+                [name for name in ("PROJECT.md", "TASKS.md", "VERIFY.md", "ENV.md") if name in artifacts]
+            )
+            for name in ("PROJECT.md", "TASKS.md", "VERIFY.md", "ENV.md"):
+                self.assertIn(name, present_constraint)
+            for name in ("SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "RELEASE.md", "MAP.md", "TASKS.archive.md"):
+                self.assertNotIn(name, present_constraint)
+            prompt = _build_plan_prompt(
+                artifacts.get("TASKS.md", ""),
+                "这个项目有哪些计划文件？",
+                map_text=artifacts.get("MAP.md", ""),
+                project_text=artifacts.get("PROJECT.md", ""),
+                env_text=artifacts.get("ENV.md", ""),
+                artifact_texts=artifacts,
+                archive_path=root / "TASKS.archive.md",
+            )
+            self.assertIn("磁盘上存在的计划文件只有：PROJECT.md、TASKS.md、VERIFY.md、ENV.md。", prompt)
+            for name in (
+                "SCOPE.md",
+                "DESIGN.md",
+                "TECH-DESIGN.md",
+                "RELEASE.md",
+                "MAP.md",
+                "TASKS.archive.md",
+            ):
+                self.assertNotIn(f"### {name}", prompt)
+                self.assertNotIn(f"## {name}", prompt)
+                self.assertNotIn(f"`{name}`", prompt)
+                self.assertNotIn(name, present_constraint)
+
+
 class LightPlanFilePromptTests(unittest.TestCase):
     _SKIPPED = ("MAP.md", "SCOPE.md", "DESIGN.md", "TECH-DESIGN.md", "RELEASE.md")
 

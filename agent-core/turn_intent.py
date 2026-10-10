@@ -307,13 +307,54 @@ def _has_research_action(text: str, lower: str) -> bool:
     return any(marker in lower for marker in _PATH_MARKERS)
 
 
+def _has_lookup_request(text: str, lower: str) -> bool:
+    """User asked to look something up. Filenames like README do not count."""
+    if any(kw in text for kw in ("查", "读", "参照", "看看", "列出", "搜索", "调研", "探索")):
+        return True
+    if any(marker in lower for marker in _PATH_MARKERS):
+        return True
+    return bool(re.search(r"\b(explore|read|search|list|where)\b", lower))
+
+
+# Status and inventory questions. Bare 「什么」 is intentionally absent so
+# 「随便写点什么」 stays a request, while 「写了什么」 / 「哪些」 stay questions.
+_INQUIRY_RE = re.compile(
+    r"(?:[?？]|哪些|是什么|有什么|有哪些|写了什么|改了什么|做了什么|"
+    r"到哪|哪里|哪儿|哪了|多少|是否|为什么|为何|怎么|如何|吗)"
+)
+# A polite or imperative frame, not a lone 写/改 inside a question.
+_IMPERATIVE_FRAME_RE = re.compile(
+    r"(?:"
+    r"(?:帮我|需要你|希望你|让你|请).{0,16}?(?:写(?!了)|改(?!了)|修|实现|修复|修改|创建|更新|添加|运行|执行)"
+    r"|写一个|写个|写一下"
+    r"|改一下|改成"
+    r"|把[^。？?\n]{0,32}改"
+    r"|能不能.{0,12}?(?:写|改|实现|修|创建)"
+    r"|可不可以.{0,12}?(?:写|改|实现|修)"
+    r")"
+)
+
+
+def _is_inquiry(text: str) -> bool:
+    """True for question-shaped lines (progress, inventory, why/how)."""
+    return bool(_INQUIRY_RE.search(text or ""))
+
+
+def _has_imperative_frame(text: str) -> bool:
+    """True when the line asks for a change, not merely mentions 写/改."""
+    return bool(_IMPERATIVE_FRAME_RE.search(text or ""))
+
+
 def _has_explicit_execution_request(text: str, lower: str) -> bool:
     """Detect an action request without treating requirement prose as one.
 
     Long user messages can contain several sentences and project filenames.
     The request/verb pairing is a stronger signal than either message length
     or an artifact mention, so it must be checked before the read-only routes.
+    A question that only contains 写/改 (「写了什么」「写到哪了」) is not a request.
     """
+    if _is_inquiry(text) and not _has_imperative_frame(text):
+        return False
     if any(lower.startswith(prefix) for prefix in _ACTION_COMMAND_PREFIXES):
         return True
 
@@ -403,6 +444,15 @@ def classify_turn(user_text: str) -> TurnIntent:
 
     if is_requirement_input(text):
         return "requirements"
+
+    # Questions that mention 写/改/计划 are still questions. A real request
+    # (帮我改、写一个、把 X 改成 Y、能不能帮我写) already returned execute.
+    if (
+        _is_inquiry(text)
+        and not _has_imperative_frame(text)
+        and not _has_lookup_request(text, lower)
+    ):
+        return "qa"
 
     if lower.startswith(("探索", "调研", "explore ")):
         return "research"

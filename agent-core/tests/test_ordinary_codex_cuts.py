@@ -403,6 +403,41 @@ class OrdinaryPlanRequestTests(unittest.TestCase):
                     self.assertEqual(len(requests), 1)
                     self.assertEqual(requests[0]["project_id"], pid)
 
+    def test_plan_inventory_question_does_not_spawn_or_emit(self) -> None:
+        from plan_agent import classify_plan_spawn_intent
+        from turn_intent import classify_turn
+
+        text = "这个项目有哪些计划文件？"
+        self.assertEqual(classify_turn(text), "qa")
+
+        class _Boom:
+            def chat(self, *args, **kwargs):
+                raise AssertionError("plan_partner classifier should not run")
+
+        decision = classify_plan_spawn_intent(text, llm=_Boom())
+        self.assertFalse(decision.spawn)
+        self.assertEqual(decision.reason, "question")
+
+        for entry in ("plan", "direct", ""):
+            with self.subTest(entry=entry or "unset"):
+                with temporary_agent_paths() as paths:
+                    pid = f"files-{entry or 'unset'}"
+                    create_project(paths, pid, project_template="light")
+                    session = self._bind(paths, pid, entry)
+                    self.assertTrue(
+                        should_skip_ordinary_plan_spawn(
+                            session, text, turn_intent="plan"
+                        )
+                    )
+                    self.assertFalse(
+                        should_treat_ordinary_direct_implement(
+                            session, text, turn_intent="execute"
+                        )
+                    )
+                    self.assertEqual(self._emit(session, paths, text, intent="plan"), [])
+                    self.assertEqual(session.meta.project_plan_status, "draft")
+                    self.assertEqual(session.meta.project_entry, entry)
+
 
 class OrdinaryDesktopContractTests(unittest.TestCase):
     def test_direct_entry_hides_dual_draft_cta(self) -> None:

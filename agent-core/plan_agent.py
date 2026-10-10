@@ -234,6 +234,7 @@ spawn=false 示例：
 - 写代码、修 bug、编译运行、联调
 - 「继续」「下一项」等执行续作
 - 纯闲聊、回顾上文
+- 询问已有计划文件、文件里写了什么、进度写到哪了（直接回答，不要整理计划）
 
 只输出一个 JSON 对象：{"spawn": true|false, "reason": "简短中文"}"""
 
@@ -277,6 +278,10 @@ def classify_plan_spawn_intent(
         return PlanSpawnDecision(False, "disabled")
     if is_project_continue_utterance(t):
         return PlanSpawnDecision(False, "continue")
+    from turn_intent import classify_turn
+
+    if classify_turn(t) in {"qa", "recall"}:
+        return PlanSpawnDecision(False, "question")
 
     from llm_routing import resolve_model_id_for_role
 
@@ -515,33 +520,80 @@ _PLAN_ARTIFACT_ORDER = (
 )
 
 
+_PLAN_PRESENT_ORDER = (
+    "PROJECT.md",
+    "TASKS.md",
+    "VERIFY.md",
+    "ENV.md",
+    "MAP.md",
+    "SCOPE.md",
+    "DESIGN.md",
+    "TECH-DESIGN.md",
+    "RELEASE.md",
+    "TASKS.archive.md",
+)
+
+
+def present_plan_file_names(
+    artifact_texts: Mapping[str, str] | None = None,
+    *,
+    archive_path: Path | None = None,
+    extra_texts: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Plan documents that actually exist for this project."""
+    texts = dict(artifact_texts or {})
+    for name, body in (extra_texts or {}).items():
+        if str(body or "").strip():
+            texts.setdefault(name, str(body))
+    names = [name for name in _PLAN_PRESENT_ORDER if name != "TASKS.archive.md" and name in texts]
+    if archive_path is not None and archive_path.is_file():
+        names.append("TASKS.archive.md")
+    return names
+
+
+def plan_files_constraint(present: list[str]) -> str:
+    """Tell Plan Agent which plan files this project really has."""
+    listed = "、".join(present) if present else "（无）"
+    return (
+        "## 本项目实际计划文件（覆盖上文角色说明）\n"
+        f"磁盘上存在的计划文件只有：{listed}。\n"
+        "reply 只能把这些文件说成已经存在。上文角色说明里的其它文件名是模板职责，"
+        "不代表本项目已经有那些文件。\n"
+        "用户只是在问有哪些文件、写了什么、进度到哪时，operations 必须 []，"
+        "不要提案补齐缺失模板。"
+    )
+
+
 def _format_plan_artifact_context(
     artifact_texts: Mapping[str, str] | None,
     manifest: Mapping[str, Any] | None = None,
 ) -> str:
-    """Render standard project artifacts and freshness metadata for Plan LLM."""
+    """Render plan artifacts that exist. Missing template files are omitted."""
     texts = artifact_texts or {}
+    names = [name for name in _PLAN_ARTIFACT_ORDER if name in texts]
+    if not names:
+        return ""
     manifest_by_path = {
         str(item.get("path")): item
         for item in (manifest or {}).get("artifacts", [])
         if isinstance(item, Mapping) and item.get("path")
     }
     rows: list[str] = []
-    for name in _PLAN_ARTIFACT_ORDER:
+    for name in names:
         item = manifest_by_path.get(name, {})
         revision = str(item.get("revision") or "unknown")
-        status = str(item.get("status") or "untracked")
+        status = str(item.get("status") or "current")
         rows.append(f"- `{name}` · revision `{revision}` · status `{status}`")
     completeness_rows = [
         f"- `{name}` · completeness `{str(manifest_by_path.get(name, {}).get('completeness') or 'unknown')}`"
-        for name in _PLAN_ARTIFACT_ORDER
+        for name in names
     ]
     sections = [
         "## 标准项目制品（只读参考；提案可引用，修改须走 Plan patch + 采纳）",
         *rows,
         *completeness_rows,
     ]
-    for name in _PLAN_ARTIFACT_ORDER:
+    for name in names:
         sections.extend(
             [
                 f"\n### {name}",
@@ -601,7 +653,31 @@ def _build_plan_prompt(
             + "\n\n".join(tool_results[-6:])
             + "\n\n"
         )
-    return f"""{prior}## 进度摘要（先看异常信号 ⚠）
+    present = present_plan_file_names(
+        artifact_texts,
+        archive_path=archive_path,
+        extra_texts={
+            "TASKS.md": tasks_text,
+            "MAP.md": map_text,
+            "PROJECT.md": project_text,
+            "ENV.md": env_text,
+        },
+    )
+    file_blocks: list[str] = []
+    if "MAP.md" in present:
+        file_blocks.append(f"## MAP.md（可 patch）\n\n{_clip_doc(map_text)}")
+    if "PROJECT.md" in present:
+        file_blocks.append(
+            f"## PROJECT.md（可 patch）\n\n{_clip_doc(project_text, limit=2500)}"
+        )
+    if "ENV.md" in present:
+        file_blocks.append(f"## ENV.md（可 patch）\n\n{_clip_doc(env_text, limit=2000)}")
+    files_body = ("\n\n".join(file_blocks) + "\n\n") if file_blocks else ""
+    route_targets = [name for name in document_patch_targets(user_intent) if name in present]
+    route_line = "、".join(route_targets) if route_targets else "（用户未点名清单外的文件）"
+    return f"""{prior}{plan_files_constraint(present)}
+
+## 进度摘要（先看异常信号 ⚠）
 
 {brief}
 
@@ -609,22 +685,9 @@ def _build_plan_prompt(
 
 {numbered}
 
-## MAP.md（可 patch）
+{files_body}{_format_plan_artifact_context(artifact_texts, manifest)}## 文档提案目标（路由约束）
 
-{_clip_doc(map_text) or "（无）"}
-
-## PROJECT.md（可 patch）
-
-{_clip_doc(project_text, limit=2500) or "（无）"}
-
-## ENV.md（可 patch）
-
-{_clip_doc(env_text, limit=2000) or "（无）"}
-
-{_format_plan_artifact_context(artifact_texts, manifest)}
-## 文档提案目标（路由约束）
-
-用户明确指定的文件优先：{"、".join(document_patch_targets(user_intent))}。TECH-DESIGN.md 负责架构/API/异步事件/技术风险；RELEASE.md 负责部署/迁移/回滚/健康检查；DESIGN.md 负责用户流程与交互。不得把指定目标改写成 DESIGN.md。除非用户明确要求跨文件同步，否则不要因为目标文件变化递归生成其它制品 patch。
+用户明确指定且本项目已有的文件优先：{route_line}。只提案「本项目实际计划文件」清单里的文件。除非用户明确要求新建，否则不要补齐清单以外的模板文档。
 
 {archive_tail or ""}{tools_block}## 用户说
 
@@ -2728,7 +2791,17 @@ class PlanAgent:
         def _one_llm_call() -> tuple[list[dict[str, Any]], bool, str, list[dict[str, Any]]]:
             response = llm.chat(
                 [
-                    {"role": "system", "content": _PLAN_SYSTEM},
+                    {
+                        "role": "system",
+                        "content": _PLAN_SYSTEM
+                        + "\n\n"
+                        + plan_files_constraint(
+                            present_plan_file_names(
+                                artifact_texts,
+                                archive_path=archive_path,
+                            )
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": _build_plan_prompt(

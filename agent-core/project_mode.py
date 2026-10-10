@@ -2085,6 +2085,17 @@ def should_treat_ordinary_direct_implement(
     explicit = is_direct_implement_request(user_text)
     if _ordinary_question_or_recall(user_text, turn_intent):
         return False
+    # A keyword hit inside a question must not confirm the plan or flip
+    # project_entry to direct. Real requests still carry an imperative frame.
+    from turn_intent import _has_imperative_frame, _is_inquiry
+
+    if (
+        (user_text or "").strip()
+        and _is_inquiry(user_text)
+        and not explicit
+        and not _has_imperative_frame(user_text)
+    ):
+        return False
     entry = normalize_project_entry(getattr(meta, "project_entry", ""))
     execute = (turn_intent or "").strip() == "execute"
     if entry == "plan" and not explicit:
