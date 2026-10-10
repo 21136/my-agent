@@ -18,6 +18,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths, PathOutOfBoundsError
 from tools.builtin.read_file import MAX_BYTES, resolve_read_path
+from tools.listing_privacy import hide_from_listing
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 TOOL_NAME = "grep"
@@ -83,6 +84,11 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
         return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
     except subprocess.SubprocessError as exc:
         return _fail(str(exc), ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
+
+    explicit = " ".join(
+        part for part in (path_arg, glob_pat if isinstance(glob_pat, str) else "") if part
+    )
+    matches = [item for item in matches if not hide_from_listing(item["path"], explicit=explicit)]
 
     return tool_ok(
         TOOL_NAME,
@@ -206,6 +212,9 @@ def _iter_search_files(target: Path, glob_pat: str | None) -> Iterator[Path]:
 
     for path in sorted(target.rglob("*")):
         if not path.is_file():
+            continue
+        rel = path.relative_to(target).as_posix()
+        if hide_from_listing(rel):
             continue
         if _glob_matches(path.name, glob_pat):
             yield path

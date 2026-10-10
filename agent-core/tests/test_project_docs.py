@@ -43,11 +43,17 @@ class ProjectDocOpsTests(unittest.TestCase):
             nested = root / "node_modules" / "pkg"
             nested.mkdir(parents=True)
             (nested / "README.md").write_text("vendor\n", encoding="utf-8")
+            book = root / ".plan-agent"
+            book.mkdir()
+            (book / "secret.md").write_text("bookkeeping\n", encoding="utf-8")
+            (root / "RUNAWAY-PROGRESS.md").write_text("log\n", encoding="utf-8")
 
             listed = {item["path"] for item in list_project_docs(paths, pid)}
             self.assertIn("PROJECT.md", listed)
             self.assertIn("notes.md", listed)
             self.assertNotIn("node_modules/pkg/README.md", listed)
+            self.assertNotIn(".plan-agent/secret.md", listed)
+            self.assertNotIn("RUNAWAY-PROGRESS.md", listed)
 
             written = write_project_doc(paths, pid, "notes.md", "# 笔记\r\n第二行\r")
             self.assertEqual(written["type"], "project.doc.write.done")

@@ -282,15 +282,18 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     ),
     "list_dir": (
         "List directory entries under agent root. "
-        "Set recursive=true to include one level of children."
+        "Set recursive=true to include one level of children. "
+        "Agent bookkeeping is omitted unless path is that directory or file."
     ),
     "grep": (
         "Search local file contents under agent root by regex pattern. "
-        "Prefer ripgrep when available."
+        "Prefer ripgrep when available. "
+        "Agent bookkeeping is omitted unless path names that directory or file."
     ),
     "glob_file_search": (
         "Find files by glob pattern (e.g. '**/*.py', '**/test_*.ts') under a directory. "
-        "Use before read_file when you need paths by name; use grep for content search."
+        "Use before read_file when you need paths by name; use grep for content search. "
+        "Agent bookkeeping is omitted unless path or pattern names it."
     ),
     "codebase_search": (
         "Semantic/BM25 search for code chunks in the bound project. "

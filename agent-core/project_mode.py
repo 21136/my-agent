@@ -3712,12 +3712,18 @@ _DOC_LIST_SKIP_DIRS = frozenset({
     ".tox",
     ".mypy_cache",
     ".cursor",
+    ".plan-agent",
+    ".agent",
 })
 
 
 def _catalog_skips_rel(rel: str) -> bool:
+    from tools.listing_privacy import path_is_internal_bookkeeping
+
     parts = rel.replace("\\", "/").split("/")
-    return any(part in _DOC_LIST_SKIP_DIRS for part in parts[:-1])
+    if any(part in _DOC_LIST_SKIP_DIRS for part in parts[:-1]):
+        return True
+    return path_is_internal_bookkeeping(rel)
 
 
 def _iter_project_markdown(root: Path):

@@ -13,6 +13,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths, PathOutOfBoundsError
 from tools.builtin.read_file import resolve_read_path
+from tools.listing_privacy import hide_from_listing
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 TOOL_NAME = "list_dir"
@@ -59,9 +60,14 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
 def _collect_entries(directory: Path, *, recursive: bool) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for child in _sorted_children(directory):
+        if hide_from_listing(child.name):
+            continue
         entries.append(_entry_dict(child))
         if recursive and child.is_dir():
             for grandchild in _sorted_children(child):
+                name = f"{child.name}/{grandchild.name}"
+                if hide_from_listing(name):
+                    continue
                 entries.append(_entry_dict(grandchild, name_prefix=f"{child.name}/"))
     return entries
 
