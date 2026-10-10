@@ -2156,17 +2156,7 @@ def should_skip_ordinary_plan_request(
             user_text = msg["content"]
             break
     intent = str(getattr(session, "turn_intent", "") or "")
-    if _ordinary_question_or_recall(user_text, intent):
-        return True
-    if normalize_project_entry(getattr(meta, "project_entry", "")) == "direct":
-        return True
-    if pid:
-        try:
-            if read_project_template(paths, pid) == "light":
-                return True
-        except Exception:
-            pass
-    return False
+    return _ordinary_question_or_recall(user_text, intent)
 
 
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:

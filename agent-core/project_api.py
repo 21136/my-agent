@@ -349,15 +349,6 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
         return None
     if bool(getattr(session.meta, "project_runaway_enabled", False)):
         return None
-    # Ordinary direct / light projects never open the plan-confirm banner.
-    entry = str(getattr(session.meta, "project_entry", "") or "").strip()
-    if entry == "direct":
-        return None
-    try:
-        if read_project_template(paths, pid) == "light":
-            return None
-    except Exception:
-        pass
     plan_status = session.meta.project_plan_status or "draft"
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
     if workflow_stage != "requirements":
@@ -370,6 +361,7 @@ def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str,
         return None
     stats = read_task_stats(project_dir(paths, pid) / "TASKS.md")
     if stats.total == 0:
+        # Nothing to confirm (e.g. a fresh light project with no tasks yet).
         return None
     preview = tasks_md
     if len(preview) > _PLAN_PREVIEW_MAX:
