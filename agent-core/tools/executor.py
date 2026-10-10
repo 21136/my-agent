@@ -1577,11 +1577,14 @@ class ToolExecutor:
             "summary": _tool_result_summary(result),
             "output_path": result.output_path,
         }
+        end_note = _tool_end_note(result)
+        if end_note:
+            end_payload["note"] = end_note
         logs_tail = _result_logs_tail(result)
         if logs_tail:
             end_payload["logs_tail"] = logs_tail
         self._emit_event("tool.end", end_payload)
-        if name == "read_file" and result.ok:
+        if name == "read_file" and result.ok and end_note != "absent":
             self._maybe_record_memory_entity_used(args, result)
         self._record_turn_evidence(name, args, result)
         self._maybe_emit_services_state_after_tool(name, args, result)
@@ -3751,8 +3754,21 @@ def _result_change_line(data: dict[str, Any]) -> str:
     return ""
 
 
+ABSENT_FILE_SUMMARY = "文件还不存在"
+
+
+def _tool_end_note(result: ToolResult) -> str | None:
+    """Informational read of a path that is not on disk yet."""
+    data = result.data if isinstance(result.data, dict) else {}
+    if result.ok and data.get("exists") is False:
+        return "absent"
+    return None
+
+
 def _tool_result_summary(result: ToolResult) -> str:
     data = result.data if isinstance(result.data, dict) else {}
+    if _tool_end_note(result) == "absent":
+        return ABSENT_FILE_SUMMARY
     if not result.ok and result.error and isinstance(result.error.details, dict):
         summary = result.error.details.get("failure_summary")
         if isinstance(summary, str) and summary.strip():

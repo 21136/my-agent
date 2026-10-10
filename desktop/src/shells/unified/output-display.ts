@@ -1,10 +1,11 @@
 import { escapeHtml } from "../chat-state";
 import { displayToolName, formatToolActionLabel } from "../../copy/tool-display";
+import type { ToolStepStatus } from "../tool-outcome";
 
 type ProcessTool = {
   tool: string;
   summary: string;
-  status: "running" | "ok" | "fail";
+  status: ToolStepStatus;
   endSummary?: string;
   logsTail?: string;
   callId: string;
@@ -87,7 +88,7 @@ export function humanizeToolSubline(
   const text = (endSummary || "").trim();
   if (!text || text === "ok" || text === "完成") return "";
   if (status === "fail") return userFacingToolError(text).slice(0, 160);
-  if (status === "ok") return text.slice(0, 160);
+  if (status === "ok" || status === "note") return text.slice(0, 160);
   return "";
 }
 

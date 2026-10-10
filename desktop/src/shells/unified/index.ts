@@ -8,6 +8,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
+import { settledToolStatus } from "../tool-outcome";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
 import {
@@ -5154,7 +5155,8 @@ export function mountUnifiedShell(
           refreshTerminals();
         }
         if (!chat.model.confirmPending) {
-          setStatus(event.ok ? (chat.isWorking() ? "处理中…" : "就绪") : "工具失败");
+          const step = settledToolStatus(event.ok, event.summary, event.note);
+          setStatus(step === "fail" ? "工具失败" : chat.isWorking() ? "处理中…" : "就绪");
         }
         break;
 

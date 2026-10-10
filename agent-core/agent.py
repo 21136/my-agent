@@ -276,7 +276,9 @@ BUILTIN_TOOL_NAMES: tuple[str, ...] = tuple(tool.name for tool in BUILTIN_TOOLS)
 _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     "read_file": (
         "Read a text file under agent root or workspace (max 512KB, UTF-8). "
-        "Use for docs, workspace files, evolve/memories, and spilled tool outputs."
+        "Use for docs, workspace files, evolve/memories, and spilled tool outputs. "
+        "A path that does not exist yet returns exists=false and is not an error; "
+        "do not probe-read a file you are about to create."
     ),
     "list_dir": (
         "List directory entries under agent root. "

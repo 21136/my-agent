@@ -34,7 +34,17 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
     except (TypeError, ValueError) as exc:
         return _fail(str(exc), ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
     except FileNotFoundError:
-        return _fail(f"path does not exist: {path_arg}", ToolErrorCode.NOT_FOUND, started, path=path_arg)
+        # A probe before create is information: the file is not there yet.
+        return tool_ok(
+            TOOL_NAME,
+            {
+                "path": path_arg.strip(),
+                "content": "",
+                "size": 0,
+                "exists": False,
+            },
+            duration_ms=_elapsed_ms(started),
+        )
 
     if not resolved.is_file():
         return _fail(f"not a file: {path_arg}", ToolErrorCode.NOT_FOUND, started, path=path_arg)
@@ -141,7 +151,6 @@ def _demo() -> None:
         ({"path": "../outside-agent"}, False, "out of bounds"),
         ({"path": "_read_file_demo.bin"}, False, "binary"),
         ({"path": "_read_file_demo_huge.txt"}, False, "too large"),
-        ({"path": "missing-file-xyz.txt"}, False, "not found"),
     ]
 
     for arguments, should_ok, label in cases:
@@ -151,6 +160,11 @@ def _demo() -> None:
             raise SystemExit(1)
         status = "ok" if result.ok else result.error.code if result.error else "?"
         print(f"[PASS] {label}: {status}")
+
+    missing = run({"path": "missing-file-xyz.txt"}, paths=paths)
+    assert missing.ok and missing.data and missing.data.get("exists") is False
+    assert missing.data.get("content") == ""
+    print("[PASS] not found: exists=false")
 
     preview = run({"path": "docs/PROJECT.md"}, paths=paths)
     assert preview.ok and preview.data

@@ -1302,6 +1302,12 @@
 .unified-tool-line.is-fail .unified-tool-mark {
   color: color-mix(in srgb, #c44 75%, var(--ma-text-muted));
 }
+.unified-tool-line.is-note,
+.unified-tool-line.is-note .unified-tool-mark,
+.unified-tool-line.is-note .unified-tool-step-label,
+.unified-tool-line.is-note .unified-tool-step-sub {
+  color: var(--ma-text-muted);
+}
 .unified-tool-name {
   font-weight: 600;
   color: var(--ma-text);

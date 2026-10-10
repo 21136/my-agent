@@ -306,3 +306,62 @@ test("a same-session banner during the turn does not drop the tool result", () =
     true,
   );
 });
+
+test("a probe read of a missing file is not a failed step", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  chat.pushUserMessage("帮我新建一个 README");
+  chat.handleEvent({
+    type: "execution.state",
+    run_id: "run-a",
+    state: "running",
+    sequence: 1,
+  });
+  chat.handleEvent({
+    type: "turn.start",
+    intent: "execute",
+    intent_label: "执行",
+    run_id: "run-a",
+  });
+  chat.handleEvent({
+    type: "tool.start",
+    tool: "read_file",
+    call_id: "read-1",
+    summary: "workspace/scratch-readme/README.md",
+    run_id: "run-a",
+  });
+  chat.handleEvent({
+    type: "tool.end",
+    tool: "read_file",
+    call_id: "read-1",
+    ok: true,
+    summary: "文件还不存在",
+    note: "absent",
+    run_id: "run-a",
+  });
+  chat.handleEvent({
+    type: "tool.start",
+    tool: "write_text",
+    call_id: "write-1",
+    summary: "workspace/scratch-readme/README.md",
+    run_id: "run-a",
+  });
+  chat.handleEvent({
+    type: "tool.end",
+    tool: "write_text",
+    call_id: "write-1",
+    ok: true,
+    summary: "workspace/scratch-readme/README.md · 写入 1 行：一句项目简介",
+    run_id: "run-a",
+  });
+
+  const cards = processes(chat.model.blocks);
+  assert.equal(cards.length, 1);
+  const tools = cards[0].tools ?? [];
+  assert.equal(tools[0]?.status, "note");
+  assert.equal(tools[0]?.endSummary, "文件还不存在");
+  assert.equal(tools[1]?.status, "ok");
+  assert.equal(failTools(cards[0]).length, 0);
+  assert.equal(processPillLabel(cards[0]).includes("失败"), false);
+  assert.equal(renderToolFailAlert(lastFailedTool(cards[0].tools)), "");
+});

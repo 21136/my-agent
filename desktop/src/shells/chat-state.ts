@@ -1,4 +1,5 @@
 import type { ExecutionStateName, ServerEvent } from "../api/ws";
+import { settledToolStatus } from "./tool-outcome";
 import {
   type ProcessActivityBlock,
   activityEntriesPrint,
@@ -961,7 +962,7 @@ export function createChatSession(
             card = findToolEntry(proc, event.call_id);
           }
           if (card) {
-            card.status = event.ok ? "ok" : "fail";
+            card.status = settledToolStatus(event.ok, event.summary, event.note);
             card.endedAt = now;
             card.endSummary = event.summary || (event.ok ? "完成" : "失败");
             if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {

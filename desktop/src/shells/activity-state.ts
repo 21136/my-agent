@@ -1,12 +1,13 @@
 /** UX-028 M0 — activity timeline entries (source of truth for process blocks). */
 
 import { reasoningSummaryLine, shouldNeutralizeReasoningSummary } from "./unified/output-display";
+import type { ToolStepStatus } from "./tool-outcome";
 
 export type ProcessToolCard = {
   callId: string;
   tool: string;
   summary: string;
-  status: "running" | "ok" | "fail";
+  status: ToolStepStatus;
   startedAt: number;
   endedAt?: number;
   endSummary?: string;
