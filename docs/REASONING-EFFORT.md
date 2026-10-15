@@ -45,7 +45,7 @@
 说明：
 
 - **DeepSeek / Sophnet**：API 使用 `thinking` 对象，不认平铺 `medium`；`medium` 映射为 `high`。见 §3.2。
-- **0x567**（当前默认 `gpt-6-luna` / `gpt-6-sol`）：使用顶层 `reasoning_effort`；**不支持 `max`**（会 `invalid parameter`），故 `max` → `high`。GPT-6 + `tools` 请求强制 `none`；无工具请求保留会话档位。
+- **0x567**（当前默认 `gpt-6-luna` / `gpt-6-sol`）：使用顶层 `reasoning_effort`；**不支持 `max`**（会 `invalid parameter`），故 `max` → `high`。GPT-6 + `tools` 时**不传** `reasoning_effort`；无工具请求保留会话档位。
 - **Tokeness**（`gpt-5.6-luna` · `/v1/chat/completions`）：**带 `tools` 时须 `reasoning_effort: none`**，否则 400；由 `llm_client` 自动处理。见 [LLM-LUNA-GATEWAYS.md](./LLM-LUNA-GATEWAYS.md)。
 - **其他厂商**：原样透传（OpenAI 兼容网关按各自模型文档）。
 
@@ -57,7 +57,7 @@
 | `0x567` | 顶层 `reasoning_effort` | `{"reasoning_effort": "high"}` |
 | 其他 | 顶层 `reasoning_effort`（若传入） | 与 OpenAI 兼容 |
 
-0x567 的 GPT-6 Luna / Sol 请求若包含 `tools`，会发送 `{"reasoning_effort": "none"}`。
+0x567 的 GPT-6 Luna / Sol 请求若包含 `tools`，**不发送** `reasoning_effort`（网关不接受 `none`）。
 
 **不要**对 DeepSeek 发平铺 `reasoning_effort`；**不要**对 0x567 发 `thinking` 对象（由 `_apply_reasoning_effort_to_payload` 分支处理）。
 

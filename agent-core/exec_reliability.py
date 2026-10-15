@@ -320,6 +320,8 @@ def llm_transport_failure_kind(exc: BaseException) -> str:
         return "session_limit"
     if status == 429 or "rate limit" in lower or "too many requests" in lower:
         return "rate_limit"
+    if status in {400, 422} or "not supported by this model" in lower:
+        return "client_error"
     if status in {401, 403} or any(
         token in lower
         for token in (
@@ -357,6 +359,11 @@ def llm_provider_failure_message(exc: BaseException) -> str:
         return "模型服务请求过于频繁，请稍后重试。"
     if kind == "auth":
         return "模型服务鉴权失败，请检查配置后再试。"
+    if kind == "client_error":
+        lower = str(exc or "").lower()
+        if "reasoning" in lower and "effort" in lower:
+            return "模型网关不接受当前 reasoning 参数，请更新客户端或切换模型。"
+        return "模型服务拒绝了本次请求参数，请检查配置或换模型后再试。"
     if kind == "network":
         return "模型服务暂时连不上，请稍后重试。"
     return "模型服务暂时不可用，请稍后重试。"

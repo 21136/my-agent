@@ -1946,13 +1946,13 @@ class Agent:
                     runaway = getattr(self.session.meta, "project_runaway_enabled", False)
                     pool_exhausted = is_pool_exhausted_transport_error(exc)
                     failure_kind = llm_transport_failure_kind(exc)
-                    if runaway and pool_exhausted:
+                    if failure_kind in {"session_limit", "client_error"}:
+                        # Session cap or bad request params will not heal on retry.
+                        max_transport_retries = 1
+                    elif runaway and pool_exhausted:
                         max_transport_retries = runaway_pool_exhausted_retries()
                     elif runaway:
                         max_transport_retries = runaway_llm_transport_retries()
-                    elif failure_kind == "session_limit":
-                        # The cap clears after idle minutes, so a short retry cannot help.
-                        max_transport_retries = 1
                     else:
                         max_transport_retries = 2
                     llm_transport_attempts += 1

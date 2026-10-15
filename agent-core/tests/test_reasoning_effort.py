@@ -61,7 +61,7 @@ class ReasoningEffortTests(unittest.TestCase):
         self.assertEqual(payload.get("reasoning_effort"), "medium")
         self.assertNotIn("thinking", payload)
 
-    def test_gpt6_tool_calls_force_reasoning_none_for_both_profiles(self) -> None:
+    def test_gpt6_tool_calls_omit_reasoning_effort_for_both_profiles(self) -> None:
         for profile_id, provider_model in (
             ("0x567-flash", "gpt-6-luna"),
             ("0x567-pro", "gpt-6-sol"),
@@ -82,7 +82,7 @@ class ReasoningEffortTests(unittest.TestCase):
                     entry,
                     has_tools=True,
                 )
-                self.assertEqual(payload.get("reasoning_effort"), "none")
+                self.assertNotIn("reasoning_effort", payload)
 
     def test_gpt6_without_tools_preserves_selected_reasoning_effort(self) -> None:
         payload: dict[str, object] = {"model": "gpt-6-luna"}

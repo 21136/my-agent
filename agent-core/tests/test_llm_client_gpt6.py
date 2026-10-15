@@ -99,7 +99,7 @@ class Gpt6RequestPayloadTests(unittest.TestCase):
                 )
         return captured
 
-    def test_chat_sends_new_provider_model_and_none_for_explicit_effort(self) -> None:
+    def test_chat_omits_reasoning_effort_for_gpt6_with_tools(self) -> None:
         for registry_id, provider_model in (
             ("0x567-flash", "gpt-6-luna"),
             ("0x567-pro", "gpt-6-sol"),
@@ -110,10 +110,10 @@ class Gpt6RequestPayloadTests(unittest.TestCase):
                 self.assertIsInstance(payload, dict)
                 assert isinstance(payload, dict)
                 self.assertEqual(payload.get("model"), provider_model)
-                self.assertEqual(payload.get("reasoning_effort"), "none")
+                self.assertNotIn("reasoning_effort", payload)
                 self.assertIn("tools", payload)
 
-    def test_chat_defaults_gpt6_tool_effort_to_none_when_unset(self) -> None:
+    def test_chat_omits_reasoning_effort_for_gpt6_tools_when_effort_unset(self) -> None:
         for registry_id, provider_model in (
             ("0x567-flash", "gpt-6-luna"),
             ("0x567-pro", "gpt-6-sol"),
@@ -124,7 +124,7 @@ class Gpt6RequestPayloadTests(unittest.TestCase):
                 self.assertIsInstance(payload, dict)
                 assert isinstance(payload, dict)
                 self.assertEqual(payload.get("model"), provider_model)
-                self.assertEqual(payload.get("reasoning_effort"), "none")
+                self.assertNotIn("reasoning_effort", payload)
 
 
 if __name__ == "__main__":

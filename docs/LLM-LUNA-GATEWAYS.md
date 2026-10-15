@@ -1,6 +1,6 @@
 # Luna 网关对照（0x567 vs Tokeness）
 
-> 版本 **0.1.0** · 2026-09-03  
+> 版本 **0.1.1** · 2026-10-15  
 > 关联：[REASONING-EFFORT.md](./REASONING-EFFORT.md) · [MAP.md](./MAP.md) §8 · `agent-core/llm_client.py` · `tools/llm_luna_gateway_probe.py`
 
 ---
@@ -17,9 +17,14 @@ my-agent 当前内置的 OpenAI-compatible 网关默认模型如下：
 
 以上是本地内置配置的默认请求名；下方 2026-09-03 的 0x567 live 记录是旧模型实测，不能证明当前 GPT-6 上游路由已通过真实 API 验证。
 
-agent 主循环几乎每轮都带 `tools` + 会话 `reasoning_effort`（默认 `medium`）。GPT-6 经 Chat Completions 发工具调用时，客户端将推理档位设为 `none`；Tokeness 的 GPT-5.6 Luna 也因其网关限制使用相同处理。
+agent 主循环几乎每轮都带 `tools` + 会话 `reasoning_effort`（默认 `medium`）。
 
-实现：`llm_client._apply_reasoning_effort_to_payload()` 为 GPT-6 工具请求及 Tokeness 工具请求强制 `reasoning_effort: "none"`。
+| 上游模型 | 带 `tools` 时客户端行为 |
+|----------|-------------------------|
+| **GPT-6 Luna / Sol**（0x567） | **省略** `reasoning_effort` 字段（2026-10-15 实测：传 `none` 会 400） |
+| **Tokeness gpt-5.6-luna** | 强制 `reasoning_effort: "none"`（否则 400） |
+
+实现：`llm_client._gpt6_omit_reasoning_effort_with_tools()` · `is_tokeness_gateway()` 分支。
 
 ---
 

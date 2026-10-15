@@ -134,6 +134,34 @@ class ProviderTransportErrorTests(unittest.TestCase):
                 self.assertNotIn("继续", result.assistant_text)
                 self.assertNotIn(str(exc), result.assistant_text)
 
+    def test_client_error_400_does_not_retry_even_in_runaway(self) -> None:
+        llm = _RaisingLLM(
+            LLMApiError(
+                "Reasoning effort 'none' is not supported by this model.",
+                status_code=400,
+            ),
+        )
+        agent = self._agent(llm)
+        agent.session.meta.project_runaway_enabled = True
+        agent.session.save()
+        sleeps: list[float] = []
+
+        def _sleep(seconds: float) -> None:
+            sleeps.append(float(seconds))
+
+        with patch("agent.time.sleep", _sleep):
+            result = agent._run_execute_segments(
+                intent="execute",
+                subagent_used=False,
+                subagent_tool_rounds=0,
+                tools=[],
+                model="0x567-flash",
+            )
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(result.finish_reason, "provider_error")
+        self.assertIn("reasoning", result.assistant_text)
+
     def test_one_provider_retry_does_not_consume_the_tool_round_budget(self) -> None:
         llm = _RecoveringLLM(LLMApiError("internal error", status_code=500))
         result, sleeps = self._run(llm)
