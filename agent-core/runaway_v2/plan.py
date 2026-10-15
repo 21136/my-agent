@@ -49,7 +49,6 @@ class TurnPlan:
     system_append: str
     acceptance_item: ChecklistItem | None
     max_tool_rounds: int
-    chain_after_ok: bool
 
 
 def _user_requested_item(user_text: str, checklist: Checklist) -> ChecklistItem | None:
@@ -110,7 +109,6 @@ def build_turn_plan(
             system_append=reason,
             acceptance_item=None,
             max_tool_rounds=0,
-            chain_after_ok=False,
         )
 
     if phase.phase == "release_wait":
@@ -137,7 +135,6 @@ def build_turn_plan(
                 ),
                 acceptance_item=None,
                 max_tool_rounds=12,
-                chain_after_ok=False,
             )
         completed = phase.release_accepted
         return TurnPlan(
@@ -151,7 +148,6 @@ def build_turn_plan(
             system_append="",
             acceptance_item=None,
             max_tool_rounds=0,
-            chain_after_ok=False,
         )
 
     if phase.phase == "prepare":
@@ -180,7 +176,6 @@ def build_turn_plan(
                 acceptance={"type": "prepare_ready"},
             ),
             max_tool_rounds=8,
-            chain_after_ok=True,
         )
 
     if phase.phase == "implement":
@@ -201,7 +196,6 @@ def build_turn_plan(
                     system_append=_system_append_for_item(requested, mode=mode),
                     acceptance_item=requested,
                     max_tool_rounds=6,
-                    chain_after_ok=False,
                 )
             return TurnPlan(
                 phase="verify",
@@ -214,7 +208,6 @@ def build_turn_plan(
                 system_append=_system_append_for_item(requested, mode=mode),
                 acceptance_item=requested,
                 max_tool_rounds=6,
-                chain_after_ok=True,
             )
         label = f"{task_id} {body}" if task_id and body else (task_id or "下一任务")
         return TurnPlan(
@@ -235,7 +228,6 @@ def build_turn_plan(
             ),
             acceptance_item=None,
             max_tool_rounds=12,
-            chain_after_ok=True,
         )
 
     focus = first_open_item(checklist)
@@ -253,7 +245,6 @@ def build_turn_plan(
             system_append=_system_append_for_item(requested, mode=mode),
             acceptance_item=requested,
             max_tool_rounds=0,
-            chain_after_ok=False,
         )
     if requested is None:
         return TurnPlan(
@@ -267,7 +258,6 @@ def build_turn_plan(
             system_append="",
             acceptance_item=None,
             max_tool_rounds=0,
-            chain_after_ok=False,
         )
     return TurnPlan(
         phase="verify",
@@ -280,56 +270,4 @@ def build_turn_plan(
         system_append=_system_append_for_item(requested, mode=mode),
         acceptance_item=requested,
         max_tool_rounds=6,
-        chain_after_ok=True,
     )
-
-
-def _checklist_item(
-    checklist: Checklist,
-    item: ChecklistItem | None,
-) -> ChecklistItem | None:
-    if item is None:
-        return None
-    return next((entry for entry in checklist.items if entry.id == item.id), None)
-
-
-def _escalated_to_human(checklist: Checklist, item: ChecklistItem | None) -> bool:
-    target = _checklist_item(checklist, item)
-    if target is None:
-        return False
-    return (
-        target.status == "failed"
-        and target.directed_used
-        and target.attempts >= directed_after()
-    )
-
-
-def should_chain(
-    *,
-    plan: TurnPlan,
-    hook_ok: bool,
-    runaway_enabled: bool,
-    cancelled: bool,
-    intent: str,
-    checklist: Checklist,
-    phase: PhaseResult,
-) -> bool:
-    if not runaway_enabled or cancelled:
-        return False
-    if plan.mode == "human":
-        return False
-    if not plan.chain_after_ok:
-        return False
-    if phase.phase in {"release_wait", "human"}:
-        return False
-    if plan.phase == "release_wait":
-        return False
-    if _escalated_to_human(checklist, plan.acceptance_item):
-        return False
-    if phase.phase == "prepare":
-        return True
-    if phase.phase == "implement":
-        return True
-    if phase.phase == "verify":
-        return first_open_item(checklist) is not None
-    return False

@@ -137,7 +137,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
 | T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
 | T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · 文档废止表 | v2 默认 off 时 v1 仍可跑；当前选定 v1 回归 108/112，通过外的 4 项待收口 | **in_progress** |
-| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；兼容 `chain_after_ok` / `plan.should_chain` 待移除；IT-6107-a～g · S-UX-028m | **in_progress**（核心与 IT-6107-a～g 已接入并通过；体验脚本里程碑回归已修；兼容层 / 指纹 / S-UX-028m 待收口） |
+| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
 | S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
 
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）

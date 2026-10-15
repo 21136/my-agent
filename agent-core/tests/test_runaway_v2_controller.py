@@ -627,19 +627,11 @@ class RunawayV2ControllerTests(unittest.TestCase):
                 intent="execute",
             )
             self.assertEqual(human_plan.mode, "human")
-            from runaway_v2.plan import should_chain
+            from runaway_v2.continuation import pending_runaway_work
 
-            self.assertFalse(
-                should_chain(
-                    plan=human_plan,
-                    hook_ok=False,
-                    runaway_enabled=True,
-                    cancelled=False,
-                    intent="execute",
-                    checklist=checklist,
-                    phase=phase,
-                )
-            )
+            session = self._bind_session(paths)
+            session.meta.project_runaway_enabled = True
+            self.assertIsNone(pending_runaway_work(paths, "demo", session, checklist=checklist))
 
     @patch.dict(os.environ, {"MY_AGENT_RUNAWAY_V2": "1"}, clear=False)
     def test_prepare_hook_still_chains_until_docs_ready(self) -> None:
@@ -657,20 +649,17 @@ class RunawayV2ControllerTests(unittest.TestCase):
                 intent="execute",
             )
             from runaway_v2.acceptance import run_acceptance
-            from runaway_v2.plan import should_chain
+            from runaway_v2.continuation import pending_runaway_work, should_continue_runaway
 
             hook = run_acceptance(paths, "demo", plan.acceptance_item)
             self.assertFalse(hook.ok)
             self.assertIn("PROJECT.md", hook.tail)
+            session = self._bind_session(paths)
+            session.meta.project_runaway_enabled = True
+            self.assertIsNotNone(pending_runaway_work(paths, "demo", session))
             self.assertTrue(
-                should_chain(
-                    plan=plan,
-                    hook_ok=hook.ok,
-                    runaway_enabled=True,
-                    cancelled=False,
-                    intent="execute",
-                    checklist=build_checklist(paths, "demo"),
-                    phase=phase,
+                should_continue_runaway(
+                    paths, "demo", session, finish_reason="completed", observe=False
                 )
             )
 
@@ -761,18 +750,18 @@ class RunawayV2ControllerTests(unittest.TestCase):
                 user_text="继续",
                 intent="qa",
             )
-            from runaway_v2.plan import should_chain
+            from runaway_v2.continuation import pending_runaway_work, should_continue_runaway
 
-            self.assertTrue(plan.chain_after_ok)
+            session = self._bind_session(paths)
+            session.meta.project_runaway_enabled = True
+            self.assertEqual(pending_runaway_work(paths, "demo", session).phase, "prepare")
             self.assertTrue(
-                should_chain(
-                    plan=plan,
-                    hook_ok=False,
-                    runaway_enabled=True,
-                    cancelled=False,
-                    intent="qa",
-                    checklist=build_checklist(paths, "demo"),
-                    phase=phase,
+                should_continue_runaway(
+                    paths,
+                    "demo",
+                    session,
+                    finish_reason="qa",
+                    observe=False,
                 )
             )
 

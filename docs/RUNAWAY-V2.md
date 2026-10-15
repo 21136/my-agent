@@ -361,7 +361,6 @@ class TurnPlan:
     system_append: str                  # ≤ 800 字，禁止 v1 overlay 长文
     acceptance: AcceptanceSpec | None
     max_tool_rounds: int
-    chain_after_ok: bool                # 兼容字段；v2 续接单真源不读取，待移除
 ```
 
 `system_append` 模板（验收定向轮示例）：
@@ -410,7 +409,7 @@ update item status / attempts / last_failure
 append PROGRESS.md
 save checklist json
 mirror debug phase to session.meta
-if should_chain: 内部再调 run_turn("[continue]") 或现有续接，但必须重入 controller
+if should_continue_runaway: 内部再调 run_turn("[continue]")，但必须重入 controller
 release lease on cancel/error
 ```
 
@@ -439,7 +438,7 @@ hook fail   → attempts += 1, status=failed, 记录 tail
 
 ### 6.5 续接（superseded → 见续接专文）
 
-> **运行时权威**：[RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)（v0.1.0）  
+> **运行时权威**：[RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)（v0.2.1）  
 > 编码任务：**T-6107** · 测试 **IT-6107-a～g** · 体验 **S-UX-028m**
 
 **已决（2026-09-04）**：续接不再由 `TurnPlan.chain_after_ok`、`turn_intent`、分散的 `should_chain` / `should_chain_runaway_after_turn` 四套规则决定，而由磁盘派生的 **`pending_runaway_work()`** 单真源驱动。
@@ -453,7 +452,7 @@ hook fail   → attempts += 1, status=failed, 记录 tail
 - **致命出口**：`cancelled`、`timeout`、`error` 在 controller 内持久化暂停原因并立即返回，不能被转译为 `tool_loop_exceeded` 或新的续接回合。  
 - **进展守卫**：连续 `MY_AGENT_RUNAWAY_V2_NO_PROGRESS_TURNS` 个自动回合无项目状态变化，或达到 `MY_AGENT_RUNAWAY_V2_MAX_AUTO_TURNS`，立即暂停并保留可恢复原因；恢复会清零守卫计数。
 
-`chain_after_ok` / `should_chain()` 目前仍保留在 `runaway_v2/plan.py` 作为兼容面；controller、server、agent 的 v2 续接路径已不再读取它们，统一使用 `pending_runaway_work()`。兼容面移除仍可单独收口，进展守卫已由 `continuation.py` 落地。
+续接判断仅经 `continuation.py`（`pending_runaway_work` · `should_continue_runaway`）；`plan.py` 不再承载续接 bool。进展守卫由 `continuation.py` 落地。
 
 ### 6.6 acceptance 钩子
 

@@ -1,7 +1,7 @@
 # 狂奔 v2 续接收敛 — `pending_work` 单真源
 
-> 版本 **0.2.0** · 2026-09-09  
-> 状态：**续接核心已接入；无进展熔断、自动预算和暂停恢复已落地**  
+> 版本 **0.2.1** · 2026-10-15  
+> 状态：**续接核心已接入；`chain_after_ok` / `plan.should_chain` 已移除；无进展熔断、自动预算和暂停恢复已落地**  
 > 父文档：[RUNAWAY-V2.md](./RUNAWAY-V2.md) · 取代其 **§6.5** 的分散 `should_chain` 条款  
 > 触发：music 试点「跑 1 轮就停」；本版已把 v2 自动续接收敛到 controller，server / Desktop 仅保留 v1 兼容入口和状态展示。  
 > 关联：[RUNAWAY-R6-RELIABILITY.md](./RUNAWAY-R6-RELIABILITY.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) G9 · [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) §7.5
@@ -130,8 +130,8 @@ should_continue_runaway(
 
 | 原调用方 | 目标 / 当前 |
 |----------|------|
-| `plan.should_chain()` | **目标删除**；当前仅保留兼容面，controller 已改调 `should_continue_runaway` |
-| `TurnPlan.chain_after_ok` | **目标删除**；当前字段仍存在但续接单真源不读取它，plan 语义待收敛为 scope / acceptance |
+| `plan.should_chain()` | **已删除**；controller / 测试统一 `should_continue_runaway` |
+| `TurnPlan.chain_after_ok` | **已删除**；plan 仅表达 scope / acceptance / mode |
 | `RunawayController` | v2 自动续接唯一 owner；回合结束先处理 fatal `finish_reason`，再读 `pending_work` |
 | `Agent._should_chain_runaway_v2_after_turn()` | 兼容查询：`should_continue_runaway(..., finish_reason=...)`；不由 server 调用 v2 自动回合 |
 | `Agent.runaway_chain_skip_reason()` | `pending_work is None` 时派生人话；与 `build_v2_state_fields` 共用 blocked 文案 |
@@ -321,8 +321,8 @@ implement 阶段「口头完成」不勾 TASKS 不算 fingerprint 进展；finge
 | 2 | 单测 IT-6107-a～g（§11）· **已完成，纳入 v2 40/40 回归** |
 | 3 | `controller.py`：续接改用 `should_continue_runaway` · **已完成** |
 | 4 | `agent.py` / `server.py`：v2 续接判断统一走 `continuation`；server 不再拥有 v2 自动续接 · **已完成** |
-| 5 | `plan.py`：移除 `chain_after_ok` 字段及赋值 · **待完成** |
-| 6 | 移除 `plan.should_chain` 兼容面 · **待完成** |
+| 5 | `plan.py`：移除 `chain_after_ok` 字段及赋值 · **已完成** |
+| 6 | 移除 `plan.should_chain` 兼容面 · **已完成** |
 | 7 | 进展指纹、自动预算、暂停恢复 §6 · **已完成** |
 
 ### 10.2 文档
