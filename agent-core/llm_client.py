@@ -30,6 +30,11 @@ from tools.http_client import make_httpx_client
 
 _REASONING_EFFORT_LEVELS = frozenset({"low", "medium", "high", "max"})
 _DEEPSEEK_REASONING_EFFORT_LEVELS = frozenset({"low", "high", "max"})
+_GPT6_CHAT_MODELS = frozenset({"gpt-6-luna", "gpt-6-sol"})
+
+
+def _gpt6_tool_calls_require_none(entry: ModelEntry) -> bool:
+    return entry.provider_model.casefold() in _GPT6_CHAT_MODELS
 
 
 def _normalize_reasoning_effort(raw: str | None) -> str:
@@ -48,7 +53,7 @@ def _api_reasoning_effort(effort: str, vendor: str) -> str:
             return effort
         return "high"
     if vendor_key in {"0x567", "tokeness"}:
-        # OpenAI-compatible gateways (e.g. gpt-5.4 / Tokeness Luna) reject ``max``; cap at high.
+        # OpenAI-compatible gateways may reject ``max``; cap it at ``high``.
         if effort == "max":
             return "high"
     return effort
@@ -64,6 +69,9 @@ def _apply_reasoning_effort_to_payload(
     """Attach provider-specific reasoning controls to a chat completion payload."""
     vendor_key = entry.vendor.casefold()
     resolved = _api_reasoning_effort(effort, entry.vendor)
+    if _gpt6_tool_calls_require_none(entry) and has_tools:
+        payload["reasoning_effort"] = "none"
+        return
     if vendor_key in {"deepseek", "sophnet"}:
         payload["thinking"] = {
             "type": "enabled",
@@ -422,6 +430,8 @@ class LLMClient:
                 entry,
                 has_tools=has_tools_in_payload,
             )
+        elif _gpt6_tool_calls_require_none(entry) and has_tools_in_payload:
+            payload["reasoning_effort"] = "none"
         elif is_tokeness_gateway(entry) and has_tools_in_payload:
             # Belt-and-suspenders: Tokeness requires explicit none when tools are present.
             payload["reasoning_effort"] = "none"

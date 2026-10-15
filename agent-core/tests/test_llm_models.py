@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
@@ -34,7 +36,11 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertEqual(flash.api_key_env, "SOPHNET_API_KEY")
 
     def test_builtin_includes_0x567(self) -> None:
-        registry = get_registry()
+        with patch.dict("os.environ"):
+            os.environ.pop("OX567_MODEL_PRO", None)
+            os.environ.pop("OX567_MODEL", None)
+            os.environ.pop("OX567_MODEL_FLASH", None)
+            registry = ModelRegistry.load()
         pro = registry.get("0x567-pro")
         self.assertIsNotNone(pro)
         assert pro is not None
@@ -44,16 +50,36 @@ class LlmModelRegistryTests(unittest.TestCase):
             "https://api-cdn.0x567.com/v1/chat/completions",
         )
         self.assertEqual(pro.api_key_env, "OX567_API_KEY")
-        self.assertEqual(pro.provider_model, "gpt-5.4")
+        self.assertEqual(pro.name, "0x567 GPT-6 Sol (1M)")
+        self.assertEqual(pro.provider_model, "gpt-6-sol")
         flash = registry.get("0x567-flash")
         self.assertIsNotNone(flash)
         assert flash is not None
-        self.assertEqual(flash.provider_model, "gpt-5.6-luna")
-        self.assertEqual(flash.max_input_tokens, 372_000)
+        self.assertEqual(flash.name, "0x567 GPT-6 Luna (1M)")
+        self.assertEqual(flash.provider_model, "gpt-6-luna")
+        self.assertEqual(flash.max_input_tokens, 1_000_000)
         resolved = registry.resolve("0x567")
         self.assertIsNotNone(resolved)
         assert resolved is not None
         self.assertEqual(resolved.id, "0x567-pro")
+
+    def test_0x567_model_environment_overrides_are_preserved(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OX567_MODEL_FLASH": "custom-flash-v1",
+                "OX567_MODEL_PRO": "custom-pro-v1",
+            },
+        ):
+            registry = ModelRegistry.load()
+
+        flash = registry.get("0x567-flash")
+        pro = registry.get("0x567-pro")
+        self.assertIsNotNone(flash)
+        self.assertIsNotNone(pro)
+        assert flash is not None and pro is not None
+        self.assertEqual(flash.provider_model, "custom-flash-v1")
+        self.assertEqual(pro.provider_model, "custom-pro-v1")
 
     def test_builtin_includes_tokeness(self) -> None:
         registry = get_registry()
@@ -141,7 +167,9 @@ class LlmModelRegistryTests(unittest.TestCase):
         from llm_client import resolve_context_limit
 
         self.assertEqual(resolve_context_limit("tokeness-luna"), 372_000)
-        self.assertEqual(resolve_context_limit("0x567-flash"), 372_000)
+        self.assertEqual(resolve_context_limit("0x567-flash"), 1_000_000)
+        self.assertEqual(resolve_context_limit("gpt-6-luna"), 1_000_000)
+        self.assertEqual(resolve_context_limit("gpt-6-sol"), 1_000_000)
         self.assertEqual(resolve_context_limit("gpt-5.6-luna"), 372_000)
         self.assertEqual(resolve_context_limit("luna"), 372_000)
 

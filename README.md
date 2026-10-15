@@ -146,6 +146,7 @@ my-agent/
 
 | 文档 | 用途 |
 |------|------|
+| [**docs/README.md**](docs/README.md) | **文档分类导航**（按产品、运行时、工具、安全与历史材料查找） |
 | [**docs/MAP.md**](docs/MAP.md) | **项目地图**（新会话先读） |
 | [**docs/TASKS.md**](docs/TASKS.md) | 任务清单 · DOC-04 准入 |
 | [**docs/TERMINAL-MODE.md**](docs/TERMINAL-MODE.md) | Terminal 狂野模式 · Ink UI · auto plan-execute |

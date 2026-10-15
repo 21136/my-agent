@@ -24,13 +24,14 @@ def _entry(
     entry_id: str,
     vendor: str,
     base_url: str = "https://example.test",
+    provider_model: str = "gpt-5.6-luna",
 ) -> ModelEntry:
     return ModelEntry(
         id=entry_id,
         name=entry_id,
         vendor=vendor,
         base_url=base_url,
-        provider_model="gpt-5.6-luna",
+        provider_model=provider_model,
     )
 
 
@@ -59,6 +60,39 @@ class ReasoningEffortTests(unittest.TestCase):
         )
         self.assertEqual(payload.get("reasoning_effort"), "medium")
         self.assertNotIn("thinking", payload)
+
+    def test_gpt6_tool_calls_force_reasoning_none_for_both_profiles(self) -> None:
+        for profile_id, provider_model in (
+            ("0x567-flash", "gpt-6-luna"),
+            ("0x567-pro", "gpt-6-sol"),
+        ):
+            with self.subTest(profile_id=profile_id):
+                payload: dict[str, object] = {
+                    "model": provider_model,
+                    "tools": [{"type": "function"}],
+                }
+                entry = _entry(
+                    entry_id=profile_id,
+                    vendor="0x567",
+                    provider_model=provider_model,
+                )
+                _apply_reasoning_effort_to_payload(
+                    payload,
+                    "medium",
+                    entry,
+                    has_tools=True,
+                )
+                self.assertEqual(payload.get("reasoning_effort"), "none")
+
+    def test_gpt6_without_tools_preserves_selected_reasoning_effort(self) -> None:
+        payload: dict[str, object] = {"model": "gpt-6-luna"}
+        entry = _entry(
+            entry_id="0x567-flash",
+            vendor="0x567",
+            provider_model="gpt-6-luna",
+        )
+        _apply_reasoning_effort_to_payload(payload, "high", entry, has_tools=False)
+        self.assertEqual(payload.get("reasoning_effort"), "high")
 
     def test_tokeness_matches_0x567_reasoning_effort(self) -> None:
         self.assertEqual(_api_reasoning_effort("medium", "Tokeness"), "medium")

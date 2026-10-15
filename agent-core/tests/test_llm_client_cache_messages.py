@@ -142,7 +142,7 @@ class LlmClientCacheMessageTests(unittest.TestCase):
             with patch("llm_client.get_registry") as mock_registry:
                 entry = MagicMock()
                 entry.id = "0x567-flash"
-                entry.provider_model = "gpt-5.6-luna"
+                entry.provider_model = "gpt-6-luna"
                 entry.vendor = "0x567"
                 entry.supports_tool_call = True
                 entry.resolve_api_key.return_value = "test-key"

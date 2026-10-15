@@ -219,9 +219,9 @@ def _builtin_models() -> list[ModelEntry]:
     ox567_pro_model = (
         os.environ.get("OX567_MODEL_PRO")
         or os.environ.get("OX567_MODEL")
-        or "gpt-5.4"
+        or "gpt-6-sol"
     ).strip()
-    ox567_flash_model = os.environ.get("OX567_MODEL_FLASH", "gpt-5.6-luna").strip()
+    ox567_flash_model = os.environ.get("OX567_MODEL_FLASH", "gpt-6-luna").strip()
     tokeness_base = os.environ.get("TOKENESS_BASE_URL", TOKENESS_DEFAULT_BASE_URL).rstrip("/")
     if tokeness_base.endswith(CHAT_COMPLETIONS_SUFFIX):
         tokeness_base = tokeness_base[: -len(CHAT_COMPLETIONS_SUFFIX)]
@@ -277,7 +277,7 @@ def _builtin_models() -> list[ModelEntry]:
         ),
         ModelEntry(
             id="0x567-pro",
-            name="0x567 GPT-5.4 (1M)",
+            name="0x567 GPT-6 Sol (1M)",
             vendor="0x567",
             base_url=ox567_base,
             provider_model=ox567_pro_model,
@@ -290,12 +290,12 @@ def _builtin_models() -> list[ModelEntry]:
         ),
         ModelEntry(
             id="0x567-flash",
-            name="0x567 Luna (372k)",
+            name="0x567 GPT-6 Luna (1M)",
             vendor="0x567",
             base_url=ox567_base,
             provider_model=ox567_flash_model,
             api_key_env="OX567_API_KEY",
-            max_input_tokens=372_000,
+            max_input_tokens=1_000_000,
             supports_image_input=True,
             tier="flash",
             aliases=("567-flash",),
