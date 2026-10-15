@@ -2,7 +2,7 @@
 
 > 版本 0.2.1 · 2026-09-07 · 细分到每个 task，**先写文档，再动手**
 > **新会话**：先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再读 [MAP.md](./MAP.md)。
-> **当前焦点**：收口 T-6106 v1 兼容回归、T-6107 续接单真源；S-6106 music 试点已完成，继续推进 UX-029 M2 / UX-030 验收。
+> **当前焦点**：T-6106 v1 兼容回归选集、OMNI-B 显式直接实现 WS；S-6106 / T-6107 已收口；继续 UX-029 M2 / UX-030 验收。
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -119,8 +119,8 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 
 | ID | 包 | 说明 | 状态 |
 |----|-----|------|------|
-| OMNI-A | 信任 · 续接 + 网关 | T-6107 · `pending_work` · GPT-6 回归 | **in_progress** |
-| OMNI-B | 日常写码 · ordinary 闭环 | S-OMNI-01 等 · ordinary 直接实现 | todo |
+| OMNI-A | 信任 · 续接 + 网关 | T-6107 · `pending_work` · GPT-6 回归 | **done** |
+| OMNI-B | 日常写码 · ordinary 闭环 | S-OMNI-01 等 · `project.direct_implement` · ordinary 直接实现 | **in_progress**（CLI/话术/侧栏 CTA 已有；Desktop WS 显式入口已接） |
 | OMNI-C | MCP 个人默认集 | 3～5 server · Desktop 连接态 | todo |
 
 ### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./RUNAWAY-V2.md)）

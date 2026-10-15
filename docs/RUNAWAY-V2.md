@@ -607,13 +607,13 @@ v1 测试在 `MY_AGENT_RUNAWAY_V2=0` 下必须仍绿。禁止改 v1 测试迁就
 
 ### 11.1 里程碑
 
-截至 2026-09-07：M0/M1 已编码，M2 的 checklist 状态面与续接核心已接入；v2 目标回归 48/48 通过，Desktop 完整构建已通过；S-6106 music 真实试点已完成。T-6107 兼容层/指纹收口、S-UX-028m 和 M4 仍未完成。
+截至 2026-10-15：M0/M1/M2 续接核心已编码；v2 自动测试 40/40；S-6106 music 试点已完成；T-6107 兼容层已移除。S-UX-028m 手工留痕与 M4 默认 v2 仍未做。
 
 | 步 | 内容 | 退出标准 | 当前状态 |
 |----|------|----------|----------|
 | M0 | `build_checklist` + derive_phase 纯函数 | IT-6101/6106 | **done** |
 | M1 | Controller 接入 `run_turn` + 开关 | 开关 0=v1，1=v2 | **done** |
-| M2 | executor glob + Desktop state + continuation core | 侧栏清单数字；IT-6107-a～g | **核心落地；兼容层/指纹待收口，完整构建已通过** |
+| M2 | executor glob + Desktop state + continuation core | 侧栏清单数字；IT-6107-a～g | **done**（`chain_after_ok` / `should_chain` 已删） |
 | M3 | music S-6106 / S-UX-028m | 人工签字 | **部分完成：S-6106 已进入 release_wait；S-UX-028m 多段续接手工证据仍待收口** |
 | M4 | 默认开 v2 或删 v1 死代码 | 另开任务，不在 M0 做 | todo |
 
@@ -639,7 +639,7 @@ v1 测试在 `MY_AGENT_RUNAWAY_V2=0` 下必须仍绿。禁止改 v1 测试迁就
 
 ## 13. 实施任务
 
-见 [TASKS.md](./TASKS.md) Phase 60：T-6100～T-6107、S-6106。T-6100～T-6105 已编码；v2 目标回归 48/48 通过；T-6106 的 v1 兼容回归仍在收口；T-6107 续接核心已接入，兼容层/指纹与 S-UX-028m 待做，S-6106 手工试点已完成。
+见 [TASKS.md](./TASKS.md) Phase 60：T-6100～T-6107、S-6106。T-6100～T-6105、T-6107 已收口；T-6106 v1 兼容回归选集待绿；S-6106 done；S-UX-028m 可选手工。
 
 ---
 

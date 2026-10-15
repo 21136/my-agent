@@ -1,6 +1,6 @@
 # 普通模式流程减负（提案 · 未实施）
 
-> 状态：**proposal only**（2026-09-12）  
+> 状态：**M0 已落地 · M1 编码中**（2026-10-15）  
 > 范围：Desktop / CLI 的 **普通模式**项目流程；不改狂奔 v2 主状态机。  
 > 依据：`0x567-flash` 普通模式写项目探测、计划门实机卡点、Desktop mockup/真机审阅。  
 > 相关：`PROJECT-MODE.md` §4 计划确认门 · `DESKTOP-TEXTBOOK-FLOW.md` 五段闸门 · 现网已合入的「直接实现话术自动确认」属过渡补丁。
@@ -91,12 +91,13 @@
 - 话术直接实现 → 自动确认 + 屏蔽 plan_partner + `verify.py` build_test 免确认  
 - 提交：`92870de`
 
-### M1 · 显式入口（建议下一刀）
+### M1 · 显式入口（编码中）
 
-- Desktop：新建/打开项目双 CTA（规划后开工 / 直接实现）
-- CLI：`项目 直接实现` 与 `项目 确认` 对称
-- session meta：`project_entry = plan | direct`（可审计）
-- 话术匹配仅当 `project_entry` 未设时回退
+- Desktop：新建/打开项目双 CTA（规划后开工 / 直接实现）· **侧栏/顶栏已有**
+- Desktop WS：`project.direct_implement` → `confirm_direct_implement`（与 CLI 对称，不再依赖聊天 `项目 直接实现`）
+- CLI：`项目 直接实现` 与 `项目 确认` 对称 · **已有**
+- session meta：`project_entry = plan | direct`（可审计）· **已有**
+- 话术匹配仅当 `project_entry` 未设时回退 · **已有**
 
 ### M2 · 轻量模板
 

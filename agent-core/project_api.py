@@ -12,7 +12,12 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from project_cli import confirm_project_design, confirm_project_plan, start_project_task
+from project_cli import (
+    confirm_direct_implement,
+    confirm_project_design,
+    confirm_project_plan,
+    start_project_task,
+)
 from project_mode import (
     ProjectModeError,
     acceptance_script_exists,
@@ -710,6 +715,19 @@ def dispatch_project_message(
             result = start_project_task(session, paths, task_id)
         except ProjectModeError as exc:
             raise ProjectApiError(str(exc)) from exc
+        return {
+            "_events": [
+                {"type": "notice", "text": result},
+                project_state_payload(session, paths),
+            ]
+        }
+
+    if msg_type == "project.direct_implement":
+        try:
+            result = confirm_direct_implement(session)
+        except ProjectModeError as exc:
+            raise ProjectApiError(str(exc)) from exc
+        session.save()
         return {
             "_events": [
                 {"type": "notice", "text": result},

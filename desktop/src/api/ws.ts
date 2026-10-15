@@ -901,6 +901,10 @@ export class AgentWsClient {
     this.send({ type: "project.task.start", task_id: taskId });
   }
 
+  startDirectImplement(): void {
+    this.send({ type: "project.direct_implement" });
+  }
+
   // project.plan.* convenience methods
   sendPlanMessage(payload: Record<string, unknown>): void {
     this.send(payload);

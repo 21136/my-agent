@@ -307,6 +307,25 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         self.assertEqual(session.meta.project_workflow_stage, "implementation")
         self.assertTrue(str(session.meta.project_scope_confirmed_at or "").strip())
 
+    def test_ws_direct_implement_sets_entry_and_state(self) -> None:
+        from project_api import dispatch_project_message, project_state_payload
+
+        session, paths = self._new_project("ws-direct")
+        response = dispatch_project_message(
+            session,
+            paths,
+            {"type": "project.direct_implement"},
+        )
+        events = response.get("_events") or []
+        self.assertTrue(any(evt.get("type") == "notice" for evt in events))
+        state_events = [evt for evt in events if evt.get("type") == "project.state"]
+        self.assertEqual(len(state_events), 1)
+        self.assertEqual(session.meta.project_entry, "direct")
+        self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertFalse(state_events[0].get("needs_plan_confirm"))
+        standalone = project_state_payload(session, paths)
+        self.assertEqual(standalone.get("project_entry"), "direct")
+
 
 class DirectImplementToolFilterTests(unittest.TestCase):
     def test_build_llm_tools_hides_plan_partner(self) -> None:

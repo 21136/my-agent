@@ -2265,7 +2265,7 @@ export function mountUnifiedShell(
     try {
       setStatus("正在直接实现…");
       showNowChat();
-      client.sendCommand("项目 直接实现");
+      client.startDirectImplement();
     } catch (err) {
       setStatus(`直接实现失败：${err instanceof Error ? err.message : String(err)}`);
     }
