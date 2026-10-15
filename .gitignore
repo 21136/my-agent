@@ -36,6 +36,10 @@ dist/
 dist-electron/
 *.log
 
+# Local 0x567 E2E probe dumps (tools/e2e_0x567_flash.py --report)
+/e2e-0x567-*.json
+/e2e-flash-smoke-probe*.json
+
 # OS
 Thumbs.db
 .DS_Store

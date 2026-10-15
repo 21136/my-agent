@@ -3223,6 +3223,11 @@ def format_project_overlay(
             lines.append(
                 "active_doc_selection_hint: 用户选中了上述片段；「这段 / 选中内容」即指它。"
             )
+    if sys.platform == "win32":
+        lines.append(
+            "tool_hint_win: Python 测试优先 run_command `python -m pytest …`，"
+            "不要假定 pytest 已在 PATH。"
+        )
     return "\n".join(lines)
 
 

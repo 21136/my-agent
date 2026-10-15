@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 REM Default flash model for new sessions / registry (override with your own LLM_MODEL).
-if not defined LLM_MODEL set "LLM_MODEL=tokeness-luna"
+if not defined LLM_MODEL set "LLM_MODEL=0x567-flash"
 
 REM Runaway v2 controller (Phase 60). Set MY_AGENT_RUNAWAY_V2=0 to use frozen v1 path.
 if not defined MY_AGENT_RUNAWAY_V2 set "MY_AGENT_RUNAWAY_V2=1"
