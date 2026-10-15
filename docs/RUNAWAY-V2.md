@@ -581,7 +581,7 @@ checklist 全绿 → release_wait，0 自动写业务；等人 `project.release.
 
 ### 10.1 自动化（IT-6101～6107）
 
-当前 v2 自动测试共 **40/40 通过**；T-6106 另有 v1 兼容回归选集 108/112 通过，剩余 4 项旧断言待收口。
+当前 v2 自动测试共 **40/40 通过**；T-6106 **v1 兼容回归选集 112/112**（`tools/runaway_v1_compat_regression.py` · `agent-core/tests/conftest.py` 在 v1 模块内强制 `MY_AGENT_RUNAWAY_V2=0`）。
 
 | ID | 断言 |
 |----|------|
@@ -597,9 +597,19 @@ checklist 全绿 → release_wait，0 自动写业务；等人 `project.release.
 
 `workspace/music`：v2 on，从暂停/缺 ENV 状态「继续狂奔」已完成真实试点。会话 `20260818-cef22232` 使用 `0x567-flash` 推进至 `release_wait`：36/36 正式任务完成，矩阵与 `AC-PROJECT` 全绿，过程无 bug-fix 子代理卡片。首轮发现并修复了 MX-2 多行验证绑定误报、`[P1] T-*` 正式任务解析遗漏和质量配置阻塞；当前续接守卫还会对重复无进展和自动回合预算显式暂停。
 
-### 10.3 回归范围
+### 10.3 回归范围（T-6106）
 
-v1 测试在 `MY_AGENT_RUNAWAY_V2=0` 下必须仍绿。禁止改 v1 测试迁就 v2。
+v1 冻结路径在 **`MY_AGENT_RUNAWAY_V2=0`** 下必须仍绿；禁止为迁就 v2 改 v1 断言。
+
+**选集（112）**：`test_runaway_flow` · `test_runaway_reliability` · `test_runaway_startup` · `test_runaway_verification_orchestrator` · `test_runaway_verification_bootstrap` · `test_runaway_verify_matrix` · `test_project_artifacts`。
+
+一键：
+
+```bat
+.venv\Scripts\python.exe tools\runaway_v1_compat_regression.py
+```
+
+在 Desktop 默认 `MY_AGENT_RUNAWAY_V2=1` 的 shell 里跑全量 pytest 时，上述模块由 `conftest.py` 自动降为 v0，避免 v2 的 `should_chain` / `project.state` 映射污染 v1 契约测试。
 
 ---
 
@@ -639,7 +649,7 @@ v1 测试在 `MY_AGENT_RUNAWAY_V2=0` 下必须仍绿。禁止改 v1 测试迁就
 
 ## 13. 实施任务
 
-见 [TASKS.md](./TASKS.md) Phase 60：T-6100～T-6107、S-6106。T-6100～T-6105、T-6107 已收口；T-6106 v1 兼容回归选集待绿；S-6106 done；S-UX-028m 可选手工。
+见 [TASKS.md](./TASKS.md) Phase 60：T-6100～T-6107、S-6106。T-6100～T-6107、S-6106 已收口；S-UX-028m 可选手工。
 
 ---
 

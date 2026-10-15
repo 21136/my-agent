@@ -2,7 +2,7 @@
 
 > 版本 0.2.1 · 2026-09-07 · 细分到每个 task，**先写文档，再动手**
 > **新会话**：先读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再读 [MAP.md](./MAP.md)。
-> **当前焦点**：T-6106 v1 兼容回归选集、OMNI-B 显式直接实现 WS；S-6106 / T-6107 已收口；继续 UX-029 M2 / UX-030 验收。
+> **当前焦点**：OMNI-B 显式直接实现 WS；Phase 60（T-6106/6107/S-6106）已收口；继续 UX-029 M2 / UX-030 验收。
 > Phase 40/41 **done**（41 仅 P3 defer）· Phase 39 done · [DOC-04](./TASKS.md)  
 > 顺序：**工具设计 → 工具实现 → 对话壳 → 进化（memory/tool）→ skill 最后**
 
@@ -136,7 +136,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6103 | turn_end acceptance hook | `runaway_v2/acceptance.py` · command exit code | IT-6103 非 0 不标 passed | **done** |
 | T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
 | T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
-| T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · 文档废止表 | v2 默认 off 时 v1 仍可跑；当前选定 v1 回归 108/112，通过外的 4 项待收口 | **in_progress** |
+| T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · `tests/conftest.py` · `tools/runaway_v1_compat_regression.py` | v2 默认 on 时 v1 选集仍 112/112；选集内强制 `MY_AGENT_RUNAWAY_V2=0` | **done** |
 | T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
 | S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
 
@@ -186,7 +186,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 |------|------|
 | 狂奔 v2 自动测试 | **40/40 通过**（checklist / controller / continuation / resume / state / experience harness） |
 | Python 基础验证 | `.venv` 解释器 `F:\my-agent-main\.venv\Scripts\python.exe`；`compileall` 通过；当前环境缺少 `pydantic` / `pytest` |
-| v1 兼容回归选集 | **108/112 通过**；4 项旧 v1 断言待收口，故 T-6106 保持 `in_progress` |
+| v1 兼容回归选集 | **112/112 通过**（`tools/runaway_v1_compat_regression.py`；conftest 隔离 Desktop 默认 v2=1） |
 | Python unittest 全量 | **1079 项**；无断言失败；`3` 项跳过；`2` 项因 `.venv` 缺少 `pytest` 导入错误 |
 | Terminal UI | **64/64 通过**；`npm run build` 仍有 5 个 TypeScript 类型错误 |
 | Desktop | Electron `tsconfig.node.json` 与完整 `npm run build` 通过；生产构建正常退出（修复 Electron 子构建误入 watch） |
