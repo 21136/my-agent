@@ -21,6 +21,7 @@
 
 ## 入口与产品基线
 
+- [个人全能进发（Claude 档参照）](./PERSONAL-OMNICAP-ROADMAP.md) · 自用多年总罗盘 · 非对外承诺
 - [生产项目 MVP](./PRODUCTION-PROJECT-MVP.md) · 产品决策真源
 - [MAP 项目地图](./MAP.md) · 模块、入口和实现索引
 - [TASKS 任务清单](./TASKS.md) · 任务、状态与验收

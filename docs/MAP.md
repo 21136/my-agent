@@ -3,6 +3,7 @@
 > 版本 **2026-09-07** · **新会话先读 `PRODUCTION-PROJECT-MVP.md`，再读本文 + `TASKS.md`**（含 **DOC-05 废止债**）
 > 代码 **Phase 1～23 / 39～41（P3→42-J doc）done**；稳定化 [STABILIZATION.md](./STABILIZATION.md) **v1.1.0 · 已解冻**。  
 > **产品定调**：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) — Desktop **主战场**（project · 闸门+证据流程轨）· Terminal **冻结维护**（独立入口）  
+> **个人全能罗盘（自用多年）**：[PERSONAL-OMNICAP-ROADMAP.md](./PERSONAL-OMNICAP-ROADMAP.md) — Claude 档参照 · 非对外承诺  
 > **当前焦点**：收口 v1 兼容回归、T-6107 续接单真源和 S-6106 music 试点；同步推进 UX-029 M2 / UX-030 验收。Phase 58b 七文件方案仍暂停，详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。

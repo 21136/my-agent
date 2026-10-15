@@ -113,6 +113,16 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-6052 | checkpoint 谓词审计 | `agent` · `exec_reliability` | review/report_progress 不驱动 checkpoint | **done** |
 | UI-6053 | 同回合过程段跳转 + 狂奔 idle 侧栏 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) §7.5 · `project-panel.ts` · `index.ts` | S-UX-028h～j；幂等 resume 不刷 notice | **in_progress** |
 
+### 个人全能（[PERSONAL-OMNICAP-ROADMAP.md](./PERSONAL-OMNICAP-ROADMAP.md)）
+
+> **非 DOC-04 Phase**：自用战略 · 拆包时再挂具体 T-/S- id。
+
+| ID | 包 | 说明 | 状态 |
+|----|-----|------|------|
+| OMNI-A | 信任 · 续接 + 网关 | T-6107 · `pending_work` · GPT-6 回归 | **in_progress** |
+| OMNI-B | 日常写码 · ordinary 闭环 | S-OMNI-01 等 · ordinary 直接实现 | todo |
+| OMNI-C | MCP 个人默认集 | 3～5 server · Desktop 连接态 | todo |
+
 ### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./RUNAWAY-V2.md)）
 
 > **DOC-04**：MAP §2 Phase 60 · 矩阵行「狂奔 v2」· 回归 S-6106 / IT-6101～6106 / **IT-6107**
