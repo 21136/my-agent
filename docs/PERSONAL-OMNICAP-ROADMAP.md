@@ -174,6 +174,7 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 | 文档 | 角色 |
 |------|------|
 | 本文 | **个人全能总罗盘**（Claude 档） |
+| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 狂奔 vs 行业 harness 对照 · 编排下一刀草案 |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 项目模式产品决策（不变） |
 | [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) | IDE/终端/确认手感 |
 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) | 长跑 profile 运行时 |

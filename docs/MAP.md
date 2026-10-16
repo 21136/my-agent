@@ -73,7 +73,7 @@
 | **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
 | **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
 | **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
-| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 自动测试 40/40；T-6106 v1 兼容回归 108/112 待收口 · T-6107 续接核心已接入，兼容层/指纹与手工体验待收口 · S-6106 手工待做**（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**；编排对照 [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) · T-6111～6114 proposal（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
 | **Phase 61** | **Agent 工具体验路线图**（终端会话 · 原子编辑 · Git diff/restore · 结构化测试 · 诊断 · 浏览器检查 · 并行隔离 · 开源优先适配） | **P0 终端会话、Git 文件级回退和 structured_test 已 active；终端会话 UI 进入设计，原子编辑仍 experimental，其余工具未开始**（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · T-6200～T-6225） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |

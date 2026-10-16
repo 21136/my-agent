@@ -638,6 +638,7 @@ v1 冻结路径在 **`MY_AGENT_RUNAWAY_V2=0`** 下必须仍绿；禁止为迁就
 | 文档 | v2 之后 |
 |------|---------|
 | 本文 | 运行时权威（阶段 · 清单 · turn plan · acceptance） |
+| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | **行业对照 + 编排边界地图**（Claude/Codex/Cursor/dsh · 下一刀 T-6110～） |
 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) | **续接权威**（`pending_work` · 段内/跨 turn · 指纹） |
 | [RUNAWAY-FLOW-STATE-MACHINE.md](./RUNAWAY-FLOW-STATE-MACHINE.md) | v1 契约；checkpoint 节 superseded |
 | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) | v1 谓词/短接；superseded |

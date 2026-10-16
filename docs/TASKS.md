@@ -139,6 +139,8 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · `tests/conftest.py` · `tools/runaway_v1_compat_regression.py` | v2 默认 on 时 v1 选集仍 112/112；选集内强制 `MY_AGENT_RUNAWAY_V2=0` | **done** |
 | T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
 | S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
+| T-6110 | 狂奔编排地图（doc） | [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 五家对照 · v1/v2 模块 · 续接 owner 表 | **doc** |
+| T-6111～6114 | 编排工程草案 | 同地图 §6 · ExecutionLifecycle · 可观测 · v1 隔离 · 工具瀑布 | 立项时补 IT/S · DOC-04 | **proposal** |
 
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
 
