@@ -1,0 +1,57 @@
+[tool]
+name = "deploy"
+description = "受控本地部署：plan/start/status/health/rollback，复用 run_service；不默认连接生产。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "plan | start | status | health | stop | rollback"
+[schema.input.properties.service_name]
+type = "string"
+description = "run_service name"
+[schema.input.properties.command]
+type = "array"
+items = { type = "string" }
+description = "candidate command"
+[schema.input.properties.working_dir]
+type = "string"
+description = "relative Agent root directory"
+[schema.input.properties.ready_port]
+type = "integer"
+description = "ready port"
+[schema.input.properties.ready_regex]
+type = "string"
+description = "ready log regex"
+[schema.input.properties.ready_timeout_sec]
+type = "integer"
+default = 90
+description = "ready timeout"
+[schema.input.properties.version]
+type = "string"
+description = "deployment version"
+[schema.input.properties.previous_command]
+type = "array"
+items = { type = "string" }
+description = "rollback command"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = true
+description = "preview only"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 300

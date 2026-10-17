@@ -11,6 +11,7 @@ import {
   resolveWorkbenchShell,
 
 } from "./pet-route";
+import { WORKING_FPS, WORKING_FRAME_COUNT, workingFramePath } from "./pet-animation";
 import "./pet.css";
 
 const MAX_VISIBLE_TURNS = 6;
@@ -21,10 +22,11 @@ type PetMood = "idle" | "listening" | "busy" | "nudge";
 
 /** CC0 · OpenGameArt «Xenia the Linux Fox sprites» (Cawfeecrow / Alan Mackey) */
 const PET_ASSET = "/pet-assets/xenia";
+const WORKING_ASSET = "/pet-assets/my-agent-working";
 const PET_SPRITES: Record<PetMood, string> = {
   idle: `${PET_ASSET}/xenia-neutral-lookingforward.png`,
   listening: `${PET_ASSET}/xenia-wink-left.png`,
-  busy: `${PET_ASSET}/xenia-amazed.png`,
+  busy: workingFramePath(WORKING_ASSET, 0),
   nudge: `${PET_ASSET}/xenia-surprised.png`,
 };
 
@@ -100,12 +102,38 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
   const workbenchBtn = root.querySelector<HTMLButtonElement>("#pet-workbench")!;
 
   const api = window.myAgentDesktop;
+  let workingFrameIndex = 0;
+  let workingAnimationTimer: number | null = null;
+
+  function stopWorkingAnimation(): void {
+    if (workingAnimationTimer === null) return;
+    window.clearInterval(workingAnimationTimer);
+    workingAnimationTimer = null;
+  }
+
+  function startWorkingAnimation(): void {
+    if (workingAnimationTimer !== null) return;
+    workingFrameIndex = 0;
+    spriteImg.src = workingFramePath(WORKING_ASSET, workingFrameIndex);
+    workingAnimationTimer = window.setInterval(() => {
+      if (shellEl.dataset.mood !== "busy") {
+        stopWorkingAnimation();
+        return;
+      }
+      workingFrameIndex = (workingFrameIndex + 1) % WORKING_FRAME_COUNT;
+      spriteImg.src = workingFramePath(WORKING_ASSET, workingFrameIndex);
+    }, 1000 / WORKING_FPS);
+  }
 
   function setMood(next: PetMood): void {
     shellEl.dataset.mood = next;
+    if (next === "busy") {
+      startWorkingAnimation();
+      return;
+    }
+    stopWorkingAnimation();
     spriteImg.src = PET_SPRITES[next];
   }
-
   function syncMood(): void {
     stopBtn.hidden = !(chat.isWorking() || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
@@ -583,6 +611,7 @@ export function mountPetShell(root: HTMLElement, client: AgentWsClient): () => v
     if (cancelledStatusTimer !== null) {
       window.clearTimeout(cancelledStatusTimer);
     }
+    stopWorkingAnimation();
     document.documentElement.classList.remove("pet-root");
     root.innerHTML = "";
     delete (window as Window & { __myAgentIsBusy?: () => boolean }).__myAgentIsBusy;

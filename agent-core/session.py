@@ -510,6 +510,11 @@ class Session:
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Request-scoped Skill package; never serialized or reused across turns.
     _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
+    # Current self-change transaction identity; persisted transaction lives under Agent data.
+    _self_change_transaction_id: str | None = field(default=None, compare=False, repr=False)
+    # Current bounded CI repair decision; durable state lives under Agent data.
+    _ci_repair_state: dict[str, Any] | None = field(default=None, compare=False, repr=False)
+    _ci_repair_auto_turns: int = field(default=0, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
     corruption_notices: list[str] = field(default_factory=list, compare=False, repr=False)
     # UI-5972: desktop switch may defer full messages.jsonl load until first turn.

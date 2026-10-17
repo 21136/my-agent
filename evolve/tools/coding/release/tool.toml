@@ -1,0 +1,40 @@
+[tool]
+name = "release"
+description = "受控本地 release：build artifact/digest；不自动 deploy、publish 或 rollback 生产。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "build"
+[schema.input.properties.version]
+type = "string"
+description = "artifact version"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "relative Agent root project directory"
+[schema.input.properties.output]
+type = "string"
+description = "optional artifact path relative to Agent data/releases"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "preview only"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 180

@@ -1,0 +1,85 @@
+name: self-hosting-baseline
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  main-project:
+    name: Main project verification
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: python -m pip install -r requirements.txt pytest
+
+      - name: Compile agent core
+        shell: pwsh
+        run: python -m compileall -q agent-core
+
+      - name: Collect main project tests
+        shell: pwsh
+        run: python tools/run_main_tests.py --scope collect
+
+      - name: Run self-hosting and Skill focused tests
+        shell: pwsh
+        run: >-
+          python -m pytest -q
+          agent-core/tests/test_self_change.py
+          agent-core/tests/test_self_change_tool.py
+          agent-core/tests/test_self_change_lifecycle.py
+          agent-core/tests/test_host_supervisor.py
+          agent-core/tests/test_ci_repair.py
+          agent-core/tests/test_ci_repair_lifecycle.py
+          agent-core/tests/test_gh_actions.py
+          agent-core/tests/test_gh_repo.py
+          agent-core/tests/test_gh_release.py
+          agent-core/tests/test_deploy_tool.py
+          agent-core/tests/test_release_manager.py
+          agent-core/tests/test_release_tool.py
+          agent-core/tests/test_self_hosting_verify.py
+          agent-core/tests/test_self_hosting_matrix.py
+          agent-core/tests/test_skill_registry.py
+          agent-core/tests/test_skill_prompt_integration.py
+
+  desktop-build:
+    name: Desktop build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        shell: pwsh
+        run: npm ci
+
+      - name: Build desktop
+        working-directory: desktop
+        shell: pwsh
+        run: npm run build

@@ -1,0 +1,49 @@
+[tool]
+name = "gh_repo"
+description = "受控 GitHub 仓库创建：只创建远端仓库，不自动 push、merge 或 release。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action", "name"]
+[schema.input.properties.action]
+type = "string"
+description = "create"
+[schema.input.properties.name]
+type = "string"
+description = "owner/name 或仓库名"
+[schema.input.properties.visibility]
+type = "string"
+default = "private"
+description = "private | public"
+[schema.input.properties.description]
+type = "string"
+default = ""
+description = "仓库描述"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "可选本地 Git 仓库目录，用于 gh repo create --source"
+[schema.input.properties.remote]
+type = "string"
+default = "origin"
+description = "source 模式的 remote name"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "只预览 gh 参数"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 120

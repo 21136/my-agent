@@ -172,6 +172,22 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6302 | 第一批内置 Skill | ordinary execution · external adoption · verification · debugging · docs governance | 每个包有触发、工具、风险、验证字段 | **done** |
 | T-6303 | Skill 安全与治理文档 | `DOC-GOVERNANCE.md` · `LAYERS.md` · Skill Registry spec | 不执行第三方脚本；权限仍归 Executor | **done** |
 
+### Phase 64 · Self-hosting 自举与自交付
+
+> 设计总览：[SELF-HOSTING-ROADMAP.md](./SELF-HOSTING-ROADMAP.md)；当前只推进本地安全闭环，不自动 push/release/deploy。
+
+| ID | 任务 | 代码 / 设计锚点 | 验收 | 状态 |
+|---|---|---|---|---|
+| T-6400 | Self-hosting 文档体系 | `SELF-HOSTING-*.md` · `TEST-SCOPE-AND-BASELINE.md` | D0～D7 文档具备职责、边界和阅读入口 | **done** |
+| T-6401 | 主项目显式测试入口 | `tools/run_main_tests.py` | core/collect/focused 不递归收集 `workspace/` | **done** |
+| T-6402 | SelfChangeTransaction primitives | `agent-core/self_change.py` | baseline、状态机、branch、rollback、verify、health | **done** |
+| T-6403 | self_change 工具与 Agent 生命周期 | `evolve/tools/coding/self_change/` · Executor · Session overlay | begin/status/branch/verify/health/switch/rollback、事件与确认 | **done** |
+| T-6404 | Host Agent 候选版本自动重启/切换 | `agent-core/host_supervisor.py` · `desktop/electron/sidecar-supervisor.ts` | Electron crash restart 和 sidecar candidate switch IPC 已接入；真实 UI/自举调用链仍待验证 | **active · partial** |
+| T-6405 | GitHub/CI 闭环 | `GITHUB-CI-LIFECYCLE.md` | repo/Actions wait/log/rerun/required checks | **todo** |
+| T-6406 | release/deploy/rollback | `release_manager.py` · `release` tool | artifact/digest、`release` build、`gh_release` create/view、`deploy` plan/start/status/health/rollback 已实现；生产目标仍待做 | **active · partial** |
+| T-6407 | self-hosting verification matrix | `self_hosting_verify.py` · `SELF-HOSTING-VERIFICATION.md` | scenario status、E0-E6 evidence、report persistence、S1/S2 local runner 已实现；S3～S6 remote/deploy runner 仍待做 | **active · partial** |
+| T-6408 | model/Skill compatibility evaluation | `SELF-HOSTING-MODEL-SKILL-COMPATIBILITY.md` | model/Skill/Runtime 矩阵与 stable/canary | **todo** |
+
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
 
 > **DOC-04**：MAP §2 Phase 61 · 影响面为工具协议、执行可靠性、上下文和 Desktop/Terminal 消费；实现前需补 STABILIZATION 矩阵与独立 IT/S 编号。

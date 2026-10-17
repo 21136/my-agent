@@ -23,12 +23,15 @@
 
 ## 2. 当前实现状态
 
-Wave 1 已先落地纯状态与本地验证 primitives：
+Wave 1 已落地状态、验证和受控工具接入：
 
 - `agent-core/self_change.py`：状态机、JSON round-trip、baseline hash、Git branch/rollback adapter、local verification、health check；
-- `agent-core/tests/test_self_change.py`：状态、dirty-path、branch、rollback、验证和 timeout 测试。
+- `evolve/tools/coding/self_change/`：active evolved tool，提供 begin/status/branch/verify/health/switch/rollback；
+- `ToolExecutor`：记录 self-change transaction identity 并发出 `self_change.state` 生命周期事件；
+- Session overlay：向后续回合暴露当前 transaction identity；
+- `agent-core/tests/test_self_change*.py`：覆盖状态、dirty-path、branch、rollback、验证、工具和生命周期。
 
-当前仍未接入 Agent/Executor 工具面，也未实现候选版本替换、自动重启、push 或 deploy。
+候选进程可由已有 `run_service` 启动，`self_change health` 负责健康检查并把事务推进到 `accepted`；`self_change switch` 支持停止旧服务、启动候选服务，候选失败时尝试恢复旧服务。`agent-core/host_supervisor.py` 已提供候选 Host process 的切换/健康失败恢复 primitive，`desktop/electron/sidecar-supervisor.ts` 已接入 sidecar crash restart；当前仍未接入候选版本 promote/rollback，也未实现 Host Agent 自身版本切换、push 或 deploy。
 
 ## 3. 事务对象
 
