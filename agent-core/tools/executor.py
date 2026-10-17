@@ -1145,6 +1145,17 @@ def _validate_scaffold_evolved_call(
     return None
 
 
+def _ci_repair_blocks_delivery(session: Any, evolved_name: str, arguments: dict[str, Any]) -> bool:
+    state = getattr(session, "_ci_repair_state", None)
+    if not isinstance(state, dict) or str(state.get("status") or "") != "repair_allowed":
+        return False
+    if evolved_name in {"git_commit", "git_push"}:
+        return True
+    if evolved_name == "gh_pr" and str(arguments.get("action") or "").strip().lower() == "create":
+        return True
+    return False
+
+
 @dataclass
 class ToolExecutor:
     """Dispatch builtins / run_evolved with confirm interaction."""
@@ -1475,6 +1486,54 @@ class ToolExecutor:
         if notice:
             self._emit_event("guard.notice", {"text": notice})
 
+    def _maybe_record_ci_repair_result(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        if tool_name != "run_evolved" or not result.ok:
+            return
+        if str(arguments.get("tool_name") or "").strip() != "gh_actions":
+            return
+        inner = arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else {}
+        if str(inner.get("action") or "").strip() != "repair_decision":
+            return
+        data = result.data if isinstance(result.data, dict) else {}
+        state = data.get("state")
+        if not isinstance(state, dict):
+            return
+        previous = getattr(self.session, "_ci_repair_state", None)
+        self.session._ci_repair_state = dict(state)
+        if not isinstance(previous, dict) or previous.get("repair_id") != state.get("repair_id") or previous.get("attempt") != state.get("attempt"):
+            self.session._ci_repair_auto_turns = 0
+        self._emit_event("ci.repair.decision", dict(state))
+
+    def _maybe_record_self_change_result(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: ToolResult,
+    ) -> None:
+        if tool_name != "run_evolved" or not result.ok:
+            return
+        if str(arguments.get("tool_name") or "").strip() != "self_change":
+            return
+        data = result.data if isinstance(result.data, dict) else {}
+        transaction_id = str(data.get("transaction_id") or "").strip()
+        if not transaction_id:
+            return
+        state = str(data.get("state") or "").strip()
+        self.session.self_change_transaction_id = transaction_id
+        self._emit_event(
+            "self_change.state",
+            {
+                "transaction_id": transaction_id,
+                "state": state,
+                "action": str((arguments.get("arguments") or {}).get("action") or ""),
+            },
+        )
+
     def run(self, tool_name: str, arguments: dict[str, Any] | None = None) -> ToolResult:
         """Validate, optionally confirm, then execute a tool call."""
         started = time.perf_counter()
@@ -1580,6 +1639,8 @@ class ToolExecutor:
         finally:
             stop_hb.set()
             hb_thread.join(timeout=0.2)
+        self._maybe_record_self_change_result(name, args, result)
+        self._maybe_record_ci_repair_result(name, args, result)
         end_payload: dict[str, Any] = {
             "tool": card_tool,
             "call_id": call_id,
@@ -2580,6 +2641,17 @@ class ToolExecutor:
                 ToolErrorCode.TOOL_NOT_FOUND,
                 f"unknown builtin tool: {name}",
             )
+
+        if name == "run_evolved":
+            evolved_name = str(arguments.get("tool_name") or "").strip()
+            inner_arguments = arguments.get("arguments") if isinstance(arguments.get("arguments"), dict) else {}
+            if _ci_repair_blocks_delivery(self.session, evolved_name, inner_arguments):
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "CI repair turn blocks commit, push, and PR creation until repair is resolved",
+                    details={"ci_repair_status": "repair_allowed", "evolved_name": evolved_name},
+                )
 
         if name in self.session.blocked_tools:
             return tool_fail(

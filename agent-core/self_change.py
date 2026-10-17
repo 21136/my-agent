@@ -27,6 +27,8 @@ class SelfChangeState(StrEnum):
     RESTART_PENDING = "restart_pending"
     HEALTH_CHECKING = "health_checking"
     ACCEPTED = "accepted"
+    SWITCHING = "switching"
+    SWITCHED = "switched"
     COMMITTED = "committed"
     PUSHED = "pushed"
     ROLLED_BACK = "rolled_back"
@@ -44,7 +46,9 @@ _ALLOWED_TRANSITIONS: dict[SelfChangeState, frozenset[SelfChangeState]] = {
     SelfChangeState.CANDIDATE_READY: frozenset({SelfChangeState.RESTART_PENDING, SelfChangeState.ACCEPTED, SelfChangeState.ROLLED_BACK, SelfChangeState.ABORTED, SelfChangeState.BLOCKED}),
     SelfChangeState.RESTART_PENDING: frozenset({SelfChangeState.HEALTH_CHECKING, SelfChangeState.ROLLED_BACK, SelfChangeState.ABORTED, SelfChangeState.BLOCKED}),
     SelfChangeState.HEALTH_CHECKING: frozenset({SelfChangeState.ACCEPTED, SelfChangeState.ROLLED_BACK, SelfChangeState.ABORTED, SelfChangeState.BLOCKED}),
-    SelfChangeState.ACCEPTED: frozenset({SelfChangeState.COMMITTED, SelfChangeState.PUSHED, SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
+    SelfChangeState.ACCEPTED: frozenset({SelfChangeState.SWITCHING, SelfChangeState.COMMITTED, SelfChangeState.PUSHED, SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
+    SelfChangeState.SWITCHING: frozenset({SelfChangeState.SWITCHED, SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
+    SelfChangeState.SWITCHED: frozenset({SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
     SelfChangeState.COMMITTED: frozenset({SelfChangeState.PUSHED, SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
     SelfChangeState.PUSHED: frozenset({SelfChangeState.ROLLED_BACK, SelfChangeState.BLOCKED}),
     SelfChangeState.ROLLED_BACK: frozenset(),
@@ -273,6 +277,58 @@ def verify_owned_paths(tx: SelfChangeTransaction) -> tuple[str, ...]:
     )
     return changed
 
+
+
+
+def switch_candidate_service(
+    tx: SelfChangeTransaction,
+    *,
+    service_name: str,
+    candidate_start: Mapping[str, Any],
+    service_runner,
+    confirm: bool,
+) -> dict[str, Any]:
+    """Stop/start one managed service with best-effort old-service recovery."""
+    if tx.state != SelfChangeState.ACCEPTED:
+        raise SelfChangeError(f"service switch requires accepted state, got {tx.state.value}")
+    name = _safe_text(service_name, field="service_name").strip()
+    if not name:
+        raise SelfChangeError("service_name is required")
+    old_status = service_runner({"action": "status", "name": name})
+    if not isinstance(old_status, dict) or not old_status.get("ok") or not old_status.get("found"):
+        raise SelfChangeError("managed service is not available for switch")
+    old_state = old_status.get("state") if isinstance(old_status.get("state"), dict) else {}
+    if not confirm:
+        return {"ok": True, "dry_run": True, "state": tx.state.value, "old_state": old_state}
+
+    switching = tx.advance(SelfChangeState.SWITCHING)
+    stop_result = service_runner({"action": "stop", "name": name})
+    if not isinstance(stop_result, dict) or not stop_result.get("ok"):
+        blocked = switching.advance(SelfChangeState.BLOCKED, failure_reason="old service stop failed")
+        return {"ok": False, "state": blocked.state.value, "recovered": False, "stop": stop_result}
+
+    start_payload = {"action": "start", "name": name, **dict(candidate_start)}
+    start_result = service_runner(start_payload)
+    if isinstance(start_result, dict) and start_result.get("ok") and start_result.get("ready", True):
+        switched = switching.advance(SelfChangeState.SWITCHED)
+        return {"ok": True, "state": switched.state.value, "recovered": False, "start": start_result}
+
+    recovery_payload: dict[str, Any] = {
+        "action": "start",
+        "name": name,
+        "command": old_state.get("command"),
+        "working_dir": old_state.get("cwd"),
+        "ready_port": old_state.get("ready_port"),
+        "ready_regex": old_state.get("ready_regex"),
+    }
+    recovery_payload = {key: value for key, value in recovery_payload.items() if value not in (None, "")}
+    recovery = service_runner(recovery_payload)
+    recovered = bool(isinstance(recovery, dict) and recovery.get("ok") and recovery.get("ready", True))
+    if recovered:
+        rolled = switching.advance(SelfChangeState.ROLLED_BACK, failure_reason="candidate service failed; old service recovered")
+        return {"ok": False, "state": rolled.state.value, "recovered": True, "start": start_result, "recovery": recovery}
+    blocked = switching.advance(SelfChangeState.BLOCKED, failure_reason="candidate and old service recovery failed")
+    return {"ok": False, "state": blocked.state.value, "recovered": False, "start": start_result, "recovery": recovery}
 
 def rollback_transaction(
     tx: SelfChangeTransaction,

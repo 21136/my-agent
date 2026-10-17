@@ -485,6 +485,28 @@ def _format_host_scope_overlay(paths: AgentPaths) -> str:
     return "\n".join(lines)
 
 
+def _format_ci_repair_overlay(session: Session) -> str:
+    state = getattr(session, "_ci_repair_state", None)
+    if not isinstance(state, dict):
+        return "(none)"
+    repair_id = str(state.get("repair_id") or "unknown")
+    status = str(state.get("status") or "unknown")
+    attempt = state.get("attempt", "?")
+    return f"{repair_id}/{status}/attempt-{attempt}"
+
+
+def _format_ci_repair_policy(session: Session) -> str:
+    state = getattr(session, "_ci_repair_state", None)
+    status = str(state.get("status") or "") if isinstance(state, dict) else ""
+    if status == "repair_allowed":
+        return "inspect logs, repair authorized code, test, and rerun; do not commit or push"
+    if status == "ready_to_deliver":
+        return "tests passed; commit and push require normal confirmation, then rerun CI"
+    if status == "blocked":
+        return "stop automatic repair and request human decision"
+    return "(none)"
+
+
 def format_session_overlay(session: Session) -> str:
     topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     goal = session.goal.strip() or "(unset)"
@@ -501,6 +523,9 @@ def format_session_overlay(session: Session) -> str:
             f"turn_mode: {session.meta.turn_mode}",
             f"turn_intent: {intent}",
             f"subagent: {subagent}",
+            f"self_change_transaction: {getattr(session, '_self_change_transaction_id', '') or '(none)'}",
+            f"ci_repair: {_format_ci_repair_overlay(session)}",
+            f"ci_repair_policy: {_format_ci_repair_policy(session)}",
         ]
     )
 

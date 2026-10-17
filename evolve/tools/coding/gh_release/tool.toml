@@ -1,0 +1,59 @@
+[tool]
+name = "gh_release"
+description = "受控 GitHub Release：create/view；必须确认，不自动 deploy。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "create | view"
+[schema.input.properties.tag]
+type = "string"
+description = "create：tag/ref"
+[schema.input.properties.title]
+type = "string"
+description = "create：title"
+[schema.input.properties.notes]
+type = "string"
+default = ""
+description = "create：release notes"
+[schema.input.properties.files]
+type = "array"
+items = { type = "string" }
+description = "create：artifact paths"
+[schema.input.properties.draft]
+type = "boolean"
+default = false
+description = "create：draft release"
+[schema.input.properties.prerelease]
+type = "boolean"
+default = false
+description = "create：prerelease"
+[schema.input.properties.number]
+type = "integer"
+description = "view：release number"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "relative Agent root repo directory"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "preview only"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 180

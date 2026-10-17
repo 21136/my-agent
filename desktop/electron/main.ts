@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from "electron";
+import { SidecarSupervisor } from "./sidecar-supervisor";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
@@ -57,6 +58,8 @@ let quitInProgress = false;
 
 let sidecarRestarting = false;
 let sidecarOwned = false;
+let activeSidecarRoot = AGENT_ROOT;
+const sidecarSupervisor = new SidecarSupervisor();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -203,12 +206,12 @@ function lockUiLabel(ui: string): string {
   return "Electron 桌面";
 }
 
-function startSidecar(): Promise<SidecarStartResult> {
+function startSidecar(root: string = activeSidecarRoot): Promise<SidecarStartResult> {
   return new Promise((resolve, reject) => {
-    const script = path.join(AGENT_ROOT, "agent-core", "server.py");
+    const script = path.join(root, "agent-core", "server.py");
     const args = [script, "--port", String(DEFAULT_WS_PORT)];
     sidecar = spawn(pythonCommand(), args, {
-      cwd: AGENT_ROOT,
+      cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       env: sidecarSpawnEnv(),
     });
@@ -303,6 +306,126 @@ function startSidecar(): Promise<SidecarStartResult> {
       }
     });
   });
+}
+
+type CandidateSidecar = {
+  proc: ChildProcess;
+  info: { host: string; port: number };
+};
+
+function stopCandidateSidecar(candidate: CandidateSidecar, root: string): void {
+  if (!candidate.proc.killed) {
+    try {
+      candidate.proc.kill();
+    } catch {
+      // best effort
+    }
+  }
+  const lockPath = path.join(root, "data", "sessions", ".interface.lock");
+  if (existsSync(lockPath)) {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // best effort
+    }
+  }
+}
+
+function startCandidateSidecar(root: string, port: number): Promise<CandidateSidecar> {
+  return new Promise((resolve, reject) => {
+    const script = path.join(root, "agent-core", "server.py");
+    const proc = spawn(pythonCommand(), [script, "--port", String(port)], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: sidecarSpawnEnv(),
+    });
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { proc.kill(); } catch { /* best effort */ }
+      reject(new Error("candidate sidecar ready timeout"));
+    }, SIDECAR_READY_TIMEOUT_MS);
+    const onPayload = (payload: Record<string, unknown>) => {
+      if (settled) return;
+      if (payload.error === "lock_conflict") {
+        settled = true;
+        clearTimeout(timeout);
+        try { proc.kill(); } catch { /* best effort */ }
+        reject(new Error("candidate sidecar interface lock conflict"));
+        return;
+      }
+      if (payload.ready === true && typeof payload.port === "number") {
+        settled = true;
+        clearTimeout(timeout);
+        resolve({
+          proc,
+          info: {
+            host: typeof payload.host === "string" ? payload.host : "127.0.0.1",
+            port: payload.port,
+          },
+        });
+      }
+    };
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString("utf-8").split("\n")) {
+        if (!line.trim()) continue;
+        try { onPayload(JSON.parse(line) as Record<string, unknown>); } catch { /* ignore non-json */ }
+      }
+    });
+    proc.stderr?.on("data", (chunk: Buffer) => console.error("[candidate-sidecar]", chunk.toString("utf-8")));
+    proc.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+    proc.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(new Error(`candidate sidecar exited before ready (code ${code})`));
+    });
+  });
+}
+
+async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, unknown>> {
+  if (typeof rawRoot !== "string" || !rawRoot.trim()) {
+    return { ok: false, state: "blocked", recovered: false, error: "candidate root is required" };
+  }
+  const candidateRoot = path.resolve(rawRoot);
+  const allowedRoot = path.resolve(AGENT_ROOT);
+  const relative = path.relative(allowedRoot, candidateRoot);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return { ok: false, state: "blocked", recovered: false, error: "candidate root must be under the Agent root" };
+  }
+  if (!sidecarOwned || !sidecarInfo) {
+    return { ok: false, state: "blocked", recovered: false, error: "current Electron sidecar is not owned" };
+  }
+  let candidate: CandidateSidecar | null = null;
+  const result = await sidecarSupervisor.switchCandidate({
+    startCandidate: async () => {
+      candidate = await startCandidateSidecar(candidateRoot, 0);
+      return { ok: true, ...candidate.info };
+    },
+    healthCandidate: async (info) => {
+      return await waitForPortOpen(info.host, info.port, PORT_WAIT_MS);
+    },
+    stopCandidate: async () => {
+      if (candidate) stopCandidateSidecar(candidate, candidateRoot);
+    },
+    stopCurrent: () => stopSidecar(),
+    promoteCandidate: async () => {
+      activeSidecarRoot = candidateRoot;
+      const promoted = await startSidecar(candidateRoot);
+      return promoted;
+    },
+    recoverCurrent: async () => {
+      activeSidecarRoot = AGENT_ROOT;
+      return await startSidecar(AGENT_ROOT);
+    },
+  });
+  return { ...result, candidateRoot };
 }
 
 async function ensureSidecar(): Promise<void> {
@@ -435,8 +558,18 @@ async function restartSidecarAfterCrash(): Promise<void> {
   sidecarRestarting = true;
   try {
     console.error("[sidecar] session backend stopped unexpectedly; restarting…");
-    stopSidecar();
-    await ensureSidecar();
+    const result = await sidecarSupervisor.restart({
+      stop: stopSidecar,
+      start: async () => {
+        await ensureSidecar();
+        return sidecarInfo
+          ? { ok: true, ...sidecarInfo }
+          : { ok: false, message: "sidecar did not become ready" };
+      },
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? "sidecar restart failed");
+    }
   } catch (err) {
     console.error("[sidecar] restart failed:", err);
     await dialog.showMessageBox({
@@ -714,6 +847,7 @@ function registerShortcuts(): void {
 }
 
 ipcMain.handle("sidecar:get", () => sidecarInfo);
+ipcMain.handle("sidecar:switch-candidate", (_event, rawRoot: unknown) => switchSidecarCandidate(rawRoot));
 ipcMain.handle("app:switch-to-cli", () => switchToCli());
 ipcMain.handle("app:open-external", async (_event, raw: unknown) => {
   if (typeof raw !== "string" || !raw.trim()) return false;

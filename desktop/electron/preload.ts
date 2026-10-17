@@ -5,6 +5,7 @@ type PetBoundsMode = "collapsed" | "expanded";
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {
   getSidecar: () => ipcRenderer.invoke("sidecar:get"),
+  switchSidecarCandidate: (root: string) => ipcRenderer.invoke("sidecar:switch-candidate", root),
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
   openPet: () => ipcRenderer.invoke("app:open-pet") as Promise<void>,
@@ -38,6 +39,7 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
 
 export type MyAgentDesktopApi = {
   getSidecar: () => Promise<{ host: string; port: number } | null>;
+  switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;
   openPet: () => Promise<void>;

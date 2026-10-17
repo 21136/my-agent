@@ -265,7 +265,7 @@ F:\my-agent-main\.venv\Scripts\python.exe -m py_compile agent-core/self_change.p
 - Modify: `F:\my-agent-main\docs\TASKS.md`
 - Modify: `F:\my-agent-main\docs\SELF-HOSTING-ROADMAP.md`
 
-- [ ] **Step 1: Add navigation and task references**
+- [x] **Step 1: Add navigation and task references**
 
 Link D0–D7 under a single self-hosting section. Add explicit Wave 0/Wave 1 task IDs without changing unrelated task status.
 
@@ -290,3 +290,24 @@ F:\my-agent-main\.venv\Scripts\python.exe tools\e2e_0x567_flash.py --maintenance
 ```
 
 Expected: temporary-root E2E only; report actual status without claiming full repository green if unrelated core failures remain.
+
+
+### Task 7: Integrate self-change as a controlled evolved tool and Agent lifecycle
+
+**Files:**
+- Create: `F:\my-agent-main\evolve\tools\coding\self_change\tool.toml`
+- Create: `F:\my-agent-main\evolve\tools\coding\self_change\main.py`
+- Modify: `F:\my-agent-main\agent-core\tools\executor.py`
+- Modify: `F:\my-agent-main\agent-core\session.py`
+- Modify: `F:\my-agent-main\agent-core\loader.py`
+- Test: `F:\my-agent-main\agent-core\tests\test_self_change_tool.py`
+- Test: `F:\my-agent-main\agent-core\tests\test_self_change_lifecycle.py`
+
+- [x] Add active `self_change` manifest with begin/status/branch/verify/health/switch/rollback actions.
+- [x] Route actions through existing Executor confirmation and evolved-tool allowlist.
+- [x] Persist transaction identity under Agent data; do not persist secrets or file contents.
+- [x] Expose current transaction identity in Session overlay.
+- [x] Emit `self_change.state` lifecycle events after successful tool actions.
+- [x] Verify registry, tool actions, Agent overlay, compile and focused tests.
+
+**Remaining boundary:** candidate startup/switch uses existing `run_service`; Host Agent automatic restart, push, release and deploy remain separate tasks.

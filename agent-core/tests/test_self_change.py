@@ -19,6 +19,7 @@ from self_change import (
     prepare_branch,
     rollback_transaction,
     save_transaction,
+    switch_candidate_service,
     verify_owned_paths,
 )
 from tests.isolation_helpers import temporary_agent_paths
@@ -163,6 +164,64 @@ class SelfChangeTransactionTests(unittest.TestCase):
         self.assertEqual(rolled.state, SelfChangeState.ROLLED_BACK)
         self.assertEqual(content, "print('v1')\n")
 
+
+
+    def test_switch_candidate_service_promotes_after_ready(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def service_runner(payload: dict[str, object]) -> dict[str, object]:
+            calls.append(dict(payload))
+            action = payload.get("action")
+            if action == "status":
+                return {"ok": True, "found": True, "state": {"command": "old", "cwd": ".", "ready_port": 9100}}
+            if action == "stop":
+                return {"ok": True}
+            if action == "start":
+                return {"ok": True, "ready": True, "state": {"pid": 123}}
+            return {"ok": False, "error": "unexpected"}
+
+        tx = self.make_tx().advance(SelfChangeState.SCOPED).advance(SelfChangeState.SNAPSHOTTED).advance(SelfChangeState.BRANCHED).advance(SelfChangeState.EDITING).advance(SelfChangeState.LOCAL_VERIFYING).advance(SelfChangeState.CANDIDATE_READY).advance(SelfChangeState.ACCEPTED)
+        result = switch_candidate_service(
+            tx,
+            service_name="host-agent-candidate",
+            candidate_start={"command": [sys.executable, "-c", "print('candidate')"], "working_dir": ".", "ready_timeout_sec": 2},
+            service_runner=service_runner,
+            confirm=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "switched")
+        self.assertEqual([item["action"] for item in calls], ["status", "stop", "start"])
+
+    def test_switch_candidate_service_recovers_old_service_on_failure(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def service_runner(payload: dict[str, object]) -> dict[str, object]:
+            calls.append(dict(payload))
+            action = payload.get("action")
+            if action == "status":
+                return {"ok": True, "found": True, "state": {"command": "old", "cwd": ".", "ready_port": 9100}}
+            if action == "stop":
+                return {"ok": True}
+            if action == "start" and payload.get("command") == "new":
+                return {"ok": False, "error": "candidate failed"}
+            if action == "start" and payload.get("command") == "old":
+                return {"ok": True, "ready": True, "state": {"pid": 456}}
+            return {"ok": False, "error": "unexpected"}
+
+        tx = self.make_tx().advance(SelfChangeState.SCOPED).advance(SelfChangeState.SNAPSHOTTED).advance(SelfChangeState.BRANCHED).advance(SelfChangeState.EDITING).advance(SelfChangeState.LOCAL_VERIFYING).advance(SelfChangeState.CANDIDATE_READY).advance(SelfChangeState.ACCEPTED)
+        result = switch_candidate_service(
+            tx,
+            service_name="host-agent-candidate",
+            candidate_start={"command": "new", "working_dir": ".", "ready_timeout_sec": 2},
+            service_runner=service_runner,
+            confirm=True,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["state"], "rolled_back")
+        self.assertTrue(result["recovered"])
+        self.assertEqual([item["action"] for item in calls], ["status", "stop", "start", "start"])
 
     def test_local_verification_records_commands_and_failure(self) -> None:
         import sys

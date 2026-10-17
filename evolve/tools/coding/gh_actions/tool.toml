@@ -1,0 +1,83 @@
+[tool]
+name = "gh_actions"
+description = "受控 GitHub Actions：run/wait/logs/rerun/required_checks；禁止 merge/force/release。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "run | wait | logs | rerun | required_checks | classify | repair_decision | repair_complete"
+
+
+
+[schema.input.properties.tests_ok]
+type = "boolean"
+description = "repair_complete：本地测试是否通过"
+[schema.input.properties.repair_id]
+type = "string"
+description = "repair_decision：持久化状态 ID"
+[schema.input.properties.repository]
+type = "string"
+description = "repair_decision：owner/repository"
+[schema.input.properties.pr_number]
+type = "integer"
+description = "repair_decision：PR number"
+[schema.input.properties.head_sha]
+type = "string"
+description = "repair_decision：CI head SHA"
+[schema.input.properties.log]
+type = "string"
+description = "classify：CI 日志文本"
+[schema.input.properties.attempt]
+type = "integer"
+default = 0
+description = "classify：当前修复尝试次数"
+[schema.input.properties.max_attempts]
+type = "integer"
+default = 3
+description = "classify：最大修复次数"
+[schema.input.properties.workflow]
+type = "string"
+description = "run：workflow 文件或名称"
+[schema.input.properties.ref]
+type = "string"
+description = "run：分支或 ref"
+[schema.input.properties.run_id]
+type = "integer"
+description = "wait/logs/rerun：workflow run ID"
+[schema.input.properties.number]
+type = "integer"
+description = "required_checks：PR number"
+[schema.input.properties.failed_only]
+type = "boolean"
+default = true
+description = "rerun：只重跑失败 jobs"
+[schema.input.properties.timeout_sec]
+type = "integer"
+default = 900
+description = "wait：最大等待秒数"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 Agent root 的仓库目录"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "只预览 gh 参数"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 900

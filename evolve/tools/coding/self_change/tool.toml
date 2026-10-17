@@ -1,0 +1,65 @@
+[tool]
+name = "self_change"
+description = "受控自修改事务：begin/status/branch/verify/rollback；默认只预览，真实分支和回滚必须确认。"
+version = "0.1.0"
+status = "active"
+topics = ["coding"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "begin | status | branch | verify | health | switch | rollback"
+[schema.input.properties.transaction_id]
+type = "string"
+description = "事务 ID"
+[schema.input.properties.run_id]
+type = "string"
+description = "Host Agent run ID"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "相对 Agent root 的 Git 仓库目录"
+[schema.input.properties.owned_paths]
+type = "array"
+items = { type = "string" }
+description = "begin 时允许修改的相对路径"
+[schema.input.properties.base_ref]
+type = "string"
+default = "HEAD"
+description = "begin/branch 的基线 ref"
+[schema.input.properties.work_branch]
+type = "string"
+description = "branch 的事务分支名"
+[schema.input.properties.commands]
+type = "array"
+items = { type = "array" }
+description = "verify 时要执行的 argv 列表"
+
+[schema.input.properties.service_name]
+type = "string"
+description = "switch 的 run_service 名称"
+[schema.input.properties.candidate_start]
+type = "object"
+description = "switch 的候选服务启动参数"
+[schema.input.properties.expected_hashes]
+type = "object"
+description = "rollback 时的当前文件 hash"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = true
+description = "branch/rollback/verify 只预览"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 180

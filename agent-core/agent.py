@@ -919,6 +919,23 @@ class Agent:
     def _clear_skill_turn(self) -> None:
         self.session._turn_skill_selection = None
 
+    def _ci_repair_continuation_text(self) -> str | None:
+        state = getattr(self.session, "_ci_repair_state", None)
+        if not isinstance(state, dict) or str(state.get("status") or "") != "repair_allowed":
+            return None
+        if int(getattr(self.session, "_ci_repair_auto_turns", 0) or 0) >= 1:
+            return None
+        return (
+            "[CI Repair] 当前 CI 修复预算允许继续一次。请读取失败证据，"
+            "只修改当前授权项目代码，运行相关测试，然后调用 gh_actions rerun；"
+            "不要 git_commit、git_push 或创建 PR。完成后报告实际证据。"
+        )
+
+    def _mark_ci_repair_continuation(self) -> None:
+        self.session._ci_repair_auto_turns = int(
+            getattr(self.session, "_ci_repair_auto_turns", 0) or 0
+        ) + 1
+
     def _sync_allowed_evolved(self) -> None:
         self.executor.session.allowed_evolved = session_evolved_allowlist(
             self.session,
@@ -2259,6 +2276,23 @@ class Agent:
             )
             finish_reason = "total_cap_exceeded"
             self.session.append_message({"role": "assistant", "content": final_text})
+
+        ci_repair_line = self._ci_repair_continuation_text()
+        if ci_repair_line and total_tool_rounds < total_max and finish_reason not in {
+            "cancelled", "timeout", "error", "provider_error", "context_switched"
+        }:
+            self._mark_ci_repair_continuation()
+            self.session.append_message({"role": "system", "content": ci_repair_line}, persist=False)
+            repair_loop = self._run_parent_tool_loop(
+                max_rounds=min(segment_max, max(1, total_max - total_tool_rounds)),
+                tools=tools,
+                model=model,
+                segment_start_index=len(self.session.messages),
+            )
+            total_tool_rounds += repair_loop.tool_rounds
+            if repair_loop.final_text:
+                final_text = repair_loop.final_text
+            finish_reason = repair_loop.finish_reason
 
         (
             final_text,

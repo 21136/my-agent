@@ -95,8 +95,8 @@ body.pet-body {
   display: block;
   width: 96px;
   height: 96px;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
+  object-fit: contain;
   pointer-events: none;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
 }
