@@ -2,6 +2,8 @@
 
 > 版本 0.2.0 · 2026-07-09 · 与 `PROJECT.md` v0.2.3 配套
 
+> **当前实现修订（2026-10-16）**：本文“Skill 最后 / M4 可选”是历史建设顺序。当前已实现受信任的 `evolve/skills/<id>/SKILL.md` Registry、按需加载和 prompt integration；Skill 不执行脚本、不绕过 Executor 权限。当前设计见 `docs/superpowers/specs/2026-10-16-skill-registry-design.md`。
+
 ---
 
 ## 1. 你的直觉是对的
@@ -51,6 +53,14 @@
 - **主题路由**：读 `prompts/_index.toml` → LLM 输出 `topics[]` → **用户确认** → 加载对应 prompt
 - **可晚于 tool 一步**：没有 memory，agent 也能靠对话 + tool 干活
 
+### 2.3a 当前 Skill Registry（2026-10-16）
+
+- 位置：`evolve/skills/<skill-id>/SKILL.md`；由 `agent-core/skill_registry.py` 发现。
+- system prompt 只在当前请求匹配时注入短索引和最多一个正文；Skill 选择不写入 `SessionMeta`。
+- `allowed_tools` 只做提示/审计元数据，Executor 仍是实际权限 owner。
+- 当前 `DirectorySkillSource` 是内置目录实现；`SkillIdentity` 记录 source、版本和 content hash，`SkillSelection` 在一个 Agent 回合内固定。
+- Skill 脚本默认不自动执行；坏包或超限正文只进入 diagnostics，不阻塞回合。
+
 ### 2.3 Skill（L2）—— 最后再上
 
 - **位置**：`evolve/skills/<name>/SKILL.md` + `meta.json`
@@ -71,7 +81,7 @@
 | **M1c** | 记忆三件套 + 主题路由 | 不做 skill；**紧随 M1b，不阻塞首版** |
 | **M2** | proposal + evolve_log（先记 tool/memory） | 不做 |
 | **M3** | 第一条 **tool** 或 memory 从使用中固化 | 仍可不建 skill |
-| **M4** | 治理 + 可选第一条 skill | **此时再考虑** |
+| **M4** | 治理 + Skill Registry | **已实施（第一批内置 Skill）** |
 
 原先 M1 把「显式 skill 调用」和 tool 绑在一起，**过早了**。修订后 M1 只要求：**LLM 能可靠调用 builtin + evolve/tools 里的脚本**。
 

@@ -121,6 +121,7 @@ def _runaway_user_status(session: Session) -> str:
 
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import classify_stage_documents, get_delivery_profile
+    from external_project import validate_external_binding
     from progress_gate import review_progress_blocked_flag
     from project_manifest import (
         manifest_blocks_on_l2_stale,
@@ -220,6 +221,14 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "type": "project.state",
         "project_id": pid or None,
         "project_root": root or None,
+        "external_project": (
+            {
+                "adopted": True,
+                "healthy": bool(validate_external_binding(paths, pid)),
+            }
+            if pid and validate_external_binding(paths, pid) is not None
+            else {"adopted": False, "healthy": True}
+        ),
         "plan_status": plan_status,
         "workflow_stage": workflow_stage,
         "project_entry": getattr(session.meta, "project_entry", "") or "",
@@ -248,6 +257,11 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             not bool(getattr(session.meta, "project_runaway_enabled", False))
             and workflow_stage == "requirements"
         ),
+        # Legacy UI hints remain available, but never authorize/deny ordinary writes.
+        "ordinary_permission_source": "request_intent_path_risk"
+        if not bool(getattr(session.meta, "project_runaway_enabled", False))
+        else "runaway_owner",
+        "ordinary_stage_gates_blocking": False,
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
@@ -331,6 +345,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
 
 def project_list_payload(paths: AgentPaths, session: Session | None = None) -> dict[str, Any]:
     from project_switch import lookup_project_session
+    from external_project import validate_external_binding
 
     items: list[dict[str, Any]] = []
     current_pid = (session.meta.project_id or "").strip() if session else ""
@@ -345,6 +360,12 @@ def project_list_payload(paths: AgentPaths, session: Session | None = None) -> d
                 "tasks_total": stats.total,
                 "session_id": sid,
                 "is_current": project_id == current_pid,
+                "external_adopted": validate_external_binding(paths, project_id) is not None,
+                "external_healthy": (
+                    validate_external_binding(paths, project_id).healthy
+                    if validate_external_binding(paths, project_id) is not None
+                    else True
+                ),
             }
         )
     return {"type": "project.list", "projects": items}
@@ -644,6 +665,50 @@ def dispatch_project_message(
             ]
         }
 
+    if msg_type == "project.import.scan":
+        from external_project import scan_external_project
+
+        raw_path = message.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ProjectApiError("project.import.scan requires path")
+        project_id = message.get("project_id")
+        if project_id is not None and not isinstance(project_id, str):
+            raise ProjectApiError("project.import.scan project_id must be string")
+        try:
+            scan = scan_external_project(paths, raw_path, project_id=project_id)
+        except Exception as exc:
+            raise ProjectApiError(str(exc)) from exc
+        return {"type": "project.import.scan", "scan": scan.to_dict()}
+
+    if msg_type == "project.import.cancel":
+        return {
+            "type": "project.import.cancelled",
+            "project_id": str(message.get("project_id") or "").strip() or None,
+        }
+
+    if msg_type == "project.import.apply":
+        if message.get("confirm") is not True:
+            raise ProjectApiError("project.import.apply requires confirm=true")
+        raw_path = message.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ProjectApiError("project.import.apply requires path")
+        project_id = message.get("project_id")
+        if project_id is not None and not isinstance(project_id, str):
+            raise ProjectApiError("project.import.apply project_id must be string")
+        try:
+            from project_cli import import_external_project
+
+            notice = import_external_project(session, paths, raw_path, project_id=project_id)
+        except Exception as exc:
+            raise ProjectApiError(str(exc)) from exc
+        pid = (session.meta.project_id or "").strip()
+        return {
+            "_events": [
+                {"type": "project.import.applied", "project_id": pid, "message": notice},
+                project_state_payload(session, paths),
+            ]
+        }
+
     if msg_type == "project.open":
         project_id = message.get("project_id")
         if not isinstance(project_id, str) or not project_id.strip():
@@ -740,7 +805,8 @@ def dispatch_project_message(
         if not pid or session.meta.active_shell != "project":
             raise ProjectApiError("no active project session")
         plan_status = session.meta.project_plan_status or "draft"
-        if not plan_allows_code_writes(plan_status):
+        from project_mode import ordinary_project_session
+        if not ordinary_project_session(session) and not plan_allows_code_writes(plan_status):
             raise ProjectApiError("计划未确认，无法运行验收")
         artifacts = read_project_artifacts(paths, pid)
         acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", ""))

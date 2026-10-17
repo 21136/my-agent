@@ -138,8 +138,8 @@ class OrdinaryVerificationOverlayTests(unittest.TestCase):
             workflow_stage="verification",
             runaway_enabled=False,
         )
-        self.assertIn("可选收尾", overlay)
-        self.assertIn("可写项目内代码", overlay)
+        self.assertIn("request_policy:", overlay)
+        self.assertIn("不阻止普通实现", overlay)
         self.assertNotIn("禁止主 Agent 写业务代码", overlay)
         self.assertNotIn("当前无法继续", overlay)
 

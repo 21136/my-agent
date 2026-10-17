@@ -457,7 +457,7 @@ class WsBridge:
             self.emit(
                 {
                     "type": "notice",
-                    "text": "正在停止狂奔续接…",
+                    "text": "正在停止自动续接…",
                     "runaway_cancel_available": False,
                 }
             )
@@ -677,7 +677,7 @@ async def _chain_runaway_after_turn(
     *,
     lock_held: bool = False,
 ) -> None:
-    # v2 owns continuation inside RunawayController. Keeping this server
+    # v2 owns continuation inside RunawayRuntime (orchestration kernel). Keeping this server
     # fallback for v1 is intentional, but running it for v2 creates a second
     # owner that can race the controller and swallow user input.
     from runaway_v2 import runaway_v2_enabled
@@ -716,7 +716,7 @@ async def _chain_runaway_after_turn(
             delay = RUNAWAY_CHAIN_COOLDOWN_SEC if attempt == 0 else RUNAWAY_CHAIN_RETRY_DELAY_SEC
             await asyncio.sleep(delay)
             if bridge.cancel_event.is_set():
-                bridge.emit({"type": "notice", "text": "狂奔续接已停止。"})
+                bridge.emit({"type": "notice", "text": "自动续接已停止。"})
                 return
             if bridge._turn_busy.is_set():
                 continue
@@ -729,7 +729,7 @@ async def _chain_runaway_after_turn(
                 acquired_here = True
             try:
                 if bridge.cancel_event.is_set():
-                    bridge.emit({"type": "notice", "text": "狂奔续接已停止。"})
+                    bridge.emit({"type": "notice", "text": "自动续接已停止。"})
                     return
                 if bridge._turn_busy.is_set():
                     continue
@@ -763,7 +763,7 @@ async def _chain_runaway_after_turn(
             {
                 "type": "turn.notice",
                 "level": "info",
-                "text": "狂奔续接等待已结束。",
+                "text": "自动续接等待已结束。",
                 "runaway_cancel_available": False,
             }
         )
@@ -772,7 +772,7 @@ async def _chain_runaway_after_turn(
         {
             "type": "turn.notice",
             "level": "warn",
-            "text": "狂奔通道暂时被占用，未能自动续接；请点侧栏「手动续接」或发送「继续」。",
+            "text": "自动执行通道暂时被占用，未能自动续接；请点侧栏「手动续接」或发送「继续」。",
         }
     )
 
@@ -839,7 +839,7 @@ async def _run_line(
         if finish_reason in {"cancelled", "timeout"}:
             ok = False
             if getattr(repl.session.meta, "project_runaway_enabled", False):
-                reason = "用户停止了狂奔" if finish_reason == "cancelled" else "运行时间达到上限"
+                reason = "用户停止了自动运行" if finish_reason == "cancelled" else "运行时间达到上限"
                 repl.agent._pause_runaway(reason)
             repl.session.save()
         elif outcome == "stop":
@@ -847,7 +847,7 @@ async def _run_line(
             finish_reason = "cancelled"
             ok = False
             if getattr(repl.session.meta, "project_runaway_enabled", False):
-                repl.agent._pause_runaway("用户停止了狂奔")
+                repl.agent._pause_runaway("用户停止了自动运行")
         else:
             from project_api import after_turn_project_hooks
 
@@ -858,7 +858,7 @@ async def _run_line(
         finish_reason = "error"
         log_sidecar_exception(f"_run_line failed line={line!r}", exc)
         if getattr(repl.session.meta, "project_runaway_enabled", False):
-            repl.agent._pause_runaway("狂奔运行异常", error=str(exc))
+            repl.agent._pause_runaway("自动运行异常", error=str(exc))
         emit_error(bridge, str(exc))
     finally:
         bridge._turn_busy.clear()
@@ -1024,7 +1024,7 @@ class WsSessionHandler:
             {
                 "type": "turn.notice",
                 "level": "info",
-                "text": "正在等待狂奔通道…",
+                "text": "正在等待自动执行通道…",
                 "runaway_cancel_available": True,
             }
         )
@@ -1033,7 +1033,7 @@ class WsSessionHandler:
                 return
             if not await _try_acquire_turn_lock(cancel_event=bridge.cancel_event):
                 if bridge.cancel_event.is_set():
-                    bridge.emit({"type": "notice", "text": "狂奔续接已停止。"})
+                    bridge.emit({"type": "notice", "text": "自动续接已停止。"})
                 else:
                     bridge.emit(
                         {
@@ -1061,7 +1061,7 @@ class WsSessionHandler:
                     {
                         "type": "turn.notice",
                         "level": "info",
-                        "text": "正在恢复狂奔…",
+                        "text": "正在恢复自动运行…",
                         "runaway_cancel_available": False,
                     }
                 )
@@ -1086,7 +1086,7 @@ class WsSessionHandler:
                 {
                     "type": "turn.notice",
                     "level": "info",
-                    "text": "狂奔恢复等待已结束。",
+                    "text": "自动运行恢复等待已结束。",
                     "runaway_cancel_available": False,
                 }
             )
@@ -1488,7 +1488,7 @@ class WsSessionHandler:
                         {
                             "type": "turn.notice",
                             "level": "info",
-                            "text": "正在等待狂奔通道…",
+                            "text": "正在等待自动执行通道…",
                             "runaway_cancel_available": True,
                         }
                     )
@@ -1498,7 +1498,7 @@ class WsSessionHandler:
                             return
                         if not await _try_acquire_turn_lock(cancel_event=bridge.cancel_event):
                             if bridge.cancel_event.is_set():
-                                bridge.emit({"type": "notice", "text": "狂奔续接已停止。"})
+                                bridge.emit({"type": "notice", "text": "自动续接已停止。"})
                             else:
                                 bridge.emit(
                                     {
@@ -1524,7 +1524,7 @@ class WsSessionHandler:
                                 {
                                     "type": "turn.notice",
                                     "level": "info",
-                                    "text": "正在恢复狂奔…",
+                                    "text": "正在恢复自动运行…",
                                     "runaway_cancel_available": False,
                                 }
                             )
@@ -1549,7 +1549,7 @@ class WsSessionHandler:
                             {
                                 "type": "turn.notice",
                                 "level": "info",
-                                "text": "狂奔恢复等待已结束。",
+                                "text": "自动运行恢复等待已结束。",
                                 "runaway_cancel_available": False,
                             }
                         )

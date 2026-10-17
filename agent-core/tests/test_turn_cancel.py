@@ -663,6 +663,70 @@ class TurnCancelTests(unittest.TestCase):
         self.assertEqual(turn_ends[0].get("finish_reason"), "cancelled")
         self.assertFalse(bridge._turn_busy.is_set())
 
+    def test_runaway_cancel_notice_uses_automatic_branding(self) -> None:
+        bridge = self._bridge()
+        bridge._runaway_chain_busy.set()
+
+        self.assertTrue(bridge.request_cancel())
+        notice_texts = [str(event.get("text", "")) for event in self.events if event.get("type") == "notice"]
+        self.assertIn("正在停止自动续接…", notice_texts)
+        self.assertNotIn("狂奔", "\n".join(notice_texts))
+
+    def test_runaway_chain_completion_notice_uses_automatic_branding(self) -> None:
+        bridge = self._bridge()
+        repl = MagicMock()
+        repl.session.meta.project_runaway_enabled = True
+        repl.agent.should_chain_runaway_after_turn.return_value = True
+        repl.agent.runaway_chain_user_line.return_value = "继续自动运行"
+
+        async def _run() -> None:
+            await TURN_LOCK.acquire()
+            try:
+                with patch("server.RUNAWAY_CHAIN_COOLDOWN_SEC", 0), patch(
+                    "server._run_line", new_callable=AsyncMock
+                ):
+                    await _chain_runaway_after_turn(
+                        repl,
+                        bridge,
+                        self.paths,
+                        "completed",
+                        lock_held=True,
+                    )
+            finally:
+                TURN_LOCK.release()
+
+        asyncio.run(_run())
+        notice_texts = [
+            str(event.get("text", ""))
+            for event in self.events
+            if event.get("type") in {"notice", "turn.notice"}
+        ]
+        self.assertIn("自动续接等待已结束。", notice_texts)
+        self.assertNotIn("狂奔", "\n".join(notice_texts))
+
+    def test_runaway_resume_notices_use_automatic_branding(self) -> None:
+        bridge = self._bridge()
+        repl = MagicMock()
+        repl.session.meta.project_id = ""
+        repl.session.meta.project_runaway_enabled = True
+        handler = WsSessionHandler(self.paths)
+
+        async def _run() -> None:
+            with patch("server._try_acquire_turn_lock", new_callable=AsyncMock, return_value=True), patch(
+                "server._runaway_v2_resume_phase", return_value="implement"
+            ), patch("server._run_line", new_callable=AsyncMock):
+                await handler._resume_runaway(repl, bridge)
+
+        asyncio.run(_run())
+        notice_texts = [
+            str(event.get("text", ""))
+            for event in self.events
+            if event.get("type") in {"notice", "turn.notice"}
+        ]
+        self.assertIn("正在等待自动执行通道…", notice_texts)
+        self.assertIn("正在恢复自动运行…", notice_texts)
+        self.assertIn("自动运行恢复等待已结束。", notice_texts)
+        self.assertNotIn("狂奔", "\n".join(notice_texts))
 
 if __name__ == "__main__":
     unittest.main()

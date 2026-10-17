@@ -13,6 +13,8 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 TurnIntent = Literal["qa", "plan", "execute", "research", "recall", "requirements"]
+OrdinaryWorkIntent = Literal["read_only", "plan_only", "execute"]
+
 
 _EXECUTE_KEYWORDS = (
     "造",
@@ -439,6 +441,101 @@ def _is_explanation_request(lower: str) -> bool:
             flags=re.IGNORECASE,
         )
     )
+
+
+_ORDINARY_PLAN_ONLY_MARKERS = (
+    "只给方案",
+    "只给计划",
+    "只做规划",
+    "只规划",
+    "仅规划",
+    "仅给方案",
+    "先不要改代码",
+    "先别改代码",
+    "不要改代码",
+    "不改代码",
+    "不要写代码",
+    "不写代码",
+    "只回答方案",
+    "only give me a plan",
+    "plan only",
+    "do not change code",
+    "don't change code",
+    "do not write code",
+    "don't write code",
+)
+_ORDINARY_READ_ONLY_MARKERS = (
+    "只查看",
+    "只读",
+    "只回答",
+    "只说明",
+    "只解释",
+    "只看状态",
+    "查看状态",
+    "检查状态",
+    "不要改任何文件",
+    "不改任何文件",
+    "不要调用工具",
+    "不要使用工具",
+    "read only",
+    "readonly",
+    "read-only",
+)
+_ORDINARY_EXECUTE_VERB_RE = re.compile(
+    r"(?:实现|修改|改成|改一下|修复|创建|写入|写一个|更新|运行|执行|测试|验证|"
+    r"implement|modify|fix|create|write|update|run|execute|test|verify|patch)"
+    r"\s*[^。！？?!\n]{1,80}(?:$|[。！？?!])",
+    flags=re.IGNORECASE,
+)
+
+
+def _has_explicit_ordinary_plan_only(text: str) -> bool:
+    folded = text.casefold()
+    return any(marker.casefold() in folded for marker in _ORDINARY_PLAN_ONLY_MARKERS)
+
+
+def _has_explicit_ordinary_read_only(text: str) -> bool:
+    folded = text.casefold()
+    return any(marker.casefold() in folded for marker in _ORDINARY_READ_ONLY_MARKERS)
+
+
+def _has_explicit_ordinary_execute(text: str, lower: str) -> bool:
+    if _has_explicit_execution_request(text, lower) or has_action_intent(text):
+        return True
+    if _is_inquiry(text) and not _has_imperative_frame(text):
+        return False
+    return bool(_ORDINARY_EXECUTE_VERB_RE.search(text))
+
+
+def resolve_ordinary_work_intent(
+    user_text: str,
+    classified_intent: str | None,
+    explicit_override: str | None = None,
+) -> OrdinaryWorkIntent:
+    """Resolve a non-persistent ordinary work intent for one user request.
+
+    Explicit read-only/plan-only wording wins over stale UI state. A clear
+    implementation request wins over plan/document language. The override is
+    intentionally considered only after those text-level safety signals.
+    """
+    text = (user_text or "").strip()
+    lower = text.casefold()
+    classified = (classified_intent or "").strip().casefold()
+    override = (explicit_override or "").strip().casefold()
+
+    if _has_explicit_ordinary_read_only(text):
+        return "read_only"
+    if _has_explicit_ordinary_plan_only(text):
+        return "plan_only"
+    if _has_explicit_ordinary_execute(text, lower) or classified == "execute":
+        return "execute"
+    if override in {"read_only", "plan_only", "execute"}:
+        return override  # type: ignore[return-value]
+    if classified == "plan":
+        return "plan_only"
+    if classified in {"qa", "recall", "research", "requirements", ""}:
+        return "read_only"
+    return "read_only"
 
 
 def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:

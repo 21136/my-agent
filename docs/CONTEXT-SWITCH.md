@@ -115,6 +115,18 @@ LLM 本轮
 
 ---
 
+## 3.5 外部项目原地接入（2026-10-16 · 已实施）
+
+`项目 导入 <外部目录> [id]` 与 WS `project.import.scan/apply/cancel` 用于接入在其他 IDE 中已经写了一部分的项目。
+
+- scan 只读扫描外部根、Git 状态、README/TASKS/VERIFY/构建标记，不读取或保存 `.env` 内容；
+- apply 需要显式 `confirm=true`，在 `workspace/<id>` 创建 Windows directory junction，实际文件仍保留在外部原目录；
+- 若缺少 `TASKS.md`，只生成“导入待确认”草稿，不伪造计划确认或完成状态；
+- junction 目标失效时 fail-closed；解除接入只删除 junction 和索引，不删除外部原目录；
+- 后续普通写入仍走请求意图、项目根和风险审批，自动模式不会因导入自动接管。
+
+权威设计：`docs/superpowers/specs/2026-10-16-external-project-adoption-design.md`。
+
 ## 4. 协议与呈现
 
 ### 4.1 事件（建议）

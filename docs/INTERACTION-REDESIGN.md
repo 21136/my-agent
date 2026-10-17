@@ -4,6 +4,9 @@
 > 状态：**项目上下文栏与决策条方案已定 · UI-6001 实施中**  
 > 关联：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)、[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)、[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)、[TASKS.md](./TASKS.md)
 
+> **普通模式实现修订（2026-10-16）**：本文早期“阶段和硬门槛继续有效”的表述现在仅适用于自动模式/legacy owner 或真实风险、发布、验收硬门。普通模式已改为请求级意图 + 路径/风险权限；`requirements`、`documentation`、`design`、`verification` 等标签只作进度摘要，不能生成普通写码阻塞。普通 UI 只在真实交付审查、危险操作或人工发布验收需要用户决策时显示决策条。
+
+
 ## 1. 背景与判断
 
 当前项目已经具备项目绑定、四个核心制品、阶段权限、计划审阅、任务授权和验证证据等能力，但用户体验仍然像“把内部控制台搬到了桌面上”。问题不在颜色或圆角，而在交互模型：系统把内部状态、实现术语和中间产物直接暴露给用户，用户必须自己理解流程、判断提示真假，再决定下一步点什么。

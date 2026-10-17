@@ -73,7 +73,8 @@
 | **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
 | **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
 | **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
-| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**；编排对照 [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) · T-6111～6114 proposal（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+| **Phase 62** | **狂奔编排内核**（transport / control / execution 三平面） | **T-6240～6248**（与 Phase 61 T-6210～6216 错号）· R0 done（T-6240）· R1 done（T-6241；kernel 14/14）· R2 done（T-6242；v1 compat 112/112） — [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md) · 附录 [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) |
 | **Phase 61** | **Agent 工具体验路线图**（终端会话 · 原子编辑 · Git diff/restore · 结构化测试 · 诊断 · 浏览器检查 · 并行隔离 · 开源优先适配） | **P0 终端会话、Git 文件级回退和 structured_test 已 active；终端会话 UI 进入设计，原子编辑仍 experimental，其余工具未开始**（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · T-6200～T-6225） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
@@ -98,14 +99,14 @@
 
 ### 2.2 废止债项（DOC-05 · 壳合并 / Plan 单入口 · 2026-08-04）
 
-> **勿再排期**。完整表见 [TASKS.md](./TASKS.md) **DOC-05**。新会话若以「grow 切 daily」「govern 壳」「双 Plan 通道」「Skill 系」为债，先查本表。
+> **勿再排期**。完整表见 [TASKS.md](./TASKS.md) **DOC-05**。新会话若以「grow 切 daily」「govern 壳」「双 Plan 通道」为债，先查本表；Skill 系已由 Phase 63 接管。
 
 | 类别 | 代表 task / 文档 | 状态 | 替代 / 说明 |
 |------|------------------|------|-------------|
 | **四壳 DOM** | `shells/grow\|daily\|project\|govern` · T-904h govern | **cancelled** | `unified` perspective + `pet`；[DESKTOP.md](./DESKTOP.md) §0 |
 | **自动切壳** | `ui.route` · `activity_router` 切壳 · T-pet-i1 路由 | **superseded** | 前端不消费；生产仅 `infer_topic_scope` + `apply_route_topics` |
 | **Plan 双通道** | Phase 38 · `plan-intent` · Plan 独立气泡 | **superseded** | Phase 39 `plan_partner` · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
-| **Skill 系** | T-605/T-606 · Phase 9 T-901 | **wontfix** | M1 不做 skill；CLI `my-agent review` / audit 已够 |
+| **Skill 系** | Phase 63 · T-6300～T-6303 | **implemented** | 内置 Skill Registry；历史 T-605/T-606/T-901 已 superseded |
 | **远期低收益** | T-902 多 LLM · T-903 SQLite/向量 · T-906 自动 venv | **wontfix** | 单人本地 agent；按需再开 Phase |
 | **日用壳独立目录** | [DAILY-SHELL.md](./DAILY-SHELL.md) · T-904i6 星图清理 | **superseded** | `perspective=night` + `skins/starfield/` |
 | **稳定化矩阵（四壳）** | STABILIZATION §3.1 grow↔daily · S-10/S-16 · `ui.route` IT-08 | **superseded** | 验收改 unified/workbench；见 [STABILIZATION.md](./STABILIZATION.md) §3.0 |
@@ -1198,7 +1199,7 @@ python evolve.py
 | workflow prompt | `evolve/prompts/workflow.md` |
 | 久远记忆 | `evolve/memories/workflow/downloads-sort.md`（`T-504`） |
 
-**下一步**：可选 `T-601b` / `T-605` skill；日常用 `git commit` 策展 `evolve/`。
+**下一步**：Skill Registry 已由 Phase 63 实施；日常用 `git commit` 策展 `evolve/`。
 
 ### 9.38 T-604 Git 回滚习惯（README + CLI 提示）
 
@@ -1730,7 +1731,7 @@ python host_scope_api.py
 2. **严格对照** `TOOLS.md` / `RUNTIME.md` 已决条款。
 3. **Python 3.12+**；依赖见根目录 `requirements.txt`（目前仅 `httpx`）。
 4. **不要 git commit**，除非用户明确要求。
-5. **M1 不做 skill**；不做 M2/M4 除非 task 要求。
+5. **Skill Registry 已实施**；Skill 只提供工作流知识，不绕过 Executor 权限，不自动执行第三方脚本。
 6. 小步交付，每步可 `python .../_demo()` 手工验收。
 
 ---

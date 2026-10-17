@@ -86,12 +86,29 @@ export interface SwitchOverlayData {
   action: string;
 }
 
+export interface ExternalProjectScan {
+  external_root: string;
+  project_id: string;
+  logical_root: string;
+  markers: string[];
+  has_git: boolean;
+  git_dirty: boolean | null;
+  has_tasks: boolean;
+  has_verify: boolean;
+  has_readme: boolean;
+  has_env: boolean;
+  has_build_manifest: boolean;
+  requires_confirmation: boolean;
+}
+
 export interface ProjectListItem {
   id: string;
   tasksDone: number;
   tasksTotal: number;
   sessionId: string | null;
   isCurrent: boolean;
+  externalAdopted?: boolean;
+  externalHealthy?: boolean;
 }
 
 export interface ProjectThreadItem {
@@ -115,6 +132,9 @@ export interface ProjectPanelState {
   tasksAllDone: boolean;
   planOverlay: PlanOverlayData | null;
   projects: ProjectListItem[];
+  externalImportPath: string;
+  externalImportProjectId: string;
+  externalImportScan: ExternalProjectScan | null;
   switchOverlay: SwitchOverlayData | null;
   switchInProgress: boolean;
   pendingPickerId: string;
@@ -321,6 +341,9 @@ export interface ProjectPanelCallbacks {
   onDesignConfirm: () => void;
   onStopTurn: () => void;
   onMilestoneAccept: () => void;
+  onExternalImportScan: (path: string, projectId: string) => void;
+  onExternalImportApply: (path: string, projectId: string) => void;
+  onExternalImportCancel: () => void;
 }
 
 // ---- helpers ----
@@ -848,6 +871,9 @@ function isOrdinaryVerificationWrapUp(state: ProjectPanelState): boolean {
 }
 
 function hasActualProjectBlocker(state: ProjectPanelState): boolean {
+  if (!state.runawayEnabled) {
+    return state.reviewProgressBlocked;
+  }
   if (isOrdinaryVerificationWrapUp(state)) {
     return state.reviewProgressBlocked;
   }
@@ -886,7 +912,7 @@ export function projectBlockerDetails(state: ProjectPanelState): ProjectBlockerD
         ? RUNAWAY_BLOCKER.pausedNextV2
         : state.runawayCheckpoint === "paused"
           ? RUNAWAY_BLOCKER.pausedNextLegacy
-          : "处理上述问题后，再重新开启狂奔；如需人工判断，请直接在聊天中说明处理方式。"
+          : "处理上述问题后，再重新开启自动模式；如需人工判断，请直接在聊天中说明处理方式。"
     )
     : RUNAWAY_BLOCKER.pausedNextOff;
   return { reason, impact, attempted, nextStep };
@@ -1099,9 +1125,9 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     return {
       status: "processing",
       statusLabel: "等待停止",
-      title: "狂奔续接等待中",
+      title: "自动续接等待中",
       summary: "上一回合还占用执行通道，当前没有新的模型回合在运行。",
-      nextStep: "可以立即停止这次续接等待，释放狂奔通道。",
+      nextStep: "可以立即停止本次续接等待，释放执行通道。",
       action: "stop-turn",
       actionLabel: "停止续接",
     };
@@ -1134,7 +1160,7 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     return {
       status: "processing",
       statusLabel: "续接中",
-      title: state.runawayUserLine || "狂奔已开启",
+      title: state.runawayUserLine || "自动模式已开启",
       summary,
       nextStep: "系统会自动续接；若停在这里，点「手动续接」或发送「继续」。",
       action: "jump-turn-process",
@@ -1220,47 +1246,6 @@ export function deriveProjectGoalViewModel(state: ProjectPanelState): ProjectGoa
     };
   }
 
-  if (!state.runawayEnabled && (state.planOverlay || state.planStatus === "plan_dirty" || (state.planStatus === "draft" && state.tasksTotal > 0)) && state.projectEntry !== "direct") {
-    return {
-      status: "decision",
-      statusLabel: "等你决定",
-      title: state.planStatus === "plan_dirty" ? "方案有变更，等你确认" : "方案已准备好",
-      summary: compactGoalText(state.planOverlay?.summary || "") || goal,
-      nextStep: "规划后开工走计划确认；直接实现跳过计划搭档、立刻写代码。确认前可随时切换。",
-      action: "confirm-plan",
-      actionLabel: "规划后开工",
-      secondaryAction: "direct-implement",
-      secondaryActionLabel: "直接实现",
-    };
-  }
-
-  if (
-    !pastFirstRoundScope(state)
-    && (state.scopeNeedsReconfirm || (!state.scopeConfirmedAt && state.tasksTotal > 0))
-  ) {
-    return {
-      status: "decision",
-      statusLabel: "等你决定",
-      title: "范围需要确认",
-      summary: goal,
-      nextStep: "确认第一轮范围后，再继续准备方案。",
-      action: "confirm-scope",
-      actionLabel: "确认范围",
-    };
-  }
-
-  if (state.needsDesignConfirm) {
-    return {
-      status: "decision",
-      statusLabel: "等你决定",
-      title: "设计需要确认",
-      summary: "",
-      nextStep: "确认设计后，才能选择任务并开始实现。",
-      action: "confirm-design",
-      actionLabel: "确认设计",
-    };
-  }
-
   return {
     status: "decision",
     statusLabel: "等你决定",
@@ -1284,15 +1269,6 @@ function extractHeaderTaskId(state: ProjectPanelState): string {
 export function deriveHeaderNextStepView(state: ProjectPanelState): HeaderNextStepView {
   if (!state.projectId || state.switchInProgress || state.runawayEnabled) {
     return { kind: "none", actions: [] };
-  }
-  if ((state.planStatus === "draft" || state.planStatus === "plan_dirty") && state.projectEntry !== "direct") {
-    return {
-      kind: "dual-draft",
-      actions: [
-        { action: "confirm-plan", label: "规划后开工", accent: true },
-        { action: "direct-implement", label: "直接实现" },
-      ],
-    };
   }
   const stage = getExecutionStage(state);
   if (state.tasksAllDone || stage === "verification") {
@@ -1504,7 +1480,7 @@ function renderDetailedStagePlanCard(state: ProjectPanelState, callbacks?: Proje
       break;
     case "design":
       body = state.runawayEnabled
-        ? `<div class="textbook-plan-goal">${RUNAWAY_STAGE.preparingTasks}</div><div class="textbook-plan-stat">计划提案由狂奔授权自动采纳</div>`
+        ? `<div class="textbook-plan-goal">${RUNAWAY_STAGE.preparingTasks}</div><div class="textbook-plan-stat">计划提案会在自动模式下自动采纳</div>`
         : `<div class="textbook-plan-goal">方案已确定后，可以开始下一项工作。</div><div class="textbook-plan-stat">还有待处理的方案变更</div>`;
       action = state.runawayEnabled
         ? `<span class="textbook-soft-signal">${RUNAWAY_STAGE.enteringImplementation}</span>`
@@ -1561,11 +1537,35 @@ export function renderStagePlanCard(state: ProjectPanelState, callbacks?: Projec
   const currentTask = state.turnArmedText || state.nextTask || "当前没有正在处理的任务";
   const reviewPassed = state.reviewVerdict === "pass" && state.reviewBlockersCount === 0;
   const runawayStatus = state.runawayEnabled && state.runawayStatus
-    ? `<div class="textbook-runaway-status">狂奔：${escapeHtml(humanizeVisibleText(state.runawayStatus, "进行中"))}</div>`
+    ? `<div class="textbook-runaway-status">自动：${escapeHtml(humanizeVisibleText(state.runawayStatus, "进行中"))}</div>`
     : "";
   let goal = "系统会在这里告诉你当前进展。";
   let stat = "";
   let action = "";
+  if (!state.runawayEnabled) {
+    const evidence = state.turnEvidence.length > 0
+      ? `${state.turnEvidence.filter((item) => item.ok).length}/${state.turnEvidence.length} 项本回合工具证据成功`
+      : "本回合尚无工具证据";
+    const taskFact = state.tasksTotal > 0
+      ? `任务 ${state.tasksDone}/${state.tasksTotal}`
+      : "暂无任务快照";
+    const blocker = state.reviewProgressBlocked
+      ? `<div class="textbook-stage-findings"><div class="textbook-stage-status is-blocked">${escapeHtml(userFacingBlockerSummary(state))}</div></div>`
+      : "";
+    const optionalAction = state.suggestions.some((suggestion) => Boolean(suggestion.action))
+      ? '<button type="button" class="unified-btn unified-btn-accent" data-action="open-plan-review">查看方案变更</button>'
+      : state.tasksTotal > 0
+        ? '<button type="button" class="unified-btn" data-action="open-full-plan">查看任务</button>'
+        : "";
+    return '<section class="textbook-plan-card" aria-label="当前进展">'
+      + '<div class="textbook-plan-card-header"><span>当前进展</span></div>'
+      + '<div class="textbook-plan-card-body">'
+      + '<div class="textbook-plan-goal">可以按当前请求继续实现。</div>'
+      + `<div class="textbook-plan-stat">${escapeHtml(taskFact)} · ${escapeHtml(evidence)}</div>`
+      + blocker
+      + '<div class="textbook-soft-signal">阶段、计划状态和文档完整度是进度事实，不是普通写码许可。</div>'
+      + '</div><div class="textbook-plan-card-actions">' + optionalAction + '</div></section>';
+  }
   switch (stage) {
     case "requirements": {
       const scopeSoft = Boolean(state.projectId && state.scopeConfirmedAt) && state.planStatus !== "confirmed";
@@ -2474,7 +2474,24 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
     });
   }
 
-  let html = `<input type="text" class="overlay-search-input" id="overlay-project-search" placeholder="搜索项目…" value="${escapeHtml(state.projectSearchQuery)}">`;
+  let html = `<input type="text" class="overlay-search-input" id="overlay-project-search" placeholder="搜索项目…" value="${escapeHtml(state.projectSearchQuery)}">
+    <section class="external-project-import" aria-label="导入外部项目">
+      <div class="sidebar-change-banner-title">导入已有项目</div>
+      <div class="sidebar-change-banner-changes">原目录不复制；确认后通过 junction 接入，后续修改直接落到原项目。</div>
+      <input type="text" class="overlay-search-input" id="external-project-path" placeholder="外部项目绝对路径" value="${escapeHtml(state.externalImportPath)}">
+      <input type="text" class="overlay-search-input" id="external-project-id" placeholder="项目 ID（可选）" value="${escapeHtml(state.externalImportProjectId)}">
+      <button type="button" class="unified-btn" data-action="external-import-scan">扫描外部项目</button>
+    </section>`;
+  if (state.externalImportScan) {
+    const scan = state.externalImportScan;
+    const git = scan.git_dirty === true ? "有未提交修改" : scan.git_dirty === false ? "Git 干净" : "未检测到 Git";
+    html += `<section class="external-project-import is-scan" aria-label="外部项目扫描结果">
+      <div class="sidebar-change-banner-title">${escapeHtml(scan.project_id)} · 待确认接入</div>
+      <div class="sidebar-change-banner-changes">${escapeHtml(git)} · ${scan.has_tasks ? "已有 TASKS.md" : "将生成待确认任务草稿"} · ${escapeHtml(scan.markers.join("、") || "无标准标记")}</div>
+      <button type="button" class="unified-btn unified-btn-accent" data-action="external-import-apply">确认原地接入</button>
+      <button type="button" class="unified-btn" data-action="external-import-cancel">取消</button>
+    </section>`;
+  }
 
   const query = state.projectSearchQuery.toLowerCase().trim();
 
@@ -2495,9 +2512,12 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
   for (const item of filtered) {
     const current = item.id === state.projectId || item.isCurrent;
     const disabled = state.switchInProgress || current;
+    const externalHint = item.externalAdopted
+      ? (item.externalHealthy === false ? " · 外部目录不可用" : " · 外部项目")
+      : "";
     html += `<button type="button" class="overlay-project-item${current ? " is-current" : ""}" data-project-id="${escapeHtml(item.id)}"${disabled ? " disabled" : ""}>
       <span class="overlay-project-item-name">${escapeHtml(item.id)}</span>
-      <span class="overlay-project-item-meta">${escapeHtml(projectProgressLabel(item))} · ${escapeHtml(projectSessionHint(item))}</span>
+      <span class="overlay-project-item-meta">${escapeHtml(projectProgressLabel(item))} · ${escapeHtml(projectSessionHint(item))}${externalHint}</span>
     </button>`;
   }
 
@@ -2587,10 +2607,10 @@ function renderCodeFollowupBanner(followup: CodeFollowup): string {
 
 /** Header already shows 规划后开工 / 直接实现 for this draft. */
 export function ordinaryDraftDecisionVisible(state: ProjectPanelState): boolean {
-  return !state.runawayEnabled
-    && Boolean(state.projectId)
-    && state.projectEntry !== "direct"
-    && (state.planStatus === "draft" || state.planStatus === "plan_dirty");
+  // Plan-only is request-scoped; ordinary UI never turns persisted draft state
+  // into a sticky implementation gate or a dual CTA.
+  void state;
+  return false;
 }
 
 export function renderChangeBanner(state: ProjectPanelState): string {
@@ -2599,16 +2619,10 @@ export function renderChangeBanner(state: ProjectPanelState): string {
   // The header already offers 规划后开工 / 直接实现 for a non-direct draft, so
   // that banner would be a second decision surface. Direct-entry questions are
   // suppressed at plan.request; a request that still arrives is a real plan change.
-  const needsPlanConfirm =
-    !state.runawayEnabled
-    && state.planOverlay
-    && state.planStatus !== "confirmed"
-    && !(state.planStatus === "draft" && ordinaryDraftDecisionVisible(state));
-  const needsPlanDirtyBanner =
-    !state.runawayEnabled && state.planStatus === "plan_dirty" && !needsPlanConfirm;
-  const isTaskLevelChange =
-    state.changesLevel === "task" && !needsPlanConfirm && !needsPlanDirtyBanner;
-  const needsScopeBanner = !state.runawayEnabled && state.scopeNeedsReconfirm && state.planStatus === "confirmed";
+  const needsPlanConfirm = false;
+  const needsPlanDirtyBanner = false;
+  const isTaskLevelChange = state.changesLevel === "task";
+  const needsScopeBanner = false;
 
   // Plan confirmation takes priority over change banner
   if (needsPlanConfirm) {
@@ -2896,6 +2910,8 @@ export function applyProjectListEvent(
     tasksTotal: item.tasks_total,
     sessionId: item.session_id,
     isCurrent: item.is_current,
+    externalAdopted: item.external_adopted,
+    externalHealthy: item.external_healthy,
   }));
 }
 
@@ -3305,12 +3321,6 @@ export function renderProjectSidebar(
       <div class="sidebar-change-banner-changes">TASKS.md 被外部工具修改（git / 编辑器 等）。任务流已刷新为最新内容。</div>
       <button type="button" class="unified-btn" data-action="dismiss-external" style="font-size:0.72rem;padding:0.15rem 0.4rem;">关闭</button>
     </div>`;
-  } else if (!state.runawayEnabled && isDocumentationBatch(state)) {
-    const pending = state.planWarningsPending.length;
-    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">文档整理中</div>
-      <div class="sidebar-change-banner-changes">四个核心制品按一个批次处理；${pending ? `已收集 ${pending} 条待完善建议，` : ""}阶段结束后统一告诉你结果。</div>
-    </div>`;
   } else if (!state.runawayEnabled && state.partnerBusy) {
     bannerHtml = renderPartnerNotices(state.partnerNotices || [], true, actionableSuggestions.length);
   } else if (state.adoptedFooterMessage && actionableSuggestions.length === 0 && !hasAdoptFlash) {
@@ -3348,11 +3358,6 @@ export function renderProjectSidebar(
       ? "项目服务暂时不可用，退回直接文件操作模式。拆分和新增任务请通过聊天框。"
       : "项目服务暂时不可用，拆分和新增任务退回单条添加模式。";
     bannerHtml = renderDegradeBanner(level, label, explain);
-  } else if (!state.runawayEnabled && isDocumentationBatch(state)) {
-    bannerHtml = `<div class="sidebar-change-banner" style="border-color:var(--ma-accent);background:color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));">
-      <div class="sidebar-change-banner-title">文档整理中</div>
-      <div class="sidebar-change-banner-changes">项目资料正在连续整理，完成后会统一告诉你下一步。</div>
-    </div>`;
   } else {
     bannerHtml = renderChangeBanner(state);
   }

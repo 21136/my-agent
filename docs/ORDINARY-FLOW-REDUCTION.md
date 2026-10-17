@@ -1,9 +1,25 @@
-# 普通模式流程减负（提案 · 未实施）
+# 普通模式流程减负（历史提案与当前实现）
+
 
 > 状态：**M0 已落地 · M1 编码中**（2026-10-15）  
 > 范围：Desktop / CLI 的 **普通模式**项目流程；不改狂奔 v2 主状态机。  
 > 依据：`0x567-flash` 普通模式写项目探测、计划门实机卡点、Desktop mockup/真机审阅。  
 > 相关：`PROJECT-MODE.md` §4 计划确认门 · `DESKTOP-TEXTBOOK-FLOW.md` 五段闸门 · 现网已合入的「直接实现话术自动确认」属过渡补丁。
+
+## 当前实现覆盖（已实施 · 2026-10-16）
+
+本文原有 M0/M1/M2 提案段落保留为历史设计演进记录；普通模式当前权威行为以 `docs/superpowers/specs/2026-10-16-ordinary-project-state-machine-design.md` 和 `docs/superpowers/plans/2026-10-16-ordinary-intent-policy.md` 为准。
+
+与原提案相比，当前实现进一步完成了架构级收口：
+
+1. **不再保留普通阶段墙**：requirements、documentation、design、verification、release 只作为进度快照，不是普通源码写入门。
+2. **不再保留普通双 CTA 入口作为权限状态**：`规划后开工` / `直接实现` 不会形成持久 permission mode；Plan-only 只由当前请求的明确语言或一次性 UI override 表达。
+3. **普通权限已切换为意图 + 路径 + 风险**：项目根目录保护、危险操作确认、验证/发布证据和自动模式 owner 保留。
+4. **CLI/API 与 Desktop 已同步**：直接实现、开始任务、文档整理、设计确认和计划确认不再因为普通模式而推进阶段墙；状态卡展示任务/测试/证据事实。
+5. **自动模式不变**：Runaway v1/v2 继续使用自己的阶段与检查点，普通模式重构不覆盖其控制面。
+
+因此，本文件 §3.1 的“两条显式入口”、§4 的“保留普通确认门”和 §7 的“documentation/design 不能直接实现”只描述历史过渡方案；不能用于判断当前普通模式是否允许项目内实现。
+
 
 ---
 

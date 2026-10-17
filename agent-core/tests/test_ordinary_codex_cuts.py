@@ -162,9 +162,7 @@ class OrdinaryStageWallCutTests(unittest.TestCase):
             },
             skip_stage_walls=False,
         )
-        self.assertIsNotNone(reason)
-        assert reason is not None
-        self.assertIn("documentation", reason)
+        self.assertIsNone(reason)
 
     def test_runaway_still_blocks_verification_writes(self) -> None:
         reason = project_mode_block_reason(
@@ -209,7 +207,8 @@ class OrdinaryStageWallCutTests(unittest.TestCase):
             skip_stage_walls=True,
             project_entry="direct",
         )
-        self.assertIn("不阻挡写码", overlay)
+        self.assertIn("request_policy:", overlay)
+        self.assertIn("不阻止普通实现", overlay)
         self.assertNotIn("禁止写业务代码", overlay)
 
 

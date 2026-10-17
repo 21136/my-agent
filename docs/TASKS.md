@@ -132,7 +132,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 |----|------|-----------------|------|------|
 | T-6100 | v2 设计文档 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) **v0.2.1** · MAP · 本文 | 失败场景、derive 算法、清单 merge、单 turn 时序、升格、走查、测试矩阵已写清 | **done** |
 | T-6101 | `build_checklist` 生成器 | `runaway_v2/checklist.py` · 复用 `lint_verify_matrix` | IT-6101 MX/T/PROJECT/ENV → checklist 项 | **done** |
-| T-6102 | `RunawayController.run_turn` 单入口 | `runaway_v2/controller.py` · `agent.run_turn` 分流 · `MY_AGENT_RUNAWAY_V2` | IT-6102 不调用 v1 `_maybe_runaway_*` | **done** |
+| T-6102 | v2 `run_turn` 单入口 | `RunawayRuntime` · `agent.run_turn` 分流 · `MY_AGENT_RUNAWAY_V2` | IT-6102 不调用 v1 `_maybe_runaway_*` | **done**（入口已迁 kernel；见 T-6240） |
 | T-6103 | turn_end acceptance hook | `runaway_v2/acceptance.py` · command exit code | IT-6103 非 0 不标 passed | **done** |
 | T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
 | T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
@@ -140,7 +140,37 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
 | S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
 | T-6110 | 狂奔编排地图（doc） | [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 五家对照 · v1/v2 模块 · 续接 owner 表 | **doc** |
-| T-6111～6114 | 编排工程草案 | 同地图 §6 · ExecutionLifecycle · 可观测 · v1 隔离 · 工具瀑布 | 立项时补 IT/S · DOC-04 | **proposal** |
+| T-6111～6114 | 编排工程草案 | 同地图 §6 | **逐项映射 Phase 62**（下表 **T-6240～6248**）；勿与 Phase 61 的 T-6210～6216 混用 | **mapped** |
+
+### Phase 62 · 狂奔编排内核换血（[RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)）
+
+> **DOC-04**：MAP §2 Phase 62 · 三平面 · R0～R5  
+> **任务编号**：**T-6240～T-6248**（与 Phase 61 提示词/归属任务 **T-6210～6216** 刻意错开）。  
+> **原则**：控制面进 `runaway_v2/kernel/`；**R0 架构准入已通过；T-6242 的 v1 迁包验收已收口**（v1 compat 112/112；见 ORCHESTRATION §6–8）。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6240 | **R0** orchestration kernel | `runaway_v2/kernel/` · `agent.run_turn` → `RunawayRuntime` · `driver=` 注入 | v2 选集绿；controller façade；R0 架构验收（R1 kernel 14/14 · v1 compat 112/112 · Runtime 产品入口） | **done**（2026-10-16 本机复核） |
+| T-6241 | **R1** fake-driver 编排单测 | `tests/test_runaway_v2_kernel.py` · `runtime` 续接取消门 · `Agent.bind_cancel_event` · AgentDriver session/executor ports | fatal · cancel 挡 **stale + pending_work** 链 · 双续接路径 · **真实 Agent** 上 bridge 与 session/executor 同一 `Event` · 会话准备及 executor 上下文经端口 | **done**（kernel 14 tests） |
+| T-6242 | **R2** v1 runaway 迁包（原 T-6113 主体） | `runaway_v1/` · `agent.py` 瘦身 | v1 compat 112/112 且 R0 架构收口 | **done**（2026-10-16：v1 compat 112/112；R0 架构验收通过） |
+| T-6243 | **R3** transport 契约收口 | `server.py` · `unified/index.ts` | v2 无第三续接 owner；单 turn 契约文档化 | todo |
+| T-6244 | **R4** kernel import / v1 符号隔离（原 T-6113 部分） | `project_sync` 集中晋升 · CI IT | kernel 不拉 v1 控制面 | todo |
+| T-6245 | ExecutionLifecycle × v2 续接（原 **T-6111**） | `execution_lifecycle` · kernel 段内链 | Stop 取消 queued 与 in-turn 递归一致 · IT-6230 子集 | todo |
+| T-6246 | 续接决策可观测（原 **T-6112**） | `turn.start` · notices | `pending_work` phase/item 摘要 · S-UX-028m 可选 | todo |
+| T-6247 | verify 工具轻量瀑布（原 **T-6114**） | acceptance / ENV verify 路径 | pre/post 契约 IT + matrix 手工 | todo |
+| T-6248 | 编排边界文档与守卫（原 **T-6110** 编码部） | ORCHESTRATION · import IT | Runtime↔Agent↔server 序列图 · import 守卫 | todo |
+
+
+### Phase 63 · Skill Registry 与内置工作流
+
+> 当前实现：受信任 Skill 包、按需加载、请求级选择；Skill 不执行脚本、不绕过 Executor 权限。
+
+| ID | 任务 | 代码 / 设计锚点 | 验收 | 状态 |
+|---|---|---|---|---|
+| T-6300 | Skill 包格式与 Registry | `agent-core/skill_registry.py` · `evolve/skills/*/SKILL.md` | frontmatter、坏包隔离、路径/大小边界 | **done**（registry 4 tests） |
+| T-6301 | 请求级 Skill prompt integration | `loader.py` · `build_system_prompt` | overlay-only、匹配才加载、静态 prompt 不变 | **done**（prompt integration 2 tests） |
+| T-6302 | 第一批内置 Skill | ordinary execution · external adoption · verification · debugging · docs governance | 每个包有触发、工具、风险、验证字段 | **done** |
+| T-6303 | Skill 安全与治理文档 | `DOC-GOVERNANCE.md` · `LAYERS.md` · Skill Registry spec | 不执行第三方脚本；权限仍归 Executor | **done** |
 
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
 
@@ -355,7 +385,7 @@ T-5901 验证：需求简介被分类为 `requirements`，不启动探索、不�
 |-----------|------|--------|------|
 | **T-904h** | Shell `govern` | **cancelled** | 治理在聊天流 + `my-agent review`；无独立壳 |
 | **T-904i6** | constellation IPC 清理 | **cancelled** | 星图方案已否决；残留 CSS/类名属低优清理，非功能债 |
-| **T-901 / T-605 / T-606** | Skill 自动生成 / 加载 / 路由 | **wontfix** | M1 不做 skill（[LAYERS.md](./LAYERS.md)） |
+| **T-901 / T-605 / T-606** | 旧 Skill 自动生成 / 加载 / 路由提案 | **superseded** | 由 Phase 63 Skill Registry 替代；历史任务不恢复 |
 | **T-902 / T-903 / T-906** | 多 LLM / SQLite·向量 / 自动 venv | **wontfix** | Phase 9 远期；单人场景默认不做 |
 | **T-602** | suspect 与 executor 深集成 | **superseded** | 由 T-602c `failure_streak` + suspect 落盘覆盖 |
 | **Phase 38** 全系 | Plan 双通道 / 自动路由 / 独立气泡 | **superseded** | Phase 39 · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
@@ -537,7 +567,7 @@ python agent.py
 
 exit 0；含 `[PASS] T-308: evolved catalog (common+topic) + run_evolved allowlist`。详见 [MAP.md](./MAP.md) §9.23。
 
-**Phase 3（M1c）已全部完成**；**Phase 4（M2）已完成**（`T-401`～`T-407`）。**Phase 5（M3）已完成**（`T-501`～`T-504`）。**Phase 6（M4）已完成**（`T-601`～`T-604`）；**`T-006` 远端 push done**。可选：`T-601b` / `T-605` skill。
+**Phase 3（M1c）已全部完成**；**Phase 4（M2）已完成**（`T-401`～`T-407`）。**Phase 5（M3）已完成**（`T-501`～`T-504`）。**Phase 6（M4）已完成**（`T-601`～`T-604`）；**`T-006` 远端 push done**。Skill Registry 现由 Phase 63 管理。
 
 **T-401 手工验收**（`agent-core/` 下）：
 
@@ -717,7 +747,7 @@ exit 0；含 `[PASS] T-503:`；`loader.py` 含 `[PASS] T-502:`。详见 [MAP.md]
 
 ---
 
-## Phase 6 — M4：治理（skill 此时才可选）
+## Phase 6 — M4：治理（历史阶段；Skill Registry 现由 Phase 63 管理）
 
 > 设计见 [GOVERNANCE.md](./GOVERNANCE.md)。
 
@@ -732,8 +762,8 @@ exit 0；含 `[PASS] T-503:`；`loader.py` 含 `[PASS] T-502:`。详见 [MAP.md]
 | T-602c | `failure_streak` 聚合 + `marked_suspect` | `governance/suspect.py` | T-602b | 与 GOVERNANCE §6 一致 | done |
 | T-603 | `my-agent audit`（LLM 兜底） | `agent-core/governance/audit.py` | T-601 | `llm_findings[]`；不自动改文件 | done |
 | T-604 | Git 回滚习惯写入 README | `README.md` + `governance/git_hints.py` | T-006 | accept / review 后提示 commit | done |
-| T-605 | **可选** 显式加载 SKILL.md | `loader.py` 扩展 | T-502,T-503 | 用户说「用 xxx skill」才注入 | wontfix |
-| T-606 | **可选** 自动 skill 路由 | `router.py` | T-605 | M4+，非 MVP | wontfix |
+| T-605 | 历史显式加载 SKILL.md 提案 | `loader.py` 扩展 | 已由 T-6301 覆盖 | superseded |
+| T-606 | 历史自动 Skill 路由提案 | `router.py` | 已由 T-6301 覆盖 | superseded |
 
 **T-601 手工验收**（`agent-core/` 下）：
 
@@ -1072,7 +1102,7 @@ python turn_intent.py    # 分类用例无回归
 
 | ID | 任务 | 状态 | 原因 |
 |----|------|------|------|
-| T-901 | Skill proposal 自动生成 | **wontfix** | M1 不做 skill |
+| T-901 | 历史 Skill proposal 自动生成 | **superseded** | 由 Phase 63 Registry 包与治理边界替代；不自动生成 Skill |
 | T-902 | 多 LLM adapter | **wontfix** | 单人无收益 |
 | T-903 | SQLite / 向量检索 | **wontfix** | 文件量级不够 |
 | T-905 | 进程沙箱 | defer | 确认流够用 |

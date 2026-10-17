@@ -2188,37 +2188,12 @@ def should_skip_ordinary_plan_request(
 
 
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
-    """Ordinary mode: open the plan gate when the user asked to implement directly.
-
-    Returns a short notice when confirmation was applied; None when unchanged.
-    Direct / light paths skip textbook documentation/design walls. Caller must
-    already have decided this turn is a direct-implement path.
-    """
+    """Arm one ordinary execute request without mutating persisted stage facts."""
     if not ordinary_project_session(session):
         return None
-    meta = getattr(session, "meta", None)
-    if meta is None:
-        return None
-    status = str(getattr(meta, "project_plan_status", "") or "draft")
-    if status not in {"draft", "plan_dirty"}:
-        if normalize_project_entry(getattr(meta, "project_entry", "")) != "direct":
-            meta.project_entry = "direct"
-            save = getattr(session, "save", None)
-            if callable(save):
-                save()
-        return None
-    from project_cli import ProjectModeError, confirm_project_plan
-
-    try:
-        message = confirm_project_plan(session, skip_stage_walls=True)  # type: ignore[arg-type]
-    except ProjectModeError as exc:
-        return f"直接实现请求未能自动确认计划：{exc}"
-    meta.project_entry = "direct"
-    save = getattr(session, "save", None)
-    if callable(save):
-        save()
-    return f"[项目] 检测到直接实现意图，已自动确认计划。{message}"
-
+    setattr(session, "next_work_intent", "execute")
+    setattr(session, "next_task_scope", "")
+    return "[项目] 检测到直接实现意图；本回合已切换为 execute，不修改项目阶段或计划确认状态。"
 
 
 def is_under_project_root(path: str, project_root: str) -> bool:
@@ -2766,6 +2741,39 @@ def extract_run_evolved_paths(tool_name: str, arguments: dict[str, object]) -> l
     return paths
 
 
+def _ordinary_action_block_reason(
+    *,
+    project_root: str,
+    tool_name: str,
+    arguments: dict[str, object],
+    ordinary_work_intent: str,
+) -> str | None:
+    """Apply request-local ordinary policy before legacy stage compatibility."""
+    intent = ordinary_work_intent if ordinary_work_intent in {"read_only", "plan_only", "execute"} else "execute"
+    if tool_name != "run_evolved":
+        return None
+    evolved = arguments.get("tool_name")
+    evolved_name = evolved.strip() if isinstance(evolved, str) else ""
+    is_write = evolved_name in _WRITE_TOOLS or evolved_name == "patch_file"
+    is_command = evolved_name in _CODING_TOOLS
+    if intent == "read_only" and (is_write or is_command):
+        return "当前请求是只读操作，不能写入文件或执行项目命令"
+    if intent == "plan_only" and is_command:
+        return "当前请求仅规划，不能修改业务源码或执行实现命令"
+
+    if is_write or is_command:
+        root = project_root.strip()
+        for path in extract_run_evolved_paths(tool_name, arguments):
+            if path and root and not is_under_project_root(path, root):
+                return f"项目写入仅限当前项目目录：{root}"
+
+    if intent == "plan_only" and is_write:
+        paths = [path for path in extract_run_evolved_paths(tool_name, arguments) if path]
+        if any(not is_plan_domain_path(path, project_root) for path in paths):
+            return "当前请求仅规划，不能修改业务源码"
+    return None
+
+
 def project_mode_block_reason(
     *,
     active_shell: str,
@@ -2779,6 +2787,8 @@ def project_mode_block_reason(
     bug_fix_lane: bool = False,
     runaway_v2_write_scope: tuple[str, ...] | None = None,
     skip_stage_walls: bool = False,
+    ordinary_work_intent: str = "execute",
+    ordinary_task_scope: str | None = None,
 ) -> str | None:
     """Return user-facing block reason, or None if allowed."""
     root = project_root.strip()
@@ -2791,6 +2801,16 @@ def project_mode_block_reason(
         if runaway_enabled and active_shell == "project"
         else ""
     )
+    ordinary_mode = not runaway_enabled and active_shell == "project"
+    if ordinary_mode:
+        ordinary_block = _ordinary_action_block_reason(
+            project_root=project_root,
+            tool_name=tool_name,
+            arguments=arguments,
+            ordinary_work_intent=ordinary_work_intent,
+        )
+        if ordinary_block:
+            return ordinary_block
 
     if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
         return (
@@ -2831,6 +2851,7 @@ def project_mode_block_reason(
     )
     if (
         active_shell == "project"
+        and not ordinary_mode
         and effective_stage
         and effective_stage != "implementation"
         and not (bug_fix_lane and effective_stage in {"verification", "release"})
@@ -2865,12 +2886,12 @@ def project_mode_block_reason(
         arguments=arguments,
         bug_fix_lane=bug_fix_lane,
         runaway_v2_write_scope=runaway_v2_write_scope,
-        allow_ordinary_plan_writes=bool(skip_stage_walls and not runaway_enabled),
+        allow_ordinary_plan_writes=bool((ordinary_mode and ordinary_work_intent in {"execute", "plan_only"}) or (skip_stage_walls and not runaway_enabled)),
     )
     if plan_domain_block:
         return plan_domain_block
 
-    plan_is_effectively_confirmed = plan_allows_code_writes(plan_status) or (
+    plan_is_effectively_confirmed = (ordinary_mode and ordinary_work_intent in {"execute", "plan_only"}) or plan_allows_code_writes(plan_status) or (
         runaway_enabled and active_shell == "project"
     )
     if plan_is_effectively_confirmed:
@@ -2895,7 +2916,7 @@ def project_mode_block_reason(
                 ):
                     from runaway_v2.config import runaway_v2_env_enabled
 
-                    if not (runaway_enabled and runaway_v2_env_enabled()):
+                    if not ordinary_mode and not (runaway_enabled and runaway_v2_env_enabled()):
                         return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
         if tool_name == "run_evolved" and evolved_name == "patch_file":
             for path in extract_run_evolved_paths(tool_name, arguments):
@@ -2995,6 +3016,8 @@ def format_project_overlay(
     runaway_acceptance_passed: bool = False,
     skip_stage_walls: bool = False,
     project_entry: str = "",
+    ordinary_work_intent: str = "execute",
+    ordinary_task_scope: str | None = None,
     plan_files: list[str] | None = None,
     active_doc: str = "",
     active_doc_selection: str = "",
@@ -3009,8 +3032,10 @@ def format_project_overlay(
     ]
     if workflow_stage:
         lines.append(f"project_workflow_stage: {workflow_stage}")
-    if active_task_id:
+    if active_task_id and (runaway_enabled or ordinary_task_scope):
         lines.append(f"project_active_task_id: {active_task_id}")
+    if ordinary_task_scope:
+        lines.append(f"request_task_scope: {ordinary_task_scope}")
     if runaway_enabled:
         lines.append("project_runaway_enabled: true")
         lines.append("runaway_policy: 自动采纳计划、自动推进任务、自动验证和修复；不等待用户确认或继续")
@@ -3079,75 +3104,84 @@ def format_project_overlay(
             lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
             lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
     else:
-        entry = normalize_project_entry(project_entry)
-        light_or_direct = skip_stage_walls or entry == "direct"
-        if light_or_direct:
-            if workflow_stage in {"documentation", "design"}:
-                lines.append(
-                    "stage_gate: 轻量/直接实现路径 — 教科书阶段不阻挡写码；"
-                    "立即用 write_text/patch_file 改业务代码"
-                )
-            elif workflow_stage == "implementation" and active_task_id:
-                lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-            elif workflow_stage in {"verification", "release"}:
-                lines.append(
-                    "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
-                    "可以先跑验收，也可以继续实现"
-                )
-            if entry == "plan" and plan_status != "confirmed":
-                lines.append(
-                    "plan_gate: 用户选了规划后开工 — 仍须「项目 确认」后写源码；"
-                    "不要再调 plan_partner 重复出计划"
-                )
-            elif plan_status != "confirmed" and entry != "direct":
-                lines.append(
-                    "plan_gate: 未确认 — 用户若要写码请走直接实现；"
-                    "禁止再调用 plan_partner / 要求「确认开工」作为写码前提"
-                )
+        ordinary_request = ordinary_work_intent in {"read_only", "plan_only", "execute"}
+        if ordinary_request:
+            if ordinary_work_intent == "read_only":
+                lines.append("request_policy: 本回合只读；允许读取和状态查看，禁止写文件、运行命令和其它副作用")
+            elif ordinary_work_intent == "plan_only":
+                lines.append("request_policy: 本回合仅规划；允许读取和更新规划制品，禁止修改业务源码或执行实现命令")
             else:
-                lines.append("plan_gate: 已确认或直接实现 — 可写项目内代码；禁止再调用 plan_partner")
+                lines.append("request_policy: 本回合按用户明确请求执行；项目根目录、风险审批和真实验证仍是硬边界；历史阶段/计划状态不阻止普通实现")
         else:
-            if workflow_stage == "documentation":
-                lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
-            elif workflow_stage == "design":
-                lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
-            elif workflow_stage == "implementation" and active_task_id:
-                lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-            elif workflow_stage in {"verification", "release"}:
-                lines.append(
-                    "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
-                    "可以先跑验收，也可以继续实现"
-                )
-            if workflow_stage == "documentation":
-                lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
-            elif workflow_stage == "design":
-                lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
-            elif plan_status != "confirmed":
-                lines.append(
-                    "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
-                )
+            entry = normalize_project_entry(project_entry)
+            light_or_direct = skip_stage_walls or entry == "direct"
+            if light_or_direct:
+                if workflow_stage in {"documentation", "design"}:
+                    lines.append(
+                        "stage_gate: 轻量/直接实现路径 — 教科书阶段不阻挡写码；"
+                        "立即用 write_text/patch_file 改业务代码"
+                    )
+                elif workflow_stage == "implementation" and active_task_id:
+                    lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+                elif workflow_stage in {"verification", "release"}:
+                    lines.append(
+                        "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
+                        "可以先跑验收，也可以继续实现"
+                    )
+                if entry == "plan" and plan_status != "confirmed":
+                    lines.append(
+                        "plan_gate: 用户选了规划后开工 — 仍须「项目 确认」后写源码；"
+                        "不要再调 plan_partner 重复出计划"
+                    )
+                elif plan_status != "confirmed" and entry != "direct":
+                    lines.append(
+                        "plan_gate: 未确认 — 用户若要写码请走直接实现；"
+                        "禁止再调用 plan_partner / 要求「确认开工」作为写码前提"
+                    )
+                else:
+                    lines.append("plan_gate: 已确认或直接实现 — 可写项目内代码；禁止再调用 plan_partner")
             else:
-                lines.append("plan_gate: 已确认 — 可写项目内代码")
-            if profile == "solo":
-                lines.append(
-                    "delivery: 完成以构建/测试为准；TASKS 为视图；"
-                    "验收口语可 spawn deliverable_review"
-                )
-                lines.append(
-                    "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
-                    "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
-                )
-            else:
-                lines.append(
-                    "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
-                )
-                lines.append(
-                    "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
-                )
-                lines.append(
-                    "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
-                    "仅 report_progress 成功勾选后 Task 一停"
-                )
+                if workflow_stage == "documentation":
+                    lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
+                elif workflow_stage == "design":
+                    lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
+                elif workflow_stage == "implementation" and active_task_id:
+                    lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
+                elif workflow_stage in {"verification", "release"}:
+                    lines.append(
+                        "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
+                        "可以先跑验收，也可以继续实现"
+                    )
+                if workflow_stage == "documentation":
+                    lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
+                elif workflow_stage == "design":
+                    lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
+                elif plan_status != "confirmed":
+                    lines.append(
+                        "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
+                    )
+                else:
+                    lines.append("plan_gate: 已确认 — 可写项目内代码")
+                if profile == "solo":
+                    lines.append(
+                        "delivery: 完成以构建/测试为准；TASKS 为视图；"
+                        "验收口语可 spawn deliverable_review"
+                    )
+                    lines.append(
+                        "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
+                        "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
+                    )
+                else:
+                    lines.append(
+                        "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
+                    )
+                    lines.append(
+                        "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
+                    )
+                    lines.append(
+                        "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
+                        "仅 report_progress 成功勾选后 Task 一停"
+                    )
     if task_stats is not None:
         lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
     if plan_status == "confirmed":

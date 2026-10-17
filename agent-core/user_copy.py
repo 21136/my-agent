@@ -24,34 +24,34 @@ def harness_stale_proposals_chain_line() -> str:
 
 def runaway_mode_toggle_notice(*, enabled: bool, resumed: bool) -> str:
     if not enabled:
-        return "狂奔已关闭：后续步骤需你在聊天中手动推进。"
+        return "自动模式已关闭：后续步骤需你在聊天中手动推进。"
     if resumed:
-        return "狂奔已恢复：将自动在当前项目内继续执行。"
-    return "狂奔已开启：将自动在当前项目内连续执行。"
+        return "自动模式已恢复：将自动在当前项目内继续执行。"
+    return "自动模式已开启：将自动在当前项目内连续执行。"
 
 
 def runaway_duplicate_lease_notice() -> str:
     return (
-        "狂奔租约未释放，无法启动新回合（界面可能显示待命）。"
-        "已尝试自动清理；请再点一次「继续狂奔」，或重启桌面端。"
+        "自动续接通道未释放，无法启动新回合（界面可能显示待命）。"
+        "已尝试自动清理；请再点一次「继续自动运行」，或重启桌面端。"
     )
 
 
 def runaway_resume_busy_notice() -> str:
-    return "狂奔已在执行中，请查看上方活动区；无需重复点击继续。"
+    return "自动运行已在执行中，请查看上方活动区；无需重复点击继续。"
 
 
 def runaway_resume_lock_timeout_notice() -> str:
-    return "上一回合仍占用狂奔通道，可点「停止续接」取消等待，或稍后再试「继续狂奔」。"
+    return "上一回合仍占用自动执行通道，可点「停止续接」取消等待，或稍后再试「继续自动运行」。"
 
 
 def runaway_turn_start_notice() -> str:
-    return "正在启动狂奔回合…"
+    return "正在启动自动运行…"
 
 
 def runaway_paused_notice(reason: str) -> str:
     text = (reason or "需要人工处理").strip()
-    return f"狂奔已暂停：{text}"
+    return f"自动运行已暂停：{text}"
 
 
 def format_tool_loop_exceeded_message(
@@ -85,7 +85,7 @@ def format_tool_loop_exceeded_message(
     if runaway:
         lines.extend(
             [
-                "狂奔若仍开启会自动续接；也可点侧栏「继续狂奔」或「定向再试」。",
+                "自动模式若仍开启会自动续接；也可点侧栏「继续自动运行」或「定向再试」。",
                 "",
                 "常见原因：",
                 "· 只在查看文件/搜索，没有写入 PROJECT/DESIGN/TASKS/VERIFY 或运行验收命令",
@@ -192,26 +192,26 @@ def harness_disk_sync_notice() -> str:
 
 
 def runaway_release_wait_turn_notice() -> str:
-    return "狂奔已到发布等待，本回合跳过模型调用。"
+    return "自动模式已到发布等待，本回合跳过模型调用。"
 
 
 def runaway_release_wait_assistant_text() -> str:
     return (
-        "狂奔已到发布等待：正式任务与硬验收均已完成。"
-        "本回合不再调用模型；等待发布确认或手动关闭狂奔即可。"
+        "自动模式已到发布等待：正式任务与硬验收均已完成。"
+        "本回合不再调用模型；等待发布确认或手动关闭自动模式即可。"
     )
 
 
 def runaway_verification_exit_notice() -> str:
-    return "狂奔正在处理验收收尾（验收矩阵、质量命令与硬验收）。"
+    return "自动模式正在处理验收收尾（验收矩阵、质量命令与硬验收）。"
 
 
 def runaway_verification_handled_notice() -> str:
-    return "狂奔已处理验收配置与自动修复，正在复验。"
+    return "自动模式已处理验收配置与自动修复，正在复验。"
 
 
 def runaway_verification_harness_skip_notice() -> str:
-    return "狂奔已处理验收配置与自动修复，本回合跳过主对话（避免重复修改计划文件）。"
+    return "自动模式已处理验收配置与自动修复，本回合跳过主对话（避免重复修改计划文件）。"
 
 
 def runaway_verification_harness_assistant_text() -> str:

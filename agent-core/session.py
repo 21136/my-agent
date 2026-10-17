@@ -497,6 +497,9 @@ class Session:
     last_review_verdict: str | None = field(default=None, compare=False, repr=False)
     last_review_blockers_count: int = field(default=0, compare=False, repr=False)
     turn_intent: str | None = field(default=None, compare=False, repr=False)
+    # Ordinary work intent/task scope are request-local and never serialized.
+    next_work_intent: str | None = field(default=None, compare=False, repr=False)
+    next_task_scope: str | None = field(default=None, compare=False, repr=False)
     plan_files_fingerprint_at_turn_start: str | None = field(
         default=None, compare=False, repr=False
     )
@@ -505,6 +508,8 @@ class Session:
     skip_ordinary_plan_spawn: bool = field(default=False, compare=False, repr=False)
     scaffold_check_status: str | None = field(default=None, compare=False, repr=False)
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
+    # Request-scoped Skill package; never serialized or reused across turns.
+    _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
     # Ephemeral load warnings (bad jsonl/meta); not persisted. STABILIZATION §3.9.1
     corruption_notices: list[str] = field(default_factory=list, compare=False, repr=False)
     # UI-5972: desktop switch may defer full messages.jsonl load until first turn.

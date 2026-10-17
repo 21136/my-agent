@@ -1,7 +1,7 @@
 # 狂奔 v2 — 外部清单 · 单 Turn · 薄 Harness · Profile
 
 > 版本 **0.3.0** · 2026-09-09  
-> 状态：**M0/M1 已编码 · controller/checklist/acceptance/state/续接核心已接入；无进展熔断、自动预算和暂停恢复已落地**  
+> 状态：**M0/M1 已编码 · kernel runtime/checklist/acceptance/state/续接核心已接入；无进展熔断、自动预算和暂停恢复已落地**  
 > 取代方向：[RUNAWAY-FLOW-STATE-MACHINE.md](./RUNAWAY-FLOW-STATE-MACHINE.md) 的 checkpoint 运行时 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) 的谓词门 / 短接 / bug-fix 分轨  
 > 关联：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) · [PROJECT-QUALITY.md](./PROJECT-QUALITY.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · [TASKS.md](./TASKS.md) Phase 60 · [MAP.md](./MAP.md) §2
 
@@ -131,22 +131,21 @@ v1 用户用换线缓解焦虑，对验收债无效。v2 UI 在新开线完成�
 ```text
 agent.run_turn
   └─ if runaway_v2_enabled(session):
-         return RunawayController(session).run_turn(user_text)
+         return RunawayRuntime(agent).run_turn(user_text)   # 编排内核
      else:
          return legacy_run_turn(...)          # v1 冻结
 
+RunawayRuntime（`runaway_v2/kernel/runtime.py`）
+  derive_phase → build_turn_plan → project_sync.apply_plan
+  AgentDriver.run_parent_tool_loop(...)      # 经端口，不短接
+  run_acceptance → project_sync.commit_acceptance
+  should_continue_runaway / pending_runaway_work   # 见 RUNAWAY-V2-CONTINUATION.md
+
 RunawayController
-  derive_phase(paths, pid, session) -> Phase
-  load_or_build_checklist(...) -> Checklist
-  build_turn_plan(...) -> TurnPlan
-  apply_turn_plan_to_executor(plan)          # write_scope / 禁 plan_partner
-  run_parent_tool_loop(...)                  # 现有 loop，不短接
-  run_acceptance(spec) -> HookResult
-  commit_progress(checklist, progress.md)
-  should_continue_runaway(...)   # 见 RUNAWAY-V2-CONTINUATION.md
+  兼容 façade；新代码勿再引用。见 [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)。
 ```
 
-**已落地模块**：`agent-core/runaway_v2/`（`config.py` · `checklist.py` · `phase.py` · `plan.py` · `acceptance.py` · `continuation.py` · `controller.py` · `progress.py` · `resume.py` · `state.py`）。续接核心、项目状态指纹、自动预算与暂停恢复均由 `continuation.py` 负责，避免再把 v2 逻辑散进 `agent.py`。
+**已落地模块**：`agent-core/runaway_v2/`（`kernel/` · `config.py` · `checklist.py` · `phase.py` · `plan.py` · `acceptance.py` · `continuation.py` · `controller.py` · `progress.py` · `resume.py` · `state.py`）。续接核心、项目状态指纹、自动预算与暂停恢复均由 `continuation.py` 负责；编排回合由 `kernel/runtime.py` 负责，避免再把 v2 逻辑散进 `agent.py`。
 
 **复用、不改语义的现有模块**：
 
@@ -445,11 +444,11 @@ hook fail   → attempts += 1, status=failed, 记录 tail
 
 摘要：
 
-- **`pending_work ≠ None`** 且未升格 human 且未取消 → **`should_continue_runaway = true`**（controller 段内使用 `MY_AGENT_RUNAWAY_V2_MAX_AUTO_TURNS` 预算；跨 turn 另滤致命 `finish_reason`）。  
+- **`pending_work ≠ None`** 且未升格 human 且未取消 → **`should_continue_runaway = true`**（RunawayRuntime 内使用 `MY_AGENT_RUNAWAY_V2_MAX_AUTO_TURNS` 预算；跨 turn 另滤致命 `finish_reason`）。  
 - **`pending_work = None`**（`release_wait` · human 升格 · 无开放 T-* 且清单全绿）→ 不续接。  
 - **intent（qa/recall/requirements）不参与续接判断**；用户短句「继续」仅影响本轮 plan 解析（`execute`）。  
-- **单 owner 主路径**：v2 由 controller 在同一回合内派生 `pending_work` 并续接；server 只负责锁/租约/状态广播，Desktop 2.5s watchdog 对 v2 已禁用，仅保留 v1 兼容。  
-- **致命出口**：`cancelled`、`timeout`、`error` 在 controller 内持久化暂停原因并立即返回，不能被转译为 `tool_loop_exceeded` 或新的续接回合。  
+- **单 owner 主路径**：v2 由 `RunawayRuntime` 在同一回合内派生 `pending_work` 并续接；server 只负责锁/租约/状态广播，Desktop 2.5s watchdog 对 v2 已禁用，仅保留 v1 兼容。  
+- **致命出口**：`cancelled`、`timeout`、`error` 在 `RunawayRuntime` 内持久化暂停原因并立即返回，不能被转译为 `tool_loop_exceeded` 或新的续接回合。  
 - **进展守卫**：连续 `MY_AGENT_RUNAWAY_V2_NO_PROGRESS_TURNS` 个自动回合无项目状态变化，或达到 `MY_AGENT_RUNAWAY_V2_MAX_AUTO_TURNS`，立即暂停并保留可恢复原因；恢复会清零守卫计数。
 
 续接判断仅经 `continuation.py`（`pending_runaway_work` · `should_continue_runaway`）；`plan.py` 不再承载续接 bool。进展守卫由 `continuation.py` 落地。
@@ -638,7 +637,8 @@ v1 冻结路径在 **`MY_AGENT_RUNAWAY_V2=0`** 下必须仍绿；禁止为迁就
 | 文档 | v2 之后 |
 |------|---------|
 | 本文 | 运行时权威（阶段 · 清单 · turn plan · acceptance） |
-| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | **行业对照 + 编排边界地图**（Claude/Codex/Cursor/dsh · 下一刀 T-6110～） |
+| [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md) | **编排换血权威**（三平面 · kernel · R0～R5 · Phase 62） |
+| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 行业对照附录（Claude/Codex/Cursor/dsh） |
 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) | **续接权威**（`pending_work` · 段内/跨 turn · 指纹） |
 | [RUNAWAY-FLOW-STATE-MACHINE.md](./RUNAWAY-FLOW-STATE-MACHINE.md) | v1 契约；checkpoint 节 superseded |
 | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) | v1 谓词/短接；superseded |

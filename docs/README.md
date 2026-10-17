@@ -1,20 +1,24 @@
 # 文档导航
 
-> 本页按用途整理 Git 跟踪的项目文档，作为查找入口；不替代各主题文档自身的状态说明，也不代表每项设计都已实现。
+> 本页按用途整理 Git 跟踪的项目文档，作为查找入口；文档状态、权威级别和验证规则见 [DOC-GOVERNANCE.md](./DOC-GOVERNANCE.md)。
+> 最后核对：2026-10-16。文档存在不等于功能已实现，当前能力必须结合代码和测试判断。
 > 当前只整理导航、不搬文件，保持现有相对链接稳定。
 
 ## 建议阅读顺序
 
 1. [仓库 README](../README.md)：安装、启动与仓库概览。
-2. [生产项目 MVP](./PRODUCTION-PROJECT-MVP.md)：当前产品决策基线。
-3. [项目地图](./MAP.md)：模块和代码地图。
-4. [任务清单](./TASKS.md)：已知任务、进行中事项与验收线索。
-5. 按下面的主题导航进入具体设计、操作说明和历史材料。
+2. [文档治理](./DOC-GOVERNANCE.md)：状态、权威级别、阅读路径和审计规则。
+3. [生产项目 MVP](./PRODUCTION-PROJECT-MVP.md)：当前产品决策基线。
+4. [项目地图](./MAP.md)：模块和代码地图。
+5. [任务清单](./TASKS.md)：已知任务、进行中事项与验收线索。
+6. 按下面的主题导航进入具体设计、操作说明和历史材料。
 
 ## 真源与状态怎么读
 
+- 先读 [DOC-GOVERNANCE.md](./DOC-GOVERNANCE.md)，再按普通模式或自动模式路径阅读；不要把历史提案和状态快照当成当前规范。
+
 - **产品决策**以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 为准；如果其他设计与它冲突，以该基线为准。
-- **实现状态**要同时核对代码和验证结果。[MAP.md](./MAP.md) 与 [TASKS.md](./TASKS.md) 是状态快照，文件头记录的最近同步日期为 2026-09-07，不能单独证明能力在当前分支已落地。
+- **实现状态**要同时核对代码和验证结果。[MAP.md](./MAP.md) 与 [TASKS.md](./TASKS.md) 是状态快照；其同步日期可能早于当前分支，不能单独证明能力已落地。
 - **主题设计文档**说明某个能力的意图、约束或验收方式；不应仅凭“存在文档”推断功能已实现。
 - 标题含“提案 / 调研 / 评审 / 体验报告”的文档用于讨论或记录证据，不自动构成产品决策。
 - 带有 `superseded`、`cancelled`、`defer`、`历史` 等状态的条目，以正文状态为准；不要据此恢复已废止路线。
@@ -27,6 +31,28 @@
 - [TASKS 任务清单](./TASKS.md) · 任务、状态与验收
 - [项目章程](./PROJECT.md) · 仓库自身目标与范围
 - [CHANGELOG](./CHANGELOG.md) · 版本变更历史
+
+## 当前架构专题路径
+
+### 普通模式（当前）
+
+- [普通模式当前 spec](./superpowers/specs/2026-10-16-ordinary-project-state-machine-design.md) · 意图、权限、生命周期与进度分离
+- [普通模式实施计划](./superpowers/plans/2026-10-16-ordinary-intent-policy.md) · 后端、Desktop 与验收切片
+- [Skill Registry 设计](./superpowers/specs/2026-10-16-skill-registry-design.md) · 内置 Skill 包、按需加载与权限边界
+- [项目模式](./PROJECT-MODE.md) · 当前实现补充与历史背景
+- [外部项目原地接入设计](./superpowers/specs/2026-10-16-external-project-adoption-design.md) · junction 接入、扫描与安全边界
+- [普通流程减负](./ORDINARY-FLOW-REDUCTION.md) · 历史提案与当前实现覆盖
+
+### 自动模式（当前）
+
+- [自举与自交付路线图](./SELF-HOSTING-ROADMAP.md) · Agent 造 Agent、GitHub/CI、发布与回滚
+- [自举架构](./SELF-HOSTING-ARCHITECTURE.md) · 三平面、状态机与交付边界
+- [自修改事务](./SELF-MODIFICATION-TRANSACTION.md) · 快照、分支、验证、候选版本与回滚
+- [测试范围基线](./TEST-SCOPE-AND-BASELINE.md) · 主项目与 workspace 独立项目的测试边界
+- [编排权威](./RUNAWAY-ORCHESTRATION.md) · Transport / Control / Execution 与 owner 边界
+- [RUNAWAY-V2](./RUNAWAY-V2.md) · 产品/阶段语义
+- [续接规则](./RUNAWAY-V2-CONTINUATION.md) · continuation owner 与兼容边界
+- [行业附录地图](./RUNAWAY-ORCHESTRATION-MAP.md) · 只作对照
 
 ## 产品流程、工作台与界面
 
@@ -58,6 +84,11 @@ Desktop / 项目模式：
 
 ## 工具、模型与外部集成
 
+- [GitHub/CI 生命周期](./GITHUB-CI-LIFECYCLE.md) · branch、commit、push、PR、CI 等待与修复边界
+- [发布/部署/回滚](./RELEASE-DEPLOY-ROLLBACK.md) · artifact、health check 和恢复目标
+- [自举安全](./SELF-HOSTING-SECURITY.md) · 核心权限、确认、密钥和 fail-closed
+- [自举验证矩阵](./SELF-HOSTING-VERIFICATION.md) · E0–E6 证据等级与负向场景
+- [模型/Skill 兼容性](./SELF-HOSTING-MODEL-SKILL-COMPATIBILITY.md) · model、Skill、Runtime 版本矩阵
 - [工具系统](./TOOLS.md) · [工具目录](./TOOL-CATALOG.md) · [Archived Tools](./ARCHIVED-TOOLS.md) · [工具参数重试](./TOOL-RETRY.md)
 - [代码库搜索](./CODEBASE-SEARCH.md) · [浏览器能力](./BROWSER.md) · [图像输入](./VISION-INPUT.md)
 - [主机范围](./HOST-SCOPE.md) · [Git Vendor](./GIT-VENDOR.md) · [托管服务](./RUN-SERVICE.md)
@@ -78,7 +109,7 @@ Desktop / 项目模式：
 
 - [Agent 工具体验路线图](./AGENT-TOOL-EXPERIENCE.md) · [Cursor 对齐](./CURSOR-ALIGN.md) · [Cursor 差距收口](./CURSOR-GAP-NEXT.md)
 - [Pack 1245 路线图](./ROADMAP-PACK-1245.md) · [本地交付模型](./LOCAL-DELIVERY-MODEL.md)
-- [普通流程减负](./ORDINARY-FLOW-REDUCTION.md) · 文档标注为提案，实施状态需对照代码 / 任务确认。
+- [普通流程减负](./ORDINARY-FLOW-REDUCTION.md) · 历史提案与当前实现覆盖；当前规则以 ordinary spec/plan 和代码测试为准。
 - 狂奔相关：[RUNAWAY-V2](./RUNAWAY-V2.md) · [续接](./RUNAWAY-V2-CONTINUATION.md) · [验证编排](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · [启动闸门](./RUNAWAY-STARTUP-GATES.md) · [状态机](./RUNAWAY-FLOW-STATE-MACHINE.md)
 - 狂奔经验：[体验报告](./RUNAWAY-EXPERIENCE.md) · [R6 可靠性](./RUNAWAY-R6-RELIABILITY.md) · 历史记录不构成当前能力保证。
 - [评审指南](./REVIEW-GUIDE.md) · [历史评审汇总](./REVIEW-SUMMARY.md)
@@ -129,7 +160,7 @@ Desktop / 项目模式：
 
 ## 维护约定
 
-1. 新增正式文档时，在本页登记用途和类别；不要只靠文件名作为导航。
+1. 新增正式文档时，在本页登记用途和类别，并遵守 [DOC-GOVERNANCE.md](./DOC-GOVERNANCE.md) 的状态/权威级别约定。
 2. 修改产品决策时，先确认是否应更新 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再同步 MAP / TASKS。
 3. 新提案、调研和历史证据要标清状态，避免被误读为当前产品要求或已实现能力。
 4. 目前维持文件路径稳定；若以后需要物理搬迁，单独迁移并验证所有 Markdown 链接。

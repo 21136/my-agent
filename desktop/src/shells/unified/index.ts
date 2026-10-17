@@ -208,6 +208,9 @@ export function mountUnifiedShell(
     tasksAllDone: false,
     planOverlay: null,
     projects: [],
+    externalImportPath: "",
+    externalImportProjectId: "",
+    externalImportScan: null,
     switchOverlay: null,
     switchInProgress: false,
     pendingPickerId: "",
@@ -860,7 +863,7 @@ export function mountUnifiedShell(
       if (!canAutoResume()) {
         return;
       }
-      resumeRunawayFromUi("狂奔待命，正在自动续接…", { force: true });
+      resumeRunawayFromUi("自动待命，正在自动续接…", { force: true });
     }, RUNAWAY_IDLE_RESUME_MS);
   }
 
@@ -929,7 +932,7 @@ export function mountUnifiedShell(
     if (!projectState.runawayCancelAvailable) return;
     projectState.runawayCancelAvailable = false;
     syncWorkingVisual();
-    setStatus("正在停止狂奔续接…");
+    setStatus("正在停止自动续接…");
     try {
       client.sendTurnCancel();
     } catch (err) {
@@ -1666,6 +1669,26 @@ export function mountUnifiedShell(
         setStatus(`发布确认失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
+    onExternalImportScan: (path: string, projectId: string) => {
+      try {
+        client.scanExternalProject(path, projectId || undefined);
+        setStatus("正在扫描外部项目…");
+      } catch (err) {
+        setStatus(`扫描外部项目失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onExternalImportApply: (path: string, projectId: string) => {
+      try {
+        client.applyExternalProject(path, projectId, true);
+        setStatus("正在接入外部项目…");
+      } catch (err) {
+        setStatus(`接入外部项目失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    onExternalImportCancel: () => {
+      projectState.externalImportScan = null;
+      renderProjectSidebar(projectEls, projectState, projectCallbacks);
+    },
   };
 
   threadReturnActiveBtn.addEventListener("click", () => {
@@ -2191,10 +2214,10 @@ export function mountUnifiedShell(
     expandEl.innerHTML = "";
   }
 
-  function resumeRunawayFromUi(label = "正在恢复狂奔…", opts?: { force?: boolean }): void {
+  function resumeRunawayFromUi(label = "正在恢复自动运行…", opts?: { force?: boolean }): void {
     try {
       if (chat.isWorking()) {
-        setStatus("狂奔已在执行中，请查看活动区");
+        setStatus("自动运行已在进行中，请查看活动区");
         return;
       }
       const now = Date.now();
@@ -2204,7 +2227,7 @@ export function mountUnifiedShell(
         && !hasProjectBlocker(projectState)
         && now - lastRunawayNudgeAt < RUNAWAY_NUDGE_DEBOUNCE_MS
       ) {
-        setStatus("狂奔已开启，系统会自动续接");
+        setStatus("自动模式已开启，系统会自动续接");
         jumpToCurrentActivity();
         return;
       }
@@ -2224,7 +2247,7 @@ export function mountUnifiedShell(
     } catch (err) {
       clearRunawayResumePending();
       syncWorkingVisual();
-      setStatus(`恢复狂奔失败：${err instanceof Error ? err.message : String(err)}`);
+      setStatus(`恢复自动运行失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -4099,6 +4122,20 @@ export function mountUnifiedShell(
       return;
     }
 
+    if (target.closest('[data-action="external-import-scan"]')) {
+      projectCallbacks.onExternalImportScan(projectState.externalImportPath.trim(), projectState.externalImportProjectId.trim());
+      return;
+    }
+    if (target.closest('[data-action="external-import-apply"]')) {
+      const scan = projectState.externalImportScan;
+      if (scan) projectCallbacks.onExternalImportApply(projectState.externalImportPath.trim(), scan.project_id);
+      return;
+    }
+    if (target.closest('[data-action="external-import-cancel"]')) {
+      projectCallbacks.onExternalImportCancel();
+      return;
+    }
+
     const projectBtn = target.closest<HTMLButtonElement>(".overlay-project-item:not(.overlay-thread-item)");
     if (projectBtn?.dataset.projectId && !projectBtn.disabled) {
       const pid = projectBtn.dataset.projectId;
@@ -4338,6 +4375,7 @@ export function mountUnifiedShell(
     if (live) {
       void import("../../markdown").then(({ renderMarkdown }) => {
         live.innerHTML = renderMarkdown(editor.value);
+        void hydrateMermaid(live);
       }).catch(() => {
         /* ignore */
       });
@@ -4361,6 +4399,7 @@ export function mountUnifiedShell(
         try {
           // renderMarkdown is already in scope in this module
           live.innerHTML = renderMarkdown(editor.value) || `<p class="doc-reader-empty">开始编辑以预览</p>`;
+          void hydrateMermaid(live);
         } catch { /* ignore */ }
       }
       return;
@@ -4395,6 +4434,16 @@ export function mountUnifiedShell(
 
   // Overlay: search input + new-doc input
   function handleRailListInput(ev: Event): void {
+    const externalPath = (ev.target as HTMLElement).closest<HTMLInputElement>("#external-project-path");
+    if (externalPath) {
+      projectState.externalImportPath = externalPath.value;
+      return;
+    }
+    const externalId = (ev.target as HTMLElement).closest<HTMLInputElement>("#external-project-id");
+    if (externalId) {
+      projectState.externalImportProjectId = externalId.value;
+      return;
+    }
     const searchInput = (ev.target as HTMLElement).closest<HTMLInputElement>("#overlay-project-search");
     if (searchInput) {
       projectState.projectSearchQuery = searchInput.value;
@@ -4933,6 +4982,25 @@ export function mountUnifiedShell(
         projectState.milestoneAcceptedAt = event.release_acceptance.accepted_at ?? null;
         renderProjectSidebar(projectEls, projectState, projectCallbacks);
         setStatus("发布确认已保存");
+        break;
+
+      case "project.import.scan":
+        projectState.externalImportScan = event.scan;
+        projectState.externalImportProjectId = event.scan.project_id;
+        setStatus("外部项目扫描完成，请确认是否原地接入");
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
+        break;
+
+      case "project.import.applied":
+        projectState.externalImportScan = null;
+        setStatus("外部项目已接入，文件仍在原目录");
+        client.refreshProject();
+        client.listProjects();
+        break;
+
+      case "project.import.cancelled":
+        projectState.externalImportScan = null;
+        renderProjectSidebar(projectEls, projectState, projectCallbacks);
         break;
 
       case "project.state":
@@ -5681,12 +5749,12 @@ export function mountUnifiedShell(
   function planStatusLabel(): string {
     if (projectState.runawayEnabled) {
       if (projectState.runawayVersion >= 2) {
-        if (chat.isWorking()) return "狂奔进行中";
+        if (chat.isWorking()) return "自动运行中";
         if (projectState.runawayBlocked) {
           return projectState.runawayUserLine || projectState.runawayStatus || "需要处理";
         }
         if (projectState.runawayUserLine) return projectState.runawayUserLine;
-        return "狂奔待命";
+        return "自动待命";
       }
       if (projectState.runawayStatus) return projectState.runawayStatus;
     }

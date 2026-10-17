@@ -265,6 +265,25 @@ export type ServerEvent =
       release_acceptance?: ReleaseAcceptanceSummary;
     }
   | {
+      type: "project.import.scan";
+      scan: {
+        external_root: string;
+        project_id: string;
+        logical_root: string;
+        markers: string[];
+        has_git: boolean;
+        git_dirty: boolean | null;
+        has_tasks: boolean;
+        has_verify: boolean;
+        has_readme: boolean;
+        has_env: boolean;
+        has_build_manifest: boolean;
+        requires_confirmation: boolean;
+      };
+    }
+  | { type: "project.import.applied"; project_id: string; message: string }
+  | { type: "project.import.cancelled"; project_id: string | null }
+  | {
       type: "project.list";
       projects: Array<{
         id: string;
@@ -273,6 +292,8 @@ export type ServerEvent =
         tasks_total: number;
         session_id: string | null;
         is_current: boolean;
+        external_adopted?: boolean;
+        external_healthy?: boolean;
       }>;
     }
   | {
@@ -879,6 +900,18 @@ export class AgentWsClient {
 
   listProjects(): void {
     this.send({ type: "project.list" });
+  }
+
+  scanExternalProject(path: string, projectId?: string): void {
+    this.send({ type: "project.import.scan", path, project_id: projectId });
+  }
+
+  applyExternalProject(path: string, projectId: string, confirm = true): void {
+    this.send({ type: "project.import.apply", path, project_id: projectId, confirm });
+  }
+
+  cancelExternalProject(projectId?: string): void {
+    this.send({ type: "project.import.cancel", project_id: projectId });
   }
 
   openProject(projectId: string): void {

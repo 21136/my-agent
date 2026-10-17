@@ -140,7 +140,7 @@ export function mountAppChrome(
         <button type="button" class="app-chrome-runaway" id="chrome-runaway" role="switch" aria-checked="false" aria-pressed="false" disabled>
           <span class="app-chrome-runaway-track" aria-hidden="true"><span class="app-chrome-runaway-thumb"></span></span>
           <span class="app-chrome-runaway-copy">
-            <span class="app-chrome-runaway-name">狂奔</span>
+            <span class="app-chrome-runaway-name">自动</span>
             <span class="app-chrome-runaway-state" id="chrome-runaway-state">关</span>
           </span>
         </button>
@@ -183,11 +183,11 @@ export function mountAppChrome(
     runawayBtn.setAttribute("aria-checked", String(enabled));
     runawayBtn.setAttribute(
       "aria-label",
-      projectBound ? `狂奔 ${enabled ? "开" : "关"}` : "先打开一个项目才能开启狂奔运行",
+      projectBound ? `自动模式 ${enabled ? "开" : "关"}` : "先打开一个项目才能开启自动模式",
     );
     runawayBtn.title = projectBound
-      ? (enabled ? "狂奔运行已开启；点击暂停" : "开启后允许当前项目连续推进")
-      : "先打开一个项目才能开启狂奔运行";
+      ? (enabled ? "自动模式已开启；点击暂停" : "开启后允许当前项目连续推进")
+      : "先打开一个项目才能开启自动模式";
     runawayBtn.classList.toggle("is-active", enabled);
   };
 

@@ -37,7 +37,7 @@ class ProjectDocumentationStageTests(unittest.TestCase):
         )
         self.assertIsNone(allowed)
 
-    def test_documentation_requires_explicit_command_and_writes_core_artifacts(self) -> None:
+    def test_organize_writes_core_artifacts_without_advancing_ordinary_stage(self) -> None:
         with temporary_agent_paths(prefix="documentation-stage-") as paths:
             session = create_new(paths, conversation_id="documentation-stage")
             outputs: list[str] = []
@@ -46,25 +46,22 @@ class ProjectDocumentationStageTests(unittest.TestCase):
             run_project_command(session, paths, command, output_fn=outputs.append)
 
             root = project_dir(paths, "textbook-demo")
-            before = {name: (root / name).read_text(encoding="utf-8") for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")}
-            status_before = session.meta.project_workflow_stage
-
-            self.assertEqual(status_before, "requirements")
-            self.assertIsNone(parse_project_command("项目简介是一个音乐项目"))
-            self.assertEqual(before["PROJECT.md"], (root / "PROJECT.md").read_text(encoding="utf-8"))
-
+            before = {
+                name: (root / name).read_text(encoding="utf-8")
+                for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
+            }
             organize = parse_project_command("项目 整理文档")
             assert organize is not None
             run_project_command(session, paths, organize, output_fn=outputs.append)
 
-            self.assertEqual(session.meta.project_workflow_stage, "documentation")
+            self.assertEqual(session.meta.project_workflow_stage, "requirements")
             self.assertEqual(session.meta.project_plan_status, "draft")
             for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md"):
                 self.assertTrue((root / name).is_file())
                 self.assertNotIn("待填写", (root / name).read_text(encoding="utf-8"))
-            self.assertIn("四个核心制品", "\n".join(outputs))
+            self.assertIn("文档制品", "\n".join(outputs))
 
-    def test_documentation_stage_cannot_confirm_code_work(self) -> None:
+    def test_plan_confirmation_is_explicit_fact_not_stage_gate(self) -> None:
         with temporary_agent_paths(prefix="documentation-gate-") as paths:
             session = create_new(paths, conversation_id="documentation-gate")
             new_command = parse_project_command("项目 新建 gated-demo")
@@ -74,10 +71,11 @@ class ProjectDocumentationStageTests(unittest.TestCase):
             assert organize is not None
             run_project_command(session, paths, organize, output_fn=lambda _text: None)
 
-            with self.assertRaisesRegex(ProjectModeError, "设计确认"):
-                confirm_project_plan(session)
+            confirm_project_plan(session)
+            self.assertEqual(session.meta.project_workflow_stage, "requirements")
+            self.assertEqual(session.meta.project_plan_status, "confirmed")
 
-    def test_design_confirmation_requires_explicit_task_authorization(self) -> None:
+    def test_design_confirmation_and_task_start_do_not_open_stage_wall(self) -> None:
         with temporary_agent_paths(prefix="design-confirmation-") as paths:
             session = create_new(paths, conversation_id="design-confirmation")
             new_command = parse_project_command("项目 新建 design-demo")
@@ -87,28 +85,12 @@ class ProjectDocumentationStageTests(unittest.TestCase):
             assert organize is not None
             run_project_command(session, paths, organize, output_fn=lambda _text: None)
 
+            session.meta.project_workflow_stage = "documentation"
             confirm_design = parse_project_command("项目 确认设计")
             assert confirm_design is not None
             run_project_command(session, paths, confirm_design, output_fn=lambda _text: None)
-            self.assertEqual(session.meta.project_workflow_stage, "design")
+            self.assertEqual(session.meta.project_workflow_stage, "documentation")
             self.assertEqual(session.meta.project_plan_status, "draft")
-
-            blocked = project_mode_block_reason(
-                active_shell="project",
-                project_root=session.meta.project_root,
-                plan_status=session.meta.project_plan_status,
-                workflow_stage=session.meta.project_workflow_stage,
-                tool_name="run_evolved",
-                arguments={"tool_name": "run_command", "arguments": {"command": "python main.py"}},
-            )
-            self.assertIn("开始任务", blocked or "")
-
-            start_task = parse_project_command("项目 开始任务 T-001")
-            assert start_task is not None
-            run_project_command(session, paths, start_task, output_fn=lambda _text: None)
-            self.assertEqual(session.meta.project_workflow_stage, "implementation")
-            self.assertEqual(session.meta.project_plan_status, "confirmed")
-            self.assertEqual(session.meta.project_active_task_id, "T-001")
 
             allowed = project_mode_block_reason(
                 active_shell="project",
@@ -117,8 +99,18 @@ class ProjectDocumentationStageTests(unittest.TestCase):
                 workflow_stage=session.meta.project_workflow_stage,
                 tool_name="run_evolved",
                 arguments={"tool_name": "run_command", "arguments": {"command": "python main.py"}},
+                ordinary_work_intent="execute",
             )
             self.assertIsNone(allowed)
+
+            start_task = parse_project_command("项目 开始任务 T-001")
+            assert start_task is not None
+            run_project_command(session, paths, start_task, output_fn=lambda _text: None)
+            self.assertEqual(session.meta.project_workflow_stage, "documentation")
+            self.assertEqual(session.meta.project_plan_status, "draft")
+            self.assertEqual(session.meta.project_active_task_id, "T-001")
+            self.assertEqual(session.next_work_intent, "execute")
+            self.assertEqual(session.next_task_scope, "T-001")
 
 
 if __name__ == "__main__":

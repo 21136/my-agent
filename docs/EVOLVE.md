@@ -2,6 +2,8 @@
 
 > 版本 0.2.6 · 2026-07-09 · 与 `MEMORY.md`、`RUNTIME.md`、`TOOLS.md` 配套
 
+> **当前实现修订（2026-10-16）**：多步工作流不再仅停留在 M4 提示；内置 Skill Registry 已落在 `agent-core/skill_registry.py` 与 `evolve/skills/`。本文关于“skill proposal / M4 skill”的段落保留为历史路线记录，不代表当前禁止使用内置 Skill。
+
 ---
 
 ## 1. 目标

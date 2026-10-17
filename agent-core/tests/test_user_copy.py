@@ -16,7 +16,17 @@ from user_copy import (
     format_tool_loop_exceeded_message,
     harness_hard_verify_passed_notice,
     runaway_auto_chain_notice,
+    runaway_duplicate_lease_notice,
     runaway_mode_toggle_notice,
+    runaway_paused_notice,
+    runaway_release_wait_assistant_text,
+    runaway_release_wait_turn_notice,
+    runaway_resume_busy_notice,
+    runaway_resume_lock_timeout_notice,
+    runaway_turn_start_notice,
+    runaway_verification_exit_notice,
+    runaway_verification_handled_notice,
+    runaway_verification_harness_skip_notice,
 )
 
 
@@ -28,6 +38,26 @@ class TestUserCopy(unittest.TestCase):
         self.assertIn("关闭", runaway_mode_toggle_notice(enabled=False, resumed=False))
         self.assertIn("恢复", runaway_mode_toggle_notice(enabled=True, resumed=True))
         self.assertIn("开启", runaway_mode_toggle_notice(enabled=True, resumed=False))
+
+    def test_runaway_user_facing_notices_use_automatic_branding(self) -> None:
+        notices = [
+            runaway_mode_toggle_notice(enabled=False, resumed=False),
+            runaway_mode_toggle_notice(enabled=True, resumed=True),
+            runaway_mode_toggle_notice(enabled=True, resumed=False),
+            runaway_duplicate_lease_notice(),
+            runaway_resume_busy_notice(),
+            runaway_resume_lock_timeout_notice(),
+            runaway_turn_start_notice(),
+            runaway_paused_notice("用户停止了自动运行"),
+            runaway_release_wait_turn_notice(),
+            runaway_release_wait_assistant_text(),
+            runaway_verification_exit_notice(),
+            runaway_verification_handled_notice(),
+            runaway_verification_harness_skip_notice(),
+        ]
+        for notice in notices:
+            with self.subTest(notice=notice):
+                self.assertNotIn("狂奔", notice)
 
     def test_harness_hard_verify_passed_notice_plain(self) -> None:
         self.assertNotIn("checkpoint", harness_hard_verify_passed_notice(target="verifying"))
@@ -48,6 +78,7 @@ class TestUserCopy(unittest.TestCase):
                 tool_loop_max=8,
             )
         self.assertIn("未成功调用工具", msg)
+        self.assertNotIn("狂奔", msg)
         self.assertNotIn("segment", msg)
         self.assertNotIn("Harness", msg)
 

@@ -33,6 +33,7 @@ from project_mode import (
     documentation_ready_for_design,
     read_project_template,
     upgrade_project_to_standard,
+    ordinary_project_session,
     utc_now_iso,
 )
 from session import Session, utc_now_iso
@@ -63,6 +64,7 @@ ProjectCommandKind = Literal[
     "verify",
     "discipline",
     "upgrade",
+    "import",
 ]
 InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
@@ -81,6 +83,7 @@ class ParsedProjectCommand:
     kind: ProjectCommandKind
     project_id: str | None = None
     project_template: str = "standard"
+    external_path: str | None = None
 
 
 class ProjectCommandError(Exception):
@@ -308,6 +311,14 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 打开 <id>")
         return ParsedProjectCommand(kind="open", project_id=tokens[1])
+    if verb in {"导入", "import", "adopt"}:
+        if len(tokens) < 2:
+            raise ProjectCommandError("项目 导入 <外部目录> [id]")
+        return ParsedProjectCommand(
+            kind="import",
+            project_id=tokens[2] if len(tokens) >= 3 else None,
+            external_path=tokens[1].strip('"'),
+        )
     if verb in {"切换", "switch"}:
         if len(tokens) < 2:
             raise ProjectCommandError("项目 切换 <id>")
@@ -443,7 +454,7 @@ def bind_project_session(
 
 
 def confirm_direct_implement(session: Session) -> str:
-    """Ordinary-mode explicit entry: persist ``project_entry=direct`` and open the plan gate."""
+    """Arm one ordinary execute request without persisting a permission mode."""
     if session.meta.active_shell != "project":
         raise ProjectModeError("当前不在项目壳；「项目 直接实现」仅在项目会话可用。")
     if bool(getattr(session.meta, "project_runaway_enabled", False)):
@@ -452,6 +463,10 @@ def confirm_direct_implement(session: Session) -> str:
     pid = (session.meta.project_id or "").strip()
     if not root or not pid:
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
+    if ordinary_project_session(session):
+        session.next_work_intent = "execute"
+        session.next_task_scope = ""
+        return "已选择直接实现入口；本次请求将直接执行，不修改项目阶段或计划确认状态。"
     status = str(session.meta.project_plan_status or "draft")
     if status in {"draft", "plan_dirty"}:
         message = confirm_project_plan(session, skip_stage_walls=True)
@@ -467,7 +482,8 @@ def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) ->
     if not root or not pid or session.meta.active_shell != "project":
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements")
-    if not skip_stage_walls:
+    ordinary = ordinary_project_session(session)
+    if not skip_stage_walls and not ordinary:
         if workflow_stage == "documentation":
             raise ProjectModeError("文档整理尚未完成设计确认；当前不能开始写代码")
         if workflow_stage == "design":
@@ -478,8 +494,12 @@ def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) ->
         raise ProjectModeError(f"缺少 {root}/TASKS.md；请先让助手生成计划")
 
     session.meta.project_plan_status = "confirmed"
-    session.meta.project_workflow_stage = "implementation"
+    if not ordinary:
+        session.meta.project_workflow_stage = "implementation"
     session.meta.project_plan_confirmed_at = utc_now_iso()
+    if ordinary:
+        session.next_work_intent = "execute"
+        session.next_task_scope = ""
     if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
         session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     snapshot_plan_fingerprints(session, session.paths, pid)
@@ -501,12 +521,16 @@ def confirm_project_design(session: Session, paths: AgentPaths) -> str:
     ready, missing = documentation_ready_for_design(paths, pid)
     if not ready:
         raise ProjectModeError(f"文档尚未达到设计确认标准：缺少 {', '.join(missing)}")
-    session.meta.project_workflow_stage = "design"
-    session.meta.project_plan_status = "draft"
+    ordinary = ordinary_project_session(session)
+    if not ordinary:
+        session.meta.project_workflow_stage = "design"
+        session.meta.project_plan_status = "draft"
+        session.meta.project_active_task_id = ""
     session.meta.project_design_confirmed_at = utc_now_iso()
-    session.meta.project_active_task_id = ""
     session.meta.updated_at = utc_now_iso()
     session.save()
+    if ordinary:
+        return f"设计确认事实已记录：{root}；普通模式不推进项目阶段。"
     return f"设计已确认：{root}。当前进入 design；请选择一个任务，例如「项目 开始任务 T-001」。"
 
 
@@ -516,7 +540,8 @@ def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str
     normalized_task = task_id.strip().upper()
     if not root or not pid or session.meta.active_shell != "project":
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
-    if getattr(session.meta, "project_workflow_stage", "requirements") != "design":
+    ordinary = ordinary_project_session(session)
+    if not ordinary and getattr(session.meta, "project_workflow_stage", "requirements") != "design":
         raise ProjectModeError("必须先确认设计，再启动实现任务")
     if not re.fullmatch(r"T-\d+(?:-\d+)*", normalized_task):
         raise ProjectModeError("任务 ID 必须是 T-001 格式")
@@ -526,13 +551,18 @@ def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str
     tasks = tasks_path.read_text(encoding="utf-8")
     if not re.search(rf"(?im)^\s*-\s*\[\s\]\s+.*\b{re.escape(normalized_task)}\b", tasks):
         raise ProjectModeError(f"开放任务中不存在 {normalized_task}；只能启动当前队列中的未完成任务")
-    session.meta.project_workflow_stage = "implementation"
-    session.meta.project_plan_status = "confirmed"
-    session.meta.project_plan_confirmed_at = utc_now_iso()
+    if not ordinary:
+        session.meta.project_workflow_stage = "implementation"
+        session.meta.project_plan_status = "confirmed"
+        session.meta.project_plan_confirmed_at = utc_now_iso()
+    else:
+        session.next_work_intent = "execute"
+        session.next_task_scope = normalized_task
     if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
         session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
     session.meta.project_active_task_id = normalized_task
-    _set_project_goal(session, root, "confirmed")
+    if not ordinary:
+        _set_project_goal(session, root, "confirmed")
     session.meta.updated_at = utc_now_iso()
     session.save()
     return f"已授权实现 {normalized_task}：仅限当前任务范围；完成后必须按 VERIFY.md 验证。"
@@ -544,16 +574,77 @@ def organize_project_plan(session: Session, paths: AgentPaths) -> str:
     if not root or not pid or session.meta.active_shell != "project":
         raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements")
-    if workflow_stage != "requirements":
+    ordinary = ordinary_project_session(session)
+    if not ordinary and workflow_stage != "requirements":
         raise ProjectModeError(f"当前阶段为 {workflow_stage}，不能重新开始文档整理")
     result = organize_project_documents(paths, pid)
-    session.meta.project_workflow_stage = "documentation"
-    session.meta.project_plan_status = "draft"
-    session.meta.project_plan_confirmed_at = ""
-    _set_project_goal(session, root, "draft")
+    if not ordinary:
+        session.meta.project_workflow_stage = "documentation"
+        session.meta.project_plan_status = "draft"
+        session.meta.project_plan_confirmed_at = ""
+        _set_project_goal(session, root, "draft")
     session.meta.updated_at = utc_now_iso()
     generated = ", ".join(result["generated"]) or "无（已有内容已保留）"
+    if ordinary:
+        return f"文档制品已整理：{root}；普通模式不推进项目阶段，可按当前请求继续实现。新生成：{generated}。"
     return f"文档整理已开始：{root}；生成/保留四个核心制品。新生成：{generated}。请确认设计后再进入实现。"
+
+
+def import_external_project(
+    session: Session,
+    paths: AgentPaths,
+    external_path: str,
+    project_id: str | None = None,
+) -> str:
+    """Adopt an external project in place through a workspace junction."""
+    from external_project import (
+        ExternalProjectError,
+        apply_external_project,
+        detach_external_project,
+        scan_external_project,
+    )
+
+    if session.meta.project_id:
+        raise ProjectModeError(
+            f"当前会话已绑定项目 {session.meta.project_id}；请先新开会话再导入外部项目"
+        )
+    binding = None
+    try:
+        scan = scan_external_project(paths, external_path, project_id=project_id)
+        binding = apply_external_project(paths, scan)
+        logical = paths.workspace / binding.project_id
+        tasks_path = logical / "TASKS.md"
+        if not tasks_path.is_file():
+            tasks_path.write_text(
+                "# 导入项目任务（待确认）\n\n"
+                "> 这是从外部项目接入时生成的草稿，请先检查现有代码和下一步。\n\n"
+                "- [ ] T-IMPORT-001 确认外部项目当前进度、测试命令和下一步任务\n",
+                encoding="utf-8",
+            )
+        from project_manifest import bootstrap_manifest, load_manifest, manifest_path, save_manifest
+
+        manifest_file = manifest_path(logical)
+        if load_manifest(manifest_file) is None:
+            save_manifest(manifest_file, bootstrap_manifest(logical, binding.project_id, tier="normal"))
+        bind_project_session(session, binding.project_id, plan_status="draft")
+        session.next_work_intent = "execute"
+        session.next_task_scope = ""
+        session.save()
+    except Exception as exc:
+        if binding is not None:
+            try:
+                detach_external_project(paths, binding.project_id)
+            except Exception:
+                pass
+        raise ProjectModeError(str(exc)) from exc
+    markers = ", ".join(scan.markers) or "未发现标准项目标记"
+    git_state = "有未提交修改" if scan.git_dirty else "Git 干净或不可用"
+    return (
+        f"外部项目已原地接入：{binding.external_root}\n"
+        f"逻辑项目：workspace/{binding.project_id}（文件仍在原目录）\n"
+        f"检测到：{markers}；{git_state}。\n"
+        "当前仍是 draft；已准备一次 execute 请求，不代表计划或项目已确认。"
+    )
 
 
 def format_project_status(session: Session, paths: AgentPaths) -> str:
@@ -636,6 +727,21 @@ def run_project_command(
         output_fn(message)
         if updated.conversation_id != session.conversation_id:
             return ProjectCommandResult(meta_changed=True, session=updated)
+        return ProjectCommandResult(meta_changed=True)
+
+    if command.kind == "import":
+        assert command.external_path is not None
+        try:
+            message = import_external_project(
+                session,
+                paths,
+                command.external_path,
+                project_id=command.project_id,
+            )
+        except ProjectModeError as exc:
+            output_fn(f"error: {exc}")
+            return ProjectCommandResult()
+        output_fn(message)
         return ProjectCommandResult(meta_changed=True)
 
     if command.kind == "open":

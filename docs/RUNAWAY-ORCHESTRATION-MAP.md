@@ -1,7 +1,7 @@
 # 狂奔编排架构地图 — 行业对照与 my-agent 落点
 
-> 版本 **0.1.0** · 2026-10-16  
-> 状态：**设计/对照文档**（非新 Phase 准入；编码任务见 §6）  
+> 版本 **0.2.0** · 2026-10-16  
+> 状态：**行业附录**；权威换血规范见 [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)  
 > 父文档：[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · [PERSONAL-OMNICAP-ROADMAP.md](./PERSONAL-OMNICAP-ROADMAP.md)  
 > 关联：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md)（普模薄父） · [execution-lifecycle-design.md](./superpowers/specs/2026-09-11-execution-lifecycle-design.md)（T-6230）
 
@@ -77,7 +77,7 @@ Cordis ctx
 ```text
 server._run_line（租约 · TURN_LOCK · ExecutionLifecycle）
   → Agent.run_turn
-       → RunawayController（v2 唯一业务 owner）
+       → RunawayRuntime（kernel · v2 唯一编排 owner）
             derive_phase → build_turn_plan → _run_parent_tool_loop
             → run_acceptance → 更新 checklist
             → should_continue_runaway → 段内再 run_turn
@@ -108,7 +108,7 @@ server._run_line（租约 · TURN_LOCK · ExecutionLifecycle）
 
 | Owner | 职责 | v2 | v1 |
 |-------|------|----|----|
-| **RunawayController** | 同 WS turn 内 `pending_work` → 再 `run_turn` | **唯一业务续接** | 不使用 |
+| **RunawayRuntime** | 同 WS turn 内 `pending_work` → 再 `run_turn` | **唯一业务续接** | 不使用 |
 | **server `_chain_runaway_after_turn`** | turn.end 后注入 `[Harness]` 行 | **直接 return** | 跨 turn 续接 |
 | **Desktop `scheduleRunawayIdleResume`** | idle 2.5s 强拉 resume | **禁用**（`runaway_version >= 2`） | 兜底第三 owner |
 | **ExecutionLifecycle** | queued/running/stopping；Stop 幂等 | 与续接 **可观测性** 绑定，非进度真源 | 同左 |
@@ -133,15 +133,15 @@ server._run_line（租约 · TURN_LOCK · ExecutionLifecycle）
 
 ## 6. 推荐下一刀（编排工程，非新 LLM）
 
-> 优先级面向 **OMNI-A 信任** 与「单 owner 不回归」。实施前若单独立 Phase，须 DOC-04（矩阵行 + IT/S）。
+> **实施任务以 [TASKS.md](./TASKS.md) Phase 62 为准**（**T-6240～T-6248**；勿与 Phase 61 的 T-6210～6216 混用）。下表为历史草案 ID → 现行映射。
 
-| ID | 主题 | 内容 | 验收倾向 |
-|----|------|------|----------|
-| **T-6110** | 编排层文档与边界测试 | Controller ↔ Agent ↔ server 序列图；**禁止** v2 import v1 `runaway_flow` 控制面 | 架构评审 + import 守卫或 IT |
-| **T-6111** | ExecutionLifecycle × v2 续接 | `begin_continuation` / Stop 取消 queued 续接与 controller 递归同 turn 一致 | IT-6230 子集 + 狂奔 IT |
-| **T-6112** | 可观测：决策外显 | `turn.start` / notice 带 `pending_work` 摘要（phase · item id）供 Desktop 时间线 | S-UX-028m 可选手工 |
-| **T-6113** | v1 物理隔离 | `runaway_v2_enabled` 时 `agent.py` 不加载 v1 短接/ repair 符号路径（lazy import 或断言） | 全量 pytest + v1 compat 112 |
-| **T-6114** | 工具瀑布（轻量） | 狂奔 verify 命令走统一 pre/post（审批/落盘/spill），对齐 dsh **思想** 不引 Cordis | IT + 手工 matrix 项 |
+| 草案 ID | Phase 62 | 主题 |
+|---------|----------|------|
+| T-6110 | **T-6248** | 编排边界序列图 · import 守卫 |
+| T-6111 | **T-6245** | ExecutionLifecycle × v2 段内续接 |
+| T-6112 | **T-6246** | `pending_work` 可观测 |
+| T-6113 | **T-6242** + **T-6244** | v1 迁包 · kernel 隔离 |
+| T-6114 | **T-6247** | verify 工具 pre/post 瀑布 |
 
 **不建议** 作为狂奔 v2 下一刀：
 
@@ -184,4 +184,5 @@ server._run_line（租约 · TURN_LOCK · ExecutionLifecycle）
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 0.2.0 | 2026-10-16 | 降为行业附录；编排权威迁至 RUNAWAY-ORCHESTRATION.md · Runtime 替换 Controller 叙述 |
 | 0.1.0 | 2026-10-16 | 初稿：五家架构对照 · v1/v2 模块映射 · T-6110～6114 草案 |

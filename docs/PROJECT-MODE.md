@@ -1,12 +1,43 @@
 # 项目模式设计（PROJECT-MODE）
 
+---
 > 版本 **0.5.4** · 2026-09-12  
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）；**Phase 58b T-5810～T-5819 制品链运行时基础 done，剩余 S-581**  
 > **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
 > **Desktop 教科书流程**（产品定调）：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)  
 > 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) · `TASKS.md` Phase 11/20/**21**/37/**58b** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
----
+
+## 0g. 普通模式状态/权限重构（已实施 · 2026-10-16）
+
+本节覆盖普通模式的最新实现口径；本文较早的阶段门、计划门和直接实现过渡补丁描述保留为历史决策记录，不再作为普通写码权限的当前解释。
+
+### 当前契约
+
+- 普通请求先解析为请求级 `read_only`、`plan_only` 或 `execute`；该值只作用于当前回合，不写入 `SessionMeta`，也不会粘滞到下一条消息。
+- 普通权限由请求意图、项目绑定/根目录、目标路径和操作风险决定。`project_workflow_stage`、`project_plan_status`、`project_entry`、模板档位和 L2 stale 只能作为兼容字段或进度事实，不能单独拒绝项目内普通实现。
+- `read_only` 允许读取和状态查看，不允许写文件或执行项目命令；`plan_only` 允许规划制品操作，不允许业务源码编辑或实现命令；`execute` 允许项目根目录内的普通编辑和测试，但仍受危险操作审批、路径边界和真实验证约束。
+- `项目 直接实现`、`项目 开始任务`、计划确认和轻量项目入口只设置一次性请求意图/任务范围；普通模式不再用它们伪造阶段推进或确认时间。显式计划确认仍可记录计划确认事实。
+- API 的 `needs_plan_confirm`、`needs_design_confirm`、`needs_documentation` 保留为兼容/展示字段；`ordinary_stage_gates_blocking=false` 且 `ordinary_permission_source=request_intent_path_risk` 是普通权限来源。
+- 自动模式 v1/v2 继续由其自身阶段、检查点、清单和验收 owner 控制，不受本节普通策略改写。
+
+### 实现锚点
+
+| 层 | 当前实现 |
+|---|---|
+| 意图解析 | `agent-core/turn_intent.py::resolve_ordinary_work_intent` |
+| 请求级状态 | `Session.next_work_intent/next_task_scope`；`ExecutorSession.ordinary_work_intent/ordinary_task_scope` |
+| 权限判断 | `project_mode_block_reason(... ordinary_work_intent=...)` |
+| 回合消费 | `agent-core/agent.py::Agent.run_turn`，消费并清除一次性 override |
+| CLI/API | `project_cli.py`、`project_api.py`、`context_switch.py` |
+| Desktop 展示 | `desktop/src/shells/unified/project-panel.ts`；阶段/计划只作为进度事实，不再生成普通写码阻塞 CTA |
+
+验收证据：普通后端、生命周期、提示词、上下文切换及自动模式定向回归通过；普通 Desktop 契约测试与生产构建通过。
+
+
+## 0h. 外部项目原地接入（2026-10-16 · 已实施）
+
+外部项目通过 `项目 导入 <path> [id]` 只读扫描并在确认后建立 `workspace/<id>` junction；源码仍位于原目录，普通工具继续使用逻辑项目路径。该流程不复制源码、不自动确认计划；缺少 `TASKS.md` 时只生成待确认草稿。详见 [external-project-adoption-design.md](./superpowers/specs/2026-10-16-external-project-adoption-design.md)。
 
 ## 0b. UI 迁移说明（2026-07-30）
 
@@ -386,7 +417,7 @@ CLI：`项目 新建 <id> --light` 或 `项目 新建 <id> light`。升档：`�
 
 ---
 
-## 4. 计划确认门（核心）
+## 4. 计划确认门（历史决策；普通模式当前实现见 §0g）
 
 ### 4.1 流程
 

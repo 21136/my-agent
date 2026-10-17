@@ -70,7 +70,7 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 
 以下 **默认不再叠新状态机**；新场景用 profile + checklist + 工具，而不是新 checkpoint / 新 Harness 短接：
 
-- `agent.run_turn` → 父 tool loop（或 `RunawayController` **单入口**）
+- `agent.run_turn` → 父 tool loop（狂奔 v2：`RunawayRuntime` **单入口** · [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)）
 - [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) 高风险边界
 - [WRITE-SCOPE.md](./WRITE-SCOPE.md)
 - 项目四件套真源（[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)）
@@ -174,7 +174,8 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 | 文档 | 角色 |
 |------|------|
 | 本文 | **个人全能总罗盘**（Claude 档） |
-| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 狂奔 vs 行业 harness 对照 · 编排下一刀草案 |
+| [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md) | 狂奔编排换血权威（三平面 · Phase 62） |
+| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 行业 harness 对照附录 |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 项目模式产品决策（不变） |
 | [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) | IDE/终端/确认手感 |
 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) | 长跑 profile 运行时 |

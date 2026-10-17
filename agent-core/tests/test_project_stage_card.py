@@ -55,9 +55,6 @@ class ProjectStageCardContractTests(unittest.TestCase):
         unified = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
             encoding="utf-8"
         )
-        project_panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
-            encoding="utf-8"
-        )
         pet = (ROOT / "desktop" / "src" / "shells" / "pet" / "index.ts").read_text(encoding="utf-8")
         self.assertIn("```mermaid", markdown)
         self.assertIn("mermaid-placeholder", markdown)
@@ -65,7 +62,8 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("Mermaid 图表渲染失败，已保留源代码", markdown)
         self.assertIn("void hydrateMermaid(documentEl)", unified)
         self.assertIn("void hydrateMermaid(chatEl)", unified)
-        self.assertIn("void hydrateMermaid(els.overlayBody)", project_panel)
+        self.assertIn("void hydrateMermaid(live)", unified)
+        self.assertGreaterEqual(unified.count("void hydrateMermaid(live)"), 2)
         self.assertIn("void hydrateMermaid(chatEl)", pet)
 
     def test_it5914_documents_use_main_focus_instead_of_sidebar_body(self) -> None:
@@ -98,12 +96,12 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("文档标题，例如：需求分析", reading)
         self.assertIn("finalizeDocumentOutline", index)
         self.assertIn("normalizeNewDocPath", index)
-        self.assertIn('chatEl.classList.toggle("hidden", focus !== "chat")', index)
+        self.assertIn('chatEl.classList.toggle("hidden", !(focus === "chat" || splitDocs))', index)
         self.assertNotIn("data-main-focus=\"document\"] .unified-chat", css)
         self.assertIn("renderDocumentReaderHtml", index)
         self.assertIn("doc-outline-jump", index)
         self.assertNotIn("主区阅读", panel)
-        self.assertNotIn("项目文档", reading)
+        self.assertIn("unified-document-kicker", reading)
         self.assertIn("textbook-artifact-title", panel)
         self.assertNotIn('textbook-artifact-completeness is-', panel)
         self.assertIn("ENV.md", reading)
@@ -153,7 +151,8 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn('正在读取待处理方案', index)
         self.assertIn('正在切换主区', index)
         self.assertIn('renderPlanReviewPane', index)
-        self.assertIn('planReviewEl.hidden = false', index)
+        self.assertIn('setMainFocus("plan_review")', index)
+        self.assertIn('planReviewEl.hidden = focus !== "plan_review"', index)
         self.assertIn('let planReviewIndex = 0;', index)
         self.assertIn('[data-action="open-suggestion-review"]', css)
 

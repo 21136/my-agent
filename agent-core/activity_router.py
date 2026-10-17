@@ -143,12 +143,13 @@ def compute_activity_route(
     if any(marker in lower for marker in _GOVERN_MARKERS):
         return ActivityRoute("govern", (), "治理 / 审查相关")
 
-    from project_mode import project_plan_gate_open
+    from project_mode import ordinary_project_session, project_plan_gate_open
 
     if project_plan_gate_open(session.meta) and not bool(
         getattr(session.meta, "project_runaway_enabled", False)
     ) and str(getattr(session.meta, "project_entry", "") or "") != "direct":
-        return ActivityRoute("project", _project_topics(session), "项目 · 计划待确认")
+        label = "项目 · 普通模式进度（计划可选）" if ordinary_project_session(session) else "项目 · 计划待确认"
+        return ActivityRoute("project", _project_topics(session), label)
 
     if pending_proposals > 0:
         return ActivityRoute("grow", (), f"{pending_proposals} 条 proposal 待处理")
@@ -197,13 +198,13 @@ def compute_session_route(session: Session, paths: AgentPaths) -> ActivityRoute:
     """Infer shell when connecting or refreshing (no new user line)."""
     from evolve import list_pending_proposals
 
-    pending = len(list_pending_proposals(paths))
-    if pending > 0:
-        return ActivityRoute("grow", (), f"{pending} 条 proposal 待处理")
-
     if session.meta.active_shell == "project" and session.meta.project_root:
         label = session.meta.project_id or session.meta.project_root
         return ActivityRoute("project", (), f"续接 · 项目 · {label}")
+
+    pending = len(list_pending_proposals(paths))
+    if pending > 0:
+        return ActivityRoute("grow", (), f"{pending} 条 proposal 待处理")
 
     topics = session.meta.topics
     if "coding" in topics and session.meta.active_shell == "grow":

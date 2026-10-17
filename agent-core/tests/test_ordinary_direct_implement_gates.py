@@ -157,9 +157,10 @@ class ProjectEntryTreatTests(unittest.TestCase):
             self.assertIsNotNone(notice, msg=stage)
             assert notice is not None
             self.assertNotIn("未能自动确认", notice, msg=stage)
-            self.assertEqual(session.meta.project_entry, "direct", msg=stage)
-            self.assertEqual(session.meta.project_plan_status, "confirmed", msg=stage)
-            self.assertEqual(session.meta.project_workflow_stage, "implementation", msg=stage)
+            self.assertEqual(session.meta.project_entry, "", msg=stage)
+            self.assertEqual(session.meta.project_plan_status, "draft", msg=stage)
+            self.assertEqual(session.meta.project_workflow_stage, stage, msg=stage)
+            self.assertEqual(session.next_work_intent, "execute", msg=stage)
 
 
 class ProjectDirectImplementCliTests(unittest.TestCase):
@@ -196,17 +197,18 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         result = run_project_command(session, paths, command, output_fn=outputs.append)
 
         self.assertTrue(result.meta_changed)
-        self.assertEqual(session.meta.project_entry, "direct")
-        self.assertEqual(session.meta.project_plan_status, "confirmed")
-        self.assertEqual(session.meta.project_workflow_stage, "implementation")
+        self.assertEqual(session.meta.project_entry, "")
+        self.assertEqual(session.meta.project_plan_status, "draft")
+        self.assertEqual(session.meta.project_workflow_stage, "requirements")
+        self.assertEqual(session.next_work_intent, "execute")
         self.assertTrue(any("直接实现" in line for line in outputs))
-        self.assertTrue(any("计划已确认" in line for line in outputs))
+        self.assertFalse(any("计划已确认" in line for line in outputs))
         self.assertFalse(any(line.startswith("error:") for line in outputs))
 
         reloaded = Session.load(paths, session.conversation_id)
-        self.assertEqual(reloaded.meta.project_entry, "direct")
-        self.assertEqual(reloaded.meta.project_plan_status, "confirmed")
-        self.assertTrue(str(reloaded.meta.project_scope_confirmed_at or "").strip())
+        self.assertEqual(reloaded.meta.project_entry, "")
+        self.assertEqual(reloaded.meta.project_plan_status, "draft")
+        self.assertFalse(str(reloaded.meta.project_scope_confirmed_at or "").strip())
 
     def test_confirm_sets_plan_entry_when_empty(self) -> None:
         session, paths = self._new_project("plan-ok")
@@ -221,8 +223,9 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         outputs: list[str] = []
         handled = try_short_plan_confirm(session, "直接实现", outputs.append)
         self.assertTrue(handled)
-        self.assertEqual(session.meta.project_entry, "direct")
-        self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertEqual(session.meta.project_entry, "")
+        self.assertEqual(session.meta.project_plan_status, "draft")
+        self.assertEqual(session.next_work_intent, "execute")
         self.assertTrue(any("直接实现" in line for line in outputs))
 
     def test_reject_not_project_shell(self) -> None:
@@ -255,9 +258,10 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
             outputs: list[str] = []
             result = run_project_command(session, paths, command, output_fn=outputs.append)
             self.assertTrue(result.meta_changed, stage)
-            self.assertEqual(session.meta.project_entry, "direct", stage)
-            self.assertEqual(session.meta.project_plan_status, "confirmed", stage)
-            self.assertEqual(session.meta.project_workflow_stage, "implementation", stage)
+            self.assertEqual(session.meta.project_entry, "", stage)
+            self.assertEqual(session.meta.project_plan_status, "draft", stage)
+            self.assertEqual(session.meta.project_workflow_stage, stage, stage)
+            self.assertEqual(session.next_work_intent, "execute", stage)
 
     def test_already_confirmed_switches_to_direct_entry(self) -> None:
         session, paths = self._new_project("already-confirmed")
@@ -277,8 +281,9 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
             output_fn=outputs.append,
         )
         self.assertTrue(result.meta_changed)
-        self.assertEqual(session.meta.project_entry, "direct")
+        self.assertEqual(session.meta.project_entry, "plan")
         self.assertEqual(session.meta.project_plan_status, "confirmed")
+        self.assertEqual(session.next_work_intent, "execute")
 
 
     def test_reply_only_sticky_direct_does_not_open_plan_gate(self) -> None:
@@ -302,10 +307,11 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         notice = maybe_auto_confirm_plan_for_direct_implement(session)
         self.assertIsNotNone(notice)
         assert notice is not None
-        self.assertIn("已自动确认计划", notice)
-        self.assertEqual(session.meta.project_plan_status, "confirmed")
-        self.assertEqual(session.meta.project_workflow_stage, "implementation")
-        self.assertTrue(str(session.meta.project_scope_confirmed_at or "").strip())
+        self.assertIn("execute", notice)
+        self.assertEqual(session.meta.project_plan_status, "draft")
+        self.assertEqual(session.meta.project_workflow_stage, "requirements")
+        self.assertEqual(session.next_work_intent, "execute")
+        self.assertFalse(str(session.meta.project_scope_confirmed_at or "").strip())
 
     def test_ws_direct_implement_sets_entry_and_state(self) -> None:
         from project_api import dispatch_project_message, project_state_payload
@@ -320,11 +326,13 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         self.assertTrue(any(evt.get("type") == "notice" for evt in events))
         state_events = [evt for evt in events if evt.get("type") == "project.state"]
         self.assertEqual(len(state_events), 1)
-        self.assertEqual(session.meta.project_entry, "direct")
-        self.assertEqual(session.meta.project_plan_status, "confirmed")
-        self.assertFalse(state_events[0].get("needs_plan_confirm"))
+        self.assertEqual(session.meta.project_entry, "")
+        self.assertEqual(session.meta.project_plan_status, "draft")
+        self.assertEqual(session.next_work_intent, "execute")
+        self.assertTrue(state_events[0].get("needs_plan_confirm"))
+        self.assertFalse(state_events[0].get("ordinary_stage_gates_blocking"))
         standalone = project_state_payload(session, paths)
-        self.assertEqual(standalone.get("project_entry"), "direct")
+        self.assertEqual(standalone.get("project_entry"), "")
 
 
 class DirectImplementToolFilterTests(unittest.TestCase):
@@ -337,8 +345,8 @@ class DirectImplementToolFilterTests(unittest.TestCase):
         session.meta.project_root = "workspace/demo"
         session.direct_implement_turn = True
         names = [item["function"]["name"] for item in build_llm_tools(session)]
-        self.assertNotIn("plan_partner", names)
-        self.assertNotIn("deliverable_review", names)
+        self.assertIn("plan_partner", names)
+        self.assertIn("deliverable_review", names)
 
     def test_project_entry_direct_hides_plan_partner_like_phrase(self) -> None:
         from agent import build_llm_tools
@@ -352,8 +360,8 @@ class DirectImplementToolFilterTests(unittest.TestCase):
         session.meta.project_workflow_stage = "implementation"
         session.meta.project_entry = "direct"
         names = [item["function"]["name"] for item in build_llm_tools(session)]
-        self.assertNotIn("plan_partner", names)
-        self.assertNotIn("deliverable_review", names)
+        self.assertIn("plan_partner", names)
+        self.assertIn("deliverable_review", names)
 
         session.meta.project_entry = ""
         names_phrase_off = [item["function"]["name"] for item in build_llm_tools(session)]

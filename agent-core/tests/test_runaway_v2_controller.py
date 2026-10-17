@@ -509,7 +509,7 @@ class RunawayV2ControllerTests(unittest.TestCase):
             plan = MagicMock(mode="auto", user_line="准备中")
             checklist = Checklist(1, "demo", "", "")
             with patch(
-                "runaway_v2.controller.build_v2_state_fields",
+                "runaway_v2.kernel.project_sync.build_v2_state_fields",
                 return_value={
                     "runaway_phase": "implement",
                     "runaway_user_line": "正在实现 T-001",
@@ -534,10 +534,10 @@ class RunawayV2ControllerTests(unittest.TestCase):
             plan = MagicMock(mode="auto", user_line="准备中")
 
             with patch(
-                "runaway_v2.controller.load_or_build_checklist",
+                "runaway_v2.kernel.project_sync.load_or_build_checklist",
                 return_value=refreshed,
             ) as reload_checklist, patch(
-                "runaway_v2.controller.build_v2_state_fields",
+                "runaway_v2.kernel.project_sync.build_v2_state_fields",
                 return_value={
                     "runaway_phase": "verify",
                     "runaway_user_line": "验收中",
@@ -562,7 +562,7 @@ class RunawayV2ControllerTests(unittest.TestCase):
             checklist = Checklist(1, "demo", "", "")
 
             with patch(
-                "runaway_v2.controller.build_v2_state_fields",
+                "runaway_v2.kernel.project_sync.build_v2_state_fields",
                 return_value={
                     "runaway_phase": "release_wait",
                     "runaway_user_line": "验收清单已全部通过，等待发布确认",

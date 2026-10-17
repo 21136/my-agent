@@ -182,9 +182,7 @@ class LightGateTests(unittest.TestCase):
                 },
                 agent_paths=paths,
             )
-            self.assertIsNotNone(reason)
-            assert reason is not None
-            self.assertIn("L2 stale", reason)
+            self.assertIsNone(reason)
 
     def test_light_progress_gate_needs_verify_not_design(self) -> None:
         evidence = [

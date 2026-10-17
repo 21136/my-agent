@@ -24,6 +24,8 @@ class SystemPromptCacheSplitTests(unittest.TestCase):
     def test_dynamic_section_names(self) -> None:
         self.assertTrue(is_dynamic_system_section("session"))
         self.assertTrue(is_dynamic_system_section("digest"))
+        self.assertTrue(is_dynamic_system_section("skill_index"))
+        self.assertTrue(is_dynamic_system_section("skill_context"))
         self.assertFalse(is_dynamic_system_section("safety"))
         self.assertFalse(is_dynamic_system_section("topic_prompt:coding"))
 

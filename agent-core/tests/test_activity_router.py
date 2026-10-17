@@ -78,7 +78,7 @@ class ActivityRouterProjectTests(unittest.TestCase):
 
         route = self._route("开始写代码", pending_proposals=5)
         self.assertEqual(route.shell, "project")
-        self.assertIn("计划待确认", route.reason)
+        self.assertIn("普通模式进度", route.reason)
 
     def test_execute_workspace_path_routes_to_project(self) -> None:
         route = self._route("改 workspace/stab-r1-demo/main.py", intent="execute")

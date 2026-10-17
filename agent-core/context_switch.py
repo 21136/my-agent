@@ -201,8 +201,7 @@ def _inject_seed(fresh: Session, previous: Session, reason: str) -> None:
 
 
 def _bind_ordinary_light_entry(session: Session, paths: AgentPaths, project_id: str) -> None:
-    """Light ordinary creates skip the plan-confirm chrome and open as direct implement."""
-    from project_cli import confirm_project_plan
+    """Arm one execute request for a light project without faking persisted approval."""
     from project_mode import read_project_template
 
     try:
@@ -210,14 +209,8 @@ def _bind_ordinary_light_entry(session: Session, paths: AgentPaths, project_id: 
             return
     except Exception:
         return
-    session.meta.project_entry = "direct"
-    status = str(getattr(session.meta, "project_plan_status", "") or "draft")
-    if status in {"draft", "plan_dirty"}:
-        try:
-            confirm_project_plan(session, skip_stage_walls=True)
-        except Exception:
-            session.meta.project_plan_status = "confirmed"
-            session.meta.project_workflow_stage = "implementation"
+    session.next_work_intent = "execute"
+    session.next_task_scope = ""
     session.save()
 
 
@@ -292,8 +285,11 @@ def _apply_project_create(
         except Exception:
             pass
         note = _create_template_note(template, project_template)
-        if str(getattr(session.meta, "project_entry", "") or "") == "direct":
-            return session, f"已创建并打开项目 workspace/{pid}（可直接写代码{note}）"
+        if (
+            str(getattr(session.meta, "project_entry", "") or "") == "direct"
+            or getattr(session, "next_work_intent", None) == "execute"
+        ):
+            return session, f"已创建并打开项目 workspace/{pid}（可直接按当前请求实现{note}）"
         return session, f"已创建并打开项目 workspace/{pid}（计划待确认{note}）"
 
     fresh = create_new(paths)
@@ -312,8 +308,11 @@ def _apply_project_create(
     except Exception:
         pass
     note = _create_template_note(template, project_template)
-    if str(getattr(fresh.meta, "project_entry", "") or "") == "direct":
-        return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 可直接写代码{note}）"
+    if (
+        str(getattr(fresh.meta, "project_entry", "") or "") == "direct"
+        or getattr(fresh, "next_work_intent", None) == "execute"
+    ):
+        return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 可直接按当前请求实现{note}）"
     return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认{note}）"
 
 

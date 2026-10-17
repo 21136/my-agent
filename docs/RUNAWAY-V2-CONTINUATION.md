@@ -28,7 +28,7 @@
 3. **`intent` 误判**（「继续」→ `qa`）→ L1 `chain_after_ok=False` → 回合内立刻断链（T-6056 已补丁，但架构未收敛）。  
 4. **`TURN_LOCK` / `_turn_busy` 竞态** → L3 静默 return（T-6055 已加重试 + notice，仍非主路径）。
 
-**结论**：业务是否还有工作由磁盘派生的 `pending_runaway_work()` 决定；v2 的自动执行由 `RunawayController` 单独拥有。server 与 Desktop 不得为 v2 再启动第二、第三个回合。
+**结论**：业务是否还有工作由磁盘派生的 `pending_runaway_work()` 决定；v2 的自动执行由 **`RunawayRuntime`（编排内核）** 单独拥有。`RunawayController` 仅为兼容 façade。server 与 Desktop 不得为 v2 再启动第二、第三个回合。
 
 ---
 
@@ -132,7 +132,8 @@ should_continue_runaway(
 |----------|------|
 | `plan.should_chain()` | **已删除**；controller / 测试统一 `should_continue_runaway` |
 | `TurnPlan.chain_after_ok` | **已删除**；plan 仅表达 scope / acceptance / mode |
-| `RunawayController` | v2 自动续接唯一 owner；回合结束先处理 fatal `finish_reason`，再读 `pending_work` |
+| `RunawayRuntime` | v2 自动续接唯一 owner；回合结束先处理 fatal `finish_reason`，再读 `pending_work` |
+| `RunawayController` | 兼容 façade → `RunawayRuntime`；勿在新代码中当作 owner |
 | `Agent._should_chain_runaway_v2_after_turn()` | 兼容查询：`should_continue_runaway(..., finish_reason=...)`；不由 server 调用 v2 自动回合 |
 | `Agent.runaway_chain_skip_reason()` | `pending_work is None` 时派生人话；与 `build_v2_state_fields` 共用 blocked 文案 |
 | `Agent.runaway_chain_user_line()` | `pending_work.chain_user_line` |
@@ -144,7 +145,7 @@ should_continue_runaway(
 
 ```text
                     ┌─────────────────────────────────────┐
-  同一 WS turn       │  v2 唯一 owner：RunawayController    │
+  同一 WS turn       │  v2 唯一 owner：RunawayRuntime       │
   turn.end 之前      │  fatal → pause/return                │
                     │  normal → pending_work → 续接         │
                     └─────────────────┬───────────────────┘
@@ -197,7 +198,7 @@ queued --可取消--> stopping --> settled / failed / paused
 - 被取消的 queued continuation 不得调用模型。它必须收口为终态，不能只发一条“续接已停止”通知后留下工作态。
 - 租约重复属于“执行请求被拒绝”，仍发 `running -> failed` 和带同一 `run_id` 的 `turn.end`，便于 Desktop/Terminal 清理工作态；它不启动 Agent，也不进入下一轮续接。
 
-`execution.state` 是回合可观测性协议，不是项目进度真源。v2 的业务续接仍只由 `RunawayController` 和 `pending_runaway_work()` 决定；生命周期只负责记录排队、运行、停止和收口。Desktop 的 v1 idle fallback 不得重新打开已经由生命周期标记为 `stopping`、`paused` 或 `failed` 的执行。
+`execution.state` 是回合可观测性协议，不是项目进度真源。v2 的业务续接仍只由 `RunawayRuntime` 和 `pending_runaway_work()` 决定；生命周期只负责记录排队、运行、停止和收口。Desktop 的 v1 idle fallback 不得重新打开已经由生命周期标记为 `stopping`、`paused` 或 `failed` 的执行。
 
 ---
 
@@ -244,7 +245,7 @@ ProgressFingerprint = sha256(
 - 若连续 `MY_AGENT_RUNAWAY_V2_NO_PROGRESS_TURNS` 个自动回合 fingerprint 相同
   且 `pending_work` 仍非 `None`，立即进入 `paused`，原因是“连续 N 个自动回合没有检测到项目状态变化”。
 - 若累计自动续接达到 `MY_AGENT_RUNAWAY_V2_MAX_AUTO_TURNS`，立即进入 `paused`，原因是“自动回合预算已用尽”。
-- 初始用户回合只建立基线，不消耗自动预算；controller 负责记录一次，server 只读判定，避免同一回合双计数。
+- 初始用户回合只建立基线，不消耗自动预算；`RunawayRuntime` 经 `continuation.py` 记录一次，server 只读判定，避免同一回合双计数。
 - 进入 `paused` 后，自动续接和服务端恢复入口都停止；用户显式恢复时清空两个计数和上一次指纹。
 
 ### 6.3 与 PROGRESS-GATE 的关系

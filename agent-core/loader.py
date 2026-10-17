@@ -101,6 +101,8 @@ _DYNAMIC_SYSTEM_SECTIONS = frozenset(
         "subagent_summary",
         "project_mode",
         "digest",
+        "skill_index",
+        "skill_context",
     }
 )
 
@@ -1198,6 +1200,28 @@ def build_system_prompt(
             sections.append(("turn_discipline", turn_discipline))
         sections.append(("safety", load_safety_prompt(evolve_dir)))
 
+        from skill_registry import SkillRegistry
+
+        skill_registry = SkillRegistry.discover(evolve_dir / "skills")
+        pinned_skill = getattr(session, "_turn_skill_selection", None)
+        if pinned_skill is not None:
+            sections.append(("skill_index", skill_registry.format_index()))
+            sections.append(("skill_context", skill_registry.format_selection_context(pinned_skill)))
+        else:
+            last_user_text = ""
+            for message in reversed(session.messages):
+                if message.get("role") == "user" and isinstance(message.get("content"), str):
+                    last_user_text = message["content"]
+                    break
+            skill_candidates = skill_registry.select_packages(last_user_text, limit=1)
+            if skill_candidates:
+                sections.append(("skill_index", skill_registry.format_index()))
+                try:
+                    sections.append(("skill_context", skill_registry.format_selection_context(skill_candidates[0])))
+                except Exception:
+                    # A malformed/oversized Skill must not block the turn.
+                    pass
+
         for topic_id, prompt_text in load_confirmed_topic_prompts(
             evolve_dir, session.meta.topics, index=topic_index
         ):
@@ -1302,6 +1326,8 @@ def build_system_prompt(
                 ),
                 skip_stage_walls=ordinary_skip_stage_walls(session),
                 project_entry=str(getattr(session.meta, "project_entry", "") or ""),
+                ordinary_work_intent=str(getattr(session, "_ordinary_work_intent", "execute") or "execute"),
+                ordinary_task_scope=str(getattr(session, "_ordinary_task_scope", "") or ""),
                 plan_files=existing_plan_files(
                     session.paths, session.meta.project_id
                 )

@@ -161,6 +161,9 @@ class ExecutorSession:
     last_review_blockers_count: int = 0
     progress_gate_notice: str = ""
     ordinary_visible_confirms_this_turn: int = 0
+    # Request-scoped ordinary policy; never persisted in SessionMeta.
+    ordinary_work_intent: str = "execute"
+    ordinary_task_scope: str = ""
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -720,6 +723,7 @@ def _validate_project_mode_call(
 
     from project_mode import ordinary_skip_stage_walls
 
+    ordinary_work_intent = str(getattr(session, "ordinary_work_intent", "execute") or "execute").strip() or "execute"
     skip_walls = False
     if not session.runaway_enabled:
         skip_walls = ordinary_skip_stage_walls(
@@ -740,6 +744,8 @@ def _validate_project_mode_call(
         bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
         runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
         skip_stage_walls=skip_walls,
+        ordinary_work_intent=ordinary_work_intent,
+        ordinary_task_scope=getattr(session, "ordinary_task_scope", ""),
     )
     if reason is None:
         return None
@@ -747,6 +753,7 @@ def _validate_project_mode_call(
     details: dict[str, Any] = {
         "active_shell": session.active_shell,
         "project_plan_status": session.project_plan_status or "draft",
+        "ordinary_work_intent": ordinary_work_intent,
     }
     from project_mode import (
         ORDINARY_PROTECTED_WRITE_BLOCK_MSG,
@@ -2796,6 +2803,10 @@ class ToolExecutor:
                 return host_block
             return None
 
+        foreign_error = _validate_foreign_project_write(self.session, name, arguments)
+        if foreign_error is not None:
+            return foreign_error
+
         project_error = _validate_project_mode_call(
             self.session,
             name,
@@ -2808,10 +2819,6 @@ class ToolExecutor:
         repl_bypass = _validate_project_repl_build_bypass(self.session, name, arguments)
         if repl_bypass is not None:
             return repl_bypass
-
-        foreign_error = _validate_foreign_project_write(self.session, name, arguments)
-        if foreign_error is not None:
-            return foreign_error
 
         task_stop_error = _validate_task_stop_write(self.session, name, arguments)
         if task_stop_error is not None:

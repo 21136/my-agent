@@ -194,10 +194,10 @@ test("draft plan with open tasks still offers scope confirm before the plan is a
     scopeNeedsReconfirm: false,
   });
   const view = deriveProjectGoalViewModel(state);
-  assert.equal(view.title, "范围需要确认");
-  assert.equal(view.action, "confirm-scope");
+  assert.notEqual(view.title, "范围需要确认");
+  assert.notEqual(view.action, "confirm-scope");
   const card = renderStagePlanCard(state);
-  assert.equal(card.includes('data-action="confirm-scope"'), true);
+  assert.equal(card.includes('data-action="confirm-scope"'), false);
 });
 
 test("stamped scope on a draft plan stays a soft signal", () => {
@@ -209,7 +209,7 @@ test("stamped scope on a draft plan stays a soft signal", () => {
     workflowStage: "requirements",
   });
   const card = renderStagePlanCard(state);
-  assert.equal(card.includes("范围已确认"), true);
+  assert.doesNotMatch(card, /确认范围|范围已确认/);
   assert.equal(card.includes('data-action="confirm-scope"'), false);
 });
 
@@ -229,13 +229,12 @@ test("draft decision is one surface after a reply-only turn", () => {
       planStatus: "draft",
     },
   });
-  assert.equal(ordinaryDraftDecisionVisible(state), true);
+  assert.equal(ordinaryDraftDecisionVisible(state), false);
   const header = deriveHeaderNextStepView(state);
-  assert.deepEqual(header.actions.map((item) => item.label), ["规划后开工", "直接实现"]);
+  assert.equal(header.actions.some((item) => item.action === "confirm-plan"), false);
+  assert.equal(header.actions.some((item) => item.action === "direct-implement"), false);
   const banner = renderChangeBanner(state);
-  assert.equal(banner.includes("方案待确认"), false);
-  assert.equal(banner.includes("确认开工"), false);
-  assert.equal(banner.includes("修改计划"), false);
+  assert.doesNotMatch(banner, /方案待确认|确认开工|修改计划/);
 });
 
 test("direct-entry draft still shows a plan banner when a confirm request arrives", () => {
@@ -253,8 +252,50 @@ test("direct-entry draft still shows a plan banner when a confirm request arrive
   });
   assert.equal(ordinaryDraftDecisionVisible(state), false);
   const banner = renderChangeBanner(state);
-  assert.equal(banner.includes("方案待确认"), true);
-  assert.equal(banner.includes("确认开工"), true);
+  assert.doesNotMatch(banner, /方案待确认|确认开工/);
+});
+
+
+test("ordinary draft and legacy stages do not expose blocking stage or plan CTAs", () => {
+  const state = panel({
+    planStatus: "draft",
+    projectEntry: "",
+    planOverlay: {
+      requestId: "req-draft",
+      title: "方案待确认",
+      summary: "draft",
+      tasksPreview: "- [ ] T-001",
+      planStatus: "draft",
+    },
+    executionStage: "requirements",
+    workflowStage: "documentation",
+    needsDesignConfirm: true,
+    tasksTotal: 1,
+  });
+  assert.equal(ordinaryDraftDecisionVisible(state), false);
+  const header = deriveHeaderNextStepView(state);
+  assert.equal(header.actions.some((item) => item.action === "confirm-plan"), false);
+  assert.equal(header.actions.some((item) => item.action === "direct-implement"), false);
+  assert.doesNotMatch(renderChangeBanner(state), /确认开工|方案待确认|确认变更/);
+  assert.doesNotMatch(renderStagePlanCard(state), /确认范围|确认设计|规划后开工|直接实现/);
+});
+
+test("ordinary plan dirty and verification facts stay advisory while implementation remains available", () => {
+  const state = panel({
+    planStatus: "plan_dirty",
+    executionStage: "verification",
+    workflowStage: "verification",
+    executionStageStatus: "blocked",
+    executionStageReason: "verification_pending",
+    tasksTotal: 1,
+    tasksDone: 0,
+    turnEvidence: [{ tool: "run_tests", ok: true }],
+  });
+  assert.equal(deriveProjectGoalViewModel(state).status, "decision");
+  assert.doesNotMatch(renderChangeBanner(state), /方案有变更|确认变更|暂停并查看变更/);
+  const card = renderStagePlanCard(state);
+  assert.match(card, /验证|当前进展/);
+  assert.doesNotMatch(card, /不能继续|确认方案/);
 });
 
 test("change banner does not render the CHG ledger", () => {
@@ -360,7 +401,7 @@ test("a model-service error leaves the ordinary project goal unchanged", () => {
   assert.equal(live.nextStep, reloaded.nextStep);
   assert.equal(live.summary, reloaded.summary);
   assert.equal(live.status, reloaded.status);
-  assert.equal(live.title, "方案已准备好");
+  assert.equal(live.title, "准备开始下一步");
   assert.doesNotMatch(live.summary, /最近一次执行或验证没有通过/);
   assert.doesNotMatch(live.nextStep, /查看失败原因/);
 });
@@ -404,4 +445,14 @@ test("session ids stay out of status, notices, and thread titles", () => {
     is_active: true,
   });
   assert.equal(state.threads[0]?.title, "未命名会话");
+});
+
+test("automatic project plan card avoids the old mode name", () => {
+  const html = renderStagePlanCard(panel({
+    runawayEnabled: true,
+    runawayVersion: 2,
+    executionStage: "design",
+    workflowStage: "design",
+  }));
+  assert.doesNotMatch(html, /狂奔/);
 });
