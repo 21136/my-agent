@@ -46,7 +46,6 @@ class ExternalProjectScan:
     markers: tuple[str, ...]
     has_git: bool
     git_dirty: bool | None
-    has_tasks: bool
     has_verify: bool
     has_readme: bool
     has_env: bool
@@ -60,7 +59,6 @@ class ExternalProjectScan:
             "markers": list(self.markers),
             "has_git": self.has_git,
             "git_dirty": self.git_dirty,
-            "has_tasks": self.has_tasks,
             "has_verify": self.has_verify,
             "has_readme": self.has_readme,
             "has_env": self.has_env,
@@ -171,7 +169,6 @@ def scan_external_project(
         markers=markers,
         has_git=(root / ".git").exists(),
         git_dirty=_git_dirty(root),
-        has_tasks=(root / "TASKS.md").is_file(),
         has_verify=(root / "VERIFY.md").is_file(),
         has_readme=(root / "README.md").is_file(),
         has_env=(root / ".env").is_file(),

@@ -59,7 +59,7 @@ flowchart TB
 | 角色 | 工具 | 预算 | 持久化 |
 |------|------|------|--------|
 | **explore 子代理** | read/list/grep/web/fetch | 默认 **8** 轮 / 次 | 仅摘要进父会话；子 messages **不落** `messages.jsonl` |
-| **plan 子代理**（Phase 39 · 设计） | plan tools + patch 提案 | 默认 **3** 轮 | 摘要 + 侧栏采纳卡；见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
+| **plan 子代理**（Phase 39 · 设计） | plan tools + patch 提案 | 默认 **3** 轮 | 摘要 + 侧栏采纳卡；见 [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) |
 | **父代理（ask）** | 同上（**无** run_evolved） | **≤5**（`PARENT_SHORT_MAX`） | 正常 `messages.jsonl` |
 | **父代理（agent）** | 同上 + run_evolved | 每 segment **50**；可多 segment；总顶 **50**（T-907） | 每 segment 追加消息 |
 
@@ -194,7 +194,7 @@ segment 1: tool loop ≤ PARENT_EXECUTE_SEGMENT_MAX (默认 50)
 
 **对用户**：默认 **自动续 segment**（CLI 打印 `…继续执行 (segment 2/…)`）；可 env `MY_AGENT_AUTO_CONTINUE=0` 改为提示输入 `继续`。
 
-> **Phase 20（已决）**：[TASK-STOP.md](./TASK-STOP.md) v0.2.0 — **project 壳**默认关闭同 turn auto-continue，改为「每 `TASKS.md` 条目一停」；grow 仍按上表。
+> **Phase 20（已决）**：[TASK-STOP.md](./archive/TASK-STOP.md) v0.2.0 — **project 壳**默认关闭同 turn auto-continue，改为「每 `TASKS.md` 条目一停」；grow 仍按上表。
 
 ### 5.1 改什么
 

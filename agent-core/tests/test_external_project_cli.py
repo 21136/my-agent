@@ -44,7 +44,7 @@ class ExternalProjectCliTests(unittest.TestCase):
         self.assertEqual(session.meta.project_plan_status, "draft")
         self.assertEqual(session.next_work_intent, "execute")
         self.assertTrue((self.external / "app.py").is_file())
-        self.assertTrue((self.external / "TASKS.md").is_file())
+        self.assertFalse((self.external / "TASKS.md").is_file())  # import no longer drafts TASKS.md
         self.assertEqual(
             (project_dir(self.paths, "imported-demo") / "app.py").resolve(),
             self.external.resolve() / "app.py",
@@ -66,7 +66,7 @@ class ExternalProjectCliTests(unittest.TestCase):
             reopened = result.session
         self.assertEqual(reopened.meta.project_id, "imported-reopen")
         self.assertTrue(result.meta_changed)
-        self.assertTrue((self.external / "TASKS.md").is_file())
+        self.assertFalse((self.external / "TASKS.md").is_file())  # import no longer drafts TASKS.md
 
     def test_import_does_not_overwrite_existing_external_tasks(self) -> None:
         existing = "# Existing tasks\n- [ ] T-777 continue existing work\n"

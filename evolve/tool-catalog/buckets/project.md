@@ -5,7 +5,6 @@
 | 工具 | 作用 |
 |------|------|
 | `deliverable_review` | 交付审查子代理（只读）；口语验收/还缺什么/能交付吗 |
-| `report_progress` | ritual：勾选派进度；solo：可选 |
 | `project_catalog` | 列出 workspace 下已登记项目 |
 | `scaffold_project` | 按 `evolve/scaffolds/<recipe>/` 配方初始化项目（见 PROJECT-RECIPES） |
 | `structured_test` | **active**：统一测试 status/exit/duration/failures/rerun；底层复用 `run_project_tests` |
@@ -15,5 +14,5 @@
 
 ## 注意
 
-- 禁止直接 `write_text` 改 `TASKS.md` 勾选；ritual 一律 `report_progress`；solo 可用侧栏勾选。
+- 不再维护 `TASKS.md` 任务清单；完成与否以验证命令的退出码为准（见 `skills/plan-and-verify`）。
 - 项目会话清单含 coding + project scope 工具。

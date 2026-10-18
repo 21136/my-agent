@@ -141,8 +141,9 @@ class MetaCommandHandleLineTests(unittest.TestCase):
         pid = normalize_project_id(project_id)
         dest = project_dir(self.paths, pid)
         self.assertTrue(dest.is_dir())
-        for name in PROJECT_ARTIFACTS:
+        for name in PROJECT_ARTIFACTS - {"TASKS.md"}:
             self.assertTrue((dest / name).is_file(), f"missing {name}")
+        self.assertFalse((dest / "TASKS.md").is_file())
 
         self.assertEqual(self.repl.session.meta.active_shell, "project")
         self.assertEqual(self.repl.session.meta.project_id, pid)

@@ -1,7 +1,7 @@
 # 项目开发工具补齐（PROJECT-DEV-TOOLS）
 
 > 版本 **0.4.0** · 2026-08-01 · **状态：M0+M1+M2 实现**（Phase 26 完成）  
-> Phase **26** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [GIT-VENDOR.md](./GIT-VENDOR.md)
+> Phase **26** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [GIT-VENDOR.md](./GIT-VENDOR.md)
 
 ## 0. 为什么开这个 Phase
 

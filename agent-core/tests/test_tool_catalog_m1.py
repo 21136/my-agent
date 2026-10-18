@@ -27,7 +27,6 @@ class ToolCatalogM1Tests(unittest.TestCase):
                 "common/write_text",
                 "coding/patch_file",
                 "workflow/sort_by_extension",
-                "project/report_progress",
             ),
         )
         self.registry = ToolRegistry.load(self.paths)

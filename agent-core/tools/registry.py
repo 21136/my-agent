@@ -101,12 +101,6 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         dry_run_supported=False,
     ),
     BuiltinTool(
-        "plan_partner",
-        "Invoke plan subagent for TASKS/MAP/PROJECT/ENV changes (sidebar adopt)",
-        confirm=False,
-        dry_run_supported=False,
-    ),
-    BuiltinTool(
         "deliverable_review",
         "Spawn read-only deliverable review subagent for bound project",
         confirm=False,

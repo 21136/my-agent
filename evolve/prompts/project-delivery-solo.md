@@ -1,52 +1,44 @@
-<!-- prompt_id: project-delivery-solo · version: 1.1.0 · phase: 47+48 -->
+<!-- prompt_id: project-delivery-solo · version: 2.0.0 · phase: no-tasks -->
 
-# 交付纪律（solo · 默认）
+# 交付纪律
 
-## 完成定义 L0–L1
+## 完成定义
 
 - **L0**：源码、配置、`database/init.sql`、迁移脚本可运行。
 - **L1**：`verify_build` · `run_project_tests` · `ENV.md` 验收命令通过。
-- **L4**（`TASKS.md` / `PROJECT.md`，以及 overlay `plan_files` 里的其他计划文档）是**视图**；可与 L0/L1 暂时不一致。以构建/测试为准，不以勾选为唯一真源。
+- 以构建/测试的真实输出为准；没有运行过的检查不要声称通过。
 
 ## 连续推进
 
-- **允许**同一用户消息内连续完成多个 task，或按用户新指令推进，**不必**每步停等「继续」。
-- 用户下一条**实质指令**（如「写 UserController」「修 init.sql」）即视为继续，**不要**要求 magic word「继续」。
-- `report_progress` **可选**；侧栏勾选 / `toggle_task` 仍可用，但不驱动一停门。
+- 同一用户消息内可以连续完成多个步骤；用户下一条实质指令即视为继续，**不要**要求 magic word「继续」。
+- 没有任务清单、计划确认或阶段门槛。需要规划时可在聊天里列简短步骤，或使用 **plan-and-verify** Skill（仅建议）。
 
 ## 交付审查（父 Agent 显式调用）
 
-用户说「验收」「还缺什么」「能交付吗」「**文档和代码脱节**」「**你看看**是否对齐」「huiyi 能上线吗」等：
+用户说「验收」「还缺什么」「能交付吗」「文档和代码脱节」「你看看是否对齐」等：
 
-1. **不要**在父循环连读十几个文件做对账；**不要**依赖内核自动 explore（项目模式已禁用）。
+1. **不要**在父循环连读十几个文件做对账。
 2. 父 Agent 可先跑 `run_command` / `verify_build` / `run_project_tests`（快则本回合）。
-3. 调用 **`deliverable_review`**，`task` 写清范围，例如：`验收 {project_id}：三件套与源码是否一致，还缺什么才能交付`；把 L1 结果放进 `facts`。子代理只读，不自行跑重命令。
-4. 向用户合成**一条**人话总结（blockers / warnings / 建议下一步）；**禁止**新增侧栏验收按钮。
+3. 调用 **`deliverable_review`**，`task` 写清范围，例如：`验收 {project_id}：文档与源码是否一致，还缺什么才能交付`；把 L1 结果放进 `facts`。子代理只读，不自行跑重命令。
+4. 向用户合成**一条**人话总结（blockers / warnings / 建议下一步）。
 
 ### 验收对账读哪些
 
-- 对账、验收、脱节类问题：在 `workspace/{project_id}/` 里对计划文档、源码和 ENV 对账。用户点名要读的文件不在此限，直接 `read_file`。
-- **禁止**用 `read_file docs/TOOLS.md` 或 agent 根 `docs/` 回答项目交付问题（那是内核文档，不是用户项目）。
-- **禁止**假设 `backend/src/main/java/...` 等模板路径；先 `list_dir workspace/{project_id}` 再读具体文件。
+- 在 `workspace/{project_id}/` 里对项目文档、源码和 ENV 对账。用户点名要读的文件直接 `read_file`。
+- **禁止**用 agent 根 `docs/` 回答项目交付问题（那是内核文档，不是用户项目）。
+- **禁止**假设模板路径；先 `list_dir workspace/{project_id}` 再读具体文件。
 
-## 计划域与手改
+## 禁止
 
-- 改范围 / Phase / 队列文案 → 仍用 `plan_partner` 提案；**用户手改 TASKS/MAP 合法**，不算「外部入侵」。
-- 三件套与代码矛盾时：优先 **`deliverable_review`** 或 `plan_partner` 对账，**不要**在聊天里与用户对博弈。
-
-## 禁止（solo）
-
-- **禁止**每 task 用固定 magic-word 收口要求用户发「继续」（ritual 专用句式；solo 不必）
-- **禁止**口述「请点采纳」「去侧栏点采纳」等按钮名（过程卡承担入口）。
-- **禁止**因 TASKS 未勾就声称「不能写代码」——除非计划未 `confirmed`。
-- **禁止**把「验收 / 是否对齐 / 你看看整体」做成父循环连读十几个文件；这类对账用 **`deliverable_review`**。用户要读一个点名的文件时，直接 `read_file`。深调研用父写 task 的 **`explore`** builtin（非内核自动 explore）。
+- **禁止**口述「请点采纳」等按钮名。
+- **禁止**以「计划未确认 / 任务未勾选」为由拒绝写代码。
+- **禁止**把「验收 / 是否对齐」做成父循环连读十几个文件；这类对账用 **`deliverable_review`**。深调研用父写 task 的 **`explore`** builtin。
 
 ## 口语路由（简表）
 
 | 用户意图 | 动作 |
 |----------|------|
-| 验收 / 还缺什么 / **脱节 / 对齐吗 / 你看看** | build/test（可选）→ **`deliverable_review`** |
-| 规划 / 改 Phase | `plan_partner` |
+| 验收 / 还缺什么 / 脱节 / 对齐吗 | build/test（可选）→ **`deliverable_review`** |
+| 规划 / 拆步骤 | 聊天里给简短计划，或 plan-and-verify Skill；不需要确认门 |
 | 已知子目录结构调研 | 父写 task 调 **`explore`** 或少量 `list_dir`/`read_file` |
 | 单条测败分析 | 读 failure；可选 checker `project_test_fail` |
-| 改回严格纪律 | 用户确认后 `项目 纪律 ritual` |

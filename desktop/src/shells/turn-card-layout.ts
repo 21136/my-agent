@@ -1,5 +1,6 @@
 import type { ChatBlock } from "./chat-state";
 import { adoptPathFromNotice } from "./unified/output-display";
+import { isProcessBlockEmpty } from "./process-placement";
 
 export type TurnCardGroup = {
   turnIndex: number;
@@ -12,7 +13,7 @@ export type ChatRenderSegment =
   | { kind: "turn-card"; group: TurnCardGroup };
 
 function blockStartsTurn(block: ChatBlock): number | null {
-  if (block.kind === "user" || block.kind === "plan-subagent" || block.kind === "review-subagent") {
+  if (block.kind === "user" || block.kind === "review-subagent") {
     return block.turnIndex;
   }
   return null;
@@ -27,12 +28,12 @@ export function liveTurnCardProcessBlocks(
     const seg = segments[i];
     if (seg.kind !== "turn-card") continue;
     if (seg.group.turnIndex === currentTurnIndex) {
-      return seg.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process");
+      return seg.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process" && !isProcessBlockEmpty(b));
     }
   }
   const last = segments[segments.length - 1];
   if (last?.kind === "turn-card") {
-    return last.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process");
+    return last.group.blocks.filter((b): b is Extract<ChatBlock, { kind: "process" }> => b.kind === "process" && !isProcessBlockEmpty(b));
   }
   return [];
 }

@@ -4,7 +4,7 @@
 > 状态：**个人战略 · 非对外产品承诺**  
 > 读者：仓库所有者（自用、可磨多年）  
 > 参照产品：**Anthropic Claude 全家桶**（聊天 · Projects · Artifacts · **Claude Code** · MCP · 长程 agent）— 你主观体验中的「最好一档」  
-> 关联：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [MAP.md](./MAP.md)
+> 关联：[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · [MAP.md](./MAP.md)
 
 ---
 
@@ -39,7 +39,7 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 |--------------------|----------------|---------------|--------|--------------|
 | **稳态 coding agent** | 读改跑、多轮不瞎编完成 | P1：扁平原语、失败截断、segment 预算已做；仍有大 prompt、多模式 | P2 | Harness · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · 模型路由 |
 | **项目 / 工作区上下文** | 绑定仓库、知道「正在做哪个项目」 | **强**：`workspace/*`、project 模式、制品链 | P1→P2 | [PROJECT-MODE.md](./PROJECT-MODE.md) · 轻量 ordinary 路径 |
-| **长程自动推进** | 少打断、清单驱动、可停可续 | 狂奔 v2 + checklist；续接曾脆 → [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) | P1 | `runaway_v2/` · 单真源续接 |
+| **长程自动推进** | 少打断、清单驱动、可停可续 | 狂奔 v2 + checklist；续接曾脆 → [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) | P1 | `runaway_v2/` · 单真源续接 |
 | **MCP / 外部工具** | 接 GitHub、浏览器、自家 API | 协议可接；**登记与默认集未产品化** | P1 | MCP 桥 · [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
 | **子代理 / 分工** | explore、plan、专项调查 | plan_partner · explore · deliverable_review；预算与 scope 已文档化 | P1 | [AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) |
 | **Artifacts / 富输出** | 可预览的独立交付块 | Canvas/长文偏聊天；项目证据在 VERIFY | P2 | Desktop 输出轨 · 可选 Canvas |
@@ -70,11 +70,11 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 
 以下 **默认不再叠新状态机**；新场景用 profile + checklist + 工具，而不是新 checkpoint / 新 Harness 短接：
 
-- `agent.run_turn` → 父 tool loop（狂奔 v2：`RunawayRuntime` **单入口** · [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)）
+- `agent.run_turn` → 父 tool loop（狂奔 v2：`RunawayRuntime` **单入口** · [RUNAWAY-ORCHESTRATION.md](./archive/RUNAWAY-ORCHESTRATION.md)）
 - [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) 高风险边界
 - [WRITE-SCOPE.md](./WRITE-SCOPE.md)
 - 项目四件套真源（[PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)）
-- 续接决策 **[RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)**（`pending_work`）
+- 续接决策 **[RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md)**（`pending_work`）
 
 ### 3.3 允许变厚的目录
 
@@ -161,7 +161,7 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 
 | 包 | 内容 | 文档/代码锚点 | 对齐 Claude 点 |
 |----|------|---------------|----------------|
-| **OMNI-A 信任** | `pending_work` 续接 + 网关 IT | T-6107 · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) | 长任务不莫名停 |
+| **OMNI-A 信任** | `pending_work` 续接 + 网关 IT | T-6107 · [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) | 长任务不莫名停 |
 | **OMNI-B 日常写码** | ordinary 直接实现 SOP + Windows pytest 提示已起步 | ordinary 路径 · [ORDINARY-FLOW-REDUCTION.md](./ORDINARY-FLOW-REDUCTION.md) | Code 式闭环 |
 | **OMNI-C 外挂** | 个人 MCP 清单 + Desktop 连接状态 + 3 个常用 server | MCP 配置文档化 | MCP 生态 |
 
@@ -174,11 +174,11 @@ my-agent 已有 **Desktop unified 壳 + 项目四件套 + 狂奔 profile + 子�
 | 文档 | 角色 |
 |------|------|
 | 本文 | **个人全能总罗盘**（Claude 档） |
-| [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md) | 狂奔编排换血权威（三平面 · Phase 62） |
-| [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 行业 harness 对照附录 |
+| [RUNAWAY-ORCHESTRATION.md](./archive/RUNAWAY-ORCHESTRATION.md) | 狂奔编排换血权威（三平面 · Phase 62） |
+| [RUNAWAY-ORCHESTRATION-MAP.md](./archive/RUNAWAY-ORCHESTRATION-MAP.md) | 行业 harness 对照附录 |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 项目模式产品决策（不变） |
 | [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) | IDE/终端/确认手感 |
-| [RUNAWAY-V2.md](./RUNAWAY-V2.md) | 长跑 profile 运行时 |
+| [RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) | 长跑 profile 运行时 |
 | [AGENT-HARNESS.md](./AGENT-HARNESS.md) | 失败饮食、止损、扁平原语 |
 | [TASKS.md](./TASKS.md) | 具体任务仍在此排队；OMNI-* 大包可拆 task |
 

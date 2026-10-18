@@ -48,7 +48,7 @@ class ProjectDocumentationStageTests(unittest.TestCase):
             root = project_dir(paths, "textbook-demo")
             before = {
                 name: (root / name).read_text(encoding="utf-8")
-                for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
+                for name in ("PROJECT.md", "DESIGN.md", "VERIFY.md")
             }
             organize = parse_project_command("项目 整理文档")
             assert organize is not None
@@ -56,7 +56,7 @@ class ProjectDocumentationStageTests(unittest.TestCase):
 
             self.assertEqual(session.meta.project_workflow_stage, "requirements")
             self.assertEqual(session.meta.project_plan_status, "draft")
-            for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md"):
+            for name in ("PROJECT.md", "DESIGN.md", "VERIFY.md"):
                 self.assertTrue((root / name).is_file())
                 self.assertNotIn("待填写", (root / name).read_text(encoding="utf-8"))
             self.assertIn("文档制品", "\n".join(outputs))
@@ -102,15 +102,8 @@ class ProjectDocumentationStageTests(unittest.TestCase):
                 ordinary_work_intent="execute",
             )
             self.assertIsNone(allowed)
-
-            start_task = parse_project_command("项目 开始任务 T-001")
-            assert start_task is not None
-            run_project_command(session, paths, start_task, output_fn=lambda _text: None)
-            self.assertEqual(session.meta.project_workflow_stage, "documentation")
-            self.assertEqual(session.meta.project_plan_status, "draft")
-            self.assertEqual(session.meta.project_active_task_id, "T-001")
-            self.assertEqual(session.next_work_intent, "execute")
-            self.assertEqual(session.next_task_scope, "T-001")
+            # 「项目 开始任务」 was removed with the task subsystem.
+            self.assertIsNone(parse_project_command("项目 开始任务 T-001"))
 
 
 if __name__ == "__main__":

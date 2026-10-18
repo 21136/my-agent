@@ -22,8 +22,6 @@ export function wireComposerAttachments(options: {
   /** Optional per-send extras (active doc context, etc.). */
   messageOpts?: () => {
     forceAgent?: boolean;
-    forcePlan?: boolean;
-    autoRoutePlan?: boolean;
     activeDoc?: string;
     activeDocSelection?: string;
   } | undefined;

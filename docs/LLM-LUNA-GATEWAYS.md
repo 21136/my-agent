@@ -73,7 +73,7 @@ agent 主循环几乎每轮都带 `tools` + 会话 `reasoning_effort`（默认 `
 - `medium` 与 `none` 行为可区分；`none` 时无 reasoning 流。
 - 即使不传 `reasoning_effort`，仍可能收到 reasoning 流（网关/模型默认行为）。
 
-与 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md)（S-6011 · `0x567-flash` 狂奔可跑通）一致。
+与 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md)（S-6011 · `0x567-flash` 狂奔可跑通）一致。
 
 ---
 

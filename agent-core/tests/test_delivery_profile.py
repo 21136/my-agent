@@ -11,9 +11,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from loader import build_system_prompt, ensure_task_paused_text
-from plan_agent import get_plan_agent
-from progress_gate import report_progress_evidence_block_reason, report_progress_review_block_reason
+from loader import build_system_prompt
 from project_cli import (
   ProjectCommandError,
   bind_project_session,
@@ -24,7 +22,6 @@ from project_mode import (
     format_project_overlay,
     get_delivery_profile,
     normalize_delivery_profile,
-    ritual_task_stop_enabled,
     set_delivery_profile,
 )
 from session import SessionMeta, create_new
@@ -45,7 +42,6 @@ class DeliveryProfileMetaTests(unittest.TestCase):
     def test_default_profile_is_solo(self) -> None:
         meta = SessionMeta()
         self.assertEqual(get_delivery_profile(meta), "solo")
-        self.assertFalse(ritual_task_stop_enabled(meta))
 
     def test_normalize_aliases(self) -> None:
         self.assertEqual(normalize_delivery_profile("strict"), "ritual")
@@ -132,137 +128,6 @@ class SoloOverlayAndPromptTests(unittest.TestCase):
         self.assertNotIn("回复「继续」开始下一项", loaded.prompt)
         self.assertNotIn("回复『继续』开始下一项", loaded.prompt)
 
-    def test_it4803_solo_routes_drift_to_deliverable_review(self) -> None:
-        from paths import AgentPaths
-
-        paths = AgentPaths.discover()
-        session = create_new(paths)
-        session.meta.active_shell = "project"
-        session.meta.project_id = "huiyi"
-        session.meta.project_root = "workspace/huiyi"
-        session.meta.project_delivery_profile = "solo"
-        loaded = build_system_prompt(session, paths=paths)
-        self.assertIn("deliverable_review", loaded.prompt)
-        self.assertIn("脱节", loaded.prompt)
-        self.assertIn("workspace/{project_id}", loaded.prompt)
-        self.assertIn("docs/TOOLS.md", loaded.prompt)
-        self.assertNotIn("看结构 / 调研 | `explore`", loaded.prompt)
-
-    def test_solo_skips_task_paused_marker(self) -> None:
-        text = ensure_task_paused_text("done", delivery_profile="solo")
-        self.assertEqual(text, "done")
-
-
-class SoloProgressGateTests(unittest.TestCase):
-    def test_unknown_allowed_in_solo(self) -> None:
-        reason = report_progress_evidence_block_reason(
-            active_shell="project",
-            armed_task_text="",
-            turn_evidence=[],
-            delivery_profile="solo",
-        )
-        self.assertIsNone(reason)
-
-    def test_l1_failure_blocks_solo(self) -> None:
-        from progress_gate import make_evidence_entry
-
-        reason = report_progress_evidence_block_reason(
-            active_shell="project",
-            armed_task_text="任意",
-            turn_evidence=[
-                make_evidence_entry(
-                    tool_name="run_evolved",
-                    evolved_name="run_project_tests",
-                    ok=False,
-                )
-            ],
-            delivery_profile="solo",
-        )
-        self.assertIsNotNone(reason)
-        self.assertIn("编译/测试失败", reason or "")
-
-
-class SoloTaskStopTests(unittest.TestCase):
-    def test_it472_solo_no_task_stop_arm(self) -> None:
-        with temporary_agent_paths(
-            copy_tool_dirs=("common/write_text", "project/report_progress"),
-        ) as paths:
-            pid = "solo-stop"
-            proj = paths.workspace / pid
-            proj.mkdir(parents=True)
-            (proj / "TASKS.md").write_text(
-                "- [ ] T-001 first\n- [ ] T-002 second\n",
-                encoding="utf-8",
-            )
-            registry = ToolRegistry.load(paths)
-            allow = {"write_text", "report_progress"}
-            executor = ToolExecutor.create(
-                paths=paths,
-                session_dir=None,
-                allowed_evolved=allow,
-                confirm_fn=lambda _p, _a: "y",
-            )
-            executor.session.active_shell = "project"
-            executor.session.project_root = f"workspace/{pid}"
-            executor.session.project_id = pid
-            executor.session.project_plan_status = "confirmed"
-            executor.session.project_delivery_profile = "solo"
-            executor.begin_turn()
-
-            executor.run(
-                "run_evolved",
-                {
-                    "tool_name": "write_text",
-                    "arguments": {
-                        "path": f"workspace/{pid}/src/A.java",
-                        "content": "class A {}",
-                        "on_conflict": "overwrite",
-                    },
-                },
-            )
-            result = executor.run(
-                "run_evolved",
-                {
-                    "tool_name": "report_progress",
-                    "arguments": {"summary": "T-001 done", "task_line": 0},
-                },
-            )
-            self.assertTrue(result.ok, result.error)
-            self.assertFalse(executor.session.task_stop_armed)
-
-            second = executor.run(
-                "run_evolved",
-                {
-                    "tool_name": "report_progress",
-                    "arguments": {"summary": "double tap same turn", "task_line": 0},
-                },
-            )
-            self.assertFalse(second.ok)
-            self.assertIn(
-                "report_progress",
-                (second.error.message if second.error else "") or "",
-            )
-
-
-class PlanAgentExternalModTests(unittest.TestCase):
-    def test_it474_solo_owner_edit_no_external_banner(self) -> None:
-        paths = make_temp_agent_paths(self)
-        pid = "owner-edit"
-        proj = paths.workspace / pid
-        proj.mkdir(parents=True)
-        (proj / "TASKS.md").write_text("- [ ] T-001 open\n", encoding="utf-8")
-        (proj / "MAP.md").write_text("# map\n", encoding="utf-8")
-        (proj / "PROJECT.md").write_text("# proj\n", encoding="utf-8")
-
-        session = create_new(paths)
-        session.meta.project_id = pid
-        session.meta.project_delivery_profile = "solo"
-
-        agent = get_plan_agent(paths, pid)
-        agent.build_state(session)
-        (proj / "TASKS.md").write_text("- [ ] T-001 open\n- [ ] T-002 added\n", encoding="utf-8")
-        state = agent.build_state(session)
-        self.assertFalse(state.get("external_changes"))
 
 
 class ReviewSubagentTests(unittest.TestCase):
@@ -375,67 +240,7 @@ class ReviewSubagentTests(unittest.TestCase):
 
 
 class RitualReviewProgressGateTests(unittest.TestCase):
-    def test_review_block_reason_env_gated(self) -> None:
-        with patch.dict("os.environ", {"RITUAL_REVIEW_BLOCKS_PROGRESS": "1"}):
-            reason = report_progress_review_block_reason(
-                active_shell="project",
-                delivery_profile="ritual",
-                last_review_verdict="fail",
-                last_review_blockers_count=2,
-            )
-        self.assertIsNotNone(reason)
-        self.assertIn("交付审查", reason or "")
 
-    def test_solo_never_review_blocked(self) -> None:
-        with patch.dict("os.environ", {"RITUAL_REVIEW_BLOCKS_PROGRESS": "1"}):
-            reason = report_progress_review_block_reason(
-                active_shell="project",
-                delivery_profile="solo",
-                last_review_verdict="fail",
-                last_review_blockers_count=2,
-            )
-        self.assertIsNone(reason)
-
-    def test_it471_ritual_review_blocks_report_progress(self) -> None:
-        with temporary_agent_paths(
-            copy_tool_dirs=("common/write_text", "project/report_progress"),
-        ) as paths:
-            pid = "ritual-review-gate"
-            proj = paths.workspace / pid
-            proj.mkdir(parents=True)
-            (proj / "TASKS.md").write_text("- [ ] T-001 first\n", encoding="utf-8")
-
-            registry = ToolRegistry.load(paths)
-            allow = {"write_text", "report_progress"}
-            executor = ToolExecutor.create(
-                paths=paths,
-                session_dir=None,
-                allowed_evolved=allow,
-                confirm_fn=lambda _p, _a: "y",
-            )
-            executor.session.active_shell = "project"
-            executor.session.project_root = f"workspace/{pid}"
-            executor.session.project_id = pid
-            executor.session.project_plan_status = "confirmed"
-            executor.session.project_delivery_profile = "ritual"
-            executor.session.last_review_verdict = "fail"
-            executor.session.last_review_blockers_count = 2
-            executor.begin_turn()
-
-            with patch.dict("os.environ", {"RITUAL_REVIEW_BLOCKS_PROGRESS": "1"}):
-                result = executor.run(
-                    "run_evolved",
-                    {
-                        "tool_name": "report_progress",
-                        "arguments": {"summary": "T-001 done", "task_line": 0},
-                    },
-                )
-            self.assertFalse(result.ok)
-            assert result.error is not None
-            self.assertEqual(
-                (result.error.details or {}).get("guard_type"),
-                "progress_gate_review",
-            )
 
     def test_project_state_review_fields(self) -> None:
         paths = make_temp_agent_paths(self)

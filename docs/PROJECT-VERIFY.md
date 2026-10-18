@@ -1,7 +1,7 @@
 # 项目结构化验证（PROJECT-VERIFY）
 
 > 版本 **0.1.0** · 2026-08-04 · **状态：M0+M1 done**（T-4408 S-441 手工 todo）  
-> Phase **44** · 关联：[PROGRESS-GATE.md](./PROGRESS-GATE.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)  
+> Phase **44** · 关联：[PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md)  
 > 触发：用户盘点——`run_tests` 只跑 my-agent 自身验收；项目测试失败需人工读日志找行号；缺「跑测→结构化失败→patch→重测」桥接。
 
 ---

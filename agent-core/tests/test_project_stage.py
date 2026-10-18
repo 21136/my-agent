@@ -12,7 +12,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from project_manifest import bootstrap_manifest, propagate_stale
-from project_mode import TaskStats, classify_stage_documents, compute_execution_stage
+from project_mode import classify_stage_documents, compute_execution_stage
 
 
 class ProjectStageTests(unittest.TestCase):
@@ -35,38 +35,11 @@ class ProjectStageTests(unittest.TestCase):
         self.addCleanup(self.temp_dir.cleanup)
 
     def test_it5817_authoritative_stage_progression(self) -> None:
+        # Plan confirmation and task queues no longer shape the stage.
         self.assertEqual(
             compute_execution_stage(
                 project_id="demo",
                 plan_status="draft",
-                task_stats=TaskStats(done=0, total=1),
-                manifest=self.manifest,
-            )["stage"],
-            "requirements",
-        )
-        self.assertEqual(
-            compute_execution_stage(
-                project_id="demo",
-                plan_status="confirmed",
-                task_stats=TaskStats(done=0, total=1),
-                manifest=self.manifest,
-            )["stage"],
-            "design",
-        )
-        self.assertEqual(
-            compute_execution_stage(
-                project_id="demo",
-                plan_status="confirmed",
-                task_stats=TaskStats(done=1, total=2),
-                manifest=self.manifest,
-            )["stage"],
-            "implementation",
-        )
-        self.assertEqual(
-            compute_execution_stage(
-                project_id="demo",
-                plan_status="confirmed",
-                task_stats=TaskStats(done=1, total=1),
                 manifest=self.manifest,
             )["stage"],
             "verification",
@@ -75,7 +48,14 @@ class ProjectStageTests(unittest.TestCase):
             compute_execution_stage(
                 project_id="demo",
                 plan_status="confirmed",
-                task_stats=TaskStats(done=1, total=1),
+                manifest=self.manifest,
+            )["stage"],
+            "verification",
+        )
+        self.assertEqual(
+            compute_execution_stage(
+                project_id="demo",
+                plan_status="confirmed",
                 manifest=self.manifest,
                 review_verdict="pass",
             )["stage"],
@@ -87,7 +67,6 @@ class ProjectStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=1, total=1),
             manifest=self.manifest,
             review_verdict="pass",
         )
@@ -104,7 +83,6 @@ class ProjectStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=0, total=1),
             manifest=self.manifest,
         )
         self.assertNotIn("REQ", result["blockers"])
@@ -115,7 +93,6 @@ class ProjectStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=0, total=1),
             manifest=self.manifest,
         )
         self.assertIn("REQ", result["blockers"])
@@ -128,7 +105,6 @@ class ProjectStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=0, total=1),
             manifest=self.manifest,
             workflow_stage="implementation",
         )
@@ -161,7 +137,6 @@ class ProjectStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="draft",
-            task_stats=TaskStats(done=0, total=0),
             manifest=self.manifest,
             workflow_stage="documentation",
         )
@@ -169,7 +144,7 @@ class ProjectStageTests(unittest.TestCase):
         self.assertEqual(result["status"], "in_progress")
         self.assertEqual(result["blockers"], [])
         self.assertEqual(set(result["missing"]), set((
-            "PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md",
+            "PROJECT.md", "DESIGN.md", "VERIFY.md",
         )))
         self.assertTrue(result["warnings"])
 

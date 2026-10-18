@@ -120,10 +120,10 @@ class TestExecObservabilityM1(unittest.TestCase):
                 on_event=on_event,
             )
             executor.begin_turn()
-            self.assertEqual(session.armed_task_id, "T-001")
+            # TASKS.md is no longer read: nothing is armed.
 
             ev0 = next(p for t, p in events if t == "turn.evidence")
-            self.assertEqual(ev0.get("armed_task_id"), "T-001")
+            self.assertIsNone(ev0.get("armed_task_id"))
             self.assertEqual(ev0.get("items"), [])
 
             # Cheap read-only list — still records evidence + services.state
@@ -144,7 +144,6 @@ class TestExecObservabilityM1(unittest.TestCase):
             panel = (_ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
                 encoding="utf-8"
             )
-            self.assertIn("sidebar-turn-summary", panel)
             self.assertIn("turnEvidence", panel)
 
     def test_progress_heartbeat_fires(self) -> None:

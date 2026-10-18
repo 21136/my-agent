@@ -84,7 +84,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-6038 | repairing plan 风暴 nudge | 连续 gateway fail → 禁 plan、改 write_text | `EXEC_RUNAWAY_PLAN_GATEWAY_NUDGE` | done |
 | UI-6039 | PROJECT.md 验收命令自愈 | hard verify 缺命令时 Harness append | `ensure_project_acceptance_section` | done |
 | **Phase 59 · bug-fix** | | | | |
-| T-5960 | bug-fix 契约文档 | [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · 双轨 · T↔V 矩阵 · 与 plan/review 分工 | DOC-04 矩阵行 + IT/S id 已列 | **doc done** |
+| T-5960 | bug-fix 契约文档 | [BUG-FIX-AGENT.md](./archive/BUG-FIX-AGENT.md) · 双轨 · T↔V 矩阵 · 与 plan/review 分工 | DOC-04 矩阵行 + IT/S id 已列 | **doc done** |
 | UI-5961 | T↔V 矩阵 linter M0 | `lint_verify_matrix` · MX-1～MX-3 | 红灯不得 `release_wait`；进入 `verifying` 前预检 | **done** |
 | UI-5962 | 验收 blocker 扫描 M1 | 无 LLM · PROJECT 命令 · 开放 T 缺 V | 与 `parse_acceptance_spec` 对齐 | **done** |
 | UI-5963 | `bug_fix` 子代理 M2 | `subagent.py` · prompt `evolve/subagents/bug_fix.md` | repairing Harness spawn；工具 allowlist §6.2 | **done** |
@@ -99,12 +99,12 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | UI-5972 | 项目会话切换性能 | [SESSION-SWITCH-PERF.md](./SESSION-SWITCH-PERF.md) · UX-027 | 去重 refresh · history 窗口 · tail 读 jsonl · plan state 去重 | **done** |
 | UI-6040 | 聊天活动轨重设计 | [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · UX-028 | P0～M2 ActivityEntry 时间线 · Turn Card · 历史/侧栏对齐 | **done** |
 | UI-6041 | 壳层视觉统一（侧栏+顶栏） | [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · UX-029 | M0+M1 done · M2 去重；S-UX-029 · S-6041 手工 | **in_progress** |
-| UI-6041 | 狂奔开头 prep 触发 | [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md) · `_prepare_runaway_project_start` | 狂奔 + 早期 stage 每回合 prep；`project.runaway.set` 同步 prep；不绑长文 requirements intent | **done** |
+| UI-6041 | 狂奔开头 prep 触发 | [RUNAWAY-STARTUP-GATES.md](./archive/RUNAWAY-STARTUP-GATES.md) · `_prepare_runaway_project_start` | 狂奔 + 早期 stage 每回合 prep；`project.runaway.set` 同步 prep；不绑长文 requirements intent | **done** |
 | UI-6042 | 狂奔 begin_turn 武装对齐 | `executor.begin_turn` · `next_open_task` / `active_task_id` | 狂奔武装当前/下一依赖满足任务，不用 `first_open_task` | **done** |
 | UI-6043 | 狂奔早期 overlay 与 executor 一致 | `format_project_overlay` | requirements/documentation 明示 stage_gate 禁止业务代码 | **done** |
 | UI-6044 | 狂奔跳过 plan 路由标签 | `activity_router.compute_activity_route` | 狂奔下不显示「计划待确认」 | **done** |
 | UI-6045 | bug-fix repairing 写 ENV | `BUG_FIX_PLAN_WRITE_ALLOWLIST` · `run_bug_fix` | repairing 可 patch ENV.md `quality.commands` + PROJECT 验收段 | **done** |
-| UI-6046 | verification 谓词门 · ENV bootstrap | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · MX-5 · `ensure_env_quality_commands` | 硬验收绿但 MX 红仍 repairing；PROJECT→ENV quality 幂等 bootstrap | **done** |
+| UI-6046 | verification 谓词门 · ENV bootstrap | [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./archive/RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · MX-5 · `ensure_env_quality_commands` | 硬验收绿但 MX 红仍 repairing；PROJECT→ENV quality 幂等 bootstrap | **done** |
 | UI-6047 | verification Harness 短接 | `_maybe_short_circuit_runaway_verification_harness_turn` | `[Harness]` + verifying/repairing → 0 主 Agent 轮 | **done** |
 | UI-6048 | verification overlay 消歧 | `format_project_overlay` | verification 禁止 else 分支「可连续写计划域」 | **done** |
 | UI-6049 | verification 跳过 G5 重复勾选 | `progress_gate.report_progress_repeat_block_reason` | runaway + verification 不拦 report_progress 重复 | **done** |
@@ -123,26 +123,26 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | OMNI-B | 日常写码 · ordinary 闭环 | S-OMNI-01 等 · `project.direct_implement` · ordinary 直接实现 | **in_progress**（CLI/话术/侧栏 CTA 已有；Desktop WS 显式入口已接） |
 | OMNI-C | MCP 个人默认集 | 3～5 server · Desktop 连接态 | todo |
 
-### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./RUNAWAY-V2.md)）
+### Phase 60 · 狂奔 v2（[RUNAWAY-V2.md](./archive/RUNAWAY-V2.md)）
 
 > **DOC-04**：MAP §2 Phase 60 · 矩阵行「狂奔 v2」· 回归 S-6106 / IT-6101～6106 / **IT-6107**
-> **原则**：Anthropic 外部 checklist + Codex 单 turn + Cursor 薄 harness + Pi profile；**不**再叠 checkpoint / bug-fix 轨 / Harness 短接。续接见 [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)。
+> **原则**：Anthropic 外部 checklist + Codex 单 turn + Cursor 薄 harness + Pi profile；**不**再叠 checkpoint / bug-fix 轨 / Harness 短接。续接见 [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md)。
 
 | ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
 |----|------|-----------------|------|------|
-| T-6100 | v2 设计文档 | [RUNAWAY-V2.md](./RUNAWAY-V2.md) **v0.2.1** · MAP · 本文 | 失败场景、derive 算法、清单 merge、单 turn 时序、升格、走查、测试矩阵已写清 | **done** |
+| T-6100 | v2 设计文档 | [RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) **v0.2.1** · MAP · 本文 | 失败场景、derive 算法、清单 merge、单 turn 时序、升格、走查、测试矩阵已写清 | **done** |
 | T-6101 | `build_checklist` 生成器 | `runaway_v2/checklist.py` · 复用 `lint_verify_matrix` | IT-6101 MX/T/PROJECT/ENV → checklist 项 | **done** |
 | T-6102 | v2 `run_turn` 单入口 | `RunawayRuntime` · `agent.run_turn` 分流 · `MY_AGENT_RUNAWAY_V2` | IT-6102 不调用 v1 `_maybe_runaway_*` | **done**（入口已迁 kernel；见 T-6240） |
 | T-6103 | turn_end acceptance hook | `runaway_v2/acceptance.py` · command exit code | IT-6103 非 0 不标 passed | **done** |
 | T-6104 | 三档 escalation | `runaway_v2/controller.py` · auto / directed / human | IT-6104 同项失败 2 次 → directed | **done** |
 | T-6105 | `project.state` v2 字段 + Desktop | `project_api` · `unified/project-panel.ts` | IT-6105 checklist merge；project state 输出 checklist passed/total · user_line | **done** |
 | T-6106 | v1 路径冻结声明 | `agent.py` v1 分支 · `tests/conftest.py` · `tools/runaway_v1_compat_regression.py` | v2 默认 on 时 v1 选集仍 112/112；选集内强制 `MY_AGENT_RUNAWAY_V2=0` | **done** |
-| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
+| T-6107 | **续接收敛** `pending_runaway_work` 单真源 | [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) · `runaway_v2/continuation.py` · `tools/runaway_experience.py` | controller/server/agent/体验脚本同调 `should_continue_runaway`；`chain_after_ok` / `plan.should_chain` 已移除；IT-6107-a～g · S-UX-028m | **done**（编码与 IT-6107 已收口；S-UX-028m 手工留痕可选） |
 | S-6106 | music 试点手工 | `workspace/music` · v2 on · 会话 `20260818-cef22232` | 真实 0x567-flash 回合；36/36 正式任务；矩阵与 AC-PROJECT 全绿；无 bug-fix 子代理 | **done** |
-| T-6110 | 狂奔编排地图（doc） | [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) | 五家对照 · v1/v2 模块 · 续接 owner 表 | **doc** |
+| T-6110 | 狂奔编排地图（doc） | [RUNAWAY-ORCHESTRATION-MAP.md](./archive/RUNAWAY-ORCHESTRATION-MAP.md) | 五家对照 · v1/v2 模块 · 续接 owner 表 | **doc** |
 | T-6111～6114 | 编排工程草案 | 同地图 §6 | **逐项映射 Phase 62**（下表 **T-6240～6248**）；勿与 Phase 61 的 T-6210～6216 混用 | **mapped** |
 
-### Phase 62 · 狂奔编排内核换血（[RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md)）
+### Phase 62 · 狂奔编排内核换血（[RUNAWAY-ORCHESTRATION.md](./archive/RUNAWAY-ORCHESTRATION.md)）
 
 > **DOC-04**：MAP §2 Phase 62 · 三平面 · R0～R5  
 > **任务编号**：**T-6240～T-6248**（与 Phase 61 提示词/归属任务 **T-6210～6216** 刻意错开）。  
@@ -182,11 +182,11 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6401 | 主项目显式测试入口 | `tools/run_main_tests.py` | core/collect/focused 不递归收集 `workspace/` | **done** |
 | T-6402 | SelfChangeTransaction primitives | `agent-core/self_change.py` | baseline、状态机、branch、rollback、verify、health | **done** |
 | T-6403 | self_change 工具与 Agent 生命周期 | `evolve/tools/coding/self_change/` · Executor · Session overlay | begin/status/branch/verify/health/switch/rollback、事件与确认 | **done** |
-| T-6404 | Host Agent 候选版本自动重启/切换 | `agent-core/host_supervisor.py` · `desktop/electron/sidecar-supervisor.ts` | Electron crash restart 和 sidecar candidate switch IPC 已接入；真实 UI/自举调用链仍待验证 | **active · partial** |
+| T-6404 | Host Agent 候选版本自动重启/切换 | `agent-core/host_supervisor.py` · `desktop/electron/sidecar-supervisor.ts` · `desktop/src/host-settings.ts` · `desktop/src/candidate-promotion.ts` | Electron crash restart、candidate switch IPC、候选目录 UI、候选晋级端口等待已接入；真实 Electron 候选切换与恢复已实测通过 | **active · partial** |
 | T-6405 | GitHub/CI 闭环 | `GITHUB-CI-LIFECYCLE.md` | repo/Actions wait/log/rerun/required checks | **todo** |
-| T-6406 | release/deploy/rollback | `release_manager.py` · `release` tool | artifact/digest、`release` build、`gh_release` create/view、`deploy` plan/start/status/health/rollback 已实现；生产目标仍待做 | **active · partial** |
-| T-6407 | self-hosting verification matrix | `self_hosting_verify.py` · `SELF-HOSTING-VERIFICATION.md` | scenario status、E0-E6 evidence、report persistence、S1/S2 local runner 已实现；S3～S6 remote/deploy runner 仍待做 | **active · partial** |
-| T-6408 | model/Skill compatibility evaluation | `SELF-HOSTING-MODEL-SKILL-COMPATIBILITY.md` | model/Skill/Runtime 矩阵与 stable/canary | **todo** |
+| T-6406 | release/deploy/rollback | `release_manager.py` · `release`/`deploy`/`gh_deploy` tools · `.github/workflows/self-hosting-deploy.yml` | artifact/digest、受控本地 target、GitHub Environment + self-hosted production target 适配已实现；真实 runner/secret 配置和首次远端 dispatch 仍待做 | **active · partial** |
+| T-6407 | self-hosting verification matrix | `self_hosting_verify.py` · `SELF-HOSTING-VERIFICATION.md` | S1/S2 local、S3 PR/S4 CI、S5 带 artifact digest 的受控 deploy target、S6 Host Agent ready + E6 故障回滚、Electron 候选切换/恢复均已实测通过 | **active · partial** |
+| T-6408 | model/Skill compatibility evaluation | `compatibility_matrix.py` · `SELF-HOSTING-MODEL-SKILL-COMPATIBILITY.md` | 当前只维护 `0x567-flash` 单模型证据；多模型评测暂缓 | **defer** |
 
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
 
@@ -276,17 +276,17 @@ UI-6023～UI-6027 验证：`test_runaway_reliability` · `test_runaway_duplicate
 
 UI-6028～UI-6031 验证：`test_sync_runaway_task_checkoff_from_verify` · `test_runaway_reliability`（plan cap=2）（`agent-core/tests/test_runaway_flow.py` · `test_runaway_reliability.py`）。
 
-UI-6032～UI-6036 验证（2026-09-01 已编码）：`test_advance_preserves_plan_partner_cap` · `test_sync_all_runaway_task_checkoffs_from_verify` · `test_plan_gateway_failure_summary` · `test_pool_exhausted_error_detection`（`test_runaway_flow.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12。
+UI-6032～UI-6036 验证（2026-09-01 已编码）：`test_advance_preserves_plan_partner_cap` · `test_sync_all_runaway_task_checkoffs_from_verify` · `test_plan_gateway_failure_summary` · `test_pool_exhausted_error_detection`（`test_runaway_flow.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3e · §12。
 
-UI-6037～UI-6039 验证（2026-09-01 已编码）：`test_plan_gateway_tool_failure` · `test_ensure_project_acceptance_section` · `test_runaway_plan_gateway_fail_max_default`（`test_runaway_reliability.py` · `test_runaway_flow.py`）。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13。
+UI-6037～UI-6039 验证（2026-09-01 已编码）：`test_plan_gateway_tool_failure` · `test_ensure_project_acceptance_section` · `test_runaway_plan_gateway_fail_max_default`（`test_runaway_reliability.py` · `test_runaway_flow.py`）。详见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3f · §13。
 
-UI-6041～6045 验证（2026-09-03 已编码）：`test_runaway_startup` · `test_bug_fix_lane_allows_env_write` · `test_bug_fix_executor_allows_env_write_in_verification`（`agent-core/tests/test_runaway_startup.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-STARTUP-GATES.md](./RUNAWAY-STARTUP-GATES.md)。
+UI-6041～6045 验证（2026-09-03 已编码）：`test_runaway_startup` · `test_bug_fix_lane_allows_env_write` · `test_bug_fix_executor_allows_env_write_in_verification`（`agent-core/tests/test_runaway_startup.py` · `test_runaway_reliability.py`）。详见 [RUNAWAY-STARTUP-GATES.md](./archive/RUNAWAY-STARTUP-GATES.md)。
 
-UI-6046～6052 验证（2026-09-03 **done**）：`test_runaway_verification_bootstrap` · `test_runaway_verification_orchestrator` · `test_verifying_without_quality_commands_bootstraps_env`（`test_runaway_flow.py`）。设计：[RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)。手工 **S-6046** todo。
+UI-6046～6052 验证（2026-09-03 **done**）：`test_runaway_verification_bootstrap` · `test_runaway_verification_orchestrator` · `test_verifying_without_quality_commands_bootstraps_env`（`test_runaway_flow.py`）。设计：[RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./archive/RUNAWAY-VERIFICATION-ORCHESTRATOR.md)。手工 **S-6046** todo。
 
 Phase 59 **bug-fix**（2026-09-02）：M0～M3 已编码；**UI-5966** verification 阶段允许验收 `run_command`；**UI-5967** Harness 真源 checkpoint 对齐。回归：`test_runaway_verify_matrix` · `test_runaway_reliability` · `test_runaway_flow`（含 IT-5966/5967）。手工：**S-5951 done（Round 10b）** · S-6011 **done（Round 10b → verifying）**。
 
-Harness R3 补丁（2026-09-01 已编码）：implementation 阶段 `_advance_runaway_checkpoint` 不再硬依赖 `task_stop_armed`；`test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty` 通过。详见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §2.2。
+Harness R3 补丁（2026-09-01 已编码）：implementation 阶段 `_advance_runaway_checkpoint` 不再硬依赖 `task_stop_armed`；`test_advance_runaway_moves_to_next_task_when_active_task_done` · `test_advance_runaway_enters_verifying_when_open_queue_empty` 通过。详见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §2.2。
 
 ### 分支 `codex/runaway-mode-research` 合入清单（2026-09-01）
 
@@ -294,14 +294,14 @@ Harness R3 补丁（2026-09-01 已编码）：implementation 阶段 `_advance_ru
 |----|------|------|
 | 已提交（3 commits） | done | `feat(runaway)` · `feat(desktop)` · `docs: RUNAWAY` |
 | Harness R3 任务切换 | **WIP 未提交** | `agent.py` + `test_runaway_flow.py` · 见 RUNAWAY-EXPERIENCE §2.2 |
-| 真实 LLM 体验 | done | 0x567-flash 两轮 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) |
+| 真实 LLM 体验 | done | 0x567-flash 两轮 · 见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) |
 | R7 收口（UI-6014～6017） | **done** | plan 调度过滤 · 证据 advance · 降噪 · segment 摘要 |
 | R7b 收口（UI-6018～6020） | **done** | 越序 revert · strip plan 行 · adopt 后 reconcile+advance |
-| R7c 收口（UI-6023～6027） | **done** | Round 4 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3c · §10 |
-| R7d 收口（UI-6028～6031） | **done** | Round 5/6 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3d · §11 |
-| R7e 收口（UI-6032～6036） | **done** | Round 7 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3e · §12 |
-| R7f 收口（UI-6037～6039） | **done** | Round 8 repairing 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./RUNAWAY-EXPERIENCE.md) §3f · §13 |
-| **Phase 59 bug-fix** | **done** | T-5960 · UI-5961～5965 · [BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · S-5951 todo |
+| R7c 收口（UI-6023～6027） | **done** | Round 4 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3c · §10 |
+| R7d 收口（UI-6028～6031） | **done** | Round 5/6 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3d · §11 |
+| R7e 收口（UI-6032～6036） | **done** | Round 7 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3e · §12 |
+| R7f 收口（UI-6037～6039） | **done** | Round 8 repairing 阻塞 · 见 [RUNAWAY-EXPERIENCE.md](./archive/RUNAWAY-EXPERIENCE.md) §3f · §13 |
+| **Phase 59 bug-fix** | **done** | T-5960 · UI-5961～5965 · [BUG-FIX-AGENT.md](./archive/BUG-FIX-AGENT.md) · S-5951 todo |
 | 手工验收 | todo | S-6011 狂奔 LLM 回归（Round 7：23/25）· S-6001 Desktop 体验 · T-5907 端到端 |
 | 合入目标 | 建议 | `phase-58-textbook-flow`（远端默认开发线；本地无 `main`） |
 
@@ -404,7 +404,7 @@ T-5901 验证：需求简介被分类为 `requirements`，不启动探索、不�
 | **T-901 / T-605 / T-606** | 旧 Skill 自动生成 / 加载 / 路由提案 | **superseded** | 由 Phase 63 Skill Registry 替代；历史任务不恢复 |
 | **T-902 / T-903 / T-906** | 多 LLM / SQLite·向量 / 自动 venv | **wontfix** | Phase 9 远期；单人场景默认不做 |
 | **T-602** | suspect 与 executor 深集成 | **superseded** | 由 T-602c `failure_streak` + suspect 落盘覆盖 |
-| **Phase 38** 全系 | Plan 双通道 / 自动路由 / 独立气泡 | **superseded** | Phase 39 · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
+| **Phase 38** 全系 | Plan 双通道 / 自动路由 / 独立气泡 | **superseded** | Phase 39 · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) |
 | **`ui.route` / 自动切壳** | activity_router → 桌面切壳 | **superseded** | 前端已移除；`pet-route.ts` stub deprecated |
 | **STABILIZATION §3.1** 四壳行 | grow↔daily 隔离 · govern · ui.route | **superseded** | 见 [STABILIZATION.md](./STABILIZATION.md) §3.0 |
 | **T-1830-01～08**（部分） | `ui.route` · refresh · 流式序等 | **superseded** | IT-X 中与四壳绑定的用例作废；其余仍 defer 维护 |
@@ -1383,13 +1383,13 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 20 — 项目 Task 一停门（Task Stop Gate）
 
-> 设计：[TASK-STOP.md](./TASK-STOP.md) **v0.2.0**  
+> 设计：[TASK-STOP.md](./archive/TASK-STOP.md) **v0.2.0**  
 > 触发：project「开始编码」一轮内多 task + 确认/编译，撞 `TURN_WALL_SEC` 墙钟；用户误以为「不适合做大项目」。  
 > 产品选择：**每个 `TASKS.md` 条目完成即停**；project 关 T-705 auto-continue；墙钟保留兜底。
 
 ### DOC-04 准入（提案自检）
 
-- [x] 影响矩阵行：见 [TASK-STOP.md](./TASK-STOP.md) §6.1（project 执行面 · segment 续跑 · turn.end 文案 · 顶栏/侧栏 · CLI 继续语义）
+- [x] 影响矩阵行：见 [TASK-STOP.md](./archive/TASK-STOP.md) §6.1（project 执行面 · segment 续跑 · turn.end 文案 · 顶栏/侧栏 · CLI 继续语义）
 - [x] 回归：计划门 / project.switch；grow 侧 IT-48 auto-continue **不变**；新增 **S-50/S-51** · **IT-51/IT-52**（见设计 §6.2）
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
@@ -1439,13 +1439,13 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 24 — 进度硬闸门（Progress Gate）
 
-> 设计：[PROGRESS-GATE.md](./PROGRESS-GATE.md) **v0.3.0**  
+> 设计：[PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) **v0.3.0**  
 > 触发：huiyi T-014 后拒确认仍勾验收、同 turn 连勾、口头旧凭证；**T-017 后证据门拒勾仍口头「继续」收口**；**Phase 7 口语标题 unknown 死锁（2026-08-04 · v0.3.0 修复）**。  
 > 产品选择：**无本回合对口工具成功证据不可勾**；人只审规则/身份异常卡；工具失败走找 bug，无强制勾选；**完成通知 Plan = `report_progress` 成功（G8/G9）**。
 
 ### DOC-04 准入（提案自检）
 
-- [x] 影响矩阵行：见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §5.1（执行门 / report_progress / 侧栏异常卡 / overlay；grow 不变）
+- [x] 影响矩阵行：见 [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) §5.1（执行门 / report_progress / 侧栏异常卡 / overlay；grow 不变）
 - [x] 回归 ID：**S-70～S-75** · **IT-70～IT-73**（同文档 §5.2）；既有一停 / armed 身份回归 IT-73
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
@@ -1627,7 +1627,7 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 37 — 计划域架构（角色多文件 · 唯一队列 · 注入切片）
 
-> 设计：[PLAN-ARCH.md](./PLAN-ARCH.md) **v0.4.1** · **状态：M1～M3 · M5 · M6 done · M4 defer**  
+> 设计：[PLAN-ARCH.md](./archive/PLAN-ARCH.md) **v0.4.1** · **状态：M1～M3 · M5 · M6 done · M4 defer**  
 > 触发：单文件扛全场 / 队列膨胀污染提示词 / 口头完成绕过 Plan；要硬结构而非再加长 prompt。  
 > 产品选择：**多文件按角色拆**；**唯一执行队列** `TASKS.md`；归档默认不注入；主 Agent 对队列只走 `report_progress`。  
 > **Q1～Q3 已签**：提案不落盘（除勾选）· `TASKS.archive.md` · 关闭理由 `done|wontfix|duplicate|moved`。  
@@ -1636,7 +1636,7 @@ python turn_intent.py    # 分类用例无回归
 
 ### DOC-04 准入（提案自检）
 
-- [x] 影响矩阵行：见 [PLAN-ARCH.md](./PLAN-ARCH.md) §8.1（project 计划门 · Plan/侧栏 · Progress Gate；grow/host 无；**M6 扩 Plan 提案形态**）
+- [x] 影响矩阵行：见 [PLAN-ARCH.md](./archive/PLAN-ARCH.md) §8.1（project 计划门 · Plan/侧栏 · Progress Gate；grow/host 无；**M6 扩 Plan 提案形态**）
 - [x] 回归 / 新增：**S-180/S-181/S-182** · **IT-180/IT-181**；M6 增 **S-183/S-184 · IT-182/IT-183**；回归 Progress Gate IT-70～73 · S-07/S-08
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
@@ -1664,7 +1664,7 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 38 — Plan 主输入双通道 + 自动路由（**superseded · Phase 39**）
 
-> 设计：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.11 / §15.11.1** · [PLAN-ARCH.md](./PLAN-ARCH.md) **v0.5.1 A10/A11/A12**  
+> 设计：[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.11 / §15.11.1** · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) **v0.5.1 A10/A11/A12**  
 > **状态：T-3800～T-3805 曾 done；整 Phase 由 Phase 39 废止**（勿再排期或回归双通道）  
 > 触发：Plan 长文挤侧栏；要主区切换；怕 Plan 灌主聊天乱改计划；**后补**：单一输入 + 自动识别改计划交 Plan。  
 > 产品选择：主输入 **自动路由** Plan（可 Alt 强制主 Agent）；Plan 独立气泡；侧栏只留决策面；Plan 线与主线隔离、进项目清空；查跑同权、计划域四件套须门。  
@@ -1694,7 +1694,7 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 39 — Plan 幕后子代理（单入口）
 
-> 设计：[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) **v0.1.0 B0～B7** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.12**  
+> 设计：[PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) **v0.1.0 B0～B7** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.12**  
 > **状态：M0～M5 + M6 done**  
 > 触发：一周体验——双 Agent 双通道难用；对齐 Cursor/Copilot/Devin「一个聊天 + 幕后规划」。  
 > **废止**：Phase 38 双通道 / 关键词 auto-route / Plan 独立气泡（M2 删代码）。
@@ -1722,7 +1722,7 @@ python turn_intent.py    # 分类用例无回归
 
 ## Phase 40 — 采纳控件对齐（Affordance）
 
-> 设计：[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) **§10 v0.2.0** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.13** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) **v0.1.1** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)  
+> 设计：[PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) **§10 v0.2.0** · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) **§15.13** · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) **v0.1.1** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)  
 > **状态：M0 文档 done · P0/P1 done · P2 defer**  
 > 触发：huiyi 截图——主聊「点采纳」，侧栏「已写入…+diff」无按钮。
 
@@ -2137,7 +2137,7 @@ python turn_intent.py    # 分类用例无回归
 
 ### Phase 54 — Pack 4 · 计划域（PLAN-DOMAIN）
 
-> 子文档：[MILESTONE-PHASE-KEY.md](./MILESTONE-PHASE-KEY.md)
+> 子文档：[MILESTONE-PHASE-KEY.md](./archive/MILESTONE-PHASE-KEY.md)
 
 | ID | 任务 | 交付物 | 验收 | 状态 |
 |----|------|--------|------|------|

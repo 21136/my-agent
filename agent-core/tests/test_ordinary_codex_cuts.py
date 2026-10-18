@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import unittest
 from pathlib import Path
@@ -15,10 +14,8 @@ if str(_AGENT_CORE) not in sys.path:
 from context import build_llm_messages
 from project_api import after_turn_project_hooks
 from project_mode import (
-    TaskStats,
     compute_execution_stage,
     create_project,
-    format_project_overlay,
     ordinary_skip_stage_walls,
     plan_files_fingerprint,
     project_dir,
@@ -164,21 +161,6 @@ class OrdinaryStageWallCutTests(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
-    def test_runaway_still_blocks_verification_writes(self) -> None:
-        reason = project_mode_block_reason(
-            active_shell="project",
-            project_root="workspace/demo",
-            plan_status="confirmed",
-            workflow_stage="verification",
-            runaway_enabled=True,
-            tool_name="run_evolved",
-            arguments={
-                "tool_name": "write_text",
-                "arguments": {"path": "workspace/demo/src/app.py", "content": "x"},
-            },
-            skip_stage_walls=True,
-        )
-        self.assertIsNotNone(reason)
 
     def test_light_draft_is_not_an_execution_blocker(self) -> None:
         with temporary_agent_paths() as paths:
@@ -189,27 +171,14 @@ class OrdinaryStageWallCutTests(unittest.TestCase):
             result = compute_execution_stage(
                 project_id="lite-draft",
                 plan_status="draft",
-                task_stats=TaskStats(done=0, total=1),
                 manifest=manifest,
                 project_root=root,
                 workflow_stage="requirements",
             )
-            self.assertEqual(result["reason"], "plan_not_confirmed")
+            self.assertNotEqual(result["reason"], "plan_not_confirmed")
             self.assertEqual(result["blockers"], [])
             self.assertEqual(result["status"], "ready")
 
-    def test_direct_overlay_does_not_forbid_code_in_documentation(self) -> None:
-        overlay = format_project_overlay(
-            project_root="workspace/demo",
-            project_id="demo",
-            plan_status="confirmed",
-            workflow_stage="documentation",
-            skip_stage_walls=True,
-            project_entry="direct",
-        )
-        self.assertIn("request_policy:", overlay)
-        self.assertIn("不阻止普通实现", overlay)
-        self.assertNotIn("禁止写业务代码", overlay)
 
 
 class OrdinaryHarnessSpamCutTests(unittest.TestCase):
@@ -249,20 +218,6 @@ class OrdinaryHarnessSpamCutTests(unittest.TestCase):
         texts = [str(msg.get("content") or "") for msg in payload]
         self.assertTrue(any("继续" in text for text in texts))
         self.assertFalse(any(text.startswith("[Harness]") for text in texts))
-
-    def test_runaway_llm_payload_keeps_harness_routing(self) -> None:
-        paths = make_temp_agent_paths(self, prefix="harness-on-")
-        session = create_new(paths, conversation_id="harness-on")
-        session.meta.project_runaway_enabled = True
-        session.append_message(
-            {
-                "role": "user",
-                "content": "[Harness] [狂奔续接] 先读 RUNAWAY-PROGRESS.md",
-            }
-        )
-        payload = build_llm_messages(session)
-        texts = [str(msg.get("content") or "") for msg in payload]
-        self.assertTrue(any(text.startswith("[Harness]") for text in texts))
 
 
 class OrdinaryConfirmBudgetTests(unittest.TestCase):
@@ -401,41 +356,6 @@ class OrdinaryPlanRequestTests(unittest.TestCase):
                     requests = self._emit(session, paths, "这个项目现在进度怎么样？")
                     self.assertEqual(len(requests), 1)
                     self.assertEqual(requests[0]["project_id"], pid)
-
-    def test_plan_inventory_question_does_not_spawn_or_emit(self) -> None:
-        from plan_agent import classify_plan_spawn_intent
-        from turn_intent import classify_turn
-
-        text = "这个项目有哪些计划文件？"
-        self.assertEqual(classify_turn(text), "qa")
-
-        class _Boom:
-            def chat(self, *args, **kwargs):
-                raise AssertionError("plan_partner classifier should not run")
-
-        decision = classify_plan_spawn_intent(text, llm=_Boom())
-        self.assertFalse(decision.spawn)
-        self.assertEqual(decision.reason, "question")
-
-        for entry in ("plan", "direct", ""):
-            with self.subTest(entry=entry or "unset"):
-                with temporary_agent_paths() as paths:
-                    pid = f"files-{entry or 'unset'}"
-                    create_project(paths, pid, project_template="light")
-                    session = self._bind(paths, pid, entry)
-                    self.assertTrue(
-                        should_skip_ordinary_plan_spawn(
-                            session, text, turn_intent="plan"
-                        )
-                    )
-                    self.assertFalse(
-                        should_treat_ordinary_direct_implement(
-                            session, text, turn_intent="execute"
-                        )
-                    )
-                    self.assertEqual(self._emit(session, paths, text, intent="plan"), [])
-                    self.assertEqual(session.meta.project_plan_status, "draft")
-                    self.assertEqual(session.meta.project_entry, entry)
 
 
 class OrdinaryDesktopContractTests(unittest.TestCase):

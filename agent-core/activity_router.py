@@ -145,9 +145,7 @@ def compute_activity_route(
 
     from project_mode import ordinary_project_session, project_plan_gate_open
 
-    if project_plan_gate_open(session.meta) and not bool(
-        getattr(session.meta, "project_runaway_enabled", False)
-    ) and str(getattr(session.meta, "project_entry", "") or "") != "direct":
+    if project_plan_gate_open(session.meta) and str(getattr(session.meta, "project_entry", "") or "") != "direct":
         label = "项目 · 普通模式进度（计划可选）" if ordinary_project_session(session) else "项目 · 计划待确认"
         return ActivityRoute("project", _project_topics(session), label)
 

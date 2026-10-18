@@ -178,8 +178,10 @@ def switch_shell(
         pid = (project_id or "").strip() or session.meta.project_id or read_last_project_id(paths) or ""
         if not pid:
             raise ShellSwitchError("请先选择项目（侧栏项目列表或「项目 切换 <id>」）")
-        if not (project_dir(paths, pid) / "TASKS.md").is_file():
-            raise ShellSwitchError(f"项目不存在或缺少 TASKS.md：workspace/{pid}")
+        from project_mode import is_project_dir
+
+        if not is_project_dir(project_dir(paths, pid)):
+            raise ShellSwitchError(f"项目不存在：workspace/{pid}")
         loaded, _message = switch_to_project(paths, session, pid)
         loaded.meta.active_shell = "project"
         loaded.save()

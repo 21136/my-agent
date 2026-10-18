@@ -56,7 +56,7 @@ class ExternalProjectApiTests(unittest.TestCase):
         self.assertEqual(self.session.meta.project_id, "api-demo")
         self.assertEqual(self.session.meta.project_plan_status, "draft")
         self.assertEqual(self.session.next_work_intent, "execute")
-        self.assertTrue((self.external / "TASKS.md").is_file())
+        self.assertFalse((self.external / "TASKS.md").is_file())  # import no longer drafts TASKS.md
         event_types = [event.get("type") for event in result["_events"]]
         self.assertIn("project.import.applied", event_types)
         self.assertIn("project.state", event_types)

@@ -33,7 +33,6 @@ from tools.builtin import (
     codebase_search,
     grep,
     list_dir,
-    plan_partner,
     propose_context_switch,
     read_file,
     run_evolved,
@@ -60,7 +59,6 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "fetch_url": fetch_url.run,
     "run_evolved": run_evolved.run,
     "propose_context_switch": propose_context_switch.run,
-    "plan_partner": plan_partner.run,
     "deliverable_review": deliverable_review.run,
     "explore": explore.run,
 }
@@ -102,18 +100,8 @@ class ExecutorSession:
     project_plan_status: str = ""
     project_workflow_stage: str = ""
     project_entry: str = ""
-    # v2 may open a temporary maintenance context for one user turn while
-    # the persisted project remains in release_wait. Tool validation refreshes
-    # meta.json on every call, so retain this explicit per-turn override.
-    runaway_v2_runtime_workflow_stage: str = ""
     project_active_task_id: str = ""
     project_delivery_profile: str = "solo"
-    runaway_enabled: bool = False
-    bug_fix_lane: bool = False
-    runaway_v2_write_scope: tuple[str, ...] | None = None
-    runaway_v2_forbid_plan_partner: bool = False
-    project_runaway_checkpoint: str = ""
-    project_runaway_acceptance_passed: bool = False
     harness: str = "desktop"
     terminal_scope_kind: str = ""
     terminal_cwd: str = ""
@@ -121,12 +109,6 @@ class ExecutorSession:
     terminal_host_id: str = ""
     in_execute_segment: bool = False
     segment_scaffold_tools: dict[str, ScaffoldDemoRecord] = field(default_factory=dict)
-    task_stop_armed: bool = False
-    report_progress_done_this_turn: bool = False
-    task_done_baseline: int | None = None
-    armed_task_id: str = ""
-    armed_task_text: str = ""
-    armed_task_contract: dict[str, Any] = field(default_factory=dict)
     turn_evidence: list[dict[str, Any]] = field(default_factory=list)
     llm_retry_notice_emitted: bool = False
     # G14 / EXEC-RELIABILITY M0 — segment-scoped circuit breaker
@@ -149,9 +131,6 @@ class ExecutorSession:
     last_failure_class: str = ""
     service_postcondition: str = ""  # "" | "ok" | "fail"
     postcondition_claim_blocked: bool = False
-    plan_partner_calls: int = 0
-    plan_partner_gateway_streak: int = 0
-    plan_gateway_nudge_emitted: bool = False
     deliverable_review_calls: int = 0
     explore_builtin_calls: int = 0
     explore_continue_used: bool = False
@@ -159,7 +138,6 @@ class ExecutorSession:
     subagent_overlay_pending: str | None = None
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
-    progress_gate_notice: str = ""
     ordinary_visible_confirms_this_turn: int = 0
     # Request-scoped ordinary policy; never persisted in SessionMeta.
     ordinary_work_intent: str = "execute"
@@ -176,7 +154,6 @@ class ExecutorSession:
         project_entry = ""
         project_active_task_id = ""
         project_delivery_profile = "solo"
-        runaway_enabled = False
         harness = "desktop"
         terminal_scope_kind = ""
         terminal_cwd = ""
@@ -203,7 +180,6 @@ class ExecutorSession:
                     project_delivery_profile = normalize_delivery_profile(
                         payload.get("project_delivery_profile", "solo")
                     )
-                    runaway_enabled = bool(payload.get("project_runaway_enabled", False))
                     from session import normalize_harness, normalize_terminal_path_field
 
                     harness = normalize_harness(payload.get("harness", "desktop"))
@@ -229,7 +205,6 @@ class ExecutorSession:
             project_entry=project_entry,
             project_active_task_id=project_active_task_id,
             project_delivery_profile=project_delivery_profile,
-            runaway_enabled=runaway_enabled,
             harness=harness,
             terminal_scope_kind=terminal_scope_kind,
             terminal_cwd=terminal_cwd,
@@ -255,9 +230,7 @@ class ExecutorSession:
         self.project_id = str(payload.get("project_id", "") or "").strip()
         self.project_plan_status = str(payload.get("project_plan_status", "") or "")
         persisted_stage = str(payload.get("project_workflow_stage", "") or "")
-        self.project_workflow_stage = (
-            self.runaway_v2_runtime_workflow_stage.strip() or persisted_stage
-        )
+        self.project_workflow_stage = persisted_stage
         self.project_entry = str(payload.get("project_entry", "") or "")
         self.project_active_task_id = str(payload.get("project_active_task_id", "") or "")
         from project_mode import normalize_delivery_profile
@@ -265,7 +238,6 @@ class ExecutorSession:
         self.project_delivery_profile = normalize_delivery_profile(
             payload.get("project_delivery_profile", "solo")
         )
-        self.runaway_enabled = bool(payload.get("project_runaway_enabled", False))
         from session import normalize_harness, normalize_terminal_path_field
 
         self.harness = normalize_harness(payload.get("harness", "desktop"))
@@ -558,23 +530,6 @@ def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
     if guard_type == "run_python_demo_rejected":
         tool_name = fields.get("tool_name", "?")
         return f"[guard] 已拒调 run_python demo · {tool_name}（本 segment 已有自动 demo 结果）"
-    if guard_type == "task_stop_armed":
-        if fields.get("runaway_enabled"):
-            return (
-                "[guard] 本轮已勾选完成一条 TASK；"
-                "狂奔将自动进入下一项，请继续写码（本回合勿再次 report_progress）。"
-            )
-        return "[guard] 本轮已勾选完成一条 TASK；请停下，等用户「继续」再做下一项"
-    if guard_type == "task_stop":
-        message = fields.get("message")
-        if isinstance(message, str) and message.strip():
-            return message
-        if fields.get("runaway_enabled"):
-            return (
-                "[guard] task 一停门：本回合已勾选一条 TASK，"
-                "狂奔下可继续写下一项产物（勿同回合再 report_progress）。"
-            )
-        return "[guard] task 一停门：请先结束本回合，用户回复「继续」后再写下一产物"
     if guard_type == "exec_circuit":
         fp = fields.get("fingerprint", "")
         return f"[guard] 同类失败已熔断，禁止再调同一命令（{fp}）"
@@ -721,57 +676,21 @@ def _validate_project_mode_call(
 ) -> ToolResult | None:
     from project_mode import project_mode_block_reason
 
-    from project_mode import ordinary_skip_stage_walls
-
     ordinary_work_intent = str(getattr(session, "ordinary_work_intent", "execute") or "execute").strip() or "execute"
-    skip_walls = False
-    if not session.runaway_enabled:
-        skip_walls = ordinary_skip_stage_walls(
-            session,
-            agent_paths=agent_paths,
-        )
-        if not skip_walls and str(getattr(session, "project_entry", "") or "") == "direct":
-            skip_walls = True
     reason = project_mode_block_reason(
         active_shell=session.active_shell,
         project_root=session.project_root,
-        plan_status=session.project_plan_status,
-        workflow_stage=session.project_workflow_stage,
-        runaway_enabled=session.runaway_enabled,
         tool_name=tool_name,
         arguments=arguments,
-        agent_paths=agent_paths,
-        bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
-        runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
-        skip_stage_walls=skip_walls,
         ordinary_work_intent=ordinary_work_intent,
-        ordinary_task_scope=getattr(session, "ordinary_task_scope", ""),
     )
     if reason is None:
         return None
     code = ToolErrorCode.VALIDATION_ERROR
     details: dict[str, Any] = {
         "active_shell": session.active_shell,
-        "project_plan_status": session.project_plan_status or "draft",
         "ordinary_work_intent": ordinary_work_intent,
     }
-    from project_mode import (
-        ORDINARY_PROTECTED_WRITE_BLOCK_MSG,
-        PLAN_DOMAIN_WRITE_BLOCK_MSG,
-        main_agent_plan_domain_write_block,
-    )
-
-    plan_block = main_agent_plan_domain_write_block(
-        project_root=session.project_root,
-        tool_name=tool_name,
-        arguments=arguments,
-        bug_fix_lane=bool(getattr(session, "bug_fix_lane", False)),
-        runaway_v2_write_scope=getattr(session, "runaway_v2_write_scope", None),
-        allow_ordinary_plan_writes=bool(skip_walls and not session.runaway_enabled),
-    )
-    if plan_block in {PLAN_DOMAIN_WRITE_BLOCK_MSG, ORDINARY_PROTECTED_WRITE_BLOCK_MSG}:
-        code = ToolErrorCode.PERMISSION_DENIED
-        details["plan_domain_gate"] = True
     return tool_fail(
         tool_name,
         code,
@@ -874,11 +793,6 @@ def _validate_project_repl_build_bypass(
     )
 
 
-def _is_progress_gate_validation_error(result: ToolResult) -> bool:
-    from progress_gate import is_progress_gate_tool_error
-
-    return is_progress_gate_tool_error(result)
-
 
 def _validate_terminal_plan_phase_block(
     session: ExecutorSession,
@@ -930,64 +844,6 @@ def _validate_terminal_host_write(
     )
 
 
-def _validate_task_stop_write(
-    session: ExecutorSession,
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> ToolResult | None:
-    """Phase 20 M1 + Phase 24 G5: after [x], block next-task writes and re-report."""
-    from progress_gate import build_progress_gate_notice, report_progress_repeat_block_reason
-    from project_mode import task_stop_block_reason
-
-    repeat = report_progress_repeat_block_reason(
-        active_shell=session.active_shell,
-        task_stop_armed=session.task_stop_armed,
-        report_progress_done_this_turn=session.report_progress_done_this_turn,
-        tool_name=tool_name,
-        arguments=arguments,
-        runaway_enabled=bool(session.runaway_enabled),
-        workflow_stage=str(getattr(session, "project_workflow_stage", "") or ""),
-    )
-    if repeat is not None:
-        session.progress_gate_notice = build_progress_gate_notice(
-            armed_task_id=session.armed_task_id or "",
-            armed_task_text=session.armed_task_text or "",
-            reason=repeat,
-            turn_evidence=list(session.turn_evidence or []),
-        )
-        return tool_fail(
-            tool_name,
-            ToolErrorCode.VALIDATION_ERROR,
-            repeat,
-            details={
-                "guard_type": "progress_gate_repeat",
-                "active_shell": session.active_shell,
-                "retry": False,
-            },
-        )
-
-    reason = task_stop_block_reason(
-        active_shell=session.active_shell,
-        project_root=session.project_root,
-        task_stop_armed=session.task_stop_armed,
-        tool_name=tool_name,
-        arguments=arguments,
-        delivery_profile=session.project_delivery_profile,
-        runaway_enabled=session.runaway_enabled,
-    )
-    if reason is None:
-        return None
-    return tool_fail(
-        tool_name,
-        ToolErrorCode.VALIDATION_ERROR,
-        reason,
-        details={
-            "guard_type": "task_stop",
-            "active_shell": session.active_shell,
-            "project_root": session.project_root,
-        },
-    )
-
 
 def _session_requires_ac_progress_binding(session: ExecutorSession) -> bool:
     """Standard projects keep AC+VERIFY binding; light only needs VERIFY."""
@@ -1004,80 +860,6 @@ def _session_requires_ac_progress_binding(session: ExecutorSession) -> bool:
     except Exception:
         return True
 
-
-def _validate_progress_gate_evidence(
-    session: ExecutorSession,
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> ToolResult | None:
-    """Phase 24 G1/G2: require this-turn matched tool success before report_progress."""
-    if tool_name != "run_evolved":
-        return None
-    evolved = arguments.get("tool_name")
-    if not isinstance(evolved, str) or evolved.strip() != "report_progress":
-        return None
-    from progress_gate import (
-        build_progress_gate_notice,
-        report_progress_evidence_block_reason,
-        report_progress_review_block_reason,
-    )
-
-    review_reason = report_progress_review_block_reason(
-        active_shell=session.active_shell,
-        delivery_profile=session.project_delivery_profile,
-        last_review_verdict=getattr(session, "last_review_verdict", None),
-        last_review_blockers_count=int(getattr(session, "last_review_blockers_count", 0) or 0),
-    )
-    if review_reason is not None:
-        session.progress_gate_notice = build_progress_gate_notice(
-            armed_task_id=session.armed_task_id or "",
-            armed_task_text=session.armed_task_text or "",
-            reason=review_reason,
-            turn_evidence=list(session.turn_evidence or []),
-        )
-        return tool_fail(
-            tool_name,
-            ToolErrorCode.VALIDATION_ERROR,
-            review_reason,
-            details={
-                "guard_type": "progress_gate_review",
-                "active_shell": session.active_shell,
-                "last_review_verdict": getattr(session, "last_review_verdict", None),
-                "retry": False,
-            },
-        )
-
-    reason = report_progress_evidence_block_reason(
-        active_shell=session.active_shell,
-        armed_task_text=session.armed_task_text or "",
-        turn_evidence=list(session.turn_evidence or []),
-        delivery_profile=session.project_delivery_profile,
-        task_id=session.armed_task_id or "",
-        expected_ac_ids=list((session.armed_task_contract or {}).get("ac_ids") or []),
-        expected_verify_ids=list((session.armed_task_contract or {}).get("verify_ids") or []),
-        require_binding=bool((session.armed_task_contract or {}).get("metadata_present")),
-        require_ac_binding=_session_requires_ac_progress_binding(session),
-    )
-    if reason is None:
-        return None
-    session.progress_gate_notice = build_progress_gate_notice(
-        armed_task_id=session.armed_task_id or "",
-        armed_task_text=session.armed_task_text or "",
-        reason=reason,
-        turn_evidence=list(session.turn_evidence or []),
-    )
-    return tool_fail(
-        tool_name,
-        ToolErrorCode.VALIDATION_ERROR,
-        reason,
-        details={
-            "guard_type": "progress_gate_evidence",
-            "armed_task_id": session.armed_task_id,
-            "armed_task_text": session.armed_task_text,
-            "evidence_count": len(session.turn_evidence or []),
-            "retry": False,
-        },
-    )
 
 
 def _validate_exec_circuit(
@@ -1203,78 +985,22 @@ class ToolExecutor:
         clear_circuit_state(self.session)
 
     def begin_turn(self, *, reset_plan_cap: bool = True) -> None:
-        """Reset per-turn task-stop gate (Phase 20 M1) and arm current open task."""
+        """Reset per-turn guard state (task gates removed; TASKS.md is not read)."""
         from exec_reliability import clear_inline_write_guard
 
         clear_inline_write_guard(self.session)
-        self.session.task_stop_armed = False
-        self.session.report_progress_done_this_turn = False
-        self.session.task_done_baseline = None
-        self.session.armed_task_id = ""
-        self.session.armed_task_text = ""
-        self.session.armed_task_contract = {}
         self.session.turn_evidence = []
         self.session.llm_retry_notice_emitted = False
         self.session.service_postcondition = ""
         self.session.postcondition_claim_blocked = False
         self.session.last_failure_class = ""
         self.session.last_playbook_id = ""
-        if reset_plan_cap:
-            self.session.plan_partner_calls = 0
-        self.session.plan_partner_gateway_streak = 0
-        self.session.plan_gateway_nudge_emitted = False
+        del reset_plan_cap  # legacy kwarg (plan_partner cap is gone)
         self.session.deliverable_review_calls = 0
         self.session.explore_builtin_calls = 0
         self.session.explore_continue_used = False
         self.session.subagent_overlay_pending = None
-        self.session.progress_gate_notice = ""
         self.session.ordinary_visible_confirms_this_turn = 0
-        if self.session.active_shell != "project" or not self.session.project_root.strip():
-            self._emit_turn_evidence()
-            return
-        from progress_gate import task_evidence_contract
-        from project_mode import first_open_task, project_id_from_root, read_task_stats
-
-        pid = (self.session.project_id or "").strip() or project_id_from_root(
-            self.session.project_root
-        )
-        if not pid:
-            self._emit_turn_evidence()
-            return
-        tasks_path = self.registry.agent_paths.workspace / pid / "TASKS.md"
-        stats = read_task_stats(tasks_path)
-        self.session.task_done_baseline = stats.done
-        if tasks_path.is_file():
-            tasks_text = tasks_path.read_text(encoding="utf-8")
-            from project_mode import next_open_task
-
-            active_id = (self.session.project_active_task_id or "").strip().upper()
-            if self.session.runaway_enabled and active_id:
-                from project_mode import parse_tasks_metadata
-
-                task_line = -1
-                body = ""
-                tid = active_id
-                for task in parse_tasks_metadata(tasks_text):
-                    if str(task.get("id") or "").upper() != active_id:
-                        continue
-                    task_line = int(task.get("line", -1))
-                    body = str(task.get("text") or "").strip()
-                    break
-            elif self.session.runaway_enabled:
-                task_line, body, tid = next_open_task(tasks_text)
-            else:
-                task_line, body, tid = first_open_task(tasks_text)
-            self.session.armed_task_id = tid or ""
-            self.session.armed_task_text = body or ""
-            resolved_line = task_line if isinstance(task_line, int) else None
-            contract = task_evidence_contract(
-                tasks_text,
-                task_id=tid,
-                task_line=resolved_line if resolved_line is not None and resolved_line >= 0 else None,
-            )
-            if contract is not None:
-                self.session.armed_task_contract = contract
         self._emit_turn_evidence()
 
     def _emit_turn_evidence(self) -> None:
@@ -1307,14 +1033,13 @@ class ToolExecutor:
                 text = text[:61] + "…"
             short_fps.append(text)
 
-        gate_notice = (self.session.progress_gate_notice or "").strip() or None
         self._emit_event(
             "turn.evidence",
             {
-                "armed_task_id": (self.session.armed_task_id or "").strip() or None,
-                "armed_task_text": (self.session.armed_task_text or "").strip() or None,
+                "armed_task_id": None,
+                "armed_task_text": None,
                 "items": items,
-                "gate_notice": gate_notice,
+                "gate_notice": None,
                 "reliability": {
                     "postcondition": postcondition,
                     "circuit_open": short_fps,
@@ -1473,7 +1198,6 @@ class ToolExecutor:
             fields = dict(payload)
 
         fields.pop("guard_type", None)
-        fields["runaway_enabled"] = bool(self.session.runaway_enabled)
 
         if self.evolve_log is not None:
             self.evolve_log.log_guard_event(
@@ -1556,21 +1280,14 @@ class ToolExecutor:
         error = self.validate(name, args)
         if error is not None:
             self._maybe_log_validation_guard(error)
-            if _is_progress_gate_validation_error(error):
-                self._emit_turn_evidence()
             self._log_tool_call(name, args, error, confirm=confirm_decision, started=started)
             return error
-
-        self._maybe_inject_report_progress_project_id(name, args)
 
         builtin = self.registry.get_builtin(name)
         assert builtin is not None
 
         if name == "propose_context_switch":
             return self._run_propose_context_switch(args, started=started)
-
-        if name == "plan_partner":
-            return self._run_plan_partner(args, started=started)
 
         if name == "deliverable_review":
             return self._run_deliverable_review(args, started=started)
@@ -1583,9 +1300,7 @@ class ToolExecutor:
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
-            if self._runaway_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
-                confirm_decision = "runaway"
-            elif self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
+            if self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
                 confirm_decision = "ordinary_budget"
             else:
                 confirm_decision = self._ask_confirm(name, args, evolved_target)
@@ -1676,7 +1391,6 @@ class ToolExecutor:
         self._emit_turn_evidence()
         if result.ok:
             self._maybe_reload_registry_after_write_evolve(name, args, result)
-            self._maybe_arm_task_stop(name, args, result)
         self._log_tool_call(name, args, result, confirm=confirm_decision, started=started)
         return result
 
@@ -1954,252 +1668,6 @@ class ToolExecutor:
         self._log_tool_call(name, arguments, result, confirm=confirm_decision, started=started)
         return result
 
-    def _run_plan_partner(
-        self,
-        arguments: dict[str, Any],
-        *,
-        started: float,
-    ) -> ToolResult:
-        """Spawn Plan subagent (Phase 39 · PLAN-SUBAGENT §4.1)."""
-        from session import Session
-        from subagent import SubagentRunner, plan_partner_max_per_turn
-        from exec_reliability import runaway_plan_partner_max_per_turn
-
-        name = "plan_partner"
-        task = str(arguments.get("task") or "").strip()
-        if not task:
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                "task is required",
-                duration_ms=_elapsed_ms(started),
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        pid = (self.session.project_id or "").strip()
-        if not pid and self.session.project_root.strip():
-            from project_mode import project_id_from_root
-
-            pid = project_id_from_root(self.session.project_root) or ""
-        if not pid:
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                "plan_partner requires a bound project; open or create a project first",
-                duration_ms=_elapsed_ms(started),
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        from runaway_flow import normalize_checkpoint
-        from exec_reliability import (
-            runaway_plan_partner_blocked,
-            runaway_plan_partner_max_per_turn,
-        )
-
-        checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
-        stage = (self.session.project_workflow_stage or "").strip()
-        if runaway_plan_partner_blocked(
-            runaway_enabled=bool(self.session.runaway_enabled),
-            workflow_stage=stage,
-            checkpoint=checkpoint,
-            runaway_v2_forbid_plan_partner=bool(
-                getattr(self.session, "runaway_v2_forbid_plan_partner", False)
-            ),
-        ):
-            if checkpoint in {"verifying", "release_wait"}:
-                message = (
-                    "verification/release_wait 阶段禁止 plan_partner；"
-                    "Harness 硬验收为真源，勿再改 PROJECT/TASKS"
-                )
-            else:
-                message = (
-                    "repairing 阶段禁止 plan_partner；"
-                    "请由 Harness bug-fix 轨或直接 write_text 修复"
-                )
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                message,
-                duration_ms=_elapsed_ms(started),
-                details={"checkpoint": checkpoint},
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        cap = plan_partner_max_per_turn()
-        if self.session.runaway_enabled and stage in {
-            "implementation",
-            "verification",
-            "release",
-        }:
-            cap = min(cap, runaway_plan_partner_max_per_turn())
-        if self.session.plan_partner_calls >= cap:
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                f"plan_partner 每回合最多 {cap} 次",
-                duration_ms=_elapsed_ms(started),
-                details={"plan_partner_limit": cap},
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        include_raw = arguments.get("include_recent_user_lines", 2)
-        try:
-            include_n = int(include_raw) if include_raw is not None else 2
-        except (TypeError, ValueError):
-            include_n = 2
-        include_n = max(0, min(include_n, 5))
-
-        if self.session.session_dir is None:
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                "no active session directory",
-                duration_ms=_elapsed_ms(started),
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        paths = self.registry.agent_paths
-        session = Session.load(paths, self.session.session_dir.name)
-        preview = task if len(task) <= 120 else task[:117] + "…"
-
-        call_id = str(uuid.uuid4())
-        self._emit_event(
-            "plan.subagent.start",
-            {"task_preview": preview, "call_id": call_id},
-        )
-        self._emit_event(
-            "tool.start",
-            {
-                "tool": name,
-                "call_id": call_id,
-                "summary": preview,
-                "arguments": {"task": preview, "include_recent_user_lines": include_n},
-            },
-        )
-
-        try:
-            runner = SubagentRunner(paths=paths, evolve_log=self.evolve_log)
-            sub_result = runner.run_plan(
-                task,
-                session=session,
-                include_recent_user_lines=include_n,
-                confirm_fn=self.confirm_fn,
-                cancel_event=self.cancel_event,
-            )
-        except Exception as exc:
-            result = tool_fail(
-                name,
-                "execution_error",
-                f"plan subagent failed: {exc}",
-                duration_ms=_elapsed_ms(started),
-            )
-            self._emit_event(
-                "plan.subagent.done",
-                {
-                    "summary": result.error.message if result.error else str(exc),
-                    "proposal_count": 0,
-                    "ok": False,
-                    "call_id": call_id,
-                },
-            )
-            self._emit_event(
-                "tool.end",
-                {
-                    "tool": name,
-                    "call_id": call_id,
-                    "ok": False,
-                    "summary": _tool_result_summary(result),
-                },
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        from exec_reliability import is_plan_gateway_failure_summary
-        from plan_agent import get_plan_agent
-        from project_api import project_state_payload
-
-        agent = get_plan_agent(paths, pid)
-        if getattr(agent, "_last_gateway_failure", False) or is_plan_gateway_failure_summary(
-            sub_result.summary
-        ):
-            agent._last_gateway_failure = False
-            self.session.plan_partner_calls += 1
-            self.session.plan_partner_gateway_streak += 1
-            result = tool_fail(
-                name,
-                "upstream_error",
-                sub_result.summary,
-                duration_ms=_elapsed_ms(started),
-                details={"retryable": True, "plan_gateway_failure": True},
-            )
-            self._emit_event(
-                "plan.subagent.done",
-                {
-                    "summary": sub_result.summary,
-                    "proposal_count": 0,
-                    "ok": False,
-                    "call_id": call_id,
-                },
-            )
-            self._emit_event(
-                "tool.end",
-                {
-                    "tool": name,
-                    "call_id": call_id,
-                    "ok": False,
-                    "summary": _tool_result_summary(result),
-                },
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        self.session.plan_partner_calls += 1
-        self.session.plan_partner_gateway_streak = 0
-
-        state_events: list[dict[str, Any]] = [
-            project_state_payload(session, paths),
-            agent.build_state(session),
-        ]
-        for payload in state_events:
-            self._emit_event(payload.get("type", "project.state"), payload)
-
-        done_payload = {
-            "summary": sub_result.summary,
-            "proposal_count": len(sub_result.proposal_ids),
-            "proposal_ids": list(sub_result.proposal_ids),
-            "adopt_pending": sub_result.adopt_pending,
-            "ok": True,
-            "call_id": call_id,
-        }
-        self._emit_event("plan.subagent.done", done_payload)
-
-        result = tool_ok(
-            name,
-            {
-                "summary": sub_result.summary,
-                "proposal_ids": list(sub_result.proposal_ids),
-                "adopt_pending": sub_result.adopt_pending,
-                "partner_notices": list(sub_result.partner_notices),
-                "truncated": sub_result.truncated,
-            },
-            duration_ms=_elapsed_ms(started),
-        )
-        self._emit_event(
-            "tool.end",
-            {
-                "tool": name,
-                "call_id": call_id,
-                "ok": True,
-                "summary": _tool_result_summary(result),
-            },
-        )
-        self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-        return result
 
     def _run_deliverable_review(
         self,
@@ -2234,26 +1702,6 @@ class ToolExecutor:
                 ToolErrorCode.VALIDATION_ERROR,
                 "deliverable_review requires a bound project",
                 duration_ms=_elapsed_ms(started),
-            )
-            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
-            return result
-
-        from exec_reliability import runaway_deliverable_review_blocked
-        from runaway_flow import normalize_checkpoint
-
-        review_checkpoint = normalize_checkpoint(self.session.project_runaway_checkpoint)
-        if runaway_deliverable_review_blocked(
-            runaway_enabled=bool(self.session.runaway_enabled),
-            workflow_stage=(self.session.project_workflow_stage or "").strip(),
-            checkpoint=review_checkpoint,
-            acceptance_passed=bool(self.session.project_runaway_acceptance_passed),
-        ):
-            result = tool_fail(
-                name,
-                ToolErrorCode.VALIDATION_ERROR,
-                "Harness 硬验收为真源，verification 出口禁止 deliverable_review",
-                duration_ms=_elapsed_ms(started),
-                details={"checkpoint": review_checkpoint},
             )
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
@@ -2396,20 +1844,6 @@ class ToolExecutor:
         self.session.last_review_blockers_count = blockers_count
         session.last_review_verdict = verdict
         session.last_review_blockers_count = blockers_count
-        if verdict in {"pass", "warn"}:
-            from plan_agent import get_plan_agent
-
-            get_plan_agent(paths_agent, pid).clear_milestone_reminded_on_review(verdict)
-        elif verdict == "fail" or blockers_count > 0:
-            from plan_agent import get_plan_agent
-            from project_mode import get_delivery_profile
-
-            get_plan_agent(paths_agent, pid).emit_bug_promote_from_review(
-                sub_result.summary,
-                source="deliverable_review",
-                delivery_profile=get_delivery_profile(session.meta),
-                verdict=verdict,
-            )
         done_payload = {
             "summary": sub_result.summary,
             "summary_preview": review_summary_preview(sub_result.summary),
@@ -2677,28 +2111,6 @@ class ToolExecutor:
         if plan_block is not None:
             return plan_block
 
-        if name == "plan_partner":
-            task = arguments.get("task")
-            if not isinstance(task, str) or not task.strip():
-                return tool_fail(
-                    name,
-                    ToolErrorCode.VALIDATION_ERROR,
-                    "task is required",
-                    details={"retry": True},
-                )
-            pid = (self.session.project_id or "").strip()
-            if not pid and self.session.project_root.strip():
-                from project_mode import project_id_from_root
-
-                pid = project_id_from_root(self.session.project_root) or ""
-            if not pid:
-                return tool_fail(
-                    name,
-                    ToolErrorCode.VALIDATION_ERROR,
-                    "plan_partner requires a bound project",
-                )
-            return None
-
         if name == "deliverable_review":
             task = arguments.get("task")
             if not isinstance(task, str) or not task.strip():
@@ -2892,14 +2304,6 @@ class ToolExecutor:
         if repl_bypass is not None:
             return repl_bypass
 
-        task_stop_error = _validate_task_stop_write(self.session, name, arguments)
-        if task_stop_error is not None:
-            return task_stop_error
-
-        progress_gate_error = _validate_progress_gate_evidence(self.session, name, arguments)
-        if progress_gate_error is not None:
-            return progress_gate_error
-
         return None
 
     def _ensure_project_scope_tools_allowed(self) -> None:
@@ -2923,44 +2327,6 @@ class ToolExecutor:
             return
         self.session.allowed_evolved = current | extra
 
-    def _maybe_inject_report_progress_project_id(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> None:
-        """§0e F4 + armed identity: fill project_id / task_id / task_text when omitted."""
-        if tool_name != "run_evolved":
-            return
-        evolved = arguments.get("tool_name")
-        if not isinstance(evolved, str) or evolved.strip() != "report_progress":
-            return
-        inner = arguments.get("arguments")
-        if not isinstance(inner, dict):
-            inner = {}
-        else:
-            inner = dict(inner)
-
-        existing = inner.get("project_id")
-        if not (isinstance(existing, str) and existing.strip()):
-            from project_mode import project_id_from_root
-
-            injected = (self.session.project_id or "").strip()
-            if not injected:
-                injected = project_id_from_root(self.session.project_root) or ""
-            if injected:
-                inner["project_id"] = injected
-
-        # Turn-locked identity wins over model-supplied id/line.
-        armed_id = (self.session.armed_task_id or "").strip()
-        if armed_id:
-            inner["task_id"] = armed_id
-        armed_text = (self.session.armed_task_text or "").strip()
-        if armed_text:
-            inner["task_text"] = armed_text
-
-        inner["delivery_profile"] = self.session.project_delivery_profile
-
-        arguments["arguments"] = inner
 
     def _record_turn_evidence(
         self,
@@ -2968,8 +2334,7 @@ class ToolExecutor:
         arguments: dict[str, Any],
         result: ToolResult,
     ) -> None:
-        """Phase 24: append this-turn tool outcome for progress_gate matching."""
-        from progress_gate import make_evidence_entry
+        """Append this-turn tool outcome for the turn.evidence sidebar snapshot."""
         from project_mode import extract_run_evolved_paths
 
         evolved = ""
@@ -2977,103 +2342,22 @@ class ToolExecutor:
             raw = arguments.get("tool_name")
             if isinstance(raw, str):
                 evolved = raw.strip()
-            # Never treat report_progress itself as completion evidence.
-            if evolved == "report_progress":
-                return
-        # dry_run / background escalate must not satisfy Progress Gate.
+        # dry_run / background escalate are not real outcomes.
         data = result.data if isinstance(result.data, dict) else {}
         if data.get("dry_run") is True:
             return
         if data.get("background") is True or data.get("escalated") is True:
             return
         paths = extract_run_evolved_paths(tool_name, arguments)
-        contract = self.session.armed_task_contract or {}
         self.session.turn_evidence.append(
-            make_evidence_entry(
-                tool_name=tool_name,
-                evolved_name=evolved or tool_name,
-                ok=bool(result.ok),
-                paths=paths,
-                task_id=str(contract.get("task_id") or self.session.armed_task_id or ""),
-                ac_ids=list(contract.get("ac_ids") or []),
-                verify_ids=list(contract.get("verify_ids") or []),
-            )
+            {
+                "tool": tool_name,
+                "evolved_name": evolved or tool_name,
+                "ok": bool(result.ok),
+                "paths": list(paths),
+            }
         )
 
-    def _maybe_arm_task_stop(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any],
-        result: ToolResult,
-    ) -> None:
-        """Arm task-stop after TASKS.md done-count increases (Phase 20 M1 / §0e F3)."""
-        if not result.ok or self.session.task_stop_armed:
-            return
-        if tool_name != "run_evolved":
-            return
-        evolved_name = arguments.get("tool_name")
-        if not isinstance(evolved_name, str):
-            return
-        evolved_name = evolved_name.strip()
-
-        via_report = evolved_name == "report_progress"
-        if via_report:
-            self.session.report_progress_done_this_turn = True
-
-        from project_mode import normalize_delivery_profile
-
-        if (
-            normalize_delivery_profile(self.session.project_delivery_profile) == "solo"
-            and not self.session.runaway_enabled
-        ):
-            return
-        if self.session.active_shell != "project" or not self.session.project_root.strip():
-            return
-
-        from project_mode import (
-            extract_run_evolved_paths,
-            is_project_tasks_path,
-            project_id_from_root,
-            read_task_stats,
-        )
-
-        via_write = evolved_name in _WORKSPACE_WRITE_TOOLS
-        if not via_report and not via_write:
-            return
-
-        if via_write:
-            touched_tasks = False
-            for path in extract_run_evolved_paths(tool_name, arguments):
-                if is_project_tasks_path(path, self.session.project_root):
-                    touched_tasks = True
-                    break
-            if not touched_tasks:
-                return
-
-        data = result.data if isinstance(result.data, dict) else {}
-        if data.get("dry_run"):
-            return
-
-        pid = project_id_from_root(self.session.project_root)
-        if not pid:
-            return
-        stats = read_task_stats(self.registry.agent_paths.workspace / pid / "TASKS.md")
-        baseline = self.session.task_done_baseline
-        if baseline is None:
-            self.session.task_done_baseline = stats.done
-            return
-        if stats.done > baseline:
-            self.session.task_stop_armed = True
-            self._record_guard_event(
-                "task_stop_armed",
-                {
-                    "ok": True,
-                    "done": stats.done,
-                    "baseline": baseline,
-                    "project_root": self.session.project_root,
-                    "via": "report_progress" if via_report else evolved_name,
-                },
-            )
 
     def _maybe_log_validation_guard(self, error: ToolResult) -> None:
         if error.error is None or not isinstance(error.error.details, dict):
@@ -3401,7 +2685,7 @@ class ToolExecutor:
         tool_name: str,
     ) -> bool:
         """Ordinary mode: at most one user-visible confirm per turn for safe work."""
-        if self.session.runaway_enabled or self.session.active_shell != "project":
+        if self.session.active_shell != "project":
             return False
         if self._ordinary_confirm_is_destructive(
             builtin, evolved, arguments, tool_name=tool_name
@@ -3410,86 +2694,6 @@ class ToolExecutor:
         shown = int(getattr(self.session, "ordinary_visible_confirms_this_turn", 0) or 0)
         return shown >= 1
 
-    def _runaway_confirm_is_covered(
-        self,
-        builtin: BuiltinTool,
-        evolved: EvolvedTool | None,
-        arguments: dict[str, Any],
-        *,
-        tool_name: str,
-    ) -> bool:
-        """Apply the one-time project runaway authorization to safe local work."""
-        if not self.session.runaway_enabled or self.session.active_shell != "project":
-            return False
-        if evolved is None or _arguments_use_host_scope(arguments):
-            return False
-
-        name = evolved.name
-        if name in {"git_restore", "git_push", "git_clone", "http_request", "browser_open", "gh_pr", "local_preview"}:
-            return False
-
-        from tools.builtin import run_evolved as _run_evolved_mod
-
-        inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
-        if name in {"write_text", "patch_file", "search_replace"}:
-            from write_policy import is_sensitive_write_path, path_under_project
-            from project_mode import (
-                BUG_FIX_PLAN_WRITE_ALLOWLIST,
-                _path_matches_write_scope,
-                project_path_rel,
-            )
-
-            if name == "search_replace":
-                raw_paths = inner.get("paths")
-                if not isinstance(raw_paths, list) or not raw_paths:
-                    return False  # default broad scan not covered by runaway grant
-                for item in raw_paths:
-                    path = str(item or "").strip()
-                    if not path or not path_under_project(path, self.session.project_root):
-                        return False
-                    if is_sensitive_write_path(path):
-                        return False
-                    rel = project_path_rel(path, self.session.project_root)
-                    runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
-                    if runaway_scope and rel and not _path_matches_write_scope(rel, runaway_scope):
-                        return False
-                return True
-
-            path = str(inner.get("path") or "").strip()
-            if not path or not path_under_project(path, self.session.project_root):
-                return False
-            rel = project_path_rel(path, self.session.project_root)
-            runaway_scope = getattr(self.session, "runaway_v2_write_scope", None)
-            if runaway_scope and rel and _path_matches_write_scope(rel, runaway_scope):
-                return True
-            if bool(getattr(self.session, "bug_fix_lane", False)) and rel:
-                if rel in BUG_FIX_PLAN_WRITE_ALLOWLIST:
-                    return True
-            return not is_sensitive_write_path(path)
-
-        if name == "run_command":
-            from run_command_policy import classify_run_command, working_dir_under_project
-
-            command = str(inner.get("command") or "")
-            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
-            if not working_dir.strip() and self.session.project_root:
-                working_dir = self.session.project_root
-            kind = classify_run_command(command)
-            return bool(
-                kind not in {"danger", "network"}
-                and working_dir_under_project(working_dir, self.session.project_root)
-            )
-
-        if name in {"run_service", "dev_start", "pip_install", "repair_node_modules", "git_commit", "git_branch"}:
-            working_dir = str(inner.get("working_dir") or inner.get("cwd") or "")
-            return bool(
-                not working_dir
-                or working_dir == self.session.project_root
-                or working_dir.startswith(self.session.project_root.rstrip("/") + "/")
-            )
-
-        # Evolved tools explicitly scoped to the project are covered by the grant.
-        return evolved.scope == "project"
 
     def _resolve_evolved_target(self, tool_name: str, arguments: dict[str, Any]) -> EvolvedTool | None:
         if tool_name != "run_evolved":

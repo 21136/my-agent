@@ -137,13 +137,6 @@ export function mountAppChrome(
         <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
       </div>
       <div class="app-chrome-trailing">
-        <button type="button" class="app-chrome-runaway" id="chrome-runaway" role="switch" aria-checked="false" aria-pressed="false" disabled>
-          <span class="app-chrome-runaway-track" aria-hidden="true"><span class="app-chrome-runaway-thumb"></span></span>
-          <span class="app-chrome-runaway-copy">
-            <span class="app-chrome-runaway-name">自动</span>
-            <span class="app-chrome-runaway-state" id="chrome-runaway-state">关</span>
-          </span>
-        </button>
         <details class="app-chrome-menu">
           <summary class="app-chrome-menu-trigger" aria-label="更多操作">⋯</summary>
           <div class="app-chrome-menu-panel" role="menu">
@@ -162,8 +155,6 @@ export function mountAppChrome(
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
   const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
-  const runawayBtn = root.querySelector<HTMLButtonElement>("#chrome-runaway")!;
-  const runawayState = root.querySelector<HTMLElement>("#chrome-runaway-state")!;
   const overflowMenu = root.querySelector<HTMLDetailsElement>(".app-chrome-menu")!;
 
   themeSelect.value = theme;
@@ -171,25 +162,6 @@ export function mountAppChrome(
 
   let routeTimer: number | null = null;
   let syncingModel = false;
-  let runawayEnabled = false;
-  let runawayProjectBound = false;
-
-  const syncRunaway = (enabled: boolean, projectBound: boolean): void => {
-    runawayEnabled = enabled;
-    runawayProjectBound = projectBound;
-    runawayBtn.disabled = !projectBound;
-    runawayState.textContent = enabled ? "开" : "关";
-    runawayBtn.setAttribute("aria-pressed", String(enabled));
-    runawayBtn.setAttribute("aria-checked", String(enabled));
-    runawayBtn.setAttribute(
-      "aria-label",
-      projectBound ? `自动模式 ${enabled ? "开" : "关"}` : "先打开一个项目才能开启自动模式",
-    );
-    runawayBtn.title = projectBound
-      ? (enabled ? "自动模式已开启；点击暂停" : "开启后允许当前项目连续推进")
-      : "先打开一个项目才能开启自动模式";
-    runawayBtn.classList.toggle("is-active", enabled);
-  };
 
   const applyModelCatalog = (models: LlmModelListItem[], selectedId?: string) => {
     knownModels = models;
@@ -218,12 +190,6 @@ export function mountAppChrome(
     const selected = knownModels.find((item) => item.id === next);
     if (selected) modelSelect.title = formatModelTitle(selected);
     handlers.client?.setSessionModel(next);
-  });
-
-  runawayBtn.addEventListener("click", () => {
-    if (!runawayProjectBound) return;
-    runawayBtn.disabled = true;
-    handlers.client?.setProjectRunaway(!runawayEnabled);
   });
 
   cliBtn.addEventListener("click", () => {
@@ -257,12 +223,10 @@ export function mountAppChrome(
     applyModelCatalog(event.models);
   });
 
-  let currentProjectId = "";
 
   const unsubBanner = handlers.client?.onEvent((event) => {
     if (event.type !== "session.banner") return;
     sessionModelReceived = true;
-    currentProjectId = event.project_id || "";
     syncingModel = true;
     if (knownModels.length) {
       modelSelect.value = pickModelId(event.llm_model, knownModels, defaultFlashId);
@@ -274,32 +238,8 @@ export function mountAppChrome(
     syncingModel = false;
   });
 
-  const unsubProject = handlers.client?.onEvent((event) => {
-    if (event.type !== "project.state") return;
-    const eventProjectId = event.project_id || "";
-    if (currentProjectId && eventProjectId !== currentProjectId) return;
-    currentProjectId = eventProjectId;
-    syncRunaway(Boolean(event.runaway_enabled), Boolean(event.project_id));
-  });
-
-  const unsubSwitch = handlers.client?.onEvent((event) => {
-    if (event.type === "context.switch.done") {
-      if (event.applied === false || event.choice !== "y") return;
-      currentProjectId = event.project_id || "";
-      syncRunaway(false, Boolean(event.project_id));
-      return;
-    }
-    if (event.type !== "project.switch.done") return;
-    currentProjectId = event.project_id;
-    syncRunaway(false, Boolean(event.project_id));
-  });
-
   void unsubModels;
   void unsubBanner;
-  void unsubProject;
-  void unsubSwitch;
-
-  syncRunaway(false, false);
 
   modelSelect.innerHTML = renderModelOptions([], true);
   modelSelect.disabled = true;

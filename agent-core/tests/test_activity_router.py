@@ -70,15 +70,6 @@ class ActivityRouterProjectTests(unittest.TestCase):
         self.assertEqual(route.shell, "project")
         self.assertIn("项目", route.reason)
 
-    def test_plan_gate_open_routes_to_project_over_proposals(self) -> None:
-        self.session.meta.project_root = "workspace/stab-r1-demo"
-        self.session.meta.project_id = "stab-r1-demo"
-        self.session.meta.active_shell = "project"
-        self.session.meta.project_plan_status = "draft"
-
-        route = self._route("开始写代码", pending_proposals=5)
-        self.assertEqual(route.shell, "project")
-        self.assertIn("普通模式进度", route.reason)
 
     def test_execute_workspace_path_routes_to_project(self) -> None:
         route = self._route("改 workspace/stab-r1-demo/main.py", intent="execute")

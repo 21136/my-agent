@@ -18,8 +18,8 @@ version: 1.0.0
 
 # External project adoption
 
-1. Scan first without writing: root, Git state, docs/tasks, build markers, and missing TASKS.
+1. Scan first without writing: root, Git state, docs, build markers, and test/build commands.
 2. Never read or persist secret contents; `.env` is a name-only marker.
 3. Apply only after explicit confirmation. The junction must point to the original directory and never replace an existing logical project path.
-4. If TASKS.md is absent, create only a clearly marked import-review draft; never fabricate confirmed or completed state.
+4. Do not create a task list (`TASKS.md` is no longer used); record the verify command instead, and never fabricate confirmed or completed state.
 5. Verify the original directory receives a test write and that a new session can reopen the adopted project.

@@ -32,42 +32,7 @@ class ProjectAllowlistTests(unittest.TestCase):
             copy_tool_dirs=("common/write_text", "project/report_progress"),
         )
 
-    def test_project_shell_includes_report_progress(self) -> None:
-        session = create_new(
-            self.paths,
-            conversation_id=f"_p21_al_{secrets.token_hex(3)}",
-        )
-        session.meta.topics = ["coding"]
-        session.meta.active_shell = "project"
-        session.meta.project_root = "workspace/demo"
-        session.meta.project_id = "demo"
-        session.save()
-        allow = session_evolved_allowlist(session, registry=ToolRegistry.load(self.paths))
-        self.assertIn("report_progress", allow)
-        catalog = format_evolved_catalog_overlay(session, registry=ToolRegistry.load(self.paths))
-        # Phase 23 M3: overlay is INDEX (+ hints), not per-tool listing
-        self.assertTrue(
-            "工具索引" in catalog or "tool-catalog" in catalog or "project.md" in catalog,
-            msg=catalog[:200],
-        )
 
-    def test_grow_coding_allowlist_includes_report_progress_m1(self) -> None:
-        """Phase 23 M1: topic lock removed — active project tools are callable even on grow."""
-        session = create_new(
-            self.paths,
-            conversation_id=f"_p21_grow_{secrets.token_hex(3)}",
-        )
-        session.meta.topics = ["coding"]
-        session.meta.active_shell = "grow"
-        session.meta.project_root = ""
-        session.meta.project_id = ""
-        session.save()
-        allow = session_evolved_allowlist(session, registry=ToolRegistry.load(self.paths))
-        self.assertIn("report_progress", allow)
-        # Catalog listing may still omit project scope until bound / M3 INDEX
-        catalog = format_evolved_catalog_overlay(session, registry=ToolRegistry.load(self.paths))
-        # F1 overlay listing without project bind: report_progress may be absent from catalog text
-        _ = catalog
 
 
     def test_executor_ensure_admits_project_tool_when_allowlist_stale(self) -> None:
@@ -110,7 +75,6 @@ class ProjectAllowlistTests(unittest.TestCase):
     def test_run_turn_source_keeps_project_shell(self) -> None:
         src = inspect.getsource(Agent.run_turn)
         self.assertNotIn('active_shell = "grow"', src)
-        self.assertIn("project_plan_gate_open", src)
 
 
 class OverlayCopyTests(unittest.TestCase):
@@ -171,76 +135,6 @@ class ReportProgressInjectTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_inject_project_id_and_arm_stop(self) -> None:
-        import os
-
-        os.environ["MY_AGENT_ROOT"] = str(self.paths.agent_root)
-        self.addCleanup(lambda: os.environ.pop("MY_AGENT_ROOT", None))
-
-        registry = ToolRegistry.load(self.paths)
-        allow = session_evolved_allowlist(self.session, registry=registry)
-        self.assertIn("report_progress", allow)
-
-        executor = ToolExecutor(
-            registry=registry,
-            session=ExecutorSession.load(
-                self.session.session_dir,
-                allowed_evolved=set(allow),
-            ),
-            confirm_fn=lambda _p, _a: "y",
-        )
-        executor.session.active_shell = "project"
-        executor.session.project_root = f"workspace/{self.pid}"
-        executor.session.project_id = self.pid
-        executor.session.project_plan_status = "confirmed"
-        executor.begin_turn()
-
-        written = executor.run(
-            "run_evolved",
-            {
-                "tool_name": "write_text",
-                "arguments": {
-                    "path": f"workspace/{self.pid}/src/Skeleton.java",
-                    "content": "class Skeleton {}",
-                    "on_conflict": "overwrite",
-                },
-            },
-        )
-        self.assertTrue(written.ok, written.error)
-
-        result = executor.run(
-            "run_evolved",
-            {
-                "tool_name": "report_progress",
-                "arguments": {
-                    "summary": "did T-001",
-                    "task_line": 2,
-                },
-            },
-        )
-        self.assertTrue(result.ok, result.error)
-        text = (project_dir(self.paths, self.pid) / "TASKS.md").read_text(encoding="utf-8")
-        self.assertNotIn("T-001 skeleton Entity write", text)
-        archive = (project_dir(self.paths, self.pid) / "TASKS.archive.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("T-001 skeleton Entity write", archive)
-        self.assertIn("closed:done", archive)
-        self.assertTrue(executor.session.task_stop_armed)
-
-        blocked = executor.run(
-            "run_evolved",
-            {
-                "tool_name": "write_text",
-                "arguments": {
-                    "path": f"workspace/{self.pid}/src/Main.java",
-                    "content": "class Main {}",
-                    "on_conflict": "overwrite",
-                },
-            },
-        )
-        self.assertFalse(blocked.ok)
-        self.assertIn("一停", blocked.error.message if blocked.error else "")
 
 
 if __name__ == "__main__":

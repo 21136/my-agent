@@ -295,7 +295,7 @@ type ActivityBlock = {
 | T-6055-02 | 未 auto-chain 时 `turn.notice` 说明原因；prepare 段内不因 PREPARE 失败数停链 |
 | T-6056-01 | v2 非 human 计划 `chain_after_ok=True`；不受 qa/recall 意图掐断 |
 | T-6056-02 | 「继续」等短句 → execute；服务端 chain 重试 4 次 + 客户端 2.5s watchdog |
-| T-6107-01 | **续接收敛**：[RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md) · `pending_runaway_work()` 单真源 |
+| T-6107-01 | **续接收敛**：[RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) · `pending_runaway_work()` 单真源 |
 | T-6107-02 | controller + server + agent 同调 `should_continue_runaway`；删 `chain_after_ok` / `plan.should_chain` 兼容面待收口 |
 | T-6107-03 | IT-6107-a～g 已通过；进展指纹（借 v1 stuck）待收口 |
 

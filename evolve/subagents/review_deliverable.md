@@ -19,7 +19,7 @@
 | D3 | 项目测试 |
 | D4 | 数据库脚本 / init.sql 完整性 |
 | D5 | ENV.md 与工具链一致 |
-| D6 | TASKS vs MAP 漂移 |
+| D6 | MAP vs 代码漂移 |
 | D7 | PROJECT 验收声明 vs L1 |
 | D8 | 路由/API 前后端一致 |
 | D9 | 源文件异常（空行比例、CRLF 损坏） |
@@ -31,7 +31,7 @@ Spring + Vue 项目：必看 `database/init.sql`、`router` 索引、`applicatio
 
 ## 三件套
 
-发现 MAP/TASKS/PROJECT 矛盾 → 记入 drift / warnings；**建议** `plan_partner` 同步，**不要**自己改 TASKS。
+发现 MAP/PROJECT/DESIGN 与代码矛盾 → 记入 drift / warnings，并建议用户同步文档；**不要**自己改文档。
 
 ## 输出
 

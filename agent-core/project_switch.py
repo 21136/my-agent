@@ -12,7 +12,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths, read_agent_state_payload, write_agent_state_payload
-from project_mode import ProjectModeError, normalize_project_id, project_dir
+from project_mode import ProjectModeError, is_project_dir, normalize_project_id, project_dir
 from session import Session, build_seed_message, create_new, sessions_root, write_last_conversation_id
 
 PROJECT_SESSIONS_KEY = "project_sessions"
@@ -128,8 +128,8 @@ def _resolve_open_plan_status(session: Session, project_id: str) -> str:
 def plan_project_open(paths: AgentPaths, session: Session, project_id: str) -> ProjectSwitchPlan:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
-    if not (dest / "TASKS.md").is_file():
-        raise ProjectModeError(f"project missing TASKS.md: workspace/{pid}")
+    if not is_project_dir(dest):
+        raise ProjectModeError(f"project not found: workspace/{pid}")
 
     current_pid = (session.meta.project_id or "").strip()
     if current_pid == pid:
@@ -169,8 +169,8 @@ def _bind(session: Session, project_id: str, *, plan_status: str) -> None:
 def plan_project_switch(paths: AgentPaths, session: Session, project_id: str) -> ProjectSwitchPlan:
     pid = normalize_project_id(project_id)
     dest = project_dir(paths, pid)
-    if not (dest / "TASKS.md").is_file():
-        raise ProjectModeError(f"project missing TASKS.md: workspace/{pid}")
+    if not is_project_dir(dest):
+        raise ProjectModeError(f"project not found: workspace/{pid}")
 
     current_pid = (session.meta.project_id or "").strip()
     if current_pid == pid and session.meta.active_shell == "project":
@@ -282,9 +282,6 @@ def _inherit_project_meta(fresh: Session, previous: Session, project_id: str) ->
         fresh.meta.project_plan_confirmed_at = previous.meta.project_plan_confirmed_at
     fresh.meta.project_phase_fingerprint = previous.meta.project_phase_fingerprint
     fresh.meta.project_doc_fingerprint = previous.meta.project_doc_fingerprint
-    fresh.meta.project_runaway_enabled = bool(
-        getattr(previous.meta, "project_runaway_enabled", False)
-    )
     previous_stage = str(getattr(previous.meta, "project_workflow_stage", "") or "").strip()
     if previous_stage:
         fresh.meta.project_workflow_stage = previous_stage
@@ -311,8 +308,8 @@ def start_new_project_thread(
         )
 
     dest = project_dir(paths, pid)
-    if not (dest / "TASKS.md").is_file():
-        raise ProjectModeError(f"project missing TASKS.md: workspace/{pid}")
+    if not is_project_dir(dest):
+        raise ProjectModeError(f"project not found: workspace/{pid}")
 
     mapped = lookup_project_session(paths, pid)
     old_cid = session.conversation_id

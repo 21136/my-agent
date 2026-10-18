@@ -6,7 +6,9 @@
 
 ## 1. 目标
 
-记录不同模型、Skill 版本和 Agent Runtime 对自举流程的兼容程度，避免模型升级后把偶然成功误认为稳定能力。
+当前阶段只维护 `0x567-flash` 与当前 Agent Runtime/Skill 组合的证据；多模型对照、canary 和跨 provider 晋级暂缓，避免扩大当前自举交付范围。
+
+记录模型、Skill 版本和 Agent Runtime 对自举流程的兼容程度，避免模型升级后把偶然成功误认为稳定能力。
 
 ## 2. 兼容性身份
 

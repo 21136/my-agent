@@ -23,10 +23,8 @@ from project_mode import (
     list_projects,
     normalize_project_id,
     parse_acceptance_spec,
-    plan_allows_code_writes,
     project_dir,
     project_root_rel,
-    read_task_stats,
     run_acceptance_check,
     snapshot_plan_fingerprints,
     organize_project_documents,
@@ -57,7 +55,6 @@ ProjectCommandKind = Literal[
     "new_thread",
     "organize",
     "confirm_design",
-    "start_task",
     "confirm",
     "direct_implement",
     "status",
@@ -137,7 +134,6 @@ _PROJECT_VERBS = frozenset(
         "开始整理文档",
         "确认设计",
         "设计确认",
-        "开始任务",
         "直接实现",
         "直接开工",
         "direct-implement",
@@ -335,10 +331,6 @@ def parse_project_command(text: str) -> ParsedProjectCommand | None:
         return ParsedProjectCommand(kind="confirm_design")
     if verb in {"直接实现", "直接开工", "direct-implement", "implement-now"}:
         return ParsedProjectCommand(kind="direct_implement")
-    if verb in {"开始任务", "启动任务", "start-task", "implement"}:
-        if len(tokens) < 2:
-            raise ProjectCommandError("项目 开始任务 <T-ID>")
-        return ParsedProjectCommand(kind="start_task", project_id=tokens[1])
     if verb in {"状态", "status"}:
         return ParsedProjectCommand(kind="status")
     if verb in {"验收", "verify"}:
@@ -427,7 +419,6 @@ def bind_project_session(
         from project_mode import DEFAULT_PROJECT_DELIVERY_PROFILE
 
         session.meta.project_delivery_profile = DEFAULT_PROJECT_DELIVERY_PROFILE
-        session.meta.project_runaway_enabled = False
         session.meta.project_entry = ""
     session.meta.active_shell = "project"
     session.meta.project_id = pid
@@ -436,7 +427,7 @@ def bind_project_session(
     if plan_status == "confirmed":
         session.meta.project_workflow_stage = "implementation"
     else:
-        core_docs = [project_dir(session.paths, pid) / name for name in ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")]
+        core_docs = [project_dir(session.paths, pid) / name for name in ("PROJECT.md", "DESIGN.md", "VERIFY.md")]
         session.meta.project_workflow_stage = (
             "documentation"
             if all(path.is_file() and "待填写" not in path.read_text(encoding="utf-8") for path in core_docs)
@@ -457,8 +448,6 @@ def confirm_direct_implement(session: Session) -> str:
     """Arm one ordinary execute request without persisting a permission mode."""
     if session.meta.active_shell != "project":
         raise ProjectModeError("当前不在项目壳；「项目 直接实现」仅在项目会话可用。")
-    if bool(getattr(session.meta, "project_runaway_enabled", False)):
-        raise ProjectModeError("狂奔模式已开启；「项目 直接实现」仅用于普通模式。")
     root = (session.meta.project_root or "").strip()
     pid = (session.meta.project_id or "").strip()
     if not root or not pid:
@@ -487,11 +476,7 @@ def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) ->
         if workflow_stage == "documentation":
             raise ProjectModeError("文档整理尚未完成设计确认；当前不能开始写代码")
         if workflow_stage == "design":
-            raise ProjectModeError("设计已确认；请使用「项目 开始任务 <T-ID>」授权实现批次")
-
-    tasks_path = project_dir(session.paths, pid) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"缺少 {root}/TASKS.md；请先让助手生成计划")
+            raise ProjectModeError("设计已确认；请使用「项目 直接实现」开始写代码")
 
     session.meta.project_plan_status = "confirmed"
     if not ordinary:
@@ -505,10 +490,7 @@ def confirm_project_plan(session: Session, *, skip_stage_walls: bool = False) ->
     snapshot_plan_fingerprints(session, session.paths, pid)
     _set_project_goal(session, root, "confirmed")
     session.meta.updated_at = utc_now_iso()
-    stats = read_task_stats(tasks_path)
-    return (
-        f"计划已确认：{root}（任务 {stats.done}/{stats.total} 已完成）。可以开始写代码。"
-    )
+    return f"计划已确认：{root}。可以开始写代码。"
 
 
 def confirm_project_design(session: Session, paths: AgentPaths) -> str:
@@ -531,41 +513,7 @@ def confirm_project_design(session: Session, paths: AgentPaths) -> str:
     session.save()
     if ordinary:
         return f"设计确认事实已记录：{root}；普通模式不推进项目阶段。"
-    return f"设计已确认：{root}。当前进入 design；请选择一个任务，例如「项目 开始任务 T-001」。"
-
-
-def start_project_task(session: Session, paths: AgentPaths, task_id: str) -> str:
-    root = (session.meta.project_root or "").strip()
-    pid = (session.meta.project_id or "").strip()
-    normalized_task = task_id.strip().upper()
-    if not root or not pid or session.meta.active_shell != "project":
-        raise ProjectModeError("当前会话未打开项目；先「项目 打开 <id>」")
-    ordinary = ordinary_project_session(session)
-    if not ordinary and getattr(session.meta, "project_workflow_stage", "requirements") != "design":
-        raise ProjectModeError("必须先确认设计，再启动实现任务")
-    if not re.fullmatch(r"T-\d+(?:-\d+)*", normalized_task):
-        raise ProjectModeError("任务 ID 必须是 T-001 格式")
-    tasks_path = project_dir(paths, pid) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"缺少 {root}/TASKS.md，无法启动实现任务")
-    tasks = tasks_path.read_text(encoding="utf-8")
-    if not re.search(rf"(?im)^\s*-\s*\[\s\]\s+.*\b{re.escape(normalized_task)}\b", tasks):
-        raise ProjectModeError(f"开放任务中不存在 {normalized_task}；只能启动当前队列中的未完成任务")
-    if not ordinary:
-        session.meta.project_workflow_stage = "implementation"
-        session.meta.project_plan_status = "confirmed"
-        session.meta.project_plan_confirmed_at = utc_now_iso()
-    else:
-        session.next_work_intent = "execute"
-        session.next_task_scope = normalized_task
-    if not str(getattr(session.meta, "project_scope_confirmed_at", "") or "").strip():
-        session.meta.project_scope_confirmed_at = session.meta.project_plan_confirmed_at
-    session.meta.project_active_task_id = normalized_task
-    if not ordinary:
-        _set_project_goal(session, root, "confirmed")
-    session.meta.updated_at = utc_now_iso()
-    session.save()
-    return f"已授权实现 {normalized_task}：仅限当前任务范围；完成后必须按 VERIFY.md 验证。"
+    return f"设计已确认：{root}。当前进入 design；可用「项目 直接实现」开始写代码。"
 
 
 def organize_project_plan(session: Session, paths: AgentPaths) -> str:
@@ -613,14 +561,6 @@ def import_external_project(
         scan = scan_external_project(paths, external_path, project_id=project_id)
         binding = apply_external_project(paths, scan)
         logical = paths.workspace / binding.project_id
-        tasks_path = logical / "TASKS.md"
-        if not tasks_path.is_file():
-            tasks_path.write_text(
-                "# 导入项目任务（待确认）\n\n"
-                "> 这是从外部项目接入时生成的草稿，请先检查现有代码和下一步。\n\n"
-                "- [ ] T-IMPORT-001 确认外部项目当前进度、测试命令和下一步任务\n",
-                encoding="utf-8",
-            )
         from project_manifest import bootstrap_manifest, load_manifest, manifest_path, save_manifest
 
         manifest_file = manifest_path(logical)
@@ -653,8 +593,6 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         return "当前会话未绑定项目。"
     pid = session.meta.project_id or Path(root).name
     status = session.meta.project_plan_status or "draft"
-    tasks_path = project_dir(paths, pid) / "TASKS.md" if pid else paths.workspace / "TASKS.md"
-    stats = read_task_stats(tasks_path)
     lines = [
         f"项目：{pid}",
         f"根目录：{root}",
@@ -662,15 +600,12 @@ def format_project_status(session: Session, paths: AgentPaths) -> str:
         f"阶段：{getattr(session.meta, 'project_workflow_stage', 'requirements')}",
         f"纪律：{session.meta.project_delivery_profile or 'solo'}",
         f"模板：{read_project_template(paths, pid) if pid else 'standard'}",
-        f"任务：{stats.done}/{stats.total} 已完成，{stats.open_count} 未勾",
     ]
     entry = getattr(session.meta, "project_entry", "") or ""
     if entry == "direct":
         lines.append("入口：直接实现")
     elif entry == "plan":
         lines.append("入口：先计划")
-    if not plan_allows_code_writes(status):
-        lines.append("提示：计划未确认 — 使用「项目 确认」或「项目 直接实现」后开始写代码。")
     return "\n".join(lines)
 
 
@@ -697,7 +632,6 @@ def run_project_command(
         output_fn("workspace 项目：")
         current = (session.meta.project_id or "").strip()
         for item_id in items:
-            stats = read_task_stats(project_dir(paths, item_id) / "TASKS.md")
             marker = ""
             if item_id == current:
                 marker = " · 当前"
@@ -705,7 +639,7 @@ def run_project_command(
                 sid = lookup_project_session(paths, item_id)
                 if sid:
                     marker = " · 可续接"
-            output_fn(f"  - {item_id} ({stats.done}/{stats.total}){marker}")
+            output_fn(f"  - {item_id}{marker}")
         if current:
             output_fn(f"当前项目：{current}")
         return ProjectCommandResult()
@@ -822,15 +756,6 @@ def run_project_command(
         output_fn(message)
         return ProjectCommandResult(meta_changed=True)
 
-    if command.kind == "start_task":
-        assert command.project_id is not None
-        try:
-            message = start_project_task(session, paths, command.project_id)
-        except ProjectModeError as exc:
-            output_fn(f"error: {exc}")
-            return ProjectCommandResult()
-        output_fn(message)
-        return ProjectCommandResult(meta_changed=True)
 
     if command.kind == "status":
         output_fn(format_project_status(session, paths))
@@ -870,10 +795,6 @@ def run_project_command(
         pid = (session.meta.project_id or "").strip()
         if not pid or session.meta.active_shell != "project":
             output_fn("error: 当前会话未打开项目")
-            return ProjectCommandResult()
-        plan_status = session.meta.project_plan_status or "draft"
-        if not plan_allows_code_writes(plan_status):
-            output_fn("error: 计划未确认，无法运行验收")
             return ProjectCommandResult()
         from project_mode import read_project_artifacts
 

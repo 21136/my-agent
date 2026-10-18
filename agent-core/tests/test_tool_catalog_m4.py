@@ -31,7 +31,6 @@ _REQUIRED = {
     ),
     "organize.md": ("sort_by_extension", "rename_batch", "dedupe_by_name"),
     "project.md": (
-        "report_progress",
         "project_catalog",
         "scaffold_project",
         "run_project_tests",

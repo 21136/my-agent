@@ -49,10 +49,10 @@
 - [自举架构](./SELF-HOSTING-ARCHITECTURE.md) · 三平面、状态机与交付边界
 - [自修改事务](./SELF-MODIFICATION-TRANSACTION.md) · 快照、分支、验证、候选版本与回滚
 - [测试范围基线](./TEST-SCOPE-AND-BASELINE.md) · 主项目与 workspace 独立项目的测试边界
-- [编排权威](./RUNAWAY-ORCHESTRATION.md) · Transport / Control / Execution 与 owner 边界
-- [RUNAWAY-V2](./RUNAWAY-V2.md) · 产品/阶段语义
-- [续接规则](./RUNAWAY-V2-CONTINUATION.md) · continuation owner 与兼容边界
-- [行业附录地图](./RUNAWAY-ORCHESTRATION-MAP.md) · 只作对照
+- [编排权威](./archive/RUNAWAY-ORCHESTRATION.md) · Transport / Control / Execution 与 owner 边界
+- [RUNAWAY-V2](./archive/RUNAWAY-V2.md) · 产品/阶段语义
+- [续接规则](./archive/RUNAWAY-V2-CONTINUATION.md) · continuation owner 与兼容边界
+- [行业附录地图](./archive/RUNAWAY-ORCHESTRATION-MAP.md) · 只作对照
 
 ## 产品流程、工作台与界面
 
@@ -76,10 +76,10 @@ Desktop / 项目模式：
 - [运行时设计](./RUNTIME.md) · [分层说明](./LAYERS.md) · [Agent Harness](./AGENT-HARNESS.md)
 - [主 Agent 编排](./AGENT-PARENT-ORCHESTRATION.md) · [对话编排](./ORCHESTRATION.md) · [异步编排](./ASYNC-ORCHESTRATION.md)
 - [Checker 子代理](./CHECKER-SUBAGENT.md) · [交付审查](./DELIVERABLE-REVIEW.md) · [子代理预算](./SUBAGENT-BUDGET.md)
-- [计划域架构](./PLAN-ARCH.md) · [Plan 子代理](./PLAN-SUBAGENT.md) · [计划审阅 UI](./PLAN-REVIEW-UI.md)
+- [计划域架构](./archive/PLAN-ARCH.md) · [Plan 子代理](./archive/PLAN-SUBAGENT.md) · [计划审阅 UI](./archive/PLAN-REVIEW-UI.md)
 - [记忆系统](./MEMORY.md) · [进化层](./EVOLVE.md) · [用户扩展层](./EXTENSIONS.md) · [提示词注册表](./PROMPT-REGISTRY.md)
 - [模式预算](./MODE-BUDGET.md) · [回合控制](./TURN-CONTROL.md) · [回合反馈](./TURN-FEEDBACK.md)
-- [里程碑阶段键](./MILESTONE-PHASE-KEY.md) · [上下文切换](./CONTEXT-SWITCH.md) · [Explore 作用域](./EXPLORE-SCOPE-RAILS.md)
+- [里程碑阶段键](./archive/MILESTONE-PHASE-KEY.md) · [上下文切换](./CONTEXT-SWITCH.md) · [Explore 作用域](./EXPLORE-SCOPE-RAILS.md)
 - [通用执行通道](./SHELL-CHANNEL.md) · [工具工坊提示词](./TOOL-WORKSHOP-PROMPTS.md)
 
 ## 工具、模型与外部集成
@@ -99,9 +99,9 @@ Desktop / 项目模式：
 ## 安全、质量与可靠性
 
 - [治理](./GOVERNANCE.md) · [确认管线](./CONFIRM-PIPELINE.md) · [写入范围](./WRITE-SCOPE.md)
-- [运行时 Guard](./RUNTIME-GUARDS.md) · [Task Stop](./TASK-STOP.md) · [Progress Gate](./PROGRESS-GATE.md)
+- [运行时 Guard](./RUNTIME-GUARDS.md) · [Task Stop](./archive/TASK-STOP.md) · [Progress Gate](./archive/PROGRESS-GATE.md)
 - [执行可观测](./EXEC-OBSERVABILITY.md) · [执行可靠性](./EXEC-RELIABILITY.md)
-- [项目验证](./PROJECT-VERIFY.md) · [项目质量](./PROJECT-QUALITY.md) · [Bug Fix Agent](./BUG-FIX-AGENT.md)
+- [项目验证](./PROJECT-VERIFY.md) · [项目质量](./PROJECT-QUALITY.md) · [Bug Fix Agent](./archive/BUG-FIX-AGENT.md)
 - [稳定化基线](./STABILIZATION.md) · [Stabilization Pack 1](./STABILIZATION-PACK1.md) · [稳定化任务](./STABILIZATION-TASKS.md)
 - [稳定化 backlog](./stabilization-backlog.md) · [稳定化日志](./stabilization-log.md) · [Bug 索引](./BUGS.md)
 
@@ -110,8 +110,8 @@ Desktop / 项目模式：
 - [Agent 工具体验路线图](./AGENT-TOOL-EXPERIENCE.md) · [Cursor 对齐](./CURSOR-ALIGN.md) · [Cursor 差距收口](./CURSOR-GAP-NEXT.md)
 - [Pack 1245 路线图](./ROADMAP-PACK-1245.md) · [本地交付模型](./LOCAL-DELIVERY-MODEL.md)
 - [普通流程减负](./ORDINARY-FLOW-REDUCTION.md) · 历史提案与当前实现覆盖；当前规则以 ordinary spec/plan 和代码测试为准。
-- 狂奔相关：[RUNAWAY-V2](./RUNAWAY-V2.md) · [续接](./RUNAWAY-V2-CONTINUATION.md) · [验证编排](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · [启动闸门](./RUNAWAY-STARTUP-GATES.md) · [状态机](./RUNAWAY-FLOW-STATE-MACHINE.md)
-- 狂奔经验：[体验报告](./RUNAWAY-EXPERIENCE.md) · [R6 可靠性](./RUNAWAY-R6-RELIABILITY.md) · 历史记录不构成当前能力保证。
+- 狂奔相关：[RUNAWAY-V2](./archive/RUNAWAY-V2.md) · [续接](./archive/RUNAWAY-V2-CONTINUATION.md) · [验证编排](./archive/RUNAWAY-VERIFICATION-ORCHESTRATOR.md) · [启动闸门](./archive/RUNAWAY-STARTUP-GATES.md) · [状态机](./archive/RUNAWAY-FLOW-STATE-MACHINE.md)
+- 狂奔经验：[体验报告](./archive/RUNAWAY-EXPERIENCE.md) · [R6 可靠性](./archive/RUNAWAY-R6-RELIABILITY.md) · 历史记录不构成当前能力保证。
 - [评审指南](./REVIEW-GUIDE.md) · [历史评审汇总](./REVIEW-SUMMARY.md)
 
 ## 历史与专项材料

@@ -12,7 +12,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from project_manifest import bootstrap_manifest, lint_project_content
-from project_mode import TaskStats, compute_execution_stage
+from project_mode import compute_execution_stage
 
 
 class ProjectContentLinterTests(unittest.TestCase):
@@ -55,14 +55,12 @@ class ProjectContentLinterTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=1, total=2),
             manifest=manifest,
             project_root=self.root,
         )
-        self.assertEqual(result["stage"], "implementation")
-        self.assertEqual(result["reason"], "tasks_in_progress")
+        # No task queue: lint advice no longer rides on the stage snapshot.
+        self.assertEqual(result["stage"], "verification")
         self.assertEqual(result["blockers"], [])
-        self.assertIn("G2", result["content_lint"]["missing"])
 
 
 if __name__ == "__main__":

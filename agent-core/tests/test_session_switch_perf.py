@@ -145,27 +145,6 @@ class SessionSwitchPerfTests(unittest.TestCase):
             self.assertEqual(quick_evt["token_usage"], full_evt["token_usage"])
             self.assertEqual(quick_evt["memory_mode"], "compact")
 
-    def test_build_state_light_skips_auto_fix(self) -> None:
-        from unittest.mock import patch
-
-        from plan_agent import get_plan_agent
-        from project_mode import create_project
-
-        with temporary_agent_paths() as paths:
-            pid = "light-build"
-            create_project(paths, pid)
-            session = create_new(paths, conversation_id="_light_build_")
-            session.meta.project_id = pid
-            session.meta.project_root = f"workspace/{pid}"
-            session.meta.active_shell = "project"
-            agent = get_plan_agent(paths, pid)
-            with patch.object(agent, "auto_fix") as auto_fix:
-                agent.build_state(session, light=True)
-                auto_fix.assert_not_called()
-            with patch.object(agent, "auto_fix", return_value=[]) as auto_fix:
-                agent.build_state(session, light=False)
-                auto_fix.assert_called_once()
-
     def test_read_messages_tail(self) -> None:
         with temporary_agent_paths() as paths:
             path = paths.data / "sessions" / "_tail_msgs_" / "messages.jsonl"

@@ -179,19 +179,6 @@ class ExploreBuiltinTests(unittest.TestCase):
 
 
 class Phase48ProjectToolingTests(unittest.TestCase):
-  def test_it4804_project_tools_include_review_not_blocked(self) -> None:
-    from agent import build_llm_tools
-    from paths import AgentPaths
-
-    paths = AgentPaths.discover()
-    session = create_new(paths)
-    session.meta.active_shell = "project"
-    session.meta.project_id = "huiyi"
-    session.meta.project_root = "workspace/huiyi"
-    names = {t["function"]["name"] for t in build_llm_tools(session)}
-    self.assertIn("deliverable_review", names)
-    self.assertIn("explore", names)
-    self.assertIn("plan_partner", names)
 
   def test_it4804_automated_proxy_for_s480(self) -> None:
     """S-480 kernel half: no auto explore + review routing in prompt."""

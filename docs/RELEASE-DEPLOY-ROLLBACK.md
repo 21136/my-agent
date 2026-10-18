@@ -103,7 +103,34 @@ deploy_prepare
 如何回滚？
 ```
 
-## 7. Health Check
+## 7. Production Target Adapter
+
+仓库提供一个真实的 GitHub Actions 生产目标契约：
+
+```text
+gh_deploy plan
+→ 人工确认
+→ gh_deploy dispatch
+→ GitHub Environment: production
+→ self-hosted runner: my-agent-production
+→ MY_AGENT_DEPLOY_COMMAND
+→ gh_deploy wait
+```
+
+实现入口：`evolve/tools/coding/gh_deploy/` 与 `.github/workflows/self-hosting-deploy.yml`。
+
+硬门槛：
+
+- dispatch 必须显式 `confirmed=true`；
+- GitHub Environment 必须配置审批规则；
+- 必须存在 `my-agent-production` self-hosted runner；
+- 必须配置 `MY_AGENT_DEPLOY_COMMAND`；
+- 缺少 runner/secret 时只能得到失败或 pending，不能报告 deployed；
+- artifact_path 与 artifact_digest 若传入必须同时校验。
+
+当前仓库只实现目标适配和 fail-closed workflow，不替用户猜测云厂商、主机地址或部署命令。
+
+## 8. Health Check
 
 健康检查至少包含：
 
@@ -116,7 +143,7 @@ deploy_prepare
 
 模型回复不能作为 health check。
 
-## 8. Rollback
+## 9. Rollback
 
 回滚必须指向明确的旧版本：
 
@@ -136,7 +163,7 @@ rollback_artifact_digest
 
 禁止用 force push 改写远端历史来实现回滚。Git 回滚和运行版本回滚必须分别记录。
 
-## 9. 人工确认
+## 10. 人工确认
 
 必须确认：
 
@@ -147,7 +174,7 @@ rollback_artifact_digest
 
 dry-run 只能生成计划，不能被报告为已发布或已部署。
 
-## 10. 验收
+## 11. 验收
 
 - 能构建带 digest 的 artifact；
 - 能把 artifact 与 commit/tag 关联；

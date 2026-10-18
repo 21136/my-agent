@@ -575,11 +575,6 @@ def _mentions_project_artifacts(text: str, lower: str) -> bool:
 
 def classify_turn(user_text: str) -> TurnIntent:
     """Classify user line: recall | qa | plan | execute | research."""
-    from exec_reliability import is_runaway_harness_utterance
-
-    if is_runaway_harness_utterance(user_text):
-        return "execute"
-
     text = user_text.strip()
     lower = text.casefold()
 

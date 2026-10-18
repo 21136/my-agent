@@ -75,12 +75,12 @@ def run_deploy(payload: dict[str, Any]) -> dict[str, Any]:
     if action == "start":
         if not command:
             return {"ok": False, "error": "start requires command"}
-        service_payload = {"action": "start", "name": name, "command": command, "working_dir": payload.get("working_dir"), "ready_port": payload.get("ready_port"), "ready_regex": payload.get("ready_regex"), "ready_timeout_sec": payload.get("ready_timeout_sec", 90)}
+        service_payload = {"action": "start", "name": name, "args": command, "working_dir": payload.get("working_dir"), "ready_port": payload.get("ready_port"), "ready_regex": payload.get("ready_regex"), "ready_timeout_sec": payload.get("ready_timeout_sec", 90)}
     elif action == "rollback":
         previous = payload.get("previous_command")
         if not isinstance(previous, list) or not previous:
             return {"ok": False, "error": "rollback requires previous_command"}
-        service_payload = {"action": "restart", "name": name, "command": previous, "working_dir": payload.get("working_dir"), "ready_port": payload.get("ready_port"), "ready_regex": payload.get("ready_regex"), "ready_timeout_sec": payload.get("ready_timeout_sec", 90)}
+        service_payload = {"action": "restart", "name": name, "args": previous, "working_dir": payload.get("working_dir"), "ready_port": payload.get("ready_port"), "ready_regex": payload.get("ready_regex"), "ready_timeout_sec": payload.get("ready_timeout_sec", 90)}
     elif action == "health":
         service_payload = {"action": "wait", "name": name, "ready_port": payload.get("ready_port"), "ready_regex": payload.get("ready_regex"), "timeout_sec": payload.get("ready_timeout_sec", 90)}
     else:

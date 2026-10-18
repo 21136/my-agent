@@ -1,42 +1,96 @@
-/* theme-light (P) — DESKTOP §9.3.2 */
+/* "Neon Twin" palette — matches the pet companion (blue→violet twin tails, glossy black, RGB).
+   Tokens mirror /workspace/my-agent-redesign/tokens.css. Light = cool grey-white, dark = ink with violet. */
 :root,
 html[data-theme="light"] {
-  --ma-bg: #f6f3ed;
-  --ma-surface: #ede8df;
-  --ma-text: #2c2925;
-  --ma-text-muted: #7a746a;
-  --ma-border: #d4cec4;
-  --ma-accent: #b4532a;
-  --ma-accent-muted: #c4a882;
-  --ma-danger: #9b4d4d;
-  --ma-focus: rgba(180, 83, 42, 0.4);
-  --ma-grow-flow-a: #ede0c8;
-  --ma-grow-flow-b: #d4a06a;
-  --ma-grow-flow-c: #b4532a;
-  --ma-project-bg: #eef3f8;
-  --ma-project-surface: #f8fafc;
-  --ma-project-accent: #2563eb;
-  --ma-project-flow-a: #93c5fd;
-  --ma-project-flow-b: #2563eb;
-  --ma-project-flow-c: #0d9488;
-  --ma-font: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --ma-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --ma-bg: #f3f4f8;
+  --ma-surface: #ffffff;
+  --ma-surface-2: #e9ebf2;
+  --ma-text: #171627;
+  --ma-text-muted: #5f5d78;
+  --ma-text-faint: #66647f;
+  --ma-border: rgb(60 60 120 / 0.14);
+  --ma-border-strong: rgb(60 60 120 / 0.22);
+  --ma-accent: #4f46e5;
+  --ma-accent-muted: #8b8cf0;
+  --ma-danger: #e11d48;
+  --ma-focus: rgb(91 92 255 / 0.38);
+  --ma-grow-flow-a: #dfe6ff;
+  --ma-grow-flow-b: #b9b5ff;
+  --ma-grow-flow-c: #8b7cf6;
+  --ma-project-bg: #f3f4f8;
+  --ma-project-surface: #ffffff;
+  --ma-project-accent: #4f46e5;
+  --ma-project-flow-a: #c7d7ff;
+  --ma-project-flow-b: #9aa6ff;
+  --ma-project-flow-c: #b69cff;
+  --ma-font: "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --ma-mono: "JetBrains Mono", "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --nt-gradient: linear-gradient(135deg, #3d8bff 0%, #5b5cff 48%, #8b5cf6 100%);
+  --nt-gradient-soft: linear-gradient(135deg, rgb(61 139 255 / 0.14), rgb(139 92 246 / 0.14));
+  --nt-bubble: linear-gradient(135deg, #3b7cf0 0%, #5a55e8 55%, #7c4fe0 100%);
+  --nt-glow: 0 0 0 1px rgb(91 92 255 / 0.30), 0 0 16px rgb(91 92 255 / 0.22);
+  --nt-shadow: 0 10px 28px rgb(40 40 90 / 0.10);
+  --nt-glass: rgb(255 255 255 / 0.66);
+  --nt-hover: rgb(91 92 255 / 0.07);
+  --nt-selected: rgb(91 92 255 / 0.11);
+  --nt-inline-code-bg: rgb(91 92 255 / 0.10);
+  --nt-inline-code-fg: #4338ca;
+  --nt-bullet: #5b5cff;
+  --nt-code-bg: #12111d;
+  --nt-code-border: rgb(150 140 255 / 0.16);
+  --nt-code-text: #dcdaf0;
+  --nt-st-idle: #6b7194;
+  --nt-st-thinking: #2563eb;
+  --nt-st-coding: #0e7490;
+  --nt-st-done: #7c3aed;
+  --nt-st-error: #e11d48;
+  --nt-st-warn: #b45309;
+  --nt-st-ok: #059669;
+  --nt-r-sm: 8px;
+  --nt-r-md: 12px;
+  --nt-r-lg: 16px;
 }
 
-/* theme-dark (R) — DESKTOP §9.3.2 */
 html[data-theme="dark"] {
-  --ma-bg: #1a1917;
-  --ma-surface: #252320;
-  --ma-text: #e6e2da;
-  --ma-text-muted: #9a948a;
-  --ma-border: #3a3834;
-  --ma-accent: #d4a06a;
-  --ma-accent-muted: #a67c52;
-  --ma-danger: #c97b7b;
-  --ma-focus: rgba(212, 160, 106, 0.45);
-  --ma-grow-flow-a: #2a241c;
-  --ma-grow-flow-b: #4a3828;
-  --ma-grow-flow-c: #8b5a32;
+  --ma-bg: #0b0a12;
+  --ma-surface: #13121d;
+  --ma-surface-2: #08070d;
+  --ma-text: #e9e7f5;
+  --ma-text-muted: #a9a6c2;
+  --ma-text-faint: #8a87a6;
+  --ma-border: rgb(150 140 255 / 0.13);
+  --ma-border-strong: rgb(150 140 255 / 0.22);
+  --ma-accent: #8b8cff;
+  --ma-accent-muted: #6d5fd6;
+  --ma-danger: #fb7185;
+  --ma-focus: rgb(124 140 255 / 0.45);
+  --ma-grow-flow-a: #121a33;
+  --ma-grow-flow-b: #22205a;
+  --ma-grow-flow-c: #3a2470;
+  --ma-project-bg: #0b0a12;
+  --ma-project-surface: #13121d;
+  --ma-project-accent: #8b8cff;
+  --ma-project-flow-a: #121a33;
+  --ma-project-flow-b: #22205a;
+  --ma-project-flow-c: #3a2470;
+
+  --nt-glow: 0 0 0 1px rgb(124 140 255 / 0.35), 0 0 18px rgb(91 92 255 / 0.35);
+  --nt-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
+  --nt-glass: rgb(22 20 36 / 0.62);
+  --nt-hover: rgb(139 92 246 / 0.10);
+  --nt-selected: rgb(91 92 255 / 0.16);
+  --nt-inline-code-bg: rgb(139 92 246 / 0.16);
+  --nt-inline-code-fg: #d6c8ff;
+  --nt-bullet: #a78bfa;
+  --nt-code-bg: #0e0d18;
+  --nt-st-idle: #8b93b8;
+  --nt-st-thinking: #6ea8ff;
+  --nt-st-coding: #22d3ee;
+  --nt-st-done: #a78bfa;
+  --nt-st-error: #fb7185;
+  --nt-st-warn: #fbbf24;
+  --nt-st-ok: #34d399;
 }
 
 *,
@@ -54,6 +108,7 @@ body {
   font-family: var(--ma-font);
   font-size: 15px;
   line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {

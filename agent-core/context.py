@@ -512,8 +512,8 @@ def build_llm_messages(
             result = repair_tool_messages([anchor, *messages[start:]])
     else:
         result = repair_tool_messages(messages[start:])
-    if not bool(getattr(session.meta, "project_runaway_enabled", False)):
-        result = _drop_harness_chat_messages(result)
+    # Legacy [Harness]/狂奔续接 lines in old transcripts never reach the model.
+    result = _drop_harness_chat_messages(result)
     return _attach_multimodal_images(session, result) if include_images else result
 
 
@@ -758,7 +758,7 @@ def build_digest_summarize_prompt(*, goal: str, transcript: str, project_hint: s
         "将以下对话片段压缩为结构化摘要，用于后续续聊时回忆上下文。\n"
         "要求：\n"
         f"- 严格使用以下 Markdown 二级标题（缺一不可）：\n{sections}\n"
-        "- 「活跃项目」须写明 project_root 与未决 task（以 TASKS.md 为准，勿猜）\n"
+        "- 「活跃项目」须写明 project_root 与未完成的工作（以 git diff、会话和最近一次验证为准，勿猜）\n"
         "- 只输出摘要正文，不要前言或结语\n"
         "- 保留具体路径、命令、文件名与用户明确约束\n"
         "- 若有关键事实需长期保留，在「用户约束」末尾注明：可说「记住」写入 evolve\n"
@@ -771,8 +771,7 @@ def _project_digest_hint(session: Session) -> str:
     if session.meta.active_shell != "project" or not session.meta.project_root:
         return ""
     return (
-        f"根 {session.meta.project_root}；计划 {session.meta.project_plan_status or 'draft'}；"
-        "未决见 TASKS.md（须 read_file）"
+        f"根 {session.meta.project_root}；未完成工作以 git diff 与最近验证为准"
     )
 
 

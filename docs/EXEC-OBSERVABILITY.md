@@ -1,7 +1,7 @@
 # 执行可观测（EXEC-OBSERVABILITY）
 
 > 版本 **0.2.1** · 2026-08-04 · **状态：M1 done**（呈现细节交叉 [DESKTOP.md](./DESKTOP.md) §3.2.2 / UX-021）  
-> Phase **27** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [UX-POLISH.md](./UX-POLISH.md)
+> Phase **27** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [UX-POLISH.md](./UX-POLISH.md)
 
 ## 0. 为什么开这个 Phase
 

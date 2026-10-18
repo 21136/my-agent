@@ -39,18 +39,7 @@ from main import ConversationRepl, ReplConfig
 from paths import AgentPaths
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
-from runtime_guards import TurnWatchdog, runaway_wall_sec, stall_watchdog_sec, turn_wall_sec
-from runaway_flow import normalize_checkpoint
-from user_copy import (
-    harness_process_resume_line,
-    runaway_auto_chain_notice,
-    runaway_duplicate_lease_notice,
-    runaway_paused_notice,
-    runaway_release_wait_turn_notice,
-    runaway_resume_busy_notice,
-    runaway_resume_lock_timeout_notice,
-    runaway_turn_start_notice,
-)
+from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
 from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
@@ -66,34 +55,6 @@ EmitFn = Callable[[dict[str, Any]], None]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_CONFIRM_TIMEOUT_SEC = 90.0
 TURN_LOCK = asyncio.Lock()
-
-
-def _runaway_lease_key(session: Session) -> str:
-    project_id = str(getattr(session.meta, "project_id", "") or "").strip()
-    return project_id
-
-
-def _acquire_runaway_lease(
-    session: Session,
-    paths: AgentPaths,
-    *,
-    reclaim_local_orphan: bool = False,
-) -> Any | None:
-    key = _runaway_lease_key(session)
-    if not key:
-        return None
-    from runaway_lease import acquire_runaway_lease_with_reclaim
-
-    return acquire_runaway_lease_with_reclaim(
-        paths,
-        key,
-        reclaim_local_orphan=reclaim_local_orphan,
-    )
-
-
-def _release_runaway_lease(lease: Any | None) -> None:
-    if lease is not None:
-        lease.release()
 
 
 def confirm_timeout_sec() -> float:
@@ -161,7 +122,6 @@ class WsBridge:
     lifecycle: ExecutionLifecycle = field(default_factory=ExecutionLifecycle, repr=False)
     _pending_confirm_id: str | None = field(default=None, init=False)
     _cancel_turn: Callable[[], None] | None = field(default=None, init=False, repr=False)
-    _runaway_chain_busy: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def __post_init__(self) -> None:
         self.turn_watchdog = TurnWatchdog(
@@ -193,8 +153,8 @@ class WsBridge:
         payload["run_id"] = snapshot.run_id
         return payload
 
-    def begin_turn(self, *, runaway: bool = False, mode: str | None = None) -> bool:
-        mode = mode or ("runaway" if runaway else "ordinary")
+    def begin_turn(self, *, mode: str | None = None) -> bool:
+        mode = mode or "ordinary"
         try:
             snapshot = self.lifecycle.start_or_activate(mode)
         except RuntimeError as exc:
@@ -202,12 +162,12 @@ class WsBridge:
             return False
         self.cancel_event.clear()
         if self.turn_watchdog is not None:
-            self.turn_watchdog.wall_sec = runaway_wall_sec() if runaway else turn_wall_sec()
+            self.turn_watchdog.wall_sec = turn_wall_sec()
             self.turn_watchdog.begin()
         self.emit(snapshot.to_event())
         return True
 
-    def begin_continuation(self, mode: str = "runaway") -> str | None:
+    def begin_continuation(self, mode: str = "continuation") -> str | None:
         try:
             snapshot = self.lifecycle.enqueue(mode)
         except RuntimeError as exc:
@@ -406,9 +366,6 @@ class WsBridge:
             "session.history",
             "session.memory",
             "project.state",
-            "project.plan.state",
-            "plan.subagent.start",
-            "plan.subagent.done",
             "review.subagent.start",
             "review.subagent.done",
             "notice",
@@ -435,8 +392,7 @@ class WsBridge:
             "stopping",
         }
         turn_busy = self._turn_busy.is_set()
-        chain_busy = self._runaway_chain_busy.is_set()
-        if not turn_busy and not chain_busy and not lifecycle_active:
+        if not turn_busy and not lifecycle_active:
             self.emit({"type": "notice", "text": "当前无进行中的回合"})
             return False
 
@@ -453,16 +409,7 @@ class WsBridge:
             self._input_queue.put("")
         if turn_busy and self._cancel_turn is not None:
             self._cancel_turn()
-        if chain_busy and not turn_busy:
-            self.emit(
-                {
-                    "type": "notice",
-                    "text": "正在停止自动续接…",
-                    "runaway_cancel_available": False,
-                }
-            )
-        else:
-            self.emit({"type": "notice", "text": "正在停止当前回合…"})
+        self.emit({"type": "notice", "text": "正在停止当前回合…"})
         return True
 
     def deliver_confirm(self, request_id: str, choice: str) -> bool:
@@ -503,12 +450,9 @@ class WsBridge:
         self.emit(models_list_event(self.paths))
         self.emit(_proposals_payload(self.paths))
         if session.meta.project_id:
-            from project_api import project_plan_state_payload, project_state_payload
+            from project_api import project_state_payload
 
             self.emit(project_state_payload(session, self.paths))
-            plan_state = project_plan_state_payload(session, self.paths)
-            if plan_state is not None:
-                self.emit(plan_state)
 
     def emit_assistant(self, text: str) -> None:
         # C9: allow empty text so desktop always gets assistant.done.
@@ -602,179 +546,9 @@ def _repl_refreshes_session_state(line: str) -> bool:
     return lower in {"新会话", "new", "换主题"}
 
 
-def _runaway_v2_resume_phase(
-    repl: ConversationRepl,
-    paths: AgentPaths,
-) -> str | None:
-    """Return a terminal v2 phase before a stale resume can start a turn."""
-    from runaway_v2 import runaway_v2_enabled
-
-    if not runaway_v2_enabled(repl.session):
-        return None
-    pid = str(repl.session.meta.project_id or "").strip()
-    if not pid:
-        return None
-
-    if str(getattr(repl.session.meta, "project_runaway_paused_reason", "") or "").strip():
-        return "human"
-
-    from runaway_v2.continuation import pending_runaway_work, repair_stale_v2_plan_status
-
-    repair_stale_v2_plan_status(paths, repl.session)
-
-    if pending_runaway_work(paths, pid, repl.session) is not None:
-        return None
-
-    # ``pending_runaway_work`` intentionally returns None for both terminal
-    # phases. Re-derive the phase so a stale UI resume cannot invoke _run_line.
-    from runaway_v2.phase import derive_phase
-
-    phase = derive_phase(
-        paths,
-        pid,
-        plan_status=str(repl.session.meta.project_plan_status or "draft"),
-    )
-    if phase.phase in {"release_wait", "human"}:
-        return phase.phase
-    return None
-
-
 def _refresh_repl_project_binding(repl: ConversationRepl) -> None:
     """Keep the long-lived executor in sync with project controls changed by the UI."""
     repl.agent.executor.session.refresh_bound_project_meta()
-
-
-RUNAWAY_CHAIN_COOLDOWN_SEC = 0.8
-RUNAWAY_CHAIN_RETRY_ATTEMPTS = 4
-RUNAWAY_CHAIN_RETRY_DELAY_SEC = 1.0
-RUNAWAY_RESUME_LOCK_TIMEOUT_SEC = 8.0
-
-
-async def _try_acquire_turn_lock(
-    timeout_sec: float = RUNAWAY_RESUME_LOCK_TIMEOUT_SEC,
-    *,
-    cancel_event: threading.Event | None = None,
-) -> bool:
-    deadline = asyncio.get_running_loop().time() + max(0.1, timeout_sec)
-    while True:
-        if cancel_event is not None and cancel_event.is_set():
-            return False
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return False
-        try:
-            await asyncio.wait_for(TURN_LOCK.acquire(), timeout=min(0.25, remaining))
-            return True
-        except TimeoutError:
-            continue
-
-
-async def _chain_runaway_after_turn(
-    repl: ConversationRepl,
-    bridge: WsBridge,
-    paths: AgentPaths,
-    finish_reason: str,
-    *,
-    lock_held: bool = False,
-) -> None:
-    # v2 owns continuation inside RunawayRuntime (orchestration kernel). Keeping this server
-    # fallback for v1 is intentional, but running it for v2 creates a second
-    # owner that can race the controller and swallow user input.
-    from runaway_v2 import runaway_v2_enabled
-
-    if runaway_v2_enabled(repl.session):
-        return
-
-    # The agent-level decision is intentionally kept for compatibility with
-    # v1, but v2 must re-check disk truth immediately before announcing or
-    # starting another turn. A stale in-memory decision must never reopen a
-    # release_wait/human project.
-    terminal_phase = _runaway_v2_resume_phase(repl, paths)
-    if terminal_phase in {"release_wait", "human"}:
-        return
-    if not repl.agent.should_chain_runaway_after_turn(finish_reason):
-        if getattr(repl.session.meta, "project_runaway_enabled", False):
-            skip = repl.agent.runaway_chain_skip_reason(finish_reason)
-            if skip:
-                bridge.emit({"type": "turn.notice", "level": "info", "text": skip})
-        return
-
-    continuation_run_id = bridge.begin_continuation()
-    if continuation_run_id is None:
-        return
-    bridge._runaway_chain_busy.set()
-    bridge.emit(
-        {
-            "type": "turn.notice",
-            "level": "info",
-            "text": runaway_auto_chain_notice(),
-            "runaway_cancel_available": True,
-        }
-    )
-    try:
-        for attempt in range(RUNAWAY_CHAIN_RETRY_ATTEMPTS):
-            delay = RUNAWAY_CHAIN_COOLDOWN_SEC if attempt == 0 else RUNAWAY_CHAIN_RETRY_DELAY_SEC
-            await asyncio.sleep(delay)
-            if bridge.cancel_event.is_set():
-                bridge.emit({"type": "notice", "text": "自动续接已停止。"})
-                return
-            if bridge._turn_busy.is_set():
-                continue
-            acquired_here = False
-            if not lock_held:
-                if not await _try_acquire_turn_lock(
-                    cancel_event=bridge.cancel_event,
-                ):
-                    continue
-                acquired_here = True
-            try:
-                if bridge.cancel_event.is_set():
-                    bridge.emit({"type": "notice", "text": "自动续接已停止。"})
-                    return
-                if bridge._turn_busy.is_set():
-                    continue
-                bridge.emit(
-                    {
-                        "type": "turn.notice",
-                        "level": "info",
-                        "text": runaway_auto_chain_notice(),
-                        "runaway_cancel_available": False,
-                    }
-                )
-                await _run_line(
-                    repl,
-                    bridge,
-                    repl.agent.runaway_chain_user_line(),
-                    paths,
-                    lock_held=True,
-                )
-                return
-            finally:
-                if acquired_here and TURN_LOCK.locked():
-                    TURN_LOCK.release()
-    finally:
-        bridge._runaway_chain_busy.clear()
-        bridge.finish_execution(
-            "cancelled" if bridge.cancel_event.is_set() else "continuation_finished",
-            ok=not bridge.cancel_event.is_set(),
-            run_id=continuation_run_id,
-        )
-        bridge.emit(
-            {
-                "type": "turn.notice",
-                "level": "info",
-                "text": "自动续接等待已结束。",
-                "runaway_cancel_available": False,
-            }
-        )
-
-    bridge.emit(
-        {
-            "type": "turn.notice",
-            "level": "warn",
-            "text": "自动执行通道暂时被占用，未能自动续接；请点侧栏「手动续接」或发送「继续」。",
-        }
-    )
 
 
 async def _run_line(
@@ -786,50 +560,12 @@ async def _run_line(
     lock_held: bool = False,
 ) -> None:
     repl.last_turn_finish_reason = None
-    runaway = bool(getattr(repl.session.meta, "project_runaway_enabled", False))
     from session import is_terminal_harness
 
-    execution_mode = "runaway" if runaway else "ordinary"
-    if is_terminal_harness(repl.session.meta):
-        execution_mode = "terminal"
-    lease = (
-        _acquire_runaway_lease(
-            repl.session,
-            paths,
-            reclaim_local_orphan=not bridge._turn_busy.is_set(),
-        )
-        if runaway
-        else None
-    )
-    if runaway and lease is None:
-        bridge.emit({"type": "notice", "text": runaway_duplicate_lease_notice()})
-        # The attempt was rejected before Agent.run_turn, but it is still an
-        # observable execution request and must close the lifecycle it may
-        # have queued (for example, a raced continuation resume).
-        if bridge.begin_turn(runaway=True, mode=execution_mode):
-            bridge.end_turn()
-            bridge.finish_execution(
-                "runaway_duplicate",
-                ok=False,
-                final_state="failed",
-            )
-        bridge.emit_turn_event(
-            {"type": "turn.end", "ok": False, "finish_reason": "runaway_duplicate"}
-        )
-        return
-    runaway = bool(getattr(repl.session.meta, "project_runaway_enabled", False))
-    if not bridge.begin_turn(runaway=runaway, mode=execution_mode):
-        _release_runaway_lease(lease)
+    execution_mode = "terminal" if is_terminal_harness(repl.session.meta) else "ordinary"
+    if not bridge.begin_turn(mode=execution_mode):
         return
     bridge._turn_busy.set()
-    if runaway:
-        bridge.emit(
-            {
-                "type": "turn.notice",
-                "level": "info",
-                "text": runaway_turn_start_notice(),
-            }
-        )
     ok = True
     finish_reason = "completed"
     try:
@@ -838,16 +574,11 @@ async def _run_line(
         finish_reason = bridge.resolve_turn_finish_reason(agent_reason)
         if finish_reason in {"cancelled", "timeout"}:
             ok = False
-            if getattr(repl.session.meta, "project_runaway_enabled", False):
-                reason = "用户停止了自动运行" if finish_reason == "cancelled" else "运行时间达到上限"
-                repl.agent._pause_runaway(reason)
             repl.session.save()
         elif outcome == "stop":
             bridge.emit({"type": "notice", "text": "会话已保存"})
             finish_reason = "cancelled"
             ok = False
-            if getattr(repl.session.meta, "project_runaway_enabled", False):
-                repl.agent._pause_runaway("用户停止了自动运行")
         else:
             from project_api import after_turn_project_hooks
 
@@ -857,8 +588,6 @@ async def _run_line(
         ok = False
         finish_reason = "error"
         log_sidecar_exception(f"_run_line failed line={line!r}", exc)
-        if getattr(repl.session.meta, "project_runaway_enabled", False):
-            repl.agent._pause_runaway("自动运行异常", error=str(exc))
         emit_error(bridge, str(exc))
     finally:
         bridge._turn_busy.clear()
@@ -870,15 +599,6 @@ async def _run_line(
             bridge.emit_turn_event(
                 {"type": "turn.end", "ok": ok, "finish_reason": finish_reason}
             )
-        _release_runaway_lease(lease)
-
-    await _chain_runaway_after_turn(
-        repl,
-        bridge,
-        paths,
-        finish_reason,
-        lock_held=lock_held,
-    )
 
 
 class WsSessionHandler:
@@ -903,16 +623,6 @@ class WsSessionHandler:
         sender_task = asyncio.create_task(self._sender(websocket, outbox))
         bridge.emit_session_state(repl.session)
         emit_corruption_notices(bridge.emit, repl.session)
-        checkpoint = normalize_checkpoint(
-            getattr(repl.session.meta, "project_runaway_checkpoint", "")
-        )
-        if (
-            getattr(repl.session.meta, "project_runaway_enabled", False)
-            and checkpoint in {"preparing", "implementing", "verifying", "repairing"}
-        ):
-            asyncio.create_task(
-                self._resume_runaway(repl, bridge)
-            )
 
         try:
             async for raw in websocket:
@@ -1010,86 +720,6 @@ class WsSessionHandler:
             return True
 
         return False
-
-    async def _resume_runaway(
-        self,
-        repl: ConversationRepl,
-        bridge: WsBridge,
-    ) -> None:
-        continuation_run_id = bridge.begin_continuation()
-        if continuation_run_id is None:
-            return
-        bridge._runaway_chain_busy.set()
-        bridge.emit(
-            {
-                "type": "turn.notice",
-                "level": "info",
-                "text": "正在等待自动执行通道…",
-                "runaway_cancel_available": True,
-            }
-        )
-        try:
-            if bridge._turn_busy.is_set():
-                return
-            if not await _try_acquire_turn_lock(cancel_event=bridge.cancel_event):
-                if bridge.cancel_event.is_set():
-                    bridge.emit({"type": "notice", "text": "自动续接已停止。"})
-                else:
-                    bridge.emit(
-                        {
-                            "type": "notice",
-                            "text": runaway_resume_lock_timeout_notice(),
-                            "runaway_cancel_available": True,
-                        }
-                    )
-                return
-            try:
-                if bridge.cancel_event.is_set() or bridge._turn_busy.is_set():
-                    return
-                if _runaway_v2_resume_phase(repl, self.paths) in {"release_wait", "human"}:
-                    return
-                resume_line = harness_process_resume_line()
-                from runaway_v2 import runaway_v2_enabled
-
-                if runaway_v2_enabled(repl.session):
-                    from runaway_v2.resume import apply_resume
-
-                    pid = str(repl.session.meta.project_id or "").strip()
-                    if pid:
-                        _checklist, resume_line = apply_resume(self.paths, pid)
-                bridge.emit(
-                    {
-                        "type": "turn.notice",
-                        "level": "info",
-                        "text": "正在恢复自动运行…",
-                        "runaway_cancel_available": False,
-                    }
-                )
-                await _run_line(
-                    repl,
-                    bridge,
-                    resume_line,
-                    self.paths,
-                    lock_held=True,
-                )
-            finally:
-                if TURN_LOCK.locked():
-                    TURN_LOCK.release()
-        finally:
-            bridge._runaway_chain_busy.clear()
-            bridge.finish_execution(
-                "cancelled" if bridge.cancel_event.is_set() else "continuation_finished",
-                ok=not bridge.cancel_event.is_set(),
-                run_id=continuation_run_id,
-            )
-            bridge.emit(
-                {
-                    "type": "turn.notice",
-                    "level": "info",
-                    "text": "自动运行恢复等待已结束。",
-                    "runaway_cancel_available": False,
-                }
-            )
 
     async def _dispatch(
         self,
@@ -1351,12 +981,8 @@ class WsSessionHandler:
             await self._dispatch_doc(message, repl, bridge)
             return
 
-        if isinstance(msg_type, str) and msg_type == "project.task.add":
-            await self._dispatch_task_add(message, repl, bridge)
-            return
-
         if isinstance(msg_type, str) and (
-            msg_type.startswith("project.") or msg_type == "plan.response"
+            msg_type.startswith("project.")
         ):
             await self._dispatch_project(message, repl, bridge)
             return
@@ -1384,65 +1010,15 @@ class WsSessionHandler:
         except ProjectApiError as exc:
             emit_error(bridge, str(exc))
 
-    async def _dispatch_task_add(
-        self,
-        message: dict[str, Any],
-        repl: ConversationRepl,
-        bridge: WsBridge,
-    ) -> None:
-        from project_api import ProjectApiError, dispatch_task_add
-
-        try:
-            payload = await asyncio.to_thread(
-                dispatch_task_add, repl.session, self.paths, message
-            )
-            _refresh_repl_project_binding(repl)
-            if isinstance(payload, dict) and "_events" in payload:
-                if "_session" in payload:
-                    repl.session = payload["_session"]
-                    repl._rebind_agent()
-                for event in payload["_events"]:
-                    bridge.emit(event)
-                return
-            bridge.emit(payload)
-        except ProjectApiError as exc:
-            emit_error(bridge, str(exc))
-
     async def _dispatch_project(
         self,
         message: dict[str, Any],
         repl: ConversationRepl,
         bridge: WsBridge,
     ) -> None:
-        from project_api import ProjectApiError, dispatch_project_message, handle_plan_response
+        from project_api import ProjectApiError, dispatch_project_message
 
         try:
-            was_runaway_enabled = bool(repl.session.meta.project_runaway_enabled)
-            runaway_should_run_line = (
-                message.get("type") == "project.runaway.set"
-                and message.get("enabled") is True
-                and (
-                    message.get("resume") is True
-                    or not was_runaway_enabled
-                )
-            )
-            if (
-                message.get("type") == "project.runaway.set"
-                and message.get("enabled") is False
-                and bridge._turn_busy.is_set()
-            ):
-                bridge.request_cancel()
-            if message.get("type") == "plan.response":
-                await asyncio.to_thread(
-                    handle_plan_response,
-                    repl.session,
-                    self.paths,
-                    message,
-                    bridge.emit,
-                )
-                _refresh_repl_project_binding(repl)
-                repl.session.save()
-                return
             payload = await asyncio.to_thread(
                 dispatch_project_message,
                 repl.session,
@@ -1456,103 +1032,6 @@ class WsSessionHandler:
                     repl._rebind_agent()
                 for event in payload["_events"]:
                     bridge.emit(event)
-                if runaway_should_run_line and bool(repl.session.meta.project_runaway_enabled):
-                    from runaway_v2 import runaway_v2_enabled
-
-                    if runaway_v2_enabled(repl.session):
-                        terminal_phase = _runaway_v2_resume_phase(repl, self.paths)
-                        if terminal_phase == "release_wait":
-                            bridge.emit(
-                                {
-                                    "type": "notice",
-                                    "text": runaway_release_wait_turn_notice(),
-                                }
-                            )
-                            return
-                        if terminal_phase == "human":
-                            bridge.emit(
-                                {
-                                    "type": "notice",
-                                    "text": runaway_paused_notice("当前验收或项目状态需要人工处理"),
-                                }
-                            )
-                            return
-                    if bridge._runaway_chain_busy.is_set():
-                        bridge.emit({"type": "notice", "text": runaway_resume_busy_notice()})
-                        return
-                    continuation_run_id = bridge.begin_continuation()
-                    if continuation_run_id is None:
-                        return
-                    bridge._runaway_chain_busy.set()
-                    bridge.emit(
-                        {
-                            "type": "turn.notice",
-                            "level": "info",
-                            "text": "正在等待自动执行通道…",
-                            "runaway_cancel_available": True,
-                        }
-                    )
-                    try:
-                        if bridge._turn_busy.is_set():
-                            bridge.emit({"type": "notice", "text": runaway_resume_busy_notice()})
-                            return
-                        if not await _try_acquire_turn_lock(cancel_event=bridge.cancel_event):
-                            if bridge.cancel_event.is_set():
-                                bridge.emit({"type": "notice", "text": "自动续接已停止。"})
-                            else:
-                                bridge.emit(
-                                    {
-                                        "type": "notice",
-                                        "text": runaway_resume_lock_timeout_notice(),
-                                        "runaway_cancel_available": True,
-                                    }
-                                )
-                            return
-                        try:
-                            if bridge.cancel_event.is_set() or bridge._turn_busy.is_set():
-                                return
-                            resume_line = harness_process_resume_line()
-                            from runaway_v2 import runaway_v2_enabled
-
-                            if runaway_v2_enabled(repl.session):
-                                from runaway_v2.resume import apply_resume
-
-                                pid = str(repl.session.meta.project_id or "").strip()
-                                if pid:
-                                    _checklist, resume_line = apply_resume(self.paths, pid)
-                            bridge.emit(
-                                {
-                                    "type": "turn.notice",
-                                    "level": "info",
-                                    "text": "正在恢复自动运行…",
-                                    "runaway_cancel_available": False,
-                                }
-                            )
-                            await _run_line(
-                                repl,
-                                bridge,
-                                resume_line,
-                                self.paths,
-                                lock_held=True,
-                            )
-                        finally:
-                            if TURN_LOCK.locked():
-                                TURN_LOCK.release()
-                    finally:
-                        bridge._runaway_chain_busy.clear()
-                        bridge.finish_execution(
-                            "cancelled" if bridge.cancel_event.is_set() else "continuation_finished",
-                            ok=not bridge.cancel_event.is_set(),
-                            run_id=continuation_run_id,
-                        )
-                        bridge.emit(
-                            {
-                                "type": "turn.notice",
-                                "level": "info",
-                                "text": "自动运行恢复等待已结束。",
-                                "runaway_cancel_available": False,
-                            }
-                        )
                 return
             bridge.emit(payload)
         except ProjectApiError as exc:

@@ -111,8 +111,6 @@ class S160ReliabilityPayloadTests(unittest.TestCase):
         panel = (
             _ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts"
         ).read_text(encoding="utf-8")
-        self.assertIn("sidebar-reliability", panel)
-        self.assertIn("renderReliabilityStrip", panel)
         self.assertIn("turnPostcondition", panel)
         css = (_ROOT / "desktop" / "src" / "shells" / "unified" / "unified.css").read_text(
             encoding="utf-8"

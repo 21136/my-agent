@@ -240,7 +240,7 @@
 | S-UX-028j | 幂等 resume | 不刷「狂奔已恢复」notice |
 | S-UX-028k | plan_partner 残留提案 | 自动续链直写；不要求审阅采纳 |
 | S-UX-028l | idle 间隙 | 2.5s 内自动续接或可见「手动续接」 |
-| S-UX-028m | 发「继续」 | ≥3 段内链/跨 turn，不单轮静默停；**T-6107 核心已接入，正式手工验收待做**（见 [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
+| S-UX-028m | 发「继续」 | ≥3 段内链/跨 turn，不单轮静默停；**T-6107 核心已接入，正式手工验收待做**（见 [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md)） |
 
 ### 实施分期
 

@@ -1,6 +1,6 @@
 ---
 name: implementation-plan
-description: Produce a bite-sized TDD implementation plan tied to real files, tests, evidence, and recovery boundaries.
+description: When the user asks for a plan, produce a short TDD-style implementation plan tied to real files and verify commands; guidance, not a gate.
 triggers:
   - 实施计划
   - 拆任务
@@ -15,8 +15,8 @@ allowed_tools:
   - write_text
   - patch_file
 risk_level: low
-verification: every task has files, RED/GREEN verification, ownership, and a concrete completion gate
-version: 1.0.0
+verification: every step names its files and a verify command with an expected exit code
+version: 1.1.0
 ---
 
 # Implementation plan
@@ -24,5 +24,5 @@ version: 1.0.0
 1. Read the governing spec, current code path, tests, and dirty-worktree constraints before writing the plan.
 2. Split work by responsibility and file ownership; do not overwrite unrelated dirty changes.
 3. For behavior changes use RED → expected failure → minimal implementation → focused GREEN → regression.
-4. Each task must name its exact files, command, expected evidence, and stop/recovery condition. Avoid “later”, “appropriate”, and untestable placeholders.
-5. The plan is a guide, not permission to change code; implementation begins only when the user’s current request is execute.
+4. Each step names its exact files and a verify command with the expected exit code. Avoid "later", "appropriate", and untestable placeholders.
+5. The plan is advice, not an approval step: no plan confirmation is needed before coding, and nothing is written to `TASKS.md`. Keep the plan in the chat (or a doc the user asked for).

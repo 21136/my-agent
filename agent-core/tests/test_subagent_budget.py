@@ -7,17 +7,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from subagent import (
-    explore_builtin_max_per_turn,
-    plan_subagent_tool_rounds,
-    plan_subagent_summary_max_chars,
-    resolve_subagent_max_rounds,
-    review_subagent_max_rounds,
-    subagent_checker_max,
-    subagent_explore_max,
-    subagent_hard_cap,
-    synthesize_cap_summary,
-)
+from subagent import (explore_builtin_max_per_turn, plan_subagent_summary_max_chars, resolve_subagent_max_rounds, review_subagent_max_rounds, subagent_checker_max, subagent_explore_max, subagent_hard_cap, synthesize_cap_summary)
 from tools.schema import to_json, tool_ok
 
 
@@ -34,8 +24,6 @@ class TestSubagentBudgetDefaults(unittest.TestCase):
     def test_it4906_parent_invoke_defaults(self) -> None:
         self.assertEqual(explore_builtin_max_per_turn(), 2)
 
-    def test_plan_tool_rounds_default(self) -> None:
-        self.assertGreaterEqual(plan_subagent_tool_rounds(), 4)
 
     def test_plan_summary_default(self) -> None:
         self.assertGreaterEqual(plan_subagent_summary_max_chars(), 3500)
@@ -124,54 +112,6 @@ class TestExploreMaxRoundsPassthrough(unittest.TestCase):
             self.assertTrue(result.ok)
             mock_run.assert_called_once()
             self.assertEqual(mock_run.call_args.kwargs.get("max_rounds"), 20)
-
-
-class TestPlanMultiToolRounds(unittest.TestCase):
-    def test_it4904_plan_executes_second_tool_round(self) -> None:
-        from plan_agent import PlanAgent
-
-        agent = PlanAgent.__new__(PlanAgent)
-        agent.project_id = "demo"
-        agent.paths = MagicMock()
-        agent._plan_transcript = []
-        agent._pending_gated = {}
-        agent._last_partner_notices = []
-        agent._degradation_level = "L0"
-        agent._plan_model = "mock"
-
-        calls = {"n": 0}
-
-        def fake_parse(raw: str):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return [], True, "", [{"name": "read_file", "arguments": {"path": "TASKS.md"}}]
-            if calls["n"] == 2:
-                return [], True, "第二轮查跑完成", []
-            return [], True, "done", []
-
-        agent._parse_operations_json = fake_parse
-        agent._execute_plan_tool_calls = MagicMock(return_value=["read_file → ok"])
-        agent._finalize_plan_reply = lambda out: out
-        agent.append_plan_turn = MagicMock()
-        agent.auto_fix = MagicMock(return_value=[])
-        agent._plan_channel_fallback = MagicMock(return_value="fallback")
-        agent._llm_noop_summary = MagicMock(return_value="noop")
-
-        mock_llm = MagicMock()
-        mock_llm.chat.return_value = MagicMock(content="{}")
-        agent._ensure_llm = MagicMock(return_value=mock_llm)
-
-        with patch("plan_agent.project_dir") as mock_root:
-            mock_root.return_value = MagicMock()
-            mock_root.return_value.__truediv__ = lambda _s, name: MagicMock(
-                is_file=MagicMock(return_value=False)
-            )
-            with patch("subagent.plan_subagent_tool_rounds", return_value=4):
-                out = agent.reason_about_intent("对照代码勾 TASKS", record_user=False)
-
-        self.assertEqual(calls["n"], 2)
-        self.assertIn("第二轮查跑完成", out)
-        agent._execute_plan_tool_calls.assert_called_once()
 
 
 if __name__ == "__main__":

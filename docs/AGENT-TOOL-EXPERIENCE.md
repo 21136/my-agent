@@ -1,7 +1,7 @@
 # Agent 工具体验路线图（Codex / Cursor 对齐）
 
 > 版本 **0.1.8** · 2026-09-08 · 状态：**P0 终端会话、Git 文件级回退和结构化测试已进入 active；原子编辑仍为 experimental，终端会话 UI 已完成设计**
-> 关联：[CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [RUNAWAY-V2.md](./RUNAWAY-V2.md) · [TASKS.md](./TASKS.md)
+> 关联：[CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) · [TASKS.md](./TASKS.md)
 
 ## 0. 目标与边界
 

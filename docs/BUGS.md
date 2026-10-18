@@ -65,9 +65,9 @@
 | `README.md` 属于 evolved 工具脚手架，不能经 write_text`（在 workspace 项目里） | BUG-018 | 已修；`workspace/**/README.md` 可正常 `write_text` |
 | `cannot import name 'session_memory_event' from 'session'`（切项目时） | BUG-019 | 已修；重启 `start-desktop.bat` 后侧栏切换应正常灌 `session.history` |
 | 助手说「report_progress 不在清单」/ 不能勾 TASKS；或提议新造该工具 | BUG-021 | **已修**；重启 sidecar；须用 `report_progress` 勾选，勿直写 TASKS |
-| 主聊说「点采纳」，侧栏只有「已写入…」+diff、无按钮 | BUG-022 | **设计已签** [PLAN-REVIEW-UI §10](./PLAN-REVIEW-UI.md)；绕行：点过程卡「待采纳」或侧栏「查看」（若可见）；代码修 Phase 40 |
-| 本回合已写文件仍拒勾；`evidence_kind=unknown`；反复撞 `plan_partner` | （分类器过严 · v0.3.0 已修） | 重启 sidecar；口语写码标题现归 `write`；纯确认类可加 `[evidence:write]`；见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) §1.3 |
-| 拒确认/测试未跑仍勾验收；同 turn 连勾多项 | — | Phase 24 **M0 核心已落地**；收尾 T-2406～2408 · [PROGRESS-GATE.md](./PROGRESS-GATE.md) |
+| 主聊说「点采纳」，侧栏只有「已写入…」+diff、无按钮 | BUG-022 | **设计已签** [PLAN-REVIEW-UI §10](./archive/PLAN-REVIEW-UI.md)；绕行：点过程卡「待采纳」或侧栏「查看」（若可见）；代码修 Phase 40 |
+| 本回合已写文件仍拒勾；`evidence_kind=unknown`；反复撞 `plan_partner` | （分类器过严 · v0.3.0 已修） | 重启 sidecar；口语写码标题现归 `write`；纯确认类可加 `[evidence:write]`；见 [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) §1.3 |
+| 拒确认/测试未跑仍勾验收；同 turn 连勾多项 | — | Phase 24 **M0 核心已落地**；收尾 T-2406～2408 · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) |
 | 自动压缩完成后长时间「思考中…」，最后「回合超时已停止」 | BUG-023 | **已修**（T-2092～2094）；仍慢时可 **停止→继续** 或空闲时「压缩」/「新会话」 |
 | `[guard] 内联写入超过 8192` 连刷多条 · 不换 staging · 不停 tool | BUG-024 | **fixed**（≥2 停 tool + staging 内核 · T-4242） |
 | 助手反复「文件又乱了 / 重写整个 xxx.vue」；`find anchor not found`；磁盘 `\r\r\r\n` | BUG-025 | **fixed**（T-4252～4254 · IT-99）；大 Vue 仍建议 staging |

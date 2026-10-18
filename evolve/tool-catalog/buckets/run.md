@@ -56,4 +56,4 @@
 
 - 用户一句要起 **多个** 长驻服务（如 gateway + 各微服务 + 前端）：**同一回合**内用 `run_service` 工具链做完——`start`（可 `ready_port` / `ready_regex` / `ready_timeout_sec`）→ `wait` / `logs` / `status` → 下一服务；前端须在后端 **ready** 后再 `start`。
 - **禁止**仅用口头「等 N 秒我再查日志 / 稍后再起前端」就结束回合；须在本回合调 `run_service` **`wait`** 或 blocking **`start`**，勿把等待留给用户发「继续」。
-- 起服子步骤 **≠** 任务完成；**Task 一停**仅 `report_progress` 成功勾选当前 task 后触发（详见 [ASYNC-ORCHESTRATION.md](../../../docs/ASYNC-ORCHESTRATION.md)）。
+- 起服子步骤 **≠** 完成；完成以验证命令（测试/构建/健康检查）退出码为准。

@@ -9,7 +9,6 @@ import {
   thinkEntryTitle,
 } from "./activity-state";
 import { escapeHtml, formatToolElapsed } from "./chat-state";
-import { diffStats } from "./unified/plan-review";
 import {
   formatReasoningDisplay,
   humanizeToolAction,
@@ -17,6 +16,13 @@ import {
   resolveEffectiveToolName,
   shouldNeutralizeReasoningSummary,
 } from "./unified/output-display";
+
+function diffStats(diff: string): string {
+  const adds = (diff.match(/^\+/gm) || []).length;
+  const dels = (diff.match(/^-/gm) || []).length;
+  if (!adds && !dels) return "";
+  return `+${adds} −${dels}`;
+}
 
 const PROCESS_TOOL_LINES_CAP = 6;
 /** Keep each think segment individually expandable; do not bundle into「思考 ×N」. */
@@ -138,7 +144,7 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const stats = diffRaw ? diffStats(diffRaw) : "";
   const statsBit = stats ? `<span class="unified-tool-diff-stats">${escapeHtml(stats)}</span>` : "";
   const diffBit = diffRaw
-    ? `<details class="unified-tool-diff-inline"><summary>查看改动${stats ? ` · ${escapeHtml(stats)}` : ""}</summary><pre class="unified-plan-review-diff">${escapeHtml(diffRaw)}</pre></details>`
+    ? `<details class="unified-tool-diff-inline"><summary>查看改动${stats ? ` · ${escapeHtml(stats)}` : ""}</summary><pre class="unified-tool-diff-pre">${escapeHtml(diffRaw)}</pre></details>`
     : "";
   return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}" title="${escapeHtml(canonical)}">
     <span class="unified-tool-mark">${mark}</span>

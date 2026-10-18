@@ -1,6 +1,6 @@
 [tool]
 name = "project_catalog"
-description = "List workspace projects with session ids and task progress (read-only)"
+description = "List workspace projects with session ids (read-only)"
 version = "1.0.0"
 status = "active"
 topics = ["common"]

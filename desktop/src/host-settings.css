@@ -206,3 +206,42 @@
   display: flex;
   gap: 0.5rem;
 }
+
+.host-candidate-section {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--ma-border);
+}
+
+.host-candidate-title {
+  font-weight: 600;
+}
+
+.host-candidate-hint,
+.host-candidate-notice,
+.host-candidate-unavailable {
+  color: var(--ma-text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.host-candidate-row,
+.host-candidate-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.host-candidate-path {
+  min-width: 0;
+  flex: 1 1 260px;
+  border: 1px solid var(--ma-border);
+  background: var(--ma-bg);
+  color: var(--ma-text-muted);
+  padding: 0.3rem 0.45rem;
+  border-radius: 2px;
+  font: inherit;
+  font-size: 0.8rem;
+}

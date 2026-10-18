@@ -36,7 +36,6 @@ class ToolDisplayTests(unittest.TestCase):
 
     def test_display_builtin_name(self) -> None:
         self.assertEqual(display_tool_name("grep"), "搜索内容")
-        self.assertEqual(display_tool_name("plan_partner"), "整理计划")
 
     def test_bare_write_text_summary_is_not_extension_tool(self) -> None:
         self.assertEqual(resolve_effective_tool_name("run_evolved", "write_text"), "write_text")

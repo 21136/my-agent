@@ -11,7 +11,6 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths
-from progress_gate import evidence_satisfies, make_evidence_entry
 from project_verify import (
     compact_test_failure_preview,
     enrich_test_failure_payload,
@@ -36,31 +35,6 @@ class ProjectVerifyTests(unittest.TestCase):
         has_line = any(f.line == 42 for f in failures)
         self.assertTrue(has_line)
 
-    def test_it443_gate_accepts_run_project_tests(self) -> None:
-        ok, _ = evidence_satisfies(
-            "test",
-            [
-                make_evidence_entry(
-                    tool_name="run_project_tests",
-                    evolved_name="run_project_tests",
-                    ok=True,
-                )
-            ],
-        )
-        self.assertTrue(ok)
-
-    def test_it444_gate_rejects_failed_run_project_tests(self) -> None:
-        ok, _ = evidence_satisfies(
-            "test",
-            [
-                make_evidence_entry(
-                    tool_name="run_project_tests",
-                    evolved_name="run_project_tests",
-                    ok=False,
-                )
-            ],
-        )
-        self.assertFalse(ok)
 
     def test_dry_run(self) -> None:
         with temporary_agent_paths() as paths:

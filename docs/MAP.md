@@ -7,12 +7,13 @@
 > **当前焦点**：收口 v1 兼容回归、T-6107 续接单真源和 S-6106 music 试点；同步推进 UX-029 M2 / UX-030 验收。Phase 58b 七文件方案仍暂停，详见 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)
 > UI 真源 = **`unified` + `pet` 工作台**（[SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md)）；勿按 grow/daily/project/govern 四壳排期。  
 > **冻结状态**：**已解冻**（T-1890-10）— 可开新功能；须遵守 **§2.1** / DOC-04。
+> **2026-10-18 · 任务子系统下线**：`TASKS.md` 队列、计划代理、进度门、一项一停与自动模式（狂奔）已删除；完成以验证命令退出码为准（[skills/plan-and-verify](../evolve/skills/plan-and-verify/SKILL.md)）。相关设计文档移至 [archive/](./archive/)，未来无任务循环见 [archive/AUTO-LOOP-FUTURE.md](./archive/AUTO-LOOP-FUTURE.md)。下文 Phase 表中涉及任务/计划/狂奔的条目为历史记录。
 
 ---
 
 ## 1. 一句话
 
-面向真实软件项目的本地生产工具：以 **`PROJECT.md`、`DESIGN.md`、`TASKS.md`、`VERIFY.md`** 组织需求、设计、实现和验证；Git 为真源，LLM 只能通过注册工具动手。个人进化层和 Terminal 是内部/维护能力，不是当前产品主线。
+面向真实软件项目的本地生产工具：以 **`PROJECT.md`、`DESIGN.md`、`VERIFY.md`** 组织需求、设计和验证（验证命令退出码即完成标准）；Git 为真源，LLM 只能通过注册工具动手。个人进化层和 Terminal 是内部/维护能力，不是当前产品主线。
 
 ---
 
@@ -43,11 +44,11 @@
 | **Phase 17** | Checker 子代理 | **M1 done**（见 [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md)） |
 | **Phase 18** | **稳定化专项** | **done · 已解冻**（[STABILIZATION.md](./STABILIZATION.md) **v1.1.0**） |
 | **Phase 19** | **上下文换线** | **done**（[CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) v0.3.0） |
-| **Phase 20** | **项目 Task 一停门** | **M0+M1 done**（[TASK-STOP.md](./TASK-STOP.md)；M2=T-2008 defer） |
+| **Phase 20** | **项目 Task 一停门** | **M0+M1 done**（[TASK-STOP.md](./archive/TASK-STOP.md)；M2=T-2008 defer） |
 | **Phase 21** | **项目进度闭环**（report_progress 清单 / draft 壳 / 一停武装） | **done**（[PROJECT-MODE.md](./PROJECT-MODE.md) §0e · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md) fixed） |
 | **Phase 22** | **可见计划搭档**（侧栏建议卡 / 低风险 auto_fix · 非聊天旁白） | **done**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.10 · T-2201～T-2207） |
 | **Phase 23** | **工具目录 INDEX**（取消主题硬锁 · INDEX + 提示词 Mp/Mq/Mr） | **done**（M0～M5·Mp·Mq·Mr · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · 2026-07-31） |
-| **Phase 24** | **进度硬闸门**（Progress Gate） | **M0 核心 done · M1 收尾中**（[PROGRESS-GATE.md](./PROGRESS-GATE.md) v0.3.0 · T-2406～2408 todo） |
+| **Phase 24** | **进度硬闸门**（Progress Gate） | **M0 核心 done · M1 收尾中**（[PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) v0.3.0 · T-2406～2408 todo） |
 | **Phase 25** | **托管长驻服务**（`run_service`） | **M0 done**（[RUN-SERVICE.md](./RUN-SERVICE.md)；IT-75/76） |
 | **Phase 26** | **项目开发工具补齐**（HTTP / 启停 / 端口 / Git / SQLite / pip） | **done**（[PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) v0.4.0；IT-80～86） |
 | **Phase 27** | **执行可观测**（聊天过程 + 侧栏服务/进度） | **M1 done**（[EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md)；IT-90～93） |
@@ -55,10 +56,10 @@
 | **Phase 29～34** | **对齐 Cursor 剩余面** | **29～33** · **34 M0** done（[CURSOR-ALIGN.md](./CURSOR-ALIGN.md)）；G M1/M2 待做 |
 | **Phase 35** | **执行可靠性**（后置条件 · 熔断 · 本地执行硬化） | **done**（[EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) · G14 · M0–M3） |
 | **Phase 36** | **项目多会话线**（一活线 · 砍线归档 · 可选交接） | **done**（[PROJECT-THREADS.md](./PROJECT-THREADS.md)；T-3600～3603） |
-| **Phase 37** | **计划域架构**（角色多文件 · 唯一队列 · 写权限 · 注入切片 · **读写提案**） | **M1～M3 · M5 · M6 done**（[PLAN-ARCH.md](./PLAN-ARCH.md) v0.5.1；T-3700～3710；M4 defer） |
+| **Phase 37** | **计划域架构**（角色多文件 · 唯一队列 · 写权限 · 注入切片 · **读写提案**） | **M1～M3 · M5 · M6 done**（[PLAN-ARCH.md](./archive/PLAN-ARCH.md) v0.5.1；T-3700～3710；M4 defer） |
 | **Phase 38** | **Plan 主输入双通道 + 自动路由**（独立气泡 · 上下文隔离 · 查跑同权） | **superseded**（[PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) §15.11 → **§15.12**；由 Phase 39 废止） |
-| **Phase 39** | **Plan 幕后子代理**（单入口 · `plan_partner` · 侧栏采纳 · 计划域写拒） | **done**（[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906） |
-| **Phase 40** | **采纳控件对齐**（禁口述按钮 · 待采纳≠已写入 · 过程卡 CTA） | **P0/P1 done**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · T-4000～T-4003） |
+| **Phase 39** | **Plan 幕后子代理**（单入口 · `plan_partner` · 侧栏采纳 · 计划域写拒） | **done**（[PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · T-3900～T-3906） |
+| **Phase 40** | **采纳控件对齐**（禁口述按钮 · 待采纳≠已写入 · 过程卡 CTA） | **P0/P1 done**（[PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) §10 · T-4000～T-4003） |
 | **Phase 41** | **Agent Harness 对齐**（扁平原语 · 失败止损 · 低→高） | **P1+P2+P4+P5 done**（[AGENT-HARNESS.md](./AGENT-HARNESS.md)；P3 → Phase 42 J） |
 | **Phase 42** | **Cursor 差距收口**（写确认分层 · Glob · 模型路由） | **M0 done**（[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · T-4202 · T-4211～4215 · T-4221～4226） |
 | **Phase 43** | **项目配方脚手架**（`scaffold_project` · `evolve/scaffolds/`） | **M0+M1 done**（[PROJECT-RECIPES.md](./PROJECT-RECIPES.md) · T-4300～4306） |
@@ -71,10 +72,10 @@
 | **Phase 57** | **Terminal 狂野模式**（legacy Bottom TUI · **Ink UI 阶段 0～5** · auto plan-execute） | **legacy M1 done · Ink 阶段 0～5 done · T-5730～5734 done**（TERMINAL v0.3.2 · **frozen** · S-576 手工待做） |
 | **Phase 58** | **Desktop 教科书流程**（产品定调 · 流程轨五段 · 阶段计划卡） | **M1 done**（[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · T-5801～5808 · S-580 todo） |
 | **Phase 58b** | **文档制品链**（历史设计：七文件 · manifest · stale · CHG ledger） | **暂停执行**（以 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) 的四个核心制品为准） |
-| **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
-| **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
-| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**（[RUNAWAY-V2.md](./RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./RUNAWAY-V2-CONTINUATION.md)） |
-| **Phase 62** | **狂奔编排内核**（transport / control / execution 三平面） | **T-6240～6248**（与 Phase 61 T-6210～6216 错号）· R0 done（T-6240）· R1 done（T-6241；kernel 14/14）· R2 done（T-6242；v1 compat 112/112） — [RUNAWAY-ORCHESTRATION.md](./RUNAWAY-ORCHESTRATION.md) · 附录 [RUNAWAY-ORCHESTRATION-MAP.md](./RUNAWAY-ORCHESTRATION-MAP.md) |
+| **Phase 59** | **bug-fix**（狂奔 repairing 专用验收修复轨 · T↔V 矩阵 · 禁 plan 风暴） | **M0～M3 done**（[BUG-FIX-AGENT.md](./archive/BUG-FIX-AGENT.md) · T-5960 · UI-5961～5965 · S-5951 todo） |
+| **Phase 59b** | **verification 出口编排**（Harness 谓词门 · ENV bootstrap · 主 Agent 短接） | **done**（UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](./archive/RUNAWAY-VERIFICATION-ORCHESTRATOR.md)） |
+| **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**（[RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md)） |
+| **Phase 62** | **狂奔编排内核**（transport / control / execution 三平面） | **T-6240～6248**（与 Phase 61 T-6210～6216 错号）· R0 done（T-6240）· R1 done（T-6241；kernel 14/14）· R2 done（T-6242；v1 compat 112/112） — [RUNAWAY-ORCHESTRATION.md](./archive/RUNAWAY-ORCHESTRATION.md) · 附录 [RUNAWAY-ORCHESTRATION-MAP.md](./archive/RUNAWAY-ORCHESTRATION-MAP.md) |
 | **Phase 64** | **Self-hosting 自举与自交付**（transaction · candidate switch · GitHub/CI · release/deploy） | **Wave 0/1 primitives + controlled self_change active；Host Agent restart、GitHub CI、release/deploy pending** — [SELF-HOSTING-ROADMAP.md](./SELF-HOSTING-ROADMAP.md) · [SELF-HOSTING-ARCHITECTURE.md](./SELF-HOSTING-ARCHITECTURE.md) |
 | **Phase 61** | **Agent 工具体验路线图**（终端会话 · 原子编辑 · Git diff/restore · 结构化测试 · 诊断 · 浏览器检查 · 并行隔离 · 开源优先适配） | **P0 终端会话、Git 文件级回退和 structured_test 已 active；终端会话 UI 进入设计，原子编辑仍 experimental，其余工具未开始**（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · T-6200～T-6225） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
@@ -106,7 +107,7 @@
 |------|------------------|------|-------------|
 | **四壳 DOM** | `shells/grow\|daily\|project\|govern` · T-904h govern | **cancelled** | `unified` perspective + `pet`；[DESKTOP.md](./DESKTOP.md) §0 |
 | **自动切壳** | `ui.route` · `activity_router` 切壳 · T-pet-i1 路由 | **superseded** | 前端不消费；生产仅 `infer_topic_scope` + `apply_route_topics` |
-| **Plan 双通道** | Phase 38 · `plan-intent` · Plan 独立气泡 | **superseded** | Phase 39 `plan_partner` · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) |
+| **Plan 双通道** | Phase 38 · `plan-intent` · Plan 独立气泡 | **superseded** | Phase 39 `plan_partner` · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) |
 | **Skill 系** | Phase 63 · T-6300～T-6303 | **implemented** | 内置 Skill Registry；历史 T-605/T-606/T-901 已 superseded |
 | **远期低收益** | T-902 多 LLM · T-903 SQLite/向量 · T-906 自动 venv | **wontfix** | 单人本地 agent；按需再开 Phase |
 | **日用壳独立目录** | [DAILY-SHELL.md](./DAILY-SHELL.md) · T-904i6 星图清理 | **superseded** | `perspective=night` + `skins/starfield/` |
@@ -196,9 +197,9 @@ my-agent/
 │   ├── UX-POLISH.md            # 体验打磨（进行中）
 │   ├── output-format.md        # 主聊 assistant 正文格式（OUTPUT-FORMAT）
 │   ├── PROJECT-SIDEBAR.md      # Plan Agent + 任务流侧栏
-│   ├── PLAN-REVIEW-UI.md       # 主列审阅 + Affordance（§10 / Phase 40）
-│   ├── PLAN-SUBAGENT.md        # Plan 幕后子代理（Phase 39）
-│   ├── PLAN-ARCH.md            # 计划域架构（角色文件 · 写权限 · 注入）
+│   ├── archive/PLAN-REVIEW-UI.md  # 已归档：主列审阅 + Affordance（§10 / Phase 40）
+│   ├── archive/PLAN-SUBAGENT.md   # 已归档：Plan 幕后子代理（Phase 39）
+│   ├── archive/PLAN-ARCH.md       # 已归档：计划域架构（角色文件 · 写权限 · 注入）
 │   ├── PROJECT-MODE.md         # 项目模式（三件套 / 计划门）
 │   ├── BUGS.md                 # 运行时缺陷索引
 │   └── …                       # RUNTIME / MEMORY / EVOLVE / STABILIZATION / …

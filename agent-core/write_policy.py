@@ -6,10 +6,25 @@ import fnmatch
 from pathlib import Path
 from typing import Literal
 
-from plan_patch import PLAN_PATCH_ALLOWLIST
 from run_command_policy import _normalize_rel
 
 WriteTool = Literal["write_text", "patch_file"]
+
+# Project docs that always ask before a write (formerly plan_patch.PLAN_PATCH_ALLOWLIST;
+# the plan subsystem is gone but the confirm policy for these docs is kept).
+PLAN_PATCH_ALLOWLIST = frozenset(
+    {
+        "PROJECT.md",
+        "SCOPE.md",
+        "DESIGN.md",
+        "TECH-DESIGN.md",
+        "TASKS.md",
+        "VERIFY.md",
+        "RELEASE.md",
+        "MAP.md",
+        "ENV.md",
+    }
+)
 
 _SENSITIVE_GLOBS = (
     "**/.env",

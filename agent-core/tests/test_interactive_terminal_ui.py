@@ -360,8 +360,6 @@ class InteractiveTerminalUiTests(unittest.TestCase):
         self.assertIn("sidebar-terminals-ended-list", css)
         self.assertNotIn("els.terminalsPanel.innerHTML = renderTerminalsPanel(state)", panel)
         self.assertNotIn("els.servicesPanel.innerHTML = renderServicesPanel(state)", panel)
-        self.assertIn("now-focus-card", panel)
-        self.assertIn('aria-label="当下焦点"', panel)
 
     def test_terminal_list_helpers(self) -> None:
         script = _ROOT / "desktop" / "tests" / "terminal-list.test.ts"

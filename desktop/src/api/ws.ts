@@ -56,9 +56,6 @@ export type ServerEvent =
       project_id?: string;
       project_root?: string | null;
       project_plan_status?: string;
-      project_plan_label?: string;
-      project_tasks_done?: number;
-      project_tasks_total?: number;
       llm_model?: string;
       llm_model_label?: string;
       llm_model_override?: boolean;
@@ -119,7 +116,6 @@ export type ServerEvent =
       type: "turn.notice";
       level?: "info" | "warn";
       text: string;
-      runaway_cancel_available?: boolean;
       run_id?: string;
     }
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
@@ -128,7 +124,7 @@ export type ServerEvent =
   | { type: "assistant.delta"; text: string; run_id?: string }
   | { type: "assistant.done"; text: string; run_id?: string }
   | { type: "reasoning.delta"; text: string; run_id?: string }
-  | { type: "notice"; text: string; runaway_cancel_available?: boolean }
+  | { type: "notice"; text: string }
   | { type: "error"; message: string }
   | { type: "confirm.request"; request_id: string; preview: string; allow_approve_all: boolean; run_id?: string }
   | { type: "confirm.done"; request_id: string; choice: string; run_id?: string }
@@ -157,8 +153,6 @@ export type ServerEvent =
     }
   | {
       type: "turn.evidence";
-      armed_task_id?: string | null;
-      armed_task_text?: string | null;
       items: Array<{ tool: string; ok: boolean }>;
       gate_notice?: string | null;
       reliability?: {
@@ -194,48 +188,16 @@ export type ServerEvent =
       type: "project.state";
       project_id: string | null;
       project_root: string | null;
+      git_branch?: string;
       plan_status: string;
       project_entry?: string;
       project_template?: string;
-      tasks_markdown: string;
       map_markdown: string;
-      tasks_done: number;
-      tasks_total: number;
-      tasks_open: number;
-      tasks_all_done: boolean;
       project_summary: string;
-      needs_plan_confirm: boolean;
       acceptance_command: string | null;
       acceptance_expected_exit: number | null;
       can_verify: boolean;
       scope_confirmed_at?: string | null;
-      runaway_enabled?: boolean;
-      runaway_status?: string;
-      runaway_checkpoint?: string | null;
-      runaway_repair_count?: number;
-      runaway_last_verification?: string | null;
-      runaway_paused_reason?: string | null;
-      runaway_acceptance_passed?: boolean;
-      runaway_verification_evidence?: Record<string, unknown> | null;
-      runaway_verification_evidence_path?: string | null;
-      runaway_version?: number;
-      runaway_phase?: string;
-      runaway_user_line?: string;
-      runaway_mode?: string;
-      runaway_blocked?: boolean;
-      runaway_checklist?: {
-        passed?: number;
-        total?: number;
-        current_id?: string | null;
-        current_title?: string | null;
-        failed_id?: string | null;
-      } | null;
-      runaway_block?: {
-        item_id?: string | null;
-        reason?: string;
-        command?: string;
-        tail?: string;
-      } | null;
       delivery_profile?: string;
       review_verdict?: string | null;
       review_blockers_count?: number;
@@ -244,7 +206,6 @@ export type ServerEvent =
       needs_documentation?: boolean;
       needs_design_confirm?: boolean;
       design_confirmed_at?: string | null;
-      active_task_id?: string | null;
       execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
       execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
       execution_stage_reason?: string;
@@ -273,7 +234,6 @@ export type ServerEvent =
         markers: string[];
         has_git: boolean;
         git_dirty: boolean | null;
-        has_tasks: boolean;
         has_verify: boolean;
         has_readme: boolean;
         has_env: boolean;
@@ -288,141 +248,13 @@ export type ServerEvent =
       projects: Array<{
         id: string;
         root: string;
-        tasks_done: number;
-        tasks_total: number;
         session_id: string | null;
         is_current: boolean;
         external_adopted?: boolean;
         external_healthy?: boolean;
       }>;
     }
-  | {
-      type: "plan.request";
-      request_id: string;
-      project_id: string;
-      project_root: string | null;
-      plan_status: string;
-      title: string;
-      summary: string;
-      tasks_preview: string;
-      tasks_done: number;
-      tasks_total: number;
-    }
-  | { type: "plan.done"; request_id: string; choice: string | null }
-  | {
-      type: "project.task.toggle.done";
-      line: number;
-      done: boolean;
-      tasks_done: number;
-      tasks_total: number;
-    }
-  | { type: "project.task.toggle.error"; line: number; message: string }
-  | { type: "project.task.reorder.done"; line: number; direction: string; tasks_done: number; tasks_total: number }
-  | { type: "project.task.reorder.error"; line: number; message: string }
-  | { type: "project.task.drop.done"; line: number; removed: string; tasks_done: number; tasks_total: number }
-  | { type: "project.task.drop.error"; line: number; message: string }
-  | { type: "project.task.skip.done"; line: number; new_position: number; tasks_done: number; tasks_total: number }
-  | { type: "project.task.skip.error"; line: number; message: string }
-  // project.plan.* events
-  | {
-      type: "project.plan.state";
-      project_id: string;
-      plan_status: string;
-      tasks_markdown: string;
-      map_markdown: string;
-      tasks_done: number;
-      tasks_total: number;
-      tasks_open: number;
-      tasks_all_done: boolean;
-      needs_confirm: boolean;
-      changes_level: string | null;
-      external_changes: boolean;
-      suggestions: Array<string | PlanSuggestion>;
-      next_task?: string | null;
-      next_task_line?: number | null;
-      degradation_level: string;
-      degradation_label: string;
-      warnings: string[];
-      operational_notices?: string[];
-      auto_fix_actions: string[];
-      partner_notices?: string[];
-      plan_transcript_len?: number;
-      change_log: PlanChangeItem[];
-      change_timeline?: ChangeLedgerItem[];
-      runaway_enabled?: boolean;
-      runaway_status?: string;
-      runaway_checkpoint?: string | null;
-      runaway_repair_count?: number;
-      runaway_last_verification?: string | null;
-      runaway_paused_reason?: string | null;
-      workflow_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
-      needs_documentation?: boolean;
-      needs_design_confirm?: boolean;
-      active_task_id?: string | null;
-      runaway_acceptance_passed?: boolean;
-      runaway_verification_evidence?: Record<string, unknown> | null;
-      runaway_verification_evidence_path?: string | null;
-      runaway_version?: number;
-      runaway_phase?: string;
-      runaway_user_line?: string;
-      runaway_mode?: string;
-      runaway_blocked?: boolean;
-      runaway_checklist?: {
-        passed?: number;
-        total?: number;
-        current_id?: string | null;
-        current_title?: string | null;
-        failed_id?: string | null;
-      } | null;
-      runaway_block?: {
-        item_id?: string | null;
-        reason?: string;
-        command?: string;
-        tail?: string;
-      } | null;
-      execution_stage?: "requirements" | "documentation" | "design" | "implementation" | "verification" | "release";
-      execution_stage_status?: "in_progress" | "blocked" | "ready" | string;
-      execution_stage_reason?: string;
-      execution_stage_blockers?: string[];
-      execution_stage_missing?: string[];
-      execution_stage_warnings?: string[];
-      execution_stage_affected?: string[];
-      execution_stage_deferred?: string[];
-      content_lint?: Record<string, unknown> | null;
-      execution_stage_artifacts?: Array<{
-        path: string;
-        role: string;
-        revision: string;
-        status: string;
-        completeness?: "skeleton" | "draft" | "complete" | string;
-        ids?: string[];
-      }>;
-      release_acceptance?: ReleaseAcceptanceSummary;
-    }
-  | {
-      type: "project.code_followup";
-      mode: "agent_cleanup" | "git_guide";
-      prefill?: string;
-      paths?: string[];
-      dropped_body?: string;
-      dropped_id?: string;
-      guide?: { workspace_rel?: string; commands?: string[]; note?: string };
-    }
-  | { type: "project.plan.confirm_changes.done" }
   | { type: "project.release.accepted"; release_acceptance: ReleaseAcceptanceSummary }
-  | { type: "project.plan.classify.done"; decision: "handle" | "forward" | "split" }
-  | { type: "project.plan.bubble"; role: "user" | "assistant"; text: string }
-  | { type: "project.plan.transcript.clear" }
-  | { type: "plan.subagent.start"; task_preview: string; call_id?: string }
-  | {
-      type: "plan.subagent.done";
-      summary: string;
-      proposal_count: number;
-      proposal_ids?: string[];
-      adopt_pending?: boolean;
-      ok?: boolean;
-      call_id?: string;
-    }
   | { type: "review.subagent.start"; task_preview: string; call_id?: string }
   | {
       type: "review.subagent.done";
@@ -449,9 +281,8 @@ export type ServerEvent =
   | { type: "project.doc.write.done"; path: string; name: string; size: number }
   | { type: "project.doc.rename.done"; path: string; old_path: string; name: string }
   | { type: "project.doc.delete.done"; path: string; name: string; is_standard?: boolean }
-  | { type: "project.task.add.done"; line: number; description: string; tasks_done: number; tasks_total: number }
   | { type: "project.undo.available"; description: string }
-  | { type: "project.detect"; project_id: string; reason: string; file_count: number; has_tasks: boolean }
+  | { type: "project.detect"; project_id: string; reason: string; file_count: number }
   | {
       type: "project.verify.done";
       ok: boolean;
@@ -636,42 +467,6 @@ export type ProjectDocItem = {
   recently_changed?: boolean;
 };
 
-export type PlanChangeItem = {
-  id: string;
-  kind: string;
-  task_text: string;
-  reason: string;
-  time: string;
-  line?: number | null;
-};
-
-export type ChangeLedgerItem = {
-  change_id: string;
-  adopted_at: string;
-  source: string;
-  proposal_id: string;
-  paths: string[];
-  summary: string;
-  requirements: string[];
-  tasks: string[];
-  acceptance: string[];
-  verification: string[];
-  stale_docs: string[];
-  replan_required: boolean;
-  before_revision: string;
-  after_revision: string;
-};
-
-export type PlanSuggestion = {
-  id: string;
-  kind: string;
-  title: string;
-  body: string;
-  risk: "low" | "suggest" | string;
-  action?: string | null;
-  payload?: Record<string, unknown>;
-};
-
 export type HostScopeRoot = {
   id: string;
   label: string;
@@ -791,8 +586,6 @@ export class AgentWsClient {
     attachmentIds?: string[],
     opts?: {
       forceAgent?: boolean;
-      forcePlan?: boolean;
-      autoRoutePlan?: boolean;
       activeDoc?: string;
       activeDocSelection?: string;
     },
@@ -805,8 +598,6 @@ export class AgentWsClient {
       payload.attachments = attachmentIds;
     }
     if (opts?.forceAgent) payload.force_agent = true;
-    if (opts?.forcePlan) payload.force_plan = true;
-    if (opts?.autoRoutePlan === false) payload.auto_route_plan = false;
     if (opts?.activeDoc) payload.active_doc = opts.activeDoc;
     if (opts?.activeDocSelection) payload.active_doc_selection = opts.activeDocSelection;
     this.send(payload);
@@ -918,53 +709,12 @@ export class AgentWsClient {
     this.send({ type: "project.open", project_id: projectId });
   }
 
-  sendPlanResponse(requestId: string, choice: "confirm" | "edit"): void {
-    this.send({ type: "plan.response", request_id: requestId, choice });
-  }
-
   sendContextSwitchResponse(requestId: string, choice: "y" | "n"): void {
     this.send({ type: "context.switch.response", request_id: requestId, choice });
   }
 
-  toggleTask(line: number, done: boolean): void {
-    this.send({ type: "project.task.toggle", line, done });
-  }
-
-  startProjectTask(taskId: string): void {
-    this.send({ type: "project.task.start", task_id: taskId });
-  }
-
   startDirectImplement(): void {
     this.send({ type: "project.direct_implement" });
-  }
-
-  // project.plan.* convenience methods
-  sendPlanMessage(payload: Record<string, unknown>): void {
-    this.send(payload);
-  }
-
-  planToggleTask(line: number, done: boolean): void {
-    this.sendPlanMessage({ type: "project.plan.toggle_task", line, done });
-  }
-
-  planReorderTask(line: number, direction: "up" | "down"): void {
-    this.sendPlanMessage({ type: "project.plan.reorder_task", line, direction });
-  }
-
-  planDropTask(line: number): void {
-    this.sendPlanMessage({ type: "project.plan.drop_task", line });
-  }
-
-  planSkipTask(line: number): void {
-    this.sendPlanMessage({ type: "project.plan.skip_task", line });
-  }
-
-  planConfirmChanges(): void {
-    this.sendPlanMessage({ type: "project.plan.confirm_changes" });
-  }
-
-  planGetState(): void {
-    this.sendPlanMessage({ type: "project.plan.state" });
   }
 
   listDocs(): void {
@@ -1008,52 +758,8 @@ export class AgentWsClient {
     this.send({ type: "project.doc.delete", path });
   }
 
-  addTask(description: string, phase?: string): void {
-    this.send({ type: "project.task.add", description, phase: phase ?? "" });
-  }
-
-  /** @deprecated Phase 39 — use main composer + plan_partner; compat only */
-  sendPlanChannelMessage(text: string, opts?: { includeLastUser?: boolean }): void {
-    this.send({
-      type: "project.plan.message",
-      text,
-      include_last_user: Boolean(opts?.includeLastUser),
-    });
-  }
-
-  undoLastPlanOp(): void {
-    this.send({ type: "project.plan.undo" });
-  }
-
-  splitPlanTask(line: number): void {
-    this.send({ type: "project.plan.split_task", line });
-  }
-
-  acceptPlanSuggestion(
-    suggestionId: string,
-    codePolicy?: "plan_only" | "agent_cleanup" | "git_guide",
-  ): void {
-    this.send({
-      type: "project.plan.accept_suggestion",
-      suggestion_id: suggestionId,
-      ...(codePolicy ? { code_policy: codePolicy } : {}),
-    });
-  }
-
   confirmProjectScope(): void {
     this.send({ type: "project.scope.confirm" });
-  }
-
-  setProjectRunaway(enabled: boolean): void {
-    this.send({ type: "project.runaway.set", enabled });
-  }
-
-  resumeProjectRunaway(): void {
-    this.send({ type: "project.runaway.set", enabled: true, resume: true });
-  }
-
-  resumeProjectRunawayDirected(): void {
-    this.send({ type: "project.runaway.set", enabled: true, resume: true, directed: true });
   }
 
   confirmProjectDesign(): void {
@@ -1062,10 +768,6 @@ export class AgentWsClient {
 
   acceptProjectRelease(): void {
     this.send({ type: "project.release.accept" });
-  }
-
-  ignorePlanSuggestion(suggestionId: string): void {
-    this.send({ type: "project.plan.ignore_suggestion", suggestion_id: suggestionId });
   }
 
   switchProject(
@@ -1205,6 +907,7 @@ declare global {
   interface Window {
     myAgentDesktop?: {
       getSidecar: () => Promise<{ host: string; port: number } | null>;
+      switchSidecarCandidate?: (root: string) => Promise<Record<string, unknown>>;
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
       openPet?: () => Promise<void>;

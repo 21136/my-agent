@@ -69,7 +69,6 @@ class ProviderTransportErrorTests(unittest.TestCase):
                 phase="S4",
                 active_shell="project",
                 turn_mode="agent",
-                project_runaway_enabled=False,
             ),
             messages=[{"role": "user", "content": "改一下 README"}],
             paths=paths,
@@ -134,7 +133,7 @@ class ProviderTransportErrorTests(unittest.TestCase):
                 self.assertNotIn("继续", result.assistant_text)
                 self.assertNotIn(str(exc), result.assistant_text)
 
-    def test_client_error_400_does_not_retry_even_in_runaway(self) -> None:
+    def test_client_error_400_does_not_retry(self) -> None:
         llm = _RaisingLLM(
             LLMApiError(
                 "Reasoning effort 'none' is not supported by this model.",
@@ -142,7 +141,6 @@ class ProviderTransportErrorTests(unittest.TestCase):
             ),
         )
         agent = self._agent(llm)
-        agent.session.meta.project_runaway_enabled = True
         agent.session.save()
         sleeps: list[float] = []
 

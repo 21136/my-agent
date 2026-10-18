@@ -33,9 +33,9 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 | **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立 `pet` 窗 |
 | **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |
 | **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
-| **Builtin** | 12 个（核心 7 + 编排 5：`explore` · `plan_partner` · `deliverable_review` 等） |
+| **Builtin** | 11 个（核心 7 + 编排 4：`explore` · `deliverable_review` 等） |
 | **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
-| **狂奔 v2** | Desktop 默认 `MY_AGENT_RUNAWAY_V2=1`；Phase 60 M0/M1 已编码，v2 自动测试 40/40；续接核心已接入，兼容层/指纹与手工试点待收口 |
+| **自动模式（狂奔）** | **已下线（2026-10-18）**：随项目任务子系统一起删除；未来以无任务循环重建，见 [docs/archive/AUTO-LOOP-FUTURE.md](docs/archive/AUTO-LOOP-FUTURE.md) |
 | **下一手工** | S-6106 music 试点；另收口 T-6106 v1 兼容、T-6107 续接、Terminal TS build |
 
 ---

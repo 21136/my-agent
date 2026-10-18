@@ -12,14 +12,11 @@ if str(_AGENT_CORE) not in sys.path:
 
 from project_api import dispatch_doc_message
 from project_mode import (
-    ORDINARY_PROTECTED_WRITE_BLOCK_MSG,
-    PLAN_DOMAIN_WRITE_BLOCK_MSG,
     create_project,
     count_untouched_template_docs,
     delete_project_doc,
     format_project_overlay,
     list_project_docs,
-    main_agent_plan_domain_write_block,
     project_dir,
     project_mode_block_reason,
     project_root_rel,
@@ -36,83 +33,6 @@ def _write_args(root: str, name: str) -> dict:
         "tool_name": "write_text",
         "arguments": {"path": f"{root}/{name}", "content": "# x\n"},
     }
-
-
-class OrdinaryPlanWriteTests(unittest.TestCase):
-    def test_ordinary_allows_standard_docs_blocks_map(self) -> None:
-        root = "workspace/demo"
-        for name in (
-            "PROJECT.md",
-            "SCOPE.md",
-            "DESIGN.md",
-            "TECH-DESIGN.md",
-            "TASKS.md",
-            "VERIFY.md",
-            "RELEASE.md",
-            "ENV.md",
-        ):
-            self.assertIsNone(
-                main_agent_plan_domain_write_block(
-                    project_root=root,
-                    tool_name="run_evolved",
-                    arguments=_write_args(root, name),
-                    allow_ordinary_plan_writes=True,
-                )
-            )
-        blocked = main_agent_plan_domain_write_block(
-            project_root=root,
-            tool_name="run_evolved",
-            arguments=_write_args(root, "MAP.md"),
-            allow_ordinary_plan_writes=True,
-        )
-        self.assertEqual(blocked, ORDINARY_PROTECTED_WRITE_BLOCK_MSG)
-
-    def test_non_ordinary_still_blocks_project(self) -> None:
-        root = "workspace/demo"
-        blocked = main_agent_plan_domain_write_block(
-            project_root=root,
-            tool_name="run_evolved",
-            arguments=_write_args(root, "PROJECT.md"),
-            allow_ordinary_plan_writes=False,
-        )
-        self.assertEqual(blocked, PLAN_DOMAIN_WRITE_BLOCK_MSG)
-
-    def test_skip_stage_walls_passes_allow_flag(self) -> None:
-        reason = project_mode_block_reason(
-            active_shell="project",
-            project_root="workspace/demo",
-            plan_status="confirmed",
-            tool_name="run_evolved",
-            arguments=_write_args("workspace/demo", "PROJECT.md"),
-            skip_stage_walls=True,
-            runaway_enabled=False,
-        )
-        self.assertIsNone(reason)
-        reason_map = project_mode_block_reason(
-            active_shell="project",
-            project_root="workspace/demo",
-            plan_status="confirmed",
-            tool_name="run_evolved",
-            arguments=_write_args("workspace/demo", "MAP.md"),
-            skip_stage_walls=True,
-            runaway_enabled=False,
-        )
-        self.assertIsNotNone(reason_map)
-        self.assertIn("MAP", reason_map or "")
-
-    def test_overlay_mentions_ordinary_plan_write_and_active_doc(self) -> None:
-        overlay = format_project_overlay(
-            project_root="workspace/demo",
-            project_id="demo",
-            plan_status="confirmed",
-            skip_stage_walls=True,
-            project_entry="direct",
-            active_doc="PROJECT.md",
-            active_doc_selection="目标一行",
-        )
-        self.assertIn("ordinary_plan_write", overlay)
-        self.assertIn("active_doc: PROJECT.md", overlay)
-        self.assertIn("目标一行", overlay)
 
 
 class DocVersionAndTrashTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Workspace project mode: roots, plan gate, task stats (PROJECT-MODE T-1102–T-1107)."""
+"""Workspace project mode: roots, artifacts, safety guards (PROJECT-MODE T-1102–T-1107)."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from project_manifest import (
     LIGHT_SCAFFOLD_ARTIFACTS,
     STANDARD_ARTIFACTS,
     is_light_project_template,
-    lint_project_content,
     normalize_project_template,
     project_template_of,
 )
@@ -47,47 +46,13 @@ VALID_PLAN_STATUSES = frozenset({"", "draft", "confirmed", "plan_dirty"})
 STANDARD_PROJECT_ARTIFACTS = STANDARD_ARTIFACTS
 PROJECT_ARTIFACTS = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
 PLAN_DOMAIN_FILES = frozenset((*STANDARD_PROJECT_ARTIFACTS, "MAP.md", "ENV.md"))
-PLAN_DOMAIN_WRITE_BLOCK_MSG = (
-    "不能直接修改该计划文件。"
-    "非狂奔时请用侧栏「方案搭档」提案并采纳；"
-    "狂奔时请确认当前验收项是否允许修改该文件。"
-)
-TASKS_ARCHIVE_NAME = "TASKS.archive.md"
-# Ordinary / direct: Agent may write the nine standard docs; MAP + archive stay protected.
-ORDINARY_PLAN_WRITE_ALLOWLIST = frozenset((*STANDARD_PROJECT_ARTIFACTS, "ENV.md"))
-ORDINARY_PLAN_WRITE_PROTECTED = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
-ORDINARY_PROTECTED_WRITE_BLOCK_MSG = (
-    "不能直接修改 MAP.md 或任务归档。"
-    "请用侧栏「方案搭档」提案，或在狂奔验收授权后再改。"
-)
-TASKS_INJECTION_OPEN_CAP = 20
-CORE_PROJECT_ARTIFACTS = ("PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md")
-CLOSE_REASONS = frozenset({"done", "wontfix", "duplicate", "moved"})
+CORE_PROJECT_ARTIFACTS = ("PROJECT.md", "DESIGN.md", "VERIFY.md")  # TASKS.md retired
 _TEMPLATE_DIRNAME = "_template"
-_TEMPLATE_FILES = (*STANDARD_PROJECT_ARTIFACTS, "MAP.md")
+# TASKS.md is no longer generated (task subsystem removed); legacy files are left alone.
+_TEMPLATE_FILES = tuple(name for name in (*STANDARD_PROJECT_ARTIFACTS, "MAP.md") if name != "TASKS.md")
+_PROJECT_MARKERS = ("PROJECT.md", "TASKS.md", ".plan-agent/manifest.json")
 _PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]*$")
-_TASK_OPEN_RE = re.compile(r"^\s*-\s*\[\s\]\s+", re.MULTILINE)
-_TASK_DONE_RE = re.compile(r"^\s*-\s*\[x\]\s+", re.IGNORECASE | re.MULTILINE)
-_TASK_ID_RE = re.compile(r"\bT-(\d+)\b", re.IGNORECASE)
-_TASK_FULL_ID_RE = re.compile(r"\bT-\d+(?:-\d+)*\b", re.IGNORECASE)
-# Priority/label prefixes are allowed before the task id (for example
-# ``[P1] T-1007``), while descriptive plan lines such as ``plan: T-1007``
-# remain non-formal because the task id is not the leading token.
-_FORMAL_TASK_LEAD_RE = re.compile(
-    r"^(?:\[[^\]\r\n]+\]\s+)*(T-\d+(?:-\d+)*)\b",
-    re.IGNORECASE,
-)
 _VERIFY_ID_INLINE_RE = re.compile(r"\bV-\d+(?:-\d+)*\b", re.IGNORECASE)
-_TASK_CHECKBOX_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.*)$")
-_TASK_METADATA_KEYS = ("req", "ac", "design", "verify", "evidence", "depends_on")
-_TASK_METADATA_FIELD_RE = re.compile(
-    r"(?<![\w-])(req|ac|design|verify|evidence|depends_on)\s*:",
-    re.IGNORECASE,
-)
-_CLOSED_SECTION_TITLE_RE = re.compile(
-    r"^(?:[\d.]+\s*)?(已关闭|归档|archive|closed|archives)\b",
-    re.IGNORECASE,
-)
 _ACCEPT_CMD_RE = re.compile(r"命令[：:]\s*`([^`]+)`", re.IGNORECASE)
 _ACCEPT_EXIT_RE = re.compile(r"退出码\s*(\d+)", re.IGNORECASE)
 _PYTHON_SCRIPT_RE = re.compile(r"python(?:3)?\s+([^\s`]+\.py)", re.IGNORECASE)
@@ -123,19 +88,6 @@ class ProjectModeError(Exception):
         self.code = code
         self.details = details or {}
 
-
-@dataclass(frozen=True, slots=True)
-class TaskStats:
-    done: int
-    total: int
-
-    @property
-    def open_count(self) -> int:
-        return max(0, self.total - self.done)
-
-    @property
-    def all_done(self) -> bool:
-        return self.total > 0 and self.open_count == 0
 
 
 EXECUTION_STAGES = ("requirements", "documentation", "design", "implementation", "verification", "release")
@@ -183,7 +135,6 @@ def _compute_execution_stage(
     *,
     project_id: str,
     plan_status: str,
-    task_stats: TaskStats,
     manifest: dict[str, Any] | None,
     project_root: Path | str | None = None,
     review_verdict: str | None = None,
@@ -223,20 +174,6 @@ def _compute_execution_stage(
             "reason": "l2_stale",
             "blockers": sorted(l2_stale),
         }
-    if workflow_stage == "requirements" and plan_status != "confirmed":
-        if light:
-            return {
-                "stage": "requirements",
-                "reason": "plan_not_confirmed",
-                "blockers": [],
-                "warnings": ["plan_status"],
-            }
-        return {
-            "stage": "requirements",
-            "reason": "plan_not_confirmed",
-            "blockers": ["plan_status"],
-        }
-
     # A workflow that has already left requirements must not rewind to the
     # first-round scope card just because SCOPE.md ids are still empty.
     if not light and workflow_stage not in {"design", "implementation", "verification", "release"}:
@@ -255,13 +192,6 @@ def _compute_execution_stage(
                 "reason": "scope_incomplete",
                 "blockers": scope_blockers,
             }
-    if task_stats.total == 0:
-        return {
-            "stage": "requirements",
-            "reason": "no_executable_tasks",
-            "blockers": ["TASKS.md"],
-        }
-
     if not light:
         design_blockers = [
             path
@@ -274,22 +204,6 @@ def _compute_execution_stage(
                 "reason": "design_incomplete",
                 "blockers": design_blockers,
             }
-    change_scope = str(manifest.get("change_scope") or manifest.get("project", {}).get("tier") or "normal")
-    content_lint: dict[str, Any] | None = None
-    if not light:
-        if project_root is not None and change_scope != "small":
-            content_lint = lint_project_content(
-                project_root,
-                tier=str(manifest.get("project", {}).get("tier") or "normal"),
-                change_scope=change_scope,
-            )
-        elif change_scope != "small" and isinstance(manifest.get("content_lint"), dict):
-            content_lint = manifest["content_lint"]
-    if not task_stats.all_done:
-        if task_stats.done == 0:
-            return {"stage": "design", "reason": "tasks_not_started", "blockers": [], "content_lint": content_lint}
-        return {"stage": "implementation", "reason": "tasks_in_progress", "blockers": [], "content_lint": content_lint}
-
     verification_names = ("VERIFY.md",) if light else ("VERIFY.md", "RELEASE.md")
     verification_blockers = [
         path
@@ -323,7 +237,6 @@ def compute_execution_stage(
     *,
     project_id: str,
     plan_status: str,
-    task_stats: TaskStats,
     manifest: dict[str, Any] | None,
     project_root: Path | str | None = None,
     review_verdict: str | None = None,
@@ -339,7 +252,6 @@ def compute_execution_stage(
     result = _compute_execution_stage(
         project_id=project_id,
         plan_status=plan_status,
-        task_stats=task_stats,
         manifest=manifest,
         project_root=project_root,
         review_verdict=review_verdict,
@@ -423,6 +335,11 @@ def template_dir(paths: AgentPaths) -> Path:
     return paths.workspace / _TEMPLATE_DIRNAME
 
 
+def is_project_dir(path: Path) -> bool:
+    """A workspace folder is a project when it has PROJECT.md, a manifest, or a legacy TASKS.md."""
+    return any((path / marker).is_file() for marker in _PROJECT_MARKERS)
+
+
 def list_projects(paths: AgentPaths) -> list[str]:
     root = paths.workspace
     if not root.is_dir():
@@ -433,7 +350,7 @@ def list_projects(paths: AgentPaths) -> list[str]:
             continue
         if entry.name.startswith(".") or entry.name == _TEMPLATE_DIRNAME:
             continue
-        if (entry / "TASKS.md").is_file():
+        if is_project_dir(entry):
             found.append(entry.name)
     return found
 
@@ -482,15 +399,6 @@ def _template_body(name: str, project_id: str) -> str:
             "# {{project_id}} · 技术设计\n\n"
             "## TD-001\n\n- 待填写架构、数据模型、API、依赖和技术风险。\n"
         ),
-        "TASKS.md": (
-            "# {{project_id}} · 执行队列\n\n"
-            "- [ ] T-001 完成第一项可交付工作\n"
-            "  req: REQ-001\n"
-            "  ac: AC-001\n"
-            "  design: UX-001, TD-001\n"
-            "  verify: V-001\n"
-            "  evidence: run_project_tests\n"
-        ),
         "VERIFY.md": (
             "# {{project_id}} · 验证矩阵\n\n"
             "| V-001 | AC-001 | 待填写测试/Gate | 待填写 L1 证据 |\n"
@@ -513,10 +421,6 @@ def _light_template_body(name: str, project_id: str) -> str:
         "PROJECT.md": (
             "# {{project_id}}\n\n"
             "直接写代码即可。需要拆任务或补文档时再说。\n"
-        ),
-        "TASKS.md": (
-            "# {{project_id}} · 任务\n\n"
-            "（暂无任务）\n"
         ),
         "VERIFY.md": (
             "# {{project_id}} · 验证\n\n"
@@ -559,7 +463,7 @@ def create_project(
             (dest / name).write_text(_light_template_body(name, pid), encoding="utf-8")
     else:
         src = ensure_template(paths)
-        for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+        for name in _TEMPLATE_FILES:
             src_file = src / name
             if src_file.is_file():
                 _copy_template_file(src_file, dest / name, pid)
@@ -611,7 +515,7 @@ def upgrade_project_to_standard(paths: AgentPaths, project_id: str) -> dict[str,
     previous = read_project_template(paths, pid)
     created: list[str] = []
     src = ensure_template(paths)
-    for name in (*_TEMPLATE_FILES, TASKS_ARCHIVE_NAME):
+    for name in _TEMPLATE_FILES:
         dest = root / name
         existing = ""
         if dest.is_file():
@@ -688,20 +592,11 @@ def organize_project_documents(paths: AgentPaths, project_id: str) -> dict[str, 
             "## 设计验收\n\n"
             "- AC-001：设计能够支撑一个小任务独立实现和验证。\n"
         ),
-        "TASKS.md": (
-            f"# {pid} · 执行队列\n\n"
-            "- [ ] T-001 实现第一条可交付用户流程\n"
-            "  req: REQ-001\n"
-            "  ac: AC-001\n"
-            "  design: UX-001, TD-001\n"
-            "  verify: V-001\n"
-            "  evidence: 按 VERIFY.md 执行对口验证\n"
-        ),
         "VERIFY.md": (
             f"# {pid} · 验证计划与证据\n\n"
             "## V-001 · 第一条用户流程\n\n"
             "- 对应验收：AC-001\n"
-            "- 验证方法：运行与 T-001 对口的测试或人工验收步骤。\n"
+            "- 验证方法：运行与 AC-001 对口的测试或人工验收步骤（以退出码为准）。\n"
             "- 预期结果：主流程、异常路径和数据结果符合 DESIGN.md。\n"
             "- 实际证据：待执行。\n\n"
             "## 发布检查\n\n"
@@ -731,7 +626,6 @@ def documentation_ready_for_design(paths: AgentPaths, project_id: str) -> tuple[
     checks = {
         "PROJECT.md": all(token in artifacts.get("PROJECT.md", "") for token in ("REQ-", "AC-")),
         "DESIGN.md": all(token in artifacts.get("DESIGN.md", "") for token in ("UX-", "TD-")),
-        "TASKS.md": "T-" in artifacts.get("TASKS.md", "") and "- [ ]" in artifacts.get("TASKS.md", ""),
         "VERIFY.md": all(token in artifacts.get("VERIFY.md", "") for token in ("V-", "AC-")),
     }
     return all(checks.values()), [name for name, ok in checks.items() if not ok]
@@ -813,29 +707,7 @@ def migrate_legacy_project(paths: AgentPaths, project_id: str) -> bool:
             f"{_migration_excerpt(map_text)}\n"
         ),
     )
-    tasks_text = _read_project_text(root / "TASKS.md")
-    if not tasks_text.strip():
-        tasks_text = _template_body("TASKS.md", pid)
-    if not re.search(r"\breq\s*:", tasks_text, re.IGNORECASE):
-        association = (
-            f"  req: {req_id}\n  ac: {ac_id}\n  design: UX-001, TD-001\n"
-            "  verify: V-001\n  evidence: 待补充"
-        )
-        task_lines = tasks_text.splitlines()
-        task_index = next(
-            (index for index, line in enumerate(task_lines) if _TASK_CHECKBOX_RE.match(line)),
-            None,
-        )
-        if task_index is None:
-            tasks_text = tasks_text.rstrip() + "\n\n" + association + "\n"
-        else:
-            task_lines[task_index + 1 : task_index + 1] = association.splitlines()
-            tasks_text = "\n".join(task_lines) + "\n"
-        tasks_path = root / "TASKS.md"
-        tasks_path.write_text(tasks_text.rstrip() + "\n", encoding="utf-8")
-        changed = True
-    else:
-        changed |= _write_migration_file(root / "TASKS.md", tasks_text)
+    # TASKS.md is neither created nor rewritten (task subsystem removed).
     changed |= _write_migration_file(
         root / "VERIFY.md",
         (
@@ -875,989 +747,20 @@ def migrate_legacy_project(paths: AgentPaths, project_id: str) -> bool:
     return changed
 
 
-def _empty_task_metadata() -> dict[str, list[str]]:
-    return {key: [] for key in _TASK_METADATA_KEYS}
 
 
-def _split_task_metadata_values(raw: str) -> list[str]:
-    values: list[str] = []
-    for item in re.split(r"[,，;；|]", raw):
-        value = item.strip().lstrip("- ").strip()
-        if value and value not in values:
-            values.append(value)
-    return values
-
-
-def _collect_task_metadata(text: str, metadata: dict[str, list[str]]) -> None:
-    matches = list(_TASK_METADATA_FIELD_RE.finditer(text))
-    for index, match in enumerate(matches):
-        key = match.group(1).lower()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        raw = text[match.end() : end].strip().strip(";|,")
-        for value in _split_task_metadata_values(raw):
-            if value not in metadata[key]:
-                metadata[key].append(value)
-
-
-def parse_task_metadata(task_text: str) -> dict[str, list[str]]:
-    """Parse the five fixed association fields from one task or task block."""
-    metadata = _empty_task_metadata()
-    _collect_task_metadata(task_text, metadata)
-    return metadata
-
-
-def parse_tasks_metadata(tasks_text: str) -> list[dict[str, Any]]:
-    """Parse task checkboxes and their inline/indented artifact associations."""
-    parsed: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    for line_number, line in enumerate((tasks_text or "").splitlines()):
-        task_match = _TASK_CHECKBOX_RE.match(line)
-        if task_match:
-            if current is not None:
-                parsed.append(current)
-            body = task_match.group(1).strip()
-            id_match = _TASK_FULL_ID_RE.search(body)
-            field_match = _TASK_METADATA_FIELD_RE.search(body)
-            description = body[: field_match.start() if field_match else len(body)].strip()
-            if id_match:
-                description = (description[: id_match.start()] + description[id_match.end() :]).strip(" -:;")
-            current = {
-                "line": line_number,
-                "id": id_match.group(0).upper() if id_match else None,
-                "text": description,
-                **_empty_task_metadata(),
-            }
-            _collect_task_metadata(body, current)
-            continue
-        if current is None:
-            continue
-        if line.startswith((" ", "\t")) and line.strip():
-            _collect_task_metadata(line, current)
-            continue
-        if line.strip().startswith("#") or line.strip():
-            parsed.append(current)
-            current = None
-    if current is not None:
-        parsed.append(current)
-    return parsed
-
-
-def read_task_stats(tasks_path: Path) -> TaskStats:
-    if not tasks_path.is_file():
-        return TaskStats(done=0, total=0)
-    text = tasks_path.read_text(encoding="utf-8")
-    # Open / legacy [x] only outside closed sections (PLAN-ARCH)
-    open_count = 0
-    legacy_done = 0
-    for _i, line in iter_tasks_lines_skipping_closed(text):
-        if _TASK_OPEN_RE.match(line):
-            open_count += 1
-        elif _TASK_DONE_RE.match(line):
-            legacy_done += 1
-    archive_done = count_archive_entries(
-        tasks_path.parent / TASKS_ARCHIVE_NAME,
-        reason="done",
-    )
-    done = legacy_done + archive_done
-    return TaskStats(done=done, total=done + open_count)
-
-
-def read_formal_task_stats(tasks_path: Path) -> TaskStats:
-    """Runaway scheduling stats: formal ``T-*`` tasks only."""
-    if not tasks_path.is_file():
-        return TaskStats(done=0, total=0)
-    text = tasks_path.read_text(encoding="utf-8")
-    archive_done = count_archive_entries(
-        tasks_path.parent / TASKS_ARCHIVE_NAME,
-        reason="done",
-    )
-    return formal_task_stats(text, archive_done=archive_done)
-
-
-def normalize_close_reason(reason: str) -> str:
-    key = (reason or "").strip().lower().replace("-", "").replace("_", "")
-    mapping = {
-        "done": "done",
-        "wontfix": "wontfix",
-        "wont": "wontfix",
-        "duplicate": "duplicate",
-        "dup": "duplicate",
-        "moved": "moved",
-        "move": "moved",
-    }
-    # also accept closed:done style
-    raw = (reason or "").strip().lower()
-    if raw.startswith("closed:"):
-        raw = raw.split(":", 1)[1].strip()
-    if raw in CLOSE_REASONS:
-        return raw
-    if key in mapping:
-        return mapping[key]
-    raise ProjectModeError(
-        f"invalid close reason {reason!r}; expected one of {sorted(CLOSE_REASONS)}"
-    )
-
-
-def format_archive_entry(
-    *,
-    body: str,
-    reason: str,
-    phase: str = "",
-    source: str = "",
-    phase_id: str = "",
-    closed_at: str | None = None,
-) -> str:
-    reason_n = normalize_close_reason(reason)
-    ts = closed_at or utc_now_iso()
-    parts = [f"- {body.strip()}", f"closed:{reason_n}", ts]
-    if phase.strip():
-        parts.append(f"phase:{phase.strip()}")
-    if phase_id.strip():
-        parts.append(f"phase_id:{phase_id.strip()}")
-    if source.strip():
-        parts.append(f"src:{source.strip()[:40]}")
-    return " · ".join(parts)
-
-
-def count_archive_entries(archive_path: Path, *, reason: str | None = None) -> int:
-    if not archive_path.is_file():
-        return 0
-    try:
-        text = archive_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return 0
-    n = 0
-    want = f"closed:{reason}" if reason else None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("- "):
-            continue
-        if want is None:
-            if "closed:" in stripped:
-                n += 1
-        elif want in stripped:
-            n += 1
-    return n
-
-
-def normalize_archive_task_body(body: str) -> str:
-    """Strip checkbox prefix from archive body text."""
-    raw = (body or "").strip()
-    m = _TASK_CHECKBOX_RE.match(raw)
-    if m:
-        return m.group(1).strip()
-    if raw.startswith("- "):
-        return raw[2:].strip()
-    return raw
-
-
-def parse_archive_entry_line(line: str) -> dict[str, str] | None:
-    """Parse one TASKS.archive.md bullet into body + metadata."""
-    stripped = line.strip()
-    if not stripped.startswith("- "):
-        return None
-    content = stripped[2:]
-    parts = [p.strip() for p in content.split(" · ") if p.strip()]
-    if not parts:
-        return None
-    body = normalize_archive_task_body(parts[0])
-    meta: dict[str, str] = {"body": body, "raw": stripped}
-    for part in parts[1:]:
-        if ":" not in part:
-            continue
-        key, val = part.split(":", 1)
-        key = key.strip().lower()
-        val = val.strip()
-        if key == "closed":
-            meta["reason"] = val
-        elif key == "phase":
-            meta["phase"] = val
-        elif key == "src":
-            meta["source"] = val
-        else:
-            meta[key] = val
-    return meta
-
-
-def list_archive_entries(archive_path: Path) -> list[dict[str, str]]:
-    if not archive_path.is_file():
-        return []
-    try:
-        text = archive_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return []
-    out: list[dict[str, str]] = []
-    for line in text.splitlines():
-        entry = parse_archive_entry_line(line)
-        if entry:
-            out.append(entry)
-    return out
-
-
-def format_archive_tail_for_prompt(archive_path: Path, *, limit: int = 12) -> str:
-    """Recent archive lines for Plan LLM (not injected into main agent)."""
-    entries = list_archive_entries(archive_path)
-    if not entries:
-        return ""
-    tail = entries[-max(1, limit) :]
-    lines = [
-        "## TASKS.archive.md 最近归档（误勾/误完成可 kind=restore 提案恢复）",
-        "",
-    ]
-    for entry in tail:
-        phase = entry.get("phase") or "（无 phase）"
-        reason = entry.get("reason") or "done"
-        lines.append(f"- {entry['body']} · closed:{reason} · phase:{phase}")
-    return "\n".join(lines) + "\n\n"
-
-
-def match_archive_entries(
-    entries: list[dict[str, str]],
-    *,
-    phase_substring: str | None = None,
-    body_substrings: list[str] | None = None,
-    task_ids: list[str] | None = None,
-) -> list[dict[str, str]]:
-    """Filter archive entries for restore proposals."""
-    if not entries:
-        return []
-    phase_key = (phase_substring or "").strip().casefold()
-    bodies = [b.strip().casefold() for b in (body_substrings or []) if b and b.strip()]
-    ids = [t.strip().upper() for t in (task_ids or []) if t and t.strip()]
-    matched: list[dict[str, str]] = []
-    for entry in entries:
-        body = entry.get("body") or ""
-        body_cf = body.casefold()
-        phase_cf = (entry.get("phase") or "").casefold()
-        if ids and not any(tid in body.upper() for tid in ids):
-            continue
-        if bodies and not any(sub in body_cf for sub in bodies):
-            continue
-        if phase_key and phase_key not in phase_cf and phase_key not in body_cf:
-            continue
-        matched.append(entry)
-    return matched
-
-
-def preview_restore_archived_tasks(
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    phase_substring: str | None = None,
-    body_substrings: list[str] | None = None,
-    task_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    """Dry-run restore — returns matched entries without writing."""
-    archive_path = project_dir(paths, project_id) / TASKS_ARCHIVE_NAME
-    entries = list_archive_entries(archive_path)
-    matched = match_archive_entries(
-        entries,
-        phase_substring=phase_substring,
-        body_substrings=body_substrings,
-        task_ids=task_ids,
-    )
-    return {
-        "matched": matched,
-        "count": len(matched),
-        "bodies": [e["body"] for e in matched],
-        "phases": sorted({e.get("phase") or "" for e in matched if e.get("phase")}),
-    }
-
-
-def restore_archived_tasks(
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    phase_substring: str | None = None,
-    body_substrings: list[str] | None = None,
-    task_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    """Move matched archive entries back into TASKS.md as open checkboxes."""
-    root = project_dir(paths, project_id)
-    archive_path = root / TASKS_ARCHIVE_NAME
-    tasks_path = root / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-    if not archive_path.is_file():
-        raise ProjectModeError("TASKS.archive.md not found")
-
-    entries = list_archive_entries(archive_path)
-    matched = match_archive_entries(
-        entries,
-        phase_substring=phase_substring,
-        body_substrings=body_substrings,
-        task_ids=task_ids,
-    )
-    if not matched:
-        raise ProjectModeError("no matching archive entries to restore")
-
-    matched_raws = {e["raw"] for e in matched}
-    keep_lines: list[str] = []
-    for line in archive_path.read_text(encoding="utf-8").splitlines():
-        entry = parse_archive_entry_line(line)
-        if entry and entry["raw"] in matched_raws:
-            continue
-        keep_lines.append(line)
-    archive_out = "\n".join(keep_lines)
-    if archive_out and not archive_out.endswith("\n"):
-        archive_out += "\n"
-    archive_path.write_text(archive_out, encoding="utf-8")
-
-    restored_lines: list[int] = []
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    default_phase = active_phase_title_from_lines(file_lines) or "Phase 1"
-    for entry in matched:
-        body = entry.get("body") or ""
-        phase_title = (entry.get("phase") or "").strip() or default_phase
-        if not body:
-            continue
-        result = add_task_to_tasks_md(paths, project_id, phase_title, body)
-        line_n = result.get("line")
-        if isinstance(line_n, int):
-            restored_lines.append(line_n)
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.restore.done",
-        "restored": [e["body"] for e in matched],
-        "lines": restored_lines,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
-
-def append_tasks_archive(
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    body: str,
-    reason: str,
-    phase: str = "",
-    source: str = "",
-) -> Path:
-    """Append one closed task to TASKS.archive.md (create file if needed)."""
-    root = project_dir(paths, project_id)
-    archive_path = root / TASKS_ARCHIVE_NAME
-    phase_id = ""
-    if phase.strip():
-        phase_id = resolve_or_assign_phase_id(
-            paths,
-            project_id,
-            phase,
-            archive_path=archive_path,
-        )
-    entry = format_archive_entry(
-        body=body,
-        reason=reason,
-        phase=phase,
-        source=source,
-        phase_id=phase_id,
-    )
-    if archive_path.is_file():
-        existing = archive_path.read_text(encoding="utf-8")
-        if not existing.endswith("\n"):
-            existing += "\n"
-        archive_path.write_text(existing + entry + "\n", encoding="utf-8")
-    else:
-        header = (
-            f"# {project_id} · 任务归档\n\n"
-            "> 只追加。默认不注入 LLM（PLAN-ARCH Q2）。"
-            "关闭理由：done / wontfix / duplicate / moved。\n\n"
-        )
-        archive_path.write_text(header + entry + "\n", encoding="utf-8")
-    return archive_path
-
-
-def _phase_for_line(file_lines: list[str], line: int) -> str:
-    current = ""
-    for i in range(0, min(line + 1, len(file_lines))):
-        stripped = file_lines[i].strip()
-        if stripped.startswith("## "):
-            current = stripped.lstrip("#").strip()
-    return current
-
-
-def archive_and_remove_task_line(
-    paths: AgentPaths,
-    project_id: str,
-    line: int,
-    *,
-    reason: str,
-    source: str = "",
-) -> dict[str, Any]:
-    """Remove a checkbox line from TASKS.md and append to TASKS.archive.md."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
-    target = file_lines[line]
-    if not (_TASK_OPEN_RE.match(target) or _TASK_DONE_RE.match(target)):
-        raise ProjectModeError(f"line {line} is not a task checkbox")
-    m = _TASK_CHECKBOX_RE.match(target)
-    body = m.group(1).strip() if m else target.strip()
-    phase = _phase_for_line(file_lines, line)
-    reason_n = normalize_close_reason(reason)
-    append_tasks_archive(
-        paths,
-        project_id,
-        body=body,
-        reason=reason_n,
-        phase=phase,
-        source=source,
-    )
-    file_lines.pop(line)
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.archive.done",
-        "line": line,
-        "body": body,
-        "phase": phase,
-        "reason": reason_n,
-        "removed": target.strip(),
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-        "open_line": f"- [ ] {body}",
-    }
-
-
-MILESTONE_PROJECT_COMPLETE_KEY = "project:complete"
-PHASE_ID_KEY_PREFIX = "phase_id:"
-_PHASE_REGISTRY_NAME = "phase_registry.json"
 _ISO_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
-
-def normalize_phase_title(title: str) -> str:
-    """Casefold + strip + collapse whitespace (MILESTONE-PHASE-KEY §3)."""
-    return re.sub(r"\s+", " ", (title or "").strip()).casefold()
-
-
-def phase_registry_path(paths: AgentPaths, project_id: str) -> Path:
-    return project_dir(paths, project_id) / ".plan-agent" / _PHASE_REGISTRY_NAME
-
-
-def load_phase_registry(registry_path: Path) -> dict[str, str]:
-    if not registry_path.is_file():
-        return {}
-    try:
-        data = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {str(k): str(v) for k, v in data.items() if k and v}
-
-
-def save_phase_registry(registry_path: Path, registry: dict[str, str]) -> None:
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(
-        json.dumps(dict(sorted(registry.items())), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
 
 
 def utc_today_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
-def compute_phase_stable_id(
-    phase_title: str,
-    project_id: str,
-    first_archive_date: str,
-) -> str:
-    norm = normalize_phase_title(phase_title)
-    payload = f"{norm}|{project_id}|{first_archive_date}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
-
-
-def phase_id_from_archive(archive_path: Path, phase_title: str) -> str:
-    title_norm = normalize_phase_title(phase_title)
-    for entry in list_archive_entries(archive_path):
-        if normalize_phase_title(entry.get("phase") or "") != title_norm:
-            continue
-        pid = (entry.get("phase_id") or "").strip()
-        if pid:
-            return pid
-    return ""
-
-
-def first_archive_date_from_archive(archive_path: Path, phase_title: str) -> str | None:
-    title_norm = normalize_phase_title(phase_title)
-    earliest: str | None = None
-    for entry in list_archive_entries(archive_path):
-        if normalize_phase_title(entry.get("phase") or "") != title_norm:
-            continue
-        raw = entry.get("raw") or ""
-        for part in (p.strip() for p in raw.split(" · ")):
-            if part.startswith(("closed:", "phase:", "src:", "phase_id:")):
-                continue
-            if _ISO_DATE_PREFIX_RE.match(part):
-                date_part = part[:10]
-                if earliest is None or date_part < earliest:
-                    earliest = date_part
-                break
-    return earliest
-
-
-def resolve_or_assign_phase_id(
-    paths: AgentPaths,
-    project_id: str,
-    phase_title: str,
-    *,
-    archive_path: Path | None = None,
-) -> str:
-    """Return 12-char stable_id; create registry + archive mapping on first use."""
-    title = (phase_title or "").strip()
-    if not title:
-        return ""
-    reg_path = phase_registry_path(paths, project_id)
-    registry = load_phase_registry(reg_path)
-    if title in registry:
-        return registry[title]
-    ap = archive_path or (project_dir(paths, project_id) / TASKS_ARCHIVE_NAME)
-    existing = phase_id_from_archive(ap, title)
-    if existing:
-        registry[title] = existing
-        save_phase_registry(reg_path, registry)
-        return existing
-    first_date = first_archive_date_from_archive(ap, title) or utc_today_iso()
-    stable_id = compute_phase_stable_id(title, project_id, first_date)
-    registry[title] = stable_id
-    save_phase_registry(reg_path, registry)
-    return stable_id
-
-
-def format_phase_key(stable_id: str) -> str:
-    return f"{PHASE_ID_KEY_PREFIX}{stable_id}"
-
-
-_PHASE_KEY_LEGACY_INDEX_RE = re.compile(r"^phase:(\d+)$")
-_PHASE_KEY_LEGACY_TITLE_RE = re.compile(r"^title:([a-f0-9]{12})$")
-
-
-def is_persisted_milestone_phase_key(key: str) -> bool:
-    """Keys written by ``_save_state`` after T-5402 migration."""
-    k = (key or "").strip()
-    if not k:
-        return False
-    if k == MILESTONE_PROJECT_COMPLETE_KEY:
-        return True
-    return k.startswith(PHASE_ID_KEY_PREFIX)
-
-
-def _phase_title_sha1_prefix(title: str) -> str:
-    return hashlib.sha1(normalize_phase_title(title).encode("utf-8")).hexdigest()[:12]
-
-
-def unique_archive_phase_titles(archive_path: Path) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for entry in list_archive_entries(archive_path):
-        phase = (entry.get("phase") or "").strip()
-        if not phase:
-            continue
-        norm = normalize_phase_title(phase)
-        if norm in seen:
-            continue
-        seen.add(norm)
-        out.append(phase)
-    return out
-
-
-def build_suggestion_phase_key_map(
-    active_suggestions: dict[str, dict[str, Any]],
-) -> dict[str, str]:
-    """Map legacy ``phase_key`` → phase title from milestone suggestion payloads."""
-    out: dict[str, str] = {}
-    for sug in active_suggestions.values():
-        if not isinstance(sug, dict) or sug.get("kind") != "milestone_review":
-            continue
-        payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
-        phase_key = str(payload.get("phase_key") or "").strip()
-        phase = str(payload.get("phase") or "").strip()
-        if phase_key and phase:
-            out[phase_key] = phase
-    return out
-
-
-def phase_title_for_legacy_phase_key(
-    legacy_key: str,
-    *,
-    tasks_lines: list[str],
-    archive_path: Path,
-    suggestion_phase_by_key: dict[str, str] | None = None,
-) -> str | None:
-    m = _PHASE_KEY_LEGACY_INDEX_RE.match((legacy_key or "").strip())
-    if not m:
-        return None
-    idx = int(m.group(1))
-    hints = suggestion_phase_by_key or {}
-    if legacy_key in hints:
-        return hints[legacy_key]
-    headers = [title for _line_i, title in iter_phase_headers(tasks_lines)]
-    if 1 <= idx <= len(headers):
-        return headers[idx - 1]
-    archive_phases = unique_archive_phase_titles(archive_path)
-    if 1 <= idx <= len(archive_phases):
-        return archive_phases[idx - 1]
-    return None
-
-
-def phase_title_for_legacy_title_key(
-    legacy_key: str,
-    *,
-    tasks_lines: list[str],
-    archive_path: Path,
-) -> str | None:
-    m = _PHASE_KEY_LEGACY_TITLE_RE.match((legacy_key or "").strip())
-    if not m:
-        return None
-    want = m.group(1)
-    for _line_i, title in iter_phase_headers(tasks_lines):
-        if _phase_title_sha1_prefix(title) == want:
-            return title
-    for title in unique_archive_phase_titles(archive_path):
-        if _phase_title_sha1_prefix(title) == want:
-            return title
-    return None
-
-
-def migrate_legacy_milestone_phase_key(
-    legacy_key: str,
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    tasks_path: Path,
-    archive_path: Path,
-    suggestion_phase_by_key: dict[str, str] | None = None,
-) -> str | None:
-    """Map ``phase:N`` / ``title:hash`` → ``phase_id:<stable>`` via archive (T-5402)."""
-    key = (legacy_key or "").strip()
-    if not key or is_persisted_milestone_phase_key(key):
-        return None
-    tasks_lines = (
-        tasks_path.read_text(encoding="utf-8").splitlines()
-        if tasks_path.is_file()
-        else []
-    )
-    title: str | None = None
-    if _PHASE_KEY_LEGACY_INDEX_RE.match(key):
-        title = phase_title_for_legacy_phase_key(
-            key,
-            tasks_lines=tasks_lines,
-            archive_path=archive_path,
-            suggestion_phase_by_key=suggestion_phase_by_key,
-        )
-    elif _PHASE_KEY_LEGACY_TITLE_RE.match(key):
-        title = phase_title_for_legacy_title_key(
-            key,
-            tasks_lines=tasks_lines,
-            archive_path=archive_path,
-        )
-    if not title:
-        return None
-    stable_id = phase_id_from_archive(archive_path, title)
-    if not stable_id:
-        stable_id = resolve_or_assign_phase_id(
-            paths,
-            project_id,
-            title,
-            archive_path=archive_path,
-        )
-    if not stable_id:
-        return None
-    return format_phase_key(stable_id)
-
-
-def migrate_milestone_phase_key_set(
-    keys: set[str] | frozenset[str],
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    tasks_path: Path,
-    archive_path: Path,
-    suggestion_phase_by_key: dict[str, str] | None = None,
-) -> tuple[set[str], bool]:
-    """Add ``phase_id`` equivalents for legacy keys; keep originals in memory (PK-4)."""
-    out = {str(k).strip() for k in keys if str(k).strip()}
-    changed = False
-    for key in list(out):
-        if is_persisted_milestone_phase_key(key):
-            continue
-        new_key = migrate_legacy_milestone_phase_key(
-            key,
-            paths,
-            project_id,
-            tasks_path=tasks_path,
-            archive_path=archive_path,
-            suggestion_phase_by_key=suggestion_phase_by_key,
-        )
-        if new_key and new_key not in out:
-            out.add(new_key)
-            changed = True
-    return out, changed
-
-
-def milestone_phase_keys_for_persist(keys: set[str] | frozenset[str]) -> list[str]:
-    """Drop superseded legacy keys when canonical ``phase_id`` keys exist (T-5402)."""
-    normalized = {str(k).strip() for k in keys if str(k).strip()}
-    canonical = {k for k in normalized if is_persisted_milestone_phase_key(k)}
-    legacy = normalized - canonical
-    if not legacy:
-        return sorted(canonical)
-    has_phase_id = any(k.startswith(PHASE_ID_KEY_PREFIX) for k in canonical)
-    if has_phase_id:
-        legacy = {
-            k
-            for k in legacy
-            if not (
-                _PHASE_KEY_LEGACY_INDEX_RE.match(k)
-                or _PHASE_KEY_LEGACY_TITLE_RE.match(k)
-            )
-        }
-    return sorted(canonical | legacy)
-
-
-def migrate_active_milestone_suggestion_keys(
-    active_suggestions: dict[str, dict[str, Any]],
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    tasks_path: Path,
-    archive_path: Path,
-    suggestion_phase_by_key: dict[str, str] | None = None,
-) -> tuple[dict[str, dict[str, Any]], bool]:
-    changed = False
-    for sug in active_suggestions.values():
-        if not isinstance(sug, dict):
-            continue
-        payload = sug.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        old_key = str(payload.get("phase_key") or "").strip()
-        if not old_key or is_persisted_milestone_phase_key(old_key):
-            continue
-        new_key = migrate_legacy_milestone_phase_key(
-            old_key,
-            paths,
-            project_id,
-            tasks_path=tasks_path,
-            archive_path=archive_path,
-            suggestion_phase_by_key=suggestion_phase_by_key,
-        )
-        if new_key:
-            payload["phase_key"] = new_key
-            changed = True
-    return active_suggestions, changed
-
-
-def phase_open_count_visible(
-    tasks_lines: list[str],
-    phase_title: str,
-    *,
-    exact: bool = True,
-) -> int:
-    """Count open checkboxes under *phase_title* (visible lines only).
-
-    Uses ``iter_tasks_lines_skipping_closed``. When *exact* is True (default),
-    the phase header must match *phase_title* exactly — not substring.
-    """
-    if not phase_title.strip():
-        return 0
-    visible = iter_tasks_lines_skipping_closed("\n".join(tasks_lines))
-    if not visible:
-        return 0
-    open_n = 0
-    for vis_i, (_orig_i, line) in enumerate(visible):
-        phase = _phase_title_at(visible, vis_i) or ""
-        if exact:
-            if phase != phase_title:
-                continue
-        elif phase_title.casefold() not in phase.casefold():
-            continue
-        if _TASK_OPEN_RE.match(line):
-            open_n += 1
-    return open_n
-
-
-def archive_done_count_for_phase(archive_path: Path, phase_title: str) -> int:
-    """Count archive entries with exact *phase* match and ``closed:done``."""
-    if not phase_title.strip():
-        return 0
-    n = 0
-    for entry in list_archive_entries(archive_path):
-        if entry.get("phase") != phase_title:
-            continue
-        if (entry.get("reason") or "done") != "done":
-            continue
-        n += 1
-    return n
-
-
-def phase_key_for_title(
-    file_lines: list[str],
-    phase_title: str,
-    *,
-    paths: AgentPaths | None = None,
-    project_id: str = "",
-    archive_path: Path | None = None,
-) -> str:
-    """Stable milestone dedup key (MILESTONE-PHASE-KEY v2 · T-5401).
-
-    Prefer ``phase_registry.json`` / archive ``phase_id`` → ``phase_id:<stable>``;
-    else 1-based ``## `` index → ``phase:N``; else ``title:<sha1[:12]>``.
-    """
-    title = (phase_title or "").strip()
-    if not title:
-        digest = hashlib.sha1(b"").hexdigest()[:12]
-        return f"title:{digest}"
-    if paths and project_id:
-        registry = load_phase_registry(phase_registry_path(paths, project_id))
-        stable_id = (registry.get(title) or "").strip()
-        if not stable_id:
-            ap = archive_path or (project_dir(paths, project_id) / TASKS_ARCHIVE_NAME)
-            stable_id = phase_id_from_archive(ap, title)
-        if stable_id:
-            return format_phase_key(stable_id)
-    for idx, (_line_i, header) in enumerate(iter_phase_headers(file_lines), start=1):
-        if header == title:
-            return f"phase:{idx}"
-    digest = hashlib.sha1(title.casefold().encode("utf-8")).hexdigest()[:12]
-    return f"title:{digest}"
-
-
-def evaluate_milestone_after_archive(
-    *,
-    tasks_path: Path,
-    archive_path: Path,
-    phase: str,
-    project_id: str = "",
-    paths: AgentPaths | None = None,
-    reminded_phase_keys: frozenset[str] | set[str] | None = None,
-    dismissed_phase_keys: frozenset[str] | set[str] | None = None,
-) -> dict[str, Any]:
-    """Post-archive M1/M2 snapshot (LOCAL-DELIVERY-MODEL §5.3–5.4 · T-4714).
-
-  Does **not** spawn ``deliverable_review`` or write suggestions — callers
-  (``plan_agent.report_progress`` · T-4715) decide whether to remind.
-    """
-    reminded = frozenset(reminded_phase_keys or ())
-    dismissed = frozenset(dismissed_phase_keys or ())
-    file_lines = (
-        tasks_path.read_text(encoding="utf-8").splitlines()
-        if tasks_path.is_file()
-        else []
-    )
-    phase_title = (phase or "").strip()
-    open_after = phase_open_count_visible(file_lines, phase_title, exact=True)
-    archive_done = archive_done_count_for_phase(archive_path, phase_title)
-    stats = read_task_stats(tasks_path)
-
-    m1 = open_after == 0 and archive_done > 0
-    m2 = stats.total == stats.done and stats.done > 0
-
-    phase_key = (
-        phase_key_for_title(
-            file_lines,
-            phase_title,
-            paths=paths,
-            project_id=project_id,
-            archive_path=archive_path,
-        )
-        if phase_title
-        else ""
-    )
-    blocked = phase_key in reminded or phase_key in dismissed
-    project_blocked = (
-        MILESTONE_PROJECT_COMPLETE_KEY in reminded
-        or MILESTONE_PROJECT_COMPLETE_KEY in dismissed
-    )
-
-    should_remind_m1 = m1 and bool(phase_key) and not blocked
-    should_remind_m2 = m2 and not project_blocked
-    should_remind = should_remind_m1 or should_remind_m2
-    if should_remind_m1 and should_remind_m2:
-        remind_scope = "phase_and_project"
-    elif should_remind_m2:
-        remind_scope = "project"
-    elif should_remind_m1:
-        remind_scope = "phase"
-    else:
-        remind_scope = ""
-
-    return {
-        "phase": phase_title,
-        "phase_key": phase_key,
-        "open_after": open_after,
-        "archive_done": archive_done,
-        "m1": m1,
-        "m2": m2,
-        "should_remind_m1": should_remind_m1,
-        "should_remind_m2": should_remind_m2,
-        "should_remind": should_remind,
-        "remind_scope": remind_scope,
-        "tasks_open": stats.open_count,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
-
-def migrate_closed_sections_to_archive(paths: AgentPaths, project_id: str) -> int:
-    """Move ## 已关闭 / Archive section tasks into TASKS.archive.md."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        return 0
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    keep: list[str] = []
-    moved = 0
-    in_closed = False
-    current_phase = ""
-    for line in file_lines:
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            title = stripped.lstrip("#").strip()
-            if is_closed_section_title(title):
-                in_closed = True
-                current_phase = title
-                continue  # drop closed header
-            in_closed = False
-            current_phase = title
-            keep.append(line)
-            continue
-        if in_closed:
-            if _TASK_OPEN_RE.match(line) or _TASK_DONE_RE.match(line):
-                m = _TASK_CHECKBOX_RE.match(line)
-                body = m.group(1).strip() if m else line.strip()
-                reason = "done" if _TASK_DONE_RE.match(line) else "wontfix"
-                append_tasks_archive(
-                    paths,
-                    project_id,
-                    body=body,
-                    reason=reason,
-                    phase=current_phase,
-                    source="migrate_closed",
-                )
-                moved += 1
-            # skip non-task lines inside closed section too
-            continue
-        keep.append(line)
-    if moved:
-        content = "\n".join(keep)
-        if not content.endswith("\n"):
-            content += "\n"
-        tasks_path.write_text(content, encoding="utf-8")
-    return moved
-
 
 # Stable order for prompts and goals. Light scaffolds omit the standard-only docs.
-_CONTEXT_PLAN_FILES = (
+_CONTEXT_PLAN_FILES = (  # TASKS.md intentionally excluded: task subsystem removed
     "PROJECT.md",
-    "TASKS.md",
     "VERIFY.md",
     "ENV.md",
     "MAP.md",
@@ -1906,8 +809,6 @@ def build_project_goal(
 ) -> str:
     lines = [
         f"项目根：{project_root}",
-        f"进度真源：{project_root}/TASKS.md（开放队列）",
-        f"归档：{project_root}/TASKS.archive.md",
     ]
     names = list(plan_files) if plan_files is not None else ["MAP.md"]
     if "MAP.md" in names:
@@ -1964,12 +865,9 @@ def is_active_project(meta: object) -> bool:
 
 
 def project_plan_gate_open(meta: object) -> bool:
-    """True when session is bound to a project but plan is not confirmed."""
-    root = getattr(meta, "project_root", "") or ""
-    if not str(root).strip():
-        return False
-    status = getattr(meta, "project_plan_status", "") or "draft"
-    return not plan_allows_code_writes(str(status))
+    """Plan confirmation gate removed (no task subsystem): never open."""
+    del meta
+    return False
 
 
 def plan_allows_code_writes(plan_status: str) -> bool:
@@ -2020,8 +918,6 @@ def ordinary_project_session(session: object) -> bool:
     meta = getattr(session, "meta", session)
     if meta is None:
         return False
-    if bool(getattr(meta, "runaway_enabled", getattr(meta, "project_runaway_enabled", False))):
-        return False
     if (getattr(meta, "active_shell", "") or "") != "project":
         return False
     if not (getattr(meta, "project_id", "") or "").strip():
@@ -2056,24 +952,6 @@ def ordinary_skip_stage_walls(
         except Exception:
             pass
     return False
-
-
-def ordinary_direct_implement_draft_allowed(session: object) -> bool:
-    """True when ordinary project draft may auto-enter coding.
-
-    Direct / light paths skip textbook documentation/design walls. Plan entry
-    still refuses auto-confirm so 「规划后开工」 stays an explicit gate.
-    """
-    if not ordinary_project_session(session):
-        return False
-    meta = getattr(session, "meta", None)
-    status = str(getattr(meta, "project_plan_status", "") or "draft")
-    if status not in {"draft", "plan_dirty"}:
-        return False
-    entry = normalize_project_entry(getattr(meta, "project_entry", ""))
-    if entry == "plan":
-        return False
-    return True
 
 
 def _ordinary_question_or_recall(user_text: str, turn_intent: str = "") -> bool:
@@ -2157,36 +1035,6 @@ def should_skip_ordinary_plan_spawn(
     return intent == "execute"
 
 
-def should_skip_ordinary_plan_request(
-    session: object,
-    paths: AgentPaths,
-    *,
-    plan_structure_changed: bool = False,
-) -> bool:
-    """Ordinary questions must not re-open the plan-confirm banner.
-
-    Question, reply-only, and recall turns skip ``plan.request``. A turn that
-    changed plan documents, or that marked the plan dirty, still emits.
-    """
-    if plan_structure_changed:
-        return False
-    if not ordinary_project_session(session):
-        return False
-    meta = getattr(session, "meta", None)
-    pid = str(getattr(meta, "project_id", "") or "").strip()
-    start = getattr(session, "plan_files_fingerprint_at_turn_start", None)
-    if start and pid and plan_files_fingerprint(paths, pid) != start:
-        return False
-    messages = getattr(session, "messages", None) or []
-    user_text = ""
-    for msg in reversed(messages):
-        if isinstance(msg, dict) and msg.get("role") == "user" and isinstance(msg.get("content"), str):
-            user_text = msg["content"]
-            break
-    intent = str(getattr(session, "turn_intent", "") or "")
-    return _ordinary_question_or_recall(user_text, intent)
-
-
 def maybe_auto_confirm_plan_for_direct_implement(session: object) -> str | None:
     """Arm one ordinary execute request without mutating persisted stage facts."""
     if not ordinary_project_session(session):
@@ -2207,450 +1055,15 @@ def is_project_artifact_path(path: str, project_root: str) -> bool:
     return rel in PROJECT_ARTIFACTS
 
 
-def is_project_tasks_path(path: str, project_root: str) -> bool:
-    rel = project_path_rel(path, project_root)
-    return rel in {"TASKS.md", TASKS_ARCHIVE_NAME}
-
 
 def is_plan_domain_path(path: str, project_root: str) -> bool:
     """True when path targets a plan-domain basename under project root (Phase 39 B5)."""
     rel = project_path_rel(path, project_root)
     if rel is None or not rel or "/" in rel:
         return False
-    return rel in PLAN_DOMAIN_FILES or rel == TASKS_ARCHIVE_NAME
+    return rel in PLAN_DOMAIN_FILES
 
 
-# bug-fix repairing lane may patch plan/quality config (BF3); MAP + archive stay forbidden.
-BUG_FIX_PLAN_WRITE_ALLOWLIST = frozenset(
-    {"PROJECT.md", "DESIGN.md", "TASKS.md", "VERIFY.md", "ENV.md"}
-)
-_BUG_FIX_ALLOWED_PLAN_WRITES = BUG_FIX_PLAN_WRITE_ALLOWLIST
-_BUG_FIX_FORBIDDEN_PLAN_WRITES = frozenset({"MAP.md", TASKS_ARCHIVE_NAME})
-_BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG = "bug-fix 轨禁止修改 MAP 或 TASKS.archive"
-
-
-def _path_matches_write_scope(rel_path: str, write_scope: tuple[str, ...]) -> bool:
-    import fnmatch
-
-    rel = rel_path.replace("\\", "/")
-    for pattern in write_scope:
-        pat = pattern.replace("\\", "/")
-        if fnmatch.fnmatch(rel, pat):
-            return True
-        if fnmatch.fnmatch(rel.split("/")[-1], pat):
-            return True
-    return False
-
-
-def main_agent_plan_domain_write_block(
-    *,
-    project_root: str,
-    tool_name: str,
-    arguments: dict[str, object],
-    bug_fix_lane: bool = False,
-    runaway_v2_write_scope: tuple[str, ...] | None = None,
-    allow_ordinary_plan_writes: bool = False,
-) -> str | None:
-    """B5: main Agent must not write TASKS/MAP/PROJECT/ENV directly.
-
-    Ordinary / direct (non-runaway) may write the nine standard docs; MAP and
-    TASKS.archive stay protected.
-    """
-    root = project_root.strip()
-    if not root or tool_name != "run_evolved":
-        return None
-    evolved = arguments.get("tool_name")
-    evolved_name = evolved.strip() if isinstance(evolved, str) else ""
-
-    def _block_for(path: str, *, patch_only_plan: bool) -> str | None:
-        if not path:
-            return None
-        if patch_only_plan:
-            if not is_plan_domain_path(path, root):
-                return None
-        elif not (is_plan_domain_path(path, root) or is_project_tasks_path(path, root)):
-            return None
-        rel = project_path_rel(path, root)
-        if bug_fix_lane:
-            if rel and rel in _BUG_FIX_FORBIDDEN_PLAN_WRITES:
-                return _BUG_FIX_FORBIDDEN_PLAN_WRITE_MSG
-            if rel and rel in _BUG_FIX_ALLOWED_PLAN_WRITES:
-                return None
-        if runaway_v2_write_scope:
-            if rel and _path_matches_write_scope(rel, runaway_v2_write_scope):
-                return None
-        if allow_ordinary_plan_writes:
-            if rel and rel in ORDINARY_PLAN_WRITE_PROTECTED:
-                return ORDINARY_PROTECTED_WRITE_BLOCK_MSG
-            if rel and rel in ORDINARY_PLAN_WRITE_ALLOWLIST:
-                return None
-            if rel == TASKS_ARCHIVE_NAME:
-                return ORDINARY_PROTECTED_WRITE_BLOCK_MSG
-        return PLAN_DOMAIN_WRITE_BLOCK_MSG
-
-    if evolved_name in _WRITE_TOOLS:
-        for path in extract_run_evolved_paths(tool_name, arguments):
-            blocked = _block_for(path, patch_only_plan=False)
-            if blocked:
-                return blocked
-    if evolved_name == "patch_file":
-        for path in extract_run_evolved_paths(tool_name, arguments):
-            blocked = _block_for(path, patch_only_plan=True)
-            if blocked:
-                return blocked
-    return None
-
-
-_CONTINUE_UTTERANCE_RE = re.compile(
-    r"^\s*(继续|下一\s*task|下一项|开始下一项|开始编码)\s*[。.!！]?$",
-    re.IGNORECASE,
-)
-
-
-def is_project_continue_utterance(text: str) -> bool:
-    """True when user asks to continue the next TASKS checkbox (TASK-STOP S6)."""
-    if not isinstance(text, str):
-        return False
-    stripped = text.strip()
-    if not stripped:
-        return False
-    if _CONTINUE_UTTERANCE_RE.fullmatch(stripped):
-        return True
-    # Short prefixes still count as continue intent.
-    lowered = stripped.lower()
-    for prefix in ("继续", "下一 task", "下一task", "下一项", "开始下一项", "开始编码"):
-        if stripped.startswith(prefix) or lowered.startswith(prefix.lower()):
-            if len(stripped) <= 24:
-                return True
-    return False
-
-
-def formal_task_id_from_checkbox_line(line: str) -> str | None:
-    """Return ``T-*`` id for a checkbox line when the body *starts* with ``T-*``."""
-    match = _TASK_CHECKBOX_RE.match(line or "")
-    if not match:
-        return None
-    return formal_task_id(None, match.group(1))
-
-
-def formal_task_id(task_id: str | None, body: str | None = None) -> str | None:
-    """Normalize to a formal queue ``T-*`` id only when it leads the task body."""
-    body_text = (body or "").strip()
-    if not body_text:
-        return None
-    lead = _FORMAL_TASK_LEAD_RE.match(body_text)
-    if not lead:
-        return None
-    return lead.group(1).upper()
-
-
-def inline_verify_ids(task_text: str) -> list[str]:
-    """Extract ``V-*`` ids from inline task text such as ``（V-015）``."""
-    return sorted({match.upper() for match in _VERIFY_ID_INLINE_RE.findall(task_text or "")})
-
-
-def first_open_task_line(tasks_text: str) -> str | None:
-    for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
-        if _TASK_OPEN_RE.match(line) and formal_task_id_from_checkbox_line(line):
-            return line.strip()
-    return None
-
-
-def first_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
-    """Return (line_idx, body, tid) for the first open formal task, else (None, None, None)."""
-    for i, line in iter_tasks_lines_skipping_closed(tasks_text):
-        if not _TASK_OPEN_RE.match(line):
-            continue
-        m = _TASK_CHECKBOX_RE.match(line)
-        body = m.group(1).strip() if m else line.strip()
-        task_id = formal_task_id(None, body)
-        if not task_id:
-            continue
-        return i, body, task_id
-    return None, None, None
-
-
-def next_open_task(tasks_text: str) -> tuple[int | None, str | None, str | None]:
-    """Return the first open task whose ``depends_on`` IDs are complete."""
-    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
-    tasks = parse_tasks_metadata(tasks_text)
-    done_ids = {
-        str(task.get("id") or "").upper()
-        for task in tasks
-        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
-    }
-    for task in tasks:
-        line_index = int(task.get("line", -1))
-        line = visible.get(line_index, "")
-        if not line or not _TASK_OPEN_RE.match(line):
-            continue
-        dependencies = {
-            value.upper()
-            for value in task.get("depends_on", [])
-            if str(value).strip()
-        }
-        if dependencies and not dependencies.issubset(done_ids):
-            continue
-        body_match = _TASK_CHECKBOX_RE.match(line)
-        body = body_match.group(1).strip() if body_match else line.strip()
-        task_id = formal_task_id(task.get("id"), body)
-        if not task_id:
-            continue
-        return line_index, body, task_id
-    return None, None, None
-
-
-def formal_task_stats(tasks_text: str, *, archive_done: int = 0) -> TaskStats:
-    """Count only formal ``T-*`` checkbox tasks (ignores plan/noise open items)."""
-    open_count = 0
-    done_count = 0
-    for _i, line in iter_tasks_lines_skipping_closed(tasks_text):
-        if not formal_task_id_from_checkbox_line(line):
-            continue
-        if _TASK_OPEN_RE.match(line):
-            open_count += 1
-        elif _TASK_DONE_RE.match(line):
-            done_count += 1
-    done = done_count + max(0, int(archive_done or 0))
-    return TaskStats(done=done, total=done + open_count)
-
-
-def task_dependency_blockers(tasks_text: str) -> dict[str, list[str]]:
-    """Return unresolved dependency IDs for each currently open task."""
-    visible = {index: line for index, line in iter_tasks_lines_skipping_closed(tasks_text)}
-    tasks = parse_tasks_metadata(tasks_text)
-    done_ids = {
-        str(task.get("id") or "").upper()
-        for task in tasks
-        if task.get("id") and _TASK_DONE_RE.match(visible.get(int(task["line"]), ""))
-    }
-    blockers: dict[str, list[str]] = {}
-    for task in tasks:
-        task_id = str(task.get("id") or "").upper()
-        line = visible.get(int(task.get("line", -1)), "")
-        # ``formal_task_id`` validates the task body as well as the id.  Here
-        # the parsed id is all we have, so pass it as the body too; calling it
-        # with the default empty body silently rejected every dependency task.
-        if not task_id or not formal_task_id(task_id, task_id) or not _TASK_OPEN_RE.match(line):
-            continue
-        missing = sorted(
-            {
-                value.upper()
-                for value in task.get("depends_on", [])
-                if str(value).strip() and value.upper() not in done_ids
-            }
-        )
-        if missing:
-            blockers[task_id] = missing
-    return blockers
-
-
-def is_closed_section_title(title: str) -> bool:
-    """True for PLAN-ARCH closed/archive section headers (LLM-invisible)."""
-    key = (title or "").strip()
-    if not key:
-        return False
-    return bool(_CLOSED_SECTION_TITLE_RE.match(key))
-
-
-def is_tasks_archive_filename(name: str) -> bool:
-    return Path(str(name or "")).name.replace("\\", "/") == TASKS_ARCHIVE_NAME
-
-
-def iter_tasks_lines_skipping_closed(tasks_text: str) -> list[tuple[int, str]]:
-    """Yield (original_line_index, line) skipping closed/archive sections."""
-    out: list[tuple[int, str]] = []
-    in_closed = False
-    for i, line in enumerate((tasks_text or "").splitlines()):
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            title = stripped.lstrip("#").strip()
-            in_closed = is_closed_section_title(title)
-            if in_closed:
-                continue
-        if in_closed:
-            continue
-        out.append((i, line))
-    return out
-
-
-def _phase_title_at(lines: list[tuple[int, str]], pos: int) -> str | None:
-    current: str | None = None
-    for j in range(0, pos + 1):
-        stripped = lines[j][1].strip()
-        if stripped.startswith("## "):
-            current = stripped.lstrip("#").strip()
-    return current
-
-
-def select_open_task_indices_for_injection(
-    tasks_text: str,
-    *,
-    open_cap: int = TASKS_INJECTION_OPEN_CAP,
-) -> list[int]:
-    """Original line indices of open checkboxes to inject (active phase first)."""
-    visible = iter_tasks_lines_skipping_closed(tasks_text)
-    if not visible:
-        return []
-    active = active_phase_title_from_lines([ln for _, ln in visible])
-    active_idxs: list[int] = []
-    other_idxs: list[int] = []
-    for vis_i, (orig_i, line) in enumerate(visible):
-        if not _TASK_OPEN_RE.match(line):
-            continue
-        phase = _phase_title_at(visible, vis_i)
-        if active and phase and phase.lower() == active.lower():
-            active_idxs.append(orig_i)
-        else:
-            other_idxs.append(orig_i)
-    ordered = active_idxs + other_idxs
-    cap = max(0, int(open_cap))
-    return ordered[:cap] if cap else []
-
-
-def build_tasks_injection_slice(
-    tasks_text: str,
-    *,
-    open_cap: int = TASKS_INJECTION_OPEN_CAP,
-) -> str:
-    """Open-queue markdown for LLM injection (PLAN-ARCH A3 · M1).
-
-    Excludes closed sections and ``[x]`` lines. Caps open checkboxes.
-    Never includes ``TASKS.archive.md`` (caller must not concatenate it).
-    """
-    selected = set(select_open_task_indices_for_injection(tasks_text, open_cap=open_cap))
-    visible = iter_tasks_lines_skipping_closed(tasks_text)
-    if not visible:
-        return ""
-
-    # done counts per phase (visible only) for omit notes
-    done_by_phase: dict[str, int] = {}
-    open_by_phase: dict[str, int] = {}
-    for vis_i, (_orig_i, line) in enumerate(visible):
-        phase = _phase_title_at(visible, vis_i) or ""
-        if _TASK_DONE_RE.match(line):
-            done_by_phase[phase] = done_by_phase.get(phase, 0) + 1
-        elif _TASK_OPEN_RE.match(line):
-            open_by_phase[phase] = open_by_phase.get(phase, 0) + 1
-
-    out: list[str] = []
-    emitted_phase: set[str] = set()
-    omitted_open = max(0, sum(open_by_phase.values()) - len(selected))
-
-    for vis_i, (orig_i, line) in enumerate(visible):
-        stripped = line.strip()
-        if stripped.startswith("# ") and not stripped.startswith("## "):
-            out.append(stripped)
-            continue
-        if stripped.startswith("## "):
-            title = stripped.lstrip("#").strip()
-            # Emit phase header only when we will show opens under it
-            will_show = any(
-                oi in selected
-                and (_phase_title_at(visible, vi) or "") == title
-                for vi, (oi, _) in enumerate(visible)
-            )
-            if will_show and title not in emitted_phase:
-                out.append(f"## {title}")
-                emitted_phase.add(title)
-                done_n = done_by_phase.get(title, 0)
-                if done_n:
-                    out.append(f"（本 Phase {done_n} 条已完成已省略）")
-            continue
-        if orig_i in selected:
-            phase = _phase_title_at(visible, vis_i) or ""
-            if phase and phase not in emitted_phase:
-                out.append(f"## {phase}")
-                emitted_phase.add(phase)
-                done_n = done_by_phase.get(phase, 0)
-                if done_n:
-                    out.append(f"（本 Phase {done_n} 条已完成已省略）")
-            out.append(line.rstrip())
-
-    if omitted_open:
-        out.append(f"（另有 {omitted_open} 条开放项未注入 · cap={open_cap}）")
-    out.append(
-        "（注入切片：不含 [x] / 不含已关闭区 / 不含 TASKS.archive.md；"
-        "全文以磁盘为准，按需 read_file）"
-    )
-    return "\n".join(out).strip()
-
-
-def format_tasks_open_slice_numbered(
-    tasks_text: str,
-    *,
-    open_cap: int = TASKS_INJECTION_OPEN_CAP,
-) -> str:
-    """Plan-Agent view: original line numbers for open items + phase headers only."""
-    selected = set(select_open_task_indices_for_injection(tasks_text, open_cap=open_cap))
-    visible = iter_tasks_lines_skipping_closed(tasks_text)
-    if not visible:
-        return "（无开放项）"
-
-    done_by_phase: dict[str, int] = {}
-    for vis_i, (_orig_i, line) in enumerate(visible):
-        if _TASK_DONE_RE.match(line):
-            phase = _phase_title_at(visible, vis_i) or ""
-            done_by_phase[phase] = done_by_phase.get(phase, 0) + 1
-
-    out: list[str] = []
-    emitted_phase: set[str] = set()
-    for vis_i, (orig_i, line) in enumerate(visible):
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            title = stripped.lstrip("#").strip()
-            will_show = any(
-                oi in selected
-                and (_phase_title_at(visible, vi) or "") == title
-                for vi, (oi, _) in enumerate(visible)
-            )
-            if will_show and title not in emitted_phase:
-                out.append(f"{orig_i}|{line.rstrip()}")
-                emitted_phase.add(title)
-                done_n = done_by_phase.get(title, 0)
-                if done_n:
-                    out.append(f"#|（本 Phase {done_n} 条 [x] 已省略）")
-            continue
-        if orig_i in selected:
-            phase = _phase_title_at(visible, vis_i) or ""
-            if phase and phase not in emitted_phase:
-                # synthetic: find header line index
-                header_i = None
-                for back in range(vis_i, -1, -1):
-                    if visible[back][1].strip().startswith("## "):
-                        header_i = visible[back][0]
-                        break
-                if header_i is not None:
-                    out.append(f"{header_i}|## {phase}")
-                else:
-                    out.append(f"#|## {phase}")
-                emitted_phase.add(phase)
-                done_n = done_by_phase.get(phase, 0)
-                if done_n:
-                    out.append(f"#|（本 Phase {done_n} 条 [x] 已省略）")
-            out.append(f"{orig_i}|{line.rstrip()}")
-
-    if not selected:
-        return "（无开放项；已关闭区与 [x] 未注入）"
-    out.append(
-        "#|（注入切片：行号=原 TASKS.md；不含已关闭区 / TASKS.archive.md）"
-    )
-    return "\n".join(out)
-
-
-def read_tasks_text_for_injection(tasks_path: Path | None) -> str:
-    """Read TASKS.md only — never TASKS.archive.md (PLAN-ARCH Q2 / IT-180)."""
-    if tasks_path is None:
-        return ""
-    path = Path(tasks_path)
-    if is_tasks_archive_filename(path.name):
-        return ""
-    if not path.is_file():
-        return ""
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
 
 
 def normalize_delivery_profile(value: Any) -> ProjectDeliveryProfile:
@@ -2669,9 +1082,6 @@ def get_delivery_profile(meta: Any) -> ProjectDeliveryProfile:
     return normalize_delivery_profile(getattr(meta, "project_delivery_profile", "solo"))
 
 
-def ritual_task_stop_enabled(meta: Any) -> bool:
-    return get_delivery_profile(meta) == "ritual"
-
 
 def set_delivery_profile(session: Any, mode: str) -> ProjectDeliveryProfile:
     """Persist delivery profile on session meta."""
@@ -2681,46 +1091,6 @@ def set_delivery_profile(session: Any, mode: str) -> ProjectDeliveryProfile:
 
     session.meta.updated_at = utc_now_iso()
     return profile
-
-
-def task_stop_block_reason(
-    *,
-    active_shell: str,
-    project_root: str,
-    task_stop_armed: bool,
-    tool_name: str,
-    arguments: dict[str, object],
-    delivery_profile: str = "ritual",
-    runaway_enabled: bool = False,
-) -> str | None:
-    """Block product writes after a TASKS checkbox was completed this turn (S5/S10)."""
-    if runaway_enabled or normalize_delivery_profile(delivery_profile) == "solo":
-        return None
-    if not task_stop_armed or active_shell != "project":
-        return None
-    root = project_root.strip()
-    if not root:
-        return None
-    if tool_name != "run_evolved":
-        return None
-    evolved = arguments.get("tool_name")
-    evolved_name = evolved.strip() if isinstance(evolved, str) else ""
-    if evolved_name not in _WRITE_TOOLS and evolved_name != "patch_file":
-        return None
-    for path in extract_run_evolved_paths(tool_name, arguments):
-        if not path:
-            continue
-        rel = project_path_rel(path, root)
-        if rel is None:
-            continue
-        if is_project_artifact_path(path, root):
-            continue
-        return (
-            "[guard] 本轮已完成一条 TASKS 勾选（task 一停门）；"
-            "请结束本回合，用户回复「继续」后再写下一 task 产物。"
-            f" 被拒路径: {path}"
-        )
-    return None
 
 
 def extract_run_evolved_paths(tool_name: str, arguments: dict[str, object]) -> list[str]:
@@ -2778,7 +1148,7 @@ def project_mode_block_reason(
     *,
     active_shell: str,
     project_root: str,
-    plan_status: str,
+    plan_status: str = "",
     tool_name: str,
     arguments: dict[str, object],
     agent_paths: AgentPaths | None = None,
@@ -2790,19 +1160,19 @@ def project_mode_block_reason(
     ordinary_work_intent: str = "execute",
     ordinary_task_scope: str | None = None,
 ) -> str | None:
-    """Return user-facing block reason, or None if allowed."""
+    """Return user-facing block reason, or None if allowed.
+
+    Only safety guards remain (request intent, project-root scope, no-project
+    side effects, write_evolve / evolve clone in project windows). Plan/stage/
+    task gates were removed: planning is optional guidance via skills.
+    Legacy keyword arguments are accepted and ignored for compatibility.
+    """
+    del plan_status, agent_paths, workflow_stage, runaway_enabled, bug_fix_lane
+    del runaway_v2_write_scope, skip_stage_walls, ordinary_task_scope
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
-    effective_stage = workflow_stage or (
-        "implementation"
-        if plan_status == "confirmed"
-        else "preparing"
-        if runaway_enabled and active_shell == "project"
-        else ""
-    )
-    ordinary_mode = not runaway_enabled and active_shell == "project"
-    if ordinary_mode:
+    if active_shell == "project":
         ordinary_block = _ordinary_action_block_reason(
             project_root=project_root,
             tool_name=tool_name,
@@ -2838,162 +1208,10 @@ def project_mode_block_reason(
     if not root:
         return None
 
-    if (
-        active_shell == "project"
-        and effective_stage in {"verification", "release"}
-        and tool_name == "run_evolved"
-        and evolved_name in _VERIFY_STAGE_EXEC_TOOLS
-    ):
-        return None
-
-    ordinary_verification_wrapup = (
-        not runaway_enabled and effective_stage in {"verification", "release"}
-    )
-    if (
-        active_shell == "project"
-        and not ordinary_mode
-        and effective_stage
-        and effective_stage != "implementation"
-        and not (bug_fix_lane and effective_stage in {"verification", "release"})
-        and not ordinary_verification_wrapup
-        and not (skip_stage_walls and not runaway_enabled)
-    ):
-        code_write = evolved_name in _CODING_TOOLS and evolved_name != "patch_file"
-        if evolved_name == "patch_file" or evolved_name in _WRITE_TOOLS:
-            code_write = any(
-                path
-                and is_under_project_root(path, project_root)
-                and not is_project_artifact_path(path, project_root)
-                for path in extract_run_evolved_paths(tool_name, arguments)
-            )
-        if runaway_enabled and effective_stage in {
-            "requirements",
-            "preparing",
-            "documentation",
-            "design",
-        } and code_write:
-            return "狂奔正在准备项目流程，当前阶段不能修改业务代码"
-        if code_write and (effective_stage in {"documentation", "design"} or plan_status == "confirmed"):
-            if effective_stage == "documentation":
-                return "当前处于 documentation：只允许整理项目文档，不能修改业务代码"
-            if effective_stage == "design":
-                return "当前处于 design：请先「项目 开始任务 <T-ID>」授权一个实现任务"
-            return "当前项目尚未进入 implementation，不能修改业务代码"
-
-    plan_domain_block = main_agent_plan_domain_write_block(
-        project_root=root,
-        tool_name=tool_name,
-        arguments=arguments,
-        bug_fix_lane=bug_fix_lane,
-        runaway_v2_write_scope=runaway_v2_write_scope,
-        allow_ordinary_plan_writes=bool((ordinary_mode and ordinary_work_intent in {"execute", "plan_only"}) or (skip_stage_walls and not runaway_enabled)),
-    )
-    if plan_domain_block:
-        return plan_domain_block
-
-    plan_is_effectively_confirmed = (ordinary_mode and ordinary_work_intent in {"execute", "plan_only"}) or plan_allows_code_writes(plan_status) or (
-        runaway_enabled and active_shell == "project"
-    )
-    if plan_is_effectively_confirmed:
-        if agent_paths is not None and active_shell == "project":
-            from project_manifest import manifest_blocks_on_l2_stale, refresh_project_manifest
-
-            pid = project_id_from_root(project_root)
-            if pid:
-                manifest = refresh_project_manifest(agent_paths, pid)
-                if manifest_blocks_on_l2_stale(manifest) and (
-                    evolved_name in _CODING_TOOLS
-                    or evolved_name == "patch_file"
-                    or (
-                        evolved_name in _WRITE_TOOLS
-                        and any(
-                            path
-                            and is_under_project_root(path, project_root)
-                            and not is_project_artifact_path(path, project_root)
-                            for path in extract_run_evolved_paths(tool_name, arguments)
-                        )
-                    )
-                ):
-                    from runaway_v2.config import runaway_v2_env_enabled
-
-                    if not ordinary_mode and not (runaway_enabled and runaway_v2_env_enabled()):
-                        return "项目存在 L2 stale 制品；请重新规划并采纳后再写码"
-        if tool_name == "run_evolved" and evolved_name == "patch_file":
-            for path in extract_run_evolved_paths(tool_name, arguments):
-                if path and not is_under_project_root(path, project_root):
-                    return f"patch_file 仅限项目目录内：{project_root}"
-
-        return None
-
-    # Plan gate: any session bound to project_root — even if router switched shell.
-    if tool_name == "run_evolved" and not plan_is_effectively_confirmed:
-        if evolved_name in _CODING_TOOLS:
-            return (
-                f"计划未确认（{plan_status or 'draft'}）；"
-                "请先完成 PROJECT/TASKS 并请用户「项目 确认」后再写代码或 run_command"
-            )
-        if evolved_name in _WRITE_TOOLS or evolved_name == "git_clone":
-            for path in extract_run_evolved_paths(tool_name, arguments):
-                if not path:
-                    continue
-                if is_under_project_root(path, project_root) and not is_project_artifact_path(
-                    path, project_root
-                ):
-                    return (
-                        "计划未确认：仅可修改 PROJECT.md / MAP.md / TASKS.md；"
-                        "确认后请「项目 确认」"
-                    )
-        if evolved_name == "patch_file":
-            return "计划未确认：patch_file 已禁用；请先「项目 确认」"
-
-    return None
-
-
-def phase_key_from_milestone_suggestion(sug: dict[str, Any]) -> str:
-    """Extract stable ``phase_key`` from a milestone_review suggestion card."""
-    payload = sug.get("payload") if isinstance(sug.get("payload"), dict) else {}
-    phase_key = str(payload.get("phase_key") or "").strip()
-    if phase_key:
-        return phase_key
-    sid = str(sug.get("id") or "")
-    prefix = "sug-milestone_review-"
-    if sid.startswith(prefix):
-        return sid[len(prefix) :].strip()
-    return ""
-
-
-def read_milestone_review_overlay_key(
-    paths: AgentPaths,
-    project_id: str,
-) -> str | None:
-    """Read active milestone ``phase_key`` from plan ``state.json`` (T-4717 · M-R6)."""
-    pid = normalize_project_id(project_id)
-    state_path = project_dir(paths, pid) / ".plan-agent" / "state.json"
-    if not state_path.is_file():
-        return None
-    try:
-        data = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    reminders = data.get("milestone_review_reminders")
-    if not isinstance(reminders, dict):
-        return None
-    active = reminders.get("active_suggestions")
-    if not isinstance(active, dict):
-        return None
-    ignored = {
-        str(x)
-        for x in (data.get("ignored_suggestion_ids") or [])
-        if str(x).strip()
-    }
-    for sid, sug in active.items():
-        if sid in ignored or not isinstance(sug, dict):
-            continue
-        if sug.get("kind") != "milestone_review":
-            continue
-        key = phase_key_from_milestone_suggestion(sug)
-        if key:
-            return key
+    if tool_name == "run_evolved" and evolved_name == "patch_file":
+        for path in extract_run_evolved_paths(tool_name, arguments):
+            if path and not is_under_project_root(path, project_root):
+                return f"patch_file 仅限项目目录内：{project_root}"
     return None
 
 
@@ -3001,245 +1219,37 @@ def format_project_overlay(
     *,
     project_root: str,
     project_id: str,
-    plan_status: str,
-    task_stats: TaskStats | None = None,
-    continue_turn: bool = False,
-    next_open_task: str | None = None,
-    armed_task_id: str | None = None,
-    open_tasks_slice: str | None = None,
-    delivery_profile: str = DEFAULT_PROJECT_DELIVERY_PROFILE,
-    milestone_review_suggested: str | None = None,
-    workflow_stage: str = "",
-    active_task_id: str | None = None,
-    runaway_enabled: bool = False,
-    runaway_checkpoint: str = "",
-    runaway_acceptance_passed: bool = False,
-    skip_stage_walls: bool = False,
-    project_entry: str = "",
     ordinary_work_intent: str = "execute",
-    ordinary_task_scope: str | None = None,
     plan_files: list[str] | None = None,
     active_doc: str = "",
     active_doc_selection: str = "",
+    **_legacy: Any,
 ) -> str:
-    profile = normalize_delivery_profile(delivery_profile)
+    """Project context overlay. No plan/stage/task gates: TASKS.md is not read.
+
+    Legacy keyword arguments (plan_status, task_stats, runaway_*, ...) are
+    accepted and ignored so older callers keep working.
+    """
     lines = [
         "[项目模式 · project]",
         f"project_root: {project_root}",
         f"project_id: {project_id}",
-        f"project_plan_status: {plan_status or 'draft'}",
-        f"project_delivery_profile: {profile}",
     ]
-    if workflow_stage:
-        lines.append(f"project_workflow_stage: {workflow_stage}")
-    if active_task_id and (runaway_enabled or ordinary_task_scope):
-        lines.append(f"project_active_task_id: {active_task_id}")
-    if ordinary_task_scope:
-        lines.append(f"request_task_scope: {ordinary_task_scope}")
-    if runaway_enabled:
-        lines.append("project_runaway_enabled: true")
-        lines.append("runaway_policy: 自动采纳计划、自动推进任务、自动验证和修复；不等待用户确认或继续")
-        lines.append("runaway_scope: 仅当前项目内安全写入、执行和测试；网络、宿主目录、敏感/删除/发布/Git 操作须暂停")
-        if workflow_stage == "documentation":
-            lines.append("stage_gate: 狂奔自动整理四个核心制品，完成后进入设计；不向用户展示计划确认门")
-        elif workflow_stage == "requirements":
-            lines.append(
-                "stage_gate: 狂奔准备中 — 自动整理文档→设计→首项任务；"
-                "此阶段禁止写业务代码（计划域制品除外）"
-            )
-        elif workflow_stage == "design":
-            lines.append("stage_gate: 狂奔自动完成设计并授权下一个可执行 T-* 任务；不等待用户确认")
-        elif workflow_stage == "implementation" and active_task_id:
-            lines.append(f"batch_scope: 狂奔模式正在实现 {active_task_id}；完成后自动验证并启动下一任务")
-        elif workflow_stage in {"verification", "release"}:
-            from runaway_flow import normalize_checkpoint
-
-            cp = normalize_checkpoint(runaway_checkpoint)
-            if cp:
-                lines.append(f"project_runaway_checkpoint: {cp}")
-            if runaway_acceptance_passed:
-                lines.append(
-                    "harness_truth: 矩阵与硬验收已通过（真源）；勿根据陈旧 review 声称缺 PROJECT 验收段"
-                )
-            if cp == "release_wait":
-                lines.append(
-                    "stage_gate: verification 出口 — Harness 已收尾；"
-                    "禁止 plan_partner / deliverable_review；"
-                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
-                )
-                lines.append(
-                    "plan_gate: verification 出口 — 计划域由 Harness/bug-fix 负责；"
-                    "主 Agent 勿调 plan_partner"
-                )
-            elif cp == "verifying":
-                lines.append(
-                    "stage_gate: verification — 硬验收已通过，Harness 正在推进 release_wait；"
-                    "禁止 plan_partner / deliverable_review；"
-                    "主 Agent 禁止 write_text/patch_file PROJECT/ENV/TASKS"
-                )
-                lines.append(
-                    "plan_gate: verification — 计划域由 Harness/bug-fix 负责；"
-                    "主 Agent 勿调 plan_partner"
-                )
-            elif cp == "repairing":
-                lines.append(
-                    "stage_gate: repairing — Harness bug-fix 轨修复验收；"
-                    "禁止 plan_partner / deliverable_review；主 Agent 勿写业务代码"
-                )
-                lines.append(
-                    "plan_gate: repairing — bug-fix 可写 PROJECT.md 验收段、"
-                    "ENV.md quality.commands、VERIFY 证据；"
-                    "主 Agent 禁止 write_text/patch_file 计划域文件"
-                )
-            else:
-                lines.append(
-                    "stage_gate: verification — 仅允许 run_command / run_quality / "
-                    "run_project_tests 等验收执行；禁止主 Agent 写业务代码"
-                )
-                lines.append(
-                    "plan_gate: verification — 计划域（PROJECT/ENV/TASKS/VERIFY）"
-                    "由 Harness bootstrap 或 bug-fix 写入；主 Agent 禁止直写；勿 plan_partner"
-                )
-        else:
-            lines.append("stage_gate: 狂奔自动推进当前阶段；仅真实阻塞、预算耗尽或危险操作可暂停")
-            lines.append("plan_gate: 狂奔已授权 — 计划提案自动采纳，项目内安全源码写入可连续执行")
+    if ordinary_work_intent == "read_only":
+        lines.append("request_policy: 本回合只读；允许读取和状态查看，禁止写文件、运行命令和其它副作用")
+    elif ordinary_work_intent == "plan_only":
+        lines.append("request_policy: 本回合仅规划；允许读取和更新规划文档，禁止修改业务源码或执行实现命令")
     else:
-        ordinary_request = ordinary_work_intent in {"read_only", "plan_only", "execute"}
-        if ordinary_request:
-            if ordinary_work_intent == "read_only":
-                lines.append("request_policy: 本回合只读；允许读取和状态查看，禁止写文件、运行命令和其它副作用")
-            elif ordinary_work_intent == "plan_only":
-                lines.append("request_policy: 本回合仅规划；允许读取和更新规划制品，禁止修改业务源码或执行实现命令")
-            else:
-                lines.append("request_policy: 本回合按用户明确请求执行；项目根目录、风险审批和真实验证仍是硬边界；历史阶段/计划状态不阻止普通实现")
-        else:
-            entry = normalize_project_entry(project_entry)
-            light_or_direct = skip_stage_walls or entry == "direct"
-            if light_or_direct:
-                if workflow_stage in {"documentation", "design"}:
-                    lines.append(
-                        "stage_gate: 轻量/直接实现路径 — 教科书阶段不阻挡写码；"
-                        "立即用 write_text/patch_file 改业务代码"
-                    )
-                elif workflow_stage == "implementation" and active_task_id:
-                    lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-                elif workflow_stage in {"verification", "release"}:
-                    lines.append(
-                        "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
-                        "可以先跑验收，也可以继续实现"
-                    )
-                if entry == "plan" and plan_status != "confirmed":
-                    lines.append(
-                        "plan_gate: 用户选了规划后开工 — 仍须「项目 确认」后写源码；"
-                        "不要再调 plan_partner 重复出计划"
-                    )
-                elif plan_status != "confirmed" and entry != "direct":
-                    lines.append(
-                        "plan_gate: 未确认 — 用户若要写码请走直接实现；"
-                        "禁止再调用 plan_partner / 要求「确认开工」作为写码前提"
-                    )
-                else:
-                    lines.append("plan_gate: 已确认或直接实现 — 可写项目内代码；禁止再调用 plan_partner")
-            else:
-                if workflow_stage == "documentation":
-                    lines.append("stage_gate: 只允许写 PROJECT.md / DESIGN.md / TASKS.md / VERIFY.md；禁止写业务代码")
-                elif workflow_stage == "design":
-                    lines.append("stage_gate: 设计已确认；先由用户授权一个 T-* 任务，再进入 implementation")
-                elif workflow_stage == "implementation" and active_task_id:
-                    lines.append(f"batch_scope: 仅实现 {active_task_id}；完成后验证并停止，不自动启动下一任务")
-                elif workflow_stage in {"verification", "release"}:
-                    lines.append(
-                        "stage_gate: 验收是可选收尾，不阻挡继续改代码；"
-                        "可以先跑验收，也可以继续实现"
-                    )
-                if workflow_stage == "documentation":
-                    lines.append("plan_gate: 文档整理中 — 只允许更新四个核心制品")
-                elif workflow_stage == "design":
-                    lines.append("plan_gate: 设计已确认 — 仍不能写业务代码，先授权具体 T-* 任务")
-                elif plan_status != "confirmed":
-                    lines.append(
-                        "plan_gate: 未确认 — 仅可编辑三件套；用户须「项目 确认」后才可写源码/run_python"
-                    )
-                else:
-                    lines.append("plan_gate: 已确认 — 可写项目内代码")
-                if profile == "solo":
-                    lines.append(
-                        "delivery: 完成以构建/测试为准；TASKS 为视图；"
-                        "验收口语可 spawn deliverable_review"
-                    )
-                    lines.append(
-                        "orch_boundary: run_service start/wait/logs 起服链 ≠ task 完成；"
-                        "可在同回合连续起服（见 tool-catalog/buckets/run.md）"
-                    )
-                else:
-                    lines.append(
-                        "plan_progress: 用 report_progress 勾选，禁止直写 TASKS.md"
-                    )
-                    lines.append(
-                        "task_stop: 每完成一条 TASKS 勾选必须停；用户「继续」后再做下一项"
-                    )
-                    lines.append(
-                        "orch_boundary: run_service 起服子步骤 ≠ task 完成；"
-                        "仅 report_progress 成功勾选后 Task 一停"
-                    )
-    if task_stats is not None:
-        lines.append(f"tasks: {task_stats.done}/{task_stats.total} done")
-    if plan_status == "confirmed":
-        if next_open_task:
-            lines.append(f"current_task: {next_open_task}")
-        armed = (armed_task_id or "").strip() or extract_task_id(next_open_task or "")
-        if armed:
-            lines.append(f"armed_task_id: {armed}")
-            if profile == "ritual":
-                lines.append(
-                    "report_progress: 无对口证据不可勾选；须本回合对口工具成功；"
-                    "身份由内核注入 armed_task_id/task_text；勿只信 task_line / 口头旧凭证"
-                )
-        slice_text = (open_tasks_slice or "").strip()
-        if slice_text:
-            lines.append("open_queue:")
-            lines.append(slice_text)
         lines.append(
-            "plan_inject: 默认只注入开放队列切片；"
-            "不含 [x]、已关闭区、TASKS.archive.md"
+            "request_policy: 按用户明确请求执行；项目根目录、风险审批和真实验证是硬边界；"
+            "没有计划确认、阶段或任务门槛。需要时可参考 plan-and-verify 等 Skill，但它们只是建议。"
         )
-    if continue_turn and plan_status == "confirmed":
-        if profile == "solo":
-            lines.append(
-                "continue_turn: solo — 用户本条消息视为继续；按指令或开放队列推进"
-            )
-        else:
-            lines.append(
-                "continue_turn: 本轮为「继续」— 只做第一条未勾选 task，完成后标 [x] 并停"
-            )
-    milestone_key = (milestone_review_suggested or "").strip()
-    suppress_milestone = False
-    if runaway_enabled and workflow_stage in {"verification", "release"}:
-        from runaway_flow import normalize_checkpoint
-
-        cp = normalize_checkpoint(runaway_checkpoint)
-        suppress_milestone = cp in {"verifying", "release_wait", "repairing"}
-    if milestone_key and not suppress_milestone:
-        lines.append(f"milestone_review_suggested: {milestone_key}")
     if plan_files is not None:
         shown = ", ".join(plan_files) if plan_files else "(none)"
-        lines.append(f"plan_files: {shown}")
+        lines.append(f"project_docs: {shown}")
         lines.append(
-            "plan_read: 上面这些是本项目已有的计划文档。"
-            "没列出的计划文档不要 read_file，也不要为了补齐模板去创建。"
-            "工作区里的其它文件随时可以读、可以查看，包括用户点名但还不存在的文件。"
-            "计划用来决定做什么，不限制读取。"
-        )
-        if not runaway_enabled:
-            lines.append(
-                "ordinary_scope: 普通模式。用户要求读取或查看工作区里的任何文件时，直接 read_file，"
-                "不要以计划范围为由拒绝。计划外的修改最多先说明一句，不要拒绝。"
-            )
-    if skip_stage_walls and not runaway_enabled:
-        lines.append(
-            "ordinary_plan_write: 普通/直接实现 — 可用 write_text/patch_file 直接改 "
-            "PROJECT/SCOPE/DESIGN/TECH-DESIGN/TASKS/VERIFY/RELEASE/ENV；"
-            "禁止直写 MAP.md 与 TASKS.archive.md；勿再调 plan_partner 改这些标准文档。"
+            "project_docs_hint: 这些是项目里已有的说明文档，按需 read_file；"
+            "不要为了补齐模板去创建文档。完成以真实构建/测试结果为准。"
         )
     active = (active_doc or "").strip()
     if active:
@@ -3279,11 +1289,8 @@ def load_project_prompt(
     boundaries = prompts_dir / "project-boundaries.md"
     if boundaries.is_file():
         parts.append(boundaries.read_text(encoding="utf-8").strip())
-    delivery_name = (
-        "project-delivery-ritual.md"
-        if normalize_delivery_profile(profile) == "ritual"
-        else "project-delivery-solo.md"
-    )
+    del profile  # ritual delivery profile removed; solo prompt is the only one
+    delivery_name = "project-delivery-solo.md"
     delivery = prompts_dir / delivery_name
     if delivery.is_file():
         parts.append(delivery.read_text(encoding="utf-8").strip())
@@ -3294,11 +1301,6 @@ def load_project_prompt(
         return "[project prompts missing at evolve/prompts/]"
     return "\n\n".join(parts)
 
-
-def phase_fingerprint_from_text(text: str) -> str:
-    """Fingerprint ## Phase headers only (checkbox toggles do not change this)."""
-    headers = [line.strip() for line in text.splitlines() if line.strip().startswith("## ")]
-    return json.dumps(headers, ensure_ascii=False)
 
 
 def project_doc_fingerprint(path: Path) -> str:
@@ -3485,329 +1487,10 @@ def run_acceptance_check(
 
 
 def snapshot_plan_fingerprints(session: object, paths: AgentPaths, project_id: str) -> None:
-    """Store phase / PROJECT.md fingerprints on plan confirm."""
-    artifacts = read_project_artifacts(paths, project_id)
-    tasks_text = artifacts.get("TASKS.md", "")
+    """Store the PROJECT.md fingerprint on plan confirm."""
     meta = session.meta  # type: ignore[attr-defined]
-    meta.project_phase_fingerprint = phase_fingerprint_from_text(tasks_text)
     meta.project_doc_fingerprint = project_doc_fingerprint(project_dir(paths, project_id) / "PROJECT.md")
 
-
-def sync_plan_dirty_if_structure_changed(session: object, paths: AgentPaths) -> bool:
-    """If confirmed plan structure drifted, set plan_dirty. Returns True if changed."""
-    meta = session.meta  # type: ignore[attr-defined]
-    if meta.project_plan_status != "confirmed":
-        return False
-    pid = (meta.project_id or "").strip()
-    if not pid:
-        return False
-    artifacts = read_project_artifacts(paths, pid)
-    tasks_fp = phase_fingerprint_from_text(artifacts.get("TASKS.md", ""))
-    doc_fp = project_doc_fingerprint(project_dir(paths, pid) / "PROJECT.md")
-    stored_phase = getattr(meta, "project_phase_fingerprint", "") or ""
-    stored_doc = getattr(meta, "project_doc_fingerprint", "") or ""
-    if tasks_fp != stored_phase or doc_fp != stored_doc:
-        meta.project_plan_status = "plan_dirty"
-        return True
-    return False
-
-
-def normalize_task_id(raw: str | None) -> str | None:
-    """Return canonical `T-011` from `T-011` / `t-11` / bare digits, else None."""
-    if not raw or not str(raw).strip():
-        return None
-    text = str(raw).strip()
-    m = _TASK_ID_RE.search(text)
-    if m:
-        return f"T-{m.group(1)}"
-    if text.isdigit():
-        return f"T-{text}"
-    return None
-
-
-def extract_task_id(*texts: str | None) -> str | None:
-    """First `T-NNN` token across texts, preserving original digit width (T-011)."""
-    for text in texts:
-        if not text:
-            continue
-        m = _TASK_ID_RE.search(str(text))
-        if m:
-            return f"T-{m.group(1)}"
-    return None
-
-
-def find_task_line_by_id(
-    paths: AgentPaths,
-    project_id: str,
-    task_id: str,
-    *,
-    prefer_open: bool = True,
-) -> int | None:
-    """0-indexed TASKS.md line whose checkbox text contains task_id (e.g. T-011)."""
-    tid = extract_task_id(task_id) or normalize_task_id(task_id)
-    if not tid:
-        return None
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        return None
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    open_hit: int | None = None
-    any_hit: int | None = None
-    token_re = re.compile(rf"\b{re.escape(tid)}\b", re.IGNORECASE)
-    for i, raw in enumerate(file_lines):
-        m = _TASK_CHECKBOX_RE.match(raw)
-        if not m:
-            continue
-        body = m.group(1)
-        if not token_re.search(body):
-            continue
-        if any_hit is None:
-            any_hit = i
-        if prefer_open and _TASK_OPEN_RE.match(raw):
-            open_hit = i
-            break
-    if prefer_open and open_hit is not None:
-        return open_hit
-    return any_hit
-
-
-def resolve_progress_task_line(
-    paths: AgentPaths,
-    project_id: str,
-    *,
-    task_line: int | None = None,
-    task_id: str | None = None,
-    summary: str = "",
-    task_text: str | None = None,
-) -> tuple[int | None, str]:
-    """Resolve which TASKS.md line to toggle for report_progress.
-
-    Prefer stable ``T-NNN`` / ``task_text`` over raw ``task_line`` (Plan Partner
-    inserts shift line numbers; LLMs also pass stale indices after re-read).
-    When identity is known, never toggle a different line because of task_line.
-    """
-    tid = extract_task_id(task_id, summary, task_text)
-    id_line = find_task_line_by_id(paths, project_id, tid) if tid else None
-
-    line_text = ""
-    if isinstance(task_line, int) and task_line >= 0:
-        tasks_path = project_dir(paths, project_id) / "TASKS.md"
-        if tasks_path.is_file():
-            file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-            if 0 <= task_line < len(file_lines):
-                line_text = file_lines[task_line]
-
-    if id_line is not None:
-        if isinstance(task_line, int) and task_line >= 0 and task_line != id_line:
-            return (
-                id_line,
-                f"resolved {tid} at line {id_line} (ignored stale task_line={task_line})",
-            )
-        return id_line, f"resolved {tid} at line {id_line}"
-
-    if task_text and str(task_text).strip():
-        needle = str(task_text).strip()
-        tasks_path = project_dir(paths, project_id) / "TASKS.md"
-        if tasks_path.is_file():
-            file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-            exact_hit: int | None = None
-            contains_hit: int | None = None
-            for i, raw in enumerate(file_lines):
-                if not _TASK_OPEN_RE.match(raw):
-                    continue
-                m = _TASK_CHECKBOX_RE.match(raw)
-                if not m:
-                    continue
-                body = m.group(1).strip()
-                if body.lower() == needle.lower():
-                    exact_hit = i
-                    break
-                if contains_hit is None and needle.lower() in body.lower():
-                    contains_hit = i
-            hit = exact_hit if exact_hit is not None else contains_hit
-            if hit is not None:
-                if isinstance(task_line, int) and task_line >= 0 and task_line != hit:
-                    return (
-                        hit,
-                        f"resolved by task_text at line {hit} "
-                        f"(ignored stale task_line={task_line})",
-                    )
-                return hit, f"resolved by task_text at line {hit}"
-
-    if isinstance(task_line, int) and task_line >= 0:
-        if tid and line_text and not re.search(rf"\b{re.escape(tid)}\b", line_text, re.I):
-            return (
-                None,
-                f"refused: task_line={task_line} does not contain {tid} "
-                f"and no matching id line found",
-            )
-        return task_line, ""
-
-    return None, "no task_line/task_id/task_text to resolve"
-
-
-def toggle_task_line(paths: AgentPaths, project_id: str, line: int, done: bool) -> dict[str, Any]:
-    """Toggle a checkbox. When marking done, archive+remove (PLAN-ARCH M3)."""
-    if done:
-        result = archive_and_remove_task_line(
-            paths,
-            project_id,
-            line,
-            reason="done",
-            source="toggle",
-        )
-        result["type"] = "project.task.toggle.done"
-        result["done"] = True
-        return result
-
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
-
-    target = file_lines[line]
-    new_line = _TASK_DONE_RE.sub("- [ ] ", target, count=1)
-    if new_line == target:
-        raise ProjectModeError(f"line {line} is not a completed task checkbox")
-
-    file_lines[line] = new_line
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.toggle.done",
-        "line": line,
-        "done": False,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
-
-def find_task_line_range(tasks_path: Path, line: int) -> tuple[int, int] | None:
-    """Find the range of contiguous task lines containing `line`. Returns (start, end) or None."""
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        return None
-    if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
-        return None
-
-    start = line
-    while start > 0 and (_TASK_OPEN_RE.match(file_lines[start - 1]) or _TASK_DONE_RE.match(file_lines[start - 1])):
-        start -= 1
-
-    end = line
-    while end < len(file_lines) - 1 and (_TASK_OPEN_RE.match(file_lines[end + 1]) or _TASK_DONE_RE.match(file_lines[end + 1])):
-        end += 1
-
-    return (start, end)
-
-
-def reorder_task_line(paths: AgentPaths, project_id: str, line: int, direction: str) -> dict[str, Any]:
-    """Move a task one position up or down within its contiguous task group."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
-
-    if direction == "up":
-        if line == 0:
-            raise ProjectModeError("already at top")
-        # Check both lines are task checkboxes
-        if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
-            raise ProjectModeError(f"line {line} is not a task checkbox")
-        if not (_TASK_OPEN_RE.match(file_lines[line - 1]) or _TASK_DONE_RE.match(file_lines[line - 1])):
-            raise ProjectModeError("cannot move across phase boundary")
-        file_lines[line], file_lines[line - 1] = file_lines[line - 1], file_lines[line]
-    elif direction == "down":
-        if line >= len(file_lines) - 1:
-            raise ProjectModeError("already at bottom")
-        if not (_TASK_OPEN_RE.match(file_lines[line]) or _TASK_DONE_RE.match(file_lines[line])):
-            raise ProjectModeError(f"line {line} is not a task checkbox")
-        if not (_TASK_OPEN_RE.match(file_lines[line + 1]) or _TASK_DONE_RE.match(file_lines[line + 1])):
-            raise ProjectModeError("cannot move across phase boundary")
-        file_lines[line], file_lines[line + 1] = file_lines[line + 1], file_lines[line]
-    else:
-        raise ProjectModeError(f"unknown direction: {direction}")
-
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.reorder.done",
-        "line": line,
-        "direction": direction,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
-
-def drop_task_line(
-    paths: AgentPaths,
-    project_id: str,
-    line: int,
-    *,
-    reason: str = "wontfix",
-    source: str = "drop",
-) -> dict[str, Any]:
-    """Archive (default wontfix) then remove a task line from TASKS.md."""
-    result = archive_and_remove_task_line(
-        paths,
-        project_id,
-        line,
-        reason=reason,
-        source=source,
-    )
-    result["type"] = "project.task.drop.done"
-    return result
-
-
-def skip_task_line(paths: AgentPaths, project_id: str, line: int) -> dict[str, Any]:
-    """Move a task to end of its Phase (contiguous task block)."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range (0–{len(file_lines) - 1})")
-
-    task_range = find_task_line_range(tasks_path, line)
-    if task_range is None:
-        raise ProjectModeError(f"line {line} is not a task checkbox")
-
-    start, end = task_range
-    if end - start == 0:
-        raise ProjectModeError("only one task in group; nothing to skip past")
-
-    task_line = file_lines.pop(line)
-    # Insert at end of task group
-    file_lines.insert(end, task_line)
-
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.skip.done",
-        "line": line,
-        "new_position": end,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
 
 
 _DOC_LIST_SKIP_DIRS = frozenset({
@@ -4201,225 +1884,6 @@ def restore_project_doc_from_trash(
     }
 
 
-def iter_phase_headers(file_lines: list[str]) -> list[tuple[int, str]]:
-    """Return [(line_index, phase_title), ...] for ``## `` headers."""
-    out: list[tuple[int, str]] = []
-    for i, line in enumerate(file_lines):
-        if line.strip().startswith("## "):
-            out.append((i, line.strip().lstrip("#").strip()))
-    return out
-
-
-def resolve_bug_promote_phase(paths: AgentPaths, project_id: str) -> str:
-    """Target phase for bug_promote adopt (MILESTONE-PHASE-KEY BQ-4 · T-5403)."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        return "Phase 1"
-    lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith("## "):
-            continue
-        title = stripped.lstrip("#").strip()
-        if normalize_phase_title(title) == "bugs":
-            return title
-    current_phase = ""
-    fallback_phase = "Phase 1"
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            current_phase = stripped.lstrip("#").strip()
-            if fallback_phase == "Phase 1" and current_phase:
-                fallback_phase = current_phase
-        elif _TASK_OPEN_RE.match(line) and current_phase:
-            return current_phase
-    return current_phase or fallback_phase
-
-
-def find_phase_title(file_lines: list[str], needle: str) -> str | None:
-    """Match phase by substring (case-insensitive); None if no hit."""
-    if not needle or not str(needle).strip():
-        return None
-    key = str(needle).strip().lower()
-    for _, title in iter_phase_headers(file_lines):
-        if key in title.lower() or title.lower() in key:
-            return title
-    return None
-
-
-def phase_open_and_done_counts(file_lines: list[str], phase_title: str) -> tuple[int, int]:
-    """Count open / done checkboxes under a phase header."""
-    headers = iter_phase_headers(file_lines)
-    start = -1
-    end = len(file_lines)
-    for idx, (line_i, title) in enumerate(headers):
-        if title.lower() == phase_title.lower() or phase_title.lower() in title.lower():
-            start = line_i + 1
-            if idx + 1 < len(headers):
-                end = headers[idx + 1][0]
-            break
-    if start < 0:
-        return 0, 0
-    open_n = 0
-    done_n = 0
-    for j in range(start, end):
-        if _TASK_OPEN_RE.match(file_lines[j]):
-            open_n += 1
-        elif _TASK_DONE_RE.match(file_lines[j]):
-            done_n += 1
-    return open_n, done_n
-
-
-def active_phase_title_from_lines(file_lines: list[str]) -> str | None:
-    """Phase that contains the first open checkbox (current work frontier)."""
-    current: str | None = None
-    in_closed = False
-    for line in file_lines:
-        if line.strip().startswith("## "):
-            current = line.strip().lstrip("#").strip()
-            in_closed = is_closed_section_title(current)
-            continue
-        if in_closed:
-            continue
-        if _TASK_OPEN_RE.match(line) and current:
-            return current
-    return None
-
-
-def add_task_to_tasks_md(
-    paths: AgentPaths,
-    project_id: str,
-    phase_title: str,
-    description: str,
-) -> dict[str, Any]:
-    """Add a new task under the Phase chosen by the caller (Plan Agent LLM).
-
-    Trusts ``phase_title``: match existing ``## `` header, or create a new section
-    at EOF. Never silently remap into Phase 1.
-    """
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    matched = find_phase_title(file_lines, phase_title) if phase_title else None
-    resolved = matched or (phase_title.strip() if isinstance(phase_title, str) and phase_title.strip() else "")
-    insert_idx = -1
-
-    if matched:
-        headers = iter_phase_headers(file_lines)
-        for idx, (line_i, title) in enumerate(headers):
-            if title != matched:
-                continue
-            phase_end = headers[idx + 1][0] if idx + 1 < len(headers) else len(file_lines)
-            last_task = -1
-            for j in range(line_i + 1, phase_end):
-                if _TASK_OPEN_RE.match(file_lines[j]) or _TASK_DONE_RE.match(file_lines[j]):
-                    last_task = j
-            if last_task >= 0:
-                insert_idx = last_task + 1
-            else:
-                insert_idx = line_i + 1
-                while insert_idx < len(file_lines) and not file_lines[insert_idx].strip():
-                    insert_idx += 1
-            break
-    elif resolved:
-        if file_lines and file_lines[-1].strip():
-            file_lines.append("")
-        file_lines.append(f"## {resolved}")
-        insert_idx = len(file_lines)
-    else:
-        insert_idx = len(file_lines)
-        if file_lines and file_lines[-1].strip():
-            file_lines.append("")
-
-    task_line = f"- [ ] {description}"
-    file_lines.insert(insert_idx, task_line)
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.add.done",
-        "line": insert_idx,
-        "description": description,
-        "phase": resolved,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
-
-def move_task_to_phase(
-    paths: AgentPaths,
-    project_id: str,
-    line: int,
-    phase_title: str,
-) -> dict[str, Any]:
-    """Move an existing checkbox line to another Phase (preserves [ ] / [x] text)."""
-    tasks_path = project_dir(paths, project_id) / "TASKS.md"
-    if not tasks_path.is_file():
-        raise ProjectModeError(f"TASKS.md not found for project {project_id}")
-
-    file_lines = tasks_path.read_text(encoding="utf-8").splitlines()
-    if line < 0 or line >= len(file_lines):
-        raise ProjectModeError(f"line {line} out of range")
-    raw = file_lines[line]
-    if not (_TASK_OPEN_RE.match(raw) or _TASK_DONE_RE.match(raw)):
-        raise ProjectModeError(f"line {line} is not a task checkbox")
-
-    task_line = file_lines.pop(line)
-    matched = find_phase_title(file_lines, phase_title) if phase_title else None
-    resolved = matched or (phase_title.strip() if phase_title and str(phase_title).strip() else "")
-    if not resolved:
-        raise ProjectModeError("move_task_to_phase requires phase_title")
-
-    insert_idx = -1
-    if matched:
-        headers = iter_phase_headers(file_lines)
-        for idx, (line_i, title) in enumerate(headers):
-            if title != matched:
-                continue
-            phase_end = headers[idx + 1][0] if idx + 1 < len(headers) else len(file_lines)
-            last_task = -1
-            for j in range(line_i + 1, phase_end):
-                if _TASK_OPEN_RE.match(file_lines[j]) or _TASK_DONE_RE.match(file_lines[j]):
-                    last_task = j
-            if last_task >= 0:
-                insert_idx = last_task + 1
-            else:
-                insert_idx = line_i + 1
-                while insert_idx < len(file_lines) and not file_lines[insert_idx].strip():
-                    insert_idx += 1
-            break
-    else:
-        if file_lines and file_lines[-1].strip():
-            file_lines.append("")
-        file_lines.append(f"## {resolved}")
-        insert_idx = len(file_lines)
-
-    if insert_idx < 0:
-        insert_idx = len(file_lines)
-    file_lines.insert(insert_idx, task_line)
-    content = "\n".join(file_lines)
-    if not content.endswith("\n"):
-        content += "\n"
-    tasks_path.write_text(content, encoding="utf-8")
-
-    m = re.match(r"^\s*-\s*\[[ xX]\]\s+(.*)", task_line)
-    desc = m.group(1).strip() if m else task_line.strip()
-    stats = read_task_stats(tasks_path)
-    return {
-        "type": "project.task.move.done",
-        "from_line": line,
-        "line": insert_idx,
-        "phase": resolved,
-        "description": desc,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
 
 _SOURCE_EXTS = frozenset({
     ".py", ".ts", ".tsx", ".js", ".jsx", ".vue", ".go", ".rs", ".java",
@@ -4442,7 +1906,7 @@ def detect_potential_project(paths: AgentPaths, current_project_id: str = "") ->
     now = time.time()
     cutoff = now - 600  # 10 minutes
 
-    candidates: list[tuple[str, float, int, bool]] = []  # (name, mtime, files, has_tasks)
+    candidates: list[tuple[str, float, int]] = []  # (name, mtime, files)
 
     for entry in root.iterdir():
         if not entry.is_dir():
@@ -4455,7 +1919,6 @@ def detect_potential_project(paths: AgentPaths, current_project_id: str = "") ->
 
         # Count source files under this directory (shallow scan, max depth 3)
         file_count = 0
-        has_tasks = (entry / "TASKS.md").is_file()
         max_mtime = entry.stat().st_mtime
 
         try:
@@ -4475,7 +1938,7 @@ def detect_potential_project(paths: AgentPaths, current_project_id: str = "") ->
             pass
 
         if file_count >= 2 and max_mtime >= cutoff:
-            candidates.append((name, max_mtime, file_count, has_tasks))
+            candidates.append((name, max_mtime, file_count))
 
     if not candidates:
         return None
@@ -4485,8 +1948,7 @@ def detect_potential_project(paths: AgentPaths, current_project_id: str = "") ->
     best = candidates[0]
 
     reason = (
-        f"检测到 workspace/{best[0]} 下有 {best[2]} 个源文件，"
-        f"{'含 TASKS.md' if best[3] else '建议创建项目以追踪任务进度'}"
+        f"检测到 workspace/{best[0]} 下有 {best[2]} 个源文件，可以创建项目"
     )
 
     return {
@@ -4494,7 +1956,6 @@ def detect_potential_project(paths: AgentPaths, current_project_id: str = "") ->
         "project_id": best[0],
         "reason": reason,
         "file_count": best[2],
-        "has_tasks": best[3],
     }
 
 
@@ -4508,12 +1969,8 @@ def _demo() -> None:
     if dest.is_dir():
         shutil.rmtree(dest)
     create_project(paths, pid)
-    assert (dest / "TASKS.md").is_file()
+    assert (dest / "PROJECT.md").is_file()
     print("[PASS] create_project")
-
-    stats = read_task_stats(dest / "TASKS.md")
-    assert stats.open_count >= 2
-    print("[PASS] read_task_stats")
 
     root = project_root_rel(pid)
     reason = project_mode_block_reason(
@@ -4523,47 +1980,8 @@ def _demo() -> None:
         tool_name="run_evolved",
         arguments={"tool_name": "run_command", "arguments": {"command": "echo hi", "working_dir": root}},
     )
-    assert reason and "未确认" in reason
-    print("[PASS] plan gate blocks run_command")
-
-    reason2 = project_mode_block_reason(
-        active_shell="project",
-        project_root=root,
-        plan_status="draft",
-        tool_name="run_evolved",
-        arguments={
-            "tool_name": "write_text",
-            "arguments": {"path": f"{root}/TASKS.md", "content": "x"},
-        },
-    )
-    assert reason2 and "plan_partner" in reason2
-    print("[PASS] plan domain write block (B5) rejects TASKS.md")
-
-    reason_grow = project_mode_block_reason(
-        active_shell="grow",
-        project_root=root,
-        plan_status="draft",
-        tool_name="run_evolved",
-        arguments={
-            "tool_name": "write_text",
-            "arguments": {"path": f"{root}/src/demo.py", "content": "x"},
-        },
-    )
-    assert reason_grow and "未确认" in reason_grow
-    print("[PASS] plan gate blocks src even in grow shell")
-
-    reason_evolve = project_mode_block_reason(
-        active_shell="grow",
-        project_root=root,
-        plan_status="draft",
-        tool_name="run_evolved",
-        arguments={
-            "tool_name": "write_text",
-            "arguments": {"path": "evolve/tools/common/foo.txt", "content": "x"},
-        },
-    )
-    assert reason_evolve is None
-    print("[PASS] plan gate allows evolve write while project bound")
+    assert reason is None
+    print("[PASS] no plan gate: draft project may run commands")
 
     reason3 = project_mode_block_reason(
         active_shell="project",
@@ -4592,38 +2010,13 @@ def _demo() -> None:
     assert reason_clone_evolve and "evolve/tools" in reason_clone_evolve
     print("[PASS] git_clone evolve_tools blocked in project shell")
 
-    reason_clone_draft = project_mode_block_reason(
-        active_shell="project",
-        project_root=root,
-        plan_status="draft",
-        tool_name="run_evolved",
-        arguments={
-            "tool_name": "git_clone",
-            "arguments": {
-                "url": "https://github.com/github/gitignore.git",
-                "target": "workspace",
-                "dest": f"{root}/vendor/foo",
-            },
-        },
-    )
-    assert reason_clone_draft and "未确认" in reason_clone_draft
-    print("[PASS] plan gate blocks workspace git_clone before confirm")
-
-    sample_md = (dest / "PROJECT.md").read_text(encoding="utf-8")
-    spec = parse_acceptance_spec(sample_md)
-    assert spec is not None and spec.script_rel == "demo.py"
-    assert spec.expected_exit_code == 0
-    print("[PASS] parse_acceptance_spec")
-
     shutil.rmtree(dest, ignore_errors=True)
-    print("[PASS] T-1102/T-1107: project_mode demo")
+    print("[PASS] project_mode demo")
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "demo":
         _demo()
     else:
-        paths = AgentPaths.discover()
-        for item_id in list_projects(paths):
-            item_stats = read_task_stats(project_dir(paths, item_id) / "TASKS.md")
-            print(f"{item_id}: {item_stats.done}/{item_stats.total}")
+        for item_id in list_projects(AgentPaths.discover()):
+            print(item_id)

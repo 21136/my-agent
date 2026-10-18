@@ -2,7 +2,7 @@
 
 > 版本 **0.1.1** · 2026-08-06 · **状态：M0 代码 done · S-4910 手工 todo**  
 > 触发：huiyi / 普通对话联调——explore **8 轮撞 cap**、摘要为空，主 Agent 仍可用 segment **15 轮** `read_file` 补读；用户结论：**主 Agent 补读合理，子代理在这件事上权利应更大，而非更严**。  
-> 关联：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md)（Phase 48 · **谁下命令**） · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) §7 · `agent-core/subagent.py` · Phase 49 T-4900～4910
+> 关联：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md)（Phase 48 · **谁下命令**） · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) §7 · `agent-core/subagent.py` · Phase 49 T-4900～4910
 
 ---
 

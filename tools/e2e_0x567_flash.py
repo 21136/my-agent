@@ -132,53 +132,20 @@ def _copy_isolated_root() -> tuple[Any, Path]:
 
 
 def _snapshot(paths: Any, session: Any) -> dict[str, Any]:
-    from project_mode import project_dir, read_task_stats
-    from runaway_v2.checklist import load_or_build_checklist
-    from runaway_v2.phase import derive_phase
-
-    pid = str(session.meta.project_id or "")
-    project = project_dir(paths, pid) if pid else None
-    stats = read_task_stats(project / "TASKS.md") if project is not None else None
-    checklist = load_or_build_checklist(paths, pid) if pid else None
-    phase = (
-        derive_phase(
-            paths,
-            pid,
-            plan_status=str(session.meta.project_plan_status or "draft"),
-            checklist=checklist,
-        )
-        if pid
-        else None
-    )
+    # Automatic mode (runaway) and the TASKS.md queue were removed; the
+    # snapshot keeps the session facts that still exist. Hard acceptance
+    # (exit code) is recorded separately by _run_acceptance_check.
+    del paths
     return {
         "plan_status": session.meta.project_plan_status,
         "workflow_stage": getattr(session.meta, "project_workflow_stage", ""),
-        "runaway_enabled": bool(session.meta.project_runaway_enabled),
-        "checkpoint": session.meta.project_runaway_checkpoint,
-        "v2_phase": getattr(session.meta, "project_runaway_v2_phase", ""),
-        "v2_blocked": bool(getattr(session.meta, "project_runaway_v2_blocked", False)),
-        "tasks_done": stats.done if stats else None,
-        "tasks_total": stats.total if stats else None,
-        "tasks_open": stats.open_count if stats else None,
-        "phase": phase.phase if phase else None,
-        "phase_reason": phase.human_reason if phase else "",
-        "checklist": [
-            {
-                "id": item.id,
-                "status": item.status,
-                "attempts": item.attempts,
-                "directed_used": item.directed_used,
-                "last_failure": item.last_failure,
-            }
-            for item in (checklist.items if checklist else [])
-        ],
     }
 
 
 def _event_handler(run: AcceptanceRun, event_type: str, payload: dict[str, Any]) -> None:
     if event_type in {"tool.start", "tool.end", "guard.notice", "turn.notice", "turn.start", "llm.usage"}:
         safe = {"type": event_type}
-        for key in ("tool", "ok", "summary", "level", "text", "runaway_phase", "finish_reason", "prompt_tokens", "completion_tokens"):
+        for key in ("tool", "ok", "summary", "level", "text", "finish_reason", "prompt_tokens", "completion_tokens"):
             if key in payload:
                 value = payload[key]
                 safe[key] = value if not isinstance(value, str) else value[:500]
@@ -264,15 +231,6 @@ def _create_session(paths: Any, project_id: str, *, seed_code: bool = False) -> 
             "UX-001：CLI 接收 operation、left、right 三个参数，错误时输出 stderr。\n"
             "TD-001：app.py 负责参数解析和计算，verify.py 负责硬验收。\n"
         ),
-        "TASKS.md": (
-            f"# {project_id} · 执行队列\n\n"
-            "- [ ] T-001 实现计算器 CLI、测试和验收脚本\n"
-            "  req: REQ-001\n"
-            "  ac: AC-001, AC-002\n"
-            "  design: UX-001, TD-001\n"
-            "  verify: V-001\n"
-            "  evidence: run_project_tests\n"
-        ),
         "VERIFY.md": (
             f"# {project_id} · 验证矩阵\n\n"
             "| V-001 | T-001 | AC-001, AC-002 | run_project_tests + verify.py |\n"
@@ -340,8 +298,6 @@ def _create_session(paths: Any, project_id: str, *, seed_code: bool = False) -> 
             "print('verification passed')\n",
             encoding="utf-8",
         )
-        tasks = (project / "TASKS.md").read_text(encoding="utf-8")
-        (project / "TASKS.md").write_text(tasks.replace("- [ ] T-001", "- [x] T-001"), encoding="utf-8")
     # The fixture writes the same artifacts that the normal project-planning
     # flow would produce. Refresh the manifest so this run tests model/tool
     # behavior instead of manufacturing an external-edit L2-stale state.
@@ -350,7 +306,6 @@ def _create_session(paths: Any, project_id: str, *, seed_code: bool = False) -> 
     session.meta.project_workflow_stage = "implementation"
     session.meta.project_plan_status = "confirmed"
     session.set_llm_model("0x567-flash", override=True)
-    session.meta.project_runaway_enabled = True
     session.save()
     return session
 
@@ -381,9 +336,6 @@ def run_e2e(
     # commands on the same interpreter so pytest is available to the project.
     venv_scripts = ROOT / ".venv" / "Scripts"
     os.environ["PATH"] = str(venv_scripts) + os.pathsep + os.environ.get("PATH", "")
-    os.environ["MY_AGENT_RUNAWAY_V2"] = "1"
-    os.environ.setdefault("MY_AGENT_RUNAWAY_V2_DIRECTED_AFTER", "2")
-    os.environ.setdefault("MY_AGENT_RUNAWAY_V2_HOOK_TIMEOUT_SEC", "90")
     os.environ.setdefault("MY_AGENT_RUN_COMMAND_LONG_TIMEOUT_SEC", "180")
     os.environ.setdefault("LLM_TIMEOUT_SEC", "90")
 
@@ -416,25 +368,18 @@ def run_e2e(
                 run,
                 agent,
                 session,
-                "按当前已经确认的项目文档完成 T-001：实现纯 Python CLI 计算器 app.py 和 pytest 测试，要求 `python app.py add 2 3` 输出 5、`python app.py mul 2 3` 输出 6，非法命令返回非零退出码；创建 verify.py 硬验收脚本，运行结构化测试和硬验收，失败就修复，直到项目可以发布。不要只写总结，要实际修改文件并留下 VERIFY 证据。",
+                "按当前已经确认的项目文档实现纯 Python CLI 计算器 app.py 和 pytest 测试，要求 `python app.py add 2 3` 输出 5、`python app.py mul 2 3` 输出 6，非法命令返回非零退出码；创建 verify.py 硬验收脚本，运行结构化测试和硬验收，失败就修复，直到项目可以发布。不要只写总结，要实际修改文件并留下 VERIFY 证据。",
                 timeout_sec=turn_timeout_sec,
                 label="从零实现并发布前验收",
             )
         else:
-            from runaway_v2.checklist import load_or_build_checklist, save_checklist
-            from runaway_v2.acceptance import run_acceptance
-
-            seeded_checklist = load_or_build_checklist(paths, project_id)
-            for item in seeded_checklist.items:
-                hook = run_acceptance(paths, project_id, item)
-                item.status = "passed" if hook.ok else "failed"
-                item.last_failure = None if hook.ok else {"tail": hook.tail, "command": hook.command}
-            save_checklist(paths, seeded_checklist)
+            # Maintenance-only: code is pre-seeded; the hard acceptance check
+            # below (exit code is the truth) confirms the fixture is green.
             run.checks.append(
                 {
-                    "label": "已完成项目进入发布等待测试夹具",
-                    "passed": all(item.status == "passed" for item in seeded_checklist.items),
-                    "detail": "代码、pytest、verify.py 和任务证据已准备",
+                    "label": "已完成项目测试夹具",
+                    "passed": True,
+                    "detail": "代码、pytest 与 verify.py 已准备",
                 }
             )
         _run_acceptance_check(run, paths, project_id, "初始硬验收")
@@ -482,61 +427,28 @@ def run_e2e(
         )
         _run_acceptance_check(run, paths, project_id, "bug 修复后硬验收")
 
-        # A user request in release_wait must be honored once, without turning
-        # into an unbounded automatic continuation chain.
+        # A read-only user request must reach the model and leave files alone.
         before_user_request = len(recorder.calls)
+        app_before = app.read_text(encoding="utf-8") if app.is_file() else ""
         _run_turn(
             run,
             agent,
             session,
             "发布前再做一次只读生产检查：确认当前项目仍然通过 pytest 和硬验收，并告诉我是否可以发布。不要修改任何文件。",
             timeout_sec=turn_timeout_sec,
-            label="release_wait 下普通用户请求",
+            label="只读发布前检查",
         )
         after_user_request = len(recorder.calls)
-        state_after_user = _snapshot(paths, session)
         _require(
             run,
-            "release_wait 用户请求实际触发模型",
+            "只读检查实际触发模型",
             after_user_request > before_user_request,
             f"LLM calls {before_user_request}->{after_user_request}",
         )
         _require(
             run,
-            "用户维护回合结束后不自动越过 release_wait",
-            state_after_user.get("phase") == "release_wait",
-            json.dumps(state_after_user, ensure_ascii=False),
-        )
-
-        # A harness continuation line in release_wait must be a no-op. The
-        # controller should return its fixed terminal text without LLM calls.
-        before_continue = len(recorder.calls)
-        _run_turn(
-            run,
-            agent,
-            session,
-            "[Harness] 继续处理剩余项目工作",
-            timeout_sec=60,
-            label="release_wait 下系统继续信号",
-        )
-        _require(
-            run,
-            "release_wait 系统继续信号不再调用模型",
-            len(recorder.calls) == before_continue,
-            f"LLM calls {before_continue}->{len(recorder.calls)}",
-        )
-
-        # Disabling runaway is a user-controlled state change. The normal
-        # non-runaway agent may still answer a later user request, so this
-        # check only asserts that the flag itself is persisted; auto-chain
-        # behavior is covered by the server/controller tests.
-        session.meta.project_runaway_enabled = False
-        session.save()
-        _require(
-            run,
-            "关闭狂奔状态已持久化",
-            not bool(session.meta.project_runaway_enabled),
-            json.dumps(_snapshot(paths, session), ensure_ascii=False),
+            "只读检查未修改 app.py",
+            (app.read_text(encoding="utf-8") if app.is_file() else "") == app_before,
         )
 
         run.llm_calls = recorder.calls
@@ -592,7 +504,7 @@ def main() -> int:
     parser.add_argument(
         "--maintenance-only",
         action="store_true",
-        help="seed a completed project and focus on release_wait and bug-fix acceptance",
+        help="seed a completed project and focus on bug-fix and read-only release acceptance",
     )
     parser.add_argument(
         "--report",

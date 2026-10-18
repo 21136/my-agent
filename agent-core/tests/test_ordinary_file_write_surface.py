@@ -138,7 +138,6 @@ class OrdinaryFileWriteCardTests(unittest.TestCase):
                 project_plan_status="confirmed",
                 project_workflow_stage="implementation",
                 project_entry="direct",
-                runaway_enabled=False,
             ),
             confirm_fn=_confirm,
             on_event=lambda kind, payload: events.append((kind, payload)),

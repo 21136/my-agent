@@ -15,7 +15,6 @@ if str(_AGENT_CORE) not in sys.path:
 
 from project_manifest import bootstrap_manifest
 from project_mode import (
-    TaskStats,
     compute_execution_stage,
     format_project_overlay,
     project_mode_block_reason,
@@ -61,7 +60,6 @@ class OrdinaryVerificationStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=1, total=1),
             manifest=self.manifest,
             project_root=self.root,
         )
@@ -75,7 +73,6 @@ class OrdinaryVerificationStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=1, total=1),
             manifest=self.manifest,
             project_root=self.root,
             review_verdict="fail",
@@ -91,7 +88,6 @@ class OrdinaryVerificationStageTests(unittest.TestCase):
         result = compute_execution_stage(
             project_id="demo",
             plan_status="confirmed",
-            task_stats=TaskStats(done=1, total=1),
             manifest=self.manifest,
             project_root=self.root,
             review_verdict="pass",
@@ -108,10 +104,6 @@ class OrdinaryVerificationWriteGateTests(unittest.TestCase):
     def test_ordinary_release_allows_code_writes(self) -> None:
         self.assertIsNone(_write_block_reason(runaway_enabled=False, workflow_stage="release"))
 
-    def test_runaway_verification_still_blocks_business_write(self) -> None:
-        reason = _write_block_reason(runaway_enabled=True)
-        self.assertIsNotNone(reason)
-        self.assertIn("implementation", reason or "")
 
     def test_runaway_verification_still_allows_run_command(self) -> None:
         reason = project_mode_block_reason(
@@ -129,31 +121,7 @@ class OrdinaryVerificationWriteGateTests(unittest.TestCase):
         self.assertIsNone(reason)
 
 
-class OrdinaryVerificationOverlayTests(unittest.TestCase):
-    def test_ordinary_overlay_says_optional_wrapup(self) -> None:
-        overlay = format_project_overlay(
-            project_root="workspace/demo",
-            project_id="demo",
-            plan_status="confirmed",
-            workflow_stage="verification",
-            runaway_enabled=False,
-        )
-        self.assertIn("request_policy:", overlay)
-        self.assertIn("不阻止普通实现", overlay)
-        self.assertNotIn("禁止主 Agent 写业务代码", overlay)
-        self.assertNotIn("当前无法继续", overlay)
 
-    def test_runaway_overlay_still_forbids_business_writes(self) -> None:
-        overlay = format_project_overlay(
-            project_root="workspace/demo",
-            project_id="demo",
-            plan_status="confirmed",
-            workflow_stage="verification",
-            runaway_enabled=True,
-            runaway_checkpoint="",
-        )
-        self.assertIn("禁止主 Agent 写业务代码", overlay)
-        self.assertNotIn("可选收尾", overlay)
 
 
 class OrdinaryVerificationDesktopContractTests(unittest.TestCase):
@@ -167,14 +135,11 @@ class OrdinaryVerificationDesktopContractTests(unittest.TestCase):
         self.assertIn("跑验收是可选收尾", panel)
         self.assertIn("也可以继续改代码", panel)
         self.assertIn('actionLabel: "跑验收"', panel)
-        self.assertIn('data-action="run-verify">跑验收', panel)
         self.assertNotRegex(
             panel,
             r'executionStageReason === "verification_pending"[\s\S]{0,200}当前无法继续',
         )
-        blocked_title = (
-            'state.runawayEnabled ? "需要你的处理" : "当前无法继续"'
-        )
+        blocked_title = 'title: "当前无法继续"'
         self.assertIn(blocked_title, panel)
         wrap_idx = panel.index("function isOrdinaryVerificationWrapUp")
         blocked_idx = panel.index(blocked_title)

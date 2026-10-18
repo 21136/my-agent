@@ -2,7 +2,8 @@
 
 > 版本 **0.1.1** · 2026-08-07 · **状态：T-4202 done（Phase 42-J · IT-440/441）**  
 > Phase **42 Track J** · 承接 [AGENT-HARNESS.md](./AGENT-HARNESS.md) **P3 defer**（T-4103）  
-> 关联：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [llm_models.py](../agent-core/llm_models.py) · [llm_client.py](../agent-core/llm_client.py) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)
+> 关联：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [llm_models.py](../agent-core/llm_models.py) · [llm_client.py](../agent-core/llm_client.py) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md)
+> **2026-10-18**：`plan_partner` 与 `bug_fix` 角色已随任务系统一起移除（下文为历史设计）。终端自动规划直接读 `planning_model` / `PLAN_PARTNER_MODEL`（见 `terminal_plan.py`），兜底为 `main_turn`。
 
 ---
 

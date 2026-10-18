@@ -3,7 +3,7 @@
 > 版本 **0.3.3** · 2026-08-06 · **状态：设计已签 · 实现 done（T-4714～4719 · IT-476/477）**  
 > **读者**：产品负责人、实现者、**外部 LLM 审查**  
 > 修订链：… → v0.3.2 Fable5 → **v0.3.3 Opus5**（LDM 单一 ID · `_plan_progress_brief` · §5.6 补全）  
-> 关联：[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md)
+> 关联：[DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md)
 
 ---
 
@@ -447,7 +447,7 @@ workspace/ 磁盘已写入（含 write_policy 项目内写）
 | **栈-C** | 写路径策略 | [WRITE-SCOPE.md](./WRITE-SCOPE.md) |
 | **栈-C** | 结构化测试 | [PROJECT-VERIFY.md](./PROJECT-VERIFY.md) |
 | **栈-D** | 项目模式 | [PROJECT-MODE.md](./PROJECT-MODE.md) |
-| **栈-D** | 进度硬闸 | [PROGRESS-GATE.md](./PROGRESS-GATE.md) |
+| **栈-D** | 进度硬闸 | [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) |
 | **栈-D** | 父编排 · 子代理预算 | [AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) |
 | **栈-D** | 审查子代理 | [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) |
 

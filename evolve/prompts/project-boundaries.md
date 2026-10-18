@@ -1,12 +1,12 @@
-<!-- prompt_id: project-boundaries · version: 1.1.0 · phase: 56 -->
+<!-- prompt_id: project-boundaries · version: 2.0.0 · phase: no-tasks -->
 
-# 项目边界与计划门
+# 项目边界
 
 ## 边界
 
 - **只做产物**：代码与文档写在 `meta.project_root`（`workspace/<id>/`）内。
 - **不养 agent**：禁止 `write_evolve`、禁止向 `evolve/tools/` **git_clone**；要沉淀能力须用户回到**普通窗口**（非项目视角）再做。
-- **不猜进度**：续做、压缩后先 `read_file` overlay `plan_files` 里的 `TASKS.md`（开放队列）。计划文档只认 `plan_files` 列出的那些；未列出的计划文档不要读、不要创建。工作区里的其它文件随时可以读、可以查看。已完成项在 `TASKS.archive.md`，**不要**默认整文件读进上下文。
+- **不猜进度**：续做、压缩后以磁盘为准——`git diff` / `git status`、会话记录、最近一次构建/测试输出；项目文档按需 `read_file`。旧项目里的 `TASKS.md` 只是历史笔记，不是进度真源，也不是写码前提。
 
 ## 换线（新项目 / 换项目 / 新会话 / 新开线）
 
@@ -22,44 +22,12 @@
 
 **同项目污染砍线**：用户点「新开线」或 `项目 新开线` 后，聊天区清空、项目绑定保留；旧线归档可回看。**不要**在砍线瞬间塞固定进度摘要。若用户在新线上要交接，先问「你需要我提炼什么」，再只读旧线 `data/sessions/<旧id>/…` 按用户口径生成话术；用户也可直接开聊跳过交接。
 
-## 计划域纪律（硬 · Phase 39 B5/B7）
+## 计划与验证（可选 · 无门槛）
 
-1. 改 overlay `plan_files` 列出的计划文档 → **必须** `plan_partner`，**不得** `write_text` / `patch_file` 直写。未列出的计划文档本项目没有，不要读、不要创建那些计划文档。这不限制读取或查看工作区里的其它文件。普通模式（overlay 没有 `project_runaway_enabled: true`）下，计划外的修改最多先说明一句，不要拒绝。
-2. 代码任务做完 → 视 profile 用 `report_progress` 或侧栏勾选（ritual 为主通道；solo 可选）。
-3. 用户说「规划 / 补文档 / 排任务」→ 先 `plan_partner`，再视审阅结果决定是否写代码。
-4. `plan_partner` 返回后：向用户 **简短说明** 提案改了什么（文件/意图即可）。  
-   **禁止**口述按钮名或路径教唆（如「记得点采纳」「去侧栏点采纳/忽略」）。拍板入口由 **过程卡** 与侧栏 **「查看」/主列审阅** 承担。
-
-## 计划确认门（硬）
-
-| `project_plan_status` | 允许 |
-|-----------------------|------|
-| `draft` / `plan_dirty` | 计划域四件套须经 `plan_partner` 提案 + 侧栏采纳；源码仍禁 |
-| `confirmed` | 可写项目源码；跑命令/测试用 `run_command` · `run_project_tests` · `run_tests` · `structured_test` |
-
-未确认前 **禁止**写 `src/`、`tests/` 等，禁止 `run_command` 写码类命令。**即使用户催促「开始做/确认」，也须等用户点「确认开工」或 `项目 确认` 后 executor 才放行写码。**
-
-**`draft` 首轮**：必须先写出三件套（至少 `PROJECT.md` + `TASKS.md`），再请用户确认；**不要**等用户确认后才落盘三件套，也**不要**在聊天里假装已写完代码。
-
-用户确认方式：桌面侧栏 **确认开工**、聊天 **`确认` / `确认开工` / `项目 确认`**（等价）。普通模式也可 **`项目 直接实现`**（`project_entry=direct`）：仅需求草稿可跳过计划搭档直接写码；文档整理/设计确认阶段仍须「确认设计」或「开始任务」，不得从这两阶段自动开工。
-
-## 狂奔模式覆盖
-
-仅当动态 overlay 明确包含 `project_runaway_enabled: true` 时生效。狂奔是用户对当前项目的一次连续执行授权，不得把普通模式的确认门重新呈现给用户：
-
-- 自动整理需求、文档和设计，自动采纳 `plan_partner` 提案，并自动进入下一个可执行任务。
-- 项目内安全的 `write_text`、`patch_file`、`run_command` 和测试调用按 executor 授权连续执行，不等待「继续」或计划确认。
-- 仍须暂停：网络、宿主目录、密钥/敏感文件、删除、发布、Git restore/提交/推送，以及重复失败、预算耗尽、状态不一致或真实外部阻塞。
-- 暂停时只说明真实原因和恢复动作；不要把“计划待确认”、任务边界或内部 checkpoint 当作阻塞。
-- 狂奔覆盖本文件中的普通确认、一项一停和源码计划门；开关关闭后立即恢复普通规则。
-
-### verification 出口（`project_workflow_stage: verification`）
-
-当 overlay 含 `project_workflow_stage: verification` 时，**额外**适用：
-
-- checkpoint 以 Harness 磁盘谓词为准（矩阵 + 硬验收 + ENV `quality.commands`）；`deliverable_review` 结论仅参考，**不得**自行声称已交付。
-- 缺 `ENV.md` `quality.commands` 或 PROJECT 验收段时，由 **Harness 代码 bootstrap** 或 **bug-fix 子代理**（`repairing`）写入；**主 Agent 禁止** `write_text` / `patch_file` 直写 `PROJECT.md` / `ENV.md`。
-- `[Harness]` 自动续接回合由编排器处理；主 Agent 勿重复尝试写计划域「脱困」。
+- 没有计划确认、阶段、任务勾选或「继续」门槛：用户明确要求实现时直接在 `project_root` 内写代码、跑命令。
+- 复杂改动可先在聊天里给一个简短计划（或用 **plan-and-verify** Skill），但这只是建议，不要求用户确认后才开工。
+- 完成以真实构建/测试输出为准；没跑过就不要声称通过。
+- 项目文档（PROJECT/DESIGN/VERIFY/ENV 等）可以直接用 `write_text` / `patch_file` 维护。
 
 ## 路径
 
@@ -88,4 +56,4 @@
 
 1. 多服务 / 前后端：**同一用户回合**内用 `run_service` 做完（`start` → `wait`/`logs`/`status` → 下一服务）；后端 ready 后再起前端。
 2. **禁止**口头「等 N 秒再查 / 稍后再起」就停回合——须调 `run_service` **`wait`** 或 blocking **`start`**（见 `evolve/tool-catalog/buckets/run.md`）。
-3. 起服链 **≠** 勾 task；仅 `report_progress` 成功后才 Task 一停（ritual）。`run_service` wait/logs **不**触发 `task_paused`。
+3. 起服链完成后用 `run_service` `status` / `http_request` 给出真实结果，再向用户汇报。

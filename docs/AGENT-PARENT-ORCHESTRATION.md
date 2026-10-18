@@ -2,7 +2,7 @@
 
 > 版本 **0.4.0** · 2026-08-06 · **状态：设计已签 · Phase 48 partial · Phase 50 scope doc**  
 > 触发：huiyi 联调——用户说「文档和代码可能脱节了，你看看」→ 内核 **自动 explore** 读了 `docs/TOOLS.md`（my-agent 内核）而非 `workspace/huiyi`；用户明确：**主 Agent 负责写码和下命令，不该由内核替它猜要查什么**；子代理预算不足时 **主 Agent 补读合法**（见 [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md)）。  
-> 关联：[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md)（Phase 50 · **作用域分轨**） · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md)（Phase 49 · **子代理轮次**） · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) §4/§8 · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [bugs/2026-08-06-explore-auto-spawn-wrong-scope.md](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) · Phase 48 T-4800～4804
+> 关联：[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md)（Phase 50 · **作用域分轨**） · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md)（Phase 49 · **子代理轮次**） · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) §4/§8 · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · [bugs/2026-08-06-explore-auto-spawn-wrong-scope.md](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md) · Phase 48 T-4800～4804
 
 ---
 

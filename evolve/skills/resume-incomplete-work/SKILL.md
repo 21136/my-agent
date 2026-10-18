@@ -1,6 +1,6 @@
 ---
 name: resume-incomplete-work
-description: Recover unfinished project work from disk, TASKS, Git diff, session evidence, and last verification without fabricating progress.
+description: Recover unfinished project work from disk, Git diff, session evidence, and the last verification run without fabricating progress.
 triggers:
   - 写了一半
   - 继续项目
@@ -16,14 +16,14 @@ allowed_tools:
   - run_command
   - run_tests
 risk_level: medium
-verification: current task, changed paths, last failure, and next safe action are explicit
-version: 1.0.0
+verification: changed paths, last verify result, and next safe action are explicit
+version: 1.1.0
 ---
 
 # Resume incomplete work
 
 1. Reopen the actual project root/session first; do not rely on an old chat summary alone.
-2. Read open tasks, changed files, Git status/diff, recent test output, and acceptance evidence. Treat missing evidence as unknown.
+2. Read Git status/diff, recently changed files, the project docs (PROJECT/DESIGN/VERIFY), and the most recent test or build output. Treat missing evidence as unknown. Do not rely on a `TASKS.md` checklist; it is no longer maintained.
 3. Separate file-level continuation from conversation-level continuation: existing code can survive a lost session, but the previous model context may not.
-4. Recommend one next action: inspect, repair, test, plan, or execute. Do not auto-set `confirmed`, mark tasks done, publish, or resume a dangerous command.
-5. After the user’s current request is execute, continue through the ordinary request-intent and path/risk policy.
+4. Re-run the verify command if it is cheap; its exit code tells you where things really stand.
+5. Recommend one next action: inspect, repair, test, or implement. Do not publish or resume a dangerous command on your own.

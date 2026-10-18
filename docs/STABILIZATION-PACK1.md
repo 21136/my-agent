@@ -2,7 +2,7 @@
 
 > 版本 **0.1.2** · 2026-08-07 · **状态：Pack 1 真机收口 done（S-472/480/481 pass · BUG-026/027 fixed）**  
 > 父文档：[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md) §3  
-> 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [BUGS.md](./BUGS.md) · [stabilization-log.md](./stabilization-log.md)
+> 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [DELIVERABLE-REVIEW.md](./DELIVERABLE-REVIEW.md) · [BUGS.md](./BUGS.md) · [stabilization-log.md](./stabilization-log.md)
 
 ---
 
@@ -96,7 +96,7 @@
 
 ## 5. T-2408 · Progress Gate S-70～S-75
 
-**真源**：[PROGRESS-GATE.md](./PROGRESS-GATE.md) §5.2
+**真源**：[PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) §5.2
 
 > **状态：done**（Phase 24 · 2026-08-06 · `stabilization-log` 已记；**S-70～74 为 pytest 自动化覆盖**，非 Pack 1 真机手工）。
 

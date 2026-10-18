@@ -3,7 +3,7 @@
 > 版本 **0.2.2** · 2026-08-07 · **状态：Fable5 评审已签（v0.2.2）· 部分代码已落地**  
 > **读者**：产品负责人、实现者、**外部 LLM 审查**（本文 + 子文档自洽，可单独评审）  
 > **背景**：Phase 47+ / LDM v0.3.3 / 里程碑 T-4714～4719 **已落地并已 push GitHub**；用户真机体验 **可接受**。本路线图收拢后续工作包，**一动一停**实施。  
-> 子文档：[STABILIZATION-PACK1.md](./STABILIZATION-PACK1.md) · [LLM-ROUTING.md](./LLM-ROUTING.md) · [ASYNC-ORCHESTRATION.md](./ASYNC-ORCHESTRATION.md) · [MILESTONE-PHASE-KEY.md](./MILESTONE-PHASE-KEY.md) · [CODEBASE-SEARCH.md](./CODEBASE-SEARCH.md)  
+> 子文档：[STABILIZATION-PACK1.md](./STABILIZATION-PACK1.md) · [LLM-ROUTING.md](./LLM-ROUTING.md) · [ASYNC-ORCHESTRATION.md](./ASYNC-ORCHESTRATION.md) · [MILESTONE-PHASE-KEY.md](./archive/MILESTONE-PHASE-KEY.md) · [CODEBASE-SEARCH.md](./CODEBASE-SEARCH.md)  
 > 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [MAP.md](./MAP.md) · [TASKS.md](./TASKS.md) · [STABILIZATION.md](./STABILIZATION.md)
 
 ---
@@ -88,7 +88,7 @@ Pack 5  T-5501 → T-5502 → S-550
 
 ## 5. Pack 4 · 计划域（PLAN-DOMAIN）
 
-**真源**：[MILESTONE-PHASE-KEY.md](./MILESTONE-PHASE-KEY.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) M4
+**真源**：[MILESTONE-PHASE-KEY.md](./archive/MILESTONE-PHASE-KEY.md) · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) M4
 
 | ID | 任务 | 交付物 | 验收 |
 |----|------|--------|------|
@@ -183,7 +183,7 @@ Pack 5  T-5501 → T-5502 → S-550
 | R2 | Pack 1 是否遗漏关键 smoke（S-490/500 等）？ |
 | R3 | Pack 2 路由表与 [LLM-ROUTING.md](./LLM-ROUTING.md) J0～J6 一致？ |
 | R4 | T-4214 免确认边界是否过宽（安全）？ |
-| R5 | [MILESTONE-PHASE-KEY.md](./MILESTONE-PHASE-KEY.md) v2 主键是否比 `phase:N` 更稳且可迁移？ |
+| R5 | [MILESTONE-PHASE-KEY.md](./archive/MILESTONE-PHASE-KEY.md) v2 主键是否比 `phase:N` 更稳且可迁移？ |
 | R6 | T-3705 bugs 晋升是否越权写 TASKS（须 plan 采纳）？ |
 | R7 | [CODEBASE-SEARCH.md](./CODEBASE-SEARCH.md) 索引范围/隐私/gitignore 是否合理？ |
 | R8 | 任务 ID 与既有 T-4202/4214/3705/4225 映射是否清晰、无重复排期？ |

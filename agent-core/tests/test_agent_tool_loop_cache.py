@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import json
 import sys
 import unittest
@@ -97,7 +99,7 @@ class AgentToolLoopCacheTests(unittest.TestCase):
             )
             agent = self._make_agent(paths, session, llm)
 
-            with patch.object(agent, "_maybe_pre_spawn_plan", return_value=None):
+            with contextlib.nullcontext():
                 with patch(
                     "turn_intent.should_spawn_explore_for_turn",
                     return_value=False,
@@ -151,7 +153,7 @@ class AgentToolLoopCacheTests(unittest.TestCase):
             events: list[dict[str, Any]] = []
             agent.on_turn_event = events.append
 
-            with patch.object(agent, "_maybe_pre_spawn_plan", return_value=None):
+            with contextlib.nullcontext():
                 with patch(
                     "turn_intent.should_spawn_explore_for_turn",
                     return_value=False,

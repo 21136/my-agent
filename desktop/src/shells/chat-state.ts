@@ -22,7 +22,6 @@ export type ChatBlock =
   | { kind: "user"; text: string; turnIndex: number }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
-  | { kind: "plan-subagent"; status: "running" | "proposals_ready"; taskPreview?: string; summary?: string; proposalCount?: number; turnIndex: number }
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
   | { kind: "notice"; text: string }
   | (ProcessActivityBlock & { kind: "process" })
@@ -106,14 +105,6 @@ export interface ChatSession {
   resetTurnActivity(): void;
   isWorking(): boolean;
   pushUserMessage(text: string): number;
-  pushPlanSubagentCard(
-    status: "running" | "proposals_ready",
-    opts?: { taskPreview?: string; summary?: string; proposalCount?: number },
-  ): number;
-  updatePlanSubagentCard(
-    status: "proposals_ready",
-    opts?: { summary?: string; proposalCount?: number },
-  ): void;
   toggleProcessCollapsed(turnKey: string): void;
   toggleThinkingOpen(turnKey: string, thinkId?: string): void;
   openThinking(turnKey: string): void;
@@ -305,6 +296,13 @@ export function createChatSession(
   let deferredHistory: Extract<ServerEvent, { type: "session.history" }> | null = null;
   const acceptedCallIds = new Set<string>();
 
+  let turnKeySeq = 0;
+  /** Unique per turn: two turns started in the same millisecond used to share one 过程 key. */
+  function nextTurnKey(): string {
+    turnKeySeq += 1;
+    return `turn-${Date.now()}-${turnKeySeq}`;
+  }
+
   function notify(): void {
     hooks.onChange?.();
   }
@@ -400,6 +398,55 @@ export function createChatSession(
     return undefined;
   }
 
+  /** The user block that opened the turn a process block belongs to. */
+  function ownerUserOf(
+    proc: ChatBlock & { kind: "process" },
+  ): (ChatBlock & { kind: "user" }) | undefined {
+    const idx = model.blocks.indexOf(proc);
+    for (let i = idx - 1; i >= 0; i--) {
+      const block = model.blocks[i];
+      if (block.kind === "user") return block;
+      if (block.kind === "review-subagent") return undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * Re-insert a kept process block at the end of its own turn (history drops process blocks).
+   * Appending it blindly attached an older turn's steps to the newest turn card.
+   */
+  function insertProcessIntoOwnerTurn(
+    proc: ChatBlock & { kind: "process" },
+    owner: (ChatBlock & { kind: "user" }) | undefined,
+    liveTurn: number,
+  ): boolean {
+    let start = -1;
+    if (owner) {
+      for (let i = model.blocks.length - 1; i >= 0; i--) {
+        const block = model.blocks[i];
+        if (block.kind === "user" && block.text === owner.text) {
+          start = i;
+          break;
+        }
+      }
+    }
+    if (start < 0) {
+      if (owner && owner.turnIndex !== liveTurn) return false;
+      model.blocks.push(proc);
+      return true;
+    }
+    let end = model.blocks.length;
+    for (let i = start + 1; i < model.blocks.length; i++) {
+      const kind = model.blocks[i].kind;
+      if (kind === "user" || kind === "review-subagent") {
+        end = i;
+        break;
+      }
+    }
+    model.blocks.splice(end, 0, proc);
+    return true;
+  }
+
   function findProcessByCallId(callId: string): (ChatBlock & { kind: "process" }) | undefined {
     for (let i = model.blocks.length - 1; i >= 0; i--) {
       const block = model.blocks[i];
@@ -413,6 +460,7 @@ export function createChatSession(
     const sameSession =
       !event.session_id || !model.sessionId || event.session_id === model.sessionId;
     const keptProcess = sameSession ? latestTooledProcess() : undefined;
+    const keptOwner = keptProcess ? ownerUserOf(keptProcess) : undefined;
     const liveTurn = model.turnCounter;
     const keptUsers = sameSession
       ? model.blocks.filter(
@@ -454,8 +502,9 @@ export function createChatSession(
       if (!present) model.blocks.push(user);
     }
     if (keptProcess) {
-      model.blocks.push(keptProcess);
-      model.currentTurnKey = keptProcess.turnKey;
+      if (insertProcessIntoOwnerTurn(keptProcess, keptOwner, liveTurn)) {
+        model.currentTurnKey = keptProcess.turnKey;
+      }
     }
     for (const assistant of keptAssistants) {
       const present = model.blocks.some(
@@ -557,6 +606,7 @@ export function createChatSession(
         kind: "notice",
         text: "停止请求超时，界面已恢复；若仍无响应请托盘退出后重启。",
       });
+      if (options.showProcess) settleCurrentTurnProcesses();
       resetTurnActivity();
       model.confirmPending = false;
       hooks.onCancelTimeout?.();
@@ -581,14 +631,14 @@ export function createChatSession(
   /** New process timeline for each server turn / v2 chain segment (no user bubble). */
   function beginServerProcessTurn(): void {
     finalizeInFlightProcessBlocks();
-    model.currentTurnKey = `turn-${Date.now()}`;
+    model.currentTurnKey = nextTurnKey();
     model.assistantBuffer = "";
     beginTurnActivity();
   }
 
   function beginTurn(): number {
     finalizeInFlightProcessBlocks();
-    model.currentTurnKey = `turn-${Date.now()}`;
+    model.currentTurnKey = nextTurnKey();
     model.turnCounter += 1;
     model.assistantBuffer = "";
     beginTurnActivity();
@@ -600,43 +650,6 @@ export function createChatSession(
     model.blocks.push({ kind: "user", text, turnIndex });
     notify();
     return turnIndex;
-  }
-
-  function pushPlanSubagentCard(
-    status: "running" | "proposals_ready",
-    opts?: { taskPreview?: string; summary?: string; proposalCount?: number },
-  ): number {
-    const turnIndex = beginTurn();
-    model.blocks.push({
-      kind: "plan-subagent",
-      status,
-      taskPreview: opts?.taskPreview,
-      summary: opts?.summary,
-      proposalCount: opts?.proposalCount,
-      turnIndex,
-    });
-    notify();
-    return turnIndex;
-  }
-
-  function updatePlanSubagentCard(
-    status: "running" | "proposals_ready",
-    opts?: { summary?: string; proposalCount?: number },
-  ): void {
-    for (let i = model.blocks.length - 1; i >= 0; i--) {
-      const block = model.blocks[i];
-      if (block.kind === "plan-subagent" && block.status === "running") {
-        model.blocks[i] = {
-          ...block,
-          status,
-          summary: opts?.summary ?? block.summary,
-          proposalCount: opts?.proposalCount ?? block.proposalCount,
-        };
-        notify();
-        return;
-      }
-    }
-    pushPlanSubagentCard(status, opts);
   }
 
   function pushReviewSubagentCard(
@@ -707,6 +720,29 @@ export function createChatSession(
     const block = findProcessBlock(model.currentTurnKey);
     if (block && !block.collapsed) {
       block.collapsed = true;
+    }
+  }
+
+  /** Turn is over (done / error / stopped): stop live indicators and fold this turn's 过程. */
+  function settleCurrentTurnProcesses(): void {
+    let start = 0;
+    for (let i = model.blocks.length - 1; i >= 0; i--) {
+      const kind = model.blocks[i].kind;
+      if (kind === "user" || kind === "review-subagent") {
+        start = i;
+        break;
+      }
+    }
+    for (let i = start; i < model.blocks.length; i++) {
+      const block = model.blocks[i];
+      if (block.kind !== "process") continue;
+      finalizeProcessAfterTurn(block);
+      block.collapsed = true;
+    }
+    const current = findProcessBlock(model.currentTurnKey);
+    if (current) {
+      finalizeProcessAfterTurn(current);
+      current.collapsed = true;
     }
   }
 
@@ -889,11 +925,7 @@ export function createChatSession(
           model.blocks.push({ kind: "notice", text: label });
         }
         if (options.showProcess) {
-          const proc = findProcessBlock(model.currentTurnKey);
-          if (proc) {
-            finalizeProcessAfterTurn(proc);
-          }
-          collapseCurrentProcess();
+          settleCurrentTurnProcesses();
         }
         finalizeInProgressConfirms(event.finish_reason === "cancelled" ? "已取消" : "已完成执行");
         resetTurnActivity();
@@ -1078,6 +1110,10 @@ export function createChatSession(
         notify();
         break;
       case "error":
+        if (options.showProcess) {
+          // Error ends the turn: without this the pill kept "等待模型…" and refused to collapse.
+          settleCurrentTurnProcesses();
+        }
         model.blocks.push({ kind: "notice", text: event.message });
         resetTurnActivity();
         hooks.onError?.();
@@ -1146,8 +1182,6 @@ export function createChatSession(
     resetTurnActivity,
     isWorking,
     pushUserMessage,
-    pushPlanSubagentCard,
-    updatePlanSubagentCard,
     pushReviewSubagentCard,
     updateReviewSubagentCard,
     toggleProcessCollapsed,

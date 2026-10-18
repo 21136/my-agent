@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from "electron";
+import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,21 @@ async function waitForPortOpen(
     await sleep(500);
   }
   return false;
+}
+
+async function waitForPortClosed(
+  host: string,
+  port: number,
+  deadlineMs = PORT_WAIT_MS,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    if (!(await isPortOpen(host, port))) {
+      return true;
+    }
+    await sleep(100);
+  }
+  return !(await isPortOpen(host, port));
 }
 
 // Windows dev: reduce native GPU crashes (exit code 0xC0000005) when tray + Chromium init.
@@ -414,11 +430,28 @@ async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, 
     stopCandidate: async () => {
       if (candidate) stopCandidateSidecar(candidate, candidateRoot);
     },
-    stopCurrent: () => stopSidecar(),
+    stopCurrent: async () => {
+      const currentPort = sidecarInfo?.port;
+      stopSidecar();
+      if (currentPort) {
+        await waitForPortClosed("127.0.0.1", currentPort, PORT_WAIT_MS);
+      }
+    },
     promoteCandidate: async () => {
-      activeSidecarRoot = candidateRoot;
-      const promoted = await startSidecar(candidateRoot);
-      return promoted;
+      if (!candidate) {
+        return { ok: false, message: "candidate process is missing" };
+      }
+      return promoteCandidateWithRestart({
+        candidateRoot,
+        candidate,
+        stopCandidate: async (readyCandidate, root) => {
+          stopCandidateSidecar(readyCandidate, root);
+        },
+        startPromoted: async (root) => {
+          activeSidecarRoot = root;
+          return startSidecar(root);
+        },
+      });
     },
     recoverCurrent: async () => {
       activeSidecarRoot = AGENT_ROOT;

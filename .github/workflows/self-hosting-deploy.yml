@@ -1,0 +1,78 @@
+name: self-hosting-production-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment to deploy into
+        required: true
+        default: production
+        type: string
+      version:
+        description: Immutable version, tag, or commit
+        required: true
+        type: string
+      artifact_path:
+        description: Optional artifact path relative to the repository
+        required: false
+        type: string
+      artifact_digest:
+        description: Optional SHA-256 digest for the artifact
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-hosting-production-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.version }} to ${{ inputs.environment }}
+    # Configure a real production runner with this label before dispatching.
+    runs-on: [self-hosted, windows, my-agent-production]
+    environment:
+      name: ${{ inputs.environment }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout immutable version
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+
+      - name: Verify artifact digest
+        if: ${{ inputs.artifact_path != '' || inputs.artifact_digest != '' }}
+        shell: pwsh
+        env:
+          ARTIFACT_PATH: ${{ inputs.artifact_path }}
+          EXPECTED_DIGEST: ${{ inputs.artifact_digest }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ARTIFACT_PATH) -or [string]::IsNullOrWhiteSpace($env:EXPECTED_DIGEST)) {
+            throw "artifact_path and artifact_digest must be supplied together"
+          }
+          if (-not (Test-Path -LiteralPath $env:ARTIFACT_PATH -PathType Leaf)) {
+            throw "artifact does not exist: $env:ARTIFACT_PATH"
+          }
+          $actual = (Get-FileHash -LiteralPath $env:ARTIFACT_PATH -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_DIGEST.ToLowerInvariant()) {
+            throw "artifact digest mismatch"
+          }
+
+      - name: Require configured production adapter
+        shell: pwsh
+        env:
+          MY_AGENT_DEPLOY_COMMAND: ${{ secrets.MY_AGENT_DEPLOY_COMMAND }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MY_AGENT_DEPLOY_COMMAND)) {
+            throw "GitHub Environment secret MY_AGENT_DEPLOY_COMMAND is not configured"
+          }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $env:MY_AGENT_DEPLOY_COMMAND
+
+      - name: Emit deployment identity
+        shell: pwsh
+        run: |
+          Write-Output "environment=${{ inputs.environment }}"
+          Write-Output "version=${{ inputs.version }}"
+          Write-Output "commit=$env:GITHUB_SHA"

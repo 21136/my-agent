@@ -15,14 +15,11 @@ from paths import AgentPaths
 from project_cli import (
     confirm_direct_implement,
     confirm_project_design,
-    confirm_project_plan,
-    start_project_task,
 )
 from project_mode import (
     ProjectModeError,
     acceptance_script_exists,
     acceptance_workspace_path,
-    add_task_to_tasks_md,
     count_untouched_template_docs,
     create_project_doc,
     compute_execution_stage,
@@ -32,27 +29,17 @@ from project_mode import (
     list_projects,
     normalize_project_id,
     parse_acceptance_spec,
-    plan_allows_code_writes,
     project_dir,
     read_project_artifacts,
     read_project_doc,
     read_project_template,
-    read_task_stats,
     rename_project_doc,
     restore_project_doc_from_trash,
     run_acceptance_check,
-    snapshot_plan_fingerprints,
-    should_skip_ordinary_plan_request,
-    sync_plan_dirty_if_structure_changed,
     write_project_doc,
 )
 from project_release import load_release_acceptance, save_release_acceptance
-from plan_agent import PlanAgent, get_plan_agent
-from runaway_flow import normalize_checkpoint
-from runaway_v2.continuation import repair_stale_v2_plan_status
-from runaway_verification import evidence_passed, load_verification_evidence, verification_evidence_path
 from session import Session, corruption_notice_events, session_banner_event, utc_now_iso
-from user_copy import runaway_mode_toggle_notice
 
 EmitFn = Callable[[dict[str, Any]], None]
 
@@ -61,34 +48,6 @@ _PROJECT_SUMMARY_MAX = 1200
 class ProjectApiError(Exception):
     """Invalid project WS message."""
 
-
-def _ack_human_plan_adopt(session: Session, paths: AgentPaths, agent: PlanAgent) -> None:
-    """Snap fingerprints after human adopt/confirm so plan_dirty clears (Phase 40)."""
-    pid = (session.meta.project_id or "").strip()
-    if not pid:
-        return
-    agent.confirm_plan()
-    snapshot_plan_fingerprints(session, paths, pid)
-    if session.meta.project_plan_status == "plan_dirty":
-        session.meta.project_plan_status = "confirmed"
-    session.meta.updated_at = utc_now_iso()
-    session.save()
-
-
-def maybe_clear_stale_plan_dirty(session: Session, paths: AgentPaths, agent: PlanAgent) -> bool:
-    """Clear persisted plan_dirty when disk already matches and nothing waits for adopt.
-
-    Restart does not wipe session meta — users who already confirmed once can get stuck
-    on plan_dirty after Phase titles change on disk (e.g. Phase 7 待实现 → 全部完成).
-    """
-    if session.meta.project_plan_status != "plan_dirty":
-        return False
-    if not (session.meta.project_plan_confirmed_at or "").strip():
-        return False
-    if agent._pending_gated:
-        return False
-    _ack_human_plan_adopt(session, paths, agent)
-    return True
 
 
 def _project_summary(project_md: str) -> str:
@@ -100,29 +59,28 @@ def _project_summary(project_md: str) -> str:
     return text[:_PROJECT_SUMMARY_MAX] + "\n…(truncated)"
 
 
-def _runaway_user_status(session: Session) -> str:
-    """Map internal runaway checkpoint data to stable user-facing copy."""
-    from runaway_v2 import runaway_v2_enabled
 
-    if runaway_v2_enabled(session):
-        line = str(getattr(session.meta, "project_runaway_v2_user_line", "") or "").strip()
-        if line:
-            return line
-    from runaway_flow import checkpoint_label, normalize_checkpoint
-
-    if not bool(getattr(session.meta, "project_runaway_enabled", False)):
-        return "已关闭"
-    paused_reason = str(getattr(session.meta, "project_runaway_paused_reason", "") or "").strip()
-    if paused_reason:
-        return f"已暂停：{paused_reason}"
-    checkpoint = str(getattr(session.meta, "project_runaway_checkpoint", "") or "").strip()
-    return checkpoint_label(normalize_checkpoint(checkpoint))
+def _git_branch(project_root: Path) -> str:
+    """Best-effort current branch (or short detached sha) from .git/HEAD; never raises."""
+    try:
+        git = project_root / ".git"
+        if git.is_file():  # worktree / submodule: "gitdir: <path>"
+            text = git.read_text(encoding="utf-8", errors="replace").strip()
+            if text.startswith("gitdir:"):
+                gitdir = Path(text[7:].strip())
+                git = gitdir if gitdir.is_absolute() else (project_root / gitdir)
+        head = (git / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    return head[:7]
 
 
 def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]:
     from project_mode import classify_stage_documents, get_delivery_profile
     from external_project import validate_external_binding
-    from progress_gate import review_progress_blocked_flag
     from project_manifest import (
         manifest_blocks_on_l2_stale,
         manifest_payload,
@@ -132,29 +90,9 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
 
     pid = (session.meta.project_id or "").strip()
     root = (session.meta.project_root or "").strip()
-    repair_stale_v2_plan_status(paths, session)
     plan_status = session.meta.project_plan_status or "draft"
     workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
     artifacts = read_project_artifacts(paths, pid) if pid else {}
-    v2_fields: dict[str, Any] | None = None
-    from runaway_v2 import runaway_v2_enabled
-
-    if pid and runaway_v2_enabled(session):
-        from runaway_v2.state import build_v2_state_fields
-
-        v2_fields = build_v2_state_fields(
-            paths,
-            project_id=pid,
-            plan_status=plan_status,
-            paused_reason=str(
-                getattr(session.meta, "project_runaway_paused_reason", "") or ""
-            ),
-        )
-    acceptance_passed = (
-        bool(v2_fields.get("runaway_acceptance_passed"))
-        if v2_fields is not None
-        else bool(getattr(session.meta, "project_runaway_acceptance_passed", False))
-    )
     manifest = None
     manifest_error = None
     if pid:
@@ -162,31 +100,15 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             manifest = refresh_project_manifest(paths, pid)
         except Exception as exc:
             manifest_error = str(exc)
-    tasks_md = artifacts.get("TASKS.md", "")
     map_md = artifacts.get("MAP.md", "")
-    stats = read_task_stats(project_dir(paths, pid) / "TASKS.md") if pid else read_task_stats(Path())
-    review_verdict = getattr(session, "last_review_verdict", None) or getattr(
-        session.meta, "project_runaway_last_verification", ""
-    ) or None
-    review_blockers_count = int(
-        getattr(session, "last_review_blockers_count", 0)
-        or getattr(session.meta, "project_runaway_review_blockers_count", 0)
-        or 0
-    )
+    review_verdict = getattr(session, "last_review_verdict", None) or None
+    review_blockers_count = int(getattr(session, "last_review_blockers_count", 0) or 0)
     stage = compute_execution_stage(
         project_id=pid,
         plan_status=plan_status,
-        task_stats=stats,
         manifest=manifest,
         project_root=project_dir(paths, pid) if pid else None,
-        review_verdict=(
-            review_verdict
-            if not (
-                bool(getattr(session.meta, "project_runaway_enabled", False))
-                and not acceptance_passed
-            )
-            else None
-        ),
+        review_verdict=review_verdict,
         review_blockers_count=review_blockers_count,
         workflow_stage=workflow_stage,
     )
@@ -210,10 +132,8 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         ),
     ) if pid else {"accepted": False, "accepted_at": None, "release_revision": None, "checklist": {}}
     acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", "")) if pid else None
-    runaway_evidence = load_verification_evidence(paths, pid) if pid else None
     can_verify = bool(
         pid
-        and plan_allows_code_writes(plan_status)
         and acceptance is not None
         and acceptance_script_exists(paths, pid, acceptance)
     )
@@ -221,6 +141,7 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "type": "project.state",
         "project_id": pid or None,
         "project_root": root or None,
+        "git_branch": _git_branch(project_dir(paths, pid)) if pid else "",
         "external_project": (
             {
                 "adopted": True,
@@ -233,48 +154,21 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "workflow_stage": workflow_stage,
         "project_entry": getattr(session.meta, "project_entry", "") or "",
         "design_confirmed_at": getattr(session.meta, "project_design_confirmed_at", "") or None,
-        "active_task_id": getattr(session.meta, "project_active_task_id", "") or None,
-        "tasks_markdown": tasks_md,
         "map_markdown": map_md,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-        "tasks_open": stats.open_count,
-        "tasks_all_done": stats.all_done,
         "project_summary": _project_summary(artifacts.get("PROJECT.md", "")),
-        "needs_plan_confirm": (
-            not bool(getattr(session.meta, "project_runaway_enabled", False))
-            and plan_status in {"draft", "plan_dirty"}
-            and workflow_stage == "requirements"
-            and str(getattr(session.meta, "project_entry", "") or "") != "direct"
-        ),
-        "needs_design_confirm": (
-            not bool(getattr(session.meta, "project_runaway_enabled", False))
-            and workflow_stage == "documentation"
-            and str(getattr(session.meta, "project_entry", "") or "") != "direct"
-            and project_template_of(manifest) != "light"
-        ),
-        "needs_documentation": (
-            not bool(getattr(session.meta, "project_runaway_enabled", False))
-            and workflow_stage == "requirements"
-        ),
-        # Legacy UI hints remain available, but never authorize/deny ordinary writes.
-        "ordinary_permission_source": "request_intent_path_risk"
-        if not bool(getattr(session.meta, "project_runaway_enabled", False))
-        else "runaway_owner",
+        # Plan/design confirmation gates were removed with the task subsystem.
+        "needs_design_confirm": False,
+        "needs_documentation": False,
+        "ordinary_permission_source": "request_intent_path_risk",
         "ordinary_stage_gates_blocking": False,
         "acceptance_command": acceptance.display if acceptance else None,
         "acceptance_expected_exit": acceptance.expected_exit_code if acceptance else None,
         "can_verify": can_verify,
         "scope_confirmed_at": getattr(session.meta, "project_scope_confirmed_at", "") or None,
-        "runaway_enabled": bool(getattr(session.meta, "project_runaway_enabled", False)),
         "delivery_profile": get_delivery_profile(session.meta),
         "review_verdict": review_verdict,
         "review_blockers_count": review_blockers_count,
-        "review_progress_blocked": review_progress_blocked_flag(
-            delivery_profile=get_delivery_profile(session.meta),
-            last_review_verdict=review_verdict,
-            last_review_blockers_count=review_blockers_count,
-        ),
+        "review_progress_blocked": False,
         "manifest": manifest_payload(manifest) if manifest is not None else None,
         "manifest_stale": manifest_blocks_on_l2_stale(manifest) if manifest is not None else False,
         "project_template": project_template_of(manifest) if manifest is not None else "standard",
@@ -289,19 +183,6 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         "execution_stage_deferred": stage_documents["deferred"],
         "content_lint": stage.get("content_lint"),
         "release_acceptance": release_acceptance,
-        "runaway_status": _runaway_user_status(session),
-        "runaway_checkpoint": normalize_checkpoint(
-            getattr(session.meta, "project_runaway_checkpoint", "")
-        ),
-        "runaway_repair_count": int(getattr(session.meta, "project_runaway_repair_count", 0) or 0),
-        "runaway_last_verification": getattr(session.meta, "project_runaway_last_verification", "") or None,
-        "runaway_paused_reason": getattr(session.meta, "project_runaway_paused_reason", "") or None,
-        "runaway_acceptance_passed": acceptance_passed,
-        "runaway_verification_evidence": runaway_evidence,
-        "runaway_verification_evidence_path": (
-            str(verification_evidence_path(paths, pid).relative_to(paths.workspace)).replace("\\", "/")
-            if pid else None
-        ),
         "execution_stage_artifacts": [
             {
                 "path": item.get("path"),
@@ -315,31 +196,6 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
             if isinstance(item, dict)
         ],
     }
-    if v2_fields is not None:
-        payload.update(v2_fields)
-        session.meta.project_runaway_acceptance_passed = acceptance_passed
-        user_line = str(v2_fields.get("runaway_user_line") or "").strip()
-        if user_line:
-            payload["runaway_status"] = user_line
-        if v2_fields.get("runaway_blocked"):
-            block = v2_fields.get("runaway_block") if isinstance(v2_fields.get("runaway_block"), dict) else {}
-            reason = str(block.get("reason") or user_line or "需要人工处理").strip()
-            payload["runaway_paused_reason"] = reason
-            payload["runaway_checkpoint"] = "paused"
-        else:
-            if not str(getattr(session.meta, "project_runaway_paused_reason", "") or "").strip():
-                payload["runaway_paused_reason"] = None
-                session.meta.project_runaway_paused_reason = ""
-            phase = str(v2_fields.get("runaway_phase") or "").strip()
-            checkpoint_map = {
-                "prepare": "preparing",
-                "implement": "implementing",
-                "verify": "verifying",
-                "release_wait": "release_wait",
-            }
-            if phase in checkpoint_map:
-                session.meta.project_runaway_checkpoint = checkpoint_map[phase]
-                payload["runaway_checkpoint"] = checkpoint_map[phase]
     return payload
 
 
@@ -350,14 +206,11 @@ def project_list_payload(paths: AgentPaths, session: Session | None = None) -> d
     items: list[dict[str, Any]] = []
     current_pid = (session.meta.project_id or "").strip() if session else ""
     for project_id in list_projects(paths):
-        stats = read_task_stats(project_dir(paths, project_id) / "TASKS.md")
         sid = lookup_project_session(paths, project_id)
         items.append(
             {
                 "id": project_id,
                 "root": f"workspace/{project_id}",
-                "tasks_done": stats.done,
-                "tasks_total": stats.total,
                 "session_id": sid,
                 "is_current": project_id == current_pid,
                 "external_adopted": validate_external_binding(paths, project_id) is not None,
@@ -371,76 +224,13 @@ def project_list_payload(paths: AgentPaths, session: Session | None = None) -> d
     return {"type": "project.list", "projects": items}
 
 
-def build_plan_request_payload(session: Session, paths: AgentPaths) -> dict[str, Any] | None:
-    pid = (session.meta.project_id or "").strip()
-    if not pid or session.meta.active_shell != "project":
-        return None
-    if bool(getattr(session.meta, "project_runaway_enabled", False)):
-        return None
-    plan_status = session.meta.project_plan_status or "draft"
-    workflow_stage = getattr(session.meta, "project_workflow_stage", "requirements") or "requirements"
-    if workflow_stage != "requirements":
-        return None
-    if plan_status not in {"draft", "plan_dirty"}:
-        return None
-    artifacts = read_project_artifacts(paths, pid)
-    tasks_md = artifacts.get("TASKS.md", "")
-    if not tasks_md.strip():
-        return None
-    stats = read_task_stats(project_dir(paths, pid) / "TASKS.md")
-    if stats.total == 0:
-        # Nothing to confirm (e.g. a fresh light project with no tasks yet).
-        return None
-    preview = tasks_md
-    if len(preview) > _PLAN_PREVIEW_MAX:
-        preview = preview[:_PLAN_PREVIEW_MAX] + "\n…(truncated)"
-    title = "计划已变更 · 请确认" if plan_status == "plan_dirty" else "计划待确认"
-    return {
-        "type": "plan.request",
-        "request_id": str(uuid.uuid4()),
-        "project_id": pid,
-        "project_root": session.meta.project_root,
-        "plan_status": plan_status,
-        "title": title,
-        "summary": _project_summary(artifacts.get("PROJECT.md", "")),
-        "tasks_preview": preview,
-        "tasks_done": stats.done,
-        "tasks_total": stats.total,
-    }
-
 
 def emit_project_session_bundle(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
     """Emit banner + project.state when a project is bound."""
-    agent = _plan_agent(session, paths)
-    if agent is not None:
-        maybe_clear_stale_plan_dirty(session, paths, agent)
     emit(session_banner_event(session))
     if session.meta.project_id and session.meta.active_shell == "project":
         emit(project_state_payload(session, paths))
-        plan_state = project_plan_state_payload(session, paths)
-        if plan_state is not None:
-            emit(plan_state)
 
-
-def maybe_emit_plan_request(
-    session: Session,
-    paths: AgentPaths,
-    emit: EmitFn,
-    *,
-    plan_structure_changed: bool = False,
-) -> None:
-    if bool(getattr(session.meta, "project_runaway_enabled", False)):
-        return
-    changed = plan_structure_changed or sync_plan_dirty_if_structure_changed(session, paths)
-    # Questions, reply-only lines, and recalls do not re-open 「方案待确认」.
-    # A turn that actually edits the plan still emits.
-    if should_skip_ordinary_plan_request(
-        session, paths, plan_structure_changed=changed
-    ):
-        return
-    payload = build_plan_request_payload(session, paths)
-    if payload is not None:
-        emit(payload)
 
 
 def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) -> None:
@@ -448,29 +238,8 @@ def after_turn_project_hooks(session: Session, paths: AgentPaths, emit: EmitFn) 
         # Not in project mode: detect potential workspace projects
         maybe_emit_project_detect(session, paths, emit)
         return
-    from runaway_v2 import runaway_v2_enabled
-
-    # v2 derives its phase from the external checklist and owns the project
-    # transition. The legacy fingerprint watcher must not reopen prepare after
-    # v2 has already reached release_wait.
-    plan_structure_changed = False
-    if not runaway_v2_enabled(session) and sync_plan_dirty_if_structure_changed(session, paths):
-        session.save()
-        plan_structure_changed = True
     emit(project_state_payload(session, paths))
     emit(session_banner_event(session))
-
-    # Keep the compatibility plan event read-only for v2. The v2 overlay is
-    # authoritative and avoids legacy auto-fixes reopening a passed checklist.
-    plan_state = project_plan_state_payload(session, paths)
-    if plan_state is not None:
-        for action in plan_state.get("auto_fix_actions", []):
-            emit({"type": "notice", "text": action})
-        emit(plan_state)
-
-    maybe_emit_plan_request(
-        session, paths, emit, plan_structure_changed=plan_structure_changed
-    )
 
 
 # Track which sessions have already received a project.detect notice
@@ -507,115 +276,6 @@ def dispatch_project_message(
         session.save()
         return project_state_payload(session, paths)
 
-    if msg_type == "project.runaway.set":
-        pid = _project_pid(session)
-        enabled = message.get("enabled")
-        if not isinstance(enabled, bool):
-            raise ProjectApiError("project.runaway.set requires boolean enabled")
-        was_enabled = bool(session.meta.project_runaway_enabled)
-        resume_requested = message.get("resume") is True
-        directed_retry = message.get("directed") is True
-        from runaway_flow import normalize_checkpoint
-
-        idempotent_resume = bool(
-            enabled
-            and resume_requested
-            and was_enabled
-            and not directed_retry
-            and not str(session.meta.project_runaway_paused_reason or "").strip()
-            and normalize_checkpoint(session.meta.project_runaway_checkpoint) != "paused"
-        )
-        session.meta.project_runaway_enabled = enabled
-        if enabled and (not was_enabled or resume_requested or directed_retry):
-            from runaway_v2 import runaway_v2_enabled
-
-            if runaway_v2_enabled(session):
-                from runaway_v2.continuation import reset_continuation_guard
-
-                if not was_enabled:
-                    session.meta.project_runaway_paused_reason = ""
-                    session.meta.project_runaway_last_error = ""
-                    session.meta.project_runaway_repair_count = 0
-                    reset_continuation_guard(session)
-                if resume_requested or directed_retry:
-                    from runaway_v2.checklist import (
-                        load_or_build_checklist,
-                        reset_failed_item_attempts,
-                        reset_failed_item_directed_retry,
-                        save_checklist,
-                    )
-
-                    checklist = load_or_build_checklist(paths, pid)
-                    changed = (
-                        reset_failed_item_directed_retry(checklist)
-                        if directed_retry
-                        else reset_failed_item_attempts(checklist)
-                    )
-                    if changed:
-                        save_checklist(paths, checklist)
-                    reset_continuation_guard(session)
-                    session.meta.project_runaway_paused_reason = ""
-                    session.meta.project_runaway_last_error = ""
-                    session.meta.project_runaway_v2_phase = ""
-                    session.meta.project_runaway_v2_mode = ""
-                    session.meta.project_runaway_v2_user_line = ""
-                    session.meta.project_runaway_v2_blocked = False
-                from agent import run_runaway_startup_prep_if_needed
-
-                run_runaway_startup_prep_if_needed(session)
-            else:
-                from runaway_flow import (
-                    checkpoint_for_stage,
-                    normalize_checkpoint,
-                    sync_checkpoint_to_stage,
-                    sync_checkpoint_to_target,
-                    transition_checkpoint,
-                )
-
-                current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
-                if current == "paused":
-                    target = checkpoint_for_stage(session.meta.project_workflow_stage)
-                    sync_checkpoint_to_target(
-                        session.meta,
-                        target if target != "idle" else "preparing",
-                    )
-                    if resume_requested:
-                        session.meta.project_runaway_repair_count = 0
-                        session.meta.project_runaway_paused_reason = ""
-                        session.meta.project_runaway_last_error = ""
-                elif current == "completed":
-                    transition_checkpoint(session.meta, "idle")
-                elif current == "idle":
-                    sync_checkpoint_to_stage(session.meta, session.meta.project_workflow_stage)
-                else:
-                    transition_checkpoint(session.meta, current)
-                from agent import run_runaway_startup_prep_if_needed
-
-                run_runaway_startup_prep_if_needed(session)
-        if not enabled:
-            from runaway_flow import normalize_checkpoint, pause_runaway, transition_checkpoint
-
-            current = normalize_checkpoint(session.meta.project_runaway_checkpoint)
-            if current == "completed":
-                transition_checkpoint(session.meta, "idle")
-            else:
-                pause_runaway(session.meta, "用户关闭了狂奔模式")
-        session.meta.updated_at = utc_now_iso()
-        session.save()
-        events: list[dict[str, Any]] = [project_state_payload(session, paths)]
-        if not idempotent_resume:
-            events.insert(
-                0,
-                {
-                    "type": "notice",
-                    "text": runaway_mode_toggle_notice(
-                        enabled=enabled,
-                        resumed=bool(enabled and resume_requested),
-                    ),
-                },
-            )
-        return {"_events": events}
-
     if msg_type == "project.release.accept":
         pid = _project_pid(session)
         state = project_state_payload(session, paths)
@@ -627,7 +287,6 @@ def dispatch_project_message(
             if isinstance(item, dict) and item.get("path")
         }
         checklist = {
-            "tasks_clear": bool(state.get("tasks_all_done")),
             "evidence_fresh": all(
                 artifacts.get(path, {}).get("status") == "current"
                 for path in ("VERIFY.md", "RELEASE.md")
@@ -637,13 +296,6 @@ def dispatch_project_message(
                 and int(state.get("review_blockers_count") or 0) == 0
             ),
             "release_current": artifacts.get("RELEASE.md", {}).get("status") == "current",
-            "runaway_evidence": (
-                not bool(state.get("runaway_enabled"))
-                or (
-                    bool(state.get("runaway_acceptance_passed"))
-                    and evidence_passed(state.get("runaway_verification_evidence"), pid)
-                )
-            ),
             "human_acceptance": True,
         }
         if not all(checklist.values()):
@@ -731,35 +383,6 @@ def dispatch_project_message(
         pid = project_id.strip() if isinstance(project_id, str) and project_id.strip() else None
         return build_project_threads_payload(paths, session, project_id=pid)
 
-    if msg_type == "plan.response":
-        request_id = message.get("request_id")
-        choice = message.get("choice")
-        if not isinstance(request_id, str) or not request_id.strip():
-            raise ProjectApiError("plan.response requires request_id")
-        if not isinstance(choice, str) or not choice.strip():
-            raise ProjectApiError("plan.response requires choice")
-        normalized = choice.strip().casefold()
-        if normalized == "confirm":
-            try:
-                confirm_project_plan(session)
-            except ProjectModeError as exc:
-                raise ProjectApiError(str(exc)) from exc
-            if not getattr(session.meta, "project_entry", ""):
-                session.meta.project_entry = "plan"
-            session.save()
-            return {
-                **project_state_payload(session, paths),
-                "plan_choice": "confirm",
-                "request_id": request_id,
-            }
-        if normalized == "edit":
-            return {
-                **project_state_payload(session, paths),
-                "plan_choice": "edit",
-                "request_id": request_id,
-            }
-        raise ProjectApiError("plan.response choice must be confirm or edit")
-
     if msg_type == "project.design.confirm":
         try:
             message = confirm_project_design(session, paths)
@@ -768,21 +391,6 @@ def dispatch_project_message(
         return {
             "_events": [
                 {"type": "notice", "text": message},
-                project_state_payload(session, paths),
-            ]
-        }
-
-    if msg_type == "project.task.start":
-        task_id = message.get("task_id")
-        if not isinstance(task_id, str) or not task_id.strip():
-            raise ProjectApiError("project.task.start requires task_id")
-        try:
-            result = start_project_task(session, paths, task_id)
-        except ProjectModeError as exc:
-            raise ProjectApiError(str(exc)) from exc
-        return {
-            "_events": [
-                {"type": "notice", "text": result},
                 project_state_payload(session, paths),
             ]
         }
@@ -804,10 +412,6 @@ def dispatch_project_message(
         pid = (session.meta.project_id or "").strip()
         if not pid or session.meta.active_shell != "project":
             raise ProjectApiError("no active project session")
-        plan_status = session.meta.project_plan_status or "draft"
-        from project_mode import ordinary_project_session
-        if not ordinary_project_session(session) and not plan_allows_code_writes(plan_status):
-            raise ProjectApiError("计划未确认，无法运行验收")
         artifacts = read_project_artifacts(paths, pid)
         acceptance = parse_acceptance_spec(artifacts.get("PROJECT.md", ""))
         if acceptance is None:
@@ -818,71 +422,6 @@ def dispatch_project_message(
         result = run_acceptance_check(paths, pid, acceptance)
         return {"type": "project.verify.done", **result}
 
-    if msg_type == "project.task.toggle":
-        _project_pid(session)
-        line = message.get("line")
-        done = message.get("done")
-        if not isinstance(line, int) or line < 0:
-            raise ProjectApiError("project.task.toggle requires line (non-negative int)")
-        if not isinstance(done, bool):
-            raise ProjectApiError("project.task.toggle requires done (bool)")
-        agent = _plan_agent(session, paths)
-        if agent is None:
-            raise ProjectApiError("PlanAgent not available")
-        try:
-            result = agent.toggle_task(line, done)
-        except ProjectModeError as exc:
-            return {"type": "project.task.toggle.error", "line": line, "message": str(exc)}
-        return _plan_task_result(agent, session, paths, result)
-
-    if msg_type == "project.task.reorder":
-        _project_pid(session)
-        line = message.get("line")
-        direction = message.get("direction")
-        if not isinstance(line, int) or line < 0:
-            raise ProjectApiError("project.task.reorder requires line (non-negative int)")
-        if direction not in ("up", "down"):
-            raise ProjectApiError("project.task.reorder requires direction: up or down")
-        agent = _plan_agent(session, paths)
-        if agent is None:
-            raise ProjectApiError("PlanAgent not available")
-        try:
-            result = agent.reorder_task(line, str(direction))
-        except ProjectModeError as exc:
-            return {"type": "project.task.reorder.error", "line": line, "message": str(exc)}
-        return _plan_task_result(agent, session, paths, result)
-
-    if msg_type == "project.task.drop":
-        _project_pid(session)
-        line = message.get("line")
-        if not isinstance(line, int) or line < 0:
-            raise ProjectApiError("project.task.drop requires line (non-negative int)")
-        agent = _plan_agent(session, paths)
-        if agent is None:
-            raise ProjectApiError("PlanAgent not available")
-        try:
-            result = agent.drop_task(line)
-        except ProjectModeError as exc:
-            return {"type": "project.task.drop.error", "line": line, "message": str(exc)}
-        return _plan_task_result(agent, session, paths, result)
-
-    if msg_type == "project.task.skip":
-        _project_pid(session)
-        line = message.get("line")
-        if not isinstance(line, int) or line < 0:
-            raise ProjectApiError("project.task.skip requires line (non-negative int)")
-        agent = _plan_agent(session, paths)
-        if agent is None:
-            raise ProjectApiError("PlanAgent not available")
-        try:
-            result = agent.skip_task(line)
-        except ProjectModeError as exc:
-            return {"type": "project.task.skip.error", "line": line, "message": str(exc)}
-        return _plan_task_result(agent, session, paths, result)
-
-    if msg_type.startswith("project.plan."):
-        return _dispatch_plan_message(session, paths, message)
-
     raise ProjectApiError(f"unknown project message type: {msg_type}")
 
 
@@ -892,97 +431,6 @@ def _project_pid(session: Session) -> str:
         raise ProjectApiError("no active project session")
     return pid
 
-
-def _plan_agent(session: Session, paths: AgentPaths) -> PlanAgent | None:
-    pid = (session.meta.project_id or "").strip()
-    if not pid or session.meta.active_shell != "project":
-        return None
-    try:
-        return get_plan_agent(paths, pid)
-    except Exception:
-        return None
-
-
-def project_plan_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any] | None:
-    agent = _plan_agent(session, paths)
-    if agent is None:
-        return None
-    pid = (session.meta.project_id or "").strip()
-    from runaway_v2 import runaway_v2_enabled
-
-    repair_stale_v2_plan_status(paths, session)
-
-    # v2 owns checklist/document progression. The legacy PlanAgent state
-    # builder performs auto-fixes as a side effect; running those fixes while
-    # merely emitting a compatibility event can invalidate a passed checklist
-    # and reopen verification. Keep this event read-only for v2.
-    payload = agent.build_state(
-        session,
-        light=bool(pid and runaway_v2_enabled(session)),
-    )
-
-    if pid and runaway_v2_enabled(session):
-        # PlanAgent is a legacy-compatible producer. Overlay the same disk-
-        # authoritative v2 state used by project.state so a later plan event
-        # cannot roll the sidebar back from release_wait to an old checkpoint.
-        from runaway_v2.state import build_v2_state_fields
-
-        v2_fields = build_v2_state_fields(
-            paths,
-            project_id=pid,
-            plan_status=str(session.meta.project_plan_status or "draft"),
-            paused_reason=str(
-                getattr(session.meta, "project_runaway_paused_reason", "") or ""
-            ),
-        )
-        payload.update(v2_fields)
-        phase = str(v2_fields.get("runaway_phase") or "").strip()
-        workflow_by_phase = {
-            "prepare": "documentation",
-            "implement": "implementation",
-            "verify": "verification",
-            "release_wait": "release",
-            "human": "verification",
-        }
-        if phase in workflow_by_phase:
-            payload["workflow_stage"] = workflow_by_phase[phase]
-        if phase == "human":
-            payload["runaway_checkpoint"] = "paused"
-        else:
-            checkpoint_by_phase = {
-                "prepare": "preparing",
-                "implement": "implementing",
-                "verify": "verifying",
-                "release_wait": "release_wait",
-            }
-            if phase in checkpoint_by_phase:
-                payload["runaway_checkpoint"] = checkpoint_by_phase[phase]
-        payload["runaway_status"] = str(
-            v2_fields.get("runaway_user_line") or payload.get("runaway_status") or ""
-        )
-    return payload
-
-
-def _plan_task_result(agent: PlanAgent, session: Session, paths: AgentPaths,
-                      result: dict[str, Any]) -> dict[str, Any]:
-    """Wrap a PlanAgent task mutation result with project.state + plan.state + auto_fix notices."""
-    events: list[dict[str, Any]] = [result, project_state_payload(session, paths)]
-
-    # Emit auto_fix actions from mutation result as notices
-    for action in result.pop("_auto_fix_actions", []):
-        events.append({"type": "notice", "text": action})
-
-    # Emit undo toast if available
-    undo_desc = result.pop("_undo_desc", None)
-    if undo_desc:
-        events.append({"type": "project.undo.available", "description": undo_desc})
-
-    # Build plan state (auto_fix runs again inside, extract any new actions too)
-    plan_state = agent.build_state(session)
-    for action in plan_state.get("auto_fix_actions", []):
-        events.append({"type": "notice", "text": action})
-    events.append(plan_state)
-    return {"_events": events}
 
 
 def _doc_list_event(paths: AgentPaths, pid: str) -> dict[str, Any]:
@@ -1110,296 +558,6 @@ def dispatch_doc_message(
     raise ProjectApiError(f"unknown doc message type: {msg_type}")
 
 
-def dispatch_plan_user_message(
-    session: Session,
-    paths: AgentPaths,
-    message: dict[str, Any],
-) -> dict[str, Any]:
-    """Handle project.plan.message — compat API (Phase 39 · routes via Plan subagent).
-
-    Does **not** append to main session messages.jsonl; emits plan.subagent.* + state.
-    """
-    _project_pid(session)
-    text = str(message.get("text") or message.get("description") or "").strip()
-    if not text:
-        raise ProjectApiError("project.plan.message requires text")
-
-    agent = _plan_agent(session, paths)
-    if agent is None:
-        raise ProjectApiError("PlanAgent not available for current session")
-
-    include_last = bool(message.get("include_last_user"))
-    include_n = 1 if include_last else 0
-
-    from subagent import SubagentRunner
-
-    preview = text if len(text) <= 120 else text[:117] + "…"
-    events: list[dict[str, Any]] = [
-        {"type": "plan.subagent.start", "task_preview": preview},
-    ]
-
-    try:
-        runner = SubagentRunner(paths=paths)
-        result = runner.run_plan(
-            text,
-            session=session,
-            include_recent_user_lines=include_n,
-        )
-    except Exception as exc:
-        agent.set_partner_notices(f"计划搭档出错：{exc}")
-        events.append(
-            {
-                "type": "plan.subagent.done",
-                "summary": str(exc),
-                "proposal_count": 0,
-                "ok": False,
-            }
-        )
-        events.extend([project_state_payload(session, paths), agent.build_state(session)])
-        return {"_events": events}
-
-    proposal_ids = tuple(result.proposal_ids)
-    adopt_pending = result.adopt_pending
-    if bool(getattr(session.meta, "project_runaway_enabled", False)) and proposal_ids:
-        adopted_ids: list[str] = []
-        with agent.state_save_batch():
-            for suggestion_id in proposal_ids:
-                try:
-                    adopted = agent.accept_suggestion(suggestion_id, code_policy="plan_only")
-                except ProjectModeError:
-                    adopted = {"ok": False}
-                if not isinstance(adopted, dict) or adopted.get("ok") is not False:
-                    adopted_ids.append(suggestion_id)
-        if adopted_ids:
-            _ack_human_plan_adopt(session, paths, agent)
-        proposal_ids = tuple(item for item in proposal_ids if item not in adopted_ids)
-        adopt_pending = bool(proposal_ids)
-
-    events.append(
-        {
-            "type": "plan.subagent.done",
-            "summary": result.summary,
-            "proposal_count": len(proposal_ids),
-            "proposal_ids": list(proposal_ids),
-            "adopt_pending": adopt_pending,
-            "ok": True,
-        }
-    )
-    events.append({"type": "assistant.done", "text": result.summary})
-    events.extend([project_state_payload(session, paths), agent.build_state(session)])
-    return {"_events": events}
-
-
-def dispatch_task_add(
-    session: Session,
-    paths: AgentPaths,
-    message: dict[str, Any],
-) -> dict[str, Any]:
-    """Handle project.task.add — legacy alias for Plan channel (compat)."""
-    return dispatch_plan_user_message(
-        session,
-        paths,
-        {
-            "type": "project.plan.message",
-            "text": str(message.get("description", "")).strip(),
-        },
-    )
-
-
-def _clear_plan_chat_events(
-    paths: AgentPaths,
-    project_id: str,
-    session: Session | None = None,
-    *,
-    skip_plan_state: bool = False,
-) -> list[dict[str, Any]]:
-    from plan_agent import clear_plan_chat_on_enter
-
-    agent = clear_plan_chat_on_enter(paths, project_id)
-    events: list[dict[str, Any]] = [{"type": "project.plan.transcript.clear"}]
-    if session is not None and not skip_plan_state:
-        events.append(agent.build_state(session))
-    return events
-
-
-def _dispatch_plan_message(
-    session: Session,
-    paths: AgentPaths,
-    message: dict[str, Any],
-) -> dict[str, Any]:
-    """Handle project.plan.* messages."""
-    msg_type = message.get("type")
-    agent = _plan_agent(session, paths)
-    if agent is None:
-        raise ProjectApiError("PlanAgent not available for current session")
-
-    try:
-        if msg_type == "project.plan.toggle_task":
-            line = message["line"] if isinstance(message.get("line"), int) else -1
-            done = bool(message.get("done"))
-            if line < 0:
-                raise ProjectApiError("project.plan.toggle_task requires line")
-            result = agent.toggle_task(line, done)
-            return _plan_task_result(agent, session, paths, result)
-
-        if msg_type == "project.plan.reorder_task":
-            line = message["line"] if isinstance(message.get("line"), int) else -1
-            direction = str(message.get("direction", ""))
-            if line < 0 or direction not in ("up", "down"):
-                raise ProjectApiError("project.plan.reorder_task requires line and direction")
-            result = agent.reorder_task(line, direction)
-            return _plan_task_result(agent, session, paths, result)
-
-        if msg_type == "project.plan.drop_task":
-            line = message["line"] if isinstance(message.get("line"), int) else -1
-            if line < 0:
-                raise ProjectApiError("project.plan.drop_task requires line")
-            result = agent.drop_task(line)
-            return _plan_task_result(agent, session, paths, result)
-
-        if msg_type == "project.plan.skip_task":
-            line = message["line"] if isinstance(message.get("line"), int) else -1
-            if line < 0:
-                raise ProjectApiError("project.plan.skip_task requires line")
-            result = agent.skip_task(line)
-            return _plan_task_result(agent, session, paths, result)
-
-        if msg_type == "project.plan.confirm_changes":
-            _ack_human_plan_adopt(session, paths, agent)
-            return {
-                "_events": [
-                    {"type": "project.plan.confirm_changes.done"},
-                    project_state_payload(session, paths),
-                    agent.build_state(session),
-                ]
-            }
-
-        if msg_type == "project.plan.state":
-            return agent.build_state(session)
-
-        if msg_type == "project.plan.undo":
-            entry = agent.undo_last()
-            if entry is None:
-                return {"type": "error", "message": "没有可撤销的操作"}
-            return {
-                "_events": [
-                    {"type": "notice", "text": f"已撤销：{entry.description}"},
-                    project_state_payload(session, paths),
-                    agent.build_state(session),
-                ]
-            }
-
-        if msg_type == "project.plan.split_task":
-            line = message.get("line")
-            if not isinstance(line, int) or line < 0:
-                raise ProjectApiError("project.plan.split_task requires line (non-negative int)")
-            summary = agent.split_task(line)
-            return {
-                "_events": [
-                    {"type": "notice", "text": summary},
-                    project_state_payload(session, paths),
-                    agent.build_state(session),
-                ]
-            }
-
-        if msg_type == "project.plan.accept_suggestion":
-            sid = str(message.get("suggestion_id") or "").strip()
-            if not sid:
-                raise ProjectApiError("project.plan.accept_suggestion requires suggestion_id")
-            policy = str(message.get("code_policy") or "plan_only").strip()
-            if policy not in {"plan_only", "agent_cleanup", "git_guide"}:
-                raise ProjectApiError("code_policy must be plan_only, agent_cleanup, or git_guide")
-            try:
-                with agent.state_save_batch():
-                    result = agent.accept_suggestion(sid, code_policy=policy)
-                    if isinstance(result, dict) and result.get("ok") is not False:
-                        _ack_human_plan_adopt(session, paths, agent)
-            except ProjectModeError:
-                agent.set_partner_notices("提案已失效，已刷新待采纳队列")
-                result = {
-                    "ok": False,
-                    "summary": "提案已失效，已刷新待采纳队列",
-                    "_suggestion_stale": True,
-                }
-            events: list[dict[str, Any]] = [
-                agent.build_state(session, light=True),
-            ]
-            summary = result.get("summary") if isinstance(result, dict) else None
-            if isinstance(summary, str) and summary.strip():
-                events.insert(0, {"type": "notice", "text": summary})
-            undo_desc = result.get("_undo_desc") if isinstance(result, dict) else None
-            if isinstance(undo_desc, str) and undo_desc:
-                events.insert(0, {"type": "project.undo.available", "description": undo_desc})
-            for action in (result.get("_auto_fix_actions") or []) if isinstance(result, dict) else []:
-                events.insert(0, {"type": "notice", "text": action})
-            followup = result.get("_code_followup") if isinstance(result, dict) else None
-            if isinstance(followup, dict):
-                events.insert(0, {"type": "project.code_followup", **followup})
-            return {"_events": events}
-
-        if msg_type == "project.plan.ignore_suggestion":
-            sid = str(message.get("suggestion_id") or "").strip()
-            if not sid:
-                raise ProjectApiError("project.plan.ignore_suggestion requires suggestion_id")
-            agent.ignore_suggestion(sid)
-            return agent.build_state(session, light=True)
-
-        if msg_type == "project.plan.report_progress":
-            task_line = message.get("task_line")
-            summary = str(message.get("summary", ""))
-            from project_mode import get_delivery_profile, read_project_template
-            from progress_gate import report_progress_evidence_block_reason, task_evidence_contract
-
-            pid = _project_pid(session)
-            tasks_text = read_project_artifacts(paths, pid).get("TASKS.md", "")
-            contract = task_evidence_contract(
-                tasks_text,
-                task_id=str(message.get("task_id") or ""),
-                task_line=task_line if isinstance(task_line, int) else None,
-            )
-            if contract and contract.get("metadata_present"):
-                provided_evidence = message.get("turn_evidence")
-                turn_evidence = provided_evidence if isinstance(provided_evidence, list) else []
-                reason = report_progress_evidence_block_reason(
-                    active_shell=session.meta.active_shell,
-                    armed_task_text=str(contract.get("task_text") or ""),
-                    turn_evidence=[
-                        item for item in turn_evidence if isinstance(item, dict)
-                    ],
-                    delivery_profile=get_delivery_profile(session.meta),
-                    task_id=str(contract.get("task_id") or ""),
-                    expected_ac_ids=list(contract.get("ac_ids") or []),
-                    expected_verify_ids=list(contract.get("verify_ids") or []),
-                    require_binding=True,
-                    require_ac_binding=read_project_template(paths, pid) != "light",
-                )
-                if reason is not None:
-                    return {
-                        "type": "project.plan.report_progress.error",
-                        "message": reason,
-                        "task_id": contract.get("task_id"),
-                        "ac_ids": list(contract.get("ac_ids") or []),
-                        "verify_ids": list(contract.get("verify_ids") or []),
-                    }
-
-            result = agent.report_progress(
-                task_line if isinstance(task_line, int) else None,
-                summary,
-                delivery_profile=get_delivery_profile(session.meta),
-            )
-            return result
-
-        if msg_type == "project.plan.classify":
-            return {"type": "project.plan.classify.done", "decision": "forward"}
-
-        if msg_type == "project.plan.message":
-            return dispatch_plan_user_message(session, paths, message)
-
-    except ProjectModeError as exc:
-        return {"type": "error", "message": str(exc)}
-
-    raise ProjectApiError(f"unknown plan message type: {msg_type}")
-
 
 def perform_project_open(
     session: Session,
@@ -1417,14 +575,6 @@ def perform_project_open(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
-    plan_state = project_plan_state_payload(updated, paths)
-    if plan_state is not None:
-        events.append(plan_state)
-    events.extend(
-        _clear_plan_chat_events(
-            paths, project_id, updated, skip_plan_state=plan_state is not None
-        )
-    )
     return updated, events
 
 
@@ -1477,9 +627,6 @@ def perform_project_switch(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
-    plan_state = project_plan_state_payload(updated, paths)
-    if plan_state is not None:
-        events.append(plan_state)
     if session_replaced:
         from context import session_memory_event
         from session import session_history_event
@@ -1488,12 +635,6 @@ def perform_project_switch(
         events.append(session_history_event(updated))
         events.extend(corruption_notice_events(updated))
     events.append({"type": "notice", "text": msg})
-    # C6 / S-192 — entering target project clears Plan chat memory
-    events.extend(
-        _clear_plan_chat_events(
-            paths, plan.project_id, updated, skip_plan_state=plan_state is not None
-        )
-    )
     return updated, events
 
 
@@ -1529,9 +670,6 @@ def perform_project_thread_new(
         project_state_payload(updated, paths),
         session_banner_event(updated),
     ]
-    plan_state = project_plan_state_payload(updated, paths)
-    if plan_state is not None:
-        events.append(plan_state)
     if session_replaced:
         from context import session_memory_event
         from session import session_history_event
@@ -1542,31 +680,6 @@ def perform_project_thread_new(
     events.append({"type": "notice", "text": msg})
     return updated, events
 
-
-def handle_plan_response(
-    session: Session,
-    paths: AgentPaths,
-    message: dict[str, Any],
-    emit: EmitFn,
-) -> None:
-    result = dispatch_project_message(session, paths, message)
-    choice = result.pop("plan_choice", None)
-    request_id = result.pop("request_id", message.get("request_id"))
-    emit({"type": "plan.done", "request_id": request_id, "choice": choice})
-    emit(result)
-    emit(session_banner_event(session))
-
-    # Sync PlanAgent fingerprint on plan confirm
-    if choice == "confirm":
-        agent = _plan_agent(session, paths)
-        if agent is not None:
-            agent.confirm_plan()
-            emit(agent.build_state(session))
-
-    if choice == "confirm":
-        emit({"type": "notice", "text": "计划已确认，可以开始写代码。"})
-    elif choice == "edit":
-        emit({"type": "notice", "text": "继续修改计划；完成后请再次确认开工。"})
 
 
 def _demo() -> None:
@@ -1597,23 +710,8 @@ def _demo() -> None:
         output_fn=lambda _t: None,
     )
     state = project_state_payload(session, paths)
-    assert state["plan_status"] == "draft"
-    assert state["needs_plan_confirm"] is True
-    print("[PASS] project.state draft")
-
-    plan = build_plan_request_payload(session, paths)
-    assert plan is not None and plan["type"] == "plan.request"
-    print("[PASS] plan.request built")
-
-    handle_plan_response(
-        session,
-        paths,
-        {"type": "plan.response", "request_id": plan["request_id"], "choice": "confirm"},
-        emit,
-    )
-    assert session.meta.project_plan_status == "confirmed"
-    assert any(e.get("type") == "plan.done" for e in events)
-    print("[PASS] plan.response confirm")
+    assert "needs_plan_confirm" not in state
+    print("[PASS] project.state (no plan gate)")
 
     demo_script = paths.workspace / "api-demo" / "demo.py"
     demo_script.parent.mkdir(parents=True, exist_ok=True)

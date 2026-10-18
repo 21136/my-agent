@@ -13,7 +13,7 @@
 | **O1** | **只写对人有用的信息** — 禁止向用户输出系统内部字段或调试态（见 §3） |
 | **O2** | **思考与交付分离** — 推理链在 **过程块**展示（若模型有 `reasoning_content`）；**正文不写假「思考」** |
 | **O3** | **痕迹在文件里** — 真实变更落在仓库路径；正文只 **指路**（路径 + 一两句摘要），不重复贴大段 diff |
-| **O4** | **遵守既有写门禁** — 计划域 `TASKS`/`MAP`/`PROJECT`/`ENV` 仍走 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) 采纳卡；**本文不授权直写或绕过采纳** |
+| **O4** | **遵守既有写门禁** — 计划域 `TASKS`/`MAP`/`PROJECT`/`ENV` 仍走 [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) 采纳卡；**本文不授权直写或绕过采纳** |
 
 ---
 
@@ -82,7 +82,7 @@
 | 文档 | 分工 |
 |------|------|
 | [DESKTOP.md](./DESKTOP.md) §3.2.2 | 过程块 / 思考折叠 UI |
-| [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) | 计划域写权限与采纳 |
+| [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) | 计划域写权限与采纳 |
 | [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) | 假成功拦截（内核改写，非正文规范） |
 | `agent-core/prompts/core.txt` §Style | 内核 prompt 摘要（与本文一致） |
 

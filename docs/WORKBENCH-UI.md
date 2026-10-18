@@ -60,7 +60,7 @@
 | Cursor 感 | 本工作台 |
 |-----------|----------|
 | 打开就是干活 | 打开就是**某个项目**（或「选项目」空态；**次选**「先聊聊」） |
-| Agent 在侧/底，不挡主线 | **聊天默认占主列**；计划 **审阅 / 完整 TASKS** 临时占主列（见 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）；侧栏仅短卡入口 |
+| Agent 在侧/底，不挡主线 | **聊天默认占主列**；计划 **审阅 / 完整 TASKS** 临时占主列（见 [PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md)）；侧栏仅短卡入口 |
 | 不切「模式」才能用工具 | **无壳选择器**；无「先进 project 才有工具」 |
 | 改文件有着落 | 路径 → 项目账本；侧栏能回看 |
 | 偶尔先问一句 | 空态 **先聊聊** → grow 问答 / 造工具，不占主按钮叙事 |
@@ -127,7 +127,7 @@
 | **M0** | 启动进工作台；空态；侧栏默认展开 | **done** |
 | **M1** | Q4：空态「先聊聊」+ grow 无绑 composer 解锁；顶栏「+ 对话」无项目时隐藏；路径写入挂账（原 M1 余量） | **Q4 done** · 挂账 todo |
 | **M2** | 文档与 DESKTOP §0 同步；可深藏 pet | todo |
-| **M3** | 计划审阅主列（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) PRU-M0） | **done** |
+| **M3** | 计划审阅主列（[PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) PRU-M0） | **done** |
 
 ### M1 任务拆分（→ [TASKS.md](./TASKS.md) T-3410～T-3413）
 

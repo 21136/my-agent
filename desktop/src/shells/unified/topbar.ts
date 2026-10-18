@@ -1,6 +1,10 @@
 import type { ProposalItem } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
-import type { HeaderNextStepAction } from "./project-panel";
+export interface HeaderNextStepAction {
+  action: string;
+  label: string;
+  accent?: boolean;
+}
 
 export interface TopbarState {
   proposals: ProposalItem[];
@@ -24,7 +28,7 @@ export type TopbarHandlers = {
   onNewThread?: () => void;
   onOpenSessions?: () => void;
   onOpenProposals?: () => void;
-  onHeaderAction?: (action: string, taskId?: string) => void;
+  onHeaderAction?: (action: string) => void;
 };
 
 export function renderTopbar(
@@ -35,7 +39,7 @@ export function renderTopbar(
   onOpenSessions?: () => void,
   onNewProject?: () => void,
   onNewThread?: () => void,
-  onHeaderAction?: (action: string, taskId?: string) => void,
+  onHeaderAction?: (action: string) => void,
 ): void {
   const handlers: TopbarHandlers = {
     onNewChat: onNewSession,
@@ -76,7 +80,7 @@ function bindTopbarHandlers(container: HTMLElement, handlers: TopbarHandlers): v
   container.querySelector<HTMLButtonElement>("#unified-open-sessions")?.addEventListener("click", () => handlers.onOpenSessions?.());
   container.querySelector<HTMLButtonElement>("#unified-open-proposal")?.addEventListener("click", () => handlers.onOpenProposals?.());
   container.querySelectorAll<HTMLButtonElement>(".unified-header-cta").forEach((btn) => {
-    btn.addEventListener("click", () => handlers.onHeaderAction?.(btn.dataset.action || "", btn.dataset.taskId));
+    btn.addEventListener("click", () => handlers.onHeaderAction?.(btn.dataset.action || ""));
   });
 
   const menu = container.querySelector<HTMLDetailsElement>(".unified-topbar-menu");
@@ -121,8 +125,7 @@ export function renderTopbarV2(
   const headerCtas = state.headerCtas.length
     ? `<div class="unified-header-ctas">${state.headerCtas.map((item) => {
       const accent = item.accent ? " unified-btn-accent" : "";
-      const task = item.taskId ? ` data-task-id="${escapeHtml(item.taskId)}"` : "";
-      return `<button type="button" class="unified-btn${accent} unified-header-cta" data-action="${escapeHtml(item.action)}"${task}>${escapeHtml(item.label)}</button>`;
+      return `<button type="button" class="unified-btn${accent} unified-header-cta" data-action="${escapeHtml(item.action)}">${escapeHtml(item.label)}</button>`;
     }).join("")}</div>`
     : "";
 

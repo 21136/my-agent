@@ -5,7 +5,7 @@
 > **状态**：**设计已决 · 实现 done**（Phase 11）；**UI** = unified project perspective；**ENV E1–E11 done**；**§0e 进度闭环 done**（Phase 21 · F1–F6）；**Phase 58b T-5810～T-5819 制品链运行时基础 done，剩余 S-581**  
 > **本地交付哲学**（四层栈 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
 > **Desktop 教科书流程**（产品定调）：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md)  
-> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) · `TASKS.md` Phase 11/20/**21**/37/**58b** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [TASK-STOP.md](./archive/TASK-STOP.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) · [DESKTOP-REAL-RD-FLOW.md](./DESKTOP-REAL-RD-FLOW.md) · `TASKS.md` Phase 11/20/**21**/37/**58b** · [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)
 
 
 ## 0g. 普通模式状态/权限重构（已实施 · 2026-10-16）
@@ -136,7 +136,7 @@ quality:
 
 ## 0e. 项目进度闭环补强（已决 · done · 2026-07-31）
 
-> **后续**：勾选证据硬闸（本回合对口成功才可 [x]）见 [PROGRESS-GATE.md](./PROGRESS-GATE.md) · Phase 24（**v0.3.0**：口语 write + `[evidence:…]` 标签）。
+> **后续**：勾选证据硬闸（本回合对口成功才可 [x]）见 [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · Phase 24（**v0.3.0**：口语 write + `[evidence:…]` 标签）。
 
 > 触发：huiyi（`20260730-27fd72d2`）助手完成工作后称「`report_progress` 不在清单」；用户质疑「工具缺失？」。  
 > 证据：2026-07-30 隔离环境门禁模拟（见 [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。  
@@ -279,7 +279,7 @@ quality:
 | **P17** | project 壳仍追加 **`coding` 主题**（`run_tests` / `patch_file` 等） |
 | **P18** | **M0 无 TASKS 侧栏**；复用 grow 聊天 + 顶栏；M1 再上只读侧栏 |
 | **P19** | 活动路由：**用户锁定外壳优先**，不覆盖手动选的壳 |
-| **P20** | **Task 一停门**（草案）：`confirmed` 后每次只做一个 `TASKS.md` 条目，标 `[x]` 即停，等「继续」；详见 [TASK-STOP.md](./TASK-STOP.md) |
+| **P20** | **Task 一停门**（草案）：`confirmed` 后每次只做一个 `TASKS.md` 条目，标 `[x]` 即停，等「继续」；详见 [TASK-STOP.md](./archive/TASK-STOP.md) |
 
 ---
 
@@ -354,7 +354,7 @@ workspace/
     …                   # 源码（confirmed 后才可写）
 ```
 
-角色与写权限见 [PLAN-ARCH.md](./PLAN-ARCH.md)（A1～A5）：叙事进 `bugs/` / `PROJECT` / `MAP`，不往 `TASKS.md` 倒全场信息。
+角色与写权限见 [PLAN-ARCH.md](./archive/PLAN-ARCH.md)（A1～A5）：叙事进 `bugs/` / `PROJECT` / `MAP`，不往 `TASKS.md` 倒全场信息。
 
 ### 3.1.1 默认 `normal` 文档基线（已决 · T-5831）
 
@@ -395,8 +395,8 @@ Plan Agent 的文档提案按目标职责路由：明确指定的 `TECH-DESIGN.m
 3. **小步完成标 `[x]`** — 经 `report_progress` + Progress Gate（禁止主 Agent 直写勾选）。
 4. **续做 / 压缩后** — 必须先 `read_file` `TASKS.md`（开放队列）；归档默认不充当「下一步」真源。
 5. **交付** — 开放项清零 + 验收通过 → 才允许「交付完成」。
-6. **每 task 一停（P20 · Phase 20）** — 标完当前 `[x]` 后必须停，等用户「继续」再开下一项；见 [TASK-STOP.md](./TASK-STOP.md) v0.2.0。
-7. **计划域角色（P37）** — 长叙述 / 已关闭项不进默认注入；见 [PLAN-ARCH.md](./PLAN-ARCH.md)。
+6. **每 task 一停（P20 · Phase 20）** — 标完当前 `[x]` 后必须停，等用户「继续」再开下一项；见 [TASK-STOP.md](./archive/TASK-STOP.md) v0.2.0。
+7. **计划域角色（P37）** — 长叙述 / 已关闭项不进默认注入；见 [PLAN-ARCH.md](./archive/PLAN-ARCH.md)。
 8. **变更包边界** — 补齐文档前先锁定 `CHG-*` 变更包；只处理当前阶段阻塞和直接受影响制品，不进行全项目递归补齐。
 9. **复杂项目分层** — 独立交付域使用独立项目；同一交付单元下的模块文档只能扩展局部事实，顶层文档保留跨模块契约。
 
@@ -684,7 +684,7 @@ CLI：`项目 新建 <id> --light` 或 `项目 新建 <id> light`。升档：`�
 
 ## 10. 内核编排
 
-- **T-705**：`confirmed` 后 `[x]` 仍算 segment 进展；**Phase 20**：project 壳 **关闭**同 turn auto-continue，改为 task 一停（[TASK-STOP.md](./TASK-STOP.md)）。
+- **T-705**：`confirmed` 后 `[x]` 仍算 segment 进展；**Phase 20**：project 壳 **关闭**同 turn auto-continue，改为 task 一停（[TASK-STOP.md](./archive/TASK-STOP.md)）。
 - **交付**：软校验 `TASKS.md` 无 `- [ ]`。
 - **T-1110**：executor / `run_turn` 检查 `project_plan_status`（§5.2）。
 
@@ -733,7 +733,7 @@ CLI：`项目 新建 <id> --light` 或 `项目 新建 <id> light`。升档：`�
 | 0.2.1 | 2026-07-12 | **M3**：§4.4 `project_sessions` 索引；§8.4 侧栏项目列表 + `project.switch` 续接；T-1113 |
 | 0.2.2 | 2026-07-14 | §8.4 切换后事件源：`session.memory` ← `context` · `session.history` ← `session`；BUG-019 |
 | 0.2.3 | 2026-07-14 | §4.1 draft 出计划：三件套可在确认前由助手填写；提及 PROJECT/TASKS/MAP 走 `plan` intent |
-| 0.2.4 | 2026-07-19 | **P20** 指针：[TASK-STOP.md](./TASK-STOP.md) v0.2.0；§3.2 / §10 每 task 一停 |
+| 0.2.4 | 2026-07-19 | **P20** 指针：[TASK-STOP.md](./archive/TASK-STOP.md) v0.2.0；§3.2 / §10 每 task 一停 |
 | 0.2.5 | 2026-08-03 | P7/P14/§4.4：一活线一项目 + `project_thread_archive` 指针；详 [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
 | 0.4.2 | 2026-08-14 | Phase 58b T-5810～T-5819 + T-5818：七文件制品链、manifest/stale、任务关联、L1 证据、CHG ledger、阶段卡制品依据与持久化人工验收 |
 | 0.4.3 | 2026-08-15 | IT-5821：项目恢复/切换补发 `project.plan.state`，待采纳提案不随会话重建消失 |

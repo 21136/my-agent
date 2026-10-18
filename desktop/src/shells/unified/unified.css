@@ -1,6 +1,88 @@
 /* Unified shell — merged from grow.css + daily.css + project.css */
 /* CSS custom properties drive light/dark theme and perspective variants */
 
+/* Pet-as-assistant avatar: grid column left of the assistant side of each turn.
+   In normal flow, so it can never overlap messages. Sources are square; object-fit
+   keeps the aspect ratio (never stretched). */
+.unified-pet-row {
+  --ma-pet-size: 40px;
+  display: grid;
+  grid-template-columns: var(--ma-pet-size) minmax(0, 1fr);
+  column-gap: 0.65rem;
+  align-items: start;
+  margin-top: 0.35rem;
+}
+.unified-pet-avatar {
+  position: sticky;
+  top: 0.4rem;
+  width: var(--ma-pet-size);
+  height: var(--ma-pet-size);
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--ma-surface) 82%, var(--ma-accent) 8%);
+  box-shadow: 0 0 0 1px var(--ma-border), 0 2px 6px color-mix(in srgb, var(--ma-text) 10%, transparent);
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+.unified-pet-avatar picture,
+.unified-pet-avatar-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.unified-pet-avatar-img {
+  object-fit: contain;
+  object-position: center;
+  pointer-events: none;
+  user-select: none;
+}
+.unified-pet-avatar:hover {
+  transform: translateY(-1px);
+}
+.unified-pet-row[data-pet-state="thinking"] .unified-pet-avatar,
+.unified-pet-row[data-pet-state="coding"] .unified-pet-avatar {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ma-accent) 70%, transparent), 0 2px 8px color-mix(in srgb, var(--ma-accent) 22%, transparent);
+}
+.unified-pet-row[data-pet-state="error"] .unified-pet-avatar {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, #d0453a 70%, transparent);
+}
+.unified-pet-row.is-settled .unified-pet-avatar {
+  opacity: 0.9;
+}
+.unified-pet-content {
+  min-width: 0;
+}
+.unified-pet-content > :first-child {
+  margin-top: 0;
+}
+.unified-pet-waiting {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  height: var(--ma-pet-size);
+}
+.unified-pet-waiting span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ma-text-muted);
+  opacity: 0.35;
+  animation: unified-pet-dot 1.2s ease-in-out infinite;
+}
+.unified-pet-waiting span:nth-child(2) { animation-delay: 0.2s; }
+.unified-pet-waiting span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes unified-pet-dot {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  50% { opacity: 0.8; transform: translateY(-2px); }
+}
+@media (max-width: 640px) {
+  .unified-pet-row { --ma-pet-size: 32px; column-gap: 0.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .unified-pet-waiting span { animation: none; opacity: 0.5; }
+  .unified-pet-avatar { transition: none; }
+}
+
 /* ================================================================
    Base shell layout
    ================================================================ */
@@ -2172,37 +2254,7 @@
   outline-offset: 1px;
 }
 
-/* Phase 39 — Plan subagent process card */
-.unified-plan-subagent {
-  border-left: 3px solid color-mix(in srgb, var(--ma-accent) 70%, transparent);
-  background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));
-  padding: 0.55rem 0.75rem;
-  margin: 0.35rem 0;
-  border-radius: 2px;
-}
-.unified-plan-subagent-title {
-  font-size: 0.72rem;
-  color: var(--ma-accent);
-  font-weight: 600;
-  margin-bottom: 0.25rem;
-}
-.unified-plan-subagent-body {
-  font-size: 0.85rem;
-  color: var(--ma-text-muted);
-  white-space: pre-wrap;
-}
-.unified-plan-subagent.is-clickable {
-  cursor: pointer;
-}
-.unified-plan-subagent.is-clickable:hover {
-  background: color-mix(in srgb, var(--ma-accent) 12%, var(--ma-surface));
-}
-.unified-plan-subagent-hint {
-  margin-top: 0.35rem;
-  font-size: 0.72rem;
-  color: var(--ma-accent);
-  opacity: 0.9;
-}
+
 .sidebar-suggestions-banner {
   border-color: var(--ma-accent);
   background: color-mix(in srgb, var(--ma-accent) 7%, var(--ma-surface));
@@ -2509,7 +2561,6 @@
   font-weight: 600;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--ma-text) 10%, transparent);
 }
-.unified-plan-review,
 .unified-plan-full,
 .unified-document {
   flex: 1;
@@ -2746,87 +2797,8 @@
     display: none;
   }
 }
-.unified-plan-review-inner {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-  gap: 0.75rem;
-}
-.unified-plan-review-header {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--ma-border);
-}
-.unified-plan-review-position {
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-align: center;
-}
-.unified-plan-review-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-.unified-plan-review-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-}
-.unified-plan-review-stats {
-  font-size: 0.75rem;
-  font-family: ui-monospace, monospace;
-  color: var(--ma-text-muted);
-}
-.unified-plan-review-summary {
-  margin: 0;
-  font-size: 0.85rem;
-  color: var(--ma-text-muted);
-  line-height: 1.45;
-}
-.unified-plan-review-path {
-  font-size: 0.78rem;
-  font-family: ui-monospace, monospace;
-  color: var(--ma-accent);
-}
-.unified-plan-review-body {
-  flex: 1;
-  min-height: 12rem;
-}
-.unified-plan-review-diff {
-  margin: 0;
-  padding: 0.75rem;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
-  background: color-mix(in srgb, var(--ma-text) 5%, var(--ma-surface));
-  font-size: 0.78rem;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow: auto;
-  max-height: none;
-}
-.unified-plan-review-diff-empty {
-  color: var(--ma-text-muted);
-}
-.unified-plan-review-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--ma-border);
-  position: sticky;
-  bottom: 0;
-  background: color-mix(in srgb, var(--ma-bg) 92%, transparent);
-}
 .unified-plan-full-body {
   padding-top: 0.5rem;
-}
-.unified-plan-review-empty {
-  padding: 2rem 0;
-  text-align: center;
 }
 .sidebar-plan-channel-hint {
   margin: 0.35rem 0 0;
@@ -3393,7 +3365,6 @@
 .textbook-plan-task { margin-top: 0.3rem; padding: 0.4rem; border-left: 2px solid var(--ma-accent); background: color-mix(in srgb, var(--ma-accent) 5%, transparent); }
 .textbook-plan-stat { margin-top: 0.25rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-plan-card-actions { display: flex; gap: 0.35rem; align-items: center; margin-top: 0.55rem; }
-.textbook-runaway-surface,
 .sidebar-status-card {
   position: relative;
   z-index: 2;
@@ -3473,11 +3444,6 @@
 .now-focus-actions {
   margin-top: 0.55rem;
 }
-
-.textbook-plan-card-actions .unified-runaway-action {
-  width: auto;
-  justify-content: center;
-}
 .unified-turn-card.is-live.is-jump-target,
 .unified-process.is-jump-target,
 .unified-turn-card.is-jump-target {
@@ -3494,16 +3460,10 @@
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ma-accent) 35%, transparent); }
   50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ma-accent) 18%, transparent); }
 }
-.textbook-runaway-surface-title { display: none; }
-.textbook-runaway-surface-status,
 .sidebar-status-card-title { color: var(--ma-text); font-size: 0.9rem; font-weight: 600; letter-spacing: normal; text-transform: none; }
-.textbook-runaway-surface-summary,
 .sidebar-status-card-summary { margin-top: 0.35rem; color: var(--ma-text-muted); font-size: 0.78rem; line-height: 1.45; }
-.textbook-runaway-surface-task,
 .sidebar-status-card-detail { margin-top: 0.35rem; padding: 0; border-left: 0; color: var(--ma-text); background: transparent; font-size: 0.78rem; font-weight: 500; line-height: 1.4; }
-.textbook-runaway-surface-next,
 .sidebar-status-card-footnote { margin-top: 0.35rem; color: var(--ma-text-muted); font-size: 0.72rem; }
-.textbook-runaway-checklist { display: none; }
 .unified-blocker-tail {
   margin: 0.35rem 0 0.5rem;
   padding: 0.45rem 0.55rem;
@@ -3550,7 +3510,7 @@
 .textbook-missing-chip { display: inline-block; margin: 0 0.2rem 0.2rem 0; padding: 0.12rem 0.3rem; border-radius: 3px; background: color-mix(in srgb, #b17d00 12%, transparent); color: #8b6f3d; font-size: 0.68rem; }
 .textbook-stage-basis { display: grid; gap: 0.18rem; color: var(--ma-text-muted); font-size: 0.7rem; }
 .textbook-next-turn-overlay { margin: 0.45rem 0.75rem; padding: 0.45rem 0.55rem; border-left: 3px solid var(--ma-accent); background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface)); font-size: 0.72rem; }
-.sidebar-suggestion-change, .unified-plan-review-what-changed { margin-top: 0.35rem; color: var(--ma-accent); font-size: 0.72rem; }
+.sidebar-suggestion-change { margin-top: 0.35rem; color: var(--ma-accent); font-size: 0.72rem; }
 .textbook-drop-choice { margin: 0.55rem 0.75rem; padding: 0.6rem; border: 1px solid #d4a000; border-radius: 0.45rem; background: color-mix(in srgb, #d4a000 7%, var(--ma-surface)); font-size: 0.75rem; }
 .textbook-drop-choice-title { font-weight: 700; }
 .textbook-drop-warning { margin: 0.35rem 0; color: var(--ma-text-muted); line-height: 1.4; }
@@ -4294,9 +4254,17 @@
   color: var(--ma-text-muted);
   font-size: 0.72rem;
 }
-.unified-tool-diff-inline .unified-plan-review-diff {
+.unified-tool-diff-pre {
   margin: 0.35rem 0 0;
+  padding: 0.6rem;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
+  background: color-mix(in srgb, var(--ma-text) 5%, var(--ma-surface));
+  font-family: var(--ma-mono);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
   max-height: 14rem;
   overflow: auto;
-  font-size: 0.7rem;
 }

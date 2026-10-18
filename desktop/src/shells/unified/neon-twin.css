@@ -1,0 +1,539 @@
+/* ==================================================================
+   "Neon Twin" skin — visual layer over unified.css / app-chrome.css.
+   Pure styling: no layout logic depends on it. Tokens live in styles/theme.css.
+   Selectors are prefixed with html[data-theme] so they win over the base sheets
+   regardless of bundle order.
+   ================================================================== */
+
+/* ---------- shell backdrop ---------- */
+html[data-theme] .unified-shell[data-perspective="project"]:not(.is-working),
+html[data-theme] .unified-shell[data-perspective="default"]:not(.is-working) {
+  background:
+    radial-gradient(900px 520px at 88% -12%, rgb(91 92 255 / 0.13), transparent 62%),
+    radial-gradient(720px 540px at -12% 112%, rgb(139 92 246 / 0.11), transparent 62%),
+    var(--ma-bg);
+}
+html[data-theme="light"] .unified-shell[data-perspective="project"]:not(.is-working) {
+  background:
+    radial-gradient(900px 520px at 88% -12%, rgb(91 92 255 / 0.09), transparent 62%),
+    radial-gradient(720px 540px at -12% 112%, rgb(139 92 246 / 0.07), transparent 62%),
+    var(--ma-bg);
+}
+
+/* ---------- app chrome (top bar) ---------- */
+html[data-theme] .app-chrome {
+  background: color-mix(in srgb, var(--ma-bg) 78%, transparent);
+  border-bottom: 1px solid var(--ma-border);
+  backdrop-filter: blur(14px);
+}
+html[data-theme] .app-chrome-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+html[data-theme] .app-chrome-title::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: var(--nt-gradient);
+  clip-path: polygon(50% 6%, 96% 92%, 4% 92%);
+  filter: drop-shadow(0 0 6px rgb(91 92 255 / 0.6));
+  flex: none;
+}
+html[data-theme] .app-chrome-controls {
+  border: 1px solid var(--ma-border);
+  border-radius: 999px;
+  background: var(--ma-surface);
+}
+html[data-theme] .app-chrome-label { color: var(--ma-text-faint); }
+html[data-theme] .app-chrome select { color: var(--ma-text); font-weight: 560; }
+html[data-theme] .app-chrome select option { background: var(--ma-surface); color: var(--ma-text); }
+html[data-theme] .app-chrome-menu-panel,
+html[data-theme] .unified-topbar-menu-panel {
+  background: var(--ma-surface);
+  border: 1px solid var(--ma-border-strong);
+  border-radius: var(--nt-r-md);
+  box-shadow: var(--nt-shadow);
+}
+html[data-theme] .app-chrome-menu-item:hover,
+html[data-theme] .unified-topbar-menu-item:hover { background: var(--nt-hover); }
+
+/* ---------- buttons ---------- */
+html[data-theme] .unified-btn {
+  border-radius: var(--nt-r-sm);
+  border-color: var(--ma-border);
+  color: var(--ma-text);
+  transition: background 0.15s ease, box-shadow 0.2s ease, border-color 0.15s ease;
+}
+html[data-theme] .unified-btn:hover:not(:disabled) { background: var(--nt-hover); }
+html[data-theme] .unified-btn-ghost {
+  border-color: var(--ma-border);
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+  color: var(--ma-text-muted);
+}
+html[data-theme] .unified-btn-accent,
+html[data-theme] .unified-btn-accent:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--nt-gradient);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgb(91 92 255 / 0.30);
+}
+html[data-theme] .unified-btn-accent:hover:not(:disabled) { box-shadow: var(--nt-glow); }
+html[data-theme] .unified-btn:focus-visible,
+html[data-theme] .unified-input:focus-visible {
+  outline: 2px solid var(--ma-focus);
+  outline-offset: 1px;
+}
+
+/* ---------- sidebar: frosted glass panel ---------- */
+html[data-theme] .unified-shell[data-perspective="project"] .unified-sidebar {
+  margin: 10px 0 10px 10px;
+  height: calc(100% - 20px);
+  border: 1px solid var(--ma-border);
+  border-radius: var(--nt-r-lg);
+  background: var(--nt-glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--nt-shadow);
+  overflow: hidden;
+}
+html[data-theme] .unified-sidebar-title { font-weight: 650; letter-spacing: -0.005em; }
+html[data-theme] .unified-sidebar-meta { color: var(--ma-text-faint); }
+html[data-theme] .sidebar-status-card {
+  border: 1px solid var(--ma-border);
+  border-radius: var(--nt-r-md);
+  background: color-mix(in srgb, var(--ma-surface) 72%, transparent);
+  box-shadow: none;
+}
+html[data-theme] .sidebar-status-card-summary { color: var(--ma-text-muted); }
+html[data-theme] .sidebar-terminals,
+html[data-theme] .sidebar-services { border-color: var(--ma-border); }
+html[data-theme] .sidebar-terminals-toggle,
+html[data-theme] .sidebar-services-toggle { color: var(--ma-text-muted); border-radius: var(--nt-r-sm); }
+html[data-theme] .sidebar-terminals-toggle:hover,
+html[data-theme] .sidebar-services-toggle:hover { background: var(--nt-hover); color: var(--ma-text); }
+html[data-theme] .sidebar-terminals-toggle-chevron,
+html[data-theme] .sidebar-services-toggle-chevron { color: var(--ma-accent); }
+html[data-theme] .sidebar-terminal-row:hover,
+html[data-theme] .sidebar-service-row:hover { background: var(--nt-hover); }
+html[data-theme] .sidebar-footer { border-top: 1px solid var(--ma-border); background: transparent; }
+html[data-theme] .sidebar-icon-bar { gap: 2px; padding: 6px; }
+html[data-theme] .sidebar-icon-btn {
+  position: relative;
+  border-radius: var(--nt-r-sm);
+  color: var(--ma-text-muted);
+  background: transparent;
+}
+html[data-theme] .sidebar-icon-btn:hover { background: var(--nt-hover); color: var(--ma-text); }
+html[data-theme] .sidebar-icon-btn.is-active {
+  color: var(--ma-text);
+  background: var(--nt-selected);
+  font-weight: 600;
+  box-shadow: none;
+}
+html[data-theme] .sidebar-icon-btn.is-active::after {
+  content: "";
+  position: absolute;
+  left: 34%;
+  right: 34%;
+  bottom: 3px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--nt-gradient);
+  box-shadow: 0 0 6px rgb(91 92 255 / 0.8);
+}
+html[data-theme] .sidebar-icon-btn.is-active .sidebar-icon-label { border-bottom-color: transparent; text-decoration: none; }
+html[data-theme] .sidebar-icon-badge {
+  background: transparent;
+  color: var(--ma-text-faint);
+  font-weight: 600;
+}
+html[data-theme] .sidebar-overlay { background: transparent; }
+
+/* thread / project / doc rows inside the rail overlay */
+html[data-theme] .sidebar-overlay-body [class*="-item"],
+html[data-theme] .sidebar-overlay-body [class*="-row"] { border-radius: var(--nt-r-sm); }
+
+/* ---------- main top bar: minimal, pending as a badge ---------- */
+html[data-theme] .unified-topbar,
+html[data-theme] .unified-shell.is-working .unified-topbar {
+  background: transparent;
+  border-bottom-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  animation: none;
+}
+html[data-theme] .unified-topbar-context.is-proposal {
+  flex: 0 1 auto;
+  gap: 0.45rem;
+  padding: 0.18rem 0.25rem 0.18rem 0.7rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+}
+html[data-theme] .unified-topbar-context.is-proposal::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--nt-st-error);
+  box-shadow: 0 0 8px var(--nt-st-error);
+}
+html[data-theme] .unified-topbar-context.is-proposal .unified-topbar-context-text {
+  font-size: 0.75rem;
+  color: var(--ma-text-muted);
+  max-width: 16rem;
+}
+html[data-theme] .unified-topbar-proposal-btn {
+  padding: 0.18rem 0.6rem;
+  font-size: 0.72rem;
+  border-radius: 999px;
+}
+
+/* ---------- chat: turns ---------- */
+html[data-theme] .unified-shell[data-perspective="project"] .unified-chat {
+  padding: 0.75rem 1.75rem 1rem;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-chat > * {
+  max-width: 920px;
+  margin-left: auto;
+  margin-right: auto;
+}
+html[data-theme] .unified-turn-card,
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin-bottom: 1.35rem;
+}
+html[data-theme] .unified-turn-card.is-live { background: transparent; box-shadow: none; }
+
+/* user: blue-violet bubble on the right */
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user { margin-bottom: 0.9rem; }
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user .unified-turn-body {
+  max-width: min(68%, 40rem);
+  padding: 0.6rem 0.95rem;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--nt-bubble);
+  color: #fff;
+  line-height: 1.6;
+  box-shadow: 0 6px 18px rgb(80 70 220 / 0.26);
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user .unified-turn-body a { color: #fff; text-decoration: underline; }
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user .unified-turn-body code {
+  background: rgb(255 255 255 / 0.18);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* assistant: no card, light typography */
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant {
+  margin-bottom: 0.25rem;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > p:first-child {
+  font-weight: 400;
+  font-size: inherit;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown {
+  font-size: 1rem;
+  line-height: 1.72;
+  font-weight: 400;
+  color: var(--ma-text);
+}
+html[data-theme] .unified-markdown strong { font-weight: 650; }
+html[data-theme] .unified-markdown a { color: var(--ma-accent); }
+html[data-theme] .unified-markdown h1,
+html[data-theme] .unified-markdown h2,
+html[data-theme] .unified-markdown h3 { letter-spacing: -0.01em; }
+
+/* triangle bullets (top-level unordered lists) */
+html[data-theme] .unified-turn-assistant .unified-markdown ul { list-style: none; padding-left: 0.2rem; }
+html[data-theme] .unified-turn-assistant .unified-markdown ul > li { position: relative; padding-left: 1.1rem; }
+html[data-theme] .unified-turn-assistant .unified-markdown ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0.15rem;
+  top: 0.72em;
+  border-left: 5px solid var(--nt-bullet);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+}
+html[data-theme] .unified-turn-assistant .unified-markdown ul ul > li::before { border-left-color: var(--ma-text-faint); }
+
+/* inline code */
+html[data-theme] .unified-markdown :not(pre) > code,
+html[data-theme] .unified-shell[data-perspective] .unified-turn-assistant .unified-markdown :not(pre) > code {
+  font-family: var(--ma-mono);
+  font-size: 0.86em;
+  padding: 0.08em 0.4em;
+  border-radius: 5px;
+  border: 0;
+  background: var(--nt-inline-code-bg);
+  color: var(--nt-inline-code-fg);
+}
+
+/* code blocks: dark with neon syntax, in both themes */
+html[data-theme] .unified-markdown pre,
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown pre {
+  margin: 0.6em 0;
+  padding: 0.75rem 0.95rem;
+  border-radius: var(--nt-r-md);
+  border: 1px solid var(--nt-code-border);
+  background:
+    linear-gradient(180deg, rgb(91 92 255 / 0.06), transparent 2.2rem),
+    var(--nt-code-bg);
+  color: var(--nt-code-text);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
+}
+html[data-theme] .unified-markdown pre code,
+html[data-theme] .unified-markdown pre code.hljs,
+html[data-theme] .unified-shell[data-perspective] .unified-turn-assistant .unified-markdown pre code {
+  font-family: var(--ma-mono);
+  font-size: 0.8rem;
+  line-height: 1.65;
+  color: var(--nt-code-text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+html[data-theme] .unified-markdown pre .hljs-comment,
+html[data-theme] .unified-markdown pre .hljs-quote { color: #6f6c8f; font-style: italic; }
+html[data-theme] .unified-markdown pre .hljs-keyword,
+html[data-theme] .unified-markdown pre .hljs-selector-tag,
+html[data-theme] .unified-markdown pre .hljs-built_in,
+html[data-theme] .unified-markdown pre .hljs-meta { color: #c4b5fd; }
+html[data-theme] .unified-markdown pre .hljs-string,
+html[data-theme] .unified-markdown pre .hljs-regexp,
+html[data-theme] .unified-markdown pre .hljs-addition { color: #5eead4; text-shadow: 0 0 8px rgb(94 234 212 / 0.28); }
+html[data-theme] .unified-markdown pre .hljs-number,
+html[data-theme] .unified-markdown pre .hljs-literal { color: #f9a8d4; }
+html[data-theme] .unified-markdown pre .hljs-title,
+html[data-theme] .unified-markdown pre .hljs-title.function_,
+html[data-theme] .unified-markdown pre .hljs-function { color: #fcd34d; }
+html[data-theme] .unified-markdown pre .hljs-selector-class,
+html[data-theme] .unified-markdown pre .hljs-selector-id,
+html[data-theme] .unified-markdown pre .hljs-type,
+html[data-theme] .unified-markdown pre .hljs-title.class_,
+html[data-theme] .unified-markdown pre .hljs-section { color: #7cc4ff; text-shadow: 0 0 8px rgb(124 196 255 / 0.3); }
+html[data-theme] .unified-markdown pre .hljs-attr,
+html[data-theme] .unified-markdown pre .hljs-attribute,
+html[data-theme] .unified-markdown pre .hljs-property,
+html[data-theme] .unified-markdown pre .hljs-variable,
+html[data-theme] .unified-markdown pre .hljs-params { color: #c4b5fd; }
+html[data-theme] .unified-markdown pre .hljs-tag,
+html[data-theme] .unified-markdown pre .hljs-name { color: #7cc4ff; }
+html[data-theme] .unified-markdown pre .hljs-symbol,
+html[data-theme] .unified-markdown pre .hljs-bullet,
+html[data-theme] .unified-markdown pre .hljs-link { color: #5eead4; }
+html[data-theme] .unified-markdown pre .hljs-deletion { color: #fb7185; }
+html[data-theme] .unified-markdown pre .hljs-emphasis { font-style: italic; }
+html[data-theme] .unified-markdown pre .hljs-strong { font-weight: 700; }
+
+/* ---------- pet row: avatar + name line + state tag ---------- */
+html[data-theme] .unified-pet-row {
+  --ma-pet-size: 38px;
+  --nt-st: var(--nt-st-done);
+  column-gap: 0.85rem;
+  margin-top: 0.2rem;
+}
+html[data-theme] .unified-pet-row[data-pet-state="idle"] { --nt-st: var(--nt-st-idle); }
+html[data-theme] .unified-pet-row[data-pet-state="thinking"] { --nt-st: var(--nt-st-thinking); }
+html[data-theme] .unified-pet-row[data-pet-state="coding"] { --nt-st: var(--nt-st-coding); }
+html[data-theme] .unified-pet-row[data-pet-state="error"] { --nt-st: var(--nt-st-error); }
+html[data-theme] .unified-pet-avatar,
+html[data-theme] .unified-pet-row[data-pet-state] .unified-pet-avatar {
+  border-radius: 11px;
+  background: var(--ma-surface);
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--nt-st) 75%, transparent),
+    0 0 12px color-mix(in srgb, var(--nt-st) 38%, transparent);
+}
+html[data-theme] .unified-pet-row[data-pet-state="done"] .unified-pet-avatar,
+html[data-theme] .unified-pet-row[data-pet-state="idle"] .unified-pet-avatar {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nt-st) 45%, transparent);
+}
+html[data-theme] .unified-pet-row.is-settled .unified-pet-avatar { opacity: 1; }
+html[data-theme] .unified-pet-content { display: flex; flex-direction: column; }
+html[data-theme] .unified-pet-content > * { min-width: 0; }
+/* 过程 placement is decided in JS (orderTurnBlocksForDisplay): after its reply and never
+   dependent on .collapsed — a collapsed-only `order` made the pill jump on toggle. */
+html[data-theme] .unified-pet-content > .unified-file-chips { order: 11; }
+html[data-theme] .unified-pet-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 1.3rem;
+  margin: 0.05rem 0 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 620;
+  color: var(--ma-text-muted);
+  order: -1;
+}
+html[data-theme] .unified-pet-state {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  color: var(--nt-st);
+  background: color-mix(in srgb, var(--nt-st) 13%, transparent);
+}
+html[data-theme] .unified-pet-waiting { height: 1.6rem; gap: 0.25rem; }
+html[data-theme] .unified-pet-waiting span {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-bottom: 8px solid var(--nt-st-thinking);
+}
+html[data-theme] .unified-pet-waiting span:nth-child(2) { border-bottom-color: #5b5cff; }
+html[data-theme] .unified-pet-waiting span:nth-child(3) { border-bottom-color: #8b5cf6; }
+
+/* ---------- 过程 pill, tool lines, thinking ---------- */
+html[data-theme] .unified-process-pill {
+  margin: 0.35rem 0 0.25rem;
+  padding: 0.22rem 0.7rem;
+  border: 1px solid var(--ma-border);
+  background: transparent;
+  color: var(--ma-text-faint);
+  font-size: 0.72rem;
+}
+html[data-theme] .unified-process-pill:hover { background: var(--nt-hover); color: var(--ma-text-muted); }
+html[data-theme] .unified-process-pill-dot { background: var(--nt-st-coding); box-shadow: 0 0 6px var(--nt-st-coding); }
+html[data-theme] .unified-tool-line {
+  border-radius: var(--nt-r-sm);
+}
+html[data-theme] .unified-tool-line.is-running {
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nt-st-coding) 30%, transparent);
+}
+html[data-theme] .unified-tool-line.is-running .unified-tool-elapsed { color: var(--nt-st-coding); }
+html[data-theme] .unified-thinking:not(.is-waiting) {
+  border: 1px solid color-mix(in srgb, var(--nt-st-thinking) 22%, var(--ma-border));
+  border-radius: var(--nt-r-md);
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+  box-shadow: none;
+}
+html[data-theme] .unified-thinking-summary { background: transparent; color: var(--ma-text-muted); }
+html[data-theme] .unified-thinking-pulse {
+  width: 0;
+  height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid var(--nt-st-thinking);
+  filter: drop-shadow(0 0 4px var(--nt-st-thinking));
+}
+html[data-theme] .unified-thinking-shimmer-inline {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--nt-st-thinking) 45%, transparent), transparent);
+  background-size: 200% 100%;
+}
+
+/* ---------- composer ---------- */
+html[data-theme] .unified-composer-dock,
+html[data-theme] .unified-shell.is-working .unified-composer-dock {
+  background: transparent;
+  border-top-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 0 1.75rem 0.9rem;
+}
+html[data-theme] .unified-composer-dock > * { max-width: 920px; width: 100%; margin-left: auto; margin-right: auto; }
+html[data-theme] .unified-composer,
+html[data-theme] .unified-shell.is-working .unified-composer {
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem;
+  border: 1px solid var(--ma-border-strong);
+  border-radius: var(--nt-r-lg);
+  background: var(--ma-surface);
+  box-shadow: var(--nt-shadow);
+  backdrop-filter: none;
+}
+html[data-theme] .unified-shell.is-working .unified-composer {
+  border-color: color-mix(in srgb, var(--nt-st-thinking) 40%, var(--ma-border-strong));
+}
+html[data-theme] .unified-input,
+html[data-theme] .unified-shell.is-working .unified-input {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ma-text);
+  font-size: 0.9rem;
+}
+html[data-theme] .unified-input::placeholder { color: var(--ma-text-faint); }
+html[data-theme] .unified-input:focus-visible { outline: none; }
+html[data-theme] .unified-composer:focus-within { border-color: color-mix(in srgb, #5b5cff 55%, var(--ma-border-strong)); }
+html[data-theme] #unified-send,
+html[data-theme] #unified-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.1rem;
+  padding: 0 0.95rem 0 0.8rem;
+  border-radius: var(--nt-r-md);
+  font-size: 0.8rem;
+}
+html[data-theme] #unified-send::before {
+  content: "";
+  border-left: 9px solid currentColor;
+  border-top: 5.5px solid transparent;
+  border-bottom: 5.5px solid transparent;
+}
+html[data-theme] #unified-send:not(:disabled) { box-shadow: var(--nt-glow); }
+html[data-theme] #unified-send:disabled { opacity: 0.5; }
+html[data-theme] #unified-stop {
+  background: var(--ma-surface-2);
+  border: 1px solid var(--ma-border);
+  color: var(--ma-text-muted);
+}
+html[data-theme] #unified-stop::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--nt-st-error);
+}
+html[data-theme] #unified-stop[hidden] { display: none; }
+html[data-theme] .unified-status { color: var(--ma-text-faint); }
+
+/* sessions dropdown (会话 N) */
+html[data-theme] .unified-expand {
+  border: 1px solid var(--ma-border);
+  border-radius: var(--nt-r-lg);
+  background: var(--nt-glass);
+  backdrop-filter: blur(16px) saturate(140%);
+  box-shadow: var(--nt-shadow);
+}
+html[data-theme] .unified-expand-item { border-radius: var(--nt-r-sm); border-color: transparent; }
+html[data-theme] .unified-expand-item:hover { background: var(--nt-hover); }
+html[data-theme] .unified-expand-item.is-current { background: var(--nt-selected); box-shadow: inset 3px 0 0 #5b5cff; }
+html[data-theme] .unified-sessions-tab.is-active { color: var(--ma-text); border-bottom-color: #5b5cff; }
+
+/* scrollbars */
+html[data-theme] .unified-chat::-webkit-scrollbar,
+html[data-theme] .unified-sidebar *::-webkit-scrollbar { width: 8px; height: 8px; }
+html[data-theme] .unified-chat::-webkit-scrollbar-thumb,
+html[data-theme] .unified-sidebar *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ma-text) 16%, transparent);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+html[data-theme] .unified-chat::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme] .unified-btn,
+  html[data-theme] .unified-pet-avatar { transition: none; }
+}

@@ -38,7 +38,6 @@ class ExternalProjectAdoptionTests(unittest.TestCase):
         self.assertIn("README.md", scan.markers)
         self.assertIn(".git", scan.markers)
         self.assertTrue(scan.has_git)
-        self.assertFalse(scan.has_tasks)
         self.assertNotIn("SECRET=must-not-be-read", repr(scan.to_dict()))
         self.assertFalse((self.paths.workspace / "partial-app").exists())
 

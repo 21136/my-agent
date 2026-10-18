@@ -14,21 +14,13 @@ class ProjectStageCardContractTests(unittest.TestCase):
         panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
             encoding="utf-8"
         )
+        # The stage/plan card that rendered these sections was removed with the
+        # task subsystem (2026-10-18); the state still carries the artifacts.
         self.assertIn("executionStageArtifacts", panel)
-        self.assertIn("renderStageArtifactSummary", panel)
-        self.assertIn("open-artifact-doc", panel)
-        self.assertIn("open-plan-review", panel)
-        self.assertIn("DESIGN@", panel)
-        self.assertIn("SCOPE@", panel)
-        self.assertIn("映射完整度", panel)
-        self.assertIn("证据新鲜度", panel)
-        self.assertIn("人工验收", panel)
 
     def test_it5819_backend_exposes_artifact_ids_for_ac_coverage(self) -> None:
         project_api = (ROOT / "agent-core" / "project_api.py").read_text(encoding="utf-8")
-        plan_agent = (ROOT / "agent-core" / "plan_agent.py").read_text(encoding="utf-8")
         self.assertGreaterEqual(project_api.count('"ids": list(item.get("ids") or [])'), 1)
-        self.assertGreaterEqual(plan_agent.count('"ids": list(item.get("ids") or [])'), 1)
 
     def test_it5910a_frontend_contract_uses_shared_stage_status(self) -> None:
         panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
@@ -42,13 +34,6 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("execution_stage_status", ws)
         self.assertIn("execution_stage_warnings", ws)
         self.assertIn("文档整理进行中；未生成文档属于进度，不是阻塞", panel)
-
-    def test_it5911_plan_review_requires_actionable_suggestions(self) -> None:
-        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("!busy && actionableCount > 0", panel)
-        self.assertNotIn("/待采纳|待审阅/.test(notices.join", panel)
 
     def test_it5913_mermaid_uses_shared_render_and_error_fallback_contract(self) -> None:
         markdown = (ROOT / "desktop" / "src" / "markdown.ts").read_text(encoding="utf-8")
@@ -76,13 +61,13 @@ class ProjectStageCardContractTests(unittest.TestCase):
         css = (ROOT / "desktop" / "src" / "shells" / "unified" / "unified.css").read_text(
             encoding="utf-8"
         )
-        plan_review = (ROOT / "desktop" / "src" / "shells" / "unified" / "plan-review.ts").read_text(
+        rail = (ROOT / "desktop" / "src" / "shells" / "unified" / "rail.ts").read_text(
             encoding="utf-8"
         )
         reading = (ROOT / "desktop" / "src" / "shells" / "unified" / "doc-reading.ts").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"document"', plan_review)
+        self.assertIn('"document"', rail)
         self.assertIn('setMainFocus("document")', index)
         self.assertIn('data-action="document-back"', reading)
         self.assertIn("unified-document-content table", css)
@@ -102,59 +87,12 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("doc-outline-jump", index)
         self.assertNotIn("主区阅读", panel)
         self.assertIn("unified-document-kicker", reading)
-        self.assertIn("textbook-artifact-title", panel)
         self.assertNotIn('textbook-artifact-completeness is-', panel)
         self.assertIn("ENV.md", reading)
         self.assertIn("环境与质量", reading)
         self.assertLess(reading.index("PROJECT.md"), reading.index("SCOPE.md"))
         self.assertLess(reading.index("TASKS.md"), reading.index("VERIFY.md"))
         self.assertLess(reading.index("VERIFY.md"), reading.index("ENV.md"))
-
-    def test_it5820_review_button_has_visible_focus_transition(self) -> None:
-        index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
-            encoding="utf-8"
-        )
-        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('data-action="open-plan-review"', panel)
-        self.assertIn('root.addEventListener("click", handleReviewSuggestionClick, true)', index)
-        self.assertIn('ev.stopImmediatePropagation()', index)
-        self.assertIn('planReviewEl.hidden = focus !== "plan_review"', index)
-
-    def test_it5825_suggestion_card_uses_dedicated_review_action(self) -> None:
-        index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
-            encoding="utf-8"
-        )
-        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('data-action="open-suggestion-review"', panel)
-        self.assertIn('[data-action="open-suggestion-review"]', index)
-        self.assertIn('projectEls.taskFlow.addEventListener("click"', index)
-        self.assertIn('openPlanReview(btn.dataset.suggestionId)', index)
-
-    def test_it5826_suggestion_card_exposes_new_review_button(self) -> None:
-        index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
-            encoding="utf-8"
-        )
-        panel = (ROOT / "desktop" / "src" / "shells" / "unified" / "project-panel.ts").read_text(
-            encoding="utf-8"
-        )
-        css = (ROOT / "desktop" / "src" / "shells" / "unified" / "unified.css").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('data-action="open-suggestion-review-new"', panel)
-        self.assertIn('[data-action="open-suggestion-review-new"]', index)
-        self.assertIn('正在打开方案变更', index)
-        self.assertIn('方案变更已打开', index)
-        self.assertIn('正在读取待处理方案', index)
-        self.assertIn('正在切换主区', index)
-        self.assertIn('renderPlanReviewPane', index)
-        self.assertIn('setMainFocus("plan_review")', index)
-        self.assertIn('planReviewEl.hidden = focus !== "plan_review"', index)
-        self.assertIn('let planReviewIndex = 0;', index)
-        self.assertIn('[data-action="open-suggestion-review"]', css)
 
     def test_it5823_change_timeline_is_not_rendered(self) -> None:
         """CHG ledger stays internal. The sidebar must not render it."""

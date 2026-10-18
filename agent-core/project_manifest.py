@@ -19,7 +19,7 @@ VALID_TIERS = frozenset({"small", "normal", "large"})
 VALID_PROJECT_TEMPLATES = frozenset({"light", "standard"})
 DEFAULT_PROJECT_TEMPLATE = "standard"
 VALID_CONTENT_ORIGINS = frozenset({"migrated", "scaffold"})
-LIGHT_SCAFFOLD_ARTIFACTS = ("PROJECT.md", "TASKS.md", "VERIFY.md")
+LIGHT_SCAFFOLD_ARTIFACTS = ("PROJECT.md", "VERIFY.md")  # TASKS.md no longer generated
 VALID_COMPLETENESS = frozenset({"skeleton", "draft", "complete"})
 VALID_STATUSES = frozenset({"current", "stale_soft", "stale", "evidence_stale"})
 STANDARD_ARTIFACTS = (
@@ -686,7 +686,6 @@ def lint_project_content(
         for key, label in (
             ("G1_non_sequence", "G1"),
             ("G2_sequence", "G2"),
-            ("G5_task_reference", "G5"),
             ("G6_verify_reference", "G6"),
         ):
             if not checks[key]:

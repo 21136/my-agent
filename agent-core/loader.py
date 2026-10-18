@@ -562,7 +562,7 @@ def format_terminal_scope_overlay(session: Session) -> str:
     lines.extend(
         [
             "wild_mode: inside effective_root → write/run skip confirm; outside → confirm.",
-            "no_plan_gate: no project_id; TASKS/MAP/docs may be write_text directly (TM-17).",
+            "no_plan_gate: no project_id; docs may be write_text directly (TM-17).",
             "no_segment_cap: auto-continue segments within total cap (TM-16).",
         ]
     )
@@ -977,36 +977,6 @@ def format_segment_pause_message(
     )
 
 
-TASK_PAUSED_MARKER = "本项已完成。回复「继续」开始下一项。"
-
-
-def format_task_paused_notice(*, next_open_task: str | None = None) -> str:
-    """User-facing notice when project task-stop gate ends the turn (T-2006)."""
-    lines = [TASK_PAUSED_MARKER]
-    if next_open_task:
-        lines.append(f"下一项：{next_open_task}")
-    return "\n".join(lines)
-
-
-def ensure_task_paused_text(
-    text: str,
-    *,
-    next_open_task: str | None = None,
-    delivery_profile: str = "solo",
-) -> str:
-    """Append pause notice if missing from assistant text."""
-    from project_mode import normalize_delivery_profile
-
-    if normalize_delivery_profile(delivery_profile) == "solo":
-        return (text or "").rstrip()
-    body = (text or "").rstrip()
-    if "回复「继续」" in body or "回复『继续』" in body or "本项已完成" in body:
-        return body
-    notice = format_task_paused_notice(next_open_task=next_open_task)
-    if not body:
-        return notice
-    return f"{body}\n\n{notice}"
-
 
 def format_total_cap_message(*, total_tool_rounds: int, total_max: int) -> str:
     """Message when PARENT_EXECUTE_TOTAL_MAX is reached (T-705)."""
@@ -1170,7 +1140,7 @@ def format_evolved_catalog_overlay(
     return "\n\n".join(parts)
 
 
-def load_project_prompt(evolve_dir: Path, *, profile: str = "solo") -> str:
+def load_project_prompt(evolve_dir: Path, *, profile: str = "solo") -> str:  # profile ignored
     from project_mode import load_project_prompt as _load
 
     return _load(evolve_dir, profile=profile)
@@ -1273,114 +1243,19 @@ def build_system_prompt(
             sections.append(("subagent_summary", session.subagent_overlay.strip()))
 
         if session.meta.active_shell == "project" and session.meta.project_root and not terminal:
-            from project_mode import (
-                build_tasks_injection_slice,
-                extract_task_id,
-                first_open_task_line,
-                existing_plan_files,
-                format_project_overlay,
-                get_delivery_profile,
-                is_project_continue_utterance,
-                ordinary_skip_stage_walls,
-                project_dir,
-                read_milestone_review_overlay_key,
-                read_task_stats,
-                read_tasks_text_for_injection,
-            )
+            from project_mode import existing_plan_files, format_project_overlay
 
-            profile = get_delivery_profile(session.meta)
-
-            tasks_path = (
-                project_dir(session.paths, session.meta.project_id) / "TASKS.md"
-                if session.meta.project_id
-                else None
-            )
-            stats = read_task_stats(tasks_path) if tasks_path is not None else None
-            tasks_text = read_tasks_text_for_injection(tasks_path)
-            last_user = ""
-            for msg in reversed(session.messages):
-                if msg.get("role") == "user" and isinstance(msg.get("content"), str):
-                    last_user = msg["content"]
-                    break
-            continue_turn = is_project_continue_utterance(last_user)
-            next_open = first_open_task_line(tasks_text)
-            open_slice = (
-                build_tasks_injection_slice(tasks_text)
-                if (session.meta.project_plan_status or "draft") == "confirmed"
-                else ""
-            )
-            milestone_key: str | None = None
-            if session.meta.project_id:
-                from plan_agent import get_plan_agent
-
-                try:
-                    milestone_key = get_plan_agent(
-                        session.paths, session.meta.project_id
-                    ).milestone_review_overlay_key()
-                except Exception:
-                    milestone_key = None
-                if not milestone_key:
-                    milestone_key = read_milestone_review_overlay_key(
-                        session.paths, session.meta.project_id
-                    )
-            sections.append(
-                (
-                    "project_prompt",
-                    load_project_prompt(evolve_dir, profile=profile),
-                )
-            )
+            sections.append(("project_prompt", load_project_prompt(evolve_dir)))
             overlay = format_project_overlay(
                 project_root=session.meta.project_root,
                 project_id=session.meta.project_id,
-                plan_status=session.meta.project_plan_status or "draft",
-                task_stats=stats,
-                continue_turn=continue_turn,
-                next_open_task=next_open,
-                armed_task_id=extract_task_id(next_open or ""),
-                open_tasks_slice=open_slice or None,
-                delivery_profile=profile,
-                milestone_review_suggested=milestone_key,
-                workflow_stage=getattr(session.meta, "project_workflow_stage", ""),
-                active_task_id=getattr(session.meta, "project_active_task_id", "") or None,
-                runaway_enabled=bool(getattr(session.meta, "project_runaway_enabled", False)),
-                runaway_checkpoint=str(
-                    getattr(session.meta, "project_runaway_checkpoint", "") or ""
-                ),
-                runaway_acceptance_passed=bool(
-                    getattr(session.meta, "project_runaway_acceptance_passed", False)
-                ),
-                skip_stage_walls=ordinary_skip_stage_walls(session),
-                project_entry=str(getattr(session.meta, "project_entry", "") or ""),
                 ordinary_work_intent=str(getattr(session, "_ordinary_work_intent", "execute") or "execute"),
-                ordinary_task_scope=str(getattr(session, "_ordinary_task_scope", "") or ""),
-                plan_files=existing_plan_files(
-                    session.paths, session.meta.project_id
-                )
+                plan_files=existing_plan_files(session.paths, session.meta.project_id)
                 if session.meta.project_id
                 else [],
                 active_doc=str(getattr(session, "_turn_active_doc", "") or ""),
-                active_doc_selection=str(
-                    getattr(session, "_turn_active_doc_selection", "") or ""
-                ),
+                active_doc_selection=str(getattr(session, "_turn_active_doc_selection", "") or ""),
             )
-            digest_text = load_digest(session) or ""
-            if profile == "solo" and digest_text and (
-                "report_progress" in digest_text and "必须" in digest_text
-            ):
-                overlay += (
-                    "\ndigest_profile_note: solo — 忽略 digest 中与一停/"
-                    "强制 report_progress 冲突的旧叙述"
-                )
-            workflow_stage = str(getattr(session.meta, "project_workflow_stage", "") or "")
-            if (
-                bool(getattr(session.meta, "project_runaway_enabled", False))
-                and workflow_stage == "verification"
-                and digest_text
-            ):
-                overlay += (
-                    "\ndigest_profile_note: verification — 忽略 digest 中"
-                    "「直写 ENV/PROJECT 验收」「report_progress 脱困」等与 Harness 谓词冲突的旧叙述"
-                )
             sections.append(
                 (
                     "project_mode",

@@ -1,4 +1,5 @@
 import type { AgentWsClient, HostScopeRoot } from "./api/ws";
+import { formatCandidateSwitchResult, normalizeCandidateSwitchResult } from "./host-candidate";
 import "./host-settings.css";
 
 export type HostSettingsApi = {
@@ -66,6 +67,9 @@ export function mountHostSettings(client: AgentWsClient): HostSettingsApi {
   let addFormPath: string | null = null;
   let wizardShown = false;
   let wizardPendingConfirm: PendingConfirm | null = null;
+  let candidateRoot: string | null = null;
+  let candidateBusy = false;
+  let candidateNotice = "";
 
   function closeSettings(): void {
     overlay.classList.add("hidden");
@@ -187,6 +191,35 @@ export function mountHostSettings(client: AgentWsClient): HostSettingsApi {
       });
     }
 
+    const candidateSection = document.createElement("section");
+    candidateSection.className = "host-candidate-section";
+    const candidateApiAvailable = Boolean(window.myAgentDesktop?.switchSidecarCandidate);
+    candidateSection.innerHTML = `
+      <div class="host-candidate-title">Host Agent 候选版本</div>
+      <p class="host-candidate-hint">选择 Agent 根目录下的候选 worktree；系统会先启动并健康检查，失败时自动恢复旧版本。</p>
+      <div class="host-candidate-row">
+        <input class="host-candidate-path" type="text" readonly value="${escapeHtml(candidateRoot ?? "")}" placeholder="尚未选择候选目录" />
+        <button type="button" class="host-settings-btn" data-action="candidate-pick" ${candidateBusy ? "disabled" : ""}>选择…</button>
+      </div>
+      <div class="host-candidate-actions">
+        <button type="button" class="host-settings-btn host-settings-btn-accent" data-action="candidate-switch" ${!candidateRoot || candidateBusy || !candidateApiAvailable ? "disabled" : ""}>${candidateBusy ? "切换中…" : "确认切换"}</button>
+        ${!candidateApiAvailable ? '<span class="host-candidate-unavailable">仅 Electron 桌面壳可用</span>' : ""}
+      </div>
+      ${candidateNotice ? `<p class="host-candidate-notice">${escapeHtml(candidateNotice)}</p>` : ""}
+    `;
+    body.append(candidateSection);
+    candidateSection.querySelector<HTMLButtonElement>('[data-action="candidate-pick"]')?.addEventListener("click", () => {
+      void pickCandidateRoot();
+    });
+    candidateSection.querySelector<HTMLButtonElement>('[data-action="candidate-switch"]')?.addEventListener("click", () => {
+      if (!candidateRoot || candidateBusy) return;
+      const selectedRoot = candidateRoot;
+      showConfirm(
+        `将启动并切换 Host Agent 候选版本\n路径: ${selectedRoot}\n失败时自动恢复当前版本`,
+        () => { void switchCandidate(selectedRoot); },
+      );
+    });
+
     if (addFormPath) {
       const form = document.createElement("div");
       form.className = "host-settings-form";
@@ -244,6 +277,42 @@ export function mountHostSettings(client: AgentWsClient): HostSettingsApi {
     }
 
     renderConfirmBar(body);
+  }
+
+  async function pickCandidateRoot(): Promise<void> {
+    const api = window.myAgentDesktop;
+    if (!api?.pickDirectory) {
+      candidateNotice = "文件夹选择器不可用（请使用 Electron 桌面壳）。";
+      renderSettings();
+      return;
+    }
+    const picked = await api.pickDirectory();
+    if (!picked) return;
+    candidateRoot = picked;
+    candidateNotice = "候选目录已选择，确认后才会启动切换。";
+    renderSettings();
+  }
+
+  async function switchCandidate(root: string): Promise<void> {
+    const api = window.myAgentDesktop;
+    if (!api?.switchSidecarCandidate) {
+      candidateNotice = "候选切换仅支持 Electron 桌面壳。";
+      renderSettings();
+      return;
+    }
+    candidateBusy = true;
+    candidateNotice = "正在启动候选版本并执行健康检查…";
+    renderSettings();
+    try {
+      const result = normalizeCandidateSwitchResult(await api.switchSidecarCandidate(root));
+      candidateNotice = formatCandidateSwitchResult(result);
+      if (result.ok) candidateRoot = result.candidateRoot ?? root;
+    } catch (error) {
+      candidateNotice = `候选切换失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      candidateBusy = false;
+      renderSettings();
+    }
   }
 
   async function repathRoot(hostId: string): Promise<void> {

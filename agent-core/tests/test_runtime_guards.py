@@ -302,30 +302,6 @@ class WsBridgeExecutorEventTests(unittest.TestCase):
     def _bridge(self) -> WsBridge:
         return WsBridge(emit=self.events.append, paths=self.paths)
 
-    def test_plan_subagent_events_passthrough(self) -> None:
-        bridge = self._bridge()
-        bridge.on_executor_event(
-            "plan.subagent.start",
-            {"task_preview": "规划模块", "call_id": "c1"},
-        )
-        bridge.on_executor_event(
-            "plan.subagent.done",
-            {"summary": "完成", "proposal_count": 0, "ok": True, "call_id": "c1"},
-        )
-        self.assertEqual(self.events[0]["type"], "plan.subagent.start")
-        self.assertEqual(self.events[0]["call_id"], "c1")
-        self.assertEqual(self.events[1]["type"], "plan.subagent.done")
-        self.assertTrue(self.events[1]["ok"])
-
-    def test_project_plan_state_passthrough(self) -> None:
-        bridge = self._bridge()
-        bridge.on_executor_event(
-            "project.plan.state",
-            {"tasks_md": "# tasks", "changes_level": "none"},
-        )
-        self.assertEqual(self.events[0]["type"], "project.plan.state")
-        self.assertEqual(self.events[0]["tasks_md"], "# tasks")
-
     def test_unknown_executor_event_not_spammed_as_notice(self) -> None:
         bridge = self._bridge()
         bridge.on_executor_event("debug.probe", {"blob": "x" * 200})

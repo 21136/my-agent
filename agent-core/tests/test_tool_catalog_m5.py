@@ -51,7 +51,6 @@ class ToolCatalogM5It81Tests(unittest.TestCase):
             copy_tool_dirs=(
                 "common/write_text",
                 "coding/patch_file",
-                "project/report_progress",
             ),
         )
         self.registry = ToolRegistry.load(self.paths)
@@ -79,7 +78,7 @@ class ToolCatalogM5It81Tests(unittest.TestCase):
         b = session_evolved_allowlist(project, registry=self.registry)
         self.assertEqual(a, b)
         self.assertIn("patch_file", a)
-        self.assertIn("report_progress", a)
+        self.assertNotIn("report_progress", a)  # archived with the task subsystem
 
 
 class ToolCatalogM5PackTests(unittest.TestCase):

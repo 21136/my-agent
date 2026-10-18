@@ -143,10 +143,6 @@ class ProjectEntryTreatTests(unittest.TestCase):
             )
         )
 
-    def test_runaway_never_treats_ordinary_direct(self) -> None:
-        session = self._bound(project_entry="direct", project_runaway_enabled=True)
-        self.assertFalse(should_treat_ordinary_direct_implement(session, "直接实现"))
-
     def test_auto_confirm_from_documentation_and_design(self) -> None:
         for stage in ("documentation", "design"):
             session = self._bound(project_workflow_stage=stage)
@@ -239,14 +235,6 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         with self.assertRaisesRegex(ProjectModeError, "项目壳"):
             confirm_direct_implement(session)
 
-    def test_reject_runaway(self) -> None:
-        session, _paths = self._new_project("runaway-block")
-        session.meta.project_runaway_enabled = True
-        with self.assertRaisesRegex(ProjectModeError, "狂奔"):
-            confirm_direct_implement(session)
-        self.assertNotEqual(session.meta.project_entry, "direct")
-        self.assertEqual(session.meta.project_plan_status, "draft")
-
     def test_direct_implement_from_documentation_and_design(self) -> None:
         session, paths = self._new_project("stage-direct")
         for stage in ("documentation", "design"):
@@ -329,43 +317,13 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
         self.assertEqual(session.meta.project_entry, "")
         self.assertEqual(session.meta.project_plan_status, "draft")
         self.assertEqual(session.next_work_intent, "execute")
-        self.assertTrue(state_events[0].get("needs_plan_confirm"))
+        self.assertFalse(state_events[0].get("needs_plan_confirm"))
         self.assertFalse(state_events[0].get("ordinary_stage_gates_blocking"))
         standalone = project_state_payload(session, paths)
         self.assertEqual(standalone.get("project_entry"), "")
 
 
-class DirectImplementToolFilterTests(unittest.TestCase):
-    def test_build_llm_tools_hides_plan_partner(self) -> None:
-        from agent import build_llm_tools
 
-        paths = make_temp_agent_paths(self, prefix="entry-tools-")
-        session = create_new(paths, conversation_id="direct-implement-tools")
-        session.meta.project_id = "demo"
-        session.meta.project_root = "workspace/demo"
-        session.direct_implement_turn = True
-        names = [item["function"]["name"] for item in build_llm_tools(session)]
-        self.assertIn("plan_partner", names)
-        self.assertIn("deliverable_review", names)
-
-    def test_project_entry_direct_hides_plan_partner_like_phrase(self) -> None:
-        from agent import build_llm_tools
-
-        paths = make_temp_agent_paths(self, prefix="entry-tools2-")
-        session = create_new(paths, conversation_id="entry-direct-tools")
-        session.meta.active_shell = "project"
-        session.meta.project_id = "demo"
-        session.meta.project_root = "workspace/demo"
-        session.meta.project_plan_status = "confirmed"
-        session.meta.project_workflow_stage = "implementation"
-        session.meta.project_entry = "direct"
-        names = [item["function"]["name"] for item in build_llm_tools(session)]
-        self.assertIn("plan_partner", names)
-        self.assertIn("deliverable_review", names)
-
-        session.meta.project_entry = ""
-        names_phrase_off = [item["function"]["name"] for item in build_llm_tools(session)]
-        self.assertIn("plan_partner", names_phrase_off)
 
 
 if __name__ == "__main__":

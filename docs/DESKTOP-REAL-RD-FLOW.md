@@ -6,7 +6,7 @@
 > **状态**：**L0 产品已决 · T-5810～T-5819 运行时完成 · T-5831 文档已决 · 下一步 T-5832 编码 + S-581**（Phase 58b · 制品链优先于流程轨 UI 抛光）  
 > **定位**：扩展 [`DESKTOP-TEXTBOOK-FLOW.md`](./DESKTOP-TEXTBOOK-FLOW.md) — 保留五段流程轨与闸门+证据，把「阶段仪表盘」推进为「文档制品链」。  
 > **范围**：仅 Desktop project 主战场；Terminal 继续 frozen。  
-> 关联：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [TASKS.md](./TASKS.md) Phase 58b
+> 关联：[DESKTOP-TEXTBOOK-FLOW.md](./DESKTOP-TEXTBOOK-FLOW.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [TASKS.md](./TASKS.md) Phase 58b
 
 ---
 

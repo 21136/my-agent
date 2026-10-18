@@ -15,7 +15,6 @@ if str(_AGENT_CORE) not in sys.path:
 
 from tests.isolation_helpers import temporary_agent_paths
 from tools.builtin.run_evolved import run
-from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
 
 
@@ -53,43 +52,6 @@ def _init_repo(root: Path) -> None:
 
 
 class GitToolsTests(unittest.TestCase):
-    def test_runaway_never_covers_git_restore_confirmation(self) -> None:
-        with temporary_agent_paths(copy_tool_dirs=("coding/git_restore",)) as paths:
-            manifest = paths.evolve / "tools" / "coding" / "git_restore" / "tool.toml"
-            manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace('status = "experimental"', 'status = "active"'),
-                encoding="utf-8",
-            )
-            registry = ToolRegistry.load(paths)
-            builtin = registry.get_builtin("run_evolved")
-            evolved = registry.get_evolved("git_restore")
-            self.assertIsNotNone(builtin)
-            self.assertIsNotNone(evolved)
-            assert builtin is not None and evolved is not None
-            executor = ToolExecutor(
-                registry=registry,
-                session=ExecutorSession(
-                    active_shell="project",
-                    project_root="workspace/repo",
-                    project_plan_status="confirmed",
-                    runaway_enabled=True,
-                ),
-            )
-            arguments = {
-                "tool_name": "git_restore",
-                "arguments": {
-                    "path": "workspace/repo/file.txt",
-                    "expected_hash": "0" * 64,
-                    "dry_run": False,
-                },
-            }
-            self.assertTrue(executor._needs_confirm(builtin, evolved, arguments, tool_name="run_evolved"))
-            self.assertFalse(
-                executor._runaway_confirm_is_covered(
-                    builtin, evolved, arguments, tool_name="run_evolved"
-                )
-            )
-
     def test_restore_defaults_to_preview_through_evolved_runner(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("coding/git_restore",)) as paths:
             _init_repo(paths.agent_root)

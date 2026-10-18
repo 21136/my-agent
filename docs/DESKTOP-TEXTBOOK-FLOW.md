@@ -4,7 +4,7 @@
 
 > 版本 **0.1.10** · 2026-09-12  
 > **状态**：**M0 文档已签 · M1 待实施**（流程轨 UI / 配方 CI / §6.3 边角 · 见 §6.0）  
-> 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) · [UX-POLISH.md](./UX-POLISH.md) UX-026 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) · [TASKS.md](./TASKS.md) Phase 58
+> 关联：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) · [UX-POLISH.md](./UX-POLISH.md) UX-026 · [TERMINAL-MODE.md](./TERMINAL-MODE.md) · [TASKS.md](./TASKS.md) Phase 58
 
 ---
 
@@ -443,7 +443,7 @@ Terminal 继续宣传：`cd` 进仓库就开干、effective root 内狂野、aut
 | **采纳** | 用户仍须 **控件采纳**（Phase 40）；摘要 **不** 替代 diff |
 | **留痕** | 采纳后写入变更时间线（§6.3.5） |
 
-实施：T-5806 · 对齐 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 短卡 · Phase 40。
+实施：T-5806 · 对齐 [PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) §10 短卡 · Phase 40。
 
 #### 6.3.4 用户操作路径（加 / 改 / 删 / 转向）
 
@@ -670,7 +670,7 @@ sequenceDiagram
 
 ##### 6.3.8.3 与一停门 / Gate 的关系
 
-- **Task 一停**（[TASK-STOP.md](./TASK-STOP.md)）：本项 `report_progress` 成功后同 turn **禁**下一项产物；与「中途改需求」独立——改 TASKS **不自动** disarm 一停。
+- **Task 一停**（[TASK-STOP.md](./archive/TASK-STOP.md)）：本项 `report_progress` 成功后同 turn **禁**下一项产物；与「中途改需求」独立——改 TASKS **不自动** disarm 一停。
 - **Progress Gate**：改 `[evidence:…]` 后，在飞代码可能 **不满足新证据**；须再跑对口工具或改任务后再勾。
 - **代码与计划**：中途删任务 **不** revert 已写文件（§6.3.7）；agent 可能写完 **已删** 任务的代码 → 用清理路径或 git。
 

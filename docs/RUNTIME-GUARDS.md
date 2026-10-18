@@ -90,7 +90,7 @@ Phase 17 checker（另文）  →  做完之后查对不对（可选第二次 De
 | **回合墙钟** `TURN_WALL_SEC` | **900** | `_run_line` / agent | 整条 user turn；segment 不重置；**tool 执行期间暂停**；到点 `finish_reason=timeout` |
 | **stall 看门狗** `STALL_WATCHDOG_SEC` | **0（关闭）** | `WsBridge` / agent | opt-in 建议 180；距上次有效进度超时 → cancel |
 | 桌面 cancel 兜底 | **45s** | `chat-state.ts` | 已实现；仅恢复 UI，不声称 sidecar 已停止 |
-| **Task 一停（project）** | 草案 | Phase 20 · [TASK-STOP.md](./TASK-STOP.md) | 每 `TASKS` 条目完成即停；**不**用拉长墙钟替代；L2 墙钟仍保留 |
+| **Task 一停（project）** | 草案 | Phase 20 · [TASK-STOP.md](./archive/TASK-STOP.md) | 每 `TASKS` 条目完成即停；**不**用拉长墙钟替代；L2 墙钟仍保留 |
 
 **有效进度事件**：`assistant.delta` · `tool.start` · `tool.end` · `confirm.request` · `confirm.done`。
 
@@ -239,6 +239,6 @@ demo probe 失败产生 `notice`、result 摘要与审计事件，供父代理�
 |------|------|------|
 | 0.1.0 | 2026-07-13 | 草案：与 checker 分线；迁入 T-1410～T-1412 |
 | 0.2.0 | 2026-07-13 | 设计定稿：900s 墙钟、stall opt-in、窄域拒调、tool.toml 后自动 demo |
-| 0.2.1 | 2026-07-19 | §3.1 指针：project Task 一停（Phase 20 草案 · [TASK-STOP.md](./TASK-STOP.md)）；墙钟仍为 L2 兜底 |
+| 0.2.1 | 2026-07-19 | §3.1 指针：project Task 一停（Phase 20 草案 · [TASK-STOP.md](./archive/TASK-STOP.md)）；墙钟仍为 L2 兜底 |
 | 0.2.2 | 2026-08-02 | G13 空头动作门；G14 指针 → [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) |
 | 0.2.3 | 2026-08-02 | G14：剧本废止倾向 + M3 本地执行硬化指针 |

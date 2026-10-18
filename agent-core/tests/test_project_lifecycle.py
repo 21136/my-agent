@@ -98,7 +98,8 @@ class ProjectLifecycleTests(unittest.TestCase):
         pid = normalize_project_id(self.project_id)
         dest = project_dir(self.paths, pid)
         self.assertTrue(dest.is_dir(), "workspace project directory should exist")
-        for name in sorted(PROJECT_ARTIFACTS):
+        self.assertFalse((dest / "TASKS.md").is_file(), "TASKS.md is no longer generated")
+        for name in sorted(PROJECT_ARTIFACTS - {"TASKS.md"}):
             artifact = dest / name
             self.assertTrue(artifact.is_file(), f"missing {name}")
             self.assertGreater(len(artifact.read_text(encoding="utf-8")), 0)

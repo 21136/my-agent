@@ -3,7 +3,7 @@
 > 版本 **0.3.0** · 2026-08-06 · **状态：代码已落地（未 commit）** · S-470/S-471 手工 todo · **里程碑提醒 done（T-4714～4718）**  
 > 触发：huiyi 联调——三件套 + 一停 + Progress Gate 叠成「和 Agent 博弈」；用户希望 **审查子代理 + 主 Agent 统一编排**，且 **系统提示词必须与内核行为一致、可审计、可版本化**。  
 > **产品栈与本地交付哲学**（四层模型 · 非云 PR · 里程碑提醒）：[LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md)  
-> 关联：[PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md)（Phase 48 · 薄父 · 禁 project 自动 explore） · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md)（Phase 49 · 子代理预算） · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [PROGRESS-GATE.md](./PROGRESS-GATE.md) · [TASK-STOP.md](./TASK-STOP.md) · [PLAN-ARCH.md](./PLAN-ARCH.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) §2.1 · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROMPT-REGISTRY.md](./PROMPT-REGISTRY.md)（T-4700 新建）
+> 关联：[PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · [ORCHESTRATION.md](./ORCHESTRATION.md) · [AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md)（Phase 48 · 薄父 · 禁 project 自动 explore） · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md)（Phase 49 · 子代理预算） · [CHECKER-SUBAGENT.md](./CHECKER-SUBAGENT.md) · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) · [TASK-STOP.md](./archive/TASK-STOP.md) · [PLAN-ARCH.md](./archive/PLAN-ARCH.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) §2.1 · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROMPT-REGISTRY.md](./PROMPT-REGISTRY.md)（T-4700 新建）
 
 ---
 

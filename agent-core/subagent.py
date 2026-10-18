@@ -25,7 +25,7 @@ from tools.registry import ToolManifestError, ToolRegistry, parse_tool_manifest
 from tools.schema import to_json
 from turn_intent import classify_turn, should_spawn_explore
 
-SubagentKind = Literal["explore", "checker", "plan", "review", "terminal_plan", "bug_fix"]
+SubagentKind = Literal["explore", "checker", "plan", "review", "terminal_plan"]
 CheckerKind = Literal["evolve_tool_scaffold", "project_test_fail"]
 CheckStatus = Literal["pass", "fail", "warn"]
 Verdict = Literal["pass", "fail", "warn"]
@@ -48,26 +48,7 @@ CHECKER_TOOL_NAMES: tuple[str, ...] = (
 
 REVIEW_TOOL_NAMES: tuple[str, ...] = CHECKER_TOOL_NAMES
 
-BUG_FIX_READ_TOOL_NAMES: tuple[str, ...] = (
-    "read_file",
-    "list_dir",
-    "glob_file_search",
-    "grep",
-)
 
-BUG_FIX_BLOCKED_TOOLS: frozenset[str] = frozenset(
-    {
-        "plan_partner",
-        "deliverable_review",
-        "explore",
-        "propose_context_switch",
-        "web_search",
-        "fetch_url",
-        "codebase_search",
-    }
-)
-
-_DEFAULT_BUG_FIX_MAX = 8
 
 _DEFAULT_EXPLORE_MAX = 16
 _DEFAULT_CHECKER_MAX = 10
@@ -78,7 +59,6 @@ _DEFAULT_PLAN_SUMMARY_MAX = 3500
 _DEFAULT_CHECKER_SUMMARY_MAX = 3500
 _DEFAULT_PLAN_TOOL_ROUNDS = 4
 _DEFAULT_SUBAGENT_HARD_CAP = 32
-_PLAN_PARTNER_MAX_PER_TURN = 2
 _DELIVERABLE_REVIEW_MAX_PER_TURN = 2
 _EXPLORE_BUILTIN_MAX_PER_TURN = 2
 _EXPLORE_CONTINUE_MAX_PER_TURN = 1
@@ -130,19 +110,7 @@ _REVIEW_DELIVERABLE_FALLBACK = "\n".join(
     ]
 )
 
-_BUG_FIX_FALLBACK = "\n".join(
-    [
-        "你是 my-agent 的 **bug-fix 子代理**（狂奔 repairing 验收修复轨）。",
-        "可读 PROJECT/DESIGN/TASKS/VERIFY/ENV 与代码；可用 write_text、patch_file、run_command。",
-        "可写 PROJECT.md 验收段、ENV.md quality.commands、VERIFY 证据及验收所需代码。",
-        "**禁止** plan_partner、新增 T-*、改 MAP/TASKS.archive。",
-        "输出末行必须是：BUG_FIX_VERDICT: pass|fail",
-    ]
-)
 
-_BUG_FIX_CLOSE_PROMPT = (
-    "请输出修复结论。末行必须是 BUG_FIX_VERDICT: pass|fail。"
-)
 
 _REVIEW_CLOSE_PROMPT = (
     "请输出交付审查结论。末行必须是 REVIEW_VERDICT: pass|warn|fail。"
@@ -201,14 +169,6 @@ def plan_subagent_summary_max_chars() -> int:
     return max(256, value)
 
 
-def plan_partner_max_per_turn() -> int:
-    raw = os.environ.get("PLAN_PARTNER_MAX_PER_TURN", str(_PLAN_PARTNER_MAX_PER_TURN))
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _PLAN_PARTNER_MAX_PER_TURN
-    return max(1, value)
-
 
 def deliverable_review_max_per_turn() -> int:
     raw = os.environ.get(
@@ -240,14 +200,6 @@ def explore_builtin_max_per_turn() -> int:
         value = _EXPLORE_BUILTIN_MAX_PER_TURN
     return max(1, value)
 
-
-def plan_subagent_tool_rounds() -> int:
-    raw = os.environ.get("PLAN_SUBAGENT_TOOL_ROUNDS", str(_DEFAULT_PLAN_TOOL_ROUNDS))
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_PLAN_TOOL_ROUNDS
-    return max(1, value)
 
 
 def terminal_plan_subagent_max_rounds() -> int:
@@ -381,29 +333,6 @@ def build_review_tools(*, registry: ToolRegistry | None = None) -> list[dict[str
     return [build_builtin_tool_definition(name) for name in REVIEW_TOOL_NAMES]
 
 
-def build_bug_fix_tools(*, registry: ToolRegistry | None = None) -> list[dict[str, Any]]:
-    """Read + write subset for bug_fix subagent (Phase 59)."""
-    from tool_proxies import build_proxy_tool_definitions
-
-    reg = registry or ToolRegistry.load()
-    for name in BUG_FIX_READ_TOOL_NAMES:
-        if reg.get_builtin(name) is None:
-            raise RuntimeError(f"missing bug_fix builtin: {name!r}")
-    if reg.get_builtin("run_evolved") is None:
-        raise RuntimeError("missing bug_fix builtin: run_evolved")
-    tools = [build_builtin_tool_definition(name) for name in BUG_FIX_READ_TOOL_NAMES]
-    tools.extend(build_proxy_tool_definitions())
-    tools.append(build_builtin_tool_definition("run_evolved"))
-    return tools
-
-
-def bug_fix_subagent_max_rounds() -> int:
-    raw = os.environ.get("SUBAGENT_BUG_FIX_MAX", str(_DEFAULT_BUG_FIX_MAX))
-    try:
-        value = int(raw)
-    except ValueError:
-        value = _DEFAULT_BUG_FIX_MAX
-    return max(1, value)
 
 
 def parse_max_rounds_argument(raw: Any) -> int | None:
@@ -770,22 +699,6 @@ def format_subagent_overlay(result: SubagentResult) -> str:
             lines.append("（摘要已截断）")
         return "\n".join(lines)
 
-    if result.kind == "bug_fix":
-        verdict = (result.verdict or "fail").upper()
-        lines = [
-            "[子代理摘要 · bug-fix]",
-            f"任务: {result.task}",
-            f"verdict: {verdict}",
-            f"结论: {result.summary}",
-        ]
-        paths_line = ", ".join(result.paths_cited) if result.paths_cited else "(none)"
-        lines.append(f"已改/已读: {paths_line}")
-        cap = bug_fix_subagent_max_rounds()
-        lines.append(f"（bug-fix 已用 {result.tool_rounds}/{cap} 轮）")
-        if result.truncated:
-            lines.append("（摘要已截断）")
-        return "\n".join(lines)
-
     paths_line = ", ".join(result.paths_cited) if result.paths_cited else "(none)"
     cap_note = ""
     if result.truncated:
@@ -872,43 +785,6 @@ def _review_system_prompt(paths: AgentPaths) -> str:
     )
 
 
-def _bug_fix_system_prompt(paths: AgentPaths) -> str:
-    from loader import load_subagent_prompt
-
-    return load_subagent_prompt(
-        paths.evolve,
-        "bug_fix",
-        fallback=_BUG_FIX_FALLBACK,
-    )
-
-
-def _parse_bug_fix_verdict_from_text(text: str) -> Verdict | None:
-    match = re.search(r"BUG_FIX_VERDICT:\s*(pass|fail)\b", text, flags=re.IGNORECASE)
-    if not match:
-        return None
-    value = match.group(1).strip().lower()
-    if value == "pass":
-        return "pass"
-    if value == "fail":
-        return "fail"
-    return None
-
-
-def _format_bug_fix_user_message(
-    *,
-    task: str,
-    facts: dict[str, Any],
-    matrix_summary: str,
-    plan_slice: str,
-) -> str:
-    lines = [task.strip(), ""]
-    if matrix_summary.strip():
-        lines.extend(["[验收矩阵]", matrix_summary.strip(), ""])
-    if plan_slice.strip():
-        lines.extend(["[计划域切片]", plan_slice.strip(), ""])
-    if facts:
-        lines.extend(["[facts]", json.dumps(facts, ensure_ascii=False, indent=2)])
-    return "\n".join(lines).strip()
 
 
 def _terminal_planner_system_prompt(paths: AgentPaths, session: Session) -> str:
@@ -1044,7 +920,7 @@ def _format_review_user_message(
 
 
 def _build_review_plan_slice(paths: AgentPaths, project_id: str) -> str:
-    from project_mode import build_tasks_injection_slice, read_project_artifacts
+    from project_mode import read_project_artifacts
 
     artifacts = read_project_artifacts(paths, project_id)
     parts: list[str] = []
@@ -1054,11 +930,6 @@ def _build_review_plan_slice(paths: AgentPaths, project_id: str) -> str:
         idx = project_md.find(marker)
         if idx >= 0:
             parts.append(project_md[idx : idx + 2000])
-    tasks = artifacts.get("TASKS.md", "")
-    if tasks:
-        open_slice = build_tasks_injection_slice(tasks)
-        if open_slice:
-            parts.append(open_slice[:2000])
     combined = "\n\n".join(parts)
     return combined[:4000]
 
@@ -1724,84 +1595,6 @@ class SubagentRunner:
 
         return result
 
-    def run_plan(
-        self,
-        task: str,
-        *,
-        session: Session,
-        include_recent_user_lines: int = 2,
-        confirm_fn: Any | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> SubagentResult:
-        """Plan subagent: PlanAgent.reason_about_intent in isolated context (Phase 39 B1/B3)."""
-        del confirm_fn  # Plan tools use auto-approve inside PlanAgent
-        _raise_if_cancelled(cancel_event)
-
-        task_text = task.strip()
-        if not task_text:
-            raise ValueError("plan task is empty")
-
-        project_id = (getattr(session.meta, "project_id", None) or "").strip()
-        if not project_id:
-            raise ValueError("plan_partner requires a bound project_id")
-
-        from llm_routing import resolve_model_id_for_role
-        from plan_agent import get_plan_agent
-
-        agent = get_plan_agent(self.paths, project_id)
-        agent.configure_planning_model(resolve_model_id_for_role("plan_partner", session.meta))
-
-        last_user_hint: str | None = None
-        n = max(0, min(int(include_recent_user_lines or 0), 5))
-        if n > 0:
-            lines: list[str] = []
-            for msg in reversed(list(getattr(session, "messages", []) or [])):
-                if not isinstance(msg, dict) or msg.get("role") != "user":
-                    continue
-                text = str(msg.get("content") or "").strip()
-                if text:
-                    lines.append(text)
-                if len(lines) >= n:
-                    break
-            if lines:
-                lines.reverse()
-                last_user_hint = "\n".join(lines)
-
-        summary_raw = agent.reason_about_intent(
-            task_text,
-            include_last_user=last_user_hint,
-        )
-        proposal_ids = tuple(sorted(agent._pending_gated.keys()))
-        notices = tuple(agent._last_partner_notices or ())
-        adopt_pending = bool(proposal_ids)
-
-        summary, truncated = truncate_summary(
-            summary_raw,
-            max_chars=plan_subagent_summary_max_chars(),
-        )
-
-        result = SubagentResult(
-            kind="plan",
-            summary=summary,
-            paths_cited=[],
-            tool_rounds=1,
-            truncated=truncated,
-            task=task_text,
-            proposal_ids=proposal_ids,
-            partner_notices=notices,
-            adopt_pending=adopt_pending,
-        )
-
-        if self.evolve_log is not None:
-            self.evolve_log.log_subagent_run(
-                kind=result.kind,
-                tool_rounds=result.tool_rounds,
-                truncated=result.truncated,
-                paths_cited=result.paths_cited,
-                conversation_id=session.conversation_id,
-            )
-
-        return result
 
     def run_terminal_plan(
         self,
@@ -1851,8 +1644,10 @@ class SubagentRunner:
         tools = build_explore_tools(registry=registry)
         from llm_routing import resolve_model_id_for_role
 
+        # Callers pass the resolved terminal planning profile model; the
+        # main-turn model is only a fallback (the plan_partner role is gone).
         model = (plan_model or "").strip() or resolve_model_id_for_role(
-            "plan_partner", session.meta
+            "main_turn", session.meta
         )
         effort = (reasoning_effort or "").strip() or "max"
         user_content = task_text
@@ -2117,175 +1912,6 @@ class SubagentRunner:
 
         result = SubagentResult(
             kind="review",
-            summary=summary,
-            paths_cited=paths_cited,
-            tool_rounds=tool_rounds,
-            truncated=truncated,
-            task=task_text,
-            verdict=verdict,
-        )
-
-        if self.evolve_log is not None:
-            self.evolve_log.log_subagent_run(
-                kind=result.kind,
-                tool_rounds=result.tool_rounds,
-                truncated=result.truncated,
-                paths_cited=result.paths_cited,
-                conversation_id=session.conversation_id,
-                verdict=result.verdict,
-            )
-
-        return result
-
-    def run_bug_fix(
-        self,
-        task: str,
-        *,
-        session: Session,
-        facts: dict[str, Any] | None = None,
-        matrix_summary: str = "",
-        llm: ChatClient | None = None,
-        max_rounds: int | None = None,
-        confirm_fn: Any | None = None,
-        cancel_event: threading.Event | None = None,
-    ) -> SubagentResult:
-        """bug-fix subagent for runaway repairing (Phase 59 · read/write + commands)."""
-        task_text = task.strip()
-        if not task_text:
-            raise ValueError("bug_fix task is empty")
-
-        project_id = (getattr(session.meta, "project_id", None) or "").strip()
-        if not project_id:
-            raise ValueError("bug_fix requires a bound project_id")
-
-        cap = resolve_subagent_max_rounds(
-            max_rounds,
-            default=bug_fix_subagent_max_rounds(),
-        )
-        registry = ToolRegistry.load(self.paths)
-        executor = ToolExecutor.create(
-            paths=self.paths,
-            session_dir=session.session_dir,
-            allowed_evolved=None,
-            confirm_fn=confirm_fn,
-            evolve_log=self.evolve_log,
-        )
-        from project_mode import project_root_rel
-
-        executor.session.active_shell = "project"
-        executor.session.project_id = project_id
-        executor.session.project_root = (
-            (getattr(session.meta, "project_root", None) or "").strip()
-            or project_root_rel(project_id)
-        )
-        executor.session.project_workflow_stage = "verification"
-        executor.session.runaway_enabled = True
-        executor.session.bug_fix_lane = True
-        executor.session.blocked_tools = BUG_FIX_BLOCKED_TOOLS
-        executor.cancel_event = cancel_event
-
-        if llm is None:
-            from llm_client import LLMClient
-
-            llm = LLMClient()
-
-        from llm_routing import resolve_model_id_for_role
-
-        model = resolve_model_id_for_role("bug_fix", session.meta)
-        _bind_llm_cancel(llm, cancel_event)
-
-        plan_slice = _build_review_plan_slice(self.paths, project_id)
-        user_message = _format_bug_fix_user_message(
-            task=task_text,
-            facts=dict(facts or {}),
-            matrix_summary=matrix_summary,
-            plan_slice=plan_slice,
-        )
-        tools = build_bug_fix_tools(registry=registry)
-        working: list[dict[str, Any]] = [
-            {"role": "system", "content": _bug_fix_system_prompt(self.paths)},
-            {"role": "user", "content": user_message},
-        ]
-
-        tool_rounds = 0
-        final_text = ""
-        hit_cap = False
-
-        for round_index in range(cap):
-            _raise_if_cancelled(cancel_event)
-            response = llm.chat(
-                working,
-                model=model,
-                tools=tools,
-                temperature=0.2,
-            )
-            if not response.tool_calls:
-                final_text = (response.content or "").strip()
-                if final_text:
-                    working.append({"role": "assistant", "content": final_text})
-                break
-
-            tool_rounds += 1
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": response.content,
-                "tool_calls": response.tool_calls,
-            }
-            working.append(assistant_msg)
-
-            for tool_call in response.tool_calls:
-                _raise_if_cancelled(cancel_event)
-                try:
-                    tool_name, arguments = _parse_tool_call(tool_call)
-                except ToolCallArgumentError as exc:
-                    result = _tool_result_for_argument_error(exc)
-                else:
-                    result = executor.run(tool_name, arguments)
-                working.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.get("id", ""),
-                        "content": to_json(result),
-                    }
-                )
-
-            if round_index == cap - 1:
-                hit_cap = True
-        else:
-            hit_cap = True
-
-        if hit_cap and not final_text:
-            final_text = _finalize_subagent_summary_on_cap(
-                working=working,
-                llm=llm,
-                model=model,
-                temperature=0.2,
-                close_prompt=_BUG_FIX_CLOSE_PROMPT,
-                kind="bug_fix",
-                cap=cap,
-                tool_rounds=tool_rounds,
-                cancel_event=cancel_event,
-                empty_label="（bug-fix 未产出文字摘要）",
-            )
-
-        if not final_text:
-            final_text = synthesize_cap_summary(
-                working,
-                kind="bug_fix",
-                cap=cap,
-                tool_rounds=tool_rounds,
-            )
-
-        llm_verdict = _parse_bug_fix_verdict_from_text(final_text)
-        verdict: Verdict = llm_verdict or "fail"
-        paths_cited = _collect_paths_cited(working)
-        summary, truncated = truncate_summary(
-            final_text,
-            max_chars=review_subagent_summary_max_chars(),
-        )
-
-        result = SubagentResult(
-            kind="bug_fix",
             summary=summary,
             paths_cited=paths_cited,
             tool_rounds=tool_rounds,

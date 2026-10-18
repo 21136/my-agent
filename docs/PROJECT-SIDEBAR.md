@@ -2,11 +2,11 @@
 
 > 状态：**implemented**（本地 ahead）+ **§15.10 / Phase 22 可见计划搭档 done**（2026-07-31）  
 > 日期：2026-07-29（设计）· 2026-07-30（文档对齐）· 2026-07-31（可见搭档决议 + 实施）  
-> **计划域写权限 / 多文件角色**：见 [PLAN-ARCH.md](./PLAN-ARCH.md)（Phase 37）  
+> **计划域写权限 / 多文件角色**：见 [PLAN-ARCH.md](./archive/PLAN-ARCH.md)（Phase 37）  
 > **A7（2026-08-03）· M5 done**：侧栏常驻 = 当前任务 + 待拍板提案；完整计划 → 覆盖面板。  
 > **A8/A9/Q4（2026-08-03）· M6 done**：Plan 提案 = 文件 patch + 侧栏 diff 采纳。  
-> **§15.12（2026-08-03）· Phase 39 done**：**废止 §15.11 双通道**；用户只跟主 Agent 说话；Plan = **幕后子代理** + 侧栏短卡入口 + **主列审阅面**（[PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md)）+ 主聊过程卡。见 [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md)。
-> **§15.13（2026-08-04）· Phase 40 设计已签**：采纳 **控件对齐**（禁口述「点采纳」；待采纳 ≠ 已写入）— [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) §10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)。
+> **§15.12（2026-08-03）· Phase 39 done**：**废止 §15.11 双通道**；用户只跟主 Agent 说话；Plan = **幕后子代理** + 侧栏短卡入口 + **主列审阅面**（[PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md)）+ 主聊过程卡。见 [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md)。
+> **§15.13（2026-08-04）· Phase 40 设计已签**：采纳 **控件对齐**（禁口述「点采纳」；待采纳 ≠ 已写入）— [PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) §10 · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md)。
 > **§6.2.2（2026-08-05）· UX-026 已决 · M0 done**：**单项目态势侧栏** — 侧栏只服务当前绑定项目；本回合证据改一行摘要；Services 默认折叠；多项目仅 overlay/顶栏切换。见 §6.2.2 · [UX-POLISH.md](./UX-POLISH.md) UX-026。  
 > **§6.2.3（2026-09-04）· UX-029 已决 · 待实施**：**壳层视觉统一** — 侧栏/顶栏与主聊对齐；态势单卡、顶栏菜单化、去 `textbook-*` CRUD 皮。见 §6.2.3 · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)。
 > **已知洞（已修 · 2026-07-31）**：主 Agent → `report_progress` 勾选路径已打通（Phase 21 / [BUG-021](./bugs/2026-07-30-project-progress-deadlock.md)）。
@@ -84,7 +84,7 @@
 
 ### 2.1 侧边栏是「当下决策面」，不是整份计划浏览器
 
-> **修订（A7 · 2026-08-03）**：废止「始终展示完整任务流长卷」。详见 [PLAN-ARCH.md](./PLAN-ARCH.md) §0 A7 · §5.3。
+> **修订（A7 · 2026-08-03）**：废止「始终展示完整任务流长卷」。详见 [PLAN-ARCH.md](./archive/PLAN-ARCH.md) §0 A7 · §5.3。
 
 侧边栏**常驻**：当前/armed 任务、待采纳提案卡、一停/短告知。  
 地图、验收、**完整 TASKS**、项目列表 = **覆盖式面板**——用时滑出，用完即走。
@@ -206,7 +206,7 @@ Agent 做任务过程中，计划会变——拆分、新增、重排、跳过�
 ### 4.4 对主 Agent 透明
 
 主 Agent 不感知 Plan Agent 的「人格」存在。它只做两件事：
-- 做完 task → 报告给 Plan Agent（**唯一通道**：`report_progress` · [PROGRESS-GATE.md](./PROGRESS-GATE.md) **G8**）
+- 做完 task → 报告给 Plan Agent（**唯一通道**：`report_progress` · [PROGRESS-GATE.md](./archive/PROGRESS-GATE.md) **G8**）
 - 收到问题 → 从 Plan Agent 获取「下一步做什么」
 
 主 Agent 不知道「搜索功能」是用户中途插进来的——对它来说，「下一步」永远从 Plan Agent 那取。
@@ -373,7 +373,7 @@ DOM（项目 perspective）：
 | **SP-7** | **待拍板类型单槽**：undo / 搭档忙 / **待采纳** / 计划待确认 等 **不同类型** banner — 同时只露 **优先级最高一类**（沿用 `renderProjectSidebar` banner 链）；**不**与 SP-9 混淆 |
 | **SP-8** | **执行日志归主聊**：工具明细、思考、失败 tail 仅在主聊 `unified-process`；侧栏不重复 |
 | **SP-9** | **待采纳多卡堆叠**：`N ≥ 1` 时标题 **「待采纳 · N」**；**仅顶卡**完整展示（标题 + 摘要 + `+n −m` + 查看/采纳/忽略）；其后 1～2 张以 **层叠露出下缘/侧缘**（视觉深度，非平铺长列表）；顶卡采纳或忽略后 **下一张升为顶卡**（无 ‹ › 翻页）；堆叠区 **固定高度预算**（约 1 张完整卡 + 堆叠 peek），不把「当前」顶出视口；**落点 = 侧栏体**，在 **当前卡之下、本回合摘要之上**（**不**进脚区）；可选 **「展开全部」** 在堆叠区内滚看全文（M1） |
-| **SP-10** | **采纳反馈双态**：（1）**堆叠位闪绿** — 用户 **采纳** 顶卡且 **仍有下一张** 时，SP-9 堆叠槽 **~1.5s** 变为绿色「已采纳写入 …」态（一行、**无**按钮、无 diff），再自动切下一张顶卡；此期间 **不出**脚区绿条。（2）**脚区反馈条** — 队列 **已空** 后最后一次采纳（或仅有告知、无堆叠时）：`.sidebar-footer` 图标栏上常驻绿条 +「关闭」（[PLAN-REVIEW-UI](./PLAN-REVIEW-UI.md) A3）。**忽略**顶卡：堆叠槽 **不**绿闪，直接切下一张（可选 ~0.5s 淡出）。DOM：堆叠闪绿 `.sidebar-suggestion-stack.is-adopt-flash`；脚区 `.sidebar-adopted-banner` |
+| **SP-10** | **采纳反馈双态**：（1）**堆叠位闪绿** — 用户 **采纳** 顶卡且 **仍有下一张** 时，SP-9 堆叠槽 **~1.5s** 变为绿色「已采纳写入 …」态（一行、**无**按钮、无 diff），再自动切下一张顶卡；此期间 **不出**脚区绿条。（2）**脚区反馈条** — 队列 **已空** 后最后一次采纳（或仅有告知、无堆叠时）：`.sidebar-footer` 图标栏上常驻绿条 +「关闭」（[PLAN-REVIEW-UI](./archive/PLAN-REVIEW-UI.md) A3）。**忽略**顶卡：堆叠槽 **不**绿闪，直接切下一张（可选 ~0.5s 淡出）。DOM：堆叠闪绿 `.sidebar-suggestion-stack.is-adopt-flash`；脚区 `.sidebar-adopted-banner` |
 
 #### 6.2.2.2 布局（常态 · 宽约 260px）
 
@@ -1089,7 +1089,7 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 #### 建议卡形状（协议草案 · 动手可微调）
 
-> **M6 起**（[PLAN-ARCH.md](./PLAN-ARCH.md) §4.1）：默认 `kind=file_patch` / `action=apply_patch`，`payload` 含 `path` + **diff 片段**；侧栏只渲染 hunk，不渲染整文件。下列结构化 `action` 为 Phase 22 遗留；实现 M6 后以 patch 为主，质检类可逐步收成 patch 生成器。
+> **M6 起**（[PLAN-ARCH.md](./archive/PLAN-ARCH.md) §4.1）：默认 `kind=file_patch` / `action=apply_patch`，`payload` 含 `path` + **diff 片段**；侧栏只渲染 hunk，不渲染整文件。下列结构化 `action` 为 Phase 22 遗留；实现 M6 后以 patch 为主，质检类可逐步收成 patch 生成器。
 
 ```json
 {
@@ -1249,7 +1249,7 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 ### 15.12 Plan 幕后子代理（已决 · 2026-08-03 · **Phase 39**）
 
-> **状态**：**设计已签 · 待实现** · [PLAN-SUBAGENT.md](./PLAN-SUBAGENT.md) · T-3900～T-3906  
+> **状态**：**设计已签 · 待实现** · [PLAN-SUBAGENT.md](./archive/PLAN-SUBAGENT.md) · T-3900～T-3906  
 > **动机**：一周体验——§15.11 双通道 + 关键词路由仍难用；对齐 Cursor/Copilot「**一个聊天** + 幕后规划」。  
 > **废止**：§15.11 C1/C4/C6/C9、Plan 独立气泡、auto-route、`plan-intent.ts`。
 
@@ -1281,7 +1281,7 @@ if isinstance(msg_type, str) and msg_type.startswith("project.plan."):
 
 ### 15.13 采纳控件对齐（已决 · 2026-08-04 · **Phase 40**）
 
-> **状态**：**设计已签 · 代码待做** · 全文 [PLAN-REVIEW-UI.md](./PLAN-REVIEW-UI.md) **§10** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md) · T-4000～T-4004  
+> **状态**：**设计已签 · 代码待做** · 全文 [PLAN-REVIEW-UI.md](./archive/PLAN-REVIEW-UI.md) **§10** · [BUG-022](./bugs/2026-08-04-adopt-affordance-mismatch.md) · T-4000～T-4004  
 > **动机**：主聊口述「点采纳」，侧栏却是无按钮的「已写入…+diff」——控件与话术错位。
 
 #### 已决（摘要）

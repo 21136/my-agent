@@ -109,7 +109,6 @@ html[data-theme="dark"] .app-chrome {
   box-shadow: 0 6px 28px color-mix(in srgb, var(--ma-accent) 12%, transparent);
 }
 
-.app-frame.is-agent-busy .app-chrome-runaway,
 .app-frame.is-agent-busy .app-chrome-menu-trigger {
   background: color-mix(in srgb, var(--ma-bg) 32%, transparent);
   border-color: color-mix(in srgb, var(--ma-accent) 28%, transparent);
@@ -231,98 +230,11 @@ html[data-theme="dark"] .app-chrome {
 }
 
 .app-chrome select:focus-visible,
-.app-chrome-runaway:focus-visible,
 .app-chrome-menu-trigger:focus-visible,
 .app-chrome-menu-item:focus-visible,
 .app-chrome-route-undo:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ma-accent) 45%, transparent);
   outline-offset: 1px;
-}
-
-.app-chrome-runaway {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex-shrink: 0;
-  min-height: 2rem;
-  border: 1px solid var(--ma-chrome-border);
-  background: var(--ma-surface);
-  color: var(--ma-text);
-  padding: 0.18rem 0.65rem 0.18rem 0.28rem;
-  border-radius: 999px;
-  font: inherit;
-  font-size: 0.8125rem;
-  font-weight: 550;
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease,
-    opacity 0.15s ease;
-}
-
-.app-chrome-runaway:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
-}
-
-.app-chrome-runaway:disabled {
-  opacity: 0.46;
-  cursor: not-allowed;
-}
-
-.app-chrome-runaway-track {
-  position: relative;
-  width: 1.7rem;
-  height: 1rem;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ma-text) 16%, transparent);
-  transition: background 0.15s ease;
-}
-
-.app-chrome-runaway-thumb {
-  position: absolute;
-  top: 0.12rem;
-  left: 0.12rem;
-  width: 0.76rem;
-  height: 0.76rem;
-  border-radius: 50%;
-  background: var(--ma-bg);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ma-text) 18%, transparent);
-  transition: transform 0.16s ease;
-}
-
-.app-chrome-runaway-copy {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.28rem;
-  white-space: nowrap;
-}
-
-.app-chrome-runaway-state {
-  font-size: 0.7rem;
-  font-weight: 500;
-  color: var(--ma-text-muted);
-}
-
-.app-chrome-runaway.is-active {
-  border-color: color-mix(in srgb, var(--ma-accent) 42%, var(--ma-border));
-  background: color-mix(in srgb, var(--ma-accent) 14%, var(--ma-surface));
-  color: var(--ma-accent);
-}
-
-.app-chrome-runaway.is-active .app-chrome-runaway-track {
-  background: var(--ma-accent);
-}
-
-.app-chrome-runaway.is-active .app-chrome-runaway-thumb {
-  transform: translateX(0.7rem);
-}
-
-.app-chrome-runaway.is-active .app-chrome-runaway-state {
-  color: var(--ma-accent);
-  font-weight: 600;
 }
 
 .app-chrome-menu {
@@ -485,8 +397,5 @@ html[data-theme="dark"] .app-chrome {
   }
   .app-chrome select {
     max-width: 8.5rem;
-  }
-  .app-chrome-runaway-state {
-    display: none;
   }
 }

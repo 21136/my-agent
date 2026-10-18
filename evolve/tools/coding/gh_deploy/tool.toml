@@ -1,0 +1,58 @@
+[tool]
+name = "gh_deploy"
+description = "受控 GitHub Actions 生产部署目标；绑定 production Environment 和 self-hosted runner，默认只计划，不伪报部署成功。"
+version = "0.1.0"
+status = "active"
+topics = ["coding", "deployment"]
+
+[entry]
+type = "python"
+path = "main.py"
+
+[schema.input]
+type = "object"
+required = ["action"]
+[schema.input.properties.action]
+type = "string"
+description = "plan | dispatch | wait | view"
+[schema.input.properties.repository]
+type = "string"
+description = "GitHub owner/name"
+[schema.input.properties.workflow]
+type = "string"
+default = "self-hosting-deploy.yml"
+[schema.input.properties.environment]
+type = "string"
+default = "production"
+[schema.input.properties.version]
+type = "string"
+description = "immutable version or commit/tag"
+[schema.input.properties.ref]
+type = "string"
+description = "workflow ref; defaults to version"
+[schema.input.properties.artifact_path]
+type = "string"
+description = "optional artifact path passed to the target"
+[schema.input.properties.artifact_digest]
+type = "string"
+description = "optional SHA-256 artifact digest"
+[schema.input.properties.run_id]
+type = "integer"
+description = "wait: GitHub Actions run id"
+[schema.input.properties.confirmed]
+type = "boolean"
+default = false
+description = "dispatch: explicit production confirmation"
+[schema.input.properties.dry_run]
+type = "boolean"
+default = false
+description = "preview only"
+
+[schema.output]
+type = "object"
+
+[policy]
+confirm = true
+dry_run_supported = true
+allow_approve_all = false
+timeout_sec = 900

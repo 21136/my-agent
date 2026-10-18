@@ -35,7 +35,7 @@ def run_project_catalog(payload: dict[str, Any]) -> dict[str, Any]:
         sys.path.insert(0, str(core))
 
     from paths import AgentPaths
-    from project_mode import list_projects, project_dir, read_project_artifacts, read_task_stats
+    from project_mode import list_projects, read_project_artifacts
     from project_switch import read_project_sessions
     from shell_switch import read_shell_sessions
 
@@ -55,8 +55,6 @@ def run_project_catalog(payload: dict[str, Any]) -> dict[str, Any]:
     projects: list[dict[str, Any]] = []
 
     for pid in list_projects(paths):
-        root = project_dir(paths, pid)
-        stats = read_task_stats(root / "TASKS.md")
         session_id = project_sessions.get(pid)
         entry: dict[str, Any] = {
             "project_id": pid,
@@ -66,9 +64,6 @@ def run_project_catalog(payload: dict[str, Any]) -> dict[str, Any]:
                 f"data/sessions/{session_id}/messages.jsonl" if session_id else None
             ),
             "meta_path": f"data/sessions/{session_id}/meta.json" if session_id else None,
-            "tasks_done": stats.done,
-            "tasks_total": stats.total,
-            "tasks_open": stats.open_count,
         }
         if include_summaries:
             artifacts = read_project_artifacts(paths, pid)

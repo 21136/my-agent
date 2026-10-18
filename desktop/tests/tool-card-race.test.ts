@@ -365,3 +365,114 @@ test("a probe read of a missing file is not a failed step", () => {
   assert.equal(processPillLabel(cards[0]).includes("失败"), false);
   assert.equal(renderToolFailAlert(lastFailedTool(cards[0].tools)), "");
 });
+
+// ---- 过程 pill: toggle state, turn end, errors, restored history ----
+
+let execSeq = 0;
+function runToolTurn(chat: ReturnType<typeof session>, userText: string, runId: string, reply: string) {
+  chat.pushUserMessage(userText);
+  chat.handleEvent({ type: "execution.state", run_id: runId, state: "running", sequence: ++execSeq });
+  chat.handleEvent({ type: "turn.start", intent: "execute", intent_label: "执行", run_id: runId });
+  chat.handleEvent({ type: "tool.start", tool: "read_file", call_id: `${runId}-c1`, summary: "读取 README.md", run_id: runId });
+  chat.handleEvent({ type: "tool.end", tool: "read_file", call_id: `${runId}-c1`, ok: true, summary: "完成", run_id: runId });
+  chat.handleEvent({ type: "assistant.delta", text: reply, run_id: runId });
+  chat.handleEvent({ type: "assistant.done", text: reply, run_id: runId });
+  chat.handleEvent({ type: "turn.end", ok: true, finish_reason: "stop", run_id: runId });
+  chat.handleEvent({ type: "execution.state", run_id: runId, state: "idle", sequence: ++execSeq });
+}
+
+test("finished turn: 过程 is collapsed, toggles both ways and stays where it is in the model", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  runToolTurn(chat, "读一下 README", "run-t1", "读完了。");
+  const [proc] = processes(chat.model.blocks);
+  assert.equal(proc.collapsed, true);
+  const before = chat.model.blocks.map((block) => block.kind).join(",");
+  chat.toggleProcessCollapsed(proc.turnKey);
+  assert.equal(proc.collapsed, false);
+  chat.toggleProcessCollapsed(proc.turnKey);
+  assert.equal(proc.collapsed, true);
+  assert.equal(chat.model.blocks.map((block) => block.kind).join(","), before);
+  assert.equal(proc.llmPending ?? false, false);
+});
+
+test("turns toggle independently and a new turn keeps an older turn's expanded 过程", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  runToolTurn(chat, "第一问", "run-a1", "第一答");
+  const [first] = processes(chat.model.blocks);
+  chat.toggleProcessCollapsed(first.turnKey);
+  assert.equal(first.collapsed, false);
+  runToolTurn(chat, "第二问", "run-a2", "第二答");
+  const [p1, p2] = processes(chat.model.blocks);
+  assert.equal(p1, first);
+  assert.equal(p1.collapsed, false, "older turn keeps the user's expanded state");
+  assert.equal(p2.collapsed, true, "the new turn folds its own 过程 when done");
+  chat.toggleProcessCollapsed(p2.turnKey);
+  assert.equal(p1.collapsed, false);
+  assert.equal(p2.collapsed, false);
+});
+
+test("error event settles the 过程: no stuck 等待模型 and it can collapse", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  chat.pushUserMessage("出错的一问");
+  chat.handleEvent({ type: "turn.start", intent: "execute", intent_label: "执行", run_id: "run-e" });
+  chat.handleEvent({ type: "llm.pending", run_id: "run-e" } as never);
+  chat.handleEvent({ type: "tool.start", tool: "read_file", call_id: "e1", summary: "读取", run_id: "run-e" });
+  chat.handleEvent({ type: "tool.end", tool: "read_file", call_id: "e1", ok: true, summary: "完成", run_id: "run-e" });
+  chat.handleEvent({ type: "llm.pending", run_id: "run-e" } as never);
+  chat.handleEvent({ type: "error", message: "LLM 请求失败" });
+  const [proc] = processes(chat.model.blocks);
+  assert.equal(proc.llmPending ?? false, false);
+  assert.equal(proc.collapsed, true);
+  assert.doesNotMatch(processPillLabel(proc), /等待模型/);
+  chat.toggleProcessCollapsed(proc.turnKey);
+  assert.equal(proc.collapsed, false, "toggle is not swallowed by a stale live-thinking flag");
+});
+
+test("multi-segment turn: every 过程 of the finished turn is folded at turn.end", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  chat.pushUserMessage("分两段做");
+  chat.handleEvent({ type: "turn.start", intent: "execute", intent_label: "执行", run_id: "run-m" });
+  chat.handleEvent({ type: "tool.start", tool: "read_file", call_id: "m1", summary: "读取", run_id: "run-m" });
+  chat.handleEvent({ type: "tool.end", tool: "read_file", call_id: "m1", ok: true, summary: "完成", run_id: "run-m" });
+  chat.handleEvent({ type: "turn.end", ok: true, finish_reason: "stop", run_id: "run-m" });
+  // server-driven follow-up segment within the same user turn
+  chat.handleEvent({ type: "turn.start", intent: "execute", intent_label: "执行", run_id: "run-m2" });
+  chat.handleEvent({ type: "tool.start", tool: "read_file", call_id: "m2", summary: "再读", run_id: "run-m2" });
+  chat.handleEvent({ type: "tool.end", tool: "read_file", call_id: "m2", ok: true, summary: "完成", run_id: "run-m2" });
+  chat.handleEvent({ type: "turn.end", ok: true, finish_reason: "stop", run_id: "run-m2" });
+  const procs = processes(chat.model.blocks);
+  assert.ok(procs.length >= 1);
+  assert.ok(procs.every((proc) => proc.collapsed), "no segment of a finished turn is left open");
+});
+
+test("history reload keeps the live 过程 inside its own turn, not under the newest turn", () => {
+  const chat = session();
+  chat.handleEvent(banner());
+  runToolTurn(chat, "带工具的一问", "run-h1", "有工具的回答");
+  // second turn has no tools at all
+  chat.pushUserMessage("纯聊天");
+  chat.handleEvent({ type: "turn.start", intent: "chat", intent_label: "聊天", run_id: "run-h2" });
+  chat.handleEvent({ type: "assistant.done", text: "纯回答", run_id: "run-h2" });
+  chat.handleEvent({ type: "turn.end", ok: true, finish_reason: "stop", run_id: "run-h2" });
+  chat.handleEvent({
+    type: "session.history",
+    session_id: "sess-1",
+    items: [
+      { role: "user", text: "带工具的一问" },
+      { role: "assistant", text: "有工具的回答" },
+      { role: "user", text: "纯聊天" },
+      { role: "assistant", text: "纯回答" },
+    ],
+  });
+  const kinds = chat.model.blocks.map((block) => block.kind);
+  const procIdx = kinds.indexOf("process");
+  const secondUserIdx = chat.model.blocks.findIndex(
+    (block) => block.kind === "user" && block.text === "纯聊天",
+  );
+  assert.ok(procIdx >= 0, "the tooled process survives the reload");
+  assert.ok(procIdx < secondUserIdx, `process must stay in turn 1 (got ${kinds.join(",")})`);
+});

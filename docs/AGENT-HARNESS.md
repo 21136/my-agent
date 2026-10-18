@@ -138,7 +138,7 @@ P1 教训：**多数项不必改 `core.txt`**。先对号入座再写代码。
 | 条件 | `session.meta.active_shell == "project"`（**后端 session 标签**；非桌面 `perspective`） |
 | `parent_execute_segment_max()` | project：**15**；其它 shell：**50**（`PARENT_EXECUTE_SEGMENT_MAX` env 仍可覆盖） |
 | `parent_execute_total_max()` | **不改默认**（仍 50）；project 下单 segment 已 ≤15，通常触顶先于 total |
-| 目的 | 少盲试；与 [TASK-STOP.md](./TASK-STOP.md) · [MODE-BUDGET.md](./MODE-BUDGET.md) 项目线一致 |
+| 目的 | 少盲试；与 [TASK-STOP.md](./archive/TASK-STOP.md) · [MODE-BUDGET.md](./MODE-BUDGET.md) 项目线一致 |
 
 ### 4.2 落点
 
