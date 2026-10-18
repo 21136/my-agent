@@ -780,6 +780,43 @@ function renderProjectsRailSidebar(state: ProjectPanelState): string {
   return renderProjectsOverlay(state);
 }
 
+function renderSettingsRailSidebar(state: ProjectPanelState): string {
+  const isDark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
+  const stoppedServices = state.services.filter((s) => !s.alive).length;
+  const inactiveTerminals = state.terminalSessions.filter((s) => s.state !== "starting" && s.state !== "running").length;
+  return `<div class="sidebar-settings-panel" style="display:flex;flex-direction:column;gap:0.75rem;padding:0.25rem 0;">
+    <section class="external-project-import" aria-label="外观与窗口">
+      <div class="sidebar-change-banner-title">外观与形态</div>
+      <div class="sidebar-change-banner-changes">切换明暗主题，或打开桌面伴侣窗与 CLI 终端。</div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
+        <button type="button" class="unified-btn${!isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-light">亮色主题</button>
+        <button type="button" class="unified-btn${isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-dark">暗色主题</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.4rem;">
+        <button type="button" class="unified-btn" data-action="settings-open-pet">打开伴侣窗</button>
+        <button type="button" class="unified-btn" data-action="settings-switch-cli">改用终端 (CLI)</button>
+      </div>
+    </section>
+
+    <section class="external-project-import" aria-label="模型与权限">
+      <div class="sidebar-change-banner-title">模型与托管区</div>
+      <div class="sidebar-change-banner-changes">配置各模型供应商 API Key，或授权本机外部托管文件夹（Host Scope）。</div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
+        <button type="button" class="unified-btn unified-btn-accent" data-action="settings-open-model-keys">模型密钥配置</button>
+        <button type="button" class="unified-btn" data-action="settings-open-host-scope">托管区文件夹</button>
+      </div>
+    </section>
+
+    <section class="external-project-import" aria-label="运行环境清理">
+      <div class="sidebar-change-banner-title">运行环境清理</div>
+      <div class="sidebar-change-banner-changes">失效/已结束终端：${inactiveTerminals} 个 · 已停止服务：${stoppedServices} 个</div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
+        <button type="button" class="unified-btn" data-action="settings-prune-runtime" ${inactiveTerminals === 0 && stoppedServices === 0 ? "disabled" : ""}>一键清理残留记录</button>
+      </div>
+    </section>
+  </div>`;
+}
+
 function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
   if (state.switchInProgress) {
     return renderSwitchLoadingHtml(state);
@@ -795,6 +832,8 @@ function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanel
       return renderDocsRailSidebar(state);
     case "projects":
       return renderProjectsRailSidebar(state);
+    case "settings":
+      return renderSettingsRailSidebar(state);
     case "now":
     default:
       return renderNowRailSidebar(state, callbacks);
@@ -1079,7 +1118,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   const output = state.terminalOutput || (state.terminalOutputLoading ? "正在读取输出…" : "暂无输出");
   const closeButton = terminalIsActive(session)
     ? `<button type="button" class="unified-btn unified-btn-danger" data-action="terminal-close" data-terminal-id="${escapeHtml(session.session_id)}">关闭会话</button>`
-    : "";
+    : `<button type="button" class="unified-btn" data-action="terminal-dismiss" data-terminal-id="${escapeHtml(session.session_id)}">移除记录</button>`;
   const activity = terminalActivityCaption(session.last_activity_at, { live: terminalIsActive(session) });
   return `<div class="sidebar-terminal-details" id="terminalDetails">
     <div class="sidebar-terminal-details-header">
@@ -1168,6 +1207,10 @@ function renderTerminalsPanel(state: ProjectPanelState): string {
   const toggleLabel = summary === "暂无会话" || summary === "加载中…"
     ? (collapsed ? "终端" : `终端 · ${summary}`)
     : `终端 · ${summary}`;
+  const hasPrunableTerminals = grouped.attention.length > 0 || grouped.endedTotal > 0;
+  const pruneBtn = hasPrunableTerminals
+    ? `<button type="button" class="unified-btn" data-action="terminals-prune" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>清理失效</button>`
+    : "";
   return `<section class="sidebar-terminals" aria-label="终端会话">
     <button type="button" class="sidebar-terminals-toggle" data-action="toggle-terminals" aria-expanded="${collapsed ? "false" : "true"}">
       <span class="sidebar-terminals-toggle-chevron">${collapsed ? "▸" : "▾"}</span>
@@ -1176,7 +1219,10 @@ function renderTerminalsPanel(state: ProjectPanelState): string {
     <div class="${bodyClass}">
       <div class="sidebar-terminals-header">
         <span>持久终端</span>
-        <button type="button" class="unified-btn" data-action="terminals-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>刷新</button>
+        <div style="display:flex;gap:0.25rem;">
+          ${pruneBtn}
+          <button type="button" class="unified-btn" data-action="terminals-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.terminalsLoading ? "disabled" : ""}>刷新</button>
+        </div>
       </div>
       ${error}
       <div class="sidebar-terminals-list">${liveRows}</div>
@@ -1211,13 +1257,19 @@ function renderServicesPanel(state: ProjectPanelState): string {
                 ? ` · :${escapeHtml(String(s.ready_port))}`
                 : "";
             const status = s.status ? escapeHtml(String(s.status)) : s.alive ? "running" : "stopped";
+            const actionBtn = s.alive
+              ? `<button type="button" class="unified-btn unified-btn-danger" data-action="service-stop" data-service-name="${escapeHtml(s.name)}" style="font-size:0.7rem;padding:0.1rem 0.35rem;">停止</button>`
+              : `<button type="button" class="unified-btn" data-action="service-remove" data-service-name="${escapeHtml(s.name)}" style="font-size:0.7rem;padding:0.1rem 0.35rem;">移除</button>`;
             return `<div class="sidebar-service-row is-${alive}">
               <div class="sidebar-service-main">
                 <span class="sidebar-service-dot" title="${alive}"></span>
                 <span class="sidebar-service-name">${escapeHtml(s.name)}</span>
                 <span class="sidebar-service-meta">${status}${port}</span>
               </div>
-              <button type="button" class="unified-btn sidebar-service-logs" data-action="service-logs" data-service-name="${escapeHtml(s.name)}" style="font-size:0.7rem;padding:0.1rem 0.35rem;">日志</button>
+              <div style="display:flex;gap:0.2rem;">
+                <button type="button" class="unified-btn sidebar-service-logs" data-action="service-logs" data-service-name="${escapeHtml(s.name)}" style="font-size:0.7rem;padding:0.1rem 0.35rem;">日志</button>
+                ${actionBtn}
+              </div>
             </div>`;
           })
           .join("");
@@ -1239,6 +1291,9 @@ function renderServicesPanel(state: ProjectPanelState): string {
   const toggleLabel = collapsed
     ? (running > 0 ? `服务 · ${running} 运行中` : "服务")
     : `服务 · ${summary}`;
+  const pruneServicesBtn = stopped > 0
+    ? `<button type="button" class="unified-btn" data-action="services-prune" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>清理已停止</button>`
+    : "";
   return `<button type="button" class="sidebar-services-toggle" data-action="toggle-services" aria-expanded="${collapsed ? "false" : "true"}">
       <span class="sidebar-services-toggle-chevron">${chevron}</span>
       <span>${escapeHtml(toggleLabel)}</span>
@@ -1246,7 +1301,10 @@ function renderServicesPanel(state: ProjectPanelState): string {
     <div class="${bodyCls}">
       <div class="sidebar-services-header">
         <span>Services</span>
-        <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
+        <div style="display:flex;gap:0.25rem;">
+          ${pruneServicesBtn}
+          <button type="button" class="unified-btn" data-action="services-refresh" style="font-size:0.7rem;padding:0.1rem 0.4rem;" ${state.servicesLoading ? "disabled" : ""}>刷新</button>
+        </div>
       </div>
       ${err}
       <div class="sidebar-services-list">${rows}</div>
@@ -1278,6 +1336,9 @@ export function renderProjectSidebar(
   } else if (rail === "docs") {
     els.sidebarTitle.textContent = railMeta.label;
     els.sidebarMeta.textContent = state.projectId || "文档目录";
+  } else if (rail === "settings") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = "全局偏好与运行环境";
   } else {
     els.sidebarTitle.textContent = railMeta.label;
     els.sidebarMeta.textContent = state.projects.length ? `${state.projects.length} 个项目` : "我的项目";

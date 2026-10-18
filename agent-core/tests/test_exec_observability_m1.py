@@ -14,12 +14,34 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from tests.isolation_helpers import temporary_agent_paths
-from tools.executor import ExecutorSession, ToolExecutor, _result_logs_tail, _tool_result_summary
+from tools.executor import (
+    ExecutorSession,
+    ToolExecutor,
+    _result_logs_tail,
+    _tool_event_summary,
+    _tool_result_summary,
+)
 from tools.registry import ToolRegistry
 from tools.schema import tool_fail, tool_ok
 
 
 class TestExecObservabilityM1(unittest.TestCase):
+    def test_run_command_tool_start_summary_includes_argv(self) -> None:
+        cmd = ".venv\\Scripts\\python.exe -m pytest agent-core/tests/test_self_change.py -q --token secret123"
+        summary = _tool_event_summary(
+            "run_evolved",
+            {
+                "tool_name": "run_command",
+                "arguments": {"command": cmd},
+            },
+            None,
+        )
+        self.assertIn("pytest", summary)
+        self.assertIn("test_self_change", summary)
+        self.assertNotIn("secret123", summary)
+        self.assertIn("***", summary)
+        self.assertNotEqual(summary.strip(), "run_command")
+
     def test_it91_logs_tail_on_failed_start_summary(self) -> None:
         """IT-91: run_service failure surfaces logs_tail in summary / helper."""
         fail = tool_fail(

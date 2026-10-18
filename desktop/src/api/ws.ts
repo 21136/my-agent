@@ -847,10 +847,29 @@ export class AgentWsClient {
     this.send({ type: "services.logs", name, tail_lines: tailLines });
   }
 
+  stopService(name: string): void {
+    this.send({ type: "services.stop", name });
+  }
+
+  pruneServices(name?: string): void {
+    this.send({
+      type: "services.prune",
+      ...(name ? { name } : {}),
+    });
+  }
+
   /** Persistent interactive terminal session visibility and controls. */
   listTerminals(requestId?: string): void {
     this.send({
       type: "terminal.list",
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  }
+
+  pruneTerminals(includeEnded = true, requestId?: string): void {
+    this.send({
+      type: "terminal.prune",
+      include_ended: includeEnded,
       ...(requestId ? { request_id: requestId } : {}),
     });
   }
@@ -870,11 +889,18 @@ export class AgentWsClient {
     });
   }
 
-  closeTerminal(sessionId: string, requestId?: string, force = false): void {
+  closeTerminal(
+    sessionId: string,
+    requestId?: string,
+    force = false,
+    options?: { userInitiated?: boolean; dismissIfInactive?: boolean },
+  ): void {
     this.send({
       type: "terminal.close",
       session_id: sessionId,
       force,
+      ...(options?.userInitiated ? { user_initiated: true } : {}),
+      ...(options?.dismissIfInactive ? { dismiss_if_inactive: true } : {}),
       ...(requestId ? { request_id: requestId } : {}),
     });
   }

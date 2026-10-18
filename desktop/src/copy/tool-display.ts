@@ -54,6 +54,7 @@ export const TOOL_DISPLAY_NAMES: Record<string, string> = {
   dev_start: "启动开发环境",
   repair_node_modules: "修复依赖",
   db_query: "数据库查询",
+  git_diff: "Git 差异",
   evolved: "扩展工具",
 };
 
@@ -81,6 +82,8 @@ const TOOL_ACTION_VERBS: Record<string, string> = {
   host_read: "读取",
   host_grep: "搜索",
   append_text: "追加",
+  git_diff: "对比差异",
+  git_snapshot: "检查状态",
   evolved: "写入",
 };
 
@@ -96,6 +99,8 @@ const KNOWN_INNER_TOOLS = new Set([
   "append_text",
   "run_service",
   "search_replace",
+  "git_diff",
+  "git_snapshot",
 ]);
 
 export function parseEvolvedToolFromSummary(summary: string): string | null {
@@ -164,6 +169,13 @@ export function formatToolActionLabel(tool: string, summary: string, endSummary?
     return `文件 ${file}`;
   }
   if (override) return file ? `${override} ${file}` : override;
+  if (effective === "run_command") {
+    const cmd = summary.trim();
+    if (cmd) {
+      const clipped = cmd.length > 140 ? `${cmd.slice(0, 139)}…` : cmd;
+      return `运行 ${clipped}`;
+    }
+  }
   const verb = TOOL_ACTION_VERBS[effective];
   if (verb && file) return `${verb} ${file}`;
   if (verb) return TOOL_DISPLAY_NAMES[effective] ?? verb;

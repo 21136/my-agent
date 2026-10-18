@@ -1,11 +1,11 @@
 # 工具索引（本会话默认只看本页）
 
-> Phase 23 · L0。`read_file` · `write_text` · `patch_file` · `run_command` 直接调用，**不要**为它们读 bucket。  
-> 改已有文件用 `patch_file`；`write_text` 只用于新建或几乎整文件重写。  
-> **常用扁平原语**（Phase 41）：`run_command` · `write_text` · `patch_file` — 直接调用，无需 `run_evolved` 嵌套  
+> Phase 23 · L0。`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot` 直接调用，**不要**为它们读 bucket。  
+> 改已有文件用 `patch_file`；`write_text` 只用于新建或几乎整文件重写。`read_file` 支持 `offset` / `limit` / `line_numbers=true` 分段读大文件。  
+> **常用扁平原语**（Phase 41+）：`run_command` · `write_text` · `patch_file` · `git_diff` · `git_snapshot` — 直接调用，无需 `run_evolved` 嵌套  
 > 其它 evolved 才在需要参数细节时 `read_file evolve/tool-catalog/buckets/<桶>.md`；`run_evolved` · `tool_name=<名>`（须 `status=active`）  
 > **实验性工具**：目录可记录但不会进入 active 默认清单；需完成独立验收后再升格。
-> Builtin（始终）：`read_file` · `list_dir` · `glob_file_search` · `grep` · `web_search` · `fetch_url` · `run_evolved` ·（+ 上三项 proxy）
+> Builtin（始终）：`read_file` · `list_dir` · `glob_file_search` · `grep` · `web_search` · `fetch_url` · `run_evolved` ·（+ 上五项 proxy）
 
 | 桶 | 何时读 | 路径 |
 |----|--------|------|

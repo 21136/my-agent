@@ -18,6 +18,7 @@ from explore_scope import (
 )
 from subagent import (
     SubagentResult,
+    format_subagent_overlay,
     merge_explore_results,
     synthesize_cap_summary,
 )
@@ -151,6 +152,24 @@ class TestExploreContinueRunner(unittest.TestCase):
         self.assertFalse(did_continue)
         mock_run.assert_called_once()
         self.assertFalse(result.explore_continued)
+
+
+class TestExploreTruncatedOverlay(unittest.TestCase):
+    def test_truncated_overlay_requires_parent_read_file(self) -> None:
+        overlay = format_subagent_overlay(
+            SubagentResult(
+                kind="explore",
+                summary="…长摘要…",
+                paths_cited=["agent-core/self_change.py"],
+                tool_rounds=8,
+                truncated=True,
+                task="查 self_change",
+            )
+        )
+        self.assertIn("摘要已截断", overlay)
+        self.assertIn("父代理必做", overlay)
+        self.assertIn("read_file", overlay)
+        self.assertIn("self_change.py", overlay)
 
 
 class TestLoaderDisciplineProxy(unittest.TestCase):

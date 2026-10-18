@@ -223,6 +223,19 @@ def _terminal_close(
             error="terminal status is invalid",
         )
     if session["state"] not in {"starting", "running"}:
+        if bool(message.get("dismiss_if_inactive", False)):
+            dismissed = module.interactive_terminal(
+                {"action": "dismiss", "session_id": normalized_id}
+            )
+            ok = isinstance(dismissed, dict) and bool(dismissed.get("ok"))
+            return _event(
+                "terminal.close.done",
+                message,
+                ok=ok,
+                session_id=normalized_id,
+                state="dismissed" if ok else session["state"],
+                **({} if ok else {"error": "failed to dismiss session"}),
+            )
         return _event(
             "terminal.close.done",
             message,
@@ -231,18 +244,19 @@ def _terminal_close(
             session=session,
             error=f"session is not active: {session['state']}",
         )
-    if confirm_fn is None:
-        raise TerminalApiError("terminal.close requires the confirmation pipeline")
-    choice = str(confirm_fn(_close_preview(session, force=force), False)).strip().lower()
-    if choice not in {"y", "yes"}:
-        return _event(
-            "terminal.close.done",
-            message,
-            ok=False,
-            session_id=normalized_id,
-            session=session,
-            error="terminal close rejected by user",
-        )
+    if not bool(message.get("user_initiated", False)):
+        if confirm_fn is None:
+            raise TerminalApiError("terminal.close requires the confirmation pipeline")
+        choice = str(confirm_fn(_close_preview(session, force=force), False)).strip().lower()
+        if choice not in {"y", "yes"}:
+            return _event(
+                "terminal.close.done",
+                message,
+                ok=False,
+                session_id=normalized_id,
+                session=session,
+                error="terminal close rejected by user",
+            )
     result = module.interactive_terminal(
         {
             "action": "close",
@@ -276,7 +290,7 @@ def dispatch_terminal_message(
 ) -> dict[str, Any]:
     """Handle terminal UI requests and return stable Desktop event payloads."""
     message_type = message.get("type")
-    if message_type not in {"terminal.list", "terminal.output", "terminal.close"}:
+    if message_type not in {"terminal.list", "terminal.output", "terminal.close", "terminal.prune"}:
         raise TerminalApiError(f"unknown terminal message: {message.get('type')}")
 
     module = _load_interactive_terminal(paths)
@@ -284,6 +298,16 @@ def dispatch_terminal_message(
         return _terminal_output(module, message)
     if message_type == "terminal.close":
         return _terminal_close(module, message, confirm_fn=confirm_fn)
+    if message_type == "terminal.prune":
+        include_ended = bool(message.get("include_ended", True))
+        out = module.interactive_terminal({"action": "prune", "include_ended": include_ended})
+        if not isinstance(out, dict) or not out.get("ok"):
+            raise TerminalApiError(
+                str(out.get("error") if isinstance(out, dict) else "terminal.prune failed")
+            )
+        raw_sessions = out.get("sessions") if isinstance(out.get("sessions"), list) else []
+        sessions = [item for raw in raw_sessions if (item := _snapshot(raw)) is not None]
+        return _event("terminal.list.done", message, ok=True, sessions=sessions)
 
     result = module.interactive_terminal({"action": "list"})
     if not isinstance(result, dict) or not result.get("ok"):

@@ -106,9 +106,10 @@ export function renderConfirmCardHtml(
 ): string {
   const view = summarizeConfirmPreview(preview);
   if (opts?.resolvedStatus) {
-    return `<div class="unified-surface unified-confirm resolved is-compact">
-      <div class="unified-confirm-headline">${escapeHtml(view.headline)}</div>
-      <div class="text-muted unified-confirm-status">${escapeHtml(opts.resolvedStatus)}</div>
+    return `<div class="unified-confirm resolved is-compact is-status-chip" role="status">
+      <span class="unified-confirm-status-dot" aria-hidden="true"></span>
+      <span class="unified-confirm-status-text">${escapeHtml(opts.resolvedStatus)}</span>
+      <span class="unified-confirm-status-hint">${escapeHtml(view.headline)}</span>
     </div>`;
   }
 

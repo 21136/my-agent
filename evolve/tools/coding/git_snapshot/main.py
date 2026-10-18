@@ -10,6 +10,10 @@ from typing import Any
 
 _MAX_STAT_CHARS = 32000
 _MAX_DIFF_CHARS = 120000
+_DIFF_CONTINUATION_HINT = (
+    "diff 未全量入上下文。请 git_diff name_status/stat_only 列文件，再 paths 逐文件查看，"
+    "或 read_file spill 全文；本回合审完再给结论，勿让用户二次下指令。"
+)
 
 
 def _agent_root() -> Path:
@@ -166,6 +170,8 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
             result["diff_truncated"] = True
     if diff_trunc or staged_trunc:
         result["truncated"] = True
+    if result.get("truncated") or result.get("diff_truncated"):
+        result["hint"] = _DIFF_CONTINUATION_HINT
     return result
 
 

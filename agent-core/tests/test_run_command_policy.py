@@ -169,6 +169,24 @@ class RunCommandPolicyTests(unittest.TestCase):
         self.assertFalse(needs)
         self.assertEqual(reason, "skip:readonly")
 
+    def test_venv_pytest_and_unbound_readonly_skip_confirm(self) -> None:
+        venv_cmd = r".venv\Scripts\python.exe -m pytest agent-core/tests/test_git_review_rails.py -q"
+        self.assertEqual(classify_run_command(venv_cmd), "build_test")
+        needs, reason = run_command_requires_confirm(
+            command=venv_cmd,
+            working_dir=".",
+            project_root="",
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:build_test")
+
+        needs_other, _ = run_command_requires_confirm(
+            command="python some_script.py",
+            working_dir=".",
+            project_root="",
+        )
+        self.assertTrue(needs_other)
+
 
 if __name__ == "__main__":
     unittest.main()

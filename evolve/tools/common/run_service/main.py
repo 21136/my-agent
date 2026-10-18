@@ -21,7 +21,7 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _MAX_LOG_CHARS = 48000
 # Used by agent-core executor for action-gated confirm (status/logs/wait/list/port_status skip).
 READ_ACTIONS = frozenset({"status", "logs", "wait", "list", "port_status"})
-MUTATING_ACTIONS = frozenset({"start", "stop", "restart", "kill_port"})
+MUTATING_ACTIONS = frozenset({"start", "stop", "restart", "kill_port", "prune", "remove"})
 
 
 def _agent_root() -> Path:
@@ -288,11 +288,17 @@ def _save_state(paths, name: str, state: dict[str, Any]) -> None:
 
 
 def _refresh_alive(state: dict[str, Any]) -> dict[str, Any]:
+    state = dict(state)
+    status = str(state.get("status") or "").strip().lower()
+    if status in {"stopped", "failed", "exited", "killed"}:
+        # Never re-probe an old PID once a service has reached a terminal state;
+        # OS PID reuse would falsely flip a months-old stopped service back to alive=True.
+        state["alive"] = False
+        return state
     pid = int(state.get("pid") or 0)
     alive = _pid_alive(pid)
-    state = dict(state)
     state["alive"] = alive
-    if not alive and state.get("status") in {"running", "starting"}:
+    if not alive and status in {"running", "starting"}:
         state["status"] = "stopped"
     return state
 
@@ -530,6 +536,7 @@ def _action_stop(paths, payload: dict[str, Any]) -> dict[str, Any]:
                 break
             time.sleep(0.2)
     state = _refresh_alive(state)
+    state["alive"] = False
     state["status"] = "stopped"
     state["stopped_at"] = _utc_now()
     _save_state(paths, name, state)
@@ -803,6 +810,60 @@ def _action_list(paths, _payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "action": "list", "services": items}
 
 
+def _action_remove(paths, payload: dict[str, Any]) -> dict[str, Any]:
+    err = _validate_name(payload.get("name"))
+    if err:
+        return {"ok": False, "error": err}
+    name = str(payload["name"]).strip()
+    state = _load_state(paths, name)
+    if state:
+        state = _refresh_alive(state)
+        if state.get("alive"):
+            return {"ok": False, "error": f"service '{name}' is still running; stop it first"}
+    state_file = _state_path(paths, name)
+    log_file = _resolve_log_file(paths, state, name)
+    removed = False
+    for f in (state_file, log_file):
+        try:
+            if f.is_file():
+                f.unlink()
+                removed = True
+        except OSError:
+            pass
+    return {"ok": True, "action": "remove", "name": name, "removed": removed}
+
+
+def _action_prune(paths, _payload: dict[str, Any]) -> dict[str, Any]:
+    services_dir = _services_dir(paths)
+    removed: list[str] = []
+    for path in sorted(services_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        name = str(data.get("name") or path.stem)
+        data = _refresh_alive(data)
+        if data.get("alive"):
+            continue
+        log_file = _resolve_log_file(paths, data, name)
+        for f in (path, log_file):
+            try:
+                if f.is_file():
+                    f.unlink()
+            except OSError:
+                pass
+        removed.append(name)
+    listed = _action_list(paths, {})
+    return {
+        "ok": True,
+        "action": "prune",
+        "removed": removed,
+        "services": listed.get("services", []),
+    }
+
+
 def run_service(payload: dict[str, Any]) -> dict[str, Any]:
     """Evolved entry — returns a JSON-serializable dict (ok + fields)."""
     AgentPaths = _load_paths()
@@ -821,6 +882,8 @@ def run_service(payload: dict[str, Any]) -> dict[str, Any]:
         "list": _action_list,
         "port_status": _action_port_status,
         "kill_port": _action_kill_port,
+        "remove": _action_remove,
+        "prune": _action_prune,
         "restart": None,  # filled below
     }
 

@@ -595,20 +595,29 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
                 f"tool_budget: ask — 每轮 ≤{short_max} 轮，run_evolved 已禁用（T-907）"
             )
         else:
-            from agent import parent_execute_segment_max
+            from agent import parent_execute_segment_max, parent_execute_total_max
 
+            git_review = bool(getattr(session, "git_review_turn", False))
             segment_max = parent_execute_segment_max(
                 active_shell=session.meta.active_shell,
+                git_review_turn=git_review,
             )
             lines.append("turn_mode: agent — 动手：含 run_evolved 写 workspace / evolve。")
-            lines.append(
-                f"tool_budget: agent — 每 segment ≤{segment_max} 轮"
-                + (
-                    "（项目模式）"
-                    if (session.meta.active_shell or "").strip() == "project"
-                    else "，可自动续跑（T-907）"
+            if git_review:
+                total_max = parent_execute_total_max(git_review_turn=True)
+                lines.append(
+                    f"tool_budget: git_review — 每 segment ≤{segment_max} 轮，"
+                    f"本消息合计 ≤{total_max}；未审完可自动续 segment（勿让用户二次下指令）。"
                 )
-            )
+            else:
+                lines.append(
+                    f"tool_budget: agent — 每 segment ≤{segment_max} 轮"
+                    + (
+                        "（项目模式）"
+                        if (session.meta.active_shell or "").strip() == "project"
+                        else "，可自动续跑（T-907）"
+                    )
+                )
     if session.scaffold_tool_turn:
         lines.append(
             "scaffold_tool: yes — 本轮创建 evolved 工具：禁 write_text 写脚手架文件名；可暂存 _staging.toml；只用 write_evolve（顶层 path+content_base64）。"
@@ -629,10 +638,10 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
             )
         else:
             overlay = (session.subagent_overlay or "").strip()
-            if "已达 explore 上限" in overlay or "摘要已截断" in overlay:
+            if "已达 explore 上限" in overlay or "摘要已截断" in overlay or "父代理必做" in overlay:
                 lines.append(
-                    "subagent: explore — 已满 cap 或摘要截断；父可补读关键文件，"
-                    "勿重复 overlay「已读」路径。"
+                    "subagent: explore — 摘要截断或已满 cap；**必须** read_file 关键路径全文后再改代码。"
+                    "禁止仅凭 explore 摘要断言「看不清/不敢改」；测试 exit 0 不等于已审阅全文。"
                 )
             else:
                 lines.append(
@@ -654,6 +663,9 @@ def format_turn_discipline_overlay(session: Session) -> str | None:
         )
     else:
         lines.append("subagent: none — 深调研可建议用户 `探索 …`。")
+    git_line = getattr(session, "git_review_discipline", "") or ""
+    if isinstance(git_line, str) and git_line.strip():
+        lines.append(git_line.strip())
     return "\n".join(lines)
 
 

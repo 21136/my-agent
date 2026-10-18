@@ -2117,6 +2117,40 @@
   box-shadow: 0 1px 0 color-mix(in srgb, var(--ma-text) 4%, transparent);
 }
 
+/* Brief resolved states (reject/submit) — not shown during in-flight confirms */
+.unified-confirm.is-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin: 0.35rem 0;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--ma-border);
+  background: color-mix(in srgb, var(--ma-chrome-surface, var(--ma-surface)) 92%, var(--ma-accent) 8%);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-width: 100%;
+}
+.unified-confirm-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--ma-accent);
+  flex-shrink: 0;
+}
+.unified-confirm-status-text {
+  font-weight: 600;
+  color: var(--ma-text);
+}
+.unified-confirm-status-hint {
+  color: var(--ma-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(100%, 28rem);
+}
+
 .unified-confirm-kicker {
   font-size: 0.72rem;
   font-weight: 600;

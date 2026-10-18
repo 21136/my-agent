@@ -119,13 +119,12 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const running = tool.status === "running";
   const elapsedMs = running ? now - tool.startedAt : (tool.endedAt ?? now) - tool.startedAt;
   const mark = running || tool.status === "note" ? "·" : tool.status === "ok" ? "✓" : "✗";
+  const progressHint =
+    running && tool.progressText ? truncateToolHint(tool.progressText, 56) : "";
   const elapsedLabel = running
-    ? `运行中… ${formatToolElapsed(elapsedMs)}`
+    ? progressHint || `运行中… ${formatToolElapsed(elapsedMs)}`
     : formatToolElapsed(elapsedMs);
-  const progressBit =
-    running && tool.progressText
-      ? ` · ${escapeHtml(truncateToolHint(tool.progressText, 48))}`
-      : "";
+  const progressBit = "";
   const logsBit =
     !running && tool.status === "fail" && tool.logsTail
       ? `<details class="unified-tool-logs-inline"><summary>日志</summary><pre>${escapeHtml(tool.logsTail)}</pre></details>`

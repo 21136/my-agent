@@ -19,7 +19,7 @@ from tools.executor import (
     preview_chars,
     spill_threshold_chars,
 )
-from tools.schema import tool_fail, to_json
+from tools.schema import tool_fail, tool_ok, to_json
 
 
 class FailureSpillTests(unittest.TestCase):
@@ -61,6 +61,36 @@ class FailureSpillTests(unittest.TestCase):
         self.assertFalse(spilled.truncated)
         self.assertIsNone(spilled.output_path)
         self.assertEqual(spilled.error.message if spilled.error else "", "boom")
+
+    def test_large_success_git_diff_spills_with_hint(self) -> None:
+        huge = "+\n" * 3000
+        data = {
+            "ok": True,
+            "diff": huge,
+            "empty": False,
+            "branch": "main",
+            "staged": False,
+            "name_status": False,
+            "stat_only": False,
+        }
+        result = tool_ok("run_evolved", data)
+        self.assertGreater(len(to_json(result)), spill_threshold_chars())
+
+        spilled = maybe_spill_result(
+            result,
+            session_dir=self.session_dir,
+            agent_paths=self.paths,
+        )
+        self.assertTrue(spilled.ok)
+        self.assertTrue(spilled.truncated)
+        self.assertIsNotNone(spilled.output_path)
+        payload = spilled.data if isinstance(spilled.data, dict) else {}
+        self.assertTrue(payload.get("spilled"))
+        self.assertIn("preview", payload)
+        hint = str(payload.get("hint", ""))
+        self.assertIn("read_file", hint)
+        self.assertIn("git_diff", hint)
+        self.assertLessEqual(len(to_json(spilled)), spill_threshold_chars() + 400)
 
     def test_large_failure_spills(self) -> None:
         huge = "E" * 2000

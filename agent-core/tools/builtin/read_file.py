@@ -16,16 +16,93 @@ from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 TOOL_NAME = "read_file"
 MAX_BYTES = 512 * 1024  # TOOLS.md §7.1
+DEFAULT_LINE_LIMIT = 500
+MAX_LINE_LIMIT = 2000
+
+
+def _slice_lines(
+    content: str,
+    *,
+    offset: int | None,
+    limit: int | None,
+    with_line_numbers: bool,
+) -> dict[str, Any]:
+    lines = content.splitlines(keepends=True)
+    total_lines = len(lines)
+    if total_lines == 0:
+        return {
+            "content": "",
+            "total_lines": 0,
+            "start_line": 1,
+            "end_line": 0,
+            "truncated_lines": False,
+        }
+    start = offset if offset is not None else 1
+    if start < 0:
+        start = max(1, total_lines + start + 1)
+    else:
+        start = max(1, start)
+    if start > total_lines:
+        return {
+            "content": "",
+            "total_lines": total_lines,
+            "start_line": start,
+            "end_line": total_lines,
+            "truncated_lines": False,
+            "hint": f"offset {start} exceeds total_lines ({total_lines})",
+        }
+
+    if limit is not None:
+        effective_limit = max(1, min(limit, MAX_LINE_LIMIT))
+    elif offset is not None or total_lines > DEFAULT_LINE_LIMIT:
+        effective_limit = DEFAULT_LINE_LIMIT
+    else:
+        effective_limit = total_lines
+
+    end_idx = min(total_lines, start - 1 + effective_limit)
+    chunk_lines = lines[start - 1 : end_idx]
+    truncated_lines = end_idx < total_lines
+
+    if with_line_numbers:
+        numbered: list[str] = []
+        for idx, line in enumerate(chunk_lines, start=start):
+            numbered.append(f"{idx:6d}|{line}")
+        body = "".join(numbered)
+    else:
+        body = "".join(chunk_lines)
+
+    out: dict[str, Any] = {
+        "content": body,
+        "total_lines": total_lines,
+        "start_line": start,
+        "end_line": end_idx,
+        "truncated_lines": truncated_lines,
+    }
+    if end_idx < total_lines:
+        next_offset = end_idx + 1
+        out["hint"] = (
+            f"Showing lines {start}-{end_idx} of {total_lines}. "
+            f"To read more, call read_file with offset={next_offset}, limit={DEFAULT_LINE_LIMIT}."
+        )
+    return out
 
 
 def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolResult:
-    """Read a text file under agent root (≤512KB, UTF-8, no binary)."""
+    """Read a text file under agent root (≤512KB, UTF-8, no binary), with optional offset/limit."""
     started = time.perf_counter()
     paths = paths or AgentPaths.discover()
 
     path_arg = arguments.get("path")
     if not isinstance(path_arg, str) or not path_arg.strip():
         return _fail("path is required", ToolErrorCode.VALIDATION_ERROR, started)
+
+    raw_offset = arguments.get("offset")
+    if raw_offset is not None and (isinstance(raw_offset, bool) or not isinstance(raw_offset, int)):
+        return _fail("offset must be an integer", ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
+    raw_limit = arguments.get("limit")
+    if raw_limit is not None and (isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 1):
+        return _fail("limit must be a positive integer", ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
+    with_line_numbers = bool(arguments.get("line_numbers", False))
 
     try:
         resolved = resolve_read_path(paths, path_arg)
@@ -77,9 +154,21 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
         return _fail("file is not valid UTF-8 text", ToolErrorCode.BINARY_FILE, started, path=path_arg)
 
     rel_path = paths.to_agent_relative(resolved)
+    sliced = _slice_lines(
+        content,
+        offset=raw_offset,
+        limit=raw_limit,
+        with_line_numbers=with_line_numbers,
+    )
+    payload: dict[str, Any] = {
+        "path": rel_path,
+        "size": size,
+        **sliced,
+    }
     return tool_ok(
         TOOL_NAME,
-        {"path": rel_path, "content": content, "size": size},
+        payload,
+        truncated=bool(sliced.get("truncated_lines")),
         duration_ms=_elapsed_ms(started),
     )
 

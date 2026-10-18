@@ -67,6 +67,30 @@ class TestExecObservabilityM0(unittest.TestCase):
             self.assertIn("line-79", logs["text"])
             self.assertNotIn("line-0", logs["text"])
 
+            # Stopped service with a reused live PID must NOT flip back to alive=True
+            import os
+
+            (services_dir / "zombie.json").write_text(
+                json.dumps(
+                    {
+                        "name": "zombie",
+                        "status": "stopped",
+                        "alive": False,
+                        "pid": os.getpid(),
+                        "command": "node server.mjs",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            listed2 = dispatch_services_message(paths, {"type": "services.list"})
+            zombie = next(s for s in listed2["services"] if s["name"] == "zombie")
+            self.assertFalse(zombie["alive"])
+            self.assertEqual(zombie["status"], "stopped")
+
+            pruned = dispatch_services_message(paths, {"type": "services.prune"})
+            self.assertEqual(pruned["type"], "services.list.done")
+            self.assertEqual(pruned["services"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

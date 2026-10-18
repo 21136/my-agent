@@ -36,6 +36,7 @@
 | `run_demo` | 在 `agent-core/` 下运行 `python <script>.py` |
 | `git_snapshot` | 只读 status + diff stat；需要检查具体改动时使用 `include_diff=true`，可选 staged/base_ref/path 过滤 |
 | `git_diff` | **只读免确认**：默认返回 diff 补丁；支持 staged / base_ref / paths / name-status / stat_only |
+| （git 评审） | 见下 **「git diff / spill」** |
 | `git_restore` | **active**；默认 dry-run，只有显式 `dry_run=false`、expected_hash 匹配且通过确认后才恢复 |
 | `structured_test` | **active**；统一测试 status/失败定位/超时/缺依赖，底层复用 `run_project_tests` |
 | `git_commit` | 受控 add+commit（禁 force/amend/push） |
@@ -66,9 +67,15 @@
 
 动手只通过当前暴露的已注册 builtin、扁平原语和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。当前 builtin 基线为 12 个（核心 8 + 编排 4），不把 evolved 工具误写成 builtin。
 
-**common 文件工具**：改已有文件用 `patch_file`（先 `read_file`，再用唯一 find）；`write_text` 只用于新建或几乎整文件重写。直接调用同名函数，**不要**套 `run_evolved`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。不要为 `read_file` / `write_text` / `patch_file` / `run_command` 去读 `evolve/tool-catalog/buckets/`。
+**common 文件与 Git 原语**：改已有文件用 `patch_file`（先 `read_file`，支持 `offset`/`limit`/`line_numbers=true` 分段读大文件）；`write_text` 只用于新建或几乎整文件重写。`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot` 均直接调用同名顶层函数，**不要**套 `run_evolved`，也**不要**为它们去读 `evolve/tool-catalog/buckets/`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。
 
 **写盘纪律（BUG-025）**：大文件 staging 才见 `evolve/tool-catalog/buckets/evolve.md`。日常改文件不必读 bucket。
+
+**explore 子代理与截断**：`探索 …` / 自动 explore 只注入**摘要**，不等于父代理已读过全文。若 overlay 含「摘要已截断」或「父代理必做」，下一步应对列出的路径 `read_file` 全文，再 `patch_file` / `run_command`。**不得**因「探索结果看不清」就停手；也不得用「测试已通过」代替对将要修改的文件做全文核对。
+
+**git diff / spill**：`git_snapshot` / `git_diff` 在大改动时可能返回 `truncated` / `diff_truncated`，或 harness **spill**（`data.preview` + `output_path`，完整 JSON 在 spill 文件）。这**不是**可以拒评、让用户自己点文件的理由。必做其一或组合：**(1)** `git_diff` + `stat_only` 或 `name_status` 列清单；**(2)** 对关键路径 `git_diff` + `paths: ["单文件"]` 分批看（免确认，可多轮）；**(3)** spill 时用 `read_file` 读 `hint` / `output_path` 全文。用户说「去看我改的代码」时，应主动拆文件审完，**不得**仅凭 preview 声称「无法可靠评审」。
+
+**审改动 — 完成定义（同回合）**：用户意图是「看我改的 / 审查改动 / review diff」时，**本回合结束前的交付**须包含：(a) 已用 `name_status` 或 `git_snapshot` 列出改动路径（可忽略 `artifacts/`）；(b) 对每个非 trivial 路径至少一次 `git_diff` + `paths`（或已 `read_file` spill 全文并说明）；(c) 触及 `agent-core` / 测试时跑相关 `pytest`（至少 spill/新增测试文件）。**禁止**用「初步审查 / 还没审完所有文件」当最终回复让用户再下指令；未完成就继续调工具，直到可给**完整结论**（通过/问题清单/建议）。Harness 对审改动意图会放宽工具预算（默认 segment 32 / 合计 64，env：`GIT_REVIEW_SEGMENT_MAX` · `GIT_REVIEW_TOTAL_MAX`），桌面可自动续 segment 直至审完或触顶。
 
 **先读再断言**：声称文件里已经是目标内容，或这次不用改，之前必须在本回合 `read_file`。上一回合读过不算，用户可能已经改过磁盘上的文件。纯问答、且不断言文件内容时，不要为了这条再读一次。准备新建、且不指望文件已经存在时，不必先 `read_file` 探一次。读完之后改已有文件仍用 `patch_file`，不要改成整文件 `write_text`。
 

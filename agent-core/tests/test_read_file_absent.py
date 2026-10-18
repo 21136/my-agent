@@ -96,3 +96,38 @@ class ReadFileAbsentTests(unittest.TestCase):
             outside = read_file_run({"path": "../outside-agent"}, paths=paths)
             self.assertFalse(outside.ok)
             self.assertEqual(classify_failure(outside).failure_class, "E")
+
+    def test_read_file_offset_limit_and_no_spill_loop(self) -> None:
+        with temporary_agent_paths() as paths:
+            big = paths.workspace / "big.py"
+            lines = [f"line_{i} = {i}\n" for i in range(1, 801)]
+            big.write_text("".join(lines), encoding="utf-8")
+
+            executor = ToolExecutor(
+                registry=ToolRegistry.load(paths),
+                session=ExecutorSession(),
+            )
+            first = executor.run("read_file", {"path": "workspace/big.py"})
+            self.assertTrue(first.ok, first.error)
+            self.assertIsNone(first.output_path)
+            assert isinstance(first.data, dict)
+            self.assertEqual(first.data["total_lines"], 800)
+            self.assertEqual(first.data["start_line"], 1)
+            self.assertEqual(first.data["end_line"], 500)
+            self.assertTrue(first.data["truncated_lines"])
+            self.assertIn("offset=501", first.data.get("hint", ""))
+
+            second = executor.run(
+                "read_file",
+                {
+                    "path": "workspace/big.py",
+                    "offset": 501,
+                    "limit": 350,
+                    "line_numbers": True,
+                },
+            )
+            self.assertTrue(second.ok, second.error)
+            assert isinstance(second.data, dict)
+            self.assertEqual(second.data["start_line"], 501)
+            self.assertEqual(second.data["end_line"], 800)
+            self.assertIn("   501|line_501 = 501", second.data["content"])

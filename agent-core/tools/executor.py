@@ -69,8 +69,8 @@ CONTEXT_SWITCH_CONFIRM_PREFIX = "__context_switch__:"
 _META_FILENAME = "meta.json"
 _WORKSPACE_APPROVED_KEY = "workspace_evolved_approved"
 _EVENT_SESSION_WORKSPACE_APPROVED = "session_workspace_approved"
-_DEFAULT_SPILL_CHARS = 8000
-_DEFAULT_PREVIEW_CHARS = 2000
+_DEFAULT_SPILL_CHARS = 32000
+_DEFAULT_PREVIEW_CHARS = 8000
 _TOOL_OUTPUTS_DIR = "tool_outputs"
 
 
@@ -136,6 +136,13 @@ class ExecutorSession:
     explore_continue_used: bool = False
     terminal_plan_phase: str = ""
     subagent_overlay_pending: str | None = None
+    git_review_turn: bool = False
+    git_review_pending_paths: list[str] = field(default_factory=list)
+    git_review_completed_paths: list[str] = field(default_factory=list)
+    git_review_spill_paths: dict[str, list[str]] = field(default_factory=dict)
+    git_review_nudge_count: int = 0
+    git_review_must_continue: bool = False
+    git_review_listed: bool = False
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
     ordinary_visible_confirms_this_turn: int = 0
@@ -1000,6 +1007,13 @@ class ToolExecutor:
         self.session.explore_builtin_calls = 0
         self.session.explore_continue_used = False
         self.session.subagent_overlay_pending = None
+        self.session.git_review_turn = False
+        self.session.git_review_pending_paths = []
+        self.session.git_review_completed_paths = []
+        self.session.git_review_spill_paths = {}
+        self.session.git_review_nudge_count = 0
+        self.session.git_review_must_continue = False
+        self.session.git_review_listed = False
         self.session.ordinary_visible_confirms_this_turn = 0
         self._emit_turn_evidence()
 
@@ -2863,6 +2877,37 @@ def serialize_tool_data(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
+_GIT_DIFF_SPILL_HINT = (
+    "整次 git 输出未全量入上下文。请 git_diff name_status/stat_only 列文件，"
+    "再 paths 逐文件 git_diff，或 read_file spill 全文；勿仅凭 preview 拒评或停手。"
+)
+
+
+def _inner_git_tool_from_data(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    if "status_lines" in data and "diff_stat" in data:
+        return "git_snapshot"
+    if "diff" in data and "empty" in data and "name_status" in data:
+        return "git_diff"
+    if "diff" in data and "empty" in data and not data.get("name_status"):
+        return "git_diff"
+    inner = data.get("tool_name")
+    if isinstance(inner, str) and inner.strip() in {"git_diff", "git_snapshot"}:
+        return inner.strip()
+    return None
+
+
+def _build_success_spill_hint(result: ToolResult, output_path: str) -> str:
+    read_line = f"Full tool result: read_file {output_path}"
+    git_tool = _inner_git_tool_from_data(result.data)
+    data = result.data if isinstance(result.data, dict) else {}
+    if git_tool or data.get("truncated") or data.get("diff_truncated"):
+        if git_tool or "diff" in data or "diff_stat" in data:
+            return f"{read_line}。{_GIT_DIFF_SPILL_HINT}"
+    return read_line
+
+
 def maybe_spill_result(
     result: ToolResult,
     *,
@@ -2880,13 +2925,22 @@ def maybe_spill_result(
     if result.ok:
         if result.data is None:
             return result
+        if result.tool == "read_file":
+            # read_file already slices by line limit (DEFAULT_LINE_LIMIT) and hints offset;
+            # never spill it into another file that would itself spill on read_file.
+            return result
         serialized = serialize_tool_data(result.data)
         if len(serialized) <= threshold:
             return result
         output_path = _write_spill_file(serialized, session_dir=session_dir, agent_paths=agent_paths)
+        hint = _build_success_spill_hint(result, output_path)
         return tool_ok(
             result.tool,
-            {"preview": serialized[:preview_limit]},
+            {
+                "preview": serialized[:preview_limit],
+                "spilled": True,
+                "hint": hint,
+            },
             truncated=True,
             duration_ms=result.duration_ms,
             output_path=output_path,
@@ -2987,7 +3041,7 @@ def _tool_event_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any
     return dict(arguments)
 
 
-_CARD_FILE_TOOLS = frozenset({"write_text", "patch_file"})
+_CARD_FILE_TOOLS = frozenset({"write_text", "patch_file", "git_diff", "git_snapshot"})
 
 
 def _card_tool_name(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -3007,14 +3061,64 @@ def _clip_summary(text: str, limit: int = 180) -> str:
     return cleaned[: limit - 1] + "…"
 
 
+_SECRET_KV_RE = re.compile(
+    r"(?i)(\b(?:token|api[_-]?key|secret|password|passwd|pwd|access[_-]?key|auth[_-]?token)"
+    r"\s*(?:=|:|\s+)\s*)(['\"]?)[^\s'\"&;|]+(\2)"
+)
+_BEARER_RE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+_SK_TOKEN_RE = re.compile(r"\b(?:sk|ghp|gho|github_pat)_[A-Za-z0-9_]{8,}\b")
+_URL_CRED_RE = re.compile(r"(https?://[^/\s:@]+:)[^@\s/]+(@)")
+
+
+def _redact_command_secrets(text: str) -> str:
+    redacted = _SECRET_KV_RE.sub(r"\1\2***\3", text)
+    redacted = _BEARER_RE.sub(r"\1***", redacted)
+    redacted = _SK_TOKEN_RE.sub("***", redacted)
+    redacted = _URL_CRED_RE.sub(r"\1***\2", redacted)
+    return redacted
+
+
+def _run_command_event_summary(command: str, *, limit: int = 320) -> str:
+    """Process timeline + tool.start: show real argv (with secrets redacted), not a blind label."""
+    text = command.strip().replace("\r\n", "\n")
+    one_line = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    one_line = _redact_command_secrets(one_line)
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[: limit - 1] + "…"
+
+
 def _tool_event_summary(
     tool_name: str,
     arguments: dict[str, Any],
     evolved: EvolvedTool | None,
 ) -> str:
+    if tool_name == "run_command":
+        cmd = arguments.get("command")
+        if isinstance(cmd, str) and cmd.strip():
+            return _run_command_event_summary(cmd)
     if tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
         inner = run_evolved.coalesce_tool_arguments(arguments)
+        if isinstance(evolved_name, str) and evolved_name.strip() == "run_command":
+            if isinstance(inner, dict):
+                cmd = inner.get("command")
+                if isinstance(cmd, str) and cmd.strip():
+                    return _run_command_event_summary(cmd)
+        if isinstance(evolved_name, str) and evolved_name.strip() in {"git_diff", "git_snapshot"}:
+            label = evolved_name.strip()
+            if isinstance(inner, dict):
+                paths = inner.get("paths")
+                if isinstance(paths, list) and paths:
+                    shown = ", ".join(str(p) for p in paths[:3] if p)
+                    if len(paths) > 3:
+                        shown += f" +{len(paths) - 3}"
+                    return f"{label}: {shown}"
+                if inner.get("name_status"):
+                    return f"{label}: --name-status"
+                if inner.get("stat_only"):
+                    return f"{label}: --stat"
+            return label
         path = ""
         if isinstance(inner, dict):
             raw_path = inner.get("path") or inner.get("file") or inner.get("dest")

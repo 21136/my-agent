@@ -612,6 +612,8 @@ def _refresh_orphan(directory: Path, state: dict[str, Any], *, now: float | None
 
 
 def _existing_action(paths, payload: dict[str, Any]) -> dict[str, Any]:
+    import shutil
+
     action = str(payload.get("action") or "").strip().lower()
     if action == "list":
         items: list[dict[str, Any]] = []
@@ -625,6 +627,30 @@ def _existing_action(paths, payload: dict[str, Any]) -> dict[str, Any]:
             items.append(item)
         return {"ok": True, "action": "list", "sessions": items}
 
+    if action == "prune":
+        include_ended = bool(payload.get("include_ended", True))
+        target_states = {"lost", "orphaned", "failed", "unsupported"}
+        if include_ended:
+            target_states |= {"closed", "exited"}
+        removed: list[str] = []
+        for state_path in sorted(_sessions_root(paths).glob("*/state.json")):
+            state = _read_json(state_path)
+            if not state:
+                continue
+            state = _refresh_orphan(state_path.parent, state)
+            st = str(state.get("state") or "").strip().lower()
+            if st in target_states:
+                sid = str(state.get("session_id") or state_path.parent.name)
+                shutil.rmtree(state_path.parent, ignore_errors=True)
+                removed.append(sid)
+        listed = _existing_action(paths, {"action": "list"})
+        return {
+            "ok": True,
+            "action": "prune",
+            "removed": removed,
+            "sessions": listed.get("sessions", []),
+        }
+
     session_id, directory, state, error = _load_session(paths, payload.get("session_id"))
     if error:
         return error
@@ -636,7 +662,20 @@ def _existing_action(paths, payload: dict[str, Any]) -> dict[str, Any]:
         return result
     if action == "read":
         return _read_output(directory, payload, state)
+    if action == "dismiss":
+        if state.get("state") in {"starting", "running"}:
+            return {
+                "ok": False,
+                "session_id": session_id,
+                "state": state.get("state"),
+                "error": "cannot dismiss an active session; close it first",
+            }
+        shutil.rmtree(directory, ignore_errors=True)
+        return {"ok": True, "action": "dismiss", "session_id": session_id, "state": "dismissed"}
     if state.get("state") in {"lost", "orphaned", "failed", "unsupported", "closed", "exited"}:
+        if action == "close" and bool(payload.get("dismiss_if_inactive", False)):
+            shutil.rmtree(directory, ignore_errors=True)
+            return {"ok": True, "action": "close", "session_id": session_id, "state": "dismissed"}
         return {
             "ok": False,
             "session_id": session_id,

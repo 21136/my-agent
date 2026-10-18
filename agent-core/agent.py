@@ -75,6 +75,8 @@ _DEFAULT_PARENT_SHORT_MAX = 5
 _DEFAULT_EXECUTE_SEGMENT_MAX = 50
 _DEFAULT_PROJECT_EXECUTE_SEGMENT_MAX = 15  # AGENT-HARNESS P2 · T-4102
 _DEFAULT_EXECUTE_TOTAL_MAX = 50
+_DEFAULT_GIT_REVIEW_SEGMENT_MAX = 32
+_DEFAULT_GIT_REVIEW_TOTAL_MAX = 64
 
 _CHECKLIST_PROGRESS_RE = re.compile(
     r"(?:\[[xX✓✔]\]|[-*]\s*\[[xX]\])",
@@ -120,12 +122,26 @@ def parent_short_max() -> int:
     return max(1, value)
 
 
-def parent_execute_segment_max(*, active_shell: str = "") -> int:
+def parent_execute_segment_max(
+    *,
+    active_shell: str = "",
+    git_review_turn: bool = False,
+) -> int:
     """Per-segment tool budget (AGENT-HARNESS P2).
 
     ``active_shell=project`` defaults to 15; other shells default to 50.
-    Explicit ``PARENT_EXECUTE_SEGMENT_MAX`` always overrides (tests / ops).
+    ``git_review_turn`` uses ``GIT_REVIEW_SEGMENT_MAX`` (default 32).
+    Explicit ``PARENT_EXECUTE_SEGMENT_MAX`` overrides normal turns (not git review).
     """
+    if git_review_turn:
+        raw = os.environ.get(
+            "GIT_REVIEW_SEGMENT_MAX",
+            str(_DEFAULT_GIT_REVIEW_SEGMENT_MAX),
+        )
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return _DEFAULT_GIT_REVIEW_SEGMENT_MAX
     if "PARENT_EXECUTE_SEGMENT_MAX" in os.environ:
         raw = os.environ.get("PARENT_EXECUTE_SEGMENT_MAX", "")
         try:
@@ -137,7 +153,16 @@ def parent_execute_segment_max(*, active_shell: str = "") -> int:
     return _DEFAULT_EXECUTE_SEGMENT_MAX
 
 
-def parent_execute_total_max() -> int:
+def parent_execute_total_max(*, git_review_turn: bool = False) -> int:
+    if git_review_turn:
+        raw = os.environ.get(
+            "GIT_REVIEW_TOTAL_MAX",
+            str(_DEFAULT_GIT_REVIEW_TOTAL_MAX),
+        )
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return _DEFAULT_GIT_REVIEW_TOTAL_MAX
     raw = os.environ.get("PARENT_EXECUTE_TOTAL_MAX", str(_DEFAULT_EXECUTE_TOTAL_MAX))
     try:
         value = int(raw)
@@ -146,16 +171,28 @@ def parent_execute_total_max() -> int:
     return max(1, value)
 
 
-def auto_continue_enabled(*, active_shell: str = "", harness: str = "") -> bool:
+def auto_continue_enabled(
+    *,
+    active_shell: str = "",
+    harness: str = "",
+    git_review_turn: bool = False,
+) -> bool:
     """Whether execute may auto-start the next segment in the same turn (T-705).
 
     Project shell pauses at the segment boundary (send「继续」for the next segment).
     Terminal harness (TM-16): no segment_cap_pause — always continue within total cap.
     grow/daily honor ``MY_AGENT_AUTO_CONTINUE`` (default **off**): each user message
     gets a fresh tool budget; send another message (e.g. 「继续」) for the next segment.
+    Git review turns on desktop auto-chain segments (``GIT_REVIEW_AUTO_CONTINUE``).
     """
     if (harness or "").strip() == "terminal":
         return True
+    if git_review_turn:
+        return os.environ.get("GIT_REVIEW_AUTO_CONTINUE", "1").strip() not in {
+            "0",
+            "false",
+            "no",
+        }
     if (active_shell or "").strip() == "project":
         return False
     return os.environ.get("MY_AGENT_AUTO_CONTINUE", "0").strip() not in {"0", "false", "no"}
@@ -322,6 +359,21 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             "path": {
                 "type": "string",
                 "description": "Path relative to agent root or workspace",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Optional 1-based starting line number (negative counts from end)",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2000,
+                "description": "Optional max lines to read (default 500 when slicing large files)",
+            },
+            "line_numbers": {
+                "type": "boolean",
+                "description": "When true, prefix each line with 1-based line number for patch_file",
+                "default": False,
             },
         },
         "required": ["path"],
@@ -1082,8 +1134,12 @@ class Agent:
         if intent == "recall":
             return 1
         if self.session.meta.turn_mode == "agent":
+            git_review_turn = bool(
+                getattr(self.executor.session, "git_review_turn", False)
+            )
             return parent_execute_segment_max(
                 active_shell=self.session.meta.active_shell,
+                git_review_turn=git_review_turn,
             )
         return min(self.tool_loop_max, parent_short_max())
 
@@ -1419,6 +1475,35 @@ class Agent:
                     except Exception:
                         pass
                     continue
+                from git_review_rails import pending_git_review_nudge
+
+                git_nudge = pending_git_review_nudge(self.executor.session)
+                if (
+                    git_nudge
+                    and tools_payload
+                    and self.session.meta.turn_mode == "agent"
+                    and tool_rounds < max_rounds
+                ):
+                    self.executor.session.git_review_nudge_count = (
+                        int(getattr(self.executor.session, "git_review_nudge_count", 0) or 0)
+                        + 1
+                    )
+                    if final_text:
+                        self.session.append_message(
+                            {"role": "assistant", "content": final_text}
+                        )
+                    self.session.append_message(
+                        {"role": "user", "content": git_nudge}
+                    )
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "warn",
+                            "text": "git 审阅未完成，已要求本回合继续分批 diff/测试。",
+                        }
+                    )
+                    _refresh_dynamic_system()
+                    continue
                 if final_text:
                     assistant_msg = {"role": "assistant", "content": final_text}
                     self.session.append_message(assistant_msg)
@@ -1462,6 +1547,22 @@ class Agent:
                     result = _tool_result_for_argument_error(exc)
                 else:
                     result = self.executor.run(tool_name, arguments)
+
+                from git_review_rails import (
+                    format_git_review_discipline_line,
+                    update_git_review_state,
+                )
+
+                update_git_review_state(
+                    self.executor.session,
+                    tool_name,
+                    arguments,
+                    result,
+                )
+                discipline = format_git_review_discipline_line(self.executor.session)
+                if discipline:
+                    self.session.git_review_discipline = discipline
+                    dynamic_dirty = True
 
                 if tool_name in {"deliverable_review", "explore"} and result.ok:
                     pending = getattr(self.executor.session, "subagent_overlay_pending", None)
@@ -1741,13 +1842,18 @@ class Agent:
             format_total_cap_message,
         )
 
+        git_review_turn = bool(
+            getattr(self.executor.session, "git_review_turn", False)
+        )
         segment_max = parent_execute_segment_max(
             active_shell=self.session.meta.active_shell,
+            git_review_turn=git_review_turn,
         )
-        total_max = parent_execute_total_max()
+        total_max = parent_execute_total_max(git_review_turn=git_review_turn)
         auto_continue = auto_continue_enabled(
             active_shell=self.session.meta.active_shell,
             harness=self.session.meta.harness,
+            git_review_turn=git_review_turn,
         )
 
         total_tool_rounds = 0
@@ -1801,8 +1907,31 @@ class Agent:
             if not loop_result.exceeded:
                 break
 
-            if loop_result.had_progress and auto_continue and total_tool_rounds < total_max:
+            from git_review_rails import git_review_incomplete
+
+            git_incomplete = git_review_turn and git_review_incomplete(
+                self.executor.session
+            )
+            should_chain_segment = (
+                total_tool_rounds < total_max
+                and (
+                    (loop_result.had_progress and auto_continue)
+                    or (git_incomplete and auto_continue)
+                )
+            )
+            if should_chain_segment:
                 segment += 1
+                if git_incomplete:
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "info",
+                            "text": (
+                                f"git 审阅续跑 segment {segment}"
+                                f"（已用 {total_tool_rounds}/{total_max} 轮工具）"
+                            ),
+                        }
+                    )
                 continue
 
             tool_loop_exceeded = True
@@ -2539,6 +2668,12 @@ class Agent:
         self._sync_turn_mode()
         self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()
+        from git_review_rails import user_wants_git_review
+
+        git_review = user_wants_git_review(user_text)
+        self.executor.session.git_review_turn = git_review
+        self.session.git_review_turn = git_review
+        self.session.git_review_discipline = ""
 
         direct_implement = False
         from project_mode import (
@@ -2584,7 +2719,9 @@ class Agent:
         overlay_parts: list[str] = []
 
         spawn_explore_flag = spawn_explore
-        if intent == "recall":
+        if intent == "recall" or getattr(self.executor.session, "git_review_turn", False):
+            # Git review uses fast read-only git_diff / git_snapshot in main loop;
+            # spawning explore here often burns 120s and times out on large worktrees.
             spawn_explore_flag = False
         elif spawn_explore_flag is None:
             spawn_explore_flag = should_spawn_explore_for_turn(
@@ -2647,6 +2784,17 @@ class Agent:
                 if did_continue:
                     self.executor.session.explore_continue_used = True
                 overlay_parts.append(format_subagent_overlay(explore_result))
+                if explore_result.truncated:
+                    self._emit_turn_event(
+                        {
+                            "type": "turn.notice",
+                            "level": "info",
+                            "text": (
+                                "[内核] explore 摘要已截断：请 read_file 要改路径的全文后再 patch/跑命令，"
+                                "勿仅凭摘要停手。"
+                            ),
+                        }
+                    )
                 subagent_tool_rounds += explore_result.tool_rounds
 
         if direct_implement:

@@ -973,7 +973,7 @@ class WsSessionHandler:
             await self._dispatch_services(message, bridge)
             return
 
-        if msg_type in {"terminal.list", "terminal.output", "terminal.close"}:
+        if msg_type in {"terminal.list", "terminal.output", "terminal.close", "terminal.prune"}:
             await self._dispatch_terminal(message, bridge)
             return
 

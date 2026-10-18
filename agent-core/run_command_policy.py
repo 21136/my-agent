@@ -65,9 +65,9 @@ _BUILD_TEST_RE = re.compile(
     r"|\bpnpm\s+(?:run\s+)?(?:build|test|lint)\b"
     r"|\byarn\s+(?:run\s+)?(?:build|test|lint)\b"
     r"|\bpytest\b"
-    r"|\bpython(?:3)?\s+-m\s+pytest\b"
-    r"|\bpy\s+-m\s+pytest\b"
-    r"|\bpython(?:3)?\s+(?:[\w./\\-]+/)?verify\.py\b"
+    r"|(?:[\w./\\:-]+[/\\])?python(?:3)?(?:\.exe)?\s+-m\s+(?:pytest|unittest)\b"
+    r"|\bpy\s+-m\s+(?:pytest|unittest)\b"
+    r"|(?:[\w./\\:-]+[/\\])?python(?:3)?(?:\.exe)?\s+(?:[\w./\\-]+/)?verify\.py\b"
     r"|\bpy\s+(?:[\w./\\-]+/)?verify\.py\b"
     r"|\bgo\s+test\b"
     r"|\bcargo\s+(?:build|test)\b"
@@ -79,7 +79,7 @@ _READONLY_RE = re.compile(
     r"echo\b|Write-Output\b|dir\b|ls\b|pwd\b|Get-Location\b|"
     r"git\s+(?:status|diff|log|show|branch)\b|"
     r"type\b|cat\b|Get-ChildItem\b|Get-Content\b|"
-    r"mvn\s+-v\b|npm\s+-v\b|node\s+-v\b|python(?:3)?\s+--version\b"
+    r"mvn\s+-v\b|npm\s+-v\b|node\s+-v\b|(?:[\w./\\:-]+[/\\])?python(?:3)?(?:\.exe)?\s+--version\b"
     r")"
 )
 
@@ -190,6 +190,17 @@ def working_dir_under_project(working_dir: str, project_root: str) -> bool:
     return cwd == root or cwd.startswith(root + "/")
 
 
+def working_dir_under_agent_root(working_dir: str) -> bool:
+    """True when working_dir is empty, '.', or a safe relative path under agent root."""
+    cwd = _normalize_rel(working_dir)
+    if not cwd or cwd == ".":
+        return True
+    if cwd.startswith("/") or re.match(r"^[A-Za-z]:", cwd):
+        return False
+    parts = [p for p in cwd.split("/") if p and p != "."]
+    return ".." not in parts
+
+
 def _normalize_cmd(command: str) -> str:
     return " ".join((command or "").replace("\\", "/").split())
 
@@ -292,8 +303,9 @@ def run_command_requires_confirm(
     if kind == "network":
         return True, "network"
     in_project = working_dir_under_project(working_dir, project_root)
+    unbound_agent_cwd = not (project_root or "").strip() and working_dir_under_agent_root(working_dir)
     if _ANY_DELETE_RE.search((command or "").strip()):
-        return True, "other:delete" if in_project else "outside_project"
+        return True, "other:delete" if (in_project or unbound_agent_cwd) else "outside_project"
     quality_argv = load_quality_command_argv(
         quality_commands=quality_commands,
         env_text=env_text,
@@ -302,7 +314,7 @@ def run_command_requires_confirm(
     )
     if in_project and matches_quality_command(command, quality_argv):
         return False, "skip:quality"
-    if kind in {"build_test", "readonly"} and in_project:
+    if kind in {"build_test", "readonly"} and (in_project or unbound_agent_cwd):
         return False, f"skip:{kind}"
     if not in_project:
         return True, "outside_project"

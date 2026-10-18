@@ -9,6 +9,8 @@ PROXY_EVOLVED_TOOL_NAMES: tuple[str, ...] = (
     "run_command",
     "write_text",
     "patch_file",
+    "git_diff",
+    "git_snapshot",
 )
 
 _PROXY_DESCRIPTIONS: dict[str, str] = {
@@ -25,6 +27,14 @@ _PROXY_DESCRIPTIONS: dict[str, str] = {
         "Patch a text file by line range or unique anchor substring. "
         "Call this function directly so the user sees the path and the edit. "
         "Do not wrap it in run_evolved."
+    ),
+    "git_diff": (
+        "Read-only git diff (no confirm). Supports paths, name_status, stat_only, staged, base_ref. "
+        "Call this function directly without wrapping in run_evolved."
+    ),
+    "git_snapshot": (
+        "Read-only git status + diff stat (no confirm). Optional include_diff, paths, base_ref. "
+        "Call this function directly without wrapping in run_evolved."
     ),
 }
 
@@ -113,6 +123,70 @@ _PROXY_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["path", "replacement"],
+        "additionalProperties": False,
+    },
+    "git_diff": {
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional pathspecs relative to repo root",
+            },
+            "staged": {
+                "type": "boolean",
+                "description": "Diff staged changes (--cached)",
+                "default": False,
+            },
+            "name_status": {
+                "type": "boolean",
+                "description": "Show only names and status of changed files (--name-status)",
+                "default": False,
+            },
+            "stat_only": {
+                "type": "boolean",
+                "description": "Show diffstat summary only (--stat)",
+                "default": False,
+            },
+            "base_ref": {
+                "type": "string",
+                "description": "Optional base commit/branch ref",
+            },
+            "working_dir": {
+                "type": "string",
+                "description": "Optional working directory relative to agent root",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 500000,
+                "description": "Max diff characters (default 120000)",
+            },
+        },
+        "additionalProperties": False,
+    },
+    "git_snapshot": {
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional pathspecs to filter status/diff",
+            },
+            "include_staged": {
+                "type": "boolean",
+                "default": True,
+            },
+            "include_diff": {
+                "type": "boolean",
+                "description": "Include full unified diff in addition to --stat",
+                "default": False,
+            },
+            "base_ref": {
+                "type": "string",
+                "description": "Optional base git ref",
+            },
+        },
         "additionalProperties": False,
     },
 }

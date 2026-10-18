@@ -320,8 +320,47 @@ class InteractiveTerminalUiTests(unittest.TestCase):
             bridge = WsBridge(emit=lambda _event: None, paths=paths)
             asyncio.run(handler._dispatch({"type": "terminal.output"}, object(), bridge))
             asyncio.run(handler._dispatch({"type": "terminal.close"}, object(), bridge))
+            asyncio.run(handler._dispatch({"type": "terminal.prune"}, object(), bridge))
 
-        self.assertEqual(routed, ["terminal.output", "terminal.close"])
+        self.assertEqual(routed, ["terminal.output", "terminal.close", "terminal.prune"])
+
+    def test_terminal_prune_and_user_initiated_dismiss(self) -> None:
+        from terminal_api import dispatch_terminal_message
+
+        with temporary_agent_paths(copy_tool_dirs=("common/interactive_terminal",)) as paths:
+            for sid, st in (("it-1111111111111111", "lost"), ("it-2222222222222222", "failed")):
+                sdir = paths.data / "interactive-terminals" / sid
+                sdir.mkdir(parents=True)
+                (sdir / "state.json").write_text(
+                    json.dumps(
+                        {
+                            "session_id": sid,
+                            "command": "python -i",
+                            "cwd": ".",
+                            "state": st,
+                            "alive": False,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            dismissed = dispatch_terminal_message(
+                paths,
+                {
+                    "type": "terminal.close",
+                    "session_id": "it-1111111111111111",
+                    "user_initiated": True,
+                    "dismiss_if_inactive": True,
+                },
+            )
+            self.assertTrue(dismissed["ok"])
+            self.assertEqual(dismissed["state"], "dismissed")
+
+            pruned = dispatch_terminal_message(
+                paths,
+                {"type": "terminal.prune", "include_ended": True},
+            )
+            self.assertTrue(pruned["ok"])
+            self.assertEqual(pruned["sessions"], [])
 
     def test_desktop_has_terminal_visibility_contract(self) -> None:
         api = (_ROOT / "desktop" / "src" / "api" / "ws.ts").read_text(encoding="utf-8")

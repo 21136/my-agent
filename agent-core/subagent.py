@@ -702,7 +702,7 @@ def format_subagent_overlay(result: SubagentResult) -> str:
     paths_line = ", ".join(result.paths_cited) if result.paths_cited else "(none)"
     cap_note = ""
     if result.truncated:
-        cap_note = "（摘要已截断；父代理可补读未列路径）"
+        cap_note = "（摘要已截断）"
     cap_used = result.tool_rounds
     cap_limit = subagent_explore_max()
     rounds_note = f"子代理已用 {cap_used}/{cap_limit} 轮"
@@ -711,15 +711,21 @@ def format_subagent_overlay(result: SubagentResult) -> str:
         if result.explore_continued:
             rounds_note += "（已续跑一轮）"
         rounds_note += " — 主 Agent 可续查"
-    return "\n".join(
-        [
-            "[子代理摘要 · explore]",
-            f"任务: {result.task}",
-            f"已读: {paths_line}",
-            f"结论: {result.summary}",
-            f"（{rounds_note}{cap_note}）",
-        ]
-    )
+    lines = [
+        "[子代理摘要 · explore]",
+        f"任务: {result.task}",
+        f"已读: {paths_line}",
+        f"结论: {result.summary}",
+        f"（{rounds_note}{cap_note}）",
+    ]
+    if result.truncated:
+        must_read = ", ".join(result.paths_cited[:12]) if result.paths_cited else paths_line
+        lines.append(
+            "父代理必做：摘要不足以下结论或拒改代码。请对本回合要改的路径执行 read_file 读全文"
+            f"（优先：{must_read}），再 patch_file / run_command；"
+            "测试已通过只说明当前用例绿，不能代替全文审阅。"
+        )
+    return "\n".join(lines)
 
 
 def truncate_summary(text: str, *, max_chars: int | None = None) -> tuple[str, bool]:

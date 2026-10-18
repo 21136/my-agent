@@ -81,4 +81,32 @@ def dispatch_services_message(paths: AgentPaths, message: dict[str, Any]) -> dic
             "text": text,
         }
 
+    if msg_type == "services.stop":
+        name = message.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ServicesApiError("services.stop requires name")
+        mod = _load_run_service(paths)
+        stop_out = mod.run_service({"action": "stop", "name": name.strip(), "force": True})
+        if not stop_out.get("ok"):
+            raise ServicesApiError(str(stop_out.get("error") or "services.stop failed"))
+        listed = mod.run_service({"action": "list"})
+        services = listed.get("services") if isinstance(listed.get("services"), list) else []
+        return {"type": "services.list.done", "ok": True, "services": services}
+
+    if msg_type == "services.prune":
+        mod = _load_run_service(paths)
+        name = message.get("name")
+        if isinstance(name, str) and name.strip():
+            rem_out = mod.run_service({"action": "remove", "name": name.strip()})
+            if not rem_out.get("ok"):
+                raise ServicesApiError(str(rem_out.get("error") or "services.remove failed"))
+            listed = mod.run_service({"action": "list"})
+            services = listed.get("services") if isinstance(listed.get("services"), list) else []
+            return {"type": "services.list.done", "ok": True, "services": services}
+        out = mod.run_service({"action": "prune"})
+        if not out.get("ok"):
+            raise ServicesApiError(str(out.get("error") or "services.prune failed"))
+        services = out.get("services") if isinstance(out.get("services"), list) else []
+        return {"type": "services.list.done", "ok": True, "services": services}
+
     raise ServicesApiError(f"unknown services message: {msg_type}")

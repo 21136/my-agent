@@ -459,7 +459,7 @@ export function mountUnifiedShell(
           </button>
           <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
           <span class="sidebar-icon-spacer" aria-hidden="true"></span>
-          <button type="button" class="sidebar-icon-btn sidebar-icon-settings" data-action="open-settings" title="设置"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg><span class="sidebar-icon-label">设置</span></button>
+          <button type="button" class="sidebar-icon-btn sidebar-icon-settings" data-panel="settings" title="设置"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg><span class="sidebar-icon-label">设置</span></button>
         </nav>
         <div class="unified-sidebar-panel">
         <div class="unified-sidebar-header">
@@ -2814,8 +2814,8 @@ export function mountUnifiedShell(
       const disabled = block.resolved ? "disabled" : "";
       const inProgress = isConfirmInProgressLabel(block.resolved);
       const isTerminal = Boolean(block.resolved) && !inProgress;
-      // Resolved confirms are already reflected in the process tool lines (DESKTOP §3.2.2).
-      if (isTerminal) return "";
+      // Pending + in-flight confirms: tool row in 过程 is the live source of truth (UX-030).
+      if (isTerminal || inProgress) return "";
       const actions = `
           <button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${block.requestId}" ${disabled}>允许此次</button>
           <button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${block.requestId}" ${disabled}>拒绝</button>
@@ -3274,6 +3274,11 @@ export function mountUnifiedShell(
       confirmGlass.innerHTML = "";
       return;
     }
+    if (confirm.resolved && isConfirmInProgressLabel(confirm.resolved)) {
+      confirmGlass.classList.add("hidden");
+      confirmGlass.innerHTML = "";
+      return;
+    }
 
     confirmGlass.classList.remove("hidden");
     const disabled = confirm.resolved ? "disabled" : "";
@@ -3449,11 +3454,6 @@ export function mountUnifiedShell(
   // Icon bar: each tab owns sidebar + main stage
   projectEls.iconBar.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(".sidebar-icon-btn");
-    if (btn?.dataset.action === "open-settings") {
-      const menu = document.querySelector<HTMLDetailsElement>("details.app-chrome-menu");
-      if (menu) window.setTimeout(() => { menu.open = !menu.open; }, 0);
-      return;
-    }
     if (!isRailTab(btn?.dataset.panel)) return;
     selectRailTab(btn.dataset.panel);
   });
@@ -3470,6 +3470,41 @@ export function mountUnifiedShell(
     }
     if (action === "services-refresh") {
       refreshServices();
+      return;
+    }
+    if (action === "services-prune") {
+      try {
+        client.pruneServices();
+      } catch (err) {
+        projectState.servicesError = err instanceof Error ? err.message : String(err);
+        renderSidebar();
+      }
+      return;
+    }
+    if (action === "service-stop") {
+      const name = btn.dataset.serviceName;
+      if (!name) return;
+      try {
+        client.stopService(name);
+      } catch (err) {
+        projectState.servicesError = err instanceof Error ? err.message : String(err);
+        renderSidebar();
+      }
+      return;
+    }
+    if (action === "service-remove") {
+      const name = btn.dataset.serviceName;
+      if (!name) return;
+      if (projectState.servicesLogName === name) {
+        projectState.servicesLogName = "";
+        projectState.servicesLogText = "";
+      }
+      try {
+        client.pruneServices(name);
+      } catch (err) {
+        projectState.servicesError = err instanceof Error ? err.message : String(err);
+        renderSidebar();
+      }
       return;
     }
     if (action === "service-logs") {
@@ -3522,14 +3557,26 @@ export function mountUnifiedShell(
       );
       return;
     }
-    if (btn.dataset.action === "terminal-close") {
+    if (btn.dataset.action === "terminal-close" || btn.dataset.action === "terminal-dismiss") {
       const sessionId = btn.dataset.terminalId;
       if (!sessionId) return;
       try {
-        setStatus("等待终端关闭确认…");
-        client.closeTerminal(sessionId, `terminal-close-${Date.now()}`);
+        client.closeTerminal(sessionId, `terminal-close-${Date.now()}`, false, {
+          userInitiated: true,
+          dismissIfInactive: true,
+        });
       } catch (err) {
         projectState.terminalOutputError = err instanceof Error ? err.message : String(err);
+        renderSidebar();
+      }
+      return;
+    }
+    if (btn.dataset.action === "terminals-prune") {
+      try {
+        closeTerminalDetails();
+        client.pruneTerminals(true, `terminal-prune-${Date.now()}`);
+      } catch (err) {
+        projectState.terminalsError = err instanceof Error ? err.message : String(err);
         renderSidebar();
       }
       return;
@@ -3622,6 +3669,45 @@ export function mountUnifiedShell(
           return;
         case "jump-review-summary":
           jumpToReviewSummary();
+          return;
+        case "settings-theme-light": {
+          const themeSelect = document.querySelector<HTMLSelectElement>("#chrome-theme");
+          if (themeSelect) {
+            themeSelect.value = "light";
+            themeSelect.dispatchEvent(new Event("change"));
+          }
+          renderSidebar();
+          return;
+        }
+        case "settings-theme-dark": {
+          const themeSelect = document.querySelector<HTMLSelectElement>("#chrome-theme");
+          if (themeSelect) {
+            themeSelect.value = "dark";
+            themeSelect.dispatchEvent(new Event("change"));
+          }
+          renderSidebar();
+          return;
+        }
+        case "settings-open-model-keys":
+          document.querySelector<HTMLButtonElement>("#chrome-model-keys")?.click();
+          return;
+        case "settings-open-host-scope":
+          document.querySelector<HTMLButtonElement>("#chrome-settings")?.click();
+          return;
+        case "settings-open-pet":
+          void window.myAgentDesktop?.openPet?.();
+          return;
+        case "settings-switch-cli":
+          document.querySelector<HTMLButtonElement>("#chrome-cli")?.click();
+          return;
+        case "settings-prune-runtime":
+          try {
+            client.pruneTerminals(true, `terminal-prune-${Date.now()}`);
+            client.pruneServices();
+            setStatus("已清理失效终端与已停止服务");
+          } catch (err) {
+            setStatus(err instanceof Error ? err.message : String(err));
+          }
           return;
         default:
           break;
@@ -4425,7 +4511,10 @@ export function mountUnifiedShell(
           projectState.terminalOutputError = event.error || "关闭终端失败";
         }
         if (event.ok) {
-          setStatus("终端关闭请求已提交");
+          if (event.state === "dismissed" && event.session_id === projectState.terminalDetails?.session_id) {
+            closeTerminalDetails();
+          }
+          setStatus(event.state === "dismissed" ? "已移除终端记录" : "已关闭终端会话");
           refreshTerminals();
         }
         renderSidebar();

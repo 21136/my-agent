@@ -137,15 +137,12 @@ export function mountAppChrome(
         <div class="app-chrome-route hidden" id="chrome-route-notice"></div>
       </div>
       <div class="app-chrome-trailing">
-        <details class="app-chrome-menu">
-          <summary class="app-chrome-menu-trigger" aria-label="更多操作">⋯</summary>
-          <div class="app-chrome-menu-panel" role="menu">
-            ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-menu-item" id="chrome-model-keys" role="menuitem">模型密钥</button>' : ""}
-            ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-menu-item" id="chrome-settings" role="menuitem">托管区</button>' : ""}
-            <button type="button" class="app-chrome-menu-item" id="chrome-pet" role="menuitem">伴侣窗</button>
-            <button type="button" class="app-chrome-menu-item" id="chrome-cli" role="menuitem">改用终端 (CLI)</button>
-          </div>
-        </details>
+        <div class="hidden" aria-hidden="true">
+          ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-menu-item" id="chrome-model-keys" role="menuitem">模型密钥</button>' : ""}
+          ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-menu-item" id="chrome-settings" role="menuitem">托管区</button>' : ""}
+          <button type="button" class="app-chrome-menu-item" id="chrome-pet" role="menuitem">伴侣窗</button>
+          <button type="button" class="app-chrome-menu-item" id="chrome-cli" role="menuitem">改用终端 (CLI)</button>
+        </div>
       </div>
     </header>
   `;
@@ -155,10 +152,10 @@ export function mountAppChrome(
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
   const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
-  const overflowMenu = root.querySelector<HTMLDetailsElement>(".app-chrome-menu")!;
+  const overflowMenu = root.querySelector<HTMLDetailsElement>(".app-chrome-menu");
 
   themeSelect.value = theme;
-  bindOverflowMenu(overflowMenu);
+  if (overflowMenu) bindOverflowMenu(overflowMenu);
 
   let routeTimer: number | null = null;
   let syncingModel = false;
