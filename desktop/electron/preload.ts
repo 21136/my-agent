@@ -1,17 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 type SessionControlAction = "suspend" | "resume";
-type PetBoundsMode = "collapsed" | "expanded";
 
 contextBridge.exposeInMainWorld("myAgentDesktop", {
   getSidecar: () => ipcRenderer.invoke("sidecar:get"),
   switchSidecarCandidate: (root: string) => ipcRenderer.invoke("sidecar:switch-candidate", root),
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
-  openPet: () => ipcRenderer.invoke("app:open-pet") as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url) as Promise<boolean>,
-  petSetIgnoreMouseEvents: (ignore: boolean) => ipcRenderer.send("pet:set-ignore-mouse-events", ignore),
-  petSetBounds: (mode: PetBoundsMode) => ipcRenderer.invoke("pet:set-bounds", mode),
   onSessionControl: (handler: (action: SessionControlAction) => void) => {
     const listener = (_event: unknown, action: SessionControlAction) => handler(action);
     ipcRenderer.on("session:control", listener);
@@ -42,10 +38,7 @@ export type MyAgentDesktopApi = {
   switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;
-  openPet: () => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
-  petSetIgnoreMouseEvents: (ignore: boolean) => void;
-  petSetBounds: (mode: PetBoundsMode) => Promise<void>;
   onSessionControl: (handler: (action: SessionControlAction) => void) => () => void;
   pickDirectory: () => Promise<string | null>;
   getDownloadsPath: () => Promise<string>;

@@ -1,7 +1,6 @@
 import { marked } from "marked";
 import { markedHighlight } from "marked-highlight";
 import hljs from "highlight.js";
-import mermaid from "mermaid";
 import "highlight.js/styles/github.css";
 
 marked.use(
@@ -21,12 +20,22 @@ marked.setOptions({
   breaks: true,
 });
 
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-});
-
+let mermaidPromise: Promise<typeof import("mermaid")["default"]> | null = null;
 let mermaidRenderSequence = 0;
+
+function loadMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then((mod) => {
+      const m = mod.default;
+      m.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+      });
+      return m;
+    });
+  }
+  return mermaidPromise;
+}
 
 function encodeMermaidSource(source: string): string {
   return encodeURIComponent(source.trim());
@@ -84,6 +93,8 @@ export async function hydrateMermaid(root: ParentNode): Promise<void> {
   const placeholders = Array.from(
     root.querySelectorAll<HTMLElement>(".mermaid-placeholder:not([data-mermaid-rendered])"),
   );
+  if (!placeholders.length) return;
+  const mermaid = await loadMermaid();
   await Promise.all(
     placeholders.map(async (placeholder) => {
       const source = decodeMermaidSource(placeholder.dataset.mermaidSource || "");

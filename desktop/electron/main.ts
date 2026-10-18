@@ -4,7 +4,7 @@ import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 
@@ -30,9 +30,6 @@ if (!app.isPackaged) {
 const APP_ICON = path.join(AGENT_ROOT, "desktop", "build", "icon.png");
 const STATE_PATH = path.join(AGENT_ROOT, "data", "state.json");
 const CONSTELLATION_PATH = path.join(AGENT_ROOT, "data", "constellation.json");
-const PET_COLLAPSED = { width: 128, height: 128 };
-const PET_EXPANDED = { width: 340, height: 480 };
-const PET_MARGIN = 16;
 const SHOW_SHORTCUT = "CommandOrControl+Shift+M";
 const DEFAULT_WS_PORT = Number(process.env.MY_AGENT_WS_PORT ?? "8765") || 8765;
 /** Cold Python import on first launch can exceed 30s on Windows. */
@@ -49,7 +46,6 @@ type SidecarStartResult =
   | { ok: true; host: string; port: number }
   | { ok: false; lockConflict?: LockHolder; message?: string };
 
-let petWindow: BrowserWindow | null = null;
 let workbenchWindow: BrowserWindow | null = null;
 let sidecar: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
@@ -201,7 +197,6 @@ function buildTray(): void {
   tray.setToolTip("my-agent");
   const menu = Menu.buildFromTemplate([
     { label: "打开工作台", click: () => void openWorkbenchWindow() },
-    { label: "显示伴侶", click: () => void showPetWindow() },
     { type: "separator" },
     { label: "改用终端 (CLI)", click: () => void switchToCli() },
     { type: "separator" },
@@ -516,18 +511,12 @@ function stopSidecar(): void {
 }
 
 async function isAgentBusy(): Promise<boolean> {
-  const checks: Promise<boolean>[] = [];
-  for (const win of [petWindow, workbenchWindow]) {
-    if (!win || win.isDestroyed()) continue;
-    checks.push(
-      win.webContents.executeJavaScript("Boolean(window.__myAgentIsBusy?.())", true).catch(() => false),
-    );
-  }
-  if (!checks.length) {
+  if (!workbenchWindow || workbenchWindow.isDestroyed()) {
     return false;
   }
-  const results = await Promise.all(checks);
-  return results.some(Boolean);
+  return workbenchWindow.webContents
+    .executeJavaScript("Boolean(window.__myAgentIsBusy?.())", true)
+    .catch(() => false);
 }
 
 async function requestAppQuit(): Promise<void> {
@@ -539,9 +528,7 @@ async function requestAppQuit(): Promise<void> {
     const busy = await isAgentBusy();
     if (busy) {
       const parent =
-        (workbenchWindow && !workbenchWindow.isDestroyed() ? workbenchWindow : null) ??
-        (petWindow && !petWindow.isDestroyed() ? petWindow : null) ??
-        undefined;
+        workbenchWindow && !workbenchWindow.isDestroyed() ? workbenchWindow : undefined;
       const { response } = await dialog.showMessageBox({
         type: "warning",
         title: "my-agent",
@@ -573,13 +560,10 @@ async function performAppQuit(): Promise<void> {
     tray = null;
   }
   stopSidecar();
-  for (const win of [petWindow, workbenchWindow]) {
-    if (win && !win.isDestroyed()) {
-      win.removeAllListeners("close");
-      win.close();
-    }
+  if (workbenchWindow && !workbenchWindow.isDestroyed()) {
+    workbenchWindow.removeAllListeners("close");
+    workbenchWindow.close();
   }
-  petWindow = null;
   workbenchWindow = null;
   finalizeAppExit();
 }
@@ -643,30 +627,17 @@ function applyApplicationMenu(): void {
   Menu.setApplicationMenu(null);
 }
 
-function petBounds(mode: "collapsed" | "expanded"): { x: number; y: number; width: number; height: number } {
-  const { workArea } = screen.getPrimaryDisplay();
-  const size = mode === "expanded" ? PET_EXPANDED : PET_COLLAPSED;
-  return {
-    x: workArea.x + workArea.width - size.width - PET_MARGIN,
-    y: workArea.y + workArea.height - size.height - PET_MARGIN,
-    width: size.width,
-    height: size.height,
-  };
-}
-
 function sendSessionControl(win: BrowserWindow | null, action: "suspend" | "resume"): void {
   if (!win || win.isDestroyed()) return;
   win.webContents.send("session:control", action);
 }
 
-async function loadRenderer(win: BrowserWindow, page: "pet" | "workbench"): Promise<void> {
+async function loadRenderer(win: BrowserWindow): Promise<void> {
   if (process.env.VITE_DEV_SERVER_URL) {
-    const suffix = page === "pet" ? "/pet.html" : "/";
-    await win.loadURL(`${process.env.VITE_DEV_SERVER_URL}${suffix}`);
+    await win.loadURL(`${process.env.VITE_DEV_SERVER_URL}/`);
     return;
   }
-  const file = page === "pet" ? "pet.html" : "index.html";
-  await win.loadFile(path.join(__dirname, "../dist", file));
+  await win.loadFile(path.join(__dirname, "../dist", "index.html"));
 }
 
 function isAppOwnedUrl(url: string): boolean {
@@ -691,54 +662,6 @@ function wireExternalNavigation(win: BrowserWindow): void {
     if (isAppOwnedUrl(url)) return;
     event.preventDefault();
     void shell.openExternal(url);
-  });
-}
-
-async function createPetWindow(): Promise<void> {
-  if (petWindow && !petWindow.isDestroyed()) {
-    return;
-  }
-
-  const bounds = petBounds("collapsed");
-  petWindow = new BrowserWindow({
-    ...bounds,
-    title: "my-agent · 伴侶",
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    hasShadow: false,
-    focusable: true,
-    show: false,
-    backgroundColor: "#00000000",
-    icon: existsSync(APP_ICON) ? APP_ICON : undefined,
-    webPreferences: {
-      preload: preloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  petWindow.setIgnoreMouseEvents(true, { forward: true });
-  petWindow.setAlwaysOnTop(true, "screen-saver");
-  if (process.platform === "darwin") {
-    petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  } else if (process.platform === "linux") {
-    petWindow.setVisibleOnAllWorkspaces(true);
-  }
-
-  petWindow.on("close", (event) => {
-    if (quitting) return;
-    event.preventDefault();
-    petWindow?.hide();
-  });
-
-  await loadRenderer(petWindow, "pet");
-  wireExternalNavigation(petWindow);
-
-  petWindow.on("closed", () => {
-    petWindow = null;
   });
 }
 
@@ -771,41 +694,12 @@ async function createWorkbenchWindow(): Promise<void> {
     // Phase 34: hide to tray; do not bounce back to pet as default entry
   });
 
-  await loadRenderer(workbenchWindow, "workbench");
+  await loadRenderer(workbenchWindow);
   wireExternalNavigation(workbenchWindow);
 
   workbenchWindow.on("closed", () => {
     workbenchWindow = null;
   });
-}
-
-async function showPetWindow(): Promise<void> {
-  try {
-    if (!sidecar || sidecar.killed || !sidecarInfo) {
-      await ensureSidecar();
-    }
-    let petNeedsResume = false;
-    if (workbenchWindow && !workbenchWindow.isDestroyed() && workbenchWindow.isVisible()) {
-      sendSessionControl(workbenchWindow, "suspend");
-      workbenchWindow.hide();
-    }
-    if (petWindow && !petWindow.isDestroyed() && !petWindow.isVisible()) {
-      petNeedsResume = true;
-    }
-    await createPetWindow();
-    if (petNeedsResume) {
-      sendSessionControl(petWindow, "resume");
-    }
-    petWindow?.show();
-    petWindow?.focus();
-  } catch (err) {
-    await dialog.showMessageBox({
-      type: "error",
-      title: "my-agent",
-      message: "无法显示伴侶",
-      detail: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 async function openWorkbenchWindow(): Promise<void> {
@@ -814,10 +708,6 @@ async function openWorkbenchWindow(): Promise<void> {
       await ensureSidecar();
     }
     let workbenchNeedsResume = false;
-    if (petWindow && !petWindow.isDestroyed() && petWindow.isVisible()) {
-      sendSessionControl(petWindow, "suspend");
-      petWindow.hide();
-    }
     if (workbenchWindow && !workbenchWindow.isDestroyed() && !workbenchWindow.isVisible()) {
       workbenchNeedsResume = true;
     }
@@ -870,7 +760,6 @@ async function switchToCli(): Promise<void> {
   }
 
   workbenchWindow?.hide();
-  petWindow?.hide();
 }
 
 function registerShortcuts(): void {
@@ -890,25 +779,9 @@ ipcMain.handle("app:open-external", async (_event, raw: unknown) => {
   return true;
 });
 
-ipcMain.on("pet:set-ignore-mouse-events", (_event, ignore: unknown) => {
-  if (!petWindow || petWindow.isDestroyed()) return;
-  if (ignore) {
-    petWindow.setIgnoreMouseEvents(true, { forward: true });
-  } else {
-    petWindow.setIgnoreMouseEvents(false);
-  }
-});
-
-ipcMain.handle("pet:set-bounds", (_event, mode: unknown) => {
-  if (!petWindow || petWindow.isDestroyed()) return;
-  const next = mode === "expanded" ? "expanded" : "collapsed";
-  petWindow.setBounds(petBounds(next));
-});
-
 ipcMain.handle("dialog:pick-directory", async () => {
   const parent =
     (workbenchWindow && !workbenchWindow.isDestroyed() ? workbenchWindow : null) ??
-    (petWindow && !petWindow.isDestroyed() ? petWindow : null) ??
     BrowserWindow.getFocusedWindow();
   const result = parent
     ? await dialog.showOpenDialog(parent, {

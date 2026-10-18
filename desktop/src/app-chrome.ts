@@ -140,7 +140,6 @@ export function mountAppChrome(
         <div class="hidden" aria-hidden="true">
           ${handlers.onOpenModelKeys ? '<button type="button" class="app-chrome-menu-item" id="chrome-model-keys" role="menuitem">模型密钥</button>' : ""}
           ${handlers.onOpenSettings ? '<button type="button" class="app-chrome-menu-item" id="chrome-settings" role="menuitem">托管区</button>' : ""}
-          <button type="button" class="app-chrome-menu-item" id="chrome-pet" role="menuitem">伴侣窗</button>
           <button type="button" class="app-chrome-menu-item" id="chrome-cli" role="menuitem">改用终端 (CLI)</button>
         </div>
       </div>
@@ -150,7 +149,6 @@ export function mountAppChrome(
   const themeSelect = root.querySelector<HTMLSelectElement>("#chrome-theme")!;
   const modelSelect = root.querySelector<HTMLSelectElement>("#chrome-model")!;
   const cliBtn = root.querySelector<HTMLButtonElement>("#chrome-cli")!;
-  const petBtn = root.querySelector<HTMLButtonElement>("#chrome-pet")!;
   const routeNotice = root.querySelector<HTMLElement>("#chrome-route-notice")!;
   const overflowMenu = root.querySelector<HTMLDetailsElement>(".app-chrome-menu");
 
@@ -194,10 +192,6 @@ export function mountAppChrome(
     void handlers.onSwitchToCli().finally(() => {
       cliBtn.disabled = false;
     });
-  });
-
-  petBtn.addEventListener("click", () => {
-    void window.myAgentDesktop?.openPet?.();
   });
 
   const settingsBtn = root.querySelector<HTMLButtonElement>("#chrome-settings");

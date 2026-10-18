@@ -162,7 +162,17 @@ export default defineConfig(({ command }) => {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, "index.html"),
-          pet: path.resolve(__dirname, "pet.html"),
+        },
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules/mermaid") || id.includes("node_modules/cytoscape") || id.includes("node_modules/katex") || id.includes("node_modules/dagre") || id.includes("node_modules/d3")) {
+              return "vendor-mermaid";
+            }
+            if (id.includes("node_modules/highlight.js") || id.includes("node_modules/marked")) {
+              return "vendor-markdown";
+            }
+            return undefined;
+          },
         },
       },
     },

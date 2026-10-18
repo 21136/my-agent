@@ -180,6 +180,111 @@ def _append_ledger(ledger: Path, entry: dict[str, Any]) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _leading_spaces(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
+def _reindent_replacement(
+    replacement: str,
+    find_lines: list[str],
+    matched_lines: list[str],
+) -> str:
+    """Shift replacement indentation by the uniform indent delta between find and matched block."""
+    deltas: list[int] = []
+    for f_line, m_line in zip(find_lines, matched_lines):
+        if f_line.strip() and m_line.strip():
+            deltas.append(_leading_spaces(m_line) - _leading_spaces(f_line))
+    if not deltas:
+        return replacement
+    # Use the first non-empty line's indent delta if all lines share a consistent shift
+    delta = deltas[0]
+    if delta == 0:
+        return replacement
+    rep_lines = replacement.splitlines(keepends=True)
+    out: list[str] = []
+    for r_line in rep_lines:
+        stripped = r_line.lstrip(" \t")
+        if not stripped or stripped in {"\n", "\r\n"}:
+            out.append(r_line)
+            continue
+        cur_indent = _leading_spaces(r_line)
+        new_indent = max(0, cur_indent + delta)
+        out.append((" " * new_indent) + stripped)
+    return "".join(out)
+
+
+def _fuzzy_line_replace(
+    text: str,
+    find: str,
+    replacement: str,
+    *,
+    not_found_msg: str,
+    multi_match_fmt: str,
+) -> str:
+    """Fallback when exact substring match fails: match line-by-line ignoring trailing
+    whitespace and uniform leading-indentation offset."""
+    norm_find = find.replace("\r\n", "\n").replace("\r", "\n")
+    find_lines = norm_find.splitlines()
+    while find_lines and not find_lines[-1].strip():
+        find_lines.pop()
+    if not find_lines:
+        raise ValueError(not_found_msg)
+
+    text_lines = text.splitlines(keepends=True)
+    n_find = len(find_lines)
+    n_text = len(text_lines)
+    if n_find > n_text:
+        raise ValueError(not_found_msg)
+
+    # Pass 1: match with trailing whitespace stripped (exact leading indent)
+    rstripped_find = [line.rstrip() for line in find_lines]
+    pass1_hits: list[int] = []
+    for i in range(n_text - n_find + 1):
+        if all(text_lines[i + j].rstrip() == rstripped_find[j] for j in range(n_find)):
+            pass1_hits.append(i)
+
+    if len(pass1_hits) == 1:
+        idx = pass1_hits[0]
+        matched_span = "".join(text_lines[idx : idx + n_find])
+        rep = replacement
+        if matched_span.endswith("\n") and not rep.endswith("\n"):
+            rep += "\n"
+        return "".join(text_lines[:idx]) + rep + "".join(text_lines[idx + n_find :])
+    if len(pass1_hits) > 1:
+        raise ValueError(multi_match_fmt.format(count=len(pass1_hits)))
+
+    # Pass 2: match ignoring leading/trailing whitespace, preserving relative indent structure
+    stripped_find = [line.strip() for line in find_lines]
+    if not any(stripped_find):
+        raise ValueError(not_found_msg)
+    pass2_hits: list[int] = []
+    for i in range(n_text - n_find + 1):
+        if not all(text_lines[i + j].strip() == stripped_find[j] for j in range(n_find)):
+            continue
+        # Verify relative indentation between non-empty lines is preserved
+        deltas = [
+            _leading_spaces(text_lines[i + j]) - _leading_spaces(find_lines[j])
+            for j in range(n_find)
+            if stripped_find[j]
+        ]
+        if deltas and len(set(deltas)) == 1:
+            pass2_hits.append(i)
+
+    if len(pass2_hits) == 0:
+        raise ValueError(not_found_msg)
+    if len(pass2_hits) > 1:
+        raise ValueError(multi_match_fmt.format(count=len(pass2_hits)))
+
+    idx = pass2_hits[0]
+    matched_lines = text_lines[idx : idx + n_find]
+    matched_span = "".join(matched_lines)
+    rep = _reindent_replacement(replacement, find_lines, matched_lines)
+    if matched_span.endswith("\n") and not rep.endswith("\n"):
+        rep += "\n"
+    return "".join(text_lines[:idx]) + rep + "".join(text_lines[idx + n_find :])
+
+
 def _apply_hunks(text: str, hunks: Any) -> tuple[str, int]:
     if not isinstance(hunks, list) or not hunks:
         raise ValueError("hunks must be a non-empty array")
@@ -196,21 +301,35 @@ def _apply_hunks(text: str, hunks: Any) -> tuple[str, int]:
         if not isinstance(replacement, str):
             raise ValueError(f"hunks[{index - 1}].replacement must be a string")
         count = current.count(find)
-        if count == 0:
-            raise ValueError(f"第 {index} 处没有找到要替换的原文")
-        if count > 1:
+        if count == 1:
+            current = current.replace(find, replacement, 1)
+        elif count > 1:
             raise ValueError(f"第 {index} 处原文出现了 {count} 处，无法确定改哪一处")
-        current = current.replace(find, replacement, 1)
+        else:
+            current = _fuzzy_line_replace(
+                current,
+                find,
+                replacement,
+                not_found_msg=f"第 {index} 处没有找到要替换的原文",
+                multi_match_fmt=f"第 {index} 处原文出现了 {{count}} 处，无法确定改哪一处",
+            )
     return current, len(hunks)
 
 
 def _apply_find_patch(text: str, find: str, replacement: str) -> tuple[str, int]:
     count = text.count(find)
-    if count == 0:
-        raise ValueError("没有找到要替换的原文")
+    if count == 1:
+        return text.replace(find, replacement, 1), 1
     if count > 1:
         raise ValueError(f"原文出现了 {count} 处，无法确定改哪一处")
-    return text.replace(find, replacement, 1), 1
+    patched = _fuzzy_line_replace(
+        text,
+        find,
+        replacement,
+        not_found_msg="没有找到要替换的原文",
+        multi_match_fmt="原文出现了 {count} 处，无法确定改哪一处",
+    )
+    return patched, 1
 
 
 def run_patch(payload: dict[str, Any]) -> dict[str, Any]:

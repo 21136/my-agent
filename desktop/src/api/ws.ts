@@ -800,6 +800,10 @@ export class AgentWsClient {
     this.send({ type: "host_scope.list" });
   }
 
+  setTurnMode(mode: "agent" | "ask"): void {
+    this.send({ type: "session.set_turn_mode", mode });
+  }
+
   addHostScope(payload: {
     host_id: string;
     path: string;
@@ -936,10 +940,7 @@ declare global {
       switchSidecarCandidate?: (root: string) => Promise<Record<string, unknown>>;
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
-      openPet?: () => Promise<void>;
       openExternal?: (url: string) => Promise<boolean>;
-      petSetIgnoreMouseEvents?: (ignore: boolean) => void;
-      petSetBounds?: (mode: "collapsed" | "expanded") => Promise<void>;
       onSessionControl?: (handler: (action: "suspend" | "resume") => void) => () => void;
       pickDirectory: () => Promise<string | null>;
       getDownloadsPath: () => Promise<string>;

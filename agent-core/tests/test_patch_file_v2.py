@@ -151,6 +151,38 @@ class PatchFileV2Tests(unittest.TestCase):
             self.assertNotIn("different hash", message)
             self.assertEqual(target.read_text(encoding="utf-8"), "完全不同的内容\n")
 
+    def test_fuzzy_indent_and_trailing_whitespace_fallback(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/patch_file",)) as paths:
+            registry = ToolRegistry.load(paths)
+            target = paths.workspace / "indent.py"
+            target.write_text(
+                "class Demo:\n"
+                "    def greet(self):   \n"
+                "        x = 1\n"
+                "        return x\n",
+                encoding="utf-8",
+            )
+            # Model passes find with 0 outer indent and no trailing spaces
+            result = run(
+                {
+                    "tool_name": "patch_file",
+                    "arguments": {
+                        "path": "workspace/indent.py",
+                        "find": "def greet(self):\n    x = 1\n    return x",
+                        "replacement": "def greet(self):\n    x = 42\n    return x + 1",
+                    },
+                },
+                registry=registry,
+            )
+            self.assertTrue(result.ok, result.error)
+            self.assertEqual(
+                target.read_text(encoding="utf-8"),
+                "class Demo:\n"
+                "    def greet(self):\n"
+                "        x = 42\n"
+                "        return x + 1\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

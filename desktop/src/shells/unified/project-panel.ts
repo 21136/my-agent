@@ -782,18 +782,27 @@ function renderProjectsRailSidebar(state: ProjectPanelState): string {
 
 function renderSettingsRailSidebar(state: ProjectPanelState): string {
   const isDark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
+  const partnerName = typeof localStorage !== "undefined" ? (localStorage.getItem("partner_name") || "小魔王") : "小魔王";
   const stoppedServices = state.services.filter((s) => !s.alive).length;
   const inactiveTerminals = state.terminalSessions.filter((s) => s.state !== "starting" && s.state !== "running").length;
   return `<div class="sidebar-settings-panel" style="display:flex;flex-direction:column;gap:0.75rem;padding:0.25rem 0;">
+    <section class="external-project-import" aria-label="专属搭档设定">
+      <div class="sidebar-change-banner-title">专属搭档（${escapeHtml(partnerName)}）</div>
+      <div class="sidebar-change-banner-changes">她的性格与说话默契保存在 <code>evolve/persona.md</code>，你可以随时告诉她想怎么调教她的语气。</div>
+      <div style="display:flex;gap:0.35rem;margin-top:0.4rem;">
+        <input type="text" class="overlay-search-input" id="settings-partner-name-input" placeholder="她的昵称（默认：小魔王）" value="${escapeHtml(partnerName)}" style="margin:0;flex:1;" />
+        <button type="button" class="unified-btn unified-btn-accent" data-action="settings-save-partner-name">改名</button>
+      </div>
+    </section>
+
     <section class="external-project-import" aria-label="外观与窗口">
       <div class="sidebar-change-banner-title">外观与形态</div>
-      <div class="sidebar-change-banner-changes">切换明暗主题，或打开桌面伴侣窗与 CLI 终端。</div>
+      <div class="sidebar-change-banner-changes">切换明暗主题，或切换到 CLI 终端。</div>
       <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
         <button type="button" class="unified-btn${!isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-light">亮色主题</button>
         <button type="button" class="unified-btn${isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-dark">暗色主题</button>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.4rem;">
-        <button type="button" class="unified-btn" data-action="settings-open-pet">打开伴侣窗</button>
         <button type="button" class="unified-btn" data-action="settings-switch-cli">改用终端 (CLI)</button>
       </div>
     </section>

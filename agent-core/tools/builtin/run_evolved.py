@@ -258,7 +258,7 @@ def execute_evolved_tool(
     # evolved-tool subprocess on Windows: the host may reap its descendants
     # when the JSON request completes.  Run the terminal adapter in the
     # long-lived agent process so its PTY worker has the correct lifetime.
-    if tool.name == "interactive_terminal":
+    if tool.name in _IN_PROCESS_TOOL_RUNNERS:
         return _execute_in_process_tool(tool, payload)
 
     stdin = json.dumps(payload, ensure_ascii=False)
@@ -367,11 +367,33 @@ def execute_evolved_tool(
     return inner
 
 
+_IN_PROCESS_TOOL_RUNNERS: dict[str, str] = {
+    "interactive_terminal": "interactive_terminal",
+    "patch_file": "run_patch",
+    "write_text": "run_write",
+    "git_diff": "run_git_diff",
+    "git_snapshot": "run_snapshot",
+}
+_IN_PROCESS_MODULE_CACHE: dict[tuple[str, str, int], Any] = {}
+
+
 def _execute_in_process_tool(tool: EvolvedTool, payload: dict[str, Any]) -> dict[str, Any]:
-    """Execute a lifecycle-sensitive evolved tool without a child wrapper."""
-    module_name = f"_evolved_in_process_{tool.name}"
-    module = sys.modules.get(module_name)
+    """Execute a lifecycle-sensitive or high-frequency evolved tool without a child wrapper."""
+    runner_name = _IN_PROCESS_TOOL_RUNNERS.get(tool.name)
+    if not runner_name:
+        raise _EvolvedExecutionError(
+            f"unsupported in-process evolved tool: {tool.name}",
+            code=ToolErrorCode.VALIDATION_ERROR,
+        )
+    script_resolved = str(tool.entry.script_path.resolve())
+    try:
+        mtime_ns = tool.entry.script_path.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = 0
+    cache_key = (tool.name, script_resolved, mtime_ns)
+    module = _IN_PROCESS_MODULE_CACHE.get(cache_key)
     if module is None:
+        module_name = f"_evolved_in_process_{tool.name}_{abs(hash(script_resolved))}"
         spec = importlib.util.spec_from_file_location(module_name, tool.entry.script_path)
         if spec is None or spec.loader is None:
             raise _EvolvedExecutionError(
@@ -385,11 +407,12 @@ def _execute_in_process_tool(tool: EvolvedTool, payload: dict[str, Any]) -> dict
         except Exception:
             sys.modules.pop(module_name, None)
             raise
+        _IN_PROCESS_MODULE_CACHE[cache_key] = module
 
-    runner = getattr(module, "interactive_terminal", None)
+    runner = getattr(module, runner_name, None)
     if not callable(runner):
         raise _EvolvedExecutionError(
-            f"in-process evolved tool has no interactive_terminal runner: {tool.name}",
+            f"in-process evolved tool {tool.name} has no {runner_name} runner",
             code=ToolErrorCode.VALIDATION_ERROR,
         )
     try:

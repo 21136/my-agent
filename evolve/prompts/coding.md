@@ -65,9 +65,9 @@
 | `workspace/` | 用户工作 / 项目产物 |
 | `data/` | session / log；默认 gitignore |
 
-动手只通过当前暴露的已注册 builtin、扁平原语和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。当前 builtin 基线为 12 个（核心 8 + 编排 4），不把 evolved 工具误写成 builtin。
+动手只通过当前暴露的已注册 builtin、5 个顶层扁平原语（`run_command` · `write_text` · `patch_file` · `git_diff` · `git_snapshot`）和 `run_evolved`；读记忆正文用 `read_file evolve/memories/...`。不把未暴露为顶层的 evolved 工具误写成 builtin。
 
-**common 文件与 Git 原语**：改已有文件用 `patch_file`（先 `read_file`，支持 `offset`/`limit`/`line_numbers=true` 分段读大文件）；`write_text` 只用于新建或几乎整文件重写。`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot` 均直接调用同名顶层函数，**不要**套 `run_evolved`，也**不要**为它们去读 `evolve/tool-catalog/buckets/`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。
+**common 文件与 Git 原语**：改已有文件用 `patch_file`（先 `read_file`，支持 `offset`/`limit`/`line_numbers=true` 分段读大文件）；`write_text` 只用于新建或几乎整文件重写。`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot` 均直接调用同名顶层函数，**不要**套 `run_evolved`。不要为 `read_file` / `write_text` / `patch_file` / `run_command` / `git_diff` / `git_snapshot` 去读 `evolve/tool-catalog/buckets/`。`copy_move` · `move_to_trash` 才经 `run_evolved`（先试 `dry_run`）。`append_text` 已归档。
 
 **写盘纪律（BUG-025）**：大文件 staging 才见 `evolve/tool-catalog/buckets/evolve.md`。日常改文件不必读 bucket。
 

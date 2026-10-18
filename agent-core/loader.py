@@ -443,6 +443,8 @@ def format_memory_index(entries: list[MemoryIndexEntry]) -> str:
 
 
 def format_builtin_summary() -> str:
+    from tool_proxies import PROXY_EVOLVED_TOOL_NAMES
+
     core_names = {
         "read_file",
         "list_dir",
@@ -453,9 +455,13 @@ def format_builtin_summary() -> str:
         "fetch_url",
         "run_evolved",
     }
+    orchestration_count = sum(1 for t in BUILTIN_TOOLS if t.name not in core_names)
+    proxy_list = " · ".join(PROXY_EVOLVED_TOOL_NAMES)
     lines = [
-        "[Builtin 工具]",
-        "恒为 12 个 function（核心 8 + 编排 4）；evolved 经 run_evolved，见工具索引：",
+        "[Builtin 与顶层扁平工具]",
+        f"Builtin {len(BUILTIN_TOOLS)} 个（核心 {len(core_names)} + 编排 {orchestration_count}，部分按项目/普通会话裁剪）"
+        f" + 顶层扁平原语 {len(PROXY_EVOLVED_TOOL_NAMES)} 个（{proxy_list}，直接调用勿套 run_evolved）；"
+        "其余 evolved 经 run_evolved，见工具索引：",
         "核心：",
     ]
     for tool in BUILTIN_TOOLS:
@@ -465,6 +471,7 @@ def format_builtin_summary() -> str:
     for tool in BUILTIN_TOOLS:
         if tool.name not in core_names:
             lines.append(f"- {tool.name}: {tool.description}")
+    lines.append(f"扁平原语（直调）：{proxy_list}")
     return "\n".join(lines)
 
 
@@ -687,6 +694,19 @@ def load_safety_prompt(evolve_dir: Path) -> str:
     if not path.is_file():
         return "[safety.md missing at evolve/prompts/safety.md]"
     return path.read_text(encoding="utf-8").strip()
+
+
+PERSONA_REL = Path("persona.md")
+
+
+def load_persona_prompt(evolve_dir: Path) -> str:
+    path = evolve_dir / PERSONA_REL
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 SUBAGENT_PROMPTS_DIR = Path("subagents")
@@ -930,11 +950,11 @@ def format_capability_hints(
     _ = registry  # retained for call-site compatibility
     lines = [
         "[能力提示]",
-        "- 工具怎么选：`read_file` / `write_text` / `patch_file` / `run_command` 看本提示即可，不要读 bucket。"
+        "- 工具怎么选：`read_file` / `write_text` / `patch_file` / `run_command` / `git_diff` / `git_snapshot` 看本提示即可，不要读 bucket。"
         "其它 evolved 的参数细节才 `read_file evolve/tool-catalog/buckets/<桶>.md`。"
-        "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file` 优先扁平原语，"
+        "执行面：凡 status=active 均可调；`run_command`/`write_text`/`patch_file`/`git_diff`/`git_snapshot` 优先扁平原语，"
         "其余 evolved 经 `run_evolved`（`status=archived` 不可调，见 docs/ARCHIVED-TOOLS.md）。",
-        "- 只读：read_file · list_dir · glob_file_search · grep（本地）；web_search · fetch_url（网络）",
+        "- 只读：read_file · list_dir · glob_file_search · grep · git_diff · git_snapshot（本地）；web_search · fetch_url（网络）",
         "- 写/改：已有文件用 patch_file（先 read_file，再用唯一 find）；write_text 只用于新建或几乎整文件重写。"
         "copy_move / move_to_trash 才 run_evolved，先试 dry_run",
         "- 执行：run_command（一次性 shell）；长驻 run_evolved → run_service 或 run_command background:true",
@@ -1190,11 +1210,18 @@ def build_system_prompt(
 
     sections: list[tuple[str, str]] = [
         (core_section, core_text),
-        ("topic_index", format_topic_index(topic_index)),
-        ("memory_index", format_memory_index(scan_memory_index(evolve_dir))),
-        ("builtin_summary", format_builtin_summary()),
-        ("host_scope", _format_host_scope_overlay(agent_paths)),
     ]
+    persona_text = load_persona_prompt(evolve_dir)
+    if persona_text:
+        sections.append(("persona", persona_text))
+    sections.extend(
+        [
+            ("topic_index", format_topic_index(topic_index)),
+            ("memory_index", format_memory_index(scan_memory_index(evolve_dir))),
+            ("builtin_summary", format_builtin_summary()),
+            ("host_scope", _format_host_scope_overlay(agent_paths)),
+        ]
+    )
 
     if include_overlay:
         sections.append(("session", format_session_overlay(session)))

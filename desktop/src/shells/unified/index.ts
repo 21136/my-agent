@@ -533,6 +533,7 @@ export function mountUnifiedShell(
             <div class="unified-token-bar hidden" id="unified-token-bar"></div>
           </div>
           <footer class="unified-composer" id="unified-composer">
+            <button type="button" class="unified-btn unified-mode-pill" id="unified-mode-toggle" data-mode="agent" title="切换 动手(Agent) / 只聊(Ask) 模式">动手</button>
             <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
             <textarea class="unified-input" id="unified-input" rows="1" placeholder="输入消息，或拖入/粘贴文件…"></textarea>
             <button type="button" class="unified-btn unified-btn-accent" id="unified-send">发送</button>
@@ -562,6 +563,7 @@ export function mountUnifiedShell(
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
+  const modeToggleBtn = root.querySelector<HTMLButtonElement>("#unified-mode-toggle")!;
   const stopBtn = root.querySelector<HTMLButtonElement>("#unified-stop")!;
   const sendBtn = root.querySelector<HTMLButtonElement>("#unified-send")!;
   const confirmGlass = root.querySelector<HTMLElement>("#unified-confirm-glass")!;
@@ -670,6 +672,20 @@ export function mountUnifiedShell(
     return true;
   }
 
+function timeOfDayPartnerPlaceholder(): string {
+  const hour = new Date().getHours();
+  if (hour >= 22 || hour < 5) {
+    return "夜深了，还想折腾点什么？直接丢给我…";
+  }
+  if (hour < 11) {
+    return "早，今天我们先啃哪块硬骨头？";
+  }
+  if (hour < 18) {
+    return "说吧，这轮想让我改哪儿、查哪儿？";
+  }
+  return "晚上好，有什么活儿直接交给我…";
+}
+
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
     freeChatActive = !hasProject && Boolean(sessionId);
   }
@@ -679,20 +695,7 @@ export function mountUnifiedShell(
       input.placeholder = "归档线只读回看；点顶栏「回到活线」继续工作";
       return;
     }
-    if (freeChatActive && !projectState.projectId) {
-      input.placeholder = "普通对话：可问答或造工具；写项目代码请先新建/选择项目";
-      return;
-    }
-    if (!projectState.projectId) {
-      input.placeholder = "输入消息，或先打开一个项目…";
-      return;
-    }
-    if (projectState.projectEntry === "direct" || projectState.projectTemplate === "light") {
-      input.placeholder = "输入消息或拖入/粘贴文件…";
-      return;
-    }
-    input.placeholder =
-      "输入消息或拖入/粘贴文件；改计划会自动交给计划搭档";
+    input.placeholder = timeOfDayPartnerPlaceholder();
   }
 
   function syncArchivedViewUi(): void {
@@ -718,7 +721,6 @@ export function mountUnifiedShell(
     shell: shellId,
     canAccept: () => {
       if (chat.model.confirmPending) return false;
-      if (!projectState.projectId) return false;
       if (isViewingArchivedThread(projectState)) return false;
       return true;
     },
@@ -765,6 +767,31 @@ export function mountUnifiedShell(
   let processJumpCursor = -1;
   let processJumpTurnIndex = -1;
 
+  let currentTurnMode: "agent" | "ask" = "agent";
+
+  function syncModeToggleUi(mode?: string): void {
+    if (mode === "ask" || mode === "agent") {
+      currentTurnMode = mode;
+    }
+    modeToggleBtn.dataset.mode = currentTurnMode;
+    modeToggleBtn.textContent = currentTurnMode === "ask" ? "只聊" : "动手";
+    modeToggleBtn.title = currentTurnMode === "ask"
+      ? "当前：只聊 (Ask) — 只读探索与回答；点击切换为 动手 (Agent)"
+      : "当前：动手 (Agent) — 允许写文件与执行命令；点击切换为 只聊 (Ask)";
+    modeToggleBtn.disabled = chat.isWorking() || chat.model.confirmPending || isViewingArchivedThread(projectState);
+  }
+
+  modeToggleBtn.addEventListener("click", () => {
+    if (chat.isWorking() || chat.model.confirmPending) return;
+    const next = currentTurnMode === "agent" ? "ask" : "agent";
+    syncModeToggleUi(next);
+    try {
+      client.setTurnMode(next);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+    }
+  });
+
   function resetProcessJumpCursor(): void {
     processJumpCursor = -1;
     processJumpTurnIndex = -1;
@@ -784,6 +811,7 @@ export function mountUnifiedShell(
     syncComposerMetaVisibility();
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
+    syncModeToggleUi();
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
     if (perspective === "project" && workingChanged) {
       renderSidebar();
@@ -1029,10 +1057,25 @@ export function mountUnifiedShell(
 
   function handleSidebarNewSession(): void {
     if (projectState.projectId) {
-      handleNewThread();
+      void handleNewThread();
       return;
     }
-    void handleFreeChat();
+    if (chat.isWorking()) {
+      setStatus("助手执行中，请稍后再开新对话");
+      return;
+    }
+    if (freeChatActive && chat.model.blocks.length === 0) {
+      input.focus();
+      return;
+    }
+    try {
+      clearChatForSwitch();
+      client.sendCommand("新会话");
+      setStatus("正在新建会话…");
+      input.focus();
+    } catch (err) {
+      setStatus(`新建会话失败：${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   sidebarSessionSearchEl.addEventListener("input", () => {
@@ -2647,7 +2690,7 @@ export function mountUnifiedShell(
     return parts.join("");
   }
 
-  function renderChatSegment(segment: ChatRenderSegment): string {
+  function renderChatSegment(segment: ChatRenderSegment, isLatestSegment = true): string {
     if (segment.kind === "orphan") {
       return renderBlocksFlat(segment.blocks);
     }
@@ -2661,7 +2704,8 @@ export function mountUnifiedShell(
       ? new Map(processBlocks.map((block, index) => [block.turnKey, { index: index + 1, total: processBlocks.length }]))
       : null;
     // 过程 pill always sits after the reply it produced — never depends on collapsed state.
-    const inner = renderTurnInnerWithPet(orderTurnBlocksForDisplay(segment.group.blocks), live);
+    const settled = !live && !isLatestSegment;
+    const inner = renderTurnInnerWithPet(orderTurnBlocksForDisplay(segment.group.blocks), live, settled);
     activeProcessMeta = prevMeta;
     return renderTurnCardShell(segment.group, inner, { live });
   }
@@ -2672,19 +2716,25 @@ export function mountUnifiedShell(
       (block): block is Extract<ChatBlock, { kind: "process" }> => block.kind === "process",
     );
     const tools = procs.flatMap((block) => getProcessTools(block));
+    const runningTools = tools.filter((tool) => tool.status === "running");
+    const lastRunning = runningTools[runningTools.length - 1];
+    const runningCanonical = lastRunning
+      ? resolveEffectiveToolName(lastRunning.tool, lastRunning.summary)
+      : undefined;
     return {
       live,
-      toolRunning: tools.some((tool) => tool.status === "running"),
+      toolRunning: runningTools.length > 0,
+      runningToolName: runningCanonical,
       thinkingLive: procs.some((block) => isProcessThinkingLive(block, chat.model.currentTurnKey)),
       replyStreaming: blocks.some((block) => block.kind === "assistant-streaming" && block.text.trim() !== ""),
       hasReply: blocks.some((block) => block.kind === "assistant" && block.text.trim() !== ""),
       toolFailed: Boolean(lastFailedTool(tools)),
       hasNotice: blocks.some((block) => block.kind === "notice" && !adoptPathFromNotice(block.text)),
-      confirmPending: blocks.some((block) => block.kind === "confirm" && !block.resolved),
+      confirmPending: blocks.some((block) => block.kind === "confirm" && !block.resolved) || chat.model.confirmPending,
     };
   }
 
-  function renderTurnInnerWithPet(blocks: ChatBlock[], live: boolean): string {
+  function renderTurnInnerWithPet(blocks: ChatBlock[], live: boolean, settled = false): string {
     if (blocks[0]?.kind !== "user") return renderBlocksFlat(blocks);
     const rest = blocks.slice(1);
     if (!rest.length && !live) return renderBlocksFlat(blocks);
@@ -2692,22 +2742,24 @@ export function mountUnifiedShell(
     const content = rest.length
       ? renderBlocksFlat(rest)
       : '<div class="unified-pet-waiting" aria-hidden="true"><span></span><span></span><span></span></div>';
-    return `${renderBlocksFlat(blocks.slice(0, 1))}<div class="unified-pet-row" data-pet-state="${state}">${renderPetAvatarHtml(state)}<div class="unified-pet-content">${renderPetNameHtml(state)}${content}</div></div>`;
+    return `${renderBlocksFlat(blocks.slice(0, 1))}<div class="unified-pet-row${settled ? " is-settled" : ""}" data-pet-state="${state}">${renderPetAvatarHtml(state, settled)}<div class="unified-pet-content">${renderPetNameHtml(state)}${content}</div></div>`;
   }
 
-  /** Only the newest pet keeps animating; older ones settle on their static first frame. */
+  /** Only the live turn (or the latest turn for 2.5s after completion) keeps animating; older turns settle on static frame. */
   function settlePetAvatars(): void {
     const rows = chatEl.querySelectorAll<HTMLElement>(".unified-pet-row");
+    const working = chat.isWorking();
     rows.forEach((row, index) => {
       const latest = index === rows.length - 1;
+      const shouldAnimate = latest && working;
       const img = row.querySelector<HTMLImageElement>(".unified-pet-avatar-img");
       const source = row.querySelector<HTMLSourceElement>(".unified-pet-avatar source");
       if (!img || !source) return;
       const still = source.getAttribute("srcset") ?? "";
       const animated = still.replace(/-still\.webp$/, ".webp");
-      const want = latest ? animated : still;
+      const want = shouldAnimate ? animated : still;
       if (img.getAttribute("src") !== want) img.setAttribute("src", want);
-      row.classList.toggle("is-settled", !latest);
+      row.classList.toggle("is-settled", !shouldAnimate);
     });
   }
 
@@ -2715,7 +2767,8 @@ export function mountUnifiedShell(
     if (!useTurnCardLayout()) {
       return renderBlocksFlat(blocks);
     }
-    return segmentChatBlocks(blocks).map(renderChatSegment).join("");
+    const segs = segmentChatBlocks(blocks);
+    return segs.map((seg, idx) => renderChatSegment(seg, idx === segs.length - 1)).join("");
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -3670,6 +3723,17 @@ export function mountUnifiedShell(
         case "jump-review-summary":
           jumpToReviewSummary();
           return;
+        case "settings-save-partner-name": {
+          const nameInput = document.querySelector<HTMLInputElement>("#settings-partner-name-input");
+          const nextName = (nameInput?.value || "").trim() || "小魔王";
+          localStorage.setItem("partner_name", nextName);
+          renderedPrints = [];
+          renderedSegmentPrints = [];
+          renderChat();
+          renderSidebar();
+          setStatus(`已将搭档昵称更新为：${nextName}`);
+          return;
+        }
         case "settings-theme-light": {
           const themeSelect = document.querySelector<HTMLSelectElement>("#chrome-theme");
           if (themeSelect) {
@@ -3693,9 +3757,6 @@ export function mountUnifiedShell(
           return;
         case "settings-open-host-scope":
           document.querySelector<HTMLButtonElement>("#chrome-settings")?.click();
-          return;
-        case "settings-open-pet":
-          void window.myAgentDesktop?.openPet?.();
           return;
         case "settings-switch-cli":
           document.querySelector<HTMLButtonElement>("#chrome-cli")?.click();
@@ -4250,6 +4311,7 @@ export function mountUnifiedShell(
         updatePlaceholder();
         updateWorkbenchEmpty();
         syncArchivedViewUi();
+        syncModeToggleUi(event.turn_mode);
         setStatus(sessionBannerStatus(event.llm_model_label || "Flash", event.turn_mode_label || ""));
         refreshTopbar();
         renderSidebar();

@@ -10,11 +10,11 @@ export const PET_AVATAR_STATES = ["idle", "thinking", "coding", "done", "error"]
 export type PetAvatarState = (typeof PET_AVATAR_STATES)[number];
 
 export const PET_AVATAR_LABELS: Record<PetAvatarState, string> = {
-  idle: "助手",
-  thinking: "助手 · 思考中",
-  coding: "助手 · 执行中",
-  done: "助手 · 已完成",
-  error: "助手 · 出错了",
+  idle: "小魔王 · 随时待命",
+  thinking: "小魔王 · 在琢磨…",
+  coding: "小魔王 · 正动手…",
+  done: "小魔王 · 搞定啦",
+  error: "小魔王 · 踩坑了",
 };
 
 /** Facts about one turn's assistant side, gathered by the shell. */
@@ -57,23 +57,25 @@ export function petAvatarSrc(state: PetAvatarState, still = false): string {
  * Avatar markup. `<picture>` swaps to the static first frame when the OS asks for
  * reduced motion, without any JS.
  */
-export function renderPetAvatarHtml(state: PetAvatarState): string {
+export function renderPetAvatarHtml(state: PetAvatarState, settled = false): string {
   const label = PET_AVATAR_LABELS[state];
   return `<div class="unified-pet-avatar" data-pet-state="${state}" role="img" aria-label="${label}" title="${label}">`
     + `<picture><source media="(prefers-reduced-motion: reduce)" srcset="${petAvatarSrc(state, true)}" />`
-    + `<img class="unified-pet-avatar-img" src="${petAvatarSrc(state)}" alt="" width="40" height="40" decoding="async" draggable="false" /></picture>`
+    + `<img class="unified-pet-avatar-img" src="${petAvatarSrc(state, settled)}" alt="" width="40" height="40" decoding="async" draggable="false" /></picture>`
     + `</div>`;
 }
 
 export const PET_STATE_TAGS: Record<PetAvatarState, string> = {
-  idle: "待命",
-  thinking: "思考中",
-  coding: "执行中",
-  done: "已完成",
-  error: "出错了",
+  idle: "随时待命",
+  thinking: "在琢磨…",
+  coding: "正动手…",
+  done: "搞定",
+  error: "踩坑了",
 };
 
 /** Name line above the assistant side of a turn, with a state tag. */
 export function renderPetNameHtml(state: PetAvatarState): string {
-  return `<div class="unified-pet-name">my-agent<span class="unified-pet-state">${PET_STATE_TAGS[state]}</span></div>`;
+  const customName = typeof localStorage !== "undefined" ? (localStorage.getItem("partner_name") || "").trim() : "";
+  const displayName = customName || "小魔王";
+  return `<div class="unified-pet-name">${displayName}<span class="unified-pet-state">${PET_STATE_TAGS[state]}</span></div>`;
 }

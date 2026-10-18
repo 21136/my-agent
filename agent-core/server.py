@@ -927,6 +927,22 @@ class WsSessionHandler:
             bridge.emit(models_list_event(self.paths))
             return
 
+        if msg_type == "session.set_turn_mode":
+            mode_raw = message.get("mode")
+            if mode_raw not in {"agent", "ask"}:
+                emit_error(bridge, "session.set_turn_mode requires mode='agent'|'ask'")
+                return
+            if bridge._turn_busy.is_set():
+                emit_error(bridge, "回合进行中，结束后再切换模式")
+                return
+            repl.session.set_turn_mode(mode_raw)
+            repl.agent.executor.session.turn_mode = repl.session.meta.turn_mode
+            repl.session.save()
+            bridge.emit_session_state(repl.session)
+            label = "动手 (Agent)" if repl.session.meta.turn_mode == "agent" else "只聊 (Ask)"
+            bridge.emit({"type": "notice", "text": f"已切换模式：{label}"})
+            return
+
         if msg_type == "proposal.accept":
             proposal_id = message.get("proposal_id")
             if not isinstance(proposal_id, str):
