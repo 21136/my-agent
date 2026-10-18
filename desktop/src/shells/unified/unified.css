@@ -5,10 +5,10 @@
    In normal flow, so it can never overlap messages. Sources are square; object-fit
    keeps the aspect ratio (never stretched). */
 .unified-pet-row {
-  --ma-pet-size: 40px;
+  --ma-pet-size: 46px;
   display: grid;
   grid-template-columns: var(--ma-pet-size) minmax(0, 1fr);
-  column-gap: 0.65rem;
+  column-gap: 0.75rem;
   align-items: start;
   margin-top: 0.35rem;
 }
@@ -17,12 +17,12 @@
   top: 0.4rem;
   width: var(--ma-pet-size);
   height: var(--ma-pet-size);
-  border-radius: 12px;
+  border-radius: 15px;
   overflow: hidden;
   cursor: pointer;
-  background: color-mix(in srgb, var(--ma-surface) 82%, var(--ma-accent) 8%);
-  box-shadow: 0 0 0 1px var(--ma-border), 0 2px 6px color-mix(in srgb, var(--ma-text) 10%, transparent);
-  transition: box-shadow 0.25s ease, transform 0.2s ease;
+  background: color-mix(in srgb, var(--ma-surface) 82%, var(--ma-accent) 12%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border)), 0 4px 12px color-mix(in srgb, var(--ma-accent) 14%, transparent);
+  transition: box-shadow 0.25s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .unified-pet-avatar picture,
 .unified-pet-avatar-img {
@@ -37,7 +37,46 @@
   user-select: none;
 }
 .unified-pet-avatar:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px) scale(1.04);
+}
+.unified-pet-avatar:active {
+  transform: scale(0.95);
+}
+.unified-pet-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--ma-text);
+  margin-bottom: 0.35rem;
+}
+.unified-pet-state {
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  color: var(--ma-accent);
+  background: color-mix(in srgb, var(--ma-accent) 11%, transparent);
+}
+.unified-pet-poke-bubble {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: #fff;
+  background: var(--nt-gradient, var(--ma-accent));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--ma-accent) 28%, transparent);
+}
+.unified-pet-poke-bubble.is-pop {
+  animation: pet-poke-pop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes pet-poke-pop {
+  0% { opacity: 0; transform: translateY(4px) scale(0.9); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 .unified-pet-row[data-pet-state="thinking"] .unified-pet-avatar,
 .unified-pet-row[data-pet-state="reading"] .unified-pet-avatar,
@@ -50,8 +89,100 @@
 .unified-pet-row[data-pet-state="error"] .unified-pet-avatar {
   box-shadow: 0 0 0 1.5px color-mix(in srgb, #d0453a 70%, transparent);
 }
-.unified-pet-row.is-settled .unified-pet-avatar {
-  opacity: 0.88;
+/* Ambient study aura + Presence stage */
+.unified-stage {
+  background:
+    radial-gradient(ellipse 68% 52% at 72% 16%, color-mix(in srgb, var(--ma-accent) 9%, transparent), transparent 72%),
+    radial-gradient(ellipse 55% 48% at 24% 86%, color-mix(in srgb, #38bdf8 7%, transparent), transparent 70%),
+    var(--ma-bg);
+}
+
+.unified-presence-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: min(64vh, 440px);
+  padding: 2.5rem 1.5rem 1.5rem;
+  user-select: none;
+}
+
+.unified-presence-halo {
+  position: relative;
+  padding: 6px;
+  border-radius: 30px;
+  background: linear-gradient(135deg, rgb(61 139 255 / 0.32), rgb(139 92 246 / 0.35));
+  box-shadow:
+    0 12px 36px color-mix(in srgb, var(--ma-accent) 24%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--ma-accent) 28%, transparent);
+  margin-bottom: 1rem;
+}
+
+.unified-presence-avatar {
+  --ma-pet-size: 96px;
+  position: relative;
+  top: 0;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+}
+
+.unified-presence-name {
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 0.18rem 0.65rem;
+  border-radius: 999px;
+  color: var(--ma-accent);
+  background: color-mix(in srgb, var(--ma-accent) 11%, transparent);
+  margin-bottom: 0.65rem;
+}
+
+.unified-presence-greeting {
+  margin: 0 0 0.45rem;
+  font-size: 1.32rem;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+  color: var(--ma-text);
+}
+
+.unified-presence-sub {
+  margin: 0 0 1.4rem;
+  max-width: 26rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ma-text-muted);
+}
+
+.unified-presence-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.55rem;
+  max-width: 34rem;
+}
+
+.unified-presence-chip {
+  padding: 0.48rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 22%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-surface) 86%, transparent);
+  backdrop-filter: blur(8px);
+  color: var(--ma-text);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--ma-text) 4%, transparent);
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+}
+
+.unified-presence-chip:hover {
+  transform: translateY(-2px);
+  border-color: var(--ma-accent);
+  color: var(--ma-accent);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ma-accent) 18%, transparent);
 }
 .unified-pet-welcome {
   display: flex;
@@ -326,14 +457,18 @@
    Topbar
    ================================================================ */
 
+.unified-topbar.is-empty-bar {
+  display: none !important;
+}
+
 .unified-topbar {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  min-height: 44px;
-  padding: 0.5rem 1rem;
-  background: var(--ma-bg);
-  border-bottom: 1px solid var(--ma-chrome-border, var(--ma-border));
+  min-height: 40px;
+  padding: 0.35rem 1rem;
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
   transition:
     border-color 0.35s ease,
     box-shadow 0.35s ease,
@@ -641,23 +776,28 @@
 .unified-shell[data-perspective="project"] .unified-turn-user {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.85rem;
 }
 
 .unified-shell[data-perspective="project"] .unified-turn-user .unified-turn-body {
-  max-width: 88%;
-  padding: 0.55rem 0.75rem;
-  border-radius: 12px 12px 4px 12px;
-  background: color-mix(in srgb, var(--ma-surface) 92%, var(--ma-bg));
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ma-text) 4%, transparent);
+  max-width: min(76%, 42rem);
+  padding: 0.65rem 0.95rem;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--nt-bubble, linear-gradient(135deg, #4b74f6 0%, #6355ea 55%, #7c4fe0 100%));
+  color: #ffffff;
+  font-size: 0.94rem;
+  line-height: 1.55;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--ma-accent) 20%, transparent);
 }
 
 .unified-shell[data-perspective="project"] .unified-turn-assistant {
-  margin-bottom: 1rem;
-  padding: 0.85rem 1rem;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--ma-bg) 88%, white);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--ma-text) 5%, transparent);
+  margin-bottom: 0.75rem;
+  padding: 0.95rem 1.15rem;
+  border-radius: 4px 18px 18px 18px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 75%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ma-text) 4%, transparent);
 }
 
 .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > p:first-child {

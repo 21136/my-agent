@@ -113,10 +113,11 @@ export function mountAppChrome(
   let defaultFlashId = FALLBACK_MODEL_ID;
   let sessionModelReceived = false;
 
+  const partnerTitle = typeof localStorage !== "undefined" ? (localStorage.getItem("partner_name") || "小魔王") : "小魔王";
   root.innerHTML = `
     <header class="app-chrome">
       <div class="app-chrome-leading">
-        <span class="app-chrome-title">my-agent</span>
+        <span class="app-chrome-title">✦ ${partnerTitle}的空间</span>
         <div class="app-chrome-controls">
           <label class="app-chrome-field" for="chrome-theme">
             <span class="app-chrome-label">外观</span>

@@ -130,11 +130,18 @@ export function renderTopbarV2(
     : "";
 
   if (!proposal) {
+    if (!state.projectLabel && !state.contextLabel && !state.headerCtas.length) {
+      container.innerHTML = "";
+      container.classList.add("is-empty-bar");
+      return;
+    }
+    container.classList.remove("is-empty-bar");
     const context = state.contextLabel
       ? `<span class="unified-topbar-context-text" title="${escapeHtml(state.contextLabel)}">${escapeHtml(state.contextLabel)}</span>`
-      : `<span class="unified-topbar-context-text is-muted">当前无待处理</span>`;
+      : "";
     container.innerHTML = `${leading}<div class="unified-topbar-context${headerCtas ? " has-next-step" : ""}">${context}${headerCtas}</div>${trailing}`;
   } else {
+    container.classList.remove("is-empty-bar");
     const count = state.proposals.length;
     const label = proposal.summary || proposal.proposal_id;
     const context = `<span class="unified-topbar-context-text">${count} 条待处理 · ${escapeHtml(label)}</span>

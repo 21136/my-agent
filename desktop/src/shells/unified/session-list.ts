@@ -114,7 +114,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         sessionId: sid,
         projectId: s.project_id,
         title: s.title || s.project_id,
-        meta: isCurrent ? "项目 · 当前" : "项目 · 可续接",
+        meta: isCurrent ? "项目 · 正在推进" : "项目 · 随时续上",
         updatedAt: s.updated_at,
         dot: isCurrent && input.working ? "running" : "project",
         current: isCurrent,
@@ -123,14 +123,14 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
     }
     // Empty ordinary sessions (created on launch/reconnect) are noise; keep only the current one.
     if (s.message_count === 0 && !isCurrent) continue;
-    const count = s.message_count ? `${s.message_count} 条消息` : "";
+    const count = s.message_count ? `${s.message_count} 句` : "";
     const untitled = !s.title || s.title === sid;
     rows.push({
       kind: "chat",
       sessionId: sid,
       projectId: "",
-      title: untitled ? (s.message_count ? "未命名对话" : "新会话") : s.title,
-      meta: ["普通对话", count].filter(Boolean).join(" · "),
+      title: untitled ? (s.message_count ? "随手闲聊" : "新会话") : s.title,
+      meta: ["随聊", count].filter(Boolean).join(" · "),
       updatedAt: s.updated_at,
       dot: isCurrent && input.working ? "running" : "idle",
       current: isCurrent,
@@ -195,7 +195,7 @@ export function renderSessionFiltersHtml(input: SessionListInput): string {
     `<button type="button" class="ma-session-chip${input.filter === id ? " is-on" : ""}" data-session-filter="${id}" aria-pressed="${input.filter === id}"><span>${escapeHtml(label)}</span><span class="n">${n}</span></button>`;
   const parts = [chip("all", "全部", counts.all)];
   if (input.projectId && counts.project > 0) parts.push(chip("project", input.projectId, counts.project));
-  parts.push(chip("chat", "普通对话", counts.chat));
+  parts.push(chip("chat", "随聊", counts.chat));
   return parts.join("");
 }
 

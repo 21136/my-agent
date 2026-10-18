@@ -71,7 +71,7 @@ import {
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
-import { petTurnState, renderPetAvatarHtml, renderPetNameHtml, type PetTurnSummary } from "./companion";
+import { petTurnState, renderIntimatePresenceStageHtml, renderPetAvatarHtml, renderPetNameHtml, type PetTurnSummary } from "./companion";
 import "./unified.css";
 import "./neon-twin.css";
 import "./sidebar-v2.css";
@@ -896,40 +896,26 @@ function timeOfDayPartnerPlaceholder(): string {
     if (usage !== undefined) lastTokenUsage = usage;
     if (limit !== undefined) lastTokenLimit = limit;
     if (usage === undefined || limit === undefined || limit <= 0) {
-      if (lastLlmCacheRatio === undefined && turnCachePromptTotal <= 0) {
-        tokenBar.classList.add("hidden");
-        syncComposerMetaVisibility();
-        return;
-      }
+      tokenBar.classList.add("hidden");
+      syncComposerMetaVisibility();
+      return;
+    }
+    const ratio = usage / limit;
+    // Keep the room clean: only surface token warning when context is nearing capacity (≥80%).
+    if (ratio < 0.80) {
+      tokenBar.classList.add("hidden");
+      syncComposerMetaVisibility();
+      return;
     }
     tokenBar.classList.remove("hidden");
-    const ratio = usage !== undefined && limit !== undefined && limit > 0 ? usage / limit : 0;
     let cls = "unified-token-bar";
-    if (limit !== undefined && limit > 0) {
-      if (ratio >= 0.95) cls += " unified-token-red";
-      else if (ratio >= 0.85) cls += " unified-token-yellow";
-    }
-    const parts: string[] = [];
-    if (usage !== undefined && limit !== undefined && limit > 0) {
-      const usageK = Math.round(usage / 1000);
-      const limitK = Math.round(limit / 1000);
-      parts.push(`${usageK}k / ${limitK}k tokens`);
-    }
-    const turnRatio =
-      turnCachePromptTotal > 0 ? turnCacheCachedTotal / turnCachePromptTotal : undefined;
-    if (turnRatio !== undefined && turnCachePromptTotal > 0) {
-      parts.push(`回合缓存 ${Math.round(turnRatio * 100)}%`);
-      if (turnRatio >= 0.5) cls += " unified-token-cache-good";
-    } else if (lastLlmCacheRatio !== undefined) {
-      parts.push(`缓存 ${Math.round(lastLlmCacheRatio * 100)}%`);
-      if (lastLlmCacheRatio >= 0.5) cls += " unified-token-cache-good";
-    }
+    if (ratio >= 0.95) cls += " unified-token-red";
+    else if (ratio >= 0.85) cls += " unified-token-yellow";
+    const usageK = Math.round(usage / 1000);
+    const limitK = Math.round(limit / 1000);
     tokenBar.className = cls;
-    tokenBar.textContent = parts.join(" · ");
-    tokenBar.title =
-      turnRatio !== undefined
-        ? `本回合 LLM 累计：${turnCacheCachedTotal} / ${turnCachePromptTotal} prompt tokens 来自缓存`
-        : "最近一次 LLM 调用的 prompt 缓存命中率";
+    tokenBar.textContent = `记忆容量 ${Math.round(ratio * 100)}%（${usageK}k / ${limitK}k）`;
+    tokenBar.title = "当前对话上下文占用较高，可随时新开会话";
     syncComposerMetaVisibility();
   }
 
@@ -1005,9 +991,9 @@ function timeOfDayPartnerPlaceholder(): string {
     const pid = projectState.projectId;
     if (!pid) {
       sidebarProjectRowEl.innerHTML = `<div class="sidebar-project-row-inner is-empty">
-        <span class="sidebar-project-ava" aria-hidden="true">＋</span>
-        <span class="sidebar-project-main"><span class="sidebar-project-name">未绑定项目</span><span class="sidebar-project-sub">普通对话也可直接开始</span></span>
-        <button type="button" class="unified-btn" data-sidebar-action="open-projects">打开</button>
+        <span class="sidebar-project-ava" aria-hidden="true">✦</span>
+        <span class="sidebar-project-main"><span class="sidebar-project-name">自由随聊中</span><span class="sidebar-project-sub">也可以挑个项目一起折腾</span></span>
+        <button type="button" class="unified-btn" data-sidebar-action="open-projects">项目</button>
         <button type="button" class="unified-btn unified-btn-accent" data-sidebar-action="new-project">新建</button>
       </div>`;
       return;
@@ -2764,6 +2750,9 @@ function timeOfDayPartnerPlaceholder(): string {
   }
 
   function renderBlocksGrouped(blocks: ChatBlock[]): string {
+    if (!blocks.length && !chat.isWorking()) {
+      return renderIntimatePresenceStageHtml(escapeHtml(projectState.projectId || ""));
+    }
     if (!useTurnCardLayout()) {
       return renderBlocksFlat(blocks);
     }
@@ -3302,8 +3291,71 @@ function timeOfDayPartnerPlaceholder(): string {
     }, RENDER_THROTTLE_MS);
   }
 
+  let pokeCount = 0;
+  let pokeBubbleTimer: number | null = null;
+
+  function pickPokeLine(state: string): string {
+    pokeCount += 1;
+    if (pokeCount >= 4 && pokeCount % 3 === 0) {
+      return "再戳墨镜都要歪了！有活儿直接派给我～";
+    }
+    const hour = new Date().getHours();
+    if (state === "thinking") return "别催别催，正给你顺这块逻辑呢…";
+    if (state === "coding") return "正下刀改着呢，盯紧屏幕，马上好！";
+    if (state === "error") return "啧，刚才那步有点小意外，换个路子再试一次。";
+    if (hour >= 22 || hour < 5) {
+      const nightLines = [
+        "夜深了还在折腾？把活儿丢给我，你靠着歇会儿。",
+        "这么晚还陪我熬夜写码，算你有良心。",
+        "困了就直说，剩下的收尾交给我。",
+      ];
+      return nightLines[pokeCount % nightLines.length];
+    }
+    const lines = [
+      "在呢在呢，随时听你指挥。",
+      "墨镜擦亮了，今天想拿哪块代码开刀？",
+      "刚帮你把周边环境盯紧了，放心大胆改。",
+      "戳我干嘛，说吧，又有什么新点子？",
+    ];
+    return lines[pokeCount % lines.length];
+  }
+
   chatEl.addEventListener("click", (ev) => {
-    if ((ev.target as HTMLElement).closest(".unified-pet-avatar")) {
+    const quickChip = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-quick-prompt]");
+    if (quickChip?.dataset.quickPrompt) {
+      input.value = quickChip.dataset.quickPrompt;
+      input.dispatchEvent(new Event("input"));
+      sendBtn.click();
+      return;
+    }
+    const avatarEl = (ev.target as HTMLElement).closest<HTMLElement>(".unified-pet-avatar");
+    if (avatarEl) {
+      const state = avatarEl.dataset.petState || "idle";
+      const stageGreeting = avatarEl.closest<HTMLElement>(".unified-presence-stage")?.querySelector<HTMLElement>(".unified-presence-greeting");
+      if (stageGreeting) {
+        stageGreeting.textContent = pickPokeLine(state);
+        input.focus();
+        return;
+      }
+      const row = avatarEl.closest<HTMLElement>(".unified-pet-row");
+      const nameEl = row?.querySelector<HTMLElement>(".unified-pet-name");
+      if (nameEl) {
+        let bubble = nameEl.querySelector<HTMLElement>(".unified-pet-poke-bubble");
+        if (!bubble) {
+          bubble = document.createElement("span");
+          bubble.className = "unified-pet-poke-bubble";
+          nameEl.appendChild(bubble);
+        }
+        bubble.textContent = pickPokeLine(state);
+        bubble.classList.remove("is-pop");
+        void bubble.offsetWidth;
+        bubble.classList.add("is-pop");
+        if (pokeBubbleTimer !== null) window.clearTimeout(pokeBubbleTimer);
+        pokeBubbleTimer = window.setTimeout(() => {
+          bubble?.remove();
+          pokeBubbleTimer = null;
+        }, 3200);
+      }
       input.focus();
       return;
     }
@@ -3727,6 +3779,8 @@ function timeOfDayPartnerPlaceholder(): string {
           const nameInput = document.querySelector<HTMLInputElement>("#settings-partner-name-input");
           const nextName = (nameInput?.value || "").trim() || "小魔王";
           localStorage.setItem("partner_name", nextName);
+          const chromeTitle = document.querySelector<HTMLElement>(".app-chrome-title");
+          if (chromeTitle) chromeTitle.textContent = `✦ ${nextName}的空间`;
           renderedPrints = [];
           renderedSegmentPrints = [];
           renderChat();

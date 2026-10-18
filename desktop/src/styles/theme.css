@@ -2,24 +2,24 @@
    Tokens mirror /workspace/my-agent-redesign/tokens.css. Light = cool grey-white, dark = ink with violet. */
 :root,
 html[data-theme="light"] {
-  --ma-bg: #f3f4f8;
+  --ma-bg: #f6f5fb;
   --ma-surface: #ffffff;
-  --ma-surface-2: #e9ebf2;
-  --ma-text: #171627;
-  --ma-text-muted: #5f5d78;
-  --ma-text-faint: #66647f;
-  --ma-border: rgb(60 60 120 / 0.14);
-  --ma-border-strong: rgb(60 60 120 / 0.22);
-  --ma-accent: #4f46e5;
+  --ma-surface-2: #edeaf6;
+  --ma-text: #1b192e;
+  --ma-text-muted: #64607d;
+  --ma-text-faint: #7b7794;
+  --ma-border: rgb(91 80 160 / 0.11);
+  --ma-border-strong: rgb(91 80 160 / 0.19);
+  --ma-accent: #5b50e6;
   --ma-accent-muted: #8b8cf0;
   --ma-danger: #e11d48;
-  --ma-focus: rgb(91 92 255 / 0.38);
-  --ma-grow-flow-a: #dfe6ff;
-  --ma-grow-flow-b: #b9b5ff;
-  --ma-grow-flow-c: #8b7cf6;
-  --ma-project-bg: #f3f4f8;
+  --ma-focus: rgb(91 92 255 / 0.32);
+  --ma-grow-flow-a: #e4e9ff;
+  --ma-grow-flow-b: #c7c2ff;
+  --ma-grow-flow-c: #9d8df8;
+  --ma-project-bg: #f6f5fb;
   --ma-project-surface: #ffffff;
-  --ma-project-accent: #4f46e5;
+  --ma-project-accent: #5b50e6;
   --ma-project-flow-a: #c7d7ff;
   --ma-project-flow-b: #9aa6ff;
   --ma-project-flow-c: #b69cff;
