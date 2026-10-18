@@ -9,7 +9,7 @@ last_used_at: "2026-08-09T00:41:37.678013Z"
 
 ## 背景
 
-my-agent 是本地可进化的个人 Agent：**Git 为真源**，LLM 仅经当前暴露的已注册 Builtin、顶层扁平原语（`run_command` / `write_text` / `patch_file` / `git_diff` / `git_snapshot`）与 `run_evolved` 动手；进化产物在 `evolve/`（prompt / memory / tool）。
+本仓库（产品内部名 my-agent）是本地可进化的个人 Agent；**对用户聊天自称小魔王**（见 `evolve/persona.md`）。**Git 为真源**，LLM 仅经当前暴露的已注册 Builtin、顶层扁平原语（`run_command` / `write_text` / `patch_file` / `git_diff` / `git_snapshot`）与 `run_evolved` 动手；进化产物在 `evolve/`（prompt / memory / tool）。
 
 ## 建设顺序（历史 Phase 路线，供参考）
 

@@ -103,9 +103,16 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  min-height: min(64vh, 440px);
-  padding: 2.5rem 1.5rem 1.5rem;
+  min-height: min(68vh, 520px);
+  padding: 2rem 1.5rem 1.5rem;
   user-select: none;
+  gap: 1.15rem;
+}
+
+.unified-presence-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .unified-presence-halo {
@@ -116,7 +123,7 @@
   box-shadow:
     0 12px 36px color-mix(in srgb, var(--ma-accent) 24%, transparent),
     0 0 0 1px color-mix(in srgb, var(--ma-accent) 28%, transparent);
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .unified-presence-avatar {
@@ -128,31 +135,164 @@
   border-radius: 24px;
 }
 
-.unified-presence-name {
+.unified-presence-routine-pill {
   font-size: 0.76rem;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 0.18rem 0.65rem;
+  letter-spacing: 0.02em;
+  padding: 0.22rem 0.75rem;
   border-radius: 999px;
   color: var(--ma-accent);
   background: color-mix(in srgb, var(--ma-accent) 11%, transparent);
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.55rem;
 }
 
 .unified-presence-greeting {
-  margin: 0 0 0.45rem;
-  font-size: 1.32rem;
+  margin: 0;
+  font-size: 1.3rem;
   font-weight: 680;
   letter-spacing: -0.015em;
   color: var(--ma-text);
 }
 
-.unified-presence-sub {
-  margin: 0 0 1.4rem;
-  max-width: 26rem;
-  font-size: 0.9rem;
-  line-height: 1.55;
+.unified-cozy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.85rem;
+  width: min(100%, 44rem);
+  text-align: left;
+}
+
+.unified-sticky-card,
+.unified-stickers-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.95rem 1.05rem;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 18%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-surface) 84%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ma-text) 4%, transparent);
+}
+
+.unified-sticky-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.unified-sticky-pin {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ma-text);
+}
+
+.unified-sticky-meta {
+  font-size: 0.72rem;
   color: var(--ma-text-muted);
+}
+
+.unified-sticky-body {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--ma-text);
+}
+
+.unified-desk-toys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+.unified-toy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 22%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface));
+  color: var(--ma-text);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.unified-toy-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--ma-accent);
+  background: color-mix(in srgb, var(--ma-accent) 14%, var(--ma-surface));
+}
+
+.unified-toy-btn:active {
+  transform: scale(0.96);
+}
+
+.unified-toy-btn .cnt {
+  font-size: 0.68rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ma-accent) 18%, transparent);
+  color: var(--ma-accent);
+}
+
+.unified-sticker-add-btn {
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--ma-accent) 45%, var(--ma-border));
+  background: transparent;
+  color: var(--ma-accent);
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.unified-sticker-add-btn:hover {
+  background: color-mix(in srgb, var(--ma-accent) 10%, transparent);
+}
+
+.unified-stickers-wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-content: flex-start;
+}
+
+.unified-bond-sticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-accent) 10%, var(--ma-surface));
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 22%, transparent);
+}
+
+.unified-bond-sticker-del {
+  border: none;
+  background: transparent;
+  color: var(--ma-text-muted);
+  font-size: 0.82rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.unified-bond-sticker-del:hover {
+  opacity: 1;
+  color: var(--ma-danger);
 }
 
 .unified-presence-prompts {

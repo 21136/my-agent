@@ -230,16 +230,36 @@ html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user .
   border-color: transparent;
 }
 
-/* assistant: no card, light typography */
+/* assistant: intimate frosted glass bubble, sized to content */
 html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant {
-  margin-bottom: 0.25rem;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  width: fit-content;
+  max-width: min(88%, 50rem);
+  margin-bottom: 0.55rem;
+  padding: 0.85rem 1.15rem;
+  border-radius: 6px 20px 20px 20px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 18%, var(--ma-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ma-accent) 4%, var(--ma-surface)), color-mix(in srgb, var(--ma-surface) 92%, transparent));
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 10px 28px color-mix(in srgb, var(--ma-text) 5%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.55);
+}
+html[data-theme="dark"] .unified-shell[data-perspective="project"] .unified-turn-assistant {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface)), color-mix(in srgb, var(--ma-surface) 88%, transparent));
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > :first-child {
+  margin-top: 0;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > :last-child {
+  margin-bottom: 0;
 }
 html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown > p:first-child {
-  font-weight: 400;
+  font-weight: 450;
   font-size: inherit;
 }
 html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant .unified-markdown {

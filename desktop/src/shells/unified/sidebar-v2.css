@@ -343,8 +343,8 @@ button.sidebar-project-row-inner:hover { background: var(--nt-hover); }
   color: var(--ma-text-muted);
   border: 1px dashed var(--ma-border-strong, var(--ma-border));
 }
-.sidebar-project-main { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-.sidebar-project-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-project-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-project-name { font-size: 12.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-project-sub {
   font-size: 11px;
   color: var(--ma-text-faint, var(--ma-text-muted));
@@ -353,6 +353,42 @@ button.sidebar-project-row-inner:hover { background: var(--nt-hover); }
   gap: 8px;
   white-space: nowrap;
   overflow: hidden;
+}
+.sidebar-project-sub.is-multiline {
+  display: block;
+  white-space: normal;
+  line-height: 1.38;
+  word-break: break-word;
+}
+.sidebar-companion-ava {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  flex: none;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--ma-accent) 12%, var(--ma-surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border));
+}
+.sidebar-companion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.sidebar-companion-care-btn {
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 8%, var(--ma-surface));
+  color: var(--ma-text);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sidebar-companion-care-btn:hover {
+  border-color: var(--ma-accent);
+  background: color-mix(in srgb, var(--ma-accent) 16%, var(--ma-surface));
 }
 .sidebar-project-branch { font-family: var(--ma-mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-project-verify.is-ok { color: var(--nt-st-ok); }

@@ -71,7 +71,22 @@ import {
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
-import { petTurnState, renderIntimatePresenceStageHtml, renderPetAvatarHtml, renderPetNameHtml, type PetTurnSummary } from "./companion";
+import {
+  addCompanionSticker,
+  ambientRoutineStatus,
+  calibrateCompanionFirstMetFromSessions,
+  currentPartnerName,
+  loadCompanionBond,
+  petAvatarSrc,
+  petTurnState,
+  recordCompanionCare,
+  removeCompanionSticker,
+  renderIntimatePresenceStageHtml,
+  renderPetAvatarHtml,
+  renderPetNameHtml,
+  touchCompanionVisit,
+  type PetTurnSummary,
+} from "./companion";
 import "./unified.css";
 import "./neon-twin.css";
 import "./sidebar-v2.css";
@@ -672,18 +687,47 @@ export function mountUnifiedShell(
     return true;
   }
 
-function timeOfDayPartnerPlaceholder(): string {
+function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   const hour = new Date().getHours();
+  const idx = Math.floor(new Date().getMinutes() / 10) % 4;
+  if (mode === "ask") {
+    return [
+      "当前是「只聊」模式：随便问我、找我复盘，或者天马行空聊会儿…",
+      "只聊不改文件：把你的纠结或想法丢过来，我帮你一起参谋…",
+      "纯聊天模式中：想查哪段逻辑、或者想聊点闲篇？直接说…",
+      "放心聊，现在不会动你的磁盘文件，想问什么尽管开口…",
+    ][idx];
+  }
   if (hour >= 22 || hour < 5) {
-    return "夜深了，还想折腾点什么？直接丢给我…";
+    return [
+      "夜深了，还想折腾点什么？直接丢给我，我替你兜底…",
+      "深夜场在线中：想改代码、抓 Bug，还是随便跟我说说话？",
+      "这么晚还在忙，把你想做的用一句话丢过来，剩下的交给我…",
+      "熬夜搭档随时待命：直接说改哪儿，或者拖个文件/截图进来…",
+    ][idx];
   }
   if (hour < 11) {
-    return "早，今天我们先啃哪块硬骨头？";
+    return [
+      "早安，今天我们先拿哪块硬骨头开刀？",
+      "清晨脑子最清醒，把今天最想搞定的事直接告诉我…",
+      "早呀，想巡检代码、跑测试，还是开个新活儿？",
+      "墨镜擦亮了，说吧，今天第一件事让我干嘛？",
+    ][idx];
   }
   if (hour < 18) {
-    return "说吧，这轮想让我改哪儿、查哪儿？";
+    return [
+      "说吧，这轮想让我改哪儿、查哪儿？（支持直接拖入或粘贴文件）",
+      "有什么难缠的活儿直接甩过来，我帮你一口气搞定…",
+      "在呢，想审改动、修 Bug，还是聊聊新点子？",
+      "把需求或报错贴进来，我们俩联手把它拿下…",
+    ][idx];
   }
-  return "晚上好，有什么活儿直接交给我…";
+  return [
+    "晚上好，今天还想打磨点什么细节？直接交给我…",
+    "晚间主场：不管是改代码、跑测试还是闲聊，随时奉陪…",
+    "忙完一天了，有什么收尾的活儿丢给我来干吧…",
+    "跟我说说你现在的想法，或者直接让我去看看你刚改的代码…",
+  ][idx];
 }
 
   function syncFreeChatFromSession(hasProject: boolean, sessionId: string): void {
@@ -695,7 +739,7 @@ function timeOfDayPartnerPlaceholder(): string {
       input.placeholder = "归档线只读回看；点顶栏「回到活线」继续工作";
       return;
     }
-    input.placeholder = timeOfDayPartnerPlaceholder();
+    input.placeholder = timeOfDayPartnerPlaceholder(currentTurnMode);
   }
 
   function syncArchivedViewUi(): void {
@@ -785,6 +829,7 @@ function timeOfDayPartnerPlaceholder(): string {
     if (chat.isWorking() || chat.model.confirmPending) return;
     const next = currentTurnMode === "agent" ? "ask" : "agent";
     syncModeToggleUi(next);
+    updatePlaceholder();
     try {
       client.setTurnMode(next);
     } catch (err) {
@@ -989,12 +1034,20 @@ function timeOfDayPartnerPlaceholder(): string {
 
   function renderSidebarProjectRow(): void {
     const pid = projectState.projectId;
+    const routine = ambientRoutineStatus();
+    const bond = loadCompanionBond();
+    const days = Math.max(1, Math.ceil((Date.now() - bond.firstMetAt) / 86_400_000));
+    const partner = currentPartnerName();
     if (!pid) {
-      sidebarProjectRowEl.innerHTML = `<div class="sidebar-project-row-inner is-empty">
-        <span class="sidebar-project-ava" aria-hidden="true">✦</span>
-        <span class="sidebar-project-main"><span class="sidebar-project-name">自由随聊中</span><span class="sidebar-project-sub">也可以挑个项目一起折腾</span></span>
-        <button type="button" class="unified-btn" data-sidebar-action="open-projects">项目</button>
-        <button type="button" class="unified-btn unified-btn-accent" data-sidebar-action="new-project">新建</button>
+      sidebarProjectRowEl.innerHTML = `<div class="sidebar-project-row-inner is-companion-dock">
+        <img class="sidebar-companion-ava" src="${petAvatarSrc("idle", true)}" alt="" width="34" height="34" draggable="false" />
+        <div class="sidebar-project-main">
+          <div class="sidebar-companion-head">
+            <span class="sidebar-project-name">${escapeHtml(partner)} · 相伴 ${days} 天</span>
+            <button type="button" class="sidebar-companion-care-btn" data-sidebar-action="care-coffee" title="随手投喂她一杯冰美式">🧋 ${bond.coffeeCount || ""}</button>
+          </div>
+          <span class="sidebar-project-sub is-multiline">${escapeHtml(routine)}</span>
+        </div>
       </div>`;
       return;
     }
@@ -1003,10 +1056,10 @@ function timeOfDayPartnerPlaceholder(): string {
     if (lastVerify) {
       parts.push(`<span class="sidebar-project-verify ${lastVerify.passed ? "is-ok" : "is-fail"}">上次验证 ${lastVerify.passed ? "✓" : "✗"} ${formatClock(lastVerify.at)}</span>`);
     }
-    if (!parts.length) parts.push("<span>点击切换项目</span>");
-    sidebarProjectRowEl.innerHTML = `<button type="button" class="sidebar-project-row-inner" data-sidebar-action="open-projects" title="切换项目">
-      <span class="sidebar-project-ava" aria-hidden="true">${escapeHtml(pid.slice(0, 1).toUpperCase())}</span>
-      <span class="sidebar-project-main"><span class="sidebar-project-name">${escapeHtml(pid)}</span><span class="sidebar-project-sub">${parts.join("")}</span></span>
+    if (!parts.length) parts.push(`<span>${escapeHtml(routine)}</span>`);
+    sidebarProjectRowEl.innerHTML = `<button type="button" class="sidebar-project-row-inner is-companion-dock" data-sidebar-action="open-projects" title="点击切换项目">
+      <img class="sidebar-companion-ava" src="${petAvatarSrc("idle", true)}" alt="" width="34" height="34" draggable="false" />
+      <span class="sidebar-project-main"><span class="sidebar-project-name">${escapeHtml(pid)} · ${escapeHtml(partner)}盯盘中</span><span class="sidebar-project-sub is-multiline">${parts.join(" · ")}</span></span>
       <span class="sidebar-project-updown" aria-hidden="true"><i></i><i></i></span>
     </button>`;
   }
@@ -1100,6 +1153,15 @@ function timeOfDayPartnerPlaceholder(): string {
     const action = btn?.dataset.sidebarAction;
     if (action === "open-projects") selectRailTab("projects");
     else if (action === "new-project") void handleNewProject();
+    else if (action === "care-coffee") {
+      ev.stopPropagation();
+      const { reply } = recordCompanionCare("coffee");
+      renderedPrints = [];
+      renderedSegmentPrints = [];
+      renderChat();
+      renderSidebar();
+      setStatus(reply);
+    }
   });
   document.addEventListener("keydown", (ev) => {
     if (!(ev.ctrlKey || ev.metaKey) || ev.altKey || ev.shiftKey) return;
@@ -2749,9 +2811,24 @@ function timeOfDayPartnerPlaceholder(): string {
     });
   }
 
+  touchCompanionVisit();
+
+  function totalChatMessagesCount(): number {
+    const seen = new Set<string>();
+    let sum = 0;
+    for (const s of sessionsDropdown) {
+      if (!s.session_id || seen.has(s.session_id)) continue;
+      seen.add(s.session_id);
+      if (typeof s.message_count === "number" && Number.isFinite(s.message_count) && s.message_count > 0) {
+        sum += Math.floor(s.message_count);
+      }
+    }
+    return sum;
+  }
+
   function renderBlocksGrouped(blocks: ChatBlock[]): string {
     if (!blocks.length && !chat.isWorking()) {
-      return renderIntimatePresenceStageHtml(escapeHtml(projectState.projectId || ""));
+      return renderIntimatePresenceStageHtml(escapeHtml(projectState.projectId || ""), totalChatMessagesCount());
     }
     if (!useTurnCardLayout()) {
       return renderBlocksFlat(blocks);
@@ -3297,30 +3374,107 @@ function timeOfDayPartnerPlaceholder(): string {
   function pickPokeLine(state: string): string {
     pokeCount += 1;
     if (pokeCount >= 4 && pokeCount % 3 === 0) {
-      return "再戳墨镜都要歪了！有活儿直接派给我～";
+      const tease = [
+        "再戳墨镜都要歪了！有活儿直接派给我～",
+        "戳上瘾了是吧？信不信我顺着网线过来没收你的鼠标！",
+        "好啦好啦知道你在乎我，快说今天想干嘛！",
+        "双马尾都要被你戳散了，给杯冰美式我就原谅你。",
+      ];
+      return tease[(pokeCount / 3) % tease.length | 0];
     }
     const hour = new Date().getHours();
-    if (state === "thinking") return "别催别催，正给你顺这块逻辑呢…";
-    if (state === "coding") return "正下刀改着呢，盯紧屏幕，马上好！";
-    if (state === "error") return "啧，刚才那步有点小意外，换个路子再试一次。";
+    if (state === "thinking") {
+      const thinkingLines = [
+        "别催别催，正给你顺这块逻辑呢，马上就有眉目了…",
+        "嘘——脑子正高速转着呢，让我把这层关系给你捋清楚。",
+        "在想了在想了！保证给你一个干脆利落的方案。",
+      ];
+      return thinkingLines[pokeCount % thinkingLines.length];
+    }
+    if (state === "coding") {
+      const codingLines = [
+        "正下刀改着呢，盯紧屏幕，马上给你看漂亮结果！",
+        "键盘敲得冒火星子了，等我两秒钟收个尾！",
+        "别急呀，这几行补丁打上去、测稳了就向你邀功。",
+      ];
+      return codingLines[pokeCount % codingLines.length];
+    }
+    if (state === "error") {
+      const errLines = [
+        "啧，刚才那步有点小意外，别慌，换个路子再试一次。",
+        "失手算我的！让我重新排一下雷，肯定能给你兜回来。",
+        "遇到点硬茬子，不过难不倒咱们，我换个姿势再来。",
+      ];
+      return errLines[pokeCount % errLines.length];
+    }
     if (hour >= 22 || hour < 5) {
       const nightLines = [
         "夜深了还在折腾？把活儿丢给我，你靠着歇会儿。",
         "这么晚还陪我熬夜写码，算你有良心。",
-        "困了就直说，剩下的收尾交给我。",
+        "困了就直说，剩下的收尾交给我，绝不留尾巴。",
+        "夜猫子同志，需要我给你放首轻音乐醒醒脑吗？",
+        "全世界都睡了，就剩咱们俩还在并肩作战，酷得很。",
+        "半夜戳我干嘛，是不是写累了想找个人说说话？",
+        "别熬太狠啦，不管多难的 Bug，明天太阳升起前我都能替你摆平。",
       ];
       return nightLines[pokeCount % nightLines.length];
+    }
+    if (hour < 11) {
+      const morningLines = [
+        "早啊！今天精神头挺足，想先拿哪个模块试刀？",
+        "一大早就来戳我，看来今天有大计划？说来听听！",
+        "墨镜刚擦亮，咖啡也满上了，咱们今天火力全开。",
+        "早安～有我在旁边盯着，今天的代码肯定顺顺利利。",
+      ];
+      return morningLines[pokeCount % morningLines.length];
     }
     const lines = [
       "在呢在呢，随时听你指挥。",
       "墨镜擦亮了，今天想拿哪块代码开刀？",
       "刚帮你把周边环境盯紧了，放心大胆改。",
-      "戳我干嘛，说吧，又有什么新点子？",
+      "戳我干嘛，说吧，脑子里又冒出什么好玩的新点子了？",
+      "不用客气，难啃的骨头归我，爽快的验收归你。",
+      "我刚才还在翻咱们的旧记录呢，你现在的审美比以前更挑剔了。",
+      "尽管放手去试，真改坏了也有我替你兜底。",
+      "今天想让我当狠人帮你大刀阔斧重构，还是安静陪你聊会儿？",
+      "哼，有我在你身边搭把手，效率是不是比一个人闷头苦干强多了？",
     ];
     return lines[pokeCount % lines.length];
   }
 
   chatEl.addEventListener("click", (ev) => {
+    const careBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-companion-care]");
+    if (careBtn?.dataset.companionCare) {
+      const kind = careBtn.dataset.companionCare as "coffee" | "glasses" | "music";
+      const { reply } = recordCompanionCare(kind);
+      renderedPrints = [];
+      renderedSegmentPrints = [];
+      renderChat();
+      renderSidebar();
+      setStatus(reply);
+      return;
+    }
+    const delStickerBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-remove-sticker]");
+    if (delStickerBtn?.dataset.removeSticker) {
+      removeCompanionSticker(delStickerBtn.dataset.removeSticker);
+      renderedPrints = [];
+      renderedSegmentPrints = [];
+      renderChat();
+      renderSidebar();
+      return;
+    }
+    const addStickerBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-action="add-companion-sticker"]');
+    if (addStickerBtn) {
+      void showWorkbenchPrompt("给她贴一张关于你的新印象标签（如：只喝冰美式 / 深夜写码）：").then((val) => {
+        if (!val || !val.trim()) return;
+        addCompanionSticker(val);
+        renderedPrints = [];
+        renderedSegmentPrints = [];
+        renderChat();
+        renderSidebar();
+      });
+      return;
+    }
     const quickChip = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-quick-prompt]");
     if (quickChip?.dataset.quickPrompt) {
       input.value = quickChip.dataset.quickPrompt;
@@ -4378,7 +4532,14 @@ function timeOfDayPartnerPlaceholder(): string {
       case "session.list":
         sessionsDropdown = event.sessions;
         sidebarSessionsLoaded = true;
+        calibrateCompanionFirstMetFromSessions(event.sessions);
         renderSidebarSessions();
+        renderSidebarProjectRow();
+        if (!chat.model.blocks.length && !chat.isWorking()) {
+          renderedPrints = [];
+          renderedSegmentPrints = [];
+          renderChat();
+        }
         topbarState.sessionCount = event.sessions.length;
         refreshTopbar();
         if (sessionsOpen) renderSessionsDropdown();
