@@ -10,6 +10,7 @@ export type StagedFile = {
   readable_text: boolean;
   copied: boolean;
   image_input?: boolean;
+  vision_input?: boolean;
 };
 
 const IMAGE_MIMES = new Set([
@@ -127,6 +128,7 @@ export function mountFileDrop(options: {
   const pasteTargets = options.pasteTargets?.length
     ? options.pasteTargets
     : [composer];
+  const dropTargets = Array.from(new Set([composer, ...pasteTargets]));
   let items: StagedFile[] = [];
 
   const chips = document.createElement("div");
@@ -143,7 +145,13 @@ export function mountFileDrop(options: {
     for (const item of items) {
       const chip = document.createElement("span");
       chip.className = "file-drop-chip";
-      const readable = item.image_input ? " · 可识图" : item.readable_text ? "" : " · 非文本";
+      const readable = item.image_input || item.vision_input
+        ? item.image_input
+          ? " · 可识图"
+          : " · PDF可识图"
+        : item.readable_text
+          ? ""
+          : " · 非文本";
       chip.innerHTML = `
         <span class="file-drop-chip-name" title="${escapeHtml(item.ref)}">${escapeHtml(item.name)}</span>
         <span class="file-drop-chip-meta">${formatSize(item.size)}${readable}</span>
@@ -260,9 +268,11 @@ export function mountFileDrop(options: {
     setItems(items.filter((item) => item.id !== attachmentId));
   });
 
-  composer.addEventListener("dragover", onDragOver);
-  composer.addEventListener("dragleave", onDragLeave);
-  composer.addEventListener("drop", onDrop);
+  for (const target of dropTargets) {
+    target.addEventListener("dragover", onDragOver);
+    target.addEventListener("dragleave", onDragLeave);
+    target.addEventListener("drop", onDrop);
+  }
   for (const target of pasteTargets) {
     target.addEventListener("paste", onPaste);
   }
@@ -274,9 +284,11 @@ export function mountFileDrop(options: {
       offStaged();
       offError();
       offUnstaged();
-      composer.removeEventListener("dragover", onDragOver);
-      composer.removeEventListener("dragleave", onDragLeave);
-      composer.removeEventListener("drop", onDrop);
+      for (const target of dropTargets) {
+        target.removeEventListener("dragover", onDragOver);
+        target.removeEventListener("dragleave", onDragLeave);
+        target.removeEventListener("drop", onDrop);
+      }
       for (const target of pasteTargets) {
         target.removeEventListener("paste", onPaste);
       }

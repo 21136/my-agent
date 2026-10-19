@@ -248,6 +248,76 @@ def _remove_binding(paths: AgentPaths, project_id: str) -> None:
     write_agent_state_payload(paths, payload)
 
 
+def list_external_bindings(paths: AgentPaths) -> dict[str, ExternalProjectBinding]:
+    out: dict[str, ExternalProjectBinding] = {}
+    for pid in _read_bindings(paths):
+        binding = validate_external_binding(paths, pid)
+        if binding is not None:
+            out[pid] = binding
+    return out
+
+
+def resolve_external_project_path(paths: AgentPaths, raw: str) -> tuple[Path, str] | None:
+    """If *raw* (agent-relative or workspace-relative) targets a mapped external project,
+    return ``(resolved_path, agent_relative_posix)``.
+    """
+    norm = raw.strip().replace("\\", "/").lstrip("/")
+    if not norm:
+        return None
+    bindings = _read_bindings(paths)
+    if not bindings:
+        return None
+
+    pid = ""
+    sub = ""
+    if norm.startswith("workspace/"):
+        rest = norm[len("workspace/") :]
+        parts = rest.split("/", 1)
+        pid = parts[0]
+        sub = parts[1] if len(parts) > 1 else ""
+    else:
+        parts = norm.split("/", 1)
+        if parts[0] in bindings:
+            pid = parts[0]
+            sub = parts[1] if len(parts) > 1 else ""
+
+    if not pid or pid not in bindings:
+        return None
+    entry = bindings[pid]
+    ext_raw = entry.get("external_root")
+    if not isinstance(ext_raw, str) or not ext_raw.strip():
+        return None
+    try:
+        ext_root = Path(ext_raw).resolve(strict=True)
+    except OSError:
+        return None
+    target = (ext_root / sub).resolve() if sub else ext_root
+    if not _within(target, ext_root):
+        return None
+    rel_posix = f"workspace/{pid}/{sub}".rstrip("/") if sub else f"workspace/{pid}"
+    return target, rel_posix
+
+
+def to_external_agent_relative(paths: AgentPaths, resolved: Path) -> str | None:
+    """If *resolved* is inside an adopted external project root, return ``workspace/<id>/...``."""
+    bindings = _read_bindings(paths)
+    if not bindings:
+        return None
+    target = resolved.resolve()
+    for pid, entry in bindings.items():
+        ext_raw = entry.get("external_root")
+        if not isinstance(ext_raw, str) or not ext_raw.strip():
+            continue
+        try:
+            ext_root = Path(ext_raw).resolve(strict=True)
+        except OSError:
+            continue
+        if _within(target, ext_root):
+            rel = target.relative_to(ext_root).as_posix()
+            return f"workspace/{pid}" if rel == "." else f"workspace/{pid}/{rel}"
+    return None
+
+
 def apply_external_project(
     paths: AgentPaths,
     scan: ExternalProjectScan,
@@ -261,9 +331,16 @@ def apply_external_project(
     if os.path.lexists(logical):
         raise ExternalProjectError(f"项目逻辑目录已存在：workspace/{pid}")
     paths.workspace.mkdir(parents=True, exist_ok=True)
-    _create_junction(logical, root)
+    junction_created = False
     try:
-        if logical.resolve(strict=True) != root:
+        _create_junction(logical, root)
+        junction_created = True
+    except ExternalProjectError:
+        # Fallback for exFAT / FAT32 volumes where Windows junctions (WinError 1) are unsupported:
+        # use logical path mapping in state.json without requiring an OS reparse point.
+        junction_created = False
+    try:
+        if junction_created and logical.resolve(strict=True) != root:
             raise ExternalProjectError("junction 目标校验失败")
         binding = ExternalProjectBinding(
             project_id=pid,
@@ -274,7 +351,7 @@ def apply_external_project(
         return binding
     except Exception:
         try:
-            if _is_link_or_junction(logical):
+            if junction_created and _is_link_or_junction(logical):
                 os.rmdir(logical)
         except OSError:
             pass
@@ -295,10 +372,11 @@ def validate_external_binding(
     try:
         external = _canonical_root(entry["external_root"])
         logical = paths.workspace / pid
-        if not _is_link_or_junction(logical):
-            return None
-        if logical.resolve(strict=True) != external:
-            return None
+        if os.path.lexists(logical):
+            if not _is_link_or_junction(logical):
+                return None
+            if logical.resolve(strict=True) != external:
+                return None
     except (OSError, ExternalProjectError):
         return None
     return ExternalProjectBinding(pid, str(external), f"workspace/{pid}", healthy=True)

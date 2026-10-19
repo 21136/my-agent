@@ -15,7 +15,7 @@ from paths import AgentPaths, PathOutOfBoundsError
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
 
 TOOL_NAME = "read_file"
-MAX_BYTES = 512 * 1024  # TOOLS.md §7.1
+MAX_BYTES = 512 * 1024  # TOOLS.md §7.1 (UTF-8 text)
 DEFAULT_LINE_LIMIT = 500
 MAX_LINE_LIMIT = 2000
 
@@ -131,27 +131,57 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
     except OSError as exc:
         return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
 
-    if size > MAX_BYTES:
-        return _fail(
-            f"file exceeds limit of {MAX_BYTES} bytes",
-            ToolErrorCode.FILE_TOO_LARGE,
-            started,
-            path=path_arg,
-            details={"size": size, "limit": MAX_BYTES},
-        )
+    from pdf_text import MAX_PDF_FILE_BYTES, extract_pdf_text, is_pdf_path
 
-    try:
-        raw = resolved.read_bytes()
-    except OSError as exc:
-        return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
+    if is_pdf_path(resolved):
+        if size > MAX_PDF_FILE_BYTES:
+            return _fail(
+                f"pdf exceeds limit of {MAX_PDF_FILE_BYTES} bytes",
+                ToolErrorCode.FILE_TOO_LARGE,
+                started,
+                path=path_arg,
+                details={"size": size, "limit": MAX_PDF_FILE_BYTES},
+            )
+        try:
+            content = extract_pdf_text(resolved)
+        except RuntimeError as exc:
+            return _fail(str(exc), ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
+        except Exception as exc:
+            return _fail(
+                f"pdf text extraction failed: {exc}",
+                ToolErrorCode.BINARY_FILE,
+                started,
+                path=path_arg,
+            )
+        if not content.strip():
+            return _fail(
+                "pdf contains no extractable text (scanned image pdf?)",
+                ToolErrorCode.BINARY_FILE,
+                started,
+                path=path_arg,
+            )
+    else:
+        if size > MAX_BYTES:
+            return _fail(
+                f"file exceeds limit of {MAX_BYTES} bytes",
+                ToolErrorCode.FILE_TOO_LARGE,
+                started,
+                path=path_arg,
+                details={"size": size, "limit": MAX_BYTES},
+            )
 
-    if b"\0" in raw:
-        return _fail("binary file rejected", ToolErrorCode.BINARY_FILE, started, path=path_arg)
+        try:
+            raw = resolved.read_bytes()
+        except OSError as exc:
+            return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
 
-    try:
-        content = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return _fail("file is not valid UTF-8 text", ToolErrorCode.BINARY_FILE, started, path=path_arg)
+        if b"\0" in raw:
+            return _fail("binary file rejected", ToolErrorCode.BINARY_FILE, started, path=path_arg)
+
+        try:
+            content = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return _fail("file is not valid UTF-8 text", ToolErrorCode.BINARY_FILE, started, path=path_arg)
 
     rel_path = paths.to_agent_relative(resolved)
     sliced = _slice_lines(

@@ -18,7 +18,7 @@ from external_project import (
     validate_external_binding,
 )
 from project_mode import normalize_project_id
-from tests.isolation_helpers import make_temp_agent_paths
+from tests.isolation_helpers import make_temp_agent_paths, temporary_agent_paths
 
 
 class ExternalProjectAdoptionTests(unittest.TestCase):
@@ -74,6 +74,80 @@ class ExternalProjectAdoptionTests(unittest.TestCase):
         scan = scan_external_project(self.paths, str(self.external), project_id=project_id)
         with self.assertRaises(ExternalProjectError):
             apply_external_project(self.paths, scan)
+
+    def test_exfat_fallback_when_junction_unsupported(self) -> None:
+        """Simulate exFAT volume (WinError 1 on junction) and verify logical path mapping."""
+        from unittest.mock import patch
+        from project_mode import list_projects, project_dir
+        from tools.builtin import glob_file_search, grep, list_dir, read_file
+        from tools.builtin.run_evolved import run as run_evolved_tool
+        from tools.registry import ToolRegistry
+
+        scan = scan_external_project(self.paths, str(self.external), project_id="exfat-app")
+        with patch("external_project._create_junction", side_effect=ExternalProjectError("WinError 1")):
+            binding = apply_external_project(self.paths, scan)
+
+        self.assertEqual(binding.project_id, "exfat-app")
+        self.assertEqual(validate_external_binding(self.paths, "exfat-app"), binding)
+        self.assertIn("exfat-app", list_projects(self.paths))
+        self.assertEqual(project_dir(self.paths, "exfat-app"), self.external.resolve())
+
+        # Builtin read / list / glob / grep
+        r_res = read_file.run({"path": "workspace/exfat-app/app.py"}, paths=self.paths)
+        self.assertTrue(r_res.ok, r_res.error)
+        self.assertIn("partial", r_res.data["content"])
+
+        l_res = list_dir.run({"path": "workspace/exfat-app"}, paths=self.paths)
+        self.assertTrue(l_res.ok, l_res.error)
+
+        g_res = glob_file_search.run({"path": "workspace/exfat-app", "pattern": "*.py"}, paths=self.paths)
+        self.assertTrue(g_res.ok, g_res.error)
+        self.assertIn("app.py", g_res.data["paths"])
+
+        gr_res = grep.run({"path": "workspace/exfat-app", "pattern": "partial"}, paths=self.paths)
+        self.assertTrue(gr_res.ok, gr_res.error)
+        self.assertEqual(gr_res.data["matches"][0]["path"], "workspace/exfat-app/app.py")
+
+        # Evolved write_text / patch_file / run_command in-place on external dir
+        with temporary_agent_paths(
+            prefix="exfat-tools-",
+            copy_tool_dirs=("common/write_text", "coding/patch_file"),
+        ) as tool_paths:
+            scan2 = scan_external_project(tool_paths, str(self.external), project_id="exfat-app")
+            with patch("external_project._create_junction", side_effect=ExternalProjectError("WinError 1")):
+                apply_external_project(tool_paths, scan2)
+            registry = ToolRegistry.load(tool_paths)
+            w_res = run_evolved_tool(
+                {
+                    "tool_name": "write_text",
+                    "arguments": {
+                        "path": "workspace/exfat-app/new_file.py",
+                        "content": "val = 1\n",
+                        "on_conflict": "overwrite",
+                    },
+                },
+                registry=registry,
+            )
+            self.assertTrue(w_res.ok, w_res.error)
+            self.assertEqual((self.external / "new_file.py").read_text(encoding="utf-8"), "val = 1\n")
+
+            p_res = run_evolved_tool(
+                {
+                    "tool_name": "patch_file",
+                    "arguments": {
+                        "path": "workspace/exfat-app/new_file.py",
+                        "find": "val = 1",
+                        "replacement": "val = 42",
+                    },
+                },
+                registry=registry,
+            )
+            self.assertTrue(p_res.ok, p_res.error)
+            self.assertEqual((self.external / "new_file.py").read_text(encoding="utf-8"), "val = 42\n")
+
+        detach_external_project(self.paths, "exfat-app")
+        self.assertIsNone(validate_external_binding(self.paths, "exfat-app"))
+        self.assertTrue((self.external / "new_file.py").is_file())
 
 
 if __name__ == "__main__":

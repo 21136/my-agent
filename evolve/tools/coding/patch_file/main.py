@@ -18,6 +18,12 @@ _PATCH_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _agent_root() -> Path:
+    env_root = os.environ.get("MY_AGENT_ROOT")
+    if env_root:
+        candidate = Path(env_root).expanduser()
+        evolve_marker = candidate / "evolve"
+        if (evolve_marker / "_index.core.toml").is_file() or (evolve_marker / "_index.toml").is_file():
+            return candidate.resolve()
     current = Path(__file__).resolve().parent
     for directory in (current, *current.parents):
         evolve_marker = directory / "evolve"

@@ -899,8 +899,8 @@ def run_service(payload: dict[str, Any]) -> dict[str, Any]:
                 start_payload["command"] = prev.get("command")
             if not _coalesce_working_dir(start_payload) and prev.get("cwd"):
                 try:
-                    rel = Path(str(prev["cwd"])).resolve().relative_to(paths.agent_root.resolve())
-                    start_payload["working_dir"] = str(rel).replace("\\", "/")
+                    rel = paths.to_agent_relative(Path(str(prev["cwd"])).resolve())
+                    start_payload["working_dir"] = rel
                 except Exception:
                     start_payload["working_dir"] = str(prev.get("cwd"))
             if not start_payload.get("ready_regex") and prev.get("ready_regex"):

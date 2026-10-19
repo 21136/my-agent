@@ -328,7 +328,13 @@ def project_root_rel(project_id: str) -> str:
 
 
 def project_dir(paths: AgentPaths, project_id: str) -> Path:
-    return paths.workspace / normalize_project_id(project_id)
+    pid = normalize_project_id(project_id)
+    from external_project import validate_external_binding
+
+    binding = validate_external_binding(paths, pid)
+    if binding is not None:
+        return Path(binding.external_root)
+    return paths.workspace / pid
 
 
 def template_dir(paths: AgentPaths) -> Path:
@@ -342,17 +348,20 @@ def is_project_dir(path: Path) -> bool:
 
 def list_projects(paths: AgentPaths) -> list[str]:
     root = paths.workspace
-    if not root.is_dir():
-        return []
-    found: list[str] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir():
-            continue
-        if entry.name.startswith(".") or entry.name == _TEMPLATE_DIRNAME:
-            continue
-        if is_project_dir(entry):
-            found.append(entry.name)
-    return found
+    found: set[str] = set()
+    if root.is_dir():
+        for entry in sorted(root.iterdir()):
+            if not entry.is_dir():
+                continue
+            if entry.name.startswith(".") or entry.name == _TEMPLATE_DIRNAME:
+                continue
+            if is_project_dir(entry):
+                found.add(entry.name)
+    from external_project import list_external_bindings
+
+    for pid in list_external_bindings(paths):
+        found.add(pid)
+    return sorted(found)
 
 
 def ensure_template(paths: AgentPaths) -> Path:
@@ -1401,7 +1410,10 @@ def acceptance_workspace_path(project_id: str, spec: AcceptanceSpec) -> str:
 def acceptance_script_exists(paths: AgentPaths, project_id: str, spec: AcceptanceSpec) -> bool:
     if spec.is_python:
         rel = acceptance_workspace_path(project_id, spec)
-        return (paths.workspace / rel).is_file()
+        try:
+            return paths.resolve_under_workspace(rel, must_exist=False).is_file()
+        except Exception:
+            return (paths.workspace / rel).is_file()
     root = project_dir(paths, project_id)
     argv = list(spec.argv) or acceptance_command_to_argv(spec.display)
     for index, arg in enumerate(argv):
@@ -1414,8 +1426,12 @@ def acceptance_script_exists(paths: AgentPaths, project_id: str, spec: Acceptanc
             if (root / rel).is_file():
                 return True
             workspace_rel = f"{normalize_project_id(project_id)}/{rel}"
-            if (paths.workspace / workspace_rel).is_file():
-                return True
+            try:
+                if paths.resolve_under_workspace(workspace_rel, must_exist=False).is_file():
+                    return True
+            except Exception:
+                if (paths.workspace / workspace_rel).is_file():
+                    return True
     return bool(argv)
 
 
@@ -1434,7 +1450,10 @@ def run_acceptance_check(
     registry = ToolRegistry.load(paths)
     if spec.is_python:
         rel = acceptance_workspace_path(project_id, spec)
-        script_path = paths.workspace / rel
+        try:
+            script_path = paths.resolve_under_workspace(rel, must_exist=False)
+        except Exception:
+            script_path = paths.workspace / rel
         if not script_path.is_file():
             return {
                 "ok": False,

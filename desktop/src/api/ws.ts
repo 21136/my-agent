@@ -447,6 +447,7 @@ export type StagedFileItem = {
   readable_text: boolean;
   copied: boolean;
   image_input?: boolean;
+  vision_input?: boolean;
 };
 
 export type ProposalItem = {

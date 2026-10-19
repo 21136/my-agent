@@ -57,7 +57,7 @@
 | `dragover` | composer 虚线高亮 + 「松开以添加文件」 |
 | `staged` | chip 列表（文件名 · 大小 · 移除） |
 | `confirm` 待决 | 禁止拖入、禁止发送（与底栏锁定一致） |
-| 无绑项目（project 壳） | 拖入 → `file.error`「请先打开或新建项目」 |
+| 无绑项目（project 壳） | 区外文件 → `workspace/_drops/<session_id>/`（与 grow 一致；不挡微信/资源管理器拖入） |
 
 **M0 拖放区**：project 壳 **composer footer**（`#grow-composer`）。M1 扩至聊天主区。
 
@@ -137,11 +137,14 @@
 
 不把文件正文写入 WS 或 `evolve_log`（对齐 TOOLS §10）。
 
-## 8.1 图片输入
+## 8.1 视觉输入（图片 + PDF）
 
-- `image_input: true` 只表示附件格式可作为图片输入，不表示当前模型一定支持视觉。
+- `image_input: true` — PNG/JPEG/WebP/GIF 原图送入多模态请求。
+- `vision_input: true` — 图片或 **PDF**（≤8MB、最多 **20 页**）：PDF 由服务端 **分页渲染为 JPEG** 再送入模型（扫描版简历可走识图，不必先 OCR）。
+- 二者均不表示当前模型一定支持视觉。
 - 模型注册表使用 `supportsImageInput`（或蛇形命名 `supports_image_input`）声明能力；桌面模型列表将支持视觉的模型标为「视觉」。
-- 支持视觉的模型收到 OpenAI-compatible 的 `image_url` data URI；图片不会写入 `messages.jsonl`、历史回放或日志。
+- 支持视觉的模型收到 OpenAI-compatible 的 `image_url` data URI（PDF 每页一张）；**图像字节**不会写入 `messages.jsonl`、历史回放或日志。
+- 文字版 PDF 仍可用 `read_file` 提取正文；识图与抽字可并存。
 - 不支持视觉的模型不会收到图片二进制；服务端提示用户切换模型，主 Agent 同时被约束为不得声称看过图片。
 - 图片读取失败、路径越权或超过 8 MB 时只保留附件说明，不阻断整轮对话。
 

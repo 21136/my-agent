@@ -759,7 +759,7 @@ class WsSessionHandler:
                 return
 
             line = compose_user_message(text=text, attachments=attachments)
-            if any(item.image_input for item in attachments):
+            if any(item.vision_input for item in attachments):
                 model_entry = resolve_model_entry(repl.session.meta.llm_model)
                 if model_entry is None or not model_entry.supports_image_input:
                     bridge.emit(

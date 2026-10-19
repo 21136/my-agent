@@ -101,10 +101,8 @@ def _repo_root(cwd: Path, paths) -> Path:
     if code != 0 or not out.strip():
         raise ValueError("working_dir is not inside a git repository")
     root = Path(out.strip()).resolve()
-    try:
-        root.relative_to(paths.agent_root.resolve())
-    except ValueError as exc:
-        raise ValueError("git repository is outside agent root") from exc
+    if not paths.is_under_agent(root):
+        raise ValueError("git repository is outside agent root")
     return root
 
 

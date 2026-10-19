@@ -16,6 +16,8 @@ if str(_AGENT_CORE) not in sys.path:
 
 from host_scope import HostScopeConfig, is_path_denied, is_system_denied_path, load_host_scope
 from paths import AgentPaths, _is_within
+from pdf_text import is_pdf_path, pdf_file_readable
+from pdf_vision import is_pdf_mime, pdf_vision_eligible_mime
 from session import Session
 
 MAX_FILES_PER_BATCH = 20
@@ -46,9 +48,16 @@ class StagedAttachment:
     def image_input(self) -> bool:
         return is_image_mime(self.mime)
 
+    @property
+    def vision_input(self) -> bool:
+        if self.image_input:
+            return True
+        return pdf_vision_eligible_mime(self.mime, self.size)
+
     def to_item(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["image_input"] = self.image_input
+        payload["vision_input"] = self.vision_input
         return payload
 
 
@@ -76,6 +85,8 @@ def is_readable_text_file(path: Path, *, size: int | None = None) -> bool:
     if not path.is_file():
         return False
     file_size = size if size is not None else path.stat().st_size
+    if is_pdf_path(path):
+        return pdf_file_readable(file_size)
     if file_size > READ_FILE_BYTES:
         return False
     try:
@@ -97,7 +108,14 @@ def format_attachment_block(items: list[StagedAttachment]) -> str:
     lines = ["[附件]"]
     for item in items:
         hint = item.mime or "application/octet-stream"
-        if not item.readable_text:
+        if is_pdf_mime(item.mime or ""):
+            parts = []
+            if item.readable_text:
+                parts.append("read_file 可提取正文")
+            if item.vision_input:
+                parts.append("视觉模型分页识图")
+            hint = f"{hint}；{' · '.join(parts)}" if parts else hint
+        elif not item.readable_text:
             hint = f"{hint}；不可直接 read_file"
         if item.image_input:
             hint = f"{hint}；图片附件"
@@ -278,12 +296,11 @@ def stage_absolute_path(
         )
 
     drop_id = secrets.token_hex(4)
-    if shell == "project":
-        project_root = (session.meta.project_root or "").strip()
-        if not project_root:
-            raise FileStageError("请先打开或新建项目后再拖入代码")
+    project_root = (session.meta.project_root or "").strip()
+    if shell == "project" and project_root:
         dest_rel = f"{_incoming_dir(project_root, drop_id)}/{resolved.name}"
     else:
+        # Free chat / unbound project UI: stage under session drops (FILES-DROP F5).
         dest_rel = f"{_drops_dir(session.conversation_id, drop_id)}/{resolved.name}"
 
     return _stage_copy(resolved, paths=paths, dest_rel=dest_rel)

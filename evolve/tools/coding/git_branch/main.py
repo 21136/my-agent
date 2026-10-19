@@ -88,15 +88,12 @@ def _git_toplevel(cwd: Path) -> Path | None:
 
 
 def _assert_repo_in_agent(paths, toplevel: Path) -> None:
-    root = paths.agent_root.resolve()
-    try:
-        toplevel.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"git toplevel outside agent root: {toplevel}") from exc
+    if not paths.is_under_agent(toplevel):
+        raise ValueError(f"git toplevel outside agent root: {toplevel}")
 
 
 def _repo_rel(paths, toplevel: Path) -> str:
-    return str(toplevel.relative_to(paths.agent_root.resolve())).replace("\\", "/")
+    return paths.to_agent_relative(toplevel)
 
 
 def _validate_branch_name(name: str) -> str | None:

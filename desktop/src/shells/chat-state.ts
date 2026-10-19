@@ -57,6 +57,8 @@ export interface ChatSessionModel {
   assistantBuffer: string;
   turnActive: boolean;
   turnFinished: boolean;
+  /** Local monotonic clock for status elapsed while waiting on server/LLM/tools. */
+  turnActivityStartedAt: number;
   toolsRunning: number;
   executionRunId: string;
   executionState: ExecutionStateName;
@@ -284,6 +286,7 @@ export function createChatSession(
     assistantBuffer: "",
     turnActive: false,
     turnFinished: false,
+    turnActivityStartedAt: 0,
     toolsRunning: 0,
     executionRunId: "",
     executionState: "idle",
@@ -321,6 +324,7 @@ export function createChatSession(
   function beginTurnActivity(): void {
     model.turnActive = true;
     model.turnFinished = false;
+    model.turnActivityStartedAt = Date.now();
   }
 
   function findProcessBlock(turnKey: string): (ChatBlock & { kind: "process" }) | undefined {
@@ -371,6 +375,7 @@ export function createChatSession(
     clearCancelWatchdog();
     model.turnActive = false;
     model.turnFinished = true;
+    model.turnActivityStartedAt = 0;
     model.toolsRunning = 0;
     model.confirmSubmitting = false;
     model.cancelRequested = false;
@@ -1071,10 +1076,10 @@ export function createChatSession(
       case "assistant.done": {
         if (options.showProcess) {
           const proc = findProcessBlock(model.currentTurnKey);
-          if (proc) {
+          if (proc && model.toolsRunning === 0 && !model.confirmPending) {
             finalizeProcessAfterTurn(proc);
+            collapseCurrentProcess();
           }
-          collapseCurrentProcess();
         }
         const finalText = event.text.trim();
         const turnIndex = currentTurnIndex();

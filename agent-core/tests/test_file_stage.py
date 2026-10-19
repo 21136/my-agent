@@ -29,6 +29,45 @@ class FileStageTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
 
+    def test_pdf_marked_readable_for_read_file(self) -> None:
+        pdf = self.tmp / "resume.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
+
+        session = create_new(
+            self.paths, conversation_id=f"_test_pdf_stage_{secrets.token_hex(4)}"
+        )
+        item = stage_absolute_path(
+            str(pdf),
+            paths=self.paths,
+            session=session,
+            shell="grow",
+            config=load_host_scope(self.paths),
+        )
+        self.assertTrue(item.readable_text)
+        self.assertEqual(item.mime, "application/pdf")
+
+    def test_unbound_project_shell_uses_session_drops(self) -> None:
+        ext = self.tmp / "Java模拟面试.md"
+        ext.write_text("# 面试\n", encoding="utf-8")
+
+        session = create_new(
+            self.paths, conversation_id=f"_test_file_stage_free_{secrets.token_hex(4)}"
+        )
+        session.meta.active_shell = "project"
+        session.meta.project_root = ""
+
+        item = stage_absolute_path(
+            str(ext),
+            paths=self.paths,
+            session=session,
+            shell="project",
+            config=load_host_scope(self.paths),
+        )
+        self.assertTrue(item.copied)
+        ref = item.ref.replace("\\", "/")
+        self.assertIn(f"/_drops/{session.conversation_id}/", ref)
+        self.assertIn("Java模拟面试.md", ref)
+
     def test_project_incoming_copy(self) -> None:
         ext = self.tmp / "module.py"
         ext.write_text("x = 1\n", encoding="utf-8")

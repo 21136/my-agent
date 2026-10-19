@@ -376,6 +376,9 @@ export function mountUnifiedShell(
         requestAnimationFrame(() => scrollToBottomIfNear());
       },
       onLlmPending: () => {
+        if (!chat.model.cancelRequested) {
+          setStatus("处理中…");
+        }
         syncToolElapsedTimer();
         requestAnimationFrame(() => scrollToBottomIfNear());
       },
@@ -857,6 +860,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     syncComposerMetaVisibility();
     stopBtn.hidden = !(working || chat.model.confirmPending);
     stopBtn.disabled = chat.model.cancelRequested;
+    if (working && (statusText === "发送中…" || statusText.startsWith("发送中"))) {
+      setStatus("处理中…");
+    }
+    composerWire.syncSendEnabled();
+    syncToolElapsedTimer();
     syncModeToggleUi();
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
     if (perspective === "project" && workingChanged) {
@@ -2598,6 +2606,49 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function tickRunningToolElapsed(): void {
     const now = Date.now();
+    let maxRunningMs = 0;
+    let maxLlmWaitMs = 0;
+    for (const block of chat.model.blocks) {
+      if (block.kind !== "process") continue;
+      for (const tool of getProcessTools(block)) {
+        if (tool.status === "running" && tool.startedAt) {
+          maxRunningMs = Math.max(maxRunningMs, now - tool.startedAt);
+        }
+      }
+      if (
+        isLiveProcessBlock(block) &&
+        block.llmPending &&
+        block.llmWaitStartedAt
+      ) {
+        maxLlmWaitMs = Math.max(maxLlmWaitMs, now - block.llmWaitStartedAt);
+      }
+    }
+    const turnStartedAt = chat.model.turnActivityStartedAt;
+    const turnElapsedMs =
+      turnStartedAt > 0 && chat.isWorking() ? now - turnStartedAt : 0;
+    const elapsedMs = Math.max(maxRunningMs, maxLlmWaitMs, turnElapsedMs);
+    if (
+      elapsedMs >= 1000 &&
+      !chat.model.cancelRequested &&
+      !chat.model.confirmPending
+    ) {
+      const sec = Math.floor(elapsedMs / 1000);
+      if (maxRunningMs >= 1000) {
+        setStatus(`仍在执行… ${sec}s`);
+      } else if (maxLlmWaitMs >= 1000) {
+        setStatus(`等待模型… ${sec}s`);
+      } else if (statusText === "发送中…" || statusText.startsWith("发送中")) {
+        setStatus(`处理中… ${sec}s`);
+      } else if (
+        statusText === "处理中…" ||
+        statusText.startsWith("处理中…") ||
+        statusText.startsWith("等待模型")
+      ) {
+        setStatus(
+          maxLlmWaitMs > 0 ? `等待模型… ${sec}s` : `处理中… ${sec}s`,
+        );
+      }
+    }
     chatEl.querySelectorAll<HTMLElement>(".unified-tool-line.is-running").forEach((el) => {
       const started = Number(el.dataset.startedAt || "0");
       if (!started) return;
@@ -2695,14 +2746,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const hasStreamingThinking = chat.model.blocks.some(
       (b) => b.kind === "process" && isProcessThinkingLive(b, chat.model.currentTurnKey),
     );
-    if ((hasRunning || hasStreamingThinking) && toolElapsedTimer === null) {
+    const working = chat.isWorking();
+    if ((hasRunning || hasStreamingThinking || working) && toolElapsedTimer === null) {
       const intervalMs = hasStreamingThinking ? 100 : 1000;
       toolElapsedTimer = window.setInterval(() => {
         tickRunningToolElapsed();
         tickStreamingThinking();
         syncLiveThinkingDom();
       }, intervalMs);
-    } else if (!hasRunning && !hasStreamingThinking && toolElapsedTimer !== null) {
+    } else if (!hasRunning && !hasStreamingThinking && !working && toolElapsedTimer !== null) {
       window.clearInterval(toolElapsedTimer);
       toolElapsedTimer = null;
     }
@@ -3626,6 +3678,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   // auto-expand textarea on input
   input.addEventListener("input", () => {
+    if (!input.value) {
+      input.style.height = "";
+      return;
+    }
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 200) + "px";
   });

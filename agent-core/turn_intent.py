@@ -102,6 +102,20 @@ _RECALL_REFERENCE_MARKERS = (
     "刚才提",
     "刚刚提",
 )
+_ATTACHMENT_PREFIX = "[附件]"
+
+
+def user_text_without_attachment_block(user_text: str) -> str:
+    """Strip desktop drag-drop prefix so workspace/_drops paths do not trigger explore."""
+    text = (user_text or "").strip()
+    if not text.startswith(_ATTACHMENT_PREFIX):
+        return text
+    if "\n\n" not in text:
+        return ""
+    body = text.split("\n\n", 1)[1].strip()
+    return body
+
+
 _MIXED_RESEARCH_MARKERS = (
     "顺便查",
     "顺便看",
@@ -304,18 +318,22 @@ def is_recall_turn(user_text: str) -> bool:
 
 
 def _has_research_action(text: str, lower: str) -> bool:
-    if any(kw in lower or kw in text for kw in _RESEARCH_ACTION_KEYWORDS):
+    body = user_text_without_attachment_block(text)
+    body_lower = body.casefold()
+    if any(kw in body_lower or kw in body for kw in _RESEARCH_ACTION_KEYWORDS):
         return True
-    return any(marker in lower for marker in _PATH_MARKERS)
+    return any(marker in body_lower for marker in _PATH_MARKERS)
 
 
 def _has_lookup_request(text: str, lower: str) -> bool:
     """User asked to look something up. Filenames like README do not count."""
-    if any(kw in text for kw in ("查", "读", "参照", "看看", "列出", "搜索", "调研", "探索")):
+    body = user_text_without_attachment_block(text)
+    body_lower = body.casefold()
+    if any(kw in body for kw in ("查", "读", "参照", "看看", "列出", "搜索", "调研", "探索")):
         return True
-    if any(marker in lower for marker in _PATH_MARKERS):
+    if any(marker in body_lower for marker in _PATH_MARKERS):
         return True
-    return bool(re.search(r"\b(explore|read|search|list|where)\b", lower))
+    return bool(re.search(r"\b(explore|read|search|list|where)\b", body_lower))
 
 
 # Status and inventory questions. Bare 「什么」 is intentionally absent so
@@ -661,9 +679,9 @@ def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
     intent = classify_turn(user_text)
     if intent not in {"execute", "research"}:
         return False
-    text = user_text.strip()
-    lower = text.casefold()
-    if any(marker in text for marker in _SPAWN_MARKERS):
+    body = user_text_without_attachment_block(user_text)
+    lower = body.casefold()
+    if any(marker in body for marker in _SPAWN_MARKERS):
         return True
     return any(marker in lower for marker in _PATH_MARKERS)
 

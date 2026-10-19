@@ -156,8 +156,8 @@ def run_search_replace(payload: dict[str, Any]) -> dict[str, Any]:
         new_text = text.replace(find, replace, apply_n)
         total_repl += apply_n
         try:
-            rel = str(fp.relative_to(agent_root)).replace("\\", "/")
-        except ValueError:
+            rel = paths_mod.to_agent_relative(fp)
+        except Exception:
             rel = str(fp)
         entry: dict[str, Any] = {"path": rel, "replacements": apply_n}
         if dry_run:

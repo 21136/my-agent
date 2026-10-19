@@ -30,6 +30,7 @@ export function wireComposerAttachments(options: {
 
   function canSend(): boolean {
     if (allowSend && !allowSend()) return false;
+    if (chat.isWorking()) return false;
     const text = input.value.trim();
     return Boolean(text) || fileDrop.getAttachments().length > 0;
   }
@@ -44,12 +45,13 @@ export function wireComposerAttachments(options: {
     const text = input.value.trim();
     const attachments = fileDrop.getAttachments();
     const attachmentIds = attachments.map((item) => item.id);
-    if ((!text && !attachmentIds.length) || chat.model.confirmPending) return;
+    if ((!text && !attachmentIds.length) || chat.model.confirmPending || chat.isWorking()) return;
     if (allowSend && !allowSend()) {
       onStatus?.("请先选择或新建项目");
       return;
     }
     input.value = "";
+    input.style.height = "";
     beforeSend?.();
     chat.pushUserMessage(
       attachmentIds.length ? composeDisplayMessage(text, attachments) : text,

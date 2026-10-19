@@ -63,9 +63,35 @@ def _truncate_diff(text: str) -> tuple[str, bool]:
     return text[:_MAX_DIFF_CHARS] + "\n…(truncated)", True
 
 
+def _coalesce_working_dir(payload: dict[str, Any]) -> str:
+    for key in ("working_dir", "cwd"):
+        raw = payload.get(key, "")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _resolve_cwd(paths, path_arg: str) -> Path:
+    if not path_arg:
+        return paths.agent_root
+    text = path_arg.strip().replace("\\", "/").lstrip("/")
+    try:
+        return paths.resolve_under_agent(text, must_exist=True)
+    except Exception:
+        if not text.startswith("workspace/"):
+            try:
+                return paths.resolve_under_agent(f"workspace/{text}", must_exist=True)
+            except Exception:
+                pass
+        raise ValueError(f"working_dir 不存在或越界: {path_arg}")
+
+
 def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     paths = _load_paths().discover(start=_agent_root())
-    root = paths.agent_root
+    try:
+        root = _resolve_cwd(paths, _coalesce_working_dir(payload))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
     if not (root / ".git").exists():
         return {"ok": False, "error": "not a git repository"}

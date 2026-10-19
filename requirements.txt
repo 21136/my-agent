@@ -4,3 +4,5 @@ websockets>=12.0
 rich>=13.7
 prompt_toolkit>=3.0.43
 python-docx>=1.1.0
+pypdf>=4.0
+pymupdf>=1.24

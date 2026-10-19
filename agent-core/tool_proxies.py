@@ -186,6 +186,10 @@ _PROXY_PARAMETERS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "description": "Optional base git ref",
             },
+            "working_dir": {
+                "type": "string",
+                "description": "Optional working directory relative to agent root",
+            },
         },
         "additionalProperties": False,
     },

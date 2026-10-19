@@ -87,11 +87,12 @@ def _git_toplevel(cwd: Path) -> Path | None:
 
 
 def _assert_repo_in_agent(paths, toplevel: Path) -> None:
-    root = paths.agent_root.resolve()
-    try:
-        toplevel.relative_to(root)
-    except ValueError as exc:
-        raise ValueError(f"git toplevel outside agent root: {toplevel}") from exc
+    if not paths.is_under_agent(toplevel):
+        raise ValueError(f"git toplevel outside agent root: {toplevel}")
+
+
+def _repo_rel(paths, toplevel: Path) -> str:
+    return paths.to_agent_relative(toplevel)
 
 
 def _validate_message(message: str) -> str | None:
@@ -191,7 +192,7 @@ def git_commit(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "dry_run": True,
-            "repo": str(toplevel.relative_to(paths.agent_root.resolve())).replace("\\", "/"),
+            "repo": _repo_rel(paths, toplevel),
             "branch": branch,
             "message": message,
             "add_command": preview_cmd,
@@ -212,7 +213,7 @@ def git_commit(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": False,
             "error": "nothing to commit (empty index after add)",
-            "repo": str(toplevel.relative_to(paths.agent_root.resolve())).replace("\\", "/"),
+            "repo": _repo_rel(paths, toplevel),
             "branch": branch,
             "status_porcelain": _truncate(status_out),
         }

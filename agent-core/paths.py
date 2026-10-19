@@ -198,19 +198,43 @@ class AgentPaths:
         ).absolute
 
     def is_under_agent(self, path: Path | str) -> bool:
-        return _is_within(Path(path).resolve(), self.agent_root.resolve())
+        resolved = Path(path).resolve()
+        if _is_within(resolved, self.agent_root.resolve()):
+            return True
+        from external_project import to_external_agent_relative
+
+        return to_external_agent_relative(self, resolved) is not None
 
     def is_under_workspace(self, path: Path | str) -> bool:
-        return _is_within(Path(path).resolve(), self.workspace.resolve())
+        resolved = Path(path).resolve()
+        if _is_within(resolved, self.workspace.resolve()):
+            return True
+        from external_project import to_external_agent_relative
+
+        return to_external_agent_relative(self, resolved) is not None
 
     def to_agent_relative(self, path: Path | str) -> str:
         """POSIX-style path relative to agent root (for tool payloads / logs)."""
         resolved = Path(path).resolve()
+        if _is_within(resolved, self.agent_root.resolve()):
+            return resolved.relative_to(self.agent_root.resolve()).as_posix()
+        from external_project import to_external_agent_relative
+
+        ext_rel = to_external_agent_relative(self, resolved)
+        if ext_rel is not None:
+            return ext_rel
         _assert_within(resolved, self.agent_root, raw=str(path), label="agent root")
         return resolved.relative_to(self.agent_root.resolve()).as_posix()
 
     def to_workspace_relative(self, path: Path | str) -> str:
         resolved = Path(path).resolve()
+        if _is_within(resolved, self.workspace.resolve()):
+            return resolved.relative_to(self.workspace.resolve()).as_posix()
+        from external_project import to_external_agent_relative
+
+        ext_rel = to_external_agent_relative(self, resolved)
+        if ext_rel is not None and ext_rel.startswith("workspace/"):
+            return ext_rel[len("workspace/") :]
         _assert_within(resolved, self.workspace, raw=str(path), label="workspace")
         return resolved.relative_to(self.workspace.resolve()).as_posix()
 
@@ -227,7 +251,26 @@ class AgentPaths:
         candidate = Path(text)
         if candidate.is_absolute():
             resolved = candidate.resolve()
+            from external_project import to_external_agent_relative
+
+            if to_external_agent_relative(self, resolved) is not None:
+                if must_exist and not resolved.exists():
+                    raise FileNotFoundError(f"path does not exist: {text}")
+                return resolved
         else:
+            from external_project import resolve_external_project_path
+
+            ext_lookup = (
+                text
+                if base_resolved == self.agent_root.resolve()
+                else f"workspace/{text.replace(chr(92), '/').lstrip('/')}"
+            )
+            mapped = resolve_external_project_path(self, ext_lookup)
+            if mapped is not None:
+                resolved, _rel = mapped
+                if must_exist and not resolved.exists():
+                    raise FileNotFoundError(f"path does not exist: {text}")
+                return resolved
             resolved = (base_resolved / candidate).resolve()
 
         label = "agent root" if base_resolved == self.agent_root.resolve() else "workspace"

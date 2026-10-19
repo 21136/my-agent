@@ -433,32 +433,62 @@ def _image_data_uri_for_attachment(
     return f"data:{mime};base64,{encoded}"
 
 
+def _vision_data_uris_for_attachment(
+    session: Session,
+    ref: str,
+    mime: str,
+) -> list[str]:
+    from file_stage import is_image_mime
+    from pdf_vision import is_pdf_mime, render_pdf_page_data_uris
+
+    if is_image_mime(mime):
+        single = _image_data_uri_for_attachment(session, ref, mime)
+        return [single] if single else []
+    if not is_pdf_mime(mime):
+        return []
+    try:
+        path = session.paths.resolve_under_agent(ref, must_exist=True)
+    except (OSError, ValueError, FileNotFoundError):
+        return []
+    try:
+        return render_pdf_page_data_uris(path)
+    except RuntimeError:
+        return []
+
+
 def _multimodal_user_content(session: Session, content: str) -> list[dict[str, Any]] | None:
     if not content.strip().startswith("[附件]"):
         return None
     blocks: list[dict[str, Any]] = [{"type": "text", "text": content}]
-    image_count = 0
+    vision_count = 0
     for line in content.splitlines()[1:]:
         match = _ATTACHMENT_LINE_RE.match(line.strip())
         if not match:
             continue
         ref, metadata = match.groups()
         mime = re.split(r"[;,；]", metadata.rsplit(",", maxsplit=1)[-1], maxsplit=1)[0].strip()
-        data_uri = _image_data_uri_for_attachment(session, ref.strip(), mime)
-        if data_uri is None:
-            continue
-        blocks.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": data_uri, "detail": "auto"},
-            }
-        )
-        image_count += 1
-    return blocks if image_count else None
+        for data_uri in _vision_data_uris_for_attachment(session, ref.strip(), mime):
+            detail = "high" if mime.casefold() == "application/pdf" else "auto"
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_uri, "detail": detail},
+                }
+            )
+            vision_count += 1
+    return blocks if vision_count else None
 
 
 def has_image_attachment(messages: list[dict[str, Any]]) -> bool:
-    """Return whether persisted user messages refer to an image attachment."""
+    """Return whether persisted user messages need a vision-capable model."""
+    return has_vision_attachment(messages)
+
+
+def has_vision_attachment(messages: list[dict[str, Any]]) -> bool:
+    """Image or PDF attachments that can be sent as multimodal input."""
+    from file_stage import is_image_mime
+    from pdf_vision import is_pdf_mime
+
     for message in messages:
         content = message.get("content")
         if not isinstance(content, str) or not content.strip().startswith("[附件]"):
@@ -469,9 +499,7 @@ def has_image_attachment(messages: list[dict[str, Any]]) -> bool:
                 continue
             _, metadata = match.groups()
             mime = re.split(r"[;,；]", metadata.rsplit(",", maxsplit=1)[-1], maxsplit=1)[0].strip()
-            from file_stage import is_image_mime
-
-            if is_image_mime(mime):
+            if is_image_mime(mime) or is_pdf_mime(mime):
                 return True
     return False
 
