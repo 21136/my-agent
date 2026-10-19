@@ -329,6 +329,40 @@ class WritePolicyExecutorTests(unittest.TestCase):
                 )
             )
 
+    def test_unbound_project_shell_patch_after_confirm(self) -> None:
+        """自由聊（project UI、无 project_root）：确认后应能改 workspace 项目文件。"""
+        with temporary_agent_paths(
+            copy_tool_dirs=("common/write_text", "coding/patch_file"),
+        ) as paths:
+            target = paths.workspace / "music" / "src"
+            target.mkdir(parents=True)
+            file_path = target / "app.py"
+            file_path.write_text("old\n", encoding="utf-8")
+            registry = ToolRegistry.load(paths)
+            executor = ToolExecutor(
+                registry=registry,
+                session=ExecutorSession(
+                    allowed_evolved={"write_text", "patch_file"},
+                    active_shell="project",
+                    project_root="",
+                    project_id="",
+                ),
+                confirm_fn=lambda _p, _a: "y",
+            )
+            result = executor.run(
+                "run_evolved",
+                {
+                    "tool_name": "patch_file",
+                    "arguments": {
+                        "path": "workspace/music/src/app.py",
+                        "find": "old",
+                        "replacement": "new",
+                    },
+                },
+            )
+            self.assertTrue(result.ok, result.error.message if result.error else result)
+            self.assertEqual(file_path.read_text(encoding="utf-8"), "new\n")
+
     def test_it4214_executor_traversal_confirms(self) -> None:
         with temporary_agent_paths(
             copy_tool_dirs=("common/write_text", "coding/patch_file"),

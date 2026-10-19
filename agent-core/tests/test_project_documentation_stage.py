@@ -37,6 +37,17 @@ class ProjectDocumentationStageTests(unittest.TestCase):
         )
         self.assertIsNone(allowed)
 
+        unbound_patch = project_mode_block_reason(
+            active_shell="project",
+            project_root="",
+            tool_name="run_evolved",
+            arguments={
+                "tool_name": "patch_file",
+                "arguments": {"path": "workspace/demo/src/a.py", "find": "x", "replacement": "y"},
+            },
+        )
+        self.assertIsNone(unbound_patch)
+
     def test_organize_writes_core_artifacts_without_advancing_ordinary_stage(self) -> None:
         with temporary_agent_paths(prefix="documentation-stage-") as paths:
             session = create_new(paths, conversation_id="documentation-stage")

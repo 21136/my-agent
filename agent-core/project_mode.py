@@ -1195,6 +1195,10 @@ def project_mode_block_reason(
             return "project 模式禁止向 evolve/tools clone；请切换到 grow 壳沉淀能力"
 
     if active_shell == "project" and not root:
+        if tool_name == "run_evolved" and evolved_name in {"write_text", "patch_file"}:
+            # Free chat in project UI: file edits go through write_policy confirm
+            # (confirm:no_project_binding / outside_project) instead of hard reject.
+            return None
         if tool_name == "run_evolved" and (
             evolved_name in _CODING_TOOLS
             or evolved_name in _WRITE_TOOLS
@@ -1203,6 +1207,7 @@ def project_mode_block_reason(
             return (
                 "当前项目窗口未绑定项目；已停止副作用操作。"
                 "请先打开或新建项目，再执行写入、运行、测试或创建工具。"
+                "（改单个文件可在确认后执行 write_text / patch_file。）"
             )
 
     if not root:
