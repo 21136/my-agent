@@ -697,6 +697,9 @@ def load_safety_prompt(evolve_dir: Path) -> str:
 
 
 PERSONA_REL = Path("persona.md")
+USER_PROFILE_REL = Path("user_profile.md")
+_COMPANION_SYNC_START = "<!-- COMPANION_SYNC_START -->"
+_COMPANION_SYNC_END = "<!-- COMPANION_SYNC_END -->"
 
 
 def load_persona_prompt(evolve_dir: Path) -> str:
@@ -707,6 +710,72 @@ def load_persona_prompt(evolve_dir: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def load_user_profile_prompt(evolve_dir: Path) -> str:
+    path = evolve_dir / USER_PROFILE_REL
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def sync_companion_profile_to_evolve(
+    evolve_dir: Path,
+    *,
+    partner_name: str = "小魔王",
+    stickers: list[str] | None = None,
+    partner_note: str = "",
+    days_together: int = 1,
+    late_night_count: int = 0,
+    care_count: int = 0,
+) -> bool:
+    """Update the companion sync block inside evolve/user_profile.md."""
+    path = evolve_dir / USER_PROFILE_REL
+    clean_name = (partner_name or "小魔王").strip()[:24] or "小魔王"
+    clean_stickers = [
+        str(s).strip()[:24]
+        for s in (stickers or [])
+        if isinstance(s, str) and str(s).strip()
+    ][:12]
+    stickers_line = " · ".join(clean_stickers) if clean_stickers else "（暂未贴标签）"
+    clean_note = (partner_note or "").replace("\r", " ").replace("\n", " ").strip()[:160]
+    note_line = clean_note if clean_note else "（暂未留便签）"
+    days_val = max(1, int(days_together or 1))
+    night_val = max(0, int(late_night_count or 0))
+    care_val = max(0, int(care_count or 0))
+
+    sync_block = (
+        f"{_COMPANION_SYNC_START}\n"
+        "## 专属搭档桌面同步（由工作台自动维护）\n\n"
+        f"- **搭档昵称**：{clean_name}\n"
+        f"- **印象贴纸**：{stickers_line}\n"
+        f"- **并肩记录**：已相伴第 {days_val} 天 · 深夜并肩 {night_val} 次 · 桌面投喂/互动 {care_val} 次\n"
+        f"- **桌面悄悄话**：{note_line}\n"
+        f"{_COMPANION_SYNC_END}"
+    )
+
+    try:
+        if path.is_file():
+            existing = path.read_text(encoding="utf-8")
+            if _COMPANION_SYNC_START in existing and _COMPANION_SYNC_END in existing:
+                before, rest = existing.split(_COMPANION_SYNC_START, 1)
+                _mid, after = rest.split(_COMPANION_SYNC_END, 1)
+                updated = f"{before.rstrip()}\n\n{sync_block}\n{after.lstrip()}"
+            else:
+                updated = f"{existing.rstrip()}\n\n{sync_block}\n"
+        else:
+            updated = (
+                "# 主人画像与相处默契（User Profile · 每次对话必载）\n\n"
+                f"{sync_block}\n"
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(updated, encoding="utf-8")
+        return True
+    except OSError:
+        return False
 
 
 SUBAGENT_PROMPTS_DIR = Path("subagents")
@@ -1214,6 +1283,9 @@ def build_system_prompt(
     persona_text = load_persona_prompt(evolve_dir)
     if persona_text:
         sections.append(("persona", persona_text))
+    user_profile_text = load_user_profile_prompt(evolve_dir)
+    if user_profile_text:
+        sections.append(("user_profile", user_profile_text))
     sections.extend(
         [
             ("topic_index", format_topic_index(topic_index)),

@@ -904,6 +904,27 @@ class WsSessionHandler:
             bridge.emit_session_state(repl.session)
             return
 
+        if msg_type == "companion.sync":
+            from loader import sync_companion_profile_to_evolve
+
+            partner_name = str(message.get("partner_name") or "小魔王")
+            raw_stickers = message.get("stickers")
+            stickers = [str(s) for s in raw_stickers] if isinstance(raw_stickers, list) else []
+            partner_note = str(message.get("partner_note") or "")
+            days_together = int(message.get("days_together") or 1) if isinstance(message.get("days_together"), (int, float)) else 1
+            late_night_count = int(message.get("late_night_count") or 0) if isinstance(message.get("late_night_count"), (int, float)) else 0
+            care_count = int(message.get("care_count") or 0) if isinstance(message.get("care_count"), (int, float)) else 0
+            sync_companion_profile_to_evolve(
+                self.paths.evolve,
+                partner_name=partner_name,
+                stickers=stickers,
+                partner_note=partner_note,
+                days_together=days_together,
+                late_night_count=late_night_count,
+                care_count=care_count,
+            )
+            return
+
         if msg_type == "session.set_model":
             model_raw = message.get("model")
             if not isinstance(model_raw, str) or not model_raw.strip():

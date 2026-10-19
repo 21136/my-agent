@@ -74,6 +74,7 @@ import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides"
 import {
   addCompanionSticker,
   ambientRoutineStatus,
+  buildCompanionSyncPayload,
   calibrateCompanionFirstMetFromSessions,
   currentPartnerName,
   loadCompanionBond,
@@ -1156,6 +1157,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     else if (action === "care-coffee") {
       ev.stopPropagation();
       const { reply } = recordCompanionCare("coffee");
+      syncCompanionToBackend();
       renderedPrints = [];
       renderedSegmentPrints = [];
       renderChat();
@@ -3442,11 +3444,20 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return lines[pokeCount % lines.length];
   }
 
+  function syncCompanionToBackend(): void {
+    try {
+      client.send(buildCompanionSyncPayload());
+    } catch {
+      // ignore if ws not yet connected
+    }
+  }
+
   chatEl.addEventListener("click", (ev) => {
     const careBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-companion-care]");
     if (careBtn?.dataset.companionCare) {
       const kind = careBtn.dataset.companionCare as "coffee" | "glasses" | "music";
       const { reply } = recordCompanionCare(kind);
+      syncCompanionToBackend();
       renderedPrints = [];
       renderedSegmentPrints = [];
       renderChat();
@@ -3457,6 +3468,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const delStickerBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-remove-sticker]");
     if (delStickerBtn?.dataset.removeSticker) {
       removeCompanionSticker(delStickerBtn.dataset.removeSticker);
+      syncCompanionToBackend();
       renderedPrints = [];
       renderedSegmentPrints = [];
       renderChat();
@@ -3468,6 +3480,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       void showWorkbenchPrompt("给她贴一张关于你的新印象标签（如：只喝冰美式 / 深夜写码）：").then((val) => {
         if (!val || !val.trim()) return;
         addCompanionSticker(val);
+        syncCompanionToBackend();
         renderedPrints = [];
         renderedSegmentPrints = [];
         renderChat();
@@ -3933,6 +3946,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           const nameInput = document.querySelector<HTMLInputElement>("#settings-partner-name-input");
           const nextName = (nameInput?.value || "").trim() || "小魔王";
           localStorage.setItem("partner_name", nextName);
+          syncCompanionToBackend();
           const chromeTitle = document.querySelector<HTMLElement>(".app-chrome-title");
           if (chromeTitle) chromeTitle.textContent = `✦ ${nextName}的空间`;
           renderedPrints = [];
@@ -4533,6 +4547,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         sessionsDropdown = event.sessions;
         sidebarSessionsLoaded = true;
         calibrateCompanionFirstMetFromSessions(event.sessions);
+        syncCompanionToBackend();
         renderSidebarSessions();
         renderSidebarProjectRow();
         if (!chat.model.blocks.length && !chat.isWorking()) {

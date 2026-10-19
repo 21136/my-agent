@@ -37,7 +37,7 @@ export function humanizeToolAction(tool: string, summary: string, endSummary?: s
   return formatToolActionLabel(tool, summary, endSummary);
 }
 
-export { displayToolName, formatToolActionLabel, resolveEffectiveToolName } from "../../copy/tool-display";
+export { companionToolAside, displayToolName, formatToolActionLabel, resolveEffectiveToolName } from "../../copy/tool-display";
 
 const TOOL_ERROR_RULES: Array<[RegExp, string]> = [
   [/find anchor not found/i, "没有找到要替换的原文"],

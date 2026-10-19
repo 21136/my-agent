@@ -225,6 +225,28 @@ export function calibrateCompanionFirstMetFromSessions(
   return bond;
 }
 
+export function buildCompanionSyncPayload(nowMs = Date.now()): {
+  type: "companion.sync";
+  partner_name: string;
+  stickers: string[];
+  partner_note: string;
+  days_together: number;
+  late_night_count: number;
+  care_count: number;
+} {
+  const bond = loadCompanionBond();
+  const daysTogether = Math.max(1, Math.floor((nowMs - bond.firstMetAt) / (24 * 3600_000)) + 1);
+  return {
+    type: "companion.sync",
+    partner_name: currentPartnerName(),
+    stickers: [...bond.stickers],
+    partner_note: bond.partnerNote || "",
+    days_together: daysTogether,
+    late_night_count: bond.lateNightDays.length,
+    care_count: bond.careCount,
+  };
+}
+
 export function calibrateCompanionFirstMet(earliestIso?: string): void {
   if (!earliestIso) return;
   calibrateCompanionFirstMetFromSessions([{ created_at: earliestIso }]);

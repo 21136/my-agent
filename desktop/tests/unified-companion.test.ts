@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PET_AVATAR_STATES,
+  buildCompanionSyncPayload,
   buildReunionStickyNote,
   calibrateCompanionFirstMetFromSessions,
   loadCompanionBond,
@@ -125,10 +126,16 @@ test("companion bond validates corrupt storage, caps lateNightDays, and preserve
   const reunion = buildReunionStickyNote(afterCare);
   assert.match(reunion, /小时|天/);
 
-  // Calibrate firstMetAt from session_id YYYYMMDD prefix
+  // Calibrate firstMetAt from session_id YYYYMMDD prefix (and ignore updated_at)
   assert.equal(parseSessionCreatedAtMs("20260912-abcd1234"), new Date(2026, 8, 12, 0, 0, 0, 0).getTime());
   const calibrated = calibrateCompanionFirstMetFromSessions([
+    { session_id: "nondate-id", updated_at: "2020-01-01T00:00:00Z" },
     { session_id: "20260912-abcd1234", updated_at: "2026-10-18T12:00:00Z" },
   ]);
   assert.equal(calibrated.firstMetAt, new Date(2026, 8, 12, 0, 0, 0, 0).getTime());
+
+  const syncPayload = buildCompanionSyncPayload(t2);
+  assert.equal(syncPayload.type, "companion.sync");
+  assert.ok(Array.isArray(syncPayload.stickers) && syncPayload.stickers.length > 0);
+  assert.ok(syncPayload.days_together >= 1);
 });

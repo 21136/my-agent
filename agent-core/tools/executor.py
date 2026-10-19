@@ -3041,7 +3041,7 @@ def _tool_event_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any
     return dict(arguments)
 
 
-_CARD_FILE_TOOLS = frozenset({"write_text", "patch_file", "git_diff", "git_snapshot"})
+_CARD_FILE_TOOLS = frozenset({"write_text", "patch_file", "git_diff", "git_snapshot", "run_command"})
 
 
 def _card_tool_name(tool_name: str, arguments: dict[str, Any]) -> str:

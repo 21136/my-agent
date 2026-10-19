@@ -152,6 +152,34 @@ export function displayToolName(tool: string, ctx?: ToolDisplayContext): string 
   return resolveDisplayLabel(tool, ctx);
 }
 
+const COMPANION_TOOL_ASIDES: Record<string, string[]> = {
+  read_file: ["正凑近翻看这页代码", "先瞄一眼原文件写的啥", "仔细核对一下上下文"],
+  patch_file: ["挽起袖子动刀改代码", "精准替换这处逻辑", "顺手把这块修干净"],
+  write_text: ["提笔把新内容落盘", "一气呵成写进文件里", "帮你把这份文件建好"],
+  run_command: ["敲下回车跑一遍试试", "盯紧终端看执行结果", "实测一下稳不稳"],
+  git_diff: ["瞅瞅刚才都改了哪些行", "逐行比对一下改动补丁", "复核一遍修改痕迹"],
+  git_snapshot: ["盘点一下仓库当前状态", "看看工作区干不干净"],
+  grep: ["在代码堆里顺藤摸瓜", "全局搜一下关键词在哪"],
+  glob_file_search: ["翻翻目录找目标文件", "按名字把文件揪出来"],
+  list_dir: ["扫一眼目录结构", "看看这层文件夹里有啥"],
+  explore: ["派分身把周边代码摸个底", "先把来龙去脉探清楚"],
+  codebase_search: ["按概念在仓库里寻宝", "搜一下相关实现在哪"],
+  deliverable_review: ["戴稳墨镜做最后把关", "全面挑挑刺看能不能交付"],
+  run_service: ["把后台服务拉起来盯好", "安顿好常驻进程"],
+};
+
+export function companionToolAside(tool: string, summary?: string, callId = ""): string {
+  const effective = resolveEffectiveToolName(tool, summary);
+  const pool = COMPANION_TOOL_ASIDES[effective];
+  if (!pool || !pool.length) return "";
+  let hash = 0;
+  const seed = `${callId}:${summary || effective}`;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return pool[hash % pool.length];
+}
+
 /** Activity timeline / fail alert one-liner. */
 export function formatToolActionLabel(tool: string, summary: string, endSummary?: string): string {
   const blob = `${summary} ${endSummary ?? ""}`;

@@ -10,6 +10,7 @@ import {
 } from "./activity-state";
 import { escapeHtml, formatToolElapsed } from "./chat-state";
 import {
+  companionToolAside,
   formatReasoningDisplay,
   humanizeToolAction,
   humanizeToolSubline,
@@ -132,6 +133,10 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const label = humanizeToolAction(tool.tool, tool.summary, tool.endSummary);
   const sub = humanizeToolSubline(tool.status, tool.endSummary);
   const canonical = resolveEffectiveToolName(tool.tool, tool.summary);
+  const aside = companionToolAside(tool.tool, tool.summary, tool.callId);
+  const asideBit = aside
+    ? `<span class="unified-tool-companion-aside">· ${escapeHtml(aside)}</span>`
+    : "";
   const filePath = extractToolPath(tool);
   const isMd = /\.md$/i.test(filePath);
   const pathBit = filePath
@@ -150,7 +155,7 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
     <span class="unified-tool-step">
       <span class="unified-tool-step-head">
         <span class="unified-tool-step-label">${escapeHtml(label)}</span>
-        ${pathBit}${statsBit}
+        ${pathBit}${statsBit}${asideBit}
         <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(canonical)}」的显示名称">改名</button>
       </span>
       ${sub ? `<span class="unified-tool-step-sub is-${tool.status}">${escapeHtml(sub)}</span>` : ""}
@@ -271,7 +276,8 @@ export function syncThinkDom(
     waiting: compactWait || Boolean(opts.waiting),
     waitStartedAt: opts.waitStartedAt,
   });
-  const summary = el.querySelector<HTMLElement>(".unified-thinking-summary, .unified-thinking-waiting-text");
+  const summary = el.querySelector<HTMLElement>(".unified-thinking-waiting-text") ??
+    el.querySelector<HTMLElement>(".unified-thinking-summary");
   if (summary) summary.textContent = title;
   if (compactWait) {
     el.querySelector<HTMLElement>(".unified-thinking-body")?.remove();

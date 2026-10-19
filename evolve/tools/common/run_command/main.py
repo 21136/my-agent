@@ -375,20 +375,40 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
     if env_extra:
         run_env = {**os.environ, **env_extra}
 
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
     started = time.perf_counter()
+    proc: subprocess.Popen[str] | None = None
     try:
-        completed = subprocess.run(
+        proc = subprocess.Popen(
             argv,
             cwd=str(cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout_sec,
-            check=False,
             env=run_env,
+            creationflags=creationflags if sys.platform == "win32" else 0,
         )
+        out_str, err_str = proc.communicate(timeout=timeout_sec)
+        returncode = proc.returncode
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    capture_output=True,
+                    check=False,
+                    timeout=10,
+                )
+            else:
+                proc.kill()
+            try:
+                proc.communicate(timeout=3)
+            except Exception:
+                pass
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return {
             "ok": False,
@@ -404,9 +424,9 @@ def run_command(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(exc), "command": command, "cwd": cwd_rel}
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    stdout, stdout_trunc = _truncate(completed.stdout or "")
-    stderr, stderr_trunc = _truncate(completed.stderr or "")
-    exit_code = int(completed.returncode)
+    stdout, stdout_trunc = _truncate(out_str or "")
+    stderr, stderr_trunc = _truncate(err_str or "")
+    exit_code = int(returncode)
     out: dict[str, Any] = {
         "ok": exit_code == 0,
         "exit_code": exit_code,
