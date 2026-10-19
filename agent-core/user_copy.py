@@ -19,9 +19,27 @@ def format_tool_loop_exceeded_message(
     registry: ToolRegistry | None = None,
     segment: int | None = None,
     total_tool_rounds: int | None = None,
+    turn_intent: str | None = None,
 ) -> str:
     """When the tool inner loop ends without a final assistant reply."""
     from loader import session_evolved_allowlist
+
+    intent = (turn_intent or getattr(session, "turn_intent", None) or "").strip()
+    mode = getattr(session.meta, "turn_mode", "agent")
+
+    if tool_rounds <= 0 and intent in {"qa", "recall", "requirements"}:
+        return (
+            "本轮已自动重试，仍未收到完整回答（多为模型超时或上游繁忙）。\n"
+            "\n"
+            "你可以再发一次同样的问题；若连续失败，建议切换 Flash 或其它模型。"
+        )
+
+    if tool_rounds <= 0 and mode == "ask":
+        return (
+            "本轮已自动重试，仍未收到完整回答。\n"
+            "\n"
+            "需要改代码或跑命令时，请切换到「动手」模式。"
+        )
 
     if tool_rounds <= 0:
         usage = f"本回合未成功调用工具（上限 {tool_loop_max} 次）"
@@ -38,20 +56,34 @@ def format_tool_loop_exceeded_message(
         f"本回合工具预算已用完（{usage}{seg_note}），当前步骤尚未完成。",
         "",
     ]
-    lines.extend(
-        [
-            "请发「继续」或给出更具体的下一步（要改哪个文件、跑哪条命令）。",
-            "",
-            "常见原因：",
-            "· 反复观察代码却没有写入或运行测试",
-            "· 缺少完成该步骤所需的工具能力",
-        ]
-    )
+    if intent in {"qa", "recall"}:
+        lines.extend(
+            [
+                "这类问题通常可以直接根据对话和附件回答；请重发或说「别查了直接说」。",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "请发「继续」或给出更具体的下一步（要改哪个文件、跑哪条命令）。",
+                "",
+                "常见原因：",
+                "· 反复观察代码却没有写入或运行测试",
+                "· 缺少完成该步骤所需的工具能力",
+            ]
+        )
 
-    reg = registry or ToolRegistry.load(session.paths)
-    allowed = sorted(session_evolved_allowlist(session, registry=reg))
-    if allowed:
-        lines.extend(["", f"本会话可用工具：{', '.join(allowed[:12])}" + ("…" if len(allowed) > 12 else "")])
+    if mode == "agent" and intent not in {"qa", "recall", "requirements"}:
+        reg = registry or ToolRegistry.load(session.paths)
+        allowed = sorted(session_evolved_allowlist(session, registry=reg))
+        if allowed:
+            lines.extend(
+                [
+                    "",
+                    f"本会话可用工具：{', '.join(allowed[:12])}"
+                    + ("…" if len(allowed) > 12 else ""),
+                ]
+            )
 
     return "\n".join(lines)
 

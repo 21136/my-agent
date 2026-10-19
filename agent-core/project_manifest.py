@@ -110,8 +110,15 @@ def change_ledger_path(project_root: Path | str) -> Path:
     return Path(project_root) / ".plan-agent" / CHG_LEDGER_FILENAME
 
 
+def _project_root_dir(paths: AgentPaths, project_id: str) -> Path:
+    pid = _project_id(project_id)
+    from project_mode import project_dir
+
+    return project_dir(paths, pid)
+
+
 def project_manifest_path(paths: AgentPaths, project_id: str) -> Path:
-    return manifest_path(paths.workspace / _project_id(project_id))
+    return manifest_path(_project_root_dir(paths, project_id))
 
 
 def normalize_project_template(value: object) -> str:
@@ -435,7 +442,7 @@ def ensure_project_manifest(
     *,
     tier: str = "normal",
 ) -> dict[str, Any]:
-    root = paths.workspace / _project_id(project_id)
+    root = _project_root_dir(paths, project_id)
     target = manifest_path(root)
     existing = load_manifest(target)
     if existing is None:
@@ -574,7 +581,7 @@ def refresh_project_manifest(
     change_levels: Mapping[str, str] | None = None,
     evidence_changed: bool = False,
 ) -> dict[str, Any]:
-    root = paths.workspace / _project_id(project_id)
+    root = _project_root_dir(paths, project_id)
     target = manifest_path(root)
     manifest = ensure_project_manifest(paths, project_id)
     if refresh_manifest(

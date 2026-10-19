@@ -1174,6 +1174,8 @@ class Agent:
 
         tool_rounds = 0
         llm_transport_attempts = 0
+        transport_fallback_used = False
+        empty_reply_attempts = 0
         retry_error_fingerprints = retry_error_fingerprints if retry_error_fingerprints is not None else set()
         final_text = ""
         finish_reason: str | None = None
@@ -1334,26 +1336,58 @@ class Agent:
                         llm_provider_failure_message,
                         llm_transport_backoff_seconds,
                         llm_transport_failure_kind,
+                        llm_transport_max_attempts,
+                        resolve_main_turn_transport_fallback_model,
                     )
 
                     pool_exhausted = is_pool_exhausted_transport_error(exc)
                     failure_kind = llm_transport_failure_kind(exc)
-                    if failure_kind in {"session_limit", "client_error"}:
-                        # Session cap or bad request params will not heal on retry.
-                        max_transport_retries = 1
-                    else:
-                        max_transport_retries = 2
+                    max_transport_retries = llm_transport_max_attempts(exc)
                     llm_transport_attempts += 1
-                    if llm_transport_attempts < max_transport_retries:
-                        if not self.executor.session.llm_retry_notice_emitted:
-                            self.executor.session.llm_retry_notice_emitted = True
-                            hint = llm_provider_failure_message(exc).rstrip("。")
-                            notice_text = f"{hint}，正在重试…"
+                    if (
+                        not transport_fallback_used
+                        and failure_kind not in {"auth", "client_error"}
+                        and llm_transport_attempts >= max(1, max_transport_retries - 1)
+                    ):
+                        fallback_model = resolve_main_turn_transport_fallback_model(model)
+                        if fallback_model:
+                            transport_fallback_used = True
+                            model = fallback_model
+                            model_entry = resolve_model_entry(model)
+                            vendor = model_entry.vendor if model_entry is not None else ""
+                            llm_transport_attempts = 0
                             self._emit_turn_event(
                                 {
                                     "type": "turn.notice",
-                                    "level": "warn",
-                                    "text": notice_text,
+                                    "level": "info",
+                                    "text": "主模型暂时不可用，正在切换备用模型继续…",
+                                }
+                            )
+                            time.sleep(
+                                llm_transport_backoff_seconds(1, pool_exhausted=pool_exhausted)
+                            )
+                            if self.cancel_event.is_set():
+                                return ToolLoopSegmentResult(
+                                    final_text="",
+                                    tool_rounds=tool_rounds,
+                                    finish_reason=self._interrupt_finish_reason(),
+                                    exceeded=False,
+                                    had_progress=segment_messages_show_progress(
+                                        self.session.messages,
+                                        segment_start_index,
+                                    ),
+                                    qa_soft_reminder_injected=reminder_injected,
+                                    action_announce_nudge_injected=action_nudge_injected,
+                                )
+                            continue
+                    if llm_transport_attempts < max_transport_retries:
+                        if not self.executor.session.llm_retry_notice_emitted:
+                            self.executor.session.llm_retry_notice_emitted = True
+                            self._emit_turn_event(
+                                {
+                                    "type": "turn.notice",
+                                    "level": "info",
+                                    "text": "模型服务繁忙，正在自动重试…",
                                 }
                             )
                         time.sleep(
@@ -1376,7 +1410,11 @@ class Agent:
                                 action_announce_nudge_injected=action_nudge_injected,
                             )
                         continue
-                    final_text = llm_provider_failure_message(exc)
+                    final_text = llm_provider_failure_message(
+                        exc,
+                        attempts=llm_transport_attempts,
+                        used_fallback_model=transport_fallback_used,
+                    )
                     self.session.append_message({"role": "assistant", "content": final_text})
                     return ToolLoopSegmentResult(
                         final_text=final_text,
@@ -1504,6 +1542,32 @@ class Agent:
                     )
                     _refresh_dynamic_system()
                     continue
+                if not final_text:
+                    empty_reply_attempts += 1
+                    if empty_reply_attempts < 3:
+                        if empty_reply_attempts == 1:
+                            self._emit_turn_event(
+                                {
+                                    "type": "turn.notice",
+                                    "level": "info",
+                                    "text": "模型未返回正文，正在自动重试…",
+                                }
+                            )
+                        time.sleep(0.5)
+                        if self.cancel_event.is_set():
+                            return ToolLoopSegmentResult(
+                                final_text="",
+                                tool_rounds=tool_rounds,
+                                finish_reason=self._interrupt_finish_reason(),
+                                exceeded=False,
+                                had_progress=segment_messages_show_progress(
+                                    self.session.messages,
+                                    segment_start_index,
+                                ),
+                                qa_soft_reminder_injected=reminder_injected,
+                                action_announce_nudge_injected=action_nudge_injected,
+                            )
+                        continue
                 if final_text:
                     assistant_msg = {"role": "assistant", "content": final_text}
                     self.session.append_message(assistant_msg)
@@ -2618,6 +2682,11 @@ class Agent:
             # Ordinary mode: explicit entry or phrase asked to implement now.
             intent = "execute"
             self.session.turn_intent = intent
+        from turn_intent import is_attachment_qa_turn, should_use_chat_first_attachment_turn
+
+        if intent == "requirements" and is_attachment_qa_turn(user_text):
+            intent = "qa"
+            self.session.turn_intent = intent
         if intent == "requirements":
             from llm_routing import resolve_model_id_for_role
 
@@ -2630,15 +2699,16 @@ class Agent:
             )
             self.executor.begin_turn()
             segment_start_index = len(self.session.messages)
+            req_loop_max = max(3, min(parent_short_max(), 8))
             loop_result = self._run_parent_tool_loop(
-                max_rounds=1,
+                max_rounds=req_loop_max,
                 tools=[],
                 model=resolve_model_id_for_role("main_turn", self.session.meta),
                 segment_start_index=segment_start_index,
             )
             return self._finish_short_tool_loop(
                 loop_result=loop_result,
-                loop_max=1,
+                loop_max=req_loop_max,
                 intent=intent,
                 spawn_explore_flag=False,
                 subagent_tool_rounds=0,
@@ -2824,6 +2894,28 @@ class Agent:
             return self._finish_short_tool_loop(
                 loop_result=loop_result,
                 loop_max=loop_max,
+                intent=intent,
+                spawn_explore_flag=subagent_used,
+                subagent_tool_rounds=subagent_tool_rounds,
+            )
+
+        if should_use_chat_first_attachment_turn(
+            user_text,
+            intent,
+            turn_mode=self.session.meta.turn_mode,
+        ):
+            segment_start_index = len(self.session.messages)
+            chat_loop_max = max(3, min(parent_short_max(), 8))
+            loop_result = self._run_parent_tool_loop(
+                max_rounds=chat_loop_max,
+                tools=[],
+                model=model,
+                segment_start_index=segment_start_index,
+                qa_soft_reminder=True,
+            )
+            return self._finish_short_tool_loop(
+                loop_result=loop_result,
+                loop_max=chat_loop_max,
                 intent=intent,
                 spawn_explore_flag=subagent_used,
                 subagent_tool_rounds=subagent_tool_rounds,

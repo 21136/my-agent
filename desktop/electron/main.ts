@@ -4,9 +4,11 @@ import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, WebContentsView, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
+import { buildBilibiliSearchUrl, isOfficialBilibiliUrl } from "./bilibili-search";
+import { clampMusicViewBounds, type MusicViewBounds } from "./music-view-bounds";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
@@ -47,6 +49,7 @@ type SidecarStartResult =
   | { ok: false; lockConflict?: LockHolder; message?: string };
 
 let workbenchWindow: BrowserWindow | null = null;
+let bilibiliSearchView: WebContentsView | null = null;
 let sidecar: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
 let tray: Tray | null = null;
@@ -665,6 +668,31 @@ function wireExternalNavigation(win: BrowserWindow): void {
   });
 }
 
+
+function wireBilibiliViewNavigation(view: WebContentsView): void {
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (isOfficialBilibiliUrl(url)) {
+      void view.webContents.loadURL(url).catch((error) => console.warn("[music] Bilibili navigation failed:", error));
+    } else if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  const keepOfficialPage = (event: Electron.Event, url: string): void => {
+    if (isOfficialBilibiliUrl(url)) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  };
+  view.webContents.on("will-navigate", keepOfficialPage);
+  view.webContents.on("will-redirect", keepOfficialPage);
+}
+
+function boundedMusicViewRect(raw: unknown): MusicViewBounds | null {
+  if (!workbenchWindow || workbenchWindow.isDestroyed()) return null;
+  const [width, height] = workbenchWindow.getContentSize();
+  return clampMusicViewBounds(raw, { width, height });
+}
+
 async function createWorkbenchWindow(): Promise<void> {
   if (workbenchWindow && !workbenchWindow.isDestroyed()) {
     return;
@@ -698,6 +726,9 @@ async function createWorkbenchWindow(): Promise<void> {
   wireExternalNavigation(workbenchWindow);
 
   workbenchWindow.on("closed", () => {
+    const view = bilibiliSearchView;
+    bilibiliSearchView = null;
+    if (view && !view.webContents.isDestroyed()) view.webContents.close();
     workbenchWindow = null;
   });
 }
@@ -771,6 +802,59 @@ function registerShortcuts(): void {
 ipcMain.handle("sidecar:get", () => sidecarInfo);
 ipcMain.handle("sidecar:switch-candidate", (_event, rawRoot: unknown) => switchSidecarCandidate(rawRoot));
 ipcMain.handle("app:switch-to-cli", () => switchToCli());
+
+ipcMain.handle("music:open-bilibili-search", async (event, rawQuery: unknown, rawBounds: unknown) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) return false;
+  const url = buildBilibiliSearchUrl(rawQuery);
+  const bounds = boundedMusicViewRect(rawBounds);
+  if (!url || !bounds) return false;
+
+  let view = bilibiliSearchView;
+  if (!view || view.webContents.isDestroyed()) {
+    view = new WebContentsView({
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        partition: "persist:bilibili-search",
+      },
+    });
+    bilibiliSearchView = view;
+    workbenchWindow.contentView.addChildView(view);
+    wireBilibiliViewNavigation(view);
+  }
+  view.setBounds(bounds);
+  view.setVisible(true);
+  try {
+    await view.webContents.loadURL(url);
+    return !view.webContents.isDestroyed();
+  } catch (error) {
+    console.warn("[music] Bilibili search page failed to load:", error);
+    view.setVisible(false);
+    return false;
+  }
+});
+
+ipcMain.handle("music:set-bilibili-view-state", (event, rawState: unknown) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) return false;
+  const view = bilibiliSearchView;
+  if (!view || view.webContents.isDestroyed()) return false;
+  if (!rawState || typeof rawState !== "object" || typeof (rawState as { visible?: unknown }).visible !== "boolean") return false;
+  const state = rawState as { visible: boolean; bounds?: unknown };
+  if (!state.visible) {
+    view.setVisible(false);
+    return true;
+  }
+  const bounds = boundedMusicViewRect(state.bounds);
+  if (!bounds) {
+    view.setVisible(false);
+    return false;
+  }
+  view.setBounds(bounds);
+  view.setVisible(true);
+  return true;
+});
+
 ipcMain.handle("app:open-external", async (_event, raw: unknown) => {
   if (typeof raw !== "string" || !raw.trim()) return false;
   const url = raw.trim();

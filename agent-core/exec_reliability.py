@@ -262,23 +262,31 @@ def llm_transport_failure_kind(exc: BaseException) -> str:
     return "unavailable"
 
 
-def llm_provider_failure_message(exc: BaseException) -> str:
-    """Chinese reply for a provider/API failure. Never the tool-budget copy."""
+def llm_provider_failure_message(
+    exc: BaseException,
+    *,
+    attempts: int = 0,
+    used_fallback_model: bool = False,
+) -> str:
+    """Chinese reply after automatic retries are exhausted. Never the tool-budget copy."""
     kind = llm_transport_failure_kind(exc)
+    tried = f"（已自动重试 {max(1, attempts)} 次" + (
+        "，并切换备用模型" if used_fallback_model else ""
+    ) + "）"
     if kind == "session_limit":
-        return "模型服务达到并发上限，请稍后重试。"
+        return f"模型服务达到并发上限{tried}，仍无法完成本次请求。可稍后再发一条，或换用 Flash 模型。"
     if kind == "rate_limit":
-        return "模型服务请求过于频繁，请稍后重试。"
+        return f"模型服务限流{tried}，仍无法完成本次请求。可换模型或稍后再试。"
     if kind == "auth":
-        return "模型服务鉴权失败，请检查配置后再试。"
+        return "模型服务鉴权失败，请检查 API 配置。"
     if kind == "client_error":
         lower = str(exc or "").lower()
         if "reasoning" in lower and "effort" in lower:
             return "模型网关不接受当前 reasoning 参数，请更新客户端或切换模型。"
-        return "模型服务拒绝了本次请求参数，请检查配置或换模型后再试。"
+        return "模型服务拒绝了本次请求参数，请检查配置或换模型。"
     if kind == "network":
-        return "模型服务暂时连不上，请稍后重试。"
-    return "模型服务暂时不可用，请稍后重试。"
+        return f"模型服务网络不通{tried}，仍无法完成本次请求。"
+    return f"模型服务暂时不可用{tried}，仍无法完成本次请求。"
 
 
 def llm_transport_user_hint(exc: BaseException) -> str:
@@ -328,6 +336,39 @@ def llm_transport_backoff_seconds(attempt: int, *, pool_exhausted: bool = False)
     if pool_exhausted:
         return min(30.0 * step, 90.0)
     return min(2.0 * (2 ** (step - 1)), 15.0)
+
+
+def llm_transport_max_attempts(exc: BaseException) -> int:
+    """How many LLM calls to make for this failure class before surfacing an error."""
+    kind = llm_transport_failure_kind(exc)
+    if kind in {"auth", "client_error"}:
+        return 1
+    if kind == "session_limit":
+        return 3
+    if is_pool_exhausted_transport_error(exc):
+        return 6
+    if kind in {"rate_limit", "network", "unavailable"}:
+        return 5
+    return 4
+
+
+def resolve_main_turn_transport_fallback_model(
+    current_model: str,
+    *,
+    registry: Any = None,
+) -> str | None:
+    """Cheaper flash tier when the session's primary model endpoint is down."""
+    from llm_models import get_registry
+
+    reg = registry or get_registry()
+    flash_id = (reg.default_flash_id or "").strip()
+    if not flash_id:
+        return None
+    entry = reg.resolve((current_model or "").strip())
+    current_id = entry.id if entry is not None else (current_model or "").strip()
+    if not current_id or current_id == flash_id:
+        return None
+    return flash_id
 
 
 

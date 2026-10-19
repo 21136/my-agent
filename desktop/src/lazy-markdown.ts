@@ -5,6 +5,7 @@ export type LazyMarkdownLookup = (turnIndex: number) => string | null;
 let lookup: LazyMarkdownLookup | null = null;
 let observer: IntersectionObserver | null = null;
 let observedRoot: HTMLElement | null = null;
+let afterUpgrade: ((body: HTMLElement) => void) | null = null;
 
 /** Bind turn-index → assistant text for viewport upgrades (UI-5972 M4). */
 export function bindLazyMarkdownLookup(fn: LazyMarkdownLookup): void {
@@ -21,12 +22,14 @@ function upgradeElement(el: HTMLElement): void {
   el.classList.remove("unified-markdown-lazy");
   delete el.dataset.lazyMd;
   el.innerHTML = renderMarkdown(text);
+  afterUpgrade?.(el);
   observer?.unobserve(el);
   void hydrateMermaid(el);
 }
 
 /** Observe off-viewport lazy markdown bodies inside the chat scroll root. */
-export function observeLazyMarkdown(chatRoot: HTMLElement): void {
+export function observeLazyMarkdown(chatRoot: HTMLElement, onUpgrade?: (body: HTMLElement) => void): void {
+  afterUpgrade = onUpgrade ?? null;
   if (!lookup) return;
   if (observer && observedRoot !== chatRoot) {
     observer.disconnect();
@@ -55,4 +58,5 @@ export function resetLazyMarkdownObserver(): void {
   observer?.disconnect();
   observer = null;
   observedRoot = null;
+  afterUpgrade = null;
 }

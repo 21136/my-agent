@@ -3,7 +3,8 @@ import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
 import { hydrateMermaid, renderMarkdown } from "../../markdown";
 import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver } from "../../lazy-markdown";
-import { formatUserMessageHtml } from "../../user-message";
+import { formatUserMessageHtml, parseUserMessage } from "../../user-message";
+import { messageReadingLayout, readingBodyHtml, prepareLazyReadingBody } from "./message-reading";
 import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
@@ -68,6 +69,11 @@ import {
   renderReviewCallout,
   renderToolFailAlert,
 } from "./output-display";
+import { renderProjectCompanionDockHtml } from "./sidebar-companion";
+import { bindChatFontControl, renderChatFontControl, syncChatFontControl } from "./chat-font-control";
+import { isSettingsSection, renderSettingsPane, type SettingsSection } from "./settings-panel";
+import { writeTheme } from "../../settings";
+import { renderMusicPanel } from "./music-panel";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
@@ -91,6 +97,9 @@ import {
 import "./unified.css";
 import "./neon-twin.css";
 import "./sidebar-v2.css";
+import "./message-reading.css";
+import "./settings-panel.css";
+import "./music-panel.css";
 
 export type Perspective = "default" | "project" | "night";
 
@@ -477,6 +486,7 @@ export function mountUnifiedShell(
             <span class="sidebar-icon-badge" id="project-count-badge">0</span>
           </button>
           <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
+          <button type="button" class="sidebar-icon-btn" data-panel="music" title="听歌"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="m9 8 12-2"/></svg><span class="sidebar-icon-label">听歌</span></button>
           <span class="sidebar-icon-spacer" aria-hidden="true"></span>
           <button type="button" class="sidebar-icon-btn sidebar-icon-settings" data-panel="settings" title="设置"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg><span class="sidebar-icon-label">设置</span></button>
         </nav>
@@ -544,6 +554,8 @@ export function mountUnifiedShell(
           <main class="unified-chat" id="unified-chat"></main>
           <section class="unified-document hidden" id="unified-document" aria-label="文档阅读"></section>
           <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
+          <section class="unified-settings hidden" id="unified-settings" aria-labelledby="settings-page-heading" hidden></section>
+          <section class="unified-music hidden" id="unified-music" aria-labelledby="music-page-heading" hidden></section>
         </div>
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
@@ -567,11 +579,25 @@ export function mountUnifiedShell(
   // ---- element refs ----
   const shellEl = root.querySelector<HTMLElement>(".unified-shell")!;
   const sidebarEl = root.querySelector<HTMLElement>("#unified-sidebar")!;
+  const unbindChatFontControl = bindChatFontControl(shellEl);
   const topbarEl = root.querySelector<HTMLElement>("#unified-topbar")!;
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
+  const settingsEl = root.querySelector<HTMLElement>("#unified-settings")!;
+  const musicEl = root.querySelector<HTMLElement>("#unified-music")!;
+  let settingsRenderedSection: SettingsSection | null = null;
+  let settingsRenderedName = "";
+  let settingsNicknameDraft: string | null = null;
+  let settingsFeedback = "";
+  let hasBilibiliSearch = false;
+  const musicViewResizeObserver = new ResizeObserver(syncMusicViewBounds);
+  musicViewResizeObserver.observe(musicEl);
+  window.addEventListener("resize", syncMusicViewBounds, { passive: true });
+  musicEl.addEventListener("scroll", syncMusicViewBounds, { passive: true });
+  const settingsThemeObserver = new MutationObserver(syncSettingsTheme);
+  settingsThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   const switchMaskEl = root.querySelector<HTMLElement>("#unified-switch-mask")!;
   const workbenchEmptyEl = root.querySelector<HTMLElement>("#workbench-empty")!;
   const emptyNewBtn = root.querySelector<HTMLButtonElement>("#empty-new-project")!;
@@ -786,6 +812,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return "";
   }
 
+  let currentTurnMode: "agent" | "ask" = "agent";
+
   const composerWire = wireComposerAttachments({
     input,
     sendBtn,
@@ -801,12 +829,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     },
     messageOpts: () => {
       const path = projectState.currentDocPath || "";
-      if (!path) return undefined;
-      const selection = currentDocSelection();
-      return {
-        activeDoc: path,
-        activeDocSelection: selection || undefined,
+      const selection = path ? currentDocSelection() : "";
+      const base = {
+        turnMode: currentTurnMode,
+        ...(path
+          ? {
+              activeDoc: path,
+              activeDocSelection: selection || undefined,
+            }
+          : {}),
       };
+      return base;
     },
   });
 
@@ -814,8 +847,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   let lastSidebarWorking = false;
   let processJumpCursor = -1;
   let processJumpTurnIndex = -1;
-
-  let currentTurnMode: "agent" | "ask" = "agent";
 
   function syncModeToggleUi(mode?: string): void {
     if (mode === "ask" || mode === "agent") {
@@ -1060,23 +1091,26 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       </div>`;
       return;
     }
-    const parts: string[] = [];
-    if (projectGitBranch) parts.push(`<span class="sidebar-project-branch">⎇ ${escapeHtml(projectGitBranch)}</span>`);
-    if (lastVerify) {
-      parts.push(`<span class="sidebar-project-verify ${lastVerify.passed ? "is-ok" : "is-fail"}">上次验证 ${lastVerify.passed ? "✓" : "✗"} ${formatClock(lastVerify.at)}</span>`);
-    }
-    if (!parts.length) parts.push(`<span>${escapeHtml(routine)}</span>`);
-    sidebarProjectRowEl.innerHTML = `<button type="button" class="sidebar-project-row-inner is-companion-dock" data-sidebar-action="open-projects" title="点击切换项目">
-      <img class="sidebar-companion-ava" src="${petAvatarSrc("idle", true)}" alt="" width="34" height="34" draggable="false" />
-      <span class="sidebar-project-main"><span class="sidebar-project-name">${escapeHtml(pid)} · ${escapeHtml(partner)}盯盘中</span><span class="sidebar-project-sub is-multiline">${parts.join(" · ")}</span></span>
-      <span class="sidebar-project-updown" aria-hidden="true"><i></i><i></i></span>
-    </button>`;
+    const currentProjectFacts = lastVerifyProjectId === pid;
+    sidebarProjectRowEl.innerHTML = renderProjectCompanionDockHtml({
+      partnerName: partner,
+      daysTogether: days,
+      projectId: pid,
+      projectName: projectState.projectDisplayName,
+      projectDirectory: projectState.projectDirectory,
+      avatarSrc: petAvatarSrc("idle", true),
+      branch: currentProjectFacts ? projectGitBranch : "",
+      verification: currentProjectFacts && lastVerify
+        ? `上次验证 ${lastVerify.passed ? "✓" : "✗"} ${formatClock(lastVerify.at)}`
+        : "",
+    });
   }
 
   function renderSidebar(): void {
     renderProjectSidebar(projectEls, projectState, projectCallbacks);
     renderSidebarSessions();
     renderSidebarProjectRow();
+    if (projectState.mainFocus === "settings") renderSettingsStage();
   }
 
   function refreshSidebarSessions(): void {
@@ -2038,20 +2072,210 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     chatEl.hidden = !(focus === "chat" || splitDocs);
     documentEl.hidden = focus !== "document";
     projectsEl.hidden = focus !== "projects";
-    composerDock.hidden = false;
-    composer.hidden = false;
-    statusEl.hidden = false;
+    settingsEl.hidden = focus !== "settings";
+    settingsEl.classList.toggle("hidden", focus !== "settings");
+    musicEl.hidden = focus !== "music";
+    musicEl.classList.toggle("hidden", focus !== "music");
+    const auxiliaryFocus = focus === "settings" || focus === "music";
+    composerDock.hidden = auxiliaryFocus;
+    composer.hidden = auxiliaryFocus;
+    statusEl.hidden = auxiliaryFocus;
     tokenBar.hidden = !chatFocus;
     syncComposerMetaVisibility();
     if (focus === "document") {
       renderDocumentPane();
     } else if (focus === "projects") {
       renderProjectsPane();
+    } else if (focus === "music") {
+      renderMusicStage();
     }
+    syncMusicViewBounds();
     updateWorkbenchEmpty();
     renderSidebar();
   }
 
+
+
+  function syncSettingsTheme(): void {
+    const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+    settingsEl.querySelectorAll<HTMLInputElement>("[data-settings-theme]").forEach(radio => {
+      radio.checked = radio.dataset.settingsTheme === theme;
+    });
+  }
+
+  function settingsRuntimeCounts(): { terminals: number; services: number } {
+    return {
+      terminals: projectState.terminalSessions.filter(item => item.state !== "starting" && item.state !== "running").length,
+      services: projectState.services.filter(item => !item.alive).length,
+    };
+  }
+
+  function settingsNotice(text: string): void {
+    settingsFeedback = text;
+    const feedback = settingsEl.querySelector<HTMLElement>(".settings-feedback");
+    if (feedback) feedback.textContent = text;
+  }
+
+  function renderSettingsStage(): void {
+    const section = projectState.settingsSection || "appearance";
+    const name = currentPartnerName();
+    const counts = settingsRuntimeCounts();
+    // Async sidebar/runtime events must not replace inputs or interrupt a drag.
+    if (settingsRenderedSection !== section || settingsRenderedName !== name) {
+      settingsEl.innerHTML = renderSettingsPane({
+        section, partnerName: name, nicknameDraft: settingsNicknameDraft ?? name,
+        avatarSrc: petAvatarSrc("idle", true),
+        daysTogether: Math.max(1, Math.ceil((Date.now() - loadCompanionBond().firstMetAt) / 86_400_000)),
+        theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+        inactiveTerminals: counts.terminals, stoppedServices: counts.services,
+        fontControlHtml: renderChatFontControl(), feedback: settingsFeedback,
+      });
+      if (settingsRenderedSection !== section) settingsEl.scrollTop = 0;
+      settingsRenderedSection = section;
+      settingsRenderedName = name;
+      syncChatFontControl(settingsEl);
+    }
+    if (section === "runtime") {
+      const terminals = settingsEl.querySelector<HTMLElement>("[data-settings-terminal-count]");
+      const services = settingsEl.querySelector<HTMLElement>("[data-settings-service-count]");
+      if (terminals) terminals.textContent = counts.terminals ? counts.terminals + " 个可清理" : "暂无可清理记录";
+      if (services) services.textContent = counts.services ? counts.services + " 个可清理" : "暂无可清理记录";
+      const prune = settingsEl.querySelector<HTMLButtonElement>('[data-action="settings-prune-runtime"]');
+      if (prune) {
+        prune.disabled = counts.terminals + counts.services === 0;
+        prune.textContent = prune.disabled ? "无需清理" : "清理记录";
+      }
+    }
+    syncSettingsTheme();
+  }
+
+  function selectSettingsSection(section: SettingsSection): void {
+    projectState.settingsSection = section;
+    settingsFeedback = "";
+    renderSidebar();
+    settingsNotice("");
+  }
+
+  shellEl.addEventListener("click", event => {
+    if (!(event.target instanceof Element)) return;
+    const category = event.target.closest<HTMLButtonElement>("[data-settings-section]");
+    if (category && isSettingsSection(category.dataset.settingsSection)) {
+      selectSettingsSection(category.dataset.settingsSection);
+      return;
+    }
+    const button = event.target.closest<HTMLButtonElement>('[data-action^="settings-"]');
+    if (!button || button.disabled) return;
+    switch (button.dataset.action) {
+      case "settings-back-chat": showNowChat(); break;
+      case "settings-open-model-keys": document.querySelector<HTMLButtonElement>("#chrome-model-keys")?.click(); break;
+      case "settings-open-host-scope": document.querySelector<HTMLButtonElement>("#chrome-settings")?.click(); break;
+      case "settings-switch-cli": document.querySelector<HTMLButtonElement>("#chrome-cli")?.click(); break;
+      case "settings-prune-runtime":
+        try {
+          client.pruneTerminals(true, `terminal-prune-${Date.now()}`);
+          client.pruneServices();
+          settingsNotice("已请求清理，记录将在运行环境刷新后更新。");
+        } catch (error) { settingsNotice(error instanceof Error ? error.message : String(error)); }
+        break;
+    }
+  });
+  settingsEl.addEventListener("input", event => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.id === "settings-partner-name-input") settingsNicknameDraft = target.value;
+  });
+  settingsEl.addEventListener("change", event => {
+    const target = event.target;
+    if (target instanceof HTMLSelectElement && target.matches(".settings-category-mobile") && isSettingsSection(target.value)) {
+      selectSettingsSection(target.value);
+    } else if (target instanceof HTMLInputElement && target.dataset.settingsTheme) {
+      const theme = target.dataset.settingsTheme === "dark" ? "dark" : "light";
+      try {
+        const chromeTheme = document.querySelector<HTMLSelectElement>("#chrome-theme");
+        if (chromeTheme) { chromeTheme.value = theme; chromeTheme.dispatchEvent(new Event("change")); }
+        else writeTheme(theme);
+        syncSettingsTheme();
+      } catch (error) { settingsNotice(error instanceof Error ? error.message : String(error)); syncSettingsTheme(); }
+    }
+  });
+  settingsEl.addEventListener("submit", event => {
+    if (!(event.target instanceof HTMLFormElement) || !event.target.matches("[data-settings-name-form]")) return;
+    event.preventDefault();
+    const nextName = (settingsNicknameDraft ?? currentPartnerName()).trim() || "小魔王";
+    try { localStorage.setItem("partner_name", nextName); }
+    catch { settingsNotice("昵称未能保存，请检查本机存储是否可用。"); return; }
+    settingsNicknameDraft = nextName;
+    syncCompanionToBackend();
+    const title = document.querySelector<HTMLElement>(".app-chrome-title");
+    if (title) title.textContent = `✦ ${nextName}的空间`;
+    renderedPrints = [];
+    renderedSegmentPrints = [];
+    renderChat();
+    renderSidebar();
+    settingsNotice(`昵称已保存：${nextName}`);
+    settingsEl.querySelector<HTMLInputElement>("#settings-partner-name-input")?.focus();
+  });
+
+
+  function currentMusicViewBounds(): { x: number; y: number; width: number; height: number } | null {
+    if (projectState.mainFocus !== "music" || !hasBilibiliSearch) return null;
+    const slot = musicEl.querySelector<HTMLElement>("[data-music-web-slot]");
+    if (!slot || slot.hidden) return null;
+    const rect = slot.getBoundingClientRect();
+    const clip = musicEl.getBoundingClientRect();
+    const left = Math.max(0, clip.left, rect.left);
+    const top = Math.max(0, clip.top, rect.top);
+    const right = Math.min(window.innerWidth, clip.right, rect.right);
+    const bottom = Math.min(window.innerHeight, clip.bottom, rect.bottom);
+    if (right <= left || bottom <= top) return null;
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  function syncMusicViewBounds(): void {
+    const api = window.myAgentDesktop?.setBilibiliViewState;
+    if (!api) return;
+    const bounds = currentMusicViewBounds();
+    void api({ visible: Boolean(bounds), bounds: bounds ?? undefined }).catch(() => {});
+  }
+
+  function renderMusicStage(): void {
+    if (musicEl.innerHTML) return;
+    musicEl.innerHTML = renderMusicPanel();
+  }
+
+  musicEl.addEventListener("submit", async (event) => {
+    if (!(event.target instanceof HTMLFormElement) || !event.target.matches("[data-music-search-form]")) return;
+    event.preventDefault();
+    const input = musicEl.querySelector<HTMLInputElement>("#music-search-query");
+    const feedback = musicEl.querySelector<HTMLElement>(".music-feedback");
+    const slot = musicEl.querySelector<HTMLElement>("[data-music-web-slot]");
+    const query = input?.value.trim() || "";
+    if (!query) {
+      if (feedback) feedback.textContent = "先输入歌名或歌手。";
+      input?.focus();
+      return;
+    }
+    if (!window.myAgentDesktop?.openBilibiliSearch) {
+      if (feedback) feedback.textContent = "请在桌面客户端中使用 B 站搜索。";
+      return;
+    }
+    if (!slot) return;
+    hasBilibiliSearch = true;
+    slot.hidden = false;
+    if (feedback) feedback.textContent = "正在当前听歌页打开 B 站搜索…";
+    musicViewResizeObserver.observe(slot);
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const bounds = currentMusicViewBounds();
+    if (!bounds) {
+      if (feedback) feedback.textContent = "滚动到播放器位置后再试一次。";
+      return;
+    }
+    try {
+      const opened = await window.myAgentDesktop.openBilibiliSearch(query, bounds);
+      if (feedback) feedback.textContent = opened ? "B 站搜索结果已显示在听歌页。" : "搜索页暂时无法打开，请稍后重试。";
+    } catch {
+      if (feedback) feedback.textContent = "搜索页暂时无法打开，请稍后重试。";
+    }
+  });
 
   function renderProjectsPane(): void {
     projectsEl.innerHTML = renderProjectsStage(projectState);
@@ -2894,6 +3118,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function renderBlock(block: ChatBlock): string {
     if (block.kind === "user") {
       let cls = "unified-turn unified-turn-user";
+      if (perspective === "project") cls += ` unified-message-${messageReadingLayout(parseUserMessage(block.text).body)}`;
       if (perspective === "night") {
         if (!isRecentTurnBlock(block.turnIndex)) cls += " unified-turn-dim";
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
@@ -2916,6 +3141,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
       let cls = "unified-turn unified-turn-assistant";
+      const readingLayout = perspective === "project" ? messageReadingLayout(block.text) : null;
+      if (readingLayout) cls += ` unified-message-${readingLayout}`;
       if (perspective === "night") {
         if (!isRecentTurnBlock(block.turnIndex)) cls += " unified-turn-dim";
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
@@ -2924,7 +3151,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const lazy = shouldLazyMarkdown(block);
       const bodyCls = `unified-turn-body unified-markdown${lazy ? " unified-markdown-lazy" : ""}`;
       const bodyAttr = lazy ? ` data-lazy-md="${block.turnIndex}"` : "";
-      const bodyHtml = lazy ? escapeHtml(block.text) : renderMarkdown(block.text);
+      const markdownHtml = lazy ? escapeHtml(block.text) : renderMarkdown(block.text);
+      const bodyHtml = !lazy && readingLayout === "reading" ? readingBodyHtml(markdownHtml) : markdownHtml;
       return `<article class="${cls}" data-turn-index="${block.turnIndex}">
         <div class="unified-turn-label">助手</div>
         <div class="${bodyCls}"${bodyAttr}>${bodyHtml}</div>
@@ -3406,7 +3634,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     settlePetAvatars();
     syncLiveThinkingDom();
     void hydrateMermaid(chatEl);
-    observeLazyMarkdown(chatEl);
+    observeLazyMarkdown(chatEl, prepareLazyReadingBody);
     scrollStreamingThinkingBodies();
     syncToolElapsedTimer();
     if (renderThrottleTimer !== null) return;
@@ -3416,7 +3644,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       settlePetAvatars();
       syncLiveThinkingDom();
       void hydrateMermaid(chatEl);
-      observeLazyMarkdown(chatEl);
+      observeLazyMarkdown(chatEl, prepareLazyReadingBody);
       scrollStreamingThinkingBodies();
       syncToolElapsedTimer();
     }, RENDER_THROTTLE_MS);
@@ -3997,56 +4225,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           return;
         case "jump-review-summary":
           jumpToReviewSummary();
-          return;
-        case "settings-save-partner-name": {
-          const nameInput = document.querySelector<HTMLInputElement>("#settings-partner-name-input");
-          const nextName = (nameInput?.value || "").trim() || "小魔王";
-          localStorage.setItem("partner_name", nextName);
-          syncCompanionToBackend();
-          const chromeTitle = document.querySelector<HTMLElement>(".app-chrome-title");
-          if (chromeTitle) chromeTitle.textContent = `✦ ${nextName}的空间`;
-          renderedPrints = [];
-          renderedSegmentPrints = [];
-          renderChat();
-          renderSidebar();
-          setStatus(`已将搭档昵称更新为：${nextName}`);
-          return;
-        }
-        case "settings-theme-light": {
-          const themeSelect = document.querySelector<HTMLSelectElement>("#chrome-theme");
-          if (themeSelect) {
-            themeSelect.value = "light";
-            themeSelect.dispatchEvent(new Event("change"));
-          }
-          renderSidebar();
-          return;
-        }
-        case "settings-theme-dark": {
-          const themeSelect = document.querySelector<HTMLSelectElement>("#chrome-theme");
-          if (themeSelect) {
-            themeSelect.value = "dark";
-            themeSelect.dispatchEvent(new Event("change"));
-          }
-          renderSidebar();
-          return;
-        }
-        case "settings-open-model-keys":
-          document.querySelector<HTMLButtonElement>("#chrome-model-keys")?.click();
-          return;
-        case "settings-open-host-scope":
-          document.querySelector<HTMLButtonElement>("#chrome-settings")?.click();
-          return;
-        case "settings-switch-cli":
-          document.querySelector<HTMLButtonElement>("#chrome-cli")?.click();
-          return;
-        case "settings-prune-runtime":
-          try {
-            client.pruneTerminals(true, `terminal-prune-${Date.now()}`);
-            client.pruneServices();
-            setStatus("已清理失效终端与已停止服务");
-          } catch (err) {
-            setStatus(err instanceof Error ? err.message : String(err));
-          }
           return;
         default:
           break;
@@ -5302,6 +5480,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     renderedPrints = [];
     renderedSegmentPrints = [];
     focusObserver?.disconnect();
+    unbindChatFontControl();
+    settingsThemeObserver.disconnect();
+    musicViewResizeObserver.disconnect();
+    window.removeEventListener("resize", syncMusicViewBounds);
+    musicEl.removeEventListener("scroll", syncMusicViewBounds);
+    void window.myAgentDesktop?.setBilibiliViewState?.({ visible: false });
     fileDrop.destroy();
     off();
     shellEl.classList.remove("is-working");

@@ -116,6 +116,64 @@ def user_text_without_attachment_block(user_text: str) -> str:
     return body
 
 
+def user_message_has_attachment_block(user_text: str) -> bool:
+    return (user_text or "").strip().startswith(_ATTACHMENT_PREFIX)
+
+
+_ATTACHMENT_QA_MARKERS = (
+    "面试",
+    "模拟面试",
+    "mock interview",
+    "根据简历",
+    "根据附件",
+    "帮我看",
+    "看一下",
+    "请回答",
+    "请问",
+    "解释一下",
+    "说说",
+)
+
+
+def is_attachment_qa_turn(user_text: str) -> bool:
+    """Drag-drop + question: answer from staged content, not PRD/requirements mode."""
+    if not user_message_has_attachment_block(user_text):
+        return False
+    body = user_text_without_attachment_block(user_text)
+    if not body.strip():
+        return True
+    lower = body.casefold()
+    if "?" in body or "？" in body:
+        return True
+    if _is_inquiry(body):
+        return True
+    if any(marker in body or marker in lower for marker in _ATTACHMENT_QA_MARKERS):
+        return True
+    if is_reply_only_turn(body):
+        return True
+    return False
+
+
+def should_use_chat_first_attachment_turn(
+    user_text: str,
+    intent: str,
+    *,
+    turn_mode: str,
+) -> bool:
+    """Cursor-like: attachments already in context — answer without tool rounds."""
+    if turn_mode != "agent":
+        return False
+    if intent not in {"qa", "recall"}:
+        return False
+    if not user_message_has_attachment_block(user_text):
+        return False
+    body = user_text_without_attachment_block(user_text)
+    lower = body.casefold()
+    if _has_explicit_execution_request(body, lower) or has_action_intent(body):
+        return False
+    return True
+
+
 _MIXED_RESEARCH_MARKERS = (
     "顺便查",
     "顺便看",
@@ -574,16 +632,19 @@ def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:
 def is_requirement_input(user_text: str) -> bool:
     """Recognize pasted project prose without treating it as an execution request."""
     text = user_text.strip()
-    if len(text) < 120:
+    if is_attachment_qa_turn(text):
         return False
-    lower = text.casefold()
-    if _has_explicit_execution_request(text, lower) or _is_explanation_request(lower):
+    body = user_text_without_attachment_block(text) if user_message_has_attachment_block(text) else text
+    if len(body) < 120:
         return False
-    if has_action_intent(text):
+    lower = body.casefold()
+    if _has_explicit_execution_request(body, lower) or _is_explanation_request(lower):
         return False
-    heading = any(marker in text or marker in lower for marker in _REQUIREMENT_HEADINGS)
-    numbered = text.startswith(tuple(f"{index}." for index in range(1, 10)))
-    sentence_count = _sentence_count(text)
+    if has_action_intent(body):
+        return False
+    heading = any(marker in body or marker in lower for marker in _REQUIREMENT_HEADINGS)
+    numbered = body.startswith(tuple(f"{index}." for index in range(1, 10)))
+    sentence_count = _sentence_count(body)
     return heading or (numbered and sentence_count >= 2) or sentence_count >= 4
 
 

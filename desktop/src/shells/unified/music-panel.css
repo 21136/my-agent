@@ -1,0 +1,40 @@
+/* Minimal listening surface; Bilibili owns search results and playback controls. */
+.unified-shell[data-rail="music"] :is(.unified-topbar, .thread-archive-banner, .unified-context-region, .sidebar-resize-handle, .unified-composer-dock) { display: none !important; }
+.unified-shell[data-rail="music"] .unified-main { min-width: 0; }
+.unified-shell[data-rail="music"] .unified-stage { background: var(--ma-bg); }
+.unified-shell[data-rail="music"] .unified-sidebar-header { padding-top: 1.15rem; }
+.unified-music { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--ma-border-strong) transparent; }
+.unified-music[hidden] { display: none !important; }
+.music-page { width: min(100%, 880px); margin: 0 auto; padding: clamp(36px, 8vh, 80px) clamp(24px, 6vw, 72px); color: var(--ma-text); }
+.music-page-heading { padding-bottom: 28px; border-bottom: 1px solid var(--ma-border); }
+.music-page-heading h1 { margin: 0; color: var(--ma-text); font-size: 27px; line-height: 1.35; letter-spacing: -.03em; font-weight: 650; }
+.music-page-heading p { margin: 8px 0 0; color: var(--ma-text-muted); font-size: 13px; line-height: 1.7; }
+.music-search-form { display: flex; align-items: stretch; gap: 10px; margin-top: 29px; }
+.music-search-box { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; height: 48px; padding: 0 15px; border: 1px solid var(--ma-border-strong); border-radius: 11px; background: var(--ma-surface); color: var(--ma-text-muted); transition: border-color .15s ease, box-shadow .15s ease; }
+.music-search-box:focus-within { border-color: var(--ma-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ma-accent) 13%, transparent); }
+.music-search-box svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.music-search-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ma-text); font: inherit; font-size: 14px; }
+.music-search-box input::placeholder { color: var(--ma-text-faint); }
+.music-search-submit { flex: none; border: 0; border-radius: 10px; padding: 0 18px; background: var(--ma-accent); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: filter .15s ease, transform .15s ease; }
+.music-search-submit:hover { filter: brightness(1.07); }
+.music-search-submit:active { transform: translateY(1px); }
+.music-search-submit:focus-visible { outline: 2px solid var(--ma-focus); outline-offset: 3px; }
+.music-search-submit span { padding-left: 4px; opacity: .85; }
+.music-search-help { margin: 14px 0 0; color: var(--ma-text-faint); font-size: 12px; line-height: 1.7; }
+.music-feedback { min-height: 1.6em; margin: 12px 0 0; color: var(--ma-accent); font-size: 12px; line-height: 1.7; }
+@media (max-width: 720px) {
+  .music-page { padding: 30px 22px; }
+  .music-page-heading h1 { font-size: 23px; }
+  .music-search-form { gap: 8px; }
+  .music-search-submit { padding-inline: 12px; white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .music-search-box, .music-search-submit { transition: none; }
+}
+/* The platform-owned Bilibili WebContentsView is positioned over this reserved slot. */
+.music-page { min-height: 100%; display: flex; flex-direction: column; }
+.music-web-slot:not([hidden]) { display: block; flex: 1 1 auto; min-height: 300px; margin-top: 22px; }
+.music-web-slot[hidden] { display: none !important; }
+@media (max-width: 720px) {
+  .music-web-slot:not([hidden]) { min-height: 260px; margin-top: 16px; }
+}

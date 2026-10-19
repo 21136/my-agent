@@ -360,6 +360,16 @@ button.sidebar-project-row-inner:hover { background: var(--nt-hover); }
   line-height: 1.38;
   word-break: break-word;
 }
+.sidebar-project-sub.is-project-presence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  color: var(--ma-text-muted);
+}
+.sidebar-project-row-inner.is-companion-dock .sidebar-project-updown { flex-shrink: 0; }
 .sidebar-companion-ava {
   width: 34px;
   height: 34px;

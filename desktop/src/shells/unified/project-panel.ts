@@ -1,6 +1,7 @@
 import type { AgentWsClient, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
 import { renderDocCatalogHtml } from "./doc-reading";
+import { renderSettingsSidebar, type SettingsSection } from "./settings-panel";
 import { userFacingThreadTitle } from "./ordinary-guards";
 import { RAIL_TAB_LABELS, type MainFocus, type RailTab } from "./rail";
 import {
@@ -80,6 +81,9 @@ export interface ProjectThreadItem {
 export interface ProjectPanelState {
   projectId: string;
   projectSummary: string;
+  /** Display metadata only; projectId remains the authoritative binding. */
+  projectDisplayName?: string;
+  projectDirectory?: string;
   planStatus: string;
   projectEntry: string;
   projectTemplate: string;
@@ -173,6 +177,7 @@ export interface ProjectPanelState {
   threadsLoading: boolean;
   currentSessionId: string;
   mainFocus: MainFocus;
+  settingsSection?: SettingsSection;
   // UX-026 — sidebar body / adopt feedback
   servicesCollapsed: boolean;
   turnInProgress: boolean;
@@ -240,6 +245,8 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
     if (state.undoTimerId !== null) window.clearTimeout(state.undoTimerId);
   }
   state.projectSummary = "";
+  state.projectDisplayName = "";
+  state.projectDirectory = "";
   state.planStatus = "";
   state.projectEntry = "";
   state.projectTemplate = "";
@@ -781,49 +788,7 @@ function renderProjectsRailSidebar(state: ProjectPanelState): string {
 }
 
 function renderSettingsRailSidebar(state: ProjectPanelState): string {
-  const isDark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
-  const partnerName = typeof localStorage !== "undefined" ? (localStorage.getItem("partner_name") || "小魔王") : "小魔王";
-  const stoppedServices = state.services.filter((s) => !s.alive).length;
-  const inactiveTerminals = state.terminalSessions.filter((s) => s.state !== "starting" && s.state !== "running").length;
-  return `<div class="sidebar-settings-panel" style="display:flex;flex-direction:column;gap:0.75rem;padding:0.25rem 0;">
-    <section class="external-project-import" aria-label="专属搭档设定">
-      <div class="sidebar-change-banner-title">专属搭档（${escapeHtml(partnerName)}）</div>
-      <div class="sidebar-change-banner-changes">她的性格与说话默契保存在 <code>evolve/persona.md</code>，你可以随时告诉她想怎么调教她的语气。</div>
-      <div style="display:flex;gap:0.35rem;margin-top:0.4rem;">
-        <input type="text" class="overlay-search-input" id="settings-partner-name-input" placeholder="她的昵称（默认：小魔王）" value="${escapeHtml(partnerName)}" style="margin:0;flex:1;" />
-        <button type="button" class="unified-btn unified-btn-accent" data-action="settings-save-partner-name">改名</button>
-      </div>
-    </section>
-
-    <section class="external-project-import" aria-label="外观与窗口">
-      <div class="sidebar-change-banner-title">外观与形态</div>
-      <div class="sidebar-change-banner-changes">切换明暗主题，或切换到 CLI 终端。</div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
-        <button type="button" class="unified-btn${!isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-light">亮色主题</button>
-        <button type="button" class="unified-btn${isDark ? " unified-btn-accent" : ""}" data-action="settings-theme-dark">暗色主题</button>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.4rem;">
-        <button type="button" class="unified-btn" data-action="settings-switch-cli">改用终端 (CLI)</button>
-      </div>
-    </section>
-
-    <section class="external-project-import" aria-label="模型与权限">
-      <div class="sidebar-change-banner-title">模型与托管区</div>
-      <div class="sidebar-change-banner-changes">配置各模型供应商 API Key，或授权本机外部托管文件夹（Host Scope）。</div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
-        <button type="button" class="unified-btn unified-btn-accent" data-action="settings-open-model-keys">模型密钥配置</button>
-        <button type="button" class="unified-btn" data-action="settings-open-host-scope">托管区文件夹</button>
-      </div>
-    </section>
-
-    <section class="external-project-import" aria-label="运行环境清理">
-      <div class="sidebar-change-banner-title">运行环境清理</div>
-      <div class="sidebar-change-banner-changes">失效/已结束终端：${inactiveTerminals} 个 · 已停止服务：${stoppedServices} 个</div>
-      <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.35rem;">
-        <button type="button" class="unified-btn" data-action="settings-prune-runtime" ${inactiveTerminals === 0 && stoppedServices === 0 ? "disabled" : ""}>一键清理残留记录</button>
-      </div>
-    </section>
-  </div>`;
+  return renderSettingsSidebar(state.settingsSection);
 }
 
 function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanelCallbacks): string {
@@ -843,6 +808,8 @@ function renderRailSidebarBody(state: ProjectPanelState, callbacks: ProjectPanel
       return renderProjectsRailSidebar(state);
     case "settings":
       return renderSettingsRailSidebar(state);
+    case "music":
+      return `<p class="music-sidebar-note">输入歌名或歌手，结果直接显示在听歌页。</p>`;
     case "now":
     default:
       return renderNowRailSidebar(state, callbacks);
@@ -951,6 +918,8 @@ export function applyProjectStateEvent(
     resetProjectScopedState(state);
   }
   state.projectId = nextProjectId;
+  state.projectDisplayName = nextProjectId ? event.project_display_name || "" : "";
+  state.projectDirectory = nextProjectId ? event.project_directory || "" : "";
   state.projectSummary = event.project_summary ?? state.projectSummary;
   state.planStatus = event.plan_status ?? "draft";
   state.projectEntry = event.project_entry ?? state.projectEntry;
@@ -1347,7 +1316,10 @@ export function renderProjectSidebar(
     els.sidebarMeta.textContent = state.projectId || "文档目录";
   } else if (rail === "settings") {
     els.sidebarTitle.textContent = railMeta.label;
-    els.sidebarMeta.textContent = "全局偏好与运行环境";
+    els.sidebarMeta.textContent = "让这个空间，更合你意。";
+  } else if (rail === "music") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = "打开 B 站，搜歌就听。";
   } else {
     els.sidebarTitle.textContent = railMeta.label;
     els.sidebarMeta.textContent = state.projects.length ? `${state.projects.length} 个项目` : "我的项目";
@@ -1408,7 +1380,14 @@ export function renderProjectSidebar(
     els.changeBanner.innerHTML = "";
   }
 
-  els.taskFlow.innerHTML = renderRailSidebarBody(state, callbacks);
+  const sidebarHtml = renderRailSidebarBody(state, callbacks);
+  if (rail !== "settings" || els.taskFlow.dataset.settingsHtml !== sidebarHtml) {
+    const focusedSection = els.taskFlow.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement)?.dataset.settingsSection : undefined;
+    els.taskFlow.innerHTML = sidebarHtml;
+    els.taskFlow.dataset.settingsHtml = rail === "settings" ? sidebarHtml : "";
+    if (focusedSection) els.taskFlow.querySelector<HTMLButtonElement>(`[data-settings-section="${focusedSection}"]`)?.focus();
+  }
 
   // project count badge
   const projectBadge = els.iconBar.querySelector<HTMLElement>("#project-count-badge");

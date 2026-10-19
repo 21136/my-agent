@@ -137,10 +137,14 @@ def project_state_payload(session: Session, paths: AgentPaths) -> dict[str, Any]
         and acceptance is not None
         and acceptance_script_exists(paths, pid, acceptance)
     )
+    display_directory = project_dir(paths, pid) if pid else None
     payload = {
         "type": "project.state",
         "project_id": pid or None,
         "project_root": root or None,
+        # Human-facing metadata only. Keep the logical ID/root for routing and tools.
+        "project_display_name": display_directory.name if display_directory else None,
+        "project_directory": str(display_directory) if display_directory else None,
         "git_branch": _git_branch(project_dir(paths, pid)) if pid else "",
         "external_project": (
             {

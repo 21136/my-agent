@@ -28,7 +28,16 @@ html[data-theme="light"] {
 
   --nt-gradient: linear-gradient(135deg, #3d8bff 0%, #5b5cff 48%, #8b5cf6 100%);
   --nt-gradient-soft: linear-gradient(135deg, rgb(61 139 255 / 0.14), rgb(139 92 246 / 0.14));
-  --nt-bubble: linear-gradient(135deg, #3b7cf0 0%, #5a55e8 55%, #7c4fe0 100%);
+  /* User bubble — tinted card (not flat gray, not full purple slab) */
+  --nt-bubble: linear-gradient(145deg, #eef2ff 0%, #e6e2ff 52%, #f3f0fc 100%);
+  --nt-bubble-fg: var(--ma-text);
+  --nt-bubble-border: color-mix(in srgb, var(--ma-accent) 32%, var(--ma-border));
+  --nt-bubble-shadow: 0 4px 16px color-mix(in srgb, var(--ma-accent) 14%, transparent);
+  --nt-assistant-card: linear-gradient(165deg, #ffffff 0%, #f9f7ff 55%, #f3f0ff 100%);
+  --nt-assistant-card-border: color-mix(in srgb, var(--ma-accent) 22%, var(--ma-border));
+  --nt-assistant-card-shadow:
+    0 10px 28px color-mix(in srgb, var(--ma-accent) 10%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.85);
   --nt-glow: 0 0 0 1px rgb(91 92 255 / 0.30), 0 0 16px rgb(91 92 255 / 0.22);
   --nt-shadow: 0 10px 28px rgb(40 40 90 / 0.10);
   --nt-glass: rgb(255 255 255 / 0.66);
@@ -74,6 +83,16 @@ html[data-theme="dark"] {
   --ma-project-flow-a: #121a33;
   --ma-project-flow-b: #22205a;
   --ma-project-flow-c: #3a2470;
+
+  --nt-bubble: linear-gradient(145deg, #1e1c32 0%, #252244 48%, #1a1828 100%);
+  --nt-bubble-fg: var(--ma-text);
+  --nt-bubble-border: color-mix(in srgb, var(--ma-accent) 38%, var(--ma-border));
+  --nt-bubble-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+  --nt-assistant-card: linear-gradient(165deg, #1a1828 0%, #1e1c34 50%, #161422 100%);
+  --nt-assistant-card-border: color-mix(in srgb, var(--ma-accent) 28%, var(--ma-border));
+  --nt-assistant-card-shadow:
+    0 12px 32px rgb(0 0 0 / 0.42),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
 
   --nt-glow: 0 0 0 1px rgb(124 140 255 / 0.35), 0 0 18px rgb(91 92 255 / 0.35);
   --nt-shadow: 0 10px 30px rgb(0 0 0 / 0.45);

@@ -1059,6 +1059,7 @@ def format_tool_loop_user_message(
         registry=registry,
         segment=segment,
         total_tool_rounds=total_tool_rounds,
+        turn_intent=getattr(session, "turn_intent", None),
     )
 
 

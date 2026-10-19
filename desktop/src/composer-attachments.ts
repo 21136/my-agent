@@ -24,6 +24,7 @@ export function wireComposerAttachments(options: {
     forceAgent?: boolean;
     activeDoc?: string;
     activeDocSelection?: string;
+    turnMode?: "agent" | "ask";
   } | undefined;
 }): ComposerAttachmentWire {
   const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend, allowSend, messageOpts } = options;

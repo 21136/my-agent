@@ -923,11 +923,12 @@
   max-width: min(76%, 42rem);
   padding: 0.65rem 0.95rem;
   border-radius: 18px 18px 4px 18px;
-  background: var(--nt-bubble, linear-gradient(135deg, #4b74f6 0%, #6355ea 55%, #7c4fe0 100%));
-  color: #ffffff;
+  background: var(--nt-bubble, color-mix(in srgb, var(--ma-accent) 6%, var(--ma-surface-2)));
+  color: var(--nt-bubble-fg, var(--ma-text));
+  border: 1px solid var(--nt-bubble-border, var(--ma-border));
   font-size: 0.94rem;
   line-height: 1.55;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--ma-accent) 20%, transparent);
+  box-shadow: var(--nt-bubble-shadow, 0 1px 2px rgb(24 22 40 / 0.06));
 }
 
 .unified-shell[data-perspective="project"] .unified-turn-assistant {

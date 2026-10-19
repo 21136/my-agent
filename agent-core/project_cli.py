@@ -560,7 +560,7 @@ def import_external_project(
     try:
         scan = scan_external_project(paths, external_path, project_id=project_id)
         binding = apply_external_project(paths, scan)
-        logical = paths.workspace / binding.project_id
+        logical = project_dir(paths, binding.project_id)
         from project_manifest import bootstrap_manifest, load_manifest, manifest_path, save_manifest
 
         manifest_file = manifest_path(logical)

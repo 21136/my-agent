@@ -188,6 +188,8 @@ export type ServerEvent =
       type: "project.state";
       project_id: string | null;
       project_root: string | null;
+      project_display_name?: string | null;
+      project_directory?: string | null;
       git_branch?: string;
       plan_status: string;
       project_entry?: string;
@@ -589,6 +591,7 @@ export class AgentWsClient {
       forceAgent?: boolean;
       activeDoc?: string;
       activeDocSelection?: string;
+      turnMode?: "agent" | "ask";
     },
   ): void {
     const payload: Record<string, unknown> = {
@@ -601,6 +604,9 @@ export class AgentWsClient {
     if (opts?.forceAgent) payload.force_agent = true;
     if (opts?.activeDoc) payload.active_doc = opts.activeDoc;
     if (opts?.activeDocSelection) payload.active_doc_selection = opts.activeDocSelection;
+    if (opts?.turnMode === "agent" || opts?.turnMode === "ask") {
+      payload.turn_mode = opts.turnMode;
+    }
     this.send(payload);
   }
 
@@ -942,6 +948,8 @@ declare global {
       switchToCli: () => Promise<void>;
       openWorkbench?: () => Promise<void>;
       openExternal?: (url: string) => Promise<boolean>;
+      openBilibiliSearch?: (query: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
+      setBilibiliViewState?: (state: { visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => Promise<boolean>;
       onSessionControl?: (handler: (action: "suspend" | "resume") => void) => () => void;
       pickDirectory: () => Promise<string | null>;
       getDownloadsPath: () => Promise<string>;

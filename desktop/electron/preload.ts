@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("app:open-external", url) as Promise<boolean>,
+  openBilibiliSearch: (query: string, bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke("music:open-bilibili-search", query, bounds) as Promise<boolean>,
+  setBilibiliViewState: (state: { visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => ipcRenderer.invoke("music:set-bilibili-view-state", state) as Promise<boolean>,
   onSessionControl: (handler: (action: SessionControlAction) => void) => {
     const listener = (_event: unknown, action: SessionControlAction) => handler(action);
     ipcRenderer.on("session:control", listener);
@@ -39,6 +41,8 @@ export type MyAgentDesktopApi = {
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
+  openBilibiliSearch: (query: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
+  setBilibiliViewState: (state: { visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => Promise<boolean>;
   onSessionControl: (handler: (action: SessionControlAction) => void) => () => void;
   pickDirectory: () => Promise<string | null>;
   getDownloadsPath: () => Promise<string>;

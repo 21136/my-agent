@@ -6,7 +6,7 @@ import { mountHostSettings } from "./host-settings";
 import { mountModelSettings } from "./model-settings";
 import { mountShell } from "./shell-router";
 import { mountContextSwitchOverlay } from "./context-switch-overlay";
-import { applyTheme } from "./settings";
+import { applyChatFontSize, applyTheme } from "./settings";
 
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>("#app");
@@ -36,6 +36,7 @@ async function boot(): Promise<void> {
 
   async function mountUi(): Promise<void> {
     applyTheme();
+    applyChatFontSize();
     app!.innerHTML = `
     <div class="app-frame">
       <div id="app-chrome"></div>

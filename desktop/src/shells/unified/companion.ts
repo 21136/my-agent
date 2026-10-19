@@ -81,7 +81,7 @@ export function currentPartnerName(): string {
 /** Name line above the assistant side of a turn, with a state tag. */
 export function renderPetNameHtml(state: PetAvatarState): string {
   const displayName = currentPartnerName();
-  return `<div class="unified-pet-name">${displayName}<span class="unified-pet-state">${PET_STATE_TAGS[state]}</span></div>`;
+  return `<div class="unified-pet-name"><span class="unified-pet-name-label">${displayName}</span><span class="unified-pet-state">${PET_STATE_TAGS[state]}</span></div>`;
 }
 
 export interface CompanionBondState {

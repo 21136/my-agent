@@ -40,7 +40,7 @@ from paths import AgentPaths
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
 try:
@@ -777,6 +777,14 @@ class WsSessionHandler:
             repl.session._turn_active_doc_selection = (
                 active_sel if isinstance(active_sel, str) else ""
             )
+            turn_mode_raw = message.get("turn_mode")
+            if isinstance(turn_mode_raw, str) and turn_mode_raw.strip():
+                try:
+                    repl.session.set_turn_mode(normalize_turn_mode(turn_mode_raw.strip()))
+                    repl.agent.executor.session.turn_mode = repl.session.meta.turn_mode
+                except SessionError as exc:
+                    emit_error(bridge, str(exc))
+                    return
             # TURN_LOCK is held by _handle_incoming for user.message / command.
             await _run_line(repl, bridge, line, self.paths, lock_held=True)
             repl.session._turn_active_doc = ""
