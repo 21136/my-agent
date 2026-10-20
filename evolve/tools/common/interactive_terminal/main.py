@@ -808,8 +808,12 @@ def _read_pty(pty: Any, size: int = 4096) -> str:
         return reader(size)
 
 
+_EXIT_OUTPUT_DRAIN_SEC = 0.25
+
+
 def _pty_reader_loop(pty: Any, output_queue: queue.Queue[str], stop_event: threading.Event) -> None:
-    """Move potentially blocking PTY reads off the request-processing loop."""
+    """Move PTY reads off-thread and keep draining briefly after process exit."""
+    exit_drain_deadline: float | None = None
     while not stop_event.is_set():
         try:
             data = _read_pty(pty)
@@ -817,13 +821,25 @@ def _pty_reader_loop(pty: Any, output_queue: queue.Queue[str], stop_event: threa
             return
         if data:
             output_queue.put(str(data))
+            try:
+                alive = bool(getattr(pty, "isalive", lambda: False)())
+            except Exception:
+                alive = False
+            if not alive:
+                exit_drain_deadline = time.monotonic() + _EXIT_OUTPUT_DRAIN_SEC
             continue
         try:
             alive = bool(getattr(pty, "isalive", lambda: False)())
         except Exception:
             alive = False
         if not alive:
-            return
+            if exit_drain_deadline is None:
+                exit_drain_deadline = time.monotonic() + _EXIT_OUTPUT_DRAIN_SEC
+            if time.monotonic() >= exit_drain_deadline:
+                return
+            stop_event.wait(0.01)
+            continue
+        exit_drain_deadline = None
         stop_event.wait(0.05)
 
 
@@ -945,7 +961,7 @@ def _worker_main(directory: Path, pty_cls: Any | None = None) -> int:
         if not alive:
             # Allow a reader that observed process exit to publish its final
             # chunk before the state becomes terminal.
-            reader.join(timeout=0.2)
+            reader.join(timeout=_EXIT_OUTPUT_DRAIN_SEC + 0.35)
             reader_stop.set()
             reader.join(timeout=0.05)
             _drain_output_queue(directory, current, output_queue)

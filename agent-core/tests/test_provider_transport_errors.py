@@ -100,14 +100,14 @@ class ProviderTransportErrorTests(unittest.TestCase):
             LLMApiError(_SESSION_LIMIT, status_code=429),
         )
         result, sleeps = self._run(llm)
-        self.assertEqual(llm.calls, 1)
+        self.assertEqual(llm.calls, 3)
         self.assertLess(llm.calls, 15)
-        self.assertEqual(sleeps, [])
+        self.assertEqual(len(sleeps), 2)
         self.assertFalse(result.tool_loop_exceeded)
         self.assertEqual(result.finish_reason, "provider_error")
         self.assertEqual(result.tool_rounds, 0)
         self.assertIn("模型服务达到并发上限", result.assistant_text)
-        self.assertIn("稍后重试", result.assistant_text)
+        self.assertIn("自动重试", result.assistant_text)
         self.assertNotIn("工具预算", result.assistant_text)
         self.assertNotIn("继续", result.assistant_text)
         self.assertNotIn("Active session", result.assistant_text)
@@ -115,17 +115,17 @@ class ProviderTransportErrorTests(unittest.TestCase):
 
     def test_rate_limit_auth_network_and_5xx_stay_model_service_errors(self) -> None:
         cases = [
-            (LLMApiError("rate limit exceeded", status_code=429), "请求过于频繁"),
-            (LLMApiError("invalid api key", status_code=401), "鉴权失败"),
-            (LLMNetworkError("connection refused"), "暂时连不上"),
-            (LLMApiError("internal error", status_code=500), "暂时不可用"),
+            (LLMApiError("rate limit exceeded", status_code=429), "限流", 5, 4),
+            (LLMApiError("invalid api key", status_code=401), "鉴权失败", 1, 0),
+            (LLMNetworkError("connection refused"), "网络不通", 5, 4),
+            (LLMApiError("internal error", status_code=500), "暂时不可用", 5, 4),
         ]
-        for exc, snippet in cases:
+        for exc, snippet, expected_calls, expected_sleeps in cases:
             with self.subTest(snippet=snippet):
                 llm = _RaisingLLM(exc)
                 result, sleeps = self._run(llm)
-                self.assertEqual(llm.calls, 2)
-                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(llm.calls, expected_calls)
+                self.assertEqual(len(sleeps), expected_sleeps)
                 self.assertFalse(result.tool_loop_exceeded)
                 self.assertEqual(result.finish_reason, "provider_error")
                 self.assertIn(snippet, result.assistant_text)

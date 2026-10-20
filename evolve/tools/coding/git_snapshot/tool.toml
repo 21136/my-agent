@@ -1,6 +1,6 @@
 [tool]
 name = "git_snapshot"
-description = "只读 Git 快照：status --porcelain 与 diff --stat（可选 staged）"
+description = "只读 Git 快照：从 working_dir/cwd 定位所属仓库根，对整个 Git 仓库返回 status 与 diff stat（可选 staged/full diff）"
 version = "1.1.0"
 status = "active"
 topics = ["coding"]
@@ -14,7 +14,15 @@ type = "object"
 [schema.input.properties.paths]
 type = "array"
 items = { type = "string" }
-description = "可选，限制 diff 范围（相对 agent 根）"
+description = "可选，限制 diff 范围（相对 Git 仓库根）；省略时检查整个仓库"
+[schema.input.properties.working_dir]
+type = "string"
+default = ""
+description = "要检查的仓库内目录，相对 agent root；会向上定位 Git 根并快照整个仓库；默认 agent root"
+[schema.input.properties.cwd]
+type = "string"
+default = ""
+description = "working_dir 的别名"
 [schema.input.properties.include_staged]
 type = "boolean"
 default = true
@@ -30,6 +38,7 @@ description = "可选，工作树 diff 的基线 ref；不填则为未暂存工�
 [schema.output]
 type = "object"
 [schema.output.properties]
+repo_root = { type = "string" }
 branch = { type = "string" }
 status_lines = { type = "array" }
 diff_stat = { type = "string" }

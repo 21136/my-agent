@@ -168,6 +168,65 @@ class TestExecObservabilityM1(unittest.TestCase):
             )
             self.assertIn("turnEvidence", panel)
 
+    def test_turn_evidence_keeps_test_terminal_and_diff_facts(self) -> None:
+        with temporary_agent_paths() as paths:
+            registry = ToolRegistry.load(paths)
+            session = ExecutorSession(allowed_evolved={"structured_test", "interactive_terminal", "git_snapshot"})
+            executor = ToolExecutor(registry=registry, session=session, confirm_fn=lambda *_a, **_k: "y")
+
+            test_result = tool_ok("run_evolved", {
+                "tool_name": "structured_test",
+                "status": "failed",
+                "suite": "pytest",
+                "duration_ms": 1234,
+                "failed": [{"file": "tests/test_bad.py", "line": 9, "test": "test_bad", "message": "assertion failed"}],
+                "stdout_tail": "not for the compact evidence summary",
+            })
+            executor._record_turn_evidence(
+                "run_evolved",
+                {"tool_name": "structured_test", "arguments": {"working_dir": "workspace/demo"}},
+                test_result,
+                call_id="call-test",
+            )
+
+            terminal_result = tool_ok("run_evolved", {
+                "tool_name": "interactive_terminal",
+                "action": "start",
+                "session_id": "it-0123456789abcdef",
+                "state": "running",
+            })
+            executor._record_turn_evidence(
+                "run_evolved",
+                {"tool_name": "interactive_terminal", "arguments": {"action": "start"}},
+                terminal_result,
+                call_id="call-terminal",
+            )
+
+            snapshot_result = tool_ok("run_evolved", {
+                "tool_name": "git_snapshot",
+                "diff_stat": "2 files changed, 4 insertions(+), 1 deletion(-)",
+                "status_lines": [" M src/app.ts", "?? src/new.ts"],
+            })
+            executor._record_turn_evidence(
+                "run_evolved",
+                {"tool_name": "git_snapshot", "arguments": {}},
+                snapshot_result,
+                call_id="call-diff",
+            )
+
+            test_item, terminal_item, diff_item = session.turn_evidence
+            self.assertEqual(test_item["call_id"], "call-test")
+            self.assertEqual(test_item["test"]["status"], "failed")
+            self.assertEqual(test_item["test"]["failed"][0]["line"], 9)
+            self.assertNotIn("message", test_item["test"]["failed"][0])
+            self.assertNotIn("stdout_tail", test_item)
+            self.assertEqual(terminal_item["terminal_session_id"], "it-0123456789abcdef")
+            self.assertIn("2 files changed", diff_item["diff_summary"])
+            self.assertIn("工作树快照", diff_item["diff_summary"])
+            # A git snapshot observes the workspace; it cannot attribute old dirty files to this run.
+            self.assertNotIn("src/app.ts", diff_item["paths"])
+            self.assertNotIn("src/new.ts", diff_item["paths"])
+
     def test_progress_heartbeat_fires(self) -> None:
         """tool.progress heartbeat while a slow tool runs (>5s)."""
         with temporary_agent_paths(copy_tool_dirs=("common/run_service",)) as paths:

@@ -5,6 +5,8 @@ import { hydrateMermaid, renderMarkdown } from "../../markdown";
 import { bindLazyMarkdownLookup, observeLazyMarkdown, resetLazyMarkdownObserver } from "../../lazy-markdown";
 import { formatUserMessageHtml, parseUserMessage } from "../../user-message";
 import { messageReadingLayout, readingBodyHtml, prepareLazyReadingBody } from "./message-reading";
+import { activityRevealScrollDelta } from "./activity-scroll";
+import { formatTerminalOutputForDisplay } from "./terminal-output";
 import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
@@ -94,6 +96,11 @@ import {
   touchCompanionVisit,
   type PetTurnSummary,
 } from "./companion";
+import { advanceCompanionWorld, recordExplicitSharedEvent, type CompanionWorldState } from "./companion-world";
+import { loadCompanionWorld, saveCompanionWorld } from "./companion-world-store";
+import { buildCompanionWorldTurnContext } from "./companion-world-context";
+import { verifiedProjectEventToSharedEvent } from "./companion-world-app-events";
+import { normalizeTurnEvidenceEvent } from "./turn-evidence";
 import "./unified.css";
 import "./neon-twin.css";
 import "./sidebar-v2.css";
@@ -292,6 +299,10 @@ export function mountUnifiedShell(
     terminalOutputCursorReset: false,
     terminalOutputTruncated: false,
     turnEvidence: [],
+    turnEvidenceRunId: "",
+    turnEvidenceTotalCount: 0,
+    turnEvidenceOmittedCount: 0,
+    turnEvidenceExpanded: false,
     turnGateNotice: "",
     turnPostcondition: "none",
     turnCircuitOpen: [],
@@ -608,6 +619,23 @@ export function mountUnifiedShell(
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
+  const fallbackWorldStorage = new Map<string, string>();
+  const worldStorage: Pick<Storage, "getItem" | "setItem"> = (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return {
+        getItem: (key: string) => fallbackWorldStorage.get(key) ?? null,
+        setItem: (key: string, value: string) => { fallbackWorldStorage.set(key, value); },
+      };
+    }
+  })();
+  const worldNow = Date.now();
+  let companionWorldState: CompanionWorldState = advanceCompanionWorld(
+    loadCompanionWorld(worldStorage, worldNow),
+    worldNow,
+  ).state;
+  saveCompanionWorld(companionWorldState, worldStorage);
   const modeToggleBtn = root.querySelector<HTMLButtonElement>("#unified-mode-toggle")!;
   const stopBtn = root.querySelector<HTMLButtonElement>("#unified-stop")!;
   const sendBtn = root.querySelector<HTMLButtonElement>("#unified-send")!;
@@ -830,8 +858,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     messageOpts: () => {
       const path = projectState.currentDocPath || "";
       const selection = path ? currentDocSelection() : "";
+      const companionWorldContext = buildCompanionWorldTurnContext(companionWorldState, {
+        projectChat: Boolean(projectState.projectId),
+      });
       const base = {
         turnMode: currentTurnMode,
+        ...(companionWorldContext ? { companionWorldContext } : {}),
         ...(path
           ? {
               activeDoc: path,
@@ -2093,9 +2125,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     updateWorkbenchEmpty();
     renderSidebar();
   }
-
-
-
   function syncSettingsTheme(): void {
     const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
     settingsEl.querySelectorAll<HTMLInputElement>("[data-settings-theme]").forEach(radio => {
@@ -2589,7 +2618,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return true;
   }
 
-  function jumpToCurrentActivity(): void {
+  function scrollToToolCall(callId: string): boolean {
+    const entry = Array.from(chatEl.querySelectorAll<HTMLElement>("[data-tool-call]"))
+      .find((node) => node.dataset.toolCall === callId);
+    if (!entry) return false;
+    const delta = activityRevealScrollDelta(chatEl.getBoundingClientRect(), entry.getBoundingClientRect());
+    if (delta !== 0) chatEl.scrollTo({ top: chatEl.scrollTop + delta, behavior: "smooth" });
+    entry.classList.add("is-jump-target");
+    window.setTimeout(() => entry.classList.remove("is-jump-target"), 1400);
+    return true;
+  }
+
+  function jumpToCurrentActivity(callId?: string): void {
     if (projectState.mainFocus !== "chat" || projectState.railTab !== "now") {
       showNowChat();
     }
@@ -2600,6 +2640,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (!block) {
       requestAnimationFrame(() => {
         renderChat();
+        if (callId && scrollToToolCall(callId)) {
+          setStatus("已定位到本轮工具记录");
+          return;
+        }
         if (jumpToLiveTurnCard()) {
           setStatus("已定位到当前回合");
           return;
@@ -2622,6 +2666,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const turnKey = block.turnKey;
     requestAnimationFrame(() => {
       renderChat();
+      if (callId && scrollToToolCall(callId)) {
+        setStatus("已定位到本轮工具记录");
+        return;
+      }
       const card =
         chatEl.querySelector<HTMLElement>(`.unified-turn-card[data-turn-key="${turnKey}"]`) ??
         chatEl.querySelector<HTMLElement>(".unified-turn-card.is-live");
@@ -4100,7 +4148,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (btn.dataset.action === "terminal-copy-output") {
       const sessionId = btn.dataset.terminalId;
       if (!sessionId || sessionId !== projectState.terminalDetails?.session_id) return;
-      const text = projectState.terminalOutput;
+      const text = formatTerminalOutputForDisplay(projectState.terminalOutput);
       if (!text) return;
       const write = navigator.clipboard?.writeText(text);
       if (!write) {
@@ -4226,6 +4274,27 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         case "jump-review-summary":
           jumpToReviewSummary();
           return;
+        case "toggle-turn-evidence":
+          projectState.turnEvidenceExpanded = !projectState.turnEvidenceExpanded;
+          renderSidebar();
+          return;
+        case "turn-evidence-jump": {
+          const callId = btn.dataset.callId;
+          if (!callId) return;
+          jumpToCurrentActivity(callId);
+          return;
+        }
+        case "turn-evidence-terminal": {
+          const sessionId = btn.dataset.terminalId;
+          if (!sessionId) return;
+          if (!projectState.terminalSessions.some((item) => item.session_id === sessionId)) {
+            refreshTerminals();
+            setStatus("正在同步本回合的终端会话…");
+            return;
+          }
+          openTerminalDetails(sessionId);
+          return;
+        }
         default:
           break;
       }
@@ -4748,6 +4817,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (event.session_id !== chat.model.sessionId) {
           renderedPrints = [];
           renderedSegmentPrints = [];
+          projectState.turnEvidence = [];
+          projectState.turnEvidenceRunId = "";
+          projectState.turnEvidenceTotalCount = 0;
+          projectState.turnEvidenceOmittedCount = 0;
+          projectState.turnEvidenceExpanded = false;
         }
         chat.handleEvent(event);
         projectState.currentSessionId = event.session_id;
@@ -4938,6 +5012,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       case "project.verify.done":
         lastVerify = { passed: Boolean(event.passed), at: new Date() };
         renderSidebarProjectRow();
+        if (event.ok === true && event.passed === true) {
+          const sharedEvent = verifiedProjectEventToSharedEvent(event);
+          if (sharedEvent) {
+            companionWorldState = recordExplicitSharedEvent(companionWorldState, sharedEvent, Date.now());
+            saveCompanionWorld(companionWorldState, worldStorage);
+          }
+        }
         break;
 
       case "project.threads":
@@ -5046,8 +5127,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         renderSidebar();
         break;
 
-      case "turn.evidence":
-        projectState.turnEvidence = Array.isArray(event.items) ? event.items : [];
+      case "turn.evidence": {
+        const snapshot = normalizeTurnEvidenceEvent(event, chat.model.executionRunId);
+        if (!snapshot) break;
+        projectState.turnEvidenceRunId = snapshot.runId;
+        projectState.turnEvidence = snapshot.items;
+        projectState.turnEvidenceTotalCount = snapshot.totalCount;
+        projectState.turnEvidenceOmittedCount = snapshot.omittedCount;
         projectState.turnGateNotice =
           typeof event.gate_notice === "string" ? event.gate_notice : "";
         {
@@ -5066,6 +5152,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           renderSidebar();
         }
         break;
+      }
 
       case "project.switch.request":
         if (
@@ -5265,6 +5352,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "execution.state":
         if (!chat.handleEvent(event)) break;
+        if ((event.state === "queued" || event.state === "running") && event.run_id) {
+          if (projectState.turnEvidenceRunId !== event.run_id) {
+            projectState.turnEvidence = [];
+            projectState.turnEvidenceTotalCount = 0;
+            projectState.turnEvidenceOmittedCount = 0;
+            projectState.turnEvidenceExpanded = false;
+          }
+          projectState.turnEvidenceRunId = event.run_id;
+        }
         if (event.state === "queued") {
           setStatus("等待续接…");
         } else if (event.state === "stopping") {
@@ -5277,6 +5373,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           setTurnEndStatus(event.finish_reason);
         }
         syncWorkingVisual();
+        if (perspective === "project") renderSidebar();
         break;
 
       case "tool.start":

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>02 · output-display 改后</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: Inter, "PingFang SC", system-ui, sans-serif; background: #111; color: #eee; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #4ade80; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #9aa0a6; margin-bottom: 0.75rem; }
+    .proto-frame { --frame-bg: #fcfcfc; --frame-border: #e4e4e7; --sidebar-bg: #f4f4f5; --composer-border: #e4e4e7; }
+    .chat-col { background: #fcfcfc; color: #1a1a1a; }
+    .bubble-user { max-width: 88%; padding: 0.55rem 0.75rem; border-radius: 12px 12px 4px 12px; background: #f4f4f5; font-size: 0.88rem; }
+    .turn-assistant { background: #fff; border-radius: 10px; padding: 0.85rem 1rem; box-shadow: 0 1px 3px rgb(0 0 0 / 0.04); }
+    .lead { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.5rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.5rem 0; }
+    .chip { font-size: 0.75rem; padding: 0.22rem 0.55rem; border-radius: 999px; background: #f4f4f5; color: #2563eb; }
+    .process-pill { background: #f4f4f5; color: #71717a; }
+    .process-detail { background: #f4f4f5; }
+    .composer-mock .input { background: #f4f4f5; }
+    .composer-mock .send { background: #1a1a1a; color: #fff; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>02 · 仓库目标（compare 右栏）</h1>
+  <p class="sub">无角色大标签 · lead 先行 · 过程 pill · 完整版见 <a href="../output-display/compare.html" style="color:#4ade80">compare.html</a></p>
+  <div class="proto-frame">
+    <div class="proto-topbar">project · 改后结构</div>
+    <div class="proto-body">
+      <div class="proto-sidebar"></div>
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    const chat = document.getElementById("chat");
+    chat.innerHTML = `
+      <div class="row-user"><div class="bubble-user">${s.user}</div></div>
+      <div class="turn-assistant md">
+        <p class="lead">先自动扛，再说话。</p>
+        ${s.assistantHtml.replace("<p><strong>先自动扛，再说话。</strong>", "").replace(/<p><strong>[^<]+<\/strong>[^<]*<\/p>/, "")}
+        <div class="chips"><span class="chip">resume.pdf</span><span class="chip">notes.md</span></div>
+        <button type="button" class="process-pill" id="pill"><span class="dot"></span>过程 · 3 步 ▸</button>
+        <div class="process-detail hidden" id="det"></div>
+      </div>
+      <div class="composer-mock"><div class="input">输入…</div><button class="send">发送</button></div>
+    `;
+    document.getElementById("det").innerHTML = s.toolSteps.map(t => `<div class="step"><span>${t.ok?"✓":"✗"}</span> ${t.label} <span style="opacity:0.6">${t.sub}</span></div>`).join("");
+    let open = false;
+    document.getElementById("pill").onclick = () => {
+      open = !open;
+      document.getElementById("det").classList.toggle("hidden", !open);
+    };
+  </script>
+</body>
+</html>

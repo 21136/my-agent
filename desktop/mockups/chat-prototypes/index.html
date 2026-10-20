@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>聊天气泡 · 原型索引</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", system-ui, sans-serif;
+      background: #0f1117;
+      color: #e8eaed;
+      padding: 2rem 1.5rem 3rem;
+      line-height: 1.55;
+    }
+    h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    .lead { color: #9aa0a6; max-width: 42rem; margin-bottom: 1.5rem; font-size: 0.92rem; }
+    h2 {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #6b7280;
+      margin: 1.75rem 0 0.65rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 0.75rem;
+      max-width: 1100px;
+    }
+    a.card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: #161a22;
+      border: 1px solid #2a2f3a;
+      border-radius: 12px;
+      padding: 1rem 1.05rem;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    a.card:hover {
+      border-color: #4ade80;
+      transform: translateY(-1px);
+    }
+    a.card.ext { border-color: #3b82f6; }
+    a.card.ext:hover { border-color: #60a5fa; }
+    .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      margin-bottom: 0.4rem;
+    }
+    .tag.internal { background: #1e3a2f; color: #4ade80; }
+    .tag.external { background: #1e293b; color: #93c5fd; }
+    .tag.legacy { background: #292524; color: #a8a29e; }
+    .name { font-weight: 600; font-size: 1rem; margin-bottom: 0.25rem; }
+    .desc { font-size: 0.8rem; color: #9aa0a6; }
+    code { font-size: 0.78rem; color: #c4cad4; }
+    .note {
+      max-width: 1100px;
+      margin-top: 2rem;
+      padding: 1rem;
+      border-radius: 10px;
+      background: #161a22;
+      border: 1px dashed #3f3f46;
+      font-size: 0.85rem;
+      color: #9aa0a6;
+    }
+  </style>
+</head>
+<body>
+  <h1>聊天气泡 & 输出结构 · HTML 原型</h1>
+  <p class="lead">
+    同一轮样本文案（WS/ACK + 小魔王回复 + 可选过程折叠）。请<strong>逐个打开</strong>对比；
+    选好后回复编号，例如「03 + 06 的过程折叠」。
+  </p>
+
+  <h2>本目录 · 参考实现原型（新建）</h2>
+  <div class="grid">
+    <a class="card" href="01-current-neon.html" target="_blank">
+      <span class="tag internal">线上近似</span>
+      <div class="name">01 · 当前 Neon Twin</div>
+      <div class="desc">灰紫用户泡 + 白玻璃助手 + 「你」标签 + 头像名 pill（你觉得素的这套）</div>
+    </a>
+    <a class="card" href="02-repo-target.html" target="_blank">
+      <span class="tag internal">仓库目标</span>
+      <div class="name">02 · output-display 改后</div>
+      <div class="desc">来自 <code>output-display/compare.html</code> 右栏：lead + chip + 过程 pill</div>
+    </a>
+    <a class="card" href="03-ref-chatgpt.html" target="_blank">
+      <span class="tag external">assistant-ui</span>
+      <div class="name">03 · ChatGPT 克隆</div>
+      <div class="desc">右对齐高对比用户泡；助手无边框；hover 操作条（结构参考）</div>
+    </a>
+    <a class="card" href="04-ref-claude.html" target="_blank">
+      <span class="tag external">assistant-ui</span>
+      <div class="name">04 · Claude 克隆</div>
+      <div class="desc">奶油底 #F0ECE0；低对比用户泡；无阴影；扁平 composer</div>
+    </a>
+    <a class="card" href="05-ref-cursor-shell.html" target="_blank">
+      <span class="tag external">Cursor 壳</span>
+      <div class="name">05 · Cursor 灰阶壳</div>
+      <div class="desc">对齐 <code>shell-styles/07-cursor.html</code>：#fcfcfc / #f4f4f5，少边框</div>
+    </a>
+    <a class="card" href="06-ref-open-webui.html" target="_blank">
+      <span class="tag external">Open WebUI</span>
+      <div class="name">06 · Explored 折叠组</div>
+      <div class="desc">连续 tool/reasoning 合并一行「Explored · …」可展开</div>
+    </a>
+    <a class="card" href="07-ref-cursor-density.html" target="_blank">
+      <span class="tag external">Cursor 3.4</span>
+      <div class="name">07 · Compact / Balanced / Detailed</div>
+      <div class="desc">三列对比工具痕迹密度（Changelog: Compact chat responses）</div>
+    </a>
+    <a class="card" href="08-hybrid-pet-compact.html" target="_blank">
+      <span class="tag internal">建议合成</span>
+      <div class="name">08 · 小魔王头像 + 紧凑过程</div>
+      <div class="desc">保留 pet 头像列；去掉「助手」标签；过程只留 pill（08 为推荐落盘方向）</div>
+    </a>
+  </div>
+
+  <h2>仓库里已有 · 相关 mockup（别重复造）</h2>
+  <div class="grid">
+    <a class="card ext" href="../output-display/compare.html" target="_blank">
+      <span class="tag legacy">已有</span>
+      <div class="name">output-display/compare</div>
+      <div class="desc">左「现在」右「改后」完整场景（Music Dreamer patch 失败）</div>
+    </a>
+    <a class="card ext" href="../shell-styles/index.html" target="_blank">
+      <span class="tag legacy">已有</span>
+      <div class="name">shell-styles 索引</div>
+      <div class="desc">07 Cursor 亮色 / 08 Codex 暗色 / 01 纸面赭石 等整壳</div>
+    </a>
+    <a class="card ext" href="../shell-styles/compare-lines.html" target="_blank">
+      <span class="tag legacy">已有</span>
+      <div class="name">shell-styles/compare-lines</div>
+      <div class="desc">线条多 vs 线条少（01 对 07）</div>
+    </a>
+    <a class="card ext" href="../chat-bubble-schemes.html" target="_blank">
+      <span class="tag legacy">实验</span>
+      <div class="name">chat-bubble-schemes</div>
+      <div class="desc">仅换色相的实验页（已过时，优先看本目录 01–08）</div>
+    </a>
+  </div>
+
+  <h2>外部链接（只读参考，需联网）</h2>
+  <div class="grid">
+    <a class="card ext" href="https://github.com/assistant-ui/assistant-ui/blob/main/apps/docs/content/examples/chatgpt.mdx" target="_blank" rel="noopener">
+      <span class="tag external">GitHub</span>
+      <div class="name">assistant-ui · ChatGPT 示例文档</div>
+      <div class="desc">用户泡圆角 22px、Copy/Edit action bar 代码</div>
+    </a>
+    <a class="card ext" href="https://github.com/assistant-ui/assistant-ui/blob/main/apps/docs/content/examples/claude.mdx" target="_blank" rel="noopener">
+      <span class="tag external">GitHub</span>
+      <div class="name">assistant-ui · Claude 示例文档</div>
+      <div class="desc">奶油色板与 hover-only 操作条</div>
+    </a>
+    <a class="card ext" href="https://github.com/open-webui/open-webui/blob/main/src/lib/components/chat/Messages/Markdown/ConsecutiveDetailsGroup.svelte" target="_blank" rel="noopener">
+      <span class="tag external">GitHub</span>
+      <div class="name">Open WebUI · ConsecutiveDetailsGroup</div>
+      <div class="desc">Explored/Exploring 折叠组实现</div>
+    </a>
+    <a class="card ext" href="https://cursor.com/changelog/3-4" target="_blank" rel="noopener">
+      <span class="tag external">Cursor</span>
+      <div class="name">Changelog · Compact chat responses</div>
+      <div class="desc">Compact / Balanced / Detailed 工具密度</div>
+    </a>
+    <a class="card ext" href="https://www.northbase.design/systems/claude/ai-input-output" target="_blank" rel="noopener">
+      <span class="tag external">Northbase</span>
+      <div class="name">Claude Input & Output 拆解</div>
+      <div class="desc">thinking 折叠、action step、正文排版截图流</div>
+    </a>
+  </div>
+
+  <p class="note">
+    打开方式：在资源管理器中进入 <code>desktop/mockups/chat-prototypes/</code>，双击 <strong>index.html</strong>。
+    文档依据：<code>docs/CHAT-OUTPUT-POLISH.md</code>、<code>docs/output-format.md</code>。
+  </p>
+</body>
+</html>

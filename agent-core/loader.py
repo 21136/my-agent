@@ -103,6 +103,7 @@ _DYNAMIC_SYSTEM_SECTIONS = frozenset(
         "digest",
         "skill_index",
         "skill_context",
+        "companion_world",
     }
 )
 
@@ -1032,6 +1033,14 @@ def format_capability_hints(
         "- 造新工具：run_evolved → write_evolve（细则见 buckets/evolve.md；scaffold 回合另有短提示）",
         "- 若无合适工具：诚实说明限制；可说「记住」提交 tool 建议到 evolve/proposals",
     ]
+    project_id = (session.meta.project_id or "").strip()
+    if project_id:
+        lines.insert(
+            5,
+            f"- 项目历史接续（仅用户明确要求接续时）：run_evolved → project_catalog(arguments={{include_threads:true, project_id:{project_id}}})；"
+            "只从本项目 state=archived 的候选中按用户提到的任务/时间选择，当前活线不是旧线候选；候选有歧义时先询问；选中后 read_file 对应 messages_path（跨会话须 confirm）；"
+            "只整理用户要求的交接范围，不自动继承旧线；旧聊天中的完成声明不是代码事实，继续操作前复核当前项目状态。",
+        )
     if session.meta.topics:
         lines.insert(
             2,
@@ -1298,6 +1307,16 @@ def build_system_prompt(
 
     if include_overlay:
         sections.append(("session", format_session_overlay(session)))
+        companion_world_context = getattr(session, "_turn_companion_world_context", None)
+        if isinstance(companion_world_context, str) and companion_world_context.strip():
+            from companion_world_context import is_companion_world_context_allowed
+
+            if is_companion_world_context_allowed(
+                active_shell=session.meta.active_shell,
+                project_root=session.meta.project_root,
+                terminal=terminal,
+            ):
+                sections.append(("companion_world", companion_world_context.strip()))
         if terminal:
             scope_overlay = format_terminal_scope_overlay(session)
             if scope_overlay:

@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>聊天气泡 · 跳出白紫</title>
+  <style>
+    :root {
+      --page-bg: #1a1a22;
+      --page-text: #ece8f0;
+      --page-muted: #9a94a8;
+      --card: #24242e;
+      --card-border: rgb(255 255 255 / 0.08);
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--page-bg);
+      color: var(--page-text);
+      line-height: 1.55;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      padding: 1rem 1.5rem;
+      background: rgb(26 26 34 / 0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--card-border);
+    }
+    header h1 { margin: 0 0 0.35rem; font-size: 1.2rem; }
+    header p { margin: 0; font-size: 0.88rem; color: var(--page-muted); max-width: 52rem; }
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1rem 1.25rem 3rem;
+    }
+    .section-title {
+      margin: 1.5rem 0 0.75rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--page-muted);
+    }
+    .section-title:first-of-type { margin-top: 0.5rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1rem;
+    }
+    .scheme {
+      --c-bg: #eee;
+      --u-bg: #ccc;
+      --u-fg: #111;
+      --u-border: transparent;
+      --u-shadow: none;
+      --u-radius: 14px 14px 4px 14px;
+      --b-bg: #fff;
+      --b-fg: #222;
+      --b-border: transparent;
+      --b-shadow: none;
+      --b-radius: 6px 18px 18px 18px;
+      --accent: #666;
+      --pill-bg: rgb(0 0 0 / 0.08);
+      --pill-fg: var(--accent);
+      --avatar: linear-gradient(135deg, #888, #666);
+      --quote-bg: rgb(0 0 0 / 0.06);
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .scheme-head {
+      padding: 0.7rem 0.9rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .scheme-head strong { display: block; font-size: 0.92rem; }
+    .scheme-head span { font-size: 0.74rem; color: var(--page-muted); }
+    .chat {
+      padding: 0.85rem;
+      min-height: 300px;
+      background: var(--c-bg);
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+    .row-user { display: flex; justify-content: flex-end; }
+    .row-bot { display: flex; gap: 0.5rem; align-items: flex-start; }
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--avatar);
+      box-shadow: 0 2px 8px rgb(0 0 0 / 0.2);
+    }
+    .bot-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin-bottom: 0.3rem;
+      font-size: 0.78rem;
+      font-weight: 650;
+      color: var(--b-fg);
+    }
+    .pill {
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: var(--pill-bg);
+      color: var(--pill-fg);
+    }
+    .bubble-user {
+      max-width: 78%;
+      padding: 0.5rem 0.8rem;
+      font-size: 0.84rem;
+      line-height: 1.58;
+      border-radius: var(--u-radius);
+      background: var(--u-bg);
+      color: var(--u-fg);
+      border: var(--u-border);
+      box-shadow: var(--u-shadow);
+    }
+    .bubble-bot {
+      flex: 1;
+      min-width: 0;
+      max-width: 92%;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.84rem;
+      line-height: 1.58;
+      border-radius: var(--b-radius);
+      background: var(--b-bg);
+      color: var(--b-fg);
+      border: var(--b-border);
+      box-shadow: var(--b-shadow);
+    }
+    .bubble-bot ul { margin: 0.3rem 0 0; padding: 0; list-style: none; }
+    .bubble-bot li {
+      position: relative;
+      padding-left: 0.9rem;
+      margin: 0.15rem 0;
+    }
+    .bubble-bot li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.62em;
+      border-left: 5px solid var(--accent);
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+    }
+    .bubble-bot blockquote {
+      margin: 0.45rem 0 0;
+      padding: 0.35rem 0.55rem;
+      border-left: 3px solid var(--accent);
+      background: var(--quote-bg);
+      font-size: 0.8rem;
+      opacity: 0.92;
+    }
+
+    /* —— 对照：线上白紫 —— */
+    .s0 {
+      --c-bg: #f6f5fb;
+      --u-bg: #ebe8f4;
+      --u-fg: #1b192e;
+      --u-border: 1px solid rgb(91 80 160 / 0.15);
+      --b-bg: #ffffff;
+      --b-fg: #1b192e;
+      --b-border: 1px solid rgb(91 80 160 / 0.14);
+      --accent: #5b50e6;
+      --pill-bg: rgb(91 80 160 / 0.12);
+      --pill-fg: #5b50e6;
+      --avatar: linear-gradient(135deg, #3d8bff, #8b5cf6);
+      --quote-bg: rgb(91 80 160 / 0.06);
+    }
+
+    /* H 森系：鼠尾草底 + 琥珀你 + 米白魔王 */
+    .sH {
+      --c-bg: linear-gradient(180deg, #dce8df 0%, #c9d9ce 100%);
+      --u-bg: linear-gradient(145deg, #e8a838 0%, #d4842a 100%);
+      --u-fg: #1f1408;
+      --u-shadow: 0 4px 14px rgb(180 100 20 / 0.35);
+      --b-bg: #faf6ee;
+      --b-fg: #1a2e24;
+      --b-border: 1px solid #a8c4b0;
+      --b-shadow: 0 3px 12px rgb(40 80 50 / 0.12);
+      --accent: #2d6a4f;
+      --pill-bg: rgb(45 106 79 / 0.15);
+      --pill-fg: #1b4332;
+      --avatar: linear-gradient(145deg, #40916c, #1b4332);
+      --quote-bg: rgb(45 106 79 / 0.08);
+    }
+    .sH .chat { background: #d4e4d9; }
+
+    /* I 珊瑚 × 薄荷：暖冷对撞 */
+    .sI {
+      --c-bg: #f0f4f8;
+      --u-bg: linear-gradient(135deg, #ff8a7a 0%, #ff6b6b 100%);
+      --u-fg: #fff;
+      --u-shadow: 0 5px 16px rgb(255 80 80 / 0.35);
+      --b-bg: linear-gradient(160deg, #e8fff9 0%, #d4f5ed 100%);
+      --b-fg: #0f3d38;
+      --b-border: 1px solid #7dcec4;
+      --accent: #0d9488;
+      --pill-bg: rgb(13 148 136 / 0.18);
+      --pill-fg: #0f766e;
+      --avatar: linear-gradient(135deg, #2dd4bf, #0d9488);
+      --quote-bg: rgb(13 148 136 / 0.1);
+    }
+
+    /* J 纸本暖褐：像笔记本 */
+    .sJ {
+      --c-bg: #e8dfd0;
+      --u-bg: #3d3428;
+      --u-fg: #f5efe6;
+      --u-radius: 4px 12px 12px 12px;
+      --b-bg: #fff9f0;
+      --b-fg: #2c241c;
+      --b-border: 1px solid #c4b5a0;
+      --b-radius: 2px 10px 10px 10px;
+      --accent: #b45309;
+      --pill-bg: rgb(180 83 9 / 0.12);
+      --pill-fg: #92400e;
+      --avatar: linear-gradient(145deg, #d97706, #78350f);
+      --quote-bg: rgb(180 83 9 / 0.08);
+    }
+
+    /* K 赛博：深底 + 橙青，零紫 */
+    .sK {
+      --c-bg: #0c1018;
+      --u-bg: linear-gradient(135deg, #ff6b2c 0%, #ff9500 100%);
+      --u-fg: #0a0a0a;
+      --u-shadow: 0 0 20px rgb(255 120 40 / 0.45);
+      --b-bg: #111820;
+      --b-fg: #d8f3f0;
+      --b-border: 1px solid #00d4aa;
+      --b-shadow: 0 0 16px rgb(0 212 170 / 0.15);
+      --accent: #00d4aa;
+      --pill-bg: rgb(0 212 170 / 0.15);
+      --pill-fg: #5eead4;
+      --avatar: linear-gradient(135deg, #00d4aa, #0891b2);
+      --quote-bg: rgb(0 212 170 / 0.08);
+    }
+
+    /* L 暮色：靛蓝夜 + 玫瑰用户泡 */
+    .sL {
+      --c-bg: linear-gradient(165deg, #1e1b4b 0%, #312e81 40%, #1e293b 100%);
+      --u-bg: #fda4af;
+      --u-fg: #4c0519;
+      --u-border: 1px solid #fb7185;
+      --b-bg: rgb(15 23 42 / 0.85);
+      --b-fg: #e2e8f0;
+      --b-border: 1px solid rgb(148 163 184 / 0.35);
+      --b-shadow: 0 8px 24px rgb(0 0 0 / 0.4);
+      --accent: #fbbf24;
+      --pill-bg: rgb(251 191 36 / 0.2);
+      --pill-fg: #fcd34d;
+      --avatar: linear-gradient(135deg, #f472b6, #6366f1);
+      --quote-bg: rgb(251 191 36 / 0.08);
+    }
+    .sL .chat { background: linear-gradient(165deg, #1e1b4b, #1e293b); }
+
+    /* M 小魔王固有色：暗红金（角色色，不是产品紫） */
+    .sM {
+      --c-bg: #141010;
+      --u-bg: #2a3548;
+      --u-fg: #e8eef8;
+      --u-border: 1px solid #4a5d78;
+      --b-bg: linear-gradient(145deg, #2a1215 0%, #1a0a0c 100%);
+      --b-fg: #fce8e6;
+      --b-border: 1px solid #c9a227;
+      --b-shadow: 0 4px 20px rgb(201 162 39 / 0.12);
+      --accent: #f0c14d;
+      --pill-bg: rgb(201 162 39 / 0.22);
+      --pill-fg: #fcd34d;
+      --avatar: linear-gradient(145deg, #dc2626, #7f1d1d);
+      --quote-bg: rgb(201 162 39 / 0.1);
+    }
+
+    /* N 苏打汽水：天蓝底 + 柠檬用户 + 白蓝魔王 */
+    .sN {
+      --c-bg: #b8e0f5;
+      --u-bg: #fef08a;
+      --u-fg: #422006;
+      --u-border: 2px solid #ca8a04;
+      --b-bg: #ffffff;
+      --b-fg: #0c4a6e;
+      --b-border: 2px solid #0284c7;
+      --accent: #0284c7;
+      --pill-bg: rgb(2 132 199 / 0.15);
+      --pill-fg: #0369a1;
+      --avatar: linear-gradient(135deg, #38bdf8, #0284c7);
+      --quote-bg: rgb(2 132 199 / 0.08);
+    }
+
+    /* O 双泡撞色：用户青绿实心，魔王浅紫灰（仍偏产品但对比强） */
+    .sO {
+      --c-bg: #f3f4f6;
+      --u-bg: #0f766e;
+      --u-fg: #ecfdf5;
+      --u-shadow: 0 3px 12px rgb(15 118 110 / 0.35);
+      --b-bg: #e9d5ff;
+      --b-fg: #3b0764;
+      --b-border: none;
+      --accent: #7e22ce;
+      --pill-bg: rgb(126 34 206 / 0.2);
+      --pill-fg: #6b21a8;
+      --avatar: linear-gradient(135deg, #a855f7, #0f766e);
+      --quote-bg: rgb(126 34 206 / 0.12);
+    }
+
+    .note {
+      margin: 0 0 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      background: rgb(255 255 255 / 0.04);
+      border: 1px solid var(--card-border);
+      font-size: 0.86rem;
+      color: var(--page-muted);
+    }
+    .note strong { color: #fbbf24; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>聊天气泡 · 跳出「白 + 紫」</h1>
+    <p>
+      上一版 8 张都在 Neon Twin 色盘里打转，看起来当然素。
+      下面 <strong>H–O</strong> 每套自带<strong>聊天区底色 + 用户/魔王两套泡色 + 头像渐变</strong>，尽量不用白底紫 accent。
+      对照组只留 <strong>0</strong>（当前线上）。
+    </p>
+  </header>
+  <main>
+    <p class="note">
+      文件路径：<code>desktop/mockups/chat-bubble-schemes.html</code> ·
+      回复示例：<strong>「K 的聊天区 + M 的魔王泡 + I 的用户泡」</strong>
+    </p>
+
+    <template id="user-text">别老白底紫边了——聊天气泡能不能有点性格？</template>
+    <template id="bot-text">
+      <div class="bot-meta"><span>小魔王</span><span class="pill">探索</span></div>
+      可以。关键是<strong>聊天区、你、我</strong>三套色都要动，只改一边还是会回到「素」：
+      <ul>
+        <li>聊天区：别永远 #f6f5fb 灰紫</li>
+        <li>你的泡：用饱和色或深色块，不必白字渐变</li>
+        <li>我的泡：角色色（红金/青/米纸）而不是白玻璃</li>
+      </ul>
+      <blockquote>选一套整体调性，再微调圆角和宽度。</blockquote>
+    </template>
+
+    <h2 class="section-title">对照 · 当前产品色</h2>
+    <div class="grid">
+      <article class="scheme s0" data-id="0">
+        <div class="scheme-head">
+          <strong>0 · 线上（白 + 紫）</strong>
+          <span>你觉得素的原因多半在这</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+    </div>
+
+    <h2 class="section-title">新调色 · 自然 / 纸本</h2>
+    <div class="grid">
+      <article class="scheme sH" data-id="H">
+        <div class="scheme-head">
+          <strong>H · 森系琥珀</strong>
+          <span>鼠尾草区 · 琥珀你 · 米白魔王 · 绿 accent</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+      <article class="scheme sJ" data-id="J">
+        <div class="scheme-head">
+          <strong>J · 纸本暖褐</strong>
+          <span>牛皮纸区 · 深褐你 · 奶纸魔王</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+      <article class="scheme sN" data-id="N">
+        <div class="scheme-head">
+          <strong>N · 苏打汽水</strong>
+          <span>天蓝区 · 柠檬你 · 白蓝框魔王</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+    </div>
+
+    <h2 class="section-title">新调色 · 高饱和 / 对撞</h2>
+    <div class="grid">
+      <article class="scheme sI" data-id="I">
+        <div class="scheme-head">
+          <strong>I · 珊瑚 × 薄荷</strong>
+          <span>珊瑚用户 · 薄荷绿魔王 · 零紫</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+      <article class="scheme sO" data-id="O">
+        <div class="scheme-head">
+          <strong>O · 青绿 × 淡紫块</strong>
+          <span>强对比；紫只在魔王泡</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+    </div>
+
+    <h2 class="section-title">新调色 · 深色 / 角色</h2>
+    <div class="grid">
+      <article class="scheme sK" data-id="K">
+        <div class="scheme-head">
+          <strong>K · 赛博橙青</strong>
+          <span>深底 · 橙你 · 青描边魔王</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+      <article class="scheme sL" data-id="L">
+        <div class="scheme-head">
+          <strong>L · 暮色玫瑰</strong>
+          <span>靛夜区 · 玫瑰你 · 暗蓝魔王 · 金 bullet</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+      <article class="scheme sM" data-id="M">
+        <div class="scheme-head">
+          <strong>M · 魔王红金</strong>
+          <span>角色向 · 暗红金魔王 · 钢蓝你</span>
+        </div>
+        <div class="chat"></div>
+      </article>
+    </div>
+  </main>
+  <script>
+    const userHtml = document.getElementById("user-text").innerHTML;
+    const botInner = document.getElementById("bot-text").innerHTML;
+    const row = () =>
+      `<div class="row-user"><div class="bubble-user">${userHtml}</div></div>` +
+      `<div class="row-bot"><div class="avatar" aria-hidden="true"></div><div class="bubble-bot">${botInner}</div></div>`;
+    document.querySelectorAll(".scheme .chat").forEach((el) => {
+      el.innerHTML = row();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>08 · 小魔王 + 紧凑过程</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: "Segoe UI", "PingFang SC", system-ui, sans-serif; background: #1a1a22; color: #eee; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #4ade80; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #9aa0a6; margin-bottom: 0.75rem; }
+    .proto-frame { --frame-bg: #f4f4f5; --frame-border: #e4e4e7; --sidebar-bg: #ececef; }
+    .chat-col { background: #f4f4f5; color: #1a1a1a; display: flex; flex-direction: column; }
+    .bubble-user { max-width: 72%; padding: 0.5rem 0.8rem; border-radius: 12px 12px 4px 12px; background: #e4e4e7; font-size: 0.88rem; }
+    .pet-row { display: flex; gap: 0.55rem; align-items: flex-start; }
+    .avatar { background: linear-gradient(135deg, #3d8bff, #8b5cf6); width: 36px; height: 36px; }
+    .name-line { font-size: 0.78rem; font-weight: 600; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.35rem; }
+    .pill { background: rgb(0 0 0 / 0.06); color: #52525b; font-size: 0.65rem; padding: 0.08rem 0.35rem; border-radius: 999px; }
+    .card { background: #fff; border-radius: 12px; padding: 0.75rem 0.9rem; box-shadow: 0 1px 2px rgb(0 0 0 / 0.04); font-size: 0.88rem; line-height: 1.6; }
+    .process-pill { background: #ececef; color: #52525b; }
+    .process-detail { background: #ececef; }
+    .composer-mock { border-color: #d4d4d8; }
+    .composer-mock .input { background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.05); border: none; }
+    .composer-mock .send { background: #1a1a1a; color: #fff; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>08 · 推荐合成：pet 头像 + 白卡片 + 过程 pill</h1>
+  <p class="sub">保留小魔王角色；去掉「你/助手」大标签；过程不展开成墙（可点 pill）。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar" style="background:#f4f4f5;color:#71717a">小魔王的空间 · 合成稿</div>
+    <div class="proto-body">
+      <div class="proto-sidebar"></div>
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    document.getElementById("chat").innerHTML = `
+      <div class="row-user"><div class="bubble-user">${s.user}</div></div>
+      <div class="pet-row">
+        <div class="avatar"></div>
+        <div style="flex:1;min-width:0">
+          <div class="name-line">小魔王 <span class="pill">探索</span></div>
+          <div class="card md">${s.assistantHtml}
+            <button type="button" class="process-pill" id="pill"><span class="dot"></span>过程 · 3 步 ▸</button>
+            <div class="process-detail hidden" id="det">${s.toolSteps.map(t => `<div class="step"><span>${t.ok?"✓":"✗"}</span> ${t.label} · ${t.sub}</div>`).join("")}</div>
+          </div>
+        </div>
+      </div>
+      <div class="composer-mock"><div class="input">输入…</div><button class="send">发送</button></div>
+    `;
+    document.getElementById("pill").onclick = () => document.getElementById("det").classList.toggle("hidden");
+  </script>
+</body>
+</html>

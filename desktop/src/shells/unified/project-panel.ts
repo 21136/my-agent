@@ -1,8 +1,10 @@
-import type { AgentWsClient, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem } from "../../api/ws";
+import type { AgentWsClient, ProjectArtifactSummary, ProjectDocItem, ServerEvent, ServiceListItem, TerminalSessionItem, TurnEvidenceItem } from "../../api/ws";
 import { escapeHtml } from "../chat-state";
 import { renderDocCatalogHtml } from "./doc-reading";
 import { renderSettingsSidebar, type SettingsSection } from "./settings-panel";
 import { userFacingThreadTitle } from "./ordinary-guards";
+import { renderTurnEvidenceSummary } from "./turn-evidence";
+import { formatTerminalOutputForDisplay } from "./terminal-output";
 import { RAIL_TAB_LABELS, type MainFocus, type RailTab } from "./rail";
 import {
   SERVICE_SCROLL_SELECTORS,
@@ -162,7 +164,11 @@ export interface ProjectPanelState {
   terminalOutputCursorReset: boolean;
   terminalOutputTruncated: boolean;
   // Phase 27 M1 — turn evidence strip
-  turnEvidence: Array<{ tool: string; ok: boolean }>;
+  turnEvidence: TurnEvidenceItem[];
+  turnEvidenceRunId: string;
+  turnEvidenceTotalCount: number;
+  turnEvidenceOmittedCount: number;
+  turnEvidenceExpanded: boolean;
   turnGateNotice: string;
   // G14 M2 — exec reliability strip
   turnPostcondition: string;
@@ -302,6 +308,10 @@ export function resetProjectScopedState(state: ProjectPanelState): void {
   state.terminalOutputCursorReset = false;
   state.terminalOutputTruncated = false;
   state.turnEvidence = [];
+  state.turnEvidenceRunId = "";
+  state.turnEvidenceTotalCount = 0;
+  state.turnEvidenceOmittedCount = 0;
+  state.turnEvidenceExpanded = false;
   state.turnGateNotice = "";
   state.turnPostcondition = "none";
   state.turnCircuitOpen = [];
@@ -751,9 +761,17 @@ export function renderProjectsStage(state: ProjectPanelState): string {
   </div>`;
 }
 
-function renderNowRailSidebar(_state: ProjectPanelState, _callbacks: ProjectPanelCallbacks): string {
-  // 当下 shows the session list (rendered by index.ts) — no focus/“为什么卡住” card.
-  return "";
+function renderNowRailSidebar(state: ProjectPanelState, _callbacks: ProjectPanelCallbacks): string {
+  if (!state.projectId) return "";
+  return renderTurnEvidenceSummary({
+    runId: state.turnEvidenceRunId,
+    items: state.turnEvidence,
+    totalCount: state.turnEvidenceTotalCount,
+    omittedCount: state.turnEvidenceOmittedCount,
+    running: state.turnInProgress,
+    finishReason: state.lastTurnFinishReason,
+    expanded: state.turnEvidenceExpanded,
+  });
 }
 
 function renderDocsRailSidebar(state: ProjectPanelState): string {
@@ -1093,7 +1111,8 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   const error = state.terminalOutputError
     ? `<div class="sidebar-terminals-error">${escapeHtml(state.terminalOutputError)}</div>`
     : "";
-  const output = state.terminalOutput || (state.terminalOutputLoading ? "正在读取输出…" : "暂无输出");
+  const visibleOutput = formatTerminalOutputForDisplay(state.terminalOutput);
+  const output = visibleOutput || (state.terminalOutputLoading ? "正在读取输出…" : "暂无输出");
   const closeButton = terminalIsActive(session)
     ? `<button type="button" class="unified-btn unified-btn-danger" data-action="terminal-close" data-terminal-id="${escapeHtml(session.session_id)}">关闭会话</button>`
     : `<button type="button" class="unified-btn" data-action="terminal-dismiss" data-terminal-id="${escapeHtml(session.session_id)}">移除记录</button>`;

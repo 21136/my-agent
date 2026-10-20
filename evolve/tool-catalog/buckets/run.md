@@ -16,7 +16,7 @@
 | `run_demo` | 在 `agent-core/` 下跑 `python <script>.py` 冒烟 |
 | `run_tests` | 批量跑约定 demo / 测试套件 |
 | `structured_test` | **active**：统一项目测试 status/exit/duration/failed/rerun；底层复用 `run_project_tests` |
-| `git_snapshot` | **只读**：status + diff stat；可选返回有上限的工作树/staged 完整 diff、基线 ref 和未跟踪路径 |
+| `git_snapshot` | **只读**：从 `working_dir` / `cwd` 向上定位 Git 根，对整个仓库返回 status + diff stat；可选完整 diff 与未跟踪路径 |
 | `git_diff` | **只读免确认**：默认返回 diff 补丁（可截断）；支持 staged / base_ref / paths / name-status |
 | `git_restore` | **active**：按文件安全回退 worktree/staged；dry-run 可预览，真实回退要求 expected hash，拒绝未知归属 |
 | `git_commit` | 受控提交：`add` + `commit`（禁 push/force/amend）；`dry_run` 可预览 |
@@ -39,10 +39,12 @@
 ## 注意
 
 - **一次性命令**（build/test/install/脚本）：主用 **`run_command`**（[SHELL-CHANNEL.md](../../../docs/SHELL-CHANNEL.md)）。
+- **交互终端不是 shell 包装器**：`interactive_terminal.start.command` 会直接启动指定可执行文件，不自动经过默认 shell。Windows 的 `echo`、`dir`、`cd` 等内置命令须显式调用 `cmd.exe /c ...`（例如 `cmd.exe /c echo TURN_TERMINAL_QA_OK`）；需要持续交互时可启动 `cmd.exe` / `powershell.exe` 后再用 `input/read`。一次性命令仍优先 `run_command`。
 - **长驻 / 后台**：优先 `run_service`；或 `run_command` + `background:true`（Phase 31 D1 升格，返回 `name` + 日志尾）。
 - 测前端：目标目录已有 `node_modules` 时**不要先 install**；直接 `npm run build` / `test`（除非需重装）。
 - **依赖损坏 / 半截 `node_modules`**：点名 `repair_node_modules`（working_dir=前端目录）；**禁止**手写 `rmdir`/`Remove-Item` + 另一次 `npm install`。勿反复 `npm run dev`。专用工具删目录更稳（shutil + 权限重试），一次确认即可。
 - 路径一律相对 agent root；项目内优先 `workspace/<id>/…`。
+- `git_snapshot` 的 `working_dir` 可指向仓库内子目录，快照仍覆盖整个仓库；`paths` 过滤器相对 Git 仓库根。
 - **长驻服务**（监听端口、不退出）：用 **`run_service`** 或 `run_command` background；不要用无 background 的 `run_command` 起不退出进程。详见 [RUN-SERVICE.md](../../../docs/RUN-SERVICE.md)。
 - **执行可见性**：同意工具后桌面会显示运行卡与耗时；项目侧栏 **Services** 可刷新登记服务/日志尾（[EXEC-OBSERVABILITY.md](../../../docs/EXEC-OBSERVABILITY.md)）。
 - **探活 / 调本地 API**：`http_request`（勿用 `fetch_url` 打 localhost）。

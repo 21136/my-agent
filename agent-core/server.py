@@ -106,6 +106,7 @@ class WsBridge:
             "tool.start",
             "tool.end",
             "tool.progress",
+            "turn.evidence",
             "terminal.plan.state",
         }
     )
@@ -346,7 +347,7 @@ class WsBridge:
             self.emit(self._scope_run_event({"type": event_type, **payload}))
             return
         if event_type == "turn.evidence":
-            self.emit({"type": event_type, **payload})
+            self.emit(self._scope_run_event({"type": event_type, **payload}))
             return
         if event_type == "services.state":
             self.emit({"type": event_type, **payload})
@@ -785,8 +786,27 @@ class WsSessionHandler:
                 except SessionError as exc:
                     emit_error(bridge, str(exc))
                     return
+            from companion_world_context import (
+                format_companion_world_context,
+                is_companion_world_context_allowed,
+            )
+            from session import is_terminal_harness
+
+            world_context = None
+            if is_companion_world_context_allowed(
+                active_shell=repl.session.meta.active_shell,
+                project_root=repl.session.meta.project_root,
+                terminal=is_terminal_harness(repl.session.meta),
+            ):
+                world_context = format_companion_world_context(
+                    message.get("companion_world_context")
+                )
+            repl.session._turn_companion_world_context = world_context
             # TURN_LOCK is held by _handle_incoming for user.message / command.
-            await _run_line(repl, bridge, line, self.paths, lock_held=True)
+            try:
+                await _run_line(repl, bridge, line, self.paths, lock_held=True)
+            finally:
+                repl.session._turn_companion_world_context = None
             repl.session._turn_active_doc = ""
             repl.session._turn_active_doc_selection = ""
             if _repl_refreshes_session_state(line):

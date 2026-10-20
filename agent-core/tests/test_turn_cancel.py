@@ -155,6 +155,16 @@ class TurnCancelTests(unittest.TestCase):
         self.assertEqual(len(finals), 1)
         self.assertEqual(finals[0]["run_id"], run_id)
 
+    def test_turn_evidence_is_scoped_to_the_active_run(self) -> None:
+        bridge = self._bridge()
+        self.assertTrue(bridge.begin_turn())
+        run_id = [event for event in self.events if event.get("type") == "execution.state"][-1]["run_id"]
+
+        bridge.on_executor_event("turn.evidence", {"items": [{"tool": "structured_test", "ok": True}]})
+
+        evidence = [event for event in self.events if event.get("type") == "turn.evidence"][-1]
+        self.assertEqual(evidence["run_id"], run_id)
+
     def test_bridge_scopes_execution_events_to_current_run(self) -> None:
         bridge = self._bridge()
         self.assertTrue(bridge.begin_turn())

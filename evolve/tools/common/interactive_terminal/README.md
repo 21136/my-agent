@@ -3,6 +3,7 @@
 Experimental P0 tool for a persistent local PTY session.
 
 - `start`: create a session and return `session_id`.
+- `start.command` is spawned directly; no shell is added implicitly. On Windows, shell built-ins such as `echo`, `dir`, and `cd` need an explicit wrapper, for example `cmd.exe /c echo TURN_TERMINAL_QA_OK`.
 - `input`: write text to the same session.
 - `read`: read output from a byte cursor without rereading old output.
 - `signal`: send `ctrl_c`, `eof` (Ctrl-D input convention), or `terminate`.

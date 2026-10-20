@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
@@ -14,6 +17,16 @@ if str(_AGENT_CORE) not in sys.path:
 from tests.isolation_helpers import temporary_agent_paths
 from tools.builtin.run_evolved import run
 from tools.registry import ToolRegistry
+
+
+def _load_patch_tool(paths):
+    script = paths.evolve / "tools" / "coding" / "patch_file" / "main.py"
+    spec = importlib.util.spec_from_file_location("patch_file_ledger_failure_under_test", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _sha256_bytes(raw: bytes) -> str:
@@ -41,6 +54,9 @@ class PatchFileV2Tests(unittest.TestCase):
                 registry=registry,
             )
             self.assertTrue(result.ok, result.error)
+            self.assertEqual(result.data.get("write_state"), "applied")
+            self.assertTrue(result.data.get("applied"))
+            self.assertTrue(result.data.get("ledger_recorded"))
             self.assertEqual(target.read_text(encoding="utf-8"), "ALPHA\nbeta\nGAMMA\n")
             self.assertEqual(result.data.get("mode"), "hunks")
             ledger = paths.data / "patch-ledger.jsonl"
@@ -66,7 +82,34 @@ class PatchFileV2Tests(unittest.TestCase):
                 registry=registry,
             )
             self.assertFalse(result.ok)
+            self.assertEqual((result.error.details or {}).get("write_state"), "not_applied")
+            self.assertFalse((result.error.details or {}).get("applied"))
             self.assertEqual(target.read_text(encoding="utf-8"), original)
+            self.assertFalse((paths.data / "patch-ledger.jsonl").exists())
+
+    def test_ledger_failure_reports_that_file_was_already_applied(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/patch_file",)) as paths:
+            target = paths.workspace / "ledger-failure.txt"
+            target.write_text("before\n", encoding="utf-8")
+            module = _load_patch_tool(paths)
+            args = {
+                "path": "workspace/ledger-failure.txt",
+                "find": "before",
+                "replacement": "after",
+                "patch_id": "it6202-ledger-failure",
+            }
+
+            with patch.dict(os.environ, {"MY_AGENT_ROOT": str(paths.agent_root)}):
+                with patch.object(module, "_append_ledger", side_effect=OSError("ledger unavailable")):
+                    result = module.run_patch(args)
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result.get("write_state"), "applied_unledgered")
+            self.assertTrue(result.get("applied"))
+            self.assertFalse(result.get("ledger_recorded"))
+            self.assertEqual(result.get("result_hash"), _sha256_bytes(target.read_bytes()))
+            self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
+            self.assertIn("do not retry", result["error"].lower())
             self.assertFalse((paths.data / "patch-ledger.jsonl").exists())
 
     def test_base_hash_dry_run_and_idempotent_retry(self) -> None:
@@ -84,9 +127,13 @@ class PatchFileV2Tests(unittest.TestCase):
             }
             preview = run({"tool_name": "patch_file", "arguments": {**args, "dry_run": True}}, registry=registry)
             self.assertTrue(preview.ok, preview.error)
+            self.assertEqual(preview.data.get("write_state"), "not_applied")
+            self.assertFalse(preview.data.get("applied"))
             self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
             applied = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
             self.assertTrue(applied.ok, applied.error)
+            self.assertEqual(applied.data.get("write_state"), "applied")
+            self.assertTrue(applied.data.get("ledger_recorded"))
             repeated = run({"tool_name": "patch_file", "arguments": args}, registry=registry)
             self.assertTrue(repeated.ok, repeated.error)
             self.assertTrue(repeated.data.get("idempotent"))

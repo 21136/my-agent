@@ -236,6 +236,61 @@ class InteractiveTerminalTests(unittest.TestCase):
             output = (directory / "output.log").read_text(encoding="utf-8")
             self.assertIn("final output", output)
 
+    def test_reader_keeps_draining_final_output_after_an_empty_exit_read(self) -> None:
+        class DelayedFinalOutputPty(FakePty):
+            def __init__(self, command: str, cwd: str | None = None) -> None:
+                super().__init__(command, cwd)
+                self.empty_after_exit = False
+
+            def read(self, size: int) -> str:
+                if not self._alive and self.empty_after_exit:
+                    self.empty_after_exit = False
+                    return ""
+                return super().read(size)
+
+            def terminate(self, force: bool = False) -> None:
+                self._reads = ["final output after empty read\r\n"]
+                self.empty_after_exit = True
+                super().terminate(force=force)
+
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "requests").mkdir()
+            (directory / "responses").mkdir()
+            self.mod._write_state(
+                directory,
+                {
+                    "session_id": "it-0000000000000002",
+                    "command": "fake",
+                    "cwd_absolute": temp,
+                    "state": "starting",
+                    "created_at": self.mod._utc_now(),
+                    "last_activity_at": self.mod._utc_now(),
+                    "idle_timeout_sec": 600,
+                    "lifetime_timeout_sec": 600,
+                    "output_start": 0,
+                    "output_bytes": 0,
+                },
+            )
+            worker = threading.Thread(
+                target=self.mod._worker_main,
+                args=(directory, DelayedFinalOutputPty),
+                daemon=True,
+            )
+            worker.start()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                current = json.loads((directory / "state.json").read_text(encoding="utf-8"))
+                if current.get("state") == "running":
+                    break
+                time.sleep(0.02)
+            response = self.mod._submit_request(directory, "close", {"force": True})
+            self.assertTrue(response.get("ok"), response)
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            output = (directory / "output.log").read_text(encoding="utf-8")
+            self.assertIn("final output after empty read", output)
+
     def test_read_pty_uses_non_blocking_timeout_when_supported(self) -> None:
         pty = TimeoutPty()
         self.assertEqual(self.mod._read_pty(pty), "")

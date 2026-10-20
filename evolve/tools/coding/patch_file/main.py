@@ -338,7 +338,7 @@ def _apply_find_patch(text: str, find: str, replacement: str) -> tuple[str, int]
     return patched, 1
 
 
-def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
+def _run_patch_impl(payload: dict[str, Any]) -> dict[str, Any]:
     AgentPaths, PathOutOfBoundsError = _load_paths()
     paths = AgentPaths.discover(start=_agent_root())
 
@@ -486,6 +486,9 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     result_raw = _normalized_bytes(new_text)
+    result_hash = _sha256(result_raw)
+    file_write_completed = False
+    ledger_recorded = False
     if len(result_raw) > _MAX_BYTES:
         return {"ok": False, "error": f"result exceeds limit of {_MAX_BYTES} bytes", "patch_id": patch_id}
 
@@ -522,7 +525,7 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
                 from evolve_tool_io import write_utf8_text
 
                 write_utf8_text(target, new_text)
-            result_hash = _sha256(result_raw)
+            file_write_completed = True
             entry = {
                 "patch_id": patch_id,
                 "source": "patch_file",
@@ -536,8 +539,40 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
                 "recorded_at": _utc_now(),
             }
             _append_ledger(ledger, entry)
+            ledger_recorded = True
     except OSError as exc:
-        return {"ok": False, "error": f"patch or ledger write failed: {exc}", "patch_id": patch_id}
+        if file_write_completed and not ledger_recorded:
+            return {
+                "ok": False,
+                "write_state": "applied_unledgered",
+                "applied": True,
+                "ledger_recorded": False,
+                "path": rel,
+                "patch_id": patch_id,
+                "base_hash": current_hash,
+                "result_hash": result_hash,
+                "error": f"file was updated but patch ledger recording failed; do not retry until the file is reread and verified: {exc}",
+            }
+        if file_write_completed and ledger_recorded:
+            return {
+                "ok": True,
+                "write_state": "applied",
+                "applied": True,
+                "ledger_recorded": True,
+                "path": rel,
+                "patch_id": patch_id,
+                "base_hash": current_hash,
+                "result_hash": result_hash,
+                "warning": f"patch and ledger were saved, but lock cleanup failed: {exc}",
+            }
+        return {
+            "ok": False,
+            "write_state": "not_applied",
+            "applied": False,
+            "ledger_recorded": False,
+            "patch_id": patch_id,
+            "error": f"patch was not applied: {exc}",
+        }
 
     diff_text = _unified_diff(rel, text, new_text)
     return {
@@ -551,6 +586,21 @@ def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
         "hunks_applied": lines_changed if mode == "hunks" else None,
         "unified_diff": diff_text,
     }
+
+
+def run_patch(payload: dict[str, Any]) -> dict[str, Any]:
+    result = _run_patch_impl(payload)
+    if "write_state" in result:
+        return result
+    if result.get("ok") is False:
+        result.update(write_state="not_applied", applied=False, ledger_recorded=False)
+    elif result.get("idempotent") is True:
+        result.update(write_state="applied", applied=True, ledger_recorded=True)
+    elif result.get("dry_run") is True or result.get("skipped") is True:
+        result.update(write_state="not_applied", applied=False, ledger_recorded=False)
+    else:
+        result.update(write_state="applied", applied=True, ledger_recorded=True)
+    return result
 
 
 def main() -> None:

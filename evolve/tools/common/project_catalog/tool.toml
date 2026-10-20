@@ -1,6 +1,6 @@
 [tool]
 name = "project_catalog"
-description = "List workspace projects with session ids (read-only)"
+description = "List workspace projects and, on explicit request, one project’s chat-thread summaries (read-only)"
 version = "1.0.0"
 status = "active"
 topics = ["common"]
@@ -16,6 +16,15 @@ type = "object"
 type = "boolean"
 default = false
 description = "Include truncated PROJECT.md summary per project"
+
+[schema.input.properties.include_threads]
+type = "boolean"
+default = false
+description = "List active and recent archived chat lines for one project; requires project_id"
+
+[schema.input.properties.project_id]
+type = "string"
+description = "Registered project id to scope include_threads results to"
 
 [schema.input.properties.dry_run]
 type = "boolean"

@@ -18,6 +18,33 @@ export type LlmKeySlot = {
   source: "env" | "file" | null;
 };
 
+export type TurnEvidenceTestStatus = "passed" | "failed" | "blocked" | "timeout";
+
+export interface TurnEvidenceTestFailure {
+  file?: string;
+  line?: number;
+  test?: string;
+}
+
+export interface TurnEvidenceTestSummary {
+  status: TurnEvidenceTestStatus;
+  suite?: string;
+  duration_ms?: number;
+  reason?: string;
+  failed: TurnEvidenceTestFailure[];
+}
+
+export interface TurnEvidenceItem {
+  tool: string;
+  ok: boolean;
+  call_id?: string;
+  paths?: string[];
+  test?: TurnEvidenceTestSummary;
+  terminal_session_id?: string;
+  terminal_state?: string;
+  diff_summary?: string;
+}
+
 export type ExecutionStateName =
   | "idle"
   | "queued"
@@ -41,6 +68,14 @@ export interface ReleaseAcceptanceSummary {
   accepted_at: string | null;
   release_revision: string | null;
   checklist: Record<string, boolean>;
+}
+
+export interface CompanionWorldContextPayload {
+  version: 1;
+  sceneId: string;
+  activityId: string;
+  personalArc: { id: string; stage: number };
+  events: Array<{ lane: string; origin: string; title: string; body: string; sourceId?: string }>;
 }
 
 export type ServerEvent =
@@ -153,7 +188,10 @@ export type ServerEvent =
     }
   | {
       type: "turn.evidence";
-      items: Array<{ tool: string; ok: boolean }>;
+      run_id?: string;
+      total_count?: number;
+      omitted_count?: number;
+      items: TurnEvidenceItem[];
       gate_notice?: string | null;
       reliability?: {
         postcondition?: "ok" | "fail" | "none" | "blocked" | string;
@@ -592,6 +630,7 @@ export class AgentWsClient {
       activeDoc?: string;
       activeDocSelection?: string;
       turnMode?: "agent" | "ask";
+      companionWorldContext?: CompanionWorldContextPayload;
     },
   ): void {
     const payload: Record<string, unknown> = {
@@ -606,6 +645,9 @@ export class AgentWsClient {
     if (opts?.activeDocSelection) payload.active_doc_selection = opts.activeDocSelection;
     if (opts?.turnMode === "agent" || opts?.turnMode === "ask") {
       payload.turn_mode = opts.turnMode;
+    }
+    if (opts?.companionWorldContext) {
+      payload.companion_world_context = opts.companionWorldContext;
     }
     this.send(payload);
   }

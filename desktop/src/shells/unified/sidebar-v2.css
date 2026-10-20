@@ -436,3 +436,11 @@ html[data-theme] .sidebar-runtime-badges .sidebar-services-toggle {
 /* An expanded badge takes the full row so its list stays readable. */
 .sidebar-runtime-badges > #sidebar-terminals:has(.sidebar-terminals-toggle[aria-expanded="true"]),
 .sidebar-runtime-badges > .sidebar-services:has(.sidebar-services-toggle[aria-expanded="true"]) { flex-basis: 100%; }
+
+/* Expanded terminal details must not consume the session list or overlap the task summary. */
+.sidebar-runtime-badges > #sidebar-terminals:has(.sidebar-terminal-details) {
+  min-height: 0;
+  max-height: min(42vh, 22rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+}

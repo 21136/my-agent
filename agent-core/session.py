@@ -371,6 +371,8 @@ class Session:
     scaffold_check_tool: str | None = field(default=None, compare=False, repr=False)
     # Request-scoped Skill package; never serialized or reused across turns.
     _turn_skill_selection: Any | None = field(default=None, compare=False, repr=False)
+    # Ephemeral companion life context for one ordinary desktop chat turn only.
+    _turn_companion_world_context: str | None = field(default=None, compare=False, repr=False)
     # Current self-change transaction identity; persisted transaction lives under Agent data.
     _self_change_transaction_id: str | None = field(default=None, compare=False, repr=False)
     # Current bounded CI repair decision; durable state lives under Agent data.
@@ -1667,6 +1669,8 @@ def session_summary_for_id(
         "session_id": conversation_id,
         "title": title,
         "preview": last_user[:120] if last_user else "",
+        "first_user_message": first_user,
+        "last_user_message": last_user,
         "updated_at": updated_at,
         "message_count": msg_count,
         "project_id": project_id,

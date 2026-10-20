@@ -51,6 +51,14 @@ def _run_git(args: list[str], *, cwd: Path) -> tuple[int, str, str]:
     return completed.returncode, completed.stdout or "", completed.stderr or ""
 
 
+def _git_toplevel(cwd: Path) -> Path | None:
+    code, out, _err = _run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    if code != 0:
+        return None
+    text = out.strip()
+    return Path(text).resolve() if text else None
+
+
 def _truncate(text: str) -> tuple[str, bool]:
     if len(text) <= _MAX_STAT_CHARS:
         return text, False
@@ -89,12 +97,17 @@ def _resolve_cwd(paths, path_arg: str) -> Path:
 def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     paths = _load_paths().discover(start=_agent_root())
     try:
-        root = _resolve_cwd(paths, _coalesce_working_dir(payload))
+        requested_cwd = _resolve_cwd(paths, _coalesce_working_dir(payload))
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
-    if not (root / ".git").exists():
+    root = _git_toplevel(requested_cwd)
+    if root is None:
         return {"ok": False, "error": "not a git repository"}
+    try:
+        root.relative_to(paths.agent_root.resolve())
+    except ValueError:
+        return {"ok": False, "error": "git repository root is outside agent root"}
 
     path_specs = payload.get("paths", [])
     if path_specs is None:
@@ -161,6 +174,7 @@ def run_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     status_lines = [line for line in status_out.splitlines() if line.strip()]
 
     result: dict[str, Any] = {
+        "repo_root": paths.to_agent_relative(root),
         "ok": True,
         "branch": branch_out.strip(),
         "status_lines": status_lines,

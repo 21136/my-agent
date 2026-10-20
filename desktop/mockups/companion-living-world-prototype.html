@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f6f5fb" />
+  <title>小魔王的生活世界 · 原型</title>
+  <link rel="stylesheet" href="./companion-living-world-prototype.css" />
+</head>
+<body>
+  <div class="prototype-shell">
+    <aside class="icon-rail" aria-label="工作台">
+      <div class="brand-mark" aria-label="My Agent">m</div>
+      <nav class="rail-links" aria-label="工作台导航">
+        <button class="rail-link" type="button">当下</button>
+        <button class="rail-link" type="button">文档</button>
+        <button class="rail-link is-current" type="button" aria-current="page">项目</button>
+        <button class="rail-link" type="button">设置</button>
+        <button class="rail-link" type="button">听歌</button>
+      </nav>
+      <div class="rail-bottom"><span class="connection-dot"></span><span>本地</span></div>
+    </aside>
+
+    <aside class="workbench-sidebar" aria-label="当前工作区">
+      <div class="sidebar-heading">
+        <span class="eyebrow">当前工作区</span>
+        <strong>项目工作台</strong>
+      </div>
+      <div class="sidebar-divider"></div>
+      <div class="session-heading">
+        <span class="eyebrow">最近会话</span>
+        <span class="subtle-count">03</span>
+      </div>
+      <button class="session-row is-selected" type="button">
+        <span class="session-mark"></span>
+        <span><strong>生活世界 · 入口原型</strong><small>刚刚 · 当前会话仍在这里</small></span>
+      </button>
+      <button class="session-row" type="button">
+        <span class="session-mark"></span>
+        <span><strong>聊天气泡改版</strong><small>昨天 · 继续上次的话题</small></span>
+      </button>
+      <button class="session-row" type="button">
+        <span class="session-mark"></span>
+        <span><strong>桌面音乐面板</strong><small>10 月 17 日</small></span>
+      </button>
+      <div class="sidebar-spacer"></div>
+      <div class="companion-entry-wrap">
+        <span class="eyebrow">你的伙伴</span>
+        <button class="companion-entry" type="button" aria-current="page">
+          <img src="../pet-assets/avatar/pet-idle.webp" alt="" />
+          <span class="companion-entry-copy"><strong>小魔王</strong><small>生活世界</small></span>
+          <span class="entry-arrow" aria-hidden="true">↗</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="world-app" data-time="evening" data-location="harbor">
+      <header class="topbar">
+        <div class="topbar-crumb"><span>项目工作台</span><span class="crumb-slash">/</span><strong>小魔王的世界</strong></div>
+        <div class="topbar-actions">
+          <span class="local-state"><i></i>只在这台设备继续</span>
+          <button class="back-to-chat" type="button" data-action="return-chat">回到聊天 <span aria-hidden="true">↗</span></button>
+        </div>
+      </header>
+
+      <div class="world-page">
+        <section class="page-intro">
+          <div>
+            <p class="eyebrow intro-eyebrow">她的生活，也有自己的方向</p>
+            <h1>她不只是在等你。</h1>
+            <p class="intro-copy">她有自己的日常和小目标；你们一起经历的事，也会慢慢留在这个世界里。</p>
+          </div>
+          <div class="day-stamp"><span class="day-light" aria-hidden="true"></span><span id="day-label">今天 · 10 月 19 日</span></div>
+        </section>
+
+        <nav class="place-nav" aria-label="世界中的地点">
+          <div class="place-nav-label">她常去的地方</div>
+          <div class="place-list">
+            <button type="button" class="place-button" data-location="home" aria-pressed="false"><span class="place-index">01</span><span>她的小窝</span></button>
+            <button type="button" class="place-button is-active" data-location="harbor" aria-pressed="true"><span class="place-index">02</span><span>旧城区</span></button>
+            <button type="button" class="place-button" data-location="beyond" aria-pressed="false"><span class="place-index">03</span><span>更远的地方</span></button>
+          </div>
+          <div class="place-nav-note">世界会随着时间往前，不用打卡</div>
+        </nav>
+
+        <div class="world-grid">
+          <section class="story-stage" aria-labelledby="scene-title">
+            <div class="stage-topline">
+              <span class="stage-overline"><span class="stage-live-dot"></span><span id="scene-location">旧城区 · 音像店</span></span>
+              <div class="time-switch" role="group" aria-label="切换世界时段">
+                <button type="button" data-time="day" aria-pressed="false">白天</button>
+                <button type="button" class="is-active" data-time="evening" aria-pressed="true">傍晚</button>
+              </div>
+            </div>
+            <div class="scene-copy">
+              <p class="scene-kicker">她自己的生活</p>
+              <h2 id="scene-title">雨停了，她找到一张<br />很合心意的旧唱片。</h2>
+              <p id="scene-description">街灯刚亮起来。她本来只是路过音像店，最后还是在唱片架前多待了一会儿——今晚想听点什么，她已经有主意了。</p>
+              <div class="scene-caption"><span class="caption-rule"></span><span>一段不需要你完成的日常</span></div>
+            </div>
+            <div class="stage-character" aria-label="小魔王正在自己的世界里活动">
+              <span class="character-orbit orbit-one"></span>
+              <span class="character-orbit orbit-two"></span>
+              <img src="../pet-assets/avatar/pet-idle.webp" alt="小魔王" />
+              <span class="character-shadow"></span>
+            </div>
+            <div class="stage-footer">
+              <div class="weather-note"><span class="weather-line"></span><span id="weather-label">雨后的风，带一点唱片店的木头香</span></div>
+              <span class="scene-time" id="scene-time">18:20</span>
+            </div>
+          </section>
+
+          <section class="story-column" aria-label="生活记录">
+            <div class="column-heading">
+              <div>
+                <p class="eyebrow">持续发生的故事</p>
+                <h2>两条生活线</h2>
+              </div>
+              <span class="story-count" id="story-count">03</span>
+            </div>
+            <div class="lane-switch" role="tablist" aria-label="选择生活线">
+              <button type="button" class="lane-tab is-active" role="tab" aria-selected="true" data-lane="personal">她自己的</button>
+              <button type="button" class="lane-tab" role="tab" aria-selected="false" data-lane="shared">我们一起的</button>
+            </div>
+
+            <div class="event-list" data-event-list="personal" role="tabpanel">
+              <article class="event-row is-current">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>18:20 · 现在</time><h3>带回一张旧唱片</h3><p>她想把它放进今晚的小电台。</p></div>
+              </article>
+              <article class="event-row">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>15:40</time><h3>把没听完的书签好</h3><p>读到喜欢的段落，就先停在这里。</p></div>
+              </article>
+              <article class="event-row">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>今早</time><h3>给窗边的植物换了位置</h3><p>她觉得那里今天会有更好的光。</p></div>
+              </article>
+            </div>
+
+            <div class="event-list is-hidden" data-event-list="shared" role="tabpanel" hidden>
+              <article class="event-row is-current">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>最近 · 一起留下的</time><h3>我们把聊天气泡重新设计了一遍</h3><p>文字变长也要舒服，细节还可以继续打磨。</p></div>
+              </article>
+              <article class="event-row">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>之前</time><h3>决定让听歌留在项目里面</h3><p>不用跳出去开另一个窗口。</p></div>
+              </article>
+              <article class="event-row">
+                <span class="event-marker"></span>
+                <div class="event-content"><time>一直以来</time><h3>工作台变成了我们一起住过的地方</h3><p>每次讨论、取舍和完成，都会改变这里。</p></div>
+              </article>
+            </div>
+
+            <div class="share-nudge" id="share-nudge">
+              <span class="nudge-mark" aria-hidden="true">✳</span>
+              <div class="nudge-copy"><strong>她有件小事想告诉你</strong><span>现在不想聊也没关系，它会安静留在这里。</span></div>
+              <button type="button" class="nudge-action" data-action="return-chat" aria-label="回到聊天，稍后再说">聊聊</button>
+            </div>
+          </section>
+        </div>
+
+        <footer class="world-controls">
+          <p>这个世界不靠提醒证明存在，也不会因为你忙了一阵就责怪你。</p>
+          <div class="control-actions">
+            <button type="button" class="quiet-control" data-action="mute" aria-pressed="false">静音主动分享</button>
+            <button type="button" class="quiet-control" data-action="pause" aria-pressed="false">暂停世界</button>
+          </div>
+        </footer>
+      </div>
+      <div class="toast" role="status" aria-live="polite" hidden></div>
+    </main>
+  </div>
+
+  <script>
+    const sceneCopy = {
+      home: {
+        place: "她的小窝 · 窗边", title: "她把一首歌\n听了三遍。", description: "窗外的光慢慢移过桌面。她没急着做下一件事，只是把喜欢的那一段又放了一遍。", weather: "安静的下午，光落在唱片封面上", time: "16:05"
+      },
+      harbor: {
+        place: "旧城区 · 音像店", title: "雨停了，她找到一张\n很合心意的旧唱片。", description: "街灯刚亮起来。她本来只是路过音像店，最后还是在唱片架前多待了一会儿——今晚想听点什么，她已经有主意了。", weather: "雨后的风，带一点唱片店的木头香", time: "18:20"
+      },
+      beyond: {
+        place: "更远的地方 · 夜行列车", title: "她在地图上\n圈下一个想去的地方。", description: "车窗外的灯火一站一站向后退。她还没决定什么时候出发，但已经开始想象抵达之后会遇见什么。", weather: "夜色很深，远处还有灯亮着", time: "21:10"
+      }
+    };
+    const stage = document.querySelector(".world-app");
+    const toast = document.querySelector(".toast");
+    let toastTimer;
+    const showToast = (message) => {
+      toast.textContent = message;
+      toast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 2600);
+    };
+    const today = new Date();
+    document.querySelector("#day-label").textContent = `今天 · ${today.getMonth() + 1} 月 ${today.getDate()} 日`;
+
+    document.querySelectorAll(".place-button[data-location]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const location = button.dataset.location;
+        const copy = sceneCopy[location];
+        if (!copy) return;
+        stage.dataset.location = location;
+        document.querySelectorAll(".place-button").forEach((item) => {
+          const selected = item === button;
+          item.classList.toggle("is-active", selected);
+          item.setAttribute("aria-pressed", String(selected));
+        });
+        document.querySelector("#scene-location").textContent = copy.place;
+        document.querySelector("#scene-title").textContent = copy.title;
+        document.querySelector("#scene-description").textContent = copy.description;
+        document.querySelector("#weather-label").textContent = copy.weather;
+        document.querySelector("#scene-time").textContent = copy.time;
+      });
+    });
+
+    document.querySelectorAll("[data-time]").forEach((button) => {
+      if (button.tagName !== "BUTTON") return;
+      button.addEventListener("click", () => {
+        const time = button.dataset.time;
+        stage.dataset.time = time;
+        document.querySelectorAll(".time-switch button").forEach((item) => {
+          const selected = item === button;
+          item.classList.toggle("is-active", selected);
+          item.setAttribute("aria-pressed", String(selected));
+        });
+        if (stage.dataset.location === "harbor") {
+          document.querySelector("#scene-location").textContent = time === "day" ? "旧城区 · 午后" : sceneCopy.harbor.place;
+          document.querySelector("#scene-time").textContent = time === "day" ? "14:35" : sceneCopy.harbor.time;
+          document.querySelector("#weather-label").textContent = time === "day" ? "云层散开了一些，街上还留着雨水" : sceneCopy.harbor.weather;
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-lane]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const lane = button.dataset.lane;
+        document.querySelectorAll(".lane-tab").forEach((item) => {
+          const selected = item === button;
+          item.classList.toggle("is-active", selected);
+          item.setAttribute("aria-selected", String(selected));
+        });
+        document.querySelectorAll("[data-event-list]").forEach((list) => {
+          const selected = list.dataset.eventList === lane;
+          list.hidden = !selected;
+          list.classList.toggle("is-hidden", !selected);
+        });
+        document.querySelector("#story-count").textContent = lane === "personal" ? "03" : "03";
+        document.querySelector("#share-nudge").hidden = lane !== "personal";
+      });
+    });
+
+    document.querySelectorAll("[data-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.action;
+        if (action === "return-chat") {
+          showToast("原型演示：正式版会回到原有聊天，不会自动发送消息。");
+          return;
+        }
+        if (action === "pause" || action === "mute") {
+          const enabled = button.getAttribute("aria-pressed") !== "true";
+          button.setAttribute("aria-pressed", String(enabled));
+          button.classList.toggle("is-enabled", enabled);
+          if (action === "pause") {
+            button.textContent = enabled ? "继续世界" : "暂停世界";
+            showToast(enabled ? "世界已暂停；不会有负面影响。" : "世界会在你回来时继续。");
+          } else {
+            button.textContent = enabled ? "开启主动分享" : "静音主动分享";
+            showToast(enabled ? "主动分享已静音。" : "主动分享已恢复。");
+          }
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+

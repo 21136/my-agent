@@ -2729,6 +2729,45 @@
   flex-shrink: 0;
   opacity: 0.55;
 }
+.sidebar-turn-summary-details {
+  max-height: 10rem;
+  overflow: auto;
+  margin: 0 0.75rem 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border-left: 2px solid color-mix(in srgb, var(--ma-accent) 40%, var(--ma-border));
+}
+.sidebar-turn-summary-details > ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.sidebar-turn-summary-item {
+  border-left: 2px solid var(--ma-border);
+  padding: 0.15rem 0.35rem;
+  font-size: 0.7rem;
+  color: var(--ma-text-muted);
+}
+.sidebar-turn-summary-item.is-failed { border-left-color: #c44; }
+.sidebar-turn-summary-item.is-passed { border-left-color: #2a8; }
+.sidebar-turn-summary-item.is-blocked,
+.sidebar-turn-summary-item.is-timeout { border-left-color: #d98b24; }
+.sidebar-turn-summary-row { display: flex; justify-content: space-between; gap: 0.35rem; }
+.sidebar-turn-summary-row strong { color: var(--ma-text); font-size: 0.7rem; }
+.sidebar-turn-summary-meta { display: block; margin-top: 0.1rem; color: var(--ma-text-muted); font-size: 0.66rem; }
+.sidebar-turn-summary-paths { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.15rem; }
+.sidebar-turn-summary-paths code,
+.sidebar-turn-summary-failures code { font-family: var(--ma-mono); font-size: 0.66rem; overflow-wrap: anywhere; }
+.sidebar-turn-summary-diff { margin-top: 0.1rem; font-size: 0.68rem; }
+.sidebar-turn-summary-failures { padding: 0.15rem 0 0 0.8rem; margin: 0.15rem 0 0; }
+.sidebar-turn-summary-failures li { overflow-wrap: anywhere; }
+.sidebar-turn-summary-failures li span { display: block; }
+.sidebar-turn-summary-actions { display: flex; gap: 0.3rem; margin-top: 0.2rem; }
+.sidebar-turn-summary-link { border: 0; padding: 0; background: transparent; color: var(--ma-accent); font: inherit; cursor: pointer; }
+.sidebar-turn-summary-omitted,
+.sidebar-turn-summary-empty { padding: 0.2rem 0.35rem; color: var(--ma-text-muted); font-size: 0.68rem; }
 
 .sidebar-adopted-banner {
   border-color: #3d8b5a;
@@ -3831,6 +3870,12 @@
 }
 
 .unified-process.is-jump-target {
+  outline: 2px solid color-mix(in srgb, var(--ma-accent) 70%, white);
+  outline-offset: 2px;
+  animation: unified-process-jump 1.2s ease;
+}
+.unified-tool-line.is-jump-target {
+  border-radius: 6px;
   outline: 2px solid color-mix(in srgb, var(--ma-accent) 70%, white);
   outline-offset: 2px;
   animation: unified-process-jump 1.2s ease;

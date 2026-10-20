@@ -1,6 +1,6 @@
 # Agent 工具体验路线图（Codex / Cursor 对齐）
 
-> 版本 **0.1.8** · 2026-09-08 · 状态：**P0 终端会话、Git 文件级回退和结构化测试已进入 active；原子编辑仍为 experimental，终端会话 UI 已完成设计**
+> 版本 **0.1.9** · 2026-10-20 · 状态：**P0 终端会话 M0/M1 UI、Git 文件级回退、结构化测试和本回合证据摘要已实现；原子编辑仍为 experimental**
 > 关联：[CURSOR-ALIGN.md](./CURSOR-ALIGN.md) · [CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) · [TASKS.md](./TASKS.md)
 
 ## 0. 目标与边界
@@ -144,7 +144,7 @@ OpenHands/Aider/Continue/Cline/Goose/SWE-agent 的调研结论只作为每一阶
 
 **当前实现切片（IT-6201）**：会话目录位于 `data/interactive-terminals/<session_id>/`，worker 通过 request/response JSON 文件与工具调用通信，输出保留在有上限的合并 PTY 流日志中。为保证跨调用 attach/resume，`run_evolved` 在长期存活的 agent/server 进程内直接托管该工具，worker 不再挂在短命 evolved wrapper 下；直接执行 `main.py` 或一次性 CLI 进程不能提供跨进程持久保证。`read` 使用逻辑字节游标；日志淘汰后返回 `cursor_reset`。PTY 的潜在阻塞读取由 reader 线程隔离，主 worker 仍可处理 `input`、`signal` 和 `close`。请求在 session lock 内分配单调序号，按序处理。Windows 输入将 LF 规范化为 CRLF；`signal=eof` 发送 Ctrl-D 输入约定，具体程序是否将其解释为 EOF 由目标控制台程序决定。缺少 `pywinpty` 时状态为 `unsupported`，不会伪装成可用会话。worker 消失后，`status/list` 会尝试按已记录的 PTY PID 清理进程树，并将清理结果写入状态；状态读写对 Windows 文件占用做了重试和串行化。
 
-当前仍未完成：ConPTY/版本兼容矩阵、服务重启后的主动恢复，以及 Terminal/Desktop 专用消费端接入。桌面端的终端会话可见性设计见 [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md)，实现仍是后续 T-6225。孤儿清理目前是 best-effort，不能替代带进程身份校验的完整恢复方案；宿主进程不可用时返回 `lost`，不伪装成持久会话。
+当前仍未完成：ConPTY/版本兼容矩阵、服务重启后的主动恢复，以及 Terminal/Desktop 专用消费端接入。桌面端的终端会话可见性 M0/M1 已实现，见 [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md)（T-6225 done）。当前 `turn.evidence` 已按 `run_id` 关联，并在项目侧栏提供折叠的本回合摘要；服务重启后的终端恢复和端到端 run evidence 归档仍是后续收口项。孤儿清理目前是 best-effort，不能替代带进程身份校验的完整恢复方案；宿主进程不可用时返回 `lost`，不伪装成持久会话。
 
 ### 3.2 结构化原子编辑 `patch_file` v2
 
@@ -165,7 +165,7 @@ OpenHands/Aider/Continue/Cline/Goose/SWE-agent 的调研结论只作为每一阶
 
 **当前实现切片（IT-6202）**：保留旧的 `start_line`/`end_line`/`find`/`replacement` 调用；新增 `hunks`（以及兼容别名 `replacements`），每个 hunk 使用唯一 `find` 锚点并在内存中按顺序应用。目标文件读取后可用 SHA-256 `base_hash` 做冲突检查；成功写盘返回 `base_hash`、`result_hash` 和 `patch_id`，并向 `data/patch-ledger.jsonl` 追加记录。显式或自动 `patch_id` 的重复请求在文件哈希仍为上次结果时幂等跳过；按目标文件锁串行化读、写和 ledger 记录。`dry_run` 只计算结果，不写文件和 ledger；二进制、非 UTF-8、超限结果和任一失败 hunk 均拒绝。
 
-本切片尚未接入 `python-unidiff`，也没有跨文件事务：只保证单文件原子落盘，后续多文件调用仍由上层逐文件处理。写盘成功但 ledger 持久化失败会明确返回错误，文件可能已经改变，调用方必须重新读取并核对 hash；这也是保持 `experimental` 的原因。
+本切片尚未接入 `python-unidiff`，也没有跨文件事务：只保证单文件原子落盘，后续多文件调用仍由上层逐文件处理。写盘成功但 ledger 持久化失败会返回 `write_state=applied_unledgered`，明确说明文件已改变、ledger 未记录；调用方须重新读取并核对 hash，禁止盲目重试。这也是保持 `experimental` 的原因。
 
 **实现契约**：多文件请求按“每个文件原子化、整体结果可部分成功”实现，是否提供跨文件事务必须另行决策，不能暗示自动回滚所有文件；LF/CRLF 规范化沿用现有写盘约定，不得因 patch 放大换行。二进制文件默认拒绝。相同 `patch_id` 的重试必须可识别并避免重复应用；`patch_id` 需持久化到可审计日志。`base_hash` 是文件内容/版本冲突校验，不能与 `plan_patch` 的提案基线或采纳队列状态混为一谈。
 

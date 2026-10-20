@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小魔王 · 长回复阅读版式</title>
+<link rel="icon" href="data:,">
+<style>
+:root{color-scheme:light;--bg:#f6f5fb;--text:#1b192e;--muted:#64607d;--faint:#7b7794;--accent:#5b50e6;--edge:#9486bf;--border:rgb(91 80 160 / .11);--user:linear-gradient(145deg,#eef2ff 0%,#e6e2ff 52%,#f3f0fc 100%);--paper:linear-gradient(165deg,#fff 0%,#f9f7ff 55%,#f3f0ff 100%);font-family:"Inter","Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;color:var(--text)}
+*{box-sizing:border-box} [hidden]{display:none!important}
+body{margin:0;background:#edecf3} button{font:inherit}
+.page{max-width:1120px;margin:auto;padding:28px 24px 24px}
+.page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:20px}
+h1{font-size:24px;letter-spacing:-.035em;line-height:1.4;margin:0 0 7px;font-weight:700}
+.intro{font-size:13px;color:var(--muted);line-height:1.8;margin:0;max-width:660px}
+.preview-note{font-size:11px;color:var(--faint);flex:none;padding-top:8px}
+.toolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+.control-group{display:flex;gap:4px;padding:4px;border-radius:11px;background:#e3e1ed;max-width:100%;flex-wrap:wrap}
+button{background:transparent;border:0;border-radius:8px;font-size:12px;color:var(--muted);padding:8px 13px;cursor:pointer;line-height:1.6}
+button[aria-pressed="true"]{background:#fff;color:var(--text);box-shadow:0 2px 5px rgb(27 25 46 / .07)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.frame{border:1px solid rgb(91 80 160 / .14);border-radius:18px;background:var(--bg);overflow:hidden;box-shadow:0 4px 18px rgb(27 25 46 / .025)}
+.frame-head{padding:16px 24px;border-bottom:1px solid var(--border);background:#faf9fd;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.frame-head h2{font-size:14px;font-weight:650;margin:0;line-height:1.6}
+.frame-head p{margin:3px 0 0;font-size:11px;line-height:1.8;color:var(--faint)}
+.frame-hint{font-size:11px;color:var(--faint);white-space:nowrap}
+.chat{padding:30px 35px 38px;background:radial-gradient(ellipse 85% 35% at 100% 0%,rgb(91 80 230 / .055),transparent 58%),var(--bg)}
+.turn{margin-bottom:30px}.turn:last-child{margin-bottom:0}
+.pet-turn{display:flex;align-items:flex-start;gap:14px}
+.avatar{width:44px;height:44px;object-fit:cover;border-radius:13px;flex:none;border:1px solid #c6b2ff;box-shadow:0 2px 8px rgb(91 80 230 / .14)}
+.pet-content{min-width:0;flex:1}
+.speaker{display:flex;align-items:center;gap:8px;height:24px;margin-bottom:7px;color:#8064fb;font-size:12px;font-weight:600}
+.status{font-size:10px;font-weight:500;padding:2px 7px;line-height:16px;border:1px solid #cdbdff;border-radius:999px;background:#eee6ff}
+.signature{display:none}
+.bubble,.reading-turn{font-size:16px;line-height:1.85;overflow-wrap:anywhere}
+.bubble{position:relative;isolation:isolate}
+.assistant.bubble{padding:19px 22px 21px;border:1.5px solid var(--edge);border-radius:22px 22px 22px 5px;background:var(--paper);box-shadow:4px 5px 0 #dad1ef;max-width:760px;width:fit-content}
+.assistant.bubble::before{content:"";position:absolute;left:-10px;top:19px;width:16px;height:16px;background:#fefeff;border-left:1.5px solid var(--edge);border-bottom:1.5px solid var(--edge);transform:rotate(45deg);border-radius:0 0 0 3px;z-index:-1}
+.user-turn{display:flex;justify-content:flex-end;padding-left:58px}
+.user{width:fit-content;max-width:80%;padding:14px 18px 16px;border:1.5px solid var(--edge);border-radius:20px 5px 20px 20px;background:var(--user);box-shadow:-4px 5px 0 #d7cbed}
+p{margin:0 0 15px} p:last-child{margin-bottom:0} strong{font-weight:650}
+blockquote{margin:18px 0;padding:10px 15px 11px 18px;border:0;border-left:3px solid #a18dc9;background:rgb(255 255 255 / .4);color:var(--muted)}
+h3{font-size:17px;font-weight:650;line-height:1.6;margin:25px 0 11px;letter-spacing:-.015em}
+ul,ol{padding-left:1.4em;margin:12px 0 18px}li{padding-left:3px;margin:7px 0}
+code{font-family:"Cascadia Code",Consolas,monospace;font-size:.88em}
+p code,li code{padding:2px 5px;background:rgb(91 80 230 / .07);border-radius:4px}
+pre{margin:16px 0 22px;padding:17px 19px;overflow-x:auto;max-width:100%;background:#eeecf6;border:1px solid var(--border);border-radius:10px;line-height:1.75;white-space:pre;overflow-wrap:normal}
+pre code{white-space:pre;overflow-wrap:normal} pre:focus-visible,.table-wrap:focus-visible{outline:2px solid #ad9bcd;outline-offset:3px}
+.table-wrap{overflow-x:auto;max-width:100%;margin:16px 0 23px;border-block:1px solid #d9d3e6}
+table{border-collapse:collapse;width:100%;font-size:14px;text-align:left;min-width:540px}th,td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top}th{font-weight:600;background:rgb(255 255 255 / .4)}tr:last-child td{border:0}
+/* The long-message surface is intentionally not a card. The existing first
+   paragraph may form an opener; no new summary or heading is generated. */
+.adaptive .reading-turn{position:relative;max-width:760px;background:none;border:0;box-shadow:none;padding:0}
+.opening-bubble{position:relative;isolation:isolate;width:fit-content;max-width:100%;padding:15px 20px 17px;border:1.5px solid #a698c7;border-radius:18px 18px 18px 5px;background:var(--paper);box-shadow:3px 3px 0 #ded6ef}
+.opening-bubble::before{content:"";position:absolute;left:-8px;top:18px;width:13px;height:13px;background:#fefeff;border-left:1.5px solid #a698c7;border-bottom:1.5px solid #a698c7;transform:rotate(45deg);z-index:-1}
+.opening-bubble p{margin:0}
+.reading-body{padding:21px 22px 0;max-width:100%}
+.reading-body>p{margin:0 0 18px}.reading-body>:last-child{margin-bottom:0}
+.reading-body>h3:first-child{margin-top:0}
+.reading-body h3{display:flex;align-items:baseline;gap:10px}
+.reading-body h3::before{content:"";display:block;flex:0 0 11px;height:3px;border-radius:3px;background:#ad9bcd;align-self:center}
+.reading-body blockquote{margin:17px 0 23px;padding:4px 0 4px 18px;border-left:2px solid #b6a5d1;background:none;color:var(--muted)}
+.reading-body strong{font-weight:650}
+.no-opener .reading-body{padding-top:5px}
+.no-opener::before{content:"";position:absolute;left:0;top:10px;width:3px;height:25px;border-radius:3px;background:#b4a2d1}
+/* Long user messages keep their alignment and measure, but lose the large
+   filled rectangle. The short mark at the right carries direction, not a rail. */
+.adaptive .user.long-user{position:relative;border:1.5px solid transparent;background:none;box-shadow:none;border-radius:0;padding-top:12px;padding-bottom:12px;color:#454057}
+.adaptive .user.long-user::after{content:"";position:absolute;right:-1px;top:17px;width:3px;height:26px;border-radius:3px;background:#ad9bcd}
+.adaptive .turn.user-turn{margin-bottom:34px}
+.sample-notes{margin:16px 0 0;color:var(--faint);font-size:12px;line-height:1.9}
+@media(max-width:640px){.page{padding:22px 12px}.page-head{flex-direction:column;gap:5px;margin-inline:3px}h1{font-size:22px}.preview-note{padding:0}.toolbar{gap:9px}.control-group{gap:2px}button{padding:8px 10px}.frame-head{padding:15px 17px}.frame-hint{display:none}.chat{padding:25px 18px 30px 14px}.pet-turn{gap:11px}.avatar{width:34px;height:34px;border-radius:10px}.assistant.bubble{padding:17px 16px 18px;border-radius:18px 18px 18px 4px;box-shadow:3px 4px 0 #dad1ef}.user-turn{padding-left:45px}.user{max-width:96%;padding-inline:14px}.opening-bubble{padding:14px 15px 16px}.reading-body{padding:21px 8px 0 15px}.no-opener .reading-body{padding-top:5px}.reading-body blockquote{padding-left:13px}.turn{margin-bottom:26px}.bubble,.reading-turn{font-size:16px;line-height:1.85}h3{font-size:17px}pre{padding:14px;max-width:100%}.reading-body h3{gap:8px}}
+@media(prefers-reduced-motion:no-preference){button{transition:background .15s ease,box-shadow .15s ease}}
+</style>
+</head>
+<body>
+<main class="page">
+<header class="page-head"><div><h1>让气泡开口，让正文展开。</h1><p class="intro">短消息保留漫画对白；长回复不再是一整块装饰面板。小魔王、名字和发言位置不变。</p></div><span class="preview-note">仅气泡区域 · 静态设计稿</span></header>
+<div class="toolbar"><nav class="control-group" aria-label="示例内容"><button type="button" data-sample="original" aria-pressed="true">原对话</button><button type="button" data-sample="prose" aria-pressed="false">纯长文压力</button><button type="button" data-sample="technical" aria-pressed="false">代码与表格</button></nav><nav class="control-group" aria-label="排版方式"><button type="button" data-layout="adaptive" aria-pressed="true">新版排版</button><button type="button" data-layout="boxed" aria-pressed="false">整块气泡对照</button></nav></div>
+<section class="frame"><header class="frame-head"><div><h2 id="view-title">短消息有造型，长消息有版式</h2><p id="view-description">沿用原对话，不新增标题、不删正文；长回复保留原有首段作为开场。</p></div><span class="frame-hint">同内容 · 同字号 · 同宽度</span></header><div class="chat layout-view adaptive" data-view="adaptive"></div><div class="chat layout-view boxed" data-view="boxed" hidden></div></section>
+<p class="sample-notes" id="sample-note">正在展示截图中的原对话。可切换「整块气泡对照」观察同一内容；压力样例仅用于排版，不是新增模型输出。</p>
+</main>
+<template id="original">
+
+  <div class="turn pet-turn">
+    <img class="avatar" src="../public/pet-assets/avatar/pet-idle-still.webp" width="44" height="44" alt="小魔王头像">
+    <div class="pet-content"><div class="speaker"><svg class="signature" aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M4 10 2 3l6 4h4l6-4-2 7-6 7Z" fill="currentColor" opacity=".8"/></svg><span>小魔王</span><span class="status">追问</span></div>
+      <div class="bubble assistant"><p>如果面试官问：</p><blockquote>“你主要是前端，为什么简历里写了 Spring Boot、REST、Docker？后端做到什么程度？”</blockquote><p>请你用 <strong>30 秒</strong>回答，重点说清楚边界，不要把自己包装成后端开发。</p></div>
+    </div>
+  </div>
+  <div class="turn user-turn"><div class="bubble user">我定位是 前端实习：能独立交付 Vue/React 页面、状态、联调和上线。 Spring Boot / REST 主要来自 Music Dreamer——我负责用户端，按队友提供的接口文档用 Axios 联调，能看懂返回结构和常见状态码，简单接口或字段我会沟通，但表设计、核心业务、部署运维主要是队友。 Docker Compose 是 本地把前后端一起拉起来演示，会改 docker-compose 里的端口、环境变量，不是日常写 Java 服务。 边界：我能讲清请求从页面到接口怎么走、跨域和鉴权怎么配合；不能说我能独立扛 Spring 后端开发。投的是 Web 前端，后端是我协作栈里的 联调能力，不是第二职业。</div></div>
+  <div class="turn pet-turn">
+    <img class="avatar" src="../public/pet-assets/avatar/pet-idle-still.webp" width="44" height="44" alt="小魔王头像">
+    <div class="pet-content"><div class="speaker"><svg class="signature" aria-hidden="true" viewBox="0 0 20 20" fill="none"><path d="M4 10 2 3l6 4h4l6-4-2 7-6 7Z" fill="currentColor" opacity=".8"/></svg><span>小魔王</span><span class="status">搞定</span></div>
+      <div class="bubble assistant"><p><strong>这段边界讲得很稳，特别适合前端实习面试：主线明确是 Vue/React 页面、状态管理、接口联调和上线；Spring Boot 是协作联调经验，Docker Compose 是本地演示环境，不冒充后端主力。</strong></p><p>可以再压成面试口语版：</p><blockquote>我主要投前端实习，能独立完成 Vue/React 页面、状态管理、接口联调和上线。Music Dreamer 里我负责用户端，后端由队友负责；我会根据接口文档用 Axios 联调，能排查请求、响应、跨域和鉴权配合问题，但不把自己说成能独立承担 Spring Boot 后端。Docker Compose 主要用于本地联合启动和演示。</blockquote><p>下一题：<strong>你平时怎么和后端队友约定接口？如果联调时发现字段或响应格式和文档不一致，你会怎么处理？</strong></p></div>
+    </div>
+  </div>
+
+</template>
+<template id="prose">
+<div class="turn user-turn"><div class="bubble user">不用分点，也不用替我总结。就用几段连贯的文字讲清楚，我想看看长内容读起来是什么感觉。</div></div>
+<div class="turn pet-turn"><img class="avatar" src="../public/pet-assets/avatar/pet-idle-still.webp" width="44" height="44" alt="小魔王头像"><div class="pet-content"><div class="speaker"><span>小魔王</span><span class="status">搞定</span></div><div class="bubble assistant">
+<p>长回复最容易出现的问题，并不是字数本身，而是所有文字被同一个视觉容器锁在一起。短短两句话放进气泡时，轮廓、尾角和阴影会让人感到这是一个角色正在说话；当内容不断增长，这些装饰却不会产生新的阅读线索，只会沿着整块文字继续向下延伸。读者看到的是一张越来越大的卡片，而不是一段有起伏的交流。即使换了颜色，或者把圆角做得更精致，这个问题也仍然存在，因为真正需要改变的是长内容的承载方式，而不是给原来的外壳继续添加效果。</p>
+<p>因此，这一版不要求长内容必须带有标题，也不会为了做出层次而改写原句。假如回复本来就是连续的几段话，它仍然保持几段话的样子。界面负责控制行宽、行距和段落之间的距离，让眼睛能够轻松找到下一行，也能看出一个意思在哪里结束、另一个意思从哪里开始。这里的留白不是用来填满页面，而是给阅读提供明确的停顿。</p>
+<p>小魔王依然留在原来的位置。头像和名字告诉你这是谁的回答，开头保留的少量造型告诉你这段交流从这里开始，但这些标记不需要一路包围所有内容。与其让角色装饰铺满每一行，不如把角色感集中在说话的入口，再让正文安静地展开。这样既不会把它变成一篇与聊天无关的文章，也不会让一大段内容显得像一块厚重的面板。</p>
+<p>这里还有一个容易被忽略的细节：第一段并不总适合放进开场气泡。有时第一段本身就很长，如果仍然强行把它塞进去，只是把原先的大框问题缩小了一点，并没有真正解决。因此，这个预览不会自动生成摘要，也不会把第一段截断。首段过长时，内容从阅读区直接开始，用一个很短的边缘标记保留发言的起点。</p>
+<p>用户发来的长内容也需要同样的处理。短句可以是一枚轻巧的右侧气泡，长段文字则不必被大面积的填色覆盖。它仍然靠右、保持原有顺序，只把方向感留在局部细节上。这样在上下滚动时，整段对话不会被两个巨大的彩色矩形交替占据，角色的差异也不必完全依赖两种背景色。</p>
+<p>这不意味着所有回复都要变成相同的排版。短消息仍然适合保留鲜明的轮廓，引用仍然应该和正文有所区别，代码需要自己的等宽字体与横向滚动，表格也需要对齐的列。但这些都是根据内容本身已有的结构来安排，而不是为了让页面看起来丰富，给每个段落都再套上一张卡片。</p>
+<p>最后，判断这套设计是否合适，不应该只看开头两句话。需要把整段内容向下读完，看中间的段落是否仍然舒服，看结尾是否自然结束，也要在窄一些的窗口里检查换行。真正耐看的长回复，不是让所有地方都成为视觉重点，而是让人在读了很多行之后，仍然愿意继续读下去。</p>
+</div></div></div>
+</template>
+<template id="technical">
+<div class="turn user-turn"><div class="bubble user">如果回复里有列表、代码和表格，也按同一套样式排一下。</div></div>
+<div class="turn pet-turn"><img class="avatar" src="../public/pet-assets/avatar/pet-idle-still.webp" width="44" height="44" alt="小魔王头像"><div class="pet-content"><div class="speaker"><span>小魔王</span><span class="status">搞定</span></div><div class="bubble assistant">
+<p>可以。下面只是一份排版样例：正文、引用、代码和表格各自保留结构，不用一个大气泡把它们全部包起来。</p>
+<h3>先让正文保持连续</h3><p>普通段落继续沿同一条阅读线展开。标题提供层级，列表表达并列关系；不需要把每种内容再做成一张独立的卡片，也不改变它们原本出现的顺序。</p>
+<ul><li>小魔王的头像、名字和状态仍在发言开头。</li><li>正文不生成额外摘要，已有的强调与引用会被保留。</li><li>代码与宽表格在自己的区域内横向滚动，不撑破聊天区域。</li></ul>
+<blockquote>引用的重点是“这是另一段被引用的内容”，而不是在长回复内部再出现一个完整的装饰面板。</blockquote>
+<h3>代码保留自己的节奏</h3><p>下面的数据全部是静态示例，用来检验等宽字体、缩进和长行。</p>
+<pre tabindex="0" role="region" aria-label="代码示例，可横向滚动"><code>{
+  "example": "layout-only",
+  "message": {
+    "speaker": "小魔王",
+    "content": "保留原始内容与段落结构",
+    "longLine": "这是一条刻意保留的长行，用于检查代码块能否独立横向滚动，而不是挤压正文或让整个预览页面出现横向滚动。"
+  }
+}</code></pre>
+<h3>表格靠对齐，而不是靠大边框</h3><div class="table-wrap" tabindex="0" role="region" aria-label="表格示例，可横向滚动"><table><thead><tr><th>内容形态</th><th>展示方式</th><th>不做什么</th></tr></thead><tbody><tr><td>短消息</td><td>保留漫画式对白轮廓</td><td>不为一句话扩出整行卡片</td></tr><tr><td>长段落</td><td>开放式连续阅读区</td><td>不缩字，不截断，不默认折叠</td></tr><tr><td>引用与代码</td><td>保留原有内容结构</td><td>不新增模型没有写出的标题</td></tr><tr><td>宽表格</td><td>区域内横向滚动</td><td>不让整条消息撑破窗口</td></tr></tbody></table></div>
+<p>读到这里，发言仍然是一条完整的回复。没有把一个段落拆成一串小气泡，也没有用折叠按钮把长内容藏起来；改变的只是它在屏幕上的阅读方式。</p>
+</div></div></div>
+</template>
+<script>
+const state={sample:'original',layout:'adaptive'};
+const layoutNotes={adaptive:['短消息有造型，长消息有版式','不新增摘要或标题，不删减文字；有合适的原有首段时，保留为开场。'],boxed:['对照：把整段回复放进一个气泡','正文、字号和阅读宽度相同，仅恢复整块气泡的外壳。']};
+const sampleNotes={original:'正在展示截图中的原对话。可切换「整块气泡对照」观察同一内容；压力样例仅用于排版，不是新增模型输出。',prose:'纯长文压力样例：无标题、无列表，首段也很长。内容为本地排版示例，不是新增模型输出。',technical:'混合内容压力样例：标题、列表、引用、代码与宽表格。所有数据均为静态排版示例。'};
+function classify(message){return message.textContent.trim().length>260||!!message.querySelector('pre,table')||message.querySelectorAll(':scope > p').length>=5;}
+function render(){
+ for(const view of document.querySelectorAll('[data-view]')){
+  view.replaceChildren(document.getElementById(state.sample).content.cloneNode(true));
+  if(view.dataset.view==='adaptive'){
+   for(const user of view.querySelectorAll('.user')) if(classify(user))user.classList.add('long-user');
+   for(const reply of view.querySelectorAll('.assistant')){
+    if(!classify(reply))continue;
+    reply.classList.remove('bubble');reply.classList.add('reading-turn');
+    const body=document.createElement('div');body.className='reading-body';
+    const first=reply.firstElementChild;
+    if(first?.tagName==='P'&&first.textContent.trim().length<=160){const leading=document.createDocumentFragment();while(reply.firstChild&&reply.firstChild!==first)leading.append(reply.firstChild);const opening=document.createElement('div');opening.className='opening-bubble';opening.append(first);while(reply.firstChild)body.append(reply.firstChild);reply.append(leading,opening,body);}
+    else{reply.classList.add('no-opener');while(reply.firstChild)body.append(reply.firstChild);reply.append(body);}
+   }
+  }
+  view.hidden=view.dataset.view!==state.layout;
+ }
+ document.getElementById('view-title').textContent=layoutNotes[state.layout][0];
+ document.getElementById('view-description').textContent=layoutNotes[state.layout][1];
+ document.getElementById('sample-note').textContent=sampleNotes[state.sample];
+ for(const button of document.querySelectorAll('[data-sample]'))button.setAttribute('aria-pressed',String(button.dataset.sample===state.sample));
+ for(const button of document.querySelectorAll('button[data-layout]'))button.setAttribute('aria-pressed',String(button.dataset.layout===state.layout));
+}
+for(const button of document.querySelectorAll('button[data-sample]'))button.addEventListener('click',()=>{state.sample=button.dataset.sample;render();});
+for(const button of document.querySelectorAll('button[data-layout]'))button.addEventListener('click',()=>{state.layout=button.dataset.layout;render();});
+render();
+</script>
+</body>
+</html>
+
+

@@ -223,7 +223,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6222 | P0 开源适配评估 | T-6201～T-6204 · T-6221 | pywinpty/ConPTY、unidiff、Git CLI、JUnit XML/pytest-json-report 逐项完成兼容性和最小回归后再编码 | **in_progress**（pywinpty 适配和缺依赖退化已落地；其余组件待评估） |
 | T-6223 | P1 开源适配评估 | T-6205～T-6208 · T-6221 | Pyright/Tree-sitter/Playwright/LSP 逐项完成许可证、版本、资源隔离和退化路径评估 | todo |
 | T-6224 | 交互终端 UI 设计 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) | 状态真源、列表/详情、输出 cursor、重连、关闭权限和 M0/M1 验收写清 | **doc** |
-| T-6225 | 交互终端 UI 实现 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · `server.py` · `project-panel.ts` | S-6224-a～h；用户可见运行中终端、退出/丢失原因、输出和关闭动作 | todo |
+| T-6225 | 交互终端 UI 实现 | [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · `server.py` · `project-panel.ts` | S-6224-a～h；用户可见运行中终端、退出/丢失原因、输出和关闭动作 | **done**（M0/M1 实现见 INTERACTIVE-TERMINAL-UI §7） |
 | T-6230 | 执行生命周期收口 | [execution-lifecycle-design.md](./superpowers/specs/2026-09-11-execution-lifecycle-design.md) · `server.py` · Desktop / Terminal consumers | `queued/running/stopping` 可见；Stop 幂等；同一 `run_id` 唯一收尾；重复租约和取消竞态不留工作态 | **in_progress** |
 | IT-6230 | 执行生命周期回归 | `test_execution_lifecycle.py` · `test_turn_cancel.py` · `reduce-events.test.ts` | 状态机、乱序事件、重复 Stop、queued 取消、重复租约、Desktop/Terminal 收口 | **in_progress** |
 

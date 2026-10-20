@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import subprocess
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -140,6 +141,73 @@ class GitToolsTests(unittest.TestCase):
             self.assertIn("first changed", result.data["diff"])
             self.assertNotIn("second changed", result.data["diff"])
 
+    def test_snapshot_from_nested_working_dir_captures_entire_git_repository(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/git_snapshot",)) as paths:
+            repo_root = paths.workspace / "music"
+            nested_dir = repo_root / "api"
+            nested_dir.mkdir(parents=True)
+            _init_repo(repo_root)
+            root_file = repo_root / "README.md"
+            nested_file = nested_dir / "service.py"
+            root_file.write_text("base root\n", encoding="utf-8")
+            nested_file.write_text("base api\n", encoding="utf-8")
+            _git(repo_root, "add", ".")
+            _git(repo_root, "commit", "-m", "base")
+            root_file.write_text("changed root\n", encoding="utf-8")
+            nested_file.write_text("changed api\n", encoding="utf-8")
+
+            manifest_path = paths.evolve / "tools" / "coding" / "git_snapshot" / "tool.toml"
+            manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+            inputs = manifest["schema"]["input"]["properties"]
+            self.assertIn("working_dir", inputs)
+            self.assertIn("cwd", inputs)
+
+            result = run(
+                {
+                    "tool_name": "git_snapshot",
+                    "arguments": {
+                        "working_dir": "workspace/music/api",
+                        "include_diff": True,
+                    },
+                },
+                registry=ToolRegistry.load(paths),
+            )
+
+            self.assertTrue(result.ok, result.error)
+            self.assertEqual(result.data["repo_root"], "workspace/music")
+            self.assertIn("changed root", result.data["diff"])
+            self.assertIn("changed api", result.data["diff"])
+
+    def test_snapshot_nested_path_filters_are_relative_to_repository_root(self) -> None:
+        with temporary_agent_paths(copy_tool_dirs=("coding/git_snapshot",)) as paths:
+            repo_root = paths.workspace / "music"
+            nested_dir = repo_root / "api"
+            nested_dir.mkdir(parents=True)
+            _init_repo(repo_root)
+            root_file = repo_root / "README.md"
+            nested_file = nested_dir / "service.py"
+            root_file.write_text("base root\n", encoding="utf-8")
+            nested_file.write_text("base api\n", encoding="utf-8")
+            _git(repo_root, "add", ".")
+            _git(repo_root, "commit", "-m", "base")
+            root_file.write_text("selected root change\n", encoding="utf-8")
+            nested_file.write_text("omitted api change\n", encoding="utf-8")
+
+            result = run(
+                {
+                    "tool_name": "git_snapshot",
+                    "arguments": {
+                        "working_dir": "workspace/music/api",
+                        "paths": ["README.md"],
+                        "include_diff": True,
+                    },
+                },
+                registry=ToolRegistry.load(paths),
+            )
+
+            self.assertTrue(result.ok, result.error)
+            self.assertIn("selected root change", result.data["diff"])
+            self.assertNotIn("omitted api change", result.data["diff"])
     def test_restore_dry_run_and_worktree_restore_require_matching_hash(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("coding/git_restore",)) as paths:
             _init_repo(paths.agent_root)

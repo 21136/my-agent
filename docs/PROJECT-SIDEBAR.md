@@ -419,7 +419,7 @@ DOM（项目 perspective）：
 | **待拍板** | `.sidebar-footer .sidebar-change-banner` | SP-7 类型单槽：undo / 搭档忙 / **已采纳** / 外部修改 / 计划确认 …（**不含**待采纳堆叠） |
 | **待采纳堆叠** | `.sidebar-task-flow` 内 **新** `.sidebar-suggestion-stack` | SP-9：体 · 当前下；顶卡可操作；`N>1` peek；**从脚区迁出**（现状误放在 `#sidebar-change-banner`） |
 | **已采纳反馈** | `.sidebar-suggestion-stack.is-adopt-flash`（体）· `.sidebar-adopted-banner`（脚） | SP-10：中间队列 → 堆叠位 ~1.5s 绿闪再切顶卡；末条 / 无堆叠 → 脚区绿条 + 关闭 |
-| **本回合摘要** | **新** `.sidebar-turn-summary`（待建） | 数据来自 `turnEvidence` / 本回合 process；默认折叠一行；**移除**侧栏 `sidebar-turn-evidence` 明细列表 |
+| **本回合摘要** | `.sidebar-task-flow .sidebar-turn-summary` | 已实现：按 `run_id` 收集本回合工具、测试、差异与终端线索；默认折叠一行；**移除**旧式 `sidebar-turn-evidence` 明细列表 |
 | **服务** | `.sidebar-services` | 默认 `collapsed`；标题行可点展开；保留刷新/日志 |
 | **脚** | `.sidebar-footer` | `change-banner`（若有）+ `sidebar-icon-bar`；**不**展示 `#project-plan-card`（UX-024） |
 

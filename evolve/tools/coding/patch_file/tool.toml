@@ -1,6 +1,6 @@
 [tool]
 name = "patch_file"
-description = "改已有文本的默认方式：先 read_file，再用唯一 find 锚点。不要改用 write_text 整文件覆盖"
+description = "工具 active；稳定主路径为先 read_file、再对单一文件用唯一 find 锚点。v2 实验字段仅作用于单文件；write_state=applied_unledgered 表示文件已写入但 ledger 记录失败，须先复读核对，勿盲目重试。不是统一 diff 应用器，也不提供跨文件事务。"
 version = "2.0.0"
 status = "active"
 topics = ["coding"]
@@ -19,11 +19,11 @@ description = "相对 agent 根的文本文件路径"
 type = "string"
 [schema.input.properties.hunks]
 type = "array"
-description = "结构化多 hunk；每项为 {find: 唯一锚点, replacement: 新文本}"
+description = "实验性 v2：单文件结构化多 hunk；每项为 {find: 唯一锚点, replacement: 新文本}；不是 unified diff"
 items = { type = "object" }
 [schema.input.properties.replacements]
 type = "array"
-description = "hunks 的兼容别名"
+description = "hunks 的兼容别名；同为实验性 v2"
 items = { type = "object" }
 [schema.input.properties.start_line]
 type = "integer"
@@ -37,14 +37,14 @@ type = "string"
 description = "无行号时：替换首次出现的锚点子串（须唯一）"
 [schema.input.properties.base_hash]
 type = "string"
-description = "可选，目标文件当前内容的 SHA-256；不匹配时失败且不落盘"
+description = "实验性 v2：可选目标文件 SHA-256；不匹配时失败且不落盘"
 [schema.input.properties.patch_id]
 type = "string"
-description = "可选，幂等补丁 ID；重复提交同 ID 会返回 skipped，不重复写盘"
+description = "实验性 v2：可选幂等补丁 ID；重复提交同 ID 会返回 skipped，不重复写盘"
 [schema.input.properties.dry_run]
 type = "boolean"
 default = false
-description = "只校验并返回结果 hash，不落盘"
+description = "实验性 v2：只校验并返回结果 hash，不落盘"
 
 [schema.output]
 type = "object"
@@ -55,6 +55,10 @@ lines_changed = { type = "integer" }
 patch_id = { type = "string" }
 base_hash = { type = "string" }
 result_hash = { type = "string" }
+write_state = { type = "string", enum = ["not_applied", "applied", "applied_unledgered"] }
+applied = { type = "boolean" }
+ledger_recorded = { type = "boolean" }
+warning = { type = "string" }
 
 [policy]
 confirm = true

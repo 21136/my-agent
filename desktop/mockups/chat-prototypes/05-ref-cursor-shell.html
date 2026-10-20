@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>05 · Cursor 灰阶壳</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: Inter, "PingFang SC", system-ui, sans-serif; background: #111; color: #eee; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #a1a1aa; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #71717a; margin-bottom: 0.75rem; }
+    .proto-frame { --frame-bg: #fcfcfc; --frame-border: transparent; --sidebar-bg: #f4f4f5; }
+    .layout { display: flex; flex: 1; min-height: 0; }
+    .side { width: 200px; background: #f4f4f5; padding: 0.75rem; font-size: 0.75rem; color: #71717a; border-right: none; }
+    .side strong { color: #1a1a1a; display: block; margin-bottom: 0.5rem; }
+    .chat-col { background: #fcfcfc; color: #1a1a1a; }
+    .bubble-user { max-width: 80%; padding: 0.5rem 0.75rem; border-radius: 10px; background: #e4e4e7; font-size: 0.88rem; border: none; }
+    .bubble-bot { font-size: 0.9rem; line-height: 1.6; }
+    .composer-float {
+      margin: 0 1rem 1rem;
+      padding: 0.5rem 0.65rem;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 0 0 1px rgb(0 0 0 / 0.04), 0 4px 20px rgb(0 0 0 / 0.06);
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      font-size: 0.82rem;
+      color: #71717a;
+    }
+    .composer-float button { margin-left: auto; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 0.35rem 0.65rem; font: inherit; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>05 · Cursor 灰阶壳（shell-styles/07）</h1>
+  <p class="sub">几乎无边框；侧栏/主区靠 #f4f4f5 与 #fcfcfc 分层；消息无「你/助手」分割线。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar" style="background:#fcfcfc;color:#71717a;border:none">Agent · GPT-6 Luna</div>
+    <div class="layout">
+      <div class="side"><strong>Chats</strong>新会话<br/>自我介绍<br/>music</div>
+      <div class="chat-col" id="chat" style="display:flex;flex-direction:column"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    const chat = document.getElementById("chat");
+    chat.innerHTML = `
+      <div style="flex:1;padding:1rem;overflow:auto">
+        <div class="row-user"><div class="bubble-user">${s.user}</div></div>
+        <div class="bubble-bot md" style="margin-top:0.75rem">${s.assistantHtml}</div>
+      </div>
+      <div class="composer-float"><span>Plan, @ for context, / for commands</span><button>发送</button></div>
+    `;
+  </script>
+</body>
+</html>

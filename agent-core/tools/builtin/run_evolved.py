@@ -118,6 +118,7 @@ def run(
     paths: AgentPaths | None = None,
     allowed_tools: set[str] | None = None,
     cancel_event: threading.Event | None = None,
+    current_project_id: str = "",
 ) -> ToolResult:
     """Invoke an evolved tool script with JSON stdin; wrap stdout in ToolResult."""
     _ = paths
@@ -201,6 +202,7 @@ def run(
             dry_run=dry_run,
             dry_run_explicit=dry_run_explicit,
             cancel_event=cancel_event,
+            bound_project_id=current_project_id,
         )
     except _EvolvedCancelledError:
         return _fail(
@@ -248,11 +250,15 @@ def execute_evolved_tool(
     dry_run: bool = False,
     dry_run_explicit: bool = True,
     cancel_event: threading.Event | None = None,
+    bound_project_id: str = "",
 ) -> dict[str, Any]:
     """Run ``tool`` entry script; return parsed JSON from stdout."""
     payload = dict(arguments)
     if dry_run_explicit:
         payload["dry_run"] = dry_run
+    if tool.name == "project_catalog":
+        # This private binding is overwritten by the executor and cannot be chosen by the model.
+        payload["_bound_project_id"] = bound_project_id.strip()
 
     # A persistent interactive terminal cannot be owned by this short-lived
     # evolved-tool subprocess on Windows: the host may reap its descendants

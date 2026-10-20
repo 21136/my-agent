@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>07 · Cursor 过程密度</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, "PingFang SC", system-ui, sans-serif; background: #111; color: #eee; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #a1a1aa; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #71717a; margin-bottom: 0.75rem; max-width: 50rem; }
+    .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; }
+    @media (max-width: 900px) { .row { grid-template-columns: 1fr; } }
+    .col {
+      background: #fcfcfc;
+      color: #1a1a1a;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #e4e4e7;
+      min-height: 420px;
+      display: flex;
+      flex-direction: column;
+    }
+    .col-hd { padding: 0.5rem 0.65rem; font-size: 0.72rem; font-weight: 700; background: #f4f4f5; border-bottom: 1px solid #e4e4e7; }
+    .col-bd { padding: 0.75rem; flex: 1; font-size: 0.82rem; line-height: 1.55; }
+    .u { text-align: right; margin-bottom: 0.5rem; }
+    .u span { display: inline-block; background: #e4e4e7; padding: 0.35rem 0.6rem; border-radius: 10px; max-width: 90%; }
+    .lead { font-weight: 600; margin-bottom: 0.35rem; }
+    .trace { color: #71717a; font-size: 0.72rem; margin: 0.2rem 0; }
+    .trace.one { display: none; }
+    .col.compact .trace.mid,
+    .col.compact .trace.det { display: none; }
+    .col.compact .trace.one { display: block; }
+    .col.balanced .trace.det { display: none; }
+    .pill { display: inline-block; margin-top: 0.35rem; padding: 0.2rem 0.5rem; border-radius: 999px; background: #f4f4f5; font-size: 0.68rem; color: #71717a; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>07 · Cursor Compact / Balanced / Detailed</h1>
+  <p class="sub">同一轮回复，仅工具痕迹量不同（<a href="https://cursor.com/changelog/3-4" style="color:#93c5fd">Changelog 3.4</a>）。解决「素」或「吵」不靠换色。</p>
+  <div class="row">
+    <div class="col compact">
+      <div class="col-hd">Compact</div>
+      <div class="col-bd">
+        <div class="u"><span>WS ACK 对账…</span></div>
+        <p class="lead">应对齐 clientMsgId 并超时重发。</p>
+        <div class="trace one">✓ 3 tools · 12s</div>
+      </div>
+    </div>
+    <div class="col balanced">
+      <div class="col-hd">Balanced</div>
+      <div class="col-bd">
+        <div class="u"><span>WS ACK 对账…</span></div>
+        <p class="lead">应对齐 clientMsgId 并超时重发。</p>
+        <div class="trace mid">✓ read_file resume.pdf</div>
+        <div class="trace mid">✓ grep Java 笔记</div>
+        <div class="trace mid">✗ explore · overloaded</div>
+        <span class="pill">过程 ▸</span>
+      </div>
+    </div>
+    <div class="col detailed">
+      <div class="col-hd">Detailed</div>
+      <div class="col-bd">
+        <div class="u"><span>WS ACK 对账…</span></div>
+        <p class="lead">应对齐 clientMsgId 并超时重发。</p>
+        <div class="trace det">思考 · 8s</div>
+        <div class="trace det">read_file workspace/_drops/…/resume.pdf · 1.2s</div>
+        <div class="trace det">grep pattern=Spring · 0.4s</div>
+        <div class="trace det">explore subagent · failed upstream</div>
+        <div class="trace det">retry LLM · 2.0s backoff</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

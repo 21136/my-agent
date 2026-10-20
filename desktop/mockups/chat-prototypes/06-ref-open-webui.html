@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>06 · Open WebUI Explored</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: system-ui, "PingFang SC", sans-serif; background: #0f172a; color: #e2e8f0; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #38bdf8; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.75rem; }
+    .proto-frame { --frame-bg: #1e293b; --frame-border: #334155; }
+    .chat-col { background: #1e293b; color: #f1f5f9; }
+    .bubble-user { max-width: 78%; padding: 0.5rem 0.8rem; border-radius: 12px; background: #334155; font-size: 0.88rem; }
+    .assistant-block { font-size: 0.9rem; line-height: 1.6; }
+    .explored {
+      margin: 0.65rem 0;
+      border: 1px solid #475569;
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 0.8rem;
+    }
+    .explored-hd {
+      width: 100%;
+      text-align: left;
+      padding: 0.45rem 0.65rem;
+      background: #0f172a;
+      border: none;
+      color: #94a3b8;
+      font: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .explored-hd strong { color: #e2e8f0; font-weight: 600; }
+    .explored-body { padding: 0.5rem 0.65rem; border-top: 1px solid #334155; background: #1e293b; }
+    .explored-body .row { padding: 0.25rem 0; color: #cbd5e1; font-family: ui-monospace, monospace; font-size: 0.75rem; }
+    .composer-mock .input { background: #0f172a; border: 1px solid #475569; color: #94a3b8; }
+    .composer-mock .send { background: #2563eb; color: #fff; }
+    .composer-mock { border-color: #334155; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>06 · Open WebUI（Explored 折叠组）</h1>
+  <p class="sub">连续 tool + thinking → 一行「Explored · read_file, grep…」；点开看逐步明细。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar">Open WebUI pattern</div>
+    <div class="proto-body">
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    document.getElementById("chat").innerHTML = `
+      <div class="row-user"><div class="bubble-user">${s.user}</div></div>
+      <div class="assistant-block md">
+        <p><strong>结论：</strong>应先对 pending clientMsgId 对账并重发，而不是只显示「发送中」。</p>
+        <div class="explored">
+          <button type="button" class="explored-hd" id="ex-btn">
+            <span>◇</span><strong>Explored</strong> read_file, grep, explore
+          </button>
+          <div class="explored-body hidden" id="ex-body">
+            ${s.toolSteps.map(t => `<div class="row">${t.ok ? "✓" : "✗"} ${t.label} · ${t.sub}</div>`).join("")}
+            <div class="row" style="color:#64748b">thought for 12s</div>
+          </div>
+        </div>
+        <p>模型 503 时后台自动重试 + 切 Flash，用户不必手动点重试。</p>
+      </div>
+      <div class="composer-mock"><div class="input">Send a Message</div><button class="send">发送</button></div>
+    `;
+    document.getElementById("ex-btn").onclick = () => document.getElementById("ex-body").classList.toggle("hidden");
+  </script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>03 · ChatGPT 参考</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: Inter, "PingFang SC", system-ui, sans-serif; background: #0d0d0d; color: #ececec; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #93c5fd; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #888; margin-bottom: 0.75rem; }
+    .proto-frame { --frame-bg: #ffffff; --frame-border: #333; --sidebar-bg: #f7f7f8; }
+    .chat-col { background: #fff; color: #0d0d0d; max-width: 640px; margin: 0 auto; }
+    .bubble-user {
+      max-width: 70%;
+      padding: 0.55rem 1rem;
+      border-radius: 22px;
+      background: #0d0d0d;
+      color: #fff;
+      font-size: 0.9rem;
+    }
+    .bubble-bot { font-size: 0.92rem; line-height: 1.65; padding: 0.25rem 0; }
+    .actions { display: flex; gap: 0.25rem; opacity: 0; transition: opacity 0.15s; font-size: 0.72rem; color: #888; }
+    .user-wrap:hover .actions { opacity: 1; }
+    .user-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; }
+    .composer-mock .input { background: #f4f4f4; border-radius: 22px; }
+    .composer-mock .send { background: #0d0d0d; color: #fff; border-radius: 22px; }
+    .composer-mock { border-color: #eee; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>03 · ChatGPT（assistant-ui 示例结构）</h1>
+  <p class="sub">用户高对比圆泡；助手纯文；Copy/Edit 仅 hover（示意）。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar" style="background:#fff;color:#666">ChatGPT-style · light</div>
+    <div class="proto-body" style="background:#fff">
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    document.getElementById("chat").innerHTML = `
+      <div class="user-wrap">
+        <div class="bubble-user">${s.user}</div>
+        <div class="actions">Copy · Edit</div>
+      </div>
+      <div class="bubble-bot md">${s.assistantHtml}</div>
+      <div class="composer-mock"><div class="input">Ask anything</div><button class="send">↑</button></div>
+    `;
+  </script>
+</body>
+</html>

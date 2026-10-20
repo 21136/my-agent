@@ -1,6 +1,6 @@
 [tool]
 name = "interactive_terminal"
-description = "交互式本地终端会话：start/input/read/signal/status/list/close；需要 stdin、增量输出、Ctrl-C 或 attach/resume 时使用。依赖 pywinpty 时启用 Windows PTY；依赖缺失返回 unsupported。"
+description = "交互式本地终端会话：start/input/read/signal/status/list/close；需要 stdin、增量输出、Ctrl-C 或 attach/resume 时使用。start.command 直接启动可执行文件，不自动套默认 shell；Windows 内置命令须用 cmd.exe /c ... 包装。依赖 pywinpty 时启用 Windows PTY；依赖缺失返回 unsupported。"
 version = "0.1.0"
 status = "active"
 topics = ["common"]
@@ -20,7 +20,7 @@ type = "string"
 description = "start 返回的会话 ID；除 start/list 外必填"
 [schema.input.properties.command]
 type = "string"
-description = "start 必填；要启动的交互式命令，例如 python -i 或 powershell"
+description = "start 必填；直接启动可执行文件/命令行，如 python -i 或 powershell；不自动经过 shell。Windows 内置命令须用 cmd.exe /c ... 包装。"
 [schema.input.properties.working_dir]
 type = "string"
 description = "start 的工作目录，相对 agent root；默认 agent root"

@@ -1,4 +1,4 @@
-import type { AgentWsClient } from "./api/ws";
+import type { AgentWsClient, CompanionWorldContextPayload } from "./api/ws";
 import type { FileDropHandle } from "./file-drop";
 import type { ChatSession } from "./shells/chat-state";
 import { userMessagePreview } from "./user-message";
@@ -25,6 +25,7 @@ export function wireComposerAttachments(options: {
     activeDoc?: string;
     activeDocSelection?: string;
     turnMode?: "agent" | "ask";
+    companionWorldContext?: CompanionWorldContextPayload;
   } | undefined;
 }): ComposerAttachmentWire {
   const { input, sendBtn, client, chat, fileDrop, onStatus, beforeSend, allowSend, messageOpts } = options;

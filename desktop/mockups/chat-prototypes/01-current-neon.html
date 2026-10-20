@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>01 · 当前 Neon Twin</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: "Segoe UI", "PingFang SC", system-ui, sans-serif; background: #1a1a22; color: #eee; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #93c5fd; text-decoration: none; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; }
+    .sub { font-size: 0.8rem; color: #9aa0a6; margin-bottom: 0.75rem; }
+    .proto-frame {
+      --frame-bg: #f6f5fb;
+      --frame-border: rgb(91 80 160 / 0.15);
+      --sidebar-bg: #edeaf6;
+      --composer-border: rgb(91 80 160 / 0.12);
+      --composer-placeholder: #64607d;
+    }
+    .chat-col { background: #f6f5fb; color: #1b192e; }
+    .turn-label { font-size: 0.72rem; font-weight: 600; color: #64607d; text-transform: uppercase; margin-bottom: 0.25rem; }
+    .bubble-user {
+      max-width: 72%;
+      padding: 0.55rem 0.85rem;
+      border-radius: 16px 16px 4px 16px;
+      background: #ebe8f4;
+      border: 1px solid rgb(91 80 160 / 0.15);
+      font-size: 0.88rem;
+    }
+    .row-user-wrap { margin-bottom: 0.75rem; text-align: right; }
+    .bubble-bot {
+      padding: 0.7rem 0.95rem;
+      border-radius: 6px 18px 18px 18px;
+      background: linear-gradient(135deg, #faf9ff, #fff);
+      border: 1px solid rgb(91 80 160 / 0.18);
+      box-shadow: 0 8px 20px rgb(40 40 90 / 0.07);
+      font-size: 0.88rem;
+    }
+    .pill { background: rgb(91 80 160 / 0.12); color: #5b50e6; }
+    .avatar { background: linear-gradient(135deg, #3d8bff, #8b5cf6); }
+    .pet-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+    .pet-name { font-size: 0.8rem; font-weight: 600; color: #5b50e6; margin-bottom: 0.25rem; }
+    .composer-mock .input { background: #fff; border: 1px solid rgb(91 80 160 / 0.15); }
+    .composer-mock .send { background: linear-gradient(135deg, #5a7ef0, #7c4fe0); color: #fff; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>01 · 当前 Neon Twin（线上近似）</h1>
+  <p class="sub">「你」标签 + 紫灰用户泡 + 助手标签 + pet 名 + 白玻璃泡 — 层次偏多。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar">小魔王的空间 · 亮色 · Flash</div>
+    <div class="proto-body">
+      <div class="proto-sidebar"></div>
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    document.getElementById("chat").innerHTML = `
+      <div class="row-user-wrap">
+        <div class="turn-label">你</div>
+        <div class="bubble-user">${s.user}</div>
+      </div>
+      <div class="turn-label">助手</div>
+      <div class="pet-row">
+        <div class="avatar"></div>
+        <div style="flex:1;min-width:0">
+          <div class="pet-name">小魔王 <span class="pill">探索</span></div>
+          <div class="bubble-bot md">${s.assistantHtml}</div>
+        </div>
+      </div>
+      <div class="composer-mock"><div class="input">有什么难缠的活儿…</div><button class="send">发送</button></div>
+    `;
+  </script>
+</body>
+</html>

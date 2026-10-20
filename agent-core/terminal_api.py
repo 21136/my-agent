@@ -204,14 +204,13 @@ def _terminal_close(
         raise TerminalApiError("terminal.close force must be boolean")
     force = raw_force
     status = module.interactive_terminal({"action": "status", "session_id": normalized_id})
-    if not isinstance(status, dict) or not status.get("ok"):
-        error = str(status.get("error") if isinstance(status, dict) else "terminal status unavailable")
+    if not isinstance(status, dict):
         return _event(
             "terminal.close.done",
             message,
             ok=False,
             session_id=normalized_id,
-            error=error,
+            error="terminal status unavailable",
         )
     session = _snapshot(status)
     if session is None:
@@ -220,7 +219,7 @@ def _terminal_close(
             message,
             ok=False,
             session_id=normalized_id,
-            error="terminal status is invalid",
+            error=str(status.get("error") or "terminal status is invalid"),
         )
     if session["state"] not in {"starting", "running"}:
         if bool(message.get("dismiss_if_inactive", False)):
@@ -243,6 +242,15 @@ def _terminal_close(
             session_id=normalized_id,
             session=session,
             error=f"session is not active: {session['state']}",
+        )
+    if not status.get("ok"):
+        return _event(
+            "terminal.close.done",
+            message,
+            ok=False,
+            session_id=normalized_id,
+            session=session,
+            error=str(status.get("error") or "terminal status unavailable"),
         )
     if not bool(message.get("user_initiated", False)):
         if confirm_fn is None:

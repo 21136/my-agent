@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>04 · Claude 参考</title>
+  <link rel="stylesheet" href="_shared-chat.css" />
+  <style>
+    body { margin: 0; font-family: Georgia, "PingFang SC", serif; background: #2b2a27; color: #ece8e0; padding: 1rem 1.25rem; }
+    .back { font-size: 0.82rem; color: #c96442; text-decoration: none; font-family: system-ui, sans-serif; }
+    h1 { font-size: 1.05rem; margin: 0.5rem 0 0.25rem; font-family: system-ui, sans-serif; }
+    .sub { font-size: 0.8rem; color: #a8a29e; margin-bottom: 0.75rem; font-family: system-ui, sans-serif; }
+    .proto-frame { --frame-bg: #F0ECE0; --frame-border: #E5E0D6; }
+    .chat-col { background: #F0ECE0; color: #2c2925; font-family: Georgia, "PingFang SC", serif; }
+    .bubble-user {
+      max-width: 75%;
+      padding: 0.5rem 0.85rem;
+      border-radius: 14px;
+      background: #E5E0D6;
+      font-size: 0.9rem;
+    }
+    .bubble-bot { font-size: 0.95rem; line-height: 1.7; }
+    .composer-mock { border-color: #E5E0D6; }
+    .composer-mock .input { background: #fff; border: 1px solid #E5E0D6; border-radius: 12px; box-shadow: none; }
+    .composer-mock .send { background: #c96442; color: #fff; border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 索引</a>
+  <h1>04 · Claude（assistant-ui 奶油主题）</h1>
+  <p class="sub">暖底、低对比用户泡、助手常无大边框泡、扁平输入框。</p>
+  <div class="proto-frame">
+    <div class="proto-topbar" style="background:#F0ECE0;color:#78716c;font-family:system-ui">Claude-style</div>
+    <div class="proto-body">
+      <div class="chat-col" id="chat"></div>
+    </div>
+  </div>
+  <script src="_samples.js"></script>
+  <script>
+    const s = CHAT_SAMPLE;
+    document.getElementById("chat").innerHTML = `
+      <div class="row-user"><div class="bubble-user">${s.user}</div></div>
+      <div class="bubble-bot md">${s.assistantHtml}</div>
+      <div class="composer-mock"><div class="input">Reply to Claude…</div><button class="send">发送</button></div>
+    `;
+  </script>
+</body>
+</html>

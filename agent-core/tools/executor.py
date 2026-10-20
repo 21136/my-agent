@@ -1027,7 +1027,17 @@ class ToolExecutor:
             if not label:
                 continue
             item = {"tool": label, "ok": bool(entry.get("ok"))}
-            for key in ("task_id", "ac_ids", "verify_ids"):
+            for key in (
+                "task_id",
+                "ac_ids",
+                "verify_ids",
+                "call_id",
+                "paths",
+                "test",
+                "terminal_session_id",
+                "terminal_state",
+                "diff_summary",
+            ):
                 if entry.get(key):
                     item[key] = entry[key]
             items.append(item)
@@ -1052,7 +1062,9 @@ class ToolExecutor:
             {
                 "armed_task_id": None,
                 "armed_task_text": None,
-                "items": items,
+                "items": items[-20:],
+                "total_count": len(items),
+                "omitted_count": max(0, len(items) - 20),
                 "gate_notice": None,
                 "reliability": {
                     "postcondition": postcondition,
@@ -1399,7 +1411,7 @@ class ToolExecutor:
         self._emit_event("tool.end", end_payload)
         if name == "read_file" and result.ok and end_note != "absent":
             self._maybe_record_memory_entity_used(args, result)
-        self._record_turn_evidence(name, args, result)
+        self._record_turn_evidence(name, args, result, call_id=call_id)
         self._maybe_emit_services_state_after_tool(name, args, result)
         self._update_exec_circuit(name, args, result)
         self._emit_turn_evidence()
@@ -2347,8 +2359,10 @@ class ToolExecutor:
         tool_name: str,
         arguments: dict[str, Any],
         result: ToolResult,
+        *,
+        call_id: str = "",
     ) -> None:
-        """Append this-turn tool outcome for the turn.evidence sidebar snapshot."""
+        """Append a bounded, structured outcome for the current-run summary."""
         from project_mode import extract_run_evolved_paths
 
         evolved = ""
@@ -2356,21 +2370,95 @@ class ToolExecutor:
             raw = arguments.get("tool_name")
             if isinstance(raw, str):
                 evolved = raw.strip()
-        # dry_run / background escalate are not real outcomes.
         data = result.data if isinstance(result.data, dict) else {}
+        error_details = result.error.details if result.error and isinstance(result.error.details, dict) else {}
+        if not data and error_details:
+            data = error_details
+        # dry_run / background escalate are not real outcomes.
         if data.get("dry_run") is True:
             return
         if data.get("background") is True or data.get("escalated") is True:
             return
-        paths = extract_run_evolved_paths(tool_name, arguments)
-        self.session.turn_evidence.append(
-            {
-                "tool": tool_name,
-                "evolved_name": evolved or tool_name,
-                "ok": bool(result.ok),
-                "paths": list(paths),
-            }
-        )
+
+        def clip(value: Any, limit: int = 240) -> str:
+            if not isinstance(value, str):
+                return ""
+            return re.sub(r"\s+", " ", value).strip()[:limit]
+
+        raw_paths = list(extract_run_evolved_paths(tool_name, arguments))
+        for key in ("paths", "untracked_paths"):
+            values = data.get(key)
+            if isinstance(values, list):
+                raw_paths.extend(value for value in values if isinstance(value, str))
+        status_lines = data.get("status_lines")
+        if isinstance(status_lines, list):
+            for line in status_lines:
+                if isinstance(line, str) and len(line) > 3:
+                    raw_paths.append(line[3:].split(" -> ")[-1].strip())
+        clean_paths = list(dict.fromkeys(clip(path, 240) for path in raw_paths if clip(path, 240)))[:8]
+        evidence: dict[str, Any] = {
+            "tool": tool_name,
+            "evolved_name": evolved or tool_name,
+            "ok": bool(result.ok),
+            "paths": clean_paths,
+        }
+        if call_id.strip():
+            evidence["call_id"] = call_id.strip()[:128]
+
+        if evolved == "structured_test":
+            status = data.get("status")
+            if isinstance(status, str) and status in {"passed", "failed", "blocked", "timeout"}:
+                failures: list[dict[str, Any]] = []
+                raw_failures = data.get("failed")
+                if isinstance(raw_failures, list):
+                    for failure in raw_failures:
+                        if not isinstance(failure, dict):
+                            continue
+                        item: dict[str, Any] = {}
+                        file = clip(failure.get("file"), 200)
+                        test = clip(failure.get("test"), 160)
+                        line = failure.get("line")
+                        if file:
+                            item["file"] = file
+                        if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+                            item["line"] = line
+                        if test:
+                            item["test"] = test
+                        failures.append(item)
+                        if len(failures) >= 3:
+                            break
+                test_summary: dict[str, Any] = {"status": status, "failed": failures}
+                suite = clip(data.get("suite"), 80)
+                duration = data.get("duration_ms")
+                if suite:
+                    test_summary["suite"] = suite
+                if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+                    test_summary["duration_ms"] = duration
+                reason = clip(data.get("reason"), 80)
+                if reason:
+                    test_summary["reason"] = reason
+                evidence["test"] = test_summary
+
+        if evolved == "interactive_terminal":
+            session_id = clip(data.get("session_id"), 128)
+            terminal_state = clip(data.get("state"), 32)
+            if session_id:
+                evidence["terminal_session_id"] = session_id
+            if terminal_state:
+                evidence["terminal_state"] = terminal_state
+
+        if evolved in {"git_snapshot", "git_diff"}:
+            diff_summary = clip(data.get("diff_stat") or data.get("summary"), 320)
+            if not diff_summary and data.get("empty") is True:
+                diff_summary = "未发现差异"
+            elif not diff_summary and isinstance(data.get("empty"), bool):
+                diff_summary = "发现差异" if not data["empty"] else "未发现差异"
+            elif not diff_summary and evolved in {"git_snapshot", "git_diff"}:
+                diff_summary = "发现变更" if clean_paths else "未发现差异"
+            if diff_summary:
+                evidence["diff_summary"] = diff_summary
+
+        self.session.turn_evidence.append(evidence)
 
 
     def _maybe_log_validation_guard(self, error: ToolResult) -> None:
@@ -2843,6 +2931,7 @@ class ToolExecutor:
                 paths=self.registry.agent_paths,
                 allowed_tools=self.session.allowed_evolved,
                 cancel_event=self.cancel_event,
+                current_project_id=self.session.project_id,
             )
         return runner(arguments, paths=self.registry.agent_paths)
 
