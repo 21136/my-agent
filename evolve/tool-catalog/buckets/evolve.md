@@ -6,12 +6,11 @@
 | 工具 | 作用 |
 |------|------|
 | `write_evolve` | 向 `evolve/tools/<scope>/<name>/` 写 `main.py` / `tool.toml`（及 README）。**每次 confirm**，无会话 `a` |
-| `git_clone` | 浅克隆公开 **https** 仓到 `workspace/` 或 `evolve/tools/`（`target`）；每次 confirm。项目线通常仅允许 workspace |
+| `git_clone` | 浅克隆公开 **https** 仓；项目线 workspace 目标限当前 `project_root`，evolve_tools 目标需显式请求；每次 confirm。 |
 
 ## 项目窗口
-
-- **项目窗口**禁止 `write_evolve` / 向 `evolve/tools` clone；要沉淀能力请到**普通窗口**。
-- `suspect` / `archived` 工具不在执行面，也不应写入 INDEX。
+- 项目会话也可在用户明确要求时调用 `write_evolve` 或 `git_clone(target=evolve_tools)`；只能沉淀到 `evolve/tools/`，不得借此写其他项目文件。
+- `write_evolve` 项目会话每次单独确认，不能由普通确认预算覆盖；`git_clone` 每次确认。`suspect` / `archived` 工具不可执行。
 
 ## `write_evolve` 逐步手册
 

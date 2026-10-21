@@ -14,9 +14,11 @@
 
 ### 当前契约
 
-- 普通请求先解析为请求级 `read_only`、`plan_only` 或 `execute`；该值只作用于当前回合，不写入 `SessionMeta`，也不会粘滞到下一条消息。
+- 普通请求先解析为请求级 `read_only`、`plan_only` 或 `execute`；该值只作用于当前回合，不写入 `SessionMeta`，也不会粘滞到下一条消息。**动手**（`turn_mode=agent`）下短句问答默认 `execute`，由模式 pill 而非每条消息关键词决定是否可调用工具；**只聊**（`ask`）仍对问答类回合默认 `read_only`。用户写明「只读/只查看」等时，动手模式也会本回合只读。
+- `agent` 模式下普通会话与项目会话提供相同的 Builtin、扁平工具与 active evolved 工具；工具可见性不由会话类型决定。`ask` 仍保留只读工具并隐藏执行/副作用入口。工具可见不代表请求获准执行。
 - 普通权限由请求意图、项目绑定/根目录、目标路径和操作风险决定。`project_workflow_stage`、`project_plan_status`、`project_entry`、模板档位和 L2 stale 只能作为兼容字段或进度事实，不能单独拒绝项目内普通实现。
 - `read_only` 允许读取和状态查看，不允许写文件或执行项目命令；`plan_only` 允许规划制品操作，不允许业务源码编辑或实现命令；`execute` 允许项目根目录内的普通编辑和测试，但仍受危险操作审批、路径边界和真实验证约束。
+- 项目 shell 不再单独禁止 `write_evolve` 或 `git_clone(target=evolve_tools)`；工具自身的 evolve 目标校验仍生效。项目会话中 `write_evolve` 每次调用须独立弹出确认，不能被普通确认预算覆盖。
 - `项目 直接实现`、`项目 开始任务`、计划确认和轻量项目入口只设置一次性请求意图/任务范围；普通模式不再用它们伪造阶段推进或确认时间。显式计划确认仍可记录计划确认事实。
 - API 的 `needs_plan_confirm`、`needs_design_confirm`、`needs_documentation` 保留为兼容/展示字段；`ordinary_stage_gates_blocking=false` 且 `ordinary_permission_source=request_intent_path_risk` 是普通权限来源。
 - 自动模式 v1/v2 继续由其自身阶段、检查点、清单和验收 owner 控制，不受本节普通策略改写。
@@ -265,7 +267,7 @@ quality:
 | **P3** | 每标准项目强制七文件：`PROJECT.md` · `SCOPE.md` · `DESIGN.md` · `TECH-DESIGN.md` · `TASKS.md` · `VERIFY.md` · `RELEASE.md` |
 | **P4** | 磁盘七文件 + `.plan-agent/manifest.json` = **抗压缩真源**；`MAP.md` / `ENV.md` 为旁路，未决以对应制品与 manifest revision 为准 |
 | **P5** | `meta.json` 扩展：`active_shell` · `project_root` · `project_id` · `project_plan_status` |
-| **P6** | project 壳 **硬拒绝** `write_evolve`；沉淀须显式切 grow |
+| **P6** | 历史规则：project 壳硬拒 `write_evolve`；**已于 2026-10-21 被 §0g supersede** |
 | **P7** | **一活线一项目（A）**：同时仅一条活线绑该项目；换项目 → `项目 切换`；同项目污染 → **新开线**（归档旧线可回看）· [PROJECT-THREADS.md](./PROJECT-THREADS.md) |
 | **P8** | **M0 用 7b**：仅 project 壳注入 `prompts/project.md`，**不**注册 `project` 主题 |
 | **P9** | `project_plan_status`：`draft` \| `confirmed` \| `plan_dirty` |
@@ -314,11 +316,11 @@ govern   → 治理（review / audit）
 | 维度 | grow | project |
 |------|------|---------|
 | 主要写哪里 | `evolve/`、`agent-core/`、`docs/` | **`workspace/<project>/`** |
-| 典型工具 | `write_evolve`、`patch_file`（仓内） | `write_text`、`run_python`、`patch_file`（**仅项目内**） |
+| 典型工具 | `write_evolve`、`patch_file`（仓内） | `write_text`、`run_python`、`patch_file`（项目内）；按请求调用的 evolve 工具仍走自身目标校验 |
 | 成功标准 | registry / proposal 合并 | **`TASKS` 全 `[x]` + `PROJECT` 验收** |
-| 默认禁止 | — | **`write_evolve`** |
+| 默认边界 | — | 项目产物默认写入 `project_root`；evolve 目标按用户明确请求调用（见 §0g） |
 
-**桌面（unified 工作台）**：项目绑定会话内仍禁 `write_evolve`（P6）。进入 grow 的路径见 [WORKBENCH-UI.md](./WORKBENCH-UI.md) **Q4**：无项目空态 **「先聊聊」**；已绑项目时顶栏 **「+ 对话」** 挂起项目后开 grow。
+**桌面（unified 工作台）**：项目绑定会话可按请求调用 `write_evolve`；每次独立确认且只写 `evolve/tools/`（见 §0g）。「先聊聊」与顶栏「+ 对话」仍可打开 grow，但不再是工具调用前置条件。
 
 ### 2.2 daily 与 project
 
@@ -553,10 +555,12 @@ CLI：`项目 新建 <id> --light` 或 `项目 新建 <id> light`。升档：`�
 | `read_file` / `grep` / `list_dir` | agent 根读 |
 
 ### 5.2 禁止 / 拒绝
+> 下表为旧阶段决议留档；当前普通模式以 §0g 为准，项目会话允许显式调用 evolve 目标并遵守逐次确认。
+
 
 | 动作 | 策略 |
 |------|------|
-| `write_evolve` | **硬拒绝** + 提示切 grow |
+| `write_evolve` | 历史规则（已 supersede，见 §0g） |
 | 写 `evolve/`、`agent-core/` | **拒绝** |
 | 非三件套写入（`draft` / `plan_dirty`） | **executor 拒绝** |
 | `run_python`（`draft` / `plan_dirty`） | **拒绝** |

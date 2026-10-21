@@ -163,6 +163,69 @@ class ExecutorGuardTests(unittest.TestCase):
         )
 
 
+class ProjectEvolutionConfirmationTests(unittest.TestCase):
+    def test_write_evolve_always_confirms_and_evolve_clone_is_destructive(self) -> None:
+        from paths import AgentPaths
+        from tools.registry import ToolRegistry
+
+        paths = AgentPaths.discover()
+        registry = ToolRegistry.load(paths)
+        write_evolve = registry.get_evolved("write_evolve")
+        git_branch = registry.get_evolved("git_branch")
+        git_clone = registry.get_evolved("git_clone")
+        self.assertIsNotNone(write_evolve)
+        self.assertIsNotNone(git_branch)
+        self.assertIsNotNone(git_clone)
+        assert write_evolve is not None and git_branch is not None and git_clone is not None
+        confirmations: list[str] = []
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession(
+                active_shell="project",
+                project_root="workspace/demo",
+                ordinary_visible_confirms_this_turn=0,
+            ),
+            confirm_fn=lambda preview, _allow: confirmations.append(preview) or "y",
+        )
+        # Keep this regression test isolated from filesystem/network execution.
+        executor.validate = lambda _name, _args: None
+        executor._execute_builtin = lambda name, _args, **_kwargs: tool_ok(name, {"dry_run": True})
+        builtin = registry.get_builtin("run_evolved")
+        assert builtin is not None
+
+        safe_write = executor.run(
+            "run_evolved",
+            {
+                "tool_name": "git_branch",
+                "arguments": {"action": "create", "branch": "confirm-probe"},
+            },
+        )
+        self.assertTrue(safe_write.ok, safe_write.error)
+        self.assertEqual(len(confirmations), 1)
+        self.assertEqual(executor.session.ordinary_visible_confirms_this_turn, 1)
+
+        write_args = {
+            "tool_name": "write_evolve",
+            "path": "evolve/tools/common/confirm_probe/tool.toml",
+            "content_base64": "W3Rvb2xd",
+        }
+        for _ in range(2):
+            result = executor.run("run_evolved", write_args)
+            self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(confirmations), 3)
+
+        clone_args = {"tool_name": "git_clone", "arguments": {"target": "evolve_tools", "dest": "common/probe"}}
+        self.assertTrue(executor._needs_confirm(builtin, git_clone, clone_args, tool_name="run_evolved"))
+        self.assertTrue(
+            executor._ordinary_confirm_is_destructive(
+                builtin, git_clone, clone_args, tool_name="run_evolved"
+            )
+        )
+        result = executor.run("run_evolved", clone_args)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(confirmations), 4)
+
+
 class WriteEvolveSkipTests(unittest.TestCase):
     def test_skip_returns_not_ok_when_exists(self) -> None:
         import importlib.util

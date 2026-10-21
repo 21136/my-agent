@@ -39,6 +39,19 @@ if not exist node_modules (
     )
 )
 
+REM Main shell 5173 + Electron; shell preview lane 5174 (see desktop/scripts/dev-with-preview.mjs).
+REM Set MY_AGENT_SKIP_PREVIEW_DEV=1 to skip 5174.
+if exist "%~dp0.worktrees\sandbox\desktop\package.json" (
+    echo [my-agent] 5173 stable desktop ^| 5174 sandbox preview ^(.worktrees/sandbox^)
+) else if not defined MY_AGENT_SKIP_PREVIEW_DEV (
+    echo [my-agent] 5173 stable ^| 5174 preview ^(no sandbox — run init-sandbox.bat for isolated experiments^)
+) else (
+    echo [my-agent] Dev: main 5173 only ^(preview lane skipped^)
+)
+if not defined MY_AGENT_SKIP_PREVIEW_DEV (
+    echo [my-agent] Skip 5174: set MY_AGENT_SKIP_PREVIEW_DEV=1
+)
+
 call npm run dev
 set EXIT_CODE=%ERRORLEVEL%
 if %EXIT_CODE% neq 0 pause

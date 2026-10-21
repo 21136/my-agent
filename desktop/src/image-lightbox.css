@@ -2,9 +2,10 @@
   position: fixed;
   inset: 0;
   z-index: 10050;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
 }
 
 .ma-image-lightbox.hidden {
@@ -20,58 +21,14 @@
   background: rgb(8 6 18 / 0.72);
   backdrop-filter: blur(6px);
   cursor: zoom-out;
-  z-index: 0;
-}
-
-.ma-image-lightbox-toolbar {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.55rem;
-  padding: 0.65rem 3rem 0.45rem;
-  color: #fff;
-  pointer-events: auto;
-}
-
-.ma-image-lightbox-tool {
-  min-width: 2.25rem;
-  height: 2rem;
-  padding: 0 0.65rem;
-  border: 1px solid rgb(255 255 255 / 25%);
-  border-radius: 9px;
-  background: rgb(255 255 255 / 10%);
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.ma-image-lightbox-tool:hover {
-  background: rgb(255 255 255 / 20%);
-}
-
-.ma-image-lightbox-toolbar output {
-  min-width: 3.25rem;
-  text-align: center;
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.ma-image-lightbox-stage {
-  position: relative;
-  z-index: 1;
-  min-height: 0;
-  overflow: auto;
-  display: grid;
-  place-items: center;
-  padding: 0.75rem 1rem 1.25rem;
-  pointer-events: auto;
 }
 
 .ma-image-lightbox-panel {
   position: relative;
+  z-index: 1;
   margin: 0;
+  max-width: min(96vw, 56rem);
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -81,23 +38,21 @@
 .ma-image-lightbox-img {
   display: block;
   max-width: min(96vw, 56rem);
-  max-height: calc(100vh - 7rem);
+  max-height: 92vh;
   width: auto;
   height: auto;
   object-fit: contain;
   border-radius: 12px;
   box-shadow: 0 20px 50px rgb(0 0 0 / 0.45);
   pointer-events: auto;
-  cursor: grab;
-  transform-origin: center center;
-  transition: transform 120ms ease;
+  cursor: zoom-out;
 }
 
 .ma-image-lightbox-close {
   position: absolute;
-  top: 0.65rem;
+  top: 0.85rem;
   right: 0.85rem;
-  z-index: 3;
+  z-index: 2;
   width: 2.25rem;
   height: 2.25rem;
   border: 1px solid color-mix(in srgb, var(--ma-border, #ccc) 55%, transparent);
@@ -108,19 +63,8 @@
   line-height: 1;
   cursor: pointer;
   box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
-  pointer-events: auto;
 }
 
 .ma-image-lightbox-close:hover {
   background: var(--ma-surface, #fff);
-}
-
-.unified-markdown img {
-  cursor: zoom-in;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ma-image-lightbox-img {
-    transition: none;
-  }
 }

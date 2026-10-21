@@ -8,7 +8,8 @@
 |------|------|
 | 探活 / 读响应体 | `http_request` |
 | 给人看页面 | **`browser_open`**（系统默认浏览器） |
-| 无头截图 / DOM 断言 | **F2 defer**（Playwright 等） |
+| 项目工作台内看 **本地前端整站** | **[PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md)**（WebContentsView · M0～M5） |
+| 无头截图 / DOM 断言 | **F2 defer**（Playwright 等；与 T-6206 共用 allowlist，非 Phase 65） |
 
 ## F1 规则
 

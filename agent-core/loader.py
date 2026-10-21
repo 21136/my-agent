@@ -481,15 +481,13 @@ def _format_host_scope_overlay(paths: AgentPaths) -> str:
     from host_scope import load_host_scope
 
     config = load_host_scope(paths)
-    roots = getattr(config, "roots", None) or {}
+    roots = config.host_roots
     if not roots:
         return ""
     lines = ["[托管区 · host scope]", "以下外部目录已注册，可用 host:<id>/… 路径直接访问："]
-    for host_id, root_info in roots.items():
-        label = getattr(root_info, "label", host_id) or host_id
-        rw = "读写" if getattr(root_info, "write", False) else "只读"
-        path = getattr(root_info, "path", "") or ""
-        lines.append(f"- host:{host_id} ({rw}) — {label} ({path})")
+    for root in roots:
+        rw = "读写" if root.write else "只读"
+        lines.append(f"- host:{root.id} ({rw}) — {root.label} ({root.path.as_posix()})")
     return "\n".join(lines)
 
 

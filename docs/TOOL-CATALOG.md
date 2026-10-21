@@ -224,7 +224,7 @@ Builtin（始终）：read_file · list_dir · grep · web_search · fetch_url �
 | 改 | 不改 |
 |----|------|
 | `core.txt` Identity：会话以**桌面**为主；CLI 命令作补充 | 删掉压缩/记住等能力本身 |
-| `project.md`：「切 grow 造工具」→「到**普通窗口**/非项目线再 `write_evolve`」 | 计划门 / 一停 / ENV / 构建纪律 |
+| `project.md`：工具可在普通/项目 `agent` 会话按请求调用；项目会话的 `write_evolve` 每次单独确认 | 计划门 / 一停 / ENV / 构建纪律 |
 | 主题 prompt 里「本仓库 MAP/TASKS」标成 **维护 agent 内核时**；用户项目跟项目三件套 | 删掉 coding 习惯全文（可后移） |
 
 验收：`grep` prompt 目录无「顶栏切 grow/daily」类主路径；桌面两窗表述一致。

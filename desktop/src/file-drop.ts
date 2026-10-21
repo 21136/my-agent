@@ -136,6 +136,7 @@ export function mountFileDrop(options: {
   const pasteTargets = Array.from(
     new Set(options.pasteTargets?.length ? options.pasteTargets : [composer]),
   );
+  // Drop only on the composer shell; drops on the textarea bubble up once.
   const dropTargets = [composer];
   let items: StagedFile[] = [];
 

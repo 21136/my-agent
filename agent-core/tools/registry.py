@@ -87,12 +87,19 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     ),
     BuiltinTool(
         "codebase_search",
-        "Semantic/BM25 search for code chunks under bound project_root (read-only)",
+        "Semantic/BM25 code search in bound project_root or agent root when unbound (read-only)",
         confirm=False,
         dry_run_supported=False,
     ),
     BuiltinTool("web_search", "Search the web for links and snippets", confirm=False, dry_run_supported=False),
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
+    BuiltinTool(
+        "show_images",
+        "Show existing image files inline in Desktop chat (read-only; no API cost)",
+        confirm=False,
+        dry_run_supported=False,
+    ),
+    BuiltinTool("generate_image", "Generate/edit a PNG with 0x567 GPT Image after explicit request and confirmation; may use credits", confirm=True, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),
     BuiltinTool(
         "propose_context_switch",
@@ -102,7 +109,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     ),
     BuiltinTool(
         "deliverable_review",
-        "Spawn read-only deliverable review subagent for bound project",
+        "Spawn read-only project review; bound sessions default current project, unbound sessions require project_id",
         confirm=False,
         dry_run_supported=False,
     ),

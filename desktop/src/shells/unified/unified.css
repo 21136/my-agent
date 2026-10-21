@@ -1862,6 +1862,7 @@
   font-size: 0.72rem;
   word-break: break-all;
 }
+
 .unified-tool-fold {
   margin: 0.1rem 0 0.25rem;
   font-size: 0.78rem;
@@ -2512,6 +2513,27 @@
   line-height: 1.35;
   color: var(--ma-text);
   margin-bottom: 0.25rem;
+}
+
+.unified-confirm-target-path {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  word-break: break-all;
+  color: var(--ma-text-muted);
+}
+
+.unified-confirm-target-path code {
+  font-family: var(--ma-mono, ui-monospace, monospace);
+  font-size: 0.76rem;
+}
+
+.unified-confirm-scope-hint {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, #3d8bfd 70%, var(--ma-text));
 }
 
 .unified-confirm-reason {
@@ -3625,6 +3647,17 @@
 }
 .thread-archive-banner-text {
   color: var(--ma-text-muted);
+}
+
+.sandbox-write-scope-banner {
+  padding: 0.45rem 0.85rem;
+  border-bottom: 1px solid color-mix(in srgb, #3d8bfd 35%, var(--ma-border));
+  background: color-mix(in srgb, #3d8bfd 10%, var(--ma-surface));
+  font-size: 0.82rem;
+  color: var(--ma-text-muted);
+}
+.sandbox-write-scope-banner.hidden {
+  display: none;
 }
 
 .overlay-threads-actions {

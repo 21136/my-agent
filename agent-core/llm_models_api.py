@@ -13,6 +13,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from llm_models import get_registry, invalidate_registry_cache, models_list_event
 from llm_secrets import (
+    IMAGE_GENERATION_KEY_ENV,
     LlmSecretsError,
     allowed_secret_envs,
     clear_llm_secret,
@@ -39,6 +40,12 @@ def llm_keys_state_payload(paths: AgentPaths) -> dict[str, Any]:
             continue
         slot = slots.setdefault(env, {"env": env, "models": []})
         slot["models"].append(entry.name)
+
+    image_slot = slots.setdefault(
+        IMAGE_GENERATION_KEY_ENV,
+        {"env": IMAGE_GENERATION_KEY_ENV, "models": []},
+    )
+    image_slot["models"].append("0x567 图片生成")
 
     keys: list[dict[str, Any]] = []
     for env in sorted(slots):

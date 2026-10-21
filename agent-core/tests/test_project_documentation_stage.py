@@ -16,6 +16,67 @@ from tests.isolation_helpers import temporary_agent_paths
 
 
 class ProjectDocumentationStageTests(unittest.TestCase):
+    def test_project_shell_allows_explicit_evolve_tool_operations(self) -> None:
+        for evolved_name, inner in (
+            (
+                "write_evolve",
+                {"path": "evolve/tools/common/example/tool.toml", "content_base64": "W3Rvb2xd"},
+            ),
+            (
+                "git_clone",
+                {"target": "evolve_tools", "dest": "common/example", "url": "https://example.invalid/repo"},
+            ),
+        ):
+            with self.subTest(evolved_name=evolved_name):
+                reason = project_mode_block_reason(
+                    active_shell="project",
+                    project_root="workspace/demo",
+                    tool_name="run_evolved",
+                    arguments={"tool_name": evolved_name, "arguments": inner},
+                )
+                self.assertIsNone(reason)
+
+                unbound_reason = project_mode_block_reason(
+                    active_shell="project",
+                    project_root="",
+                    tool_name="run_evolved",
+                    arguments={"tool_name": evolved_name, "arguments": inner},
+                )
+                self.assertIsNone(unbound_reason)
+
+    def test_unbound_project_shell_keeps_workspace_targets_blocked(self) -> None:
+        for evolved_name, inner in (
+            ("run_command", {"command": "pytest", "working_dir": "workspace/demo"}),
+            (
+                "git_clone",
+                {"target": "workspace", "dest": "workspace/demo/vendor/repo", "url": "https://example.invalid/repo"},
+            ),
+        ):
+            with self.subTest(evolved_name=evolved_name):
+                reason = project_mode_block_reason(
+                    active_shell="project",
+                    project_root="",
+                    tool_name="run_evolved",
+                    arguments={"tool_name": evolved_name, "arguments": inner},
+                )
+                self.assertIn("未绑定项目", reason or "")
+
+    def test_bound_project_workspace_clone_stays_under_project_root(self) -> None:
+        reason = project_mode_block_reason(
+            active_shell="project",
+            project_root="workspace/demo",
+            tool_name="run_evolved",
+            arguments={
+                "tool_name": "git_clone",
+                "arguments": {
+                    "target": "workspace",
+                    "dest": "workspace/other/vendor/repo",
+                    "url": "https://example.invalid/repo",
+                },
+            },
+        )
+        self.assertIn("项目目录", reason or "")
+
     def test_project_shell_without_binding_blocks_side_effects_but_allows_reads(self) -> None:
         blocked = project_mode_block_reason(
             active_shell="project",

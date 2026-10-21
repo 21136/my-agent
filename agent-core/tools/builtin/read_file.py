@@ -183,7 +183,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
         except UnicodeDecodeError:
             return _fail("file is not valid UTF-8 text", ToolErrorCode.BINARY_FILE, started, path=path_arg)
 
-    rel_path = paths.to_agent_relative(resolved)
+    rel_path = paths.to_agent_or_host_path(resolved)
     sliced = _slice_lines(
         content,
         offset=raw_offset,

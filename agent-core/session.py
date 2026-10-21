@@ -161,6 +161,7 @@ class SessionMeta:
     terminal_cwd: str = ""
     terminal_foreign_root: str = ""
     terminal_host_id: str = ""
+    write_scope_root: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +197,7 @@ class SessionMeta:
             "terminal_cwd": self.terminal_cwd,
             "terminal_foreign_root": self.terminal_foreign_root,
             "terminal_host_id": self.terminal_host_id,
+            "write_scope_root": self.write_scope_root,
         }
 
     @classmethod
@@ -302,6 +304,16 @@ class SessionMeta:
             terminal_host_id = ""
         terminal_host_id = terminal_host_id.strip()
 
+        write_scope_raw = payload.get("write_scope_root", "")
+        write_scope_root = ""
+        if isinstance(write_scope_raw, str) and write_scope_raw.strip():
+            from sandbox_evolution import normalize_write_scope_root
+
+            try:
+                write_scope_root = normalize_write_scope_root(write_scope_raw)
+            except Exception:
+                write_scope_root = ""
+
         turn_mode = normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE))
         if harness == "terminal":
             turn_mode = "agent"
@@ -341,6 +353,7 @@ class SessionMeta:
             terminal_cwd=terminal_cwd,
             terminal_foreign_root=terminal_foreign_root,
             terminal_host_id=terminal_host_id,
+            write_scope_root=write_scope_root,
         )
 
 
@@ -696,6 +709,7 @@ def reasoning_effort_label(level: str) -> str:
 
 def session_banner_event(session: Session) -> dict[str, Any]:
     from llm_client import llm_model_label, resolve_session_model
+    from sandbox_evolution import write_scope_label
 
     model = session.meta.llm_model or resolve_session_model(list(session.meta.topics))
     payload: dict[str, Any] = {
@@ -717,6 +731,12 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         payload["project_id"] = session.meta.project_id
         payload["project_root"] = session.meta.project_root or None
         payload["project_plan_status"] = session.meta.project_plan_status or "draft"
+    scope = (session.meta.write_scope_root or "").strip()
+    if scope:
+        payload["write_scope_root"] = scope
+        label = write_scope_label(scope)
+        if label:
+            payload["write_scope_label"] = label
     return payload
 
 
@@ -892,6 +912,7 @@ def list_session_summaries(
         project_id = ""
         meta_path = entry / META_FILENAME
         harness = DEFAULT_HARNESS
+        write_scope_root = ""
         if meta_path.is_file():
             try:
                 payload = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -901,6 +922,9 @@ def list_session_summaries(
                     if isinstance(raw_pid, str):
                         project_id = raw_pid.strip()
                     harness = normalize_harness(payload.get("harness", DEFAULT_HARNESS))
+                    raw_scope = payload.get("write_scope_root", "")
+                    if isinstance(raw_scope, str):
+                        write_scope_root = raw_scope.strip()
             except (OSError, json.JSONDecodeError):
                 pass
         if harness == "terminal":
@@ -917,6 +941,8 @@ def list_session_summaries(
             title = project_id
         else:
             title = goal[:80] if goal else (first_user[:80] if first_user else cid)
+        if write_scope_root and not project_id:
+            title = f"[实验] {title}"[:120]
         preview = last_user[:120] if last_user else ""
         entries.append({
             "session_id": cid,
@@ -1103,6 +1129,7 @@ def create_new(
     terminal_cwd: str = "",
     terminal_foreign_root: str = "",
     terminal_host_id: str = "",
+    write_scope_root: str = "",
 ) -> Session:
     """Start a fresh session (``新会话``); empty goal/topics; phase S4 (direct chat)."""
     cid = conversation_id or generate_conversation_id()
@@ -1128,6 +1155,14 @@ def create_new(
     if harness_kind == "terminal" and not scope_kind:
         raise SessionError("terminal session requires terminal_scope_kind")
 
+    normalized_write_scope = ""
+    if write_scope_root.strip():
+        from sandbox_evolution import normalize_write_scope_root
+
+        normalized_write_scope = normalize_write_scope_root(write_scope_root)
+    if normalized_write_scope and harness_kind != "desktop":
+        raise SessionError("write_scope_root is only supported for desktop harness sessions")
+
     meta = SessionMeta(
         topics=[],
         llm_model=resolve_session_model([]),
@@ -1142,6 +1177,7 @@ def create_new(
         ),
         terminal_host_id=terminal_host_id.strip(),
         turn_mode="agent" if harness_kind == "terminal" else DEFAULT_TURN_MODE,
+        write_scope_root=normalized_write_scope,
     )
     enforce_terminal_meta_invariants(meta)
     session = Session(
@@ -1153,6 +1189,28 @@ def create_new(
         paths=paths,
     )
     session.save()
+    return session
+
+
+def create_sandbox_evolution_session(paths: AgentPaths) -> Session:
+    """Desktop session that may only write under the sandbox git worktree."""
+    from sandbox_evolution import (
+        sandbox_session_seed_content,
+        sandbox_worktree_ready,
+        sandbox_write_scope_relative,
+    )
+
+    if not sandbox_worktree_ready(paths):
+        raise SessionError("sandbox 未初始化；请先运行 init-sandbox.bat")
+    scope = sandbox_write_scope_relative(paths)
+    session = create_new(paths, write_scope_root=scope)
+    session.goal = "实验进化（sandbox）"
+    session.append_message(
+        {"role": "user", "content": sandbox_session_seed_content(scope)},
+        persist=False,
+    )
+    session.save()
+    write_last_conversation_id(paths, session.conversation_id)
     return session
 
 
@@ -1296,7 +1354,115 @@ def session_history_max_items() -> int:
         return _DEFAULT_SESSION_HISTORY_MAX_ITEMS
 
 
-def build_session_chat_history(session: Session) -> list[dict[str, str]]:
+_CHAT_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+_CHAT_IMAGE_TOOLS = frozenset({"generate_image", "show_images"})
+
+
+def _is_chat_image_rel_path(value: str) -> bool:
+    lowered = value.strip().lower().replace("\\", "/")
+    return any(lowered.endswith(ext) for ext in _CHAT_IMAGE_SUFFIXES)
+
+
+def _image_paths_from_tool_message(message: dict[str, Any]) -> list[str]:
+    if message.get("role") != "tool":
+        return []
+    content = message.get("content")
+    if not isinstance(content, str):
+        return []
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return []
+    tool = str(payload.get("tool") or "")
+    if tool not in _CHAT_IMAGE_TOOLS:
+        return []
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+    paths: list[str] = []
+    raw = data.get("display_paths")
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                normalized = item.strip().replace("\\", "/")
+                if _is_chat_image_rel_path(normalized):
+                    paths.append(normalized)
+    if not paths and tool == "generate_image":
+        path = data.get("path")
+        if isinstance(path, str) and _is_chat_image_rel_path(path):
+            paths.append(path.strip().replace("\\", "/"))
+    return paths
+
+
+def _append_chat_history_item(
+    items: list[dict[str, Any]],
+    item: dict[str, Any],
+    *,
+    max_items: int | None,
+) -> None:
+    items.append(item)
+    if max_items and max_items > 0 and len(items) > max_items:
+        items.pop(0)
+
+
+def _build_chat_history_from_messages(
+    messages: list[dict[str, Any]],
+    *,
+    max_items: int | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """User/assistant lines (+ inline_images from tool results) for Desktop hydration."""
+    items: list[dict[str, Any]] = []
+    total = 0
+    last_user: str | None = None
+    pending_images: list[str] = []
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "tool":
+            for path in _image_paths_from_tool_message(message):
+                if path not in pending_images:
+                    pending_images.append(path)
+            continue
+
+        content = message.get("content")
+        if role == "user":
+            pending_images = []
+            if not isinstance(content, str):
+                continue
+            text = content.strip()
+            if not text or _ui_skip_chat_text(text):
+                continue
+            if text == last_user:
+                continue
+            last_user = text
+            total += 1
+            _append_chat_history_item(items, {"role": "user", "text": text}, max_items=max_items)
+            continue
+
+        if role == "assistant":
+            if message.get("tool_calls"):
+                continue
+            if not isinstance(content, str):
+                continue
+            text = content.strip()
+            if not text or _ui_skip_chat_text(text):
+                continue
+            item: dict[str, Any] = {"role": "assistant", "text": text}
+            if pending_images:
+                item["inline_images"] = list(pending_images)
+                pending_images = []
+            total += 1
+            _append_chat_history_item(items, item, max_items=max_items)
+            last_user = None
+
+    return items, total
+
+
+def build_session_chat_history(session: Session) -> list[dict[str, Any]]:
     """User/assistant lines for desktop chat hydration (DESKTOP §5.2 session.history)."""
     if not session._messages_fully_loaded and session.messages_path.is_file():
         max_items = session_history_max_items()
@@ -1305,37 +1471,7 @@ def build_session_chat_history(session: Session) -> list[dict[str, str]]:
             max_items=max_items if max_items > 0 else None,
         )
         return items
-    items: list[dict[str, str]] = []
-    last_user: str | None = None
-
-    for message in session.messages:
-        role = message.get("role")
-        content = message.get("content")
-        if role == "user":
-            if not isinstance(content, str):
-                continue
-            text = content.strip()
-            if not text:
-                continue
-            if _ui_skip_chat_text(text):
-                continue
-            if text == last_user:
-                continue
-            last_user = text
-            items.append({"role": "user", "text": text})
-            continue
-
-        if role == "assistant":
-            if not isinstance(content, str):
-                continue
-            text = content.strip()
-            if not text:
-                continue
-            if _ui_skip_chat_text(text):
-                continue
-            items.append({"role": "assistant", "text": text})
-            last_user = None
-
+    items, _ = _build_chat_history_from_messages(session.messages)
     return items
 
 
@@ -1343,13 +1479,11 @@ def build_session_chat_history_from_path(
     messages_path: Path,
     *,
     max_items: int | None = None,
-) -> tuple[list[dict[str, str]], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Stream jsonl once; return (items, total_ui_item_count). UI-5972 switch fast path."""
     if not messages_path.is_file():
         return [], 0
-    items: list[dict[str, str]] = []
-    total = 0
-    last_user: str | None = None
+    parsed: list[dict[str, Any]] = []
     try:
         with messages_path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -1360,42 +1494,11 @@ def build_session_chat_history_from_path(
                     message = json.loads(text_line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(message, dict):
-                    continue
-                role = message.get("role")
-                content = message.get("content")
-                if role == "user":
-                    if not isinstance(content, str):
-                        continue
-                    text = content.strip()
-                    if not text:
-                        continue
-                    if _ui_skip_chat_text(text):
-                        continue
-                    if text == last_user:
-                        continue
-                    last_user = text
-                    total += 1
-                    items.append({"role": "user", "text": text})
-                    if max_items and max_items > 0 and len(items) > max_items:
-                        items.pop(0)
-                    continue
-                if role == "assistant":
-                    if not isinstance(content, str):
-                        continue
-                    text = content.strip()
-                    if not text:
-                        continue
-                    if _ui_skip_chat_text(text):
-                        continue
-                    total += 1
-                    items.append({"role": "assistant", "text": text})
-                    last_user = None
-                    if max_items and max_items > 0 and len(items) > max_items:
-                        items.pop(0)
+                if isinstance(message, dict):
+                    parsed.append(message)
     except OSError:
         return [], 0
-    return items, total
+    return _build_chat_history_from_messages(parsed, max_items=max_items)
 
 
 def session_history_event(session: Session) -> dict[str, Any]:

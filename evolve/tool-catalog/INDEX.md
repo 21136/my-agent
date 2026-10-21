@@ -1,15 +1,16 @@
 # 工具索引（本会话默认只看本页）
 
-> Phase 23 · L0。`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot` 直接调用，**不要**为它们读 bucket。  
-> 改已有文件用 `patch_file`；`write_text` 只用于新建或几乎整文件重写。`read_file` 支持 `offset` / `limit` / `line_numbers=true` 分段读大文件。  
-> **常用扁平原语**（Phase 41+）：`run_command` · `write_text` · `patch_file` · `git_diff` · `git_snapshot` — 直接调用，无需 `run_evolved` 嵌套  
+> 直接工具：`read_file` · `write_text` · `patch_file` · `run_command` · `git_diff` · `git_snapshot`；不读 bucket。
+> 改文件用 `patch_file`；`write_text` 用于新建/整文件重写；`read_file` 可分段读取。
+
 > 其它 evolved 才在需要参数细节时 `read_file evolve/tool-catalog/buckets/<桶>.md`；`run_evolved` · `tool_name=<名>`（须 `status=active`）  
-> **实验性工具**：目录可记录但不会进入 active 默认清单；需完成独立验收后再升格。
-> Builtin（始终）：`read_file` · `list_dir` · `glob_file_search` · `grep` · `web_search` · `fetch_url` · `run_evolved` ·（+ 上五项 proxy）
+> Builtins (agent mode; session-independent): `read_file` · `list_dir` · `grep` · `glob_file_search` · `codebase_search` · `web_search` · `fetch_url` · `show_images` · `generate_image` · `run_evolved` · `propose_context_switch` · `deliverable_review` · `explore`
+> agent：普通会话与项目会话工具集一致；ask 隐藏执行类与生图；只读/仅规划仍禁副作用；可见不等于授权。
+> `show_images`: 只读，在 Desktop 聊天内联展示已有图片路径（无 confirm、无 API 费用）；生图用 `generate_image`。
+> `generate_image`: 仅响应明确生图请求；调用前确认，参考图获准后才上传（可能消耗额度）；本轮图用 `current_attachment`，历史图按上下文查找，歧义时请用户选择。
 
 | 桶 | 何时读 | 路径 |
 |----|--------|------|
-| 设计文档与图表 | 生成设计文档、图源并渲染为图片 | `buckets/design.md` |
 | 写文件 | `copy_move` / `move_to_trash`、大文件 staging | `buckets/write.md` |
 | 设计文档 | 生成四类设计文档及 Mermaid/PlantUML 图表源 | `buckets/design.md` |
 | 执行构建 | `run_service` / `repair_node_modules` / `browser_open` / git_* | `buckets/run.md` |

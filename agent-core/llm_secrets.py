@@ -17,6 +17,7 @@ from paths import AgentPaths
 
 SECRETS_FILENAME = "llm_secrets.json"
 SECRETS_VERSION = 1
+IMAGE_GENERATION_KEY_ENV = "LLM_0x567_KEY"
 
 
 class LlmSecretsError(Exception):
@@ -146,4 +147,5 @@ def allowed_secret_envs(paths: AgentPaths) -> frozenset[str]:
     for entry in registry.models:
         if entry.api_key_env.strip():
             envs.add(entry.api_key_env.strip())
+    envs.add(IMAGE_GENERATION_KEY_ENV)
     return frozenset(envs)

@@ -15,7 +15,7 @@
 
 | 约束 | 说明 |
 |------|------|
-| **Builtin 分两类共 12 个** | **核心 8**（观察/执行口）+ **编排 4**（子代理/上下文）；核心长期不随使用增长 |
+| **Builtin 共 12 个** | **核心 8**（观察/执行口）+ **其它 4**（上下文、子代理、生图）；核心保持精简 |
 | **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `evolve/tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
@@ -40,7 +40,7 @@
 
 ## 3. Builtin（12 个 function，不分主题）
 
-注册表固定为 12 个 function，不按主题过滤；但 LLM 是否在某一轮看到某个 function 仍由 turn mode、项目绑定状态和 verification 策略决定。例如 `ask` 隐藏执行入口，未绑定项目时隐藏项目编排入口。以下是注册基线，实际暴露以 `build_llm_tools()` 和 executor 策略为准。分两类：
+注册表固定为 12 个 function，不按主题过滤。`agent`（动手）模式下，普通会话与项目会话提供相同的 Builtin 和扁平工具；项目绑定、shell 类型及 `read_only` / `plan_only` 意图不再从 schema 隐藏工具。`ask`（只聊）仍隐藏 `run_evolved`、生图和扁平副作用工具。工具可见不等于获准执行：执行器仍按请求意图、工具策略和目标路径拒绝不允许的副作用；`deliverable_review` 在普通会话需显式提供项目 ID。
 
 ### 3.0 核心 8 个（观察 / 执行口）
 
@@ -50,18 +50,19 @@
 | `list_dir` | 列目录（可递归一层） | 否 | 否 |
 | `grep` | 在路径下搜**本地**文件内容 | 否 | 否 |
 | `glob_file_search` | 按 glob 列文件（Phase 42 · **done**） | 否 | 否 |
-| `codebase_search` | 在绑定 project_root 下做语义/BM25 代码搜索（只读） | 否 | 否 |
+| `codebase_search` | 绑定项目时搜 project_root；普通会话搜索 agent root（语义/BM25，只读） | 否 | 否 |
 | `web_search` | **上网**搜索（query → 标题/链接/摘要） | 否 | 否 |
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
 
-### 3.0a 编排 4 个（子代理 / 上下文）
+### 3.0a 其它 5 个（上下文 / 子代理 / 图片 / 生图）
 
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
 | `propose_context_switch` | 提议切换 project/shell 上下文 | **是** | 否 |
-| `plan_partner` | 计划子代理（TASKS/MAP/PROJECT/ENV · 侧栏采纳） | 否 | 否 |
-| `deliverable_review` | 只读交付物审查子代理（绑定项目） | 否 | 否 |
+| `show_images` | 在 Desktop 聊天内联展示已有图片文件（只读、无 API 费用） | 否 | 否 |
+| `generate_image` | 0x567 GPT Image 生图或参考图编辑；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
+| `deliverable_review` | 只读交付审查；绑定项目默认当前项目，普通会话须 `project_id` | 否 | 否 |
 | `explore` | 只读 explore 子代理（须显式 task/scope） | 否 | 否 |
 
 Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。注册表见 `tools/registry.py` 的 `BUILTIN_TOOLS`。
@@ -69,8 +70,8 @@ Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
 ### 3.1 观察 vs 执行
 
 ```text
-本地观察：read_file · list_dir · grep · glob_file_search · codebase_search
-编排：propose_context_switch · plan_partner · deliverable_review · explore
+本地观察：read_file · list_dir · grep · glob_file_search · codebase_search · `show_images`
+其它：`propose_context_switch` · `generate_image` · `deliverable_review` · `explore`
 网络观察：web_search · fetch_url
 动手执行：run_command · write_text · patch_file（扁平原语，Phase 41）
             或 run_evolved → 其它 evolve/tools/*
@@ -146,6 +147,7 @@ tool_dirs = ["tools/coding"]
 `evolve/tools/common/` **不**写在 topic 的 `tool_dirs` 里；磁盘组织约定，**执行面**凡 `status=active` 均可调（见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)）。
 
 **双索引注入（Phase 23）**：`build_system_prompt` 同时注入 `[主题索引]`（来自 `_index.*.toml`）与 `[工具索引]`（来自 `tool-catalog/INDEX.md` + 能力提示）。主题确认仍管 prompt/memory，**不管** evolved 执行门禁。
+**会话类型与执行面**：active 工具在普通/项目会话均可调用；项目 shell 不再单独禁止 `write_evolve` 或 `git_clone(target=evolve_tools)`。二者仍受 evolved 自身目标校验；`write_evolve` 在项目会话每次单独弹确认，不能被普通确认预算覆盖。只读/仅规划及 ask 限制仍由执行器执行。
 
 ### 4.3 会话内 LLM 可见的 evolved 导引（Phase 23）
 
@@ -153,7 +155,7 @@ tool_dirs = ["tools/coding"]
 
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
-Builtin 恒为 **12** 个 function（核心 8 + 编排 4）；evolved **不**平铺为独立 function，经 `run_evolved` 调用：
+Builtin 共 12 个 function（核心 8 + 其它 4）；evolved 不平铺，统一通过 `run_evolved` 调用：
 
 - **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
 - **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
@@ -237,6 +239,7 @@ timeout_sec = 60
 | `a` | **仅** `allow_approve_all=true` 的 **evolved** tool：本会话后续同类调用 **免 confirm**（作用域 = **agent root**，deny-list 仍生效）；写 log；记入 session 批准状态 |
 
 Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。  
+项目会话的 `write_evolve` 每次调用均须单独可见确认，不受本回合普通确认预算覆盖。
 旧字段名 `workspace_only` 仍可读，语义等同 `allow_approve_all`。
 
 ### 6.4 超长 tool 结果落盘（已决，对齐 Cursor）
@@ -388,6 +391,26 @@ DeepSeek 搜索**不是**独立 REST，而是经 Anthropic 兼容端点 `https:/
   "duration_ms": 890
 }
 ```
+
+### 7.5.1 `generate_image`
+
+| 项 | 说明 |
+|----|------|
+| 参数 | 必填 `prompt`；可选 `reference_context`、`reference_id`、`model`、`size`、`quality`。`current_attachment` 表示本轮最新图片。 |
+| 历史图 | 只查本地会话附件引用，不扫描文件夹；多个候选时先让用户选择。 |
+| 确认与费用 | 调用前须确认；确认卡展示参考图来源，批准后才上传至 0x567，可能消耗额度。 |
+| 密钥 | 后端读取 `LLM_0x567_KEY` 环境变量或现有本地密钥设置，不放入工具参数。 |
+| 输出 | 校验 PNG 并独占创建，拒绝覆盖；项目写入 `<project>/artifacts/generated-images/`，未绑定项目写入 `workspace/_drops/<session>/generated-images/`。 |
+| UI | 成功时 `data.display_paths`（与 `path` 一致）经 `tool.end` 送 Desktop 内联展示；见 [CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md)。 |
+
+### 7.5.2 `show_images`
+
+| 项 | 说明 |
+|----|------|
+| 参数 | `paths[]`（1～12，agent 相对）；可选 `reference_context` / `reference_id`（与 `generate_image` 相同解析规则）。 |
+| 模式 | **只读**；`read_only` 轮次与 **ask** 模式均可调用（无 confirm）。 |
+| 输出 | `display_paths`、`displayed[]`；无效路径汇总在 `skipped`；全无有效图 → `no_images`。 |
+| UI | 仅 Desktop unified；Terminal 不保证内联图。 |
 
 ### 7.6 `run_evolved`
 
@@ -544,18 +567,20 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 ```text
 agent-core/tools/
-├── registry.py       # 扫描 evolve/tools/**；合并 11 builtin
+├── registry.py       # 扫描 evolve/tools/**；合并 13 builtins
 ├── executor.py
 ├── builtin/
 │   ├── read_file.py
 │   ├── list_dir.py
 │   ├── grep.py
 │   ├── glob_file_search.py
+│   ├── codebase_search.py
 │   ├── web_search.py
 │   ├── fetch_url.py
+│   ├── show_images.py
+│   ├── generate_image.py
 │   ├── run_evolved.py
 │   ├── propose_context_switch.py
-│   ├── plan_partner.py
 │   ├── deliverable_review.py
 │   └── explore.py
 └── schema.py
@@ -579,7 +604,7 @@ evolve/
 
 | # | 议题 | 决议 |
 |---|------|------|
-| 1 | Builtin 数量与名单 | **12 个**：核心 8（read/list/grep/glob/codebase/web/fetch/run_evolved）+ 编排 4（context_switch/plan_partner/deliverable_review/explore） |
+| 1 | Builtin count and names | **13**: core 8 (read/list/grep/glob/codebase/web/fetch/run_evolved) + other 5 (context_switch/show_images/generate_image/deliverable_review/explore) |
 | 2 | Evolved 暴露 | **仅** `run_evolved`（+ Phase 41 扁平原语）；导引 = INDEX + 桶（[TOOL-CATALOG.md](./TOOL-CATALOG.md)）；**不再**按主题过滤执行面 |
 | 3 | 主题索引 | **`evolve/_index.core.toml` + `_index.user.toml`**（驱动 prompt/memory）；工具目录 = **`tool-catalog/INDEX.md`**（两者并存注入） |
 | 4 | 跨主题工具 | **`evolve/tools/common/`** 仍为目录约定；active 均可调 |
@@ -593,7 +618,7 @@ evolve/
 
 ## 14. 验收（TOOLS 设计阶段）
 
-- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；编排 4 与子代理文档一致
+- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；其它 4 个名称与 registry 一致
 - [ ] Evolved 主题目录 + common 规则清楚
 - [ ] 与 `evolve/_index.*.toml`、`tool-catalog/INDEX.md`、MEMORY 主题路由一致
 - [ ] `run_evolved` + 会话清单可实现

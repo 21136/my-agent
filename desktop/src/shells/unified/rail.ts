@@ -1,8 +1,8 @@
 /** Main stage owned by the active rail tab. */
-export type MainFocus = "chat" | "document" | "projects" | "settings" | "music";
+export type MainFocus = "chat" | "document" | "projects" | "settings" | "music" | "shell-dev";
 
 /** Left icon rail. Each tab owns sidebar context and main stage together. */
-export type RailTab = "now" | "docs" | "projects" | "settings" | "music";
+export type RailTab = "now" | "docs" | "projects" | "settings" | "music" | "shell-dev";
 
 export const RAIL_TAB_LABELS: Record<RailTab, { label: string; title: string }> = {
   now: { label: "当下", title: "当下" },
@@ -10,9 +10,10 @@ export const RAIL_TAB_LABELS: Record<RailTab, { label: string; title: string }> 
   projects: { label: "项目", title: "我的项目" },
   settings: { label: "设置", title: "设置" },
   music: { label: "听歌", title: "听歌" },
+  "shell-dev": { label: "壳预览", title: "壳开发预览" },
 };
 
-const RAIL_TABS = new Set<RailTab>(["now", "docs", "projects", "settings", "music"]);
+const RAIL_TABS = new Set<RailTab>(["now", "docs", "projects", "settings", "music", "shell-dev"]);
 
 export function isRailTab(value: string | undefined): value is RailTab {
   return Boolean(value && RAIL_TABS.has(value as RailTab));
@@ -31,6 +32,8 @@ export function mainFocusForRail(tab: RailTab): MainFocus {
       return "settings";
     case "music":
       return "music";
+    case "shell-dev":
+      return "shell-dev";
     case "docs":
       return "document";
     case "projects":

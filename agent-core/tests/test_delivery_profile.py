@@ -220,6 +220,9 @@ class ReviewSubagentTests(unittest.TestCase):
 
     def test_scope_phase_requires_hint(self) -> None:
         with temporary_agent_paths() as paths:
+            project_root = paths.workspace / "demo"
+            project_root.mkdir()
+            (project_root / "PROJECT.md").write_text("# Demo\n", encoding="utf-8")
             registry = ToolRegistry.load(paths)
             executor = ToolExecutor.create(
                 paths=paths,

@@ -2,6 +2,8 @@
 
 export type ConfirmPreviewView = {
   headline: string;
+  /** Full agent-relative path when the confirm is a file write/patch. */
+  targetPath: string;
   reason: string;
   detail: string;
   compact: boolean;
@@ -33,6 +35,7 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
   if (!text) {
     return {
       headline: "待确认的工具操作",
+      targetPath: "",
       reason: "执行前需要你同意",
       detail: "",
       compact: true,
@@ -56,8 +59,10 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
       const meta = contentLine.replace("内容：", "").trim();
       if (meta) reasonParts.push(meta);
     }
+    const normalizedPath = path.replace(/\\/g, "/");
     return {
       headline,
+      targetPath: normalizedPath,
       reason: reasonParts.join(" · "),
       detail: text,
       compact: true,
@@ -83,6 +88,7 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
     const long = detail.length > 400 || detail.split("\n").length > 8;
     return {
       headline: cmdHead ? `运行 ${cmdHead.slice(0, 100)}` : "运行命令",
+      targetPath: "",
       reason: reasonParts.join(" · "),
       detail,
       compact: long,
@@ -93,6 +99,7 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
   const headline = lines[0]?.slice(0, 120) ?? "工具确认";
   return {
     headline,
+    targetPath: "",
     reason: "执行前需要你同意",
     detail: text,
     compact,
@@ -124,9 +131,22 @@ export function renderConfirmCardHtml(
     ? `<p class="unified-confirm-reason">${escapeHtml(view.reason)}</p>`
     : "";
 
+  const sandboxHint =
+    view.targetPath.includes(".worktrees/sandbox")
+      ? `<p class="unified-confirm-scope-hint">实验副本（sandbox）</p>`
+      : "";
+
+  const pathBlock = view.targetPath
+    ? `<p class="unified-confirm-target-path" title="${escapeHtml(view.targetPath)}"><code>${escapeHtml(
+        view.targetPath,
+      )}</code></p>`
+    : "";
+
   return `<div class="unified-surface unified-confirm is-compact-pending" role="region" aria-label="工具确认">
     <div class="unified-confirm-kicker">需要确认</div>
     <div class="unified-confirm-headline">${escapeHtml(view.headline)}</div>
+    ${pathBlock}
+    ${sandboxHint}
     ${reasonBlock}
     ${detailBlock}
     <div class="unified-confirm-actions">${actionsHtml}</div>

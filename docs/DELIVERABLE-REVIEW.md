@@ -145,6 +145,10 @@ run_project_tests 失败
         "type": "string",
         "description": "User intent or focus, e.g. 验收 huiyi / Phase 7 是否完成"
       },
+      "project_id": {
+        "type": "string",
+        "description": "Optional workspace project ID; required in an unbound session. A bound session defaults to its current project and cannot target another project."
+      },
       "scope": {
         "type": "string",
         "enum": ["full", "phase", "files"],
@@ -178,9 +182,9 @@ run_project_tests 失败
 
 **校验**：
 
-- 须绑定 `project_id` / `project_root`（同 `plan_partner`）
+- 项目会话省略 `project_id` 时使用当前绑定项目；若显式给出则必须与当前项目一致。普通/未绑定会话必须给出 `project_id`，且只能解析到 `workspace/<id>` 下已存在的项目（包括已登记的外部项目映射）；不接受绝对路径或 HostScope 路径。
 - 每 turn 最多 **1** 次（`DELIVERABLE_REVIEW_MAX_PER_TURN=1`，env 可配）
-- `scope=files` 时 `paths` 非空；路径须在 `project_root` 下
+- `scope=files` 时 `paths` 非空，且必须位于解析后的目标项目根目录下。
 
 ### 4.2 子代理内部循环
 

@@ -49,7 +49,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
     except OSError as exc:
         return _fail(str(exc), ToolErrorCode.PERMISSION_DENIED, started, path=path_arg)
 
-    rel_path = paths.to_agent_relative(resolved)
+    rel_path = paths.to_agent_or_host_path(resolved)
     return tool_ok(
         TOOL_NAME,
         {"path": rel_path, "entries": entries},

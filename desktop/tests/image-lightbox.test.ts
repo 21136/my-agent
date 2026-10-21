@@ -12,15 +12,8 @@ test("lightbox opens from data URLs and agent paths", () => {
   assert.match(lightbox, /loadAgentImageDataUrl/);
 });
 
-test("lightbox supports wheel and toolbar zoom", () => {
-  assert.match(lightbox, /changeScale/);
-  assert.match(lightbox, /data-ma-zoom-in/);
-  assert.match(lightbox, /"wheel"/);
-});
-
 test("chat inline images use click-to-zoom", () => {
   assert.match(unified, /bindImageLightboxClick\(chatEl/);
   assert.match(unified, /img\.unified-generated-image/);
-  assert.doesNotMatch(unified, /image-zoom/);
   assert.match(stylesheet, /\.unified-generated-image\s*\{[^}]*cursor:\s*zoom-in/s);
 });

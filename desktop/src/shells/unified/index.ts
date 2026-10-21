@@ -78,6 +78,7 @@ import { bindChatFontControl, renderChatFontControl, syncChatFontControl } from 
 import { isSettingsSection, renderSettingsPane, type SettingsSection } from "./settings-panel";
 import { writeTheme } from "../../settings";
 import { renderMusicPanel } from "./music-panel";
+import { renderShellDevPanel } from "./shell-dev-panel";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
@@ -109,6 +110,7 @@ import "./sidebar-v2.css";
 import "./message-reading.css";
 import "./settings-panel.css";
 import "./music-panel.css";
+import "./shell-dev-panel.css";
 
 export type Perspective = "default" | "project" | "night";
 
@@ -331,6 +333,7 @@ export function mountUnifiedShell(
 
   let statusText = "连接中…";
   let cancelledStatusTimer: number | null = null;
+  let composerWhisperTimer: number | null = null;
   let cancelSafetyTimer: number | null = null;
   let destroyed = false;
   let renderThrottleTimer: number | null = null;
@@ -500,6 +503,7 @@ export function mountUnifiedShell(
             <span class="sidebar-icon-badge" id="project-count-badge">0</span>
           </button>
           <span class="sidebar-degrade-dot hidden" id="sidebar-degrade-dot" data-action="toggle-degrade-info" title="项目管理器状态"></span>
+          <button type="button" class="sidebar-icon-btn" data-panel="shell-dev" title="壳开发预览"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="12" rx="2"/><path d="M8 19h8M12 17v2"/></svg><span class="sidebar-icon-label">壳预览</span></button>
           <button type="button" class="sidebar-icon-btn" data-panel="music" title="听歌"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/><path d="m9 8 12-2"/></svg><span class="sidebar-icon-label">听歌</span></button>
           <span class="sidebar-icon-spacer" aria-hidden="true"></span>
           <button type="button" class="sidebar-icon-btn sidebar-icon-settings" data-panel="settings" title="设置"><svg class="sidebar-icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></svg><span class="sidebar-icon-label">设置</span></button>
@@ -549,6 +553,9 @@ export function mountUnifiedShell(
           <span class="thread-archive-banner-text">归档线 · 只读回看（不会改回活线）</span>
           <button type="button" class="unified-btn" id="thread-return-active">回到活线</button>
         </div>
+        <div class="sandbox-write-scope-banner hidden" id="sandbox-write-scope-banner" role="status">
+          <span class="sandbox-write-scope-banner-text" id="sandbox-write-scope-banner-text"></span>
+        </div>
         <section class="unified-context-region hidden" id="unified-goal-card" aria-label="项目上下文"></section>
         <div class="workbench-empty" id="workbench-empty" hidden>
           <div class="workbench-empty-card">
@@ -570,6 +577,7 @@ export function mountUnifiedShell(
           <section class="unified-projects hidden" id="unified-projects" aria-label="项目"></section>
           <section class="unified-settings hidden" id="unified-settings" aria-labelledby="settings-page-heading" hidden></section>
           <section class="unified-music hidden" id="unified-music" aria-labelledby="music-page-heading" hidden></section>
+          <section class="unified-shell-dev hidden" id="unified-shell-dev" aria-labelledby="shell-dev-page-heading" hidden></section>
         </div>
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
@@ -602,6 +610,7 @@ export function mountUnifiedShell(
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const settingsEl = root.querySelector<HTMLElement>("#unified-settings")!;
   const musicEl = root.querySelector<HTMLElement>("#unified-music")!;
+  const shellDevEl = root.querySelector<HTMLElement>("#unified-shell-dev")!;
   let settingsRenderedSection: SettingsSection | null = null;
   let settingsRenderedName = "";
   let settingsNicknameDraft: string | null = null;
@@ -609,8 +618,12 @@ export function mountUnifiedShell(
   let hasBilibiliSearch = false;
   const musicViewResizeObserver = new ResizeObserver(syncMusicViewBounds);
   musicViewResizeObserver.observe(musicEl);
+  const shellDevViewResizeObserver = new ResizeObserver(syncShellDevViewBounds);
+  shellDevViewResizeObserver.observe(shellDevEl);
   window.addEventListener("resize", syncMusicViewBounds, { passive: true });
+  window.addEventListener("resize", syncShellDevViewBounds, { passive: true });
   musicEl.addEventListener("scroll", syncMusicViewBounds, { passive: true });
+  shellDevEl.addEventListener("scroll", syncShellDevViewBounds, { passive: true });
   const settingsThemeObserver = new MutationObserver(syncSettingsTheme);
   settingsThemeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   const switchMaskEl = root.querySelector<HTMLElement>("#unified-switch-mask")!;
@@ -648,6 +661,8 @@ export function mountUnifiedShell(
   const tokenBar = root.querySelector<HTMLElement>("#unified-token-bar")!;
   const threadArchiveBannerEl = root.querySelector<HTMLElement>("#thread-archive-banner")!;
   const threadReturnActiveBtn = root.querySelector<HTMLButtonElement>("#thread-return-active")!;
+  const sandboxWriteScopeBannerEl = root.querySelector<HTMLElement>("#sandbox-write-scope-banner")!;
+  const sandboxWriteScopeBannerTextEl = root.querySelector<HTMLElement>("#sandbox-write-scope-banner-text")!;
 
   let turnCachePromptTotal = 0;
   let turnCacheCachedTotal = 0;
@@ -811,6 +826,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     composerWire.syncSendEnabled();
   }
 
+  function syncSandboxWriteScopeBanner(label?: string): void {
+    const text = (label || "").trim();
+    const show = Boolean(text);
+    sandboxWriteScopeBannerEl.classList.toggle("hidden", !show);
+    if (sandboxWriteScopeBannerTextEl) {
+      sandboxWriteScopeBannerTextEl.textContent = show
+        ? `实验进化会话 · ${text}（稳定树只读）`
+        : "";
+    }
+  }
+
   function updateWorkbenchEmpty(): void {
     workbenchEmptyEl.hidden = true;
     chatEl.classList.remove("is-empty-gated");
@@ -822,7 +848,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   // ---- file drop + composer ----
   const fileDrop = mountFileDrop({
     composer,
-    pasteTargets: [composer, input],
+    pasteTargets: [input],
     client,
     shell: shellId,
     canAccept: () => {
@@ -990,6 +1016,59 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const idle = text === "就绪" && !shellEl.classList.contains("is-working");
     statusEl.classList.toggle("is-idle", idle);
     syncComposerMetaVisibility();
+  }
+
+  /** Feed / 小互动：输入框上方短句，不触发聊天区重绘或滚动。 */
+  function showComposerWhisper(text: string, durationMs = 6500): void {
+    if (composerWhisperTimer !== null) {
+      window.clearTimeout(composerWhisperTimer);
+      composerWhisperTimer = null;
+    }
+    if (cancelledStatusTimer !== null) {
+      window.clearTimeout(cancelledStatusTimer);
+      cancelledStatusTimer = null;
+    }
+    setStatus(text);
+    statusEl.classList.remove("is-idle");
+    syncComposerMetaVisibility();
+    composerWhisperTimer = window.setTimeout(() => {
+      composerWhisperTimer = null;
+      if (!chat.isWorking() && !chat.model.confirmPending) setStatus("就绪");
+    }, durationMs);
+  }
+
+  function patchCompanionCareCounts(): void {
+    const bond = loadCompanionBond();
+    const syncToy = (kind: "coffee" | "glasses" | "music", count: number) => {
+      chatEl.querySelectorAll<HTMLButtonElement>(`[data-companion-care="${kind}"]`).forEach((btn) => {
+        let cnt = btn.querySelector<HTMLSpanElement>(".cnt");
+        if (count > 0) {
+          if (!cnt) {
+            cnt = document.createElement("span");
+            cnt.className = "cnt";
+            btn.appendChild(cnt);
+          }
+          cnt.textContent = String(count);
+        } else {
+          cnt?.remove();
+        }
+      });
+    };
+    syncToy("coffee", bond.coffeeCount);
+    syncToy("glasses", bond.glassesCount);
+    syncToy("music", bond.musicCount);
+    const sidebarCoffee = root.querySelector<HTMLButtonElement>('[data-sidebar-action="care-coffee"]');
+    if (sidebarCoffee) {
+      sidebarCoffee.textContent = bond.coffeeCount > 0 ? `🧋 ${bond.coffeeCount}` : "🧋";
+    }
+  }
+
+  function onCompanionCare(kind: "coffee" | "glasses" | "music"): void {
+    const { reply } = recordCompanionCare(kind);
+    syncCompanionToBackend();
+    renderSidebar();
+    patchCompanionCareCounts();
+    showComposerWhisper(reply);
   }
 
   function setTurnEndStatus(finishReason: string): void {
@@ -1234,13 +1313,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     else if (action === "new-project") void handleNewProject();
     else if (action === "care-coffee") {
       ev.stopPropagation();
-      const { reply } = recordCompanionCare("coffee");
-      syncCompanionToBackend();
-      renderedPrints = [];
-      renderedSegmentPrints = [];
-      renderChat();
-      renderSidebar();
-      setStatus(reply);
+      onCompanionCare("coffee");
     }
   });
   document.addEventListener("keydown", (ev) => {
@@ -2112,7 +2185,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     settingsEl.classList.toggle("hidden", focus !== "settings");
     musicEl.hidden = focus !== "music";
     musicEl.classList.toggle("hidden", focus !== "music");
-    const auxiliaryFocus = focus === "settings" || focus === "music";
+    shellDevEl.hidden = focus !== "shell-dev";
+    shellDevEl.classList.toggle("hidden", focus !== "shell-dev");
+    const auxiliaryFocus = focus === "settings" || focus === "music" || focus === "shell-dev";
     composerDock.hidden = auxiliaryFocus;
     composer.hidden = auxiliaryFocus;
     statusEl.hidden = auxiliaryFocus;
@@ -2124,8 +2199,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       renderProjectsPane();
     } else if (focus === "music") {
       renderMusicStage();
+    } else if (focus === "shell-dev") {
+      shellDevLastOpenOk = false;
+      void renderShellDevStage();
     }
     syncMusicViewBounds();
+    syncShellDevViewBounds();
     updateWorkbenchEmpty();
     renderSidebar();
   }
@@ -2273,6 +2352,253 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function renderMusicStage(): void {
     if (musicEl.innerHTML) return;
     musicEl.innerHTML = renderMusicPanel();
+  }
+
+  function currentShellDevViewBounds(): { x: number; y: number; width: number; height: number } | null {
+    if (projectState.mainFocus !== "shell-dev") return null;
+    const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
+    if (!slot) return null;
+    const rect = slot.getBoundingClientRect();
+    const clip = shellDevEl.getBoundingClientRect();
+    const left = Math.max(0, clip.left, rect.left);
+    const top = Math.max(0, clip.top, rect.top);
+    const right = Math.min(window.innerWidth, clip.right, rect.right);
+    const bottom = Math.min(window.innerHeight, clip.bottom, rect.bottom);
+    if (right <= left || bottom <= top) return null;
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  function shellDevFeedback(text: string, tone: "neutral" | "ok" | "error" | "busy" = "neutral"): void {
+    const el = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-feedback]");
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.tone = tone;
+    el.classList.toggle("is-ok", tone === "ok");
+    el.classList.toggle("is-error", tone === "error");
+    el.classList.toggle("is-busy", tone === "busy");
+  }
+
+  function clearShellDevSlotPlaceholder(): void {
+    shellDevEl.querySelector<HTMLElement>(".shell-dev-slot-placeholder")?.remove();
+  }
+
+  function showShellDevSlotPlaceholder(previewUrl: string, mainUrl: string): void {
+    const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
+    if (!slot) return;
+    clearShellDevSlotPlaceholder();
+    const panel = document.createElement("div");
+    panel.className = "shell-dev-slot-placeholder";
+    panel.innerHTML = `<p>原生预览未嵌入（页内 iframe 无法加载完整桌面壳）。</p>
+      <p class="shell-dev-slot-hint">请用 <code>start-desktop.bat</code> 启动（含 5174 预览轨）；若只要主壳可设 <code>MY_AGENT_SKIP_PREVIEW_DEV=1</code>。</p>
+      <div class="shell-dev-slot-actions">
+        <button type="button" class="unified-btn" data-shell-dev-open-preview>在浏览器打开预览轨</button>
+        <button type="button" class="unified-btn" data-shell-dev-open-main>在浏览器打开主壳</button>
+      </div>`;
+    panel.querySelector<HTMLButtonElement>("[data-shell-dev-open-preview]")?.addEventListener("click", () => {
+      void window.myAgentDesktop?.openExternal?.(previewUrl);
+    });
+    panel.querySelector<HTMLButtonElement>("[data-shell-dev-open-main]")?.addEventListener("click", () => {
+      void window.myAgentDesktop?.openExternal?.(mainUrl);
+    });
+    slot.appendChild(panel);
+  }
+
+  let shellDevOpenTimer: number | null = null;
+  let shellDevLastOpenOk = false;
+
+  async function openShellDevPreviewIfReady(): Promise<void> {
+    const api = window.myAgentDesktop;
+    const fallbackMain = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
+    const fallbackPreview = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
+    if (!api?.openShellDevPreview) {
+      showShellDevSlotPlaceholder(fallbackPreview, fallbackMain);
+      shellDevFeedback("请完全退出后重启桌面壳，以启用壳预览原生嵌入。");
+      return;
+    }
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const bounds = currentShellDevViewBounds();
+    if (!bounds || bounds.width < 80 || bounds.height < 80) {
+      shellDevFeedback("预览区域尚未就绪，请稍后再试或点「重新加载预览」。");
+      return;
+    }
+    try {
+      const result = await api.openShellDevPreview(bounds);
+      shellDevLastOpenOk = Boolean(result?.ok);
+      if (result?.ok) {
+        clearShellDevSlotPlaceholder();
+        shellDevFeedback(
+          result.message
+            || (result.fallbackToMain
+              ? "已显示主壳开发页（单轨）。请用 start-desktop.bat 重启以拉起 5174 预览轨。"
+              : "内嵌缩略预览已就绪；要看全尺寸请点「独立窗口预览」。"),
+        );
+        return;
+      }
+      showShellDevSlotPlaceholder(fallbackPreview, fallbackMain);
+      shellDevFeedback(
+        result?.message
+          || "原生嵌入失败。请点「重新加载预览」，或先用下方按钮在浏览器里打开开发页。",
+      );
+    } catch {
+      showShellDevSlotPlaceholder(fallbackPreview, fallbackMain);
+      shellDevFeedback("预览暂时无法打开。请确认 npm run dev 正在运行后点「重新加载预览」。");
+    }
+  }
+
+  function queueShellDevPreviewOpen(): void {
+    if (projectState.mainFocus !== "shell-dev") return;
+    if (shellDevOpenTimer !== null) window.clearTimeout(shellDevOpenTimer);
+    shellDevOpenTimer = window.setTimeout(() => {
+      shellDevOpenTimer = null;
+      if (!shellDevLastOpenOk) void openShellDevPreviewIfReady();
+    }, 120);
+  }
+
+  function syncShellDevViewBounds(): void {
+    const api = window.myAgentDesktop?.setShellDevViewState;
+    if (!api) return;
+    const bounds = currentShellDevViewBounds();
+    void api({ visible: Boolean(bounds), bounds: bounds ?? undefined }).catch(() => {});
+    if (bounds && bounds.width >= 80 && bounds.height >= 80) {
+      queueShellDevPreviewOpen();
+    }
+  }
+
+  async function refreshShellDevLaneLabels(): Promise<void> {
+    const api = window.myAgentDesktop;
+    const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
+    const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
+    const mainEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-main-url]");
+    const previewEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-url]");
+    if (mainEl) mainEl.textContent = mainUrl;
+    if (previewEl) previewEl.textContent = previewUrl;
+  }
+
+  async function renderShellDevStage(): Promise<void> {
+    if (!shellDevEl.innerHTML) {
+      const api = window.myAgentDesktop;
+      const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
+      const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
+      shellDevEl.innerHTML = renderShellDevPanel(mainUrl, previewUrl);
+      const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
+      if (slot) shellDevViewResizeObserver.observe(slot);
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", () => {
+        client.createSandboxSession();
+        setPerspective("project", "session");
+        shellDevFeedback("正在打开实验进化会话（写入仅限 sandbox）…");
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-popout]")?.addEventListener("click", () => {
+        void window.myAgentDesktop?.openShellDevPopout?.().then((result) => {
+          if (result?.ok) {
+            shellDevFeedback(result.message || `已在独立窗口打开：${result.url ?? ""}`);
+            return;
+          }
+          shellDevFeedback(result?.message || "独立预览窗口未能打开。");
+        });
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reload]")?.addEventListener("click", () => {
+        shellDevLastOpenOk = false;
+        clearShellDevSlotPlaceholder();
+        void openShellDevPreviewIfReady();
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-promote]")?.addEventListener("click", () => {
+        const ok = window.confirm(
+          "将把「预览壳」的地址设为主壳并重新加载主窗口；原主壳会移到预览轨。继续？",
+        );
+        if (!ok) return;
+        void window.myAgentDesktop?.promoteShellDevPreview?.().then(async (result) => {
+          if (result?.ok) {
+            shellDevFeedback(
+              `已提取为主壳：${result.mainUrl ?? ""}。原主壳在预览轨：${result.previewUrl ?? ""}`,
+            );
+            await refreshShellDevLaneLabels();
+            await openShellDevPreviewIfReady();
+            return;
+          }
+          shellDevFeedback(result?.message || "提取失败，请确认预览页已打开。");
+        });
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]")?.addEventListener("click", () => {
+        void (async () => {
+          const mergeBtn = shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]");
+          try {
+            const raw = await window.myAgentDesktop?.getSandboxAdoptStatus?.();
+            if (!raw || (raw as { message?: string }).message === "workbench unavailable") {
+              shellDevFeedback("请在 Electron 桌面壳内使用合入功能。", "error");
+              return;
+            }
+            const status = raw as {
+              readyToMerge?: boolean;
+              fatalBlockers?: string[];
+              needsSandboxCommit?: boolean;
+              needsStableStash?: boolean;
+              currentBranch?: string;
+              sandboxBranch?: string;
+              commitsAhead?: number | null;
+              recentCommits?: string[];
+              sandboxDirtyProduct?: string[];
+              stableDirtyProduct?: string[];
+            };
+
+            if (status.fatalBlockers?.length) {
+              shellDevFeedback(status.fatalBlockers[0], "error");
+              return;
+            }
+
+            const sandboxCommitMessage = "chore(sandbox): prepare merge into stable";
+            const plan: string[] = [];
+            if (status.needsSandboxCommit) {
+              plan.push(
+                `在 sandbox 提交 ${status.sandboxDirtyProduct?.length ?? "?"} 处改动（说明：${sandboxCommitMessage}）`,
+              );
+            }
+            if (status.needsStableStash) {
+              plan.push(`把稳定树 ${status.stableDirtyProduct?.length ?? "?"} 处改动 stash 掉`);
+            }
+            const commitLines = status.recentCommits?.length
+              ? status.recentCommits.map((c) => `  ${c}`).join("\n")
+              : status.commitsAhead != null
+                ? `  共 ${status.commitsAhead} 个提交`
+                : "";
+            const mergeLine = `合并 ${status.sandboxBranch ?? "experiment/sandbox"} → ${status.currentBranch ?? "HEAD"}（整支，含 agent-core + desktop）`;
+
+            const confirmBody = status.readyToMerge
+              ? [`将执行：${mergeLine}`, commitLines ? `待合入：\n${commitLines}` : "", "", "完成后会弹出结果窗口。继续？"]
+              : [
+                  "将自动完成合入准备并 merge：",
+                  ...plan.map((p) => `• ${p}`),
+                  `• ${mergeLine}`,
+                  commitLines ? `\n已有待合入提交：\n${commitLines}` : "",
+                  "",
+                  "取消则不做任何 git 操作。合入成功后会自动 git stash pop 恢复稳定树本地改动，并弹出结果窗口。继续？",
+                ];
+            if (!window.confirm(confirmBody.filter(Boolean).join("\n"))) return;
+
+            if (mergeBtn) mergeBtn.disabled = true;
+            shellDevFeedback("正在合入，请稍候（sandbox 提交 / stash / merge）…", "busy");
+            const result = await window.myAgentDesktop?.mergeSandboxIntoStable?.({
+              autoCommitSandbox: Boolean(status.needsSandboxCommit),
+              sandboxCommitMessage,
+              autoStashStable: Boolean(status.needsStableStash),
+            });
+            if (!result) {
+              shellDevFeedback("合入调用失败。", "error");
+              return;
+            }
+            const parts = [result.message, result.steps?.join(" → "), result.detail].filter(Boolean);
+            shellDevFeedback(parts.join("\n"), result.ok ? "ok" : "error");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            shellDevFeedback(`合入过程异常：${message}`, "error");
+          } finally {
+            if (mergeBtn) mergeBtn.disabled = false;
+          }
+        })();
+      });
+    }
+    await refreshShellDevLaneLabels();
+    await openShellDevPreviewIfReady();
   }
 
   musicEl.addEventListener("submit", async (event) => {
@@ -3819,14 +4145,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   chatEl.addEventListener("click", (ev) => {
     const careBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-companion-care]");
     if (careBtn?.dataset.companionCare) {
-      const kind = careBtn.dataset.companionCare as "coffee" | "glasses" | "music";
-      const { reply } = recordCompanionCare(kind);
-      syncCompanionToBackend();
-      renderedPrints = [];
-      renderedSegmentPrints = [];
-      renderChat();
-      renderSidebar();
-      setStatus(reply);
+      onCompanionCare(careBtn.dataset.companionCare as "coffee" | "glasses" | "music");
       return;
     }
     const delStickerBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-remove-sticker]");
@@ -4877,6 +5196,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         updatePlaceholder();
         updateWorkbenchEmpty();
         syncArchivedViewUi();
+        syncSandboxWriteScopeBanner(event.write_scope_label);
         syncModeToggleUi(event.turn_mode);
         setStatus(sessionBannerStatus(event.llm_model_label || "Flash", event.turn_mode_label || ""));
         refreshTopbar();
@@ -5616,9 +5936,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     unbindChatFontControl();
     settingsThemeObserver.disconnect();
     musicViewResizeObserver.disconnect();
+    shellDevViewResizeObserver.disconnect();
     window.removeEventListener("resize", syncMusicViewBounds);
+    window.removeEventListener("resize", syncShellDevViewBounds);
     musicEl.removeEventListener("scroll", syncMusicViewBounds);
+    shellDevEl.removeEventListener("scroll", syncShellDevViewBounds);
     void window.myAgentDesktop?.setBilibiliViewState?.({ visible: false });
+    void window.myAgentDesktop?.setShellDevViewState?.({ visible: false });
     fileDrop.destroy();
     off();
     shellEl.classList.remove("is-working");

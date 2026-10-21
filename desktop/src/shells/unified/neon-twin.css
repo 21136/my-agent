@@ -247,8 +247,13 @@ html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assist
   border-radius: 8px 20px 20px 20px;
   border: 1px solid var(--nt-assistant-card-border, color-mix(in srgb, var(--ma-accent) 18%, var(--ma-border)));
   background: var(--nt-assistant-card, var(--ma-surface));
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px) saturate(118%);
   box-shadow: var(--nt-assistant-card-shadow, 0 10px 28px color-mix(in srgb, var(--ma-text) 5%, transparent));
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-turn-assistant {
+  background: var(--nt-assistant-card, color-mix(in srgb, var(--ma-surface) 96%, var(--ma-bg)));
+  border-color: var(--nt-assistant-card-border, color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border)));
 }
 html[data-theme] .unified-pet-content .unified-turn-assistant {
   width: 100%;
@@ -447,6 +452,36 @@ html[data-theme] .unified-process-pill {
   font-size: 0.72rem;
   border-radius: 999px;
 }
+
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-process {
+  margin-bottom: 0.65rem;
+  padding: 0.55rem 0.8rem 0.65rem;
+  border-radius: var(--nt-r-md);
+  border: 1px solid color-mix(in srgb, var(--ma-border-strong) 85%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 94%, var(--ma-bg));
+  backdrop-filter: blur(12px) saturate(115%);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--ma-text) 6%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-process-pill {
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-surface) 96%, var(--ma-bg));
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-tool-line.is-running,
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-thinking:not(.is-waiting) {
+  background: color-mix(in srgb, var(--ma-surface) 92%, var(--ma-bg));
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-confirm.is-compact-pending,
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-confirm.is-compact .unified-confirm-preview {
+  background: color-mix(in srgb, var(--ma-surface) 94%, var(--ma-bg));
+  color: var(--ma-text);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-confirm-preview {
+  color: color-mix(in srgb, var(--ma-text) 88%, var(--ma-text-muted));
+}
 html[data-theme] .unified-process-pill:hover {
   background: color-mix(in srgb, var(--ma-accent) 12%, var(--ma-surface));
   color: var(--ma-text);
@@ -551,18 +586,54 @@ html[data-theme] #unified-stop::before {
 html[data-theme] #unified-stop[hidden] { display: none; }
 html[data-theme] .unified-status { color: var(--ma-text-faint); }
 
+/* session switch surfaces (sidebar list, 会话 expand, switch mask card) */
+html[data-theme="light"] .sidebar-sessions,
+html[data-theme="light"] .unified-expand,
+html[data-theme="light"] .unified-switch-mask-card {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--ma-bg) 62%, transparent),
+      color-mix(in srgb, var(--ma-bg) 48%, transparent)
+    ),
+    url("./assets/session-switch-light.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="dark"] .sidebar-sessions,
+html[data-theme="dark"] .unified-expand,
+html[data-theme="dark"] .unified-switch-mask-card {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--ma-bg) 58%, transparent),
+      color-mix(in srgb, var(--ma-bg) 42%, transparent)
+    ),
+    url("./assets/session-switch-dark.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
 /* sessions dropdown (会话 N) */
 html[data-theme] .unified-expand {
   border: 1px solid var(--ma-border);
   border-radius: var(--nt-r-lg);
-  background: var(--nt-glass);
-  backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(10px) saturate(130%);
   box-shadow: var(--nt-shadow);
 }
 html[data-theme] .unified-expand-item { border-radius: var(--nt-r-sm); border-color: transparent; }
 html[data-theme] .unified-expand-item:hover { background: var(--nt-hover); }
 html[data-theme] .unified-expand-item.is-current { background: var(--nt-selected); box-shadow: inset 3px 0 0 #5b5cff; }
 html[data-theme] .unified-sessions-tab.is-active { color: var(--ma-text); border-bottom-color: #5b5cff; }
+
+html[data-theme] .unified-switch-mask-card {
+  min-width: 12rem;
+  padding: 1rem 1.2rem;
+  text-align: center;
+  backdrop-filter: blur(8px) saturate(125%);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--ma-text) 12%, transparent);
+}
 
 /* scrollbars */
 html[data-theme] .unified-chat::-webkit-scrollbar,
@@ -613,7 +684,7 @@ html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has
   background-repeat: no-repeat;
 }
 
-/* Let the fixed main wallpaper show through the scrollable message area and dock. */
+/* Let the fixed main wallpaper show through at full brightness; readability = bubble/process cards only. */
 html[data-theme] .unified-shell[data-main-focus="chat"] .unified-stage,
 html[data-theme] .unified-shell[data-main-focus="chat"] .unified-chat {
   background: transparent;
@@ -634,9 +705,64 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock >
   margin-inline: 0;
 }
 
-html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer {
-  background: color-mix(in srgb, var(--ma-surface) 72%, transparent);
+/* 投喂/状态：与输入框同一张玻璃卡，避免上下两块「拼贴」 */
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock:has(.unified-composer-meta:not(.hidden):not([hidden])) {
+  gap: 0;
+  padding: 0.5rem clamp(0.65rem, 1.2vw, 0.85rem) 0.55rem;
+  border-radius: var(--nt-r-lg);
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 16%, var(--ma-border-strong));
+  background: color-mix(in srgb, var(--ma-surface) 76%, transparent);
+  backdrop-filter: blur(18px) saturate(125%);
+  box-shadow: var(--nt-shadow);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta {
+  margin: 0;
+  padding: 0 0.5rem 0.4rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock:has(.unified-composer-meta:not(.hidden):not([hidden])) .unified-composer-meta {
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta .unified-status {
+  color: color-mix(in srgb, var(--ma-text) 90%, var(--ma-accent-muted));
+  font-size: 0.76rem;
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock:has(.unified-composer-meta:not(.hidden):not([hidden])) .unified-composer {
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.4rem;
+  background: color-mix(in srgb, var(--ma-bg) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);
+  border-radius: calc(var(--nt-r-lg) - 5px);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock:not(:has(.unified-composer-meta:not(.hidden):not([hidden]))) .unified-composer {
+  background: color-mix(in srgb, var(--ma-surface) 78%, transparent);
   border-color: color-mix(in srgb, var(--ma-border-strong) 78%, transparent);
-  box-shadow: 0 5px 20px color-mix(in srgb, var(--ma-text) 9%, transparent);
-  backdrop-filter: blur(10px) saturate(115%);
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--ma-text) 8%, transparent);
+  backdrop-filter: blur(12px) saturate(115%);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-generated-image-caption {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  color: var(--ma-text-muted);
+  background: color-mix(in srgb, var(--ma-surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent);
+  backdrop-filter: blur(10px);
 }

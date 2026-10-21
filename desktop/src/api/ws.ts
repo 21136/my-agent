@@ -94,6 +94,8 @@ export type ServerEvent =
       llm_model?: string;
       llm_model_label?: string;
       llm_model_override?: boolean;
+      write_scope_root?: string;
+      write_scope_label?: string;
     }
   | {
       type: "session.models";
@@ -173,9 +175,9 @@ export type ServerEvent =
       summary: string;
       /** "absent" — a read found the path does not exist yet. Not a failure. */
       note?: string;
-      output_path?: string;
       path?: string;
-      diff?: string;
+      output_path?: string;
+      /** Agent-relative image paths for Desktop inline preview (CHAT-IMAGE-DISPLAY). */
       display_paths?: string[];
       logs_tail?: string;
       run_id?: string;
@@ -713,6 +715,10 @@ export class AgentWsClient {
     this.send({ type: "session.open", session_id: sessionId });
   }
 
+  createSandboxSession(): void {
+    this.send({ type: "session.create_sandbox" });
+  }
+
   refreshSession(): void {
     this.send({ type: "session.refresh" });
   }
@@ -995,6 +1001,31 @@ declare global {
       openExternal?: (url: string) => Promise<boolean>;
       openBilibiliSearch?: (query: string, bounds: { x: number; y: number; width: number; height: number }) => Promise<boolean>;
       setBilibiliViewState?: (state: { visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => Promise<boolean>;
+      getShellDevPreviewUrl?: () => Promise<string>;
+      getShellDevMainUrl?: () => Promise<string>;
+      promoteShellDevPreview?: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
+      getSandboxAdoptStatus?: () => Promise<Record<string, unknown>>;
+      mergeSandboxIntoStable?: (options?: {
+        autoCommitSandbox?: boolean;
+        sandboxCommitMessage?: string;
+        autoStashStable?: boolean;
+      }) => Promise<{ ok: boolean; message: string; detail?: string; steps?: string[] }>;
+      openShellDevPreview?: (bounds: { x: number; y: number; width: number; height: number }) => Promise<{
+        ok: boolean;
+        url?: string;
+        configuredUrl?: string;
+        fallbackToMain?: boolean;
+        message?: string;
+      }>;
+      openShellDevPopout?: () => Promise<{
+        ok: boolean;
+        url?: string;
+        configuredUrl?: string;
+        fallbackToMain?: boolean;
+        message?: string;
+      }>;
+      reloadShellDevPreview?: () => Promise<boolean>;
+      setShellDevViewState?: (state: { visible: boolean; bounds?: { x: number; y: number; width: number; height: number } }) => Promise<boolean>;
       onSessionControl?: (handler: (action: "suspend" | "resume") => void) => () => void;
       pickDirectory: () => Promise<string | null>;
       getDownloadsPath: () => Promise<string>;

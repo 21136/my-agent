@@ -2,7 +2,7 @@
 
 > 版本 **0.1.0** · 2026-09-04  
 > 状态：`in-progress` — **UX-030 M0 已编码，待完整手工验收；M1 后端人话文案基础已落地**  
-> 关联：[output-format.md](./output-format.md) · [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · [UX-POLISH.md](./UX-POLISH.md) **UX-030** · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)
+> 关联：[output-format.md](./output-format.md) · [CHAT-ACTIVITY-TIMELINE.md](./CHAT-ACTIVITY-TIMELINE.md) · [CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md) · [UX-POLISH.md](./UX-POLISH.md) **UX-030** · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md)
 
 ---
 
