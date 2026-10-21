@@ -580,3 +580,63 @@ html[data-theme] .unified-chat::-webkit-scrollbar-track { background: transparen
   html[data-theme] .unified-btn,
   html[data-theme] .unified-pet-avatar { transition: none; }
 }
+/* Keep chat wallpapers on the fixed-height main surface, never on the scrolling transcript. */
+html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-presence-stage) {
+  background-image:
+    linear-gradient(rgb(246 245 251 / 0.08), rgb(246 245 251 / 0.08)),
+    url("./assets/presence-light.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-presence-stage) {
+  background-image:
+    linear-gradient(rgb(11 10 18 / 0.12), rgb(11 10 18 / 0.12)),
+    url("./assets/presence-dark.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
+  background-image: url("./assets/chat-background-light.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
+  background-image: url("./assets/chat-background-dark.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+/* Let the fixed main wallpaper show through the scrollable message area and dock. */
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-stage,
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-chat {
+  background: transparent;
+}
+
+/* Use the full chat column for the composer, leaving only a narrow safety gutter. */
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock {
+  background: transparent;
+  border-top-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding: 0 clamp(0.75rem, 1.4vw, 1.5rem) 0.8rem;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock > * {
+  max-width: none;
+  width: 100%;
+  margin-inline: 0;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer {
+  background: color-mix(in srgb, var(--ma-surface) 72%, transparent);
+  border-color: color-mix(in srgb, var(--ma-border-strong) 78%, transparent);
+  box-shadow: 0 5px 20px color-mix(in srgb, var(--ma-text) 9%, transparent);
+  backdrop-filter: blur(10px) saturate(115%);
+}

@@ -343,6 +343,7 @@ export function mountUnifiedShell(
   let terminalOutputRequestSessionId: string | null = null;
   let renderedPrints: string[] = [];
   let renderedSegmentPrints: string[] = [];
+  let renderedPresenceHtml = "";
   /** UI-5972 M4: full history load defers markdown; incremental paths render eagerly. */
   let markdownRenderEager = true;
   /** turnKey → user expanded the folded early tool list (UX-023). */
@@ -487,7 +488,7 @@ export function mountUnifiedShell(
 
   // ---- DOM layout ----
   root.innerHTML = `
-    <div class="unified-shell" data-perspective="project" data-rail="now">
+    <div class="unified-shell" data-perspective="project" data-main-focus="chat" data-rail="now">
       <aside class="unified-sidebar" id="unified-sidebar">
         <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
         <nav class="sidebar-icon-bar" id="sidebar-icon-bar" aria-label="主导航">
@@ -3467,6 +3468,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function doRender(): void {
     markdownRenderEager = true;
     const curPrints = chat.model.blocks.map(blockPrint);
+
+    if (!curPrints.length && !chat.isWorking()) {
+      const presenceHtml = renderBlocksGrouped([]);
+      if (
+        renderedPresenceHtml !== presenceHtml ||
+        !chatEl.firstElementChild?.classList.contains("unified-presence-stage")
+      ) {
+        resetLazyMarkdownObserver();
+        chatEl.innerHTML = presenceHtml;
+        renderedPresenceHtml = presenceHtml;
+        bindNewProcessToggles(chatEl);
+        setupFocusObserver();
+        scrollToBottomIfNear();
+      }
+      renderedPrints = [];
+      renderedSegmentPrints = [];
+      return;
+    }
+    renderedPresenceHtml = "";
 
     if (useTurnCardLayout()) {
       const segments = segmentChatBlocks(chat.model.blocks);
