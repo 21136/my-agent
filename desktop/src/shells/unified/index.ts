@@ -1,3 +1,5 @@
+import { hydrateAgentImageElements } from "../../agent-image-hydrate";
+import { bindImageLightboxClick } from "../../image-lightbox";
 import { setAgentBusy } from "../../agent-busy";
 import { wireComposerAttachments } from "../../composer-attachments";
 import { mountFileDrop } from "../../file-drop";
@@ -595,6 +597,7 @@ export function mountUnifiedShell(
   const topbarEl = root.querySelector<HTMLElement>("#unified-topbar")!;
   const expandEl = root.querySelector<HTMLElement>("#unified-expand")!;
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
+  bindImageLightboxClick(chatEl, "img.unified-generated-image");
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
   const settingsEl = root.querySelector<HTMLElement>("#unified-settings")!;
@@ -3207,6 +3210,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         <div class="${bodyCls}"${bodyAttr}>${bodyHtml}</div>
       </article>`;
     }
+    if (block.kind === "generated-image") {
+      const fileName = block.agentPath.split("/").pop() || block.agentPath;
+      return `<figure class="unified-generated-image-wrap" data-turn-index="${block.turnIndex}">
+        <img class="unified-generated-image" alt="${escapeHtml(fileName)}" data-agent-path="${escapeHtml(block.agentPath)}" loading="lazy" />
+        <figcaption class="unified-generated-image-caption text-muted">${escapeHtml(fileName)}</figcaption>
+      </figure>`;
+    }
     if (block.kind === "notice") {
       const adoptPath = adoptPathFromNotice(block.text);
       if (adoptPath) {
@@ -3696,11 +3706,16 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   const RENDER_THROTTLE_MS = 100;
 
+  async function hydrateGeneratedImages(root: ParentNode): Promise<void> {
+    await hydrateAgentImageElements(root, "img.unified-generated-image[data-agent-path]");
+  }
+
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
     settlePetAvatars();
     syncLiveThinkingDom();
+    void hydrateGeneratedImages(chatEl);
     void hydrateMermaid(chatEl);
     observeLazyMarkdown(chatEl, prepareLazyReadingBody);
     scrollStreamingThinkingBodies();
@@ -3711,6 +3726,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       doRender();
       settlePetAvatars();
       syncLiveThinkingDom();
+      void hydrateGeneratedImages(chatEl);
       void hydrateMermaid(chatEl);
       observeLazyMarkdown(chatEl, prepareLazyReadingBody);
       scrollStreamingThinkingBodies();

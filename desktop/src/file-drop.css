@@ -17,6 +17,59 @@
   font-size: 0.82rem;
 }
 
+.file-drop-chip-image {
+  position: relative;
+  padding: 0;
+  border: none;
+  background: transparent;
+  gap: 0;
+  max-width: none;
+}
+
+.file-drop-chip-zoom {
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 85%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ma-surface) 75%, transparent);
+  cursor: zoom-in;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.file-drop-chip-zoom:hover {
+  border-color: color-mix(in srgb, var(--ma-accent) 45%, var(--ma-border));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--ma-text) 10%, transparent);
+}
+
+.file-drop-chip-thumb {
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border: none;
+  background: color-mix(in srgb, var(--ma-surface-2, var(--ma-surface)) 90%, var(--ma-bg));
+}
+
+.file-drop-chip-image .file-drop-chip-remove {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  z-index: 1;
+  width: 1.2rem;
+  height: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--ma-border);
+  background: var(--ma-surface);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ma-text) 12%, transparent);
+  font-size: 0.9rem;
+}
+
 .file-drop-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;

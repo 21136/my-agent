@@ -24,6 +24,7 @@ export type ChatBlock =
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
   | { kind: "notice"; text: string }
+  | { kind: "generated-image"; agentPath: string; turnIndex: number }
   | (ProcessActivityBlock & { kind: "process" })
   | {
       kind: "confirm";
@@ -151,8 +152,15 @@ export function isHarnessChatText(text: string): boolean {
   return trimmed.startsWith("[狂奔续接]") || trimmed.slice(0, 40).includes("[狂奔续接]");
 }
 
+export type SessionHistoryItem = {
+  role: "user" | "assistant";
+  text: string;
+  /** Agent-relative image paths to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
+  inline_images?: string[];
+};
+
 export function historyFromItems(
-  items: Array<{ role: "user" | "assistant"; text: string }>,
+  items: SessionHistoryItem[],
 ): { blocks: ChatBlock[]; turnCounter: number; seeds: HistoryStarSeed[] } {
   let turnIndex = 0;
   const blocks: ChatBlock[] = [];
@@ -173,6 +181,12 @@ export function historyFromItems(
         continue;
       }
       const assistantTurn = turnIndex || 1;
+      const imageExt = /\.(png|jpe?g|webp|gif|bmp)$/i;
+      for (const rawPath of item.inline_images ?? []) {
+        const agentPath = rawPath.trim().replace(/\\/g, "/");
+        if (!agentPath || !imageExt.test(agentPath)) continue;
+        blocks.push({ kind: "generated-image", agentPath, turnIndex: assistantTurn });
+      }
       blocks.push({ kind: "assistant", text: item.text, turnIndex: assistantTurn });
       seeds.push({ role: "assistant", turnIndex: assistantTurn });
     }
@@ -1017,6 +1031,34 @@ export function createChatSession(
         }
         if (model.turnFinished && model.toolsRunning === 0) {
           model.turnActive = false;
+        }
+        if (event.ok) {
+          const rawDisplay = (event as { display_paths?: unknown }).display_paths;
+          const displayPaths = Array.isArray(rawDisplay)
+            ? rawDisplay
+                .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+                .map((p) => p.trim().replace(/\\/g, "/"))
+            : [];
+          const imageExt = /\.(png|jpe?g|webp|gif|bmp)$/i;
+          const pushImageBlock = (agentPath: string) => {
+            if (!imageExt.test(agentPath)) return;
+            model.blocks.push({
+              kind: "generated-image",
+              agentPath,
+              turnIndex: currentTurnIndex(),
+            });
+          };
+          if (displayPaths.length) {
+            for (const p of displayPaths) pushImageBlock(p);
+          } else if (/generate_image|show_images/i.test(event.tool || "")) {
+            const imagePath =
+              (typeof (event as { path?: string }).path === "string"
+                ? (event as { path: string }).path
+                : ""
+              ).trim()
+              || (typeof event.output_path === "string" ? event.output_path : "").trim();
+            if (imagePath) pushImageBlock(imagePath.replace(/\\/g, "/"));
+          }
         }
         // When all tools done after an approve, flip confirm label to terminal state.
         if (model.toolsRunning === 0) {

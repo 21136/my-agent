@@ -1839,6 +1839,29 @@
   background: var(--ma-accent, #2563eb);
   color: #fff;
 }
+.unified-generated-image-wrap {
+  margin: 0.65rem 0 0.35rem;
+  max-width: min(100%, 18rem);
+}
+.unified-generated-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: min(38vh, 16rem);
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--ma-border);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ma-text) 8%, transparent);
+  background: var(--ma-surface);
+  min-height: 3rem;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.unified-generated-image-caption {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  word-break: break-all;
+}
 .unified-tool-fold {
   margin: 0.1rem 0 0.25rem;
   font-size: 0.78rem;

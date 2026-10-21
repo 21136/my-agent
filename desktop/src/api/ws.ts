@@ -110,7 +110,7 @@ export type ServerEvent =
       type: "session.history";
       session_id?: string;
       project_id?: string | null;
-      items: Array<{ role: "user" | "assistant"; text: string }>;
+      items: Array<{ role: "user" | "assistant"; text: string; inline_images?: string[] }>;
       truncated?: boolean;
       total_items?: number;
       omitted_count?: number;
@@ -174,6 +174,9 @@ export type ServerEvent =
       /** "absent" — a read found the path does not exist yet. Not a failure. */
       note?: string;
       output_path?: string;
+      path?: string;
+      diff?: string;
+      display_paths?: string[];
       logs_tail?: string;
       run_id?: string;
     }
@@ -999,6 +1002,7 @@ declare global {
       getPathForFile?: (file: File) => string;
       writeTempStagingFile?: (name: string, data: Uint8Array) => Promise<string>;
       readClipboardImageToTemp?: () => Promise<string | null>;
+      readAgentImageDataUrl?: (agentRelativePath: string) => Promise<string | null>;
       readConstellation: () => Promise<{ version: 1; stars: unknown[]; links: unknown[] }>;
       writeConstellation: (payload: { version: 1; stars: unknown[]; links: unknown[] }) => Promise<boolean>;
       clearConstellation: () => Promise<boolean>;
