@@ -2,7 +2,7 @@
 
 > 版本 **0.3.0** · 2026-08-04 · **状态：M1 Q4 已落地（T-3410～3413）**  
 > 触发：huiyi 联调体验差 + 反窄化结论——产品初衷是**写项目工具**，聊天顺带；多壳/绑工具骨架与初衷拧着。  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · **总路线** [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) **Track G / Phase 34**
+> 关联：[DESKTOP.md](./DESKTOP.md) · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md)（内嵌前端预览 · Phase 65） · **总路线** [CURSOR-ALIGN.md](./CURSOR-ALIGN.md) **Track G / Phase 34**
 
 ---
 
@@ -44,7 +44,7 @@
 | 侧栏 | 无项目绑定时：任务流/服务区 **弱化或空提示**；不假装有项目进度 |
 | 拖文件 | 无项目绑定时 **仍禁止**（与 [FILES-DROP.md](./FILES-DROP.md) 一致） |
 | 与顶栏「+ 对话」 | **无项目**：空态「先聊聊」= 唯一入口；**已绑项目**：顶栏「+ 对话」= 挂起项目开 grow（UX-POLISH D7） |
-| 与 `write_evolve` | grow 普通对话内 **允许** `write_evolve`；项目绑定会话内 **仍禁止**（PROJECT-MODE P6） |
+| 与 `write_evolve` | grow 与项目绑定会话均可显式调用；项目绑定会话每次须单独确认（当前权限见 PROJECT-MODE §0g） |
 | 回项目 | 用户从「会话」列表或侧栏「我的项目」回到已绑项目会话；不要求从「先聊聊」里再 propose 换线 |
 
 **非目标**：

@@ -540,6 +540,39 @@ _ORDINARY_PLAN_ONLY_MARKERS = (
     "do not write code",
     "don't write code",
 )
+_IMAGE_GENERATION_MARKERS = (
+    "生图",
+    "生成图",
+    "生成图片",
+    "生成一张",
+    "出图",
+    "画图",
+    "作图",
+    "再生成",
+    "重新生成",
+    "去生成",
+    "帮我生成",
+    "generate image",
+    "generate an image",
+    "generate_image",
+    "regenerate",
+    "image generation",
+)
+
+
+def is_explicit_image_generation_request(user_text: str) -> bool:
+    """User asked to run generate_image (paid/confirmed), not merely discuss images."""
+    text = user_text_without_attachment_block(user_text or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if any(marker.casefold() in folded for marker in _IMAGE_GENERATION_MARKERS):
+        return True
+    if re.search(r"(?:^|[\s，,。！？!?])(?:生成|出图)(?:吧|呀|呢|一下|张)?(?:$|[\s，,。！？!?])", text):
+        return True
+    return False
+
+
 _ORDINARY_READ_ONLY_MARKERS = (
     "只查看",
     "只读",
@@ -587,12 +620,18 @@ def resolve_ordinary_work_intent(
     user_text: str,
     classified_intent: str | None,
     explicit_override: str | None = None,
+    *,
+    turn_mode: str = "agent",
 ) -> OrdinaryWorkIntent:
     """Resolve a non-persistent ordinary work intent for one user request.
 
     Explicit read-only/plan-only wording wins over stale UI state. A clear
     implementation request wins over plan/document language. The override is
     intentionally considered only after those text-level safety signals.
+
+    When ``turn_mode`` is ``agent`` (动手), casual QA/recall/research lines default
+    to ``execute`` so the desktop mode pill — not per-message keywords — gates tools.
+    ``ask`` (只聊) keeps conservative read-only defaults for those classifications.
     """
     text = (user_text or "").strip()
     lower = text.casefold()
@@ -603,15 +642,22 @@ def resolve_ordinary_work_intent(
         return "read_only"
     if _has_explicit_ordinary_plan_only(text):
         return "plan_only"
+    if is_explicit_image_generation_request(text):
+        return "execute"
     if _has_explicit_ordinary_execute(text, lower) or classified == "execute":
         return "execute"
     if override in {"read_only", "plan_only", "execute"}:
         return override  # type: ignore[return-value]
     if classified == "plan":
         return "plan_only"
-    if classified in {"qa", "recall", "research", "requirements", ""}:
+    mode = (turn_mode or "agent").strip().casefold()
+    if classified == "requirements":
         return "read_only"
-    return "read_only"
+    if classified in {"qa", "recall", "research", ""}:
+        if mode == "agent":
+            return "execute"
+        return "read_only"
+    return "read_only" if mode != "agent" else "execute"
 
 
 def intent_label(intent: TurnIntent, *, spawn_explore: bool = False) -> str:

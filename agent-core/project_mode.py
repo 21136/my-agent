@@ -1135,18 +1135,25 @@ def _ordinary_action_block_reason(
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
     is_write = evolved_name in _WRITE_TOOLS or evolved_name == "patch_file"
     is_command = evolved_name in _CODING_TOOLS
-    if intent == "read_only" and (is_write or is_command):
+    is_side_effect = is_write or is_command or evolved_name in {"write_evolve", "git_clone"}
+    if intent == "read_only" and is_side_effect:
         return "当前请求是只读操作，不能写入文件或执行项目命令"
     if intent == "plan_only" and is_command:
         return "当前请求仅规划，不能修改业务源码或执行实现命令"
 
-    if is_write or is_command:
+    inner = arguments.get("arguments")
+    clone_targets_workspace = (
+        evolved_name == "git_clone"
+        and isinstance(inner, dict)
+        and inner.get("target") == "workspace"
+    )
+    if (is_write or is_command or clone_targets_workspace) and project_root.strip():
         root = project_root.strip()
         for path in extract_run_evolved_paths(tool_name, arguments):
-            if path and root and not is_under_project_root(path, root):
+            if path and not is_under_project_root(path, root):
                 return f"项目写入仅限当前项目目录：{root}"
 
-    if intent == "plan_only" and is_write:
+    if intent == "plan_only" and (is_write or evolved_name in {"write_evolve", "git_clone"}):
         paths = [path for path in extract_run_evolved_paths(tool_name, arguments) if path]
         if any(not is_plan_domain_path(path, project_root) for path in paths):
             return "当前请求仅规划，不能修改业务源码"
@@ -1172,7 +1179,7 @@ def project_mode_block_reason(
     """Return user-facing block reason, or None if allowed.
 
     Only safety guards remain (request intent, project-root scope, no-project
-    side effects, write_evolve / evolve clone in project windows). Plan/stage/
+    side effects, and tool-level evolve destination validation). Plan/stage/
     task gates were removed: planning is optional guidance via skills.
     Legacy keyword arguments are accepted and ignored for compatibility.
     """
@@ -1181,27 +1188,14 @@ def project_mode_block_reason(
     root = project_root.strip()
     evolved = arguments.get("tool_name") if tool_name == "run_evolved" else None
     evolved_name = evolved.strip() if isinstance(evolved, str) else ""
-    if active_shell == "project":
-        ordinary_block = _ordinary_action_block_reason(
-            project_root=project_root,
-            tool_name=tool_name,
-            arguments=arguments,
-            ordinary_work_intent=ordinary_work_intent,
-        )
-        if ordinary_block:
-            return ordinary_block
-
-    if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "write_evolve":
-        return (
-            "项目窗口禁止 write_evolve（养 agent 与做产物分离）。"
-            "请点顶栏「+ 对话」开普通对话后再造工具，"
-            "或由助手 propose_context_switch(action=session.new, target=current)。"
-        )
-
-    if active_shell == "project" and tool_name == "run_evolved" and evolved_name == "git_clone":
-        inner = arguments.get("arguments")
-        if isinstance(inner, dict) and inner.get("target") == "evolve_tools":
-            return "project 模式禁止向 evolve/tools clone；请切换到 grow 壳沉淀能力"
+    ordinary_block = _ordinary_action_block_reason(
+        project_root=project_root if active_shell == "project" else "",
+        tool_name=tool_name,
+        arguments=arguments,
+        ordinary_work_intent=ordinary_work_intent,
+    )
+    if ordinary_block:
+        return ordinary_block
 
     if active_shell == "project" and not root:
         if tool_name == "run_evolved" and evolved_name in {"write_text", "patch_file"}:
@@ -1211,7 +1205,13 @@ def project_mode_block_reason(
         if tool_name == "run_evolved" and (
             evolved_name in _CODING_TOOLS
             or evolved_name in _WRITE_TOOLS
-            or evolved_name in {"git_clone", "write_evolve"}
+            or (
+                evolved_name == "git_clone"
+                and not (
+                    isinstance(arguments.get("arguments"), dict)
+                    and arguments["arguments"].get("target") == "evolve_tools"
+                )
+            )
         ):
             return (
                 "当前项目窗口未绑定项目；已停止副作用操作。"
@@ -1250,7 +1250,10 @@ def format_project_overlay(
         f"project_id: {project_id}",
     ]
     if ordinary_work_intent == "read_only":
-        lines.append("request_policy: 本回合只读；允许读取和状态查看，禁止写文件、运行命令和其它副作用")
+        lines.append(
+            "request_policy: 本回合用户明确要求只读（如只查看/只读）；禁止写文件、运行命令和生图；"
+            "动手/只聊由 turn_mode 决定，勿因工具失败让用户切换模式 pill"
+        )
     elif ordinary_work_intent == "plan_only":
         lines.append("request_policy: 本回合仅规划；允许读取和更新规划文档，禁止修改业务源码或执行实现命令")
     else:

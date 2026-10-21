@@ -307,7 +307,7 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "Agent bookkeeping is omitted unless path or pattern names it."
     ),
     "codebase_search": (
-        "Semantic/BM25 search for code chunks in the bound project. "
+        "Semantic/BM25 code search in the bound project, or the agent root when this session is unbound. "
         "Use for 'where is X implemented' before glob/grep on large trees."
     ),
     "web_search": (
@@ -317,6 +317,21 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     "fetch_url": (
         "Fetch an HTTP/HTTPS URL and return extracted plain text "
         "(HTML stripped). Pair with web_search for page bodies."
+    ),
+    "show_images": (
+        "Show one or more existing image files inline in the Desktop chat UI. "
+        "Read-only: no API cost and no user confirm. On success the user already sees the "
+        "image(s) in chat (tool result includes desktop_chat_inline_display and llm_hint); "
+        "do not ask whether to show them again. Use when the user asks to see saved PNG/JPEG/WebP "
+        "paths, or to re-display a prior output. Pass agent-relative paths in paths[]."
+    ),
+    "generate_image": (
+        "Generate one image with 0x567 GPT Image; this is a paid, user-confirmed action. "
+        "Call only when the user explicitly asks for image generation. On success Desktop chat "
+        "already displays the PNG inline (display_paths); read llm_hint in the tool result and "
+        "do not ask whether to show it again. For a current-turn attachment pass "
+        "reference_context='current_attachment'. To reuse a past image, pass a short topic/phrase; "
+        "if candidates are returned, ask the user which image and retry with its reference_id."
     ),
     "run_evolved": (
         "Run a registered evolved tool by name (see session catalog). "
@@ -339,7 +354,8 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "or before evolve writes from project shell. Requires user confirm/reject."
     ),
     "deliverable_review": (
-        "Spawn read-only deliverable review subagent for the bound project. "
+        "Spawn read-only deliverable review subagent. Bound sessions default to the current project; "
+        "unbound sessions must provide project_id for a workspace project. "
         "Parent should run build/tests first when possible; pass results in facts. "
         "Use when user asks for acceptance, what's missing, deliverability, or "
         "doc/code drift (e.g. 脱节, 你看看是否对齐)."
@@ -507,6 +523,65 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "required": ["url"],
         "additionalProperties": False,
     },
+    "show_images": {
+        "type": "object",
+        "properties": {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "minItems": 1,
+                "maxItems": 12,
+                "description": "Agent-relative image file paths to show inline in chat",
+            },
+            "reference_context": {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Optional phrase to resolve a prior attachment; use current_attachment for this turn",
+            },
+            "reference_id": {
+                "type": "string",
+                "description": "Opaque candidate id when prior-image search was ambiguous",
+            },
+        },
+        "additionalProperties": False,
+    },
+    "generate_image": {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10000,
+                "description": "Prompt or edit instructions for one PNG image",
+            },
+            "reference_context": {
+                "type": "string",
+                "maxLength": 500,
+                "description": "Optional nearby conversation phrase; use current_attachment for an image attached in the latest user message",
+            },
+            "reference_id": {
+                "type": "string",
+                "description": "Opaque candidate ID returned when prior-image search needs user disambiguation",
+            },
+            "model": {
+                "type": "string",
+                "enum": ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"],
+                "default": "gpt-image-2.5-flare",
+            },
+            "size": {
+                "type": "string",
+                "description": "auto or WIDTHxHEIGHT; dimensions are multiples of 16, up to 3840x2160",
+                "default": "1024x1024",
+            },
+            "quality": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "auto"],
+                "default": "low",
+            },
+        },
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
     "run_evolved": {
         "type": "object",
         "properties": {
@@ -611,6 +686,10 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "description": "User intent or focus, e.g. 验收 huiyi / Phase 7 是否完成",
             },
+            "project_id": {
+                "type": "string",
+                "description": "Optional workspace project ID. Defaults to this session's project; required in an unbound session.",
+            },
             "scope": {
                 "type": "string",
                 "enum": ["full", "phase", "files"],
@@ -704,14 +783,8 @@ def build_llm_tools(
     tools = build_builtin_tools(registry=registry)
     tools.extend(build_proxy_tool_definitions())
     if session.meta.turn_mode == "ask":
-        blocked = {"run_evolved", *PROXY_EVOLVED_TOOL_NAMES}
+        blocked = {"run_evolved", "generate_image", *PROXY_EVOLVED_TOOL_NAMES}
         tools = [item for item in tools if item["function"]["name"] not in blocked]
-    pid = (session.meta.project_id or "").strip()
-    ordinary_work_intent = str(
-        getattr(session, "_ordinary_work_intent", "execute") or "execute"
-    ).strip() or "execute"
-    if not pid or ordinary_work_intent == "read_only":
-        tools = [item for item in tools if item["function"]["name"] != "deliverable_review"]
     return tools
 
 
@@ -2653,6 +2726,7 @@ class Agent:
             user_text,
             intent,
             explicit_override=pending_work_intent,
+            turn_mode=self.session.meta.turn_mode,
         )
         self.session.turn_intent = intent
         self.executor.session.ordinary_work_intent = ordinary_work_intent
@@ -3240,7 +3314,7 @@ def _demo_tools() -> None:
     registry = ToolRegistry.load()
     tools = build_builtin_tools(registry=registry)
 
-    assert len(tools) == 8, len(tools)
+    assert len(tools) == len(BUILTIN_TOOLS), len(tools)
     print(f"[PASS] build_builtin_tools returns {len(tools)} tools")
 
     names = [item["function"]["name"] for item in tools]

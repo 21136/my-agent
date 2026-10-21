@@ -40,7 +40,7 @@ from paths import AgentPaths
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
-from session import Session, SessionError, HarnessMismatchError, create_new, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
+from session import Session, SessionError, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
 
 try:
@@ -925,6 +925,23 @@ class WsSessionHandler:
                 bridge.emit_session_state(repl.session)
                 emit_corruption_notices(bridge.emit, repl.session)
             except (SessionError, HarnessMismatchError) as exc:
+                emit_error(bridge, str(exc))
+            return
+
+        if msg_type == "session.create_sandbox":
+            if bridge._turn_busy.is_set():
+                emit_error(bridge, "回合进行中，结束后再开实验会话")
+                return
+
+            def _create_sandbox() -> Session:
+                return create_sandbox_evolution_session(self.paths)
+
+            try:
+                repl.session = await asyncio.to_thread(_create_sandbox)
+                repl._rebind_agent()
+                bridge.emit_session_state(repl.session)
+                emit_corruption_notices(bridge.emit, repl.session)
+            except SessionError as exc:
                 emit_error(bridge, str(exc))
             return
 

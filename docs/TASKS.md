@@ -188,6 +188,61 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6407 | self-hosting verification matrix | `self_hosting_verify.py` · `SELF-HOSTING-VERIFICATION.md` | S1/S2 local、S3 PR/S4 CI、S5 带 artifact digest 的受控 deploy target、S6 Host Agent ready + E6 故障回滚、Electron 候选切换/恢复均已实测通过 | **active · partial** |
 | T-6408 | model/Skill compatibility evaluation | `compatibility_matrix.py` · `SELF-HOSTING-MODEL-SKILL-COMPATIBILITY.md` | 当前只维护 `0x567-flash` 单模型证据；多模型评测暂缓 | **defer** |
 
+### Phase 65 · 项目内嵌预览（[PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md)）
+
+> **DOC-04**：MAP §2 Phase 65 · 影响 Desktop unified 工作台、Electron 主进程、项目配置写 scope、M2+ 工具与确认管线。  
+> **状态**：设计 **0.1.0 已签**（2026-10-21）；M0～M5 为产品目标；**M6（Playwright 深检等）不纳入本 Phase**。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6500 | 预览设计文档 | [PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md) | M0～M5、安全、IPC、与 BROWSER/local_preview 分工 | **doc · done** |
+| T-6500b | my-agent 壳 dev 预览 happy path | `preview-url-policy.ts` · `shell-dev-panel` · unified 侧栏「壳预览」 | 双轨 5173/5174 · `dev:preview` · 采用为主壳 · IT-6500 | **M0 · done（happy path）** |
+| T-6501 | `preview-url-policy` + 环境配置 schema | `desktop/electron/preview-url-policy.ts` · `workspace/.../.my-agent/preview-environments.json` | 禁 file/javascript/userinfo；精确 origin | todo |
+| T-6502 | `PreviewViewManager` + bounds | `preview-view-manager.ts` · `preview-view-bounds.ts` · `main.ts` | WebContentsView 生命周期；sender 校验 | todo |
+| T-6503 | unified 预览主区 + slot 同步 | `preview-panel.ts` · `unified/index.ts` | 切主区隐藏；ResizeObserver | todo |
+| T-6504 | M0：截图附对话 + console/加载摘要 | `preview:capture` IPC · UI | S-6500 | todo |
+| T-6505 | M1：登记命令起服 + ready 探活 | sidecar · `run_service` / `local_preview` | 失败日志尾部 | todo |
+| T-6506 | M1：停 dev 与关预览分离 | UI + sidecar | S-6501 | todo |
+| T-6507 | M1：`local_preview` → 工作台同 URL | `local_preview` · desktop 事件 | IT-6501 | todo |
+| T-6508 | M1：前后端双环境编排（可选） | 配置示例 + 文档 | IT-6501 扩展 | todo |
+| T-6509 | M2：`preview_capture` 工具 | evolve/builtin · executor | IT-6502 | todo |
+| T-6510 | M2：`preview_console` / errors 工具 | 同上 | IT-6502 | todo |
+| T-6511 | M2：验证绿后预览提示 / 可选静默截图 | `run_project_tests` · harness | S-6502 | todo |
+| T-6512 | M3：点选检查 + 附对话 | 主进程注入 · policy | IT-6503 | todo |
+| T-6513 | M3：页内 pin 注释 | preview-panel | S-6503 | todo |
+| T-6514 | M3：地址栏 / navigate / 视口 / 刷新 | IPC §5 | S-6503 | todo |
+| T-6515 | M4：多环境切换 + partition | manager | S-6504 | todo |
+| T-6516 | M4：SSO persist + 清除 + IdP 登记 | policy + UI | S-6504 | todo |
+| T-6517 | M4：多 `.env` / 第二 dev 命令 | 文档 + 配置 | todo |
+| T-6518 | M5：预览旁 dev 日志 dock | EXEC-OBSERVABILITY 风格 | S-6505 | todo |
+| T-6519 | M5：deliverable_review 预览截图证据 | DELIVERABLE-REVIEW | todo |
+| T-6520 | M5：可选验证谓词「预览可达」 | verification 门 | todo |
+| IT-6500 | M0 配置与 policy 单测 | `desktop/tests/preview-url-policy.test.ts` | origin 边界用例 | todo |
+| IT-6501 | M1 local_preview 联动 | agent-core + desktop 集成 | todo |
+| IT-6502 | M2 预览工具门控 | agent-core tests | todo |
+| IT-6503 | M3 点选输出截断 | desktop tests | todo |
+| S-6500 | 手工：loopback 整站预览 + 截图 | stabilization-log | todo |
+| S-6501 | 手工：一键起 dev + 自动打开 | 同上 | todo |
+| S-6502 | 手工：Agent capture 与 console 工具 | 同上 | todo |
+| S-6503 | 手工：点选 + pin + 视口 | 同上 | todo |
+| S-6504 | 手工：多环境 + 清除登录 | 同上 | todo |
+| S-6505 | 手工：日志 dock + 审查附图 | 同上 | todo |
+
+### Phase 66 · 聊天内联图片（[CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md)）
+
+> **DOC-04**：MAP §6 builtin 行 · Desktop unified · `tool.end.display_paths` 通道。
+
+| ID | 任务 | 设计 / 代码锚点 | 验收 | 状态 |
+|----|------|-----------------|------|------|
+| T-6600 | 设计文档 | [CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md) | 数据流 · 与非目标边界 | **doc · done** |
+| T-6601 | `show_images` builtin | `builtin/show_images.py` · registry · agent schema | IT-6600 | **done** |
+| T-6602 | `display_paths` on `tool.end` | `executor.py` · `generate_image` data | IT-6600 · IT-6601 | **done** |
+| T-6603 | Desktop 通用内联块 | `chat-state.ts` · `agent-file-preview.ts` | S-6600 · S-6601 | **done** |
+| IT-6600 | `show_images` + 事件 | `test_show_images.py` | green | **done** |
+| IT-6601 | 生图 `display_paths` | `test_generate_image.py` | green | **done** |
+| S-6600 | 手工：生图后聊天可见图 | stabilization-log | todo |
+| S-6601 | 手工：`show_images` 展示已有 PNG | 同上 | todo |
+
 ### Phase 61 · Agent 工具体验路线图（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md)）
 
 > **DOC-04**：MAP §2 Phase 61 · 影响面为工具协议、执行可靠性、上下文和 Desktop/Terminal 消费；实现前需补 STABILIZATION 矩阵与独立 IT/S 编号。
@@ -202,7 +257,7 @@ Phase 58b 的七文件强制布局、文档 completeness 分级和双 Mermaid �
 | T-6203 | P0 Git 变更与回退实现切片 | `git_snapshot` diff 扩展 · `git_restore` · `GIT-VENDOR.md` | 文件 diff、文件级局部恢复、用户改动保护、确认卡而非模型 token | **active**（IT-6203 5/5；hunk 级恢复、baseline/ledger 归属待后续收口） |
 | T-6204 | P0 结构化测试协议实现切片 | `agent-core/structured_test.py` · `evolve/tools/project/structured_test/` · `PROJECT-VERIFY.md` | 统一状态、失败 `file:line`、耗时、重跑和缺依赖语义 | **active**（IT-6204 4/4；JUnit/JSON 原生报告适配、取消和真实重跑执行待后续收口） |
 | T-6205 | P1 语言服务原语设计 | `diagnostics` · `symbol` | LSP 发现/启动/缓存、workspace root、缺依赖、不支持语言、只读诊断和受门控重命名 | todo |
-| T-6206 | P1 浏览器检查设计 | `browser_inspect` · [BROWSER.md](./BROWSER.md) | 生命周期、profile/cookie 隔离、截图/trace、网络 allowlist、超时、上传下载和敏感状态清理 | todo |
+| T-6206 | P1 浏览器检查设计 | `browser_inspect` · [BROWSER.md](./BROWSER.md) | 生命周期、profile/cookie 隔离、截图/trace、网络 allowlist、超时、上传下载和敏感状态清理；**allowlist 与 [PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md) 登记语义对齐** | todo |
 | T-6207 | P1 并行隔离工作区设计 | `explore` · `deliverable_review` · worktree contract | 单项目单活线、只读并行、显式隔离写入、输入快照、冲突检测和结果采纳 | todo |
 | T-6208 | P1 变更审查设计 | `change_review` · `git_snapshot` diff · VERIFY | hunk 风险、测试关联、接受/拒绝和审查状态 | todo |
 | T-6209 | P2 生态适配设计 | GitHub/GitLab/CI · container/db · context planner | 只读回链优先，外部写操作与上下文预算边界明确 | defer |

@@ -1,0 +1,140 @@
+.unified-shell-dev {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ma-border-strong) transparent;
+}
+
+.unified-shell-dev[hidden] {
+  display: none !important;
+}
+
+.shell-dev-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 1rem 1.25rem 1.25rem;
+  gap: 0.65rem;
+}
+
+.shell-dev-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.shell-dev-heading h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.shell-dev-heading p {
+  margin: 0.35rem 0 0;
+  color: var(--ma-text-muted);
+  font-size: 0.88rem;
+  max-width: 42rem;
+  line-height: 1.5;
+}
+
+.shell-dev-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.shell-dev-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0;
+}
+
+.shell-dev-lanes > div {
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--nt-r-sm, 8px);
+  border: 1px solid var(--ma-border);
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+}
+
+.shell-dev-lanes dt {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ma-text-muted);
+  letter-spacing: 0.02em;
+}
+
+.shell-dev-lanes dd {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+  word-break: break-all;
+  font-family: var(--ma-mono, monospace);
+}
+
+.shell-dev-feedback {
+  margin: 0;
+  min-height: 1.25rem;
+  font-size: 0.82rem;
+  color: var(--ma-text-muted);
+  white-space: pre-wrap;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--nt-r-sm, 8px);
+}
+
+.shell-dev-feedback.is-busy {
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-accent) 12%, transparent);
+}
+
+.shell-dev-feedback.is-ok {
+  color: var(--ma-text);
+  background: color-mix(in srgb, #22c55e 18%, transparent);
+  border: 1px solid color-mix(in srgb, #22c55e 35%, transparent);
+}
+
+.shell-dev-feedback.is-error {
+  color: var(--ma-text);
+  background: color-mix(in srgb, #ef4444 14%, transparent);
+  border: 1px solid color-mix(in srgb, #ef4444 35%, transparent);
+}
+
+.shell-dev-web-slot {
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 14rem;
+  position: relative;
+  border-radius: var(--nt-r-md, 12px);
+  border: 1px dashed color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-surface) 55%, transparent);
+}
+
+.shell-dev-slot-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  padding: 1.25rem;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--ma-text-muted);
+  background: color-mix(in srgb, var(--ma-surface) 92%, transparent);
+  border-radius: inherit;
+}
+
+.shell-dev-slot-placeholder p {
+  margin: 0;
+  max-width: 28rem;
+  line-height: 1.5;
+}
+
+.shell-dev-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}

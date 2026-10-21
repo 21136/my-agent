@@ -18,6 +18,21 @@ test("run_command confirm shows the real command, not a char count", () => {
   assert.ok(!/^运行命令：\d+ 字符/.test(view.headline));
 });
 
+test("write confirm shows full path on the card", () => {
+  const preview = [
+    "写入文件：.worktrees/sandbox/desktop/src/shells/unified/image-zoom.ts",
+    "内容：2844 字符 · 65 行",
+    "写入策略：confirm:no_project_binding",
+  ].join("\n");
+  const view = summarizeConfirmPreview(preview);
+  assert.equal(view.headline, "写入 image-zoom.ts");
+  assert.equal(
+    view.targetPath,
+    ".worktrees/sandbox/desktop/src/shells/unified/image-zoom.ts",
+  );
+  assert.match(view.reason, /未绑定项目/);
+});
+
 test("danger run_command still labels the risk", () => {
   const preview = ["运行命令：rm -rf /", "命令类型：danger", "命令全文：", "rm -rf /"].join("\n");
   const view = summarizeConfirmPreview(preview);

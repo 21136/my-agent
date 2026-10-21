@@ -81,13 +81,13 @@
 ---
 
 ## 5. 项目模式边界
-
 | 场景 | 行为 |
 |------|------|
-| project 壳 + `target=evolve_tools` | **硬拒**（同 `write_evolve`：须切 grow 壳） |
-| project 壳 + `target=workspace` + 计划未确认 | 仅允许 dest 为三件套同级目录时… **否**；vendor 属源码 → **须 `confirmed` 后** |
-| project 壳 + `target=workspace` + 已确认 | dest 须在 `project_root` 下 |
-| grow / daily | 两 target 均可（仍 confirm） |
+| project 壳 + `target=evolve_tools` | 允许显式请求；目标须是 `evolve/tools/<scope>/<name>/...`；每次 confirm |
+| project 壳 + `target=workspace` | 仅允许目标位于当前 `project_root` 下；无绑定项目时拒绝 |
+| grow / daily | 两 target 均按工具路径校验执行；每次 confirm |
+
+只读/仅规划请求仍由执行器拒绝副作用操作。项目会话对 `write_evolve` 的每次写入独立确认。
 
 ---
 

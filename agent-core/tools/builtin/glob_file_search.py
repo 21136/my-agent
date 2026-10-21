@@ -158,7 +158,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
     return tool_ok(
         TOOL_NAME,
         {
-            "path": paths.to_agent_relative(search_root),
+            "path": paths.to_agent_or_host_path(search_root),
             "paths": rel_paths,
             "truncated": truncated,
         },

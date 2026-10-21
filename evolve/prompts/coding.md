@@ -53,8 +53,8 @@
 - **会改状态的须 confirm**：`git_branch` create/switch、`git_commit` / `git_push`（dry_run 除外）、写盘类、`run_command` 按策略等。
 - `allow_approve_all=true` 的工具可在本会话用 `a` 免重复确认；`allow_approve_all=false` 的每次仍须确认（dry_run / 上列只读特例除外）。
 
-**新建 evolved 工具**：仅在 **非项目绑定** 会话（grow / 先聊聊）；system 已含 `[tool_workshop]`；语法见 `buckets/evolve.md`。
-**项目绑定会话**禁止 `write_evolve`（见 PROJECT-MODE P6）。
+**新建 evolved 工具**：普通与项目会话的 `agent` 模式都可响应用户明确请求使用 `write_evolve` / `git_clone(target=evolve_tools)`；项目会话中的每次 `write_evolve` 都须单独确认。需要参数细节时读 `buckets/evolve.md`。
+项目绑定不会隐藏工具或单独禁止 evolve 目标；工具自身的目的地校验、请求意图限制与确认仍生效（见 PROJECT-MODE §0g）。
 
 ## 路径与工具
 

@@ -154,7 +154,7 @@ def _grep_rg(
         if not file_path or line_number is None:
             continue
 
-        rel = paths.to_agent_relative(file_path.resolve())
+        rel = paths.to_agent_or_host_path(file_path.resolve())
         matches.append(
             {
                 "path": rel,
@@ -193,7 +193,7 @@ def _grep_python(
         except OSError:
             continue
 
-        rel = paths.to_agent_relative(file_path)
+        rel = paths.to_agent_or_host_path(file_path)
         for line_no, text in _iter_text_lines(file_path):
             if regex.search(text):
                 matches.append({"path": rel, "line": line_no, "text": text.rstrip("\r\n")})

@@ -83,12 +83,12 @@ function killElectronApp(): void {
 let electronLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronLaunching = false;
 
-function launchElectron(startup: (argv?: string[]) => Promise<void>): void {
+function launchElectron(startup: (argv?: string[]) => Promise<void | boolean>): void {
   if (electronLaunchTimer) clearTimeout(electronLaunchTimer);
   electronLaunchTimer = setTimeout(() => void runElectron(startup), 900);
 }
 
-async function runElectron(startup: (argv?: string[]) => Promise<void>): Promise<void> {
+async function runElectron(startup: (argv?: string[]) => Promise<void | boolean>): Promise<void> {
   if (electronLaunching) return;
   electronLaunching = true;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -177,6 +177,7 @@ export default defineConfig(({ command }) => {
       },
     },
     server: {
+      host: "127.0.0.1",
       port: 5173,
       strictPort: false,
       watch: {

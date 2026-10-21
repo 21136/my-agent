@@ -265,13 +265,12 @@ def is_scaffold_turn(session: Session) -> bool:
     return bool(session.scaffold_tool_turn)
 ```
 
-**注意**：`active_shell == "grow"` **单独不足以**判定工坊——须 **`NOT project_bound`**。  
-反例：用户绑定了 project 但 `+ 对话` 挂起项目开 grow 线时，若 session 仍带 `project_id`，则 **不** 注入 `tool_workshop`（造工具应开**无 project** 的新会话 / 「先聊聊」）。
+**注意**：`tool_workshop` overlay 是否注入与工具权限分开；project-bound session 可以不注入该 overlay，但 `agent` 模式仍可按请求调用 active `write_evolve`。项目会话每次 `write_evolve` 独立确认。
 
 | 条件 | `project_id` | `project_root` | `active_shell` | `workshop_eligible` |
 |------|--------------|----------------|----------------|---------------------|
 | 项目工作台继续 | 有 | 有 | project | **否** |
-| 顶栏 + 对话（仍绑 project） | 有 | 有 | grow | **否**（P6 仍可能拒 write_evolve） |
+| 顶栏 + 对话（仍绑 project） | 有 | 有 | grow | **否**（无 workshop overlay；不代表工具被禁） |
 | 先聊聊 / 新会话无项目 | 空 | 空 | grow | **是** |
 | CLI 默认 | 空 | 空 | grow | **是** |
 | 只聊模式无项目 | 空 | 空 | grow + ask | **是**（但 executor 禁 run_evolved） |
@@ -595,8 +594,8 @@ evolve/
 **改为**（2 行）：
 
 ```markdown
-**新建 evolved 工具**：仅在 **非项目绑定** 会话（grow / 先聊聊）；system 已含 `[tool_workshop]`；语法见 `buckets/evolve.md`。
-**项目绑定会话**禁止 `write_evolve`（见 PROJECT-MODE P6）。
+**新建 evolved 工具**：普通/项目 `agent` 会话均可按用户请求调用；项目会话中每次 `write_evolve` 单独确认。system 可能包含 `[tool_workshop]`；语法见 `buckets/evolve.md`。
+项目绑定不会单独禁止 `write_evolve`；工具目标、请求意图与逐次确认仍受内核执行器约束。
 ```
 
 ### 7.2 其他 topic
@@ -618,7 +617,7 @@ evolve/
 
 | 行为 | 实现位置 | M1 prompt 怎么说 |
 |------|----------|------------------|
-| project 拒 write_evolve | `project_mode.py` ~L1001 | tool_workshop 提示用户换会话 |
+| project-bound write_evolve | `project_mode.py` + executor | 显式 evolve 目标可用；项目会话每次单独 confirm |
 | scaffold 拒 write_text 写 evolved | `executor.py` ~L843 | scaffold overlay + tool_workshop 硬约束 |
 | tool.toml 后 auto demo | `runtime_guards` / executor | tool_workshop 四步第 3 步 |
 | checker 完成声明门 | agent + checker overlay | tool_workshop + CHECKER K8 |
@@ -734,7 +733,7 @@ def test_no_triplicate_base64_manual():
 | 4 | 完成 main.py + tool.toml draft | demo probe 跑过 |
 | 5 | 用户：`验收 echo_test` | checker 报告；末行 VERDICT |
 | 6 | 切换到已绑 project 会话 | system **无**「工具工坊」块 |
-| 7 | project 会话说「造工具」 | 拒 write_evolve 或 oral 引导换会话 |
+| 7 | project 会话说「造工具」 | active 工具可见；有效 evolve 目标逐次确认后执行 |
 
 ### 11.5 回归
 
@@ -758,7 +757,7 @@ def test_no_triplicate_base64_manual():
 | explore 子代理 | P2 | IT-462 · IT-26 |
 | checker 子代理 | P1 | IT-462 · IT-24～25 · S-36～38 |
 | grow 造工具最小路径 | P1 | S-35 · S-461 |
-| project 模式 write_evolve 拒 | P1 | 既有 project_mode 测试 · P6 |
+| project 模式 write_evolve 可调用且逐次确认 | P1 | Task 2 project_mode / confirmation regression tests |
 
 ### 12.2 提案自检
 
@@ -785,7 +784,7 @@ def test_no_triplicate_base64_manual():
 | # | 问题 | 倾向 |
 |---|------|------|
 | Q1 | `+ 对话` 挂 project 但用户想造工具 |  oral 引导「先聊聊」新会话；不注入 tool_workshop |
-| Q2 | scaffold_turn 但 project_bound | 不应发生 write_evolve；overlay 可不注入 scaffold_tool |
+| Q2 | scaffold_turn 但 project_bound | write_evolve 可用；workshop overlay 可不注入，executor 仍校验内容并逐次确认 |
 | Q3 | tool_workshop 是否翻译英文版 | 先中文；core 英文时可加 `_en` 后缀 defer |
 | Q4 | explore_tool 自动检测 false negative | M2 加强 `_explore_task_needs_tool_patterns` |
 | Q5 | 改 subagent md 是否热重载 | 否；下轮 spawn / 新 turn build_system_prompt |

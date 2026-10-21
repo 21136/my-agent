@@ -30,6 +30,8 @@ export const TOOL_DISPLAY_NAMES: Record<string, string> = {
   codebase_search: "语义搜索",
   web_search: "网页搜索",
   fetch_url: "获取网页",
+  generate_image: "生成图片",
+  show_images: "展示图片",
   deliverable_review: "交付检查",
   scaffold_project: "项目脚手架",
   db_migrate_status: "数据库迁移",

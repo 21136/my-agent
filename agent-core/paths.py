@@ -7,13 +7,15 @@ symlinks that escape the boundary is rejected with :class:`PathOutOfBoundsError`
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Iterator, Literal
 
 from tools.schema import ToolErrorCode
 
@@ -105,6 +107,27 @@ class PathDeniedForWriteError(PathError):
 
 
 # Write deny-list — paths matching these patterns are read-only even within agent root.
+_session_write_scope_root: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "session_write_scope_root",
+    default="",
+)
+
+
+def active_write_scope_root() -> str:
+    return _session_write_scope_root.get().strip()
+
+
+@contextlib.contextmanager
+def session_write_scope(scope_root: str) -> Iterator[None]:
+    """Limit resolve_under_agent_for_write to *scope_root* (relative POSIX path)."""
+    normalized = scope_root.strip().replace("\\", "/").strip("/")
+    token = _session_write_scope_root.set(normalized)
+    try:
+        yield
+    finally:
+        _session_write_scope_root.reset(token)
+
+
 _WRITE_DENY_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"(^|[/\\])\.git([/\\]|$)"),
     re.compile(r"(^|[/\\])data[/\\]sessions([/\\]|$)"),
@@ -177,7 +200,27 @@ class AgentPaths:
                 raise PathDeniedForWriteError(
                     f"禁止写入此路径（受保护）：{raw!r}", path=raw,
                 )
+        self.assert_within_session_write_scope(resolved, raw=raw)
         return resolved
+
+    def assert_within_session_write_scope(
+        self,
+        resolved: Path,
+        *,
+        raw: str = "",
+        scope_root: str | None = None,
+    ) -> None:
+        """When a session write scope is active, reject paths outside that subtree."""
+        scope = (scope_root or active_write_scope_root()).strip()
+        if not scope:
+            return
+        scope_dir = (self.agent_root / scope.replace("/", os.sep)).resolve()
+        if not _is_within(resolved.resolve(), scope_dir):
+            hint = raw or str(resolved)
+            raise PathDeniedForWriteError(
+                f"本会话写入范围仅限 {scope!r}，拒绝：{hint!r}",
+                path=hint,
+            )
 
     def resolve_under_host(
         self,
@@ -225,6 +268,28 @@ class AgentPaths:
             return ext_rel
         _assert_within(resolved, self.agent_root, raw=str(path), label="agent root")
         return resolved.relative_to(self.agent_root.resolve()).as_posix()
+
+    def to_agent_or_host_path(self, path: Path | str) -> str:
+        """Format a resolved path as agent-relative or host:<id>/... ."""
+        resolved = Path(path).resolve()
+        try:
+            return self.to_agent_relative(resolved)
+        except PathOutOfBoundsError as agent_error:
+            from host_scope import load_host_scope
+
+            config = load_host_scope(self)
+            roots = [
+                (root.path.resolve(), root)
+                for root in config.host_roots
+                if _is_within(resolved, root.path.resolve())
+            ]
+            if not roots:
+                raise agent_error
+
+            # Prefer the most specific registered root if host roots overlap.
+            root_path, root = max(roots, key=lambda item: len(item[0].parts))
+            relative = resolved.relative_to(root_path).as_posix()
+            return f"host:{root.id}" if relative == "." else f"host:{root.id}/{relative}"
 
     def to_workspace_relative(self, path: Path | str) -> str:
         resolved = Path(path).resolve()

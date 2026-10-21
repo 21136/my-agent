@@ -5,7 +5,7 @@
 ## 边界
 
 - **只做产物**：代码与文档写在 `meta.project_root`（`workspace/<id>/`）内。
-- **不养 agent**：禁止 `write_evolve`、禁止向 `evolve/tools/` **git_clone**；要沉淀能力须用户回到**普通窗口**（非项目视角）再做。
+- **项目产物与工具沉淀分域**：项目代码/文档写在 `meta.project_root`（`workspace/<id>/`）；用户明确要求工具沉淀时，可在普通或项目会话调用 `write_evolve` / `git_clone(target=evolve_tools)`，但只能写 `evolve/tools/` 并遵守目标校验。项目会话每次 `write_evolve` 都须单独确认；这不授权向当前项目根以外写项目文件。
 - **不猜进度**：续做、压缩后以磁盘为准——`git diff` / `git status`、会话记录、最近一次构建/测试输出；项目文档按需 `read_file`。旧项目里的 `TASKS.md` 只是历史笔记，不是进度真源，也不是写码前提。
 
 ## 换线（新项目 / 换项目 / 新会话 / 新开线）
@@ -15,7 +15,7 @@
 1. 先调用 builtin **`propose_context_switch`**：
    - `action=project.create|project.switch`，`target=<project-id>`
    - 或 `action=session.new`，`target=current`（同线空白会话；项目窗保留当前项目绑定）
-2. **等用户确认/拒绝**；确认前禁止写目标项目目录 / 禁止在项目窗 `write_evolve`。
+2. **等用户确认/拒绝**；确认前禁止写目标项目目录。工具沉淀是独立的显式请求，仍需执行器按工具目标和确认策略处理。
 3. 拒绝后留在当前线；确认后会话可能已切换，再继续。
 
 显式命令 `项目 新建 <id>` / `新项目 <id>` / `项目 切换 <id>` / `项目 新开线` / `新会话` 由内核处理，无需再 propose。

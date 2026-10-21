@@ -27,7 +27,7 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
             "plan_only",
         )
 
-    def test_questions_and_recall_are_read_only(self) -> None:
+    def test_ask_mode_questions_and_recall_are_read_only(self) -> None:
         for text, classified in (
             ("这个项目现在进度怎么样？", "qa"),
             ("刚刚我们说了什么", "recall"),
@@ -35,8 +35,37 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertEqual(
-                    turn_intent.resolve_ordinary_work_intent(text, classified),
+                    turn_intent.resolve_ordinary_work_intent(
+                        text, classified, turn_mode="ask"
+                    ),
                     "read_only",
+                )
+
+    def test_agent_mode_short_lines_default_execute(self) -> None:
+        for text, classified in (
+            ("现在呢", "qa"),
+            ("现在应该可以了，去生成吧", "qa"),
+            ("这个项目现在进度怎么样？", "qa"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(
+                        text, classified, turn_mode="agent"
+                    ),
+                    "execute",
+                )
+
+    def test_explicit_image_generation_is_execute_even_when_classified_qa(self) -> None:
+        for text in (
+            "现在应该可以了，去生成吧",
+            "帮我生成图片",
+            "用附件再生成一张",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(turn_intent.is_explicit_image_generation_request(text))
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, "qa"),
+                    "execute",
                 )
 
     def test_imperative_implementation_overrides_classified_plan(self) -> None:
@@ -135,6 +164,68 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
         self.assertIn("只读", write_block or "")
         self.assertIn("只读", command_block or "")
         self.assertIsNone(read_allowed)
+
+    def test_request_intent_applies_to_project_and_grow_shells(self) -> None:
+        from project_mode import project_mode_block_reason
+
+        for shell in ("project", "grow"):
+            with self.subTest(shell=shell):
+                common = dict(
+                    active_shell=shell,
+                    project_root="workspace/demo",
+                    ordinary_work_intent="read_only",
+                )
+                for evolved_name, inner in (
+                    ("write_text", {"path": "workspace/demo/app.py", "content": "x"}),
+                    ("run_command", {"command": "pytest"}),
+                    ("write_evolve", {"path": "evolve/tools/common/x/tool.toml"}),
+                    ("git_clone", {"target": "evolve_tools", "dest": "common/x"}),
+                ):
+                    reason = project_mode_block_reason(
+                        **common,
+                        tool_name="run_evolved",
+                        arguments={"tool_name": evolved_name, "arguments": inner},
+                    )
+                    self.assertIn("只读", reason or "", evolved_name)
+
+                read_reason = project_mode_block_reason(
+                    **common,
+                    tool_name="run_evolved",
+                    arguments={"tool_name": "read_file", "arguments": {"path": "workspace/demo/README.md"}},
+                )
+                self.assertIsNone(read_reason)
+
+    def test_plan_only_checks_sources_commands_and_planning_writes_in_both_shells(self) -> None:
+        from project_mode import project_mode_block_reason
+
+        for shell in ("project", "grow"):
+            with self.subTest(shell=shell):
+                common = dict(
+                    active_shell=shell,
+                    project_root="workspace/demo",
+                    ordinary_work_intent="plan_only",
+                )
+                for evolved_name, inner in (
+                    ("write_text", {"path": "workspace/demo/app.py", "content": "x"}),
+                    ("run_command", {"command": "pytest"}),
+                ):
+                    reason = project_mode_block_reason(
+                        **common,
+                        tool_name="run_evolved",
+                        arguments={"tool_name": evolved_name, "arguments": inner},
+                    )
+                    self.assertIsNotNone(reason, evolved_name)
+
+                if shell == "project":
+                    plan_reason = project_mode_block_reason(
+                        **common,
+                        tool_name="run_evolved",
+                        arguments={
+                            "tool_name": "write_text",
+                            "arguments": {"path": "workspace/demo/PROJECT.md", "content": "# plan"},
+                        },
+                    )
+                    self.assertIsNone(plan_reason)
 
     def test_ordinary_writes_stay_inside_project_root(self) -> None:
         from project_mode import project_mode_block_reason

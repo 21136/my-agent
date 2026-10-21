@@ -33,7 +33,7 @@
 
 原则：已有工具的问题优先通过契约、组合和输出结构解决，不因为体验不足就随意新增同义的 `*_exec` 工具。
 
-当前基线是 **12 个 builtin function（核心 8 + 编排 4）**。实现提示词变更时必须同时修正旧文案中“6 Builtin”或“11 个 builtin”的过期说法；这是文档同步任务，不代表新增 builtin。
+当前基线是 **13 个 builtin function（核心 8 + 编排 5，含 `show_images`）**。实现提示词变更时必须同时修正旧文案中“6 Builtin”或“12 个 builtin”的过期说法；这是文档同步任务，不代表新增 builtin。聊天内联图见 [CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md)。
 
 ## 2. 开源优先选型
 

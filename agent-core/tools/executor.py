@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +23,15 @@ if sys.path and Path(sys.path[0]).resolve() == _TOOLS_DIR.resolve():
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
-from paths import AgentPaths
+from paths import AgentPaths, PathDeniedForWriteError, PathError, session_write_scope
 from runtime_guards import auto_demo_on_write_evolve, write_inline_max_chars
 from tool_proxies import rewrite_proxy_tool_call
 from tools.builtin import (
     deliverable_review,
     explore,
     fetch_url,
+    generate_image,
+    show_images,
     glob_file_search,
     codebase_search,
     grep,
@@ -57,6 +60,8 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "codebase_search": codebase_search.run,
     "web_search": web_search.run,
     "fetch_url": fetch_url.run,
+    "show_images": show_images.run,
+    "generate_image": generate_image.run,
     "run_evolved": run_evolved.run,
     "propose_context_switch": propose_context_switch.run,
     "deliverable_review": deliverable_review.run,
@@ -149,6 +154,7 @@ class ExecutorSession:
     # Request-scoped ordinary policy; never persisted in SessionMeta.
     ordinary_work_intent: str = "execute"
     ordinary_task_scope: str = ""
+    write_scope_root: str = ""
 
     @classmethod
     def load(cls, session_dir: Path | None, *, allowed_evolved: set[str] | None = None) -> ExecutorSession:
@@ -166,6 +172,7 @@ class ExecutorSession:
         terminal_cwd = ""
         terminal_foreign_root = ""
         terminal_host_id = ""
+        write_scope_root = ""
         if session_dir is not None:
             meta_path = session_dir / _META_FILENAME
             if meta_path.is_file():
@@ -200,6 +207,7 @@ class ExecutorSession:
                         payload.get("terminal_foreign_root", ""), relative=False
                     )
                     terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
+                    write_scope_root = str(payload.get("write_scope_root", "") or "").strip()
         return cls(
             session_dir=session_dir,
             workspace_evolved_approved=approved,
@@ -217,6 +225,7 @@ class ExecutorSession:
             terminal_cwd=terminal_cwd,
             terminal_foreign_root=terminal_foreign_root,
             terminal_host_id=terminal_host_id,
+            write_scope_root=write_scope_root,
         )
 
     def refresh_bound_project_meta(self) -> None:
@@ -254,6 +263,7 @@ class ExecutorSession:
             payload.get("terminal_foreign_root", ""), relative=False
         )
         self.terminal_host_id = str(payload.get("terminal_host_id", "") or "").strip()
+        self.write_scope_root = str(payload.get("write_scope_root", "") or "").strip()
 
 
 def _executor_session_meta(session: ExecutorSession):
@@ -674,6 +684,54 @@ def _enrich_write_evolve_result(
         )
 
 
+def _resolve_deliverable_review_target(
+    paths: AgentPaths,
+    session: ExecutorSession,
+    arguments: dict[str, Any],
+) -> tuple[str, str, Path]:
+    """Resolve a review target to a registered workspace project, never an arbitrary root."""
+    from external_project import validate_external_binding
+    from project_mode import (
+        ProjectModeError,
+        is_project_dir,
+        normalize_project_id,
+        project_dir,
+        project_id_from_root,
+        project_root_rel,
+    )
+
+    raw_project_id = arguments.get("project_id")
+    if raw_project_id is not None and not isinstance(raw_project_id, str):
+        raise ProjectModeError("project_id must be a string")
+
+    bound_project_id = (session.project_id or "").strip()
+    if not bound_project_id and session.project_root.strip():
+        bound_project_id = project_id_from_root(session.project_root)
+    if bound_project_id:
+        project_id = normalize_project_id(bound_project_id)
+        if isinstance(raw_project_id, str):
+            requested_project_id = normalize_project_id(raw_project_id)
+            if requested_project_id != project_id:
+                raise ProjectModeError("project_id must match the current project in this session")
+    else:
+        if not isinstance(raw_project_id, str) or not raw_project_id.strip():
+            raise ProjectModeError("project_id is required when the session has no bound project")
+        project_id = normalize_project_id(raw_project_id)
+
+    resolved_project = project_dir(paths, project_id).resolve(strict=True)
+    external_binding = validate_external_binding(paths, project_id)
+    if external_binding is None:
+        workspace_root = paths.workspace.resolve(strict=True)
+        try:
+            resolved_project.relative_to(workspace_root)
+        except ValueError as exc:
+            raise ProjectModeError("project_id must resolve to a project under workspace/") from exc
+    if not resolved_project.is_dir() or not is_project_dir(resolved_project):
+        raise ProjectModeError(f"workspace/{project_id} is not an existing project")
+
+    return project_id, project_root_rel(project_id), resolved_project
+
+
 def _validate_project_mode_call(
     session: ExecutorSession,
     tool_name: str,
@@ -931,6 +989,52 @@ def _validate_scaffold_evolved_call(
             guard = _write_evolve_content_guard(path, inner, outer_arguments)
             if guard is not None:
                 return guard
+    return None
+
+
+def _validate_session_write_scope(
+    executor_session: ExecutorSession,
+    agent_paths: AgentPaths,
+    evolved_name: str,
+    outer_arguments: dict[str, Any],
+) -> ToolResult | None:
+    scope = (executor_session.write_scope_root or "").strip()
+    if not scope:
+        return None
+    inner = _merged_evolved_arguments(outer_arguments, evolved_name)
+    path_keys = ("path", "file", "dest", "output", "working_dir", "cwd")
+    paths_to_check: list[str] = []
+    for key in path_keys:
+        raw = inner.get(key)
+        if isinstance(raw, str) and raw.strip():
+            paths_to_check.append(raw.strip())
+    if evolved_name == "write_evolve":
+        for key in ("path", "main_path"):
+            raw = inner.get(key)
+            if isinstance(raw, str) and raw.strip():
+                paths_to_check.append(raw.strip())
+    for rel in paths_to_check:
+        try:
+            resolved = agent_paths.resolve_under_agent(rel, must_exist=False)
+            agent_paths.assert_within_session_write_scope(
+                resolved,
+                raw=rel,
+                scope_root=scope,
+            )
+        except PathDeniedForWriteError as exc:
+            return tool_fail(
+                "run_evolved",
+                ToolErrorCode.PATH_DENIED,
+                str(exc),
+                details={"write_scope_root": scope, "path": rel},
+            )
+        except PathError as exc:
+            return tool_fail(
+                "run_evolved",
+                ToolErrorCode.VALIDATION_ERROR,
+                str(exc),
+                details={"path": rel},
+            )
     return None
 
 
@@ -1303,6 +1407,22 @@ class ToolExecutor:
 
         confirm_decision = "skipped"
 
+        with session_write_scope(self.session.write_scope_root):
+            return self._run_with_write_scope(
+                name,
+                args,
+                started=started,
+                confirm_decision=confirm_decision,
+            )
+
+    def _run_with_write_scope(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        started: float,
+        confirm_decision: str,
+    ) -> ToolResult:
         error = self.validate(name, args)
         if error is not None:
             self._maybe_log_validation_guard(error)
@@ -1324,12 +1444,60 @@ class ToolExecutor:
         if name == "codebase_search":
             return self._run_codebase_search(args, started=started)
 
+        prepared_image_reference = None
+        image_confirm_context = None
+        if name == "generate_image" and (
+            str(args.get("reference_context") or "").strip()
+            or str(args.get("reference_id") or "").strip()
+        ):
+            from image_references import find_image_references
+
+            search = find_image_references(
+                str(args.get("reference_context") or ""),
+                paths=self.registry.agent_paths,
+                current_session_dir=self.session.session_dir,
+                reference_id=(str(args["reference_id"]) if args.get("reference_id") else None),
+            )
+            if search.status == "ambiguous":
+                result = tool_ok(
+                    name,
+                    {
+                        "status": "reference_selection_required",
+                        "candidates": [candidate.to_public_dict() for candidate in search.candidates],
+                    },
+                    duration_ms=_elapsed_ms(started),
+                )
+                self._log_tool_call(name, args, result, confirm="skipped", started=started)
+                return result
+            if search.status != "selected" or search.selected is None:
+                result = tool_fail(
+                    name,
+                    "reference_not_found",
+                    "No accessible local chat image matched the requested context; no image was sent.",
+                    duration_ms=_elapsed_ms(started),
+                )
+                self._log_tool_call(name, args, result, confirm="skipped", started=started)
+                return result
+            prepared_image_reference = search.selected
+            source_title = " ".join(prepared_image_reference.session_title.split())[:80]
+            source_context = " / ".join(prepared_image_reference.context.split())[:500]
+            image_confirm_context = (
+                f"Reference: {prepared_image_reference.filename} from '{source_title}'.\n"
+                f"Session updated: {prepared_image_reference.updated_at or 'unknown'}\n"
+                f"Conversation context: {source_context}"
+            )
+
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
             if self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
                 confirm_decision = "ordinary_budget"
             else:
-                confirm_decision = self._ask_confirm(name, args, evolved_target)
+                confirm_decision = self._ask_confirm(
+                    name,
+                    args,
+                    evolved_target,
+                    extra_context=image_confirm_context,
+                )
                 if (
                     confirm_decision in {"y", "a"}
                     and not self._ordinary_confirm_is_destructive(
@@ -1369,7 +1537,16 @@ class ToolExecutor:
         stop_hb, hb_thread = self._start_tool_progress_heartbeat(call_id, name)
         result: ToolResult
         try:
-            result = self._maybe_spill_output(self._execute_builtin(name, args, started=started))
+            if name == "generate_image":
+                executed = self._execute_builtin(
+                    name,
+                    args,
+                    started=started,
+                    prepared_image_reference=prepared_image_reference,
+                )
+            else:
+                executed = self._execute_builtin(name, args, started=started)
+            result = _attach_desktop_inline_display_hint(self._maybe_spill_output(executed))
         except Exception as exc:
             result = tool_fail(
                 name,
@@ -1408,6 +1585,9 @@ class ToolExecutor:
         diff = data.get("unified_diff") or data.get("diff")
         if isinstance(diff, str) and diff.strip():
             end_payload["diff"] = diff if len(diff) <= 8000 else diff[:7999] + "…"
+        display_paths = _tool_end_display_paths(data)
+        if display_paths:
+            end_payload["display_paths"] = display_paths
         self._emit_event("tool.end", end_payload)
         if name == "read_file" and result.ok and end_note != "absent":
             self._maybe_record_memory_entity_used(args, result)
@@ -1717,16 +1897,19 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
-        pid = (self.session.project_id or "").strip()
-        if not pid and self.session.project_root.strip():
-            from project_mode import project_id_from_root
+        from project_mode import ProjectModeError
 
-            pid = project_id_from_root(self.session.project_root) or ""
-        if not pid:
+        try:
+            pid, review_project_root, _resolved_project = _resolve_deliverable_review_target(
+                self.registry.agent_paths,
+                self.session,
+                arguments,
+            )
+        except (ProjectModeError, OSError) as exc:
             result = tool_fail(
                 name,
                 ToolErrorCode.VALIDATION_ERROR,
-                "deliverable_review requires a bound project",
+                str(exc),
                 duration_ms=_elapsed_ms(started),
             )
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
@@ -1800,6 +1983,10 @@ class ToolExecutor:
 
         paths_agent = self.registry.agent_paths
         session = Session.load(paths_agent, self.session.session_dir.name)
+        session = copy.copy(session)
+        session.meta = copy.deepcopy(session.meta)
+        session.meta.project_id = pid
+        session.meta.project_root = review_project_root
         preview = task if len(task) <= 120 else task[:117] + "…"
         call_id = str(uuid.uuid4())
         self._emit_event(
@@ -2113,6 +2300,29 @@ class ToolExecutor:
                     details={"ci_repair_status": "repair_allowed", "evolved_name": evolved_name},
                 )
 
+        if name == "generate_image":
+            prompt = arguments.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "prompt is required")
+            reference_context = arguments.get("reference_context")
+            if reference_context is not None and (
+                not isinstance(reference_context, str) or len(reference_context) > 500
+            ):
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "reference_context must be a string of at most 500 characters",
+                )
+            reference_id = arguments.get("reference_id")
+            if reference_id is not None and (
+                not isinstance(reference_id, str) or not reference_id.strip()
+            ):
+                return tool_fail(
+                    name,
+                    ToolErrorCode.VALIDATION_ERROR,
+                    "reference_id must be a non-empty string",
+                )
+
         if name in self.session.blocked_tools:
             return tool_fail(
                 name,
@@ -2133,6 +2343,24 @@ class ToolExecutor:
                 details={"turn_mode": "ask"},
             )
 
+        if name == "generate_image" and self.session.turn_mode == "ask":
+            return tool_fail(
+                name,
+                ToolErrorCode.PERMISSION_DENIED,
+                "generate_image is disabled in ask mode (只聊); switch to 动手 (agent) first",
+                details={"turn_mode": "ask"},
+            )
+        if name == "generate_image" and str(self.session.ordinary_work_intent or "").strip() == "read_only":
+            return tool_fail(
+                name,
+                ToolErrorCode.PERMISSION_DENIED,
+                "generate_image blocked: this turn is explicitly read-only (e.g. 只读/只查看)",
+                details={
+                    "turn_mode": self.session.turn_mode,
+                    "ordinary_work_intent": "read_only",
+                },
+            )
+
         plan_block = _validate_terminal_plan_phase_block(self.session, name, arguments)
         if plan_block is not None:
             return plan_block
@@ -2146,16 +2374,19 @@ class ToolExecutor:
                     "task is required",
                     details={"retry": True},
                 )
-            pid = (self.session.project_id or "").strip()
-            if not pid and self.session.project_root.strip():
-                from project_mode import project_id_from_root
+            from project_mode import ProjectModeError
 
-                pid = project_id_from_root(self.session.project_root) or ""
-            if not pid:
+            try:
+                review_project_id, review_project_root, resolved_project = _resolve_deliverable_review_target(
+                    self.registry.agent_paths,
+                    self.session,
+                    arguments,
+                )
+            except (ProjectModeError, OSError) as exc:
                 return tool_fail(
                     name,
                     ToolErrorCode.VALIDATION_ERROR,
-                    "deliverable_review requires a bound project",
+                    str(exc),
                 )
             scope = str(arguments.get("scope") or "full").strip() or "full"
             if scope == "files":
@@ -2168,18 +2399,43 @@ class ToolExecutor:
                         ToolErrorCode.VALIDATION_ERROR,
                         "paths required when scope=files",
                     )
-                root = self.session.project_root.strip()
-                if root:
-                    from project_mode import is_under_project_root
+                from paths import PathError
 
-                    for raw_path in paths_raw:
-                        path = str(raw_path).strip()
-                        if path and not is_under_project_root(path, root):
-                            return tool_fail(
-                                name,
-                                ToolErrorCode.VALIDATION_ERROR,
-                                f"path must be under project_root: {path}",
-                            )
+                project_prefix = f"workspace/{review_project_id}"
+                for raw_path in paths_raw:
+                    path = str(raw_path).strip().replace("\\", "/")
+                    if not path:
+                        continue
+                    if path.startswith(("/", "host:")) or re.match(r"^[A-Za-z]:", path):
+                        return tool_fail(
+                            name,
+                            ToolErrorCode.VALIDATION_ERROR,
+                            f"path must be relative to project_root: {path}",
+                        )
+                    if path == project_prefix or path.startswith(f"{project_prefix}/"):
+                        agent_path = path
+                    elif path == review_project_id or path.startswith(f"{review_project_id}/"):
+                        agent_path = f"workspace/{path}"
+                    elif path.startswith("workspace/"):
+                        return tool_fail(
+                            name,
+                            ToolErrorCode.VALIDATION_ERROR,
+                            f"path must be under project_root: {path}",
+                        )
+                    else:
+                        agent_path = f"{review_project_root}/{path}"
+                    try:
+                        resolved_path = self.registry.agent_paths.resolve_under_agent(
+                            agent_path,
+                            must_exist=False,
+                        ).resolve()
+                        resolved_path.relative_to(resolved_project)
+                    except (OSError, PathError, TypeError, ValueError):
+                        return tool_fail(
+                            name,
+                            ToolErrorCode.VALIDATION_ERROR,
+                            f"path must resolve under project_root: {path}",
+                        )
             if scope == "phase":
                 phase_hint = str(arguments.get("phase_hint") or "").strip()
                 if not phase_hint:
@@ -2286,6 +2542,15 @@ class ToolExecutor:
         scaffold_error = _validate_scaffold_evolved_call(self.session, evolved.name, arguments)
         if scaffold_error is not None:
             return scaffold_error
+
+        scope_error = _validate_session_write_scope(
+            self.session,
+            self.registry.agent_paths,
+            evolved.name,
+            arguments,
+        )
+        if scope_error is not None:
+            return scope_error
 
         if evolved.name in _INLINE_WRITE_TOOLS or evolved.name == "write_evolve":
             inline_error = _inline_body_guard(evolved.name, arguments)
@@ -2789,6 +3054,8 @@ class ToolExecutor:
         """Ordinary mode: at most one user-visible confirm per turn for safe work."""
         if self.session.active_shell != "project":
             return False
+        if evolved is not None and evolved.name == "write_evolve":
+            return False
         if self._ordinary_confirm_is_destructive(
             builtin, evolved, arguments, tool_name=tool_name
         ):
@@ -2810,6 +3077,8 @@ class ToolExecutor:
         tool_name: str,
         arguments: dict[str, Any],
         evolved: EvolvedTool | None,
+        *,
+        extra_context: str | None = None,
     ) -> str:
         preview = build_confirm_preview(
             tool_name,
@@ -2818,6 +3087,7 @@ class ToolExecutor:
             project_root=self.session.project_root or "",
             active_shell=self.session.active_shell or "",
             agent_paths=self.registry.agent_paths,
+            extra_context=extra_context,
         )
         allow_approve_all = (
             evolved is not None
@@ -2922,7 +3192,14 @@ class ToolExecutor:
             conversation_id=conversation_id_from_session(self.session.session_dir),
         )
 
-    def _execute_builtin(self, tool_name: str, arguments: dict[str, Any], *, started: float) -> ToolResult:
+    def _execute_builtin(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+        prepared_image_reference: Any | None = None,
+    ) -> ToolResult:
         runner = _BUILTIN_RUNNERS[tool_name]
         if tool_name == "run_evolved":
             return runner(
@@ -2932,6 +3209,21 @@ class ToolExecutor:
                 allowed_tools=self.session.allowed_evolved,
                 cancel_event=self.cancel_event,
                 current_project_id=self.session.project_id,
+            )
+        if tool_name == "generate_image":
+            conversation_id = self.session.session_dir.name if self.session.session_dir else ""
+            return runner(
+                arguments,
+                paths=self.registry.agent_paths,
+                prepared_reference=prepared_image_reference,
+                project_root=self.session.project_root or "",
+                conversation_id=conversation_id,
+            )
+        if tool_name == "show_images":
+            return runner(
+                arguments,
+                paths=self.registry.agent_paths,
+                current_session_dir=self.session.session_dir,
             )
         return runner(arguments, paths=self.registry.agent_paths)
 
@@ -3257,6 +3549,45 @@ def _tool_end_note(result: ToolResult) -> str | None:
     return None
 
 
+def _tool_end_display_paths(data: dict[str, Any]) -> list[str]:
+    """Agent-relative image paths for Desktop inline preview (CHAT-IMAGE-DISPLAY)."""
+    raw = data.get("display_paths")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip().replace("\\", "/"))
+    return out
+
+
+def _attach_desktop_inline_display_hint(result: ToolResult) -> ToolResult:
+    """Tell the LLM that Desktop already rendered display_paths inline (CHAT-IMAGE-DISPLAY)."""
+    if not result.ok or not isinstance(result.data, dict):
+        return result
+    paths = _tool_end_display_paths(result.data)
+    if not paths:
+        return result
+    if result.data.get("desktop_chat_inline_display"):
+        return result
+    data = dict(result.data)
+    data["desktop_chat_inline_display"] = True
+    count = len(paths)
+    if count == 1:
+        data["llm_hint"] = (
+            "Desktop unified chat already shows this image inline (display_paths). "
+            "The user can see it in the chat UI. Do not ask whether to show or display it again; "
+            "describe what they should see and suggest next steps only."
+        )
+    else:
+        data["llm_hint"] = (
+            f"Desktop unified chat already shows all {count} images inline (display_paths). "
+            "The user can see them in the chat UI. Do not ask whether to show or display them again; "
+            "describe what they should see and suggest next steps only."
+        )
+    return replace(result, data=data)
+
+
 def _tool_result_summary(result: ToolResult) -> str:
     data = result.data if isinstance(result.data, dict) else {}
     if _tool_end_note(result) == "absent":
@@ -3279,6 +3610,10 @@ def _tool_result_summary(result: ToolResult) -> str:
                 combined = f"{base} · {last}"
                 return combined[:120] + ("…" if len(combined) > 120 else "")
         return base
+    display_paths = _tool_end_display_paths(data)
+    if display_paths:
+        n = len(display_paths)
+        return "已在聊天内联展示图片" if n == 1 else f"已在聊天内联展示 {n} 张图片"
     change_line = _result_change_line(data)
     if change_line:
         return change_line
@@ -3530,10 +3865,23 @@ def build_confirm_preview(
     project_root: str = "",
     active_shell: str = "",
     agent_paths: AgentPaths | None = None,
+    extra_context: str | None = None,
 ) -> str:
     """Human-readable preview shown before confirm."""
     lines: list[str] = []
-    if tool_name == "run_evolved":
+    if tool_name == "generate_image":
+        prompt = arguments.get("prompt")
+        if extra_context:
+            source_header = extra_context.splitlines()[0].strip()
+            lines.append(f"{source_header} Image bytes will be sent to 0x567 only after approval; this may use account credits.")
+        else:
+            lines.append("Image-generation request to 0x567; this may use account credits.")
+        if isinstance(prompt, str) and prompt.strip():
+            lines.append(f"Prompt: {prompt.strip()[:2000]}")
+        lines.append(f"Model: {arguments.get('model', 'gpt-image-2.5-flare')}")
+        lines.append(f"Size: {arguments.get('size', '1024x1024')}")
+        lines.append(f"Quality: {arguments.get('quality', 'low')}")
+    elif tool_name == "run_evolved":
         evolved_name = arguments.get("tool_name")
         inner = run_evolved.coalesce_tool_arguments(arguments)
         if isinstance(evolved_name, str) and evolved_name.strip():
@@ -3597,6 +3945,12 @@ def build_confirm_preview(
     else:
         if arguments:
             lines.append(f"Arguments: {json.dumps(arguments, ensure_ascii=False, sort_keys=True)}")
+    if extra_context:
+        detail_lines = extra_context.splitlines()
+        if tool_name == "generate_image":
+            lines.extend(detail_lines[1:])
+        else:
+            lines.append(extra_context)
     if tool_name == "read_file":
         path_arg = arguments.get("path")
         if isinstance(path_arg, str):

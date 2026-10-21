@@ -1,3 +1,5 @@
+import { hydrateAgentImageElements, peekAgentImageDataUrl } from "./agent-image-hydrate";
+import { bindImageLightboxClick } from "./image-lightbox";
 import type { AgentWsClient, ShellId } from "./api/ws";
 import "./file-drop.css";
 
@@ -24,6 +26,12 @@ function formatSize(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isStagedImage(item: StagedFile): boolean {
+  if (item.image_input) return true;
+  const mime = (item.mime || "").trim().toLowerCase();
+  return mime.startsWith("image/") || IMAGE_MIMES.has(mime);
 }
 
 function escapeHtml(text: string): string {
@@ -125,15 +133,17 @@ export function mountFileDrop(options: {
   onNotice?: (text: string) => void;
 }): FileDropHandle {
   const { composer, client, shell, canAccept, onChange, onNotice } = options;
-  const pasteTargets = options.pasteTargets?.length
-    ? options.pasteTargets
-    : [composer];
-  const dropTargets = Array.from(new Set([composer, ...pasteTargets]));
+  const pasteTargets = Array.from(
+    new Set(options.pasteTargets?.length ? options.pasteTargets : [composer]),
+  );
+  // Drop only on the composer shell; drops on the textarea bubble up once.
+  const dropTargets = [composer];
   let items: StagedFile[] = [];
 
   const chips = document.createElement("div");
   chips.className = "file-drop-chips hidden";
   composer.prepend(chips);
+  bindImageLightboxClick(chips, "img.file-drop-chip-thumb");
 
   function renderChips(): void {
     chips.innerHTML = "";
@@ -144,24 +154,41 @@ export function mountFileDrop(options: {
     chips.classList.remove("hidden");
     for (const item of items) {
       const chip = document.createElement("span");
-      chip.className = "file-drop-chip";
+      const imageChip = isStagedImage(item);
+      chip.className = imageChip ? "file-drop-chip file-drop-chip-image" : "file-drop-chip";
       const readable = item.image_input || item.vision_input
         ? item.image_input
-          ? " · 可识图"
-          : " · PDF可识图"
+          ? "可识图"
+          : "PDF可识图"
         : item.readable_text
           ? ""
-          : " · 非文本";
-      chip.innerHTML = `
-        <span class="file-drop-chip-name" title="${escapeHtml(item.ref)}">${escapeHtml(item.name)}</span>
-        <span class="file-drop-chip-meta">${formatSize(item.size)}${readable}</span>
-        <button type="button" class="file-drop-chip-remove" aria-label="移除">×</button>
-      `;
+          : "非文本";
+      const metaText = readable
+        ? `${formatSize(item.size)} · ${readable}`
+        : formatSize(item.size);
+      if (imageChip) {
+        const cached = peekAgentImageDataUrl(item.ref);
+        chip.innerHTML = `
+          <button type="button" class="file-drop-chip-zoom" data-agent-path="${escapeHtml(item.ref)}" aria-label="放大预览图片" title="点击放大">
+            <img class="file-drop-chip-thumb" alt="" data-agent-path="${escapeHtml(item.ref)}"${
+              cached ? ` src="${cached.replace(/"/g, "&quot;")}" data-hydrated="1"` : ""
+            } />
+          </button>
+          <button type="button" class="file-drop-chip-remove" aria-label="移除图片">×</button>
+        `;
+      } else {
+        chip.innerHTML = `
+          <span class="file-drop-chip-name" title="${escapeHtml(item.ref)}">${escapeHtml(item.name)}</span>
+          <span class="file-drop-chip-meta">${escapeHtml(metaText)}</span>
+          <button type="button" class="file-drop-chip-remove" aria-label="移除">×</button>
+        `;
+      }
       chip.querySelector<HTMLButtonElement>(".file-drop-chip-remove")!.addEventListener("click", () => {
         void removeItem(item.id);
       });
       chips.appendChild(chip);
     }
+    void hydrateAgentImageElements(chips, "img.file-drop-chip-thumb[data-agent-path]");
   }
 
   function setItems(next: StagedFile[]): void {
@@ -206,6 +233,7 @@ export function mountFileDrop(options: {
 
   async function onDrop(ev: DragEvent): Promise<void> {
     ev.preventDefault();
+    ev.stopPropagation();
     composer.classList.remove("file-drop-active");
     if (!canAccept()) return;
 
@@ -249,6 +277,7 @@ export function mountFileDrop(options: {
     }
 
     ev.preventDefault();
+    ev.stopPropagation();
     await stageAbsolutePaths(paths);
   }
 

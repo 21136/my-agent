@@ -1,14 +1,107 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, WebContentsView, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  clipboard,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  shell,
+  Tray,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 import { buildBilibiliSearchUrl, isOfficialBilibiliUrl } from "./bilibili-search";
+import { readAgentImageDataUrl } from "./agent-file-preview";
 import { clampMusicViewBounds, type MusicViewBounds } from "./music-view-bounds";
+import {
+  configuredShellDevPreviewBase,
+  defaultShellDevPreviewBase,
+  defaultShellMainDevBase,
+  isAllowedShellDevPreviewNavigation,
+  isAllowedShellRendererPromotion,
+  loopbackUrlVariants,
+  normalizeShellDevPreviewBase,
+} from "./preview-url-policy";
+import { shellDevEmbedZoom } from "./shell-dev-embed-zoom";
+import {
+  getSandboxAdoptStatus,
+  prepareAndMergeSandboxIntoStable,
+  type SandboxAdoptPrepareOptions,
+} from "./sandbox-adopt";
+import { loadAppIcon } from "./app-icon";
+
+type ShellDevOpenResult = {
+  ok: boolean;
+  url?: string;
+  configuredUrl?: string;
+  fallbackToMain?: boolean;
+  message?: string;
+};
+
+async function isDevServerReachable(url: string): Promise<boolean> {
+  const normalized = normalizeShellDevPreviewBase(url);
+  if (!normalized) return false;
+  const lib = normalized.startsWith("https:") ? https : http;
+  return new Promise((resolve) => {
+    const req = lib.get(
+      normalized,
+      { timeout: 2500, headers: { Accept: "text/html" } },
+      (res) => {
+        res.resume();
+        resolve((res.statusCode ?? 0) < 500);
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
+
+async function resolveReachableDevServerUrl(preferred: string): Promise<string | null> {
+  for (const candidate of loopbackUrlVariants(preferred)) {
+    if (await isDevServerReachable(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function pickShellPreviewLoadUrl(): Promise<{ url: string; fallback: boolean; configured: string }> {
+  const configured = configuredShellDevPreviewBase();
+  const main = defaultShellMainDevBase();
+  const previewUrl = await resolveReachableDevServerUrl(configured);
+  if (previewUrl) {
+    return { url: previewUrl, fallback: false, configured };
+  }
+  if (configured !== main) {
+    const mainUrl = await resolveReachableDevServerUrl(main);
+    if (mainUrl) {
+      return { url: mainUrl, fallback: true, configured };
+    }
+  }
+  return { url: configured, fallback: false, configured };
+}
+
+async function loadShellPreviewUrl(view: WebContentsView, url: string): Promise<boolean> {
+  try {
+    await view.webContents.loadURL(url);
+    return !view.webContents.isDestroyed();
+  } catch {
+    return false;
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
@@ -29,7 +122,6 @@ if (!app.isPackaged) {
   );
 }
 
-const APP_ICON = path.join(AGENT_ROOT, "desktop", "build", "icon.png");
 const STATE_PATH = path.join(AGENT_ROOT, "data", "state.json");
 const CONSTELLATION_PATH = path.join(AGENT_ROOT, "data", "constellation.json");
 const SHOW_SHORTCUT = "CommandOrControl+Shift+M";
@@ -50,6 +142,9 @@ type SidecarStartResult =
 
 let workbenchWindow: BrowserWindow | null = null;
 let bilibiliSearchView: WebContentsView | null = null;
+let shellDevPreviewView: WebContentsView | null = null;
+let shellDevPopoutWindow: BrowserWindow | null = null;
+let shellDevPreviewBaseUrl = defaultShellDevPreviewBase();
 let sidecar: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
 let tray: Tray | null = null;
@@ -188,10 +283,7 @@ function setPreferredUi(ui: "electron" | "cli"): void {
 }
 
 function trayIcon() {
-  if (!existsSync(APP_ICON)) {
-    return nativeImage.createEmpty();
-  }
-  return nativeImage.createFromPath(APP_ICON);
+  return loadAppIcon(32);
 }
 
 function buildTray(): void {
@@ -635,9 +727,45 @@ function sendSessionControl(win: BrowserWindow | null, action: "suspend" | "resu
   win.webContents.send("session:control", action);
 }
 
+function readPersistedShellRendererUrl(): string | null {
+  if (!existsSync(STATE_PATH)) return null;
+  try {
+    const loaded = JSON.parse(readFileSync(STATE_PATH, "utf-8")) as Record<string, unknown>;
+    const raw = typeof loaded.desktop_shell_renderer_url === "string" ? loaded.desktop_shell_renderer_url : "";
+    const normalized = normalizeShellDevPreviewBase(raw);
+    if (!normalized || !isAllowedShellRendererPromotion(normalized)) return null;
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
+function persistShellRendererUrl(url: string): void {
+  const normalized = normalizeShellDevPreviewBase(url);
+  if (!normalized || !isAllowedShellRendererPromotion(normalized)) return;
+  let payload: Record<string, unknown> = {};
+  if (existsSync(STATE_PATH)) {
+    try {
+      const loaded = JSON.parse(readFileSync(STATE_PATH, "utf-8")) as Record<string, unknown>;
+      if (loaded && typeof loaded === "object") payload = loaded;
+    } catch {
+      payload = {};
+    }
+  }
+  payload.desktop_shell_renderer_url = normalized;
+  writeFileSync(STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+}
+
+function resolveShellMainDevUrl(): string {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return readPersistedShellRendererUrl() || defaultShellMainDevBase();
+  }
+  return "";
+}
+
 async function loadRenderer(win: BrowserWindow): Promise<void> {
   if (process.env.VITE_DEV_SERVER_URL) {
-    await win.loadURL(`${process.env.VITE_DEV_SERVER_URL}/`);
+    await win.loadURL(resolveShellMainDevUrl() || defaultShellMainDevBase());
     return;
   }
   await win.loadFile(path.join(__dirname, "../dist", "index.html"));
@@ -669,6 +797,26 @@ function wireExternalNavigation(win: BrowserWindow): void {
 }
 
 
+function wireShellDevPreviewNavigation(view: WebContentsView, baseUrl: string): void {
+  const base = normalizeShellDevPreviewBase(baseUrl) || defaultShellDevPreviewBase();
+  shellDevPreviewBaseUrl = base;
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedShellDevPreviewNavigation(url, base)) {
+      void view.webContents.loadURL(url).catch((error) => console.warn("[shell-dev] navigation failed:", error));
+    } else if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  const guard = (event: Electron.Event, url: string): void => {
+    if (isAllowedShellDevPreviewNavigation(url, base)) return;
+    event.preventDefault();
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  };
+  view.webContents.on("will-navigate", guard);
+  view.webContents.on("will-redirect", guard);
+}
+
 function wireBilibiliViewNavigation(view: WebContentsView): void {
   view.webContents.setWindowOpenHandler(({ url }) => {
     if (isOfficialBilibiliUrl(url)) {
@@ -698,6 +846,7 @@ async function createWorkbenchWindow(): Promise<void> {
     return;
   }
 
+  const windowIcon = loadAppIcon(256);
   workbenchWindow = new BrowserWindow({
     width: 960,
     height: 720,
@@ -706,7 +855,7 @@ async function createWorkbenchWindow(): Promise<void> {
     title: "my-agent",
     autoHideMenuBar: true,
     backgroundColor: windowBackground(),
-    icon: existsSync(APP_ICON) ? APP_ICON : undefined,
+    icon: windowIcon.isEmpty() ? undefined : windowIcon,
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
@@ -726,9 +875,15 @@ async function createWorkbenchWindow(): Promise<void> {
   wireExternalNavigation(workbenchWindow);
 
   workbenchWindow.on("closed", () => {
-    const view = bilibiliSearchView;
+    const bilibili = bilibiliSearchView;
     bilibiliSearchView = null;
-    if (view && !view.webContents.isDestroyed()) view.webContents.close();
+    if (bilibili && !bilibili.webContents.isDestroyed()) bilibili.webContents.close();
+    const shellDev = shellDevPreviewView;
+    shellDevPreviewView = null;
+    if (shellDev && !shellDev.webContents.isDestroyed()) shellDev.webContents.close();
+    const popout = shellDevPopoutWindow;
+    shellDevPopoutWindow = null;
+    if (popout && !popout.isDestroyed()) popout.close();
     workbenchWindow = null;
   });
 }
@@ -835,6 +990,264 @@ ipcMain.handle("music:open-bilibili-search", async (event, rawQuery: unknown, ra
   }
 });
 
+ipcMain.handle("shell-dev:get-preview-url", (event) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return configuredShellDevPreviewBase();
+  }
+  return configuredShellDevPreviewBase();
+});
+
+ipcMain.handle("shell-dev:get-main-url", (event) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return defaultShellMainDevBase();
+  }
+  const live = normalizeShellDevPreviewBase(workbenchWindow.webContents.getURL());
+  return live || resolveShellMainDevUrl() || defaultShellMainDevBase();
+});
+
+function assertShellDevWorkbenchSender(event: IpcMainInvokeEvent): boolean {
+  return Boolean(workbenchWindow && !workbenchWindow.isDestroyed() && event.sender === workbenchWindow.webContents);
+}
+
+ipcMain.handle("shell-dev:sandbox-adopt-status", async (event) => {
+  if (!assertShellDevWorkbenchSender(event)) {
+    return { ok: false, message: "workbench unavailable" };
+  }
+  return getSandboxAdoptStatus();
+});
+
+function showSandboxAdoptResultDialog(result: {
+  ok: boolean;
+  message: string;
+  detail?: string;
+  steps?: string[];
+}): void {
+  const parent = workbenchWindow && !workbenchWindow.isDestroyed() ? workbenchWindow : null;
+  const detail = [result.steps?.join(" → "), result.detail].filter(Boolean).join("\n\n");
+  const box = {
+    type: result.ok ? "info" : "error",
+    title: result.ok ? "实验分支已合入" : "合入未完成",
+    message: result.message,
+    detail: detail || undefined,
+    buttons: ["知道了"],
+    defaultId: 0,
+  } as Electron.MessageBoxOptions;
+  if (parent) void dialog.showMessageBox(parent, box);
+  else void dialog.showMessageBox(box);
+}
+
+ipcMain.handle("shell-dev:merge-sandbox", async (event, rawOptions: unknown) => {
+  if (!assertShellDevWorkbenchSender(event)) {
+    const blocked = { ok: false, message: "workbench unavailable" };
+    showSandboxAdoptResultDialog(blocked);
+    return blocked;
+  }
+  const options = (rawOptions && typeof rawOptions === "object" ? rawOptions : {}) as SandboxAdoptPrepareOptions;
+  const result = await prepareAndMergeSandboxIntoStable(options);
+  showSandboxAdoptResultDialog(result);
+  return result;
+});
+
+ipcMain.handle("shell-dev:promote-preview", async (event) => {
+  if (!assertShellDevWorkbenchSender(event)) {
+    return { ok: false, message: "workbench unavailable" };
+  }
+  const previewUrl = normalizeShellDevPreviewBase(shellDevPreviewBaseUrl || defaultShellDevPreviewBase());
+  if (!previewUrl || !isAllowedShellRendererPromotion(previewUrl)) {
+    return { ok: false, message: "预览地址无效" };
+  }
+  const previousMain =
+    normalizeShellDevPreviewBase(workbenchWindow.webContents.getURL()) || defaultShellMainDevBase();
+  try {
+    persistShellRendererUrl(previewUrl);
+    await workbenchWindow.webContents.loadURL(previewUrl);
+    const view = shellDevPreviewView;
+    if (view && !view.webContents.isDestroyed() && previousMain !== previewUrl) {
+      shellDevPreviewBaseUrl = previousMain;
+      wireShellDevPreviewNavigation(view, previousMain);
+      if (view.isVisible()) {
+        await view.webContents.loadURL(previousMain).catch(() => {});
+      }
+    }
+    return { ok: true, mainUrl: previewUrl, previewUrl: previousMain };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, message };
+  }
+});
+
+function applyShellDevPreviewViewBounds(view: WebContentsView, bounds: MusicViewBounds): void {
+  view.setBounds(bounds);
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || view.webContents.isDestroyed()) return;
+  const hostZoom = workbenchWindow.webContents.getZoomFactor() || 1;
+  const fit = shellDevEmbedZoom(bounds.width, bounds.height);
+  view.webContents.setZoomFactor(hostZoom * fit);
+}
+
+async function ensureShellDevPreviewView(bounds: MusicViewBounds): Promise<WebContentsView | null> {
+  if (!workbenchWindow || workbenchWindow.isDestroyed()) return null;
+  let view = shellDevPreviewView;
+  if (!view || view.webContents.isDestroyed()) {
+    view = new WebContentsView({
+      webPreferences: {
+        preload: preloadPath(),
+        contextIsolation: true,
+        nodeIntegration: false,
+        partition: "persist:shell-dev-preview",
+      },
+    });
+    shellDevPreviewView = view;
+    wireShellDevPreviewNavigation(view, defaultShellDevPreviewBase());
+  }
+  const bilibili = bilibiliSearchView;
+  if (bilibili && !bilibili.webContents.isDestroyed()) bilibili.setVisible(false);
+  workbenchWindow.contentView.addChildView(view);
+  applyShellDevPreviewViewBounds(view, bounds);
+  view.setVisible(true);
+  return view;
+}
+
+ipcMain.handle("shell-dev:open-preview", async (event, rawBounds: unknown): Promise<ShellDevOpenResult> => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return { ok: false, message: "工作台不可用" };
+  }
+  const bounds = boundedMusicViewRect(rawBounds);
+  if (!bounds) {
+    return { ok: false, message: "预览区域尺寸无效" };
+  }
+  let pick = await pickShellPreviewLoadUrl();
+  shellDevPreviewBaseUrl = pick.url;
+  const view = await ensureShellDevPreviewView(bounds);
+  if (!view) return { ok: false, message: "无法创建预览视图" };
+  wireShellDevPreviewNavigation(view, pick.url);
+  let loaded = await loadShellPreviewUrl(view, pick.url);
+  const mainDev = defaultShellMainDevBase();
+  if (!loaded && pick.url !== mainDev && await isDevServerReachable(mainDev)) {
+    loaded = await loadShellPreviewUrl(view, mainDev);
+    if (loaded) {
+      pick = { url: mainDev, fallback: true, configured: pick.configured };
+      shellDevPreviewBaseUrl = mainDev;
+      wireShellDevPreviewNavigation(view, mainDev);
+    }
+  }
+  if (!loaded) {
+    view.setVisible(false);
+    const hint = await isDevServerReachable(mainDev)
+      ? `开发服在 ${mainDev}，但嵌入预览失败。下方将尝试页内预览；或点「重新加载预览」。`
+      : "无法连接开发服。请用 start-desktop.bat 启动（默认含 5173+5174）；或单独 npm run dev:preview。";
+    return {
+      ok: false,
+      url: pick.url,
+      configuredUrl: pick.configured,
+      message: hint,
+    };
+  }
+  return {
+    ok: true,
+    url: pick.url,
+    configuredUrl: pick.configured,
+    fallbackToMain: pick.fallback,
+    message: pick.fallback
+      ? `未检测到 ${pick.configured}，已临时嵌入主壳 ${pick.url}。请重启 start-desktop.bat（默认会起 5174）。`
+      : undefined,
+  };
+});
+
+ipcMain.handle("shell-dev:open-popout", async (event): Promise<ShellDevOpenResult> => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return { ok: false, message: "工作台不可用" };
+  }
+  const pick = await pickShellPreviewLoadUrl();
+  const reachable = await resolveReachableDevServerUrl(pick.url);
+  if (!reachable) {
+    return {
+      ok: false,
+      configuredUrl: pick.configured,
+      message: "预览开发服未就绪。请用 start-desktop.bat 启动（默认含 5174）。",
+    };
+  }
+  let win = shellDevPopoutWindow;
+  if (!win || win.isDestroyed()) {
+    win = new BrowserWindow({
+      width: 1000,
+      height: 760,
+      minWidth: 720,
+      minHeight: 540,
+      title: "壳预览 · my-agent",
+      autoHideMenuBar: true,
+      backgroundColor: windowBackground(),
+      icon: (() => {
+        const popoutIcon = loadAppIcon(256);
+        return popoutIcon.isEmpty() ? undefined : popoutIcon;
+      })(),
+      webPreferences: {
+        preload: preloadPath(),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    shellDevPopoutWindow = win;
+    wireExternalNavigation(win);
+    win.on("closed", () => {
+      shellDevPopoutWindow = null;
+    });
+  }
+  try {
+    await win.loadURL(reachable);
+    win.show();
+    win.focus();
+  } catch {
+    return { ok: false, message: "预览窗口暂时无法打开。" };
+  }
+  return {
+    ok: true,
+    url: reachable,
+    configuredUrl: pick.configured,
+    fallbackToMain: pick.fallback,
+    message: pick.fallback
+      ? `未检测到 ${pick.configured}，独立窗口已打开主壳 ${reachable}。`
+      : undefined,
+  };
+});
+
+ipcMain.handle("shell-dev:reload-preview", async (event) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return false;
+  }
+  const view = shellDevPreviewView;
+  if (!view || view.webContents.isDestroyed()) return false;
+  try {
+    await view.webContents.loadURL(shellDevPreviewBaseUrl || defaultShellDevPreviewBase());
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle("shell-dev:set-view-state", (event, rawState: unknown) => {
+  if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) {
+    return false;
+  }
+  const view = shellDevPreviewView;
+  if (!view || view.webContents.isDestroyed()) return false;
+  if (!rawState || typeof rawState !== "object" || typeof (rawState as { visible?: unknown }).visible !== "boolean") {
+    return false;
+  }
+  const state = rawState as { visible: boolean; bounds?: unknown };
+  if (!state.visible) {
+    view.setVisible(false);
+    return true;
+  }
+  const bounds = boundedMusicViewRect(state.bounds);
+  if (!bounds) {
+    view.setVisible(false);
+    return false;
+  }
+  applyShellDevPreviewViewBounds(view, bounds);
+  view.setVisible(true);
+  return true;
+});
+
 ipcMain.handle("music:set-bilibili-view-state", (event, rawState: unknown) => {
   if (!workbenchWindow || workbenchWindow.isDestroyed() || event.sender !== workbenchWindow.webContents) return false;
   const view = bilibiliSearchView;
@@ -906,9 +1319,39 @@ ipcMain.handle("staging:write-temp", async (_event, name: unknown, data: unknown
   return filePath;
 });
 
+async function readClipboardNativeImage(): Promise<Electron.NativeImage | null> {
+  const imageMimes = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
+  for (const mime of imageMimes) {
+    if (!(await clipboard.has(mime))) continue;
+    const items = await clipboard.read();
+    for (const item of items) {
+      if (!item.types.includes(mime)) continue;
+      const payload = await item.getType(mime);
+      if (!(payload instanceof Blob)) continue;
+      const image = nativeImage.createFromBuffer(Buffer.from(await payload.arrayBuffer()));
+      if (!image.isEmpty()) return image;
+    }
+  }
+  const items = await clipboard.read();
+  for (const item of items) {
+    const mime = item.types.find((t) => t.startsWith("image/"));
+    if (!mime) continue;
+    const payload = await item.getType(mime);
+    if (!(payload instanceof Blob)) continue;
+    const image = nativeImage.createFromBuffer(Buffer.from(await payload.arrayBuffer()));
+    if (!image.isEmpty()) return image;
+  }
+  return null;
+}
+
+ipcMain.handle("agent:read-image-data-url", (_event, rawPath: unknown) => {
+  if (typeof rawPath !== "string" || !rawPath.trim()) return null;
+  return readAgentImageDataUrl(activeSidecarRoot, rawPath.trim());
+});
+
 ipcMain.handle("clipboard:read-image-temp", async () => {
-  const image = clipboard.readImage();
-  if (image.isEmpty()) return null;
+  const image = await readClipboardNativeImage();
+  if (!image) return null;
   const dir = path.join(os.tmpdir(), "my-agent-paste");
   mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${Date.now()}-clipboard.png`);
@@ -935,6 +1378,13 @@ ipcMain.handle("constellation:clear", () => {
 });
 
 app.whenReady().then(async () => {
+  if (process.platform === "win32") {
+    app.setAppUserModelId("my-agent.desktop");
+  }
+  const dockIcon = loadAppIcon(256);
+  if (!dockIcon.isEmpty() && process.platform === "darwin") {
+    app.dock?.setIcon(dockIcon);
+  }
   applyApplicationMenu();
   buildTray();
   registerShortcuts();

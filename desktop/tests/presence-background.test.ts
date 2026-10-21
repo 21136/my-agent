@@ -13,6 +13,10 @@ const chatThemeAssets = [
   ["light", "chat-background-light.png"],
   ["dark", "chat-background-dark.png"],
 ] as const;
+const sessionSwitchAssets = [
+  ["light", "session-switch-light.jpg"],
+  ["dark", "session-switch-dark.jpg"],
+] as const;
 
 function assertWallpaperRule(theme: string, asset: string, stateSelector: string): void {
   const rule = new RegExp(
@@ -62,6 +66,15 @@ test("composer spans the chat width with a restrained translucent surface", () =
     stylesheet,
     /html\[data-theme\]\s+\.unified-shell\[data-main-focus="chat"\]\s+\.unified-composer\s*\{[^}]*background:\s*color-mix\([^}]*transparent/s,
   );
+});
+
+test("session switch surfaces reference themed JPG wallpapers", () => {
+  for (const [theme, asset] of sessionSwitchAssets) {
+    const rule = new RegExp(
+      `html\\[data-theme="${theme}"\\]\\s+\\.sidebar-sessions,[\\s\\S]*?url\\(\"?\\.\\/assets\\/${asset.replaceAll(".", "\\.")}`,
+    );
+    assert.match(stylesheet, rule);
+  }
 });
 
 test("both welcome and active-chat background assets are valid 16:9 PNG images", () => {

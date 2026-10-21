@@ -77,6 +77,7 @@
 | **Phase 60** | **狂奔 v2**（外部 checklist · 单 turn · 薄 harness · profile） | **M0/M1 已编码 · v2 40/40 · T-6106/6107/S-6106 已收口**（[RUNAWAY-V2.md](./archive/RUNAWAY-V2.md) · [RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md)） |
 | **Phase 62** | **狂奔编排内核**（transport / control / execution 三平面） | **T-6240～6248**（与 Phase 61 T-6210～6216 错号）· R0 done（T-6240）· R1 done（T-6241；kernel 14/14）· R2 done（T-6242；v1 compat 112/112） — [RUNAWAY-ORCHESTRATION.md](./archive/RUNAWAY-ORCHESTRATION.md) · 附录 [RUNAWAY-ORCHESTRATION-MAP.md](./archive/RUNAWAY-ORCHESTRATION-MAP.md) |
 | **Phase 64** | **Self-hosting 自举与自交付**（transaction · candidate switch · GitHub/CI · release/deploy） | **Wave 0/1 primitives + controlled self_change active；Host Agent restart、GitHub CI、release/deploy pending** — [SELF-HOSTING-ROADMAP.md](./SELF-HOSTING-ROADMAP.md) · [SELF-HOSTING-ARCHITECTURE.md](./SELF-HOSTING-ARCHITECTURE.md) |
+| **Phase 65** | **项目内嵌预览**（工作台 WebContentsView · dev 整站 · Agent 观察 M0～M5） | **设计已签 · 实现未开始**（[PROJECT-PREVIEW.md](./PROJECT-PREVIEW.md) · T-6500～T-6520 · **不含 M6 Playwright 深检**） |
 | **Phase 61** | **Agent 工具体验路线图**（终端会话 · 原子编辑 · Git diff/restore · 结构化测试 · 诊断 · 浏览器检查 · 并行隔离 · 开源优先适配） | **P0 终端会话、Git 文件级回退和 structured_test 已 active；终端会话 UI 进入设计，原子编辑仍 experimental，其余工具未开始**（[AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [INTERACTIVE-TERMINAL-UI.md](./INTERACTIVE-TERMINAL-UI.md) · T-6200～T-6225） |
 | **Phase 48** | **薄父编排 + 采纳队列**（禁 project 自动 explore · patch merge · BUG-026/027） | **done**（T-4801～4803·4802·4810～4812 · S-480/S-481 pass · BUG-026/027 fixed） |
 | **Phase 49** | **子代理预算**（专任务轮次 ≥ 父 segment · cap 硬交卷 · 父补读合法） | **M0 done**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · S-4910 手工） |
@@ -321,8 +322,12 @@ flowchart TD
 | `read_file` | `builtin/read_file.py` | `path` | paths |
 | `list_dir` | `builtin/list_dir.py` | `path`, `recursive?` | paths |
 | `grep` | `builtin/grep.py` | `pattern`, `path`, `glob?`, `max_results?` | paths, 优先 `rg` |
+| `codebase_search` | `builtin/codebase_search.py` | `query`, `top_k?`, `path_prefix?` | project index when bound; agent-root index otherwise |
 | `web_search` | `builtin/web_search.py` | `query`, `max_results?` | httpx, `LLM_API_KEY` |
 | `fetch_url` | `builtin/fetch_url.py` | `url`, `max_chars?` | httpx, SSRF 防护 |
+| `show_images` | `builtin/show_images.py` | `paths[]`, `reference_context?`, `reference_id?` | paths；[CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md) |
+| `generate_image` | `builtin/generate_image.py` | `prompt`, `reference_context?`, `reference_id?`, `model?`, `size?`, `quality?` | 0x567 API/key, confirm |
+| `deliverable_review` | `builtin/deliverable_review.py` | `task`, `project_id?`, `scope?`, `paths?`, `phase_hint?`, `facts?` | bound project or explicit `workspace/<project_id>` |
 | `run_evolved` | `builtin/run_evolved.py` | `tool_name`, `arguments`, `dry_run?` | registry |
 
 **路径规则**（`paths.py`）：
@@ -633,8 +638,9 @@ exit 0；7 条 `[PASS]`：
 
 | 场景 | 预期 |
 |------|------|
-| `build_builtin_tools()` | 恰好 **6** 个 OpenAI `type: function` |
-| 工具名 | `read_file` · `list_dir` · `grep` · `web_search` · `fetch_url` · `run_evolved` |
+| `build_llm_tools()` in `agent` mode | 普通会话与项目会话提供相同的 Builtin/proxy 工具集；ask 保留受限执行面 |
+| `build_builtin_tools()` | Exactly **13** OpenAI `type: function` definitions (mode filters may hide some) |
+| Builtin names | `read_file` · `list_dir` · `grep` · `glob_file_search` · `codebase_search` · `web_search` · `fetch_url` · `show_images` · `generate_image` · `run_evolved` · `propose_context_switch` · `deliverable_review` · `explore` |
 | 无平铺 evolved | `write_text` 等 **不在** function 列表；仅经 `run_evolved` |
 | 参数 schema | 各 builtin 含 `parameters`（JSON Schema），`required` 字段在 `properties` 内 |
 | `format_session_evolved_catalog([])` | 含 `write_text`（common）；evolved 列在 system 文案而非独立 function |
