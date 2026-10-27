@@ -15,7 +15,7 @@
 
 | 约束 | 说明 |
 |------|------|
-| **Builtin 共 12 个** | **核心 8**（观察/执行口）+ **其它 4**（上下文、子代理、生图）；核心保持精简 |
+| **Builtin 共 14 个** | **核心 8**（观察/执行口）+ **其它 6**（上下文、子代理、生图、演化）；核心保持精简 |
 | **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `evolve/tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
@@ -38,9 +38,9 @@
 
 ---
 
-## 3. Builtin（12 个 function，不分主题）
+## 3. Builtin（14 个 function，不分主题）
 
-注册表固定为 12 个 function，不按主题过滤。`agent`（动手）模式下，普通会话与项目会话提供相同的 Builtin 和扁平工具；项目绑定、shell 类型及 `read_only` / `plan_only` 意图不再从 schema 隐藏工具。`ask`（只聊）仍隐藏 `run_evolved`、生图和扁平副作用工具。工具可见不等于获准执行：执行器仍按请求意图、工具策略和目标路径拒绝不允许的副作用；`deliverable_review` 在普通会话需显式提供项目 ID。
+注册表固定为 14 个 function，不按主题过滤。`agent`（动手）模式下，普通会话与项目会话提供相同的 Builtin 和扁平工具；项目绑定、shell 类型及 `read_only` / `plan_only` 意图不再从 schema 隐藏工具。`ask`（只聊）仍隐藏 `run_evolved`、生图和扁平副作用工具；`evolution` 保持可见但只允许 `inspect`。工具可见不等于获准执行：执行器仍按请求意图、工具策略和目标路径拒绝不允许的副作用；`deliverable_review` 在普通会话需显式提供项目 ID。
 
 ### 3.0 核心 8 个（观察 / 执行口）
 
@@ -55,7 +55,7 @@
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
 
-### 3.0a 其它 5 个（上下文 / 子代理 / 图片 / 生图）
+### 3.0a 其它 6 个（上下文 / 子代理 / 图片 / 生图 / 演化）
 
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
@@ -64,6 +64,7 @@
 | `generate_image` | 0x567 GPT Image 生图或参考图编辑；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
 | `deliverable_review` | 只读交付审查；绑定项目默认当前项目，普通会话须 `project_id` | 否 | 否 |
 | `explore` | 只读 explore 子代理（须显式 task/scope） | 否 | 否 |
+| `evolution` | 通过当前会话绑定的监督器 inspect/patch/snapshot/build/launch/stop/run_case；不接受模型提供的会话、授权、token 或 host path | 按 action 的服务端授权 | 否 |
 
 Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。注册表见 `tools/registry.py` 的 `BUILTIN_TOOLS`。
 
@@ -155,7 +156,7 @@ tool_dirs = ["tools/coding"]
 
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
-Builtin 共 12 个 function（核心 8 + 其它 4）；evolved 不平铺，统一通过 `run_evolved` 调用：
+Builtin 共 14 个 function（核心 8 + 其它 6）；evolved 不平铺，统一通过 `run_evolved` 调用：
 
 - **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
 - **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
@@ -221,7 +222,7 @@ timeout_sec = 60
 
 ```text
 用户输入
-    → LLM 选 Builtin（12 个之一）或 run_evolved / 扁平原语 proxy
+    → LLM 选 Builtin（14 个之一）或 run_evolved / 扁平原语 proxy
     → ToolExecutor.validate（schema、路径、策略）
     → run_evolved：tool_name 须在「本会话清单」或 CLI 显式指定
     → 若 confirm：预览，等待 y/n/a（§6.3）
@@ -567,7 +568,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 
 ```text
 agent-core/tools/
-├── registry.py       # 扫描 evolve/tools/**；合并 13 builtins
+├── registry.py       # 扫描 evolve/tools/**；合并 14 builtins
 ├── executor.py
 ├── builtin/
 │   ├── read_file.py
@@ -580,6 +581,7 @@ agent-core/tools/
 │   ├── show_images.py
 │   ├── generate_image.py
 │   ├── run_evolved.py
+│   ├── evolution.py
 │   ├── propose_context_switch.py
 │   ├── deliverable_review.py
 │   └── explore.py
@@ -614,11 +616,13 @@ evolve/
 | 8 | `fetch_url` 实现 | **`httpx`**；stdlib HTML 去标签；SSRF；默认 32k chars / 2MB raw；§7.5 |
 | 9 | 超长 tool 结果 | **>8k** 落盘 `tool_outputs/`；LLM 见 2k 预览 + `output_path` |
 
+T7（2026-10-22）增加第 14 个一方 Builtin `evolution`。它只控制当前 Session 已绑定的监督器；`ask` / `read_only` / `plan_only` 仅允许 inspect，授权仍由 Host/GrantStore 强制，不能由 tool schema 或模型参数自我授权。
+
 ---
 
 ## 14. 验收（TOOLS 设计阶段）
 
-- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；其它 4 个名称与 registry 一致
+- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；其它 6 个名称与 registry 一致
 - [ ] Evolved 主题目录 + common 规则清楚
 - [ ] 与 `evolve/_index.*.toml`、`tool-catalog/INDEX.md`、MEMORY 主题路由一致
 - [ ] `run_evolved` + 会话清单可实现

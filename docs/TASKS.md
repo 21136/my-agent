@@ -2598,3 +2598,10 @@ flowchart TD
 | M4 | Phase 6 |
 
 建议在 `PROJECT.md` §7.3 引用本文件为 **实施细表**。
+
+## Evolution Slice A T9 (2026-10-23)
+
+- T9 scripted recovery code is implemented in the sandbox. The ordinary H1 profile remains index-only; an explicit `t4-recovery-node-v1` profile grants only the T4 `main.cjs`, `service.cjs`, and `manifest.json` in addition to the catalog index. These mutable candidate bytes are registered separately after the fixed control release is sealed. The trusted Host registers a fixed Node runtime/profile and snapshot-bound descriptor factory only for the exact T4 manifest.
+- The scripted CLI builds fresh H1 main/preload bundles from current sandbox sources into the run root, then contains the visible H1 launcher, ephemeral-port/WebSocket driver, per-action confirmation receipt flow, recovery orchestration, late-ready rejection probe, controlled shutdown, and evidence capture for the journal, nonce-redacted component stdout/stderr, stable baseline and fixed release.
+- Verification rerun (2026-10-23): strict control build and Node typecheck/syntax passed; 12 focused Node files **93 passed / 0 failed + 1 opt-in leaf-process skipped**; 8 focused Python files **95 passed / 0 failed**. Dependency audit: **157 packages, 0 issues**. Full `npm run build` completed; loopback preview served the page and six assets (HTTP 200), but visual/interaction QA is still open. Vite emitted non-fatal chunk/dynamic-import and Electron plugin option warnings. The Windows worker test fixture now supplies the private sandbox root and config digest required by production bootstrap. Evidence: `artifacts/evolution-a-t9-code-acceptance-db884b8a2fc34ee7b4534b62ef8cc5cc/`.
+- Acceptance remains **open**: real P1/H1 scripted execution; M1 provider adapter, safe credential-service wiring and model run; independent review; security audit; and visual/interaction preview remain unverified. No dependency install, full test suite, stage, commit, merge or stable-tree edit. Details: [T9 implementation status](reviews/2026-10-22-evolution-a-implementation.md).

@@ -39,6 +39,8 @@
 
 合入稳定 = `git merge experiment/sandbox`（或 PR），不是复制文件夹。
 
+存储测量、备份归档、依赖预检与尚未完成的验收，见 [双版本存储安全](./SANDBOX-STORAGE.md)。
+
 ## 一次性准备
 
 ```bat

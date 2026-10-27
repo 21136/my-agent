@@ -15,5 +15,6 @@ test("shell dev panel exposes embedded web slot and dual lanes", () => {
   assert.match(html, /data-shell-dev-promote/);
   assert.match(html, /data-shell-dev-adopt-merge/);
   assert.match(html, /一键合入实验分支/);
+  assert.match(html, /data-shell-dev-sync-sandbox/);
   assert.match(html, /壳开发预览/);
 });

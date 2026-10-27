@@ -1,0 +1,392 @@
+{
+  "protocol": "evolution/1.0",
+  "max_control_bytes": 65536,
+  "max_json_depth": 64,
+  "cases": [
+    {
+      "id": "valid_inspect",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": 0,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": true
+      }
+    },
+    {
+      "id": "extra_field",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": 0,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        },
+        "candidate_says": "approved"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "bool_revision",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": true,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "negative_revision",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": -1,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "wrong_protocol",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/2.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": 0,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "protocol_incompatible"
+      }
+    },
+    {
+      "id": "bad_uuid",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "not-a-uuid",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": 0,
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "bad_hash",
+      "validator": "control_request",
+      "input": {
+        "protocol": "evolution/1.0",
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "conversation_id": "33333333-3333-4333-8333-333333333333",
+        "host_run_id": "44444444-4444-4444-8444-444444444444",
+        "authorization_id": "55555555-5555-4555-8555-555555555555",
+        "expected_state_revision": 0,
+        "action": "build",
+        "payload": {
+          "source_snapshot_id": "sha256:ABC",
+          "descriptor_artifact_id": "66666666-6666-4666-8666-666666666666",
+          "build_input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "isolation_mode": "local_managed"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "unsafe_number",
+      "validator": "json_bytes",
+      "input": {
+        "utf8": "{\"protocol\":\"evolution/1.0\",\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"evolution_id\":\"22222222-2222-4222-8222-222222222222\",\"conversation_id\":\"33333333-3333-4333-8333-333333333333\",\"host_run_id\":\"44444444-4444-4444-8444-444444444444\",\"authorization_id\":\"55555555-5555-4555-8555-555555555555\",\"expected_state_revision\":9007199254740992,\"action\":\"inspect\",\"payload\":{\"query\":\"summary\"}}"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "float_number",
+      "validator": "json_bytes",
+      "input": {
+        "utf8": "{\"protocol\":\"evolution/1.0\",\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"evolution_id\":\"22222222-2222-4222-8222-222222222222\",\"conversation_id\":\"33333333-3333-4333-8333-333333333333\",\"host_run_id\":\"44444444-4444-4444-8444-444444444444\",\"authorization_id\":\"55555555-5555-4555-8555-555555555555\",\"expected_state_revision\":0,\"action\":\"inspect\",\"payload\":{\"query\":\"summary\",\"ratio\":0.5}}"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "duplicate_key",
+      "validator": "json_bytes",
+      "input": {
+        "utf8": "{\"protocol\":\"evolution/1.0\",\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"operation_id\":\"22222222-2222-4222-8222-222222222222\"}"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "valid_result",
+      "validator": "control_result",
+      "input": {
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "state_revision": 1,
+        "status": "succeeded",
+        "result": {
+          "summary": "当前会话"
+        },
+        "error": null
+      },
+      "expected": {
+        "accept": true
+      }
+    },
+    {
+      "id": "result_extra_field",
+      "validator": "control_result",
+      "input": {
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "state_revision": 1,
+        "status": "succeeded",
+        "result": {
+          "summary": "当前会话"
+        },
+        "error": null,
+        "unexpected": true
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "result_bad_status",
+      "validator": "control_result",
+      "input": {
+        "operation_id": "11111111-1111-4111-8111-111111111111",
+        "evolution_id": "22222222-2222-4222-8222-222222222222",
+        "state_revision": 1,
+        "status": "green",
+        "result": {
+          "summary": "当前会话"
+        },
+        "error": null
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "payload_inspect_summary",
+      "validator": "action_payload",
+      "input": {
+        "action": "inspect",
+        "payload": {
+          "query": "summary"
+        }
+      },
+      "expected": {
+        "accept": true
+      }
+    },
+    {
+      "id": "payload_inspect_smuggling",
+      "validator": "action_payload",
+      "input": {
+        "action": "inspect",
+        "payload": {
+          "query": "summary",
+          "command": "delete stable"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "payload_patch_traversal",
+      "validator": "action_payload",
+      "input": {
+        "action": "patch",
+        "payload": {
+          "path": "../stable/main.ts",
+          "expected_before_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "content_utf8": "x"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "payload_build_valid",
+      "validator": "action_payload",
+      "input": {
+        "action": "build",
+        "payload": {
+          "source_snapshot_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "descriptor_artifact_id": "66666666-6666-4666-8666-666666666666",
+          "build_input_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "isolation_mode": "local_managed"
+        }
+      },
+      "expected": {
+        "accept": true
+      }
+    },
+    {
+      "id": "payload_launch_missing_instance_binding",
+      "validator": "action_payload",
+      "input": {
+        "action": "launch",
+        "payload": {
+          "candidate_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "oversized_frame",
+      "validator": "frame",
+      "input": {
+        "hex": "00010001"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "budget_exceeded"
+      }
+    },
+    {
+      "id": "unpaired_surrogate",
+      "validator": "json_bytes",
+      "input": {
+        "utf8": "{\"protocol\":\"evolution/1.0\",\"operation_id\":\"11111111-1111-4111-8111-111111111111\",\"evolution_id\":\"22222222-2222-4222-8222-222222222222\",\"conversation_id\":\"\\ud800\",\"host_run_id\":\"44444444-4444-4444-8444-444444444444\",\"authorization_id\":\"55555555-5555-4555-8555-555555555555\",\"expected_state_revision\":0,\"action\":\"inspect\",\"payload\":{\"query\":\"summary\"}}"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "excessive_depth",
+      "validator": "json_bytes",
+      "input": {
+        "utf8": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    },
+    {
+      "id": "empty_frame",
+      "validator": "frame",
+      "input": {
+        "hex": "00000000"
+      },
+      "expected": {
+        "accept": false,
+        "error_code": "invalid_request"
+      }
+    }
+  ],
+  "canonical_vectors": [
+    {
+      "value": {
+        "b": 2,
+        "a": "中"
+      },
+      "canonical_utf8": "{\"a\":\"中\",\"b\":2}",
+      "sha256": "sha256:c0fff7adca44fc199b07f493cca70f5988a889a43462c798888a83f6c946156a"
+    },
+    {
+      "value": {
+        "😀": 1,
+        "": 2
+      },
+      "canonical_utf8": "{\"😀\":1,\"\":2}",
+      "sha256": "sha256:04208f6cdb854e2ab1b07dd3633a39dec854344fe72824cf7f2fdb4e2e33129e"
+    },
+    {
+      "value": {
+        "n": true,
+        "s": "slash/ok",
+        "array": [
+          null,
+          -1
+        ]
+      },
+      "canonical_utf8": "{\"array\":[null,-1],\"n\":true,\"s\":\"slash/ok\"}",
+      "sha256": "sha256:56c476d7a9fd826c57a666e83e2d711fa80127e5b06afbfe7e4f1c2bbc3d416b"
+    }
+  ]
+}

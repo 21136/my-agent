@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 
 from paths import AgentPaths, PathDeniedForWriteError, session_write_scope
-from sandbox_evolution import normalize_write_scope_root, sandbox_write_scope_relative
+from sandbox_evolution import (
+    is_sandbox_agent_root,
+    normalize_write_scope_root,
+    sandbox_write_scope_relative,
+)
 from session import SessionMeta, create_new, create_sandbox_evolution_session
 from tools.executor import ExecutorSession, _validate_session_write_scope
 
@@ -49,6 +53,12 @@ class SandboxWriteScopeTests(unittest.TestCase):
             self.assertTrue(str(ok).endswith("foo.ts"))
             with self.assertRaises(PathDeniedForWriteError):
                 self.paths.resolve_under_agent_for_write("desktop/foo.ts", must_exist=False)
+
+    def test_sandbox_agent_root_has_no_write_scope(self) -> None:
+        sandbox = self.paths.agent_root / ".worktrees" / "sandbox"
+        sandbox_paths = AgentPaths.from_root(sandbox)
+        self.assertTrue(is_sandbox_agent_root(sandbox_paths))
+        self.assertEqual(sandbox_write_scope_relative(sandbox_paths), "")
 
     def test_create_sandbox_session_meta(self) -> None:
         session = create_sandbox_evolution_session(self.paths)

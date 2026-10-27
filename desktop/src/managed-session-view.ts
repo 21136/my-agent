@@ -64,21 +64,55 @@ export async function mountManagedSessionView(
   root.replaceChildren();
   root.dataset.managedView = "loading";
 
-  const frame = doc.createElement("div");
-  frame.className = "app-frame";
-  const main = doc.createElement("main");
-  main.className = "shell-host shell-placeholder";
-  main.style.gap = "1rem";
-  main.style.overflow = "auto";
-
+  const frame = doc.createElement("main");
+  frame.className = "managed-workspace";
+  frame.dataset.viewState = "loading";
+  const sidebar = doc.createElement("aside");
+  sidebar.className = "managed-sidebar";
+  sidebar.setAttribute("aria-label", "记录导航");
+  const brand = doc.createElement("div");
+  brand.className = "managed-brand";
+  const brandMark = doc.createElement("span");
+  brandMark.className = "managed-brand-mark";
+  brandMark.textContent = "m";
+  brandMark.setAttribute("aria-hidden", "true");
+  const brandText = doc.createElement("div");
+  const brandName = doc.createElement("strong");
+  brandName.className = "managed-brand-title";
+  brandName.textContent = "my-agent";
+  const brandSubtitle = doc.createElement("span");
+  brandSubtitle.className = "managed-brand-subtitle";
+  brandSubtitle.textContent = "本地工作空间";
+  brandText.append(brandName, brandSubtitle);
+  brand.append(brandMark, brandText);
+  const main = doc.createElement("section");
+  main.className = "managed-main";
+  main.setAttribute("aria-label", "记录工作区");
+  const toolbar = doc.createElement("header");
+  toolbar.className = "managed-toolbar";
+  const breadcrumb = doc.createElement("span");
+  breadcrumb.className = "managed-breadcrumb";
+  breadcrumb.textContent = "工作空间 / 本地记录";
+  toolbar.append(breadcrumb);
+  const contentHeader = doc.createElement("div");
+  contentHeader.className = "managed-content-header";
   const heading = doc.createElement("h1");
-  heading.textContent = "本地记录";
+  heading.textContent = "留住每一个好想法";
+  const contentHint = doc.createElement("p");
+  contentHint.textContent = "选择左侧记录继续，或新建一条记录。";
+  contentHeader.append(heading, contentHint);
   const identity = doc.createElement("p");
-  identity.className = "text-muted";
+  identity.className = "managed-identity";
+  const details = doc.createElement("details");
+  details.className = "managed-details";
+  const detailsSummary = doc.createElement("summary");
+  detailsSummary.textContent = "运行信息";
+  details.append(detailsSummary, identity);
   const modeLabel = doc.createElement("p");
-  modeLabel.className = "text-muted";
+  modeLabel.className = "managed-mode";
+  modeLabel.textContent = "正在连接本地空间";
   const status = doc.createElement("p");
-  status.className = "text-muted";
+  status.className = "managed-status";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
@@ -87,42 +121,84 @@ export async function mountManagedSessionView(
   const titleInput = doc.createElement("input");
   titleInput.type = "text";
   titleInput.maxLength = 120;
+  titleInput.placeholder = "给记录起个名字";
   titleInput.dataset.managedField = "title";
   titleInput.setAttribute("aria-label", "记录名称");
   const createButton = doc.createElement("button");
   createButton.type = "button";
   createButton.dataset.managedAction = "create";
   createButton.textContent = "新建记录";
+  createButton.className = "managed-primary-button";
   createButton.disabled = true;
   createLabel.append(titleInput);
   const createRow = doc.createElement("div");
+  createRow.className = "managed-create-form";
   createRow.append(createLabel, createButton);
 
-  const listHeading = doc.createElement("h2");
-  listHeading.textContent = "记录列表";
+  const listHeading = doc.createElement("div");
+  listHeading.className = "managed-section-heading";
+  const listTitle = doc.createElement("span");
+  listTitle.className = "managed-section-label";
+  listTitle.textContent = "我的记录";
+  const recordCount = doc.createElement("span");
+  recordCount.className = "managed-record-count";
+  recordCount.textContent = "0";
+  listHeading.append(listTitle, recordCount);
   const list = doc.createElement("nav");
+  list.className = "managed-record-list";
   list.setAttribute("aria-label", "本地记录");
-  const contentHeading = doc.createElement("h2");
-  contentHeading.textContent = "记录内容";
   const documents = doc.createElement("section");
+  documents.className = "managed-documents";
   documents.setAttribute("aria-label", "记录内容");
   const editorLabel = doc.createElement("label");
   editorLabel.textContent = "追加一段文字";
   const editor = doc.createElement("textarea");
   editor.dataset.managedField = "document";
   editor.rows = 6;
+  editor.placeholder = "在这里写下想法、进展，或下一步计划…";
   editor.setAttribute("aria-label", "追加一段文字");
   editor.disabled = true;
   const saveButton = doc.createElement("button");
   saveButton.type = "button";
   saveButton.dataset.managedAction = "save";
   saveButton.textContent = "保存记录";
+  saveButton.className = "managed-primary-button";
   saveButton.disabled = true;
   editorLabel.append(editor);
 
-  main.append(heading, identity, modeLabel, status, createRow, listHeading, list, contentHeading, documents, editorLabel, saveButton);
-  frame.append(main);
+  const composer = doc.createElement("div");
+  composer.className = "managed-composer";
+  const composerFooter = doc.createElement("div");
+  composerFooter.className = "managed-composer-footer";
+  const saveHint = doc.createElement("span");
+  saveHint.className = "managed-composer-hint";
+  saveHint.textContent = "选择记录后可追加内容";
+  composerFooter.append(saveHint, saveButton);
+  composer.append(editorLabel, composerFooter);
+  const sidebarFooter = doc.createElement("footer");
+  sidebarFooter.className = "managed-sidebar-footer";
+  sidebarFooter.append(modeLabel, details);
+  sidebar.append(brand, createRow, listHeading, list, sidebarFooter);
+  main.append(toolbar, contentHeader, documents, composer, status);
+  frame.append(sidebar, main);
   root.append(frame);
+
+  const renderEmpty = (title: string, description: string) => {
+    const empty = doc.createElement("div");
+    empty.className = "managed-empty";
+    const icon = doc.createElement("span");
+    icon.className = "managed-empty-icon";
+    icon.setAttribute("aria-hidden", "true");
+    const emptyTitle = doc.createElement("h2");
+    emptyTitle.className = "managed-empty-title";
+    emptyTitle.textContent = title;
+    const hint = doc.createElement("p");
+    hint.className = "managed-empty-description";
+    hint.textContent = description;
+    empty.append(icon, emptyTitle, hint);
+    documents.replaceChildren(empty);
+  };
+  renderEmpty("从一条记录开始", "把灵感与进展留在这里，下次打开时继续。" );
 
   let currentSessionId: string | null = null;
   let selectionRevision = 0;
@@ -133,6 +209,7 @@ export async function mountManagedSessionView(
   const setStatus = (message: string) => { status.textContent = message; };
   const renderSessions = () => {
     list.replaceChildren();
+    recordCount.textContent = String(sessions.length);
     if (!sessions.length) {
       const empty = doc.createElement("p");
       empty.className = "text-muted";
@@ -144,7 +221,14 @@ export async function mountManagedSessionView(
       const button = doc.createElement("button");
       button.type = "button";
       button.dataset.managedSession = session.session_id;
-      button.textContent = session.title;
+      button.className = "managed-record-item";
+      const icon = doc.createElement("span");
+      icon.className = "managed-record-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const name = doc.createElement("span");
+      name.className = "managed-record-name";
+      name.textContent = session.title;
+      button.append(icon, name);
       button.setAttribute("aria-current", String(session.session_id === currentSessionId));
       button.addEventListener("click", async () => { await selectSession(session.session_id); });
       list.append(button);
@@ -160,14 +244,12 @@ export async function mountManagedSessionView(
       const entries = Array.isArray(session.documents) ? session.documents : [];
       documents.replaceChildren();
       if (!entries.length) {
-        const empty = doc.createElement("p");
-        empty.className = "text-muted";
-        empty.textContent = "这条记录还没有内容";
-        documents.append(empty);
+        renderEmpty("这条记录还没有内容", canWrite ? "在下方写下第一段内容，点击保存即可。" : "当前为只读模式，可查看已有记录。" );
       }
       for (const entry of entries) {
         if (!record(entry) || typeof entry.text !== "string") continue;
         const paragraph = doc.createElement("p");
+        paragraph.className = "managed-document";
         paragraph.textContent = entry.text;
         documents.append(paragraph);
       }
@@ -183,6 +265,9 @@ export async function mountManagedSessionView(
 
   const selectSession = async (sessionId: string) => {
     currentSessionId = sessionId;
+    heading.textContent = sessions.find(session => session.session_id === sessionId)?.title ?? "本地记录";
+    contentHint.textContent = "你的内容保存在本地，随时回来继续。";
+    saveHint.textContent = canWrite ? "保存后将追加到当前记录" : "当前只读，内容不会被修改";
     const selectedAtStart = ++selectionRevision;
     renderSessions();
     editor.value = "";
@@ -240,19 +325,29 @@ export async function mountManagedSessionView(
   try {
     const health = unwrap(await bridge.health());
     if (health.ready !== true) throw new Error("Host unavailable");
-    identity.textContent = safeIdentity(health).join("　");
+    identity.textContent = safeIdentity(health).join("\n") || "本地连接已建立";
     const mode = modeFrom(await bridge.getMode());
     canWrite = mode === "fenced_application";
-    modeLabel.textContent = canWrite ? "可保存本地记录" : "只读检查";
+    modeLabel.textContent = canWrite ? "本地空间 · 可保存" : "本地空间 · 只读";
+    modeLabel.dataset.mode = canWrite ? "writable" : "readonly";
+    if (!canWrite) {
+      saveHint.textContent = "只读模式，内容不会被修改";
+      editor.placeholder = "当前为只读模式，可在左侧选择记录查看。";
+    }
     titleInput.disabled = !canWrite;
     editor.disabled = !canWrite;
     createButton.disabled = !canWrite;
     sessions = sessionsFrom(await bridge.listSessions());
     renderSessions();
     root.dataset.managedView = "ready";
+    frame.dataset.viewState = "ready";
     setStatus("");
   } catch {
     root.dataset.managedView = "error";
+    frame.dataset.viewState = "error";
+    modeLabel.textContent = "本地空间暂时不可用";
+    modeLabel.dataset.mode = "readonly";
+    renderEmpty("暂时无法连接本地空间", "请稍后重新打开窗口，你的已有记录不会被修改。" );
     titleInput.disabled = true;
     createButton.disabled = true;
     editor.disabled = true;

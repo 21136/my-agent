@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>my-agent · 界面预览（示例数据）</title></head>
+<body><div id="app"></div><script type="module">
+import '../src/styles/theme.css';
+import '../src/styles/managed-session.css';
+import { mountManagedSessionView } from '../src/managed-session-view.ts';
+// UI-only preview. All sample data stays in memory; no production bridge or acceptance claim.
+const samples = new Map([
+  ['notes', { session_id: 'notes', title: '今天的想法', documents: [
+    { text: '把值得记住的想法，留在一个安静的地方。\n\n记录今天的灵感、项目进展，或还没来得及展开的念头。下一次打开，仍然可以从这里继续。' },
+    { text: '接下来\n整理客户反馈，明确下一步要解决的问题。' },
+  ] }],
+  ['project', { session_id: 'project', title: '项目备忘', documents: [{ text: '先把最重要的一件事做好，再开始下一件。' }] }],
+  ['ideas', { session_id: 'ideas', title: '灵感随记', documents: [] }],
+]);
+const mode = new URLSearchParams(location.search).get('mode');
+document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'dark' ? 'dark' : 'light';
+await mountManagedSessionView(document.querySelector('#app'), {
+  async health() { return { ready: true, installation_id: 'ui-preview-only', data_store_id: 'sample-memory-only', release_id: 'not-a-production-release' }; },
+  async getMode() { return mode === 'readonly' ? 'read_only' : 'fenced_application'; },
+  async listSessions() { return { sessions: [...samples.values()].map(({ session_id, title }) => ({ session_id, title })) }; },
+  async readSession(id) { return { session: samples.get(id) }; },
+  async createSession({ sessionId, title }) { if (mode === 'readonly') throw new Error('readonly'); samples.set(sessionId, { session_id: sessionId, title, documents: [] }); return { type: 'session.created' }; },
+  async appendDocument({ sessionId, text }) { if (mode === 'readonly') throw new Error('readonly'); samples.get(sessionId).documents.push({ text }); return { type: 'session.appended' }; },
+});
+</script></body></html>

@@ -240,10 +240,12 @@ async function start(): Promise<void> {
     stage = "renderer";
     await within(app.whenReady(), "Electron readiness");
     const renderer = path.join(production.binding.paths.code, "desktop", "dist", "index.html");
-    const window = new BrowserWindow({ show: false, title: "Managed " + production.binding.installationId + " — my-agent", webPreferences: {
+    const managedTitle = boot.access === "fenced_application" ? "my-agent · 本地工作空间" : "my-agent · 本地工作空间（只读）";
+    const window = new BrowserWindow({ show: false, width: 1120, height: 800, minWidth: 640, minHeight: 560,
+      autoHideMenuBar: true, title: managedTitle, webPreferences: {
       preload: path.join(__dirname, "managed-preload.js"), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
     } });
-    const managedTitle = "Managed " + production.binding.installationId + " — my-agent";
+    window.removeMenu();
     window.on("page-title-updated", (event) => { event.preventDefault(); window.setTitle(managedTitle); });
     const rendererUrl = pathToFileURL(renderer).href;
     const rendererRoot = path.dirname(renderer);
