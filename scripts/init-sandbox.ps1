@@ -12,6 +12,12 @@ Set-Location $RepoRoot
 
 if (Test-Path $SandboxPath) {
     Write-Host "[sandbox] Already exists: $SandboxPath"
+    $stableBranch = (& git rev-parse --abbrev-ref HEAD).Trim()
+    $ahead = & git rev-list --count "$Branch..$stableBranch" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $ahead -and [int]$ahead -gt 0) {
+        Write-Host "[sandbox] WARN: stable ($stableBranch) is $ahead commit(s) ahead of $Branch."
+        Write-Host "[sandbox]        After a merge into stable, run sync-sandbox-worktree.bat (or 壳预览 -> 同步 sandbox 与稳定)."
+    }
     Write-Host "[sandbox] Remove with: git worktree remove .worktrees/sandbox"
     exit 0
 }

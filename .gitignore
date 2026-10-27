@@ -44,3 +44,6 @@ artifacts/
 # OS
 Thumbs.db
 .DS_Store
+
+# Git worktrees (sandbox evolution); never commit nested checkout
+.worktrees/
