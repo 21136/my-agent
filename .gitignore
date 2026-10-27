@@ -54,3 +54,7 @@ Thumbs.db
 .y/
 .z/
 storage-*/
+
+# Local sealed/managed Host runtime (never publish)
+.managed-runtime/
+
