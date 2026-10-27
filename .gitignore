@@ -47,3 +47,10 @@ Thumbs.db
 
 # Git worktrees (sandbox evolution); never commit nested checkout
 .worktrees/
+
+# Local scratch / probe trees (never source)
+.vp/
+.x/
+.y/
+.z/
+storage-*/

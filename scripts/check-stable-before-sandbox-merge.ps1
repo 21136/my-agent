@@ -38,7 +38,7 @@ if (-not (Test-Path $sandboxPath)) {
     Warn "Sandbox worktree missing ($sandboxPath). Run init-sandbox.bat first if you still need experiments."
 }
 
-function Test-GitRef([string]$BranchName): bool {
+function Test-GitRef([string]$BranchName) {
     $null = & git show-ref --verify --quiet "refs/heads/$BranchName" 2>$null
     return $LASTEXITCODE -eq 0
 }
