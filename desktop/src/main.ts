@@ -1,4 +1,5 @@
 import "./styles/theme.css";
+import "./styles/managed-session.css";
 import type { AgentWsClient } from "./api/ws";
 import { mountAppChrome } from "./app-chrome";
 import { createWsClient } from "./api/ws";
@@ -18,6 +19,7 @@ async function boot(): Promise<void> {
 
   const managedBridge = window.myAgentManaged;
   if (managedBridge) {
+    applyTheme();
     await mountManagedSessionView(app, managedBridge);
     return;
   }
