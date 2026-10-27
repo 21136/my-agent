@@ -93,6 +93,8 @@ test("formatDualLaneStrip surfaces stableAhead without legacy gate fields", () =
   const strip = ui.formatDualLaneStrip({
     stableHead: "abcdef012345",
     sandboxHead: "1234567890ab",
+    currentBranch: "main",
+    sandboxBranch: "experiment/sandbox",
     commitsAhead: 0,
     stableAheadOfSandbox: 2,
     needsSandboxSync: true,
@@ -103,8 +105,11 @@ test("formatDualLaneStrip surfaces stableAhead without legacy gate fields", () =
   });
   assert.equal(strip.stableHead, "abcdef0");
   assert.equal(strip.sandboxHead, "1234567");
+  assert.equal(strip.stableBranch, "main");
+  assert.equal(strip.sandboxBranch, "experiment/sandbox");
   assert.equal(strip.stableAhead, "2");
-  assert.match(strip.hint, /稳定分支比实验树新 2/);
+  assert.match(strip.hint, /稳定比实验新 2/);
+  assert.match(strip.hint, /用稳定刷实验/);
   assert.equal(strip.showBlockers, false);
 });
 
@@ -180,4 +185,22 @@ test("sync success reports before to after heads and refreshes status", async ()
   assert.equal(outputs.at(-1)?.tone, "ok");
   assert.match(outputs.at(-1)?.text ?? "", /aaaaaaa/);
   assert.ok(statuses.length >= 1);
+});
+
+test("formatDualLaneStrip adopt hint uses flat CTA copy", () => {
+  const strip = ui.formatDualLaneStrip({
+    stableHead: "aaaaaaa",
+    sandboxHead: "bbbbbbb",
+    currentBranch: "main",
+    sandboxBranch: "experiment/sandbox",
+    commitsAhead: 3,
+    stableAheadOfSandbox: 0,
+    needsSandboxSync: false,
+    sandboxDirtyProduct: [],
+    stableDirtyProduct: [],
+    fatalBlockers: [],
+    syncBlockers: [],
+  });
+  assert.match(strip.hint, /合入稳定/);
+  assert.doesNotMatch(strip.hint, /一键完成合入/);
 });
