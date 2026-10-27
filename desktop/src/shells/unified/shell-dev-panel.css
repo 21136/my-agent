@@ -1,3 +1,22 @@
+/* Collapse hollow secondary rail for dual-lane: icon bar only. */
+.unified-shell[data-rail="shell-dev"] .unified-sidebar-panel,
+.unified-shell[data-rail="shell-dev"] .sidebar-resize-handle {
+  display: none !important;
+}
+.unified-shell[data-rail="shell-dev"] .sidebar-icon-bar {
+  width: 56px;
+  flex-basis: 56px;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev"] {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+.unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .thread-archive-banner, .unified-context-region, .unified-composer-dock) {
+  display: none;
+}
+.unified-shell[data-rail="shell-dev"] .unified-main {
+  min-width: 0;
+}
+
 .unified-shell-dev {
   flex: 1;
   min-height: 0;
@@ -15,13 +34,14 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 0.65rem 0.9rem 0.85rem;
-  gap: 0.55rem;
+  padding: 0.85rem 1.1rem 1rem;
+  gap: 0.65rem;
+  max-width: 56rem;
 }
 
 .dual-lane-heading {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 0.65rem 1rem;
   flex-wrap: wrap;
@@ -29,40 +49,46 @@
 }
 
 .shell-dev-heading-copy {
-  min-width: min(100%, 16rem);
-  flex: 1 1 14rem;
+  min-width: min(100%, 12rem);
+  flex: 1 1 12rem;
 }
 
 .shell-dev-heading-copy h1,
 .dual-lane-heading h1 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   line-height: 1.25;
+  letter-spacing: -0.01em;
 }
 
 .shell-dev-hint {
-  margin: 0.25rem 0 0;
+  margin: 0.2rem 0 0;
   color: var(--ma-text-muted);
   font-size: 0.78rem;
-  line-height: 1.4;
-  max-width: 42rem;
+  line-height: 1.35;
+  max-width: 28rem;
+}
+
+.dual-lane-refresh {
+  flex: 0 0 auto;
+  opacity: 0.85;
 }
 
 .dual-lane-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.65rem;
+  gap: 0.75rem;
   flex: 0 0 auto;
 }
 
 .dual-lane-card {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.7rem 0.75rem 0.75rem;
+  gap: 0.55rem;
+  padding: 0.85rem 0.9rem 0.9rem;
   border: 1px solid var(--ma-border);
   border-radius: var(--nt-r-md, 12px);
-  background: color-mix(in srgb, var(--ma-surface) 82%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
   min-width: 0;
 }
 
@@ -76,20 +102,65 @@
 
 .dual-lane-card-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
 }
 
 .dual-lane-card-head h2 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
 }
 
-.dual-lane-card-sub {
-  font-size: 0.7rem;
+.dual-lane-status {
+  margin: 0;
+  font-size: 0.82rem;
   color: var(--ma-text-muted);
-  font-family: var(--ma-mono, monospace);
+  line-height: 1.35;
+}
+
+.dual-lane-status[data-tone="ok"] {
+  color: color-mix(in srgb, #16a34a 70%, var(--ma-text));
+}
+
+.dual-lane-status[data-tone="warn"] {
+  color: color-mix(in srgb, #ca8a04 75%, var(--ma-text));
+}
+
+.dual-lane-status[data-tone="blocked"] {
+  color: var(--ma-danger, #c44);
+}
+
+.dual-lane-peer-cta {
+  min-height: 2.45rem;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  width: 100%;
+  justify-content: center;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 28%, transparent),
+    0 4px 14px color-mix(in srgb, var(--ma-accent) 16%, transparent);
+}
+
+.dual-lane-details {
+  margin: 0;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
+  padding-top: 0.35rem;
+}
+
+.dual-lane-details > summary {
+  cursor: pointer;
+  font-size: 0.74rem;
+  color: var(--ma-text-muted);
+  list-style-position: outside;
+  padding: 0.15rem 0;
+  user-select: none;
+}
+
+.dual-lane-details[open] > summary {
+  margin-bottom: 0.3rem;
 }
 
 .dual-lane-card-grid {
@@ -124,30 +195,12 @@
   word-break: break-all;
 }
 
-.dual-lane-peer-cta {
-  min-height: 2.4rem;
-  padding: 0.5rem 0.9rem;
-  font-size: 0.9rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  width: 100%;
-  justify-content: center;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 30%, transparent),
-    0 4px 14px color-mix(in srgb, var(--ma-accent) 18%, transparent);
-}
-
-.dual-lane-card-note {
-  margin: 0;
-  font-size: 0.72rem;
-  color: var(--ma-text-muted);
-}
-
 .shell-dev-dual-blockers {
   margin: 0;
-  font-size: 0.74rem;
+  font-size: 0.78rem;
   color: var(--ma-danger, #c44);
   white-space: pre-wrap;
-  padding: 0.35rem 0.45rem;
+  padding: 0.4rem 0.5rem;
   border-radius: var(--nt-r-sm, 8px);
   border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
   background: color-mix(in srgb, #ef4444 12%, transparent);
@@ -155,7 +208,7 @@
 
 .shell-dev-sync-hint {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   color: var(--ma-text-muted);
   flex: 0 0 auto;
 }
@@ -194,6 +247,51 @@
 
 .shell-dev-actions-primary {
   flex-wrap: wrap;
+}
+
+.shell-dev-preview-more {
+  position: relative;
+  margin: 0;
+}
+
+.shell-dev-preview-more > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--nt-r-sm, 8px);
+  border: 1px solid var(--ma-border);
+  background: color-mix(in srgb, var(--ma-surface) 80%, transparent);
+  color: var(--ma-text-muted);
+  font-size: 0.78rem;
+  user-select: none;
+}
+
+.shell-dev-preview-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.shell-dev-preview-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 9.5rem;
+  padding: 0.35rem;
+  border: 1px solid var(--ma-border);
+  border-radius: var(--nt-r-sm, 8px);
+  background: var(--ma-surface, #fff);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 12%, transparent);
+}
+
+.shell-dev-preview-more-menu .unified-btn {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .shell-dev-actions-advanced-inline {
@@ -399,5 +497,9 @@
 
   .shell-dev-evolution {
     flex-wrap: wrap;
+  }
+
+  .shell-dev-page {
+    max-width: none;
   }
 }

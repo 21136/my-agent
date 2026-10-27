@@ -2553,6 +2553,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     setText("[data-shell-dev-stable-ahead]", strip.stableAhead);
     setText("[data-shell-dev-sandbox-dirty]", strip.sandboxDirty);
     setText("[data-shell-dev-stable-dirty]", strip.stableDirty);
+    const setStatus = (sel: string, value: string, tone: string) => {
+      const el = shellDevEl.querySelector<HTMLElement>(sel);
+      if (!el) return;
+      el.textContent = value;
+      if (tone) el.dataset.tone = tone;
+      else delete el.dataset.tone;
+    };
+    setStatus("[data-shell-dev-stable-status]", strip.stableStatus, strip.stableTone);
+    setStatus("[data-shell-dev-sandbox-status]", strip.sandboxStatus, strip.sandboxTone);
+    for (const sel of ["[data-shell-dev-stable-details]", "[data-shell-dev-sandbox-details]"]) {
+      const details = shellDevEl.querySelector<HTMLDetailsElement>(sel);
+      if (details) details.open = strip.openDetails;
+    }
     const hintEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-sync-hint]");
     if (hintEl) {
       hintEl.textContent = strip.hint;
