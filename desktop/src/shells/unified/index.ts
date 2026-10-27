@@ -2650,9 +2650,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         managedReviewButton.addEventListener("click", () => { void managedReview.inspect(); });
       }
       const adoption = createShellDevAdoptionController(window.myAgentDesktop, shellDevFeedback, (busy) => {
-        const button = shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]");
-        if (button) button.disabled = busy;
+        for (const sel of ["[data-shell-dev-adopt-merge]", "[data-shell-dev-one-click]"]) {
+          const button = shellDevEl.querySelector<HTMLButtonElement>(sel);
+          if (button) button.disabled = busy;
+        }
       });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-one-click]")?.addEventListener("click", () => { void adoption.oneClick(); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]")?.addEventListener("click", () => { void adoption.merge(); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-status]")?.addEventListener("click", () => { void adoption.inspect(); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reset-main]")?.addEventListener("click", () => {
