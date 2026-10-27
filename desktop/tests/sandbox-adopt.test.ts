@@ -309,9 +309,9 @@ test("preflight stops Windows case-alias untracked collisions before stable move
 });
 
 
-test("live adoption is disabled for a mutable dev Host or rehearsal Host", () => {
-  assert.match(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: true, testHost: false }) ?? "", /固定|开发/);
+test("live adoption is disabled only for a rehearsal Host", () => {
+  assert.equal(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: true, testHost: false }), null);
   assert.match(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: true }) ?? "", /测试/);
-  assert.match(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: false }) ?? "", /固定/);
+  assert.equal(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: false }), null);
   assert.equal(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: false, fixedHostVerified:true }), null);
 });
