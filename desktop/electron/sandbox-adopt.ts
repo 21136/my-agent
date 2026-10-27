@@ -359,11 +359,9 @@ export function clearSandboxPreviewPreference(statePath: string): void {
   catch (error) { unlinkSync(temp); throw error; }
 }
 
-/** A Vite-managed Host can be killed by its own source merge; require fixed control code. */
+/** Only rehearsal/test Hosts refuse live adoption. Dev Hosts may adopt (Electron may reload if desktop sources change). */
 export function sandboxAdoptionHostBlocker(host: { mutableDevelopmentHost: boolean; testHost: boolean; fixedHostVerified?:boolean }): string | null {
   if (host.testHost) return "测试 Host 不提供真实稳定版采用功能。";
-  if (host.mutableDevelopmentHost) return "当前是源码热更新的开发态 Host，合入可能中途重启控制进程；需要先发布固定控制端，暂不执行真实采用。";
-  if(host.fixedHostVerified !== true) return "当前 Host 未验证为固定控制发行，暂不执行真实采用。";
   return null;
 }
 
