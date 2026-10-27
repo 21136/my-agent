@@ -19,41 +19,49 @@ export function countList(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
 }
 
-/** Pure formatter for the persistent dual-lane strip (no legacySessionLanes gate). */
+/** Pure formatter for flat dual-lane cards (no legacySessionLanes gate). */
 export function formatDualLaneStrip(status: Record<string, unknown> | undefined): {
-  stableHead: string; sandboxHead: string; commitsAhead: string; stableAhead: string;
+  stableHead: string; sandboxHead: string; stableBranch: string; sandboxBranch: string;
+  commitsAhead: string; stableAhead: string;
   sandboxDirty: string; stableDirty: string; hint: string; blockers: string; showBlockers: boolean;
 } {
   if (!status) {
     return {
-      stableHead: "—", sandboxHead: "—", commitsAhead: "—", stableAhead: "—",
+      stableHead: "—", sandboxHead: "—", stableBranch: "—", sandboxBranch: "—",
+      commitsAhead: "—", stableAhead: "—",
       sandboxDirty: "—", stableDirty: "—",
-      hint: "无法读取合入状态（请在 Electron 桌面工作台打开壳预览）。",
+      hint: "无法读取合入状态（请在 Electron 桌面工作台打开双车道）。",
       blockers: "", showBlockers: false,
     };
   }
+  const branch = (value: unknown) => {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text || "—";
+  };
   const commitsAhead = status.commitsAhead == null ? "未知" : String(status.commitsAhead);
   const stableAhead = status.stableAheadOfSandbox == null ? "未知" : String(status.stableAheadOfSandbox);
   const sandboxDirty = String(countList(status.sandboxDirtyProduct));
   const stableDirty = String(countList(status.stableDirtyProduct));
   const syncBlockers = Array.isArray(status.syncBlockers) ? status.syncBlockers.map(String) : [];
   const fatalBlockers = Array.isArray(status.fatalBlockers) ? status.fatalBlockers.map(String) : [];
-  // Prefer sync-oriented blockers for the strip; also surface fatal adopt blockers that are not the benign "nothing to merge".
+  // Prefer sync-oriented blockers for the cards; also surface fatal adopt blockers that are not the benign "nothing to merge".
   const adoptNoise = new Set(["没有待合入的实验改动。"]);
   const usefulFatal = fatalBlockers.filter((b) => !adoptNoise.has(b));
   const blockers = [...syncBlockers, ...usefulFatal.filter((b) => !syncBlockers.includes(b))];
   let hint = "双车道已对齐。";
   if (status.needsSandboxSync === true && Number(status.stableAheadOfSandbox) > 0) {
-    hint = `稳定分支比实验树新 ${status.stableAheadOfSandbox} 个提交。可点「用稳定刷实验」。`;
+    hint = `稳定比实验新 ${status.stableAheadOfSandbox} 个提交。可点「用稳定刷实验」。`;
   } else if (Number(status.commitsAhead) > 0) {
-    hint = `实验树比稳定版新 ${status.commitsAhead} 个提交。可点「一键完成合入」。`;
+    hint = `实验比稳定新 ${status.commitsAhead} 个提交。可点「合入稳定」。`;
   } else if (countList(status.sandboxDirtyProduct) > 0) {
-    hint = `实验区有 ${sandboxDirty} 个未提交 product 文件；刷入稳定版前会拒绝。`;
+    hint = `实验区有 ${sandboxDirty} 个未提交 product 文件；刷入前会拒绝。`;
   }
   if (blockers.length) hint = blockers[0];
   return {
     stableHead: shortHead(status.stableHead),
     sandboxHead: shortHead(status.sandboxHead),
+    stableBranch: branch(status.currentBranch),
+    sandboxBranch: branch(status.sandboxBranch),
     commitsAhead,
     stableAhead,
     sandboxDirty,
@@ -143,7 +151,7 @@ export function createShellDevAdoptionController(
         "稳定 HEAD " + shortHead(status.stableHead) + " · 实验 HEAD " + shortHead(status.sandboxHead),
         "已有实验提交：" + (status.commitsAhead ?? "未知") + "；稳定领先实验：" + (status.stableAheadOfSandbox ?? "未知"),
         "待保存实验文件：" + countList(status.sandboxDirtyProduct) + "；稳定区待备份：" + countList(status.stableDirtyProduct),
-        "点击一键完成合入后，还会由桌面主进程展示实际文件范围并请求确认。",
+        "点击合入稳定后，还会由桌面主进程展示实际文件范围并请求确认。",
         "代码合入不代表真实运行或模型验收已通过。",
       ].join("\n"));
     } catch (error) { feedback("检查失败：" + String(error), "error"); }

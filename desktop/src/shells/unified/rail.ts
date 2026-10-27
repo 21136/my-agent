@@ -10,7 +10,7 @@ export const RAIL_TAB_LABELS: Record<RailTab, { label: string; title: string }> 
   projects: { label: "项目", title: "我的项目" },
   settings: { label: "设置", title: "设置" },
   music: { label: "听歌", title: "听歌" },
-  "shell-dev": { label: "壳预览", title: "壳开发预览" },
+  "shell-dev": { label: "双车道", title: "双车道" },
 };
 
 const RAIL_TABS = new Set<RailTab>(["now", "docs", "projects", "settings", "music", "shell-dev"]);

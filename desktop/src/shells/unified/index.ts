@@ -2547,6 +2547,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     };
     setText("[data-shell-dev-stable-head]", strip.stableHead);
     setText("[data-shell-dev-sandbox-head]", strip.sandboxHead);
+    setText("[data-shell-dev-stable-branch]", strip.stableBranch);
+    setText("[data-shell-dev-sandbox-branch]", strip.sandboxBranch);
     setText("[data-shell-dev-commits-ahead]", strip.commitsAhead);
     setText("[data-shell-dev-stable-ahead]", strip.stableAhead);
     setText("[data-shell-dev-sandbox-dirty]", strip.sandboxDirty);
