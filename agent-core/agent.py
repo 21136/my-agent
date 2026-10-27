@@ -2060,6 +2060,77 @@ class Agent:
             git_review_turn=git_review_turn,
         )
 
+        from goal_runtime import (
+            goal_runtime_for_session,
+            maybe_run_project_acceptance,
+            resolve_acceptance_from_session,
+            resolve_workspace_scope,
+        )
+
+        goal_rt = goal_runtime_for_session(self.session)
+        if goal_rt is not None:
+            accept_cmd, accept_exit = resolve_acceptance_from_session(self.session)
+            goal_text = (self.session.goal or "").strip() or "动手任务"
+            goal_rt.ensure_goal(
+                goal_text=goal_text,
+                workspace_scope=resolve_workspace_scope(self.session),
+                acceptance_command=accept_cmd,
+                expected_exit_code=accept_exit,
+                tool_turns_limit=total_max,
+            )
+            if goal_rt.state is not None and goal_rt.state.stop_requested:
+                stop_text = "目标已停止，不会自动续跑。发送新目标或清除停止状态后再动手。"
+                self.session.append_message({"role": "assistant", "content": stop_text})
+                self.session.save()
+                return TurnResult(
+                    assistant_text=stop_text,
+                    tool_rounds=0,
+                    finish_reason="stopped",
+                    turn_intent=intent,
+                    total_tool_rounds=0,
+                    notices=["goal_stopped"],
+                )
+            if not goal_rt.should_auto_continue() and goal_rt.state is not None and goal_rt.state.status == "paused":
+                # Allow explicit new user turn to resume a paused goal by clearing pause.
+                if goal_rt.state.pause_reason in {"budget_exhausted", "repair_exhausted"}:
+                    paused_text = (
+                        f"目标已暂停（{goal_rt.state.pause_reason}）："
+                        f"{goal_rt.state.next_step or '请扩预算或收窄目标后再继续。'}"
+                    )
+                    self.session.append_message({"role": "assistant", "content": paused_text})
+                    self.session.save()
+                    return TurnResult(
+                        assistant_text=paused_text,
+                        tool_rounds=0,
+                        finish_reason="budget_exhausted"
+                        if goal_rt.state.pause_reason == "budget_exhausted"
+                        else "repair_exhausted",
+                        turn_intent=intent,
+                        total_tool_rounds=goal_rt.state.budgets.tool_turns_used,
+                        notices=["goal_paused"],
+                    )
+                # process_restart / soft pause: resume on this explicit user turn
+                goal_rt.state.status = "idle"
+                goal_rt.state.pause_reason = None
+                goal_rt.save()
+            try:
+                goal_rt.begin_run("agent")
+            except RuntimeError as exc:
+                err_text = f"无法开始目标 Run：{exc}"
+                self.session.append_message({"role": "assistant", "content": err_text})
+                self.session.save()
+                return TurnResult(
+                    assistant_text=err_text,
+                    tool_rounds=0,
+                    finish_reason="error",
+                    turn_intent=intent,
+                    total_tool_rounds=0,
+                    notices=["goal_begin_failed"],
+                )
+            event = goal_rt.status_event()
+            if event is not None:
+                self._emit_turn_event(event)
+
         total_tool_rounds = 0
         segment = 1
         retry_error_fingerprints: set[str] = set()
@@ -2071,6 +2142,27 @@ class Agent:
         while total_tool_rounds < total_max:
             remaining = total_max - total_tool_rounds
             this_segment_max = min(segment_max, remaining)
+            if goal_rt is not None:
+                goal_remaining = goal_rt.remaining_tool_budget()
+                if goal_remaining <= 0:
+                    goal_rt.mark_budget_paused()
+                    finish_reason = "total_cap_exceeded"
+                    final_text = final_text or (
+                        goal_rt.state.next_step
+                        if goal_rt.state is not None
+                        else "目标预算已用尽，已暂停。"
+                    )
+                    if final_text and not any(
+                        isinstance(m, dict)
+                        and m.get("role") == "assistant"
+                        and m.get("content") == final_text
+                        for m in self.session.messages[-3:]
+                    ):
+                        self.session.append_message(
+                            {"role": "assistant", "content": final_text}
+                        )
+                    break
+                this_segment_max = min(this_segment_max, goal_remaining)
             segment_start_index = len(self.session.messages)
             self.executor.begin_execute_segment()
 
@@ -2097,10 +2189,19 @@ class Agent:
                 retry_error_fingerprints=retry_error_fingerprints,
             )
             total_tool_rounds += loop_result.tool_rounds
+            if goal_rt is not None:
+                goal_rt.record_segment_usage(tool_turns=loop_result.tool_rounds)
+                event = goal_rt.status_event()
+                if event is not None:
+                    self._emit_turn_event(event)
             if loop_result.finish_reason in {"cancelled", "timeout"}:
                 finish_reason = loop_result.finish_reason
                 if loop_result.final_text:
                     final_text = loop_result.final_text
+                if goal_rt is not None:
+                    goal_rt.request_stop(
+                        "user" if loop_result.finish_reason == "cancelled" else "timeout"
+                    )
                 break
 
             if loop_result.final_text:
@@ -2116,8 +2217,10 @@ class Agent:
             git_incomplete = git_review_turn and git_review_incomplete(
                 self.executor.session
             )
+            goal_allows_continue = goal_rt is None or goal_rt.should_auto_continue()
             should_chain_segment = (
                 total_tool_rounds < total_max
+                and goal_allows_continue
                 and (
                     (loop_result.had_progress and auto_continue)
                     or (git_incomplete and auto_continue)
@@ -2204,6 +2307,55 @@ class Agent:
             final_text=final_text,
             finish_reason=finish_reason,
         )
+
+        if goal_rt is not None:
+            if finish_reason in {"cancelled", "timeout", "stopped"}:
+                if goal_rt.state is not None and not goal_rt.state.stop_requested:
+                    goal_rt.request_stop(
+                        "user" if finish_reason == "cancelled" else finish_reason or "user"
+                    )
+            elif finish_reason in {
+                "total_cap_exceeded",
+                "segment_cap_pause",
+                "tool_loop_exceeded",
+            }:
+                goal_rt.mark_budget_paused()
+            else:
+                accept_verdict = None
+                if goal_rt.state is not None and goal_rt.state.acceptance_command:
+                    accept_verdict = maybe_run_project_acceptance(self.session)
+                if accept_verdict is not None:
+                    goal_rt.apply_acceptance_result(accept_verdict)
+                    if accept_verdict.get("passed"):
+                        finish_reason = finish_reason or "acceptance_passed"
+                        notice = (
+                            "[Goal] 验收通过（exit="
+                            f"{accept_verdict.get('exit_code')}"
+                            "）。"
+                        )
+                        notices.append(notice)
+                        self._emit_turn_event(
+                            {"type": "turn.notice", "level": "info", "text": notice}
+                        )
+                    else:
+                        feed = (
+                            goal_rt.state.next_step
+                            if goal_rt.state is not None
+                            else "验收失败，请根据退出码修复后继续。"
+                        )
+                        notices.append(f"[Goal] {feed}")
+                        if goal_rt.state is not None and goal_rt.state.status == "paused":
+                            finish_reason = goal_rt.state.pause_reason or "budget_exhausted"
+                        else:
+                            finish_reason = finish_reason or "acceptance_failed"
+                else:
+                    goal_rt.finish_run(
+                        ok=finish_reason not in {"error", "provider_error"},
+                        finish_reason=finish_reason or "completed",
+                    )
+            event = goal_rt.status_event()
+            if event is not None:
+                self._emit_turn_event(event)
 
         self.session.save()
         self.executor.end_execute_segments()
