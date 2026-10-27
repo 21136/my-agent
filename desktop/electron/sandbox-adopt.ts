@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const SANDBOX_BRANCH = "experiment/sandbox";
 // Source/release material only: never add/stash an entire checkout or its data.
 const RELEASE_PREFIXES = ["agent-core/", "desktop/", "docs/", "protocol/", "scripts/", "evolve/tools/", "evolve/skills/", "evolve/tool-catalog/"];
-const RELEASE_FILES = new Set(["AGENTS.md", ".gitignore", "start-desktop.bat", "init-sandbox.bat", "check-stable-before-sandbox-merge.bat", "sync-sandbox-worktree.bat"]);
+const RELEASE_FILES = new Set(["AGENTS.md", "README.md", ".gitignore", "start-desktop.bat", "init-sandbox.bat", "check-stable-before-sandbox-merge.bat", "sync-sandbox-worktree.bat"]);
 function releasePath(file: string): boolean {
   const parts = file.split("/");
   if (parts.some((p) => /^(?:\.git|\.venv|venv|node_modules|data|artifacts|dist|dist-electron|__pycache__)$/i.test(p)
