@@ -315,3 +315,45 @@ test("live adoption is disabled only for a rehearsal Host", () => {
   assert.equal(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: false }), null);
   assert.equal(adoption.sandboxAdoptionHostBlocker({ mutableDevelopmentHost: false, testHost: false, fixedHostVerified:true }), null);
 });
+
+test("getStatus reports stableAheadOfSandbox and needsSandboxSync", async () => {
+  const f = fixture();
+  put(f.root, "desktop/main.txt", "stable newer\n");
+  git(f.root, "add", "desktop/main.txt");
+  git(f.root, "commit", "-m", "stable ahead");
+  const status = await f.service.getStatus();
+  assert.equal(status.stableAheadOfSandbox, 1);
+  assert.equal(status.needsSandboxSync, true);
+  assert.equal(status.commitsAhead, 0);
+  assert.ok(Array.isArray(status.syncBlockers));
+});
+
+test("syncSandboxWithStable fast-forwards a clean sandbox", async () => {
+  const f = fixture();
+  put(f.root, "desktop/main.txt", "from stable\n");
+  git(f.root, "add", "desktop/main.txt");
+  git(f.root, "commit", "-m", "stable ahead for sync");
+  const beforeStable = git(f.root, "rev-parse", "HEAD");
+  const beforeSandbox = git(f.sandbox, "rev-parse", "HEAD");
+  assert.notEqual(beforeStable, beforeSandbox);
+  const result = await f.service.syncSandboxWithStable();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.synced, true);
+  assert.equal(git(f.sandbox, "rev-parse", "HEAD"), beforeStable);
+  assert.equal(result.afterSandboxHead, beforeStable);
+  assert.match(result.message, /刷入|无需/);
+});
+
+test("syncSandboxWithStable refuses dirty sandbox and lists blockers", async () => {
+  const f = fixture();
+  put(f.root, "desktop/main.txt", "stable tip\n");
+  git(f.root, "add", "desktop/main.txt");
+  git(f.root, "commit", "-m", "stable ahead dirty case");
+  put(f.sandbox, "desktop/main.txt", "sandbox dirty\n");
+  const before = git(f.sandbox, "rev-parse", "HEAD");
+  const result = await f.service.syncSandboxWithStable();
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.match(result.message, /脏|未提交|不干净|改动/);
+  assert.equal(git(f.sandbox, "rev-parse", "HEAD"), before);
+  assert.ok((result.blockers && result.blockers.length) || (result.detail && result.detail.length));
+});

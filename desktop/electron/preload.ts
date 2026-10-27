@@ -41,7 +41,7 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   promoteShellDevPreview: () => ipcRenderer.invoke("shell-dev:promote-preview") as Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>,
   resetShellDevMain: () => ipcRenderer.invoke("shell-dev:reset-main") as Promise<{ ok: boolean; message?: string; mainUrl?: string }>,
   getSandboxAdoptStatus: () => ipcRenderer.invoke("shell-dev:sandbox-adopt-status") as Promise<Record<string, unknown>>,
-  syncSandboxWorktree: () => ipcRenderer.invoke("shell-dev:sync-sandbox") as Promise<{ ok: boolean; message: string; detail?: string }>,
+  syncSandboxWorktree: (options?: { allowTheirsMerge?: boolean }) => ipcRenderer.invoke("shell-dev:sync-sandbox", options) as Promise<{ ok: boolean; message: string; detail?: string; synced?: boolean; beforeStableHead?: string; beforeSandboxHead?: string; afterSandboxHead?: string; needsTheirsConfirm?: boolean; blockers?: string[] }>,
   resetShellDevMainLane: () => ipcRenderer.invoke("shell-dev:reset-main-lane") as Promise<{ ok: boolean; message: string; mainUrl?: string }>,
   inspectManagedSourceReview: () => ipcRenderer.invoke("shell-dev:managed-source-review") as Promise<{ ok: true; report: Record<string, any> } | { ok: false; message: string }>,
   proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => ipcRenderer.invoke("shell-dev:managed-source-selection", request) as Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>,
@@ -120,7 +120,7 @@ export type MyAgentDesktopApi = {
   promoteShellDevPreview: () => Promise<{ ok: boolean; mainUrl?: string; previewUrl?: string; message?: string }>;
   resetShellDevMain: () => Promise<{ ok: boolean; message?: string; mainUrl?: string }>;
   getSandboxAdoptStatus: () => Promise<Record<string, unknown>>;
-  syncSandboxWorktree: () => Promise<{ ok: boolean; message: string; detail?: string }>;
+  syncSandboxWorktree: (options?: { allowTheirsMerge?: boolean }) => Promise<{ ok: boolean; message: string; detail?: string; synced?: boolean; beforeStableHead?: string; beforeSandboxHead?: string; afterSandboxHead?: string; needsTheirsConfirm?: boolean; blockers?: string[] }>;
   resetShellDevMainLane: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;
   inspectManagedSourceReview: () => Promise<{ ok: true; report: Record<string, any> } | { ok: false; message: string }>;
   proposeManagedSourceSelection: (request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] }) => Promise<{ ok: true; proposal: Record<string, unknown> } | { ok: false; message: string }>;

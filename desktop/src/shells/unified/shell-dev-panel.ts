@@ -13,15 +13,17 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     <header class="shell-dev-heading">
       <div class="shell-dev-heading-copy">
         <h1 id="shell-dev-page-heading">壳开发预览</h1>
-        <p class="shell-dev-hint">日常合入点这里；实验树预览与主壳切换见下方操作。</p>
+        <p class="shell-dev-hint">日常合入点这里；用稳定刷实验见主操作；实验树预览与主壳切换见下方。</p>
         <details class="shell-dev-notes">
           <summary>注意事项</summary>
-          <p>实验期在 <code>.worktrees/sandbox</code> 中修改并通过预览检查。<strong>一键完成合入</strong>会先检查状态，再走项目真实合入（原生确认），不等于只切换预览 URL。旧整支合入按钮仅用于隔离夹具，普通项目由 E0 gate 拒绝；所选源码合入≠build/activate，不会自动同步 sandbox 的 dirty 内容。<strong>采用预览为主壳</strong>只临时切换预览 URL，不等于源码合入或激活。</p>
+          <p>实验期在 <code>.worktrees/sandbox</code> 中修改并通过预览检查。<strong>一键完成合入</strong>会先检查状态，再走项目真实合入（原生确认），不等于只切换预览 URL。<strong>用稳定刷实验</strong>把稳定 HEAD 同步进实验树（优先 fast-forward；分叉时需确认以稳定为准），不等于合入。<strong>采用预览为主壳</strong>只临时切换预览 URL，不等于源码合入或激活。旧整支合入按钮仅用于隔离夹具。</p>
         </details>
       </div>
       <div class="shell-dev-toolbar" role="toolbar" aria-label="壳预览主操作">
         <div class="shell-dev-cta">
           <button type="button" class="unified-btn unified-btn-accent shell-dev-one-click" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入（桌面原生确认）；取消不会改代码">一键完成合入</button>
+          <button type="button" class="unified-btn" data-shell-dev-sync-stable title="把当前稳定版刷进实验树；实验区 dirty 会拒绝并列出阻断">用稳定刷实验</button>
+          <button type="button" class="unified-btn" data-shell-dev-refresh-status title="刷新双车道 HEAD / ahead / dirty / 阻断">刷新状态</button>
         </div>
         <div class="shell-dev-actions shell-dev-actions-primary">
           <button type="button" class="unified-btn" data-shell-dev-popout>独立窗口预览</button>
@@ -46,6 +48,22 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
       <div><dt>当前主壳</dt><dd data-shell-dev-main-url>${main}</dd></div>
       <div><dt>预览壳</dt><dd data-shell-dev-url>${preview}</dd></div>
     </dl>
+    <section class="shell-dev-dual-status" aria-label="双车道状态" data-shell-dev-dual-status>
+      <div class="shell-dev-dual-status-heading">
+        <strong>双车道状态</strong>
+        <button type="button" class="unified-btn shell-dev-dual-refresh" data-shell-dev-refresh-status>刷新</button>
+      </div>
+      <dl class="shell-dev-dual-grid">
+        <div><dt>稳定 HEAD</dt><dd data-shell-dev-stable-head>—</dd></div>
+        <div><dt>实验 HEAD</dt><dd data-shell-dev-sandbox-head>—</dd></div>
+        <div><dt>实验领先</dt><dd data-shell-dev-commits-ahead>—</dd></div>
+        <div><dt>稳定领先</dt><dd data-shell-dev-stable-ahead>—</dd></div>
+        <div><dt>实验脏文件</dt><dd data-shell-dev-sandbox-dirty>—</dd></div>
+        <div><dt>稳定脏文件</dt><dd data-shell-dev-stable-dirty>—</dd></div>
+      </dl>
+      <p class="shell-dev-sync-hint" role="status" aria-live="polite" data-shell-dev-sync-hint>正在读取双车道状态…</p>
+      <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>
+    </section>
     <section class="shell-dev-evolution" aria-label="当前会话演化状态">
       <div class="shell-dev-evolution-heading">
         <strong>当前会话演化</strong>

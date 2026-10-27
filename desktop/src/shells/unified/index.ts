@@ -1,4 +1,4 @@
-import { createShellDevAdoptionController } from "./shell-dev-adoption";
+import { createShellDevAdoptionController, formatDualLaneStrip } from "./shell-dev-adoption";
 import { hydrateAgentImageElements } from "../../agent-image-hydrate";
 import { bindImageLightboxClick } from "../../image-lightbox";
 import { setAgentBusy } from "../../agent-busy";
@@ -2539,24 +2539,33 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
   }
 
-  async function refreshShellDevSyncHint(): Promise<void> {
+  function applyShellDevDualLaneStatus(status: Record<string, unknown> | undefined): void {
+    const strip = formatDualLaneStrip(status);
+    const setText = (sel: string, value: string) => {
+      const el = shellDevEl.querySelector<HTMLElement>(sel);
+      if (el) el.textContent = value;
+    };
+    setText("[data-shell-dev-stable-head]", strip.stableHead);
+    setText("[data-shell-dev-sandbox-head]", strip.sandboxHead);
+    setText("[data-shell-dev-commits-ahead]", strip.commitsAhead);
+    setText("[data-shell-dev-stable-ahead]", strip.stableAhead);
+    setText("[data-shell-dev-sandbox-dirty]", strip.sandboxDirty);
+    setText("[data-shell-dev-stable-dirty]", strip.stableDirty);
     const hintEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-sync-hint]");
-    if (!hintEl) return;
-    const capabilities = await window.myAgentDesktop?.getSessionLaneCapabilities?.().catch(() => undefined);
-    if (capabilities?.legacySessionLanes !== true) {
-      hintEl.textContent = "";
-      hintEl.classList.add("hidden");
-      return;
-    }
-    const status = await window.myAgentDesktop?.getSandboxAdoptStatus?.().catch(() => undefined);
-    const ahead = typeof status?.stableAheadOfSandbox === "number" ? status.stableAheadOfSandbox : 0;
-    if (status?.needsSandboxSync === true && ahead > 0) {
-      hintEl.textContent = `稳定分支比 sandbox 新 ${ahead} 个提交。当前同步入口未启用；所选源码合入不会自动同步 sandbox。`;
+    if (hintEl) {
+      hintEl.textContent = strip.hint;
       hintEl.classList.remove("hidden");
-      return;
     }
-    hintEl.textContent = "";
-    hintEl.classList.add("hidden");
+    const blockersEl = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-dual-blockers]");
+    if (blockersEl) {
+      blockersEl.textContent = strip.blockers;
+      blockersEl.hidden = !strip.showBlockers;
+    }
+  }
+
+  async function refreshShellDevSyncHint(): Promise<void> {
+    const status = await window.myAgentDesktop?.getSandboxAdoptStatus?.().catch(() => undefined);
+    applyShellDevDualLaneStatus(status as Record<string, unknown> | undefined);
   }
 
   async function refreshShellDevLaneLabels(): Promise<void> {
@@ -2576,10 +2585,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
       const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
       shellDevEl.innerHTML = renderShellDevPanel(mainUrl, previewUrl);
-      const syncHint = document.createElement("p");
-      syncHint.setAttribute("data-shell-dev-sync-hint", "");
-      syncHint.classList.add("hidden");
-      shellDevEl.querySelector(".shell-dev-lanes")?.after(syncHint);
       syncShellDevEvolutionView();
       if (!evolutionRelayErrorCleanup) {
         const onRelayError = (event: Event) => {
@@ -2665,14 +2670,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         managedReviewButton.addEventListener("click", () => { void managedReview.inspect(); });
       }
       const adoption = createShellDevAdoptionController(window.myAgentDesktop, shellDevFeedback, (busy) => {
-        for (const sel of ["[data-shell-dev-adopt-merge]", "[data-shell-dev-one-click]"]) {
-          const button = shellDevEl.querySelector<HTMLButtonElement>(sel);
-          if (button) button.disabled = busy;
+        for (const sel of ["[data-shell-dev-adopt-merge]", "[data-shell-dev-one-click]", "[data-shell-dev-sync-stable]", "[data-shell-dev-refresh-status]"]) {
+          shellDevEl.querySelectorAll<HTMLButtonElement>(sel).forEach((button) => { button.disabled = busy; });
         }
-      });
+      }, (status) => { applyShellDevDualLaneStatus(status); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-one-click]")?.addEventListener("click", () => { void adoption.oneClick(); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-merge]")?.addEventListener("click", () => { void adoption.merge(); });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-adopt-status]")?.addEventListener("click", () => { void adoption.inspect(); });
+      shellDevEl.querySelectorAll<HTMLButtonElement>("[data-shell-dev-sync-stable]").forEach((btn) => {
+        btn.addEventListener("click", () => { void adoption.sync(); });
+      });
+      shellDevEl.querySelectorAll<HTMLButtonElement>("[data-shell-dev-refresh-status]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          void (async () => {
+            shellDevFeedback("正在刷新双车道状态…", "busy");
+            await adoption.refreshStatus();
+            shellDevFeedback("双车道状态已刷新。", "ok");
+          })();
+        });
+      });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-reset-main]")?.addEventListener("click", () => {
         void (async () => {
           try {

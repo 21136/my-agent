@@ -46,6 +46,7 @@ import {
   createSandboxAdoptRequestHandler,
   createSandboxAdopter,
   prepareAndMergeSandboxIntoStable,
+  syncSandboxWithStable,
   isTrustedSandboxAdoptSender,
   clearSandboxPreviewPreference,
   sandboxAdoptionHostBlocker,
@@ -134,7 +135,7 @@ const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostC
 }) : null;
 const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
   stableRoot:fixedHostContext.binding.stable_source_root, sandboxRoot:fixedHostContext.binding.sandbox_source_root,
-}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable};
+}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable,syncSandboxWithStable};
 let adoptionInProgress = false;
 let evolutionTestHostContext: EvolutionTestHostContext | null = null;
 let evolutionTestHostContextError: Error | null = null;
@@ -1630,9 +1631,22 @@ ipcMain.handle("shell-dev:reset-main-lane", async (event) => {
   } catch (error) { return { ok: false, message: error instanceof Error ? error.message : String(error) }; }
 });
 
-ipcMain.handle("shell-dev:sync-sandbox", async (event) => {
-  if (!legacySandboxLaneAllowed() || !assertShellDevWorkbenchSender(event)) return { ok: false, message: "旧同步通道仅限普通可变开发 Host；固定/测试 Host 已禁用。" };
-  return { ok: false, message: "旧 sandbox 同步实现未在选定源码合入流程中开放；请先进行受审查的源码审查、选择、检查点与单独合入。" };
+ipcMain.handle("shell-dev:sync-sandbox", async (event, options?: { allowTheirsMerge?: boolean }) => {
+  if (!assertShellDevWorkbenchSender(event)) return { ok: false, message: "仅允许稳定版工作台的可信主页面发起同步。" };
+  const hostBlocker = sandboxAdoptionHostBlocker({
+    mutableDevelopmentHost: Boolean(process.env.VITE_DEV_SERVER_URL),
+    testHost: Boolean(evolutionTestHostContext),
+    fixedHostVerified: Boolean(fixedHostContext),
+  });
+  if (hostBlocker) return { ok: false, message: hostBlocker };
+  try {
+    const sync = typeof (sandboxAdoptionService as { syncSandboxWithStable?: typeof syncSandboxWithStable }).syncSandboxWithStable === "function"
+      ? (sandboxAdoptionService as { syncSandboxWithStable: typeof syncSandboxWithStable }).syncSandboxWithStable.bind(sandboxAdoptionService)
+      : syncSandboxWithStable;
+    return await sync({ allowTheirsMerge: Boolean(options?.allowTheirsMerge) });
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
 });
 ipcMain.handle("shell-dev:promote-preview", async (event) => {
   if(fixedHostContext) return {ok:false,message:"固定控制工作台不能采用可变预览 URL 作为可信主页面。"};

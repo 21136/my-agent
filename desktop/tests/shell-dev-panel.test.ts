@@ -63,3 +63,22 @@ test("shell dev panel keeps preview chrome compact by default", () => {
   assert.match(html, /<details class="shell-dev-section"[^>]*aria-label="源码范围选择"/);
   assert.doesNotMatch(html, /<details[^>]*open[^>]*data-managed-review-panel/);
 });
+
+test("shell dev panel exposes dual-lane status strip and sync CTA", () => {
+  const html = renderShellDevPanel("http://127.0.0.1:5173/", "http://127.0.0.1:5174/");
+  assert.match(html, /data-shell-dev-dual-status/);
+  assert.match(html, /data-shell-dev-stable-head/);
+  assert.match(html, /data-shell-dev-sandbox-head/);
+  assert.match(html, /data-shell-dev-commits-ahead/);
+  assert.match(html, /data-shell-dev-stable-ahead/);
+  assert.match(html, /data-shell-dev-sandbox-dirty/);
+  assert.match(html, /data-shell-dev-stable-dirty/);
+  assert.match(html, /data-shell-dev-sync-hint/);
+  assert.match(html, /data-shell-dev-dual-blockers/);
+  assert.match(html, /data-shell-dev-sync-stable/);
+  assert.match(html, /用稳定刷实验/);
+  assert.match(html, /data-shell-dev-refresh-status/);
+  const syncIdx = html.indexOf("data-shell-dev-sync-stable");
+  const moreIdx = html.indexOf('class="shell-dev-more"');
+  assert.ok(syncIdx >= 0 && moreIdx > syncIdx, "sync CTA should sit outside 更多");
+});

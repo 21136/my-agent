@@ -21,10 +21,17 @@ export function resolveSandboxRoot(): string {
 }
 export type SandboxAdoptStatus = {
   repoRoot: string; sandboxRoot: string; sandboxActive: boolean; currentBranch: string; sandboxBranch: string;
-  commitsAhead: number | null; stableDirtyProduct: string[]; sandboxDirtyProduct: string[];
-  stableDirtyOutside: string[]; mergeFiles: string[]; fatalBlockers: string[];
+  commitsAhead: number | null; stableAheadOfSandbox: number | null; needsSandboxSync: boolean;
+  stableDirtyProduct: string[]; sandboxDirtyProduct: string[];
+  stableDirtyOutside: string[]; mergeFiles: string[]; fatalBlockers: string[]; syncBlockers: string[];
   needsSandboxCommit: boolean; needsStableStash: boolean; readyToMerge: boolean; recentCommits: string[];
   stableHead: string; sandboxHead: string; snapshotId: string;
+};
+export type SandboxSyncOptions = { allowTheirsMerge?: boolean };
+export type SandboxSyncResult = {
+  ok: boolean; message: string; detail?: string; synced?: boolean;
+  beforeStableHead?: string; beforeSandboxHead?: string; afterSandboxHead?: string;
+  needsTheirsConfirm?: boolean; blockers?: string[];
 };
 export type SandboxAdoptPrepareOptions = {
   expectedSnapshotId?: string; autoCommitSandbox?: boolean; sandboxCommitMessage?: string; autoStashStable?: boolean;
@@ -107,8 +114,9 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
   async function getStatus(): Promise<SandboxAdoptStatus> {
     const status: SandboxAdoptStatus = {
       repoRoot: stableRoot, sandboxRoot, sandboxActive: false, currentBranch: "?", sandboxBranch: SANDBOX_BRANCH,
-      commitsAhead: null, stableDirtyProduct: [], sandboxDirtyProduct: [], stableDirtyOutside: [], mergeFiles: [],
-      fatalBlockers: [], needsSandboxCommit: false, needsStableStash: false, readyToMerge: false,
+      commitsAhead: null, stableAheadOfSandbox: null, needsSandboxSync: false,
+      stableDirtyProduct: [], sandboxDirtyProduct: [], stableDirtyOutside: [], mergeFiles: [],
+      fatalBlockers: [], syncBlockers: [], needsSandboxCommit: false, needsStableStash: false, readyToMerge: false,
       recentCommits: [], stableHead: "", sandboxHead: "", snapshotId: "",
     };
     try {
@@ -146,6 +154,8 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
       status.needsSandboxCommit = sandboxSource.length > 0;
       const range = status.stableHead + ".." + status.sandboxHead;
       status.commitsAhead = Number(await scopedGit(stableRoot, ["rev-list", "--count", range]));
+      status.stableAheadOfSandbox = Number(await scopedGit(stableRoot, ["rev-list", "--count", status.sandboxHead + ".." + status.stableHead]));
+      status.needsSandboxSync = status.stableAheadOfSandbox > 0;
       status.recentCommits = (await scopedGit(stableRoot, ["log", "--oneline", "-8", range])).split(/\r?\n/).filter(Boolean);
       const diff = await scopedRunGit(stableRoot, ["diff", "--name-only", "--no-renames", "-z", status.stableHead + "..." + status.sandboxHead]);
       if (diff.code !== 0) throw new Error(diff.stderr || "不能比较两条分支");
@@ -171,6 +181,17 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
         stable: fingerprint(stableRoot, stableEntries), sandbox: fingerprint(sandboxRoot, sandboxEntries),
         stableIndex, sandboxIndex, blockers: status.fatalBlockers,
       })).digest("hex");
+      // Sync blockers are independent of adopt "nothing to merge" — used by 用稳定刷实验.
+      if (status.sandboxDirtyProduct.length) status.syncBlockers.push("实验区有未提交 product 改动，刷入稳定版前请先提交或清理：" + status.sandboxDirtyProduct.join("、"));
+      const sandboxUnsupported = unsupported.map((e) => e.file);
+      if (sandboxUnsupported.length) status.syncBlockers.push("实验区含发布范围外改动，不会自动刷入：" + sandboxUnsupported.join("、"));
+      for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "BISECT_LOG"]) {
+        const statePath = await scopedGit(sandboxRoot, ["rev-parse", "--git-path", name]);
+        if (existsSync(path.resolve(sandboxRoot, statePath))) status.syncBlockers.push("实验区有未完成 Git 操作：" + name);
+      }
+      if (status.needsSandboxSync && status.syncBlockers.length === 0 && status.commitsAhead > 0) {
+        status.syncBlockers.push("实验分支比稳定版多 " + status.commitsAhead + " 个提交；fast-forward 不可用。勾选允许以稳定为准（-X theirs）后再刷，或先合入实验改动。");
+      }
       status.readyToMerge = status.fatalBlockers.length === 0 && !status.needsSandboxCommit && !status.needsStableStash;
     } catch (error) { status.fatalBlockers.push(error instanceof Error ? error.message : String(error)); }
     return status;
@@ -327,7 +348,81 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
     runtime.observer?.finish(result);
     return result;
   }
-  return { getStatus, prepareAndMerge };
+  /** Stable → sandbox: prefer --ff-only (same as post-adopt); -X theirs only when explicitly allowed. */
+  async function syncSandboxWithStable(options: SandboxSyncOptions = {}): Promise<SandboxSyncResult> {
+    runtime.revalidate?.();
+    const status = await getStatus();
+    const beforeStableHead = status.stableHead;
+    const beforeSandboxHead = status.sandboxHead;
+    const short = (h: string) => (h || "").slice(0, 7);
+    if (!status.sandboxActive) {
+      return { ok: false, message: "Sandbox 尚未就绪。", beforeStableHead, beforeSandboxHead, blockers: status.syncBlockers };
+    }
+    if (status.syncBlockers.length && !(options.allowTheirsMerge && status.syncBlockers.every((b) => b.includes("fast-forward 不可用") || b.includes("-X theirs")))) {
+      // Allow only the divergence blocker to be overridden by allowTheirsMerge; dirty/in-progress always refuse.
+      const hard = status.syncBlockers.filter((b) => !b.includes("fast-forward 不可用") && !b.includes("-X theirs"));
+      if (hard.length) {
+        return { ok: false, message: hard[0], detail: hard.slice(1).join("\n"), beforeStableHead, beforeSandboxHead, blockers: hard };
+      }
+    }
+    if (!status.needsSandboxSync) {
+      return {
+        ok: true, synced: true, message: "实验树已包含当前稳定版（" + short(beforeStableHead) + "），无需刷入。",
+        beforeStableHead, beforeSandboxHead, afterSandboxHead: beforeSandboxHead,
+      };
+    }
+    const dirtyNow = await dirty(sandboxRoot);
+    if (dirtyNow.length) {
+      return {
+        ok: false, message: "实验区工作树不干净，拒绝刷入。",
+        detail: dirtyNow.map(label).join("\n"),
+        beforeStableHead, beforeSandboxHead, blockers: dirtyNow.map(label),
+      };
+    }
+    const branch = await scopedGit(sandboxRoot, ["symbolic-ref", "--short", "HEAD"]);
+    if (branch !== SANDBOX_BRANCH) {
+      return { ok: false, message: "实验区分支不是 experiment/sandbox，拒绝刷入。", beforeStableHead, beforeSandboxHead };
+    }
+    // Prefer fast-forward, matching post-adopt sync.
+    const ff = await scopedRunGit(sandboxRoot, ["merge", "--ff-only", beforeStableHead]);
+    if (ff.code === 0) {
+      const after = await scopedGit(sandboxRoot, ["rev-parse", "HEAD"]);
+      if (after !== beforeStableHead) {
+        return { ok: false, message: "fast-forward 后 HEAD 未对齐稳定版。", beforeStableHead, beforeSandboxHead, afterSandboxHead: after };
+      }
+      return {
+        ok: true, synced: true,
+        message: "已用稳定版刷入实验树：" + short(beforeSandboxHead) + " → " + short(after),
+        beforeStableHead, beforeSandboxHead, afterSandboxHead: after,
+      };
+    }
+    if (!options.allowTheirsMerge) {
+      return {
+        ok: false, needsTheirsConfirm: true,
+        message: "无法 fast-forward（实验树有分叉提交）。确认后将以稳定版为准（merge -X theirs）刷入。",
+        detail: (ff.stderr || ff.stdout || "").trim(),
+        beforeStableHead, beforeSandboxHead, blockers: status.syncBlockers,
+      };
+    }
+    const theirs = await scopedRunGit(sandboxRoot, [
+      "merge", beforeStableHead, "-X", "theirs", "--no-edit",
+      "-m", "chore(sandbox): sync with stable after stable update",
+    ]);
+    if (theirs.code !== 0) {
+      return {
+        ok: false, message: "以稳定为准的同步失败；请在 .worktrees/sandbox 手解冲突后提交。",
+        detail: (theirs.stderr || theirs.stdout || "").trim(),
+        beforeStableHead, beforeSandboxHead,
+      };
+    }
+    const after = await scopedGit(sandboxRoot, ["rev-parse", "HEAD"]);
+    return {
+      ok: true, synced: true,
+      message: "已用稳定版（-X theirs）刷入实验树：" + short(beforeSandboxHead) + " → " + short(after),
+      beforeStableHead, beforeSandboxHead, afterSandboxHead: after,
+    };
+  }
+  return { getStatus, prepareAndMerge, syncSandboxWithStable };
 }
 
 /** Only main supplies this callback; renderer options cannot substitute for native approval. */
@@ -372,4 +467,5 @@ const defaultService = createSandboxAdopter({ stableRoot: repoRoot, sandboxRoot:
 export const getSandboxAdoptStatus = defaultService.getStatus;
 export const prepareAndMergeSandboxIntoStable = defaultService.prepareAndMerge;
 export const mergeSandboxIntoStable = () => defaultService.prepareAndMerge();
+export const syncSandboxWithStable = (options?: SandboxSyncOptions) => defaultService.syncSandboxWithStable(options);
 export const createDefaultSandboxAdoptRequestHandler = (confirm: (status: SandboxAdoptStatus) => Promise<boolean>) => createSandboxAdoptRequestHandler(defaultService, confirm);
