@@ -23,20 +23,23 @@ Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换�
 
 ---
 
-## 当前摘要（2026-09-07）
+## 当前摘要（2026-10-27）
 
 | 项 | 说明 |
 |----|------|
-| **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal 冻结维护 |
-| **当前产品基线** | [PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md) — 四个核心制品 · 三个硬门槛 |
+| **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal / CLI 旁路维护 |
+| **当前产品基线** | [PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md) — 四个核心制品 · 项目工作区交付 |
+| **GitHub 主分支** | 默认分支 **`main`**（当前产品 tip）；自托管演进历史支线见 `codex/self-hosting-e2e` |
+| **双车道合入** | 稳定根目录 + `.worktrees/sandbox`（`experiment/sandbox`）· 壳预览 **一键完成合入** / product adopt · [SANDBOX-EVOLUTION](docs/SANDBOX-EVOLUTION.md) |
+| **壳预览** | unified 侧栏「壳预览」· 稳定 5173 / 实验 5174 · 实验进化会话走 sandbox sidecar 8766（T-6500b） |
+| **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立伴侣窗 `pet`（昵称小魔王） |
 | **交付模型** | [LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3 · Pack 1245 M0 done |
-| **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立 `pet` 窗 |
 | **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |
 | **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
 | **Builtin** | 11 个（核心 7 + 编排 4：`explore` · `deliverable_review` 等） |
 | **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
 | **自动模式（狂奔）** | **已下线（2026-10-18）**：随项目任务子系统一起删除；未来以无任务循环重建，见 [docs/archive/AUTO-LOOP-FUTURE.md](docs/archive/AUTO-LOOP-FUTURE.md) |
-| **下一手工** | S-6106 music 试点；另收口 T-6106 v1 兼容、T-6107 续接、Terminal TS build |
+| **下一手工** | UX-029 M2 / UX-030 验收；Phase 61 工具体验与 Phase 65 项目内嵌预览（设计已签） |
 
 ---
 
@@ -87,12 +90,13 @@ python my-agent audit --topic coding
 ```text
 my-agent/
 ├── agent-core/          # Python 内核（agent 循环 · 工具 · 子代理 · Terminal 桥接）
-├── desktop/             # Electron 桌面壳
+├── desktop/             # Electron 桌面壳（unified + pet）
 ├── terminal-ui/         # Terminal Ink TUI（React + Ink）
 ├── evolve/              # 进化层：prompt / memory / tool / scaffold
-├── docs/                # 设计真源（MAP · TASKS · TERMINAL-MODE …）
+├── docs/                # 设计真源（MAP · TASKS · SANDBOX-EVOLUTION …）
+├── .worktrees/sandbox/  # 实验车道（git worktree · 不合入前不写稳定树）
 ├── tools/file-sentinel/ # 源码截断监控（start-*.bat 自动拉起）
-├── start-desktop.bat    # 默认入口
+├── start-desktop.bat    # 默认入口（稳定 5173 + 可选实验 5174）
 ├── start-terminal.bat   # Terminal 入口
 └── start.bat            # CLI 入口
 ```
@@ -156,7 +160,8 @@ my-agent/
 | [docs/PROJECT-MODE.md](docs/PROJECT-MODE.md) | 项目模式 · ENV |
 | [docs/PROJECT-VERIFY.md](docs/PROJECT-VERIFY.md) | 项目测试、结构化验证与 pytest 约定 |
 | [docs/TOOLS.md](docs/TOOLS.md) | Builtin + evolved 工具 |
-| [docs/DESKTOP.md](docs/DESKTOP.md) | 桌面壳 · unified 工作台 |
+| [docs/DESKTOP.md](docs/DESKTOP.md) | 桌面壳 · unified 工作台 · 伴侣窗 |
+| [docs/SANDBOX-EVOLUTION.md](docs/SANDBOX-EVOLUTION.md) | 稳定/实验双车道 · 壳预览合入 · sandbox 同步 |
 | [docs/STABILIZATION.md](docs/STABILIZATION.md) | 稳定化 · smoke · Gate |
 
 <details>
