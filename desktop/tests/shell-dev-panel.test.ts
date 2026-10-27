@@ -17,6 +17,7 @@ test("shell dev panel exposes embedded web slot and dual lanes", () => {
   assert.match(html, /data-shell-dev-reset-main/);
   assert.match(html, /data-shell-dev-reload/);
   assert.match(html, /data-shell-dev-popout/);
+  assert.match(html, /data-shell-dev-one-click/);
   assert.match(html, /data-shell-dev-adopt-merge/);
   assert.match(html, /data-shell-dev-adopt-status/);
   assert.match(html, /data-shell-dev-sandbox-session/);
@@ -28,6 +29,8 @@ test("shell dev panel exposes embedded web slot and dual lanes", () => {
   assert.match(html, /data-evolution-inspect/);
   assert.match(html, /data-evolution-stop/);
   assert.match(html, /壳开发预览/);
+  assert.match(html, /一键完成合入/);
+  assert.match(html, /日常合入点这里/);
   assert.match(html, /独立窗口预览/);
   assert.match(html, /采用预览为主壳/);
   assert.match(html, /返回稳定版/);
@@ -35,6 +38,7 @@ test("shell dev panel exposes embedded web slot and dual lanes", () => {
   assert.match(html, /shell-dev-more/);
   assert.match(html, /shell-dev-notes/);
   assert.match(html, /shell-dev-section/);
+  assert.match(html, /shell-dev-one-click/);
 });
 
 test("shell dev panel keeps preview chrome compact by default", () => {
@@ -43,13 +47,16 @@ test("shell dev panel keeps preview chrome compact by default", () => {
   const hintMatch = html.match(/<p class="shell-dev-hint">([\s\S]*?)<\/p>/);
   assert.ok(hintMatch, "missing shell-dev-hint");
   assert.equal(hintMatch[1].includes("旧整支合入按钮仅用于隔离夹具"), false);
+  assert.match(hintMatch[1], /日常合入点这里/);
   assert.match(html, /<details class="shell-dev-notes">/);
-  assert.match(html, /shell-dev-notes[\s\S]*旧整支合入按钮仅用于隔离夹具/);
+  assert.match(html, /shell-dev-notes[\s\S]*一键完成合入/);
 
-  // Legacy / secondary actions sit inside the closed-by-default 更多 menu.
+  // One-click CTA is outside 更多 and before secondary actions.
+  const oneClickIdx = html.indexOf("data-shell-dev-one-click");
   const moreIdx = html.indexOf('class="shell-dev-more"');
   const sandboxIdx = html.indexOf("data-shell-dev-sandbox-session");
   const adoptIdx = html.indexOf("data-shell-dev-adopt-merge");
+  assert.ok(oneClickIdx >= 0 && moreIdx > oneClickIdx);
   assert.ok(moreIdx >= 0 && sandboxIdx > moreIdx && adoptIdx > moreIdx);
   // Review + source selection start collapsed so the web slot keeps height.
   assert.match(html, /<details class="shell-dev-section"[^>]*data-managed-review-panel/);

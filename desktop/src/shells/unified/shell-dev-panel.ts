@@ -13,15 +13,18 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     <header class="shell-dev-heading">
       <div class="shell-dev-heading-copy">
         <h1 id="shell-dev-page-heading">壳开发预览</h1>
-        <p class="shell-dev-hint">实验树预览与主壳切换；详细合入说明见「注意事项」。</p>
+        <p class="shell-dev-hint">日常合入点这里；实验树预览与主壳切换见下方操作。</p>
         <details class="shell-dev-notes">
           <summary>注意事项</summary>
-          <p>实验期在 <code>.worktrees/sandbox</code> 中修改并通过预览检查。旧整支合入按钮仅用于隔离夹具，普通项目由 E0 gate 拒绝；真实项目请使用下方源码选择与检查点原生入口。所选源码合入≠build/activate，不会自动同步 sandbox 的 dirty 内容。<strong>采用预览为主壳</strong>只临时切换预览 URL，不等于源码合入或激活。</p>
+          <p>实验期在 <code>.worktrees/sandbox</code> 中修改并通过预览检查。<strong>一键完成合入</strong>会先检查状态，再走项目真实合入（原生确认），不等于只切换预览 URL。旧整支合入按钮仅用于隔离夹具，普通项目由 E0 gate 拒绝；所选源码合入≠build/activate，不会自动同步 sandbox 的 dirty 内容。<strong>采用预览为主壳</strong>只临时切换预览 URL，不等于源码合入或激活。</p>
         </details>
       </div>
       <div class="shell-dev-toolbar" role="toolbar" aria-label="壳预览主操作">
+        <div class="shell-dev-cta">
+          <button type="button" class="unified-btn unified-btn-accent shell-dev-one-click" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入（桌面原生确认）；取消不会改代码">一键完成合入</button>
+        </div>
         <div class="shell-dev-actions shell-dev-actions-primary">
-          <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-popout>独立窗口预览</button>
+          <button type="button" class="unified-btn" data-shell-dev-popout>独立窗口预览</button>
           <button type="button" class="unified-btn" data-shell-dev-reload>重新加载内嵌</button>
           <div class="shell-dev-lane-toggle" role="group" aria-label="主壳切换">
             <button type="button" class="unified-btn" data-shell-dev-promote title="仅切换 5173/5174 主窗口 URL">采用预览为主壳</button>
@@ -31,10 +34,10 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
         <details class="shell-dev-more">
           <summary class="unified-btn">更多</summary>
           <div class="shell-dev-actions shell-dev-actions-advanced">
-            <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-sandbox-session title="旧入口：将当前会话切到候选 sidecar">在候选中试用（旧入口）</button>
+            <button type="button" class="unified-btn" data-shell-dev-sandbox-session title="旧入口：将当前会话切到候选 sidecar">在候选中试用（旧入口）</button>
             <button type="button" class="unified-btn" data-shell-dev-adopt-status>检查合入状态</button>
             <button type="button" class="unified-btn" data-shell-dev-managed-review>只读源码审查</button>
-            <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-adopt-merge title="旧整支合入仅用于隔离夹具；普通项目由 E0 gate 拒绝。真实项目请使用下方源码选择与检查点原生入口。">旧整支合入（仅隔离夹具）</button>
+            <button type="button" class="unified-btn" data-shell-dev-adopt-merge title="旧整支合入仅用于隔离夹具；普通项目由 E0 gate 拒绝。真实项目请使用一键完成合入或下方源码选择与检查点原生入口。">旧整支合入（仅隔离夹具）</button>
           </div>
         </details>
       </div>

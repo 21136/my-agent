@@ -48,3 +48,43 @@ test("status shows blockers and actual pending counts instead of claiming runtim
   }) }, (text) => messages.push(text), () => {});
   await controller.inspect(); assert.match(messages.join("\n"), /先处理冲突/);
 });
+
+test("one-click surfaces fatal blockers without opening merge", async () => {
+  const outputs: { text: string; tone?: string }[] = [];
+  let mergeCalls = 0;
+  const controller = ui.createShellDevAdoptionController({
+    getSandboxAdoptStatus: async () => ({ fatalBlockers: ["稳定区有未保存冲突"] }),
+    mergeSandboxIntoStable: async () => { mergeCalls++; return { ok: true, message: "不应到达" }; },
+  }, (text, tone) => outputs.push({ text, tone }), () => {});
+  await controller.oneClick();
+  assert.equal(mergeCalls, 0);
+  assert.equal(outputs.at(-1)?.tone, "error");
+  assert.match(outputs.at(-1)?.text ?? "", /稳定区有未保存冲突/);
+});
+
+test("one-click refreshes status then delegates to the same native merge path", async () => {
+  const busy: boolean[] = [];
+  const messages: string[] = [];
+  let statusCalls = 0;
+  let mergeCalls = 0;
+  const controller = ui.createShellDevAdoptionController({
+    getSandboxAdoptStatus: async () => { statusCalls++; return { fatalBlockers: [], commitsAhead: 1 }; },
+    mergeSandboxIntoStable: async (...args: unknown[]) => {
+      mergeCalls++;
+      assert.equal(args.length, 0);
+      return { ok: true, message: "已合入稳定版", steps: ["已同步"] };
+    },
+  }, (text) => messages.push(text), (value) => busy.push(value));
+  await controller.oneClick();
+  assert.equal(statusCalls, 1);
+  assert.equal(mergeCalls, 1);
+  assert.deepEqual(busy, [true, false]);
+  assert.match(messages.join("\n"), /已合入稳定版/);
+});
+
+test("one-click desktop-only without api matches merge messaging", async () => {
+  const messages: string[] = [];
+  const controller = ui.createShellDevAdoptionController(undefined, (text) => messages.push(text), () => {});
+  await controller.oneClick();
+  assert.match(messages.join("\n"), /Electron|桌面/);
+});
