@@ -19,47 +19,105 @@ export function countList(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
 }
 
-/** Pure formatter for flat dual-lane cards (no legacySessionLanes gate). */
+/** Pure formatter for product dual-lane cards (status line + details). */
 export function formatDualLaneStrip(status: Record<string, unknown> | undefined): {
   stableHead: string; sandboxHead: string; stableBranch: string; sandboxBranch: string;
   commitsAhead: string; stableAhead: string;
   sandboxDirty: string; stableDirty: string; hint: string; blockers: string; showBlockers: boolean;
+  stableStatus: string; sandboxStatus: string;
+  stableTone: "ok" | "warn" | "blocked" | ""; sandboxTone: "ok" | "warn" | "blocked" | "";
+  openDetails: boolean;
 } {
   if (!status) {
     return {
       stableHead: "—", sandboxHead: "—", stableBranch: "—", sandboxBranch: "—",
       commitsAhead: "—", stableAhead: "—",
       sandboxDirty: "—", stableDirty: "—",
-      hint: "无法读取合入状态（请在 Electron 桌面工作台打开双车道）。",
+      hint: "请在桌面工作台打开双车道。",
       blockers: "", showBlockers: false,
+      stableStatus: "未连接", sandboxStatus: "未连接",
+      stableTone: "blocked", sandboxTone: "blocked",
+      openDetails: false,
     };
   }
   const branch = (value: unknown) => {
     const text = typeof value === "string" ? value.trim() : "";
     return text || "—";
   };
+  const commitsAheadNum = status.commitsAhead == null ? NaN : Number(status.commitsAhead);
+  const stableAheadNum = status.stableAheadOfSandbox == null ? NaN : Number(status.stableAheadOfSandbox);
   const commitsAhead = status.commitsAhead == null ? "未知" : String(status.commitsAhead);
   const stableAhead = status.stableAheadOfSandbox == null ? "未知" : String(status.stableAheadOfSandbox);
-  const sandboxDirty = String(countList(status.sandboxDirtyProduct));
-  const stableDirty = String(countList(status.stableDirtyProduct));
+  const sandboxDirtyCount = countList(status.sandboxDirtyProduct);
+  const stableDirtyCount = countList(status.stableDirtyProduct);
+  const sandboxDirty = String(sandboxDirtyCount);
+  const stableDirty = String(stableDirtyCount);
   const syncBlockers = Array.isArray(status.syncBlockers) ? status.syncBlockers.map(String) : [];
   const fatalBlockers = Array.isArray(status.fatalBlockers) ? status.fatalBlockers.map(String) : [];
   // Prefer sync-oriented blockers for the cards; also surface fatal adopt blockers that are not the benign "nothing to merge".
   const adoptNoise = new Set(["没有待合入的实验改动。"]);
   const usefulFatal = fatalBlockers.filter((b) => !adoptNoise.has(b));
   const blockers = [...syncBlockers, ...usefulFatal.filter((b) => !syncBlockers.includes(b))];
-  let hint = "双车道已对齐。";
-  if (status.needsSandboxSync === true && Number(status.stableAheadOfSandbox) > 0) {
-    hint = `稳定比实验新 ${status.stableAheadOfSandbox} 个提交。可点「用稳定刷实验」。`;
-  } else if (Number(status.commitsAhead) > 0) {
-    hint = `实验比稳定新 ${status.commitsAhead} 个提交。可点「合入稳定」。`;
-  } else if (countList(status.sandboxDirtyProduct) > 0) {
-    hint = `实验区有 ${sandboxDirty} 个未提交 product 文件；刷入前会拒绝。`;
+  const stableHead = shortHead(status.stableHead);
+  const sandboxHead = shortHead(status.sandboxHead);
+  const aligned = !blockers.length
+    && sandboxDirtyCount === 0
+    && !(status.needsSandboxSync === true && stableAheadNum > 0)
+    && !(commitsAheadNum > 0);
+
+  let stableStatus = `已对齐 · ${stableHead}`;
+  let sandboxStatus = `已对齐 · ${sandboxHead}`;
+  let stableTone: "ok" | "warn" | "blocked" | "" = "ok";
+  let sandboxTone: "ok" | "warn" | "blocked" | "" = "ok";
+  let hint = "已对齐。";
+
+  if (status.needsSandboxSync === true && stableAheadNum > 0) {
+    stableStatus = `领先实验 ${stableAheadNum} · ${stableHead}`;
+    sandboxStatus = `落后稳定 ${stableAheadNum} · ${sandboxHead}`;
+    stableTone = "warn";
+    sandboxTone = "warn";
+    hint = `稳定领先 ${stableAheadNum}，可刷实验。`;
+  } else if (commitsAheadNum > 0) {
+    stableStatus = `可合入 · ${stableHead}`;
+    sandboxStatus = `领先稳定 ${commitsAheadNum} · ${sandboxHead}`;
+    stableTone = "warn";
+    sandboxTone = "warn";
+    hint = `实验领先 ${commitsAheadNum}，可合入。`;
   }
-  if (blockers.length) hint = blockers[0];
+
+  if (stableDirtyCount > 0) {
+    stableStatus = `有未提交 ${stableDirtyCount} · ${stableHead}`;
+    stableTone = "warn";
+  }
+  if (sandboxDirtyCount > 0) {
+    sandboxStatus = `有未提交 ${sandboxDirtyCount} · ${sandboxHead}`;
+    sandboxTone = "warn";
+    if (!(status.needsSandboxSync === true && stableAheadNum > 0) && !(commitsAheadNum > 0)) {
+      hint = `实验有 ${sandboxDirtyCount} 个未提交；刷入前会拦。`;
+    }
+  }
+
+  if (blockers.length) {
+    hint = blockers[0];
+    if (syncBlockers.length) sandboxTone = "blocked";
+    if (usefulFatal.length) sandboxTone = "blocked";
+  } else if (aligned) {
+    hint = "已对齐。";
+    stableStatus = `已对齐 · ${stableHead}`;
+    sandboxStatus = `已对齐 · ${sandboxHead}`;
+    stableTone = "ok";
+    sandboxTone = "ok";
+  }
+
+  const openDetails = blockers.length > 0
+    || sandboxDirtyCount > 0
+    || stableDirtyCount > 0
+    || (status.needsSandboxSync === true && stableAheadNum > 0)
+    || commitsAheadNum > 0;
+
   return {
-    stableHead: shortHead(status.stableHead),
-    sandboxHead: shortHead(status.sandboxHead),
+    stableHead,
+    sandboxHead,
     stableBranch: branch(status.currentBranch),
     sandboxBranch: branch(status.sandboxBranch),
     commitsAhead,
@@ -69,6 +127,11 @@ export function formatDualLaneStrip(status: Record<string, unknown> | undefined)
     hint,
     blockers: blockers.join("\n"),
     showBlockers: blockers.length > 0,
+    stableStatus,
+    sandboxStatus,
+    stableTone,
+    sandboxTone,
+    openDetails,
   };
 }
 

@@ -1339,6 +1339,9 @@ export function renderProjectSidebar(
   } else if (rail === "music") {
     els.sidebarTitle.textContent = railMeta.label;
     els.sidebarMeta.textContent = "打开 B 站，搜歌就听。";
+  } else if (rail === "shell-dev") {
+    els.sidebarTitle.textContent = railMeta.label;
+    els.sidebarMeta.textContent = "稳定与实验";
   } else {
     els.sidebarTitle.textContent = railMeta.label;
     els.sidebarMeta.textContent = state.projects.length ? `${state.projects.length} 个项目` : "我的项目";

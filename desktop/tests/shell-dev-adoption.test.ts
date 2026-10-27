@@ -108,8 +108,8 @@ test("formatDualLaneStrip surfaces stableAhead without legacy gate fields", () =
   assert.equal(strip.stableBranch, "main");
   assert.equal(strip.sandboxBranch, "experiment/sandbox");
   assert.equal(strip.stableAhead, "2");
-  assert.match(strip.hint, /稳定比实验新 2/);
-  assert.match(strip.hint, /用稳定刷实验/);
+  assert.match(strip.hint, /稳定领先 2/);
+  assert.match(strip.hint, /刷实验/);
   assert.equal(strip.showBlockers, false);
 });
 
@@ -201,6 +201,48 @@ test("formatDualLaneStrip adopt hint uses flat CTA copy", () => {
     fatalBlockers: [],
     syncBlockers: [],
   });
-  assert.match(strip.hint, /合入稳定/);
+  assert.match(strip.hint, /合入/);
   assert.doesNotMatch(strip.hint, /一键完成合入/);
+});
+
+
+test("formatDualLaneStrip product status is aligned by default", () => {
+  const strip = ui.formatDualLaneStrip({
+    stableHead: "e689e0eabcdef",
+    sandboxHead: "e689e0eabcdef",
+    currentBranch: "codex/self-hosting-e2e",
+    sandboxBranch: "experiment/sandbox",
+    commitsAhead: 0,
+    stableAheadOfSandbox: 0,
+    needsSandboxSync: false,
+    sandboxDirtyProduct: [],
+    stableDirtyProduct: [],
+    fatalBlockers: ["没有待合入的实验改动。"],
+    syncBlockers: [],
+  });
+  assert.equal(strip.stableStatus, "已对齐 · e689e0e");
+  assert.equal(strip.sandboxStatus, "已对齐 · e689e0e");
+  assert.equal(strip.hint, "已对齐。");
+  assert.equal(strip.openDetails, false);
+  assert.equal(strip.showBlockers, false);
+});
+
+test("formatDualLaneStrip opens details when stable leads", () => {
+  const strip = ui.formatDualLaneStrip({
+    stableHead: "abcdef012345",
+    sandboxHead: "1234567890ab",
+    currentBranch: "main",
+    sandboxBranch: "experiment/sandbox",
+    commitsAhead: 0,
+    stableAheadOfSandbox: 2,
+    needsSandboxSync: true,
+    sandboxDirtyProduct: [],
+    stableDirtyProduct: [],
+    fatalBlockers: [],
+    syncBlockers: [],
+  });
+  assert.match(strip.stableStatus, /领先实验 2/);
+  assert.match(strip.sandboxStatus, /落后稳定 2/);
+  assert.equal(strip.openDetails, true);
+  assert.match(strip.hint, /刷实验/);
 });
