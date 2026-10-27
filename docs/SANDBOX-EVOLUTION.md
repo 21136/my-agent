@@ -99,7 +99,7 @@ init-sandbox.bat
 
 **做法（任选其一）：**
 
-- 壳预览 → **同步 sandbox 与稳定**
+- 壳预览 → **用稳定刷实验**（主操作；优先 fast-forward，分叉需确认以稳定为准）或 **同步 sandbox 与稳定**
 - 或 `sync-sandbox-worktree.bat`（把当前稳定分支 merge 进 sandbox worktree）
 
 然后 **重启 `start-desktop.bat`**。

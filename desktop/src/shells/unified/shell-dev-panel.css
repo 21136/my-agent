@@ -355,3 +355,76 @@
     flex-wrap: wrap;
   }
 }
+
+
+.shell-dev-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.shell-dev-dual-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--ma-border);
+  border-radius: var(--nt-r-sm, 8px);
+  background: color-mix(in srgb, var(--ma-surface) 75%, transparent);
+  flex: 0 0 auto;
+}
+
+.shell-dev-dual-status-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.shell-dev-dual-status-heading strong { color: var(--ma-text); }
+
+.shell-dev-dual-refresh {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.7rem;
+}
+
+.shell-dev-dual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.3rem 0.55rem;
+  margin: 0;
+}
+
+.shell-dev-dual-grid > div {
+  padding: 0.2rem 0.35rem;
+  border-radius: var(--nt-r-sm, 8px);
+  border: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
+}
+
+.shell-dev-dual-grid dt {
+  margin: 0;
+  font-size: 0.64rem;
+  color: var(--ma-text-muted);
+}
+
+.shell-dev-dual-grid dd {
+  margin: 0.05rem 0 0;
+  font-size: 0.74rem;
+  font-family: var(--ma-mono, monospace);
+  word-break: break-all;
+}
+
+.shell-dev-sync-hint {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ma-text-muted);
+}
+
+.shell-dev-dual-blockers {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ma-danger, #c44);
+  white-space: pre-wrap;
+}
