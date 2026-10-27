@@ -100,7 +100,8 @@ class SessionAgnosticToolAccessTests(unittest.TestCase):
             self.assertNotIn("禁止 `write_evolve`", prompt)
             self.assertIn("项目会话", prompt)
         self.assertIn("每次", evolve_bucket)
-        self.assertLessEqual((root / "evolve" / "tool-catalog" / "INDEX.md").stat().st_size, 2048)
+        # The documented limit is characters, not UTF-8 file bytes.
+        self.assertLessEqual(len(index), 2048)
 
     def test_ask_mode_still_hides_execution_tools_but_keeps_read_tools(self) -> None:
         for session in (self.ordinary, self.project):

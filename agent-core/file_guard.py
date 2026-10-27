@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from evolve_tool_io import normalize_newlines
+from guard_snapshots import safe_container, snapshot_payload
 
 MIN_PROTECTED_BYTES = 8
 _BACKUP_ROOT_NAME = ".file-guard"
@@ -73,12 +75,37 @@ def _snapshot_file(path: Path, agent_root: Path) -> None:
 
 
 def _prune_backups(directory: Path, *, keep: int) -> None:
-    files = sorted(directory.iterdir(), key=lambda item: item.name, reverse=True)
-    for stale in files[keep:]:
+    """Bound known snapshots, excluding latest, unknown entries and links.
+
+    Session snapshots are flat directories, not files. Resolve and validate each
+    target immediately before removal; never recurse into arbitrary contents.
+    """
+    if keep < 0:
+        raise ValueError("keep must be nonnegative")
+    directory = directory.absolute()
+    if not safe_container(directory):
+        return
+    candidates = sorted(
+        (p for p in directory.iterdir() if snapshot_payload(p, directory) is not None),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for stale in candidates[keep:]:
         try:
-            stale.unlink(missing_ok=True)
-        except OSError:
-            pass
+            if not safe_container(directory):
+                return
+            payload = snapshot_payload(stale, directory)
+            if payload is None:
+                continue
+            # Only validated flat snapshot payloads; no recursive tree deletion.
+            for item in payload:
+                item.unlink()
+            if directory.parent.name == _SESSION_BACKUP_ROOT:
+                stale.rmdir()
+        except OSError as error:
+            logging.getLogger(__name__).warning(
+                "Guard snapshot retention could not remove %s: %s", stale, error
+            )
 
 
 def guard_protected_truncate(

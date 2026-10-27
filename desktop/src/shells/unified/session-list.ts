@@ -11,6 +11,7 @@ export interface SessionSummary {
   updated_at: string;
   message_count?: number;
   project_id?: string;
+  execution_lane?: "stable" | "sandbox";
 }
 
 export interface ThreadSummary {
@@ -38,6 +39,7 @@ export interface SessionListInput {
   projectId: string;
   activeSessionId: string;
   currentSessionId: string;
+  currentLane?: "stable" | "sandbox";
   working: boolean;
   query: string;
   filter: SessionFilter;
@@ -54,6 +56,7 @@ export interface SessionRow {
   updatedAt: string;
   dot: SessionDot;
   current: boolean;
+  sidecarLane: "stable" | "sandbox";
 }
 
 function escapeHtml(text: string): string {
@@ -103,12 +106,14 @@ export function shortTime(value: string, now: Date = new Date()): string {
 export function buildSessionRows(input: SessionListInput): SessionRow[] {
   const rows: SessionRow[] = [];
   const pid = input.projectId.trim();
+  const currentLane = input.currentLane ?? "stable";
   const useThreads = Boolean(pid) && input.threads.length > 0;
   for (const s of input.sessions) {
     const sid = s.session_id;
-    const isCurrent = sid === input.currentSessionId;
+    const lane = s.execution_lane === "sandbox" ? "sandbox" : "stable";
+    const isCurrent = sid === input.currentSessionId && lane === currentLane;
     if (s.project_id) {
-      if (useThreads && s.project_id === pid) continue;
+      if (useThreads && s.project_id === pid && lane === currentLane) continue;
       rows.push({
         kind: "project",
         sessionId: sid,
@@ -118,6 +123,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: s.updated_at,
         dot: isCurrent && input.working ? "running" : "project",
         current: isCurrent,
+        sidecarLane: lane,
       });
       continue;
     }
@@ -130,10 +136,11 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
       sessionId: sid,
       projectId: "",
       title: untitled ? (s.message_count ? "随手闲聊" : "新会话") : s.title,
-      meta: ["随聊", count].filter(Boolean).join(" · "),
+      meta: ["随聊", lane === "sandbox" ? "实验运行时" : "", count].filter(Boolean).join(" · "),
       updatedAt: s.updated_at,
       dot: isCurrent && input.working ? "running" : "idle",
       current: isCurrent,
+      sidecarLane: lane,
     });
   }
   if (useThreads) {
@@ -149,6 +156,7 @@ export function buildSessionRows(input: SessionListInput): SessionRow[] {
         updatedAt: t.updatedAt,
         dot: isCurrent && input.working ? "running" : live ? "live" : "archived",
         current: isCurrent,
+        sidecarLane: currentLane,
       });
     }
   }
@@ -180,7 +188,7 @@ function rowTime(row: SessionRow): number {
 function renderRow(row: SessionRow, now: Date): string {
   const attrs = row.kind === "thread"
     ? `data-thread-id="${escapeHtml(row.sessionId)}"`
-    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}"`;
+    : `data-open-session="${escapeHtml(row.sessionId)}" data-project-id="${escapeHtml(row.projectId)}" data-sidecar-lane="${row.sidecarLane}"`;
   const tag = row.current ? '<span class="ma-session-tag">当前</span>' : "";
   return `<button type="button" class="ma-session${row.current ? " is-current" : ""}${row.kind === "thread" ? " is-thread" : ""}" ${attrs}${row.current ? ' aria-current="true"' : ""}>
     <span class="ma-session-dot is-${row.dot}" aria-hidden="true"></span>

@@ -1305,6 +1305,9 @@ def build_system_prompt(
 
     if include_overlay:
         sections.append(("session", format_session_overlay(session)))
+        evolution_overlay = getattr(session, "_turn_evolution_overlay", None)
+        if isinstance(evolution_overlay, str) and evolution_overlay.strip():
+            sections.append(("evolution", evolution_overlay.strip()[:2_000]))
         companion_world_context = getattr(session, "_turn_companion_world_context", None)
         if isinstance(companion_world_context, str) and companion_world_context.strip():
             from companion_world_context import is_companion_world_context_allowed

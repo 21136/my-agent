@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
+    "rootDir": "electron/evolution",
+    "outDir": "../artifacts/evolution-control-build",
+    "composite": false,
+    "declaration": false,
+    "noEmitOnError": true
+  },
+  "include": [
+    "electron/evolution/**/*.ts"
+  ]
+}

@@ -23,6 +23,8 @@ export type PetTurnSummary = {
   live: boolean;
   /** A tool / code execution is running right now. */
   toolRunning: boolean;
+  /** Canonical tool name when a tool is currently running. */
+  runningToolName?: string;
   /** The model is streaming its reasoning. */
   thinkingLive: boolean;
   /** The reply text is being streamed. */

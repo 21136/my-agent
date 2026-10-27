@@ -1,17 +1,27 @@
 import "./styles/theme.css";
+import "./styles/managed-session.css";
 import type { AgentWsClient } from "./api/ws";
 import { mountAppChrome } from "./app-chrome";
 import { createWsClient } from "./api/ws";
+import { bindEvolutionHostRelay } from "./api/evolution-bridge";
 import { mountHostSettings } from "./host-settings";
 import { mountModelSettings } from "./model-settings";
 import { mountShell } from "./shell-router";
 import { mountContextSwitchOverlay } from "./context-switch-overlay";
 import { applyChatFontSize, applyTheme } from "./settings";
+import { mountManagedSessionView } from "./managed-session-view";
 
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>("#app");
   if (!app) {
     throw new Error("#app missing");
+  }
+
+  const managedBridge = window.myAgentManaged;
+  if (managedBridge) {
+    applyTheme();
+    await mountManagedSessionView(app, managedBridge);
+    return;
   }
 
   // Belt-and-suspenders with Electron will-navigate: keep workbench from loading http(s).
@@ -32,6 +42,7 @@ async function boot(): Promise<void> {
   );
 
   let client: AgentWsClient | null = null;
+  let offEvolutionRequest: (() => void) | null = null;
   let teardownUi: (() => void) | null = null;
 
   async function mountUi(): Promise<void> {
@@ -49,6 +60,14 @@ async function boot(): Promise<void> {
 
     if (!client) {
       client = await createWsClient();
+    }
+    if (!offEvolutionRequest && client) {
+      const activeClient = client;
+      offEvolutionRequest = bindEvolutionHostRelay({
+        desktop: window.myAgentDesktop,
+        client: activeClient,
+        onError: (error) => window.dispatchEvent(new CustomEvent("evolution:transport-error", { detail: error.message })),
+      });
     }
 
     shellRoot.innerHTML = "";
@@ -88,6 +107,8 @@ async function boot(): Promise<void> {
   async function suspendSession(): Promise<void> {
     teardownUi?.();
     teardownUi = null;
+    offEvolutionRequest?.();
+    offEvolutionRequest = null;
     client?.destroy();
     client = null;
     app!.innerHTML = `<p class="text-muted" style="padding:1rem">已切到伴侶…</p>`;
@@ -113,6 +134,8 @@ async function boot(): Promise<void> {
 
   window.addEventListener("beforeunload", () => {
     teardownUi?.();
+    offEvolutionRequest?.();
+    offEvolutionRequest = null;
     client?.destroy();
   });
 }

@@ -259,3 +259,9 @@ INDEX / `project.md` bucket **必须**并列说明，防混调。
 
 - [x] D0 文档评审（2026-08-04 · 用户「文档先行」）
 - [x] M0+M1 实现（2026-08-04 · `project_verify.py` · checker `project_test_fail`）
+
+## T9 — Evolution Slice A recovery drill implementation status (2026-10-23)
+
+- Code-only status: the sandbox now contains the exact optional T4 recovery profile/scope, mutable-source separation from the fixed control release, strict runtime/profile/factory validation, snapshot-bound candidate descriptor generation, a visible H1 launcher with a private shutdown channel, and a fixed-profile sidecar WebSocket scripted driver. The adapter uses the current Session and existing confirmation receipts; it does not call a model.
+- Verification rerun (2026-10-23): strict evolution-control build, `desktop/tsconfig.node.json --noEmit`, and T9 script syntax check passed; 12 focused Node files **93 passed, 0 failed, 1 opt-in leaf-process skipped**; 8 focused Python files **95 passed, 0 failed**. Dependency audit checked **157 locked packages, 0 issues**; `npm run build` completed, including renderer and Electron main/preload bundles. Loopback preview HTTP smoke returned the page and six assets with **HTTP 200**. Vite emitted non-fatal chunk/dynamic-import and Electron plugin option warnings. Browser visual/interaction review remains unverified. Evidence: `artifacts/evolution-a-t9-code-acceptance-db884b8a2fc34ee7b4534b62ef8cc5cc/`.
+- Acceptance remains **OPEN**. No real Electron app/Host/sidecar/WebSocket session/named pipe/candidate/model was started. Real P1/H1 scripted recovery remains unrun; M1 has no provider adapter or isolated credential-service wiring; independent review and security audit remain open. Preview delivery was HTTP-checked only, not visually/interaction verified. See [T9 implementation status](reviews/2026-10-22-evolution-a-implementation.md).

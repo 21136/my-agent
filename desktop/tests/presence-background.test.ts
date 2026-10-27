@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const stylesheet = readFileSync(new URL("../src/shells/unified/neon-twin.css", import.meta.url), "utf8");
+const composerStylesheet = readFileSync(new URL("../src/shells/unified/composer-companion.css", import.meta.url), "utf8");
 const baseStylesheet = readFileSync(new URL("../src/shells/unified/unified.css", import.meta.url), "utf8");
 const unifiedShell = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
 const welcomeThemeAssets = [
@@ -54,20 +55,17 @@ test("chat stage and transcript are transparent so the fixed main wallpaper rema
   assert.ok(chatRule && /overflow-y:\s*auto/.test(chatRule[1]));
 });
 
-test("composer spans the chat width with a restrained translucent surface", () => {
-  const widthRule = stylesheet.match(
+test("composer stays centered and legible without changing the continuous chat wallpaper", () => {
+  const widthRule = composerStylesheet.match(
     /html\[data-theme\]\s+\.unified-shell\[data-main-focus="chat"\]\s+\.unified-composer-dock\s*>\s*\*\s*\{([^}]*)\}/s,
   );
-  assert.ok(widthRule, "missing full-width composer dock child rule");
-  assert.match(widthRule[1], /max-width:\s*none/);
+  assert.ok(widthRule, "missing bounded composer width");
+  assert.match(widthRule[1], /max-width:\s*920px/);
   assert.match(widthRule[1], /width:\s*100%/);
-  assert.match(widthRule[1], /margin-inline:\s*0/);
-  assert.match(
-    stylesheet,
-    /html\[data-theme\]\s+\.unified-shell\[data-main-focus="chat"\]\s+\.unified-composer\s*\{[^}]*background:\s*color-mix\([^}]*transparent/s,
-  );
+  assert.match(widthRule[1], /margin-inline:\s*auto/);
+  assert.match(composerStylesheet, /background:\s*color-mix\(in srgb, var\(--ma-surface\) 96%, var\(--ma-accent\) 4%\)/);
+  assert.match(composerStylesheet, /#unified-composer-dock\s*\{[^}]*background:\s*transparent/s);
 });
-
 test("session switch surfaces reference themed JPG wallpapers", () => {
   for (const [theme, asset] of sessionSwitchAssets) {
     const rule = new RegExp(

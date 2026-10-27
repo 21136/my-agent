@@ -99,6 +99,20 @@ export interface ChatSessionHooks {
 
 const CANCEL_WATCHDOG_MS = 45_000;
 
+/** The current renderer protocol omits `diff`; validate the server extension at its boundary. */
+function hasStringDiff(
+  event: Extract<ServerEvent, { type: "tool.end" }>,
+): event is Extract<ServerEvent, { type: "tool.end" }> & { diff?: string } {
+  return !("diff" in event) || typeof event.diff === "string";
+}
+
+function normalizeDisplayPaths(paths: unknown): string[] {
+  if (!Array.isArray(paths)) return [];
+  return paths
+    .filter((path): path is string => typeof path === "string" && path.trim().length > 0)
+    .map((path) => path.trim().replace(/\\/g, "/"));
+}
+
 export interface ChatSession {
   model: ChatSessionModel;
   currentTurnIndex(): number;
@@ -108,6 +122,14 @@ export interface ChatSession {
   resetTurnActivity(): void;
   isWorking(): boolean;
   pushUserMessage(text: string): number;
+  pushReviewSubagentCard(
+    status: "running" | "done",
+    opts?: { taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number },
+  ): number;
+  updateReviewSubagentCard(
+    status: "done",
+    opts?: { summary?: string; verdict?: string; blockersCount?: number },
+  ): void;
   toggleProcessCollapsed(turnKey: string): void;
   toggleThinkingOpen(turnKey: string, thinkId?: string): void;
   openThinking(turnKey: string): void;
@@ -1019,11 +1041,11 @@ export function createChatSession(
             if (typeof event.logs_tail === "string" && event.logs_tail.trim()) {
               card.logsTail = event.logs_tail.trim();
             }
-            if (typeof (event as { path?: string }).path === "string" && (event as { path?: string }).path!.trim()) {
-              card.path = (event as { path: string }).path.trim();
+            if (event.path?.trim()) {
+              card.path = event.path.trim();
             }
-            if (typeof (event as { diff?: string }).diff === "string" && (event as { diff?: string }).diff!.trim()) {
-              card.diff = (event as { diff: string }).diff;
+            if (hasStringDiff(event) && event.diff?.trim()) {
+              card.diff = event.diff;
             }
             syncProcessLegacyFields(proc);
           }
@@ -1033,12 +1055,7 @@ export function createChatSession(
           model.turnActive = false;
         }
         if (event.ok) {
-          const rawDisplay = (event as { display_paths?: unknown }).display_paths;
-          const displayPaths = Array.isArray(rawDisplay)
-            ? rawDisplay
-                .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-                .map((p) => p.trim().replace(/\\/g, "/"))
-            : [];
+          const displayPaths = normalizeDisplayPaths(event.display_paths);
           const imageExt = /\.(png|jpe?g|webp|gif|bmp)$/i;
           const pushImageBlock = (agentPath: string) => {
             if (!imageExt.test(agentPath)) return;
@@ -1051,12 +1068,7 @@ export function createChatSession(
           if (displayPaths.length) {
             for (const p of displayPaths) pushImageBlock(p);
           } else if (/generate_image|show_images/i.test(event.tool || "")) {
-            const imagePath =
-              (typeof (event as { path?: string }).path === "string"
-                ? (event as { path: string }).path
-                : ""
-              ).trim()
-              || (typeof event.output_path === "string" ? event.output_path : "").trim();
+            const imagePath = event.path?.trim() || event.output_path?.trim() || "";
             if (imagePath) pushImageBlock(imagePath.replace(/\\/g, "/"));
           }
         }
@@ -1070,7 +1082,8 @@ export function createChatSession(
       case "tool.progress":
         if (options.showProcess) {
           const proc = model.blocks.find(
-            (b) => b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
+            (b): b is ChatBlock & { kind: "process" } =>
+              b.kind === "process" && b.turnKey === model.currentTurnKey && !b.collapsed,
           );
           const card =
             proc?.kind === "process" ? findToolEntry(proc, event.call_id) : undefined;

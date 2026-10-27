@@ -7,6 +7,7 @@ import os
 import secrets
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,6 +38,14 @@ SessionPhase = Literal["S1", "S2", "S3", "S4"]
 TurnMode = Literal["ask", "agent"]
 DEFAULT_TURN_MODE: TurnMode = "agent"
 VALID_TURN_MODES = frozenset({"ask", "agent"})
+
+def normalize_evolution_id(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        return value if str(uuid.UUID(value)) == value else ""
+    except (ValueError, AttributeError, TypeError):
+        return ""
 
 # Deprecated since shell consolidation (Phase 3). Kept for old session compatibility.
 ShellId = Literal["grow", "daily", "govern", "project", "unified"]
@@ -137,6 +146,7 @@ class SessionMeta:
     updated_at: str = ""
     phase: SessionPhase = "S1"
     workspace_evolved_approved: bool = False
+    evolution_id: str = ""
     pending_feedback: list[dict[str, Any]] = field(default_factory=list)
     compact_before_index: int = 0
     evolve_offer_pending: bool = False
@@ -198,6 +208,7 @@ class SessionMeta:
             "terminal_foreign_root": self.terminal_foreign_root,
             "terminal_host_id": self.terminal_host_id,
             "write_scope_root": self.write_scope_root,
+            "evolution_id": self.evolution_id,
         }
 
     @classmethod
@@ -314,6 +325,8 @@ class SessionMeta:
             except Exception:
                 write_scope_root = ""
 
+        evolution_id = normalize_evolution_id(payload.get("evolution_id", ""))
+
         turn_mode = normalize_turn_mode(payload.get("turn_mode", DEFAULT_TURN_MODE))
         if harness == "terminal":
             turn_mode = "agent"
@@ -327,6 +340,7 @@ class SessionMeta:
             updated_at=updated_at,
             phase=phase,
             workspace_evolved_approved=bool(payload.get("workspace_evolved_approved", False)),
+            evolution_id=evolution_id,
             pending_feedback=pending_feedback,
             compact_before_index=int(payload.get("compact_before_index", 0) or 0),
             evolve_offer_pending=bool(payload.get("evolve_offer_pending", False)),

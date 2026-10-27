@@ -639,8 +639,8 @@ exit 0；7 条 `[PASS]`：
 | 场景 | 预期 |
 |------|------|
 | `build_llm_tools()` in `agent` mode | 普通会话与项目会话提供相同的 Builtin/proxy 工具集；ask 保留受限执行面 |
-| `build_builtin_tools()` | Exactly **13** OpenAI `type: function` definitions (mode filters may hide some) |
-| Builtin names | `read_file` · `list_dir` · `grep` · `glob_file_search` · `codebase_search` · `web_search` · `fetch_url` · `show_images` · `generate_image` · `run_evolved` · `propose_context_switch` · `deliverable_review` · `explore` |
+| `build_builtin_tools()` | Exactly **14** OpenAI `type: function` definitions (mode filters may hide some) |
+| Builtin names | `read_file` · `list_dir` · `grep` · `glob_file_search` · `codebase_search` · `web_search` · `fetch_url` · `show_images` · `generate_image` · `run_evolved` · `propose_context_switch` · `deliverable_review` · `explore` · `evolution` |
 | 无平铺 evolved | `write_text` 等 **不在** function 列表；仅经 `run_evolved` |
 | 参数 schema | 各 builtin 含 `parameters`（JSON Schema），`required` 字段在 `properties` 内 |
 | `format_session_evolved_catalog([])` | 含 `write_text`（common）；evolved 列在 system 文案而非独立 function |

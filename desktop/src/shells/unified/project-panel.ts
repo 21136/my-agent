@@ -1139,7 +1139,7 @@ function renderTerminalDetails(state: ProjectPanelState): string {
   </div>`;
 }
 
-function renderTerminalRow(state: ProjectPanelState, session: TerminalSessionItem): string {
+function renderTerminalRow(state: ProjectPanelState, session: TerminalListSession): string {
   const display = reconcileTerminalSession(session);
   const status = terminalStatusLabel(display);
   const title = terminalHumanTitle(display.command || "", display.cwd || "");

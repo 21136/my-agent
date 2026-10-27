@@ -13,21 +13,46 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     <header class="shell-dev-heading">
       <div>
         <h1 id="shell-dev-page-heading">壳开发预览</h1>
-        <p>实验期在 <code>.worktrees/sandbox</code> 里随便改 <strong>desktop + agent-core</strong>（及 evolve 工具），稳定树不动。预览：<code>5173</code> 稳定壳、<code>5174</code> 实验壳。验收满意后点<strong>一键合入实验分支</strong>：<code>git merge experiment/sandbox</code>，把实验提交整包写进当前稳定分支。<strong>采用预览为主壳</strong>只临时换 5173/5174 地址，不算合入。</p>
+        <p>实验期在 <code>.worktrees/sandbox</code> 中修改并通过预览检查。旧整支合入按钮仅用于隔离夹具，普通项目由 E0 gate 拒绝；真实项目请使用下方源码选择与检查点原生入口。所选源码合入≠build/activate，不会自动同步 sandbox 的 dirty 内容。<strong>采用预览为主壳</strong>只临时切换预览 URL，不等于源码合入或激活。</p>
       </div>
       <div class="shell-dev-actions">
         <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-popout>独立窗口预览</button>
-        <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-sandbox-session>开实验进化会话</button>
-        <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-adopt-merge title="git merge experiment/sandbox（含 agent-core 与 desktop）">一键合入实验分支</button>
+        <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-sandbox-session title="旧入口：将当前会话切到候选 sidecar">在候选中试用（旧入口）</button>
+        <button type="button" class="unified-btn" data-shell-dev-adopt-status>检查合入状态</button>
+        <button type="button" class="unified-btn" data-shell-dev-managed-review>只读源码审查</button>
+        <button type="button" class="unified-btn unified-btn-accent" data-shell-dev-adopt-merge title="旧整支合入仅用于隔离夹具；普通项目由 E0 gate 拒绝。真实项目请使用下方源码选择与检查点原生入口。">旧整支合入（仅隔离夹具）</button>
         <button type="button" class="unified-btn" data-shell-dev-reload>重新加载内嵌</button>
         <button type="button" class="unified-btn" data-shell-dev-promote title="仅切换 5173/5174 主窗口 URL">采用预览为主壳</button>
+        <button type="button" class="unified-btn" data-shell-dev-reset-main>返回稳定版</button>
       </div>
     </header>
     <dl class="shell-dev-lanes">
       <div><dt>当前主壳</dt><dd data-shell-dev-main-url>${main}</dd></div>
       <div><dt>预览壳</dt><dd data-shell-dev-url>${preview}</dd></div>
     </dl>
+    <section class="shell-dev-evolution" aria-label="当前会话演化状态">
+      <div class="shell-dev-evolution-heading">
+        <strong>当前会话演化</strong>
+        <span role="status" aria-live="polite" data-evolution-status>未查询</span>
+      </div>
+      <div class="shell-dev-evolution-actions">
+        <button type="button" class="unified-btn unified-btn-accent" data-evolution-begin>开始演化</button>
+        <button type="button" class="unified-btn" data-evolution-inspect>查看状态</button>
+        <button type="button" class="unified-btn" data-evolution-stop disabled>停止候选</button>
+      </div>
+      <p class="shell-dev-evolution-checks" data-evolution-checks></p>
+    </section>
+    <section aria-label="只读管理源码审查" data-managed-review-panel>
+      <div data-managed-review-browser aria-live="polite" style="max-height: min(42vh, 420px); overflow: auto; overflow-wrap: anywhere;"></div>
+      <pre data-managed-review-output hidden aria-live="polite" style="max-height: min(42vh, 420px); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;"></pre>
+    </section>
+    <section aria-label="源码范围选择">
+      <p>所选范围只生成提案，不执行合入。归属声明不等于来源证明；稳定区现有修改默认保留。</p>
+      <div data-managed-source-selection aria-live="polite" style="max-height: min(42vh, 420px); overflow: auto; overflow-wrap: anywhere;"></div>
+    </section>
     <p class="shell-dev-feedback" role="status" aria-live="polite" data-shell-dev-feedback></p>
     <div class="shell-dev-web-slot" data-shell-dev-web-slot aria-label="Desktop Vite 候选预览"></div>
   </div>`;
 }
+
+

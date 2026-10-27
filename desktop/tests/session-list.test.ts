@@ -90,3 +90,31 @@ test("list html groups by date and wires click targets", () => {
   assert.match(renderSessionListHtml(input({ query: "zzz" })), /没有匹配的会话/);
   assert.doesNotMatch(renderSessionListHtml(input({ sessions: [{ session_id: "x", title: "<b>", updated_at: "" }], threads: [], projectId: "" })), /<b>/);
 });
+
+
+test("merged lane session rows carry the lane onto the click target", () => {
+  const sessions = [
+    { session_id: "stable-session", title: "Stable", updated_at: now.toISOString(), execution_lane: "stable" as const },
+    { session_id: "sandbox-session", title: "Sandbox", updated_at: now.toISOString(), execution_lane: "sandbox" as const },
+  ];
+  const html = renderSessionListHtml(input({ sessions, threads: [], projectId: "" }));
+  assert.match(html, /data-open-session="stable-session" data-project-id="" data-sidecar-lane="stable"/);
+  assert.match(html, /data-open-session="sandbox-session" data-project-id="" data-sidecar-lane="sandbox"/);
+  assert.match(html, /实验运行时/);
+});
+
+test("current project threads replace only their own lane and current tags are lane-bound", () => {
+  const rows = buildSessionRows(input({
+    currentLane: "sandbox",
+    sessions: [
+      { session_id: "t-live", title: "stable copy", updated_at: "", project_id: "demo", execution_lane: "stable" },
+      { session_id: "sandbox-project", title: "sandbox", updated_at: "", project_id: "demo", execution_lane: "sandbox" },
+    ],
+  }));
+  const copy = rows.find((row) => row.title === "stable copy")!;
+  assert.ok(copy, "current project threads must not hide the other lane");
+  assert.equal(copy.current, false);
+  assert.equal(copy.sidecarLane, "stable");
+  assert.equal(rows.find((row) => row.kind === "thread" && row.sessionId === "t-live")!.sidecarLane, "sandbox");
+  assert.ok(!rows.some((row) => row.sessionId === "sandbox-project"));
+});

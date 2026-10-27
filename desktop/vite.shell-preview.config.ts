@@ -5,6 +5,9 @@
 import os from "node:os";
 import path from "node:path";
 import { defineConfig } from "vite";
+import { assertDependencies } from "./scripts/dependency-audit.mjs";
+
+assertDependencies(__dirname);
 
 const repoRoot = path.resolve(__dirname, "..");
 const localCacheRoot = path.join(
