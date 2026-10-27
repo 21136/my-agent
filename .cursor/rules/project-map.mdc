@@ -42,6 +42,7 @@ alwaysApply: true
 - **Plan Agent / 侧栏**：Phase 39 done · Phase 40 P0/P1 done · Phase 41 P1+P2+P4+P5 done · **Phase 42 doc**（H/I/J）。
 - **Phase 57**：**legacy M1 done** · **Ink 阶段 0～5 done** · **T-5730～5734 done** — [TERMINAL-MODE.md](../../docs/TERMINAL-MODE.md) v0.3.2 §6.6 · **frozen** · S-576 手工留痕
 - **Phase 59b**：**done** — verification 谓词门 UI-6046～6052 · [RUNAWAY-VERIFICATION-ORCHESTRATOR.md](../../docs/RUNAWAY-VERIFICATION-ORCHESTRATOR.md)
+- **Sandbox 双轨**：稳定根目录 + `.worktrees/sandbox`（5173/5174）· 合入后须 **同步 sandbox** — [SANDBOX-EVOLUTION.md](../../docs/SANDBOX-EVOLUTION.md)
 - **下一焦点**：T-6106 v1 兼容回归 · T-6107 continuation · S-6106 music 试点 · UX-029 M2 / UX-030 验收；Phase 58b T-5832 保持暂停
 - **准入**：新 Phase 须 DOC-04（矩阵行 + S/IT id）；见 MAP §2.1。
 - 默认入口：`start-desktop.bat`；Terminal：`start-terminal.bat`；CLI 备用 `start.bat`。

@@ -2,6 +2,31 @@
 
 > 稳定驾驶舱改实验副本，**不碰稳定工作区里的 `desktop/` 与 `agent-core/` 文件**。
 
+## 你要的工作方式（产品契约）
+
+在 **实验进化会话**里提需求：加功能、加工具、改架构。**开实验进化会话**会走 **sandbox sidecar（8766）**，直接试跑 sandbox 里的 agent-core；稳定 **8765 / 5173** 并行，不合入前稳定 product 树仍不被改写。
+
+| 期望 | 含义 |
+|------|------|
+| 稳定版「还是那样」 | 不合入前，根目录 `agent-core/`、`desktop/` 不被助手写入；**5173 主壳**照常 |
+| 实验版「变成你要的」 | 改动在 sandbox worktree；**5174** 预览那套 UI/代码 |
+| 不合入也安全 | 实验做坏了、**5174 打不开**，不应等于稳定不可用；稳定仍可聊天、做项目、用 Cursor 修 sandbox |
+| 稳定能修实验 | 在稳定环境只读看、在 `.worktrees/sandbox` 里改；或合入前由你在 Cursor 里 patch sandbox |
+| 满意再合入 | **一键合入**整支分支；合入后 **同步 sandbox**，避免 5174 仍停在旧树 |
+
+**执行与写入（实现口径）：**
+
+- **双 sidecar**：稳定 **8765**（根目录 agent-core）+ sandbox **8766**（`.worktrees/sandbox` agent-core），各用各自 `data/` 与 interface lock，**互不影响**。
+- **壳预览 → 开实验进化会话**：连 **8766**，在 sandbox 里**试跑新工具 / 新 agent-core**；顶栏会标「运行在 sandbox agent-core」。
+- **普通稳定会话**：仍走 **8765**；需要只改 sandbox 文件、仍用稳定运行时，可用带 `write_scope_root` 的实验会话（侧栏标题 `[实验]`）。
+- **验收**：5174 = sandbox `desktop`；5173 = 稳定 `desktop`（两条 Vite，互不影响，除非你把主窗口绑到 5174）。
+
+**仍要注意：**
+
+- 实验会话数据在 **sandbox `data/`**；稳定会话在 **稳定 `data/`**；侧栏列表会合并两边，切换会话会自动换 WS 端口。
+- sandbox sidecar 崩了 **不应**拖垮 8765；稳定照常聊天、做项目。
+- 「采用预览为主壳」只换 5173/5174 地址，**不是**换 agent 运行时；合入/同步后应 **主壳恢复稳定 5173**。
+
 ## 存储模型（不是两个 Git 仓库）
 
 | 存什么 | 份数 |
@@ -29,7 +54,7 @@ init-sandbox.bat
 1. **稳定**：只用仓库根目录 `start-desktop.bat`；聊天、做项目；**不要**在根目录改实验性壳/工具。
 2. **实验**：Agent / 你只改 `.worktrees/sandbox/**`（`agent-core`、`desktop` 等）。
 3. **预览**：重启 `start-desktop.bat` 后，**5173 = 稳定 desktop**，**5174 = sandbox desktop**（存在 sandbox 时自动）。预览轨已对齐稳定版的 **生成图 hydrate + lightbox**（`inline_images` / `show_images`）；改完后刷新 5174 或重启 dev。
-4. **试新 agent-core**：设置 → 候选 Host 根目录选 `.worktrees\sandbox`（须在 Agent 根下）；会切换 sidecar，**短暂**用于验收，失败会恢复。
+4. **试新 agent-core**：优先 **壳预览 → 开实验进化会话**（8766）；旧路：设置 → 候选 Host 切到 sandbox（**会替换全局 sidecar**，不如双轨）。
 5. **合入**（界面或命令行）：
    - 桌面 **壳预览** → **一键合入实验分支**：可自动 **在 sandbox 提交**、**stash 稳定树 product 改动**，再 `git merge experiment/sandbox`（整支，含 **agent-core、desktop**）。做不了的事（缺 sandbox、没有可合入提交等）会一句话说明，不堆手册式提示。**采用预览为主壳**只换 5173/5174 地址，不算合入。
    ```bat
@@ -68,26 +93,35 @@ init-sandbox.bat
 
 关联：[SELF-MODIFICATION-TRANSACTION.md](./SELF-MODIFICATION-TRANSACTION.md) · 壳预览 T-6500b · `switchSidecarCandidate`（`desktop/src/host-settings.ts`）
 
-## Evolution Slice A T9 verification boundary (2026-10-23)
+## 合入后必修（双轨最容易漏的一步）
 
-The sandbox T9 scripted code path is implemented: an explicitly authorized `t4-recovery-node-v1` profile admits only the exact three T4 candidate files in addition to the catalog index; those mutable bytes are registered separately from the fixed control-release digest. The trusted Host uses a fixed Node runtime/profile and a descriptor factory bound to the exact candidate snapshot. The CLI now contains the visible H1 launcher and sidecar WebSocket driver, reuses the current Session and existing confirmation receipts, captures the operation journal and process logs, and stops owned components. Agent/M1 remains fail-closed without a provider adapter; scripted mode makes no model call.
+稳定上 `git merge experiment/sandbox` **不会**自动更新 `.worktrees/sandbox` 里的文件。合入后 **experiment/sandbox 分支往往仍停在旧提交**，5174 继续跑旧实验树，看起来像「预览壳坏了 / 功能没了」。
 
-No real H1/P1 run was performed. No Electron app/Host/sidecar/WebSocket session/named pipe/candidate/model startup occurred; M1, independent review and security audit remain open. The 2026-10-23 code-only rerun passed the full sandbox `npm run build` and a read-only dependency audit (157 packages, 0 issues). A loopback Vite preview returned the page and six assets with HTTP 200, but rendered visual/interaction acceptance remains open. See [T9 implementation status](reviews/2026-10-22-evolution-a-implementation.md).
+**做法（任选其一）：**
 
-## 2026-10-23 开发态双版本合入闭环（sandbox 实现）
+- 壳预览 → **同步 sandbox 与稳定**
+- 或 `sync-sandbox-worktree.bat`（把当前稳定分支 merge 进 sandbox worktree）
 
-日常操作仍在原桌面的「壳开发预览」页面，不要求用户打开终端执行 Git：
+然后 **重启 `start-desktop.bat`**。
 
-1. 在实验版修改并试用；「检查合入状态」显示待保存/待合入内容或阻断原因。
-2. 点击「一键合入实验分支」，由稳定 Host 主进程弹出**原生确认**，展示源码、协议、文档和稳定区备份范围。renderer 不能自行提供自动提交/stash 授权、路径或提交说明；测试 Host 不开放采用操作。
-3. 确认绑定两个 HEAD、文件内容和暂存区快照；等待确认期间变更会使该次确认失效。同一仓库的合入操作使用互斥锁，不抢占遗留锁，不接管已存在的 merge/rebase/cherry-pick。
-4. 只提交已确认的源码发布白名单；协议、文档包含在内。拒绝源码外改动、已提交的敏感路径、链接/子模块及跨仓库 worktree。稳定区范围外未暂存工作不自动提交；范围外已暂存工作直接阻断，避免混入合并提交。
-5. 稳定区本地改动按精确路径备份，使用**本次备份对象**恢复并保留原暂存状态。备份按唯一标签识别，保留到用户验收后处理；不执行无引用的 stash pop，也不自动删除其它任务的 stash。
-6. 稳定分支移动前，用 merge-tree 和私有索引预检分支合并、本地内容、原暂存状态及未跟踪文件/目录碰撞；Windows 按大小写和尾点/空格别名保守检查。已知冲突先恢复本次备份并停止，稳定 HEAD 不移动，不自动选边。Git stash 自身失败也先捕获本次对象并恢复原暂存状态。无法预见的后续恢复或同步失败仍返回 partial（ok=false），绝不冒充完整成功。
-7. 成功后只用 fast-forward 同步实验分支，清除主壳的预览地址偏好；不自动重启当前会话。用户关闭后从原 start-desktop.bat 启动，在稳定版验收。再次实验仍在 sandbox。
+## 已知漏项与对策（双版本清单）
 
-边界：这是**开发态 Git 采用流程**，不等于 Evolution E 的正式发行、独立 Launcher、版本/数据迁移或崩溃恢复验收；也不使 P1/H1/M1 自动通过。遗留锁需要检查现场而非自动删除，保留的备份也没有自动清理。Git 外部编辑器/其它 Git 工具不受本应用的互斥锁约束；这不是操作系统级隔离。
+| 漏项 | 现象 | 对策 |
+|------|------|------|
+| 合入后未同步 sandbox | 5173 正常、5174 缺功能或很旧 | **同步 sandbox 与稳定** + 重启 |
+| 稳定未提交改动被 stash | 合入后壳预览/图标消失 | 现已 **合入后自动 stash pop**；仍建议及时 **commit** |
+| 只用「采用预览为主壳」 | 以为已合入代码 | 仅换 URL；真合入用 **一键合入实验分支** |
+| 普通会话写稳定树 | 实验改动写进根目录 | 用 **开实验进化会话**（`write_scope_root`） |
+| 试 agent-core 未切候选 Host | 5174 UI 新、sidecar 仍旧 | 设置 → 候选 Host 指 `.worktrees\sandbox`（验收后切回） |
+| `data/` 各一份 | 稳定与 sandbox sidecar 会话不共享 | 设计如此；切候选 Host 即换 data |
+| `.worktrees/` 误提交 | 嵌套仓库污染 Git | 已加入 `.gitignore` |
+| 文档写 `main`、你在 `codex/…` | 命令行分支名不一致 | merge/sync 以 **当前检出分支** 为准（界面已显示） |
+| init 已存在但极旧 | sandbox 长期未同步 | `sync-sandbox-worktree.bat` 或删 worktree 后重装 |
+| merge 冲突（同步 sandbox） | 两边都改过 lightbox / package.json 等 | 同步默认 **以稳定为准**（`merge -X theirs`）；仍失败则在 `.worktrees/sandbox` 手解后 commit |
+| 双份 `node_modules` | 磁盘占用 | 正常；sandbox `npm install` 独立一份 |
+| **采用预览为主壳** 后重启仍像实验壳 | `data/state.json` 的 `desktop_shell_renderer_url` 记住 5174 | 壳预览 → **主壳恢复稳定 5173**；合入/同步成功也会自动清除 |
+| `check-stable-before-sandbox-merge` 写 `main` | 你实际在 `codex/…` 等分支 | 脚本默认用 **当前 HEAD 分支** 比较 |
+| sandbox worktree 切错分支 | 合入/提交报分支不对 | 在 `.worktrees/sandbox` 保持 `experiment/sandbox` |
+| 只改 desktop 未切候选 Host | 新工具在 sidecar 不生效 | 设置里候选 Host 指 sandbox（验收后切回稳定根） |
 
-控制端更新存在一次性发布边界：**仅把新 renderer 放到预览地址，不会升级正在运行的稳定 Electron main/preload**。本轮代码只写 sandbox，不能据此宣称当前稳定安装已有这套新合入能力。当前 start-desktop.bat 是 Vite 管理的源码热更新入口，合入 main/preload/config 可能在操作未结束时杀掉并重启控制进程。因此新 main 会明确阻断开发态 Host 和测试 Host 的真实采用；仅拷贝几个控制文件或重启开发壳并不足够。下一阶段必须先设计并发布与可变源码分离的固定控制端/独立启动器，再在真实桌面原生确认中验收。该架构工作尚未实现；不以外部 Agent 手工 merge 代替日常产品闭环。
-
-定向验证：在 sandbox/desktop 执行 npm run test:sandbox-adopt。真实 Git 测试仅在 sandbox/artifacts/dual-version-adoption-20261023/git-fixtures 的临时双工作区内做提交、备份、合入、同步，不触碰真实稳定/实验分支；原生 Electron 对话框、真实分支采用及重启仍需分别验收。网页预览没有 Electron preload 时不能代替桌面验收，不注入假 preload 绕过此边界。
+**推荐闭环：** 实验会话改 sandbox → 5174 验收 → sandbox commit → **一键合入** → **同步 sandbox** → 重启 → 5173 验收 → 继续下一轮实验。

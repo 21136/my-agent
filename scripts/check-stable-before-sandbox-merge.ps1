@@ -1,7 +1,7 @@
 # Pre-merge guard: stable worktree must not carry uncommitted product changes.
 # Sandbox commits merge in via git; stable tree should be clean (or only unrelated paths).
 param(
-    [string]$StableBranch = "main",
+    [string]$StableBranch = "",
     [string]$SandboxBranch = "experiment/sandbox",
     [switch]$AllowDirtyOutsideProduct
 )
@@ -11,6 +11,10 @@ $ErrorActionPreference = "Stop"
 $ProductPrefixes = @("agent-core/", "desktop/", "evolve/tools/", "evolve/skills/")
 
 Set-Location $RepoRoot
+
+if (-not $StableBranch.Trim()) {
+    $StableBranch = (& git rev-parse --abbrev-ref HEAD).Trim()
+}
 
 function Fail([string]$Message) {
     Write-Host "[check] FAIL: $Message" -ForegroundColor Red

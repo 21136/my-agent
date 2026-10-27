@@ -45,12 +45,5 @@ artifacts/
 Thumbs.db
 .DS_Store
 
-# Project-local managed preparation state (never source)
-.managed-runtime/
-
-# Local scratch / probe trees (never source)
-.vp/
-.x/
-.y/
-.z/
-storage-*/
+# Git worktrees (sandbox evolution); never commit nested checkout
+.worktrees/
