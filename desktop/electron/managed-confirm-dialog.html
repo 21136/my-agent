@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'"/>
+<title>确认</title>
+<style>
+:root{
+  --bg:#0f1220; --panel:#171b2e; --card:#1d2340; --line:rgba(148,163,255,.22);
+  --text:#eef1ff; --muted:#9aa3c7; --accent:#7c6cff; --accent2:#46c2ff;
+  --danger:#ff6b8a; --warn:#ffc457; --shadow:0 24px 80px rgba(0,0,0,.45);
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:
+  radial-gradient(1200px 600px at 10% -10%,rgba(124,108,255,.28),transparent 55%),
+  radial-gradient(900px 500px at 110% 0%,rgba(70,194,255,.18),transparent 50%),
+  var(--bg);color:var(--text)}
+body{display:flex;align-items:center;justify-content:center;padding:18px}
+.sheet{width:min(720px,100%);max-height:100%;overflow:auto;background:linear-gradient(180deg,rgba(255,255,255,.04),transparent 40%),var(--panel);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:22px 22px 16px}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);letter-spacing:.04em}
+.badge i{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 12px rgba(124,108,255,.8)}
+h1{margin:10px 0 8px;font-size:20px;font-weight:700;line-height:1.35}
+.lead{margin:0 0 16px;color:var(--muted);font-size:13.5px;line-height:1.55}
+.grid{display:grid;gap:10px;margin-bottom:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.card h2{margin:0 0 8px;font-size:12px;font-weight:650;color:var(--accent2);letter-spacing:.02em}
+.mono{font-family:Consolas,"Cascadia Mono",monospace;font-size:12px;word-break:break-all;line-height:1.45;color:#d7dcff}
+.kv{display:grid;gap:6px}
+.kv div{display:grid;grid-template-columns:132px 1fr;gap:8px;align-items:start}
+.kv b{color:var(--muted);font-weight:600;font-size:12px}
+.list{margin:0;padding-left:18px;color:#d7dcff;font-size:12.5px;line-height:1.5}
+.list li{margin:4px 0}
+.tone-danger{border-color:rgba(255,107,138,.35);background:linear-gradient(180deg,rgba(255,107,138,.08),var(--card))}
+.tone-danger h2{color:var(--danger)}
+.tone-warn{border-color:rgba(255,196,87,.35);background:linear-gradient(180deg,rgba(255,196,87,.08),var(--card))}
+.tone-warn h2{color:var(--warn)}
+.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;position:sticky;bottom:0;padding-top:12px;background:linear-gradient(180deg,transparent,rgba(23,27,46,.92) 35%)}
+button{appearance:none;border:0;border-radius:12px;padding:10px 16px;font-size:13px;font-weight:650;cursor:pointer}
+.btn-cancel{background:rgba(255,255,255,.06);color:var(--text);border:1px solid var(--line)}
+.btn-cancel:hover{background:rgba(255,255,255,.1)}
+.btn-ok{background:linear-gradient(135deg,var(--accent),#5a8cff);color:white;box-shadow:0 10px 28px rgba(124,108,255,.35)}
+.btn-ok:hover{filter:brightness(1.05)}
+.btn-ok:focus,.btn-cancel:focus{outline:2px solid rgba(70,194,255,.7);outline-offset:2px}
+</style>
+</head>
+<body>
+<main class="sheet">
+  <div class="badge"><i></i><span>my-agent · 本地确认</span></div>
+  <h1 id="title"></h1>
+  <p class="lead" id="message"></p>
+  <div class="grid" id="sections"></div>
+  <div class="actions">
+    <button type="button" class="btn-cancel" id="cancel">取消</button>
+    <button type="button" class="btn-ok" id="ok">确认</button>
+  </div>
+</main>
+<script>
+const payload = JSON.parse(decodeURIComponent((location.hash || "#").slice(1) || "%7B%7D"));
+document.getElementById("title").textContent = payload.title || "";
+document.getElementById("message").textContent = payload.message || "";
+document.getElementById("ok").textContent = payload.confirmLabel || "确认";
+document.getElementById("cancel").textContent = payload.cancelLabel || "取消";
+const root = document.getElementById("sections");
+for (const section of (payload.sections || [])) {
+  const card = document.createElement("section");
+  card.className = "card" + (section.tone === "danger" ? " tone-danger" : section.tone === "warn" ? " tone-warn" : "");
+  const h = document.createElement("h2");
+  h.textContent = section.heading || "";
+  card.appendChild(h);
+  if (Array.isArray(section.pairs) && section.pairs.length) {
+    const kv = document.createElement("div");
+    kv.className = "kv mono";
+    for (const pair of section.pairs) {
+      const row = document.createElement("div");
+      const k = document.createElement("b"); k.textContent = pair[0];
+      const v = document.createElement("span"); v.textContent = pair[1];
+      row.appendChild(k); row.appendChild(v); kv.appendChild(row);
+    }
+    card.appendChild(kv);
+  } else if (Array.isArray(section.bullets) && section.bullets.length) {
+    const ul = document.createElement("ul"); ul.className = "list";
+    for (const item of section.bullets) {
+      const li = document.createElement("li"); li.textContent = item; ul.appendChild(li);
+    }
+    card.appendChild(ul);
+  } else {
+    const pre = document.createElement("div"); pre.className = "mono"; pre.textContent = section.body || "";
+    card.appendChild(pre);
+  }
+  root.appendChild(card);
+}
+let answered = false;
+function reply(ok) {
+  if (answered) return;
+  answered = true;
+  if (window.managedConfirm && typeof window.managedConfirm.reply === "function") {
+    window.managedConfirm.reply(!!ok);
+  }
+}
+document.getElementById("cancel").onclick = () => reply(false);
+document.getElementById("ok").onclick = () => reply(true);
+document.getElementById("cancel").focus();
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") reply(false);
+});
+</script>
+</body>
+</html>

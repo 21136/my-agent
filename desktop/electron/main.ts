@@ -57,6 +57,7 @@ import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed
 import { createManagedSelectionHandler } from "./managed-selection-bridge";
 import { createManagedCheckpointHandler } from "./managed-checkpoint-bridge";
 import { createManagedSelectedMergeHandler } from "./managed-selected-merge-bridge";
+import { showManagedConfirmDialog, summarizeBlockers } from "./managed-confirm-dialog";
 import { validateManagedSelectionRequest, createManagedSourceSelectionProposal } from "../launcher/managed-source-selection.mjs";
 import { validateManagedCheckpointRequest } from "../launcher/managed-source-checkpoint.mjs";
 import { validateManagedSelectedMergeRequest } from "../launcher/managed-selected-merge.mjs";
@@ -1306,33 +1307,32 @@ ipcMain.handle("shell-dev:managed-source-selection", (event, ...args: unknown[])
 });
 
 let managedCheckpointBackend: typeof import("../launcher/managed-source-checkpoint.mjs") | null = null;
-function nativeCheckpointDetails(pack: import("../launcher/managed-source-checkpoint.mjs").ManagedSourceCheckpoint): string {
+function nativeCheckpointConfirmSections(pack: import("../launcher/managed-source-checkpoint.mjs").ManagedSourceCheckpoint) {
   const selectionRequest = { format: 1 as const, mode: "managed_source_selection_request_v1" as const, reviewDigest: pack.request.reviewDigest, selectedPaths: [...pack.request.selectedPaths] };
   const proposal = createManagedSourceSelectionProposal({ review: pack.review, request: selectionRequest });
-  const blockers = (label: string, values: unknown) => {
-    const list = Array.isArray(values) ? values : [];
-    const counts = new Map<string, number>();
-    for (const item of list) {
-      const value = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
-      const code = typeof value.code === "string" && value.code ? value.code : "unknown_blocker";
-      counts.set(code, (counts.get(code) ?? 0) + 1);
-    }
-    return [
-      `${label}：${list.length} 条 / ${counts.size} 类`,
-      ...[...counts].map(([code, count]) => `- ${code}：${count} 条`),
-    ].join("\n");
-  };
-  const files = pack.files.map((file) => `- ${String(file.path)} · SHA-256=${String(file.workingSha256)} · mode=${String(file.mode)} · ${String(file.size)} 字节`).join("\n");
+  const files = pack.files.map((file) => `${String(file.path)} · SHA-256=${String(file.workingSha256)} · mode=${String(file.mode)} · ${String(file.size)} 字节`);
   return [
-    `Review SHA-256：${pack.request.reviewDigest}`,
-    `Proposal SHA-256：${pack.request.proposalDigest}`,
-    `Checkpoint SHA-256：${pack.checkpointDigest}`,
-    `原始字节总数：${pack.rawBytes}`,
-    "所选文件（完整路径、内容哈希、模式、大小）：", files,
-    blockers("审查阻塞项", pack.review.blockers),
-    blockers("范围提案阻塞项", proposal.blockers),
-    "仅创建所选源码检查点；不合入、不启动、不验证所有权。Canonical 哈希绑定内容，不认证来源或同意。",
-  ].join("\n\n");
+    {
+      heading: "指纹",
+      pairs: [
+        ["Review", String(pack.request.reviewDigest)],
+        ["Proposal", String(pack.request.proposalDigest)],
+        ["Checkpoint", String(pack.checkpointDigest)],
+        ["原始字节", String(pack.rawBytes)],
+      ] as Array<[string, string]>,
+    },
+    {
+      heading: `入选文件 · ${files.length} 个`,
+      bullets: files,
+    },
+    summarizeBlockers("审查阻塞项", pack.review.blockers),
+    summarizeBlockers("范围提案阻塞项", proposal.blockers),
+    {
+      heading: "边界",
+      body: "仅保存当前已核验的源码字节快照；不合入、不启动，也不证明来源所有权。",
+      tone: "danger" as const,
+    },
+  ];
 }
 const managedCheckpointHandler = createManagedCheckpointHandler<IpcMainInvokeEvent>({
   isTrusted: (event) => assertShellDevWorkbenchSender(event),
@@ -1369,17 +1369,16 @@ const managedCheckpointHandler = createManagedCheckpointHandler<IpcMainInvokeEve
   confirm: async (pack, event) => {
     const parent = workbenchWindow;
     if (!parent || parent.isDestroyed() || !assertShellDevWorkbenchSender(event)) return false;
-    const answer = await dialog.showMessageBox(parent, {
-      type: "warning",
+    const answer = await showManagedConfirmDialog({
+      parent,
+      assetDir: path.join(AGENT_ROOT, "desktop", "electron"),
       title: "确认保存选定源码检查点",
       message: "确认仅保存当前已核验的源码字节快照？此操作不合入、不启动，也不证明来源所有权。",
-      detail: nativeCheckpointDetails(pack),
-      buttons: ["保存检查点", "取消"],
-      defaultId: 1,
-      cancelId: 1,
-      noLink: true,
+      sections: nativeCheckpointConfirmSections(pack),
+      confirmLabel: "保存检查点",
+      cancelLabel: "取消",
     });
-    return answer.response === 0 && assertShellDevWorkbenchSender(event) && !parent.isDestroyed() && workbenchWindow === parent;
+    return answer === true && assertShellDevWorkbenchSender(event) && !parent.isDestroyed() && workbenchWindow === parent
   },
   persist: ({ sandboxRoot, checkpoint }) => {
     const backend = managedCheckpointBackend;
@@ -1500,15 +1499,23 @@ const managedSelectedMergeHandler = createManagedSelectedMergeHandler<IpcMainInv
         || !isRecord(stableReview.identity) || !isRecord(sandboxReview.identity)
         || plan.stable.worktreeRoot !== stableReview.identity.worktreeRoot
         || plan.sandbox.worktreeRoot !== sandboxReview.identity.worktreeRoot) return false;
-    const answer = await dialog.showMessageBox(parent, {
-      type: "warning", title: "确认通过项目 Git 合入所选源码",
-      message: plan.stablePreservation
-        ? "这将真实修改 stable 项目 Git：先将所选原始未提交工作改动提交为保留父提交，再以子提交采用已选检查点内容。"
-        : "这将真实修改 stable 项目 Git：仅采用已选内容，不合入 sandbox 整段历史。",
-      detail: nativeSelectedMergeDetails({ plan, checkpoint }),
-      buttons: ["通过项目 Git 合入所选内容", "取消"], defaultId: 1, cancelId: 1, noLink: true,
+    const mergeMessage = plan.stablePreservation
+      ? "这将真实修改 stable 项目 Git：先将所选原始未提交工作改动提交为保留父提交，再以子提交采用已选检查点内容。"
+      : "这将真实修改 stable 项目 Git：仅采用已选内容，不合入 sandbox 整段历史。";
+    const answer = await showManagedConfirmDialog({
+      parent,
+      assetDir: path.join(AGENT_ROOT, "desktop", "electron"),
+      title: "确认通过项目 Git 合入所选源码",
+      message: mergeMessage,
+      sections: [
+        { heading: "合入明细", body: nativeSelectedMergeDetails({ plan, checkpoint }) },
+        { heading: "边界", body: "此操作会真实改写 stable 项目 Git；取消则不做任何写入。", tone: "danger" },
+      ],
+      confirmLabel: "通过项目 Git 合入所选内容",
+      cancelLabel: "取消",
+      height: 680,
     });
-    return answer.response === 0 && assertShellDevWorkbenchSender(caller) && !parent.isDestroyed() && workbenchWindow === parent;
+    return answer === true && assertShellDevWorkbenchSender(caller) && !parent.isDestroyed() && workbenchWindow === parent
   },
   execute: ({ caller, request, plan, roots, finalCheckpoint }) => {
     const backend = managedSelectedMergeBackend;

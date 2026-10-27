@@ -84,8 +84,9 @@ test("host and preload wire one bounded IPC channel with native-only confirmatio
  const preload=readFileSync(new URL("../electron/preload.ts",import.meta.url),"utf8");
  const api=readFileSync(new URL("../src/api/ws.ts",import.meta.url),"utf8");
  const shell=readFileSync(new URL("../src/shells/unified/index.ts",import.meta.url),"utf8");
- assert.match(main,/ipcMain\.handle\("shell-dev:managed-source-checkpoint"/);assert.match(main,/validateManagedCheckpointRequest/);assert.match(main,/buttons: \["保存检查点", "取消"\]/);assert.match(main,/defaultId: 1,[\s\S]*?cancelId: 1/);assert.match(main,/await dialog\.showMessageBox/);assert.match(main,/persistManagedSourceCheckpoint/);
- assert.doesNotMatch(main,/JSON\.stringify\(pack/);assert.doesNotMatch(main,/bytesBase64/);assert.match(main,/counts\.set\(code/);assert.doesNotMatch(main,/paths\.map\(String\)\.join/);
+ const confirmUi=readFileSync(new URL("../electron/managed-confirm-dialog.ts",import.meta.url),"utf8");
+ assert.match(main,/ipcMain\.handle\("shell-dev:managed-source-checkpoint"/);assert.match(main,/validateManagedCheckpointRequest/);assert.match(main,/showManagedConfirmDialog/);assert.match(main,/confirmLabel: "保存检查点"/);assert.match(main,/cancelLabel: "取消"/);assert.match(main,/nativeCheckpointConfirmSections/);assert.match(main,/persistManagedSourceCheckpoint/);
+ assert.doesNotMatch(main,/JSON\.stringify\(pack/);assert.doesNotMatch(main,/bytesBase64/);assert.match(confirmUi,/counts\.set\(code/);assert.match(confirmUi,/Cancel as the safe default focus/);assert.doesNotMatch(main,/paths\.map\(String\)\.join/);
  assert.match(preload,/ipcRenderer\.invoke\("shell-dev:managed-source-checkpoint", request\)/);assert.match(api,/createManagedSourceCheckpoint\?/);assert.match(shell,/createCheckpoint: window\.myAgentDesktop/);
 });
 
