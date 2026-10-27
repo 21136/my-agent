@@ -604,7 +604,10 @@ export function mountUnifiedShell(
           </div>
           <footer class="unified-composer" id="unified-composer">
             <span class="unified-composer-companion" aria-hidden="true"><img src="${new URL("./assets/composer-companion.png", import.meta.url).href}" alt="" width="400" height="240" draggable="false" /></span>
-            <button type="button" class="unified-btn unified-mode-pill" id="unified-mode-toggle" data-mode="agent" title="切换 动手(Agent) / 只聊(Ask) 模式">动手</button>
+            <div class="unified-mode-toggle" id="unified-mode-toggle" role="group" aria-label="对话模式" data-mode="agent" title="切换 动手(Agent) / 只聊(Ask) 模式">
+              <button type="button" class="unified-mode-seg" data-mode-value="ask" aria-pressed="false">只聊</button>
+              <button type="button" class="unified-mode-seg" data-mode-value="agent" aria-pressed="true">动手</button>
+            </div>
             <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
             <textarea class="unified-input" id="unified-input" rows="2" aria-label="输入消息" placeholder="和小魔王说点什么…"></textarea>
             <button type="button" class="unified-btn unified-btn-accent" id="unified-send" aria-label="发送消息" title="发送消息"><span aria-hidden="true">↑</span></button>
@@ -671,7 +674,8 @@ export function mountUnifiedShell(
     worldNow,
   ).state;
   saveCompanionWorld(companionWorldState, worldStorage);
-  const modeToggleBtn = root.querySelector<HTMLButtonElement>("#unified-mode-toggle")!;
+  const modeToggleEl = root.querySelector<HTMLElement>("#unified-mode-toggle")!;
+  const modeSegButtons = Array.from(modeToggleEl.querySelectorAll<HTMLButtonElement>(".unified-mode-seg"));
   const stopBtn = root.querySelector<HTMLButtonElement>("#unified-stop")!;
   const sendBtn = root.querySelector<HTMLButtonElement>("#unified-send")!;
   const confirmGlass = root.querySelector<HTMLElement>("#unified-confirm-glass")!;
@@ -893,17 +897,28 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (mode === "ask" || mode === "agent") {
       currentTurnMode = mode;
     }
-    modeToggleBtn.dataset.mode = currentTurnMode;
-    modeToggleBtn.textContent = currentTurnMode === "ask" ? "只聊" : "动手";
-    modeToggleBtn.title = currentTurnMode === "ask"
+    modeToggleEl.dataset.mode = currentTurnMode;
+    modeToggleEl.title = currentTurnMode === "ask"
       ? "当前：只聊 (Ask) — 只读探索与回答；点击切换为 动手 (Agent)"
       : "当前：动手 (Agent) — 允许写文件与执行命令；点击切换为 只聊 (Ask)";
-    modeToggleBtn.disabled = chat.isWorking() || chat.model.confirmPending || isViewingArchivedThread(projectState);
+    const locked = chat.isWorking() || chat.model.confirmPending || isViewingArchivedThread(projectState);
+    for (const btn of modeSegButtons) {
+      const value = btn.dataset.modeValue === "ask" ? "ask" : "agent";
+      const active = value === currentTurnMode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+      btn.disabled = locked;
+    }
   }
 
-  modeToggleBtn.addEventListener("click", () => {
+  modeToggleEl.addEventListener("click", (event) => {
     if (chat.isWorking() || chat.model.confirmPending) return;
-    const next = currentTurnMode === "agent" ? "ask" : "agent";
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>(".unified-mode-seg")
+      : null;
+    if (!target || !modeToggleEl.contains(target)) return;
+    const next = target.dataset.modeValue === "ask" ? "ask" : "agent";
+    if (next === currentTurnMode) return;
     syncModeToggleUi(next);
     updatePlaceholder();
     try {

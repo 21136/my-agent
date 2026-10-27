@@ -82,8 +82,7 @@ html[data-theme] #unified-composer .unified-input:focus-visible {
 }
 
 html[data-theme] #unified-composer .file-drop-chips { grid-area: attachments; }
-html[data-theme] #unified-mode-toggle { grid-area: mode; }
-html[data-theme] #unified-mode-toggle::after { content: "⌄"; margin-left: 0.4rem; }
+html[data-theme] #unified-mode-toggle { grid-area: mode; justify-self: start; }
 html[data-theme] #unified-stop { grid-area: stop; justify-self: start; }
 html[data-theme] #unified-composer #unified-send {
   grid-area: send;

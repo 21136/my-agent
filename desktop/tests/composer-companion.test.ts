@@ -13,6 +13,9 @@ test("composer embeds one decorative static companion without replacing chat con
   for (const id of ["unified-input", "unified-mode-toggle", "unified-stop", "unified-send"]) {
     assert.equal((footer.match(new RegExp(`id="${id}"`, "g")) || []).length, 1);
   }
+  assert.match(footer, /class="unified-mode-toggle"[^>]*role="group"/);
+  assert.match(footer, /data-mode-value="ask"[^>]*>只聊</);
+  assert.match(footer, /data-mode-value="agent"[^>]*>动手</);
   assert.match(footer, /aria-label="输入消息"/);
   assert.match(footer, /aria-label="发送消息"/);
   assert.match(shell, /import "\.\/composer-companion\.css"/);
@@ -23,6 +26,7 @@ test("companion stays compact, reserves its own room and cannot intercept typing
   assert.match(css, /pointer-events:\s*none/);
   assert.match(css, /margin-top:\s*76px/);
   assert.match(css, /grid-template-areas:\s*"attachments attachments attachments"\s*"input input input"\s*"mode stop send"/);
+  assert.doesNotMatch(css, /#unified-mode-toggle::after/);
   assert.match(css, /max-width:\s*920px/);
   assert.match(css, /@media\s*\(max-width:\s*680px\)/);
   assert.doesNotMatch(css, /animation:/);
