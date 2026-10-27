@@ -89,13 +89,44 @@ def load_secrets(paths: AgentPaths) -> dict[str, str]:
     return dict(_read_payload(paths)["keys"])
 
 
+
+def stable_product_root_for_sandbox(agent_root: Path) -> Path | None:
+    """If *agent_root* is the registered dual-lane sandbox worktree, return stable root.
+
+    Layout: ``<stable>/.worktrees/sandbox``. Secrets stay per-workspace, but the
+    sandbox sidecar should still be able to read LLM keys already saved on stable
+    when its own ``data/llm_secrets.json`` is missing that key.
+    """
+    root = Path(agent_root).resolve()
+    try:
+        if root.name.casefold() != "sandbox":
+            return None
+        if root.parent.name.casefold() != ".worktrees":
+            return None
+        stable = root.parent.parent
+        from paths import _is_agent_root
+
+        if not _is_agent_root(stable):
+            return None
+        return stable
+    except OSError:
+        return None
+
+
 def get_llm_secret(env_name: str, paths: AgentPaths | None = None) -> str | None:
     key = env_name.strip()
     if not key:
         return None
     agent_paths = paths or AgentPaths.discover()
     value = load_secrets(agent_paths).get(key)
-    return value if value else None
+    if value:
+        return value
+    stable = stable_product_root_for_sandbox(agent_paths.agent_root)
+    if stable is None:
+        return None
+    # Read-only fallback: never invent a second store for writes.
+    fallback = load_secrets(AgentPaths.from_root(stable)).get(key)
+    return fallback if fallback else None
 
 
 def resolve_secret_source(env_name: str, paths: AgentPaths) -> str | None:
@@ -105,7 +136,11 @@ def resolve_secret_source(env_name: str, paths: AgentPaths) -> str | None:
         return None
     if os.environ.get(key, "").strip():
         return "env"
-    if get_llm_secret(key, paths):
+    # Local file first, then dual-lane stable fallback (same as get_llm_secret).
+    if load_secrets(paths).get(key):
+        return "file"
+    stable = stable_product_root_for_sandbox(paths.agent_root)
+    if stable is not None and load_secrets(AgentPaths.from_root(stable)).get(key):
         return "file"
     return None
 
