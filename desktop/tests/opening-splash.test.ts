@@ -15,8 +15,15 @@ test("opening splash asset and page reference splash-xiaomowang.mp4", () => {
   assert.match(splashModule, /OPENING_SPLASH_VIDEO_BASENAME = "splash-xiaomowang\.mp4"/);
 });
 
-test("electron main plays opening splash in parallel with sidecar startup", () => {
+test("electron main opens workbench after sidecar then dismisses splash (no post-splash dead wait)", () => {
   assert.match(mainSource, /playOpeningSplash\(\)/);
-  assert.match(mainSource, /await splashWork;/);
+  assert.match(mainSource, /await openWorkbenchWindow\(\)/);
   assert.match(mainSource, /await dismissOpeningSplash\(\)/);
+  assert.match(mainSource, /await splashWork;/);
+  assert.doesNotMatch(mainSource, /await splashWork;\s*\n\s*await openWorkbenchWindow\(\)/);
+});
+
+test("opening splash holds last frame until main dismisses (video ended does not auto-close)", () => {
+  assert.match(splashModule, /video\.pause\(\)/);
+  assert.doesNotMatch(splashModule, /addEventListener\("ended", finish/);
 });
