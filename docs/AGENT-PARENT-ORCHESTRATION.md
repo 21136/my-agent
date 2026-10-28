@@ -24,3 +24,7 @@
 - `agent-core/explore_scope.py`：自动和显式 explore 的任务范围包装。
 - `agent-core/tools/executor.py`、`agent-core/project_mode.py`：工具执行与项目范围策略。
 - [子代理预算说明](./SUBAGENT-BUDGET.md) 仅作辅助；当前限制值以源码/配置为准。
+
+## 相关草案
+
+- 多项目、主 Agent 调度按项目 worker（**未实现**）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)
