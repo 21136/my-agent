@@ -1,5 +1,7 @@
 # 可替换 Skill Provider 与版本化运行时设计
 
+> Current implementation authority: `agent-core/skill_registry.py`; source identity does not bypass Executor permission checks. The dated status below is not a fresh test report.
+
 > 版本：0.1.0 · 2026-10-17
 > 状态：**implemented · local directory source**
 > 范围：在现有内置 Skill Registry 之上增加可替换来源、版本选择、回合固定和评测/回滚边界。

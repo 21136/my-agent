@@ -114,8 +114,8 @@ Skill 将来只做一件事：告诉 LLM「这类任务请读 SKILL.md，并调�
 | [RUNTIME.md](./RUNTIME.md) | 对话层：续接 session、DeepSeek、digest |
 | [TOOLS.md](./TOOLS.md) | 6 Builtin、主题 evolved、`tools/common` |
 | [MEMORY.md](./MEMORY.md) | 三件套 + **`evolve/_index.toml`** |
-| [TASKS.md](./TASKS.md) | **细分到每个 task** 的实施清单（含依赖与验收） |
-| [PROJECT.md](./PROJECT.md) | 项目总览（里程碑以 TASKS 为准做细拆） |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | **细分到每个 task** 的实施清单（含依赖与验收） |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 项目总览（里程碑以 TASKS 为准做细拆） |
 
 ---
 

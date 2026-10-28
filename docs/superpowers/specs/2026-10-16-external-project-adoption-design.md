@@ -1,5 +1,7 @@
 # 外部项目原地接入设计
 
+> Current implementation authority: `agent-core/external_project.py`; verify exact behavior against current code and tests. The dated status below is not a fresh acceptance report.
+
 > 版本：0.1.0 · 2026-10-16
 > 状态：**current · 已确认 · implemented**（2026-10-16）
 > 范围：Windows Desktop/CLI 普通模式；自动模式 v1/v2 不改变 owner。

@@ -1,4 +1,4 @@
-"""CLI REPL: resume session, commands, agent turns (RUNTIME.md §2, TASKS T-207)."""
+"""CLI REPL: resume session, commands, and agent turns."""
 
 from __future__ import annotations
 
@@ -1080,7 +1080,7 @@ def _demo() -> int:
         "## 关键路径与命令\n(none)\n\n## 用户约束\n(none)"
     )
     grep_args = json.dumps(
-        {"pattern": "T-207", "path": "docs/TASKS.md", "max_results": 1},
+        {"pattern": "agent-core/", "path": "docs/MAP.md", "max_results": 1},
         ensure_ascii=False,
     )
     chat_mock = _MockLLM(
@@ -1101,7 +1101,7 @@ def _demo() -> int:
             ),
             LLMResponse(
                 model="mock",
-                content="T-207 is in TASKS.md.",
+                content="agent-core/ is listed in MAP.md.",
                 tool_calls=[],
                 finish_reason="stop",
                 usage=None,
@@ -1119,7 +1119,7 @@ def _demo() -> int:
     )
 
     chat_session = create_new(paths, conversation_id="_repl_chat")
-    chat_session.set_goal("Find T-207")
+    chat_session.set_goal("Find agent-core/")
     chat_session.set_topics([], phase="S4")
     chat_session.messages = [
         {"role": "user", "content": "[本次会议上下文]\nanchor"},
@@ -1132,7 +1132,7 @@ def _demo() -> int:
 
     inputs = iter(
         [
-            "grep task id",  # chat
+            "grep source directory",  # chat
             "压缩",  # manual compact
             "主题 workflow",  # shortcut
             "exit --record",
@@ -1147,7 +1147,7 @@ def _demo() -> int:
     repl.agent = Agent.create(chat_session, llm=chat_mock, confirm_fn=lambda _p, _a: "y")
     code = repl.run()
     assert code == 0
-    assert any("T-207 is in TASKS" in line for line in outputs)
+    assert any("agent-core/ is listed in MAP" in line for line in outputs)
     assert any("已压缩" in line for line in outputs)
     assert any("topics updated" in line for line in outputs)
     assert any("archived:" in line for line in outputs)

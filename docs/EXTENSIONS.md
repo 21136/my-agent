@@ -270,7 +270,7 @@ MY_AGENT_EXTENSIONS=D:\my-extensions
 | [TOOLS.md](./TOOLS.md) §4.2、§8.1 | `write_evolve` scope 来源 |
 | [RUNTIME.md](./RUNTIME.md) §2 | 新增 `注册主题` 命令表 |
 | [MAP.md](./MAP.md) §2 | Phase 8 进度 |
-| [TASKS.md](./TASKS.md) | T-801～T-804 任务表 |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | T-801～T-804 任务表 |
 
 ---
 

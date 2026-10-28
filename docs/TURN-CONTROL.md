@@ -3,7 +3,7 @@
 > 版本 **0.2.1** · 2026-07-30  
 > **状态**：**implemented**（T-1401～T-1408；Stop / Escape · UX-002）  
 > **UI 路径**：`shells/unified/` + `shells/pet/`（旧 grow/project/daily 路径已删）  
-> 关联：[CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [DESKTOP.md](./DESKTOP.md) §0 · [UX-POLISH.md](./UX-POLISH.md) · [BUGS.md](./BUGS.md) · [TASKS.md](./TASKS.md) §Phase 15
+> 关联：[CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [DESKTOP.md](./DESKTOP.md) §0 · [DESKTOP.md](./DESKTOP.md) · BUGS.md（历史引用已淘汰） · 旧项目可遗留的 `TASKS.md`（非当前任务真源） §Phase 15
 
 ---
 
@@ -415,7 +415,7 @@ if len(body) > INLINE_MAX and not has_workspace_path(arguments):
 | **回合墙钟** | 「回合已超过墙钟限制，已自动停止」 | watchdog → `timeout` |
 | **stall 看门狗** | 「回合超时无响应，已自动停止」 | watchdog → `timeout` |
 
-**已决（T-2093）**：`LLMTimeoutError` 须先发 `turn.notice`（含秒数）；桌面可继续用「回合超时已停止」作 `turn.end` 收口，或细分为「LLM 请求超时」— 以 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) §6 R4 为准。
+**已决（T-2093）**：`LLMTimeoutError` 须先发 `turn.notice`（含秒数）；桌面可继续用「回合超时已停止」作 `turn.end` 收口，或细分为「LLM 请求超时」— 以 bugs/2026-08-05-compact-turn-llm-timeout.md（历史引用已淘汰） §6 R4 为准。
 
 **与压缩叠加**：自动压缩后的第一次主 LLM 超时，用户体感为「刚压缩就卡死」— 根因在摘要+主 LLM 串行占满 120s，见 RUNTIME §8.4。
 

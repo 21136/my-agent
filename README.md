@@ -1,179 +1,80 @@
 # my-agent
 
-面向真实软件项目的**本地生产工具**。项目文档、代码和验证结果是交付真源；`evolve/` 与 `data/` 是内部运行能力，不是当前产品主线。
+面向真实软件项目的本地 Agent 工作台。聊天是入口，项目文件、代码与可核实的验证结果是工作产物。
 
-**产品决策真源**：[docs/PRODUCTION-PROJECT-MVP.md](docs/PRODUCTION-PROJECT-MVP.md)（先读；先写文档，再动手）
+- **开发前先读**：[AGENTS.md](AGENTS.md) → [当前源码地图](docs/MAP.md)。
+- **文档入口**：[文档导航](docs/README.md)；按需阅读，不以旧计划或历史任务表判断当前能力。
+- **产品范围**：[PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md)。
 
-**进度真源**：[docs/MAP.md](docs/MAP.md) §2 + [docs/TASKS.md](docs/TASKS.md)（勿以本 README 判断代码是否已落地）
+## 当前入口
 
-**稳定化**：Phase 18 已解冻（[STABILIZATION.md](docs/STABILIZATION.md)）
+| 入口 | 用途 |
+|---|---|
+| `start-desktop.bat` | 主要工作台：Electron + unified 聊天/项目界面，独立伴侣窗 pet |
+| `start-terminal.bat` | Terminal Ink UI，独立会话入口 |
+| `start.bat` | 备用 CLI REPL |
 
----
+Desktop 与 Terminal 的会话边界不同，不把切换界面当成同一个运行过程。
 
-## 三条产品线
+## 当前实现边界
 
-| 入口 | 用途 | 文档 |
-|------|------|------|
-| **`start-desktop.bat`**（默认） | **主战场** · 只为写 workspace 项目 · unified **project** 纪律 · 教科书流程（闸门+证据） | [DESKTOP-TEXTBOOK-FLOW.md](docs/DESKTOP-TEXTBOOK-FLOW.md) · [DESKTOP.md](docs/DESKTOP.md) |
-| **`start-terminal.bat`** | **狂野挎包** · cwd agent · Ink · auto plan-execute · **功能冻结**（维护/P0） | [TERMINAL-MODE.md](docs/TERMINAL-MODE.md) **v0.3.2** |
-| **`start.bat`** | 轻量 CLI REPL（备用） | [RUNTIME.md](docs/RUNTIME.md) |
-
-Desktop 与 Terminal **会话分离**（`meta.harness` 终身不可变）；换界面只能 exit 后在另一入口续接。  
-**定调**：Desktop = 产品开发焦点；Terminal = 卖点维护态，**独立入口**，不进 Desktop 流程轨。
-
----
-
-## 当前摘要（2026-10-27）
-
-| 项 | 说明 |
-|----|------|
-| **产品定调** | [DESKTOP-TEXTBOOK-FLOW](docs/DESKTOP-TEXTBOOK-FLOW.md) — Desktop 主战场 · Terminal / CLI 旁路维护 |
-| **当前产品基线** | [PRODUCTION-PROJECT-MVP](docs/PRODUCTION-PROJECT-MVP.md) — 四个核心制品 · 项目工作区交付 |
-| **GitHub 主分支** | 默认分支 **`main`**（当前产品 tip）；自托管演进历史支线见 `codex/self-hosting-e2e` |
-| **双车道合入** | 稳定根目录 + `.worktrees/sandbox`（`experiment/sandbox`）· 壳预览 **一键完成合入** / product adopt · [SANDBOX-EVOLUTION](docs/SANDBOX-EVOLUTION.md) |
-| **壳预览** | unified 侧栏「壳预览」· 稳定 5173 / 实验 5174 · 实验进化会话走 sandbox sidecar 8766（T-6500b） |
-| **桌面 UI** | `desktop/src/shells/unified/`（`default` / `project` / `night`）+ 独立伴侣窗 `pet`（昵称小魔王） |
-| **交付模型** | [LOCAL-DELIVERY-MODEL](docs/LOCAL-DELIVERY-MODEL.md) v0.3.3 · Pack 1245 M0 done |
-| **Terminal UI** | Ink **v0.3.2**（`terminal-ui/`）· 默认 `MY_AGENT_TERMINAL_UI=ink` · legacy Bottom TUI 可回退 |
-| **Terminal 内核** | TM-24～28 自动 plan-execute · effective root 内免 confirm · 与 Desktop 无 `project_id` |
-| **Builtin** | 11 个（核心 7 + 编排 4：`explore` · `deliverable_review` 等） |
-| **Evolved** | `evolve/tools/**` 经 `run_evolved` 调用；写路径默认 agent root |
-| **自动模式（狂奔）** | **已下线（2026-10-18）**：随项目任务子系统一起删除；未来以无任务循环重建，见 [docs/archive/AUTO-LOOP-FUTURE.md](docs/archive/AUTO-LOOP-FUTURE.md) |
-| **下一手工** | UX-029 M2 / UX-030 验收；Phase 61 工具体验与 Phase 65 项目内嵌预览（设计已签） |
-
----
+- 项目核心制品：`PROJECT.md`、`DESIGN.md`、`VERIFY.md`。旧任务队列、计划代理、进度门和狂奔调度已下线，不再要求按历史 Phase 或 `docs/TASKS.md` 推进。
+- **Goal Runtime P0**：已接入动手回合，持久化目标状态、累计执行预算并记录验收结果；不是旧狂奔功能的恢复，也不代表无人值守全流程已验收。
+- **双车道**：稳定根目录 + `.worktrees/sandbox/` 实验树，支持状态检查、合入与同步；见 [SANDBOX-EVOLUTION](docs/SANDBOX-EVOLUTION.md)。
+- **managed 原生入口**与普通 Agent 工作台不同：记录页的创建/保存/重开验证不等于完整聊天、模型和工具能力验收。
+- 当前分支、提交、未提交改动和验证结果以现场证据为准，不在 README 维护另一份进度表。
 
 ## 快速开始
 
+前置：Python 3.12+；Desktop / Terminal Ink 还需要 Node.js 20+。
+
 ```powershell
-# 前置：Python 3.12+；桌面 / Terminal Ink 还要 Node.js 20+（LTS 即可）
 if (-not (Test-Path .venv\Scripts\python.exe)) { python -m venv .venv }
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 
-# 开发 / 回归测试：pytest 安装到项目虚拟环境，不属于运行时依赖
-.venv\Scripts\python.exe -m pip install pytest
-.venv\Scripts\python.exe -m pytest agent-core/tests -q
-
-# 桌面（默认；首次自动 npm install）
+# 桌面主入口
 .\start-desktop.bat
 
-# Terminal：先 cd 进你的仓库（Claude 同款），再启动
-cd D:\path\to\your-repo
-D:\my-agent\start-terminal.bat
-
-# CLI 备用（Windows 请用 start.bat 强制 UTF-8）
+# 或使用 Terminal / CLI
+.\start-terminal.bat
 .\start.bat
-
-# 无 LLM 调工具
-python my-agent tool list
-python my-agent tool run grep --json '{\"pattern\":\"Phase\",\"path\":\"docs/MAP.md\",\"max_results\":2}' -y
-
-# 治理
-python my-agent review
-python my-agent audit --topic coding
 ```
 
-**环境变量**：`LLM_API_KEY`（对话 / audit）；`MY_AGENT_FEEDBACK_ON_EXIT=1`（exit 时可选反馈）。更多见 [MAP.md](docs/MAP.md) §8。
+模型配置见 [LLM-ROUTING](docs/LLM-ROUTING.md) 与 [RUNTIME](docs/RUNTIME.md)。凭据保存在本机运行配置中，不要提交或粘贴密钥。
 
-**Terminal 常用开关**：
-
-| 变量 | 说明 |
-|------|------|
-| `MY_AGENT_TERMINAL_UI=legacy` | 回退 prompt_toolkit Bottom TUI（Welcome 显示 v0.2.1） |
-| `MY_AGENT_TERMINAL_USE_DIST=1` | 强制用 `terminal-ui/dist/` 而非 tsx 源码 |
-| `TERMINAL_PLAN_CLASSIFY=0` | 关闭复杂任务的 auto-plan 分类器 |
-
----
-
-## 仓库结构（简图）
+## 仓库结构
 
 ```text
-my-agent/
-├── agent-core/          # Python 内核（agent 循环 · 工具 · 子代理 · Terminal 桥接）
-├── desktop/             # Electron 桌面壳（unified + pet）
-├── terminal-ui/         # Terminal Ink TUI（React + Ink）
-├── evolve/              # 进化层：prompt / memory / tool / scaffold
-├── docs/                # 设计真源（MAP · TASKS · SANDBOX-EVOLUTION …）
-├── .worktrees/sandbox/  # 实验车道（git worktree · 不合入前不写稳定树）
-├── tools/file-sentinel/ # 源码截断监控（start-*.bat 自动拉起）
-├── start-desktop.bat    # 默认入口（稳定 5173 + 可选实验 5174）
-├── start-terminal.bat   # Terminal 入口
-└── start.bat            # CLI 入口
+agent-core/          Python Agent、API、权限、工具、目标与发布运行时
+desktop/            Electron 主进程与 unified / pet 界面
+terminal-ui/        Terminal Ink UI
+evolve/             提示词、Skill、工具与记忆等进化层
+docs/               当前专题说明与源码导航
+.worktrees/sandbox/  实验车道，合入前不写稳定树
+data/               本机运行数据（默认不进 Git）
+workspace/          用户项目与产物
 ```
 
----
+## 定向验证
 
-## Fresh bootstrap（新机器 / 新 clone）
+先确认解释器和依赖：
 
-> 验收对照 [STABILIZATION.md](docs/STABILIZATION.md) §3.11.1 · `data/` **不进 Git**
+```powershell
+.venv\Scripts\python.exe -c "import sys, pytest; print(sys.executable)"
 
-| 步 | 动作 | 验收 |
-|----|------|------|
-| 0 | **前置** | `python --version` → 3.12+；`node -v` / `npm -v`（桌面与 Terminal） |
-| 1 | **clone** | `git clone <private-url> my-agent` → `cd my-agent` |
-| 2 | **pip** | 创建 `.venv` 后，运行时：`.venv\Scripts\python.exe -m pip install -r requirements.txt`；回归测试：`.venv\Scripts\python.exe -m pip install pytest` |
-| 3 | **密钥** | 设置 `LLM_API_KEY`；无 key 仍可跑 `tool` CLI |
-| 4a | **桌面** | `.\start-desktop.bat` → 自动 `desktop/npm install` |
-| 4b | **Terminal** | `.\start-terminal.bat` → 自动 `terminal-ui/npm install` |
-| 4c | **CLI** | `.\start.bat` |
-| 5 | **就绪** | 桌面：sidecar `{"ready": true}`；Terminal：Welcome **v0.3.2** |
+# 示例：目标状态模块的定向回归，不是全量测试
+.venv\Scripts\python.exe -m pytest agent-core/tests/test_goal_runtime.py -q
 
-换机可把备份的 `data/`、`workspace/` 拷回仓库根下同名路径。
-
-**常见失败**：
-
-| 现象 | 处理 |
-|------|------|
-| `Python not found` / `npm not found` | 安装并加入 PATH |
-| `ModuleNotFoundError: httpx` | 重跑 `.venv\Scripts\python.exe -m pip install -r requirements.txt` |
-| `ModuleNotFoundError: pytest` | `.venv\Scripts\python.exe -m pip install pytest`，再用 `.venv\Scripts\python.exe -m pytest` |
-| 桌面首启卡在 npm | `cd desktop` → `npm install` |
-| Terminal 黑屏或显示 v0.2.1 | 确认 `terminal-ui` 已 `npm install`；或设 `MY_AGENT_TERMINAL_UI=legacy` 排查 |
-| 端口 8765 占用 | 关旧实例或托盘「接管」 |
-| 控制台中文乱码 | 用 `start.bat` / 桌面 spawn（DOC-08） |
-
----
-
-## Git 回滚习惯（进化层）
-
-> 与 [GOVERNANCE.md](docs/GOVERNANCE.md) §9.3 一致。**内容回滚靠 Git**；`evolve_log.jsonl` 只追加审计。
-
-| 时机 | 建议 |
-|------|------|
-| **`proposals accept` 成功** | 立刻 `git commit` 本次 `evolve/` |
-| **review / audit 后手改** | `git add evolve/` + commit |
-| **误接受** | `git log` → `git checkout <hash> -- evolve/<path>` |
-
----
-
-## 文档索引
-
-| 文档 | 用途 |
-|------|------|
-| [**docs/README.md**](docs/README.md) | **文档分类导航**（按产品、运行时、工具、安全与历史材料查找） |
-| [**docs/MAP.md**](docs/MAP.md) | **项目地图**（新会话先读） |
-| [**docs/TASKS.md**](docs/TASKS.md) | 任务清单 · DOC-04 准入 |
-| [**docs/TERMINAL-MODE.md**](docs/TERMINAL-MODE.md) | Terminal 狂野模式 · Ink UI · auto plan-execute |
-| [**docs/CHANGELOG.md**](docs/CHANGELOG.md) | 版本与变更记录 |
-| [docs/ROADMAP-PACK-1245.md](docs/ROADMAP-PACK-1245.md) | Pack 1/2/4/5/6 路线图 |
-| [docs/LOCAL-DELIVERY-MODEL.md](docs/LOCAL-DELIVERY-MODEL.md) | 本地交付模型（LDM） |
-| [docs/PROJECT-MODE.md](docs/PROJECT-MODE.md) | 项目模式 · ENV |
-| [docs/PROJECT-VERIFY.md](docs/PROJECT-VERIFY.md) | 项目测试、结构化验证与 pytest 约定 |
-| [docs/TOOLS.md](docs/TOOLS.md) | Builtin + evolved 工具 |
-| [docs/DESKTOP.md](docs/DESKTOP.md) | 桌面壳 · unified 工作台 · 伴侣窗 |
-| [docs/SANDBOX-EVOLUTION.md](docs/SANDBOX-EVOLUTION.md) | 稳定/实验双车道 · 壳预览合入 · sandbox 同步 |
-| [docs/STABILIZATION.md](docs/STABILIZATION.md) | 稳定化 · smoke · Gate |
-
-<details>
-<summary>建设顺序（历史 · 勿作现状依据）</summary>
-
-```
-Phase 1～6 基线 → Phase 18 稳定化解冻
-→ Phase 22～50：侧栏 · Harness · 配方 · 验证 · 编排 …
-→ Pack 1245（2026-08）：收口 · 路由 · phase_key · codebase_search
-→ Phase 57（2026-08）：Terminal legacy TUI + Ink UI + auto plan-execute
+# Desktop 定向测试示例
+cd desktop
+node --test tests/shell-dev-adoption.test.ts
 ```
 
-完整 Phase 表见 [MAP.md](docs/MAP.md) §2。
+根据修改对象选择测试，不为了“完成”无理由重跑全部套件。真实模型调用、正式环境启动和发布另行确认范围。
 
-</details>
+## 工作区纪律
+
+- 保留无关既有修改，不自行 `reset`、`clean`、暂存、提交或推送。
+- 实验工作按 [AGENTS.md](AGENTS.md) 写入 sandbox；源码合入与切换预览地址不是一回事。
+- 测试通过、构建完成、隔离运行与客户认可分别报告，不互相替代。
+- 过期设计、任务历史与现场交接不再作为新会话必读材料；需要追溯时查 Git 历史。

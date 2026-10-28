@@ -1,7 +1,7 @@
 # 通用执行通道（SHELL-CHANNEL）
 
 > 版本 **0.4.0** · 2026-08-02 · **状态：M0+M1 done + Phase 31 D1**（IT-100～103 · IT-130；S-100 手工）  
-> Phase **28** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [UX-POLISH.md](./UX-POLISH.md) §6.3.3 / 治本 7 · [WRITE-SCOPE.md](./WRITE-SCOPE.md)
+> Phase **28** · 关联：[RUN-SERVICE.md](./RUN-SERVICE.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [CONFIRM-PIPELINE.md](./CONFIRM-PIPELINE.md) · [TOOL-CATALOG.md](./TOOL-CATALOG.md) · [DESKTOP.md](./DESKTOP.md) §6.3.3 / 治本 7 · [WRITE-SCOPE.md](./WRITE-SCOPE.md)
 
 ## 0. 为什么开这个 Phase
 
@@ -177,7 +177,7 @@ LLM
 | 桌面壳 / host / 计划门 / 换线 | **无**（仅复用 RunningCard 事件） | — |
 | `run_service` 语义 | **无破坏** | 长驻仍独占 |
 
-实现前：在 [STABILIZATION.md](./STABILIZATION.md) §3 补一行「通用 shell 通道」或并入 evolve 执行面备注。
+实现前：在 STABILIZATION.md（历史引用已淘汰） §3 补一行「通用 shell 通道」或并入 evolve 执行面备注。
 
 ### 6.2 回归 ID（预留）
 

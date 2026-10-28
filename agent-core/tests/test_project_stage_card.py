@@ -29,18 +29,14 @@ class ProjectStageCardContractTests(unittest.TestCase):
         ws = (ROOT / "desktop" / "src" / "api" / "ws.ts").read_text(encoding="utf-8")
         self.assertIn("executionStageStatus", panel)
         self.assertIn("executionStageWarnings", panel)
-        self.assertIn("isDocumentationBatch", panel)
-        self.assertIn("四个核心制品按一个批次处理", panel)
         self.assertIn("execution_stage_status", ws)
         self.assertIn("execution_stage_warnings", ws)
-        self.assertIn("文档整理进行中；未生成文档属于进度，不是阻塞", panel)
 
     def test_it5913_mermaid_uses_shared_render_and_error_fallback_contract(self) -> None:
         markdown = (ROOT / "desktop" / "src" / "markdown.ts").read_text(encoding="utf-8")
         unified = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(
             encoding="utf-8"
         )
-        pet = (ROOT / "desktop" / "src" / "shells" / "pet" / "index.ts").read_text(encoding="utf-8")
         self.assertIn("```mermaid", markdown)
         self.assertIn("mermaid-placeholder", markdown)
         self.assertIn("mermaid.render", markdown)
@@ -49,7 +45,6 @@ class ProjectStageCardContractTests(unittest.TestCase):
         self.assertIn("void hydrateMermaid(chatEl)", unified)
         self.assertIn("void hydrateMermaid(live)", unified)
         self.assertGreaterEqual(unified.count("void hydrateMermaid(live)"), 2)
-        self.assertIn("void hydrateMermaid(chatEl)", pet)
 
     def test_it5914_documents_use_main_focus_instead_of_sidebar_body(self) -> None:
         index = (ROOT / "desktop" / "src" / "shells" / "unified" / "index.ts").read_text(

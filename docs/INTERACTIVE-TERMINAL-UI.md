@@ -1,7 +1,7 @@
 # 交互终端会话 UI
 
 > 版本 0.2.1 · 2026-09-14 · 状态：M0/M1 已实现；侧栏默认只显示活动/需处理，已结束折叠；刷新保留滚动位置
-> 关联：`interactive_terminal` · [AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · [DESKTOP-CHROME.md](./DESKTOP-CHROME.md) · [TASKS.md](./TASKS.md)
+> 关联：`interactive_terminal` · [TERMINAL-MODE.md](./TERMINAL-MODE.md) · [DESKTOP.md](./DESKTOP.md) · 旧项目可遗留的 `TASKS.md`（非当前任务真源）
 
 ## 0. 结论
 

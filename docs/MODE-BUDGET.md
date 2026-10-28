@@ -191,7 +191,7 @@ tool_budget: ask — 每轮 ≤5 轮，run_evolved 已禁用
 | `docs/RUNTIME.md` | §7.1 流程图与表格 |
 | `docs/ORCHESTRATION.md` | §2 架构图、§8 表、版本 0.3.0 指针 |
 | `docs/MAP.md` | T-907 索引 |
-| `docs/TASKS.md` | T-907 任务与验收 |
+| `docs/README.md（旧 TASKS 已下线）` | T-907 任务与验收 |
 
 **不改**：
 

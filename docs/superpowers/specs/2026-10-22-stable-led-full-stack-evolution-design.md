@@ -31,7 +31,7 @@
 | 文件系统 | Get-Volume：C: NTFS，F: exFAT | 不以 F: 目录 ACL 或 Git worktree 作为 OS 权限边界，见 [S1] |
 | 历史交付 | 依赖复核记录有构建和聚焦测试通过，也有真实 preload 工作台未通过、独立审查未完成及 audit 未通过 | 历史结果不代表本文能力通过；不在本轮重新宣称验收 |
 
-源码参照（均相对各自工作区）：desktop/electron/main.ts、desktop/electron/preload.ts、desktop/src/api/ws.ts、desktop/src/shells/unified/index.ts、agent-core/sandbox_evolution.py、agent-core/tools/executor.py、agent-core/tools/registry.py。历史结果见 [后续交付记录](../../reviews/2026-10-22-sandbox-dependency-followup.md)。
+源码参照（均相对各自工作区）：desktop/electron/main.ts、desktop/electron/preload.ts、desktop/src/api/ws.ts、desktop/src/shells/unified/index.ts、agent-core/sandbox_evolution.py、agent-core/tools/executor.py、agent-core/tools/registry.py。历史结果见 后续交付记录（历史引用已淘汰）。
 
 ## 3. 需求与不可破坏的约束
 

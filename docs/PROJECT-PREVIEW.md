@@ -1,7 +1,7 @@
 # 项目内嵌预览（PROJECT-PREVIEW）
 
 > 版本 **0.1.0** · 2026-10-21 · **状态：设计已签 · 实现未开始**  
-> 关联：[WORKBENCH-UI.md](./WORKBENCH-UI.md) · [DESKTOP.md](./DESKTOP.md) · [BROWSER.md](./BROWSER.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [AGENT-TOOL-EXPERIENCE.md](./AGENT-TOOL-EXPERIENCE.md) · Phase **65** · [TASKS.md](./TASKS.md) T-6500～T-6515
+> 关联：[WORKBENCH-UI.md](./WORKBENCH-UI.md) · [DESKTOP.md](./DESKTOP.md) · [BROWSER.md](./BROWSER.md) · [PROJECT-DEV-TOOLS.md](./PROJECT-DEV-TOOLS.md) · [PROJECT-VERIFY.md](./PROJECT-VERIFY.md) · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · Phase **65** · 旧项目可遗留的 `TASKS.md`（非当前任务真源） T-6500～T-6515
 
 ---
 
@@ -260,7 +260,7 @@ desktop/src/shells/unified/
 | 项 | 内容 |
 |----|------|
 | **矩阵影响** | Desktop unified 工作台 · Electron 主进程 · 项目绑定写 scope · 工具/确认管线（M2+） |
-| **回归** | IT-6500～IT-6503 · S-6500～S-6505（见 [TASKS.md](./TASKS.md)） |
+| **回归** | IT-6500～IT-6503 · S-6500～S-6505（见 旧项目可遗留的 `TASKS.md`（非当前任务真源）） |
 | **Terminal** | 非主战场；仅 BUG-P0 安全时可跟端口 |
 
 ---

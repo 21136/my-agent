@@ -1,4 +1,4 @@
-﻿"""CLI for tool invocation without LLM (TASKS T-112)."""
+"""CLI for tool invocation without an LLM."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from tools.schema import ToolErrorCode, to_json
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="my-agent", description="my-agent tool CLI (Phase 1)")
+    parser = argparse.ArgumentParser(prog="my-agent", description="my-agent tool CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     tool = sub.add_parser("tool", help="Run or list tools")
@@ -263,7 +263,7 @@ def _demo() -> None:
 
         grep = executor.run(
             "grep",
-            {"pattern": "Phase 1", "path": "docs/MAP.md", "max_results": 2},
+            {"pattern": "agent-core/", "path": "docs/MAP.md", "max_results": 2},
         )
         assert grep.ok
         print("[PASS] tool run grep")
@@ -308,7 +308,7 @@ def _demo() -> None:
             argparse.Namespace(
                 target="grep",
                 evolved_name=None,
-                json=json.dumps({"pattern": "T-112", "path": "docs/TASKS.md", "max_results": 1}),
+                json=json.dumps({"pattern": "agent-core/", "path": "docs/MAP.md", "max_results": 1}),
                 dry_run=False,
                 yes=True,
                 session="_cli_demo",

@@ -1,5 +1,7 @@
 # 普通模式状态机重构：意图、权限与进度分离
 
+> Current implementation authority: `agent-core/turn_intent.py`, `agent-core/project_mode.py` and the executor/write policies. The dated status below is not a fresh test report.
+
 > 版本：0.4.0 · 2026-10-16  
 > 状态：**current · authoritative · 已实施并验证**（2026-10-16）；实现证据见 `agent-core/`、`desktop/` 定向测试与构建。
 > 范围：Desktop/CLI `project` 普通模式；v1/v2 自动流程保持现有 owner。

@@ -4,9 +4,9 @@
 
 - **TERMINAL-MODE v0.3.2**：§6.6 Ink TUI 完整落盘（阶段 0～5 · live pane · rAF · thinking UX · ephemeral notice · bridge 启动）；§5.5 auto plan-execute；§7 实现表更新
 - **README**：三条产品线 · Ink Terminal v0.3.2 · 仓库结构 · bootstrap 更新
-- **BUG-025 fixed**：`patch_file` / `write_text` LF 规范化（`write_utf8_text`）· huiyi views S-99 normalize；见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) · T-4252～4255 · IT-99
-- **BUG-024 fixed**：重复 `inline_write_max` ≥2 → 停 tool + staging 内核（`MY_AGENT_INLINE_WRITE_GUARD_MAX`）；见 [bugs/2026-08-05-inline-write-repeat-guard-loop.md](./bugs/2026-08-05-inline-write-repeat-guard-loop.md) · T-4242～4243 · IT-98
-- **BUG-023**：自动压缩后主循环 LLM 超时（「思考中…」→「回合超时已停止」）— 根因 · 规避 · R1～R7；见 [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · RUNTIME §8.4 · RUNTIME-GUARDS G15 · T-2091～2094
+- **BUG-025 fixed**：`patch_file` / `write_text` LF 规范化（`write_utf8_text`）· huiyi views S-99 normalize；见 bugs/2026-08-05-patch-file-crlf-corruption.md（历史引用已淘汰） · T-4252～4255 · IT-99
+- **BUG-024 fixed**：重复 `inline_write_max` ≥2 → 停 tool + staging 内核（`MY_AGENT_INLINE_WRITE_GUARD_MAX`）；见 bugs/2026-08-05-inline-write-repeat-guard-loop.md（历史引用已淘汰） · T-4242～4243 · IT-98
+- **BUG-023**：自动压缩后主循环 LLM 超时（「思考中…」→「回合超时已停止」）— 根因 · 规避 · R1～R7；见 bugs/2026-08-05-compact-turn-llm-timeout.md（历史引用已淘汰） · RUNTIME §8.4 · RUNTIME-GUARDS G15 · T-2091～2094
 - **AGENT-HARNESS / Phase 41**：同一 API 下失败多的 harness 对齐路线（P1～P5；低→高实施）；见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)
 - **OUTPUT-FORMAT / UX-022**：主聊 assistant 正文格式（禁止假思考、内部字段泄露）；见 [output-format.md](./output-format.md) · `core.txt` §Style
 - **DESKTOP §3.2.2 / UX-023**：过程块工具行 >6 折叠「更早 N 个」（**2026-08-04**）；不引入聊天 sticky
@@ -48,8 +48,8 @@
 
 ### UX / 项目侧栏
 
-- **UX-POLISH**：UX-001～020（高亮、Escape 停、自动撑高、Y/N/A、会话列表、token 指示器等）；第五轮流式滚动缓解；见 [UX-POLISH.md](./UX-POLISH.md)
-- **Plan Agent + 任务流侧栏**：本地 commit ahead（侧栏任务流、确认粒度、外部 TASKS 检测、proactive suggestions 等）；见 [PROJECT-SIDEBAR.md](./PROJECT-SIDEBAR.md)
+- **UX-POLISH**：UX-001～020（高亮、Escape 停、自动撑高、Y/N/A、会话列表、token 指示器等）；第五轮流式滚动缓解；见 [DESKTOP.md](./DESKTOP.md)
+- **Plan Agent + 任务流侧栏**：本地 commit ahead（侧栏任务流、确认粒度、外部 TASKS 检测、proactive suggestions 等）；见 [PROJECT-SIDEBAR.md](./DESKTOP.md)
 
 ### 文档
 
@@ -296,7 +296,7 @@
 
 ### 新增（桌面 · daily Amp + 全窗运行态）
 
-- **Shell `daily` · Amp（极致嗨）**（T-904i1–i5）：亮底霓彩、idle shimmer、四色 `is-working`（3s）、胶囊输入条、recall 对话聚焦；设计 [DAILY-SHELL.md](./DAILY-SHELL.md) v0.3
+- **Shell `daily` · Amp（极致嗨）**（T-904i1–i5）：亮底霓彩、idle shimmer、四色 `is-working`（3s）、胶囊输入条、recall 对话聚焦；设计 DAILY-SHELL.md（历史引用已淘汰） v0.3
 - **全窗 busy 染色**：`agent-busy.ts` + `.app-frame.is-agent-busy` — **app-chrome 顶栏**与壳体同步渐变；按**当前可见壳**选色带（daily 四色 / grow 赭石）
 - **grow 整壳沉浸**：busy 时顶栏 proposal 条、展开区、对话、输入、状态栏玻璃化，底色透上来（对齐 daily 机制）
 - **Electron**：Windows/Linux **隐藏** File/Edit/View 系统菜单（`Menu.setApplicationMenu(null)`）；macOS 保留最小「退出」菜单

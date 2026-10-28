@@ -1,6 +1,6 @@
 # my-agent 评审指南
 
-供多个 LLM 或人工评审者使用。请先完整阅读 [PROJECT.md](./PROJECT.md)，再按本指南逐项给出意见。
+供多个 LLM 或人工评审者使用。请先完整阅读 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md)，再按本指南逐项给出意见。
 
 ---
 

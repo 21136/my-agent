@@ -1,5 +1,7 @@
 # Chat Image Generation Tool Design
 
+> Current implementation authority: `agent-core/agent.py` and image-reference/tool handling. Paid provider behavior requires separate live verification; this dated status is not a fresh provider test.
+
 **Date:** 2026-10-21
 **Status:** Implemented; automated tests run; live provider verification not performed.
 **Scope:** Add image generation as a first-party my-agent tool. It is not an MCP client/server or a Skill.

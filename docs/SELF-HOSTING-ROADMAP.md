@@ -30,10 +30,10 @@
 |---|---|---|
 | 工具协议 | `docs/TOOLS.md`、`docs/TOOL-CATALOG.md` | 自举场景如何编排 Git/CI/发布工具 |
 | 项目验证 | `docs/PROJECT-VERIFY.md`、`docs/PROJECT-QUALITY.md` | Agent 自身与新生成 Agent 的验收矩阵 |
-| Git/治理 | `docs/GOVERNANCE.md`、`docs/LOCAL-DELIVERY-MODEL.md` | GitHub 远端、CI、发布、回滚生命周期 |
+| Git/治理 | `docs/GOVERNANCE.md`、`docs/SANDBOX-EVOLUTION.md` | GitHub 远端、CI、发布、回滚生命周期 |
 | Agent 运行时 | `docs/RUNTIME.md`、`docs/RUNTIME-GUARDS.md` | 自修改事务、重启切换和恢复 |
 | Skill/模型 | `docs/EVOLVE.md`、`docs/LAYERS.md` | Skill/模型版本兼容和自举评测 |
-| 状态/进度 | `docs/MAP.md`、`docs/TASKS.md`、`docs/README.md` | 新文档索引、任务状态和阅读顺序 |
+| 状态/进度 | `docs/MAP.md`、`docs/README.md（旧 TASKS 已下线）`、`docs/README.md` | 新文档索引、任务状态和阅读顺序 |
 
 ## 3. 新增文档清单
 
@@ -259,7 +259,7 @@ SkillIdentity
    - 增加“自举与自交付”专题路径；
 2. `docs/MAP.md`
    - 增加 D0～D7 的文件地图和代码入口；
-3. `docs/TASKS.md`
+3. `docs/README.md（旧 TASKS 已下线）`
    - 增加 Self-hosting Epic 和分阶段任务；
 4. `docs/TOOLS.md`
    - 补充 GitHub/CI/自修改候选工具的协议入口；

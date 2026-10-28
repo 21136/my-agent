@@ -2,7 +2,7 @@
 
 > 版本 **0.2.2** · 2026-07-30  
 > **状态**：`implemented`（M0 + M1）；工作台 = **`shells/unified/`**（不再是 grow/daily/project 三壳）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [FILES-DROP.md](./FILES-DROP.md) · [TASKS.md](./TASKS.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) §0 · [SHELL-CONSOLIDATION.md](./SHELL-CONSOLIDATION.md) · [FILES-DROP.md](./FILES-DROP.md) · 旧项目可遗留的 `TASKS.md`（非当前任务真源）
 
 ---
 

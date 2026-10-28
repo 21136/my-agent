@@ -16,7 +16,7 @@
 | Session 默认 | **续接**最近 `conversation_id` |
 | 新开会话 | 仅 **`新会话`** 重置 goal / topics / 空 messages |
 | `exit` | 保存状态退出；**不强制** proposal |
-| Proposal | **仅显式触发**（见 §9）；与 [PROJECT.md](./PROJECT.md) §4.3 衔接 |
+| Proposal | **仅显式触发**（见 §9）；与 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §4.3 衔接 |
 | LLM | **OpenAI 兼容 API + DeepSeek**；默认 flash，**coding 主题**用 pro（§6.1） |
 | Context 爆了 | **记忆式压缩**（§8），非仅警告 |
 
@@ -76,7 +76,7 @@ data/sessions/<conversation_id>/
 
 `messages` **仅本机**（已决）。**默认 exit 不写** `data/conversations/`；见 §2.3 `--record`。
 
-**残缺 tool 回复修复（2026-07-11）**：若 assistant 带 `tool_calls` 后因 confirm 中断 / sidecar 崩溃未写入 `role: tool`，续聊时 LLM API 会拒收历史。`context.repair_orphaned_tool_calls` 在 `Session.load` 与 `build_llm_messages` 自动补齐占位 tool 消息；详见 [BUGS.md](./BUGS.md) BUG-005。
+**残缺 tool 回复修复（2026-07-11）**：若 assistant 带 `tool_calls` 后因 confirm 中断 / sidecar 崩溃未写入 `role: tool`，续聊时 LLM API 会拒收历史。`context.repair_orphaned_tool_calls` 在 `Session.load` 与 `build_llm_messages` 自动补齐占位 tool 消息；详见 BUGS.md（历史引用已淘汰） BUG-005。
 
 ---
 
@@ -103,7 +103,7 @@ data/sessions/<conversation_id>/
 ### 2.4 Schema 兼容（DOC-05 · Phase 18）
 
 > 目标：旧 `meta.json` / `data/state.json` **缺字段或类型不符**时仍可加载，**不**要求手写迁移脚本。  
-> **不**覆盖结构损坏（非法 JSON / 非 object）——那是 [STABILIZATION.md](./STABILIZATION.md) §3.9 的 notice 路径（T-1823）。
+> **不**覆盖结构损坏（非法 JSON / 非 object）——那是 STABILIZATION.md（历史引用已淘汰） §3.9 的 notice 路径（T-1823）。
 
 #### 2.4.1 兼容原则（已决）
 
@@ -368,7 +368,7 @@ User 消息模板：
 
 ### 7.2 桌面事件模块契约（Phase 18 · T-1803）
 
-> 全文：[STABILIZATION.md](./STABILIZATION.md) §6。目的：避免 `session` / `context` 导错（如 BUG-019）。
+> 全文：STABILIZATION.md（历史引用已淘汰） §6。目的：避免 `session` / `context` 导错（如 BUG-019）。
 
 | 符号 | 模块 | 说明 |
 |------|------|------|
@@ -501,7 +501,7 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 
 ### 8.4 与回合超时 / 墙钟的交互（已知缺口 · BUG-023）
 
-> **2026-08-05** · [bugs/2026-08-05-compact-turn-llm-timeout.md](./bugs/2026-08-05-compact-turn-llm-timeout.md) · 修复任务 T-2092～T-2094
+> **2026-08-05** · bugs/2026-08-05-compact-turn-llm-timeout.md（历史引用已淘汰） · 修复任务 T-2092～T-2094
 
 | 项 | 现状 | 目标（已决） |
 |----|------|--------------|
@@ -531,7 +531,7 @@ Proposal 流程见 [EVOLVE.md](./EVOLVE.md)；写入 `evolve/proposals/`，用�
 
 ## 10. 使用侧反馈（M4，T-602）
 
-> 与 [PROJECT.md](./PROJECT.md) §4.4、[GOVERNANCE.md](./GOVERNANCE.md) §6 配套。M1–M3 **只**写 `entity_used`；**M4** 起启用 exit 问句与 `feedback_*` 事件。
+> 与 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §4.4、[GOVERNANCE.md](./GOVERNANCE.md) §6 配套。M1–M3 **只**写 `entity_used`；**M4** 起启用 exit 问句与 `feedback_*` 事件。
 
 ### 10.1 开关
 
@@ -622,5 +622,5 @@ context.py        digest 压缩（§8）
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、接受路由 |
 | [TOOLS.md](./TOOLS.md) | Builtin、web_search、run_evolved |
 | [GOVERNANCE.md](./GOVERNANCE.md) | review、exit 反馈、suspect |
-| [TASKS.md](./TASKS.md) | 实施 task |
-| [STABILIZATION.md](./STABILIZATION.md) | Phase 18；数据韧性 §3.9；DOC-05 → 本文 **§2.4** |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | 实施 task |
+| STABILIZATION.md（历史引用已淘汰） | Phase 18；数据韧性 §3.9；DOC-05 → 本文 **§2.4** |

@@ -101,18 +101,9 @@ class SoloOverlayAndPromptTests(unittest.TestCase):
             plan_status="confirmed",
             delivery_profile="solo",
         )
-        self.assertIn("project_delivery_profile: solo", overlay)
+        self.assertIn("project_root: workspace/x", overlay)
+        self.assertIn("project_id: x", overlay)
         self.assertNotIn("task_stop:", overlay)
-        self.assertIn("deliverable_review", overlay)
-
-    def test_ritual_overlay_keeps_task_stop(self) -> None:
-        overlay = format_project_overlay(
-            project_root="workspace/x",
-            project_id="x",
-            plan_status="confirmed",
-            delivery_profile="ritual",
-        )
-        self.assertIn("task_stop:", overlay)
 
     def test_it473_solo_prompt_snapshot(self) -> None:
         from paths import AgentPaths

@@ -749,7 +749,7 @@ def test_no_triplicate_base64_manual():
 
 ## 12. DOC-04 准入
 
-### 12.1 影响矩阵（[STABILIZATION.md](./STABILIZATION.md) §3）
+### 12.1 影响矩阵（STABILIZATION.md（历史引用已淘汰） §3）
 
 | 面 | 档 | 验收 |
 |----|----|------|
