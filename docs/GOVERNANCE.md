@@ -1,7 +1,7 @@
 # 治理设计（GOVERNANCE）
 
 > 版本 0.2.10 · 2026-07-09 · M4 设计文档（**不写 agent-core 代码**）  
-> 与 [PROJECT.md](./PROJECT.md) §4.4–4.5、[EVOLVE.md](./EVOLVE.md)、[MEMORY.md](./MEMORY.md)、[TOOLS.md](./TOOLS.md) 配套
+> 与 [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §4.4–4.5、[EVOLVE.md](./EVOLVE.md)、[MEMORY.md](./MEMORY.md)、[TOOLS.md](./TOOLS.md) 配套
 
 ---
 
@@ -378,7 +378,7 @@ Builtin 仍 **6 个封顶**（[TOOLS.md](./TOOLS.md)）。扩展路径：
 - [ ] recover 后 tool 恢复可调用
 - [ ] 误 accept 可用 git 恢复 + `rollback_noted`
 
-实现任务见 [TASKS.md](./TASKS.md) Phase 6。
+实现任务见 旧项目可遗留的 `TASKS.md`（非当前任务真源） Phase 6。
 
 ---
 
@@ -386,7 +386,7 @@ Builtin 仍 **6 个封顶**（[TOOLS.md](./TOOLS.md)）。扩展路径：
 
 | 文档 | 内容 |
 |------|------|
-| [PROJECT.md](./PROJECT.md) | §4.4–4.5 总览 |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | §4.4–4.5 总览 |
 | [EVOLVE.md](./EVOLVE.md) | 提案阶段闸门、M2 事件 |
 | [MEMORY.md](./MEMORY.md) | 引用级别、session 审计 |
 | [RUNTIME.md](./RUNTIME.md) | §10 exit 反馈协议 |

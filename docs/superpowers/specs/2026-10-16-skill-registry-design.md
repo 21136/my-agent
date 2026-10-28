@@ -1,5 +1,7 @@
 # Skills Registry and Runtime Design
 
+> Current implementation authority: `agent-core/skill_registry.py`; a Skill supplies workflow guidance and does not grant tool permission. The dated status below is not a fresh test report.
+
 > 版本：0.1.0 · 2026-10-16
 > 状态：**current · 已确认 · implemented**
 > 范围：内置 Skill 注册、发现、按需加载和 system prompt 索引；不改变 Executor 权限 owner。

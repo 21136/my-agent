@@ -1,5 +1,7 @@
 # Execution Lifecycle Design
 
+> Implementation and historical status are informative; current behavior and verification are determined by `agent-core/execution_lifecycle.py` and its focused tests.
+
 > Version 0.1 · 2026-09-11 · First implementation slice
 
 ## Goal

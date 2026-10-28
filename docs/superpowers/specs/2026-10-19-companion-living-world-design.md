@@ -1,5 +1,7 @@
 # 小魔王生活世界与主动性设计
 
+> Current behavior must be checked against `agent-core/companion_world_context.py` and the current Desktop source. This dated design is not a fresh product-acceptance report.
+
 > 状态：**方向已确认；按生活连续性融入普通聊天实现**  
 > 日期：2026-10-20（方向修订）  
 > 范围：桌面伴侣主动性、个人生活世界与用户共同经历；生活世界不作为可点击的独立页面，而是普通聊天的隐式连续背景。

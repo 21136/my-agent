@@ -1,4 +1,10 @@
 # Repository Agent Instructions
+## Current documentation and test scope
+
+- Start with `docs/MAP.md` for existing source entry points and `docs/README.md` for topic-specific documentation. Do not load all design documents by default.
+- The repository's old `docs/TASKS.md`, Phase backlog, plan-agent/Progress Gate and runaway scheduling documents are retired. Do not reconstruct their workflows from Git history or old local handoff artifacts.
+- Goal Runtime P0 is a separate lightweight goal/budget layer; its presence is not evidence that the retired scheduler or full autonomous delivery has returned.
+- Keep tests that protect current behavior, permissions, data integrity and compatibility. Old age or a failing assertion alone is not grounds for deleting a test.
 
 ## Evolution sandbox (stable edits experiment)
 

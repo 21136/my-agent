@@ -2,7 +2,7 @@
 
 > 版本 **0.1.0** · 2026-08-03  
 > **状态**：**M1–M3 已实现**（T-3601～T-3603）  
-> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) §4.4 · [CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) · [STABILIZATION.md](./STABILIZATION.md) §3.1 · [DESKTOP.md](./DESKTOP.md)
+> 关联：[PROJECT-MODE.md](./PROJECT-MODE.md) §4.4 · [CONTEXT-SWITCH.md](./CONTEXT-SWITCH.md) · STABILIZATION.md（历史引用已淘汰） §3.1 · [DESKTOP.md](./DESKTOP.md)
 
 ---
 
@@ -164,7 +164,7 @@ CLI：`项目 新开线`（名称可议）≡ 按钮。
 
 ## 7. DOC-04 准入
 
-### 7.1 影响矩阵行（[STABILIZATION.md](./STABILIZATION.md) §3）
+### 7.1 影响矩阵行（STABILIZATION.md（历史引用已淘汰） §3）
 
 | 面 | 档位 | 说明 |
 |----|------|------|

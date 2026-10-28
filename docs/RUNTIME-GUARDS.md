@@ -27,7 +27,7 @@
 | **G14** | **执行可靠性**（后置条件 + 熔断；**剧本自动 nudge 废止中** · 见 [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) §3.4/M3）— 管「假成功 / 同招空转」，修好环境靠本地长任务能力 |
 | **G15** | **Context 摘要 LLM 占 turn 墙钟**（BUG-023 · **fixed** T-2092）：自动/手动 `compact_context` 的 digest 摘要 **`pause_wall`** + 独立 `CONTEXT_SUMMARIZE_TIMEOUT_SEC`；见 [RUNTIME.md](./RUNTIME.md) §8.4 |
 | **G16** | **重复 inline_write_max 停 tool**（BUG-024 · **fixed** T-4242）：同 segment streak ≥2 → 停 tool + staging 内核；见 [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) §3.6 |
-| **G17** | **文本写盘换行一致性**（BUG-025 · **fixed** T-4252～4253）：`patch_file` / `write_text` 经 `write_utf8_text` LF 规范化；见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md) |
+| **G17** | **文本写盘换行一致性**（BUG-025 · **fixed** T-4252～4253）：`patch_file` / `write_text` 经 `write_utf8_text` LF 规范化；见 bugs/2026-08-05-patch-file-crlf-corruption.md（历史引用已淘汰） |
 
 ---
 
@@ -90,7 +90,7 @@ Phase 17 checker（另文）  →  做完之后查对不对（可选第二次 De
 | **回合墙钟** `TURN_WALL_SEC` | **900** | `_run_line` / agent | 整条 user turn；segment 不重置；**tool 执行期间暂停**；到点 `finish_reason=timeout` |
 | **stall 看门狗** `STALL_WATCHDOG_SEC` | **0（关闭）** | `WsBridge` / agent | opt-in 建议 180；距上次有效进度超时 → cancel |
 | 桌面 cancel 兜底 | **45s** | `chat-state.ts` | 已实现；仅恢复 UI，不声称 sidecar 已停止 |
-| **Task 一停（project）** | 草案 | Phase 20 · [TASK-STOP.md](./archive/TASK-STOP.md) | 每 `TASKS` 条目完成即停；**不**用拉长墙钟替代；L2 墙钟仍保留 |
+| **Task 一停（project）** | 草案 | Phase 20 · TASK-STOP.md（历史引用已淘汰） | 每 `TASKS` 条目完成即停；**不**用拉长墙钟替代；L2 墙钟仍保留 |
 
 **有效进度事件**：`assistant.delta` · `tool.start` · `tool.end` · `confirm.request` · `confirm.done`。
 
@@ -239,6 +239,6 @@ demo probe 失败产生 `notice`、result 摘要与审计事件，供父代理�
 |------|------|------|
 | 0.1.0 | 2026-07-13 | 草案：与 checker 分线；迁入 T-1410～T-1412 |
 | 0.2.0 | 2026-07-13 | 设计定稿：900s 墙钟、stall opt-in、窄域拒调、tool.toml 后自动 demo |
-| 0.2.1 | 2026-07-19 | §3.1 指针：project Task 一停（Phase 20 草案 · [TASK-STOP.md](./archive/TASK-STOP.md)）；墙钟仍为 L2 兜底 |
+| 0.2.1 | 2026-07-19 | §3.1 指针：project Task 一停（Phase 20 草案 · TASK-STOP.md（历史引用已淘汰））；墙钟仍为 L2 兜底 |
 | 0.2.2 | 2026-08-02 | G13 空头动作门；G14 指针 → [EXEC-RELIABILITY.md](./EXEC-RELIABILITY.md) |
 | 0.2.3 | 2026-08-02 | G14：剧本废止倾向 + M3 本地执行硬化指针 |

@@ -1,4 +1,4 @@
-"""Builtin LLM tool definitions + agent main loop (TOOLS.md, RUNTIME.md §7, TASKS T-202/T-206)."""
+"""Builtin LLM tool definitions and agent main loop."""
 
 from __future__ import annotations
 
@@ -3601,7 +3601,7 @@ def _demo_loop() -> None:
     session.save()
 
     grep_args = json.dumps(
-        {"pattern": "T-206", "path": "docs/TASKS.md", "max_results": 1},
+        {"pattern": "agent-core/", "path": "docs/MAP.md", "max_results": 1},
         ensure_ascii=False,
     )
     mock = _MockLLM(
@@ -3622,7 +3622,7 @@ def _demo_loop() -> None:
             ),
             LLMResponse(
                 model="mock",
-                content="Found T-206 in TASKS.md.",
+                content="Found agent-core/ in MAP.md.",
                 tool_calls=[],
                 finish_reason="stop",
                 usage=None,
@@ -3632,10 +3632,10 @@ def _demo_loop() -> None:
     )
 
     agent = Agent.create(session, llm=mock, confirm_fn=lambda _p, _a: "y")
-    result = agent.run_turn("Where is T-206 documented?", spawn_explore=False)
+    result = agent.run_turn("Where is agent-core/ documented?", spawn_explore=False)
 
     assert result.tool_rounds == 1
-    assert "T-206" in result.assistant_text
+    assert "agent-core/" in result.assistant_text
     assert has_anchor_message(session)
     assert session.messages[0]["role"] == "user"
     assert ANCHOR_HEADER in session.messages[0]["content"]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import secrets
 import shutil
 import sys
@@ -21,15 +20,6 @@ from paths import AgentPaths
 from project_mode import PROJECT_ARTIFACTS, normalize_project_id, project_dir
 from server import WsBridge, WsSessionHandler, _build_repl, _repl_refreshes_session_state, _run_line
 from session import create_new
-
-_PARITY_DOC = Path(__file__).resolve().parents[2] / "docs" / "CLI-DESKTOP-PARITY.md"
-
-# Minimum meta-command fixtures referenced by CLI-DESKTOP-PARITY.md §1 (IT-38).
-PARITY_META_FIXTURES: tuple[tuple[str, str], ...] = (
-    ("M04", "新会话"),
-    ("M05", "压缩"),
-    ("M14", "项目 新建"),
-)
 
 # IT-11 / T-1808-05: meta lines exercised on both WS channels.
 IT11_META_LINES: tuple[str, ...] = (
@@ -53,23 +43,6 @@ def _session_snapshot(repl, events: list[dict[str, Any]]) -> dict[str, Any]:
         "turn_end_ok": turn_ends[-1].get("ok") if turn_ends else None,
         "session_banner_count": sum(1 for event in events if event.get("type") == "session.banner"),
     }
-
-
-class ParityTableDocTests(unittest.TestCase):
-    """Doc drift guard: parity table still lists IT-38 minimum commands."""
-
-    def test_parity_doc_lists_minimum_meta_commands(self) -> None:
-        self.assertTrue(_PARITY_DOC.is_file(), f"missing {_PARITY_DOC}")
-        text = _PARITY_DOC.read_text(encoding="utf-8")
-        for row_id, trigger in PARITY_META_FIXTURES:
-            with self.subTest(row_id=row_id, trigger=trigger):
-                self.assertIn(row_id, text)
-                self.assertIn(trigger, text)
-
-    def test_parity_doc_has_at_least_fifteen_command_families(self) -> None:
-        text = _PARITY_DOC.read_text(encoding="utf-8")
-        families = re.findall(r"^\| M\d{2} \|", text, flags=re.MULTILINE)
-        self.assertGreaterEqual(len(families), 15)
 
 
 class MetaCommandHandleLineTests(unittest.TestCase):

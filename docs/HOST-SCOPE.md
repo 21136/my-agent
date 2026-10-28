@@ -1,8 +1,8 @@
 # 主机托管区设计（HOST-SCOPE）
 
 > 版本 **0.2.9** · 2026-07-11  
-> **状态**：**Phase 10 done**（T-1001～T-1008；手工验收见 [TASKS.md](./TASKS.md) §Phase 10）  
-> 关联：[TOOLS.md](./TOOLS.md) §2 / §8.1 / §10 · [PROJECT.md](./PROJECT.md) §6.4 · [paths.py](../agent-core/paths.py) · [EXTENSIONS.md](./EXTENSIONS.md) · [DESKTOP.md](./DESKTOP.md)
+> **状态**：**Phase 10 done**（T-1001～T-1008；手工验收见 旧项目可遗留的 `TASKS.md`（非当前任务真源） §Phase 10）
+> 关联：[TOOLS.md](./TOOLS.md) §2 / §8.1 / §10 · [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4 · [paths.py](../agent-core/paths.py) · [EXTENSIONS.md](./EXTENSIONS.md) · [DESKTOP.md](./DESKTOP.md)
 
 ---
 
@@ -43,7 +43,7 @@
 |------|------|
 | **进化层污染** | `evolve/`、`agent-core/` 需保持 Git 真源与可审计；与「整理 C 盘」混权限会破坏分层 |
 | **误操作放大** | LLM 路径幻觉、批量删除、覆盖配置文件——范围越大后果越不可逆 |
-| **无技术沙箱** | [PROJECT.md](./PROJECT.md) §6.4 已诚实声明：安全靠 **路径约定 + confirm + dry_run**，不是进程隔离 |
+| **无技术沙箱** | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) §6.4 已诚实声明：安全靠 **路径约定 + confirm + dry_run**，不是进程隔离 |
 | **敏感数据** | `.ssh`、浏览器配置、`.env`、凭证文件一旦可读，可能进 LLM context 或日志 |
 
 **结论**：扩范围是**方向正确**，但应加 **host scope（主机托管区）** 分层，而不是拆掉 agent root 边界。
@@ -370,18 +370,18 @@ CLI 等价：`托管目录 列表` · `托管目录 添加 …` · `托管目录
 
 ## 9. 实施顺序
 
-> 正式条目见 [TASKS.md](./TASKS.md) Phase 10。设计评审 **已决**（本文 v0.2.1）。
+> 正式条目见 旧项目可遗留的 `TASKS.md`（非当前任务真源） Phase 10。设计评审 **已决**（本文 v0.2.1）。
 
 | ID | 任务 | 交付物 | 依赖 | 验收 | 状态 |
 |----|------|--------|------|------|------|
 | T-1001 | 设计评审 | `HOST-SCOPE.md` v0.2.1 | Phase 9 | §8 全部已决 | **done** |
-| T-1002 | `host_scope.json` 加载与校验 | `agent-core/host_scope.py` | T-1001 | [TASKS](./TASKS.md) §T-1002 | **done** |
-| T-1003 | `paths.resolve_under_host` | `paths.py` + `host_scope.resolve_host_path` | T-1002 | [TASKS](./TASKS.md) §T-1003 | **done** |
-| T-1004 | CLI / REPL 托管目录管理 | `host_scope_cli.py` + `main.py` | T-1002 | [TASKS](./TASKS.md) §T-1004 | **done** |
-| T-1005 | host 只读工具 | `host_tools.py` + `evolve/.../host_*` | T-1003 | [TASKS](./TASKS.md) §T-1005 | **done** |
-| T-1006 | host 写工具 + confirm | `host_copy_move` + `executor`/`logging` | T-1005 | [TASKS](./TASKS.md) §T-1006 | **done** |
-| T-1007 | workflow 工具适配 host 路径 | `evolve/tools/workflow/*` | T-1006 | [TASKS](./TASKS.md) §T-1007 | **done** |
-| T-1008 | 桌面设置 UI | `desktop/src/host-settings.ts` 等 | T-1004 | [TASKS](./TASKS.md) §T-1008 | **done** |
+| T-1002 | `host_scope.json` 加载与校验 | `agent-core/host_scope.py` | T-1001 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1002 | **done** |
+| T-1003 | `paths.resolve_under_host` | `paths.py` + `host_scope.resolve_host_path` | T-1002 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1003 | **done** |
+| T-1004 | CLI / REPL 托管目录管理 | `host_scope_cli.py` + `main.py` | T-1002 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1004 | **done** |
+| T-1005 | host 只读工具 | `host_tools.py` + `evolve/.../host_*` | T-1003 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1005 | **done** |
+| T-1006 | host 写工具 + confirm | `host_copy_move` + `executor`/`logging` | T-1005 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1006 | **done** |
+| T-1007 | workflow 工具适配 host 路径 | `evolve/tools/workflow/*` | T-1006 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1007 | **done** |
+| T-1008 | 桌面设置 UI | `desktop/src/host-settings.ts` 等 | T-1004 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） §T-1008 | **done** |
 
 **建议实现顺序**：T-1001 评审 → T-1002～T-1004（配置与解析）→ T-1005（只读闭环）→ 自用一段时间 → T-1006～T-1008（写与 UI）。
 
@@ -407,7 +407,7 @@ CLI 等价：`托管目录 列表` · `托管目录 添加 …` · `托管目录
 | 文档 | 需修订章节 |
 |------|------------|
 | [TOOLS.md](./TOOLS.md) | §2 路径、§8.1 写入边界、§6.3 confirm、§10 安全 |
-| [PROJECT.md](./PROJECT.md) | §6.4 补充 host scope 诚实声明 |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | §6.4 补充 host scope 诚实声明 |
 | [MAP.md](./MAP.md) | Phase 10 进度 |
 | [DESKTOP.md](./DESKTOP.md) | 设置页、confirm 文案 |
 | `agent-core/prompts/core.txt` | 路径与 host 规则 |

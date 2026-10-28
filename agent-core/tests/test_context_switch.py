@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import secrets
 import sys
 import unittest
@@ -11,6 +12,7 @@ _AGENT_CORE = Path(__file__).resolve().parents[1]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from agent import Agent
 from context_switch import (
     foreign_workspace_project_write,
     normalize_proposal,
@@ -24,6 +26,51 @@ from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode
 
 from tests.isolation_helpers import make_temp_agent_paths
+
+
+class ProjectShellSourceContractTests(unittest.TestCase):
+    def test_run_turn_source_keeps_project_shell(self) -> None:
+        src = inspect.getsource(Agent.run_turn)
+        self.assertNotIn('active_shell = "grow"', src)
+
+
+class ProjectScopeAllowlistTests(unittest.TestCase):
+    """F1 belt-and-suspenders: project-bound sessions admit scope=project tools."""
+
+    def test_executor_ensure_admits_project_tool_when_allowlist_stale(self) -> None:
+        """validate merges scope=project tools even if allowed_evolved omitted them."""
+        paths = make_temp_agent_paths(
+            self,
+            copy_tool_dirs=("project/run_project_tests", "common/write_text"),
+        )
+        registry = ToolRegistry.load(paths)
+        # Stale allowlist: coding/common only — missing project-scoped run_project_tests.
+        stale = {t.name for t in registry.session_evolved(["coding"])}
+        self.assertNotIn("run_project_tests", stale)
+
+        session_dir = paths.data / "sessions" / "_stale_al"
+        session_dir.mkdir(parents=True)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession(
+                session_dir=session_dir,
+                allowed_evolved=stale,
+                active_shell="project",
+                project_root="workspace/demo",
+                project_id="demo",
+            ),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        err = executor.validate(
+            "run_evolved",
+            {"tool_name": "run_project_tests", "arguments": {"working_dir": "workspace/demo"}},
+        )
+        self.assertIn("run_project_tests", executor.session.allowed_evolved or set())
+        # Admission itself must succeed; other validation may still fire, but must not be
+        # the stale-allowlist "不在本会话清单" rejection.
+        if err is not None:
+            msg = err.error.message if err.error else str(err)
+            self.assertNotIn("不在本会话清单", msg)
 
 
 class ContextSwitchTests(unittest.TestCase):
@@ -224,50 +271,6 @@ class ContextSwitchTests(unittest.TestCase):
             == self.session.conversation_id
         )
 
-    @unittest.skip("shell.switch deprecated after shell consolidation")
-    def test_propose_shell_switch_to_grow(self) -> None:
-        run_project_command(
-            self.session,
-            self.paths,
-            parse_project_command(f"项目 新建 {self.pid_a}"),
-            output_fn=lambda _l: None,
-        )
-        old_cid = self.session.conversation_id
-        # seed a grow line
-        from shell_switch import record_shell_session
-        from session import create_new
-
-        grow = create_new(self.paths, conversation_id=f"_grow_{secrets.token_hex(3)}")
-        grow.meta.active_shell = "grow"
-        grow.save()
-        record_shell_session(self.paths, "grow", grow.conversation_id)
-
-        events: list[tuple[str, dict]] = []
-        registry = ToolRegistry.load(self.paths)
-        executor = ToolExecutor(
-            registry=registry,
-            session=ExecutorSession.load(self.session.session_dir),
-            confirm_fn=lambda _p, _a: "y",
-            on_event=lambda et, payload: events.append((et, payload)),
-        )
-        result = executor.run(
-            "propose_context_switch",
-            {
-                "action": "shell.switch",
-                "target": "grow",
-                "reason": "go evolve",
-            },
-        )
-        self.assertTrue(result.ok, result.error.message if result.error else "")
-        assert isinstance(result.data, dict)
-        self.assertEqual(result.data.get("session_id"), grow.conversation_id)
-        self.assertTrue(result.data.get("session_replaced"))
-        self.assertNotEqual(result.data.get("session_id"), old_cid)
-        types = [et for et, _ in events]
-        self.assertIn("context.switch.request", types)
-        self.assertIn("context.switch.done", types)
-        self.assertIn("shell.switch.done", types)
-
     def test_propose_shell_switch_reject(self) -> None:
         run_project_command(
             self.session,
@@ -288,36 +291,6 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(self.session.meta.project_id, normalize_project_id(self.pid_a))
         self.assertEqual(self.session.meta.active_shell, "project")
-
-    @unittest.skip("cross-shell session.new deprecated after shell consolidation")
-    def test_propose_session_new_on_grow(self) -> None:
-        from shell_switch import record_shell_session, read_shell_sessions
-
-        self.session.meta.active_shell = "grow"
-        self.session.save()
-        record_shell_session(self.paths, "grow", self.session.conversation_id)
-        old_cid = self.session.conversation_id
-
-        registry = ToolRegistry.load(self.paths)
-        executor = ToolExecutor(
-            registry=registry,
-            session=ExecutorSession.load(self.session.session_dir),
-            confirm_fn=lambda _p, _a: "y",
-        )
-        result = executor.run(
-            "propose_context_switch",
-            {
-                "action": "session.new",
-                "target": "current",
-                "reason": "clean slate",
-            },
-        )
-        self.assertTrue(result.ok, result.error.message if result.error else "")
-        assert isinstance(result.data, dict)
-        self.assertTrue(result.data.get("session_replaced"))
-        new_cid = result.data.get("session_id")
-        self.assertNotEqual(new_cid, old_cid)
-        self.assertEqual(read_shell_sessions(self.paths).get("grow"), new_cid)
 
     def test_propose_session_new_on_project_parks_binding(self) -> None:
         """UX-POLISH §7.6 D6/D8: session.new leaves project mapping; new chat is unbound."""
@@ -355,27 +328,6 @@ class ContextSwitchTests(unittest.TestCase):
         loaded = Session.load(self.paths, str(new_cid))
         self.assertEqual(loaded.meta.project_id, "")
         self.assertNotEqual(loaded.meta.project_plan_status, "confirmed")
-
-    @unittest.skip("cross-shell session.new deprecated after shell consolidation")
-    def test_session_new_rejects_cross_shell_target(self) -> None:
-        run_project_command(
-            self.session,
-            self.paths,
-            parse_project_command(f"项目 新建 {self.pid_a}"),
-            output_fn=lambda _l: None,
-        )
-        registry = ToolRegistry.load(self.paths)
-        executor = ToolExecutor(
-            registry=registry,
-            session=ExecutorSession.load(self.session.session_dir),
-            confirm_fn=lambda _p, _a: "y",
-        )
-        result = executor.run(
-            "propose_context_switch",
-            {"action": "session.new", "target": "grow"},
-        )
-        self.assertFalse(result.ok)
-        self.assertIn("当前壳", result.error.message if result.error else "")
 
     def test_normalize_shell_switch_rejects_bad_target(self) -> None:
         with self.assertRaises(Exception):

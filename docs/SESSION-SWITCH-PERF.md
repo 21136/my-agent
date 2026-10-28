@@ -1,7 +1,7 @@
 # 项目会话切换性能（SESSION-SWITCH-PERF）
 
 > 版本 **0.1.0** · 2026-09-02 · **UI-5972**  
-> 关联：[UX-POLISH.md](./UX-POLISH.md) **UX-027** · [DESKTOP.md](./DESKTOP.md) §5.2.1 · [TASKS.md](./TASKS.md) UI-5972
+> 关联：[DESKTOP.md](./DESKTOP.md) **UX-027** · [DESKTOP.md](./DESKTOP.md) §5.2.1 · 旧项目可遗留的 `TASKS.md`（非当前任务真源） UI-5972
 
 ---
 

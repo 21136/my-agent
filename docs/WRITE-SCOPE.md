@@ -2,7 +2,7 @@
 
 > 版本 **0.2.0** · 2026-07-30  
 > 状态：`implemented` — `resolve_under_agent_for_write` + deny-list 已落地；evolved 写/整理/exec 工具已切；`workspace_only` → `allow_approve_all`  
-> 关联：[TOOLS.md](./TOOLS.md) · [MAP.md](./MAP.md) · [UX-POLISH.md](./UX-POLISH.md) · [TOOL-RETRY.md](./TOOL-RETRY.md)
+> 关联：[TOOLS.md](./TOOLS.md) · [MAP.md](./MAP.md) · [DESKTOP.md](./DESKTOP.md) · [TOOL-RETRY.md](./TOOL-RETRY.md)
 
 ---
 

@@ -2,7 +2,7 @@
 
 > 版本 **0.1.0** · 2026-09-03  
 > 状态：`doc` — **UX-028 已实施**（P0～M2）  
-> 关联：[DESKTOP.md](./DESKTOP.md) §3.2.2 · [UX-POLISH.md](./UX-POLISH.md) **UX-028** · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · [TASKS.md](./TASKS.md) **UI-6040** · [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) §3.2.2 · [DESKTOP.md](./DESKTOP.md) **UX-028** · [EXEC-OBSERVABILITY.md](./EXEC-OBSERVABILITY.md) · 旧项目可遗留的 `TASKS.md`（非当前任务真源） **UI-6040** · [DESKTOP.md](./DESKTOP.md)
 
 ---
 
@@ -44,7 +44,7 @@
 
 - **不推翻** [DESKTOP.md](./DESKTOP.md) §3.2.2 **D-T1～D-T7**：思考仍在过程区内、工具在下、>6 折叠、回合结束默认收起。
 - **收束呈现**：把「过程块 + 思考 accordion + 工具行」在**信息架构**上合并为 **Activity Timeline**，减少平行入口。
-- **对齐** [INTERACTION-REDESIGN.md](./INTERACTION-REDESIGN.md)：Harness 内部阶段不进主路径；活动轨只展示**用户可观察的执行事实**（思考片段、工具、需确认的写操作）。
+- **对齐** [DESKTOP.md](./DESKTOP.md)：Harness 内部阶段不进主路径；活动轨只展示**用户可观察的执行事实**（思考片段、工具、需确认的写操作）。
 
 ---
 
@@ -295,7 +295,7 @@ type ActivityBlock = {
 | T-6055-02 | 未 auto-chain 时 `turn.notice` 说明原因；prepare 段内不因 PREPARE 失败数停链 |
 | T-6056-01 | v2 非 human 计划 `chain_after_ok=True`；不受 qa/recall 意图掐断 |
 | T-6056-02 | 「继续」等短句 → execute；服务端 chain 重试 4 次 + 客户端 2.5s watchdog |
-| T-6107-01 | **续接收敛**：[RUNAWAY-V2-CONTINUATION.md](./archive/RUNAWAY-V2-CONTINUATION.md) · `pending_runaway_work()` 单真源 |
+| T-6107-01 | **续接收敛**：RUNAWAY-V2-CONTINUATION.md（历史引用已淘汰） · `pending_runaway_work()` 单真源 |
 | T-6107-02 | controller + server + agent 同调 `should_continue_runaway`；删 `chain_after_ok` / `plan.should_chain` 兼容面待收口 |
 | T-6107-03 | IT-6107-a～g 已通过；进展指纹（借 v1 stuck）待收口 |
 

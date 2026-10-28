@@ -2,7 +2,7 @@
 
 > 版本 **0.2.2** · 2026-07-30  
 > 状态：**已实现**（T-905a～d）；UI 现挂 **unified** 顶栏/状态栏（旧 `shells/grow/` 路径已删）  
-> 关联：[RUNTIME.md](./RUNTIME.md) §7–8 · [DESKTOP.md](./DESKTOP.md) §0 · [UX-POLISH.md](./UX-POLISH.md) · [ORCHESTRATION.md](./ORCHESTRATION.md)
+> 关联：[RUNTIME.md](./RUNTIME.md) §7–8 · [DESKTOP.md](./DESKTOP.md) §0 · [DESKTOP.md](./DESKTOP.md) · [ORCHESTRATION.md](./ORCHESTRATION.md)
 
 ---
 

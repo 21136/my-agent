@@ -309,7 +309,7 @@ Builtin **无** `a`；`allow_approve_all=false` 的 evolved **无** `a`。
 
 ### 7.3.1 `glob_file_search`（Phase 42 · **done**）
 
-> 真源：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) §3 · TASKS **T-4221** · 实现 `agent-core/tools/builtin/glob_file_search.py`
+> 真源：CURSOR-GAP-NEXT.md（历史引用已淘汰） §3 · TASKS **T-4221** · 实现 `agent-core/tools/builtin/glob_file_search.py`
 
 | 项 | 值 |
 |----|-----|
@@ -485,7 +485,7 @@ stderr: 人类可读日志（通常为空；错误优先在 stdout JSON）
 | `git_snapshot` | `evolve/tools/coding/git_snapshot/` | 只读 git status + diff --stat |
 | `patch_file` | `evolve/tools/coding/patch_file/` | 行号/锚点文本补丁（agent 根；**仅改已有文件**） |
 
-> **换行（BUG-025 · fixed T-4252）**：find / line_range 落盘经 `write_utf8_text`（LF 规范化 · 无平台换行翻译）。大文件仍优先 `_staging` + `content_workspace_path`（8192 内联上限）。详见 [bugs/2026-08-05-patch-file-crlf-corruption.md](./bugs/2026-08-05-patch-file-crlf-corruption.md)。
+> **换行（BUG-025 · fixed T-4252）**：find / line_range 落盘经 `write_utf8_text`（LF 规范化 · 无平台换行翻译）。大文件仍优先 `_staging` + `content_workspace_path`（8192 内联上限）。详见 bugs/2026-08-05-patch-file-crlf-corruption.md（历史引用已淘汰）。
 
 **data**（T-805，用户扩展主题）：
 
@@ -638,5 +638,5 @@ T7（2026-10-22）增加第 14 个一方 Builtin `evolution`。它只控制当�
 |------|------|
 | [TOOL-CATALOG.md](./TOOL-CATALOG.md) | Phase 23：INDEX / 桶 / 取消主题硬锁 |
 | [MEMORY.md](./MEMORY.md) | 主题路由、三件套、`_index.core.toml` / `_index.user.toml` |
-| [TASKS.md](./TASKS.md) | 实施 task |
-| [PROJECT.md](./PROJECT.md) | 总览 |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | 实施 task |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 |

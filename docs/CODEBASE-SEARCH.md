@@ -1,8 +1,8 @@
 # 代码库语义搜索（CODEBASE-SEARCH）
 
 > 版本 **0.1.1** · 2026-08-07 · **状态：Fable5 评审已吸收 · 实现 todo（Pack 5）**  
-> 父文档：[ROADMAP-PACK-1245.md](./ROADMAP-PACK-1245.md) §6  
-> 承接：[CURSOR-GAP-NEXT.md](./CURSOR-GAP-NEXT.md) Track I M2 · 原 T-4225 → **T-5500 done(doc)**  
+> 父文档：ROADMAP-PACK-1245.md（历史引用已淘汰） §6
+> 承接：CURSOR-GAP-NEXT.md（历史引用已淘汰） Track I M2 · 原 T-4225 → **T-5500 done(doc)**
 > 关联：[TOOLS.md](./TOOLS.md) · `glob_file_search` · [WRITE-SCOPE.md](./WRITE-SCOPE.md) · [PROJECT-MODE.md](./PROJECT-MODE.md)
 
 ---

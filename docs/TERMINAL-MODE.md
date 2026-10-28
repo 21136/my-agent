@@ -2,7 +2,7 @@
 
 > 版本 **0.3.2** · 2026-08-13 · **状态：legacy Bottom TUI done · Ink UI 阶段 0～5 done · TM-24～28 M0 done · T-5733 M1 done**  
 > **读者**：产品负责人、实现者  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./LOCAL-DELIVERY-MODEL.md) · [CLI-DESKTOP-PARITY.md](./CLI-DESKTOP-PARITY.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [REASONING-EFFORT.md](./REASONING-EFFORT.md)
+> 关联：[DESKTOP.md](./DESKTOP.md) · [PROJECT-MODE.md](./PROJECT-MODE.md) · [HOST-SCOPE.md](./HOST-SCOPE.md) · [LOCAL-DELIVERY-MODEL.md](./SELF-HOSTING-ARCHITECTURE.md) · [DESKTOP.md](./DESKTOP.md) · [AGENT-HARNESS.md](./AGENT-HARNESS.md) · [REASONING-EFFORT.md](./REASONING-EFFORT.md)
 
 ---
 
@@ -33,7 +33,7 @@ my-agent terminal                 # 无参数 = 就用这个 cwd
 | 用户要 CLI「像 Claude 终端」 | cwd 内直接改代码、跑命令，**不要**繁琐流程 |
 | 与 Desktop 混会话 | `meta` 打架（plan 态、壳线、采纳） |
 
-**结论**：Terminal 不是「瘦桌面」，是 **第二条产品线**；与 [ROADMAP-PACK-1245](./ROADMAP-PACK-1245.md) 正交。
+**结论**：Terminal 不是「瘦桌面」，是 **第二条产品线**；与 ROADMAP-PACK-1245（历史引用已淘汰） 正交。
 
 ---
 

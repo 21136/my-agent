@@ -90,7 +90,7 @@ node .\scripts\dependency-audit.mjs --json
 
 2026-10-22 已重新完成相关小测试（Python 20、Node 12）、只读依赖预检和稳定内容比较；依赖 21 项问题、Electron 类型检查 10 项错误、构建/预览前置阻断仍存在。外部审查代理未取得有效结果，**独立审查未完成、不计通过**。
 
-首次 exFAT TEMP 链接夹具失败及恢复默认 NTFS TEMP 后的重跑结果、每条验收门槛、精确命令和本机日志位置，见 [最终本地复核与交付记录](./reviews/2026-10-22-sandbox-storage-local-review.md)。这不是稳定发布批准。
+首次 exFAT TEMP 链接夹具失败及恢复默认 NTFS TEMP 后的重跑结果、每条验收门槛、精确命令和本机日志位置，见 最终本地复核与交付记录（历史引用已淘汰）。这不是稳定发布批准。
 
 ## 后续依赖对齐与构建更新（2026-10-22）
 
@@ -98,4 +98,4 @@ node .\scripts\dependency-audit.mjs --json
 
 真实 Electron 二进制/View 可见性已通过隔离无窗口夹具；5174 renderer 服务能响应 HTTP 200，但普通浏览器实际显示 preload API missing，**真实应用预览/交互仍未验收**。独立外部审查仍未完成，npm audit 另报告 7 项（4 high / 3 low），构建仍有大 chunk 与插件选项警告。未启动真实 sidecar、未重启现用应用、未改真实备份，也未提交或合入。
 
-完整命令、前后结果、截图和验收边界见 [依赖对齐与构建复核](./reviews/2026-10-22-sandbox-dependency-followup.md)。
+完整命令、前后结果、截图和验收边界见 依赖对齐与构建复核（历史引用已淘汰）。

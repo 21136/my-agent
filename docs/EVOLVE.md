@@ -474,5 +474,5 @@ conversation_id 不变（续接）──证据去重跨启动有效
 | [MEMORY.md](./MEMORY.md) | 三件套、主题、读取侧 |
 | [RUNTIME.md](./RUNTIME.md) | 续接、digest、触发入口 §9 |
 | [TOOLS.md](./TOOLS.md) | evolved 落盘与 registry |
-| [PROJECT.md](./PROJECT.md) | 总览 §4.3 进化协议 |
-| [TASKS.md](./TASKS.md) | Phase 4 实施 task |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 §4.3 进化协议 |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | Phase 4 实施 task |

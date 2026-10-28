@@ -2,7 +2,7 @@
 
 > 版本 **0.2.0** · 2026-07-30  
 > 状态：`implemented` — **前端已落地**（unified + pet；旧壳目录已删）；后端 `active_shell` / `shell_sessions` 仍作会话线标签，`shell.switch` UI 路由已退役  
-> 关联：[DESKTOP.md](./DESKTOP.md) · [UX-POLISH.md](./UX-POLISH.md) · [DAILY-SHELL.md](./DAILY-SHELL.md)（superseded） · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PET-SHELL.md](./PET-SHELL.md) · `TASKS.md`
+> 关联：[DESKTOP.md](./DESKTOP.md) · [DESKTOP.md](./DESKTOP.md) · DAILY-SHELL.md（历史引用已淘汰）（superseded） · [PROJECT-MODE.md](./PROJECT-MODE.md) · [PET-SHELL.md](./PET-SHELL.md) · `TASKS.md`
 
 ---
 

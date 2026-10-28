@@ -1,6 +1,6 @@
 # 浏览器打开（BROWSER）
 
-> 版本 **0.1.0** · 2026-08-02 · Phase **33 F1** · 关联：[CURSOR-ALIGN.md](./CURSOR-ALIGN.md) §4.F · [http_request](./PROJECT-DEV-TOOLS.md)
+> 版本 **0.1.0** · 2026-08-02 · Phase **33 F1** · 关联：CURSOR-ALIGN.md（历史引用已淘汰） §4.F · [http_request](./PROJECT-DEV-TOOLS.md)
 
 ## 心智
 

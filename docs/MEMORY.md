@@ -327,5 +327,5 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | [RUNTIME.md](./RUNTIME.md) | 续接 session、system 拼装、digest |
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、M2 写入 |
 | [GOVERNANCE.md](./GOVERNANCE.md) | review、audit、suspect、ReviewReport |
-| [TASKS.md](./TASKS.md) | Phase 3 实施 task |
-| [PROJECT.md](./PROJECT.md) | 总览 §4.4 使用侧协议 |
+| 旧项目可遗留的 `TASKS.md`（非当前任务真源） | Phase 3 实施 task |
+| [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 §4.4 使用侧协议 |
