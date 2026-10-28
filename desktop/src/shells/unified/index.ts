@@ -4881,6 +4881,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return;
     }
 
+    if (target.closest('[data-action="external-import-pick"]')) {
+      void (async () => {
+        const api = window.myAgentDesktop;
+        if (!api?.pickDirectory) return;
+        const picked = await api.pickDirectory();
+        if (!picked) return;
+        projectState.externalImportPath = picked;
+        const input = document.querySelector<HTMLInputElement>("#external-project-path");
+        if (input) input.value = picked;
+        renderSidebar();
+      })();
+      return;
+    }
     if (target.closest('[data-action="external-import-scan"]')) {
       projectCallbacks.onExternalImportScan(projectState.externalImportPath.trim(), projectState.externalImportProjectId.trim());
       return;

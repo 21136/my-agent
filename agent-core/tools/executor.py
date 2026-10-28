@@ -38,6 +38,7 @@ from tools.builtin import (
     grep,
     list_dir,
     propose_context_switch,
+    bind_project_dir,
     read_file,
     run_evolved,
     web_search,
@@ -66,6 +67,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "run_evolved": run_evolved.run,
     "evolution": evolution.run,
     "propose_context_switch": propose_context_switch.run,
+    "bind_project_dir": bind_project_dir.run,
     "deliverable_review": deliverable_review.run,
     "explore": explore.run,
 }
@@ -1469,6 +1471,8 @@ class ToolExecutor:
         builtin = self.registry.get_builtin(name)
         assert builtin is not None
 
+        if name == "bind_project_dir":
+            return self._run_bind_project_dir(args, started=started)
         if name == "propose_context_switch":
             return self._run_propose_context_switch(args, started=started)
 
@@ -1736,6 +1740,83 @@ class ToolExecutor:
             return
         if insight.failure_class in {"B", "E"} and insight.playbook_id:
             self.session.service_postcondition = "fail"
+
+
+    def _run_bind_project_dir(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        """Confirm (unless dry_run) then bind absolute dir as current project."""
+        from session import Session
+
+        name = "bind_project_dir"
+        dry_run = bool(arguments.get("dry_run"))
+        path_arg = arguments.get("path")
+        summary = path_arg.strip() if isinstance(path_arg, str) else name
+
+        if not dry_run:
+            confirm_decision = "y"
+            if self.confirm_fn is not None:
+                preview = (
+                    f"将把目录接入为当前项目：\n{summary}\n"
+                    f"可选 ID：{arguments.get('project_id') or '（从目录名推导）'}\n"
+                    f"当前项目：{(self.session.project_id or '（无）')}"
+                )
+                confirm_decision = _normalize_confirm_choice(
+                    self.confirm_fn(preview, False),
+                    False,
+                )
+            else:
+                confirm_decision = _prompt_confirm_interactive(
+                    f"bind_project_dir → {summary}",
+                    False,
+                )
+            if confirm_decision != "y":
+                result = tool_fail(
+                    name,
+                    ToolErrorCode.CONFIRM_REJECTED,
+                    "bind_project_dir rejected by user",
+                    duration_ms=_elapsed_ms(started),
+                    details={"path": path_arg},
+                )
+                self._log_tool_call(name, arguments, result, confirm="n", started=started)
+                return result
+
+        # Prefer live Session when available so meta mutations persist.
+        session_obj: Any = self.session
+        if self.session.session_dir is not None:
+            try:
+                session_obj = Session.load(self.registry.agent_paths, self.session.session_dir.name)
+            except Exception:
+                session_obj = self.session
+
+        result = bind_project_dir.run(
+            arguments,
+            paths=self.registry.agent_paths,
+            session=session_obj,
+        )
+        # Mirror meta onto executor session facade when binding succeeded.
+        if result.ok and isinstance(result.data, dict) and not dry_run:
+            pid = str(result.data.get("project_id") or "").strip()
+            if pid:
+                try:
+                    # Reload facade fields from saved session
+                    if self.session.session_dir is not None:
+                        loaded = Session.load(self.registry.agent_paths, self.session.session_dir.name)
+                        self.session.project_id = loaded.meta.project_id
+                        self.session.project_root = loaded.meta.project_root
+                        self.session.active_shell = loaded.meta.active_shell
+                except Exception:
+                    self.session.project_id = pid
+                    self.session.project_root = f"workspace/{pid}"
+                    self.session.active_shell = "project"
+            self._ensure_project_scope_tools_allowed()
+
+        confirm_label = "skipped" if dry_run else "y"
+        self._log_tool_call(name, arguments, result, confirm=confirm_label, started=started)
+        return result
 
     def _run_propose_context_switch(
         self,
@@ -2393,6 +2474,14 @@ class ToolExecutor:
                 details={"turn_mode": "ask"},
             )
 
+        if name == "bind_project_dir" and self.session.turn_mode == "ask":
+            return tool_fail(
+                name,
+                ToolErrorCode.PERMISSION_DENIED,
+                "bind_project_dir is disabled in ask mode (只聊); switch to 动手 (agent) first",
+                details={"turn_mode": "ask"},
+            )
+
         if name == "generate_image" and self.session.turn_mode == "ask":
             return tool_fail(
                 name,
@@ -3018,6 +3107,8 @@ class ToolExecutor:
             if not needs:
                 return False
             return True
+        if tool_name == "bind_project_dir" and bool(arguments.get("dry_run")):
+            return False
         if not builtin.confirm:
             return False
         if evolved is not None and not evolved.policy.confirm:
@@ -3278,6 +3369,12 @@ class ToolExecutor:
                 arguments,
                 paths=self.registry.agent_paths,
                 current_session_dir=self.session.session_dir,
+            )
+        if tool_name == "bind_project_dir":
+            return runner(
+                arguments,
+                paths=self.registry.agent_paths,
+                session=self.session,
             )
         return runner(arguments, paths=self.registry.agent_paths)
 

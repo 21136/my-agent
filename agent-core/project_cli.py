@@ -538,53 +538,181 @@ def organize_project_plan(session: Session, paths: AgentPaths) -> str:
     return f"文档整理已开始：{root}；生成/保留四个核心制品。新生成：{generated}。请确认设计后再进入实现。"
 
 
+def bind_external_project_dir(
+    session: Session,
+    paths: AgentPaths,
+    external_path: str,
+    project_id: str | None = None,
+    *,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Scan/apply an absolute directory and bind it on the *current* session.
+
+    Unlike the old import gate, an already-bound session may switch to the newly
+    adopted (or previously adopted) project — Codex-like open-folder semantics.
+    """
+    from external_project import (
+        ExternalProjectError,
+        apply_external_project,
+        detach_external_project,
+        list_external_bindings,
+        scan_external_project,
+        validate_external_binding,
+    )
+    from pathlib import Path as _Path
+
+    try:
+        scan = scan_external_project(paths, external_path, project_id=project_id)
+    except ExternalProjectError as exc:
+        raise ProjectModeError(str(exc)) from exc
+
+    scan_dict = scan.to_dict()
+    previous_pid = (session.meta.project_id or "").strip()
+    if dry_run:
+        return {
+            "action": "scan",
+            "applied": False,
+            "switched": False,
+            "already_bound": previous_pid == scan.project_id,
+            "previous_project_id": previous_pid or None,
+            "project_id": scan.project_id,
+            "external_root": scan.external_root,
+            "logical_root": scan.logical_root,
+            "scan": scan_dict,
+            "message": (
+                f"扫描完成：{scan.external_root} → workspace/{scan.project_id}；"
+                "dry_run 未接入也未切换会话。"
+            ),
+        }
+
+    # Reuse an existing healthy binding that points at the same external root.
+    resolved_root = _Path(scan.external_root).resolve()
+    existing_same_root = None
+    for binding in list_external_bindings(paths).values():
+        try:
+            if _Path(binding.external_root).resolve() == resolved_root:
+                existing_same_root = binding
+                break
+        except OSError:
+            continue
+
+    target_pid = existing_same_root.project_id if existing_same_root is not None else scan.project_id
+    if existing_same_root is not None and existing_same_root.project_id != scan.project_id:
+        # Prefer the already-registered id for this directory.
+        target_pid = existing_same_root.project_id
+
+    if previous_pid and previous_pid == target_pid:
+        healthy = validate_external_binding(paths, target_pid)
+        return {
+            "action": "already_bound",
+            "applied": False,
+            "switched": False,
+            "already_bound": True,
+            "previous_project_id": previous_pid,
+            "project_id": target_pid,
+            "external_root": (healthy.external_root if healthy else scan.external_root),
+            "logical_root": f"workspace/{target_pid}",
+            "scan": scan_dict,
+            "message": f"当前会话已绑定项目 {target_pid}，无需重复接入。",
+        }
+
+    created_binding = False
+    binding = existing_same_root
+    try:
+        if binding is None:
+            # Fresh adopt — apply may fail if workspace/<id> already exists as a
+            # non-external project; surface that clearly.
+            logical = paths.workspace / target_pid
+            if logical.exists() or __import__("os").path.lexists(logical):
+                # If it is already a healthy external binding under this id, treat as adopted.
+                binding = validate_external_binding(paths, target_pid)
+                if binding is None:
+                    raise ProjectModeError(
+                        f"项目逻辑目录已存在且不是可接入的外部绑定：workspace/{target_pid}"
+                    )
+            else:
+                # Keep scan.project_id aligned with target_pid for apply.
+                if scan.project_id != target_pid:
+                    scan = scan_external_project(paths, external_path, project_id=target_pid)
+                    scan_dict = scan.to_dict()
+                binding = apply_external_project(paths, scan)
+                created_binding = True
+                logical = project_dir(paths, binding.project_id)
+                from project_manifest import bootstrap_manifest, load_manifest, manifest_path, save_manifest
+
+                manifest_file = manifest_path(logical)
+                if load_manifest(manifest_file) is None:
+                    save_manifest(
+                        manifest_file,
+                        bootstrap_manifest(logical, binding.project_id, tier="normal"),
+                    )
+        assert binding is not None
+        bind_project_session(session, binding.project_id, plan_status="draft")
+        session.next_work_intent = "execute"
+        session.next_task_scope = ""
+        session.save()
+    except Exception as exc:
+        if created_binding and binding is not None:
+            try:
+                detach_external_project(paths, binding.project_id)
+            except Exception:
+                pass
+        if isinstance(exc, ProjectModeError):
+            raise
+        raise ProjectModeError(str(exc)) from exc
+
+    switched = bool(previous_pid) and previous_pid != binding.project_id
+    markers = ", ".join(scan.markers) or "未发现标准项目标记"
+    git_state = "有未提交修改" if scan.git_dirty else "Git 干净或不可用"
+    if created_binding:
+        action = "imported"
+        head = f"外部项目已原地接入：{binding.external_root}"
+    elif switched:
+        action = "switched"
+        head = f"已切换到已接入外部项目：{binding.external_root}"
+    else:
+        action = "bound"
+        head = f"已绑定外部项目：{binding.external_root}"
+    switch_note = f"\n已从项目 {previous_pid} 切换到 {binding.project_id}。" if switched else ""
+    message = (
+        f"{head}\n"
+        f"逻辑项目：workspace/{binding.project_id}（文件仍在原目录）\n"
+        f"检测到：{markers}；{git_state}。{switch_note}\n"
+        "当前仍是 draft；已准备一次 execute 请求，不代表计划或项目已确认。"
+    )
+    return {
+        "action": action,
+        "applied": created_binding,
+        "switched": switched,
+        "already_bound": False,
+        "previous_project_id": previous_pid or None,
+        "project_id": binding.project_id,
+        "external_root": binding.external_root,
+        "logical_root": binding.logical_root,
+        "scan": scan_dict,
+        "message": message,
+    }
+
+
 def import_external_project(
     session: Session,
     paths: AgentPaths,
     external_path: str,
     project_id: str | None = None,
 ) -> str:
-    """Adopt an external project in place through a workspace junction."""
-    from external_project import (
-        ExternalProjectError,
-        apply_external_project,
-        detach_external_project,
-        scan_external_project,
-    )
+    """Adopt an external project in place and bind it on the current session.
 
-    if session.meta.project_id:
-        raise ProjectModeError(
-            f"当前会话已绑定项目 {session.meta.project_id}；请先新开会话再导入外部项目"
-        )
-    binding = None
-    try:
-        scan = scan_external_project(paths, external_path, project_id=project_id)
-        binding = apply_external_project(paths, scan)
-        logical = project_dir(paths, binding.project_id)
-        from project_manifest import bootstrap_manifest, load_manifest, manifest_path, save_manifest
-
-        manifest_file = manifest_path(logical)
-        if load_manifest(manifest_file) is None:
-            save_manifest(manifest_file, bootstrap_manifest(logical, binding.project_id, tier="normal"))
-        bind_project_session(session, binding.project_id, plan_status="draft")
-        session.next_work_intent = "execute"
-        session.next_task_scope = ""
-        session.save()
-    except Exception as exc:
-        if binding is not None:
-            try:
-                detach_external_project(paths, binding.project_id)
-            except Exception:
-                pass
-        raise ProjectModeError(str(exc)) from exc
-    markers = ", ".join(scan.markers) or "未发现标准项目标记"
-    git_state = "有未提交修改" if scan.git_dirty else "Git 干净或不可用"
-    return (
-        f"外部项目已原地接入：{binding.external_root}\n"
-        f"逻辑项目：workspace/{binding.project_id}（文件仍在原目录）\n"
-        f"检测到：{markers}；{git_state}。\n"
-        "当前仍是 draft；已准备一次 execute 请求，不代表计划或项目已确认。"
+    If the session already has another project, this switches the binding
+    (Codex-like open folder) instead of requiring a brand-new session.
+    """
+    result = bind_external_project_dir(
+        session,
+        paths,
+        external_path,
+        project_id=project_id,
+        dry_run=False,
     )
+    return str(result["message"])
 
 
 def format_project_status(session: Session, paths: AgentPaths) -> str:

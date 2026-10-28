@@ -358,6 +358,14 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "ALWAYS call this BEFORE writing files under a different workspace/<id>/ "
         "or before evolve writes from project shell. Requires user confirm/reject."
     ),
+    "bind_project_dir": (
+        "Bind an absolute local directory as this session's current project "
+        "(Codex-like open folder). Scans then junction-adopts in place; "
+        "if the session already has another project, switches to the new one after confirm. "
+        "Use when the user says 把这个目录当项目 / open this folder as project. "
+        "Pass absolute path; optional project_id; dry_run=true only scans. "
+        "Disabled in 只聊 (ask); requires confirm unless dry_run."
+    ),
     "deliverable_review": (
         "Spawn read-only deliverable review subagent. Bound sessions default to the current project; "
         "unbound sessions must provide project_id for a workspace project. "
@@ -693,6 +701,26 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
         "required": ["action", "target"],
         "additionalProperties": False,
     },
+    "bind_project_dir": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Absolute directory path to adopt as the current project",
+            },
+            "project_id": {
+                "type": "string",
+                "description": "Optional workspace project id (defaults from folder name)",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "When true, only scan and report; do not apply or switch",
+                "default": False,
+            },
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
     "deliverable_review": {
         "type": "object",
         "properties": {
@@ -797,7 +825,7 @@ def build_llm_tools(
     tools = build_builtin_tools(registry=registry)
     tools.extend(build_proxy_tool_definitions())
     if session.meta.turn_mode == "ask":
-        blocked = {"run_evolved", "generate_image", *PROXY_EVOLVED_TOOL_NAMES}
+        blocked = {"run_evolved", "generate_image", "bind_project_dir", *PROXY_EVOLVED_TOOL_NAMES}
         tools = [item for item in tools if item["function"]["name"] not in blocked]
     return tools
 

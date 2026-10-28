@@ -1268,7 +1268,7 @@ class SubagentRunner:
             confirm_fn=confirm_fn,
             evolve_log=self.evolve_log,
         )
-        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.session.blocked_tools = frozenset({"run_evolved", "bind_project_dir", "propose_context_switch", "generate_image"})
         executor.cancel_event = cancel_event
         _bind_llm_cancel(llm, cancel_event)
 
@@ -1468,7 +1468,7 @@ class SubagentRunner:
             confirm_fn=confirm_fn,
             evolve_log=None,
         )
-        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.session.blocked_tools = frozenset({"run_evolved", "bind_project_dir", "propose_context_switch", "generate_image"})
         executor.cancel_event = cancel_event
         _bind_llm_cancel(llm, cancel_event)
 
@@ -1637,7 +1637,7 @@ class SubagentRunner:
             evolve_log=self.evolve_log,
             on_event=on_executor_event,
         )
-        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.session.blocked_tools = frozenset({"run_evolved", "bind_project_dir", "propose_context_switch", "generate_image"})
         executor.session.harness = session.meta.harness
         executor.session.terminal_scope_kind = str(session.meta.terminal_scope_kind or "")
         executor.session.terminal_cwd = session.meta.terminal_cwd
@@ -1808,7 +1808,7 @@ class SubagentRunner:
             (getattr(session.meta, "project_root", None) or "").strip()
             or project_root_rel(project_id)
         )
-        executor.session.blocked_tools = frozenset({"run_evolved"})
+        executor.session.blocked_tools = frozenset({"run_evolved", "bind_project_dir", "propose_context_switch", "generate_image"})
         executor.cancel_event = cancel_event
 
         if llm is None:

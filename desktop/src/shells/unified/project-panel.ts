@@ -878,7 +878,10 @@ function renderProjectsOverlay(state: ProjectPanelState): string {
     <section class="external-project-import" aria-label="导入外部项目">
       <div class="sidebar-change-banner-title">导入已有项目</div>
       <div class="sidebar-change-banner-changes">原目录不复制；确认后通过 junction 接入，后续修改直接落到原项目。</div>
-      <input type="text" class="overlay-search-input" id="external-project-path" placeholder="外部项目绝对路径" value="${escapeHtml(state.externalImportPath)}">
+      <div class="external-project-import-path-row">
+        <input type="text" class="overlay-search-input" id="external-project-path" placeholder="外部项目绝对路径" value="${escapeHtml(state.externalImportPath)}">
+        <button type="button" class="unified-btn" data-action="external-import-pick">浏览…</button>
+      </div>
       <input type="text" class="overlay-search-input" id="external-project-id" placeholder="项目 ID（可选）" value="${escapeHtml(state.externalImportProjectId)}">
       <button type="button" class="unified-btn" data-action="external-import-scan">扫描外部项目</button>
     </section>`;
