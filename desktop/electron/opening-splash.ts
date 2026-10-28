@@ -15,6 +15,7 @@ const distRoot = path.join(electronDir, "../dist");
 const publicRoot = path.join(electronDir, "../public");
 
 let splashWindow: BrowserWindow | null = null;
+let activeSplashFinish: (() => void) | null = null;
 
 export function openingSplashVideoPath(): string {
   const distVideo = path.join(distRoot, OPENING_SPLASH_VIDEO_BASENAME);
@@ -37,10 +38,7 @@ export function openingSplashEnabled(evolutionTestHost: boolean): boolean {
 }
 
 export async function dismissOpeningSplash(): Promise<void> {
-  const win = splashWindow;
-  splashWindow = null;
-  if (!win || win.isDestroyed()) return;
-  win.close();
+  activeSplashFinish?.();
 }
 
 async function waitForSplashPlayback(win: BrowserWindow): Promise<void> {
@@ -53,9 +51,18 @@ async function waitForSplashPlayback(win: BrowserWindow): Promise<void> {
         return;
       }
       const finish = () => resolve();
-      video.addEventListener("ended", finish, { once: true });
       video.addEventListener("error", finish, { once: true });
-      window.setTimeout(finish, ${SPLASH_MAX_WAIT_MS});
+      video.addEventListener(
+        "ended",
+        () => {
+          try {
+            video.pause();
+          } catch {
+            /* hold last frame until main dismisses splash */
+          }
+        },
+        { once: true },
+      );
       void video.play().catch(finish);
     })`,
     true,
@@ -65,11 +72,21 @@ async function waitForSplashPlayback(win: BrowserWindow): Promise<void> {
 export function playOpeningSplash(): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
+    let maxWait: ReturnType<typeof setTimeout> | undefined;
+
     const finish = () => {
       if (settled) return;
       settled = true;
-      void dismissOpeningSplash().finally(resolve);
+      activeSplashFinish = null;
+      if (maxWait !== undefined) clearTimeout(maxWait);
+      const win = splashWindow;
+      splashWindow = null;
+      if (win && !win.isDestroyed()) win.close();
+      resolve();
     };
+
+    activeSplashFinish = finish;
+    maxWait = setTimeout(finish, SPLASH_MAX_WAIT_MS);
 
     const win = new BrowserWindow({
       width: SPLASH_WIDTH,
@@ -101,7 +118,6 @@ export function playOpeningSplash(): Promise<void> {
     void win
       .loadURL(openingSplashPageHref())
       .then(() => waitForSplashPlayback(win))
-      .catch(() => undefined)
-      .finally(finish);
+      .catch(() => undefined);
   });
 }
