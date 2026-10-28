@@ -45,7 +45,7 @@ MAX_EVIDENCE_PER_PROPOSAL = 2
 RECENT_MESSAGE_TURNS = 12
 VALID_PROPOSAL_TYPES = frozenset({"memory", "prompt_patch", "tool_suggestion"})
 VALID_MODES = frozenset({"create", "update"})
-TriggeredBy = Literal["explicit", "llm_offer"]
+TriggeredBy = Literal["explicit", "llm_offer", "compact_deposit"]
 
 CHECKPOINT_USER_TEMPLATE = """用户触发词：{trigger_phrase}
 用户原句：{user_line}
@@ -1330,6 +1330,45 @@ def run_explicit_checkpoint(
     )
 
 
+
+SOFT_DEPOSIT_TRIGGER = "压缩后沉淀"
+
+
+def maybe_soft_deposit_after_compact(
+    session: Session,
+    *,
+    client: ChatClient | None = None,
+    paths: AgentPaths | None = None,
+    evolve_log: EvolveLog | None = None,
+) -> CheckpointResult | None:
+    """After compact, draft pending proposals from digest/dialogue (human still accepts).
+
+    OpenClaw/Mem0-inspired soft deposit: write to pending inbox, never auto-publish.
+    Skips when digest missing, corpus empty, or pending already at checkpoint cap.
+    """
+    from llm_client import LLMError, LLMMissingApiKeyError
+
+    agent_paths = paths or session.paths
+    if not session.digest_path.is_file():
+        return None
+    if len(list_pending_proposals(agent_paths)) >= MAX_PROPOSALS_PER_CHECKPOINT:
+        return None
+    if not build_dialogue_corpus(session):
+        return None
+    try:
+        return run_explicit_checkpoint(
+            session,
+            trigger_phrase=SOFT_DEPOSIT_TRIGGER,
+            user_line=SOFT_DEPOSIT_TRIGGER,
+            client=client,
+            paths=agent_paths,
+            triggered_by="compact_deposit",
+            evolve_log=evolve_log,
+        )
+    except (LLMMissingApiKeyError, EvolveError, LLMError):
+        return None
+
+
 def proposals_archive_dir(evolve_dir: Path) -> Path:
     return evolve_dir / PROPOSALS_DIRNAME / PROPOSALS_ARCHIVE_DIRNAME
 
@@ -2559,6 +2598,31 @@ def _demo() -> None:
             for e in dedup_events
         )
         print("[PASS] T-407: run_explicit_checkpoint logs blocked dedup")
+
+
+    # --- T-408: soft deposit after compact skips without digest / empty corpus ---
+    with tempfile.TemporaryDirectory(prefix="evolve-soft-") as soft_tmp:
+        soft_root = Path(soft_tmp)
+        (soft_root / "evolve" / "proposals").mkdir(parents=True)
+        (soft_root / "evolve" / "_index.core.toml").write_text("[core]\n", encoding="utf-8")
+        (soft_root / "data" / "sessions" / "soft-deposit").mkdir(parents=True)
+        soft_paths = AgentPaths.from_root(soft_root)
+        soft_session = Session(
+            conversation_id="soft-deposit",
+            session_dir=soft_root / "data" / "sessions" / "soft-deposit",
+            goal="soft deposit",
+            meta=SessionMeta(topics=["coding"], llm_model="pro", updated_at=utc_now_iso()),
+            messages=[{"role": "user", "content": "hello"}],
+            paths=soft_paths,
+        )
+        assert maybe_soft_deposit_after_compact(soft_session, paths=soft_paths) is None
+        print("[PASS] T-408: soft deposit skips when digest missing")
+
+        soft_session.digest_path.write_text("# Digest\n\n## 1\n\n", encoding="utf-8")
+        soft_session.messages = []
+        assert maybe_soft_deposit_after_compact(soft_session, paths=soft_paths) is None
+        print("[PASS] T-408b: soft deposit skips when dialogue corpus empty")
+
 
     if load_config().api_key:
         print("[SKIP] live checkpoint LLM (optional)")

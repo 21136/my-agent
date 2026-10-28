@@ -162,6 +162,7 @@ export type ServerEvent =
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
   | { type: "turn.end"; ok: boolean; finish_reason: string; run_id?: string }
   | { type: "evolve.proposals"; items: ProposalItem[] }
+  | { type: "evolve.memories"; items: MemoryItem[] }
   | { type: "evolution.bound"; evolution_id: string; conversation_id: string; host_run_id: string }
   | { type: "evolution.denied"; conversation_id: string }
   | { type: "evolution.state"; evolution_id: string; conversation_id: string; host_run_id: string; projection: EvolutionProjection }
@@ -517,6 +518,13 @@ export type ProposalItem = {
   summary: string;
   target_path?: string | null;
   topics: string[];
+};
+
+export type MemoryItem = {
+  memory_id: string;
+  topics: string[];
+  summary: string;
+  path: string;
 };
 
 export type ProjectDocItem = {
@@ -911,6 +919,10 @@ export class AgentWsClient {
 
   rejectProposal(proposalId: string): void {
     this.send({ type: "proposal.reject", proposal_id: proposalId });
+  }
+
+  listMemories(): void {
+    this.send({ type: "memory.list" });
   }
 
   listSessions(): void {

@@ -1397,6 +1397,25 @@ class Agent:
                         }
                     )
                 self._emit_turn_event(session_memory_event(self.session))
+                try:
+                    from evolve import maybe_soft_deposit_after_compact
+
+                    deposit = maybe_soft_deposit_after_compact(
+                        self.session,
+                        client=self.llm,
+                        paths=self.session.paths,
+                        evolve_log=EvolveLog.for_agent(self.session.paths),
+                    )
+                    if deposit is not None and deposit.written_paths:
+                        self._emit_turn_event(
+                            {
+                                "type": "turn.notice",
+                                "level": "info",
+                                "text": deposit.user_message,
+                            }
+                        )
+                except Exception:
+                    pass
                 _refresh_dynamic_system()
                 full_system = loaded_system.prompt
             if compact_result and compact_result.compacted:

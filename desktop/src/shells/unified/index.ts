@@ -18,6 +18,7 @@ import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusT
 import { settledToolStatus } from "../tool-outcome";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
+import { renderMemoryShelf, memoryShelfLabel, type MemoryShelfState } from "./memory-shelf";
 import {
   canRequestProjectDocs,
   noticeMirrorsToStatus,
@@ -84,7 +85,7 @@ import { renderShellDevPanel } from "./shell-dev-panel";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
-import type { AgentWsClient, ProposalItem, ServerEvent } from "../../api/ws";
+import type { AgentWsClient, MemoryItem, ProposalItem, ServerEvent } from "../../api/ws";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { renderConfirmCardHtml, summarizeConfirmPreview } from "./confirm-preview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
@@ -198,6 +199,8 @@ export function mountUnifiedShell(
     intentLabel: "",
     checkerLabel: "",
     memoryLabel: "",
+    memoryCount: 0,
+    pendingMemoryCount: 0,
     projectLabel: "",
     contextLabel: "",
     sessionCount: 0,
@@ -231,6 +234,8 @@ export function mountUnifiedShell(
 
   function refreshTopbar(): void {
     syncTopbarFromProject();
+    topbarState.memoryCount = memoryShelfState.memories.length;
+    topbarState.pendingMemoryCount = memoryShelfState.pending.length || topbarState.proposals.length;
     renderTopbar(
       topbarEl,
       topbarState,
@@ -240,12 +245,19 @@ export function mountUnifiedShell(
       handleNewProject,
       handleNewThread,
       handleHeaderNextStepAction,
+      openMemoryShelf,
     );
   }
 
   const proposalsState: ProposalsState = {
     proposals: [] as ProposalItem[],
     proposalIndex: 0,
+    expandOpen: false,
+  };
+
+  const memoryShelfState: MemoryShelfState = {
+    memories: [] as MemoryItem[],
+    pending: [] as ProposalItem[],
     expandOpen: false,
   };
 
@@ -1767,6 +1779,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function openProposals(): void {
+    memoryShelfState.expandOpen = false;
     proposalsState.expandOpen = true;
     syncProposalsState();
     renderProposalsPanel();
@@ -1792,11 +1805,39 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     proposalsState.proposals = items;
     proposalsState.proposalIndex = 0;
     if (!items.length) proposalsState.expandOpen = false;
-    // also sync topbarState for renderTopbar
     topbarState.proposals = items;
+    memoryShelfState.pending = items;
+    topbarState.pendingMemoryCount = items.length;
     syncProposalsState();
     refreshTopbar();
     renderProposalsPanel();
+    if (memoryShelfState.expandOpen) renderMemoryShelfPanel();
+  }
+
+  function openMemoryShelf(): void {
+    proposalsState.expandOpen = false;
+    renderProposalsPanel();
+    sessionsOpen = false;
+    memoryShelfState.expandOpen = true;
+    renderMemoryShelfPanel();
+    client.listMemories();
+  }
+
+  function renderMemoryShelfPanel(): void {
+    memoryShelfState.pending = topbarState.proposals;
+    renderMemoryShelf(expandEl, memoryShelfState, client, openProposals);
+    expandEl.addEventListener("memory:close", () => {
+      memoryShelfState.expandOpen = false;
+      renderMemoryShelfPanel();
+      refreshTopbar();
+    }, { once: true });
+  }
+
+  function handleMemoriesEvent(items: MemoryItem[]): void {
+    memoryShelfState.memories = items;
+    topbarState.memoryCount = items.length;
+    refreshTopbar();
+    if (memoryShelfState.expandOpen) renderMemoryShelfPanel();
   }
 
   // ---- project panel helpers ----
@@ -5367,6 +5408,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         handleProposalsEvent(event.items);
         break;
 
+      case "evolve.memories":
+        handleMemoriesEvent(event.items);
+        break;
+
       case "evolution.bound":
         if (event.conversation_id !== chat.model.sessionId) break;
         evolutionBeginPending = false;
@@ -6066,6 +6111,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   updatePlaceholder();
   refreshTopbar();
   renderProposalsPanel();
+  renderMemoryShelfPanel();
   renderChat();
   setComposerEnabled(true);
   setStatus("已连接");
