@@ -109,6 +109,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         dry_run_supported=False,
     ),
     BuiltinTool(
+        "bind_project_dir",
+        "Bind an absolute directory as the current session project (scan/apply external project; may switch)",
+        confirm=True,
+        dry_run_supported=True,
+    ),
+    BuiltinTool(
         "deliverable_review",
         "Spawn read-only project review; bound sessions default current project, unbound sessions require project_id",
         confirm=False,
