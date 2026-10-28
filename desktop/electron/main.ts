@@ -46,6 +46,7 @@ import {
   openingSplashEnabled,
   playOpeningSplash,
 } from "./opening-splash";
+import { workbenchDefaultWindowSize } from "./workbench-window-defaults";
 import {
   getSandboxAdoptStatus,
   createSandboxAdoptRequestHandler,
@@ -1070,9 +1071,10 @@ async function createWorkbenchWindow(): Promise<void> {
   }
 
   const windowIcon = loadAppIcon(256);
+  const { width, height } = workbenchDefaultWindowSize();
   workbenchWindow = new BrowserWindow({
-    width: 960,
-    height: 720,
+    width,
+    height,
     minWidth: 640,
     minHeight: 480,
     title: "my-agent",
