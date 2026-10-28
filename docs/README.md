@@ -15,6 +15,7 @@
 - 桌面/工作台：[DESKTOP](./DESKTOP.md) · [WORKBENCH-UI](./WORKBENCH-UI.md) · [会话线程](./PROJECT-THREADS.md)
 - 记忆（现行 + 草案）：[MEMORY](./MEMORY.md) · [按天日记记忆草案（未实现）](./DAY-JOURNAL-MEMORY.md)
 - Agent 与工具：[AGENT-HARNESS](./AGENT-HARNESS.md) · [ORCHESTRATION](./ORCHESTRATION.md) · [TOOLS](./TOOLS.md) · [TOOL-CATALOG](./TOOL-CATALOG.md)
+- 多项目编排草案（未实现）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)（主 Agent 调度 · 按项目 worker）
 - 生命周期/长任务：[执行可观测](./EXEC-OBSERVABILITY.md) · [执行可靠性](./EXEC-RELIABILITY.md) · `agent-core/execution_lifecycle.py` · `agent-core/goal_runtime.py`
 - 稳定/实验双车道：[SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md) · [SANDBOX-STORAGE](./SANDBOX-STORAGE.md)
 - Managed 发布：[MANAGED-POSTMERGE-RELEASE](./MANAGED-POSTMERGE-RELEASE.md) · [MANAGED-SELECTED-MERGE](./MANAGED-SELECTED-MERGE.md) · [SELF-HOSTING-SECURITY](./SELF-HOSTING-SECURITY.md)
