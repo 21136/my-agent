@@ -14,6 +14,10 @@ export interface TopbarState {
   checkerLabel: string;
   /** @deprecated M2 — no longer rendered in chrome */
   memoryLabel: string;
+  /** Accepted long-term memories count (shelf chip). */
+  memoryCount: number;
+  /** Pending evolve proposals count for shelf chip. */
+  pendingMemoryCount: number;
   /** Current project id (display name). */
   projectLabel: string;
   /** One-line goal / status from deriveProjectGoalViewModel.title */
@@ -28,6 +32,7 @@ export type TopbarHandlers = {
   onNewThread?: () => void;
   onOpenSessions?: () => void;
   onOpenProposals?: () => void;
+  onOpenMemory?: () => void;
   onHeaderAction?: (action: string) => void;
 };
 
@@ -40,6 +45,7 @@ export function renderTopbar(
   onNewProject?: () => void,
   onNewThread?: () => void,
   onHeaderAction?: (action: string) => void,
+  onOpenMemory?: () => void,
 ): void {
   const handlers: TopbarHandlers = {
     onNewChat: onNewSession,
@@ -47,6 +53,7 @@ export function renderTopbar(
     onNewThread,
     onOpenSessions,
     onOpenProposals,
+    onOpenMemory,
     onHeaderAction,
   };
   renderTopbarV2(container, state, handlers);
@@ -79,6 +86,7 @@ function bindTopbarHandlers(container: HTMLElement, handlers: TopbarHandlers): v
   container.querySelector<HTMLButtonElement>("#unified-new-project")?.addEventListener("click", () => handlers.onNewProject?.());
   container.querySelector<HTMLButtonElement>("#unified-open-sessions")?.addEventListener("click", () => handlers.onOpenSessions?.());
   container.querySelector<HTMLButtonElement>("#unified-open-proposal")?.addEventListener("click", () => handlers.onOpenProposals?.());
+  container.querySelector<HTMLButtonElement>("#unified-open-memory")?.addEventListener("click", () => handlers.onOpenMemory?.());
   container.querySelectorAll<HTMLButtonElement>(".unified-header-cta").forEach((btn) => {
     btn.addEventListener("click", () => handlers.onHeaderAction?.(btn.dataset.action || ""));
   });
@@ -121,7 +129,17 @@ export function renderTopbarV2(
   const sessionsBtn = handlers.onOpenSessions && !state.headerCtas.length
     ? `<button type="button" class="unified-btn unified-btn-ghost" id="unified-open-sessions" title="最近会话">${state.sessionCount ? `会话 ${state.sessionCount}` : "会话"}</button>`
     : "";
-  const trailing = `<div class="unified-topbar-trailing">${sessionsBtn}</div>`;
+  const memoryCount = state.memoryCount ?? 0;
+  const pendingCount = state.pendingMemoryCount ?? 0;
+  const memoryChipLabel = pendingCount > 0
+    ? `记忆 ${memoryCount} · 待审 ${pendingCount}`
+    : memoryCount > 0
+      ? `记忆 ${memoryCount}`
+      : "记忆";
+  const memoryBtn = handlers.onOpenMemory
+    ? `<button type="button" class="unified-btn unified-btn-ghost unified-topbar-memory-btn" id="unified-open-memory" title="记住了什么">${memoryChipLabel}</button>`
+    : "";
+  const trailing = `<div class="unified-topbar-trailing">${memoryBtn}${sessionsBtn}</div>`;
   const headerCtas = state.headerCtas.length
     ? `<div class="unified-header-ctas">${state.headerCtas.map((item) => {
       const accent = item.accent ? " unified-btn-accent" : "";
@@ -130,7 +148,7 @@ export function renderTopbarV2(
     : "";
 
   if (!proposal) {
-    if (!state.projectLabel && !state.contextLabel && !state.headerCtas.length) {
+    if (!state.projectLabel && !state.contextLabel && !state.headerCtas.length && !handlers.onOpenMemory) {
       container.innerHTML = "";
       container.classList.add("is-empty-bar");
       return;

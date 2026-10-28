@@ -34,6 +34,7 @@ from evolve import (
 from llm_client import LLMError, resolve_model_entry  # noqa: F401
 from llm_client import StreamHandlers
 from context import session_memory_event, validate_llm_model_switch
+from loader import scan_memory_index
 from execution_lifecycle import ExecutionLifecycle
 from llm_models import models_list_event
 from main import ConversationRepl, ReplConfig
@@ -87,6 +88,20 @@ def _session_banner_payload(session: Session) -> dict[str, Any]:
 def _proposals_payload(paths: AgentPaths) -> dict[str, Any]:
     items = [_proposal_item(record) for record in list_pending_proposals(paths)]
     return {"type": "evolve.proposals", "items": items}
+
+
+def _memory_item(entry: Any) -> dict[str, Any]:
+    return {
+        "memory_id": entry.memory_id,
+        "topics": list(entry.topics),
+        "summary": entry.summary,
+        "path": entry.path,
+    }
+
+
+def _memories_payload(paths: AgentPaths) -> dict[str, Any]:
+    items = [_memory_item(entry) for entry in scan_memory_index(paths.evolve)]
+    return {"type": "evolve.memories", "items": items}
 
 
 @dataclass
@@ -456,6 +471,7 @@ class WsBridge:
         )
         self.emit(models_list_event(self.paths))
         self.emit(_proposals_payload(self.paths))
+        self.emit(_memories_payload(self.paths))
         if session.meta.project_id:
             from project_api import project_state_payload
 
@@ -627,6 +643,9 @@ async def _run_line(
         bridge.end_turn()
         # UX-019: emit updated token usage after every turn
         bridge.emit(session_memory_event(repl.session))
+        # Memory shelf: keep accepted + pending in sync after compact soft-deposit
+        bridge.emit(_proposals_payload(paths))
+        bridge.emit(_memories_payload(paths))
         # C9: always close the turn so desktop can resetTurnActivity (BUG-012).
         if bridge.finish_execution(finish_reason, ok=ok):
             bridge.emit_turn_event(
@@ -1132,6 +1151,11 @@ class WsSessionHandler:
             bridge.emit({"type": "notice", "text": f"已切换模式：{label}"})
             return
 
+        if msg_type == "memory.list":
+            bridge.emit(_memories_payload(self.paths))
+            bridge.emit(_proposals_payload(self.paths))
+            return
+
         if msg_type == "proposal.accept":
             proposal_id = message.get("proposal_id")
             if not isinstance(proposal_id, str):
@@ -1145,6 +1169,7 @@ class WsSessionHandler:
                 )
                 bridge.emit({"type": "notice", "text": result.message})
                 bridge.emit(_proposals_payload(self.paths))
+                bridge.emit(_memories_payload(self.paths))
             except EvolveError as exc:
                 emit_error(bridge, str(exc))
             return
@@ -1162,6 +1187,7 @@ class WsSessionHandler:
                 )
                 bridge.emit({"type": "notice", "text": result.message})
                 bridge.emit(_proposals_payload(self.paths))
+                bridge.emit(_memories_payload(self.paths))
             except EvolveError as exc:
                 emit_error(bridge, str(exc))
             return
@@ -2072,10 +2098,12 @@ def _demo() -> int:
 
     bridge.emit_session_state(session)
     assert events[0]["type"] == "session.banner"
-    assert events[1]["type"] == "session.memory"
-    assert events[2]["type"] == "session.history"
-    assert events[3]["type"] == "evolve.proposals"
-    print("[PASS] T-904a: session.banner + memory + history + proposals")
+    assert events[1]["type"] == "session.history"
+    assert events[2]["type"] == "session.memory"
+    types = [e["type"] for e in events]
+    assert "evolve.proposals" in types
+    assert "evolve.memories" in types
+    print("[PASS] T-904a: session.banner + history + memory + proposals + memories")
 
     delivered: list[str] = []
 

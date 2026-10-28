@@ -39,6 +39,7 @@ from evolve import (
     reject_proposals_at_paths,
     reject_proposals_batch,
     reset_evolve_escalation,
+    maybe_soft_deposit_after_compact,
     run_explicit_checkpoint,
 )
 from loader import log_session_start, log_topics_confirmed
@@ -416,6 +417,17 @@ class ConversationRepl:
         try:
             result = compact_context(self.session, self.agent.llm, force=True)
             self.output_fn(result.message)
+            if result.compacted:
+                deposit = maybe_soft_deposit_after_compact(
+                    self.session,
+                    client=self.agent.llm,
+                    paths=self.paths,
+                )
+                if deposit is not None and deposit.written_paths:
+                    self.output_fn(deposit.user_message)
+                    for path in deposit.written_paths:
+                        rel = path.relative_to(self.paths.evolve).as_posix()
+                        self.output_fn(f"proposal: evolve/{rel}")
         except LLMError as exc:
             if "content policy" in str(exc).casefold():
                 self.output_fn(
