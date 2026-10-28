@@ -2039,8 +2039,9 @@ app.whenReady().then(async () => {
     return;
   }
 
-  await splashWork;
   await openWorkbenchWindow();
+  await dismissOpeningSplash();
+  await splashWork;
   if(fixedHostContext){fixedHostContext.revalidate();process.stdout.write(JSON.stringify(fixedHostContext.readyFrame())+"\n");}
 });
 
