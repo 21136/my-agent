@@ -2,7 +2,7 @@
 
 > 版本 **0.1.1** · 2026-08-06 · **状态：M0 代码 done · S-500/S-501 手工 todo**  
 > 触发：Phase 49 后普通对话联调——explore 16 轮 + 父补读 `docs/TOOLS.md`；讨论中明确：**这不是读错目录**（未绑项目时对账对象就是 agent 内核）；**内核 auto explore 是与 Cursor 的差异化能力，不应全局禁止**。  
-> 关联：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · [bugs/2026-08-06-explore-auto-spawn-wrong-scope.md](./bugs/2026-08-06-explore-auto-spawn-wrong-scope.md)（**BUG-027**） · Phase 50 T-5000～5010
+> 关联：[AGENT-PARENT-ORCHESTRATION.md](./AGENT-PARENT-ORCHESTRATION.md) · [SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) · bugs/2026-08-06-explore-auto-spawn-wrong-scope.md（历史引用已淘汰）（**BUG-027**） · Phase 50 T-5000～5010
 
 ---
 
@@ -47,8 +47,8 @@ scope_rail(session)
 ├─ project_id 非空 AND active_shell == "project"
 │     → rail = project
 │     → 默认对账根 = workspace/{project_id}/
-│     → 内核 auto explore = OFF（T-4801）
-│     → 口语脱节 / 验收 → 父选 deliverable_review 或父写 task 的 explore
+│     → 内核 auto explore = ON + scope_rail=project 包装（Phase 50；T-4801 硬关已退）
+│     → 口语脱节 / 验收 → 仍可父选 deliverable_review 或父写 task 的 explore
 └─ 否则
       → rail = general（含 grow · 普通对话 · 未绑项目 CLI）
       → 默认对账根 = agent 根（docs/ · agent-core/ · evolve/）
@@ -81,10 +81,10 @@ scope_rail(session)
 | grow / scaffold | P3 | 造工具前读范例 |
 | Kill-switch | `MY_AGENT_AUTO_EXPLORE=0` | 运维 / 测试 |
 
-### 3.2 项目轨已落地（Phase 48）
+### 3.2 项目轨（Phase 48 → Phase 50）
 
-- `project_explore_autospawn_disabled` → 绑项目 + `active_shell=project` 时不预 spawn  
-- 父调 `explore` / `deliverable_review`；task 由父撰写  
+- `project_explore_autospawn_disabled` → **恒 False**（硬关已退）；预 spawn 走 `build_kernel_auto_explore_task`  
+- 父调 `explore` / `deliverable_review` 仍保留；父调 `explore` 同样套 scope rail  
 
 ### 3.3 待落地（Phase 50 · 实现前评审）
 

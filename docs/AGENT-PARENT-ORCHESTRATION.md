@@ -9,7 +9,7 @@
 ## 0. 一句话
 
 **主 Agent = 薄指挥**：理解用户意图 → **显式下命令**（`deliverable_review` / `plan_partner` / `explore` / `run_evolved`）→ **合成一条**用户可见回复。  
-**项目模式**：禁内核自动 explore（P1）；**普通对话 / grow**：**保留**内核 auto explore（与 Cursor 差异化，见 [EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) S3/S4）。  
+**项目模式**：允许内核 auto explore，但 **必须**经 Phase 50 scope rail 包装（默认读 `workspace/{id}`，见 [EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md)）；**普通对话 / grow**：**保留**内核 auto explore（与 Cursor 差异化，见同文档 S3/S4）。  
 **对账类优先委派子代理**；overlay 不足时主 Agent **可补读**（[SUBAGENT-BUDGET.md](./SUBAGENT-BUDGET.md) B3）。
 
 ---
@@ -18,8 +18,8 @@
 
 | ID | 决议 |
 |----|------|
-| **P0** | **项目轨编排权**：`project_id` + `active_shell=project` 时，读什么 / review / explore 由 **主 Agent 显式 builtin** 决定；**不由**内核 `should_spawn_explore` 抢先 |
-| **P1** | **项目模式**：**禁止内核自动 explore**（BUG-027）；口语「看看 / 查 / 还缺什么」进主回合，由主 Agent 选 `deliverable_review` 或父写 task 的 `explore` |
+| **P0** | **项目轨编排权**：`project_id` + `active_shell=project` 时，主 Agent 仍显式调度 `deliverable_review` / `explore`；内核 auto explore **仅**在 Phase 50 scope rail 下预调研，不得裸 `user_text` 翻 agent 根 |
+| **P1** | **项目模式**：内核 auto explore **开**，但 task 必须经 `build_kernel_auto_explore_task`（`scope_rail=project`）包装（BUG-027 修法从「禁 spawn」升级为「禁裸 scope」）；口语「看看 / 查」仍可由主 Agent 再调 `deliverable_review` / `explore` |
 | **P2** | **`explore` 与 `deliverable_review` 对称**（项目轨）：均为父调 builtin；`task` 由主 Agent 撰写 |
 | **P3** | **普通对话 / grow**：**保留**内核 auto explore（口语 + execute/research）；grow 造工具读 `evolve/tools` 范例 |
 | **P4** | **子代理 scope 写在 task 里**（项目轨）；普通轨默认 scope = agent 内核（[EXPLORE-SCOPE-RAILS.md](./EXPLORE-SCOPE-RAILS.md) S0/S1） |
