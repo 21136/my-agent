@@ -771,10 +771,17 @@ def project_explore_autospawn_disabled(
     project_id: str = "",
     active_shell: str = "",
 ) -> bool:
-    """Phase 48 / BUG-027: bound project shell must not kernel-auto explore."""
-    pid = (project_id or "").strip()
-    shell = (active_shell or "").strip()
-    return bool(pid) and shell == "project"
+    """Phase 50: hard-disable retired; project rail uses scoped auto explore instead.
+
+    Phase 48 / BUG-027 originally returned True for bound project shells so the
+    kernel would not auto-spawn explore with a bare user_text (which read agent
+    docs). Phase 50 ``build_kernel_auto_explore_task`` wraps the task with a
+    project scope rail, so the gate stays open and relies on that wrapper.
+    ``project_id`` / ``active_shell`` are kept for call-site compatibility.
+    """
+    _ = (project_id or "").strip()
+    _ = (active_shell or "").strip()
+    return False
 
 
 def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
@@ -800,7 +807,7 @@ def should_spawn_explore_for_turn(
     active_shell: str = "",
     explicit: bool = False,
 ) -> bool:
-    """Auto explore gate including project-mode disable (AGENT-PARENT-ORCHESTRATION P1)."""
+    """Auto explore gate (project rail no longer hard-disabled; Phase 50 scope rails)."""
     if project_explore_autospawn_disabled(project_id=project_id, active_shell=active_shell):
         return False
     return should_spawn_explore(user_text, explicit=explicit)
@@ -859,10 +866,10 @@ def _demo() -> None:
     assert should_spawn_explore("按 run_demo 造 bar")
     print("[PASS] MY_AGENT_AUTO_EXPLORE=0 disables auto spawn")
 
-    assert project_explore_autospawn_disabled(project_id="huiyi", active_shell="project")
+    assert not project_explore_autospawn_disabled(project_id="huiyi", active_shell="project")
     assert not project_explore_autospawn_disabled(project_id="huiyi", active_shell="grow")
     assert not project_explore_autospawn_disabled(project_id="", active_shell="project")
-    assert not should_spawn_explore_for_turn(
+    assert should_spawn_explore_for_turn(
         "文档和代码脱节了，你看看",
         project_id="huiyi",
         active_shell="project",
@@ -872,7 +879,7 @@ def _demo() -> None:
         project_id="",
         active_shell="grow",
     )
-    print("[PASS] IT-4801: project shell disables auto explore")
+    print("[PASS] IT-4801/Phase50: project shell allows scoped auto explore")
 
 
 if __name__ == "__main__":

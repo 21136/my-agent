@@ -2238,11 +2238,24 @@ class ToolExecutor:
         )
 
         try:
+            from explore_scope import build_kernel_auto_explore_task
             from llm_client import LLMClient
 
+            # Same Phase 50 scope rail as kernel auto explore so parent-invoked
+            # explore in a bound project does not re-read agent-root docs by default.
+            scoped_task = build_kernel_auto_explore_task(
+                task,
+                project_id=str(getattr(session.meta, "project_id", "") or ""),
+                active_shell=str(
+                    getattr(session.meta, "active_shell", None)
+                    or getattr(self.session, "active_shell", "")
+                    or ""
+                ),
+                scaffold_tool_turn=bool(getattr(session, "scaffold_tool_turn", False)),
+            )
             runner = SubagentRunner(paths=paths_agent, evolve_log=self.evolve_log)
             sub_result, did_continue = runner.run_explore_with_continue(
-                task,
+                scoped_task,
                 session=session,
                 llm=LLMClient(),
                 confirm_fn=self.confirm_fn,

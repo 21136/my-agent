@@ -22,8 +22,9 @@ from tests.isolation_helpers import temporary_agent_paths
 
 
 class ProjectExploreAutospawnTests(unittest.TestCase):
-  def test_project_shell_disables_auto_explore(self) -> None:
-    self.assertTrue(
+  def test_project_shell_allows_scoped_auto_explore(self) -> None:
+    # Phase 50: hard-disable retired; scope rails wrap the task instead.
+    self.assertFalse(
         project_explore_autospawn_disabled(project_id="huiyi", active_shell="project")
     )
     self.assertFalse(
@@ -33,10 +34,10 @@ class ProjectExploreAutospawnTests(unittest.TestCase):
         project_explore_autospawn_disabled(project_id="", active_shell="project")
     )
 
-  def test_it4801_huiyi_look_phrase_no_spawn(self) -> None:
+  def test_it4801_huiyi_look_phrase_spawns_with_scope(self) -> None:
     text = "文档和代码可能脱节了，你看看"
     self.assertTrue(should_spawn_explore(text))
-    self.assertFalse(
+    self.assertTrue(
         should_spawn_explore_for_turn(
             text,
             project_id="huiyi",
@@ -69,7 +70,7 @@ class RunTurnProjectExploreTests(unittest.TestCase):
     )
     return Agent(session=session, executor=executor, llm=MagicMock())
 
-  def test_run_turn_skips_explore_in_project_shell(self) -> None:
+  def test_run_turn_spawns_scoped_explore_in_project_shell(self) -> None:
     with temporary_agent_paths() as paths:
       session = create_new(paths)
       session.meta.project_id = "huiyi"
@@ -78,16 +79,31 @@ class RunTurnProjectExploreTests(unittest.TestCase):
 
       agent = self._make_agent(paths, session)
       from agent import TurnResult
+      from subagent import SubagentResult
 
+      explore_result = SubagentResult(
+        kind="explore",
+        summary="scoped",
+        paths_cited=["workspace/huiyi/PROJECT.md"],
+        tool_rounds=1,
+        truncated=False,
+        task="看看",
+      )
       with patch.object(agent, "_run_execute_segments") as mock_segments:
         mock_segments.return_value = TurnResult(
           assistant_text="ok",
           tool_rounds=0,
           finish_reason="stop",
         )
-        with patch("subagent.SubagentRunner.run_explore") as mock_explore:
+        with patch(
+            "subagent.SubagentRunner.run_explore",
+            return_value=explore_result,
+        ) as mock_explore:
           agent.run_turn("文档和代码可能脱节了，你看看")
-          mock_explore.assert_not_called()
+          mock_explore.assert_called_once()
+          task_arg = mock_explore.call_args.args[0]
+          self.assertIn("scope_rail=project", task_arg)
+          self.assertIn("workspace", task_arg)
 
   def test_run_turn_explicit_spawn_explore_still_runs(self) -> None:
     with temporary_agent_paths() as paths:
@@ -181,7 +197,8 @@ class ExploreBuiltinTests(unittest.TestCase):
 class Phase48ProjectToolingTests(unittest.TestCase):
 
   def test_it4804_automated_proxy_for_s480(self) -> None:
-    """S-480 kernel half: no auto explore + review routing in prompt."""
+    """S-480/Phase50: scoped auto explore + review routing in prompt."""
+    from explore_scope import build_kernel_auto_explore_task
     from paths import AgentPaths
     from loader import build_system_prompt
 
@@ -192,13 +209,20 @@ class Phase48ProjectToolingTests(unittest.TestCase):
     session.meta.project_root = "workspace/huiyi"
     session.meta.project_delivery_profile = "solo"
     text = "文档和代码可能脱节了，你看看"
-    self.assertFalse(
+    self.assertTrue(
       should_spawn_explore_for_turn(
         text,
         project_id=session.meta.project_id,
         active_shell=session.meta.active_shell,
       )
     )
+    scoped = build_kernel_auto_explore_task(
+      text,
+      project_id=session.meta.project_id,
+      active_shell=session.meta.active_shell,
+    )
+    self.assertIn("scope_rail=project", scoped)
+    self.assertIn("workspace", scoped)
     loaded = build_system_prompt(session, paths=paths)
     self.assertIn("deliverable_review", loaded.prompt)
     self.assertIn("脱节", loaded.prompt)
