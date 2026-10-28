@@ -1248,12 +1248,17 @@ export async function createWsClient(): Promise<AgentWsClient> {
   if (!api) {
     throw new Error("myAgentDesktop preload API missing");
   }
-  const sidecar = await api.getSidecar();
+  const deadline = Date.now() + 30_000;
+  let sidecar: { host: string; port: number } | null = null;
+  while (Date.now() < deadline) {
+    sidecar = await api.getSidecar();
+    if (sidecar) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
   if (!sidecar) {
     throw new Error("Python sidecar not ready");
   }
   const client = new AgentWsClient(sidecar.host, sidecar.port);
-  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
       await client.connect();

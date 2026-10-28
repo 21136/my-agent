@@ -15,11 +15,12 @@ test("opening splash asset and page reference splash-xiaomowang.mp4", () => {
   assert.match(splashModule, /OPENING_SPLASH_VIDEO_BASENAME = "splash-xiaomowang\.mp4"/);
 });
 
-test("electron main opens workbench after sidecar then dismisses splash (no post-splash dead wait)", () => {
+test("electron main overlaps sidecar startup with workbench load and dismisses splash when workbench shows", () => {
   assert.match(mainSource, /playOpeningSplash\(\)/);
-  assert.match(mainSource, /await openWorkbenchWindow\(\)/);
+  assert.match(mainSource, /revealColdStartWorkbench/);
   assert.match(mainSource, /await dismissOpeningSplash\(\)/);
-  assert.match(mainSource, /await splashWork;/);
+  assert.match(mainSource, /Promise\.all\(\[runSidecarStartup\(\), revealColdStartWorkbench\(\)\]\)/);
+  assert.doesNotMatch(mainSource, /await runSidecarStartup\(\);\s*\n\s*await openWorkbenchWindow\(\)/);
   assert.doesNotMatch(mainSource, /await splashWork;\s*\n\s*await openWorkbenchWindow\(\)/);
 });
 

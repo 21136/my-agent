@@ -1965,6 +1965,54 @@ ipcMain.handle(
   },
 );
 
+async function runSidecarStartup(): Promise<void> {
+  if (evolutionTestHostContextError) throw evolutionTestHostContextError;
+  if (evolutionTestHostContext) {
+    const hostConfig = await buildEvolutionTestSupervisorConfig(evolutionTestHostContext);
+    evolutionSupervisorHost = await createEvolutionSupervisorHost(hostConfig, { bootstrapRegistry: evolutionSidecarBootstraps });
+  }
+  await ensureSidecar();
+  if (legacySandboxLaneAllowed()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
+  if (evolutionTestHostContext) {
+    evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
+    if (evolutionTestHostContext.profile.candidate_fixture_profile === "t4-recovery-node-v1") {
+      process.stdout.write(`${JSON.stringify({ type: "evolution-test-host-ready", host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 })}\n`);
+    }
+  }
+}
+
+/** Cold start: load/show workbench without waiting for sidecar (renderer polls until ready). */
+async function revealColdStartWorkbench(): Promise<void> {
+  await createWorkbenchWindow();
+  workbenchWindow?.show();
+  workbenchWindow?.focus();
+  await dismissOpeningSplash();
+}
+
+async function handleSidecarStartupFailure(err: unknown): Promise<void> {
+  await dismissOpeningSplash();
+  try {
+    await closeEvolutionSupervisorHost();
+  } catch (closeError) {
+    console.error("[evolution] supervisor cleanup failed:", closeError);
+  }
+  try {
+    await closeEvolutionTestRendererServer();
+  } catch (closeError) {
+    console.error("[evolution] renderer cleanup failed:", closeError);
+  }
+  stopSidecar();
+  console.error("Failed to start Python sidecar or fixed test Host:", err);
+  await dialog.showMessageBox({
+    type: "error",
+    title: "my-agent",
+    message: "无法启动会话 sidecar",
+    detail: err instanceof Error ? err.message : String(err),
+  });
+  quitting = true;
+  finalizeAppExit();
+}
+
 ipcMain.handle("constellation:clear", () => {
   atomicWriteJson(CONSTELLATION_PATH, { version: 1, stars: [], links: [] });
   return true;
@@ -1987,46 +2035,17 @@ app.whenReady().then(async () => {
     : Promise.resolve();
 
   try {
-    if (evolutionTestHostContextError) throw evolutionTestHostContextError;
     if (evolutionTestHostContext) {
-      const hostConfig = await buildEvolutionTestSupervisorConfig(evolutionTestHostContext);
-      evolutionSupervisorHost = await createEvolutionSupervisorHost(hostConfig, { bootstrapRegistry: evolutionSidecarBootstraps });
-    }
-    await ensureSidecar();
-    if (legacySandboxLaneAllowed()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
-    if (evolutionTestHostContext) {
-      evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
-      if (evolutionTestHostContext.profile.candidate_fixture_profile === "t4-recovery-node-v1") {
-        process.stdout.write(`${JSON.stringify({ type: "evolution-test-host-ready", host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 })}\n`);
-      }
+      await runSidecarStartup();
+      await revealColdStartWorkbench();
+    } else {
+      await Promise.all([runSidecarStartup(), revealColdStartWorkbench()]);
     }
   } catch (err) {
-    await dismissOpeningSplash();
-    try {
-      await closeEvolutionSupervisorHost();
-    } catch (closeError) {
-      console.error("[evolution] supervisor cleanup failed:", closeError);
-    }
-    try {
-      await closeEvolutionTestRendererServer();
-    } catch (closeError) {
-      console.error("[evolution] renderer cleanup failed:", closeError);
-    }
-    stopSidecar();
-    console.error("Failed to start Python sidecar or fixed test Host:", err);
-    await dialog.showMessageBox({
-      type: "error",
-      title: "my-agent",
-      message: "无法启动会话 sidecar",
-      detail: err instanceof Error ? err.message : String(err),
-    });
-    quitting = true;
-    finalizeAppExit();
+    await handleSidecarStartupFailure(err);
     return;
   }
 
-  await openWorkbenchWindow();
-  await dismissOpeningSplash();
   await splashWork;
   if(fixedHostContext){fixedHostContext.revalidate();process.stdout.write(JSON.stringify(fixedHostContext.readyFrame())+"\n");}
 });
