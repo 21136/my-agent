@@ -28,3 +28,11 @@ test("opening splash holds last frame until main dismisses (video ended does not
   assert.match(splashModule, /video\.pause\(\)/);
   assert.doesNotMatch(splashModule, /addEventListener\("ended", finish/);
 });
+
+test("opening splash and workbench share default BrowserWindow size", () => {
+  assert.match(splashModule, /workbenchDefaultWindowSize\(\)/);
+  assert.match(mainSource, /workbenchDefaultWindowSize\(\)/);
+  assert.doesNotMatch(splashModule, /SPLASH_WIDTH\s*=\s*1280/);
+  assert.doesNotMatch(mainSource, /width:\s*960,\s*\n\s*height:\s*720,/);
+  assert.match(splashHtml, /object-fit:\s*cover/);
+});

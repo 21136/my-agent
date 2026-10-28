@@ -2,12 +2,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BrowserWindow } from "electron";
+import { workbenchDefaultWindowSize } from "./workbench-window-defaults";
 
 /** Approved cold-start splash clip (Neon Twin · 小魔王). Served from Vite `public/`. */
 export const OPENING_SPLASH_VIDEO_BASENAME = "splash-xiaomowang.mp4";
 
-const SPLASH_WIDTH = 1280;
-const SPLASH_HEIGHT = 720;
 const SPLASH_MAX_WAIT_MS = 12_000;
 
 const electronDir = path.dirname(fileURLToPath(import.meta.url));
@@ -88,9 +87,10 @@ export function playOpeningSplash(): Promise<void> {
     activeSplashFinish = finish;
     maxWait = setTimeout(finish, SPLASH_MAX_WAIT_MS);
 
+    const { width, height } = workbenchDefaultWindowSize();
     const win = new BrowserWindow({
-      width: SPLASH_WIDTH,
-      height: SPLASH_HEIGHT,
+      width,
+      height,
       frame: false,
       resizable: false,
       movable: false,
