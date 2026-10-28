@@ -42,6 +42,11 @@ import {
 } from "./preview-url-policy";
 import { shellDevEmbedZoom } from "./shell-dev-embed-zoom";
 import {
+  dismissOpeningSplash,
+  openingSplashEnabled,
+  playOpeningSplash,
+} from "./opening-splash";
+import {
   getSandboxAdoptStatus,
   createSandboxAdoptRequestHandler,
   createSandboxAdopter,
@@ -1991,6 +1996,10 @@ app.whenReady().then(async () => {
   buildTray();
   registerShortcuts();
 
+  const splashWork = openingSplashEnabled(Boolean(evolutionTestHostContext))
+    ? playOpeningSplash()
+    : Promise.resolve();
+
   try {
     if (evolutionTestHostContextError) throw evolutionTestHostContextError;
     if (evolutionTestHostContext) {
@@ -2006,6 +2015,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (err) {
+    await dismissOpeningSplash();
     try {
       await closeEvolutionSupervisorHost();
     } catch (closeError) {
@@ -2029,6 +2039,7 @@ app.whenReady().then(async () => {
     return;
   }
 
+  await splashWork;
   await openWorkbenchWindow();
   if(fixedHostContext){fixedHostContext.revalidate();process.stdout.write(JSON.stringify(fixedHostContext.readyFrame())+"\n");}
 });
