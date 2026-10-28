@@ -318,8 +318,23 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 
 ---
 
-## 11. 文档索引
 
+## 10.1 草案 / 未实现：按天日记 + 一个界面
+
+> **状态：proposal · 未实现。** 仅文档；无运行时代码。用户仍有后续想法待补充。
+
+在现行三件套之外，产品向设想是：
+
+- **一个会话界面**承载日常使用；
+- 底下用 **按天日记目录**（日期 · 聊了什么压缩 · 动过哪些项目名/id）做时间线；
+- **某天详情**里闲聊保留，进项目时段只留短提示 + **稳定链接**；
+- 完整片段进 **按项目、再按天** 的会话库；
+- **久远记忆**继续走 Letta / MemGPT（小索引 + 按需正文），与日记分工：日记管何时/哪个项目，久远管跨天硬事实；同一事实不双写。
+
+完整草案、建议写入时机、链接坐标与第一刀切片见 **[DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md)**。
+
+---
+## 11. 文档索引
 | 文档 | 内容 |
 |------|------|
 | [TOOL-CATALOG.md](./TOOL-CATALOG.md) | 工具 INDEX / 取消主题硬锁（与主题 prompt 解耦） |
@@ -328,4 +343,5 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 | [EVOLVE.md](./EVOLVE.md) | proposal、防重复、M2 写入 |
 | [GOVERNANCE.md](./GOVERNANCE.md) | review、audit、suspect、ReviewReport |
 | 旧项目可遗留的 `TASKS.md`（非当前任务真源） | Phase 3 实施 task |
+| [DAY-JOURNAL-MEMORY.md](./DAY-JOURNAL-MEMORY.md) | **草案/未实现**：按天日记 + 项目链接 + 与久远分工 |
 | [PRODUCTION-PROJECT-MVP.md](./PRODUCTION-PROJECT-MVP.md) | 总览 §4.4 使用侧协议 |
