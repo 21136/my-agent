@@ -20,9 +20,9 @@ type Options<Caller> = {
   validateRequest: (value: unknown) => Request;
   loadBackend?: (caller: Caller) => void | Promise<void>;
   resolveRoots: (caller: Caller) => Roots | Promise<Roots>;
-  /** Read is deliberately synchronous: the post-confirm read, prepare, trust check, and execute have no async gap. */
+  /** Checkpoint reads stay synchronous; worker prepare yields and a final read rebinds the checkpoint before execution. */
   readCheckpoint: (caller: Caller, request: Request, roots: Roots) => Checkpoint;
-  prepare: (input: PrepareInput<Caller>) => MergePlan;
+  prepare: (input: PrepareInput<Caller>) => MergePlan | Promise<MergePlan>;
   /** Must display selected paths/files/hashes/modes, both root bindings and heads/indexes, preservation scope, and explicitly exclude history, unrelated changes, activation, and model calls. */
   confirm: (input: { caller: Caller; request: Request; plan: MergePlan }) => boolean | Promise<boolean>;
   /** Executes with the exact final re-read checkpoint; asynchronous worker uncertainty is maintenance-required, never retry-safe. */
@@ -112,9 +112,9 @@ function safeRefusal(error: unknown): Failure | null {
   });
   return { ok: false, code: error.code, paths, message: `源码范围被拒绝（${error.code}）${paths.length ? `：${paths.join("、")}` : "。"}` };
 }
-function prepare<Caller>(options: Options<Caller>, input: PrepareInput<Caller>, checkpoint: Checkpoint): MergePlan | Failure {
+async function prepare<Caller>(options: Options<Caller>, input: PrepareInput<Caller>, checkpoint: Checkpoint): Promise<MergePlan | Failure> {
   try {
-    const plan = sync(options.prepare({ ...input, checkpoint }), "prepare");
+    const plan = await options.prepare({ ...input, checkpoint });
     validatePlan(plan, checkpoint, input.request);
     return plan;
   } catch (error) { return safeRefusal(error) ?? { ok: false, message: ERROR }; }
@@ -147,26 +147,37 @@ export function createManagedSelectedMergeHandler<Caller>(options: Options<Calle
       const firstCheckpoint = sync(options.readCheckpoint(caller, request, roots), "readCheckpoint");
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       validateCheckpoint(firstCheckpoint, request);
-      const firstPlan = prepare(options, { caller, request, roots, checkpoint: firstCheckpoint }, firstCheckpoint);
-      if ("ok" in firstPlan) return firstPlan;
+      const firstPlan = await prepare(options, { caller, request, roots, checkpoint: firstCheckpoint }, firstCheckpoint);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
+      if ("ok" in firstPlan) return firstPlan;
       const confirmed = await options.confirm({ caller, request, plan: structuredClone(firstPlan) });
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       if (confirmed !== true) return { ok: false, message: CANCELLED };
-      // From this final synchronous read through execute, there is no await or event-loop yield.
+      // Final prepare yields; synchronously reread the checkpoint and rebind it before execution.
       const finalCheckpoint = sync(options.readCheckpoint(caller, request, roots), "readCheckpoint");
       validateCheckpoint(finalCheckpoint, request);
-      const finalPlan = prepare(options, { caller, request, roots, checkpoint: finalCheckpoint }, finalCheckpoint);
+      const finalPlan = await prepare(options, { caller, request, roots, checkpoint: finalCheckpoint }, finalCheckpoint);
+      if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       if ("ok" in finalPlan) return finalPlan;
       if (finalPlan.planDigest !== firstPlan.planDigest || finalPlan.checkpointDigest !== firstPlan.checkpointDigest
           || JSON.stringify(finalPlan.selectedPaths) !== JSON.stringify(firstPlan.selectedPaths)) return { ok: false, message: "检查点或已选源码计划已变化，请重新审查后重试。" };
+      // Close the worker prepare await window. From this synchronous reread through execute dispatch, no await occurs.
+      const executionCheckpoint = sync(options.readCheckpoint(caller, request, roots), "readCheckpoint");
+      validateCheckpoint(executionCheckpoint, request);
+      if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
+      if (executionCheckpoint.checkpointDigest !== finalCheckpoint.checkpointDigest
+          || executionCheckpoint.checkpointDigest !== finalPlan.checkpointDigest
+          || JSON.stringify(selectedPaths(executionCheckpoint)) !== JSON.stringify(finalPlan.selectedPaths)) {
+        return { ok: false, message: "检查点或已选源码计划已变化，请重新审查后重试。" };
+      }
       // Another handler may have consumed this identity while this one awaited confirmation.
+
       const finalRefusal = consumedRefusal(checkpointDigest);
       if (finalRefusal) return finalRefusal;
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       executionStates.set(checkpointDigest, "consumed");
       executeStarted = true;
-      const rawReceipt = await options.execute({ caller, request, plan: finalPlan, roots, finalCheckpoint });
+      const rawReceipt = await options.execute({ caller, request, plan: finalPlan, roots, finalCheckpoint: executionCheckpoint });
       if (!options.isTrusted(caller)) throw new Error("selected merge caller disconnected or lost authorization");
       validateReceipt(rawReceipt, finalPlan);
       const receipt = structuredClone(rawReceipt);

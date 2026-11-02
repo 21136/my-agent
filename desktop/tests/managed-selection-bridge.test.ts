@@ -79,7 +79,7 @@ test('production wiring uses trusted handler and selection API, never adoption e
   const index = readFileSync(new URL('../src/shells/unified/index.ts', import.meta.url), 'utf8');
   assert.match(main, /shell-dev:managed-source-selection/);
   const block = main.slice(main.indexOf('const managedSelectionHandler'), main.indexOf('ipcMain.handle("shell-dev:sandbox-adopt-status"'));
-  assert.match(block, /assertShellDevWorkbenchSender/); assert.match(block, /validateManagedSelectionRequest/); assert.match(block, /inspectManagedReview/);
+  assert.match(block, /assertShellDevWorkbenchSender/); assert.match(block, /validateManagedSelectionRequest/); assert.match(block, /operation: "identity"/); assert.match(block, /operation: "review"/);
   assert.doesNotMatch(block, /executeRecorded|mergeSandbox|prepareAndMerge|writeFile|execSync|spawn\(/);
   assert.match(preload, /proposeManagedSourceSelection/); assert.match(index, /mountManagedSourceSelection/);
   assert.match(index, /managedSourceSelection\.clear\(\)/); assert.match(index, /managedSourceSelection\.show\(report\)/);

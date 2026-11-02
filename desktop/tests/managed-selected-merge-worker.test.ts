@@ -153,8 +153,11 @@ test("worker uses the exact host-confirmed plan and checkpoint bindings", async 
 
 test("main resolves the worker entry from the repository root and that source file exists", () => {
   const source = readFileSync(path.join(desktopRoot, "electron", "main.ts"), "utf8");
-  const match = source.match(/new Worker\(path\.join\(AGENT_ROOT,((?:\s*"[^"]+"\s*,?)+)\)\s*,/);
-  assert.ok(match, "worker path must be an explicit AGENT_ROOT-relative join");
+  const executeStart = source.indexOf("  execute: ({ caller, request, plan, roots, finalCheckpoint }) => {");
+  assert.ok(executeStart >= 0, "selected merge execute callback must remain present");
+  const executeBlock = source.slice(executeStart, source.indexOf('ipcMain.handle("shell-dev:managed-selected-merge"', executeStart));
+  const match = executeBlock.match(/new Worker\(path\.join\(AGENT_ROOT,((?:\s*"[^"]+"\s*,?)+)\)\s*,/);
+  assert.ok(match, "execute worker path must remain an explicit AGENT_ROOT-relative join");
   const segments = [...match[1].matchAll(/"([^"]+)"/g)].map(item => item[1]);
   const agentRoot = repositoryRoot;
   const resolvedWorker = path.join(agentRoot, ...segments);

@@ -45,10 +45,11 @@ function harness(overrides: Record<string, any> = {}, checkpointDigest = newChec
   return { handler: createManagedSelectedMergeHandler(deps), request: () => request(checkpointDigest), deps, events, confirmedPlan: () => confirmedPlan, setTrusted: (value: boolean) => { trusted = value; }, reads: () => reads, merges: () => merges };
 }
 
-test("confirms complete bindings then synchronously rereads, replans, and executes with final checkpoint", async () => {
+test("confirms complete bindings then synchronously rereads, replans, and recaptures before execute", async () => {
   const h = harness(); const result = await h.handler({}, h.request());
   assert.equal(result.ok, true); assert.equal(h.merges(), 1);
-  assert.deepEqual(h.events, ["backend", "roots", "checkpoint", "prepare", "confirm", "checkpoint", "prepare", "execute"]);
+  assert.deepEqual(h.events, ["backend", "roots", "checkpoint", "prepare", "confirm", "checkpoint", "prepare", "checkpoint", "execute"]);
+  assert.equal(h.reads(), 3);
   assert.equal(h.confirmedPlan().stable.rawIndexSha256, hash("2"));
   assert.deepEqual((result as any).receipt, receipt(plan(h.request().checkpointDigest)));
   assert.doesNotMatch(JSON.stringify(result), /private|bytesBase64/);
@@ -64,6 +65,19 @@ test("cancel, stale checkpoint, changed plan and trust loss never execute", asyn
   for (const h of [cancelled, stale, changed, untrusted]) { assert.equal((await h.handler({}, h.request())).ok, false); assert.equal(h.merges(), 0); }
 });
 
+test("final synchronous reread detects checkpoint tampering after async prepare and passes latest read to execute", async () => {
+  const h = harness(); let reads = 0;
+  h.deps.readCheckpoint = () => { h.events.push("checkpoint"); reads++; return checkpoint(reads === 3 ? hash("e") : h.request().checkpointDigest); };
+  const result = await h.handler({}, h.request());
+  assert.equal(result.ok, false); assert.equal(reads, 3); assert.equal(h.merges(), 0); assert.ok(!h.events.includes("execute"));
+});
+
+test("trust revoked during the final synchronous checkpoint reread never reaches execute", async () => {
+  const h = harness(); let reads = 0;
+  h.deps.readCheckpoint = () => { h.events.push("checkpoint"); reads++; if (reads === 3) h.setTrusted(false); return checkpoint(h.request().checkpointDigest); };
+  assert.equal((await h.handler({}, h.request())).ok, false); assert.equal(h.merges(), 0); assert.equal(reads, 3);
+});
+
 test("rejects bad arity, fixture/untrusted callers, busy requests and thenable checkpoint", async () => {
   for (const extra of [false, true]) { const h = harness(); const args = extra ? [h.request(), h.request()] : []; assert.equal((await h.handler({}, ...args)).ok, false); assert.deepEqual(h.events, []); }
   for (const overrides of [{ isFixture: true }, { isTrusted: () => false }, { readCheckpoint: async () => checkpoint(hash("a")) }]) {
@@ -76,7 +90,7 @@ test("rejects bad arity, fixture/untrusted callers, busy requests and thenable c
 });
 
 test("surfaces safe refusal code and only normalized source paths, never arbitrary exception text", async () => {
-  const h = harness({ prepare: () => { const error: any = new Error("sensitive raw message"); error.code = "selected_overlap"; error.paths = ["desktop/ok.ts", "desktop/bad\nname.ts", "desktop/colon:name.ts", "C:/private/file.ts", "node_modules/pkg/index.js"]; throw error; } });
+  const h = harness({ prepare: async () => { await new Promise(resolve => setImmediate(resolve)); const error: any = new Error("sensitive raw message"); error.code = "selected_overlap"; error.paths = ["desktop/ok.ts", "desktop/bad\nname.ts", "desktop/colon:name.ts", "C:/private/file.ts", "node_modules/pkg/index.js"]; throw error; } });
   const result = await h.handler({}, h.request());
   assert.equal((result as any).code, "selected_overlap"); assert.deepEqual((result as any).paths, ["desktop/ok.ts"]);
   assert.doesNotMatch(JSON.stringify(result), /sensitive|bad|colon|private|node_modules/);
@@ -146,11 +160,11 @@ test("rejects symlink mode, mismatched object format, and an unapproved post-mer
   assert.equal((await h.handler({}, h.request()) as any).maintenanceRequired, true);
 });
 
-test("rejects thenable prepare before confirmation without consuming the digest", async () => {
-  const h = harness({ prepare: ({ checkpoint: current }: any) => Promise.resolve(plan(current.checkpointDigest)) });
-  assert.equal((await h.handler({}, h.request())).ok, false); assert.equal(h.events.includes("confirm"), false);
-  h.deps.prepare = ({ checkpoint: current }: any) => plan(current.checkpointDigest);
-  assert.equal((await h.handler({}, h.request())).ok, true);
+test("awaits both worker-backed prepare passes and rechecks trust before execute", async () => {
+  let h: ReturnType<typeof harness>; let passes = 0;
+  h = harness({ prepare: async ({ checkpoint: current }: any) => { h.events.push("worker-prepare-start"); await new Promise(resolve => setImmediate(resolve)); passes++; if (passes === 2) h.setTrusted(false); h.events.push("worker-prepare-finish"); return plan(current.checkpointDigest); } });
+  assert.equal((await h.handler({}, h.request())).ok, false);
+  assert.equal(passes, 2); assert.equal(h.merges(), 0); assert.ok(!h.events.includes("execute"));
 });
 
 test("native bridge rejects malformed preservation bytes or paths before presenting consent", async () => {

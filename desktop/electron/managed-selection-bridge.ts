@@ -7,8 +7,8 @@ type Options<Caller, Selection extends Request> = {
   isTrusted: (caller: Caller) => boolean;
   isFixture?: boolean;
   validateRequest: (value: unknown) => Selection;
-  resolveRoots: () => Promise<Roots>;
-  inspect: (roots: Roots) => Promise<Report>;
+  resolveRoots: (caller: Caller) => Promise<Roots>;
+  inspect: (roots: Roots, caller: Caller) => Promise<Report>;
   propose: (input: { review: Report; request: Selection }) => Report;
 };
 
@@ -29,9 +29,9 @@ export function createManagedSelectionHandler<Caller, Selection extends Request>
     if (busy) return { ok: false, message: '源码范围正在核验，请稍后重试。' };
     busy = true;
     try {
-      const roots = await options.resolveRoots();
+      const roots = await options.resolveRoots(caller);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
-      const review = await options.inspect(roots);
+      const review = await options.inspect(roots, caller);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       if (review.review_digest !== request.reviewDigest) return { ok: false, message: '源码已变化，请重新读取审查报告后选择范围。' };
       const proposal = options.propose({ review, request });

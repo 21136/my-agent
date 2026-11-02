@@ -66,6 +66,7 @@ import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed
 import { createManagedSelectionHandler } from "./managed-selection-bridge";
 import { createManagedCheckpointHandler } from "./managed-checkpoint-bridge";
 import { createManagedSelectedMergeHandler } from "./managed-selected-merge-bridge";
+import { runManagedSourceAnalysis } from "./managed-source-analysis-worker-client.mjs";
 import { showManagedConfirmDialog, summarizeBlockers } from "./managed-confirm-dialog";
 import { validateManagedSelectionRequest, createManagedSourceSelectionProposal } from "../launcher/managed-source-selection.mjs";
 import { validateManagedCheckpointRequest } from "../launcher/managed-source-checkpoint.mjs";
@@ -1335,15 +1336,15 @@ const managedSelectionHandler = createManagedSelectionHandler({
   isTrusted: (event: IpcMainInvokeEvent) => assertShellDevWorkbenchSender(event),
   isFixture: Boolean(fixedHostContext || evolutionTestHostContext),
   validateRequest: validateManagedSelectionRequest,
-  resolveRoots: () => resolveManagedReviewRoots(AGENT_ROOT, async (roots) => {
-    const sourcePlanUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-source-plan.mjs")).href;
-    const { inspectManagedSources } = await import(sourcePlanUrl);
-    return inspectManagedSources({ ...roots, metadataOnlyHistory: true });
+  resolveRoots: async (event: IpcMainInvokeEvent) => resolveManagedReviewRoots(AGENT_ROOT, async (roots) => {
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "identity", roots, isTrusted: () => assertShellDevWorkbenchSender(event) });
+    if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted selection caller");
+    return result.identity;
   }),
-  inspect: async (roots) => {
-    const reviewUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-review.mjs")).href;
-    const { inspectManagedReview } = await import(reviewUrl);
-    return inspectManagedReview(roots);
+  inspect: async (roots, event: IpcMainInvokeEvent) => {
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "review", roots, isTrusted: () => assertShellDevWorkbenchSender(event) });
+    if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted selection caller");
+    return result.report;
   },
   propose: createManagedSourceSelectionProposal,
 });
@@ -1386,20 +1387,14 @@ const managedCheckpointHandler = createManagedCheckpointHandler<IpcMainInvokeEve
   isFixture: Boolean(fixedHostContext || evolutionTestHostContext),
   validateRequest: validateManagedCheckpointRequest,
   resolveRoots: async (event) => resolveManagedReviewRoots(AGENT_ROOT, async (roots) => {
-    const sourcePlanUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-source-plan.mjs")).href;
-    const { inspectManagedSources } = await import(sourcePlanUrl);
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "identity", roots, isTrusted: () => assertShellDevWorkbenchSender(event) });
     if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
-    const identity = await inspectManagedSources({ ...roots, metadataOnlyHistory: true });
-    if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
-    return identity;
+    return result.identity;
   }),
   inspect: async (roots, event) => {
-    const reviewUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-review.mjs")).href;
-    const { inspectManagedReview } = await import(reviewUrl);
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "review", roots, isTrusted: () => assertShellDevWorkbenchSender(event) });
     if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
-    const report = await inspectManagedReview(roots);
-    if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
-    return report;
+    return result.report;
   },
   propose: createManagedSourceSelectionProposal,
   loadBackend: async (event) => {
@@ -1408,10 +1403,34 @@ const managedCheckpointHandler = createManagedCheckpointHandler<IpcMainInvokeEve
     if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
     managedCheckpointBackend = backend;
   },
-  capture: (input, event) => {
-    const backend = managedCheckpointBackend;
-    if (!backend || !assertShellDevWorkbenchSender(event)) throw new Error("checkpoint backend unavailable");
-    return backend.captureManagedSourceCheckpoint(input);
+  capture: async (input, event) => {
+    if (!managedCheckpointBackend || !assertShellDevWorkbenchSender(event)) throw new Error("checkpoint backend unavailable");
+    const pack = await new Promise<import("../launcher/managed-source-checkpoint.mjs").ManagedSourceCheckpoint>((resolve, reject) => {
+      const worker = new Worker(path.join(AGENT_ROOT, "desktop", "electron", "managed-checkpoint-capture-worker.mjs"), {
+        workerData: { mode: "managed_source_checkpoint_capture_worker_v1", codeRoot: AGENT_ROOT, roots: { stableRoot: input.stableRoot, sandboxRoot: input.sandboxRoot }, captureInput: { review: input.review, request: input.request } },
+        env: { PATH: process.env.PATH ?? process.env.Path ?? "", SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? "", WINDIR: process.env.WINDIR ?? process.env.Windir ?? "" },
+      });
+      let settled = false;
+      const finish = (error?: Error, value?: import("../launcher/managed-source-checkpoint.mjs").ManagedSourceCheckpoint) => {
+        if (settled) return; settled = true;
+        if (error) { reject(error); void worker.terminate(); } else resolve(value!);
+      };
+      worker.on("message", (message: any) => {
+        if (!message || typeof message !== "object") { finish(new Error("checkpoint capture worker protocol invalid")); return; }
+        if (message.type === "authorization_required") {
+          const signal = message.signal instanceof SharedArrayBuffer && message.signal.byteLength === Int32Array.BYTES_PER_ELEMENT ? new Int32Array(message.signal) : null;
+          let allowed = false; try { allowed = Boolean(signal && assertShellDevWorkbenchSender(event)); } catch { allowed = false; }
+          if (!signal) { finish(new Error("checkpoint capture authorization channel invalid")); return; }
+          Atomics.store(signal, 0, allowed ? 1 : 2); Atomics.notify(signal, 0); return;
+        }
+        if (message.type === "finished" && message.pack && typeof message.pack === "object" && !Array.isArray(message.pack)) finish(undefined, message.pack);
+        else finish(new Error("checkpoint capture worker failed"));
+      });
+      worker.once("error", (error) => finish(error));
+      worker.once("exit", (code) => { if (!settled) finish(new Error(`checkpoint capture worker exited (${code})`)); });
+    });
+    if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted checkpoint caller");
+    return pack;
   },
   confirm: async (pack, event) => {
     const parent = workbenchWindow;
@@ -1506,18 +1525,11 @@ const managedSelectedMergeHandler = createManagedSelectedMergeHandler<IpcMainInv
     managedSelectedMergeBackend = backend;
     managedSelectedMergeCheckpointBackend = checkpointBackend;
   },
-  resolveRoots: async (event) => {
-    const roots = await resolveManagedReviewRoots(AGENT_ROOT, async (candidate) => {
-      const sourcePlanUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-source-plan.mjs")).href;
-      const { inspectManagedSources } = await import(sourcePlanUrl);
-      if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted selected merge caller");
-      const identity = await inspectManagedSources({ ...candidate, metadataOnlyHistory: true });
-      if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted selected merge caller");
-      return identity;
-    });
+  resolveRoots: async (event) => resolveManagedReviewRoots(AGENT_ROOT, async (roots) => {
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "identity", roots, isTrusted: () => assertShellDevWorkbenchSender(event) });
     if (!assertShellDevWorkbenchSender(event)) throw new Error("untrusted selected merge caller");
-    return roots;
-  },
+    return result.identity;
+  }),
   readCheckpoint: (_event, request, roots) => {
     const backend = managedSelectedMergeCheckpointBackend;
     if (!backend) throw new Error("checkpoint reader unavailable");
@@ -1525,11 +1537,11 @@ const managedSelectedMergeHandler = createManagedSelectedMergeHandler<IpcMainInv
     managedSelectedMergeCheckpoint = checkpoint;
     return checkpoint;
   },
-  prepare: ({ roots, checkpoint }) => {
-    const backend = managedSelectedMergeBackend;
-    if (!backend) throw new Error("selected merge backend unavailable");
-    // Trusted Host policy only; the renderer request never supplies this option.
-    return backend.prepareManagedSelectedMerge({ stableRoot: roots.stableRoot, sandboxRoot: roots.sandboxRoot, checkpoint, gitExecutable: "C:\\Program Files\\Git\\cmd\\git.exe", preserveStableWorkingChanges: true });
+  prepare: async ({ caller, roots, checkpoint }) => {
+    if (!managedSelectedMergeBackend || !assertShellDevWorkbenchSender(caller)) throw new Error("selected merge backend unavailable");
+    const result = await runManagedSourceAnalysis({ codeRoot: AGENT_ROOT, operation: "prepare", roots, checkpoint, isTrusted: () => assertShellDevWorkbenchSender(caller) });
+    if (!assertShellDevWorkbenchSender(caller)) throw new Error("untrusted selected merge caller");
+    return result.plan as import("../launcher/managed-selected-merge.mjs").ManagedSelectedMergePlan;
   },
   confirm: async ({ caller, request, plan }) => {
     const parent = workbenchWindow;

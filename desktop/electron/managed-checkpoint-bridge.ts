@@ -15,7 +15,7 @@ type Options<Caller> = {
   resolveRoots: (caller: Caller) => Promise<Roots>;
   inspect: (roots: Roots, caller: Caller) => Promise<Report>;
   propose: (input: { review: Report; request: { format: 1; mode: "managed_source_selection_request_v1"; reviewDigest: string; selectedPaths: string[] } }) => Proposal;
-  capture: (input: { review: Report; request: Request; stableRoot: string; sandboxRoot: string }, caller: Caller) => Pack;
+  capture: (input: { review: Report; request: Request; stableRoot: string; sandboxRoot: string }, caller: Caller) => Pack | Promise<Pack>;
   confirm: (pack: Pack, caller: Caller) => Promise<boolean>;
   persist: (input: { sandboxRoot: string; checkpoint: Pack }) => Receipt;
 };
@@ -36,10 +36,6 @@ function validateProposal(proposal: Proposal, request: Request): void {
       || proposal.checkpointCreated !== false || proposal.nativeConsent !== false || !Array.isArray(proposal.blockers)) {
     throw new TypeError("proposal binding invalid");
   }
-}
-function synchronousPack(value: unknown): Pack {
-  if (value !== null && (typeof value === "object" || typeof value === "function") && typeof (value as { then?: unknown }).then === "function") throw new TypeError("checkpoint capture must be synchronous");
-  return value as Pack;
 }
 function validatePack(pack: Pack, review: Report, request: Request): void {
   if (!isRecord(pack) || pack.format !== 1 || pack.mode !== "managed_selected_source_checkpoint_v1"
@@ -84,7 +80,7 @@ export function createManagedCheckpointHandler<Caller>(options: Options<Caller>)
       const proposal = options.propose({ review, request: { format: 1, mode: "managed_source_selection_request_v1", reviewDigest: request.reviewDigest, selectedPaths: [...request.selectedPaths] } });
       validateProposal(proposal, request);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
-      const captured = synchronousPack(options.capture({ review, request, ...roots }, caller));
+      const captured = await options.capture({ review, request, ...roots }, caller);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       validatePack(captured, review, request);
       const confirmed = await options.confirm(captured, caller);
@@ -96,7 +92,7 @@ export function createManagedCheckpointHandler<Caller>(options: Options<Caller>)
       const finalProposal = options.propose({ review: finalReview, request: { format: 1, mode: "managed_source_selection_request_v1", reviewDigest: request.reviewDigest, selectedPaths: [...request.selectedPaths] } });
       validateProposal(finalProposal, request);
       if (finalProposal.proposal_digest !== proposal.proposal_digest) return { ok: false, message: "源码范围已变化，请重新审查后重试。" };
-      const finalPack = synchronousPack(options.capture({ review: finalReview, request, ...roots }, caller));
+      const finalPack = await options.capture({ review: finalReview, request, ...roots }, caller);
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       validatePack(finalPack, finalReview, request);
       if (finalReview.review_digest !== review.review_digest || finalProposal.proposal_digest !== proposal.proposal_digest

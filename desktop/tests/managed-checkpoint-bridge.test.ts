@@ -81,26 +81,23 @@ test("sanitizes failures and preserves the no-await final persistence boundary",
 
 test("host and preload wire one bounded IPC channel with native-only confirmation and no pack serialization",()=>{
  const main=readFileSync(new URL("../electron/main.ts",import.meta.url),"utf8");
+ const worker=readFileSync(new URL("../electron/managed-checkpoint-capture-worker.mjs",import.meta.url),"utf8");
  const preload=readFileSync(new URL("../electron/preload.ts",import.meta.url),"utf8");
  const api=readFileSync(new URL("../src/api/ws.ts",import.meta.url),"utf8");
  const shell=readFileSync(new URL("../src/shells/unified/index.ts",import.meta.url),"utf8");
  const confirmUi=readFileSync(new URL("../electron/managed-confirm-dialog.ts",import.meta.url),"utf8");
- assert.match(main,/ipcMain\.handle\("shell-dev:managed-source-checkpoint"/);assert.match(main,/validateManagedCheckpointRequest/);assert.match(main,/showManagedConfirmDialog/);assert.match(main,/confirmLabel: "保存检查点"/);assert.match(main,/cancelLabel: "取消"/);assert.match(main,/nativeCheckpointConfirmSections/);assert.match(main,/persistManagedSourceCheckpoint/);
+ assert.match(main,/ipcMain\.handle\("shell-dev:managed-source-checkpoint"/);assert.match(main,/validateManagedCheckpointRequest/);assert.match(main,/showManagedConfirmDialog/);assert.match(main,/confirmLabel: "保存检查点"/);assert.match(main,/cancelLabel: "取消"/);assert.match(main,/nativeCheckpointConfirmSections/);assert.match(main,/persistManagedSourceCheckpoint/);assert.match(main,/managed-checkpoint-capture-worker\.mjs/);assert.match(worker,/captureManagedSourceCheckpoint\(\{ \.\.\.workerData\.captureInput/);assert.match(main,/captureInput: \{ review: input\.review, request: input\.request \}/);
  assert.doesNotMatch(main,/JSON\.stringify\(pack/);assert.doesNotMatch(main,/bytesBase64/);assert.match(confirmUi,/counts\.set\(code/);assert.match(confirmUi,/Cancel as the safe default focus/);assert.doesNotMatch(main,/paths\.map\(String\)\.join/);
  assert.match(preload,/ipcRenderer\.invoke\("shell-dev:managed-source-checkpoint", request\)/);assert.match(api,/createManagedSourceCheckpoint\?/);assert.match(shell,/createCheckpoint: window\.myAgentDesktop/);
 });
 
 
-test("synchronous final capture persists before queued nonselected review drift can run",async()=>{
- let digest=hash("a"), captures=0, digestAtWriter="";
- const h=harness({
-  inspect:async()=>review(digest),
-  capture:(input:any)=>{captures++;if(captures===2)queueMicrotask(()=>{digest=hash("e");});return pack(input.review,input.request);},
-  persist:()=>{digestAtWriter=digest;return {format:1,mode:"managed_source_checkpoint_receipt_v1",reviewDigest:hash("a"),proposalDigest:hash("b"),checkpointDigest:hash("c"),selectedPaths:["desktop/one.ts"],rawBytes:1,storedBytes:1,checkpointCreated:true,execution:false,readyForMerge:false,readyForLaunch:false,nativeConsent:false};},
- });
- const result=await h.handler({},request());assert.equal(result.ok,true);assert.equal(captures,2);assert.equal(digestAtWriter,hash("a"));assert.equal(digest,hash("e"));
-});
-
-test("Promise-returning capture implementation fails closed without confirmation or persistence",async()=>{
- const h=harness({capture:async(input:any)=>pack(input.review,input.request)});const result=await h.handler({},request());assert.equal(result.ok,false);assert.equal(h.events.includes("confirm"),false);assert.equal(h.writes(),0);
+test("awaits both authorized worker captures and rejects trust loss before synchronous persistence",async()=>{
+ let captures=0;let asyncCapture:ReturnType<typeof harness>;
+ asyncCapture=harness({capture:async(input:any)=>{captures++;asyncCapture.events.push("capture");await new Promise(resolve=>setImmediate(resolve));return pack(input.review,input.request);}});
+ assert.equal((await asyncCapture.handler({},request())).ok,true);assert.equal(captures,2);
+ assert.deepEqual(asyncCapture.events,["roots","inspect","propose","capture","confirm","inspect","propose","capture","persist"]);
+ let revoked:ReturnType<typeof harness>;let pass=0;
+ revoked=harness({capture:async(input:any)=>{pass++;await new Promise(resolve=>setImmediate(resolve));if(pass===2)revoked.setTrusted(false);return pack(input.review,input.request);}});
+ assert.equal((await revoked.handler({},request())).ok,false);assert.equal(revoked.writes(),0);assert.equal(pass,2);
 });
