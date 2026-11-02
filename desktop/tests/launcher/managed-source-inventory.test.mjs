@@ -100,8 +100,13 @@ test('rejects Windows device aliases when Git permits metadata injection', async
  const rows=g.git('ls-files','--stage'); if(!rows.includes('desktop/src/deep/CON')) return t.skip('Git ignored the reserved Windows device path');
  await assert.rejects(captureManagedSourceInventory({root:g.root,head:g.head,indexDigest:g.indexDigest()}),/unsafe|aliased/i);
 });
-test('rejects sparse oversized allowed files without allocating a large payload', async t => {
- const f=fixture(t), sparse=path.join(f.root,'desktop/src/deep/large.mjs'); writeFileSync(sparse,''); truncateSync(sparse,4*1024*1024+1);
+test('inventories a clean tracked 10,474,292-byte public source file', async t => {
+ const f=fixture(t), p='desktop/public/splash-xiaomowang.mp4', source=path.join(f.root,p); mkdirSync(path.dirname(source),{recursive:true}); writeFileSync(source,''); truncateSync(source,10_474_292); f.git('add',p); f.git('commit','-qm','add large public source fixture');
+ const head=f.git('rev-parse','HEAD'), out=await captureManagedSourceInventory({root:f.root,head,indexDigest:f.indexDigest()});
+ const entry=out.entries.find(x=>x.path===p); assert.ok(entry); assert.equal(entry.size,10_474_292); assert.equal(entry.state,'clean'); assert.equal(entry.workingOid,entry.headOid);
+});
+test('rejects sparse allowed files above the finite per-file limit without allocating a large payload', async t => {
+ const f=fixture(t), sparse=path.join(f.root,'desktop/src/deep/large.mjs'); writeFileSync(sparse,''); truncateSync(sparse,16*1024*1024+1);
  await assert.rejects(captureManagedSourceInventory({root:f.root,head:f.head,indexDigest:f.indexDigest()}),/limit exceeded/i);
 });
 
