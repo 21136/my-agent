@@ -27,7 +27,7 @@ const receipt = (approvedPlan: any) => {
   return value;
 };
 function reseal(value: any, key: string) { delete value[key]; value[key] = digest(value); return value; }
-function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason?: unknown) => void; const promise = new Promise<T>((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; }
 function harness(overrides: Record<string, any> = {}, checkpointDigest = newCheckpointDigest()) {
   const events: string[] = [];
   let trusted = true, reads = 0, merges = 0, confirmedPlan: any, lastCheckpoint: any;
@@ -84,7 +84,7 @@ test("surfaces safe refusal code and only normalized source paths, never arbitra
 
 const unknownExecutions = [
   () => { throw Error("unknown private outcome"); },
-  ({ plan: current }: any) => Promise.resolve(receipt(current)),
+  ({ plan: current }: any) => Promise.resolve({ ...receipt(current), checkpointDigest: hash("b") }),
   ({ plan: current }: any) => ({ ...receipt(current), selectedPaths: ["desktop/wrong.ts"] }),
   () => ({ status: "maintenance_required", maintenanceRequired: true, errorCode: "selected_merge_postcondition_failed" }),
 ];
@@ -200,4 +200,50 @@ test("native bridge refuses preservation tampering even after the outer plan is 
     const h = harness({ prepare: ({ checkpoint: current }: any) => { const p = withPreservation(current.checkpointDigest); change(p); return reseal(p, "planDigest"); } });
     assert.equal((await h.handler({}, h.request())).ok, false); assert.equal(h.merges(), 0); assert.ok(!h.events.includes("confirm"));
   }
+});
+
+test("async worker execution yields to the host event loop and verifies its bound receipt", async () => {
+  const entered = deferred<void>(), finish = deferred<any>();
+  const h = harness({ execute: ({ plan: current }: any) => { entered.resolve(); return finish.promise; } });
+  let hostTurn = false;
+  const pending = h.handler({}, h.request());
+  await entered.promise;
+  await Promise.resolve().then(() => { hostTurn = true; });
+  assert.equal(hostTurn, true, "main event loop must progress while worker execution is pending");
+  finish.resolve(receipt(plan(h.request().checkpointDigest)));
+  assert.equal((await pending).ok, true);
+});
+
+test("async worker disconnect or authorization revocation is maintenance-only and never retried", async () => {
+  for (const outcome of ["disconnect", "revoked"]) {
+    const entered = deferred<void>(), finish = deferred<any>(); let attempts = 0;
+    const h = harness({ execute: () => { attempts++; entered.resolve(); return finish.promise; } });
+    const pending = h.handler({}, h.request()); await entered.promise;
+    if (outcome === "revoked") h.setTrusted(false);
+    finish.reject(new Error(outcome));
+    const first = await pending;
+    assert.equal((first as any).maintenanceRequired, true);
+    h.setTrusted(true);
+    const repeat = await h.handler({}, h.request());
+    assert.equal((repeat as any).maintenanceRequired, true);
+    assert.equal(attempts, 1);
+  }
+});
+
+test("worker result cannot be accepted for a different confirmed plan or checkpoint", async () => {
+  const h = harness({ execute: ({ plan: current }: any) => Promise.resolve(receipt({ ...current, planDigest: hash("f") })) });
+  const result = await h.handler({}, h.request());
+  assert.equal((result as any).maintenanceRequired, true);
+  assert.equal(h.merges(), 0);
+});
+
+test("authorization loss after worker resolves cannot be reported as verified success", async () => {
+  const h = harness({ execute: ({ plan: current }: any) => {
+    const result = Promise.resolve(receipt(current));
+    h.setTrusted(false);
+    return result;
+  } });
+  const result = await h.handler({}, h.request());
+  assert.equal(result.ok, false);
+  assert.equal((result as any).maintenanceRequired, true);
 });

@@ -1,5 +1,5 @@
 export type ManagedSelectedMergeRequest = { format: 1; mode: 'managed_selected_merge_request_v1'; checkpointDigest: string };
-export type ManagedSelectedMergeBlocker = { code: string; paths: string[]; disposition: 'preserve' | 'exclude' | 'review_required' };
+export type ManagedSelectedMergeBlocker = { code: string; paths: string[]; disposition: 'preserve' | 'exclude' | 'review_required' | 'verified_pending_native_confirmation' };
 export type ManagedSelectedMergeRootIdentity = { worktreeRoot: string; gitDir: string; commonDir: string; branch: string; head: string; rawIndexSha256: string };
 export type ManagedSelectedMergeFile = {
   path: string; action: 'add' | 'replace'; rawSha256: string; mode: '100644' | '100755';

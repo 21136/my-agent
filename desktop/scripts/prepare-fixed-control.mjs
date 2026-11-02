@@ -25,6 +25,9 @@ function sourceInventories(sandboxRoot){
  const addTree=(root,prefix,filter)=>{root=realDirectory(root,prefix+' build root');for(const rel of walk(root).files){if(!filter(rel))continue;const source=path.join(root,...rel.split('/'));releaseFiles.set(prefix+'/'+rel,source);}};
  addTree(path.join(desktop,'dist-electron'),'desktop/dist-electron',allowedBuildPath);
  addTree(path.join(desktop,'dist'),'desktop/dist',allowedBuildPath);
+ for(const name of ['managed-selected-merge-worker.mjs','managed-selected-merge-authorization.mjs']){const rel='desktop/electron/'+name;releaseFiles.set(rel,regularFile(path.join(desktop,'electron',name),'selected merge worker runtime'));}
+ // The worker loads this backend under AGENT_ROOT/desktop/launcher; keep its local imports beside it.
+ for(const name of ['managed-selected-merge.mjs','managed-clean-git-metadata.mjs','managed-readonly-sandbox-index.mjs','managed-selected-merge-store.mjs','managed-source-checkpoint.mjs','managed-source-selection.mjs','managed-stable-preservation.mjs']){const rel='desktop/launcher/'+name;releaseFiles.set(rel,regularFile(path.join(desktop,'launcher',name),'selected merge backend runtime'));}
  if(!releaseFiles.has('desktop/dist-electron/main.js')||!releaseFiles.has('desktop/dist-electron/preload.js')||!releaseFiles.has('desktop/dist/index.html'))throw Error('built Electron main/preload and renderer index are required');
  const builtMain=readFileSync(releaseFiles.get('desktop/dist-electron/main.js'),'utf8');
  for(const marker of ['--fixed-host-bootstrap-stdin','my-agent-fixed-host-v1','fixed-host.ready','-S','fixed_host_entry.py','python_base_root'])if(!builtMain.includes(marker))throw Error('compiled Electron main is stale or lacks fixed-Host bootstrap marker: '+marker);

@@ -4,6 +4,7 @@ import https from "node:https";
 import net from "node:net";
 import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -1541,11 +1542,43 @@ const managedSelectedMergeHandler = createManagedSelectedMergeHandler<IpcMainInv
     return answer === true && assertShellDevWorkbenchSender(caller) && !parent.isDestroyed() && workbenchWindow === parent
   },
   execute: ({ caller, request, plan, roots, finalCheckpoint }) => {
-    const backend = managedSelectedMergeBackend;
-    if (!backend || !assertShellDevWorkbenchSender(caller) || finalCheckpoint.checkpointDigest !== request.checkpointDigest || plan.checkpointDigest !== request.checkpointDigest) throw new Error("selected merge backend unavailable");
+    if (!managedSelectedMergeBackend || !assertShellDevWorkbenchSender(caller) || finalCheckpoint.checkpointDigest !== request.checkpointDigest || plan.checkpointDigest !== request.checkpointDigest) throw new Error("selected merge backend unavailable");
     if (process.platform !== "win32") throw new Error("native project Git merge is currently Windows-only");
     const directory = path.join(roots.sandboxRoot, "artifacts", "managed-selected-merges", plan.planDigest);
-    return backend.executeManagedSelectedMerge({ plan, checkpoint: finalCheckpoint, stableRoot: roots.stableRoot, sandboxRoot: roots.sandboxRoot, gitExecutable: "C:\\Program Files\\Git\\cmd\\git.exe", directory, assertTrusted: () => assertShellDevWorkbenchSender(caller) });
+    const backendPath = path.join(AGENT_ROOT, "desktop", "launcher", "managed-selected-merge.mjs");
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(path.join(AGENT_ROOT, "desktop", "electron", "managed-selected-merge-worker.mjs"), {
+        workerData: {
+          mode: "managed_selected_merge_worker_v1", backendPath, plan, checkpoint: finalCheckpoint,
+          stableRoot: roots.stableRoot, sandboxRoot: roots.sandboxRoot, directory,
+          gitExecutable: "C:\\Program Files\\Git\\cmd\\git.exe",
+        },
+      });
+      let settled = false;
+      const finish = (error: Error | null, value?: unknown) => {
+        if (settled) return;
+        settled = true;
+        if (error) { reject(error); void worker.terminate(); } else resolve(value);
+      };
+      worker.on("message", (message) => {
+        if (!message || typeof message !== "object") { finish(new Error("selected merge worker protocol invalid")); return; }
+        if (message.type === "authorization_required") {
+          const signal = message.signal instanceof SharedArrayBuffer && message.signal.byteLength === Int32Array.BYTES_PER_ELEMENT
+            ? new Int32Array(message.signal) : null;
+          let allowed = false;
+          try { allowed = Boolean(signal && assertShellDevWorkbenchSender(caller)); } catch { allowed = false; }
+          if (signal) { Atomics.store(signal, 0, allowed ? 1 : 2); Atomics.notify(signal, 0); }
+          else finish(new Error("selected merge worker authorization channel invalid"));
+          return;
+        }
+        if (message.type === "finished") finish(null, message.receipt);
+        else if (message.type === "failed") finish(new Error("selected merge worker failed"));
+        else finish(new Error("selected merge worker protocol invalid"));
+      });
+      worker.on("messageerror", () => finish(new Error("selected merge worker message could not be deserialized")));
+      worker.once("error", () => finish(new Error("selected merge worker failed")));
+      worker.once("exit", (code) => { if (!settled) finish(new Error("selected merge worker exited (" + code + ")")); });
+    });
   },
 });
 ipcMain.handle("shell-dev:managed-selected-merge", (event, ...args: unknown[]) => managedSelectedMergeHandler(event, ...args));

@@ -25,8 +25,8 @@ type Options<Caller> = {
   prepare: (input: PrepareInput<Caller>) => MergePlan;
   /** Must display selected paths/files/hashes/modes, both root bindings and heads/indexes, preservation scope, and explicitly exclude history, unrelated changes, activation, and model calls. */
   confirm: (input: { caller: Caller; request: Request; plan: MergePlan }) => boolean | Promise<boolean>;
-  /** Synchronous backend transaction. Receives the exact final re-read checkpoint; invocation uncertainty is maintenance-required, never retry-safe. */
-  execute: (input: { caller: Caller; request: Request; plan: MergePlan; roots: Roots; finalCheckpoint: Checkpoint }) => unknown;
+  /** Executes with the exact final re-read checkpoint; asynchronous worker uncertainty is maintenance-required, never retry-safe. */
+  execute: (input: { caller: Caller; request: Request; plan: MergePlan; roots: Roots; finalCheckpoint: Checkpoint }) => unknown | Promise<unknown>;
 };
 
 const DENIED = "仅允许可信工作台主页面执行管理源码合并。";
@@ -166,7 +166,8 @@ export function createManagedSelectedMergeHandler<Caller>(options: Options<Calle
       if (!options.isTrusted(caller)) return { ok: false, message: DENIED };
       executionStates.set(checkpointDigest, "consumed");
       executeStarted = true;
-      const rawReceipt = sync(options.execute({ caller, request, plan: finalPlan, roots, finalCheckpoint }), "execute");
+      const rawReceipt = await options.execute({ caller, request, plan: finalPlan, roots, finalCheckpoint });
+      if (!options.isTrusted(caller)) throw new Error("selected merge caller disconnected or lost authorization");
       validateReceipt(rawReceipt, finalPlan);
       const receipt = structuredClone(rawReceipt);
       executionStates.set(checkpointDigest, "completed");

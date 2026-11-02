@@ -1,18 +1,18 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, closeSync, writeSync, fstatSync, readSync, fsyncSync, realpathSync } from 'node:fs';
+import { constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, closeSync, writeSync, fstatSync, readSync, fsyncSync, realpathSync, ftruncateSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { assertManagedPlainIndex } from './managed-clean-git-metadata.mjs';
 import { assertManagedReadonlySandboxIndex } from './managed-readonly-sandbox-index.mjs';
 import { claimSelectedMergeStore } from './managed-selected-merge-store.mjs';
 import { validateManagedSourceCheckpoint } from './managed-source-checkpoint.mjs';
-import { validateManagedSelectionRequest } from './managed-source-selection.mjs';
+import { createManagedSourceSelectionProposal, validateManagedSelectionRequest } from './managed-source-selection.mjs';
 
 const SHA = /^[a-f0-9]{64}$/;
 const MAX_RAW_INDEX_BYTES = 1024 * 1024;
 const MAX_TEMP_INDEX_BYTES = 4 * 1024 * 1024;
-const MAX_SOURCE_FILES=20000,MAX_SOURCE_BYTES=64*1024*1024,MAX_SOURCE_FILE_BYTES=4*1024*1024,MAX_SOURCE_ENTRIES=60000,MAX_SOURCE_DEPTH=64;
+const MAX_SOURCE_FILES=20000,MAX_SOURCE_BYTES=64*1024*1024,MAX_LIVE_SOURCE_FILE_BYTES=16*1024*1024,MAX_STABLE_PRESERVATION_FILE_BYTES=4*1024*1024,MAX_STABLE_PRESERVATION_BYTES=8*1024*1024,MAX_SOURCE_ENTRIES=60000,MAX_SOURCE_DEPTH=64;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const ALLOWED = ['agent-core/', 'desktop/', 'docs/', 'protocol/', 'scripts/', 'evolve/tools/', 'evolve/skills/', 'evolve/tool-catalog/'];
 const ROOT_ALLOWED = new Set(['AGENTS.md', '.gitignore', 'start-desktop.bat', 'init-sandbox.bat', 'check-stable-before-sandbox-merge.bat', 'sync-sandbox-worktree.bat']);
@@ -128,10 +128,14 @@ function guardBeforeGit(git,roots){
   return {pairs,metadataDigest};
 }
 function state(git, cwd) {
-  const top = path.resolve(text(run(git, cwd, ['rev-parse', '--show-toplevel'])));
+  // The three locations are read together on every call; HEAD and index checks remain independent.
+  // Fall back to individual reads if the line-delimited locations are ambiguous.
+  const locations = /[\r\n]/.test(cwd) ? [] : text(run(git, cwd, ['rev-parse', '--show-toplevel', '--path-format=absolute', '--git-dir', '--git-common-dir'])).split(/\r?\n/);
+  const grouped = locations.length === 3 && locations.every(Boolean);
+  const top = path.resolve(grouped ? locations[0] : text(run(git, cwd, ['rev-parse', '--show-toplevel'])));
   if (top !== cwd) fail('git_root_mismatch', 'supplied path is not exact Git worktree root');
-  const gitDir = path.resolve(cwd, text(run(git, cwd, ['rev-parse', '--path-format=absolute', '--git-dir'])));
-  const commonDir = path.resolve(cwd, text(run(git, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])));
+  const gitDir = path.resolve(cwd, grouped ? locations[1] : text(run(git, cwd, ['rev-parse', '--path-format=absolute', '--git-dir'])));
+  const commonDir = path.resolve(cwd, grouped ? locations[2] : text(run(git, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])));
   for (const d of [gitDir, commonDir]) { const st = lstatSync(d); if (!st.isDirectory() || st.isSymbolicLink() || (st.attributes & 0x400)) fail('git_directory_unsafe', 'Git metadata directory is unsafe'); }
   const head = text(run(git, cwd, ['rev-parse', '--verify', 'HEAD']));
   if (!OID.test(head)) fail('git_head_invalid', 'Git HEAD is not a full object ID');
@@ -154,8 +158,8 @@ function treeMap(git, cwd, head) {
   }
   return map;
 }
-function indexMap(git, cwd) {
-  const out = run(git, cwd, ['ls-files', '--stage', '-z']); const map = new Map();
+function indexMap(git, cwd, indexFile) {
+  const out = run(git, cwd, ['ls-files', '--stage', '-z'], indexFile); const map = new Map();
   for (const row of out.toString('utf8').split('\0').filter(Boolean)) {
     const tab = row.indexOf('\t'), meta = row.slice(0, tab).split(' '), p = row.slice(tab + 1);
     if (tab < 0 || meta.length !== 3 || meta[2] !== '0') fail('git_index_conflict', 'index has conflicts or malformed entries', [p]);
@@ -206,9 +210,9 @@ function sourcePathAllowed(p) {
   return ROOT_ALLOWED.has(p) || ALLOWED.some(prefix => p.startsWith(prefix));
 }
 function sourceIdentity(st){return [st.dev,st.ino,st.size,st.mtimeMs,st.ctimeMs,st.nlink,st.mode].join(':');}
-function boundedSourceRead(file,initial,p,budget){
+function boundedSourceRead(file,initial,p,budget,maxFileBytes=MAX_LIVE_SOURCE_FILE_BYTES){
   if(!initial.isFile()||initial.isSymbolicLink()||(initial.attributes&0x400)||initial.nlink!==1)fail('allowed_source_file_unsafe','allowed source is not an ordinary single-link file',[p]);
-  if(initial.size>MAX_SOURCE_FILE_BYTES)fail('allowed_source_file_limit_exceeded','allowed source file exceeds 4 MiB',[p]);
+  if(initial.size>maxFileBytes)fail('allowed_source_file_limit_exceeded',`allowed source file exceeds ${maxFileBytes/(1024*1024)} MiB`,[p]);
   if(budget.files>=MAX_SOURCE_FILES||budget.bytes+initial.size>MAX_SOURCE_BYTES)fail('allowed_source_lane_limit_exceeded','allowed source lane exceeds file/byte limits',[p]);
   const fd=openSync(file,fsConstants.O_RDONLY|(fsConstants.O_NOFOLLOW||0));try{const before=fstatSync(fd);if(!before.isFile()||before.nlink!==1||sourceIdentity(before)!==sourceIdentity(initial))fail('allowed_source_changed_before_read','allowed source changed before bounded read',[p]);const bytes=Buffer.alloc(before.size);let off=0;while(off<bytes.length){const n=readSync(fd,bytes,off,Math.min(64*1024,bytes.length-off),off);if(n<=0)fail('allowed_source_short_read','allowed source read was incomplete',[p]);off+=n;}const after=fstatSync(fd),byPath=lstatSync(file);if(sourceIdentity(before)!==sourceIdentity(after)||sourceIdentity(after)!==sourceIdentity(byPath))fail('allowed_source_changed_during_read','allowed source changed during bounded read',[p]);budget.files++;budget.bytes+=bytes.length;return bytes;}finally{closeSync(fd);}
 }
@@ -262,6 +266,8 @@ export function prepareManagedSelectedMerge({ stableRoot, sandboxRoot, checkpoin
   const selectedPaths = [...pack.request.selectedPaths].sort();
   const req = validateManagedSelectionRequest({ format: 1, mode: 'managed_source_selection_request_v1', reviewDigest: review.review_digest, selectedPaths });
   const selectedSet = new Set(req.selectedPaths);
+  const proposal = createManagedSourceSelectionProposal({ review, request: { format: 1, mode: 'managed_source_selection_request_v1', reviewDigest: review.review_digest, selectedPaths: req.selectedPaths } });
+  if (proposal.proposal_digest !== pack.request.proposalDigest) fail('checkpoint_invalid', 'regenerated selection proposal differs from checkpoint binding');
   const currentTree = treeMap(git, stable, s.head), currentIndex = indexMap(git, stable);
   const temporaryIndexUpperBoundBytes=estimateTemporaryIndexUpperBound(currentTree,req.selectedPaths);if(temporaryIndexUpperBoundBytes>MAX_TEMP_INDEX_BYTES)fail('selected_merge_temp_index_bound_exceeded','conservative temporary-index upper bound exceeds 4 MiB');
   const files = [], preservedFiles = [];
@@ -289,7 +295,7 @@ export function prepareManagedSelectedMerge({ stableRoot, sandboxRoot, checkpoin
       if (!current.equals(headBytes)) {
         if (!preserveStableWorkingChanges) fail('selected_stable_working_dirty', 'selected stable working bytes differ from HEAD; explicit native preservation is required', [f.path]);
         preservedRawBytes += current.length;
-        if (current.length > MAX_SOURCE_FILE_BYTES || preservedRawBytes > 8*1024*1024) fail('stable_preservation_bytes_exceeded', 'stable preservation exceeds its 4 MiB file / 8 MiB aggregate bounds');
+        if (current.length > MAX_STABLE_PRESERVATION_FILE_BYTES || preservedRawBytes > MAX_STABLE_PRESERVATION_BYTES) fail('stable_preservation_bytes_exceeded', 'stable preservation exceeds its 4 MiB file / 8 MiB aggregate bounds');
         const oid = objectOid(s.head.length === 64 ? 'sha256' : 'sha1', 'blob', current);
         preservedFiles.push({path:f.path,sha256:sha(current),oid,mode:actualMode,bytesBase64:current.toString('base64')});
       }
@@ -316,6 +322,36 @@ export function prepareManagedSelectedMerge({ stableRoot, sandboxRoot, checkpoin
   const commitBody = Buffer.from(`tree ${expectedMergedTree}\nparent ${stablePreservation?.expectedCommit ?? s.head}\nauthor ${author}\ncommitter ${author}\n\nSelected content from checkpoint ${pack.checkpointDigest}\n`);
   const expectedCommit = objectOid(format, 'commit', commitBody);
   const blockers=normalizeBlockers(review);
+  const blockerKey = blocker => canonical({code:blocker.code,paths:[...(blocker.paths||[])].sort()});
+  const reviewBlockerKeys = new Set((review.blockers||[]).map(blockerKey));
+  const selectedFileByPath = new Map(files.map(file=>[file.path,file]));
+  for (const blocker of proposal.blockers) {
+    if (reviewBlockerKeys.has(blockerKey(blocker))) continue;
+    const paths=[...(blocker.paths||[])].sort();
+    if (blocker.code==='selected_sandbox_source_metadata_incomplete') {
+      if(paths.length!==1||!selectedSet.has(paths[0]))fail('selected_merge_proposal_blocker_invalid','proposal blocker does not bind one selected path',paths);
+      const checkpointFile=pack.files.find(file=>file.path===paths[0]);
+      const live=sandboxSnapshot.sources.find(source=>source.path===paths[0]);
+      if(!checkpointFile||!live||live.sha256!==checkpointFile.workingSha256||live.size!==checkpointFile.size||live.mode!==checkpointFile.mode)
+        fail('selected_merge_proposal_sandbox_unverified','selected sandbox source metadata could not be verified against the checkpoint',paths);
+      blockers.push({code:blocker.code,paths,disposition:'verified_pending_native_confirmation'});
+      continue;
+    }
+    if (blocker.code==='selected_stable_counterpart_absence_unproven') {
+      if(paths.length!==1||!selectedSet.has(paths[0]))fail('selected_merge_proposal_blocker_invalid','proposal blocker does not bind one selected path',paths);
+      const p=paths[0],file=selectedFileByPath.get(p),folded=p.toLocaleLowerCase('en-US');
+      const liveMatches=stableSnapshot.sources.filter(source=>source.path.toLocaleLowerCase('en-US')===folded);
+      if(!file||file.action!=='add'||file.expectedBaseOid!==null||currentTree.has(p)||currentIndex.has(p)||liveMatches.length)
+        fail('selected_merge_stable_counterpart_unverified','stable absence could not be proven from current tree, index, and live sources',[p,...liveMatches.map(source=>source.path)]);
+      blockers.push({code:blocker.code,paths,disposition:'verified_pending_native_confirmation'});
+      continue;
+    }
+    if (['cross_lane_case_alias_requires_review','selected_stable_source_requires_preservation_review','selected_stable_source_metadata_incomplete'].includes(blocker.code)) {
+      blockers.push({code:blocker.code,paths,disposition:'review_required'});
+      continue;
+    }
+    fail('selected_merge_unknown_proposal_blocker',`unknown proposal blocker: ${String(blocker.code)}`,paths);
+  }
   for (const blocker of blockers) {
     if (stablePreservation && blocker.code==='selected_stable_source_requires_preservation_review' && blocker.paths.length && blocker.paths.every(p=>preservedFiles.some(f=>f.path===p))) blocker.disposition='preserve';
   }
@@ -356,6 +392,123 @@ function samePlanState(plan, stableRoot, sandboxRoot, git, checkpoint, phase) {
 }
 function selectedWorkingPath(rootPath,p){return path.join(rootPath,...p.split('/'));}
 function writeArtifactFile(file,bytes){const fd=openSync(file,fsConstants.O_CREAT|fsConstants.O_EXCL|fsConstants.O_WRONLY,0o600);try{writeSync(fd,bytes);fsyncSync(fd);}finally{closeSync(fd);}}
+function importBoundedBlobs(git,stable,blobs,format){
+  if(!Array.isArray(blobs)||blobs.length>MAX_SOURCE_FILES)fail('selected_merge_precondition_failed','blob batch exceeds the selected-source bound');
+  const input=[],expected=[];let total=0;
+  for(let i=0;i<blobs.length;i++){
+    const {bytes,oid}=blobs[i];if(!Buffer.isBuffer(bytes)||!OID.test(oid||''))fail('selected_merge_precondition_failed','blob batch record is malformed');
+    total+=bytes.length;if(total>MAX_SOURCE_BYTES+MAX_STABLE_PRESERVATION_BYTES)fail('selected_merge_precondition_failed','blob batch exceeds its bounded byte budget');
+    if(objectOid(format,'blob',bytes)!==oid)fail('selected_merge_precondition_failed','checkpoint bytes do not match the planned Git blob OID');
+    const mark=i+1;input.push(Buffer.from('blob\nmark :'+mark+'\ndata '+bytes.length+'\n'),bytes,Buffer.from('\nget-mark :'+mark+'\n'));expected.push(oid);
+  }
+  if(!blobs.length)return [];
+  const cfg=['-c',`safe.directory=${stable}`,'-c',`core.hooksPath=${process.platform==='win32'?'NUL':'/dev/null'}`,'-c','protocol.allow=never','-c','gc.auto=0','-c','gc.autoDetach=false','-c','maintenance.auto=false','--no-pager','fast-import','--quiet'];
+  // get-mark emits one ASCII OID and newline per trusted blob. Reserve the
+  // SHA-256 worst case for the full source-file ceiling plus bounded slack.
+  const stdoutLimit=blobs.length*(format==='sha256'?65:41)+1024;
+  if(stdoutLimit>MAX_SOURCE_FILES*65+1024)fail('selected_merge_precondition_failed','fast-import mark output bound is invalid');
+  const result=spawnSync(git,cfg,{cwd:stable,env:envFor(stable),input:Buffer.concat(input),encoding:'buffer',windowsHide:true,timeout:120000,maxBuffer:stdoutLimit,stdio:['pipe','pipe','pipe']});
+  if(result.error||result.status!==0)fail('selected_merge_result_unknown','blob-only fast-import failed or timed out; managed operation requires maintenance');
+  const output=result.stdout.toString('ascii');
+  const lines=output.endsWith('\n')?output.slice(0,-1).split(/\r?\n/):[];
+  if(lines.length!==expected.length||lines.some((oid,i)=>!OID.test(oid)||oid!==expected[i]))fail('selected_merge_result_unknown','blob-only fast-import marks did not exactly match planned OIDs');
+  return lines;
+}
+function statIdentity(st) { return { dev: st.dev, ino: st.ino, nlink: st.nlink, mode: st.mode & 0o170000 }; }
+function sameStatIdentity(a, b) { return a.dev === b.dev && a.ino === b.ino && a.nlink === b.nlink && a.mode === b.mode; }
+function plainFileSnapshot(file, maxBytes, code = 'selected_merge_index_path_unsafe') {
+  let before, fd;
+  try {
+    before = lstatSync(file);
+    if (!before.isFile() || before.isSymbolicLink() || (before.attributes & 0x400) || before.nlink !== 1 || before.size > maxBytes || realpathSync.native(file) !== file) fail(code, 'index path must be a canonical ordinary single-link file');
+    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0));
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1 || !sameStatIdentity(statIdentity(before), statIdentity(opened)) || opened.size !== before.size) fail(code, 'index file identity changed while opening');
+    const bytes = readFileSync(fd), afterFd = fstatSync(fd), afterPath = lstatSync(file);
+    if (bytes.length !== before.size || afterFd.size !== before.size || !sameStatIdentity(statIdentity(before), statIdentity(afterFd)) || !sameStatIdentity(statIdentity(before), statIdentity(afterPath)) || realpathSync.native(file) !== file) fail(code, 'index bytes or path identity changed while reading');
+    return { bytes, identity: statIdentity(before) };
+  } catch (e) { if (e.code === code) throw e; fail(code, 'index file could not be safely opened and read'); }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
+function assertPlainDirectory(directory) {
+  let current = path.parse(directory).root, finalStat = lstatSync(current);
+  for (const part of directory.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    finalStat = lstatSync(current);
+    if (!finalStat.isDirectory() || finalStat.isSymbolicLink() || (finalStat.attributes & 0x400) || realpathSync.native(current) !== current) fail('selected_merge_index_path_unsafe', 'Git metadata path contains a link, reparse point, or alias');
+  }
+  if (!finalStat.isDirectory()) fail('selected_merge_index_path_unsafe', 'Git metadata directory is not an ordinary directory');
+  return statIdentity(finalStat);
+}
+function writePrivateIndex(file, bytes) {
+  const before = plainFileSnapshot(file, MAX_TEMP_INDEX_BYTES, 'selected_merge_temp_index_unsafe');
+  let fd;
+  try {
+    fd = openSync(file, fsConstants.O_WRONLY | (fsConstants.O_NOFOLLOW || 0));
+    const opened = fstatSync(fd);
+    if (!sameStatIdentity(before.identity, statIdentity(opened))) fail('selected_merge_temp_index_unsafe', 'private index path changed before candidate write');
+    ftruncateSync(fd, 0);
+    let offset = 0;
+    while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset, offset); if (!n) fail('selected_merge_temp_index_write_failed', 'private candidate index write was incomplete'); offset += n; }
+    fsyncSync(fd);
+    if (fstatSync(fd).size !== bytes.length) fail('selected_merge_temp_index_write_failed', 'private candidate index length did not verify');
+  } finally { if (fd !== undefined) closeSync(fd); }
+  const after = plainFileSnapshot(file, MAX_TEMP_INDEX_BYTES, 'selected_merge_temp_index_unsafe');
+  if (!after.bytes.equals(bytes) || !sameStatIdentity(before.identity, after.identity)) fail('selected_merge_temp_index_write_failed', 'private candidate index did not verify byte-for-byte');
+}
+function syncIndexDirectory(directory) {
+  let fd;
+  try { fd = openSync(directory, fsConstants.O_RDONLY); fsyncSync(fd); }
+  catch (e) { if (process.platform !== 'win32' || !['EPERM','EISDIR','EINVAL','EBADF','EACCES'].includes(e.code)) throw e; }
+  finally { if (fd !== undefined) closeSync(fd); }
+}
+function publishIndexCandidateWithGitLock({ gitDir, expected, expectedSha256, expectedIdentity, candidateBytes, boundary }) {
+  const indexPath = path.join(gitDir, 'index'), lockPath = `${indexPath}.lock`;
+  const gitDirIdentity = assertPlainDirectory(gitDir);
+  const before = plainFileSnapshot(indexPath, MAX_RAW_INDEX_BYTES);
+  if (!before.bytes.equals(expected) || sha(before.bytes) !== expectedSha256 || !sameStatIdentity(expectedIdentity, before.identity)) fail('selected_merge_index_race_detected', 'real index no longer matches the exact confirmed bytes and identity before locking');
+  let lockFd, lockIdentity, lockOwned = false, renamed = false;
+  try {
+    lockFd = openSync(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o666);
+    lockOwned = true;
+    const lockStat = fstatSync(lockFd), lockPathStat = lstatSync(lockPath);
+    if (!lockStat.isFile() || lockStat.nlink !== 1 || lockPathStat.isSymbolicLink() || (lockPathStat.attributes & 0x400) || !sameStatIdentity(statIdentity(lockStat), statIdentity(lockPathStat)) || realpathSync.native(lockPath) !== lockPath) fail('selected_merge_index_lock_unsafe', 'new index.lock identity or path is unsafe');
+    lockIdentity = statIdentity(lockStat);
+    if(!sameStatIdentity(gitDirIdentity,assertPlainDirectory(gitDir)))fail('selected_merge_index_path_unsafe','Git metadata directory identity changed while acquiring index.lock');
+    const held = plainFileSnapshot(indexPath, MAX_RAW_INDEX_BYTES);
+    if (!held.bytes.equals(expected) || sha(held.bytes) !== expectedSha256 || !sameStatIdentity(before.identity, held.identity)) fail('selected_merge_index_race_detected', 'real index drifted or was replaced while acquiring index.lock');
+    boundary();
+    const authorized = plainFileSnapshot(indexPath, MAX_RAW_INDEX_BYTES);
+    if (!authorized.bytes.equals(expected) || sha(authorized.bytes) !== expectedSha256 || !sameStatIdentity(before.identity, authorized.identity)) fail('selected_merge_index_race_detected', 'real index changed during locked authorization');
+    let offset = 0;
+    while (offset < candidateBytes.length) { const n = writeSync(lockFd, candidateBytes, offset, candidateBytes.length - offset, offset); if (!n) fail('selected_merge_index_lock_write_failed', 'index.lock candidate write was incomplete'); offset += n; }
+    ftruncateSync(lockFd, candidateBytes.length); fsyncSync(lockFd);
+    if (fstatSync(lockFd).size !== candidateBytes.length || !sameStatIdentity(lockIdentity, statIdentity(fstatSync(lockFd)))) fail('selected_merge_index_lock_write_failed', 'index.lock candidate failed descriptor verification');
+    const lockBytes = plainFileSnapshot(lockPath, MAX_RAW_INDEX_BYTES, 'selected_merge_index_lock_unsafe');
+    if (!lockBytes.bytes.equals(candidateBytes) || !sameStatIdentity(lockIdentity, lockBytes.identity)) fail('selected_merge_index_lock_write_failed', 'index.lock path does not identify the complete candidate bytes');
+    boundary();
+    if(!sameStatIdentity(gitDirIdentity,assertPlainDirectory(gitDir)))fail('selected_merge_index_path_unsafe','Git metadata directory identity changed before atomic index commit');
+    const finalBeforeRename = plainFileSnapshot(indexPath, MAX_RAW_INDEX_BYTES);
+    if (!finalBeforeRename.bytes.equals(expected) || sha(finalBeforeRename.bytes) !== expectedSha256 || !sameStatIdentity(before.identity, finalBeforeRename.identity)) fail('selected_merge_index_race_detected', 'real index changed before atomic lock commit');
+    const lockBeforeRename = plainFileSnapshot(lockPath, MAX_RAW_INDEX_BYTES, 'selected_merge_index_lock_unsafe');
+    if (!lockBeforeRename.bytes.equals(candidateBytes) || !sameStatIdentity(lockIdentity, lockBeforeRename.identity)) fail('selected_merge_index_lock_unsafe', 'index.lock was replaced before atomic commit');
+    closeSync(lockFd); lockFd = undefined;
+    renameSync(lockPath, indexPath); renamed = true; lockOwned = false;
+    syncIndexDirectory(gitDir);
+    const committed = plainFileSnapshot(indexPath, MAX_RAW_INDEX_BYTES);
+    if (!committed.bytes.equals(candidateBytes) || !sameStatIdentity(lockIdentity, committed.identity)) fail('selected_merge_index_commit_unknown', 'atomically published index did not verify against the locked candidate');
+    return committed;
+  } catch (e) {
+    if (lockFd !== undefined) { try { closeSync(lockFd); } catch {} lockFd = undefined; }
+    if (!renamed && lockOwned) {
+      try {
+        const current = plainFileSnapshot(lockPath, MAX_RAW_INDEX_BYTES, 'selected_merge_index_lock_unsafe');
+        if (lockIdentity && sameStatIdentity(lockIdentity, current.identity)) unlinkSync(lockPath);
+      } catch {}
+    }
+    throw e;
+  }
+}
 function createPlannedCommit(git,stable,indexPath,tree,parent,message,expected) {
   const env=envFor(stable,indexPath);env.GIT_AUTHOR_NAME='Managed Selected Merge';env.GIT_AUTHOR_EMAIL='managed-selected-merge@invalid';env.GIT_COMMITTER_NAME=env.GIT_AUTHOR_NAME;env.GIT_COMMITTER_EMAIL=env.GIT_AUTHOR_EMAIL;env.GIT_AUTHOR_DATE='@0 +0000';env.GIT_COMMITTER_DATE='@0 +0000';
   const commit=spawnSync(git,['-c',`safe.directory=${stable}`,'-c','protocol.allow=never','-c','gc.auto=0','-c','gc.autoDetach=false','-c','maintenance.auto=false','-c','commit.gpgSign=false','-c',`core.hooksPath=${process.platform==='win32'?'NUL':'/dev/null'}`,'commit-tree',tree,'-p',parent],{cwd:stable,env,input:Buffer.from(message),encoding:'buffer',windowsHide:true,timeout:20000,maxBuffer:1024*1024});
@@ -378,7 +531,9 @@ export function executeManagedSelectedMerge({ plan, checkpoint, stableRoot, sand
   const fresh=prepareManagedSelectedMerge({stableRoot:stable,sandboxRoot:sandbox,checkpoint,gitExecutable:git,preserveStableWorkingChanges:Boolean(plan.stablePreservation)});
   if(canonical(fresh)!==canonical(plan))fail('selected_merge_plan_stale','fresh canonical plan differs; operation was not started');
   if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted host revoked authority after final preparation');
-  const durableBundle={checkpoint,stableIndex:readFileSync(path.join(plan.stable.gitDir,'index'))};
+  const initialIndexSnapshot=plainFileSnapshot(path.join(plan.stable.gitDir,'index'),MAX_RAW_INDEX_BYTES);
+  if(sha(initialIndexSnapshot.bytes)!==plan.stable.rawIndexSha256)fail('selected_merge_index_race_detected','stable real index changed after final preparation');
+  const durableBundle={checkpoint,stableIndex:initialIndexSnapshot.bytes};
   const store=claimSelectedMergeStore({sandboxRoot:sandbox,plan,assertTrusted,durableBundle});
   if(directory&&path.resolve(directory)!==store.directory){store.fail('selected_merge_intent_path_invalid');fail('selected_merge_intent_path_invalid','store returned unexpected intent path');}
   const dir=store.directory,idxPath=path.join(dir,'temporary.index');let commandStarted=false;
@@ -388,28 +543,50 @@ export function executeManagedSelectedMerge({ plan, checkpoint, stableRoot, sand
     if (plan.stablePreservation) {
       const p=plan.stablePreservation;
       boundary();run(git,stable,['read-tree',plan.stable.head],idxPath);assertTemporaryIndexBound(idxPath);
+      const preservationIndexInfo=[],preservationBlobs=[];
       for (const f of p.files) {
-        boundary();const bytes=Buffer.from(f.bytesBase64,'base64');const oid=text(run(git,stable,['hash-object','--no-filters','-w','--stdin'],undefined,bytes));
-        if(oid!==f.oid||sha(bytes)!==f.sha256)fail('stable_preservation_blob_mismatch','stable original bytes did not produce the planned preservation blob',[f.path]);
-        boundary();run(git,stable,['update-index','--add','--cacheinfo',`${f.mode},${oid},${f.path}`],idxPath);assertTemporaryIndexBound(idxPath);
+        const bytes=Buffer.from(f.bytesBase64,'base64');if(sha(bytes)!==f.sha256)fail('stable_preservation_blob_mismatch','stable original bytes differ from the confirmed preservation plan',[f.path]);
+        preservationBlobs.push({bytes,oid:f.oid});
       }
+      boundary();if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted native host revoked authority before preservation blob batch');commandStarted=true;importBoundedBlobs(git,stable,preservationBlobs,plan.stable.head.length===64?'sha256':'sha1');
+      boundary();
+      for(const f of p.files)preservationIndexInfo.push(Buffer.from(f.mode+' '+f.oid+'\t'+f.path+'\0'));
+      if(preservationIndexInfo.length){boundary();run(git,stable,['update-index','-z','--index-info'],idxPath,Buffer.concat(preservationIndexInfo));assertTemporaryIndexBound(idxPath);}
       boundary();const tree=text(run(git,stable,['write-tree'],idxPath));assertTemporaryIndexBound(idxPath);
       if(tree!==p.expectedTree)fail('stable_preservation_tree_mismatch','stable preservation tree differs from native-confirmed plan');
       boundary();createPlannedCommit(git,stable,idxPath,tree,plan.stable.head,`Preserve stable working bytes for checkpoint ${plan.checkpointDigest}\n`,p.expectedCommit);
-      // Only explicitly selected original bytes enter the real index. No broad
-      // add/stash/reset/checkout or direct working-file overwrite is permitted.
-      for (const f of p.files) {
-        boundary();commandStarted=true;run(git,stable,['update-index','--cacheinfo',`${f.mode},${f.oid},${f.path}`]);
-        phase.indexChanged=true;phase.stagedPaths.add(f.path);
-      }
+      // Seed the private index from the exact real-index snapshot and update all
+      // selected preservation paths in one Git operation. Publish only after a
+      // Git-compatible exclusive lock and byte/identity CAS against that snapshot.
+      writePrivateIndex(idxPath,durableBundle.stableIndex);assertTemporaryIndexBound(idxPath);
+      const originalEntries=indexMap(git,stable,idxPath),candidateInfo=[];
+      for(const f of p.files)candidateInfo.push(Buffer.from(f.mode+' '+f.oid+'\t'+f.path+'\0'));
+      if(candidateInfo.length)run(git,stable,['update-index','-z','--index-info'],idxPath,Buffer.concat(candidateInfo));
+      assertTemporaryIndexBound(idxPath);
+      const expectedEntries=new Map(originalEntries);
+      for(const f of p.files)expectedEntries.set(f.path,{mode:f.mode,oid:f.oid});
+      const candidateEntries=indexMap(git,stable,idxPath);
+      const entriesCanonical=map=>[...map.entries()].sort(([a],[b])=>a.localeCompare(b,'en')).map(([p,e])=>[p,e.mode,e.oid]);
+      if(canonical(entriesCanonical(candidateEntries))!==canonical(entriesCanonical(expectedEntries)))fail('selected_merge_index_candidate_mismatch','candidate index changed entries beyond the exact selected preservation set');
+      const candidateSnapshot=plainFileSnapshot(idxPath,MAX_TEMP_INDEX_BYTES,'selected_merge_temp_index_unsafe');
+      try{assertManagedPlainIndex(candidateSnapshot.bytes,{objectFormat:plan.stable.head.length===64?'sha256':'sha1'});}catch{fail('selected_merge_index_candidate_invalid','candidate index failed strict plain-index validation');}
+      boundary();commandStarted=true;
+      publishIndexCandidateWithGitLock({gitDir:plan.stable.gitDir,expected:durableBundle.stableIndex,expectedSha256:plan.stable.rawIndexSha256,expectedIdentity:initialIndexSnapshot.identity,candidateBytes:candidateSnapshot.bytes,boundary});
+      phase.indexChanged=true;for(const f of p.files)phase.stagedPaths.add(f.path);
       boundary();run(git,stable,['merge','--ff-only','--no-edit',p.expectedCommit]);phase.head=p.expectedCommit;
       boundary();
     }
     boundary();run(git,stable,['read-tree',phase.head],idxPath);assertTemporaryIndexBound(idxPath);
-    for(const f of validateManagedSourceCheckpoint(checkpoint).files){
-      boundary();const bytes=Buffer.from(f.bytesBase64,'base64');const oid=text(run(git,stable,['hash-object','--no-filters','-w','--stdin'],undefined,bytes));
-      boundary();run(git,stable,['update-index','--add','--cacheinfo',`${f.mode},${oid},${f.path}`],idxPath);assertTemporaryIndexBound(idxPath);
+    const indexInfo=[],selectedBlobs=[],selectedPack=validateManagedSourceCheckpoint(checkpoint);
+    for(const f of selectedPack.files){
+      const bytes=Buffer.from(f.bytesBase64,'base64');if(sha(bytes)!==f.workingSha256)fail('sandbox_selected_source_drift','checkpoint bytes changed while preparing selected blob batch',[f.path]);
+      const approved=plan.files.find(x=>x.path===f.path);if(!approved||approved.rawSha256!==sha(bytes)||approved.mode!==f.mode)fail('selected_merge_plan_stale','selected blob no longer matches the approved plan',[f.path]);
+      selectedBlobs.push({bytes,oid:f.workingOid});
     }
+    boundary();if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted native host revoked authority before selected blob batch');commandStarted=true;importBoundedBlobs(git,stable,selectedBlobs,plan.stable.head.length===64?'sha256':'sha1');
+    boundary();
+    for(const f of selectedPack.files)indexInfo.push(Buffer.from(f.mode+' '+f.workingOid+'\t'+f.path+'\0'));
+    if(indexInfo.length){boundary();run(git,stable,['update-index','-z','--index-info'],idxPath,Buffer.concat(indexInfo));assertTemporaryIndexBound(idxPath);}
     boundary();const tree=text(run(git,stable,['write-tree'],idxPath));assertTemporaryIndexBound(idxPath);if(tree!==plan.expectedMergedTree)fail('selected_merge_tree_mismatch','temporary index differs from exact planned selected-content tree');
     boundary();createPlannedCommit(git,stable,idxPath,tree,phase.head,`Selected content from checkpoint ${plan.checkpointDigest}\n`,plan.expectedCommit);
     boundary();assertTemporaryIndexBound(idxPath);if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted host revoked authority immediately before ff-only merge');commandStarted=true;
