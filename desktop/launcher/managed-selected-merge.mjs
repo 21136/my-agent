@@ -584,7 +584,8 @@ export function executeManagedSelectedMerge({ plan, checkpoint, stableRoot, sand
       selectedBlobs.push({bytes,oid:f.workingOid});
     }
     boundary();if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted native host revoked authority before selected blob batch');commandStarted=true;importBoundedBlobs(git,stable,selectedBlobs,plan.stable.head.length===64?'sha256':'sha1');
-    boundary();
+    // Preserve the post-import trust recheck; the next write boundary performs the full workspace revalidation.
+    if(assertTrusted()!==true)fail('selected_merge_trust_denied','trusted native host revoked authority after selected blob batch');
     for(const f of selectedPack.files)indexInfo.push(Buffer.from(f.mode+' '+f.workingOid+'\t'+f.path+'\0'));
     if(indexInfo.length){boundary();run(git,stable,['update-index','-z','--index-info'],idxPath,Buffer.concat(indexInfo));assertTemporaryIndexBound(idxPath);}
     boundary();const tree=text(run(git,stable,['write-tree'],idxPath));assertTemporaryIndexBound(idxPath);if(tree!==plan.expectedMergedTree)fail('selected_merge_tree_mismatch','temporary index differs from exact planned selected-content tree');
