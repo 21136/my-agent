@@ -60,6 +60,7 @@ import {
 } from "./sandbox-adopt";
 import { loadAppIcon } from "./app-icon";
 import {loadFixedHostContext} from "./fixed-host-context";
+import { activateWorkbenchWindow, installWorkbenchSingleInstance } from "./workbench-single-instance.mjs";
 import { createManagedReviewHandler, resolveManagedReviewRoots } from "./managed-review-bridge";
 import { createManagedSelectionHandler } from "./managed-selection-bridge";
 import { createManagedCheckpointHandler } from "./managed-checkpoint-bridge";
@@ -232,6 +233,17 @@ let sidecar: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+const workbenchInstance = installWorkbenchSingleInstance({
+  app,
+  processType: process.type,
+  profile: {
+    kind: fixedHostContext ? "fixed-host" : evolutionTestHostContext ? "evolution-test" : "normal",
+    userDataPath: app.getPath("userData"),
+  },
+  getWindow: () => workbenchWindow,
+  activateWindow: (window) => { activateWorkbenchWindow(window, sendSessionControl); },
+});
+if (!workbenchInstance.ownsInstance) app.quit();
 let quitInProgress = false;
 
 let sidecarRestarting = false;
@@ -1071,6 +1083,7 @@ async function createWorkbenchWindow(): Promise<void> {
     return;
   }
 
+  workbenchInstance.windowUnavailable();
   const windowIcon = loadAppIcon(256);
   const { width, height } = workbenchDefaultWindowSize();
   workbenchWindow = new BrowserWindow({
@@ -1130,7 +1143,9 @@ async function createWorkbenchWindow(): Promise<void> {
     shellDevPopoutWindow = null;
     if (popout && !popout.isDestroyed()) popout.close();
     workbenchWindow = null;
+    workbenchInstance.windowUnavailable();
   });
+  workbenchInstance.windowReady();
 }
 
 async function openWorkbenchWindow(): Promise<void> {
@@ -2035,6 +2050,7 @@ ipcMain.handle("constellation:clear", () => {
 });
 
 app.whenReady().then(async () => {
+  if (!workbenchInstance.ownsInstance) return;
   if (process.platform === "win32") {
     app.setAppUserModelId("my-agent.desktop");
   }
