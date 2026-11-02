@@ -7,21 +7,21 @@ const roots = { stableRoot: "C:\\work\\project", sandboxRoot: "C:\\work\\project
 
 test("rejects untrusted sender before inspector runs", async () => {
   let calls = 0;
-  const handler = createManagedReviewHandler({ isTrusted: () => false, hasArgs: () => false, resolveRoots: async () => roots, inspect: async () => { calls++; return report; } });
+  const handler = createManagedReviewHandler({ isTrusted: () => false, hasArgs: () => false, inspect: async () => { calls++; return report; } });
   assert.deepEqual(await handler({}), { ok: false, message: "仅允许可信工作台主页面查看源码审查报告。" });
   assert.equal(calls, 0);
 });
 
 test("rejects any renderer arguments", async () => {
   let calls = 0;
-  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: (args) => args.length > 0, resolveRoots: async () => roots, inspect: async () => { calls++; return report; } });
+  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: (args) => args.length > 0, inspect: async () => { calls++; return report; } });
   assert.deepEqual(await handler("C:/attacker", { stableRoot: "x" }), { ok: false, message: "审查接口不接受渲染器参数。" });
   assert.equal(calls, 0);
 });
 
 test("fixture context is unsupported and never calls resolver or inspector", async () => {
   let calls = 0;
-  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, isFixture: true, resolveRoots: async () => { calls++; return roots; }, inspect: async () => { calls++; return report; } });
+  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, isFixture: true, inspect: async () => { calls++; return report; } });
   assert.deepEqual(await handler(), { ok: false, message: "固定或测试 Host 不支持管理源码审查。" });
   assert.equal(calls, 0);
 });
@@ -35,7 +35,7 @@ test("derives only the fixed sandbox sibling and rejects ambiguous layouts by in
 });
 
 test("sanitizes inspector failures", async () => {
-  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, resolveRoots: async () => roots, inspect: async () => { throw new Error("C:/secret/config token=abc"); } });
+  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, inspect: async () => { throw new Error("C:/secret/config token=abc"); } });
   const result = await handler();
   assert.deepEqual(result, { ok: false, message: "源码审查暂不可用，请检查受支持的工作区布局。" });
   assert.doesNotMatch(result.message, /secret|token|C:\\?/);
@@ -45,8 +45,19 @@ test("sanitizes inspector failures", async () => {
 
 test("bridge busy gate prevents overlapping inspector calls", async () => {
   let release!: (value: typeof report) => void; let calls = 0;
-  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, resolveRoots: async () => roots, inspect: () => { calls++; return new Promise((resolve) => { release = resolve; }); } });
+  const handler = createManagedReviewHandler({ isTrusted: () => true, hasArgs: () => false, inspect: () => { calls++; return new Promise((resolve) => { release = resolve; }); } });
   const pending = handler();
   assert.deepEqual(await handler(), { ok: false, message: "源码审查正在进行，请稍后重试。" });
   assert.equal(calls, 1); release(report); await pending;
+});
+test("rechecks the originating trusted caller after asynchronous review work", async () => {
+  let trusted = true, inspectCalls = 0;
+  const caller = { id: "trusted-main-frame" };
+  const handler = createManagedReviewHandler({
+    isTrusted: (value: typeof caller) => value === caller && trusted,
+    hasArgs: (args) => args.length > 0,
+    inspect: async (value: typeof caller) => { assert.equal(value, caller); inspectCalls++; trusted = false; return report; },
+  });
+  assert.deepEqual(await handler(caller), { ok: false, message: "仅允许可信工作台主页面查看源码审查报告。" });
+  assert.equal(inspectCalls, 1, "caller was trusted at dispatch but lost trust before the result was released");
 });

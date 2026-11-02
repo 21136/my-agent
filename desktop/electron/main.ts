@@ -1288,25 +1288,48 @@ function assertShellDevWorkbenchSender(event: IpcMainInvokeEvent, pinnedOrigin?:
 }
 
 const managedReviewHandler = createManagedReviewHandler({
-  isTrusted: () => true,
+  isTrusted: (caller) => assertShellDevWorkbenchSender(caller as IpcMainInvokeEvent),
   hasArgs: (args) => args.length > 0,
   isFixture: Boolean(fixedHostContext || evolutionTestHostContext),
-  resolveRoots: () => resolveManagedReviewRoots(AGENT_ROOT, async (roots) => {
-    const sourcePlanUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-source-plan.mjs")).href;
-    const { inspectManagedSources } = await import(sourcePlanUrl);
-    return inspectManagedSources({ ...roots, metadataOnlyHistory: true });
+  inspect: (caller) => new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(AGENT_ROOT, "desktop", "electron", "managed-review-worker.mjs"), {
+      workerData: { mode: "managed_source_review_worker_v1", codeRoot: AGENT_ROOT },
+      // Launcher Git subprocesses need only path/system roots; do not copy tokens or unrelated Host secrets.
+      env: {
+        PATH: process.env.PATH ?? process.env.Path ?? "",
+        SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? "",
+        WINDIR: process.env.WINDIR ?? process.env.Windir ?? "",
+      },
+    });
+    let settled = false;
+    const finish = (error?: Error, value?: Record<string, unknown>) => {
+      if (settled) return;
+      settled = true;
+      if (error) { reject(error); void worker.terminate(); } else resolve(value!);
+    };
+    worker.on("message", (message: any) => {
+      if (!message || typeof message !== "object") { finish(new Error("managed review worker protocol invalid")); return; }
+      if (message.type === "authorization_required") {
+        const signal = message.signal instanceof SharedArrayBuffer && message.signal.byteLength === Int32Array.BYTES_PER_ELEMENT
+          ? new Int32Array(message.signal) : null;
+        let allowed = false;
+        try { allowed = Boolean(signal && assertShellDevWorkbenchSender(caller as IpcMainInvokeEvent)); } catch { allowed = false; }
+        if (signal) { Atomics.store(signal, 0, allowed ? 1 : 2); Atomics.notify(signal, 0); }
+        return;
+      }
+      if (message.type === "finished" && message.report && typeof message.report === "object" && !Array.isArray(message.report)) {
+        finish(undefined, message.report); return;
+      }
+      if (message.type === "failed") { finish(new Error("managed review worker failed")); return; }
+      finish(new Error("managed review worker protocol invalid"));
+    });
+    worker.once("error", (error) => finish(error));
+    worker.once("exit", (code) => { if (!settled) finish(new Error(`managed review worker exited (${code})`)); });
   }),
-  inspect: async (roots) => {
-    const reviewUrl = pathToFileURL(path.join(AGENT_ROOT, "desktop", "launcher", "managed-review.mjs")).href;
-    const { inspectManagedReview } = await import(reviewUrl);
-    return inspectManagedReview(roots);
-  },
 });
 
 ipcMain.handle("shell-dev:managed-source-review", async (event, ...args: unknown[]) => {
-  // Validate the trusted main frame before resolving any code root or reading source metadata.
-  if (!assertShellDevWorkbenchSender(event)) return { ok: false, message: "仅允许可信工作台主页面查看源码审查报告。" };
-  return managedReviewHandler(...args);
+  return managedReviewHandler(event, ...args);
 });
 const managedSelectionHandler = createManagedSelectionHandler({
   isTrusted: (event: IpcMainInvokeEvent) => assertShellDevWorkbenchSender(event),
