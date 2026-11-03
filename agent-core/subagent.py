@@ -259,7 +259,7 @@ def checker_summary_max_chars() -> int:
     return max(256, value)
 
 
-def resolve_checker_model(session_model: str, meta: Any | None = None) -> str:
+def resolve_checker_model(session_model: str, meta: Any | None = None, *, paths: AgentPaths | None = None) -> str:
     from llm_routing import resolve_model_id_for_role
     from session import SessionMeta
 
@@ -270,7 +270,7 @@ def resolve_checker_model(session_model: str, meta: Any | None = None) -> str:
             execution_model=session_meta.execution_model,
             planning_model=session_meta.planning_model,
         )
-    return resolve_model_id_for_role("checker", session_meta)
+    return resolve_model_id_for_role("checker", session_meta, paths=paths)
 
 
 def checker_task_from_demo_record(
@@ -1306,7 +1306,7 @@ class SubagentRunner:
         tools = build_explore_tools(registry=registry)
         from llm_routing import resolve_model_id_for_role
 
-        model = resolve_model_id_for_role("explore", session.meta)
+        model = resolve_model_id_for_role("explore", session.meta, paths=self.paths)
 
         working: list[dict[str, Any]] = [
             {
@@ -1502,7 +1502,7 @@ class SubagentRunner:
         tools = build_checker_tools(registry=registry)
         from llm_routing import resolve_model_id_for_role
 
-        model = resolve_model_id_for_role("checker", session.meta)
+        model = resolve_model_id_for_role("checker", session.meta, paths=self.paths)
 
         user_content = _format_checker_user_message(resolved_task, hard_checklist)
         working: list[dict[str, Any]] = [
@@ -1668,7 +1668,7 @@ class SubagentRunner:
         # Callers pass the resolved terminal planning profile model; the
         # main-turn model is only a fallback (the plan_partner role is gone).
         model = (plan_model or "").strip() or resolve_model_id_for_role(
-            "main_turn", session.meta
+            "main_turn", session.meta, paths=self.paths
         )
         effort = (reasoning_effort or "").strip() or "max"
         user_content = task_text
@@ -1829,7 +1829,7 @@ class SubagentRunner:
 
         from llm_routing import resolve_model_id_for_role
 
-        model = resolve_model_id_for_role("deliverable_review", session.meta)
+        model = resolve_model_id_for_role("deliverable_review", session.meta, paths=self.paths)
         _bind_llm_cancel(llm, cancel_event)
 
         plan_slice = _build_review_plan_slice(self.paths, project_id)

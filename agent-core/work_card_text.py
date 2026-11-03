@@ -14,10 +14,10 @@ from typing import Any
 from work_record_cards import ProjectWorkRecordCardsSnapshot, IndependentWorkRecordCardsSnapshot
 
 from work_card_ledger import (
-    _RECORD_KEYS, _SNAPSHOT_KEYS, _INDEPENDENT_SNAPSHOT_KEYS,
+    _RECORD_KEYS, _SNAPSHOT_KEYS, _SNAPSHOT_KEYS_WITH_FOCUS, _INDEPENDENT_SNAPSHOT_KEYS,
     _PROJECT_CARD_KEYS, _INDEPENDENT_CARD_KEYS,
     _REQUIREMENT_CARD_KEYS, _INDEPENDENT_REQUIREMENT_KEYS,
-    _RESULT_CARD_KEYS, _INDEPENDENT_RESULT_KEYS,
+    _RESULT_CARD_KEYS, _RESULT_CARD_KEYS_WITH_PROJECT_TEST, _INDEPENDENT_RESULT_KEYS,
 )
 
 
@@ -98,7 +98,11 @@ def _render_snapshot(snapshot: Any, *, card_id: str | None, saved_at: str | None
         scoped_keys = _SNAPSHOT_KEYS | {'kind'}
         _check(set(snapshot) in (scoped_keys, scoped_keys | {'change_focus'}))
     else:
-        _shape(snapshot, _INDEPENDENT_SNAPSHOT_KEYS if independent else _SNAPSHOT_KEYS)
+        if independent:
+            allowed = (_INDEPENDENT_SNAPSHOT_KEYS, _INDEPENDENT_SNAPSHOT_KEYS | {"change_focus"})
+            _check(type(snapshot) is dict and set(snapshot) in allowed)
+        else:
+            _check(type(snapshot) is dict and set(snapshot) in (_SNAPSHOT_KEYS, _SNAPSHOT_KEYS_WITH_FOCUS))
     session_id = snapshot['session_id']
     _text(session_id)
     _text(snapshot['captured_at'])
@@ -184,7 +188,10 @@ def _render_snapshot(snapshot: Any, *, card_id: str | None, saved_at: str | None
                 lines.append('  最新结果：无已保存结果')
                 lines.append('  验证状态：未提供')
             else:
-                _shape(latest, _INDEPENDENT_RESULT_KEYS if independent else _RESULT_CARD_KEYS)
+                if independent:
+                    _shape(latest, _INDEPENDENT_RESULT_KEYS)
+                else:
+                    _check(type(latest) is dict and set(latest) in (_RESULT_CARD_KEYS, _RESULT_CARD_KEYS_WITH_PROJECT_TEST))
                 _check(result_count > 0 and omitted == result_count - 1
                        and latest['session_id'] == session_id and latest['item_id'] == item_id
                        and latest['requirement_id'] == req_id)
@@ -206,6 +213,22 @@ def _render_snapshot(snapshot: Any, *, card_id: str | None, saved_at: str | None
                               '  结果摘要：' + _text(latest['summary'], empty=True),
                               '  验证状态：' + ('未提供' if verification is None else _text(verification)),
                               '  结果来源：' + _refs(latest['sources'])])
+                if 'project_test' in latest:
+                    report = latest['project_test']
+                    if report is None:
+                        lines.append('  项目自测报告：未提供')
+                    else:
+                        _check(type(report) is dict and set(report) == {'status', 'source', 'pytest_target', 'exit_code'})
+                        lines.append(
+                            '  项目自测报告：'
+                            + _text(report['status'])
+                            + ' / '
+                            + _text(report['source'])
+                            + ' / '
+                            + _text(report['pytest_target'])
+                            + ' / exit_code='
+                            + _text(str(report['exit_code']))
+                        )
             if req['current_result_missing']:
                 lines.append('  当前结果缺失：builder 标记此终态要求缺少当前结果。')
     _check(total_req == counts['requirement_count'] and total_results == counts['result_count']

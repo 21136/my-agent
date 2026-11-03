@@ -83,16 +83,35 @@ def resolve_model_id_for_role(
     meta: SessionMeta | None = None,
     *,
     registry: ModelRegistry | None = None,
+    paths=None,
 ) -> str:
     """Resolve registry model id for a harness role (J0–J5)."""
-    reg = registry or get_registry()
+    reg = registry or get_registry(paths)
     session_meta = meta or SessionMeta()
+
+    preference_role = "main" if role == "main_turn" else (
+        "subagent" if role in {"explore", "checker", "deliverable_review", "topic_routing"} else ""
+    )
+    role_settings = None
+    if preference_role:
+        from llm_role_model_preferences import load_role_model_settings
+
+        role_settings = load_role_model_settings(paths)
+        if preference_role in role_settings["explicit_roles"]:
+            selected_entry = reg.resolve(role_settings["preferences"][preference_role])
+            if selected_entry is not None:
+                return selected_entry.id
 
     env_raw = _env_override(role)
     if env_raw:
         resolved = _resolve_raw_id(env_raw, reg)
         if resolved:
             return resolved
+
+    if role_settings is not None:
+        selected_entry = reg.resolve(role_settings["preferences"][preference_role])
+        if selected_entry is not None:
+            return selected_entry.id
 
     raw = ""
     if role == "main_turn":

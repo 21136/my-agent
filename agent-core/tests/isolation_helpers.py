@@ -6,8 +6,11 @@ Prefer this over ``AgentPaths.discover()`` whenever a test writes sessions,
 
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import tempfile
+import threading
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,6 +24,64 @@ _DEFAULT_INDEX = (
     '[[topic]]\nid = "workflow"\n'
 )
 
+# Cleanup is authorized only for roots created by this module in this process.
+_TEMP_ROOTS: dict[str, tuple[tuple[int, int], tuple[int, int] | None, str]] = {}
+_TEMP_ROOTS_LOCK = threading.RLock()
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _identity(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _is_reparse_or_link(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except OSError:
+        return True
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    is_junction = getattr(path, "is_junction", lambda: False)
+    return (
+        path.is_symlink()
+        or is_junction()
+        or bool(getattr(info, "st_file_attributes", 0) & reparse_flag)
+    )
+
+
+def _is_plain_directory(path: Path) -> bool:
+    if _identity(path) is None or _is_reparse_or_link(path):
+        return False
+    try:
+        return stat.S_ISDIR(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+def _path_has_link_or_reparse_component(path: Path) -> bool:
+    try:
+        return any(_is_reparse_or_link(part) for part in (path, *path.parents))
+    except OSError:
+        return True
+
+
+def _tree_has_link_or_reparse(root: Path) -> bool:
+    try:
+        for current, dirs, files in os.walk(root, followlinks=False):
+            base = Path(current)
+            for name in (*dirs, *files):
+                if _is_reparse_or_link(base / name):
+                    return True
+        return False
+    except OSError:
+        return True
+
 
 def _build_temp_root(
     *,
@@ -28,7 +89,7 @@ def _build_temp_root(
     prefix: str = "stab-iso-",
 ) -> Path:
     live = AgentPaths.discover()
-    tmp = Path(tempfile.mkdtemp(prefix=prefix))
+    tmp = Path(tempfile.mkdtemp(prefix=prefix)).absolute()
     (tmp / "evolve").mkdir(parents=True)
     (tmp / "evolve" / "_index.core.toml").write_text(_DEFAULT_INDEX, encoding="utf-8")
     (tmp / "workspace").mkdir(parents=True)
@@ -60,33 +121,72 @@ def _build_temp_root(
                 encoding="utf-8",
                 errors="replace",
             )
+    root_identity = _identity(tmp)
+    link_identity = _identity(core_link)
+    if root_identity is None or link_identity is None:
+        raise RuntimeError("temporary isolation root identity could not be recorded")
+    with _TEMP_ROOTS_LOCK:
+        _TEMP_ROOTS[_path_key(tmp)] = (root_identity, link_identity, str(core_src.resolve()))
     return tmp
 
 
-def _unlink_agent_core_link(tmp: Path) -> None:
-    """Remove agent-core symlink/junction without descending into the live tree."""
+def _unlink_agent_core_link(tmp: Path, expected: tuple[int, int], target: str) -> bool:
+    """Remove only the exact symlink/junction created by _build_temp_root."""
     core = tmp / "agent-core"
-    if not core.exists() and not core.is_symlink():
-        return
     try:
+        if _identity(core) != expected or not _is_reparse_or_link(core):
+            return False
+        if str(core.resolve(strict=True)) != target:
+            return False
         if hasattr(core, "is_junction") and core.is_junction():  # type: ignore[attr-defined]
             core.rmdir()
-            return
-    except OSError:
-        pass
-    if core.is_symlink():
-        core.unlink(missing_ok=True)
-        return
-    # Junction fallback (Windows): rmdir removes the link, not the target.
-    try:
-        core.rmdir()
-    except OSError:
-        pass
+        elif core.is_symlink():
+            core.unlink()
+        else:
+            return False
+        return _identity(core) is None
+    except (OSError, RuntimeError):
+        return False
 
 
 def _cleanup_temp_root(tmp: Path) -> None:
-    _unlink_agent_core_link(tmp)
-    shutil.rmtree(tmp, ignore_errors=True)
+    with _TEMP_ROOTS_LOCK:
+        key = _path_key(tmp)
+        record = _TEMP_ROOTS.get(key)
+        if record is None:
+            return
+        root_identity, link_identity, expected_link_target = record
+        root = Path(key)
+        temp_parent = Path(tempfile.gettempdir()).absolute()
+        try:
+            resolved_parent = root.resolve(strict=True).parent
+            resolved_temp_parent = temp_parent.resolve(strict=True)
+            if root.parent != temp_parent or resolved_parent != resolved_temp_parent:
+                return
+            if not _is_plain_directory(root) or _identity(root) != root_identity:
+                return
+            if _path_has_link_or_reparse_component(root):
+                return
+        except (OSError, RuntimeError):
+            return
+        if link_identity is None:
+            core = root / "agent-core"
+            if _identity(core) is not None or core.exists() or core.is_symlink():
+                return
+        else:
+            if not _unlink_agent_core_link(root, link_identity, expected_link_target):
+                return
+            _TEMP_ROOTS[key] = (root_identity, None, expected_link_target)
+        if not _is_plain_directory(root) or _identity(root) != root_identity:
+            return
+        if _tree_has_link_or_reparse(root):
+            return
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            return
+        if _identity(root) is None:
+            _TEMP_ROOTS.pop(key, None)
 
 
 @contextmanager

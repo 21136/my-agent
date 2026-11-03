@@ -4899,7 +4899,7 @@ class Agent:
         from llm_routing import resolve_model_id_for_role
 
         tools = build_llm_tools(self.session, registry=self.executor.registry)
-        model = resolve_model_id_for_role("main_turn", self.session.meta)
+        model = resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths)
         result = self._run_execute_segments(
             intent=intent,
             subagent_used=False,
@@ -4982,7 +4982,7 @@ class Agent:
             self._emit_turn_event({"type": "turn.notice", "level": "info", "text": _text})
             self._emit_terminal_plan_state(
                 mode="executing",
-                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                model=resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths),
                 effort=self.session.meta.reasoning_effort,
                 step=1,
                 total=len(artifact.steps),
@@ -5073,7 +5073,7 @@ class Agent:
             self._emit_turn_event({"type": "turn.notice", "level": "info", "text": _text})
             self._emit_terminal_plan_state(
                 mode="executing",
-                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                model=resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths),
                 effort=self.session.meta.reasoning_effort,
                 step=artifact.current_step + 1,
                 total=len(artifact.steps),
@@ -5125,7 +5125,7 @@ class Agent:
                 notices=notices,
             )
 
-        exec_model = resolve_model_id_for_role("main_turn", self.session.meta)
+        exec_model = resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths)
         exec_effort = self.session.meta.reasoning_effort
         self._emit_terminal_plan_state(
             mode="executing",
@@ -6528,7 +6528,7 @@ class Agent:
             loop_result = self._run_parent_tool_loop(
                 max_rounds=req_loop_max,
                 tools=[],
-                model=resolve_model_id_for_role("main_turn", self.session.meta),
+                model=resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths),
                 segment_start_index=segment_start_index,
             )
             return self._finish_short_tool_loop(
@@ -6711,7 +6711,7 @@ class Agent:
         )
         from llm_routing import resolve_model_id_for_role
 
-        model = resolve_model_id_for_role("main_turn", self.session.meta)
+        model = resolve_model_id_for_role("main_turn", self.session.meta, paths=self.session.paths)
 
         if intent == "recall":
             tools = [tool for tool in tools

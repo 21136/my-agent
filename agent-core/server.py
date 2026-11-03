@@ -295,8 +295,8 @@ def _proposal_item(record: ProposalRecord) -> dict[str, Any]:
     }
 
 
-def _session_banner_payload(session: Session) -> dict[str, Any]:
-    return session_banner_event(session)
+def _session_banner_payload(session: Session, paths: AgentPaths | None = None) -> dict[str, Any]:
+    return session_banner_event(session, paths=paths)
 
 
 def _proposals_payload(paths: AgentPaths) -> dict[str, Any]:
@@ -316,6 +316,12 @@ def _memory_item(entry: Any) -> dict[str, Any]:
 def _memories_payload(paths: AgentPaths) -> dict[str, Any]:
     items = [_memory_item(entry) for entry in scan_memory_index(paths.evolve)]
     return {"type": "evolve.memories", "items": items}
+
+
+def _role_model_preferences_payload(paths: AgentPaths) -> dict[str, Any]:
+    from llm_role_model_preferences import dispatch_llm_role_models_message
+
+    return dispatch_llm_role_models_message(paths, {"type": "llm_role_models.get"})[0]
 
 
 _POST_TURN_REQUEST_CAPACITY = 4096
@@ -364,6 +370,8 @@ class WsBridge:
     _auto_record_confirmations: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
     _auto_recognition_queue: Any | None = field(default=None, init=False, repr=False)
     _auto_recognition_session: Session | None = field(default=None, init=False, repr=False)
+    _auto_recognition_opt_out: bool = field(default=False, init=False, repr=False)
+    _auto_recognition_preference_failed: bool = field(default=False, init=False, repr=False)
     _auto_recognition_request_ids: set[str] = field(default_factory=set, init=False, repr=False)
     _auto_recognition_request_capacity_exhausted: bool = field(default=False, init=False, repr=False)
     _auto_recognition_pending: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
@@ -734,12 +742,78 @@ class WsBridge:
         if session is not None and self._auto_recognition_queue is not None:
             self._auto_recognition_queue.revoke(self, session)
 
+    def _auto_recognition_preference_enabled_locked(self) -> bool:
+        """Refresh the durable user choice while the bridge binding lock is held."""
+        if self._auto_recognition_preference_failed:
+            return False
+        from work_record_auto_recognition_preference import (
+            AutoRecognitionPreferenceError, AutoRecognitionPreferenceStore,
+        )
+        try:
+            enabled = AutoRecognitionPreferenceStore(self.paths).read_enabled()
+        except AutoRecognitionPreferenceError:
+            self._auto_recognition_preference_failed = True
+            self._auto_recognition_opt_out = True
+            self._revoke_auto_recognition_locked()
+            return False
+        self._auto_recognition_opt_out = not enabled
+        if not enabled:
+            self._revoke_auto_recognition_locked()
+        return enabled
+
+    def sync_auto_recognition_session(self, session: Any) -> None:
+        """Default-enable the bound session unless the durable user preference opts out.
+
+        This only binds authorization; recognition runs after ordinary turns and does
+        not issue another consent prompt. The queue remains exact-session and
+        connection scoped.
+        """
+        from work_record_recognition_queue import QueueStatus, RecognitionQueue
+
+        with self._result_view_write_lock:
+            provider_session = self._session_provider() if callable(self._session_provider) else None
+            if (not isinstance(session, Session) or provider_session is not session
+                    or self._connection_closed.is_set() or self._session_binding_transitions):
+                return
+            try:
+                preference_enabled = self._auto_recognition_preference_enabled_locked()
+            except Exception:
+                self._auto_recognition_preference_failed = True
+                self._auto_recognition_opt_out = True
+                self._revoke_auto_recognition_locked()
+                preference_enabled = False
+            if not preference_enabled:
+                self._revoke_auto_recognition_locked()
+            elif self._auto_recognition_session is not session:
+                try:
+                    if self._auto_recognition_queue is None:
+                        self._auto_recognition_queue = RecognitionQueue()
+                    result = self._auto_recognition_queue.authorize(self, session)
+                    if result.status is QueueStatus.AUTHORIZED:
+                        self._post_turn_generation += 1
+                        self._auto_recognition_session = session
+                    else:
+                        self._revoke_auto_recognition_locked()
+                except Exception:
+                    self._revoke_auto_recognition_locked()
+            enabled = self._auto_recognition_session is session
+            try:
+                self.emit({"type": "work-record.auto-recognition.state",
+                           "session_id": session.conversation_id, "enabled": enabled})
+            except Exception:
+                self._auto_recognition_opt_out = True
+                self._auto_recognition_preference_failed = True
+                self._revoke_auto_recognition_locked()
+
     def set_auto_recognition(self, message: dict[str, Any], session: Any) -> dict[str, Any]:
         """Apply explicit connection/Session consent; never invoke recognition here.
 
         Request IDs are connection-lifetime replay tombstones. Once their bounded
         capacity is reached, new grants fail closed; revoke remains available.
         """
+        from work_record_auto_recognition_preference import (
+            AutoRecognitionPreferenceError, AutoRecognitionPreferenceStore,
+        )
         from work_record_recognition_queue import QueueStatus, RecognitionQueue
         raw_id = message.get('request_id')
         raw_session = message.get('session_id')
@@ -775,11 +849,28 @@ class WsBridge:
                 else:
                     self._auto_recognition_request_ids.add(raw_id)
                 if action == 'revoke':
+                    self._auto_recognition_opt_out = True
                     self._revoke_auto_recognition_locked()
+                    try:
+                        AutoRecognitionPreferenceStore(self.paths).write_enabled(False)
+                        self._auto_recognition_preference_failed = False
+                    except AutoRecognitionPreferenceError:
+                        self._auto_recognition_preference_failed = True
+                        response.update(status='rejected', enabled=False)
+                        return response
                     response.update(status='ok', enabled=False)
                     return response
                 if self._auto_recognition_request_capacity_exhausted:
                     return response
+                try:
+                    AutoRecognitionPreferenceStore(self.paths).write_enabled(True)
+                except AutoRecognitionPreferenceError:
+                    self._auto_recognition_opt_out = True
+                    self._auto_recognition_preference_failed = True
+                    self._revoke_auto_recognition_locked()
+                    return response
+                self._auto_recognition_opt_out = False
+                self._auto_recognition_preference_failed = False
                 if self._auto_recognition_session is session:
                     response.update(status='ok', enabled=True)
                     return response
@@ -793,6 +884,8 @@ class WsBridge:
                 return response
             except Exception:
                 # Do not advertise permission after an uncertain state transition.
+                self._auto_recognition_opt_out = True
+                self._auto_recognition_preference_failed = True
                 try:
                     self._revoke_auto_recognition_locked()
                 except Exception:
@@ -1357,6 +1450,7 @@ class WsBridge:
             self.end_session_binding_change()
 
     def end_session_binding_change(self) -> None:
+        session_to_sync = None
         with self._result_view_write_lock:
             with self._overview_query_lock:
                 self._session_binding_transitions = max(0, self._session_binding_transitions - 1)
@@ -1367,6 +1461,13 @@ class WsBridge:
                 except Exception:
                     # Fail closed if the transition bookkeeping is inconsistent.
                     self._post_turn_send_gate.disconnect()
+            if self._session_binding_transitions == 0 and callable(self._session_provider):
+                try:
+                    session_to_sync = self._session_provider()
+                except Exception:
+                    session_to_sync = None
+        if session_to_sync is not None:
+            self.sync_auto_recognition_session(session_to_sync)
 
     def request_cancel(self) -> bool:
         # Serialize cancellation ingress with a result-view atomic write. Whichever
@@ -1440,13 +1541,18 @@ class WsBridge:
 
     def emit_session_state(self, session: Session) -> None:
         quick_memory = not session._messages_fully_loaded
-        self.emit(_session_banner_payload(session))
+        self.emit(_session_banner_payload(session, self.paths))
+        self.sync_auto_recognition_session(session)
         # History before heavy project.state so chat hydrates first (UI-5972).
         self.emit(session_history_event(session))
         self.emit(
             session_memory_event(session, quick=quick_memory)
         )
         self.emit(models_list_event(self.paths))
+        try:
+            self.emit(_role_model_preferences_payload(self.paths))
+        except Exception as exc:
+            self.emit({"type": "llm_role_models.state", "status": "rejected", "message": str(exc)})
         self.emit(_proposals_payload(self.paths))
         self.emit(_memories_payload(self.paths))
         if session.meta.project_id:
@@ -2993,8 +3099,15 @@ def _auto_recognition_binding(bridge: WsBridge, candidate: Any) -> bool:
         return (not bridge._connection_closed.is_set() and not bridge._session_binding_transitions
                 and bridge._auto_recognition_session is candidate.session
                 and callable(bridge._session_provider) and bridge._session_provider() is candidate.session
+                and bridge._auto_recognition_preference_enabled_locked()
                 and candidate.cancel_generation == bridge._post_turn_generation)
     except Exception:
+        bridge._auto_recognition_preference_failed = True
+        bridge._auto_recognition_opt_out = True
+        try:
+            bridge._revoke_auto_recognition_locked()
+        except Exception:
+            bridge._auto_recognition_session = None
         return False
 
 
@@ -3057,12 +3170,16 @@ class _AutoRecognitionClient:
                 if (shown != preview or allow_approve_all is not False or self._started
                         or not _auto_recognition_binding(self._bridge, self._candidate)):
                     return 'n'
-                self._started = True  # linearization point; never hold this lock for network I/O
+                self._started = True  # authorization linearizes; network I/O holds no lock
                 return 'y'
+        def before_send() -> bool:
+            # Re-read durable preference after request/client setup, at the last safe gate.
+            with self._bridge._result_view_write_lock:
+                return _auto_recognition_binding(self._bridge, self._candidate)
         try:
             response = self._client.chat_confirmed_json(safe_messages, model_id=MODEL_ID,
                 session_id=self._candidate.session.conversation_id,
-                expected_preview_json=preview, confirm_fn=permit)
+                expected_preview_json=preview, confirm_fn=permit, before_send_fn=before_send)
             content = response if isinstance(response, str) else getattr(response, 'content', None)
             if (not isinstance(content, str) or (not isinstance(response, str) and getattr(response, 'tool_calls', None))):
                 self.failed = True
@@ -7109,14 +7226,14 @@ class WsSessionHandler:
                         try:
                             record = ledger.get_card(card_id)
                             snapshot = record.get("snapshot") if type(record) is dict else None
-                            item_id = _work_card_snapshot_item_for_result(
+                            result_item_id = _work_card_snapshot_item_for_result(
                                 snapshot, session_id=session.conversation_id,
                                 requirement_id=requirement_id, result_id=result_id,
                             )
-                            if item_id is not None and bridge.result_view_lease_is_bound(result_view_lease, session):
+                            if result_item_id is not None and bridge.result_view_lease_is_bound(result_view_lease, session):
                                 from work_record_cards import project_local_assistant_reply_excerpt_detail
                                 detail = project_local_assistant_reply_excerpt_detail(
-                                    store, session_id=session.conversation_id, item_id=item_id,
+                                    store, session_id=session.conversation_id, item_id=result_item_id,
                                     requirement_id=requirement_id, result_id=result_id,
                                 )
                                 if detail is not None and bridge.result_view_lease_is_bound(result_view_lease, session):
@@ -7845,6 +7962,10 @@ class WsSessionHandler:
             await self._dispatch_llm_keys(message, bridge)
             return
 
+        if isinstance(msg_type, str) and msg_type.startswith("llm_role_models."):
+            await self._dispatch_llm_role_models(message, bridge)
+            return
+
         if isinstance(msg_type, str) and msg_type.startswith("services."):
             await self._dispatch_services(message, bridge)
             return
@@ -8259,6 +8380,30 @@ class WsSessionHandler:
             bridge.emit(payload)
         except HostScopeConfigError as exc:
             emit_error(bridge, str(exc))
+
+    async def _dispatch_llm_role_models(
+        self,
+        message: dict[str, Any],
+        bridge: WsBridge,
+    ) -> None:
+        from llm_role_model_preferences import LlmRoleModelPreferenceError, dispatch_llm_role_models_message
+
+        try:
+            payloads = await asyncio.to_thread(
+                dispatch_llm_role_models_message,
+                self.paths,
+                message,
+            )
+            for payload in payloads:
+                # A failed set must finish the UI's pending request, not look
+                # like an unsolicited state refresh.
+                if (message.get("type") == "llm_role_models.set"
+                        and payload.get("type") == "llm_role_models.state"
+                        and payload.get("status") == "rejected"):
+                    payload = {**payload, "type": "llm_role_models.done"}
+                bridge.emit(payload)
+        except LlmRoleModelPreferenceError as exc:
+            bridge.emit({"type": "llm_role_models.done", "status": "rejected", "message": str(exc)})
 
     async def _dispatch_llm_keys(
         self,

@@ -567,8 +567,9 @@ class LLMClient:
         session_id: str,
         expected_preview_json: str,
         confirm_fn: Callable[[str, bool], str],
+        before_send_fn: Callable[[], bool] | None = None,
     ) -> LLMResponse:
-        """Send one non-streaming, no-tools JSON request bound to an exact confirmation.
+        """Send one frozen non-streaming request with exact-confirm and an optional final guard.
 
         ``expected_preview_json`` is the host's already prepared preview. It must
         byte-for-byte match the canonical preview assembled here before the
@@ -582,7 +583,8 @@ class LLMClient:
         if (type(model_id) is not str or not model_id or model_id != model_id.strip()
                 or not _confirmed_label(model_id) or type(session_id) is not str
                 or not _confirmed_label(session_id) or type(messages) is not list
-                or type(expected_preview_json) is not str or not callable(confirm_fn)):
+                or type(expected_preview_json) is not str or not callable(confirm_fn)
+                or (before_send_fn is not None and not callable(before_send_fn))):
             raise LLMOutboundConfigurationChangedError("confirmed request inputs are invalid")
 
         try:
@@ -676,8 +678,18 @@ class LLMClient:
             with self._active_response_lock:
                 self._active_client = client
             with client:
-                # Best effort only: cancellation can still race this check and
-                # the call to post; callers must treat a granted permit as sent.
+                # This trusted host guard observes authorization changes after client
+                # setup, immediately before handing the frozen body to HTTP.
+                self._raise_if_cancelled()
+                if before_send_fn is not None:
+                    try:
+                        send_allowed = before_send_fn()
+                    except Exception:
+                        send_allowed = False
+                    if send_allowed is not True:
+                        raise LLMOutboundConfigurationChangedError(
+                            "confirmed request authorization changed; no request was sent"
+                        )
                 self._raise_if_cancelled()
                 response = client.post(
                     endpoint_text,
@@ -713,7 +725,7 @@ class LLMClient:
                         "confirmed provider returned an invalid response; it was not retried",
                         status_code=response.status_code,
                     ) from None
-        except (LLMOutboundRequestError, LLMCancelledError):
+        except (LLMOutboundConfigurationChangedError, LLMOutboundRequestError, LLMCancelledError):
             raise
         except httpx.TimeoutException:
             raise LLMOutboundRequestError("confirmed request timed out; it was not retried") from None

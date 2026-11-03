@@ -1286,12 +1286,19 @@ def reasoning_effort_label(level: str) -> str:
     }.get(level, "")
 
 
-def session_banner_event(session: Session) -> dict[str, Any]:
+def session_banner_event(session: Session, *, paths: AgentPaths | None = None) -> dict[str, Any]:
     from llm_client import llm_model_label
+    from llm_role_model_preferences import LlmRoleModelPreferenceError
     from llm_routing import resolve_model_id_for_role
     from sandbox_evolution import write_scope_label
 
-    model = resolve_model_id_for_role("main_turn", session.meta)
+    try:
+        model = resolve_model_id_for_role("main_turn", session.meta, paths=paths or session.paths)
+        model_label = llm_model_label(model)
+    except LlmRoleModelPreferenceError:
+        # Keep the session usable for diagnosis without claiming any model was selected.
+        # Actual model calls still fail closed until the preference is repaired.
+        model, model_label = "", "全局模型选择不可用"
     payload: dict[str, Any] = {
         "type": "session.banner",
         "session_id": session.conversation_id,
@@ -1302,7 +1309,7 @@ def session_banner_event(session: Session) -> dict[str, Any]:
         "reasoning_effort": session.meta.reasoning_effort,
         "reasoning_effort_label": reasoning_effort_label(session.meta.reasoning_effort),
         "llm_model": model,
-        "llm_model_label": llm_model_label(model),
+        "llm_model_label": model_label,
         "llm_model_override": bool(session.meta.llm_model_override),
         "phase": session.meta.phase,
         "active_shell": session.meta.active_shell,

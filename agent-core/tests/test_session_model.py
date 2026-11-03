@@ -55,9 +55,9 @@ class SessionModelPickerTests(unittest.TestCase):
     def test_banner_includes_model(self) -> None:
         session = create_new(self.paths, conversation_id=f"_mb-{secrets.token_hex(3)}")
         session.set_llm_model("deepseek-v4-pro")
-        banner = session_banner_event(session)
-        self.assertEqual(banner["llm_model"], DEFAULT_MODEL_CODING)
-        self.assertEqual(banner["llm_model_label"], "DeepSeek Pro")
+        banner = session_banner_event(session, paths=self.paths)
+        self.assertEqual(banner["llm_model"], "0x567-pro")
+        self.assertIn("GPT-6.1 Terra", banner["llm_model_label"])
         self.assertTrue(banner["llm_model_override"])
         self.assertEqual(llm_model_label(DEFAULT_MODEL), "DeepSeek Flash")
 

@@ -156,7 +156,18 @@ def resolve_terminal_planning_profile(
 
     agent_paths = paths or session.paths
     reg = registry or get_registry(agent_paths)
-    main_id = resolve_model_id_for_role("main_turn", session.meta, registry=reg)
+    from llm_role_model_preferences import load_role_model_settings
+
+    role_settings = load_role_model_settings(agent_paths)
+    if "subagent" in role_settings["explicit_roles"]:
+        selected_entry = reg.resolve(role_settings["preferences"]["subagent"])
+        if selected_entry is not None:
+            return TerminalPlanningProfile(
+                model_id=selected_entry.id,
+                reasoning_effort="max",
+                degraded=False,
+            )
+    main_id = resolve_model_id_for_role("main_turn", session.meta, registry=reg, paths=agent_paths)
     main_entry = reg.resolve(main_id)
 
     if main_entry is None:
@@ -527,6 +538,7 @@ def classify_terminal_plan_need(
     *,
     llm: Any,
     meta: Any | None = None,
+    paths: AgentPaths | None = None,
 ) -> TerminalPlanGateDecision:
     """Constrained classifier for ambiguous execute turns (TM-24 §5.5.1)."""
     from session import SessionMeta
@@ -544,7 +556,7 @@ def classify_terminal_plan_need(
 
     from llm_routing import resolve_model_id_for_role
 
-    model = resolve_model_id_for_role("topic_routing", meta or SessionMeta())
+    model = resolve_model_id_for_role("topic_routing", meta or SessionMeta(), paths=paths)
     try:
         response = llm.chat(
             [
@@ -580,7 +592,7 @@ def resolve_auto_plan_turn(
         return TerminalPlanGateDecision(True, "rule_yes")
     if llm is None:
         return TerminalPlanGateDecision(False, "no_llm")
-    return classify_terminal_plan_need(user_text, llm=llm, meta=session.meta)
+    return classify_terminal_plan_need(user_text, llm=llm, meta=session.meta, paths=session.paths)
 
 
 def should_handle_terminal_plan_turn(
