@@ -46,6 +46,40 @@ test("literal search and 25-row pagination retain search and checkbox identities
  const next=root.all().find(n=>n.textContent==="下一页")!; next.click(); assert.ok(root.all().some(n=>n.textContent.includes("第 2/2 页")));
 });
 
+test("pasted catalog paths replace the selection atomically without invoking proposal or checkpoint APIs", () => {
+ const review = structuredClone(report);
+ review.sandbox.inventory.entries = Array.from({length:90},(_,i)=>entry(`desktop/selected-${i}.ts`,"f"));
+ const {root,panel}=setup(true,async()=>{throw new Error("paste must not propose");},async()=>{throw new Error("paste must not checkpoint");}); panel.show(review);
+ const first=root.all().find(n=>n.type==="checkbox")!; first.checked=true; first.dispatch("change");
+ const input=root.all().find(n=>n.getAttribute("aria-label")==="批量路径选择（每行一个精确 sandbox 路径）")!;
+ input.value=review.sandbox.inventory.entries.map((item:any)=>item.path).join("\n");
+ root.all().find(n=>n.textContent==="应用粘贴路径（替换选择）")!.click();
+ assert.equal(root.all().find(n=>n.getAttribute("aria-live")==="polite")?.textContent,"已选择 90 条路径。仅声明选择，不会创建检查点或合入。");
+ const next=root.all().find(n=>n.textContent==="下一页")!; next.click();
+ assert.equal(root.all().filter(n=>n.type==="checkbox"&&n.checked).length,25);
+ assert.match(root.all().map(n=>n.textContent).join("\n"),/仅声明选择/);
+});
+
+test("unknown, duplicate, blank, and over-limit pasted paths preserve the existing selection", () => {
+ const cases = [
+  {paths:["desktop/file-2.ts","desktop/not-in-catalog.ts"], label:"unknown"},
+  {paths:["desktop/file-2.ts","desktop/file-2.ts"], label:"duplicate"},
+  {paths:["desktop/file-2.ts","","desktop/file-1.ts"], label:"blank"},
+  {paths:Array.from({length:2049},(_,i)=>`desktop/file-${i+1}.ts`), label:"over limit", count:2050},
+ ];
+ for(const item of cases){
+  const review=structuredClone(report);
+  if(item.count) review.sandbox.inventory.entries=Array.from({length:item.count},(_,i)=>entry(`desktop/file-${i}.ts`,"f"));
+  const {root,panel}=setup(); panel.show(review);
+  const check=root.all().find(n=>n.type==="checkbox")!;check.checked=true;check.dispatch("change");
+  const input=root.all().find(n=>n.getAttribute("aria-label")==="批量路径选择（每行一个精确 sandbox 路径）")!;
+  input.value=item.paths.join("\n");root.all().find(n=>n.textContent==="应用粘贴路径（替换选择）")!.click();
+  assert.equal(root.all().find(n=>n.getAttribute("aria-live")==="polite")?.textContent,"已选择 1 条路径。仅声明选择，不会创建检查点或合入。",`${item.label} input changed existing selection`);
+  assert.equal(root.all().find(n=>n.type==="checkbox")?.checked,true,`${item.label} input must preserve the prior path`);
+  assert.ok(root.all().some(n=>n.getAttribute("role")==="status"&&n.textContent.length>0),`${item.label} input should explain refusal`);
+ }
+});
+
 test("selection edits invalidate old proposal and stale async results cannot overwrite current state",async()=>{
  let resolve!:(value:any)=>void; const calls:any[]=[];
  const {root,panel}=setup(true,(request:any)=>{calls.push(request);return new Promise(r=>resolve=r);}); panel.show(report);
@@ -240,7 +274,12 @@ test("native merge confirmation rejects non-record checkpoint lanes and identiti
    let dialogs = 0;
    const parent = { isDestroyed: () => false };
    const checkpoint = { ...request, request: { selectedPaths: ["desktop/file-0.ts"] }, review };
-   const confirm = new Function("workbenchWindow", "assertShellDevWorkbenchSender", "managedSelectedMergeCheckpoint", "dialog", "nativeSelectedMergeDetails", `return (${stripTypeScriptTypes(callback)});`)(parent, () => true, checkpoint, { showMessageBox: async () => { dialogs++; return { response: 1 }; } }, () => "details");
+   const showManagedConfirmDialog = async (options: Record<string, unknown>) => {
+    dialogs++;
+    assert.equal(options.cancelLabel, "取消");
+    return false;
+   };
+   const confirm = new Function("workbenchWindow", "assertShellDevWorkbenchSender", "managedSelectedMergeCheckpoint", "nativeSelectedMergeDetails", "path", "AGENT_ROOT", "showManagedConfirmDialog", `return (${stripTypeScriptTypes(callback)});`)(parent, () => true, checkpoint, () => "details", { join: (...parts: string[]) => parts.join("/") }, "fixture-root", showManagedConfirmDialog);
    assert.equal(await confirm({ caller: {}, request, plan }), false);
    assert.equal(dialogs, expectedDialogs, `${lane} must be a matching record identity`);
   }

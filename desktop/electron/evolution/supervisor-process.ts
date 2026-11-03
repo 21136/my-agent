@@ -113,7 +113,7 @@ export async function createSupervisorRuntime(value:unknown,factories:Partial<Su
     const bindings=new BindingStore(journal);const grants=new GrantStore(journal);
     const workspace=await createWorkspace({release:config.host_bootstrap.control_release,sandboxRoot:config.sandbox_root,runRoot:config.run_root});
     const runner=createRunner();
-    const deps:SupervisorDeps={journal,bindings,grants,runner,workspace,scopes:new Map(config.scopes.map(scope=>[scope.scope_id,scope])),runRoot:config.run_root,runtimePaths:new Map(Object.entries(config.runtime_paths)),snapshots:new Map(),descriptors:new Map(config.descriptors.map(item=>[item.artifact_id,item.descriptor])),profileFixtures:new Map(config.profile_fixtures.map(item=>[item.id,item.root])),descriptorFactories:config.descriptor_factories??[]};
+    const deps:SupervisorDeps={journal,bindings,grants,runner,workspace,scopes:new Map(config.scopes.map(scope=>[scope.scope_id,scope])),runRoot:config.run_root,sandboxRoot:config.sandbox_root,runtimePaths:new Map(Object.entries(config.runtime_paths)),snapshots:new Map(),descriptors:new Map(config.descriptors.map(item=>[item.artifact_id,item.descriptor])),profileFixtures:new Map(config.profile_fixtures.map(item=>[item.id,item.root])),descriptorFactories:config.descriptor_factories??[]};
     const supervisor=new EvolutionSupervisor(deps);
     return {config,supervisor,journal,closeJournal(){if(closed)return;closed=true;journal.close();},isClosed:()=>closed};
   }catch(error){journal.close();throw error;}

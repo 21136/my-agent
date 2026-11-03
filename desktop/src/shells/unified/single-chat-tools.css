@@ -2,19 +2,46 @@
 html[data-theme] .unified-shell[data-perspective="project"],
 .unified-shell[data-perspective="project"] { grid-template-columns: minmax(0, 1fr); }
 .unified-shell[data-perspective="project"] .unified-sidebar[hidden] { display: none !important; }
-html[data-theme] .unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .unified-composer-dock),
-.unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .unified-composer-dock) { display: flex; }
+/* Sidebar stays inert in single-chat; never reserve a settings/music rail column. */
+html[data-theme] .unified-shell[data-perspective="project"]:has(.unified-sidebar[hidden]),
+.unified-shell[data-perspective="project"]:has(.unified-sidebar[hidden]) { grid-template-columns: minmax(0, 1fr) !important; }
+
+/* Full-page tools (双车道 / 设置 / 听歌 / 文档) take the whole stage — do not squeeze chat left. */
+.unified-shell.is-tool-fullpage .unified-stage {
+  display: flex;
+  flex-direction: column;
+}
+.unified-shell.is-tool-fullpage .unified-stage > .unified-chat {
+  display: none !important;
+}
+.unified-shell.is-tool-fullpage .unified-tool-region {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  border-left: 0;
+  border-top: 0;
+  background: var(--ma-bg);
+}
+.unified-shell.is-tool-fullpage :is(.unified-topbar, .thread-archive-banner, .unified-context-region, .unified-composer-dock) {
+  display: none !important;
+}
+
 .unified-tool-region[hidden] { display: none !important; }
-.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) { display: flex; flex-direction: row; }
-.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 50%; min-width: 0; min-height: 0; max-height: none; }
-.unified-tool-region { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--ma-border); background: var(--ma-bg); }
+/* Runtime-only: keep a closable side tool beside chat. */
+.unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) { display: flex; flex-direction: row; }
+.unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 50%; min-width: 0; min-height: 0; max-height: none; }
+.unified-shell:not(.is-tool-fullpage) .unified-tool-region { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--ma-border); background: var(--ma-bg); }
 .unified-tool-heading { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .4rem .7rem; border-bottom: 1px solid var(--ma-border); }
 .unified-runtime-tool { flex: 1; min-height: 0; overflow: auto; padding: .75rem; }
 .unified-tool-unavailable { margin: 1rem; }
 @media (max-width: 800px) {
-  .unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
-  .unified-shell .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
-  .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
+  .unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
+  .unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
+  .unified-shell:not(.is-tool-fullpage) .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
 }
 .unified-tool-region .settings-category-nav { flex-direction: row; flex-wrap: wrap; padding: .4rem .7rem; }
 .unified-tool-region .settings-category-nav button { padding: .4rem .6rem; }

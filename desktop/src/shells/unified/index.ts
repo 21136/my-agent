@@ -87,7 +87,7 @@ import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
-import type { AgentWsClient, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import type { AgentWsClient, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt } from "./confirm-preview";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
@@ -117,6 +117,7 @@ import { buildCompanionWorldTurnContext } from "./companion-world-context";
 import { verifiedProjectEventToSharedEvent } from "./companion-world-app-events";
 import { normalizeTurnEvidenceEvent } from "./turn-evidence";
 import "./unified.css";
+import "./topbar-shortcuts.css";
 import "./work-card.css";
 import "./current-work-overview.css";
 import "./neon-twin.css";
@@ -204,6 +205,9 @@ export function mountUnifiedShell(
 
   // ---- ui state ----
   let autoRecognition = { sessionId: "", enabled: false, pending: "", action: "" as "" | "enable" | "revoke", error: false };
+  const globalRoleModels: { preferences: LlmRoleModelPreferences; models: LlmModelListItem[]; pendingRole: "main" | "subagent" | ""; error: string } = {
+    preferences: { main: "", subagent: "" }, models: [], pendingRole: "", error: "",
+  };
   let currentWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
   let currentWorkOverviewOpen = false;
   const currentWorkOverviewExpandedRequirementItemIds = new Set<string>();
@@ -410,8 +414,8 @@ export function mountUnifiedShell(
       toggleStructuredCurrentWorkOverview,
       expandStructuredCurrentWorkOverview,
       selectSingleChatTool,
-      setAutoRecognition,
     );
+    if (projectState.mainFocus === "settings") renderSettingsStage();
     sizeCurrentWorkPopover();
     topbarEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
       button.addEventListener("click", () => requestCurrentWorkOverviewDetail(button));
@@ -424,6 +428,30 @@ export function mountUnifiedShell(
         else currentWorkOverviewExpandedRequirementItemIds.delete(itemId);
       });
     });
+  }
+
+  function refreshGlobalRoleModels(): void {
+    if (globalRoleModels.pendingRole) return;
+    try {
+      client.listRoleModels();
+    } catch {
+      globalRoleModels.error = "无法读取最新的全局模型选择。";
+      refreshTopbar();
+    }
+  }
+
+  function setGlobalRoleModel(role: "main" | "subagent", model: string): void {
+    if (globalRoleModels.pendingRole) return;
+    globalRoleModels.pendingRole = role;
+    globalRoleModels.error = "";
+    refreshTopbar();
+    try {
+      client.setRoleModel(role, model);
+    } catch {
+      globalRoleModels.pendingRole = "";
+      globalRoleModels.error = "请求未能发送；全局模型选择未更改。";
+      refreshTopbar();
+    }
   }
 
   function setAutoRecognition(action: "enable" | "revoke"): void {
@@ -876,6 +904,7 @@ export function mountUnifiedShell(
   const shellDevEl = root.querySelector<HTMLElement>("#unified-shell-dev")!;
   let settingsRenderedSection: SettingsSection | null = null;
   let settingsRenderedName = "";
+  let settingsRenderedModelState = "";
   let settingsNicknameDraft: string | null = null;
   let settingsFeedback = "";
   let hasBilibiliSearch = false;
@@ -2521,19 +2550,26 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function syncMainFocusView(): void {
     const focus = projectState.mainFocus;
-    const chatFocus = true;
-    const toolOpen = focus !== "chat" || runtimeToolOpen;
+    const pageToolOpen =
+      focus === "document" ||
+      focus === "projects" ||
+      focus === "settings" ||
+      focus === "music" ||
+      focus === "shell-dev";
+    const chatFocus = focus === "chat" && !runtimeToolOpen;
+    const toolOpen = pageToolOpen || runtimeToolOpen;
     toolRegion.hidden = !toolOpen;
     runtimeTool.hidden = !runtimeToolOpen;
     toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
-    // Preserve the chat theme and composer while the selected tool is open.
-    shellEl.dataset.mainFocus = "chat";
-    shellEl.dataset.rail = "now";
+    // Full-page tools own the stage (完整页面). Chat stays mounted but is not left-split.
+    shellEl.dataset.mainFocus = focus;
+    shellEl.dataset.rail = projectState.railTab;
+    shellEl.classList.toggle("is-tool-fullpage", pageToolOpen);
     shellEl.classList.remove("is-docs-split");
-    chatEl.classList.remove("hidden");
+    chatEl.classList.toggle("hidden", pageToolOpen);
     documentEl.classList.toggle("hidden", focus !== "document");
     projectsEl.classList.toggle("hidden", focus !== "projects");
-    chatEl.hidden = false;
+    chatEl.hidden = pageToolOpen;
     documentEl.hidden = focus !== "document";
     projectsEl.hidden = focus !== "projects";
     settingsEl.hidden = focus !== "settings";
@@ -2542,9 +2578,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     musicEl.classList.toggle("hidden", focus !== "music");
     shellDevEl.hidden = focus !== "shell-dev";
     shellDevEl.classList.toggle("hidden", focus !== "shell-dev");
-    composerDock.hidden = false;
-    composer.hidden = false;
-    statusEl.hidden = false;
+    composerDock.hidden = pageToolOpen;
+    composer.hidden = pageToolOpen;
+    statusEl.hidden = pageToolOpen;
     tokenBar.hidden = !chatFocus;
     syncComposerMetaVisibility();
     if (focus === "document") {
@@ -2556,6 +2592,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (focus === "shell-dev") {
       shellDevLastOpenOk = false;
       void renderShellDevStage();
+    } else if (focus === "settings") {
+      renderSettingsStage();
+      if (projectState.settingsSection === "models") refreshGlobalRoleModels();
     }
     syncMusicViewBounds();
     syncShellDevViewBounds();
@@ -2587,7 +2626,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const name = currentPartnerName();
     const counts = settingsRuntimeCounts();
     // Async sidebar/runtime events must not replace inputs or interrupt a drag.
-    if (settingsRenderedSection !== section || settingsRenderedName !== name) {
+    const modelStateKey = section === "models" ? JSON.stringify([globalRoleModels, autoRecognition.enabled, !!autoRecognition.pending, autoRecognition.error, autoRecognition.sessionId === chat.model.sessionId]) : "";
+    if (settingsRenderedSection !== section || settingsRenderedName !== name || (section === "models" && settingsRenderedModelState !== modelStateKey)) {
       settingsEl.innerHTML = renderSettingsSidebar(section) + renderSettingsPane({
         section, partnerName: name, nicknameDraft: settingsNicknameDraft ?? name,
         avatarSrc: petAvatarSrc("idle", true),
@@ -2595,10 +2635,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
         inactiveTerminals: counts.terminals, stoppedServices: counts.services,
         fontControlHtml: renderChatFontControl(), feedback: settingsFeedback,
+        roleModels: globalRoleModels,
+        autoRecognition: { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error },
       });
       if (settingsRenderedSection !== section) settingsEl.scrollTop = 0;
       settingsRenderedSection = section;
       settingsRenderedName = name;
+      settingsRenderedModelState = modelStateKey;
       syncChatFontControl(settingsEl);
     }
     if (section === "runtime") {
@@ -2618,8 +2661,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function selectSettingsSection(section: SettingsSection): void {
     projectState.settingsSection = section;
     settingsFeedback = "";
+    settingsRenderedSection = null;
     renderSidebar();
+    renderSettingsStage();
     settingsNotice("");
+    if (section === "models") refreshGlobalRoleModels();
   }
 
   shellEl.addEventListener("click", event => {
@@ -2635,6 +2681,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       case "settings-back-chat": showNowChat(); break;
       case "settings-open-model-keys": document.querySelector<HTMLButtonElement>("#chrome-model-keys")?.click(); break;
       case "settings-open-host-scope": document.querySelector<HTMLButtonElement>("#chrome-settings")?.click(); break;
+      case "settings-open-runtime-status": selectSingleChatTool("runtime"); break;
+      case "settings-auto-recognition": setAutoRecognition(autoRecognition.enabled ? "revoke" : "enable"); break;
       case "settings-switch-cli": document.querySelector<HTMLButtonElement>("#chrome-cli")?.click(); break;
       case "settings-prune-runtime":
         try {
@@ -2653,6 +2701,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const target = event.target;
     if (target instanceof HTMLSelectElement && target.matches(".settings-category-mobile") && isSettingsSection(target.value)) {
       selectSettingsSection(target.value);
+    } else if (target instanceof HTMLSelectElement && target.matches(".settings-role-model-select")) {
+      const role = target.dataset.role;
+      if ((role === "main" || role === "subagent") && target.value) setGlobalRoleModel(role, target.value);
     } else if (target instanceof HTMLInputElement && target.dataset.settingsTheme) {
       const theme = target.dataset.settingsTheme === "dark" ? "dark" : "light";
       try {
@@ -5848,6 +5899,24 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       case "user.message.persisted":
         chat.handleEvent(event);
         break;
+      case "llm_role_models.state":
+      case "llm_role_models.done": {
+        if (event.status === "ok" && event.preferences && event.models) {
+          globalRoleModels.preferences = event.preferences;
+          globalRoleModels.models = event.models;
+          globalRoleModels.error = "";
+        } else if (event.status !== "ok") {
+          globalRoleModels.error = event.message || "全局模型选择读取或保存失败，当前选择未确认。";
+        }
+        if (event.type === "llm_role_models.done" || !globalRoleModels.pendingRole) globalRoleModels.pendingRole = "";
+        refreshTopbar();
+        break;
+      }
+      case "work-record.auto-recognition.state":
+        if (event.session_id !== chat.model.sessionId || autoRecognition.pending) break;
+        autoRecognition = { sessionId: event.session_id, enabled: event.enabled, pending: "", action: "", error: false };
+        refreshTopbar();
+        break;
       case "work-record.auto-recognition.done":
         if (event.session_id !== autoRecognition.sessionId || event.session_id !== chat.model.sessionId || !autoRecognition.pending
           || event.request_id !== autoRecognition.pending || event.action !== autoRecognition.action) break;
@@ -6872,15 +6941,3 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     root.innerHTML = "";
   };
 }
-
-
-
-
-
-
-
-
-
-
-
-

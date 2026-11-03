@@ -216,14 +216,6 @@ html[data-theme="dark"] .app-chrome {
   text-overflow: ellipsis;
 }
 
-.app-chrome-field-model {
-  flex: 1 1 auto;
-}
-
-.app-chrome-field-model select {
-  width: 100%;
-}
-
 .app-chrome select:hover,
 .app-chrome select:focus-visible {
   background-color: color-mix(in srgb, var(--ma-bg) 55%, transparent);

@@ -12,8 +12,10 @@ const MAX_ATTESTED_PYTHON_BYTES = 768 * 1024 * 1024;
 const REQUIRED_PYTHON_DISTRIBUTIONS = ["httpx", "websockets", "rich", "prompt_toolkit", "python-docx", "pypdf", "pymupdf"];
 const PYTHON_IMPORT_NAMES = { httpx: "httpx", websockets: "websockets", rich: "rich", prompt_toolkit: "prompt_toolkit", "python-docx": "docx", pypdf: "pypdf", pymupdf: "fitz" };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+let defaultControlReleaseQueue = Promise.resolve();
 
 function deny(message) { const error = new Error(`permission_denied: ${message}`); error.code = "permission_denied"; throw error; }
+function assertH1LaunchProfileEnabled(profile, options = {}) { if (profile?.chat_fixture_profile === "ordinary-chat-h1-v1") { if (process.env.REAL_ELECTRON_CHAT_H1_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_OPT_IN=1 to launch ordinary-chat H1"); if (process.env.REAL_ELECTRON_CHAT_H1_GUI_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_GUI_OPT_IN=1 to launch ordinary-chat H1"); if (options.capturePythonEnvironment !== undefined) deny("custom Python environment attestation is forbidden for ordinary-chat H1 native launch"); } }
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function within(parent, child) { const rel = path.relative(parent, child); return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); }
 function samePath(a, b) { const left = path.resolve(a), right = path.resolve(b); return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right; }
@@ -36,6 +38,158 @@ function canonical(value) {
   return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
 }
 function writeExclusive(file, bytes) { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, bytes, { flag: "wx" }); }
+function h1UserDirectoryMap(profileRoot) {
+  return {
+    USERPROFILE: path.join(profileRoot, "userprofile"), APPDATA: path.join(profileRoot, "appdata", "Roaming"), LOCALAPPDATA: path.join(profileRoot, "appdata", "Local"),
+    HOME: path.join(profileRoot, "home"), XDG_CONFIG_HOME: path.join(profileRoot, "xdg-config"), XDG_DATA_HOME: path.join(profileRoot, "xdg-data"), XDG_CACHE_HOME: path.join(profileRoot, "xdg-cache"),
+    TEMP: path.join(profileRoot, "tmp"), TMP: path.join(profileRoot, "tmp"),
+    MY_AGENT_ELECTRON_USER_DATA: path.join(profileRoot, "electron-userData"), MY_AGENT_ELECTRON_SESSION_DATA: path.join(profileRoot, "electron-sessionData"),
+  };
+}
+function prepareH1UserDirectories(profileRoot) { for (const directory of new Set(Object.values(h1UserDirectoryMap(profileRoot)))) mkdirSync(directory, { recursive: true }); }
+export function buildH1RuntimeEnvironment(profileRoot, appRoot, sourceEnvironment = process.env) {
+  const env = {}; for (const key of ["SYSTEMROOT", "WINDIR", "PATH"]) if (sourceEnvironment[key]) env[key] = sourceEnvironment[key];
+  Object.assign(env, h1UserDirectoryMap(profileRoot), { MY_AGENT_ROOT: appRoot, MY_AGENT_H1_PROFILE_ROOT: profileRoot, MY_AGENT_H1_RUN_ID: path.basename(path.dirname(path.dirname(appRoot))), PYTHONDONTWRITEBYTECODE: "1", PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }); return env;
+}
+function verifyAgentPathsBeforeH1Start(verified) {
+  const input = { sandboxRoot: verified.sandbox_root, runRoot: verified.run_root, appRoot: verified.app_root, profileRoot: verified.profile_root, pythonExecutable: verified.profile.trusted_python_executable };
+  const actual = verifyH1AgentPaths(input);
+  if (actual && typeof actual.then === "function") deny("async AgentPaths preflight is not supported before H1 spawn");
+  const expected = { agent_root: verified.app_root, data: path.join(verified.app_root, "data"), workspace: path.join(verified.app_root, "workspace"), evolve: path.join(verified.app_root, "evolve") };
+  if (!actual || Object.keys(actual).length !== 4 || Object.keys(expected).some(key => typeof actual[key] !== "string" || !samePath(actual[key], expected[key]))) deny("H1 AgentPaths preflight did not bind every root to this sealed app");
+  return actual;
+}
+export function assertH1SpawnEnvironment(env, appRoot, profileRoot) {
+  if (env?.MY_AGENT_ROOT !== appRoot) deny("H1 Electron spawn environment must set MY_AGENT_ROOT to the sealed app");
+  if (env?.MY_AGENT_H1_PROFILE_ROOT !== profileRoot || env?.MY_AGENT_H1_RUN_ID !== path.basename(path.dirname(path.dirname(appRoot)))) deny("H1 Electron spawn environment is not bound to the marked run identity");
+  const expected = h1UserDirectoryMap(profileRoot);
+  for (const [key, value] of Object.entries(expected)) if (env[key] !== value || !samePath(env[key], value)) deny("H1 Electron spawn environment is not isolated to this run profile");
+  if (env.PYTHONDONTWRITEBYTECODE !== "1" || env.PYTHONNOUSERSITE !== "1") deny("H1 Python user-site/bytecode isolation is missing from the Electron environment");
+  return true;
+}
+export function buildH1ElectronArgs(desktopAppPath, cdpOptions) {
+  if (typeof desktopAppPath !== "string" || !path.isAbsolute(desktopAppPath)) deny("sealed H1 Electron app path must be absolute");
+  if (cdpOptions === undefined) return [desktopAppPath];
+  if (!cdpOptions || typeof cdpOptions !== "object" || Array.isArray(cdpOptions) || Object.keys(cdpOptions).length !== 1 || cdpOptions.enabled !== true) deny("H1 CDP options accept only { enabled: true }");
+  return ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", desktopAppPath];
+}
+
+export function buildH1NativeLaunchPlan(verified, { mode, cdp, sourceEnvironment = process.env } = {}) {
+  if (!verified || typeof verified !== "object" || typeof verified.app_root !== "string" || typeof verified.profile_root !== "string" || typeof verified.electron?.executable !== "string") deny("verified H1 paths and Electron identity are required for a launch plan");
+  if (mode !== "exit" && mode !== "controlled") deny("H1 native launch mode is invalid");
+  if (mode === "exit" && cdp !== undefined) deny("uncontrolled H1 exit launch cannot enable CDP");
+  const env = buildH1RuntimeEnvironment(verified.profile_root, verified.app_root, sourceEnvironment);
+  assertH1SpawnEnvironment(env, verified.app_root, verified.profile_root);
+  const appEntry = path.join(verified.app_root, "desktop");
+  const args = mode === "controlled" ? buildH1ElectronArgs(appEntry, cdp) : [appEntry];
+  return { executable: verified.electron.executable, args, options: { cwd: verified.app_root, env, stdio: mode === "controlled" ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"], windowsHide: false, shell: false } };
+}
+
+export function awaitH1ChildExit(child) {
+  if (!child || typeof child.once !== "function") deny("H1 child exit observer requires an event-capable child handle");
+  return new Promise(resolve => {
+    let startError = null;
+    child.once("error", error => { startError = error; });
+    child.once("close", (code, signal) => resolve({ code, signal, ...(startError ? { start_error: String(startError.message ?? startError).slice(0, 512) } : {}) }));
+  });
+}
+
+export async function completeH1ExitLifecycle({ child, stdoutPath, stderrPath, exitPath, runRoot, pythonExecutable, pythonPackages, beforeEnvironment, captureEnvironment }) {
+  if (!child?.stdout || !child?.stderr || typeof child.once !== "function" || typeof captureEnvironment !== "function") deny("H1 exit lifecycle inputs are incomplete");
+  const stdout = [], stderr = []; let stdoutBytes = 0, stderrBytes = 0;
+  const collect = (target, stream, which) => stream.on("data", chunk => {
+    const bytes = Buffer.from(chunk); if (which === "stdout") stdoutBytes += bytes.length; else stderrBytes += bytes.length;
+    if (stdoutBytes + stderrBytes > 5 * 1024 * 1024) { try { child.kill?.(); } catch { /* retain bounded log failure */ } return; }
+    target.push(bytes);
+  });
+  collect(stdout, child.stdout, "stdout"); collect(stderr, child.stderr, "stderr");
+  const exit = await awaitH1ChildExit(child);
+  writeFileSync(stdoutPath, Buffer.concat(stdout), { flag: "wx" }); writeFileSync(stderrPath, Buffer.concat(stderr), { flag: "wx" });
+  const after = captureEnvironment(pythonExecutable, pythonPackages);
+  assertPythonEnvironmentUnchanged(beforeEnvironment, after);
+  const record = { code: exit.code, signal: exit.signal, ...(exit.start_error ? { start_error: exit.start_error } : {}), stdout: path.relative(runRoot, stdoutPath).replace(/\\/g, "/"), stderr: path.relative(runRoot, stderrPath).replace(/\\/g, "/"), python_environment_digest: after.digest };
+  writeFileSync(exitPath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+  return record;
+}
+export function createH1LifecycleProtocol(profile, token) {
+  const ordinaryChat = profile === "ordinary-chat-h1-v1";
+  if (!ordinaryChat && profile !== "t4-recovery-node-v1") deny("H1 lifecycle profile is not an approved synthetic profile");
+  if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) deny("H1 lifecycle shutdown token is invalid");
+  const controlType = ordinaryChat ? "ordinary-chat-h1.control" : "t9.control";
+  return {
+    bootstrapFrame: `${JSON.stringify({ type: `${controlType}.bootstrap`, token })}\n`,
+    shutdownFrame: `${JSON.stringify({ type: `${controlType}.shutdown`, token })}\n`,
+    parseReadyLine(line) {
+      try {
+        const message = JSON.parse(line);
+        if (message?.type !== (ordinaryChat ? "ordinary-chat-h1-host-ready" : "evolution-test-host-ready") || message.host !== "127.0.0.1" || !Number.isInteger(message.port) || message.port < 1 || message.port > 65_535) return null;
+        if (ordinaryChat && (message.renderer_host !== "127.0.0.1" || !Number.isInteger(message.renderer_port) || message.renderer_port < 1 || message.renderer_port > 65_535)) return null;
+        return message;
+      } catch { return null; }
+    },
+  };
+}
+export function extractH1CdpEndpoint(output) {
+  if (typeof output !== "string") return null;
+  const match = /DevTools listening on (ws:\/\/[^\s]+)/u.exec(output);
+  return match ? validateH1CdpEndpoint(match[1]) : null;
+}
+export function validateH1CdpEndpoint(value) {
+  if (typeof value !== "string") deny("H1 CDP endpoint must be a string");
+  let parsed; try { parsed = new URL(value); } catch { deny("H1 CDP endpoint is invalid"); }
+  if (parsed.protocol !== "ws:" || parsed.hostname !== "127.0.0.1" || !Number.isInteger(Number(parsed.port)) || Number(parsed.port) < 1 || Number(parsed.port) > 65_535 || parsed.username || parsed.password || parsed.search || parsed.hash || !/^\/devtools\/browser\/[A-Za-z0-9_-]+$/.test(parsed.pathname)) deny("H1 CDP endpoint must be a dynamic 127.0.0.1 browser endpoint");
+  return parsed.href;
+}
+
+export async function closeH1BrowserViaCdp(value, { WebSocketClass = globalThis.WebSocket, timeoutMs = 5_000 } = {}) {
+  const endpoint = validateH1CdpEndpoint(value);
+  if (typeof WebSocketClass !== "function") deny("H1 dynamic CDP WebSocket is unavailable");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) deny("H1 CDP close timeout is invalid");
+  let socket;
+  try { socket = new WebSocketClass(endpoint); } catch { deny("H1 CDP Browser.close connection could not be created"); }
+  return await new Promise((resolve, reject) => {
+    let settled = false, commandSent = false, sending = false, pendingClose = false, pendingError = false, pendingMessage = null, timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      try { socket.removeEventListener("open", onOpen); socket.removeEventListener("message", onMessage); socket.removeEventListener("error", onError); socket.removeEventListener("close", onClose); } catch { /* closing socket */ }
+      try { socket.close(); } catch { /* socket may already be closed */ }
+    };
+    const finish = (error, result) => { if (settled) return; settled = true; cleanup(); if (error) reject(error); else resolve(result); };
+    const transportClosed = () => {
+      if (sending) { pendingClose = true; return; }
+      if (commandSent) finish(null, { command_sent: true, acknowledged: false });
+      else finish(new Error("H1 CDP connection closed before Browser.close was sent"));
+    };
+    const processMessage = event => {
+      let message; try { message = JSON.parse(typeof event.data === "string" ? event.data : String(event.data)); } catch { return; }
+      if (message?.id !== 1) return;
+      if (message.error) finish(new Error("H1 CDP Browser.close command was rejected"));
+      else finish(null, { command_sent: true, acknowledged: true });
+    };
+    const onOpen = () => {
+      if (commandSent || sending || settled) return;
+      sending = true;
+      try { socket.send(JSON.stringify({ id: 1, method: "Browser.close" })); commandSent = true; }
+      catch { sending = false; finish(new Error("H1 CDP Browser.close command could not be sent")); return; }
+      sending = false;
+      if (pendingMessage) { const message = pendingMessage; pendingMessage = null; processMessage(message); }
+      if (!settled && (pendingClose || pendingError)) transportClosed();
+    };
+    const onMessage = event => { if (sending) { pendingMessage = event; return; } processMessage(event); };
+    const onError = () => {
+      if (sending) { pendingError = true; return; }
+      if (commandSent) finish(null, { command_sent: true, acknowledged: false });
+      else finish(new Error("H1 CDP Browser.close connection failed before send"));
+    };
+    const onClose = () => transportClosed();
+    socket.addEventListener("open", onOpen); socket.addEventListener("message", onMessage); socket.addEventListener("error", onError); socket.addEventListener("close", onClose);
+    timer = setTimeout(() => finish(new Error("H1 CDP Browser.close timed out")), timeoutMs);
+  });
+}
+function addSealedSyntheticFile(root, relative, content, manifestFiles) {
+  const target = path.join(root, ...relative.split("/")); const bytes = Buffer.from(content, "utf8"); writeExclusive(target, bytes);
+  manifestFiles.push({ path: relative, byte_length: bytes.length, sha256: sha256(bytes) });
+}
 
 function validateRunRoot(sandboxRootValue, runRootValue) {
   const sandboxRoot = realDirectory(path.resolve(sandboxRootValue), "sandbox root");
@@ -192,27 +346,56 @@ function copySingleFile(sourceValue, destinationValue, manifestFiles, manifestPa
   const bytes = readFileSync(destination); manifestFiles.push({ path: manifestPath, byte_length: bytes.length, sha256: sha256(bytes) });
 }
 
-function defaultFreezeControlRelease(sandboxRoot, runRoot, pythonExecutable) {
+async function defaultFreezeControlRelease(sandboxRoot, runRoot, pythonExecutable) {
   const require = createRequire(import.meta.url); const modulePath = path.join(sandboxRoot, "artifacts", "evolution-control-build", "control-release.js");
   regularFile(modulePath, "compiled control-release module"); const api = require(modulePath);
   if (typeof api.freezeControlRelease !== "function") deny("fixed control release builder is unavailable");
-  return api.freezeControlRelease({ buildRoot: path.join(sandboxRoot, "artifacts", "evolution-control-build"), workerRoot: path.join(sandboxRoot, "agent-core", "evolution"), outputRoot: path.join(runRoot, "control-releases"), nodeExecutable: process.execPath, pythonExecutable });
+  let releaseTurn;
+  const queued = defaultControlReleaseQueue;
+  defaultControlReleaseQueue = new Promise(resolve => { releaseTurn = resolve; });
+  await queued;
+  const hadRunRoot = Object.hasOwn(process.env, "EVOLUTION_TEST_ROOT");
+  const previousRunRoot = process.env.EVOLUTION_TEST_ROOT;
+  const previousCwd = process.cwd();
+  try {
+    let pending;
+    try {
+      // freezeControlRelease synchronously captures both globals before its first await.
+      process.env.EVOLUTION_TEST_ROOT = runRoot;
+      process.chdir(sandboxRoot);
+      pending = api.freezeControlRelease({ runRoot, buildRoot: path.join(sandboxRoot, "artifacts", "evolution-control-build"), workerRoot: path.join(sandboxRoot, "agent-core", "evolution"), outputRoot: path.join(runRoot, "control-releases"), nodeExecutable: process.execPath, pythonExecutable });
+    } finally {
+      try { process.chdir(previousCwd); }
+      finally {
+        if (hadRunRoot) process.env.EVOLUTION_TEST_ROOT = previousRunRoot;
+        else delete process.env.EVOLUTION_TEST_ROOT;
+      }
+    }
+    return await pending;
+  } finally { releaseTurn(); }
 }
-
 export async function buildH1ElectronMainOutputs(input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2 || typeof input.sandboxRoot !== "string" || typeof input.runRoot !== "string") deny("H1 Electron build input fields are invalid");
   const { sandboxRoot, runRoot } = validateRunRoot(input.sandboxRoot, input.runRoot);
   const desktopRoot = realDirectory(path.join(sandboxRoot, "desktop"), "sandbox desktop source root");
   const entryPoints = { main: regularFile(path.join(desktopRoot, "electron", "main.ts"), "current H1 Electron main source"), preload: regularFile(path.join(desktopRoot, "electron", "preload.ts"), "current H1 Electron preload source") };
-  const esbuildEntry = regularFile(path.join(desktopRoot, "node_modules", "esbuild", "lib", "main.js"), "fixed sandbox esbuild runtime");
+  let esbuildEntry = null;
+  let build = options.build;
+  if (build !== undefined && typeof build !== "function") deny("injected H1 esbuild build function is invalid");
+  if (!build) {
+    esbuildEntry = regularFile(path.join(desktopRoot, "node_modules", "esbuild", "lib", "main.js"), "fixed sandbox esbuild runtime");
+    const esbuild = createRequire(import.meta.url)(esbuildEntry);
+    if (!esbuild || typeof esbuild.build !== "function") deny("fixed sandbox esbuild API is unavailable");
+    build = esbuild.build.bind(esbuild);
+  }
   const outputRoot = path.join(runRoot, "t9-electron-build-" + randomUUID());
   if (existsSync(outputRoot)) deny("T9 Electron build output already exists; refusing overwrite");
   mkdirSync(outputRoot, { recursive: false });
-  const require = createRequire(import.meta.url); const esbuild = require(esbuildEntry);
-  if (!esbuild || typeof esbuild.build !== "function") deny("fixed sandbox esbuild API is unavailable");
   try {
-    const build = options.build ?? esbuild.build.bind(esbuild);
-    await build({ entryPoints, outdir: outputRoot, bundle: true, platform: "node", format: "cjs", target: "node20", external: ["electron", "node:*"], define: { "import.meta.url": "__h1_import_meta_url" }, banner: { js: "const __h1_import_meta_url = require('node:url').pathToFileURL(__filename).href;" }, sourcemap: false, logLevel: "silent", metafile: true });
+    const common = { outdir: outputRoot, bundle: true, platform: "node", format: "cjs", target: "node20", external: ["electron", "node:*"], sourcemap: false, logLevel: "silent", metafile: true };
+    await build({ ...common, entryPoints: { main: entryPoints.main }, define: { "import.meta.url": "__h1_import_meta_url" }, banner: { js: "const __h1_import_meta_url = require('node:url').pathToFileURL(__filename).href;" } });
+    // Sandboxed preload only allows require("electron"); keep Node URL shims/globals out of this bundle.
+    await build({ ...common, entryPoints: { preload: entryPoints.preload } });
     const files = ["main.js", "preload.js"].map(name => {
       const absolute = regularFile(path.join(outputRoot, name), `T9 bundled Electron ${name}`); const bytes = readFileSync(absolute);
       return { path: name, byte_length: bytes.length, sha256: sha256Hex(bytes), absolute };
@@ -225,9 +408,12 @@ export async function buildH1ElectronMainOutputs(input, options = {}) {
 export async function freezeHostFixture(input, options = {}) {
   const inputFields = ["sandboxRoot", "runRoot", "trustedPythonExecutable", "electronExecutable"];
   const recoveryFixture = input && typeof input === "object" && Object.hasOwn(input, "candidateFixtureProfile");
-  const expectedInputFields = recoveryFixture ? [...inputFields, "candidateFixtureProfile"] : inputFields;
+  const chatFixture = input && typeof input === "object" && Object.hasOwn(input, "chatFixtureProfile");
+  if (recoveryFixture && chatFixture) deny("T4 recovery and ordinary chat fixtures are mutually exclusive");
+  const expectedInputFields = recoveryFixture ? [...inputFields, "candidateFixtureProfile"] : chatFixture ? [...inputFields, "chatFixtureProfile"] : inputFields;
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== expectedInputFields.length || expectedInputFields.some(key => !Object.hasOwn(input, key))) deny("H1 fixture input fields are invalid");
   if (recoveryFixture && input.candidateFixtureProfile !== "t4-recovery-node-v1") deny("H1 candidate fixture profile is unsupported");
+  if (chatFixture && input.chatFixtureProfile !== "ordinary-chat-h1-v1") deny("H1 ordinary chat fixture profile is unsupported");
   const { sandboxRoot, runRoot } = validateRunRoot(input.sandboxRoot, input.runRoot);
   const pythonExecutable = regularFile(input.trustedPythonExecutable, "trusted fixture Python executable");
   const electron = distributionFingerprint(input.electronExecutable);
@@ -241,11 +427,22 @@ export async function freezeHostFixture(input, options = {}) {
     if (!samePath(path.dirname(release.manifest_path), release.root)) deny("fixed control release manifest path is inconsistent");
 
     const appRoot = path.join(stageRoot, "app"); const desktopRoot = path.join(appRoot, "desktop"); const profileRoot = path.join(stageRoot, "profile");
-    mkdirSync(path.join(appRoot, "data", "sessions"), { recursive: true }); mkdirSync(profileRoot, { recursive: true });
+    mkdirSync(path.join(appRoot, "data", "sessions"), { recursive: true }); mkdirSync(path.join(appRoot, "workspace"), { recursive: true }); mkdirSync(path.join(appRoot, "evolve"), { recursive: true }); mkdirSync(profileRoot, { recursive: true }); prepareH1UserDirectories(profileRoot);
     const manifestFiles = [];
+    addSealedSyntheticFile(appRoot, "evolve/_index.core.toml", "[core]\n", manifestFiles);
+    addSealedSyntheticFile(appRoot, "evolve/_index.toml", "# synthetic H1 legacy root marker\n", manifestFiles);
     const electronBuildRoot = realDirectory(options.electronBuildRoot ?? path.join(sandboxRoot, "desktop", "dist-electron"), "sealed Electron build output root");
     if (options.electronBuildRoot && !within(runRoot, electronBuildRoot)) deny("T9 Electron build output must stay inside the marked run root");
-    const rendererSource = path.join(sandboxRoot, "desktop", "dist");
+    if (options.rendererBuild !== undefined && options.rendererBuild !== true) deny("H1 rendererBuild option must be true when enabled");
+    const rendererBuild = options.rendererBuild === true ? await (options.factories?.buildRenderer ?? buildH1RendererOutputs)({ sandboxRoot, runRoot }) : null;
+    let rendererSource = path.join(sandboxRoot, "desktop", "dist");
+    if (rendererBuild) {
+      if (!rendererBuild || typeof rendererBuild.output_root !== "string" || !path.isAbsolute(rendererBuild.output_root) || typeof rendererBuild.source_digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(rendererBuild.source_digest) || !Array.isArray(rendererBuild.files)) deny("run-local renderer build attestation is invalid");
+      rendererSource = realDirectory(rendererBuild.output_root, "run-local renderer build output");
+      if (!within(runRoot, rendererSource) || !path.basename(rendererSource).startsWith("t9-renderer-build-")) deny("renderer build output must stay inside the marked run root");
+      if (rendererBuild.source_digest !== rendererSourceDigest(path.join(sandboxRoot, "desktop"))) deny("renderer build source digest does not match current sandbox sources");
+      if (canonical(rendererBuild.files) !== canonical(rendererOutputFiles(rendererSource))) deny("renderer build output digest does not match its attestation");
+    }
     const agentCoreSource = path.join(sandboxRoot, "agent-core");
     const catalogSource = path.join(sandboxRoot, "evolve", "tool-catalog", "INDEX.md");
     const electronBuildFiles = listFiles(electronBuildRoot, { includeFile: (rel, name) => /\.(?:js|cjs|mjs|json|node|wasm)$/i.test(name) && !/(?:^|\/)vite(?:\.shell-preview)?\.config\.(?:js|mjs|cjs)$/i.test(rel) });
@@ -270,7 +467,7 @@ export async function freezeHostFixture(input, options = {}) {
     const packageBytes = Buffer.from(`${JSON.stringify(runtimePackage, null, 2)}\n`, "utf8"); writeExclusive(path.join(desktopRoot, "package.json"), packageBytes);
     manifestFiles.push({ path: "desktop/package.json", byte_length: packageBytes.length, sha256: sha256(packageBytes) });
 
-    const excludedDirectories = new Set([".git", ".venv", "__pycache__", ".pytest_cache", "tests", "test", "data", "profiles", "profile", "node_modules", "dist", "build"]);
+    const excludedDirectories = new Set([".git", ".venv", "__pycache__", ".pytest_cache", "tests", "test", "data", "workspace", "profiles", "profile", "config", "configs", ".config", "credentials", "secrets", "node_modules", "dist", "build"]);
     const allowedCoreExtensions = new Set([".py", ".md", ".toml", ".json", ".txt", ".yaml", ".yml", ".jinja", ".jinja2", ".html"]);
     const coreFiles = listFiles(agentCoreSource, {
       skipDirectory: (_rel, name) => excludedDirectories.has(name.toLowerCase()),
@@ -296,7 +493,7 @@ export async function freezeHostFixture(input, options = {}) {
     if (!pythonEnvironment || typeof pythonEnvironment.digest !== "string" || !pythonEnvironment.digest.startsWith("sha256:")) deny("trusted Python environment attestation is invalid");
     const electronRuntime = { executable: electron.executable, executable_sha256: electron.executable_sha256, distribution_root: electron.distribution_root, distribution_digest: electron.distribution_digest, file_count: electron.file_count, byte_length: electron.byte_length };
     const pythonRuntime = { executable: pythonExecutable, executable_sha256: sha256(readFileSync(pythonExecutable)), environment: pythonEnvironment };
-    const profile = { profile_root: path.join(runRoot, "host", "profile"), control_release_root: release.root, trusted_python_executable: pythonExecutable, ws_port: 0, renderer_port: 0, fixture_scope_id: randomUUID(), ...(recoveryFixture ? { candidate_fixture_profile: "t4-recovery-node-v1" } : {}) };
+    const profile = { profile_root: path.join(runRoot, "host", "profile"), control_release_root: release.root, trusted_python_executable: pythonExecutable, ws_port: 0, renderer_port: 0, fixture_scope_id: randomUUID(), ...(recoveryFixture ? { candidate_fixture_profile: "t4-recovery-node-v1" } : chatFixture ? { chat_fixture_profile: "ordinary-chat-h1-v1", chat_run_id: path.basename(runRoot) } : {}) };
     const profileBytes = Buffer.from(`${JSON.stringify(profile, null, 2)}\n`, "utf8"); writeFileSync(path.join(stageRoot, "evolution-test-profile.json"), profileBytes, { flag: "wx" });
     const sourceInputs = [];
     const desktopSource = path.join(sandboxRoot, "desktop");
@@ -307,7 +504,7 @@ export async function freezeHostFixture(input, options = {}) {
     for (const item of listFiles(path.join(desktopSource, "electron"), { includeFile: (_rel, name) => /\.tsx?$/i.test(name) && !/\.d\.ts$/i.test(name) })) sourceInputs.push({ path: "desktop/electron/" + item.relative, byte_length: item.byte_length, sha256: sha256(readFileSync(item.absolute)) });
     for (const item of listFiles(path.join(desktopSource, "src"), { includeFile: (_rel, name) => !/\.(?:map|tsbuildinfo|d\.ts)$/i.test(name) })) sourceInputs.push({ path: "desktop/src/" + item.relative, byte_length: item.byte_length, sha256: sha256(readFileSync(item.absolute)) });
     sourceInputs.sort((a, b) => a.path.localeCompare(b.path, "en"));
-    const manifest = { format: 1, scope: "evolution-slice-a-h1-test-host", app_root: "app", renderer_root: "app/desktop/dist", profile_root: "profile", files: manifestFiles, mutable_candidate_sources: [], source_inputs: sourceInputs, profile_sha256: sha256(profileBytes), control_release_id: release.release_id, runtimes: { electron: electronRuntime, python: pythonRuntime }, python_environment_recheck: "required_at_host_start_and_shutdown", build_provenance: "run-local-esbuild-main-preload; sealed-output-hashes-recorded; source-output-reproducibility-not-asserted" };
+    const manifest = { format: 1, scope: "evolution-slice-a-h1-test-host", app_root: "app", renderer_root: "app/desktop/dist", profile_root: "profile", files: manifestFiles, mutable_candidate_sources: [], source_inputs: sourceInputs, profile_sha256: sha256(profileBytes), control_release_id: release.release_id, runtimes: { electron: electronRuntime, python: pythonRuntime }, python_environment_recheck: "required_at_host_start_and_shutdown", build_provenance: rendererBuild ? "run-local-vite-renderer-and-esbuild-main-preload; renderer-source-and-sealed-output-hashes-verified" : "run-local-esbuild-main-preload; legacy-desktop-dist-renderer; sealed-output-hashes-recorded; source-output-reproducibility-not-asserted" };
     const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"); writeFileSync(path.join(stageRoot, "manifest.json"), manifestBytes, { flag: "wx" });
     renameSync(stageRoot, hostRoot);
     return { app_root: path.join(hostRoot, "app"), profile_root: path.join(hostRoot, "profile"), renderer_root: path.join(hostRoot, "app", "desktop", "dist"), manifest_path: path.join(hostRoot, "manifest.json") };
@@ -318,6 +515,46 @@ export async function freezeHostFixture(input, options = {}) {
 }
 
 function sha256Hex(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
+export function verifyH1AgentPaths(input) {
+  const fields = ["sandboxRoot", "runRoot", "appRoot", "profileRoot", "pythonExecutable"];
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length || fields.some(key => typeof input[key] !== "string")) deny("H1 AgentPaths verification input fields are invalid");
+  const { sandboxRoot, runRoot } = validateRunRoot(input.sandboxRoot, input.runRoot);
+  const appRoot = realDirectory(input.appRoot, "sealed H1 app root"), profileRoot = realDirectory(input.profileRoot, "isolated H1 profile root");
+  if (!samePath(appRoot, path.join(runRoot, "host", "app")) || !samePath(profileRoot, path.join(runRoot, "host", "profile")) || !within(runRoot, appRoot) || !within(runRoot, profileRoot)) deny("H1 AgentPaths roots are outside the current sealed run");
+  regularFile(path.join(appRoot, "agent-core", "paths.py"), "sealed AgentPaths implementation");
+  for (const name of ["data", "workspace", "evolve"]) { const directory = realDirectory(path.join(appRoot, name), `sealed AgentPaths ${name} root`); if (!within(appRoot, directory)) deny(`sealed AgentPaths ${name} root escaped the app`); }
+  regularFile(path.join(appRoot, "evolve", "_index.core.toml"), "synthetic sealed core root marker");
+  regularFile(path.join(appRoot, "evolve", "_index.toml"), "synthetic sealed legacy root marker");
+  for (const directory of new Set(Object.values(h1UserDirectoryMap(profileRoot)))) { const real = realDirectory(directory, "isolated H1 user configuration directory"); if (!within(profileRoot, real)) deny("H1 user configuration directory escaped the run profile"); }
+  listFiles(appRoot, { includeFile: () => true });
+  const python = regularFile(input.pythonExecutable, "trusted H1 AgentPaths Python executable");
+  const script = String.raw`import json, pathlib, sys
+sealed=pathlib.Path(sys.argv[1]).resolve(strict=True)
+expected_module=pathlib.Path(sys.argv[2]).resolve(strict=True)
+sys.path.insert(0,str(sealed/"agent-core"))
+import paths
+from paths import AgentPaths
+module_origin=pathlib.Path(paths.__file__).resolve(strict=True)
+if module_origin != expected_module or AgentPaths.__module__ != paths.__name__:
+    raise RuntimeError("AgentPaths module is not the sealed app implementation")
+p=AgentPaths.discover()
+actual={"agent_root":str(p.agent_root.resolve(strict=True)),"data":str(p.data.resolve(strict=True)),"workspace":str(p.workspace.resolve(strict=True)),"evolve":str(p.evolve.resolve(strict=True)),"module_origin":str(module_origin)}
+print(json.dumps(actual,sort_keys=True,separators=(",",":")))`;
+  const expected = { agent_root: appRoot, data: path.join(appRoot, "data"), workspace: path.join(appRoot, "workspace"), evolve: path.join(appRoot, "evolve") };
+  const probe = env => {
+    const result = spawnSync(python, ["-I", "-B", "-c", script, appRoot, path.join(appRoot, "agent-core", "paths.py")], { cwd: appRoot, env, encoding: "utf8", windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024, shell: false });
+    if (result.error || result.status !== 0 || typeof result.stdout !== "string") deny("H1 Python AgentPaths preflight failed");
+    let actual; try { actual = JSON.parse(result.stdout.trim()); } catch { deny("H1 Python AgentPaths preflight returned invalid JSON"); }
+    if (!actual || Object.keys(actual).length !== 5 || Object.keys(expected).some(key => typeof actual[key] !== "string" || !samePath(actual[key], expected[key])) || typeof actual.module_origin !== "string" || !samePath(actual.module_origin, path.join(appRoot, "agent-core", "paths.py"))) deny("H1 Python AgentPaths resolved outside this sealed run or imported an unsealed implementation");
+    return Object.fromEntries(Object.keys(expected).map(key => [key, actual[key]]));
+  };
+  const explicitRoot = probe(buildH1RuntimeEnvironment(profileRoot, appRoot));
+  // The Electron sidecar starts with cwd=AGENT_ROOT; prove marker-based discovery still binds if a runner strips MY_AGENT_ROOT.
+  const inheritedRootFreeEnv = buildH1RuntimeEnvironment(profileRoot, appRoot); delete inheritedRootFreeEnv.MY_AGENT_ROOT;
+  const cwdDiscovery = probe(inheritedRootFreeEnv);
+  if (canonical(explicitRoot) !== canonical(cwdDiscovery)) deny("H1 AgentPaths differs when MY_AGENT_ROOT is absent");
+  return explicitRoot;
+}
 
 export function createCandidateSourceFixture(input) {
   if (!input || typeof input !== "object" || Object.keys(input).length !== 2 || typeof input.sandboxRoot !== "string" || typeof input.runRoot !== "string") deny("candidate fixture input fields are invalid");
@@ -372,7 +609,9 @@ export function verifyFrozenHostFixture(input, options = {}) {
   if (sha256Hex(profileBytes) !== manifest.profile_sha256) deny("frozen H1 profile digest changed");
   let profile; try { profile = JSON.parse(profileBytes.toString("utf8")); } catch { deny("frozen H1 profile is invalid JSON"); }
   const recoveryFixture = !!profile && Object.hasOwn(profile, "candidate_fixture_profile");
-  if (!profile || Object.keys(profile).length !== (recoveryFixture ? 7 : 6) || recoveryFixture && profile.candidate_fixture_profile !== "t4-recovery-node-v1" || profile.ws_port !== 0 || profile.renderer_port !== 0 || !UUID_RE.test(String(profile.fixture_scope_id)) || !samePath(profile.profile_root, profileRoot)) deny("frozen H1 profile violates the dynamic-port fixture contract");
+  const chatFixture = !!profile && Object.hasOwn(profile, "chat_fixture_profile");
+  if (recoveryFixture && chatFixture) deny("T4 recovery and ordinary chat fixture profiles are mutually exclusive");
+  if (!profile || Object.keys(profile).length !== (recoveryFixture ? 7 : chatFixture ? 8 : 6) || recoveryFixture && profile.candidate_fixture_profile !== "t4-recovery-node-v1" || chatFixture && (profile.chat_fixture_profile !== "ordinary-chat-h1-v1" || profile.chat_run_id !== path.basename(runRoot)) || profile.ws_port !== 0 || profile.renderer_port !== 0 || !UUID_RE.test(String(profile.fixture_scope_id)) || !samePath(profile.profile_root, profileRoot)) deny("frozen H1 profile violates the dynamic-port fixture contract");
   if (!path.isAbsolute(profile.control_release_root) || !within(runRoot, path.resolve(profile.control_release_root))) deny("fixed release path escaped the marked run root");
   const expected = new Map();
   for (const item of manifest.files) {
@@ -417,106 +656,186 @@ export function verifyFrozenHostFixture(input, options = {}) {
 
 export async function launchFrozenHost(input, options = {}) {
   const verified = verifyFrozenHostFixture(input, options);
-  const spawnProcess = options.spawnProcess ?? (await import("node:child_process")).spawn;
+  assertH1LaunchProfileEnabled(verified.profile, options);
+  // Real launches always validate Python AgentPaths before native spawn.
+  verifyAgentPathsBeforeH1Start(verified);
+  if (options.spawnProcess !== undefined) deny("custom H1 spawn adapter is disabled; native spawn is required");
+  const spawnProcess = (await import("node:child_process")).spawn;
+  const plan = buildH1NativeLaunchPlan(verified, { mode: "exit", sourceEnvironment: process.env });
+  const env = plan.options.env;
   const logRoot = path.join(verified.run_root, "host", "logs");
   if (existsSync(logRoot)) deny("H1 host log root already exists; refusing overwrite");
   mkdirSync(logRoot, { recursive: false });
   const stdoutPath = path.join(logRoot, "electron.stdout.log"); const stderrPath = path.join(logRoot, "electron.stderr.log");
-  const env = {};
-  for (const key of ["SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) if (process.env[key]) env[key] = process.env[key];
-  env.PYTHONDONTWRITEBYTECODE = "1";
-  const child = spawnProcess(verified.electron.executable, [path.join(verified.app_root, "desktop")], { cwd: path.join(verified.app_root, "desktop"), env, stdio: ["ignore", "pipe", "pipe"], windowsHide: false, shell: false });
+  const exitPath = path.join(logRoot, "electron.exit.json");
+  const child = spawnProcess(plan.executable, plan.args, plan.options);
   if (!child || typeof child.once !== "function") deny("H1 Electron process handle is invalid");
-  const stdout = []; const stderr = []; let stdoutBytes = 0; let stderrBytes = 0; const maxLogBytes = 5 * 1024 * 1024;
-  const collect = (target, stream, label) => stream?.on("data", chunk => {
-    const bytes = Buffer.from(chunk); if (target === stdout) stdoutBytes += bytes.length; else stderrBytes += bytes.length;
-    if (stdoutBytes + stderrBytes > maxLogBytes) { try { child.kill(); } catch { /* retain the over-limit evidence state */ } return; }
-    target.push(bytes);
-  });
-  collect(stdout, child.stdout, "stdout"); collect(stderr, child.stderr, "stderr");
-  let startError = null;
-  child.once("error", error => { startError = error; });
-  const exitCode = await new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
-  writeFileSync(stdoutPath, Buffer.concat(stdout), { flag: "wx" }); writeFileSync(stderrPath, Buffer.concat(stderr), { flag: "wx" });
-  const after = (options.capturePythonEnvironment ?? ((executable, packages) => capturePythonEnvironment(executable, packages, { cwd: verified.sandbox_root })))(verified.profile.trusted_python_executable, verified.manifest.runtimes.python.environment.packages.map(item => item.name));
-  assertPythonEnvironmentUnchanged(verified.python_environment, after);
-  const exitRecord = { ...exitCode, ...(startError ? { start_error: String(startError.message ?? startError).slice(0, 512) } : {}), stdout: path.relative(verified.run_root, stdoutPath).replace(/\\/g, "/"), stderr: path.relative(verified.run_root, stderrPath).replace(/\\/g, "/"), python_environment_digest: after.digest };
-  writeFileSync(path.join(logRoot, "electron.exit.json"), `${JSON.stringify(exitRecord, null, 2)}\n`, { flag: "wx" });
-  return exitRecord;
+  return await completeH1ExitLifecycle({ child, stdoutPath, stderrPath, exitPath, runRoot: verified.run_root, pythonExecutable: verified.profile.trusted_python_executable, pythonPackages: verified.manifest.runtimes.python.environment.packages.map(item => item.name), beforeEnvironment: verified.python_environment, captureEnvironment: options.capturePythonEnvironment ?? ((executable, packages) => capturePythonEnvironment(executable, packages, { cwd: verified.sandbox_root })) });
 }
 
-export async function startFrozenHost(input, options = {}) {
-  const verified = verifyFrozenHostFixture(input, options);
-  if (verified.profile.candidate_fixture_profile !== "t4-recovery-node-v1") deny("T9 launcher requires the fixed T4 recovery profile");
-  const spawnProcess = options.spawnProcess ?? (await import("node:child_process")).spawn;
-  const logRoot = path.join(verified.run_root, "host", "logs");
-  if (existsSync(logRoot)) deny("H1 host log root already exists; refusing overwrite");
-  mkdirSync(logRoot, { recursive: false });
-  const stdoutPath = path.join(logRoot, "electron.stdout.log"); const stderrPath = path.join(logRoot, "electron.stderr.log");
-  const env = {};
-  for (const key of ["SYSTEMROOT", "WINDIR", "PATH", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]) if (process.env[key]) env[key] = process.env[key];
-  env.PYTHONDONTWRITEBYTECODE = "1";
-  const token = randomBytes(32).toString("hex");
-  const child = spawnProcess(verified.electron.executable, [path.join(verified.app_root, "desktop")], { cwd: path.join(verified.app_root, "desktop"), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: false, shell: false });
-  if (!child || typeof child.once !== "function" || !child.stdin || !child.stdout || !child.stderr) deny("H1 Electron process handle is invalid");
-  const stdout = []; const stderr = []; let total = 0; let stdoutBuffer = ""; let startError = null; let closed = false; let closeRecord = null;
-  let closeResolve; const closedPromise = new Promise(resolve => { closeResolve = resolve; });
-  const append = (target, bytes) => { total += bytes.length; if (total > 5 * 1024 * 1024) { try { child.kill(); } catch { /* retain over-limit evidence */ } return false; } target.push(bytes); return true; };
-  let readyResolve; let readyReject;
+export function resolveH1HostCwd(verified) {
+  if (!verified || typeof verified !== "object" || typeof verified.sandbox_root !== "string" || typeof verified.run_root !== "string" || typeof verified.app_root !== "string") deny("verified H1 sandbox/run/app roots are required for Electron cwd");
+  const { runRoot } = validateRunRoot(verified.sandbox_root, verified.run_root);
+  const appRoot = realDirectory(verified.app_root, "sealed H1 Electron cwd");
+  if (!samePath(appRoot, path.join(runRoot, "host", "app")) || !within(runRoot, appRoot)) deny("H1 Electron cwd escaped the sealed app root");
+  return appRoot;
+}
+export function createH1SpawnEnvironmentEvidence(env) {
+  if (!env || typeof env !== "object" || Array.isArray(env)) deny("H1 spawn environment evidence input is invalid");
+  const forwardedKeys = Object.keys(env).sort();
+  const credentialKeys = forwardedKeys.filter(key => /(?:API.?KEY|TOKEN|SECRET|CREDENTIAL)/i.test(key));
+  if (credentialKeys.length) deny("H1 spawn environment contains a credential-like key");
+  return { forwarded_keys: forwardedKeys, credential_env_forwarded_keys: credentialKeys, isolated_agent_root: env.MY_AGENT_ROOT, isolated_user_profile: env.USERPROFILE, isolated_app_data: env.APPDATA, isolated_local_app_data: env.LOCALAPPDATA, isolated_temp: env.TEMP };
+}
+
+export async function cleanupFailedH1NativeLaunch(child, lifecycle = null) {
+  if (lifecycle && typeof lifecycle.close === "function") {
+    try { await lifecycle.close(); } catch { /* preserve the startup failure; still check this child handle */ }
+  }
+  if (!child || (child.exitCode !== null && child.exitCode !== undefined) || (child.signalCode !== null && child.signalCode !== undefined)) return;
+  if (typeof child.once !== "function" || typeof child.kill !== "function") return;
+  let resolveClose;
+  const closed = new Promise(resolve => { resolveClose = resolve; });
+  child.once("close", resolveClose);
+  if ((child.exitCode !== null && child.exitCode !== undefined) || (child.signalCode !== null && child.signalCode !== undefined)) return;
+  try { child.kill(); } catch { /* cleanup is bound to this native child handle only */ }
+  if ((child.exitCode !== null && child.exitCode !== undefined) || (child.signalCode !== null && child.signalCode !== undefined)) return;
+  await closed;
+}
+export async function startH1ControlledLifecycle(child, { profile, token, cdpEnabled = false, readyTimeoutMs = 180_000, shutdownTimeoutMs = 20_000, stdoutPath, stderrPath, exitPath, runRoot, pythonExecutable, pythonPackages, beforeEnvironment, captureEnvironment } = {}) {
+  if (!child?.stdin || !child?.stdout || !child?.stderr || typeof child.once !== "function" || typeof child.kill !== "function") deny("H1 controlled lifecycle requires an event-capable private-stdin child");
+  if (![stdoutPath, stderrPath, exitPath, runRoot, pythonExecutable].every(value => typeof value === "string" && path.isAbsolute(value)) || typeof captureEnvironment !== "function") deny("H1 controlled lifecycle evidence and recheck paths are required");
+  const protocol = createH1LifecycleProtocol(profile, token);
+  const ordinaryChat = profile === "ordinary-chat-h1-v1";
+  const stdout = [], stderr = []; let total = 0, stdoutBuffer = "", startError = null, closed = false, closeRecord = null;
+  let shutdownMethod = ordinaryChat ? "cdp_browser_close" : "stdin_control_frame", shutdownRequestSent = false, shutdownRequestAcknowledged = false, shutdownRequestError = null;
+  let closeResolve, readyResolve, readyReject;
+  const closedPromise = new Promise(resolve => { closeResolve = resolve; });
   const readyPromise = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+  let cdpBuffer = "", cdpWebSocketUrl = null, cdpFailure = null, resolveCdpReady;
+  const cdpReadyPromise = new Promise(resolve => { resolveCdpReady = resolve; });
+  const observeCdpOutput = chunk => {
+    if (!cdpEnabled || cdpWebSocketUrl || cdpFailure) return;
+    cdpBuffer = (cdpBuffer + Buffer.from(chunk).toString("utf8")).slice(-16_384);
+    const match = /DevTools listening on (ws:\/\/[^\s]+)/u.exec(cdpBuffer);
+    if (!match) return;
+    try { cdpWebSocketUrl = validateH1CdpEndpoint(match[1]); resolveCdpReady(cdpWebSocketUrl); }
+    catch (error) { cdpFailure = error; resolveCdpReady(null); }
+  };
+  const waitForCdp = async () => {
+    if (!cdpEnabled) deny("H1 CDP was not requested for this Host");
+    if (cdpFailure) throw cdpFailure;
+    if (cdpWebSocketUrl) return cdpWebSocketUrl;
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("dynamic loopback CDP endpoint timed out")), 20_000); });
+    try {
+      const endpoint = await Promise.race([cdpReadyPromise, timeout, closedPromise.then(() => { throw new Error("Host exited before CDP became ready"); })]);
+      if (cdpFailure) throw cdpFailure;
+      return validateH1CdpEndpoint(endpoint);
+    } finally { clearTimeout(timer); }
+  };
+  const append = (target, bytes) => { total += bytes.length; if (total > 5 * 1024 * 1024) { try { child.kill(); } catch { /* retain over-limit evidence */ } return false; } target.push(bytes); return true; };
   child.stdout.on("data", chunk => {
-    const bytes = Buffer.from(chunk); if (!append(stdout, bytes)) return;
+    const bytes = Buffer.from(chunk); if (!append(stdout, bytes)) return; observeCdpOutput(bytes);
     stdoutBuffer += bytes.toString("utf8");
     for (;;) {
       const newline = stdoutBuffer.indexOf("\n"); if (newline < 0) break;
       const line = stdoutBuffer.slice(0, newline).replace(/\r$/u, ""); stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      try { const message = JSON.parse(line); if (message?.type === "evolution-test-host-ready" && message.host === "127.0.0.1" && Number.isInteger(message.port) && message.port > 0 && message.port <= 65_535) readyResolve(message); } catch { /* ordinary Electron output is not a control message */ }
+      const message = protocol.parseReadyLine(line); if (message) readyResolve(message);
     }
   });
-  child.stderr.on("data", chunk => { append(stderr, Buffer.from(chunk)); });
+  child.stderr.on("data", chunk => { const bytes = Buffer.from(chunk); if (append(stderr, bytes)) observeCdpOutput(bytes); });
   child.once("error", error => { startError = error; readyReject(error); });
   child.once("close", (code, signal) => { closed = true; closeRecord = { code, signal }; readyReject(new Error("frozen H1 Host exited before signalling readiness")); closeResolve(closeRecord); });
-  child.stdin.write(`${JSON.stringify({ type: "t9.control.bootstrap", token })}\n`);
-  const timer = setTimeout(() => readyReject(new Error("frozen H1 Host ready marker timed out")), options.readyTimeoutMs ?? 180_000);
-  timer.unref?.();
+  child.stdin.write(protocol.bootstrapFrame);
+  const readyTimer = setTimeout(() => readyReject(new Error("frozen H1 Host ready marker timed out")), readyTimeoutMs); readyTimer.unref?.();
   let ready;
   try { ready = await readyPromise; }
   catch (error) {
-    clearTimeout(timer);
-    if (!closed) { try { child.stdin.end(`${JSON.stringify({ type: "t9.control.shutdown", token })}\n`); } catch { /* preserve startup failure */ } }
+    clearTimeout(readyTimer);
+    if (!closed) {
+      if (!ordinaryChat) { try { child.stdin.end(protocol.shutdownFrame); } catch { /* preserve startup failure */ } }
+      else if (cdpEnabled && cdpWebSocketUrl) { try { await closeH1BrowserViaCdp(cdpWebSocketUrl, { timeoutMs: Math.min(5_000, shutdownTimeoutMs) }); } catch { /* startup failure remains primary; bounded child-handle cleanup follows */ } }
+    }
     const exit = await Promise.race([closedPromise, new Promise(resolve => setTimeout(() => resolve(null), 15_000))]);
     if (!exit && !closed) { try { child.kill(); } catch { /* preserve startup failure */ } await closedPromise; }
-    writeFileSync(stdoutPath, Buffer.concat(stdout), { flag: "wx" }); writeFileSync(stderrPath, Buffer.concat(stderr), { flag: "wx" });
-    throw error;
-  } finally { clearTimeout(timer); }
-  let finalized = false;
+    writeFileSync(stdoutPath, Buffer.concat(stdout), { flag: "wx" }); writeFileSync(stderrPath, Buffer.concat(stderr), { flag: "wx" }); throw error;
+  } finally { clearTimeout(readyTimer); }
+  let finalized = false, forcedTermination = false;
   const finalize = async () => {
     if (finalized) return closeRecord;
-    finalized = true;
-    const exit = await closedPromise;
+    finalized = true; const exit = await closedPromise;
     writeFileSync(stdoutPath, Buffer.concat(stdout), { flag: "wx" }); writeFileSync(stderrPath, Buffer.concat(stderr), { flag: "wx" });
-    let after = null; let environmentError = null; let pythonEnvironmentUnchanged = false;
-    try {
-      after = (options.capturePythonEnvironment ?? ((executable, packages) => capturePythonEnvironment(executable, packages, { cwd: verified.sandbox_root })))(verified.profile.trusted_python_executable, verified.manifest.runtimes.python.environment.packages.map(item => item.name));
-      assertPythonEnvironmentUnchanged(verified.python_environment, after); pythonEnvironmentUnchanged = true;
-    } catch (error) { environmentError = String(error?.message ?? error).slice(0, 512); }
-    const record = { ...exit, ...(startError ? { start_error: String(startError.message ?? startError).slice(0, 512) } : {}), stdout: path.relative(verified.run_root, stdoutPath).replace(/\\/g, "/"), stderr: path.relative(verified.run_root, stderrPath).replace(/\\/g, "/"), python_environment_digest: after?.digest ?? null, python_environment_unchanged: pythonEnvironmentUnchanged, ...(environmentError ? { python_environment_error: environmentError } : {}) };
-    writeFileSync(path.join(logRoot, "electron.exit.json"), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+    let after = null, environmentError = null, pythonEnvironmentUnchanged = false;
+    try { after = captureEnvironment(pythonExecutable, pythonPackages); assertPythonEnvironmentUnchanged(beforeEnvironment, after); pythonEnvironmentUnchanged = true; }
+    catch (error) { environmentError = String(error?.message ?? error).slice(0, 512); }
+    const record = { ...exit, shutdown_method: shutdownMethod, shutdown_request_sent: shutdownRequestSent, shutdown_request_acknowledged: shutdownRequestAcknowledged, shutdown_request_error: shutdownRequestError, forced_termination: forcedTermination, shutdown_timeout_ms: shutdownTimeoutMs, ...(startError ? { start_error: String(startError.message ?? startError).slice(0, 512) } : {}), stdout: path.relative(runRoot, stdoutPath).replace(/\\/g, "/"), stderr: path.relative(runRoot, stderrPath).replace(/\\/g, "/"), python_environment_digest: after?.digest ?? null, python_environment_unchanged: pythonEnvironmentUnchanged, ...(environmentError ? { python_environment_error: environmentError } : {}) };
+    writeFileSync(exitPath, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
     if (!pythonEnvironmentUnchanged) throw new Error(environmentError ?? "trusted Python environment changed during the drill");
     return record;
   };
+  let closePromise = null;
+  const closeOnce = async () => {
+    if (!closed) {
+      if (ordinaryChat) {
+        if (!cdpEnabled) shutdownRequestError = "dynamic_cdp_not_enabled";
+        else {
+          try {
+            const endpoint = cdpWebSocketUrl ?? await waitForCdp();
+            const result = await closeH1BrowserViaCdp(endpoint, { timeoutMs: Math.min(5_000, shutdownTimeoutMs) });
+            shutdownRequestSent = result.command_sent === true; shutdownRequestAcknowledged = result.acknowledged === true;
+          } catch (error) { shutdownRequestError = error?.message === "H1 CDP Browser.close timed out" ? "cdp_close_timeout" : "cdp_close_failed"; }
+        }
+      } else {
+        try { child.stdin.end(protocol.shutdownFrame); shutdownRequestSent = true; }
+        catch { shutdownRequestError = "stdin_shutdown_failed"; }
+      }
+    }
+    const exit = await Promise.race([closedPromise, new Promise(resolve => setTimeout(() => resolve(null), shutdownTimeoutMs))]);
+    if (!exit && !closed) { forcedTermination = true; try { child.kill(); } catch { /* retain shutdown evidence */ } await closedPromise; }
+    return await finalize();
+  };
   return {
-    child,
-    port: ready.port,
-    async close() {
-      if (!closed) child.stdin.end(`${JSON.stringify({ type: "t9.control.shutdown", token })}\n`);
-      const exit = await Promise.race([closedPromise, new Promise(resolve => setTimeout(() => resolve(null), options.shutdownTimeoutMs ?? 20_000))]);
-      if (!exit && !closed) { try { child.kill(); } catch { /* retain shutdown failure evidence */ } await closedPromise; }
-      return await finalize();
-    },
+    child, ready, ...(cdpEnabled ? { waitForCdp } : {}),
+    close() { if (!closePromise) closePromise = closeOnce(); return closePromise; },
   };
 }
-export function createT9ScriptedWebSocketDriver(input) {
+export async function startFrozenHost(input, options = {}) {
+  const verified = verifyFrozenHostFixture(input, options);
+  assertH1LaunchProfileEnabled(verified.profile, options);
+  verifyAgentPathsBeforeH1Start(verified);
+  if (options.spawnProcess !== undefined) deny("custom spawnProcess is forbidden; use native H1 spawn with the strict CDP option");
+  const ordinaryChat = verified.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
+  const profile = ordinaryChat ? "ordinary-chat-h1-v1" : verified.profile.candidate_fixture_profile;
+  if (profile !== "ordinary-chat-h1-v1" && profile !== "t4-recovery-node-v1") deny("H1 controlled launcher requires an explicit synthetic T4 or ordinary chat profile");
+  if (ordinaryChat && options.cdp?.enabled !== true) deny("ordinary-chat H1 requires the existing dynamic CDP close path");
+  resolveH1HostCwd(verified);
+  const plan = buildH1NativeLaunchPlan(verified, { mode: "controlled", cdp: options.cdp, sourceEnvironment: process.env });
+  const env = plan.options.env;
+  const logRoot = path.join(verified.run_root, "host", "logs");
+  if (existsSync(logRoot)) deny("H1 host log root already exists; refusing overwrite");
+  mkdirSync(logRoot, { recursive: false });
+  const stdoutPath = path.join(logRoot, "electron.stdout.log"), stderrPath = path.join(logRoot, "electron.stderr.log"), exitPath = path.join(logRoot, "electron.exit.json");
+  const spawnProcess = (await import("node:child_process")).spawn;
+  const child = spawnProcess(plan.executable, plan.args, plan.options);
+  let lifecycle = null;
+  try {
+    lifecycle = await startH1ControlledLifecycle(child, {
+      profile, token: randomBytes(32).toString("hex"), cdpEnabled: options.cdp !== undefined,
+      readyTimeoutMs: options.readyTimeoutMs ?? 180_000, shutdownTimeoutMs: options.shutdownTimeoutMs ?? 20_000,
+      stdoutPath, stderrPath, exitPath, runRoot: verified.run_root,
+      pythonExecutable: verified.profile.trusted_python_executable,
+      pythonPackages: verified.manifest.runtimes.python.environment.packages.map(item => item.name),
+      beforeEnvironment: verified.python_environment,
+      captureEnvironment: options.capturePythonEnvironment ?? ((executable, packages) => capturePythonEnvironment(executable, packages, { cwd: verified.sandbox_root })),
+    });
+    const spawnEnvironmentEvidence = createH1SpawnEnvironmentEvidence(env);
+    return { child, port: lifecycle.ready.port, spawn_environment_evidence: spawnEnvironmentEvidence, ...(lifecycle.waitForCdp ? { waitForCdp: lifecycle.waitForCdp } : {}), ...(ordinaryChat ? { renderer_port: lifecycle.ready.renderer_port } : {}), close: lifecycle.close };
+  } catch (error) {
+    await cleanupFailedH1NativeLaunch(child, lifecycle);
+    throw error;
+  }
+}export function createT9ScriptedWebSocketDriver(input) {
   if (!input || typeof input !== "object" || typeof input.port !== "number" || !Number.isSafeInteger(input.port) || input.port < 1 || input.port > 65_535 || typeof input.runRoot !== "string" || !path.isAbsolute(input.runRoot)) deny("T9 WebSocket driver input is invalid");
   const WebSocketClass = input.WebSocketClass ?? globalThis.WebSocket;
   if (typeof WebSocketClass !== "function") deny("this Node runtime does not provide the built-in WebSocket client");
@@ -935,3 +1254,51 @@ export function captureStableBaseline(sandboxRootValue, runRootValue, options = 
   return { captured_at: new Date().toISOString(), sandbox_root: sandboxRoot, stable_root: stableRoot, stable_files: stableFiles, baseline_listeners: listeners, listener_probe: !netstat.error && netstat.status === 0 ? "netstat_observed" : "unavailable", stable_changes_by_this_drill: false };
 }
 
+function rendererSourceDigest(desktopRoot) {
+  const files = ["index.html", ...listFiles(path.join(desktopRoot, "src"), { includeFile: (_rel, name) => !/\.(?:map|tsbuildinfo|d\.ts)$/i.test(name) }).map(item => `src/${item.relative}`)];
+  const entries = files.sort((a, b) => a.localeCompare(b, "en")).map(relative => ({ path: relative, sha256: sha256(readFileSync(path.join(desktopRoot, ...relative.split("/")))) }));
+  return `sha256:${sha256(Buffer.from(canonical(entries), "utf8"))}`;
+}
+
+function rendererOutputFiles(outputRoot) {
+  return listFiles(outputRoot, { includeFile: (_rel, name) => !/\.(?:map|tsbuildinfo|d\.ts)$/i.test(name) }).map(item => ({ path: item.relative, byte_length: item.byte_length, sha256: sha256(readFileSync(item.absolute)) }));
+}
+
+export async function buildH1RendererOutputs(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2 || typeof input.sandboxRoot !== "string" || typeof input.runRoot !== "string") deny("H1 renderer build input fields are invalid");
+  const { sandboxRoot, runRoot } = validateRunRoot(input.sandboxRoot, input.runRoot);
+  const desktopRoot = realDirectory(path.join(sandboxRoot, "desktop"), "sandbox desktop source root");
+  const sourceDigest = rendererSourceDigest(desktopRoot);
+  const outputRoot = path.join(runRoot, "t9-renderer-build-" + randomUUID());
+  if (existsSync(outputRoot)) deny("T9 renderer build output already exists; refusing overwrite");
+  const require = createRequire(import.meta.url);
+  const configuredVite = process.env.MY_AGENT_H1_VITE_ENTRY;
+  if (configuredVite !== undefined && !path.isAbsolute(configuredVite)) deny("MY_AGENT_H1_VITE_ENTRY must be an absolute read-only tool path");
+  const viteEntry = configuredVite ? regularFile(configuredVite, "fixed H1 Vite runtime") : require.resolve("vite", { paths: [desktopRoot] });
+  const { build } = await import(pathToFileURL(viteEntry).href);
+  const configuredModules = process.env.MY_AGENT_H1_NODE_MODULES;
+  let aliases = [];
+  if (configuredModules !== undefined) {
+    if (!path.isAbsolute(configuredModules)) deny("MY_AGENT_H1_NODE_MODULES must be an absolute read-only dependency directory");
+    const moduleRoot = realDirectory(configuredModules, "H1 read-only dependency directory");
+    for (const entry of readdirSync(moduleRoot, { withFileTypes: true })) {
+      if (entry.name === ".bin" || entry.name.startsWith(".") || ["vite", "rollup", "esbuild"].includes(entry.name)) continue;
+      if (entry.name.startsWith("@") && entry.isDirectory()) {
+        for (const scoped of readdirSync(path.join(moduleRoot, entry.name), { withFileTypes: true })) {
+          if (scoped.isDirectory()) aliases.push({ find: entry.name + "/" + scoped.name, replacement: path.join(moduleRoot, entry.name, scoped.name) });
+        }
+      } else if (entry.isDirectory()) aliases.push({ find: entry.name, replacement: path.join(moduleRoot, entry.name) });
+    }
+  }
+  if (typeof build !== "function") deny("fixed sandbox Vite build API is unavailable");
+  try {
+    await build({ configFile: false, root: desktopRoot, logLevel: "silent", resolve: aliases.length ? { alias: aliases } : undefined, build: { outDir: outputRoot, emptyOutDir: false, rollupOptions: { input: path.join(desktopRoot, "index.html") } } });
+    const actualSourceDigest = rendererSourceDigest(desktopRoot);
+    if (actualSourceDigest !== sourceDigest) deny("renderer source changed during its run-local build");
+    const files = rendererOutputFiles(outputRoot);
+    if (!files.some(file => file.path === "index.html")) deny("run-local renderer build omitted index.html");
+    return { output_root: outputRoot, source_digest: sourceDigest, files };
+  } catch (error) {
+    throw new Error(`T9 renderer build failed in ${path.relative(runRoot, outputRoot)}: ${String(error?.message ?? error).slice(0, 512)}`, { cause: error });
+  }
+}

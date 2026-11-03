@@ -23,6 +23,18 @@ function assertRunRoot():string{const runInput=process.env.EVOLUTION_TEST_ROOT;i
 function verifyBuildRoot(input:string):{root:string;files:FileEntry[]}{const root=realDirectory(path.resolve(input),"control build root");const markerPath=regularFile(path.join(root,BUILD_MARKER),"control build manifest");const marker=JSON.parse(readFileSync(markerPath,"utf8")) as Record<string,unknown>;if(marker.owner!==BUILD_OWNER||marker.format!==1||!Array.isArray(marker.files))fail("control build manifest is not recognized");const files=marker.files.map((raw)=>{if(raw===null||typeof raw!=="object"||Array.isArray(raw))fail("control build file entry is malformed");const item=raw as Record<string,unknown>;if(Object.keys(item).length!==3||typeof item.path!=="string"||!safeRelative(item.path)||typeof item.sha256!=="string"||!/^[0-9a-f]{64}$/.test(item.sha256)||!Number.isSafeInteger(item.byte_length)||Number(item.byte_length)<0)fail("control build file entry is invalid");return{path:item.path,sha256:item.sha256,byte_length:Number(item.byte_length)};});
   if(new Set(files.map(item=>item.path)).size!==files.length)fail("control build manifest has duplicate paths");const actual=walk(root).files.filter(item=>item!==BUILD_MARKER);if(actual.join("\n")!==files.map(item=>item.path).sort().join("\n"))fail("control build contains unmanifested files");for(const item of files){const file=regularFile(path.join(root,...item.path.split("/")),"control build file");const bytes=readFileSync(file);if(bytes.length!==item.byte_length||sha(bytes)!==item.sha256)fail(`control build file digest mismatch: ${item.path}`);}return{root,files};}
 function runtimeEntry(value:string,label:string):RuntimeEntry{const file=regularFile(path.resolve(value),label);return{path:file,sha256:sha(readFileSync(file))};}
+async function promoteReleaseStage(stage:string,releaseRoot:string):Promise<void>{
+ const delays=[50,100,200,400,800];
+ for(let attempt=0;;attempt++){
+  if(existsSync(releaseRoot))fail("refusing to overwrite an existing control release");
+  try{renameSync(stage,releaseRoot);return;}
+  catch(error){
+   const code=error!==null&&typeof error==="object"?String((error as NodeJS.ErrnoException).code??""):"";
+   if(process.platform!=="win32"||!(code==="EPERM"||code==="EBUSY")||attempt>=delays.length||existsSync(releaseRoot))throw error;
+   await new Promise(resolve=>setTimeout(resolve,delays[attempt]));
+  }
+ }
+}
 function validateManifest(value:unknown):ReleaseManifest{if(value===null||typeof value!=="object"||Array.isArray(value))fail("release manifest must be an object");const manifest=value as Record<string,unknown>;if(Object.keys(manifest).length!==3||manifest.format!==1||!Array.isArray(manifest.files)||manifest.runtimes===null||typeof manifest.runtimes!=="object"||Array.isArray(manifest.runtimes))fail("release manifest fields are invalid");const runtimes=manifest.runtimes as Record<string,unknown>;if(Object.keys(runtimes).length!==2)fail("release runtime manifest fields are invalid");for(const name of ["node","python"]){const entry=runtimes[name];if(entry===null||typeof entry!=="object"||Array.isArray(entry))fail("release runtime entry is malformed");const item=entry as Record<string,unknown>;if(Object.keys(item).length!==2||typeof item.path!=="string"||!path.isAbsolute(item.path)||typeof item.sha256!=="string"||!/^[0-9a-f]{64}$/.test(item.sha256))fail("release runtime entry is invalid");}
   const files=(manifest.files as unknown[]).map(raw=>{if(raw===null||typeof raw!=="object"||Array.isArray(raw))fail("release file entry is malformed");const item=raw as Record<string,unknown>;if(Object.keys(item).length!==3||!safeRelative(item.path)||typeof item.sha256!=="string"||!/^[0-9a-f]{64}$/.test(item.sha256)||!Number.isSafeInteger(item.byte_length)||Number(item.byte_length)<0)fail("release file entry is invalid");return{path:item.path as string,sha256:item.sha256,byte_length:Number(item.byte_length)};});if(files.length===0||new Set(files.map(item=>item.path)).size!==files.length)fail("release file list is empty or duplicated");return{format:1,files,runtimes:runtimes as unknown as ReleaseManifest["runtimes"]};}
 
@@ -37,7 +49,7 @@ export async function freezeControlRelease(input:{buildRoot:string;workerRoot:st
   const stage=path.join(output,`.stage-${randomUUID()}`);mkdirSync(stage,{recursive:false});
   for(const item of build.files){const relative=`node/${item.path}`;const target=path.join(stage,...relative.split("/"));mkdirSync(path.dirname(target),{recursive:true});copyFileSync(path.join(build.root,...item.path.split("/")),target,constants.COPYFILE_EXCL);}
   for(const item of workerEntries){const target=path.join(stage,...item.path.split("/"));mkdirSync(path.dirname(target),{recursive:true});copyFileSync(item.source,target,constants.COPYFILE_EXCL);}
-  writeFileSync(path.join(stage,"manifest.json"),manifestBytes,{flag:"wx"});renameSync(stage,releaseRoot);
+  writeFileSync(path.join(stage,"manifest.json"),manifestBytes,{flag:"wx"});await promoteReleaseStage(stage,releaseRoot);
   const release:ControlRelease={release_id:releaseId,root:releaseRoot,node_executable:node.path,python_executable:python.path,manifest_path:path.join(releaseRoot,"manifest.json"),manifest_digest:manifestDigest};await verifyControlRelease(release);return release;
 }
 

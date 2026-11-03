@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {mkdtempSync,readFileSync,writeFileSync} from "node:fs";
+import {mkdirSync,mkdtempSync,readFileSync,writeFileSync} from "node:fs";
 import {test} from "node:test";
 import {createRequire} from "node:module";
 import path from "node:path";
 const require=createRequire(import.meta.url);
+const fs=require("node:fs");
 let api={};try{api=require("../../../artifacts/evolution-control-build/control-release.js");}catch{/* RED: the T6 module has not been implemented yet. */}
 const run=process.env.EVOLUTION_TEST_ROOT;assert.ok(run);assert.equal(readFileSync(path.join(run,".evolution-test-run"),"utf8").replace(/^\uFEFF/,"").trim(),"evolution-a");
 const sha=(bytes)=>createHash("sha256").update(bytes).digest("hex");
@@ -41,4 +42,18 @@ test("actual sandbox control build and Python modules freeze into one verified r
   const release=await freeze({buildRoot:path.resolve("artifacts/evolution-control-build"),workerRoot:path.resolve("agent-core/evolution"),outputRoot,nodeExecutable:process.execPath,pythonExecutable:process.env.EVOLUTION_TRUSTED_PYTHON});
   await verify(release);const manifest=JSON.parse(readFileSync(release.manifest_path,"utf8"));const paths=manifest.files.map(item=>item.path);
   assert.ok(paths.includes("node/control-client-entry.js"));assert.ok(paths.includes("node/supervisor-entry.js"));assert.ok(paths.includes("python/evolution/client.py"));assert.equal(paths.some(item=>item.includes("__pycache__")||item.endsWith(".pyc")),false);
+});
+
+test("Windows release promotion retries a transient EPERM without changing the sealed release",{skip:process.platform!=="win32"},async()=>{
+  const freeze=exported("freezeControlRelease");const verify=exported("verifyControlRelease");const fixture=createFixture();const original=fs.renameSync;let attempts=0;
+  fs.renameSync=(source,target)=>{if(path.basename(source).startsWith(".stage-")&&attempts++===0)throw Object.assign(new Error("controlled transient rename denial"),{code:"EPERM"});return original(source,target);};
+  let release;try{release=await freeze(fixture.input);}finally{fs.renameSync=original;}
+  assert.equal(attempts,2);assert.equal(await verify(release),undefined);
+});
+
+test("Windows release promotion does not retry when the destination appears after EPERM",{skip:process.platform!=="win32"},async()=>{
+  const freeze=exported("freezeControlRelease");const fixture=createFixture();const original=fs.renameSync;let attempts=0;let destination="";
+  fs.renameSync=(source,target)=>{if(path.basename(source).startsWith(".stage-")&&attempts++===0){destination=target;mkdirSync(target);writeFileSync(path.join(target,"sentinel"),"preserve",{flag:"wx"});throw Object.assign(new Error("controlled destination race"),{code:"EPERM"});}return original(source,target);};
+  try{await assert.rejects(()=>freeze(fixture.input),error=>error?.code==="EPERM");}finally{fs.renameSync=original;}
+  assert.equal(attempts,1);assert.equal(readFileSync(path.join(destination,"sentinel"),"utf8"),"preserve");
 });

@@ -35,7 +35,7 @@ const SOURCE_HASH=/^sha256:[0-9a-f]{64}$/;
 function isSafeOwnedPath(value:unknown):value is string{return typeof value==="string"&&!!value&&!value.startsWith("/")&&!value.includes("\\")&&!value.includes(":")&&!value.split("/").some(part=>!part||part==="."||part==="..");}
 export type SupervisorDeps={
   journal:JournalStore;bindings:BindingStore;grants:GrantStore;runner:CandidateRunner;workspace:WorkspaceClient;
-  scopes:Map<string,WorkspaceScope>;runRoot:string;runtimePaths:Map<string,string>;
+  scopes:Map<string,WorkspaceScope>;runRoot:string;sandboxRoot?:string;runtimePaths:Map<string,string>;
   snapshots:Map<Hash,SourceSnapshotRef>;descriptors:Map<string,CandidateDescriptor>;profileFixtures:Map<string,string>;descriptorFactories?:SnapshotDescriptorFactory[];
 };
 type MutableProjection=Projection&{late_events:Array<Record<string,unknown>>;seen_instance_sequence:number};
@@ -70,7 +70,9 @@ export class EvolutionSupervisor {
     this.deps=deps;
     if(!path.isAbsolute(deps.runRoot))fail("invalid_request","supervisor run root must be absolute");
     const root=path.resolve(deps.runRoot);
-    const artifacts=path.resolve(process.cwd(),"artifacts");
+    const sandboxRoot=this.deps.sandboxRoot??process.cwd();
+    if(!path.isAbsolute(sandboxRoot))fail("invalid_request","supervisor sandbox root must be absolute");
+    const artifacts=path.resolve(sandboxRoot,"artifacts");
     const relative=path.relative(artifacts,root);
     if(relative===""||relative===".."||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative))fail("permission_denied","supervisor run root must remain under sandbox/artifacts");
     if(readFileSync(path.join(root,".evolution-test-run"),"utf8").replace(/^\uFEFF/,"").trim()!=="evolution-a")fail("permission_denied","supervisor run root marker is missing");

@@ -1,0 +1,9 @@
+Live2D Cubism Core
+(C) 2019 Live2D Inc. All rights reserved.
+
+This file is licensed pursuant to the license agreement below.
+This file corresponds to the "Redistributable Code" in the agreement.
+https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html
+
+Source: F:/Open-LLM-VTuber/app/frontend/libs/live2dcubismcore.min.js
+The original source file and its notice were copied without modification.

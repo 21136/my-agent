@@ -1,0 +1,68 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "model.moc3",
+    "Textures": [
+      "texture.png"
+    ],
+    "Physics": "see-through-chibi-v1.physics3.json",
+    "DisplayInfo": "see-through-chibi-v1.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "微笑",
+        "File": "see-through-chibi-v1.smile.exp3.json"
+      },
+      {
+        "Name": "悲伤",
+        "File": "see-through-chibi-v1.sad.exp3.json"
+      },
+      {
+        "Name": "生气",
+        "File": "see-through-chibi-v1.angry.exp3.json"
+      },
+      {
+        "Name": "惊讶",
+        "File": "see-through-chibi-v1.surprised.exp3.json"
+      }
+    ],
+    "Motions": {
+      "Idle": [
+        {
+          "File": "see-through-chibi-v1.idle.motion3.json"
+        }
+      ],
+      "Blink": [
+        {
+          "File": "see-through-chibi-v1.blink.motion3.json"
+        }
+      ],
+      "Nod": [
+        {
+          "File": "see-through-chibi-v1.nod.motion3.json"
+        }
+      ],
+      "Shake": [
+        {
+          "File": "see-through-chibi-v1.shake.motion3.json"
+        }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": [
+        "ParamMouthOpenY"
+      ]
+    }
+  ]
+}

@@ -52,6 +52,11 @@ function validMergeReceipt(value: unknown, checkpoint: ManagedCheckpointReceipt)
     && JSON.stringify(value.selectedPaths) === JSON.stringify(checkpoint.selectedPaths) && oid(value.stableHeadBefore) && oid(value.stableHeadAfter) && oid(value.mergedTree)
     && value.sourceMergeExecuted === true && value.sourceHistoryMerged === false && value.readyForLaunch === false && typeof value.receiptDigest === "string" && HASH.test(value.receiptDigest);
 }
+function selectionLimitError(paths: string[], digest: string): string | null {
+  const request = { format: 1, mode: "managed_source_selection_request_v1", reviewDigest: digest, selectedPaths: paths };
+  if (paths.length > 2048 || paths.some(path => new TextEncoder().encode(path).byteLength > 512) || new TextEncoder().encode(JSON.stringify(request)).byteLength > 256 * 1024) return "所选范围超过请求大小限制。";
+  return null;
+}
 function proposalBlockerCount(proposal: Record<string, unknown>): string {
   const blockers = proposal.blockers;
   if (!Array.isArray(blockers)) return "阻塞项：报告未提供可计数的 blockers 数组";
@@ -64,7 +69,7 @@ export function mountManagedSourceSelection(container: HTMLElement, options: { i
   let query = ""; let page = 1; let epoch = 0; let pending = false; let checkpointPending = false; let mergePending = false;
   let selected = new Set<string>(); let proposal: Record<string, unknown> | null = null; let receipt: ManagedCheckpointReceipt | null = null; let mergeReceipt: Record<string, unknown> | null = null; let mergeMaintenanceRequired = false; const maintenanceBlockedCheckpoints = new Set<string>(); let errorMessage = "";
   let search: HTMLInputElement | null = null; let list: HTMLOListElement | null = null; let pager: HTMLElement | null = null; let output: HTMLElement | null = null;
-  let submit: HTMLButtonElement | null = null; let checkpoint: HTMLButtonElement | null = null; let merge: HTMLButtonElement | null = null; let status: HTMLElement | null = null; let selectionSummary: HTMLElement | null = null;
+  let submit: HTMLButtonElement | null = null; let batchPaths: HTMLTextAreaElement | null = null; let checkpoint: HTMLButtonElement | null = null; let merge: HTMLButtonElement | null = null; let status: HTMLElement | null = null; let selectionSummary: HTMLElement | null = null;
   const controls = new Map<string, HTMLInputElement>();
   const invalidate = () => { epoch++; pending = false; checkpointPending = false; mergePending = false; proposal = null; receipt = null; mergeReceipt = null; mergeMaintenanceRequired = false; errorMessage = ""; };
   const renderRows = () => {
@@ -113,7 +118,7 @@ export function mountManagedSourceSelection(container: HTMLElement, options: { i
     checkpoint.disabled = !options.isDesktop || !options.createCheckpoint || !proposalValid || pending || checkpointPending || mergePending;
     merge.hidden = !receipt; mergeMaintenanceRequired = !!receipt && maintenanceBlockedCheckpoints.has(String(receipt.checkpointDigest));
     merge.disabled = !options.isDesktop || !options.executeMerge || !receipt || mergePending || !!mergeReceipt || mergeMaintenanceRequired;
-    if (selectionSummary) selectionSummary.textContent = `已选择 ${selected.size} 条路径。`;
+    if (selectionSummary) selectionSummary.textContent = `已选择 ${selected.size} 条路径。仅声明选择，不会创建检查点或合入。`;
     status.textContent = errorMessage;
     if (proposal) {
       const details = document.createElement("details"); details.open = true; details.appendChild(text(document, "summary", "完整范围提案（原始 JSON）"));
@@ -133,13 +138,30 @@ export function mountManagedSourceSelection(container: HTMLElement, options: { i
       const warning = text(document, "p", "逐路径声明仅用于生成范围提案；未验证任务归属或来源所有权。始终保留 stable 的其他内容；源码合入只会在检查点成功后由桌面可信宿主通过项目 Git 和原生确认执行，不合入 sandbox 整段历史。原生确认期间若编辑面板，宿主已确认的操作不会因此撤销，面板只忽略旧请求结果。不会启动/激活，也不会调用模型。"); warning.setAttribute("role", "note");
       selectionSummary = text(document, "p", `已选择 ${selected.size} 条路径。`); selectionSummary.setAttribute("aria-live", "polite");
       const environmentNotice = text(document, "p", options.isDesktop ? (options.propose ? "仅桌面可信宿主可核验；仍不产生原生同意或执行权。" : "桌面提案 API 不可用，提交已禁用。") : "当前为 Web 环境，不能调用桌面可信宿主；提交已禁用。"); environmentNotice.setAttribute("role", "note");
+      const batchLabel = text(document, "label", "批量路径选择（每行一个精确 sandbox 路径）"); batchPaths = document.createElement("textarea"); batchPaths.setAttribute("aria-label", "批量路径选择（每行一个精确 sandbox 路径）"); batchPaths.rows = 6; batchPaths.placeholder = "粘贴 sandbox 清单中的完整相对路径，每行一条"; batchLabel.appendChild(batchPaths);
+      const applyBatch = text(document, "button", "应用粘贴路径（替换选择）") as HTMLButtonElement; applyBatch.type = "button"; applyBatch.addEventListener("click", () => {
+        if (!catalog || !batchPaths) return;
+        const raw = batchPaths.value;
+        const paths = raw.split(/\r?\n/);
+        if (paths.at(-1) === "" && /\r?\n$/.test(raw)) paths.pop();
+        const catalogPaths = new Set(catalog.sandbox.map(entry => entry.path));
+        const duplicate = new Set(paths).size !== paths.length;
+        const unknown = paths.find(path => !catalogPaths.has(path));
+        const limitError = selectionLimitError(paths, catalog.digest);
+        if (!raw || paths.length === 0 || paths.some(path => path.length === 0)) errorMessage = "粘贴内容不能为空，且不能包含空行；现有选择未更改。";
+        else if (duplicate) errorMessage = "粘贴路径包含重复项；现有选择未更改。";
+        else if (unknown !== undefined) errorMessage = `路径不在当前 sandbox 清单中：${unknown}；现有选择未更改。`;
+        else if (limitError) errorMessage = `${limitError} 现有选择未更改。`;
+        else { invalidate(); selected = new Set(paths); page = 1; query = ""; if (search) search.value = ""; errorMessage = "批量路径已应用；这仅声明 UI 选择，未生成提案、检查点或合入。"; }
+        renderRows(); renderState();
+      });
       const searchLabel = text(document, "label", "搜索 sandbox 路径"); search = document.createElement("input"); search.type = "search"; search.setAttribute("aria-label", "搜索 sandbox 路径"); search.addEventListener("input", () => { query = search!.value; page = 1; renderRows(); }); searchLabel.appendChild(search);
       list = document.createElement("ol"); pager = document.createElement("nav"); pager.setAttribute("aria-label", "选择分页");
       submit = text(document, "button", "核验所选范围（不合入）") as HTMLButtonElement; submit.type = "button"; submit.addEventListener("click", async () => {
         if (!catalog || !options.isDesktop || !options.propose || pending || selected.size === 0) return;
         const paths = [...selected].sort(); const request = { format: 1 as const, mode: "managed_source_selection_request_v1" as const, reviewDigest: catalog.digest, selectedPaths: paths };
-        const bytes = new TextEncoder().encode(JSON.stringify(request)).byteLength;
-        if (paths.length > 2048 || paths.some(path => new TextEncoder().encode(path).byteLength > 512) || bytes > 256 * 1024) { errorMessage = "所选范围超过请求大小限制。"; renderState(); return; }
+        const limitError = selectionLimitError(paths, catalog.digest);
+        if (limitError) { errorMessage = limitError; renderState(); return; }
         const current = ++epoch; pending = true; checkpointPending = false; receipt = null; proposal = null; errorMessage = "提案生成中…"; renderRows(); renderState();
         try {
           const result = await options.propose(request);
@@ -194,9 +216,9 @@ export function mountManagedSourceSelection(container: HTMLElement, options: { i
         renderState();
       });
       status = text(document, "p", ""); status.setAttribute("role", "status"); output = document.createElement("section");
-      container.replaceChildren(heading, warning, selectionSummary, environmentNotice, searchLabel, list, pager, submit, checkpoint, merge, status, output); renderRows(); renderState();
+      container.replaceChildren(heading, warning, selectionSummary, environmentNotice, batchLabel, applyBatch, searchLabel, list, pager, submit, checkpoint, merge, status, output); renderRows(); renderState();
     },
-    clear() { epoch++; catalog = null; selected.clear(); proposal = null; receipt = null; pending = false; checkpointPending = false; mergePending = false; mergeMaintenanceRequired = false; query = ""; controls.clear(); search = null; list = null; pager = null; submit = null; checkpoint = null; merge = null; status = null; output = null; selectionSummary = null; container.replaceChildren(); },
+    clear() { epoch++; catalog = null; selected.clear(); proposal = null; receipt = null; pending = false; checkpointPending = false; mergePending = false; mergeMaintenanceRequired = false; query = ""; controls.clear(); search = null; list = null; pager = null; submit = null; checkpoint = null; merge = null; status = null; output = null; selectionSummary = null; batchPaths = null; container.replaceChildren(); },
   };
 }
 

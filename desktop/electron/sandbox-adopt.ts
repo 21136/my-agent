@@ -78,6 +78,12 @@ async function dirty(cwd: string): Promise<Dirty[]> {
   return entries;
 }
 function label(entry: Dirty): string { return entry.xy + " " + entry.file; }
+/** Keep dual-lane blocker cards readable when hundreds of dirty paths exist. */
+function summarizePaths(prefix: string, items: string[], limit = 8): string {
+  if (!items.length) return prefix;
+  if (items.length <= limit) return prefix + items.join("、");
+  return prefix + "共 " + String(items.length) + " 项：" + items.slice(0, limit).join("、") + " …";
+}
 function fingerprint(root: string, entries: Dirty[]): string[] {
   return entries.map(({ xy, file }) => {
     if (!releasePath(file)) return xy + file;
@@ -148,7 +154,7 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
       status.sandboxDirtyProduct = sandboxSource.map(label);
       status.stableDirtyOutside = stableEntries.filter((e) => !releasePath(e.file)).map(label);
       const unsupported = sandboxEntries.filter((e) => !releasePath(e.file));
-      if (unsupported.length) status.fatalBlockers.push("Sandbox 含发布范围外改动，不会自动提交：" + unsupported.map((e) => e.file).join("、"));
+      if (unsupported.length) status.fatalBlockers.push(summarizePaths("Sandbox 含发布范围外改动，不会自动提交：", unsupported.map((e) => e.file)));
       if (stableEntries.some((e) => !releasePath(e.file) && e.xy[0] !== " " && e.xy !== "??")) status.fatalBlockers.push("稳定区存在发布范围外的已暂存改动，不会混入合并提交。");
       status.needsStableStash = stableSource.length > 0;
       status.needsSandboxCommit = sandboxSource.length > 0;
@@ -170,7 +176,7 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
         }
       }
       const blockedCommitted = status.mergeFiles.filter((file) => !releasePath(file));
-      if (blockedCommitted.length) status.fatalBlockers.push("实验提交包含发布范围外文件，禁止整支合入：" + blockedCommitted.join("、"));
+      if (blockedCommitted.length) status.fatalBlockers.push(summarizePaths("实验提交包含发布范围外文件，禁止整支合入：", blockedCommitted));
       if (status.commitsAhead === 0 && !status.needsSandboxCommit) status.fatalBlockers.push("没有待合入的实验改动。");
       // Bind consent to HEAD, file bytes AND each index; same filename/status is not sufficient.
       const stableIndex = await scopedGit(stableRoot, ["diff", "--cached", "--binary"]);
@@ -182,9 +188,9 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
         stableIndex, sandboxIndex, blockers: status.fatalBlockers,
       })).digest("hex");
       // Sync blockers are independent of adopt "nothing to merge" — used by 用稳定刷实验.
-      if (status.sandboxDirtyProduct.length) status.syncBlockers.push("实验区有未提交 product 改动，刷入稳定版前请先提交或清理：" + status.sandboxDirtyProduct.join("、"));
+      if (status.sandboxDirtyProduct.length) status.syncBlockers.push(summarizePaths("实验区有未提交 product 改动，刷入稳定版前请先提交或清理：", status.sandboxDirtyProduct));
       const sandboxUnsupported = unsupported.map((e) => e.file);
-      if (sandboxUnsupported.length) status.syncBlockers.push("实验区含发布范围外改动，不会自动刷入：" + sandboxUnsupported.join("、"));
+      if (sandboxUnsupported.length) status.syncBlockers.push(summarizePaths("实验区含发布范围外改动，不会自动刷入：", sandboxUnsupported));
       for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "BISECT_LOG"]) {
         const statePath = await scopedGit(sandboxRoot, ["rev-parse", "--git-path", name]);
         if (existsSync(path.resolve(sandboxRoot, statePath))) status.syncBlockers.push("实验区有未完成 Git 操作：" + name);

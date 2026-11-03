@@ -15,13 +15,25 @@ test("opening splash asset and page reference splash-xiaomowang.mp4", () => {
   assert.match(splashModule, /OPENING_SPLASH_VIDEO_BASENAME = "splash-xiaomowang\.mp4"/);
 });
 
-test("electron main overlaps sidecar startup with workbench load and dismisses splash when workbench shows", () => {
+test("electron main overlaps sidecar startup with workbench prepare; splash dismisses only after sidecar ready", () => {
   assert.match(mainSource, /playOpeningSplash\(\)/);
+  assert.match(mainSource, /prepareColdStartWorkbench/);
   assert.match(mainSource, /revealColdStartWorkbench/);
   assert.match(mainSource, /await dismissOpeningSplash\(\)/);
-  assert.match(mainSource, /Promise\.all\(\[runSidecarStartup\(\), revealColdStartWorkbench\(\)\]\)/);
+  assert.match(mainSource, /Promise\.all\(\[runSidecarStartup\(\), prepareColdStartWorkbench\(\)\]\)/);
+  assert.match(mainSource, /await Promise\.all\(\[runSidecarStartup\(\), prepareColdStartWorkbench\(\)\]\);\s*\n\s*\}\s*\n\s*await revealColdStartWorkbench\(\)/);
+  assert.doesNotMatch(mainSource, /Promise\.all\(\[runSidecarStartup\(\), revealColdStartWorkbench\(\)\]\)/);
   assert.doesNotMatch(mainSource, /await runSidecarStartup\(\);\s*\n\s*await openWorkbenchWindow\(\)/);
   assert.doesNotMatch(mainSource, /await splashWork;\s*\n\s*await openWorkbenchWindow\(\)/);
+});
+
+test("opening splash safety wait is long enough not to beat sidecar boot", () => {
+  assert.match(splashModule, /SPLASH_SAFETY_MAX_MS = 120_000/);
+  assert.doesNotMatch(splashModule, /SPLASH_MAX_WAIT_MS = 12_000/);
+});
+
+test("cold-start workbench BrowserWindow stays hidden until reveal", () => {
+  assert.match(mainSource, /show:\s*false/);
 });
 
 test("opening splash holds last frame until main dismisses (video ended does not auto-close)", () => {

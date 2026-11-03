@@ -1,26 +1,40 @@
-/* Collapse hollow secondary rail for dual-lane: icon bar only. */
-.unified-shell[data-rail="shell-dev"] .unified-sidebar-panel,
-.unified-shell[data-rail="shell-dev"] .sidebar-resize-handle {
+/* The dual-lane tool takes over the existing work area; chat/input stay mounted offscreen. */
+.unified-shell:has(#unified-shell-dev:not([hidden])) .unified-sidebar-panel,
+.unified-shell:has(#unified-shell-dev:not([hidden])) .sidebar-resize-handle {
   display: none !important;
 }
-.unified-shell[data-rail="shell-dev"] .sidebar-icon-bar {
+.unified-shell:has(#unified-shell-dev:not([hidden])) .sidebar-icon-bar {
   width: 56px;
   flex-basis: 56px;
 }
-html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev"] {
+html[data-theme] .unified-shell[data-perspective="project"]:has(#unified-shell-dev:not([hidden])) {
   grid-template-columns: 56px minmax(0, 1fr);
 }
-.unified-shell[data-rail="shell-dev"] :is(.unified-topbar, .thread-archive-banner, .unified-context-region, .unified-composer-dock) {
+.unified-main:has(#unified-shell-dev:not([hidden])) > :is(
+  .unified-topbar,
+  .thread-archive-banner,
+  .unified-context-region,
+  .unified-composer-dock
+) {
+  display: none !important;
+}
+.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden]):has(#unified-shell-dev:not([hidden]))) {
+  flex-direction: column;
+}
+.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden]):has(#unified-shell-dev:not([hidden]))) > .unified-chat {
   display: none;
 }
-.unified-shell[data-rail="shell-dev"] .unified-main {
-  min-width: 0;
+.unified-shell .unified-stage:has(> .unified-tool-region:not([hidden]):has(#unified-shell-dev:not([hidden]))) > .unified-tool-region {
+  flex: 1 1 auto;
+  width: 100%;
+  border: 0;
+  background: transparent;
 }
-
 .unified-shell-dev {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--ma-border-strong) transparent;
 }
@@ -32,11 +46,12 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
 .shell-dev-page {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  padding: 0.85rem 1.1rem 1rem;
-  gap: 0.65rem;
-  max-width: 56rem;
+  height: auto;
+  min-height: 100%;
+  padding: clamp(1rem, 2.2vw, 2rem) clamp(1rem, 3vw, 3rem);
+  gap: clamp(0.8rem, 1.4vw, 1.25rem);
+  width: 100%;
+  max-width: none;
 }
 
 .dual-lane-heading {
@@ -77,7 +92,7 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
 .dual-lane-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: clamp(0.85rem, 1.6vw, 1.5rem);
   flex: 0 0 auto;
 }
 
@@ -85,7 +100,7 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
-  padding: 0.85rem 0.9rem 0.9rem;
+  padding: clamp(1rem, 1.8vw, 1.5rem);
   border: 1px solid var(--ma-border);
   border-radius: var(--nt-r-md, 12px);
   background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
@@ -219,7 +234,7 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
   gap: 0.4rem;
   flex: 1 1 auto;
   min-height: min-content;
-  padding: 0.55rem 0.65rem 0.65rem;
+  padding: clamp(0.75rem, 1.4vw, 1.25rem);
   border: 1px solid var(--ma-border);
   border-radius: var(--nt-r-md, 12px);
   background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
@@ -501,5 +516,271 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="shell-dev
 
   .shell-dev-page {
     max-width: none;
+  }
+}
+
+/* Refined dual-lane visual hierarchy. */
+.shell-dev-page {
+  box-sizing: border-box;
+  color: var(--ma-text);
+  overflow-wrap: anywhere;
+}
+
+.dual-lane-heading {
+  align-items: center;
+  margin-bottom: 0.2rem;
+}
+
+.dual-lane-heading h1 {
+  font-size: clamp(1.5rem, 2.3vw, 1.9rem);
+  font-weight: 720;
+  letter-spacing: -0.035em;
+}
+
+.shell-dev-hint {
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  max-width: 42rem;
+}
+
+.dual-lane-refresh {
+  min-height: 2.65rem;
+  padding-inline: 1rem;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--ma-border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 72%, transparent);
+  color: var(--ma-text);
+  opacity: 1;
+}
+
+.dual-lane-cards {
+  gap: clamp(0.9rem, 1.8vw, 1.6rem);
+}
+
+.dual-lane-card {
+  position: relative;
+  gap: 0.9rem;
+  overflow: hidden;
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  border-radius: 20px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--ma-surface) 85%, transparent), color-mix(in srgb, var(--ma-surface) 66%, transparent));
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 34px color-mix(in srgb, var(--ma-text) 7%, transparent);
+}
+
+.dual-lane-card[data-lane="stable"] {
+  --lane-accent: #38b8a5;
+  border-color: color-mix(in srgb, var(--lane-accent) 42%, var(--ma-border));
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--lane-accent) 75%, transparent),
+    0 12px 34px color-mix(in srgb, var(--ma-text) 7%, transparent);
+}
+
+.dual-lane-card[data-lane="sandbox"] {
+  --lane-accent: #a78bfa;
+  border-color: color-mix(in srgb, var(--lane-accent) 46%, var(--ma-border));
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--lane-accent) 78%, transparent),
+    0 12px 34px color-mix(in srgb, var(--ma-text) 7%, transparent);
+}
+
+.dual-lane-card-head {
+  gap: 0.45rem;
+}
+
+.dual-lane-card-head::before {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.24rem 0.58rem;
+  border: 1px solid color-mix(in srgb, var(--lane-accent) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lane-accent) 12%, transparent);
+  color: color-mix(in srgb, var(--lane-accent) 76%, var(--ma-text));
+  font-size: 0.68rem;
+  font-weight: 740;
+  letter-spacing: 0.075em;
+  line-height: 1.2;
+}
+
+.dual-lane-card[data-lane="stable"] .dual-lane-card-head::before {
+  content: "稳定车道 · STABLE";
+}
+
+.dual-lane-card[data-lane="sandbox"] .dual-lane-card-head::before {
+  content: "实验车道 · SANDBOX";
+}
+
+.dual-lane-card-head h2 {
+  font-size: clamp(1.15rem, 1.5vw, 1.35rem);
+  font-weight: 680;
+  letter-spacing: -0.025em;
+}
+
+.dual-lane-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ma-surface) 56%, transparent);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.dual-lane-status::before {
+  content: "";
+  flex: 0 0 0.48rem;
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.dual-lane-peer-cta {
+  min-height: 2.75rem;
+  padding: 0.65rem 1rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--lane-accent) 12%, var(--ma-surface));
+  border-color: color-mix(in srgb, var(--lane-accent) 44%, var(--ma-border));
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--lane-accent) 12%, transparent);
+  font-size: 0.92rem;
+  font-weight: 680;
+  transition: transform 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.dual-lane-peer-cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--lane-accent) 19%, var(--ma-surface));
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--lane-accent) 18%, transparent);
+}
+
+.dual-lane-details {
+  padding-top: 0.55rem;
+  border-top-color: color-mix(in srgb, var(--ma-border) 65%, transparent);
+}
+
+.dual-lane-details > summary {
+  width: fit-content;
+  padding: 0.3rem 0.1rem;
+  font-size: 0.78rem;
+  font-weight: 620;
+}
+
+.dual-lane-preview {
+  flex: 1 0 auto;
+  min-height: 18rem;
+  gap: 0.75rem;
+  padding: clamp(0.8rem, 1.4vw, 1.25rem);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--ma-border-strong) 55%, var(--ma-border));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--ma-surface) 48%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 20%, transparent);
+}
+
+.dual-lane-preview-heading {
+  min-height: 2.6rem;
+  padding: 0 0.15rem 0.65rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);
+}
+
+.dual-lane-preview-heading strong {
+  font-size: 1rem;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+}
+
+.dual-lane-preview-heading .unified-btn,
+.shell-dev-preview-more > summary {
+  min-height: 2.4rem;
+  border-radius: 10px;
+}
+
+.shell-dev-web-slot {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: clamp(18rem, 38vh, 42rem);
+  overflow: hidden;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--ma-border-strong) 58%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ma-surface) 34%, transparent);
+  box-shadow: inset 0 1px 8px color-mix(in srgb, var(--ma-text) 5%, transparent);
+}
+
+.shell-dev-evolution {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ma-surface) 55%, transparent);
+}
+
+.shell-dev-evolution-actions {
+  flex-wrap: wrap;
+}
+
+.shell-dev-help,
+.shell-dev-notes {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ma-surface) 48%, transparent);
+}
+
+@media (max-width: 720px) {
+  .shell-dev-page {
+    height: auto;
+    min-height: 100%;
+    gap: 0.75rem;
+    padding: 0.85rem;
+  }
+
+  .dual-lane-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dual-lane-preview {
+    flex: 0 0 auto;
+    min-height: 18rem;
+  }
+
+  .dual-lane-card {
+    padding: 1rem;
+  }
+
+  .dual-lane-preview-heading {
+    align-items: flex-start;
+  }
+
+  .dual-lane-preview-heading .shell-dev-actions-primary {
+    width: 100%;
+  }
+
+  .shell-dev-evolution-actions {
+    flex: 1 1 100%;
+  }
+
+  .shell-dev-evolution-actions .unified-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .dual-lane-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dual-lane-card-grid .dual-lane-card-wide {
+    grid-column: auto;
+  }
+
+  .shell-dev-web-slot {
+    min-height: 16rem;
   }
 }

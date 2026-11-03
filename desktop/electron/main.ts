@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -27,6 +27,7 @@ import { createLegacySandboxLane, createTrustedLegacyLaneHandlers } from "./lega
 import { SidecarBootstrapRegistry, sidecarBootstrapLaunch, type EvolutionSidecarBootstrap } from "./evolution/sidecar-bootstrap";
 import { createEvolutionSupervisorHost, type EvolutionSupervisorHost } from "./evolution/supervisor-host";
 import { buildEvolutionTestSupervisorConfig, loadEvolutionTestHostProfile, type EvolutionTestHostContext } from "./evolution/test-host-config";
+import { assertEvolutionTestProfileLoaded, detectEvolutionTestLaunchIntent } from "./evolution/test-launch-intent.mjs";
 import { bindEvolutionIpc, type EvolutionIpcAdapter, type EvolutionIpcEvent } from "./evolution/main-bridge";
 import { startEvolutionTestRendererServer, type EvolutionTestRendererServer } from "./evolution/sealed-renderer-server";
 import { buildBilibiliSearchUrl, isOfficialBilibiliUrl } from "./bilibili-search";
@@ -136,16 +137,10 @@ async function loadShellPreviewUrl(view: WebContentsView, url: string): Promise<
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AGENT_ROOT = path.resolve(__dirname, "../..");
+// Detect test-host intent before resolving or preparing any Host state.
+const evolutionTestLaunchIntent = detectEvolutionTestLaunchIntent(AGENT_ROOT, process.argv, process.env);
 // Only a private Launcher bootstrap plus full manifest/target verification establishes this identity.
 const fixedHostContext = loadFixedHostContext(AGENT_ROOT, process.argv);
-const DATA_ROOT = fixedHostContext?.dataRoot ?? path.join(AGENT_ROOT, "data");
-const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostContext.binding.state_root, {
-  installation_id:fixedHostContext.binding.installation_id, release_id:fixedHostContext.binding.release.release_id, binding_digest:fixedHostContext.bindingDigest,
-}) : null;
-const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
-  stableRoot:fixedHostContext.binding.stable_source_root, sandboxRoot:fixedHostContext.binding.sandbox_source_root,
-}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable,syncSandboxWithStable};
-let adoptionInProgress = false;
 let evolutionTestHostContext: EvolutionTestHostContext | null = null;
 let evolutionTestHostContextError: Error | null = null;
 let t9ShutdownToken: string | null = null;
@@ -154,23 +149,83 @@ try {
 } catch (error) {
   evolutionTestHostContextError = error instanceof Error ? error : new Error(String(error));
 }
+assertEvolutionTestProfileLoaded(evolutionTestLaunchIntent, evolutionTestHostContext, evolutionTestHostContextError);
 if (fixedHostContext && evolutionTestHostContext) throw Error("fixed and rehearsal Host identities cannot be combined");
-if (evolutionTestHostContext?.profile.candidate_fixture_profile === "t4-recovery-node-v1") {
+const ordinaryChatH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
+const ordinaryChatH1Isolation = ordinaryChatH1 && evolutionTestHostContext ? assertOrdinaryChatH1Isolation(evolutionTestHostContext) : null;
+const DATA_ROOT = fixedHostContext?.dataRoot ?? path.join(AGENT_ROOT, "data");
+const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostContext.binding.state_root, {
+  installation_id:fixedHostContext.binding.installation_id, release_id:fixedHostContext.binding.release.release_id, binding_digest:fixedHostContext.bindingDigest,
+}) : null;
+const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
+  stableRoot:fixedHostContext.binding.stable_source_root, sandboxRoot:fixedHostContext.binding.sandbox_source_root,
+}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable,syncSandboxWithStable};
+let adoptionInProgress = false;
+
+function samePath(left: string, right: string): boolean { const a = path.resolve(left), b = path.resolve(right); return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b; }
+function assertOrdinaryChatH1Isolation(context: EvolutionTestHostContext): { temp: string; userData: string; sessionData: string } {
+  const { app_root: appRoot, run_root: runRoot, profile, sandbox_root: sandboxRoot } = context;
+  const profileRoot = profile.profile_root, runId = path.basename(runRoot);
+  if (profile.chat_run_id !== runId || !samePath(appRoot, path.join(runRoot, "host", "app")) || !samePath(profileRoot, path.join(runRoot, "host", "profile")) || !samePath(path.join(sandboxRoot, "artifacts"), path.dirname(path.dirname(runRoot)))) throw Error("ordinary-chat H1 run/profile identity does not match the marked sandbox run");
+  const identityPath = path.join(runRoot, ".ordinary-chat-h1.json"), identityInfo = lstatSync(identityPath);
+  if (!identityInfo.isFile() || identityInfo.isSymbolicLink() || !samePath(realpathSync.native(identityPath), identityPath)) throw Error("ordinary-chat H1 run identity marker is linked or non-regular");
+  let identity: any; try { identity = JSON.parse(readFileSync(identityPath, "utf8")); } catch { throw Error("ordinary-chat H1 run identity marker is invalid"); }
+  if (!identity || Object.keys(identity).length !== 4 || identity.format !== 1 || identity.fixture !== "ordinary-chat-h1-v1" || identity.run_id !== runId) throw Error("ordinary-chat H1 run identity marker changed");
+  const expected = {
+    MY_AGENT_ROOT: appRoot, MY_AGENT_H1_PROFILE_ROOT: profileRoot, MY_AGENT_H1_RUN_ID: runId,
+    USERPROFILE: path.join(profileRoot, "userprofile"), APPDATA: path.join(profileRoot, "appdata", "Roaming"), LOCALAPPDATA: path.join(profileRoot, "appdata", "Local"),
+    HOME: path.join(profileRoot, "home"), XDG_CONFIG_HOME: path.join(profileRoot, "xdg-config"), XDG_DATA_HOME: path.join(profileRoot, "xdg-data"), XDG_CACHE_HOME: path.join(profileRoot, "xdg-cache"),
+    TEMP: path.join(profileRoot, "tmp"), TMP: path.join(profileRoot, "tmp"), MY_AGENT_ELECTRON_USER_DATA: path.join(profileRoot, "electron-userData"), MY_AGENT_ELECTRON_SESSION_DATA: path.join(profileRoot, "electron-sessionData"),
+  };
+  for (const [key, target] of Object.entries(expected)) if (process.env[key] !== target || !samePath(process.env[key] ?? "", target)) throw Error("ordinary-chat H1 environment path is not bound to the sealed profile: " + key);
+  for (const target of [profileRoot, ...Object.values(expected).filter(value => value !== appRoot && value !== profileRoot && value !== runId), path.join(appRoot, "data"), path.join(appRoot, "data", "sessions"), path.join(appRoot, "workspace"), path.join(appRoot, "evolve")]) {
+    const info = lstatSync(target); if (!info.isDirectory() || info.isSymbolicLink() || !samePath(realpathSync.native(target), target)) throw Error("ordinary-chat H1 runtime root is missing, linked, or escaped its sealed run");
+  }
+  if (JSON.stringify(readdirSync(path.join(appRoot, "data")).sort()) !== JSON.stringify(["sessions"]) || readdirSync(path.join(appRoot, "data", "sessions")).length !== 0) throw Error("ordinary-chat H1 agent data root is not empty");
+  if (JSON.stringify(readdirSync(profileRoot).sort()) !== JSON.stringify(["appdata", "electron-sessionData", "electron-userData", "home", "tmp", "userprofile", "xdg-cache", "xdg-config", "xdg-data"])) throw Error("ordinary-chat H1 profile has unexpected entries");
+  if (JSON.stringify(readdirSync(path.join(profileRoot, "appdata")).sort()) !== JSON.stringify(["Local", "Roaming"])) throw Error("ordinary-chat H1 appdata root has unexpected entries");
+  for (const target of Object.values(expected).filter(value => value.includes(profileRoot + path.sep))) if (readdirSync(target).length !== 0) throw Error("ordinary-chat H1 isolated data directory is not empty");
+  for (const marker of [path.join(appRoot, "evolve", "_index.core.toml"), path.join(appRoot, "evolve", "_index.toml")]) { const info = lstatSync(marker); if (!info.isFile() || info.isSymbolicLink() || !samePath(realpathSync.native(marker), marker)) throw Error("ordinary-chat H1 AgentPaths root marker is invalid"); }
+  if (process.env.PYTHONNOUSERSITE !== "1" || process.env.PYTHONDONTWRITEBYTECODE !== "1") throw Error("ordinary-chat H1 Python isolation flags are missing");
+  return { temp: expected.TEMP, userData: expected.MY_AGENT_ELECTRON_USER_DATA, sessionData: expected.MY_AGENT_ELECTRON_SESSION_DATA };
+}
+const controlledH1 = evolutionTestHostContext?.profile.candidate_fixture_profile === "t4-recovery-node-v1" || ordinaryChatH1;
+const h1Control = ordinaryChatH1
+  ? { bootstrap: "ordinary-chat-h1.control.bootstrap", shutdown: "ordinary-chat-h1.control.shutdown", ready: "ordinary-chat-h1-host-ready" }
+  : { bootstrap: "t9.control.bootstrap", shutdown: "t9.control.shutdown", ready: "evolution-test-host-ready" };
+const h1ShutdownStages = new Set<string>();
+function h1ShutdownStage(stage: "stdin_listening" | "stdin_data_received" | "stdin_end" | "stdin_closed" | "stdin_unreadable" | "stdin_tty" | "stdin_overflow" | "stdin_invalid_json" | "stdin_invalid_frame" | "stdin_unrecognized_frame" | "bootstrap_rejected" | "bootstrap_accepted" | "shutdown_accepted" | "shutdown_rejected" | "before_quit" | "adoption_blocked" | "sidecars_stop_started" | "sidecars_stop_finished" | "cleanup_reentry" | "renderer_close_started" | "renderer_close_finished" | "renderer_close_failed" | "supervisor_close_started" | "supervisor_close_finished" | "supervisor_close_failed" | "quit_reissued" | "window_all_closed" | "will_quit"): void {
+  if (!ordinaryChatH1 || h1ShutdownStages.has(stage)) return;
+  h1ShutdownStages.add(stage);
+  try { process.stderr.write(JSON.stringify({ type: "ordinary-chat-h1.shutdown-stage", stage }) + "\n"); } catch { /* diagnostics must not affect shutdown */ }
+}
+if (controlledH1) {
   let controlBuffer = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk: string) => {
+    h1ShutdownStage("stdin_data_received");
     controlBuffer += chunk;
-    if (Buffer.byteLength(controlBuffer, "utf8") > 8192) { controlBuffer = ""; return; }
+    if (Buffer.byteLength(controlBuffer, "utf8") > 8192) { h1ShutdownStage("stdin_overflow"); controlBuffer = ""; return; }
     for (;;) {
       const newline = controlBuffer.indexOf("\n"); if (newline < 0) break;
       const line = controlBuffer.slice(0, newline).replace(/\r$/u, ""); controlBuffer = controlBuffer.slice(newline + 1);
-      let frame: unknown; try { frame = JSON.parse(line); } catch { continue; }
-      if (!frame || typeof frame !== "object" || Array.isArray(frame)) continue;
+      let frame: unknown; try { frame = JSON.parse(line); } catch { h1ShutdownStage("stdin_invalid_json"); continue; }
+      if (!frame || typeof frame !== "object" || Array.isArray(frame)) { h1ShutdownStage("stdin_invalid_frame"); continue; }
       const item = frame as Record<string, unknown>;
-      if (item.type === "t9.control.bootstrap" && Object.keys(item).length === 2 && typeof item.token === "string" && /^[0-9a-f]{64}$/.test(item.token) && t9ShutdownToken === null) { t9ShutdownToken = item.token; continue; }
-      if (item.type === "t9.control.shutdown" && Object.keys(item).length === 2 && t9ShutdownToken !== null && item.token === t9ShutdownToken) { t9ShutdownToken = null; app.quit(); }
+      if (item.type === h1Control.bootstrap && Object.keys(item).length === 2 && typeof item.token === "string" && /^[0-9a-f]{64}$/.test(item.token) && t9ShutdownToken === null) { t9ShutdownToken = item.token; h1ShutdownStage("bootstrap_accepted"); continue; }
+      if (item.type === h1Control.bootstrap) { h1ShutdownStage("bootstrap_rejected"); continue; }
+      if (item.type === h1Control.shutdown && Object.keys(item).length === 2 && t9ShutdownToken !== null && item.token === t9ShutdownToken) { t9ShutdownToken = null; h1ShutdownStage("shutdown_accepted"); app.quit(); }
+      else if (item.type === h1Control.shutdown) h1ShutdownStage("shutdown_rejected");
+      else h1ShutdownStage("stdin_unrecognized_frame");
     }
   });
+  if (ordinaryChatH1) {
+    process.stdin.on("end", () => h1ShutdownStage("stdin_end"));
+    process.stdin.on("close", () => h1ShutdownStage("stdin_closed"));
+    if (process.stdin.readable === false || process.stdin.destroyed || process.stdin.readableEnded) h1ShutdownStage("stdin_unreadable");
+    if (process.stdin.isTTY) h1ShutdownStage("stdin_tty");
+  }
+  h1ShutdownStage("stdin_listening");
 }
 
 /** Dev: keep Chromium/session cache on local disk (USB/removable roots cause lock storms). */
@@ -185,6 +240,14 @@ if (fixedHostContext) {
   mkdirSync(userData,{recursive:true});mkdirSync(sessionData,{recursive:true});mkdirSync(tempRoot,{recursive:true});
   app.setPath("temp",tempRoot);
   app.setPath("userData",userData);app.setPath("sessionData",sessionData);
+} else if (ordinaryChatH1 && evolutionTestHostContext) {
+  const isolated = ordinaryChatH1Isolation;
+  if (!isolated) throw Error("ordinary-chat H1 isolation proof is incomplete");
+  app.setPath("temp", isolated.temp); app.setPath("userData", isolated.userData); app.setPath("sessionData", isolated.sessionData);
+  try {
+    const temp = app.getPath("temp"), userData = app.getPath("userData"), sessionData = app.getPath("sessionData");
+    if (!samePath(temp, isolated.temp) || !samePath(userData, isolated.userData) || !samePath(sessionData, isolated.sessionData)) throw Error("ordinary-chat H1 Electron path verification failed");
+  } catch { throw Error("ordinary-chat H1 Electron path verification failed"); }
 } else if (evolutionTestHostContext) {
   try {
     const userData = path.join(evolutionTestHostContext.profile.profile_root, "electron-userData");
@@ -332,6 +395,11 @@ if (process.platform === "win32" && process.env.VITE_DEV_SERVER_URL) {
 }
 
 function pythonCommand(root: string = AGENT_ROOT, trustedHost = false): string {
+  if (ordinaryChatH1) {
+    const context = evolutionTestHostContext;
+    if (!context || path.resolve(root) !== context.app_root) throw Error("ordinary-chat H1 cannot load another sidecar root");
+    return context.profile.trusted_python_executable;
+  }
   if(fixedHostContext){fixedHostContext.revalidate();if(path.resolve(root)!==AGENT_ROOT)throw Error("fixed Host cannot load another sidecar root");const runtime=fixedHostContext.manifest.runtimes.python;return path.join(runtime.root,runtime.entry);}
   if (trustedHost && evolutionTestHostContext && path.resolve(root) === AGENT_ROOT) {
     return evolutionTestHostContext.profile.trusted_python_executable;
@@ -440,16 +508,18 @@ function lockUiLabel(ui: string): string {
 
 function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: EvolutionSidecarBootstrap): Promise<SidecarStartResult> {
   return new Promise((resolve, reject) => {
+    if (ordinaryChatH1 && (!evolutionTestHostContext || path.resolve(root) !== evolutionTestHostContext.app_root)) throw Error("ordinary-chat H1 sidecar root is not the sealed host app");
     const selectedBootstrap = evolutionBootstrap ?? evolutionSupervisorHost?.getSidecarBootstrap(root) ?? undefined;
     if (selectedBootstrap) evolutionSidecarBootstraps.register(root, selectedBootstrap);
     const privateFrame = selectedBootstrap ? evolutionSidecarBootstraps.forRoot(root) : null;
     const privateLaunch = sidecarBootstrapLaunch(privateFrame);
-    const script = path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
+    if (ordinaryChatH1 && (!selectedBootstrap || privateLaunch.privateInput === null)) throw Error("ordinary-chat H1 requires its private sidecar bootstrap");
+    const script = ordinaryChatH1 ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
     if(fixedHostContext && selectedBootstrap) throw Error("fixed E0 layout cannot be mixed with evolution test bootstrap");
     const fixedFrame=fixedHostContext?.sidecarLayoutFrame();
     const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", String(DEFAULT_WS_PORT), ...privateLaunch.args];
     sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
-      cwd: fixedHostContext?.binding.instance_root ?? root,
+      cwd: ordinaryChatH1 ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
       stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
       env: fixedHostContext ? {...cleanHostEnvironment(),TEMP:path.join(fixedHostContext.profileRoot,"tmp"),TMP:path.join(fixedHostContext.profileRoot,"tmp")} : sidecarSpawnEnv(),
       windowsHide:true, shell:false,
@@ -652,6 +722,7 @@ function startCandidateSidecar(root: string, port: number): Promise<CandidateSid
 }
 
 async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, unknown>> {
+  if (ordinaryChatH1) return { ok: false, state: "blocked", recovered: false, error: "ordinary-chat H1 disables candidate sidecar switching" };
   if(fixedHostContext || adoptionInProgress) return {ok:false,state:"blocked",error:"固定控制入口不支持旧候选直接替换 sidecar；采用中也不切换。"};
   if (typeof rawRoot !== "string" || !rawRoot.trim()) {
     return { ok: false, state: "blocked", recovered: false, error: "candidate root is required" };
@@ -1094,6 +1165,7 @@ async function createWorkbenchWindow(): Promise<void> {
     minWidth: 640,
     minHeight: 480,
     title: "my-agent",
+    show: false,
     autoHideMenuBar: true,
     backgroundColor: windowBackground(),
     icon: windowIcon.isEmpty() ? undefined : windowIcon,
@@ -1176,6 +1248,7 @@ async function openWorkbenchWindow(): Promise<void> {
 }
 
 async function switchToCli(): Promise<void> {
+  if (ordinaryChatH1) { await dialog.showMessageBox({ type: "info", message: "ordinary-chat H1 disables CLI switching", buttons: ["知道了"] }); return; }
   if(fixedHostContext || adoptionInProgress){await dialog.showMessageBox({type:"info",message:"固定控制入口不从可变源码启动旧 CLI；采用期间也不切换。",buttons:["知道了"]});return;}
   const { response } = await dialog.showMessageBox({
     type: "question",
@@ -2074,15 +2147,21 @@ async function runSidecarStartup(): Promise<void> {
   if (legacySandboxLaneAllowed()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
   if (evolutionTestHostContext) {
     evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
-    if (evolutionTestHostContext.profile.candidate_fixture_profile === "t4-recovery-node-v1") {
-      process.stdout.write(`${JSON.stringify({ type: "evolution-test-host-ready", host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 })}\n`);
+    if (controlledH1) {
+      const renderer = evolutionTestRendererServer;
+      const ready = { type: h1Control.ready, host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 };
+      process.stdout.write(`${JSON.stringify(ordinaryChatH1 && renderer ? { ...ready, renderer_host: "127.0.0.1", renderer_port: renderer.port } : ready)}\n`);
     }
   }
 }
 
-/** Cold start: load/show workbench without waiting for sidecar (renderer polls until ready). */
-async function revealColdStartWorkbench(): Promise<void> {
+/** Cold start: prepare workbench behind splash (do not show / dismiss yet). */
+async function prepareColdStartWorkbench(): Promise<void> {
   await createWorkbenchWindow();
+}
+
+/** Reveal workbench and drop splash only after sidecar is ready (failure path dismisses separately). */
+async function revealColdStartWorkbench(): Promise<void> {
   workbenchWindow?.show();
   workbenchWindow?.focus();
   await dismissOpeningSplash();
@@ -2137,10 +2216,12 @@ app.whenReady().then(async () => {
   try {
     if (evolutionTestHostContext) {
       await runSidecarStartup();
-      await revealColdStartWorkbench();
+      await prepareColdStartWorkbench();
     } else {
-      await Promise.all([runSidecarStartup(), revealColdStartWorkbench()]);
+      // Overlap sidecar boot with workbench load; keep splash until sidecar is ready.
+      await Promise.all([runSidecarStartup(), prepareColdStartWorkbench()]);
     }
+    await revealColdStartWorkbench();
   } catch (err) {
     await handleSidecarStartupFailure(err);
     return;
@@ -2151,18 +2232,23 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
+  h1ShutdownStage("window_all_closed");
   if (quitting && !evolutionHostShutdownInProgress) {
     finalizeAppExit();
   }
 });
 
 app.on("before-quit", (event) => {
-  if(adoptionInProgress){event.preventDefault();return;}
+  h1ShutdownStage("before_quit");
+  if(adoptionInProgress){h1ShutdownStage("adoption_blocked");event.preventDefault();return;}
   quitting = true;
   globalShortcut.unregisterAll();
+  h1ShutdownStage("sidecars_stop_started");
   stopSandboxSidecar();
   stopSidecar();
+  h1ShutdownStage("sidecars_stop_finished");
   if (evolutionHostShutdownInProgress) {
+    h1ShutdownStage("cleanup_reentry");
     event.preventDefault();
     return;
   }
@@ -2170,18 +2256,22 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     evolutionHostShutdownInProgress = true;
     void (async () => {
-      try { await closeEvolutionTestRendererServer(); }
-      catch (error) { console.error("[evolution] renderer server shutdown failed:", error); }
-      try { await closeEvolutionSupervisorHost(); }
-      catch (error) { console.error("[evolution] supervisor shutdown failed:", error); }
+      h1ShutdownStage("renderer_close_started");
+      try { await closeEvolutionTestRendererServer(); h1ShutdownStage("renderer_close_finished"); }
+      catch (error) { h1ShutdownStage("renderer_close_failed"); console.error("[evolution] renderer server shutdown failed:", error); }
+      h1ShutdownStage("supervisor_close_started");
+      try { await closeEvolutionSupervisorHost(); h1ShutdownStage("supervisor_close_finished"); }
+      catch (error) { h1ShutdownStage("supervisor_close_failed"); console.error("[evolution] supervisor shutdown failed:", error); }
     })().finally(() => {
       evolutionSidecarBootstraps.clearAll();
       evolutionHostShutdownInProgress = false;
+      h1ShutdownStage("quit_reissued");
       app.quit();
     });
   }
 });
 
 app.on("will-quit", () => {
+  h1ShutdownStage("will_quit");
   globalShortcut.unregisterAll();
 });

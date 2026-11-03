@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { mainFocusForRail, isRailTab, RAIL_TAB_LABELS } from "../src/shells/unified/rail.ts";
 import { renderShellDevPanel } from "../src/shells/unified/shell-dev-panel.ts";
@@ -105,4 +106,47 @@ test("legacy / advanced entry points collapse under help, review starts closed",
   assert.equal(hintMatch[1].includes("旧整支合入按钮仅用于隔离夹具"), false);
   assert.ok(hintMatch[1].length < 40, `hint too long: ${hintMatch[1]}`);
   assert.match(hintMatch[1], /刷实验|合入/);
+});
+
+test("dual-lane expands the existing tool region while keeping chat and composer mounted", () => {
+  const css = readFileSync(new URL("../src/shells/unified/shell-dev-panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.unified-stage:has\([^\n]*#unified-shell-dev:not\(\[hidden\]\)[^\n]*\)\s*\{[^}]*flex-direction:\s*column/s);
+  assert.match(css, /#unified-shell-dev:not\(\[hidden\]\)[^\n]*\.unified-chat[^\n]*\{[^}]*display:\s*none/s);
+  assert.match(css, /#unified-shell-dev:not\(\[hidden\]\)[^\n]*\.unified-tool-region[^\n]*\{[^}]*flex:\s*1 1 auto/s);
+  assert.match(css, /\.unified-main:has\(#unified-shell-dev:not\(\[hidden\]\)\)[\s\S]*?\.unified-composer-dock[\s\S]*?\)\s*\{\s*display:\s*none !important;/);
+  assert.match(css, /\.shell-dev-page\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/s);
+  const shell = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
+  assert.match(shell, /<main class="unified-chat" id="unified-chat"><\/main>/);
+  assert.match(shell, /<textarea class="unified-input" id="unified-input"/);
+  assert.match(shell, /shellDevEl\.hidden = focus !== "shell-dev"/);
+});
+
+test("dual-lane visuals distinguish both lanes and stay contained on narrow screens", () => {
+  const css = readFileSync(new URL("../src/shells/unified/shell-dev-panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.dual-lane-card\[data-lane="stable"\] \.dual-lane-card-head::before/);
+  assert.match(css, /\.dual-lane-card\[data-lane="sandbox"\] \.dual-lane-card-head::before/);
+  assert.match(css, /\.dual-lane-status::before/);
+  assert.match(css, /\.dual-lane-peer-cta[\s\S]*min-height:\s*2\.75rem/);
+  assert.match(css, /\.shell-dev-web-slot[\s\S]*box-sizing:\s*border-box/);
+  assert.match(css, /@media \(max-width:\s*720px\)[\s\S]*\.dual-lane-cards[\s\S]*grid-template-columns:\s*1fr/);
+  assert.match(css, /\.shell-dev-evolution-actions[\s\S]*flex-wrap:\s*wrap/);
+});
+
+test("dual-lane preview keeps its 18rem floor and lets the page scroll on desktop and mobile", () => {
+  const css = readFileSync(new URL("../src/shells/unified/shell-dev-panel.css", import.meta.url), "utf8");
+  assert.match(css, /\.shell-dev-page\s*\{[^}]*height:\s*auto[^}]*min-height:\s*100%/s);
+
+  const mobileStart = css.lastIndexOf("@media (max-width: 720px)");
+  const previewStart = css.lastIndexOf(".dual-lane-preview {", mobileStart - 1);
+  assert.ok(previewStart >= 0 && previewStart < mobileStart);
+  const previewRule = css.slice(previewStart, css.indexOf("}", previewStart));
+  assert.match(previewRule, /flex:\s*1 0 auto/);
+  assert.match(previewRule, /min-height:\s*18rem/);
+
+  const scrollRule = css.match(/\.unified-shell-dev\s*\{([^}]+)\}/)?.[1] ?? "";
+  assert.match(scrollRule, /overflow-y:\s*auto/);
+  assert.match(scrollRule, /overflow-x:\s*hidden/);
+  const mobileRules = css.slice(mobileStart);
+  assert.match(mobileRules, /\.dual-lane-preview\s*\{[^}]*flex:\s*0 0 auto[^}]*min-height:\s*18rem/s);
+  assert.match(mobileRules, /\.shell-dev-page\s*\{[^}]*height:\s*auto/);
 });

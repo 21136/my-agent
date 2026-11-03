@@ -66,3 +66,19 @@ test("profile and fixed control release must belong to the same marked run",()=>
   writeFileSync(profilePath,`${contracts.canonicalJson({...f.profile,control_release_root:other.releaseRoot})}\n`);
   assert.throws(()=>load(f.appRoot),/same marked|share.*run|scope/i);
 });
+
+
+test("ordinary chat H1 is an explicit synthetic profile with only the base owned path and no T4 capability",async()=>{
+  const load=exported("loadEvolutionTestHostProfile");const build=exported("buildEvolutionTestSupervisorConfig");const f=fixture();const profilePath=path.join(f.hostRoot,"evolution-test-profile.json");
+  writeFileSync(profilePath,contracts.canonicalJson({...f.profile,chat_fixture_profile:"ordinary-chat-h1-v1",chat_run_id:path.basename(f.runRoot)})+"\n");
+  const context=load(f.appRoot);assert.equal(context.profile.chat_fixture_profile,"ordinary-chat-h1-v1");
+  const config=await build(context,{verifyControlRelease:async()=>{}});assert.deepEqual(config.scopes[0].owned_paths,["evolve/tool-catalog/INDEX.md"]);
+  assert.deepEqual(config.runtime_paths,{});assert.deepEqual(config.descriptors,[]);assert.equal(config.descriptor_factories,undefined);assert.deepEqual(config.profile_fixtures,[]);
+});
+test("ordinary chat H1 profile rejects T4 combination and arbitrary fixture values",()=>{
+  const load=exported("loadEvolutionTestHostProfile");const f=fixture();const profilePath=path.join(f.hostRoot,"evolution-test-profile.json");
+  writeFileSync(profilePath,contracts.canonicalJson({...f.profile,chat_fixture_profile:"ordinary-chat-h1-v1",chat_run_id:path.basename(f.runRoot),candidate_fixture_profile:"t4-recovery-node-v1"})+"\n");
+  assert.throws(()=>load(f.appRoot),/exclusive|fixture profile|fields|profile/i);
+  writeFileSync(profilePath,contracts.canonicalJson({...f.profile,chat_fixture_profile:"arbitrary"})+"\n");
+  assert.throws(()=>load(f.appRoot),/chat|fixture profile|profile/i);
+});

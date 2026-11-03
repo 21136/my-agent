@@ -12,6 +12,16 @@ export type LlmModelListItem = {
   configured: boolean;
 };
 
+export type LlmRoleModelPreferences = { main: string; subagent: string };
+export type LlmRoleModelsEvent = {
+  type: "llm_role_models.state" | "llm_role_models.done";
+  status: "ok" | "rejected";
+  preferences?: LlmRoleModelPreferences;
+  explicit_roles?: Array<"main" | "subagent">;
+  models?: LlmModelListItem[];
+  message?: string;
+};
+
 export type LlmKeySlot = {
   env: string;
   label: string;
@@ -166,11 +176,14 @@ export type WorkCardEvent =
   | { type: "work-card.create.done" | "work-card.get.done" | "work-card.seen.done"; status: WorkCardErrorStatus; message: string; request_id?: string; card_id?: string };
 
 export type AutoRecognitionDoneEvent = { type: "work-record.auto-recognition.done"; session_id: string; request_id: string; action: "enable" | "revoke"; status: "ok" | "rejected"; enabled: boolean };
+export type AutoRecognitionStateEvent = { type: "work-record.auto-recognition.state"; session_id: string; enabled: boolean };
 
 export type ProjectWorkerVerificationPayload = { session_id: string; project_id: string; item_id: string; requirement_id: string; project_name: string; requirement_text: string; pytest_target: string; worker_run_id: string; reservation_id: string };
 
 export type ServerEvent =
   | AutoRecognitionDoneEvent
+  | AutoRecognitionStateEvent
+  | LlmRoleModelsEvent
   | { type: "client.connection.closed" }
   | { type: "user.message.persisted"; session_id: string; request_id: string }
   | WorkCardPresentEvent
@@ -1098,6 +1111,21 @@ export class AgentWsClient {
             this.cardProjectId = nextProject;
             data.execution_lane ??= this.lane;
           }
+          if ((data.type === "llm_role_models.state" || data.type === "llm_role_models.done") && (
+            !["ok", "rejected"].includes(data.status)
+            || Object.keys(data).some(key => !["type", "status", "preferences", "explicit_roles", "models", "message"].includes(key))
+            || (data.status === "ok" && (!data.preferences || !Array.isArray(data.models)))
+            || (data.preferences !== undefined && (typeof data.preferences !== "object" || data.preferences === null
+              || Object.keys(data.preferences).length !== 2
+              || typeof data.preferences.main !== "string" || typeof data.preferences.subagent !== "string"))
+            || (data.models !== undefined && (!Array.isArray(data.models) || data.models.some(model => !model || typeof model.id !== "string" || typeof model.name !== "string" || typeof model.configured !== "boolean")))
+            || (data.message !== undefined && typeof data.message !== "string")
+          )) return;
+          if (data.type === "work-record.auto-recognition.state" && (
+            Object.keys(data).length !== 3 || typeof data.session_id !== "string" || !data.session_id
+            || data.session_id !== this.currentConversationId || typeof data.enabled !== "boolean"
+            || this.autoRecognitionPending !== null
+          )) return;
           if (data.type === "work-record.auto-recognition.done") {
             const pending = this.autoRecognitionPending;
             if (!pending || data.session_id !== this.currentConversationId || data.session_id !== pending.sessionId
@@ -1916,6 +1944,15 @@ export class AgentWsClient {
 
   listModels(): void {
     this.send({ type: "session.models" });
+  }
+
+  listRoleModels(): void {
+    this.send({ type: "llm_role_models.get" });
+  }
+
+  setRoleModel(role: "main" | "subagent", model: string): void {
+    if ((role !== "main" && role !== "subagent") || typeof model !== "string" || !model.trim()) throw new Error("invalid role model selection");
+    this.send({ type: "llm_role_models.set", role, model });
   }
 
   listLlmKeys(): void {

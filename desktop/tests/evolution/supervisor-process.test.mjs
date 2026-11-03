@@ -22,7 +22,13 @@ function config(){
     descriptors:[],profile_fixtures:[{id:uuid("7"),root:path.join(runtimeRoot,"profiles","candidate")}],
   };
 }
-function parser(){assert.equal(typeof api.parseSupervisorProcessConfig,"function","supervisor-process must export parseSupervisorProcessConfig");return api.parseSupervisorProcessConfig;}
+test("supervisor composition validates its run under the configured sandbox, not sealed-app cwd",async()=>{
+  const create=api.createSupervisorRuntime;assert.equal(typeof create,"function");const input=config();input.host_bootstrap.control_release.python_executable=process.execPath;
+  const originalCwd=process.cwd();const sealedAppCwd=path.join(input.run_root,"host","app");mkdirSync(sealedAppCwd,{recursive:true});
+  const workspace={inspect:async()=>({}),patch:async()=>({}),snapshot:async()=>({})};const runner={lifecycle:"declared_components_only",prepare:async()=>{throw Error("unused")},launch:async()=>{throw Error("unused")},stop:async()=>{throw Error("unused")},inspect:()=>null};let runtime;
+  try{process.chdir(sealedAppCwd);runtime=await create(input,{verifyRelease:async()=>{},createWorkspace:async()=>workspace,createRunner:()=>runner});assert.equal(runtime.supervisor.deps.sandboxRoot,input.sandbox_root);}
+  finally{runtime?.closeJournal();process.chdir(originalCwd);}
+});function parser(){assert.equal(typeof api.parseSupervisorProcessConfig,"function","supervisor-process must export parseSupervisorProcessConfig");return api.parseSupervisorProcessConfig;}
 
 test("supervisor child config binds every allowed scope to a sandbox-owned path set",()=>{
   const parse=parser();const input=config();const checked=parse(input,process.cwd());

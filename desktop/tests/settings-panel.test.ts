@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mainFocusForRail } from '../src/shells/unified/rail.ts';
 
 test('settings owns a dedicated stage, other rails keep their destinations', () => {
@@ -14,7 +14,7 @@ async function panel() {
   assert.ok(existsSync(moduleUrl), 'production settings panel must exist');
   return import(moduleUrl.href);
 }
-const data = {section:'appearance',partnerName:'小魔王',nicknameDraft:'小魔王',avatarSrc:'/pet.webp',daysTogether:3,theme:'light',inactiveTerminals:0,stoppedServices:0,fontControlHtml:'<div data-chat-font-control></div>',feedback:''};
+const data = {section:'appearance',partnerName:'小魔王',nicknameDraft:'小魔王',avatarSrc:'/pet.webp',daysTogether:3,theme:'light',inactiveTerminals:0,stoppedServices:0,fontControlHtml:'<div data-chat-font-control></div>',feedback:'',roleModels:{preferences:{main:'m1',subagent:'m2'},models:[{id:'m1',name:'Model 1',configured:true},{id:'m2',name:'Model 2',configured:true}],pendingRole:'',error:''},autoRecognition:{enabled:false,pending:false,available:true,error:false}};
 test('settings sidebar contains navigation, not cramped controls', async () => {
   const p = await panel();
   const html = p.renderSettingsSidebar('appearance');
@@ -59,4 +59,36 @@ test('runtime reflects real counts and disables cleanup only when empty', async 
   assert.ok(populated.includes('2 个可清理'));
   assert.ok(populated.includes('1 个可清理'));
   assert.ok(!populated.includes('data-action="settings-prune-runtime" disabled'));
+});
+
+test('models section lets the user choose main and subagent models and control semantic recognition', async () => {
+  const p = await panel();
+  const html = p.renderSettingsPane({...data,section:'models'});
+  assert.match(html, /data-role="main"/);
+  assert.match(html, /data-role="subagent"/);
+  assert.match(html, /<option value="m1" selected>Model 1<\/option>/);
+  assert.match(html, /role="switch"[^>]*aria-checked="false"/);
+  assert.match(html, /aria-label="自动识别语义"/);
+  const recognition = html.match(/<section class="section settings-semantic-recognition"[\s\S]*?<\/section>/)?.[0] ?? '';
+  assert.match(recognition, /<h2>自动识别语义<\/h2>/);
+  assert.match(recognition, /role="switch"/);
+  assert.doesNotMatch(recognition, /<p|settings-recognition-description/);
+  assert.match(html, /aria-checked="false">开启<\/button>/);
+  const shell = readFileSync(new URL('../src/shells/unified/index.ts', import.meta.url), 'utf8');
+  const transport = readFileSync(new URL('../src/api/ws.ts', import.meta.url), 'utf8');
+  assert.match(shell, /client\.listRoleModels\(\)/);
+  assert.match(shell, /client\.setRoleModel\(role, model\)/);
+  assert.match(shell, /case "llm_role_models\.done"/);
+  assert.match(shell, /setAutoRecognition\(autoRecognition\.enabled \? "revoke" : "enable"\)/);
+  assert.match(transport, /type: "llm_role_models\.get"/);
+  assert.match(transport, /type: "llm_role_models\.set"/);
+});
+
+test('runtime settings provides access to the existing terminal and service controls', async () => {
+  const p = await panel();
+  const html = p.renderSettingsPane({...data,section:'runtime'});
+  assert.match(html, /settings-open-runtime-status/);
+  assert.match(html, /终端与服务/);
+  const shell = readFileSync(new URL('../src/shells/unified/index.ts', import.meta.url), 'utf8');
+  assert.match(shell, /case "settings-open-runtime-status": selectSingleChatTool\("runtime"\)/);
 });

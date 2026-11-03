@@ -144,3 +144,20 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="settings"
 @media (prefers-reduced-motion: reduce) {
   .settings-pane button { transition: none; }
 }
+
+.settings-pane .settings-role-models { display: grid; gap: 12px; }
+.settings-pane .settings-role-models > h2,
+.settings-pane .settings-semantic-recognition h2 { margin: 0; font-size: 16px; }
+.settings-pane .settings-role-models > label { display: grid; grid-template-columns: minmax(110px, .5fr) minmax(0, 1fr); align-items: center; gap: 16px; }
+.settings-pane .settings-role-model-select { min-width: 0; padding: 10px 12px; border: 1px solid var(--ma-border-strong); border-radius: 8px; color: var(--ma-text); background: var(--ma-surface); font: inherit; }
+.settings-pane .settings-role-model-select:focus-visible,
+.settings-pane .settings-recognition-toggle:focus-visible { outline: 2px solid var(--ma-focus, var(--ma-accent)); outline-offset: 2px; }
+.settings-pane .settings-semantic-recognition { display: flex; align-items: center; gap: 18px; }
+.settings-pane .settings-recognition-toggle { min-width: 76px; min-height: 40px; border: 1px solid var(--ma-border-strong); border-radius: 9px; color: var(--ma-text); background: var(--ma-surface); cursor: pointer; font: inherit; }
+.settings-pane .settings-recognition-toggle[aria-checked="true"] { border-color: var(--ma-accent); color: var(--ma-accent); }
+.settings-pane .settings-recognition-toggle:disabled { opacity: .65; cursor: wait; }
+.settings-pane .settings-inline-error { margin: 0; color: var(--ma-danger, #b74355); font-size: 12px; }
+@media (max-width: 720px) {
+  .settings-pane .settings-role-models > label { grid-template-columns: 1fr; gap: 6px; }
+  .settings-pane .settings-semantic-recognition { align-items: flex-start; }
+}

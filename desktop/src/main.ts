@@ -79,7 +79,6 @@ async function boot(): Promise<void> {
     const modelSettings = mountModelSettings(client);
 
     mountAppChrome(chromeRoot, {
-      client: client!,
       onSwitchToCli: async () => {
         if (!window.myAgentDesktop?.switchToCli) {
           throw new Error("switchToCli unavailable");

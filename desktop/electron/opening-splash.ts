@@ -7,7 +7,8 @@ import { workbenchDefaultWindowSize } from "./workbench-window-defaults";
 /** Approved cold-start splash clip (Neon Twin · 小魔王). Served from Vite `public/`. */
 export const OPENING_SPLASH_VIDEO_BASENAME = "splash-xiaomowang.mp4";
 
-const SPLASH_MAX_WAIT_MS = 12_000;
+/** Safety only: main dismisses on sidecar ready/failure. Must not beat sidecar boot (often >12s). */
+const SPLASH_SAFETY_MAX_MS = 120_000;
 
 const electronDir = path.dirname(fileURLToPath(import.meta.url));
 const distRoot = path.join(electronDir, "../dist");
@@ -85,7 +86,7 @@ export function playOpeningSplash(): Promise<void> {
     };
 
     activeSplashFinish = finish;
-    maxWait = setTimeout(finish, SPLASH_MAX_WAIT_MS);
+    maxWait = setTimeout(finish, SPLASH_SAFETY_MAX_MS);
 
     const { width, height } = workbenchDefaultWindowSize();
     const win = new BrowserWindow({
