@@ -413,26 +413,27 @@ async function rejectIfPresent(file, checkedPaths, label) {
   if (await optionalPath(file, 'file', checkedPaths)) metadataError(`${label} is unsupported`);
 }
 
-/** Guard the shared Git object store and relevant worktree metadata before Git is invoked. */
-export async function assertManagedGitObjectStore({ commonDir: commonInput, gitDir: gitInput } = {}) {
+/** Validate one worktree, sharing a common-directory pass only inside one explicit batch. */
+async function assertManagedGitObjectStoreInternal({ commonDir: commonInput, gitDir: gitInput } = {}, batch = null) {
   const commonDir = normalizedAbsolute(commonInput, 'commonDir');
   const gitDir = normalizedAbsolute(gitInput, 'gitDir');
-  const checkedPaths = new Set();
-  await assertOrdinaryMetadataDirectory(commonDir, checkedPaths);
+  const commonIsFresh = !batch || !batch.checkedCommonDirs.has(commonDir);
+  const checkedPaths = batch?.checkedPaths ?? new Set();
+  if (commonIsFresh) await assertOrdinaryMetadataDirectory(commonDir, checkedPaths);
   await assertOrdinaryMetadataDirectory(gitDir, checkedPaths);
   const sameGitDirectory = commonDir === gitDir;
   const commondirFile = path.join(gitDir, 'commondir');
   if (!sameGitDirectory) {
     const commondir = decodeMetadata(await readSmallMetadataFile(commondirFile, checkedPaths, 4096), 'commondir').trim();
     if (!commondir || /[\r\n\0]/.test(commondir) || path.resolve(gitDir, commondir) !== commonDir) metadataError('worktree commondir does not bind the supplied common directory');
-  } else if (await optionalPath(commondirFile, 'file', checkedPaths)) {
+  } else if (commonIsFresh && await optionalPath(commondirFile, 'file', checkedPaths)) {
     metadataError('common Git directory unexpectedly contains commondir indirection');
   }
 
   const requiredFiles = [
     [path.join(gitDir, 'HEAD'), 'HEAD'],
     [path.join(gitDir, 'index'), 'index'],
-    [path.join(commonDir, 'config'), 'common config'],
+    ...(commonIsFresh ? [[path.join(commonDir, 'config'), 'common config']] : []),
   ];
   for (const [file, label] of requiredFiles) {
     await assertPathChain(file, 'file', checkedPaths);
@@ -442,6 +443,80 @@ export async function assertManagedGitObjectStore({ commonDir: commonInput, gitD
     }
   }
 
+  if (commonIsFresh) {
+    for (const directory of [
+      path.join(commonDir, 'objects'),
+      path.join(commonDir, 'objects', 'info'),
+      path.join(commonDir, 'objects', 'pack'),
+      path.join(commonDir, 'info'),
+      path.join(commonDir, 'refs'),
+    ]) await assertOrdinaryMetadataDirectory(directory, checkedPaths);
+  }
+
+  const rejectedFiles = [
+    ...(commonIsFresh ? [
+      [path.join(commonDir, 'objects', 'info', 'alternates'), 'object alternates'],
+      [path.join(commonDir, 'objects', 'info', 'http-alternates'), 'HTTP object alternates'],
+      [path.join(commonDir, 'info', 'grafts'), 'grafts'],
+      [path.join(commonDir, 'shallow'), 'shallow repository state'],
+    ] : []),
+    [path.join(gitDir, 'shallow'), 'worktree shallow state'],
+    [path.join(gitDir, 'config.worktree'), 'worktree-specific config'],
+  ];
+  for (const [file, label] of rejectedFiles) await rejectIfPresent(file, checkedPaths, label);
+
+  const indexNames = await readdir(gitDir).catch(() => metadataError('Git directory cannot be enumerated'));
+  if (indexNames.some((name) => name.startsWith('sharedindex.'))) metadataError('split/shared index indirection is unsupported');
+  if (!sameGitDirectory && await optionalPath(path.join(gitDir, 'objects'), 'directory', checkedPaths)) metadataError('worktree-local object directory is unsupported');
+  if (commonIsFresh) {
+    const replaceRefs = path.join(commonDir, 'refs', 'replace');
+    if (await optionalPath(replaceRefs, 'directory', checkedPaths)) metadataError('replace refs are unsupported');
+    await optionalPath(path.join(commonDir, 'logs'), 'directory', checkedPaths);
+  }
+  for (const optional of [path.join(gitDir, 'logs'), path.join(gitDir, 'refs'), path.join(gitDir, 'info')]) {
+    await optionalPath(optional, 'directory', checkedPaths);
+  }
+  const metadataFiles = [
+    ...(commonIsFresh ? [[path.join(commonDir, 'info', 'exclude'), 'exclude']] : []),
+    [path.join(gitDir, 'gitdir'), 'gitdir'],
+  ];
+  for (const [file, label] of metadataFiles) {
+    if (await optionalPath(file, 'file', checkedPaths)) {
+      const bytes = await readSmallMetadataFile(file, checkedPaths, 4096);
+      decodeMetadata(bytes, label);
+    }
+  }
+
+  let commonRefCount = batch?.commonRefCounts.get(commonDir) ?? 0;
+  if (commonIsFresh) {
+    const refState = { count: 0 };
+    await scanRefMetadata(path.join(commonDir, 'refs'), checkedPaths, refState);
+    commonRefCount = refState.count;
+    await scanPackedRefs(commonDir, checkedPaths);
+    if (batch) batch.objectStoreDirs.add(path.join(commonDir, 'objects'));
+    else await scanObjectStore(path.join(commonDir, 'objects'), checkedPaths);
+    batch?.commonRefCounts.set(commonDir, commonRefCount);
+    batch?.checkedCommonDirs.add(commonDir);
+  }
+  if (!sameGitDirectory && await optionalPath(path.join(gitDir, 'refs'), 'directory', checkedPaths)) {
+    const refState = { count: commonRefCount };
+    await scanRefMetadata(path.join(gitDir, 'refs'), checkedPaths, refState);
+  }
+  if (!sameGitDirectory) await scanPackedRefs(gitDir, checkedPaths);
+
+  if (batch) for (const checkedPath of checkedPaths) batch.checkedPaths.add(checkedPath);
+  else await verifyWindowsReparseAttributes([...checkedPaths].sort());
+}
+
+/** Guard one Git worktree and its common metadata. */
+export async function assertManagedGitObjectStore(input = {}) {
+  return assertManagedGitObjectStoreInternal(input);
+}
+
+/** Recheck shared metadata after all worktree-specific checks without rescanning the loose/packed object store. */
+async function revalidateSharedGitMetadata(commonDir, checkedPaths) {
+  await assertOrdinaryMetadataDirectory(commonDir, checkedPaths);
+  await assertPathChain(path.join(commonDir, 'config'), 'file', checkedPaths);
   for (const directory of [
     path.join(commonDir, 'objects'),
     path.join(commonDir, 'objects', 'info'),
@@ -449,39 +524,31 @@ export async function assertManagedGitObjectStore({ commonDir: commonInput, gitD
     path.join(commonDir, 'info'),
     path.join(commonDir, 'refs'),
   ]) await assertOrdinaryMetadataDirectory(directory, checkedPaths);
-
   for (const [file, label] of [
     [path.join(commonDir, 'objects', 'info', 'alternates'), 'object alternates'],
     [path.join(commonDir, 'objects', 'info', 'http-alternates'), 'HTTP object alternates'],
     [path.join(commonDir, 'info', 'grafts'), 'grafts'],
     [path.join(commonDir, 'shallow'), 'shallow repository state'],
-    [path.join(gitDir, 'shallow'), 'worktree shallow state'],
-    [path.join(gitDir, 'config.worktree'), 'worktree-specific config'],
   ]) await rejectIfPresent(file, checkedPaths, label);
-
-  const indexNames = await readdir(gitDir).catch(() => metadataError('Git directory cannot be enumerated'));
-  if (indexNames.some((name) => name.startsWith('sharedindex.'))) metadataError('split/shared index indirection is unsupported');
-  if (!sameGitDirectory && await optionalPath(path.join(gitDir, 'objects'), 'directory', checkedPaths)) metadataError('worktree-local object directory is unsupported');
-  const replaceRefs = path.join(commonDir, 'refs', 'replace');
-  if (await optionalPath(replaceRefs, 'directory', checkedPaths)) metadataError('replace refs are unsupported');
-
-  for (const optional of [path.join(commonDir, 'logs'), path.join(gitDir, 'logs'), path.join(gitDir, 'refs'), path.join(gitDir, 'info')]) {
-    await optionalPath(optional, 'directory', checkedPaths);
-  }
-  for (const file of [path.join(commonDir, 'info', 'exclude'), path.join(gitDir, 'gitdir')]) {
-    if (await optionalPath(file, 'file', checkedPaths)) {
-      const bytes = await readSmallMetadataFile(file, checkedPaths, 4096);
-      decodeMetadata(bytes, path.basename(file));
-    }
-  }
-
-  const refState = { count: 0 };
-  await scanRefMetadata(path.join(commonDir, 'refs'), checkedPaths, refState);
-  if (!sameGitDirectory && await optionalPath(path.join(gitDir, 'refs'), 'directory', checkedPaths)) {
-    await scanRefMetadata(path.join(gitDir, 'refs'), checkedPaths, refState);
-  }
+  if (await optionalPath(path.join(commonDir, 'refs', 'replace'), 'directory', checkedPaths)) metadataError('replace refs are unsupported');
+  await optionalPath(path.join(commonDir, 'logs'), 'directory', checkedPaths);
+  const exclude = path.join(commonDir, 'info', 'exclude');
+  if (await optionalPath(exclude, 'file', checkedPaths)) decodeMetadata(await readSmallMetadataFile(exclude, checkedPaths, 4096), 'exclude');
+  await scanRefMetadata(path.join(commonDir, 'refs'), checkedPaths, { count: 0 });
   await scanPackedRefs(commonDir, checkedPaths);
-  if (!sameGitDirectory) await scanPackedRefs(gitDir, checkedPaths);
-  await scanObjectStore(path.join(commonDir, 'objects'), checkedPaths);
-  await verifyWindowsReparseAttributes([...checkedPaths].sort());
+}
+
+/** Validate each worktree's private metadata while scanning each shared commonDir once. */
+export async function assertManagedGitObjectStores(worktrees) {
+  if (!Array.isArray(worktrees) || worktrees.length < 1 || worktrees.length > 16) metadataError('worktree batch size is invalid');
+  const commonDirs = new Set(worktrees.map((worktree) => normalizedAbsolute(worktree?.commonDir, 'commonDir')));
+  if (commonDirs.size !== 1) metadataError('batched worktrees must share one common directory');
+  const batch = { checkedCommonDirs: new Set(), commonRefCounts: new Map(), objectStoreDirs: new Set(), checkedPaths: new Set() };
+  for (const worktree of worktrees) await assertManagedGitObjectStoreInternal(worktree, batch);
+  for (const commonDir of batch.checkedCommonDirs) await revalidateSharedGitMetadata(commonDir, batch.checkedPaths);
+  for (const objectsDir of batch.objectStoreDirs) await scanObjectStore(objectsDir, batch.checkedPaths);
+  // The first pass leaves a race window for earlier worktrees while later gitDirs are checked.
+  // Re-run private metadata validation after the shared store scan; commonDir remains deduplicated.
+  for (const worktree of worktrees) await assertManagedGitObjectStoreInternal(worktree, batch);
+  await verifyWindowsReparseAttributes([...batch.checkedPaths].sort());
 }

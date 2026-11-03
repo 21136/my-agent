@@ -111,7 +111,7 @@ function validateLocalConfig(dirs){
 function readConfigFormat(_hashes,dirs){const f=path.join(dirs.commonDir,'config');if(!existsSync(f))return 'sha1';const text=readFileSync(f,'utf8');const m=/^\s*objectformat\s*=\s*(sha1|sha256)\s*$/im.exec(text);return m?m[1].toLowerCase():'sha1';}
 function assertObjectStore(git,rootPairs){
   const moduleUrl=new URL('./managed-clean-git-metadata.mjs',import.meta.url).href;
-  const script=`import {assertManagedGitObjectStore} from ${JSON.stringify(moduleUrl)};const input=JSON.parse((await import('node:fs')).readFileSync(0,'utf8'));for(const d of input)await assertManagedGitObjectStore(d);process.stdout.write('ok');`;
+  const script=`import {assertManagedGitObjectStores} from ${JSON.stringify(moduleUrl)};const input=JSON.parse((await import('node:fs')).readFileSync(0,'utf8'));await assertManagedGitObjectStores(input);process.stdout.write('ok');`;
   const env={PATH:path.dirname(git),ELECTRON_RUN_AS_NODE:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null',HOME:os.tmpdir(),USERPROFILE:os.tmpdir(),LC_ALL:'C'};for(const k of ['SYSTEMROOT','WINDIR','TEMP','TMP'])if(process.env[k])env[k]=process.env[k];
   const r=spawnSync(process.execPath,['--input-type=module','-e',script],{cwd:rootPairs[0].root,env,input:JSON.stringify(rootPairs.map(x=>x.dirs)),encoding:'utf8',windowsHide:true,timeout:120000,maxBuffer:1024*1024});
   if(r.error||r.status!==0||r.stdout!=='ok')fail('git_object_store_guard_failed','managed Git object-store guard rejected the repository');

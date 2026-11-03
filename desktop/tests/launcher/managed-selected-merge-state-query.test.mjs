@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
+import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, readdirSync, realpathSync, rmSync } from 'node:fs';
@@ -117,6 +118,32 @@ function makeCheckpoint(stable, sandbox) {
   return { checkpoint, changed };
 }
 
+test('write-boundary selected sandbox reread rejects drift after the snapshot was captured', t => {
+  const { stable, sandbox } = fixture(t), { checkpoint } = makeCheckpoint(stable, sandbox);
+  const plan = current.prepareManagedSelectedMerge({ stableRoot: stable, sandboxRoot: sandbox, checkpoint, gitExecutable: git });
+  const selectedSandboxFile = path.join(sandbox, 'desktop', 'selected.mjs');
+  const originalReadFileSync = fs.readFileSync;
+  const originalWriteFileSync = fs.writeFileSync;
+  let selectedSandboxReads = 0;
+  fs.readFileSync = function(file, ...args) {
+    if (typeof file === 'string' && path.resolve(file) === selectedSandboxFile && ++selectedSandboxReads === 2) {
+      originalWriteFileSync(selectedSandboxFile, Buffer.from('raced after snapshot\n'));
+    }
+    return originalReadFileSync.call(this, file, ...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => current.executeManagedSelectedMerge({ plan, checkpoint, stableRoot: stable, sandboxRoot: sandbox, gitExecutable: git, assertTrusted: () => true }),
+      error => error.code === 'sandbox_selected_source_drift',
+    );
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    syncBuiltinESMExports();
+  }
+  assert.equal(selectedSandboxReads, 2, 'execution rereads the selected sandbox file after the write-boundary snapshot');
+});
+
 test('changed index is rejected before the real selected merge starts', t => {
   const { stable, sandbox } = fixture(t), { checkpoint } = makeCheckpoint(stable, sandbox);
   const plan = current.prepareManagedSelectedMerge({ stableRoot: stable, sandboxRoot: sandbox, checkpoint, gitExecutable: git });
@@ -125,6 +152,47 @@ test('changed index is rejected before the real selected merge starts', t => {
   const before = gitRun(stable, 'rev-parse', '--verify', 'HEAD');
   assert.throws(() => current.executeManagedSelectedMerge({ plan, checkpoint, stableRoot: stable, sandboxRoot: sandbox, gitExecutable: git, assertTrusted: () => true }), e => e.code === 'selected_merge_plan_stale');
   assert.equal(gitRun(stable, 'rev-parse', '--verify', 'HEAD'), before);
+});
+
+// Opt-in A/B: identical isolated selected merges, differing only in commonDir batch validation.
+test('isolated merge A/B batches the shared object-store and Windows reparse guard', { skip: process.env.MANAGED_OBJECT_GUARD_AB !== '1', timeout: 300000 }, async t => {
+  const modulePath = fileURLToPath(new URL('../../launcher/managed-selected-merge.mjs', import.meta.url));
+  const moduleUrl = new URL('../../launcher/managed-clean-git-metadata.mjs', import.meta.url).href;
+  const batchScript = "const script=`import {assertManagedGitObjectStores} from ${JSON.stringify(moduleUrl)};const input=JSON.parse((await import('node:fs')).readFileSync(0,'utf8'));await assertManagedGitObjectStores(input);process.stdout.write('ok');`;";
+  const legacyScript = "const script=`import {assertManagedGitObjectStore} from ${JSON.stringify(moduleUrl)};const input=JSON.parse((await import('node:fs')).readFileSync(0,'utf8'));for(const d of input)await assertManagedGitObjectStore(d);process.stdout.write('ok');`;";
+  let baseline = readFileSync(modulePath, 'utf8');
+  assert.ok(baseline.includes(batchScript), 'current source must call the batched metadata guard');
+  baseline = baseline.replace(batchScript, legacyScript);
+  baseline = baseline.replace("new URL('./managed-clean-git-metadata.mjs',import.meta.url).href", JSON.stringify(moduleUrl));
+  const launcher = new URL('../../launcher/', import.meta.url);
+  baseline = baseline.replace(/from '(\.\/[^']+)'/g, (_, rel) => `from '${new URL(rel, launcher).href}'`);
+  const legacy = await import(`data:text/javascript;base64,${Buffer.from(baseline).toString('base64')}`);
+  const results = [];
+  for (const [label, impl] of [['two-scans', legacy], ['batched-commonDir', current]]) {
+    const { stable, sandbox } = fixture(t), { checkpoint } = makeCheckpoint(stable, sandbox);
+    const plan = impl.prepareManagedSelectedMerge({ stableRoot: stable, sandboxRoot: sandbox, checkpoint, gitExecutable: git });
+    let guardProcesses = 0, guardProcessMs = 0;
+    const original = childProcess.spawnSync;
+    childProcess.spawnSync = function(file, args, options) {
+      const isGuard = path.resolve(String(file)) === path.resolve(process.execPath) && Array.isArray(args) && args.includes('--input-type=module');
+      const start = isGuard ? performance.now() : 0;
+      try { return original.call(this, file, args, options); }
+      finally { if (isGuard) { guardProcesses++; guardProcessMs += performance.now() - start; } }
+    };
+    syncBuiltinESMExports();
+    let receipt, elapsedMs;
+    try {
+      const start = performance.now();
+      receipt = impl.executeManagedSelectedMerge({ plan, checkpoint, stableRoot: stable, sandboxRoot: sandbox, gitExecutable: git, assertTrusted: () => true });
+      elapsedMs = Math.round(performance.now() - start);
+    } finally { childProcess.spawnSync = original; syncBuiltinESMExports(); }
+    assert.equal(receipt.status, 'source_merge_verified');
+    assert.equal(receipt.readyForLaunch, false);
+    assert.equal(gitRun(stable, 'rev-parse', '--verify', 'HEAD'), plan.expectedCommit);
+    results.push({ label, elapsedMs, guardProcesses, guardProcessMs: Math.round(guardProcessMs) });
+  }
+  assert.equal(results[0].guardProcesses, results[1].guardProcesses, 'per-boundary Node guard invocation count remains unchanged');
+  console.log(`managed-selected-merge-object-guard-ab ${JSON.stringify({ scope: 'isolated real merge; linked fixture only', results })}`);
 });
 
 // Opt in explicitly: one real selected merge per version; no live worktree is touched.
