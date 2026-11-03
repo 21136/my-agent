@@ -7,9 +7,9 @@ const pwPath=process.env.CODEX_PLAYWRIGHT_PATH || path.join(os.homedir(),'.cache
 const edge=process.env.ISOLATED_TEST_BROWSER || (process.platform==='win32'?'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe':'');
 const root=new URL('../src/shells/unified/',import.meta.url);const source=readFileSync(new URL('index.ts',root),'utf8');
 const ast=ts.createSourceFile('index.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);let template;const found={};
-function visit(n){if(ts.isBinaryExpression(n)&&n.left.getText(ast)==='root.innerHTML'&&ts.isTemplateExpression(n.right)) template=n.right.getText(ast);if(ts.isFunctionDeclaration(n)&&n.name)found[n.name.text]=n.getText(ast);ts.forEachChild(n,visit)}visit(ast);
+function visit(n){if(ts.isBinaryExpression(n)&&n.left.getText(ast)==='root.innerHTML'&&(ts.isTemplateExpression(n.right)||ts.isNoSubstitutionTemplateLiteral(n.right))) template=n.right.getText(ast);if(ts.isFunctionDeclaration(n)&&n.name)found[n.name.text]=n.getText(ast);ts.forEachChild(n,visit)}visit(ast);
 const names=['setMainFocus','selectSingleChatTool','selectRailTab','showNowChat','syncMainFocusView'];for(const n of names)assert.ok(found[n],n);assert.ok(template);
-const layout=template.slice(1,-1).replace('${new URL("./assets/composer-companion.png", import.meta.url).href}','');
+const layout=template.slice(1,-1);
 const files=['unified.css','neon-twin.css','sidebar-v2.css','settings-panel.css','music-panel.css','shell-dev-panel.css','current-work-overview.css','single-chat-tools.css'];
 const css=files.map(f=>readFileSync(new URL(f,root),'utf8')).join('\n');
 const topbar=ts.transpileModule(readFileSync(new URL('topbar.ts',root),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -29,7 +29,7 @@ exports.renderTopbarV2(root.querySelector('#unified-topbar'),{proposals:[],proje
 syncMainFocusView();`;
 const html=`<!doctype html><html data-theme="dark"><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'"><style>html,body,#root{height:100%;margin:0}${css}</style></head><body><div id="root">${layout}</div><script>${init}</script></body></html>`;
 test('actual shell template uses full-page tools; runtime keeps chat split; return restores chat', {skip:!existsSync(pwPath)||!existsSync(edge)},async()=>{
- const {chromium}=require(pwPath),browser=await chromium.launch({headless:true,executablePath:edge,args:['--disable-background-networking','--no-first-run']});try {for(const [width,height] of [[1200,900],[360,740]]){const c=await browser.newContext({viewport:{width,height}});let requests=0,errors=[];await c.route('**/*',r=>{requests++;return r.abort()});const page=await c.newPage();page.on('pageerror',e=>errors.push(e.message));await page.setContent(html);await page.locator('#unified-chat').evaluate(e=>e.textContent='合成聊天');
+ const {chromium}=require(pwPath),browser=await chromium.launch({headless:true,executablePath:edge,args:['--disable-background-networking','--no-first-run']});try {for(const [width,height] of [[1200,900],[360,740]]){const c=await browser.newContext({viewport:{width,height}});let requests=0,errors=[];await c.route('**/*',r=>{requests++;return r.abort()});const page=await c.newPage();page.on('pageerror',e=>errors.push(e.message));await page.setContent(html);assert.equal(await page.locator('#unified-input').getAttribute('placeholder'),'和小魔王说点什么…');assert.equal(await page.locator('#unified-composer canvas, #unified-composer img, .unified-composer-companion').count(),0);await page.locator('#unified-chat').evaluate(e=>e.textContent='合成聊天');
  assert.equal(await page.locator('#unified-sidebar').isVisible(),false);for(const id of ['#unified-new-chat','#unified-new-thread','#unified-new-project','#unified-open-sessions'])assert.equal(await page.locator(id).count(),0);
  for(const id of ['docs','settings','music','shell-dev','runtime']) {
    if(id==='runtime') await page.evaluate(()=>selectSingleChatTool('runtime'));

@@ -1,7 +1,5 @@
-/* Keep the companion at the chat-side edge of the composer, out of the input flow. */
+/* The chat footer is one light card; controls share its surface. */
 html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
-  --composer-companion-width: 132px;
-  container-type: inline-size;
   gap: 0;
   padding: 0 clamp(0.75rem, 1.4vw, 1.5rem) 0.85rem;
   border: 0;
@@ -20,45 +18,25 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock >
 html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "attachments attachments attachments"
-                       "input input input"
-                       "mode stop send";
-  align-items: end;
-  gap: 0.25rem 0.5rem;
-  padding: 0.45rem 0.7rem 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border));
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--ma-surface) 96%, var(--ma-accent) 4%);
-  box-shadow: 0 5px 22px color-mix(in srgb, var(--ma-accent) 9%, transparent);
+  grid-template-columns: minmax(0, 1fr) auto auto 2.2rem;
+  grid-template-areas: "attachments attachments attachments attachments"
+                       "input mode stop send";
+  align-items: center;
+  gap: 0 0.4rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 82%, var(--ma-accent) 18%);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--ma-surface) 97%, var(--ma-accent) 3%);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--ma-text) 6%, transparent);
   backdrop-filter: none;
   overflow: visible;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer:focus-within {
-  border-color: color-mix(in srgb, var(--ma-accent) 62%, var(--ma-border));
-}
-
-.unified-composer-companion {
-  position: absolute;
-  width: min(var(--composer-companion-width, 132px), calc(50cqw - 476px));
-  height: auto;
-  aspect-ratio: 5 / 3;
-  left: auto;
-  right: calc(468px - 50cqw);
-  bottom: calc(100% - 5px);
-  z-index: 1;
-  pointer-events: none;
-  user-select: none;
-  line-height: 0;
-  filter: drop-shadow(0 2px 1px rgb(24 18 54 / 12%));
-}
-
-.unified-composer-companion img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+  border-color: color-mix(in srgb, var(--ma-accent) 52%, var(--ma-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ma-accent) 12%, transparent),
+              0 3px 14px color-mix(in srgb, var(--ma-text) 6%, transparent);
 }
 
 html[data-theme] #unified-composer .unified-input {
@@ -67,63 +45,80 @@ html[data-theme] #unified-composer .unified-input {
   min-width: 0;
   min-height: 2.5rem;
   max-height: 8rem;
-  padding: 0.35rem 0.3rem;
-  line-height: 1.55;
+  padding: 0.25rem 0.4rem;
+  line-height: 1.5;
   border: 0;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   box-shadow: none;
+  resize: none;
 }
 
+html[data-theme] #unified-composer .unified-input:focus,
 html[data-theme] #unified-composer .unified-input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ma-accent) 38%, transparent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 html[data-theme] #unified-composer .file-drop-chips { grid-area: attachments; }
-html[data-theme] #unified-mode-toggle { grid-area: mode; justify-self: start; }
-html[data-theme] #unified-stop { grid-area: stop; justify-self: start; }
+html[data-theme] #unified-mode-toggle {
+  grid-area: mode;
+  justify-self: start;
+  height: 1.95rem;
+  padding: 0.1rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-theme] #unified-mode-toggle[data-mode="agent"],
+html[data-theme] #unified-mode-toggle[data-mode="ask"] { border-color: transparent; box-shadow: none; }
+html[data-theme] #unified-composer .unified-mode-seg {
+  min-width: 2.6rem;
+  padding-inline: 0.65rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+}
+html[data-theme] #unified-composer .unified-mode-seg.is-active {
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-accent) 14%, var(--ma-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ma-accent) 18%, transparent);
+}
+html[data-theme] #unified-composer .unified-mode-toggle[data-mode="ask"] .unified-mode-seg.is-active {
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-accent-muted) 15%, var(--ma-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ma-accent-muted) 20%, transparent);
+}
+html[data-theme] #unified-mode-toggle .unified-mode-seg:focus-visible,
+html[data-theme] #unified-composer #unified-stop:focus-visible,
+html[data-theme] #unified-composer #unified-send:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ma-accent) 62%, transparent);
+  outline-offset: 2px;
+}
+html[data-theme] #unified-stop { grid-area: stop; justify-self: center; }
 html[data-theme] #unified-composer #unified-send {
   grid-area: send;
+  justify-self: end;
   justify-content: center;
   width: 2.2rem;
   height: 2.2rem;
   min-height: 2.2rem;
   padding: 0;
-  border-radius: 50%;
-  font-size: 1.35rem;
+  border-radius: 12px;
+  font-size: 1.25rem;
   line-height: 1;
+  box-shadow: none;
 }
 html[data-theme] #unified-send::before { content: none; }
 
-@container (max-width: 1096px) {
-  .unified-composer-companion { display: none; }
-}
-
 @media (max-width: 680px) {
-  .unified-composer-companion { display: none; }
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
     padding-inline: 0.6rem;
   }
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer {
-    gap: 0.15rem 0.3rem;
-    padding-inline: 0.45rem;
+    grid-template-columns: minmax(0, 1fr) auto auto 2.2rem;
+    grid-template-areas: "attachments attachments attachments attachments"
+                         "input mode stop send";
+    gap: 0 0.3rem;
+    padding-inline: 0.4rem;
     border-radius: 16px;
   }
-}
-
-.unified-composer-companion { isolation: isolate; }
-.unified-composer-live2d {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-.unified-composer-live2d[hidden],
-.unified-composer-companion img[hidden] { display: none !important; }
-@media (prefers-reduced-motion: reduce) {
-  .unified-composer-live2d { display: none !important; }
-  .unified-composer-companion img { display: block !important; }
 }
