@@ -17,6 +17,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  screen,
   shell,
   Tray,
   type IpcMainInvokeEvent,
@@ -1158,7 +1159,7 @@ async function createWorkbenchWindow(): Promise<void> {
 
   workbenchInstance.windowUnavailable();
   const windowIcon = loadAppIcon(256);
-  const { width, height } = workbenchDefaultWindowSize();
+  const { width, height } = workbenchDefaultWindowSize(screen.getPrimaryDisplay().workAreaSize);
   workbenchWindow = new BrowserWindow({
     width,
     height,

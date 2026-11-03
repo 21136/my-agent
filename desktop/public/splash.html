@@ -13,11 +13,13 @@
         overflow: hidden;
         background: #05060a;
       }
+      /* Keep full splash frame visible: letterbox/pillarbox when window aspect differs (e.g. 1280x720 video in 960x720). Never crop. */
       video {
         display: block;
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
+        object-position: center center;
         background: #05060a;
       }
     </style>

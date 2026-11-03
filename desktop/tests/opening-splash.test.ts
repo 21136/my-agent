@@ -42,9 +42,10 @@ test("opening splash holds last frame until main dismisses (video ended does not
 });
 
 test("opening splash and workbench share default BrowserWindow size", () => {
-  assert.match(splashModule, /workbenchDefaultWindowSize\(\)/);
-  assert.match(mainSource, /workbenchDefaultWindowSize\(\)/);
+  assert.match(splashModule, /workbenchDefaultWindowSize\(screen\.getPrimaryDisplay\(\)\.workAreaSize\)/);
+  assert.match(mainSource, /workbenchDefaultWindowSize\(screen\.getPrimaryDisplay\(\)\.workAreaSize\)/);
   assert.doesNotMatch(splashModule, /SPLASH_WIDTH\s*=\s*1280/);
   assert.doesNotMatch(mainSource, /width:\s*960,\s*\n\s*height:\s*720,/);
-  assert.match(splashHtml, /object-fit:\s*cover/);
+  assert.match(splashHtml, /object-fit:\s*contain/);
+  assert.doesNotMatch(splashHtml, /object-fit:\s*cover/);
 });
