@@ -26,8 +26,6 @@ try {
     return plan.inspectManagedSources({ ...candidateRoots, metadataOnlyHistory: true });
   });
   if (!authorizeAtMainThread()) throw new Error("untrusted managed review caller");
-  phase = "review_authorization";
-  if (!authorizeAtMainThread()) throw new Error("untrusted managed review caller");
   phase = "review_inspection";
   const { inspectManagedReview } = await import(pathToFileURL(path.join(launcher, "managed-review.mjs")).href);
   const report = await inspectManagedReview(roots);
