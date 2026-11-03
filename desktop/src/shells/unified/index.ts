@@ -868,7 +868,7 @@ export function mountUnifiedShell(
               <button type="button" class="unified-mode-seg" data-mode-value="agent" aria-pressed="true">动手</button>
             </div>
             <button type="button" class="unified-btn" id="unified-stop" hidden>停止</button>
-            <textarea class="unified-input" id="unified-input" rows="2" aria-label="输入消息" placeholder="和小魔王说点什么…"></textarea>
+            <textarea class="unified-input" id="unified-input" rows="1" aria-label="输入消息" placeholder="和小魔王说点什么…"></textarea>
             <button type="button" class="unified-btn unified-btn-accent" id="unified-send" aria-label="发送消息" title="发送消息"><span aria-hidden="true">↑</span></button>
           </footer>
         </div>

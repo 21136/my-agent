@@ -1,7 +1,7 @@
-/* A small, static cutout from the approved mockup. Its palms cross the card's
-   top border; reserved flow space keeps the head out of the transcript. */
+/* Keep the companion at the chat-side edge of the composer, out of the input flow. */
 html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
   --composer-companion-width: 132px;
+  container-type: inline-size;
   gap: 0;
   padding: 0 clamp(0.75rem, 1.4vw, 1.5rem) 0.85rem;
   border: 0;
@@ -20,19 +20,17 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock >
 html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: "attachments attachments attachments"
                        "input input input"
                        "mode stop send";
   align-items: end;
   gap: 0.25rem 0.5rem;
-  margin-top: 76px;
-  padding: 0.6rem 0.8rem 0.55rem;
+  padding: 0.45rem 0.7rem 0.5rem;
   border: 1px solid color-mix(in srgb, var(--ma-accent) 24%, var(--ma-border));
   border-radius: 20px;
   background: color-mix(in srgb, var(--ma-surface) 96%, var(--ma-accent) 4%);
   box-shadow: 0 5px 22px color-mix(in srgb, var(--ma-accent) 9%, transparent);
-  /* Do not filter/clip this ancestor: the transparent cutout crosses its edge. */
   backdrop-filter: none;
   overflow: visible;
 }
@@ -43,10 +41,11 @@ html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer:focus-
 
 .unified-composer-companion {
   position: absolute;
-  width: var(--composer-companion-width, 132px);
+  width: min(var(--composer-companion-width, 132px), calc(50cqw - 476px));
   height: auto;
   aspect-ratio: 5 / 3;
-  right: 2.7rem;
+  left: auto;
+  right: calc(468px - 50cqw);
   bottom: calc(100% - 5px);
   z-index: 1;
   pointer-events: none;
@@ -66,7 +65,7 @@ html[data-theme] #unified-composer .unified-input {
   grid-area: input;
   width: 100%;
   min-width: 0;
-  min-height: 3rem;
+  min-height: 2.5rem;
   max-height: 8rem;
   padding: 0.35rem 0.3rem;
   line-height: 1.55;
@@ -97,17 +96,20 @@ html[data-theme] #unified-composer #unified-send {
 }
 html[data-theme] #unified-send::before { content: none; }
 
+@container (max-width: 1096px) {
+  .unified-composer-companion { display: none; }
+}
+
 @media (max-width: 680px) {
+  .unified-composer-companion { display: none; }
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
-    --composer-companion-width: 108px;
     padding-inline: 0.6rem;
   }
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer {
-    margin-top: 64px;
-    padding-inline: 0.6rem;
+    gap: 0.15rem 0.3rem;
+    padding-inline: 0.45rem;
     border-radius: 16px;
   }
-  .unified-composer-companion { right: 1.4rem; }
 }
 
 .unified-composer-companion { isolation: isolate; }
