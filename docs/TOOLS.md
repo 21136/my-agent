@@ -15,7 +15,7 @@
 
 | 约束 | 说明 |
 |------|------|
-| **Builtin 共 14 个** | **核心 8**（观察/执行口）+ **其它 6**（上下文、子代理、生图、演化）；核心保持精简 |
+| **Builtin** | 核心观察/执行口加上下文、子代理与生成工具；完整清单以 registry 为准 |
 | **Evolved 按主题目录放置** | `evolve/tools/<topic>/` + `evolve/tools/common/`（**磁盘组织**；非调用门禁） |
 | **执行唯一口** | 所有 evolved 经 `run_evolved`；**例外（Phase 41）**：`run_command` · `write_text` · `patch_file` 可向 LLM 扁平原语暴露，内核仍路由到 `run_evolved`（见 [AGENT-HARNESS.md](./AGENT-HARNESS.md)） |
 | **~~主题过滤清单~~ → 目录 INDEX** | **superseded（Phase 23）**：凡 `status=active` 均可调；system 注入短 [INDEX](../evolve/tool-catalog/INDEX.md)，不按 `topics[]` 硬锁。详见 [TOOL-CATALOG.md](./TOOL-CATALOG.md) |
@@ -38,9 +38,9 @@
 
 ---
 
-## 3. Builtin（14 个 function，不分主题）
+## 3. Builtin（不分主题）
 
-注册表固定为 14 个 function，不按主题过滤。`agent`（动手）模式下，普通会话与项目会话提供相同的 Builtin 和扁平工具；项目绑定、shell 类型及 `read_only` / `plan_only` 意图不再从 schema 隐藏工具。`ask`（只聊）仍隐藏 `run_evolved`、生图和扁平副作用工具；`evolution` 保持可见但只允许 `inspect`。工具可见不等于获准执行：执行器仍按请求意图、工具策略和目标路径拒绝不允许的副作用；`deliverable_review` 在普通会话需显式提供项目 ID。
+注册表以 `tools/registry.py` 为准，不按主题过滤。`agent`（动手）模式下，普通会话与项目会话提供相同的 Builtin 和扁平工具；项目绑定、shell 类型及 `read_only` / `plan_only` 意图不再从 schema 隐藏工具。`ask`（只聊）仍隐藏 `run_evolved`、生图、视频生成和扁平副作用工具；`evolution` 保持可见但只允许 `inspect`。工具可见不等于获准执行：执行器仍按请求意图、工具策略和目标路径拒绝不允许的副作用；`deliverable_review` 在普通会话需显式提供项目 ID。
 
 ### 3.0 核心 8 个（观察 / 执行口）
 
@@ -55,13 +55,14 @@
 | `fetch_url` | 拉取指定 URL 正文（文本/markdown） | 否 | 否 |
 | `run_evolved` | 调用 `evolve/tools/` 已注册脚本 | **是** | 透传 |
 
-### 3.0a 其它 6 个（上下文 / 子代理 / 图片 / 生图 / 演化）
+### 3.0a 其它工具（上下文 / 子代理 / 图片 / 生成 / 演化，摘录）
 
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
 | `propose_context_switch` | 提议切换 project/shell 上下文 | **是** | 否 |
 | `show_images` | 在 Desktop 聊天内联展示已有图片文件（只读、无 API 费用） | 否 | 否 |
 | `generate_image` | 0x567 GPT Image 生图或参考图编辑；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
+| `generate_video` | 0x567 Grok 文生视频或 PNG 图生视频；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
 | `deliverable_review` | 只读交付审查；绑定项目默认当前项目，普通会话须 `project_id` | 否 | 否 |
 | `explore` | 只读 explore 子代理（须显式 task/scope） | 否 | 否 |
 | `evolution` | 通过当前会话绑定的监督器 inspect/patch/snapshot/build/launch/stop/run_case；不接受模型提供的会话、授权、token 或 host path | 按 action 的服务端授权 | 否 |
@@ -72,7 +73,7 @@ Builtin 代码在 `agent-core/tools/builtin/`；**不**放在 `evolve/tools/`。
 
 ```text
 本地观察：read_file · list_dir · grep · glob_file_search · codebase_search · `show_images`
-其它：`propose_context_switch` · `generate_image` · `deliverable_review` · `explore`
+其它：`propose_context_switch` · `generate_image` · `generate_video` · `deliverable_review` · `explore`
 网络观察：web_search · fetch_url
 动手执行：run_command · write_text · patch_file（扁平原语，Phase 41）
             或 run_evolved → 其它 evolve/tools/*
@@ -156,7 +157,7 @@ tool_dirs = ["tools/coding"]
 
 > **superseded**：旧「按主题列全量 name+description 清单」已废止。现行见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
-Builtin 共 14 个 function（核心 8 + 其它 6）；evolved 不平铺，统一通过 `run_evolved` 调用：
+Builtin 以 registry 为准；evolved 不平铺，统一通过 `run_evolved` 调用：
 
 - **执行面**：凡 registry 中 `status=active` 的 evolved 均可调（**不**按 `meta.topics` 硬锁）。
 - **每轮 system**：注入短文档 `evolve/tool-catalog/INDEX.md`（桶路径表）；细则按需 `read_file` 对应 `buckets/*.md`。
@@ -222,7 +223,7 @@ timeout_sec = 60
 
 ```text
 用户输入
-    → LLM 选 Builtin（14 个之一）或 run_evolved / 扁平原语 proxy
+    → LLM 选 Builtin或 run_evolved / 扁平原语 proxy
     → ToolExecutor.validate（schema、路径、策略）
     → run_evolved：tool_name 须在「本会话清单」或 CLI 显式指定
     → 若 confirm：预览，等待 y/n/a（§6.3）
@@ -404,6 +405,15 @@ DeepSeek 搜索**不是**独立 REST，而是经 Anthropic 兼容端点 `https:/
 | 输出 | 校验 PNG 并独占创建，拒绝覆盖；项目写入 `<project>/artifacts/generated-images/`，未绑定项目写入 `workspace/_drops/<session>/generated-images/`。 |
 | UI | 成功时 `data.display_paths`（与 `path` 一致）经 `tool.end` 送 Desktop 内联展示；见 [CHAT-IMAGE-DISPLAY.md](./CHAT-IMAGE-DISPLAY.md)。 |
 
+### 视频生成 `generate_video`
+
+- 使用一等 Builtin（不是 MCP 或 Skill）；仅用户明确要求生成视频时调用，并在提交前展示确认，可能产生费用。只聊、只读或仅规划时不可生成。
+- 参数：`prompt`；可选 `model`、`duration`（1～15 秒）、`resolution`、`aspect_ratio`、`reference_image_path`（agent 根目录内本地 PNG），或使用 `reference_context` / `reference_id` 选择会话图片。默认 `grok-imagine-video-1.5`（标准版）、5 秒、480p、16:9。已有任务可只传 `request_id` 续查，避免再次提交产生费用。
+- 参考图：目前只支持小于 50 MiB 的本地 PNG，不支持图片 URL、JPEG 或 WebP；本轮附件使用 `current_attachment`，历史图按上下文选择，多个候选时先询问。确认卡展示来源，确认后才将图片编码上传至 0x567；不同引用方式及续查不能混用。图片内容、Base64 和密钥不得记入日志。
+- 后端从与图片工具相同的 `LLM_0x567_KEY` 环境变量或本机密钥设置读取凭据，不接受密钥工具参数。使用 0x567 的视频生成与查询接口，具体模型权限和价格以网关为准。
+- 返回的 MP4 经校验后独占创建；项目输出 `artifacts/generated-videos/`，普通会话输出 `workspace/_drops/<session>/generated-videos/`。结果返回路径，不声称聊天内联播放。
+- 创建请求不自动重试；提交超时且没有 request_id 时先查服务商任务记录。轮询或下载失败时保留已知 request_id，供确认后续查。
+
 ### 7.5.2 `show_images`
 
 | 项 | 说明 |
@@ -580,6 +590,7 @@ agent-core/tools/
 │   ├── fetch_url.py
 │   ├── show_images.py
 │   ├── generate_image.py
+│   ├── generate_video.py
 │   ├── run_evolved.py
 │   ├── evolution.py
 │   ├── propose_context_switch.py
@@ -622,7 +633,7 @@ T7（2026-10-22）增加第 14 个一方 Builtin `evolution`。它只控制当�
 
 ## 14. 验收（TOOLS 设计阶段）
 
-- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；其它 6 个名称与 registry 一致
+- [ ] 核心 8 Builtin 职责无重叠、无缺口（本地看 / 网络看 / 执行）；其它工具名称与 registry 一致
 - [ ] Evolved 主题目录 + common 规则清楚
 - [ ] 与 `evolve/_index.*.toml`、`tool-catalog/INDEX.md`、MEMORY 主题路由一致
 - [ ] `run_evolved` + 会话清单可实现

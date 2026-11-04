@@ -34,6 +34,7 @@ from tools.builtin import (
     explore,
     fetch_url,
     generate_image,
+    generate_video,
     show_images,
     glob_file_search,
     codebase_search,
@@ -66,6 +67,7 @@ _BUILTIN_RUNNERS: dict[str, Callable[..., ToolResult]] = {
     "fetch_url": fetch_url.run,
     "show_images": show_images.run,
     "generate_image": generate_image.run,
+    "generate_video": generate_video.run,
     "run_evolved": run_evolved.run,
     "evolution": evolution.run,
     "propose_context_switch": propose_context_switch.run,
@@ -1724,8 +1726,32 @@ class ToolExecutor:
             return self._run_codebase_search(args, started=started)
 
         prepared_image_reference = None
-        image_confirm_context = None
-        if name == "generate_image" and (
+        video_reference_image_path = None
+        video_confirm_context = None
+        if name == "generate_video" and args.get("reference_image_path"):
+            raw_reference_path = str(args["reference_image_path"])
+            try:
+                if raw_reference_path.casefold().startswith("host:"):
+                    raise ValueError("host-scoped references are not allowed")
+                candidate = Path(raw_reference_path)
+                if candidate.is_absolute():
+                    resolved = candidate.resolve(strict=True)
+                    resolved.relative_to(self.registry.agent_paths.agent_root.resolve())
+                else:
+                    resolved = self.registry.agent_paths.resolve_under_agent(raw_reference_path, must_exist=True).resolve(strict=True)
+                    resolved.relative_to(self.registry.agent_paths.agent_root.resolve())
+                if not resolved.is_file() or resolved.suffix.lower() != ".png":
+                    raise ValueError("reference must be an existing PNG file")
+                with resolved.open("rb") as image_file:
+                    if image_file.read(8) != b"\x89PNG\r\n\x1a\n":
+                        raise ValueError("reference file is not a valid PNG")
+                video_reference_image_path = self.registry.agent_paths.to_agent_relative(resolved)
+                video_confirm_context = f"Reference source: explicit local image path\nReference path: {resolved}\nImage bytes will be sent only after approval."
+            except Exception as exc:
+                result = tool_fail(name, "reference_path_denied", f"Reference image path is not an authorized local PNG; no image was sent ({type(exc).__name__}).", duration_ms=_elapsed_ms(started))
+                self._log_tool_call(name, args, result, confirm="skipped", started=started)
+                return result
+        if name in {"generate_image", "generate_video"} and (
             str(args.get("reference_context") or "").strip()
             or str(args.get("reference_id") or "").strip()
         ):
@@ -1760,11 +1786,17 @@ class ToolExecutor:
             prepared_image_reference = search.selected
             source_title = " ".join(prepared_image_reference.session_title.split())[:80]
             source_context = " / ".join(prepared_image_reference.context.split())[:500]
-            image_confirm_context = (
-                f"Reference: {prepared_image_reference.filename} from '{source_title}'.\n"
+            reference_path = prepared_image_reference.source_ref
+            reference_confirm_context = (
+                f"Reference source: local chat attachment\nReference path: {reference_path}\n"
+                f"Reference file: {prepared_image_reference.filename} from '{source_title}'.\n"
                 f"Session updated: {prepared_image_reference.updated_at or 'unknown'}\n"
-                f"Conversation context: {source_context}"
+                f"Conversation context: {source_context}\nImage bytes will be sent only after approval."
             )
+            if name == "generate_video":
+                video_confirm_context = reference_confirm_context
+            else:
+                image_confirm_context = reference_confirm_context
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
@@ -1775,7 +1807,7 @@ class ToolExecutor:
                     name,
                     args,
                     evolved_target,
-                    extra_context=image_confirm_context,
+                    extra_context=video_confirm_context if name == "generate_video" else image_confirm_context,
                 )
                 if (
                     confirm_decision in {"y", "a"}
@@ -1840,19 +1872,21 @@ class ToolExecutor:
                             f"could not safely prepare target under lease ({type(exc).__name__})",
                         )
                     else:
-                        if name == "generate_image":
+                        if name in {"generate_image", "generate_video"}:
                             executed = self._execute_builtin(
                                 name, args, started=started,
                                 prepared_image_reference=prepared_image_reference,
+                                video_reference_image_path=video_reference_image_path,
                             )
                         else:
                             executed = self._execute_builtin(name, args, started=started)
-                elif name == "generate_image":
+                elif name in {"generate_image", "generate_video"}:
                     executed = self._execute_builtin(
                         name,
                         args,
                         started=started,
                         prepared_image_reference=prepared_image_reference,
+                        video_reference_image_path=video_reference_image_path,
                     )
                 else:
                     executed = self._execute_builtin(name, args, started=started)
@@ -2708,6 +2742,41 @@ class ToolExecutor:
                     details={"ci_repair_status": "repair_allowed", "evolved_name": evolved_name},
                 )
 
+        if name == "generate_video":
+            prompt = arguments.get("prompt")
+            request_id = arguments.get("request_id")
+            if request_id is None and (not isinstance(prompt, str) or not prompt.strip()):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "prompt is required unless request_id is supplied")
+            if request_id is not None and (not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 1024):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "request_id must be a non-empty string of at most 1024 characters")
+            model = arguments.get("model")
+            if model is not None and model not in {"grok-imagine-video-1.5", "grok-imagine-video"}:
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "model must be grok-imagine-video-1.5 or grok-imagine-video")
+            reference_path = arguments.get("reference_image_path")
+            reference_context = arguments.get("reference_context")
+            reference_id = arguments.get("reference_id")
+            has_search_reference = bool(str(reference_context or "").strip() or str(reference_id or "").strip())
+            if reference_path is not None and (not isinstance(reference_path, str) or not reference_path.strip()):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "reference_image_path must be a non-empty local PNG path")
+            if reference_path is not None and has_search_reference:
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "reference_image_path cannot be combined with reference_context or reference_id")
+            if request_id is not None and (reference_path is not None or has_search_reference):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "request_id polling cannot be combined with image references")
+            for key in ("reference_context", "reference_id"):
+                value = arguments.get(key)
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, f"{key} must be a non-empty string")
+            for key in ("model", "resolution", "aspect_ratio", "request_id"):
+                value = arguments.get(key)
+                if value is not None and (not isinstance(value, str) or not value.strip()):
+                    return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, f"{key} must be a non-empty string")
+            duration = arguments.get("duration")
+            if duration is not None and (type(duration) is not int or not 1 <= duration <= 15):
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "duration must be an integer from 1 to 15 seconds")
+            resolution = arguments.get("resolution")
+            if resolution is not None and resolution not in {"480p", "720p", "1080p"}:
+                return tool_fail(name, ToolErrorCode.VALIDATION_ERROR, "resolution must be 480p, 720p, or 1080p")
+
         if name == "generate_image":
             prompt = arguments.get("prompt")
             if not isinstance(prompt, str) or not prompt.strip():
@@ -2758,6 +2827,14 @@ class ToolExecutor:
                 "bind_project_dir is disabled in ask mode (只聊); switch to 动手 (agent) first",
                 details={"turn_mode": "ask"},
             )
+
+        if name == "generate_video" and self.session.turn_mode == "ask":
+            return tool_fail(name, ToolErrorCode.PERMISSION_DENIED, "generate_video is disabled in ask mode", details={"turn_mode": "ask"})
+        if name == "generate_video" and str(self.session.ordinary_work_intent or "").strip() in {"read_only", "plan_only"}:
+            intent = str(self.session.ordinary_work_intent or "").strip()
+            return tool_fail(name, ToolErrorCode.PERMISSION_DENIED,
+                f"generate_video blocked: this turn is explicitly {intent}",
+                details={"turn_mode": self.session.turn_mode, "ordinary_work_intent": intent})
 
         if name == "generate_image" and self.session.turn_mode == "ask":
             return tool_fail(
@@ -3493,6 +3570,10 @@ class ToolExecutor:
         """Ordinary mode: at most one user-visible confirm per turn for safe work."""
         if self.session.active_shell != "project":
             return False
+        # Paid video generation always needs its own explicit confirmation; it
+        # must never consume another visible confirmation's ordinary budget.
+        if tool_name == "generate_video":
+            return False
         if evolved is not None and evolved.name == "write_evolve":
             return False
         if self._ordinary_confirm_is_destructive(
@@ -3581,9 +3662,10 @@ class ToolExecutor:
                 duration_ms=_elapsed_ms(started),
                 output_path=result.output_path,
             )
+        safe_arguments = _tool_event_args(tool_name, arguments) if tool_name == "generate_video" else arguments
         self.evolve_log.log_tool_call(
             tool=tool_name,
-            arguments=arguments,
+            arguments=safe_arguments,
             result=logged,
             conversation_id=conversation_id_from_session(self.session.session_dir),
             confirm=confirm,
@@ -3685,6 +3767,7 @@ class ToolExecutor:
         *,
         started: float,
         prepared_image_reference: Any | None = None,
+        video_reference_image_path: str | None = None,
     ) -> ToolResult:
         if tool_name == "recall_current_dialogue":
             dispatch = self.dialogue_recall_host_dispatch
@@ -3725,6 +3808,15 @@ class ToolExecutor:
                 cancel_event=self.cancel_event,
                 current_project_id=self.session.project_id,
             )
+        if tool_name == "generate_video":
+            conversation_id = self.session.session_dir.name if self.session.session_dir else ""
+            video_arguments = dict(arguments)
+            if not video_arguments.get("request_id"):
+                video_arguments.setdefault("model", "grok-imagine-video-1.5")
+            return runner(video_arguments, paths=self.registry.agent_paths,
+                          project_root=self.session.project_root or "", conversation_id=conversation_id,
+                          prepared_reference=prepared_image_reference,
+                          reference_image_path=video_reference_image_path)
         if tool_name == "generate_image":
             conversation_id = self.session.session_dir.name if self.session.session_dir else ""
             return runner(
@@ -3933,6 +4025,10 @@ def _write_spill_file(
 
 
 def _tool_event_args(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "generate_video":
+        # Keep local source paths and any unexpected binary-like fields out of event logs.
+        allowed = {"prompt", "model", "duration", "resolution", "aspect_ratio", "request_id"}
+        return {key: value for key, value in arguments.items() if key in allowed}
     if tool_name == "run_evolved":
         inner = run_evolved.coalesce_tool_arguments(arguments)
         payload: dict[str, Any] = {"tool_name": arguments.get("tool_name")}
@@ -4395,7 +4491,24 @@ def build_confirm_preview(
 ) -> str:
     """Human-readable preview shown before confirm."""
     lines: list[str] = []
-    if tool_name == "generate_image":
+    if tool_name == "generate_video":
+        prompt = arguments.get("prompt")
+        if isinstance(prompt, str) and prompt.strip():
+            lines.extend(["Video-generation request; this may use account credits.", f"Prompt: {prompt.strip()[:2000]}",
+                          f"Model: {arguments.get('model', 'grok-imagine-video-1.5')}", f"Duration: {arguments.get('duration', 5)} seconds",
+                          f"Resolution: {arguments.get('resolution', '480p')}", f"Aspect ratio: {arguments.get('aspect_ratio', '16:9')}"])
+        else:
+            lines.append("Video-generation request; this may use account credits.")
+        reference_path = arguments.get("reference_image_path")
+        if isinstance(reference_path, str) and reference_path.strip():
+            lines.extend(["Reference source: explicit local image path", f"Reference path: {reference_path.strip()}", "Image bytes will be sent only after approval."])
+        if extra_context:
+            lines.extend(extra_context.splitlines())
+        if isinstance(arguments.get("request_id"), str) and arguments["request_id"].strip():
+            request_id = arguments["request_id"].strip()
+            preview_id = request_id if len(request_id) <= 160 else f"{request_id[:157]}..."
+            lines.append(f"Continue polling request_id: {preview_id} ({len(request_id)} characters)")
+    elif tool_name == "generate_image":
         prompt = arguments.get("prompt")
         if extra_context:
             source_header = extra_context.splitlines()[0].strip()

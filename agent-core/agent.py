@@ -1227,6 +1227,13 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "do not ask whether to show them again. Use when the user asks to see saved PNG/JPEG/WebP "
         "paths, or to re-display a prior output. Pass agent-relative paths in paths[]."
     ),
+    "generate_video": (
+        "Generate or continue a video generation job. This may use account credits and requires user confirmation. "
+        "Call only when the user explicitly asks to generate a video. Defaults: Grok Imagine Video 1.5, 5 seconds, 480p, 16:9. "
+        "For image-to-video, use either reference_image_path (an authorized local PNG path) or reference_context/reference_id to resolve a chat attachment; never combine these or use references with request_id polling. "
+        "Ambiguous chat-image matches require user selection. The source path/origin is shown for approval before image bytes are sent. "
+        "Pass request_id only to continue polling a previously created job."
+    ),
     "generate_image": (
         "Generate one image with 0x567 GPT Image; this is a paid, user-confirmed action. "
         "Call only when the user explicitly asks for image generation. On success Desktop chat "
@@ -1479,6 +1486,22 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                 "description": "Opaque candidate id when prior-image search was ambiguous",
             },
         },
+        "additionalProperties": False,
+    },
+    "generate_video": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 10000, "description": "Prompt describing the video to generate"},
+            "model": {"type": "string", "enum": ["grok-imagine-video-1.5", "grok-imagine-video"], "default": "grok-imagine-video-1.5", "description": "Video model; Grok Imagine Video 1.5 or original Grok Imagine Video"},
+            "duration": {"type": "integer", "minimum": 1, "maximum": 15, "default": 5, "description": "Video duration in seconds"},
+            "resolution": {"type": "string", "enum": ["480p", "720p", "1080p"], "default": "480p", "description": "Output resolution"},
+            "aspect_ratio": {"type": "string", "default": "16:9", "description": "Output aspect ratio"},
+            "request_id": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Existing generation request ID to continue polling; cannot be combined with image references"},
+            "reference_image_path": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Authorized local PNG path for image-to-video; mutually exclusive with reference_context/reference_id and request_id"},
+            "reference_context": {"type": "string", "maxLength": 500, "description": "Search current_attachment or prior local chat images; ambiguous matches require user selection"},
+            "reference_id": {"type": "string", "maxLength": 128, "description": "Opaque candidate ID from a prior image search; cannot be combined with reference_image_path or request_id"},
+        },
+        "anyOf": [{"required": ["prompt"]}, {"required": ["request_id"]}],
         "additionalProperties": False,
     },
     "generate_image": {
@@ -1802,7 +1825,7 @@ def build_llm_tools(
         tools = [tool for tool in tools if tool["function"]["name"] != "recall_current_dialogue"]
     tools.extend(build_proxy_tool_definitions())
     if session.meta.turn_mode == "ask":
-        blocked = {"run_evolved", "generate_image", "bind_project_dir", "run_project_workers", *PROXY_EVOLVED_TOOL_NAMES}
+        blocked = {"run_evolved", "generate_image", "generate_video", "bind_project_dir", "run_project_workers", *PROXY_EVOLVED_TOOL_NAMES}
         tools = [item for item in tools if item["function"]["name"] not in blocked]
     return tools
 

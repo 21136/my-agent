@@ -57,6 +57,7 @@ class SessionAgnosticToolAccessTests(unittest.TestCase):
                 self.assertEqual(ordinary_names, project_names)
                 self.assertIn("deliverable_review", ordinary_names)
                 self.assertIn("generate_image", ordinary_names)
+                self.assertIn("generate_video", ordinary_names)
 
     def test_project_context_builtin_descriptions_cover_ordinary_sessions(self) -> None:
         codebase = build_builtin_tool_definition("codebase_search")["function"]["description"]

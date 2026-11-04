@@ -556,6 +556,38 @@ _ORDINARY_PLAN_ONLY_MARKERS = (
     "do not write code",
     "don't write code",
 )
+_VIDEO_GENERATION_MARKERS = (
+    "生成视频", "生成一个视频", "生成一段视频", "做个视频", "制作视频", "出视频",
+    "generate video", "generate a video", "generate_video", "video generation",
+)
+
+
+def is_explicit_video_generation_request(user_text: str) -> bool:
+    """True only when the user asks to run the video-generation tool."""
+    text = user_text_without_attachment_block(user_text or "").strip()
+    if not text:
+        return False
+    folded = text.casefold()
+    if re.match(r"^(?:how\s+to|how\s+do\s+i|what\s+is|\u600e\u4e48|\u5982\u4f55|\u4e3a\u4ec0\u4e48)", folded):
+        return False
+    capability_question = re.match(r"^(?:can\s+you|could\s+you|\u80fd\u4e0d\u80fd|\u80fd\u5426|\u8bf7\u95ee)", folded)
+    if capability_question:
+        # Treat capability-only questions as discussion, but a concrete video
+        # subject after the request phrasing is an actionable generation request.
+        concrete_scene = bool(re.search(r"\b(?:generate|make|create)\s+(?:a\s+)?video\s+(?:of|about|showing)\s+\S+", folded))
+        if not concrete_scene:
+            video_at = text.find("\u89c6\u9891")
+            tail = text[video_at + 2:].strip(" \t\r\n\u3002\uff01\uff1f?!,\uff0c:：….") if video_at >= 0 else ""
+            concrete_scene = len(tail) >= 2
+        if not concrete_scene:
+            return False
+    if re.search(r"(?:\u4e0d\u8981|\u522b|\u4e0d\u9700\u8981|\u5148\u4e0d\u8981).{0,12}(?:\u751f\u6210|\u5236\u4f5c).{0,12}\u89c6\u9891", text):
+        return False
+    if any(marker.casefold() in folded for marker in _VIDEO_GENERATION_MARKERS):
+        return True
+    return bool(re.search(r"\u751f\u6210[^\u3002\uff01\uff1f?!\n]{0,24}\u89c6\u9891", text))
+
+
 _IMAGE_GENERATION_MARKERS = (
     "生图",
     "生成图",
@@ -663,7 +695,7 @@ def resolve_ordinary_work_intent(
         return "read_only"
     if _has_explicit_ordinary_plan_only(text):
         return "plan_only"
-    if is_explicit_image_generation_request(text):
+    if is_explicit_image_generation_request(text) or is_explicit_video_generation_request(text):
         return "execute"
     if _has_explicit_ordinary_execute(text, lower) or classified == "execute":
         return "execute"

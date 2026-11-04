@@ -100,6 +100,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         dry_run_supported=False,
     ),
     BuiltinTool("generate_image", "Generate/edit a PNG with 0x567 GPT Image after explicit request and confirmation; may use credits", confirm=True, dry_run_supported=False),
+    BuiltinTool("generate_video", "Generate or continue a video job after explicit request and confirmation; may use credits", confirm=True, dry_run_supported=False),
     BuiltinTool("run_evolved", "Run a registered evolved tool script", confirm=True, dry_run_supported=True),
     BuiltinTool("evolution", "Inspect or operate on the candidate bound to this conversation through the trusted evolution supervisor", confirm=False, dry_run_supported=False),
     BuiltinTool(

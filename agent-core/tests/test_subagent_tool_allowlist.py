@@ -44,6 +44,7 @@ def test_only_exact_schema_names_reach_executor(kind):
         else: runner.run_terminal_plan('task',session=session,llm=llm,max_rounds=2)
     expected=(['read_file','fetch_url','web_search'] if kind in ('explore','terminal_plan') else ['read_file']) + ['list_dir','glob_file_search','grep']
     assert seen==expected
+    assert 'generate_video' in executor.session.blocked_tools
     results=[m for m in llm.messages if m['role']=='tool']
     assert len(results)==len(names)
     assert json.loads(results[0]['content'])['ok'] is True

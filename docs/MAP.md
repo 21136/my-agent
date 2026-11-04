@@ -30,6 +30,7 @@
 | 项目接入、制品与验收 | `agent-core/project_mode.py`、`project_manifest.py`、`project_verify.py`、`external_project.py` |
 | 权限、路径与工具执行 | `agent-core/tools/executor.py`、`write_policy.py`、`boundaries.py`、`host_scope.py` |
 | 工具与子代理 | `agent-core/tools/`、`subagent.py`、`evolve/tools/`、`evolve/subagents/` |
+| 生图与视频一方工具 | `agent-core/tools/builtin/generate_image.py`、`generate_video.py`；Agent 指引见 `evolve/tool-catalog/INDEX.md` 和 `docs/TOOLS.md` |
 | Skill 注册与按需加载 | `agent-core/skill_registry.py`、`evolve/skills/` |
 | 模型、路由和凭据读取 | `agent-core/llm_client.py`、`llm_routing.py`、`llm_models.py`、`llm_secrets.py` |
 | API、会话和 sidecar | `agent-core/server.py`、`session.py`、`project_api.py`、`terminal_api.py` |
