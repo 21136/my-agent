@@ -120,6 +120,7 @@ import "./unified.css";
 import "./topbar-shortcuts.css";
 import "./work-card.css";
 import "./current-work-overview.css";
+import { projectRecentWorkActivity } from "./work-activity";
 import "./neon-twin.css";
 import "./composer-companion.css";
 import "./sidebar-v2.css";
@@ -620,6 +621,7 @@ export function mountUnifiedShell(
     {
       onChange: () => {
         renderChat();
+        renderWorkActivity();
         renderConfirmGlass();
         syncWorkingVisual();
       },
@@ -820,6 +822,17 @@ export function mountUnifiedShell(
       </aside>
       <div class="unified-main">
         <header class="unified-topbar" id="unified-topbar"></header>
+      <aside class="work-activity-rail" id="work-activity-rail" aria-label="工作动态">
+        <button type="button" class="work-activity-toggle" id="work-activity-toggle" aria-controls="work-activity-history" aria-haspopup="dialog">
+          <span class="work-activity-title">工作动态</span>
+          <span class="work-activity-state" id="work-activity-state">安静</span>
+        </button>
+        <div class="work-activity-list" id="work-activity-list" aria-live="polite"></div>
+      </aside>
+      <button type="button" class="work-activity-compact-toggle" id="work-activity-compact-toggle" hidden>
+        工作动态 <span id="work-activity-compact-count"></span>
+      </button>
+      <div class="work-activity-history hidden" id="work-activity-history" role="dialog" aria-modal="true" aria-labelledby="work-activity-history-title"></div>
         <div class="thread-archive-banner hidden" id="thread-archive-banner">
           <span class="thread-archive-banner-text">归档线 · 只读回看（不会改回活线）</span>
           <button type="button" class="unified-btn" id="thread-return-active">回到活线</button>
@@ -877,6 +890,88 @@ export function mountUnifiedShell(
   `;
 
 
+  let workActivityHistoryOpen = false;
+  let workActivityOpener: HTMLElement | null = null;
+
+  function renderWorkActivity(): void {
+    const rail = root.querySelector<HTMLElement>("#work-activity-rail");
+    const list = root.querySelector<HTMLElement>("#work-activity-list");
+    const toggle = root.querySelector<HTMLButtonElement>("#work-activity-toggle");
+    const state = root.querySelector<HTMLElement>("#work-activity-state");
+    if (!rail || !list || !toggle || !state) return;
+    const items = projectRecentWorkActivity(chat.model.blocks);
+    const main = rail.closest<HTMLElement>(".unified-main");
+    const chatViewport = root.querySelector<HTMLElement>("#unified-chat");
+    const chatContentLeft = chatViewport
+      ? [...chatViewport.children].reduce((left, child) => {
+        const rect = child.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 ? Math.min(left, rect.left) : left;
+      }, Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY;
+    const composerContent = root.querySelector<HTMLElement>(".unified-composer");
+    const contentLeft = Math.min(chatContentLeft, composerContent?.getBoundingClientRect().left ?? Number.POSITIVE_INFINITY);
+    const mainLeft = main?.getBoundingClientRect().left ?? 0;
+    const hasLeftGutter = window.innerWidth > 760 && Number.isFinite(contentLeft) && contentLeft - mainLeft >= 310;
+    rail.hidden = !items.length || !hasLeftGutter;
+    const compactToggle = root.querySelector<HTMLButtonElement>("#work-activity-compact-toggle");
+    const compactCount = root.querySelector<HTMLElement>("#work-activity-compact-count");
+    if (compactToggle) compactToggle.hidden = !items.length || hasLeftGutter;
+    if (compactCount) compactCount.textContent = items.length ? `${items.length} 项` : "";
+    state.textContent = items.length ? `${items.length} 项 · 查看完整历史` : "安静";
+    const statusText = { running: "进行中", ok: "已完成", fail: "失败", note: "记录" } as const;
+    list.innerHTML = items.map((item) => `<article class="work-activity-item is-${item.status}">
+      <span class="work-activity-marker" aria-hidden="true"></span>
+      <div class="work-activity-copy"><span class="work-activity-action">${escapeHtml(item.action || "工具动作")}</span>
+      ${item.path ? `<span class="work-activity-path" title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</span>` : ""}</div>
+      <span class="work-activity-status">${statusText[item.status]}</span>
+    </article>`).join("");
+    const history = root.querySelector<HTMLElement>("#work-activity-history");
+    if (history && workActivityHistoryOpen) {
+      const blocks = chat.model.blocks.filter((block): block is ProcessActivityBlock => block.kind === "process");
+      history.innerHTML = `<div class="work-activity-history-backdrop" data-work-activity-dismiss></div>
+        <section class="work-activity-history-panel" role="document">
+          <header class="work-activity-history-header">
+            <div><h2 id="work-activity-history-title">工作历史与失败详情</h2><p>当前会话已记录的全部过程，只读回看。</p></div>
+            <button type="button" class="work-activity-history-close" id="work-activity-history-close" aria-label="关闭工作历史">×</button>
+          </header>
+          <div class="work-activity-history-body">${blocks.map((block) => `<section class="work-activity-history-turn"><h3>工作过程</h3>${renderActivityTimeline(block, { liveTurn: isLiveProcessBlock(block), toolsFoldOpen: true, toolDisplay: "all" })}</section>`).join("") || `<p class="work-activity-empty">暂无工作历史。</p>`}</div>
+        </section>`;
+      history.classList.remove("hidden");
+      bindNewProcessToggles(history);
+    } else if (history) {
+      history.classList.add("hidden");
+      history.innerHTML = "";
+    }
+  }
+  function openWorkActivityHistory(opener: HTMLElement): void {
+    workActivityOpener = opener;
+    workActivityHistoryOpen = true;
+    renderWorkActivity();
+    root.querySelector<HTMLButtonElement>("#work-activity-history-close")?.focus();
+  }
+  function closeWorkActivityHistory(): void {
+    workActivityHistoryOpen = false;
+    renderWorkActivity();
+    workActivityOpener?.focus({ preventScroll: true });
+    workActivityOpener = null;
+  }
+  root.querySelector<HTMLButtonElement>("#work-activity-toggle")?.addEventListener("click", (event) => openWorkActivityHistory(event.currentTarget as HTMLElement));
+  root.querySelector<HTMLButtonElement>("#work-activity-compact-toggle")?.addEventListener("click", (event) => openWorkActivityHistory(event.currentTarget as HTMLElement));
+  root.querySelector<HTMLElement>("#work-activity-history")?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("#work-activity-history-close") || target.hasAttribute("data-work-activity-dismiss")) closeWorkActivityHistory();
+  });
+  function onWorkActivityHistoryKeydown(event: KeyboardEvent): void {
+    if (!workActivityHistoryOpen || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeWorkActivityHistory();
+  }
+  document.addEventListener("keydown", onWorkActivityHistoryKeydown, true);
+  function onWorkActivityResize(): void {
+    renderWorkActivity();
+  }
+  window.addEventListener("resize", onWorkActivityResize);
   // ---- element refs ----
   const shellEl = root.querySelector<HTMLElement>(".unified-shell")!;
   const sidebarEl = root.querySelector<HTMLElement>("#unified-sidebar")!;
@@ -4092,47 +4187,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return `<p class="unified-sys-line text-muted">${escapeHtml(block.text)}</p>`;
     }
     // night perspective: skip process and confirm blocks (use overlay instead)
-    if (block.kind === "process") {
-      if (perspective === "night") return "";
-      ensureProcessEntries(block);
-      // No steps, no thinking, not waiting → no empty 过程 pill.
-      if (isProcessBlockEmpty(block)) return "";
-      const liveTurn = isLiveProcessBlock(block);
-      const timelineHtml = renderActivityTimeline(block, {
-        liveTurn,
-        toolsFoldOpen: toolsListExpanded.has(block.turnKey),
-      });
-      const tools = getProcessTools(block);
-      const meta = activeProcessMeta?.get(block.turnKey);
-      const pill = processPillLabel(block, {
-        expanded: !block.collapsed,
-        segmentIndex: meta?.index,
-        segmentTotal: meta?.total,
-      });
-      const chevron = block.collapsed ? "▸" : "▾";
-      const running = tools.some((t) => t.status === "running");
-      const failAlert = renderToolFailAlert(lastFailedTool(tools));
-      const thinkingLive = isProcessThinkingLive(block, chat.model.currentTurnKey);
-      const processCls = [
-        "unified-process",
-        "unified-activity",
-        block.collapsed ? "collapsed" : "",
-        timelineHasThinking(block, liveTurn) ? "has-thinking" : "",
-        thinkingLive ? "is-thinking-live" : "",
-      ].filter(Boolean).join(" ");
-      const showPillDot = running || thinkingLive;
-      return `
-        <div class="${processCls}" data-turn="${block.turnKey}">
-          <button type="button" class="unified-process-pill" data-process-toggle="${block.turnKey}" aria-expanded="${block.collapsed ? "false" : "true"}" aria-controls="unified-process-body-${block.turnKey}">
-            ${showPillDot ? '<span class="unified-process-pill-dot" aria-hidden="true"></span>' : ""}
-            <span class="unified-process-pill-text">${escapeHtml(pill)} ${chevron}</span>
-          </button>
-          <div class="unified-process-body" id="unified-process-body-${block.turnKey}">
-            ${timelineHtml}
-          </div>
-          ${failAlert}
-        </div>`;
-    }
+    if (block.kind === "process") return "";
     if (block.kind === "confirm") {
       if (perspective === "night" && block.confirmKind !== "work_record_post_turn" && block.confirmKind !== "project_worker_requirement_verification") return ""; // ordinary confirms use the overlay
       const inlineScopedConfirm = block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification";
@@ -6879,6 +6934,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   renderProposalsPanel();
   renderMemoryShelfPanel();
   renderChat();
+  renderWorkActivity();
   setComposerEnabled(true);
   setStatus("已连接");
 
@@ -6918,6 +6974,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     unbindChatFontControl();
     settingsThemeObserver.disconnect();
     currentWorkResizeObserver.disconnect();
+    window.removeEventListener("resize", onWorkActivityResize);
+    document.removeEventListener("keydown", onWorkActivityHistoryKeydown, true);
     window.removeEventListener("resize", sizeCurrentWorkPopover);
     musicViewResizeObserver.disconnect();
     shellDevViewResizeObserver.disconnect();

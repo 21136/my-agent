@@ -185,9 +185,14 @@ function renderToolFold(
 
 export function renderActivityTimeline(
   block: ProcessActivityBlock,
-  opts: { liveTurn: boolean; toolsFoldOpen: boolean },
+  opts: { liveTurn: boolean; toolsFoldOpen: boolean; toolDisplay?: "all" | "summary" },
 ): string {
-  const entries = ensureProcessEntries(block);
+  const sourceEntries = ensureProcessEntries(block);
+  // Rendering projection only: keep accepted event history in the model, while
+  // the work-activity rail carries routine start/success rows.
+  const entries = opts.toolDisplay === "summary"
+    ? sourceEntries.filter((entry) => entry.kind === "think" || entry.status === "fail" || entry.status === "note")
+    : sourceEntries;
   const hasPendingOnly =
     opts.liveTurn && Boolean(block.llmPending) && !entries.some((e) => e.kind === "think" && e.phase === "streaming");
   if (!entries.length && !hasPendingOnly) return "";
