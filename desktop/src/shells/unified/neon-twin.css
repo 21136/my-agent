@@ -766,3 +766,314 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-generated-image
   border: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent);
   backdrop-filter: blur(10px);
 }
+
+/* Sandbox visual trial: preserve the open left reading field and keep the companion visible at right. */
+html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant),
+html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
+  background-image:
+    linear-gradient(90deg, rgb(246 249 255 / 0.18) 0%, rgb(246 249 255 / 0.06) 48%, transparent 76%),
+    url("./assets/chat-background-candidate.png");
+  background-position: right center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+/* In normal desktop windows, move the character clear of the right-aligned user bubble. */
+@media (min-width: 901px) and (max-width: 1500px) {
+  html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant),
+  html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
+    background-position: calc(100% + 220px) center;
+  }
+}
+
+/* One comfortable, slightly-left lane aligns turns and composer without touching the edge. */
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat {
+  padding: 0.9rem clamp(1rem, 2vw, 2rem) 1.1rem;
+  scroll-padding-block: 1rem;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat > * {
+  width: min(72%, 58rem);
+  max-width: none;
+  margin-left: max(1.25rem, calc((100% - min(72%, 58rem)) / 2 - 3rem));
+  margin-right: auto;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-user .unified-turn-body {
+  max-width: min(88%, 48rem);
+  overflow-wrap: anywhere;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-assistant {
+  max-width: min(100%, 62rem);
+  overflow-wrap: anywhere;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-assistant .unified-markdown {
+  min-width: 0;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-assistant .unified-markdown pre,
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-assistant .unified-markdown table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock {
+  padding-inline: clamp(1rem, 2vw, 2rem);
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock > * {
+  width: min(72%, 58rem);
+  max-width: 100%;
+  margin-left: max(1.25rem, calc((100% - min(72%, 58rem)) / 2 - 3rem));
+  margin-right: auto;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-input {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-pet-row {
+  --ma-pet-size: 46px;
+}
+
+@media (max-width: 1100px) {
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat > *,
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock > * {
+    width: min(72%, 58rem);
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-assistant {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 900px) {
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat > *,
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock > * {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant),
+  html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
+    background-position: right center;
+    background-size: cover;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat {
+    padding: 0.7rem 0.75rem 0.9rem;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat > *,
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock > * {
+    width: 100%;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-turn-user .unified-turn-body {
+    max-width: 94%;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-pet-row {
+    --ma-pet-size: 42px;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer-dock {
+    padding-inline: 0.75rem;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-composer {
+    gap: 0.4rem;
+    padding: 0.4rem;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-input {
+    flex-basis: 10rem;
+  }
+}
+
+/* Floating work pulse: lightweight, translucent, and outside the chat/composer layout. */
+html[data-theme] .work-activity-rail[hidden] { display: none !important; }
+html[data-theme] .unified-main { position: relative; }
+html[data-theme] .work-activity-rail {
+  position: absolute;
+  z-index: 8;
+  top: 52px;
+  left: 12px;
+  margin: 0;
+  width: 286px;
+  max-width: calc(100vw - 28px);
+  max-height: min(48vh, 420px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ma-text);
+  border: 1px solid color-mix(in srgb, var(--ma-border-strong) 52%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--ma-surface) 66%, transparent);
+  box-shadow: 0 8px 26px color-mix(in srgb, var(--ma-text) 10%, transparent);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+html[data-theme] .work-activity-toggle {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.48rem 0.68rem;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+html[data-theme] .work-activity-title { font-size: 0.78rem; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
+html[data-theme] .work-activity-state { margin-left: auto; color: var(--ma-text-muted); font-size: 0.68rem; white-space: nowrap; }
+html[data-theme] .work-activity-chevron { color: var(--ma-text-faint); font-size: 0.78rem; transition: transform 0.15s ease; }
+html[data-theme] .work-activity-list { min-height: 0; overflow: auto; padding: 0.18rem 0.68rem 0.55rem; border-top: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent); }
+html[data-theme] .work-activity-rail .work-activity-list { display: block; }
+
+html[data-theme] .work-activity-empty { padding: 0.35rem 0.05rem 0.55rem; color: var(--ma-text-muted); font-size: 0.72rem; line-height: 1.5; }
+html[data-theme] .work-activity-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: 0.48rem;
+  padding: 0.58rem 0.05rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border) 34%, transparent);
+}
+html[data-theme] .work-activity-marker { width: 6px; height: 6px; margin-top: 0.34rem; border-radius: 50%; background: var(--ma-text-faint); }
+html[data-theme] .work-activity-item.is-running .work-activity-marker { background: var(--ma-accent); }
+html[data-theme] .work-activity-item.is-ok .work-activity-marker { background: #36a879; }
+html[data-theme] .work-activity-item.is-fail .work-activity-marker { background: #d65c64; }
+html[data-theme] .work-activity-copy { min-width: 0; display: flex; flex-direction: column; gap: 0.22rem; }
+html[data-theme] .work-activity-action { color: var(--ma-text); font-size: 0.73rem; line-height: 1.42; overflow-wrap: anywhere; }
+html[data-theme] .work-activity-path { color: var(--ma-text-muted); font-family: var(--ma-font-mono, ui-monospace, monospace); font-size: 0.64rem; line-height: 1.4; overflow-wrap: anywhere; }
+html[data-theme] .work-activity-status { grid-column: 2; justify-self: start; margin-top: 0.08rem; padding: 0.08rem 0.36rem; border: 1px solid color-mix(in srgb, var(--ma-border) 68%, transparent); border-radius: 999px; color: var(--ma-text-muted); background: color-mix(in srgb, var(--ma-surface) 75%, transparent); font-size: 0.6rem; line-height: 1.35; }
+html[data-theme] .work-activity-item.is-running .work-activity-status { color: color-mix(in srgb, #6d5800 82%, var(--ma-text)); border-color: color-mix(in srgb, #c59a24 35%, var(--ma-border)); }
+html[data-theme] .work-activity-item.is-ok .work-activity-status { color: color-mix(in srgb, #267554 84%, var(--ma-text)); border-color: color-mix(in srgb, #36a879 30%, var(--ma-border)); }
+html[data-theme] .work-activity-item.is-fail .work-activity-status { color: color-mix(in srgb, #a63d45 84%, var(--ma-text)); border-color: color-mix(in srgb, #d65c64 30%, var(--ma-border)); }
+html[data-theme] .unified-shell:not([data-main-focus="chat"]) .work-activity-rail { display: none; }
+@media (max-width: 760px) {
+  html[data-theme] .work-activity-rail { display: none !important; }
+}
+
+
+/* Light engineering finish for the floating work pulse. */
+html[data-theme] .work-activity-rail {
+  border-radius: 12px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--ma-surface) 92%, white 8%), color-mix(in srgb, var(--ma-surface) 78%, transparent));
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--ma-text) 8%, transparent), 0 1px 3px color-mix(in srgb, white 55%, transparent);
+}
+html[data-theme] .work-activity-rail::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  inset: 0 12px auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ma-accent) 72%, white), color-mix(in srgb, #48b98b 58%, white), transparent);
+  pointer-events: none;
+}
+html[data-theme] .work-activity-toggle::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 66%, var(--ma-border-strong));
+  border-radius: 3px;
+  background: radial-gradient(circle, var(--ma-accent) 1.4px, transparent 1.7px) center / 6px 6px no-repeat;
+  transform: rotate(45deg);
+}
+html[data-theme] .work-activity-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ma-accent) 58%, transparent);
+  outline-offset: -3px;
+  border-radius: 9px;
+}
+html[data-theme] .work-activity-list {
+  padding-top: 0.18rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
+}
+html[data-theme] .work-activity-status {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 0.08rem;
+  padding: 0.08rem 0.36rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 68%, transparent);
+  border-radius: 999px;
+  color: var(--ma-text-muted);
+  background: color-mix(in srgb, var(--ma-surface) 75%, transparent);
+  font-size: 0.6rem;
+  line-height: 1.35;
+}
+html[data-theme] .work-activity-item.is-running .work-activity-status { color: color-mix(in srgb, #6d5800 82%, var(--ma-text)); border-color: color-mix(in srgb, #c59a24 35%, var(--ma-border)); }
+html[data-theme] .work-activity-item.is-ok .work-activity-status { color: color-mix(in srgb, #267554 84%, var(--ma-text)); border-color: color-mix(in srgb, #36a879 30%, var(--ma-border)); }
+html[data-theme] .work-activity-item.is-fail .work-activity-status { color: color-mix(in srgb, #a63d45 84%, var(--ma-text)); border-color: color-mix(in srgb, #d65c64 30%, var(--ma-border)); }
+
+
+html[data-theme] .work-activity-compact-toggle {
+  position: absolute;
+  z-index: 8;
+  top: 54px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.68rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border-strong) 60%, transparent);
+  border-radius: 999px;
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--ma-text) 8%, transparent);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+html[data-theme] .work-activity-compact-toggle[hidden] { display: none !important; }
+html[data-theme] .work-activity-compact-toggle:focus-visible { outline: 2px solid var(--ma-accent); outline-offset: 2px; }
+html[data-theme] .work-activity-history.hidden { display: none !important; }
+html[data-theme] .work-activity-history {
+  position: absolute;
+  z-index: 9;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(0.75rem, 3vh, 1.75rem);
+}
+html[data-theme] .work-activity-history-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ma-bg) 54%, transparent);
+  backdrop-filter: blur(5px);
+}
+html[data-theme] .work-activity-history-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: min(82vh, 780px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ma-border-strong) 60%, transparent);
+  border-radius: 16px;
+  color: var(--ma-text);
+  background: color-mix(in srgb, var(--ma-surface) 96%, transparent);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--ma-text) 24%, transparent);
+}
+html[data-theme] .work-activity-history-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem 0.85rem;
+  border-bottom: 1px solid var(--ma-border);
+}
+html[data-theme] .work-activity-history-header h2 { margin: 0; font-size: 1rem; }
+html[data-theme] .work-activity-history-header p { margin: 0.3rem 0 0; color: var(--ma-text-muted); font-size: 0.75rem; }
+html[data-theme] .work-activity-history-close {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 50%;
+  color: var(--ma-text);
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+html[data-theme] .work-activity-history-body { min-height: 0; overflow: auto; padding: 0.65rem 1.15rem 1.2rem; }
+html[data-theme] .work-activity-history-turn { padding: 0.6rem 0; border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent); }
+html[data-theme] .work-activity-history-turn h3 { margin: 0 0 0.3rem; color: var(--ma-text-muted); font-size: 0.72rem; font-weight: 600; }
+html[data-theme] .work-activity-history-turn .unified-activity-timeline { display: flex; flex-direction: column; gap: 0.35rem; }
+@media (max-width: 640px) {
+  html[data-theme] .work-activity-history { padding: 0.5rem; }
+  html[data-theme] .work-activity-history-panel { max-height: 88vh; border-radius: 12px; }
+  html[data-theme] .work-activity-history-header, html[data-theme] .work-activity-history-body { padding-inline: 0.8rem; }
+}
