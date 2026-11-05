@@ -328,6 +328,26 @@ _POST_TURN_REQUEST_CAPACITY = 4096
 
 
 @dataclass
+class _ParallelChatRequest:
+    request_id: str
+    work_run_id: str
+    session: Session
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    client: Any | None = None
+
+
+@dataclass
+class _WorkInstruction:
+    request_id: str
+    run_id: str
+    session_id: str
+    text: str = field(repr=False)
+    state: str = "queued"
+    prepared: bool = False
+    reason: str | None = None
+
+
+@dataclass
 class WsBridge:
     """Thread-safe bridge between WebSocket events and ConversationRepl I/O."""
 
@@ -356,6 +376,8 @@ class WsBridge:
     _input_queue: queue.Queue[str] = field(default_factory=queue.Queue)
     _confirm_queue: queue.Queue[tuple[str, str]] = field(default_factory=queue.Queue)
     _awaiting_input: threading.Event = field(default_factory=threading.Event)
+    _input_request_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _pending_input_request: tuple[str, str, str] | None = field(default=None, init=False, repr=False)
     _turn_busy: threading.Event = field(default_factory=threading.Event)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     confirm_timeout: float = field(default_factory=confirm_timeout_sec)
@@ -399,6 +421,16 @@ class WsBridge:
     _work_card_reference_enqueued: set[str] = field(default_factory=set, init=False, repr=False)
     _work_card_reference_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _work_card_continue_requests: set[tuple[str, str]] = field(default_factory=set, init=False, repr=False)
+    _parallel_chat_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _parallel_chats: dict[str, _ParallelChatRequest] = field(default_factory=dict, init=False, repr=False)
+    _parallel_chat_seen_requests: set[str] = field(default_factory=set, init=False, repr=False)
+    _work_instruction_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _work_instructions: dict[str, _WorkInstruction] = field(default_factory=dict, init=False, repr=False)
+    _active_message_route_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _active_route_slots: threading.BoundedSemaphore = field(
+        default_factory=lambda: threading.BoundedSemaphore(16), init=False, repr=False,
+    )
+    _active_message_seen_requests: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.turn_watchdog = TurnWatchdog(
@@ -901,7 +933,54 @@ class WsBridge:
             if self._post_turn_send_gate is not None:
                 self._post_turn_send_gate.cancel()
 
+    def register_parallel_chat(self, request: _ParallelChatRequest) -> bool:
+        with self._parallel_chat_lock:
+            if (self._connection_closed.is_set() or request.request_id in self._parallel_chat_seen_requests
+                    or len(self._parallel_chats) >= 8 or len(self._parallel_chat_seen_requests) >= 4096):
+                return False
+            self._parallel_chat_seen_requests.add(request.request_id)
+            self._parallel_chats[request.request_id] = request
+            return True
+
+    def cancel_parallel_chat(self, request_id: Any) -> bool:
+        if type(request_id) is not str:
+            return False
+        with self._parallel_chat_lock:
+            request = self._parallel_chats.get(request_id)
+            if request is None:
+                return False
+            request.cancel_event.set()
+            client = request.client
+        if client is not None:
+            cancel = getattr(client, "cancel_current_request", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+        return True
+
+    def finish_parallel_chat(self, request: _ParallelChatRequest) -> None:
+        with self._parallel_chat_lock:
+            if self._parallel_chats.get(request.request_id) is request:
+                self._parallel_chats.pop(request.request_id, None)
+
+    def _cancel_parallel_chats(self) -> None:
+        with self._parallel_chat_lock:
+            requests = tuple(self._parallel_chats.values())
+            for request in requests:
+                request.cancel_event.set()
+        for request in requests:
+            client = request.client
+            cancel = getattr(client, "cancel_current_request", None) if client is not None else None
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+
     def mark_connection_closed(self) -> None:
+        self._cancel_parallel_chats()
         with self._result_view_write_lock:
             self._post_turn_generation += 1
             self._revoke_auto_recognition_locked()
@@ -1005,14 +1084,42 @@ class WsBridge:
         self.emit({"type": "notice", "text": text})
 
     def input_fn(self, prompt: str) -> str:
-        self.emit({"type": "prompt.request", "prompt": prompt})
-        self._awaiting_input.set()
+        snapshot = self.lifecycle.snapshot()
+        run_id = snapshot.run_id if snapshot is not None else ""
+        session_id = self.lifecycle_conversation_id
+        request_id = str(uuid.uuid4())
+        pending = (request_id, run_id, session_id)
+        with self._input_request_lock:
+            self._pending_input_request = pending
+            self._awaiting_input.set()
+        self.emit({"type": "prompt.request", "prompt": prompt, "request_id": request_id,
+                   "run_id": run_id, "session_id": session_id})
         try:
             return self._input_queue.get(timeout=3600)
         except queue.Empty:
             return ""
         finally:
-            self._awaiting_input.clear()
+            with self._input_request_lock:
+                if self._pending_input_request == pending:
+                    self._pending_input_request = None
+                self._awaiting_input.clear()
+
+    def route_prompt_response(self, request_id: Any, run_id: Any, session_id: Any, text: Any) -> bool:
+        if (type(request_id) is not str or type(run_id) is not str or type(session_id) is not str
+                or type(text) is not str or len(text) > 4000):
+            return False
+        with self._input_request_lock:
+            if (not self._awaiting_input.is_set()
+                    or self._pending_input_request != (request_id, run_id, session_id)
+                    or self._connection_closed.is_set() or self.cancel_event.is_set()):
+                return False
+            snapshot = self.lifecycle.snapshot()
+            if (snapshot is None or snapshot.run_id != run_id or snapshot.state != "running"
+                    or self.lifecycle_conversation_id != session_id):
+                return False
+            self._pending_input_request = None
+            self._input_queue.put(text)
+            return True
 
     def confirm_fn(self, preview: str, allow_approve_all: bool) -> str:
         return self.confirm_with_receipt(preview, allow_approve_all)[0]
@@ -1468,6 +1575,168 @@ class WsBridge:
                     session_to_sync = None
         if session_to_sync is not None:
             self.sync_auto_recognition_session(session_to_sync)
+
+    @staticmethod
+    def _work_instruction_event(instruction: _WorkInstruction, state: str, *, reason: str | None = None) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": "work.instruction.state",
+            "request_id": instruction.request_id,
+            "run_id": instruction.run_id,
+            "session_id": instruction.session_id,
+            "state": state,
+        }
+        if reason or instruction.reason:
+            event["reason"] = reason or instruction.reason
+        if state == "delivered":
+            event["delivery_stage"] = "next_model_request_context"
+        return event
+
+    def _emit_work_instruction_state(self, instruction: _WorkInstruction, state: str, *, reason: str | None = None) -> None:
+        try:
+            self.emit(self._work_instruction_event(instruction, state, reason=reason))
+        except Exception as exc:
+            _log_notification_failure("work instruction state notification failed", exc)
+
+    def enqueue_work_instruction(
+        self, *, request_id: str, run_id: str, session: Session, text: str,
+    ) -> str:
+        """Queue only an explicitly targeted instruction for the exact live run/session."""
+        session_id = session.conversation_id if isinstance(session, Session) else ""
+        request_key = request_id if type(request_id) is str else ""
+        with self._work_instruction_lock:
+            existing = self._work_instructions.get(request_key)
+            if existing is not None:
+                self._emit_work_instruction_state(existing, existing.state)
+                return existing.state
+            instruction = _WorkInstruction(request_key, run_id if type(run_id) is str else "", session_id,
+                                           text if type(text) is str else "")
+            snapshot = self.lifecycle.snapshot()
+            reason = None
+            if len(self._work_instructions) >= 4096 and existing is None:
+                reason = "request_capacity_exhausted"
+            elif (not request_key or not run_id or not isinstance(session, Session)
+                    or type(text) is not str or not text.strip() or len(text) > 2000):
+                reason = "invalid_request"
+            elif (self._connection_closed.is_set() or not self._turn_busy.is_set()
+                    or snapshot is None or snapshot.run_id != run_id or snapshot.state != "running"
+                    or snapshot.cancel_requested or self.cancel_event.is_set()
+                    or self.lifecycle_conversation_id != session_id):
+                reason = "run_session_mismatch"
+            else:
+                pending = [row for row in self._work_instructions.values()
+                           if row.run_id == run_id and row.session_id == session_id and row.state == "queued"]
+                queued_bytes = sum(len(row.text.encode("utf-8")) for row in pending)
+                incoming_bytes = len(text.encode("utf-8"))
+                if len(pending) >= 8 or queued_bytes + incoming_bytes > 16000:
+                    reason = "queue_full"
+            if reason is not None:
+                instruction.state = "undelivered"
+                instruction.reason = reason
+                if request_key and reason in {"queue_full", "request_capacity_exhausted"}:
+                    self._work_instructions[request_key] = instruction
+                self._emit_work_instruction_state(instruction, "undelivered")
+                return "undelivered"
+            self._work_instructions[request_key] = instruction
+            self._emit_work_instruction_state(instruction, "queued")
+            return "queued"
+
+    def prepare_work_instructions_at_checkpoint(self, session: Session, run_id: str) -> int:
+        """Durably stage queued text at the exact round boundary; it is not delivered until added to next prompt."""
+        with self._result_view_write_lock:
+            with self._work_instruction_lock:
+                snapshot = self.lifecycle.snapshot()
+                if (not isinstance(session, Session) or snapshot is None or snapshot.run_id != run_id
+                        or snapshot.state != "running" or snapshot.cancel_requested
+                        or self.cancel_event.is_set() or self._connection_closed.is_set()
+                        or not self._turn_busy.is_set() or self.lifecycle_conversation_id != session.conversation_id):
+                    return 0
+                ready = [row for row in self._work_instructions.values()
+                         if row.run_id == run_id and row.session_id == session.conversation_id
+                         and row.state == "queued" and not row.prepared]
+                prepared = 0
+                for index, instruction in enumerate(ready):
+                    try:
+                        session.append_message({
+                            "role": "user",
+                            "content": instruction.text,
+                            HOST_INTERNAL_METADATA_KEY: {
+                                "work_instruction": True,
+                                "work_instruction_request_id": instruction.request_id,
+                                "work_instruction_run_id": run_id,
+                            },
+                        })
+                    except Exception:
+                        instruction.state = "undelivered"
+                        instruction.reason = "persistence_failed"
+                        self._emit_work_instruction_state(instruction, "undelivered")
+                        for remainder in ready[index + 1:]:
+                            remainder.state = "undelivered"
+                            remainder.reason = "persistence_failed"
+                            self._emit_work_instruction_state(remainder, "undelivered")
+                        break
+                    instruction.prepared = True
+                    prepared += 1
+                return prepared
+
+    def commit_work_instruction_delivery(
+        self, session: Session, run_id: str, model_context: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        """Add prepared instructions to the imminent Agent model context and then report delivery."""
+        with self._result_view_write_lock:
+            with self._work_instruction_lock:
+                snapshot = self.lifecycle.snapshot()
+                if (not isinstance(session, Session) or type(model_context) is not list
+                        or snapshot is None or snapshot.run_id != run_id or snapshot.state != "running"
+                        or snapshot.cancel_requested or self.cancel_event.is_set()
+                        or self._connection_closed.is_set() or not self._turn_busy.is_set()
+                        or self.lifecycle_conversation_id != session.conversation_id):
+                    return []
+                ready = [row for row in self._work_instructions.values()
+                         if row.run_id == run_id and row.session_id == session.conversation_id
+                         and row.state == "queued" and row.prepared]
+                delivered: list[dict[str, str]] = []
+                for instruction in ready:
+                    message = {"role": "user", "content": instruction.text}
+                    model_context.append(message)
+                    instruction.state = "delivered"
+                    self._emit_work_instruction_state(instruction, "delivered")
+                    delivered.append(message)
+                return delivered
+
+    def finish_work_instructions(self, run_id: str, session_id: str, finish_reason: str) -> int:
+        """Settle every instruction not handed to a model request before this run ended."""
+        with self._work_instruction_lock:
+            pending = [row for row in self._work_instructions.values()
+                       if row.run_id == run_id and row.session_id == session_id and row.state == "queued"]
+            for instruction in pending:
+                instruction.state = "undelivered"
+                instruction.reason = ("run_stopped_before_model_request" if instruction.prepared
+                                      else "run_stopped_before_checkpoint") if finish_reason in {"cancelled", "stopped", "timeout"} else (
+                    "run_ended_before_model_request" if instruction.prepared else "run_ended_before_checkpoint"
+                )
+                self._emit_work_instruction_state(instruction, "undelivered")
+            return len(pending)
+
+    def request_execution_stop(self, run_id: Any) -> bool:
+        """Stop exactly one active execution; stale/missing IDs are inert."""
+        if type(run_id) is not str or not run_id.strip():
+            return False
+        with self._result_view_write_lock:
+            snapshot, changed = self.lifecycle.request_stop(
+                "user", expected_run_id=run_id,
+            )
+            if not changed or snapshot is None:
+                return False
+            self.emit(snapshot.to_event())
+            if self.turn_watchdog is not None and self._turn_busy.is_set():
+                self.turn_watchdog.request_user_cancel()
+            self.cancel_event.set()
+            if self._turn_busy.is_set() and self._awaiting_input.is_set():
+                self._input_queue.put("")
+            if self._turn_busy.is_set() and self._cancel_turn is not None:
+                self._cancel_turn()
+            self.emit({"type": "notice", "text": "正在停止指定工作 run…"})
+            return True
 
     def request_cancel(self) -> bool:
         # Serialize cancellation ingress with a result-view atomic write. Whichever
@@ -3692,6 +3961,7 @@ async def _run_line(
     stream_request_start_index = 0
     stream_request_persisted = False
     previous_binding_transition = getattr(bound_agent, "_session_binding_transition", None)
+    previous_work_instruction_checkpoint = getattr(bound_agent, "_work_instruction_checkpoint", None)
     if hasattr(bound_agent, "_session_binding_transition"):
         bound_agent._session_binding_transition = bridge.agent_session_binding_transition
     bind_host_run_context = getattr(bound_agent, "bind_host_run_context", None)
@@ -3700,6 +3970,27 @@ async def _run_line(
         executor_session = getattr(getattr(bound_agent, "executor", None), "session", None)
         authorization_id = getattr(executor_session, "evolution_authorization_id", "")
         bind_host_run_context(run_snapshot.run_id, authorization_id)
+    if run_snapshot is not None and run_snapshot.state == "running":
+        captured_instruction_run_id = run_snapshot.run_id
+        captured_instruction_session_id = bound_session.conversation_id
+
+        def work_instruction_checkpoint(
+            phase: str, candidate_session: Session, model_context: list[dict[str, Any]] | None,
+        ) -> None:
+            if (candidate_session is not bound_session or repl.session is not bound_session
+                    or repl.agent is not bound_agent
+                    or bound_session.conversation_id != captured_instruction_session_id):
+                return
+            if phase == "prepare":
+                bridge.prepare_work_instructions_at_checkpoint(
+                    candidate_session, captured_instruction_run_id,
+                )
+            elif phase == "deliver" and model_context is not None:
+                return bridge.commit_work_instruction_delivery(
+                    candidate_session, captured_instruction_run_id, model_context,
+                )
+
+        bound_agent._work_instruction_checkpoint = work_instruction_checkpoint
     bind_project_worker_context = getattr(bound_agent, "bind_project_worker_live_context", None)
     if run_snapshot is not None and run_snapshot.state == "running" and callable(bind_project_worker_context):
         captured_run_id = run_snapshot.run_id
@@ -4213,6 +4504,8 @@ async def _run_line(
                 bound_agent.__dict__.pop("_append_user_message_with_result_reply", None)
         if hasattr(bound_agent, "_session_binding_transition"):
             bound_agent._session_binding_transition = previous_binding_transition
+        if hasattr(bound_agent, "_work_instruction_checkpoint"):
+            bound_agent._work_instruction_checkpoint = previous_work_instruction_checkpoint
         bridge._turn_busy.clear()
         try:
             bridge.end_turn()
@@ -4224,6 +4517,9 @@ async def _run_line(
             final_snapshot = _finish_execution_safely(
                 bridge, run_id=run_snapshot.run_id,
                 finish_reason=finish_reason, ok=ok,
+            )
+            bridge.finish_work_instructions(
+                run_snapshot.run_id, bound_session.conversation_id, finish_reason,
             )
             worker_work_record_result = getattr(
                 bound_agent, "_project_worker_work_record_result", None,
@@ -5681,6 +5977,9 @@ class WsSessionHandler:
                 if not isinstance(message, dict):
                     emit_error(bridge, "message must be a JSON object")
                     continue
+                # Do not await natural-language routing here: sibling tasks must deliver
+                # prompt.response, confirm.response, and run-bound stop immediately.
+                # Active natural messages serialize themselves through the bridge FIFO lock.
                 asyncio.create_task(self._handle_incoming(message, repl, bridge))
         finally:
             bridge.mark_connection_closed()
@@ -6337,7 +6636,69 @@ class WsSessionHandler:
                 emit_error(bridge, "work-records overview query failed")
             return
 
+        if msg_type == "work.instruction":
+            request_id = message.get("request_id")
+            invalid = _WorkInstruction(
+                request_id if type(request_id) is str else "",
+                message.get("run_id") if type(message.get("run_id")) is str else "",
+                getattr(getattr(repl, "session", None), "conversation_id", ""),
+                message.get("text") if type(message.get("text")) is str else "",
+            )
+            invalid.state = "undelivered"
+            bridge._emit_work_instruction_state(
+                invalid, "undelivered", reason="client_selected_route_disabled_use_user_message",
+            )
+            return
+
+        if msg_type == "chat.message":
+            bridge.emit({"type": "chat.error",
+                         "request_id": message.get("request_id") if type(message.get("request_id")) is str else "",
+                         "work_run_id": getattr(bridge.lifecycle.snapshot(), "run_id", ""),
+                         "session_id": getattr(getattr(repl, "session", None), "conversation_id", ""),
+                         "code": "client_selected_route_disabled",
+                         "message": "\u8bf7\u6539\u7528 user.message\uff1b\u7531\u670d\u52a1\u7aef\u7ed3\u5408\u4f1a\u8bdd\u4e0a\u4e0b\u6587\u8def\u7531\u3002"})
+            return
+
         if msg_type == "user.message":
+            # Natural language must never be consumed as interactive tool input.
+            # Tool prompts use the run-bound prompt.response message handled inline.
+            text = message.get("text")
+            active_work = self._active_work_run_for_session(bridge, getattr(repl, "session", None))
+            if active_work is not None:
+                if self._looks_like_natural_stop_request(text if type(text) is str else ""):
+                    request_id = message.get("request_id")
+                    session = getattr(repl, "session", None)
+                    try:
+                        canonical = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
+                    except (ValueError, TypeError, AttributeError):
+                        canonical = False
+                    if (not canonical or message.get("session_id") != getattr(session, "conversation_id", None)
+                            or not isinstance(session, Session)):
+                        accepted = False
+                    else:
+                        accepted = bridge.request_execution_stop(active_work.run_id)
+                    if accepted:
+                        bridge.invalidate_post_turn()
+                    result = {"type": "execution.stop.result", "accepted": accepted,
+                              "run_id": active_work.run_id, "source": "user.message"}
+                    if type(request_id) is str:
+                        result["request_id"] = request_id
+                    bridge.emit(result)
+                    return
+                if bridge._awaiting_input.is_set():
+                    with bridge._input_request_lock:
+                        pending_prompt = bridge._pending_input_request
+                    if pending_prompt is not None:
+                        bridge.emit({
+                            "type": "error", "code": "prompt_response_required",
+                            "request_id": message.get("request_id") if type(message.get("request_id")) is str else "",
+                            "prompt_request_id": pending_prompt[0], "run_id": pending_prompt[1],
+                            "session_id": pending_prompt[2],
+                            "message": "\u5f53\u524d\u6709\u4e00\u4e2a\u7b49\u5f85\u4e2d\u7684\u5de5\u5177\u8f93\u5165\u63d0\u793a\uff1b\u672c\u6761 user.message \u672a\u88ab\u5f53\u4f5c\u5de5\u5177\u8f93\u5165\u3002\u8bf7\u4f7f\u7528 prompt.response \u5e76\u5e26\u56de prompt.request \u4e2d\u7684 request_id\u3001run_id \u548c session_id\u3002",
+                        })
+                        return
+                await self._route_active_work_message(message, repl, bridge, active_work)
+                return
             # A replay of an admitted turn must not become input to a running tool.
             # This check and admission below run on the connection's event loop.
             request_id = message.get("request_id")
@@ -6349,8 +6710,6 @@ class WsSessionHandler:
                 bridge.emit({"type": "notice", "text": "重复请求已拦截；未再次执行，请核对原回合。"})
                 return
             text = message.get("text")
-            if isinstance(text, str) and text.strip() and bridge.try_route_input(text):
-                return
             if text in (self.PROJECT_JOURNAL_ENABLE_PHRASE, self.PROJECT_JOURNAL_DISABLE_PHRASE):
                 async with TURN_LOCK:
                     await self._handle_project_journal_command(text, bridge, repl.session.conversation_id)
@@ -6586,6 +6945,276 @@ class WsSessionHandler:
                     bridge.mark_connection_closed()
                 break
 
+    @staticmethod
+    def _active_work_run_for_session(bridge: WsBridge, session: Any) -> Any | None:
+        if not isinstance(session, Session) or not bridge._turn_busy.is_set():
+            return None
+        snapshot = bridge.lifecycle.snapshot()
+        if (snapshot is None or snapshot.state not in {"running", "stopping"}
+                or bridge.lifecycle_conversation_id != session.conversation_id):
+            return None
+        return snapshot
+
+    @staticmethod
+    def _looks_like_natural_stop_request(text: str) -> bool:
+        normalized = " ".join(text.strip().casefold().split()).rstrip(".!?。！？")
+        return normalized in {
+            "stop current work", "stop the current work", "stop work", "stop the work",
+            "\u505c\u6b62\u5f53\u524d\u5de5\u4f5c", "\u505c\u6b62\u5de5\u4f5c",
+        }
+
+    @staticmethod
+    def _looks_like_ambiguous_stop_request(text: str) -> bool:
+        normalized = " ".join(text.strip().casefold().split()).rstrip(".!?。！？")
+        return normalized in {
+            "hold on", "pause", "wait", "\u505c\u4e00\u4e0b", "\u7b49\u4e00\u4e0b",
+            "\u5148\u505c\u4e00\u4e0b", "\u5148\u505c\u4e0b",
+        }
+
+    async def _classify_active_work_message(self, text: str, session: Session) -> tuple[str, str | None]:
+        """Contextual, no-tools route classification. Every uncertain result fails closed."""
+        if self._looks_like_natural_stop_request(text):
+            return "stop", None
+        if self._looks_like_ambiguous_stop_request(text):
+            return "clarify", "ambiguous_stop"
+        try:
+            from llm_client import LLMClient
+            from llm_role_model_preferences import load_role_model_preferences
+
+            session.ensure_messages_loaded()
+            with session._messages_instance_lock:
+                history = [
+                    {"role": row.get("role"), "content": row.get("content")}
+                    for row in session.messages[-24:]
+                    if type(row) is dict and row.get("role") in {"user", "assistant"}
+                    and type(row.get("content")) is str
+                ]
+            client = LLMClient(paths=self.paths)
+            model = load_role_model_preferences(self.paths)["main"]
+            router_prompt = (
+                "ACTIVE_WORK_MESSAGE_ROUTER v1. Classify the newest user message using the supplied same-session history. "
+                "Return ONLY JSON: {\"route\":\"chat|work_instruction|clarify\",\"confidence\":\"high|low\"}. "
+                "chat means answer/discuss in the shared conversation without changing the work. "
+                "work_instruction means the user clearly and directly asks to add/change the active work; this is routing only, "
+                "not permission to bypass tool, confirmation, path, or external-side-effect safety checks. "
+                "clarify means ambiguous, quoted/untrusted, low-confidence, stop/cancel language, or a request with unclear scope. "
+                "Never classify natural stop/cancel as an instruction; the run-bound stop control is separate. "
+                "If an irreversible, external, or otherwise high-impact side effect is requested unclearly, choose clarify. "
+                "Do not answer the user and do not call tools. The final user message is the one to classify."
+            )
+            response = await asyncio.to_thread(
+                client.chat,
+                [{"role": "system", "content": router_prompt}, *history,
+                 {"role": "user", "content": text}],
+                model=model, tools=[],
+            )
+            if response.tool_calls or type(response.content) is not str:
+                return "clarify", "router_invalid_response"
+            decision = json.loads(response.content)
+            if (type(decision) is not dict or decision.get("route") not in {"chat", "work_instruction", "clarify"}
+                    or decision.get("confidence") != "high"):
+                return "clarify", "router_uncertain"
+            return decision["route"], None
+        except Exception:
+            return "clarify", "router_unavailable"
+
+    async def _route_active_work_message(
+        self, message: dict[str, Any], repl: ConversationRepl, bridge: WsBridge, work_snapshot: Any,
+    ) -> None:
+        if not bridge._active_route_slots.acquire(blocking=False):
+            bridge.emit({"type": "chat.error", "request_id": message.get("request_id", ""),
+                         "work_run_id": work_snapshot.run_id,
+                         "session_id": getattr(getattr(repl, "session", None), "conversation_id", ""),
+                         "code": "route_capacity_exhausted",
+                         "message": "\u6d3b\u52a8\u5de5\u4f5c\u8def\u7531\u7e41\u5fd9\uff1b\u672c\u6761\u672a\u56de\u590d\u6216\u6295\u9012\u3002"})
+            return
+        try:
+            async with bridge._active_message_route_lock:
+                current = self._active_work_run_for_session(bridge, getattr(repl, "session", None))
+                if (current is None or current.run_id != work_snapshot.run_id or current.state != "running"
+                        or current.cancel_requested):
+                    bridge.emit({"type": "chat.error", "request_id": message.get("request_id", ""),
+                                 "work_run_id": work_snapshot.run_id,
+                                 "session_id": getattr(getattr(repl, "session", None), "conversation_id", ""),
+                                 "code": "run_ended_during_routing",
+                                 "message": "\u5de5\u4f5c run \u5df2\u7ed3\u675f\u6216\u6b63\u5728\u505c\u6b62\uff1b\u672c\u6761\u672a\u56de\u590d\u6216\u6295\u9012\u3002"})
+                    return
+                await self._route_active_work_message_locked(message, repl, bridge, current)
+        finally:
+            bridge._active_route_slots.release()
+
+    async def _route_active_work_message_locked(
+        self, message: dict[str, Any], repl: ConversationRepl, bridge: WsBridge, work_snapshot: Any,
+    ) -> None:
+        session = getattr(repl, "session", None)
+        request_id = message.get("request_id")
+        text = message.get("text")
+        try:
+            canonical = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
+        except (ValueError, TypeError, AttributeError):
+            canonical = False
+        if (not canonical or not isinstance(session, Session)
+                or message.get("session_id") != session.conversation_id
+                or type(text) is not str or not text.strip()):
+            bridge.emit({"type": "chat.error", "request_id": request_id if type(request_id) is str else "",
+                         "work_run_id": work_snapshot.run_id,
+                         "session_id": getattr(session, "conversation_id", ""),
+                         "code": "invalid_request", "message": "\u6d3b\u52a8\u5de5\u4f5c\u671f\u95f4\u9700\u8981\u6709\u6548 request_id\u3001session_id \u548c\u975e\u7a7a\u6587\u672c\uff1b\u672c\u6761\u672a\u6295\u9012\u3002"})
+            return
+        if message.get("attachments") not in (None, []):
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "attachments_unsupported",
+                         "message": "\u6d3b\u52a8\u5de5\u4f5c\u671f\u95f4\u6682\u4e0d\u652f\u6301\u5e26\u9644\u4ef6\u6d88\u606f\uff1b\u672c\u6761\u672a\u6295\u9012\u3002"})
+            return
+        if request_id in bridge._parallel_chat_seen_requests or request_id in bridge._work_instructions:
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "duplicate_request",
+                         "message": "\u91cd\u590d\u8bf7\u6c42\u5df2\u62e6\u622a\uff1b\u6ca1\u6709\u518d\u6b21\u56de\u590d\u6216\u6295\u9012\u3002"})
+            return
+        if request_id in bridge._active_message_seen_requests:
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "duplicate_request",
+                         "message": "\u91cd\u590d\u8bf7\u6c42\u5df2\u62e6\u622a\uff1b\u672a\u91cd\u590d\u5904\u7406\u3002"})
+            return
+        if len(bridge._active_message_seen_requests) >= 4096:
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "request_capacity_exhausted",
+                         "message": "\u672c\u8fde\u63a5\u7684\u8bf7\u6c42\u53bb\u91cd\u5bb9\u91cf\u5df2\u8fbe\u4e0a\u9650\uff1b\u672c\u6761\u672a\u5904\u7406\u3002"})
+            return
+        bridge._active_message_seen_requests.add(request_id)
+        route, reason = await self._classify_active_work_message(text, session)
+        current = self._active_work_run_for_session(bridge, session)
+        if (current is None or current.run_id != work_snapshot.run_id or current.state != "running"
+                or current.cancel_requested):
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "run_ended_during_routing",
+                         "message": "\u5de5\u4f5c run \u5df2\u7ed3\u675f\u6216\u6b63\u5728\u505c\u6b62\uff1b\u672c\u6761\u672a\u56de\u590d\u6216\u6295\u9012\u3002"})
+            return
+        if route == "stop":
+            accepted = bridge.request_execution_stop(work_snapshot.run_id)
+            if accepted:
+                bridge.invalidate_post_turn()
+            bridge.emit({"type": "execution.stop.result", "accepted": accepted,
+                         "run_id": work_snapshot.run_id, "request_id": request_id,
+                         "source": "user.message"})
+            return
+        if route == "work_instruction":
+            bridge.enqueue_work_instruction(
+                request_id=request_id, run_id=work_snapshot.run_id, session=session, text=text,
+            )
+            return
+        if route == "chat":
+            await self._dispatch_parallel_chat(message, repl, bridge, work_snapshot)
+            return
+        if reason in {"stop_request", "ambiguous_stop"}:
+            clarification = (
+                "\u4f60\u662f\u5e0c\u671b\u505c\u6b62\u5f53\u524d\u5de5\u4f5c\uff0c\u8fd8\u662f\u53ea\u60f3\u8ba8\u8bba\u505c\u6b62\u65b9\u5f0f\uff1f"
+                "\u5f53\u524d\u5de5\u4f5c\u5c1a\u672a\u505c\u6b62\uff1b\u5982\u786e\u9700\u505c\u6b62\uff0c\u8bf7\u4f7f\u7528\u5f53\u524d\u5de5\u4f5c\u5bf9\u5e94\u7684\u505c\u6b62\u63a7\u4ef6\u3002"
+            )
+        else:
+            clarification = (
+                "\u6211\u8fd8\u4e0d\u80fd\u53ef\u9760\u5224\u65ad\u8fd9\u6761\u6d88\u606f\u662f\u8ba8\u8bba\uff0c\u8fd8\u662f\u8981\u6539\u53d8\u5f53\u524d\u5de5\u4f5c\uff1b\u5f53\u524d\u5de5\u4f5c\u5c1a\u672a\u6536\u5230\u65b0\u6307\u4ee4\u3002"
+                "\u8bf7\u8865\u5145\u4f60\u5e0c\u671b\u6211\u56de\u7b54\u7684\u5177\u4f53\u95ee\u9898\uff0c\u6216\u660e\u786e\u8bf4\u660e\u8981\u5bf9\u5f53\u524d\u5de5\u4f5c\u505a\u7684\u5177\u4f53\u6539\u52a8\u3002"
+            )
+        await self._dispatch_parallel_chat(
+            message, repl, bridge, work_snapshot, forced_response=clarification,
+        )
+
+    async def _dispatch_parallel_chat(
+        self, message: dict[str, Any], repl: ConversationRepl, bridge: WsBridge, work_snapshot: Any,
+        *, forced_response: str | None = None,
+    ) -> None:
+        request_id = message.get("request_id")
+        text = message.get("text")
+        try:
+            canonical_request = type(request_id) is str and str(uuid.UUID(request_id)) == request_id
+        except (ValueError, TypeError, AttributeError):
+            canonical_request = False
+        if not canonical_request or type(text) is not str or not text.strip():
+            bridge.emit({"type": "chat.error", "request_id": request_id if type(request_id) is str else "",
+                         "work_run_id": work_snapshot.run_id, "session_id": repl.session.conversation_id,
+                         "code": "invalid_request", "message": "并行聊天需要有效 request_id 和非空文本。"})
+            return
+        if message.get("attachments") not in (None, []):
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": repl.session.conversation_id, "code": "attachments_unsupported",
+                         "message": "工作运行期间的并行聊天暂不支持附件。"})
+            return
+        session = repl.session
+        request = _ParallelChatRequest(request_id, work_snapshot.run_id, session)
+        if not bridge.register_parallel_chat(request):
+            bridge.emit({"type": "chat.error", "request_id": request_id, "work_run_id": work_snapshot.run_id,
+                         "session_id": session.conversation_id, "code": "request_unavailable",
+                         "message": "聊天请求重复、连接已关闭或并行请求已达上限。"})
+            return
+        fields = {"request_id": request_id, "work_run_id": work_snapshot.run_id,
+                  "session_id": session.conversation_id}
+        try:
+            if bridge._connection_closed.is_set():
+                request.cancel_event.set()
+                raise LLMCancelledError("connection closed")
+            # Session.append_message uses both the per-instance and OS-backed lock.
+            # Never save a stale full-history snapshot from this side channel.
+            session.ensure_messages_loaded()
+            parallel_chat_meta = {
+                HOST_INTERNAL_METADATA_KEY: {"parallel_chat": True, "request_id": request_id},
+            }
+            session.append_message({"role": "user", "content": text, **parallel_chat_meta})
+            bridge.emit({"type": "chat.start", **fields})
+            with session._messages_instance_lock:
+                history = [
+                    {"role": row.get("role"), "content": row.get("content")}
+                    for row in session.messages
+                    if type(row) is dict and row.get("role") in {"user", "assistant"}
+                    and type(row.get("content")) is str
+                ][-40:]
+            if forced_response is not None:
+                # Deterministic clarifications must remain available when routing/model
+                # providers are unhealthy; they never claim the message was delivered to work.
+                answer = forced_response
+                bridge.emit({"type": "chat.delta", **fields, "text": answer})
+            else:
+                from llm_client import LLMClient, StreamHandlers
+                from llm_role_model_preferences import load_role_model_preferences
+                from loader import build_system_prompt
+
+                client = LLMClient(paths=self.paths)
+                request.client = client
+                client.set_cancel_event(request.cancel_event)
+                if request.cancel_event.is_set():
+                    raise LLMCancelledError("parallel chat cancelled")
+                model = load_role_model_preferences(self.paths)["main"]
+                base_prompt = build_system_prompt(
+                    session, paths=self.paths, include_overlay=False,
+                ).prompt
+                shared_context_guard = (
+                    "This is the same conversation as the active work. Answer naturally in the established assistant voice. "
+                    "Do not claim live execution facts that are absent from the conversation history. "
+                    "This response call has no tools; any requested work change must be separately admitted at the active run's safety checkpoint."
+                )
+                messages = [{"role": "system", "content": base_prompt + "\n\n" + shared_context_guard}, *history]
+                stream = StreamHandlers(on_content_delta=lambda delta: bridge.emit({
+                    "type": "chat.delta", **fields, "text": delta,
+                }))
+                response = await asyncio.to_thread(
+                    client.chat, messages, model=model, tools=[], stream=stream,
+                )
+                if request.cancel_event.is_set():
+                    raise LLMCancelledError("parallel chat cancelled")
+                if response.tool_calls:
+                    raise RuntimeError("parallel chat tool calls are forbidden")
+                answer = response.content if type(response.content) is str else ""
+            session.append_message({"role": "assistant", "content": answer, **parallel_chat_meta})
+            bridge.emit({"type": "chat.done", **fields, "text": answer,
+                         "finish_reason": (response.finish_reason or "unknown") if forced_response is None else "clarification"})
+        except LLMCancelledError:
+            bridge.emit({"type": "chat.error", **fields, "code": "cancelled", "message": "聊天请求已取消；工作 run 未受影响。"})
+        except Exception:
+            bridge.emit({"type": "chat.error", **fields, "code": "chat_failed",
+                         "message": "并行聊天未能完成或保存；工作 run 未受影响。"})
+        finally:
+            bridge.finish_parallel_chat(request)
+
     def _dispatch_inline(self, message: dict[str, Any], bridge: WsBridge) -> bool:
         """Handle messages that must not wait behind an in-flight turn.
 
@@ -6595,6 +7224,21 @@ class WsSessionHandler:
         msg_type = message.get("type")
         if not isinstance(msg_type, str):
             return False
+
+        if msg_type == "prompt.response":
+            request_id = message.get("request_id")
+            run_id = message.get("run_id")
+            text = message.get("text")
+            accepted = bridge.route_prompt_response(request_id, run_id, message.get("session_id"), text)
+            response = {"type": "prompt.response.result", "accepted": accepted}
+            if type(request_id) is str:
+                response["request_id"] = request_id
+            if type(run_id) is str:
+                response["run_id"] = run_id
+            if type(message.get("session_id")) is str:
+                response["session_id"] = message["session_id"]
+            bridge.emit(response)
+            return True
 
         if msg_type == "confirm.response":
             request_id = message.get("request_id")
@@ -6629,7 +7273,27 @@ class WsSessionHandler:
             bridge.deliver_confirm(request_id, normalized)
             return True
 
+        if msg_type == "execution.stop":
+            run_id = message.get("run_id")
+            accepted = bridge.request_execution_stop(run_id)
+            if accepted:
+                bridge.invalidate_post_turn()
+            response: dict[str, Any] = {"type": "execution.stop.result", "accepted": accepted}
+            if type(run_id) is str:
+                response["run_id"] = run_id
+            bridge.emit(response)
+            return True
+
+        if msg_type == "chat.cancel":
+            request_id = message.get("request_id")
+            cancelled = bridge.cancel_parallel_chat(request_id)
+            bridge.emit({"type": "chat.cancel.result", "request_id": request_id if type(request_id) is str else "",
+                         "accepted": cancelled})
+            return True
+
         if msg_type == "turn.cancel":
+            # Legacy compatibility: Terminal and older clients intentionally send
+            # an unbound cancel for their current turn. New UI must use execution.stop.
             bridge.invalidate_post_turn()
             overview_cancelled = bridge.cancel_overview_query()
             run = bridge.lifecycle.snapshot()
@@ -7464,8 +8128,6 @@ class WsSessionHandler:
                 await self._handle_day_journal_summary(
                     text, repl, bridge, request_id=message.get("request_id"),
                 )
-                return
-            if text.strip() and bridge.try_route_input(text):
                 return
             from file_stage import compose_user_message
 

@@ -61,6 +61,8 @@ class TerminalInkBridgeStage3Tests(unittest.TestCase):
 
     def test_invalid_messages_are_ignored(self):
         self.assertIsNone(TerminalInkBridge._parse_input({'type': 'input.line', 'text': 3}))
+        # Terminal CLI prompts use local input.line, not the server's user.message wire.
+        self.assertIsNone(TerminalInkBridge._parse_input({'type': 'user.message', 'text': '42'}))
         self.assertIsNone(
             TerminalInkBridge._parse_input(
                 {'type': 'confirm.response', 'request_id': 'r1', 'choice': 'maybe'}

@@ -186,6 +186,13 @@ export type ServerEvent =
   | LlmRoleModelsEvent
   | { type: "client.connection.closed" }
   | { type: "user.message.persisted"; session_id: string; request_id: string }
+  | { type: "chat.start"; request_id: string; work_run_id: string; session_id: string }
+  | { type: "chat.delta"; request_id: string; work_run_id: string; session_id: string; text: string }
+  | { type: "chat.done"; request_id: string; work_run_id: string; session_id: string; text: string; finish_reason: string }
+  | { type: "chat.error"; request_id: string; work_run_id: string; session_id: string; code: string; message: string }
+  | { type: "chat.cancel.result"; request_id: string; accepted: boolean }
+  | { type: "execution.stop.result"; run_id?: string; accepted: boolean }
+  | { type: "work.instruction.state"; request_id: string; run_id: string; session_id: string; state: "queued" | "delivered" | "undelivered"; reason?: string; delivery_stage?: "next_model_request_context" }
   | WorkCardPresentEvent
   | WorkCardEvent
   | WorkRecordsOverviewResultEvent
@@ -331,7 +338,8 @@ export type ServerEvent =
       ok?: boolean;
       services: ServiceListItem[];
     }
-  | { type: "prompt.request"; prompt: string }
+  | { type: "prompt.request"; request_id: string; run_id: string; session_id: string; prompt: string }
+  | { type: "prompt.response.result"; request_id: string; run_id: string; session_id: string; accepted: boolean }
   | {
       type: "session.list";
       sessions: Array<{
@@ -1776,14 +1784,19 @@ export class AgentWsClient {
       activeDocSelection?: string;
       turnMode?: "agent" | "ask";
       requestId?: string;
+      sessionId?: string;
       companionWorldContext?: CompanionWorldContextPayload;
     },
   ): { requestId: string; sessionId: string | null } {
     const requestId = opts?.requestId ?? crypto.randomUUID();
-    const sessionId = this.currentConversationId || null;
+    const sessionId = opts?.sessionId ?? (this.currentConversationId || null);
+    if (opts?.sessionId && opts.sessionId !== this.currentConversationId) {
+      throw new Error("user message session does not match the active conversation");
+    }
     const payload: Record<string, unknown> = {
       type: "user.message",
       request_id: requestId,
+      ...(sessionId ? { session_id: sessionId } : {}),
       text,
     };
     if (attachmentIds?.length) {
@@ -1838,6 +1851,44 @@ export class AgentWsClient {
 
   sendConfirm(requestId: string, choice: "y" | "n" | "a"): void {
     this.send({ type: "confirm.response", request_id: requestId, choice });
+  }
+
+  sendPromptResponse(requestId: string, runId: string, sessionId: string, text: string): void {
+    if (!WORK_CARD_UUID.test(requestId) || !runId.trim() || !sessionId.trim()
+      || typeof text !== "string" || text.length > 4000) {
+      throw new Error("tool prompt response requires a request UUID, run, session, and text up to 4000 characters");
+    }
+    if (sessionId !== this.currentConversationId) {
+      throw new Error("tool prompt response session does not match the active conversation");
+    }
+    this.send({ type: "prompt.response", request_id: requestId, run_id: runId, session_id: sessionId, text });
+  }
+
+  sendExecutionStop(runId: string): void {
+    const targetRunId = typeof runId === "string" ? runId.trim() : "";
+    if (!targetRunId) throw new Error("execution stop requires a run id");
+    this.send({ type: "execution.stop", run_id: targetRunId });
+  }
+
+  sendWorkInstruction(requestId: string, sessionId: string, runId: string, text: string): void {
+    if (!WORK_CARD_UUID.test(requestId) || !sessionId.trim() || !runId.trim() || !text.trim()) {
+      throw new Error("work instruction requires a request UUID, session, run, and non-empty text");
+    }
+    this.send({ type: "work.instruction", request_id: requestId, session_id: sessionId, run_id: runId, text });
+  }
+
+
+  sendParallelChatMessage(text: string, requestId: string): void {
+    if (!WORK_CARD_UUID.test(requestId) || typeof text !== "string" || !text.trim()) {
+      throw new Error("parallel chat requires a request UUID and non-empty text");
+    }
+    this.send({ type: "chat.message", request_id: requestId, text });
+  }
+
+
+  cancelParallelChat(requestId: string): void {
+    if (!WORK_CARD_UUID.test(requestId)) throw new Error("parallel chat cancellation requires a request UUID");
+    this.send({ type: "chat.cancel", request_id: requestId });
   }
 
   sendTurnCancel(): void {

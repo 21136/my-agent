@@ -124,11 +124,14 @@ class ExecutionLifecycle:
     def request_stop(
         self,
         reason: str = "user",
+        *,
+        expected_run_id: str | None = None,
     ) -> tuple[ExecutionSnapshot | None, bool]:
         normalized_reason = reason.strip() or "user"
         with self._lock:
             current = self._snapshot
-            if current is None or current.state not in {"queued", "running"}:
+            if (current is None or current.state not in {"queued", "running"}
+                    or (expected_run_id is not None and current.run_id != expected_run_id)):
                 return current, False
             self._snapshot = replace(
                 current,

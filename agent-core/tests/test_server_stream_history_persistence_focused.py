@@ -138,7 +138,7 @@ def test_real_loopback_persists_each_failed_attempt_and_marks_partial_history(tm
                             deltas.append(event.get("text", ""))
                             if cancel and not sent_cancel:
                                 sent_cancel = True
-                                await ws.send(json.dumps({"type": "turn.cancel"}))
+                                await ws.send(json.dumps({"type": "execution.stop", "run_id": event["run_id"]}))
                         if event.get("type") == "turn.end":
                             return deltas, event
 
@@ -304,7 +304,7 @@ def test_session_switch_saves_stream_to_bound_session_only(tmp_path, monkeypatch
                     event = json.loads(await asyncio.wait_for(ws.recv(), 8))
                     if event.get("type") == "assistant.delta":
                         seen_delta = True
-                        await ws.send(json.dumps({"type": "turn.cancel"}))
+                        await ws.send(json.dumps({"type": "execution.stop", "run_id": event["run_id"]}))
                     if event.get("type") == "turn.end":
                         assert event.get("finish_reason") == "cancelled"
                         break
@@ -461,8 +461,13 @@ def test_pre_delta_failure_and_cancel_persist_empty_terminal_outcomes(tmp_path, 
                     clients[-1].set_mode(mode)
                     await ws.send(json.dumps({"type": "user.message", "text": text}))
                     if cancel:
+                        run_id = None
+                        while run_id is None:
+                            event = json.loads(await asyncio.wait_for(ws.recv(), 5))
+                            if event.get("type") == "execution.state" and event.get("state") == "running":
+                                run_id = event.get("run_id")
                         assert await asyncio.to_thread(clients[-1].started.wait, 5)
-                        await ws.send(json.dumps({"type": "turn.cancel"}))
+                        await ws.send(json.dumps({"type": "execution.stop", "run_id": run_id}))
                     deltas = []
                     while True:
                         event = json.loads(await asyncio.wait_for(ws.recv(), 10))

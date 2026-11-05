@@ -33,6 +33,9 @@ export type ChatBlock =
   | { kind: "user"; text: string; turnIndex: number; persistence?: UserMessagePersistence }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
+  | { kind: "work-instruction"; requestId: string; sessionId: string; workRunId: string; text: string; state: "sending" | "queued" | "delivered" | "undelivered"; reason?: string; deliveryStage?: "next_model_request_context" }
+  | { kind: "parallel-chat"; requestId: string; sessionId: string; workRunId: string; promptText: string; responseText: string; deliveryState: "pending" | "delivered" | "done" | "error"; cancelRequested?: boolean; errorCode?: string; errorMessage?: string }
+  | ToolPromptBlock
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
   | { kind: "notice"; text: string; plainText?: boolean }
   | { kind: "work-card-reference"; presentationId: string; cardId: string; text: string }
@@ -50,6 +53,17 @@ export type ChatBlock =
       allowApproveAll: boolean;
       resolved?: string;
     };
+
+export type ToolPromptBlock = {
+  kind: "tool-prompt";
+  requestId: string;
+  runId: string;
+  sessionId: string;
+  prompt: string;
+  responseText: string;
+  state: "waiting" | "sending" | "accepted" | "rejected";
+  reason?: string;
+};
 
 export type ConfirmOverlay = {
   requestId: string;
@@ -69,6 +83,7 @@ export interface ChatSessionModel {
   confirmSubmitting: boolean;
   cancelRequested: boolean;
   confirmOverlay: ConfirmOverlay | null;
+  pendingToolPrompt: ToolPromptBlock | null;
   currentTurnKey: string;
   turnCounter: number;
   blocks: ChatBlock[];
@@ -110,8 +125,6 @@ export interface ChatSessionHooks {
   onTurnEnd?: (ok: boolean, finishReason: string) => void;
   onCheckerVerdict?: (event: { tool_name: string; verdict: string }) => void;
   onError?: () => void;
-  /** Sidecar did not emit turn.end within watchdog window after Stop. */
-  onCancelTimeout?: () => void;
 }
 
 const CANCEL_WATCHDOG_MS = 45_000;
@@ -140,6 +153,10 @@ export interface ChatSession {
   resetTurnActivity(): void;
   isWorking(): boolean;
   pushUserMessage(text: string, persistence?: { requestId: string; sessionId: string | null; receiptEligible: boolean; hasAttachments?: boolean }): number;
+  beginToolPromptResponse(requestId: string, runId: string, sessionId: string, text: string): boolean;
+  addParallelChatRequest(text: string, requestId: string, workRunId: string): boolean;
+  addWorkInstructionRequest(text: string, requestId: string, sessionId: string, workRunId: string): boolean;
+  requestParallelChatCancel(requestId: string): boolean;
   pushReviewSubagentCard(
     status: "running" | "done",
     opts?: { taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number },
@@ -168,7 +185,7 @@ export function escapeHtml(text: string): string {
 }
 
 export function isEphemeralChatBlock(kind: ChatBlock["kind"]): boolean {
-  return kind === "process" || kind === "assistant-streaming" || kind === "confirm";
+  return kind === "process" || kind === "assistant-streaming" || kind === "confirm" || kind === "parallel-chat" || kind === "work-instruction" || kind === "tool-prompt";
 }
 
 /** UX-028 M2 — history reload must not resurrect live process/thinking UI. */
@@ -357,6 +374,7 @@ export function createChatSession(
     confirmSubmitting: false,
     cancelRequested: false,
     confirmOverlay: null,
+    pendingToolPrompt: null,
     currentTurnKey: "",
     turnCounter: 0,
     blocks: [],
@@ -719,12 +737,8 @@ export function createChatSession(
       if (!model.cancelRequested) return;
       model.blocks.push({
         kind: "notice",
-        text: "停止请求超时，界面已恢复；若仍无响应请托盘退出后重启。",
+        text: "仍未收到停止终态；当前工作状态未确认，继续等待服务端回执。",
       });
-      if (options.showProcess) settleCurrentTurnProcesses();
-      resetTurnActivity();
-      model.confirmPending = false;
-      hooks.onCancelTimeout?.();
       notify();
     }, CANCEL_WATCHDOG_MS);
     notify();
@@ -777,6 +791,188 @@ export function createChatSession(
     model.blocks.push({ kind: "user", text, turnIndex, ...(persistence ? { persistence } : {}) });
     notify();
     return turnIndex;
+  }
+
+  function addParallelChatRequest(text: string, requestId: string, workRunId: string): boolean {
+    const normalizedText = text.trim();
+    const normalizedRequestId = requestId.trim();
+    const normalizedWorkRunId = normalizedRunId(workRunId);
+    if (!normalizedText || !USER_MESSAGE_REQUEST_UUID.test(normalizedRequestId)
+      || !normalizedWorkRunId || normalizedWorkRunId !== normalizedRunId(model.executionRunId)
+      || model.executionState !== "running" || model.confirmPending || model.cancelRequested
+      || model.blocks.some((block) => block.kind === "parallel-chat" && block.requestId === normalizedRequestId)) {
+      return false;
+    }
+    model.blocks.push({
+      kind: "parallel-chat",
+      requestId: normalizedRequestId,
+      sessionId: model.sessionId,
+      workRunId: normalizedWorkRunId,
+      promptText: normalizedText,
+      responseText: "",
+      deliveryState: "pending",
+    });
+    notify();
+    return true;
+  }
+
+  function addWorkInstructionRequest(text: string, requestId: string, sessionId: string, workRunId: string): boolean {
+    const normalizedText = text.trim();
+    const normalizedRequestId = requestId.trim();
+    const normalizedSessionId = sessionId.trim();
+    const normalizedWorkRunId = normalizedRunId(workRunId);
+    if (!normalizedText || !USER_MESSAGE_REQUEST_UUID.test(normalizedRequestId)
+      || !normalizedSessionId || normalizedSessionId !== model.sessionId
+      || !normalizedWorkRunId || normalizedWorkRunId !== normalizedRunId(model.executionRunId)
+      || model.executionState !== "running" || model.confirmPending || model.cancelRequested
+      || model.blocks.some((block) => block.kind === "work-instruction" && block.requestId === normalizedRequestId)) return false;
+    model.blocks.push({ kind: "work-instruction", requestId: normalizedRequestId, sessionId: normalizedSessionId,
+      workRunId: normalizedWorkRunId, text: normalizedText, state: "sending" });
+    notify();
+    return true;
+  }
+
+  function handleWorkInstructionState(event: Extract<ServerEvent, { type: "work.instruction.state" }>): boolean {
+    if (event.session_id !== model.sessionId || typeof event.request_id !== "string" || typeof event.run_id !== "string") return false;
+    const block = model.blocks.find((item) => item.kind === "work-instruction" && item.requestId === event.request_id
+      && item.sessionId === event.session_id && item.workRunId === event.run_id);
+    if (!block) return false;
+    if (event.state === "queued") {
+      if (block.state !== "sending" && block.state !== "queued") return false;
+      block.state = "queued";
+      block.reason = undefined;
+      block.deliveryStage = undefined;
+    } else if (event.state === "delivered") {
+      if (event.delivery_stage !== "next_model_request_context" || (block.state !== "queued" && block.state !== "delivered")) return false;
+      block.state = "delivered";
+      block.deliveryStage = event.delivery_stage;
+      block.reason = undefined;
+    } else if (event.state === "undelivered") {
+      if (block.state === "delivered" || block.state === "undelivered") return false;
+      block.state = "undelivered";
+      block.reason = typeof event.reason === "string" ? event.reason : undefined;
+      block.deliveryStage = undefined;
+    } else {
+      return false;
+    }
+    notify();
+    return true;
+  }
+
+  function requestParallelChatCancel(requestId: string): boolean {
+    const block = model.blocks.find((item) => item.kind === "parallel-chat" && item.requestId === requestId);
+    if (!block || block.deliveryState !== "delivered" || block.cancelRequested) return false;
+    block.cancelRequested = true;
+    notify();
+    return true;
+  }
+
+  function handleParallelChatEvent(event: Extract<ServerEvent, { type: "chat.start" | "chat.delta" | "chat.done" | "chat.error" | "chat.cancel.result" }>): boolean {
+    if (typeof event.request_id !== "string") return false;
+    let block = event.type === "chat.cancel.result"
+      ? model.blocks.find((item) => item.kind === "parallel-chat" && item.requestId === event.request_id && item.sessionId === model.sessionId)
+      : event.session_id === model.sessionId && typeof event.work_run_id === "string"
+        ? model.blocks.find((item) => item.kind === "parallel-chat"
+          && item.requestId === event.request_id && item.sessionId === event.session_id
+          && item.workRunId === event.work_run_id)
+        : undefined;
+    if (!block && (event.type === "chat.start" || event.type === "chat.error")
+      && event.session_id === model.sessionId && typeof event.work_run_id === "string") {
+      const pendingIndex = model.blocks.findIndex((item) => item.kind === "work-instruction"
+        && item.requestId === event.request_id && item.sessionId === event.session_id
+        && item.workRunId === event.work_run_id);
+      const pending = model.blocks[pendingIndex];
+      if (pending?.kind === "work-instruction" && pending.state === "sending") {
+        block = {
+          kind: "parallel-chat", requestId: pending.requestId, sessionId: pending.sessionId,
+          workRunId: pending.workRunId, promptText: pending.text, responseText: "", deliveryState: "pending",
+        };
+        model.blocks[pendingIndex] = block;
+      }
+    }
+    if (!block) return false;
+    if (event.type === "chat.cancel.result") {
+      if (block.deliveryState !== "delivered" || typeof event.accepted !== "boolean") return false;
+      block.cancelRequested = event.accepted;
+    } else if (event.type === "chat.start") {
+      if (block.deliveryState !== "pending") return false;
+      block.deliveryState = "delivered";
+    } else if (event.type === "chat.delta") {
+      if (block.deliveryState !== "delivered" || typeof event.text !== "string") return false;
+      block.responseText += event.text;
+    } else if (event.type === "chat.done") {
+      if (block.deliveryState !== "delivered" || typeof event.text !== "string") return false;
+      block.deliveryState = "done";
+      block.responseText = event.text;
+    } else {
+      if (block.deliveryState === "done" || block.deliveryState === "error"
+        || typeof event.message !== "string" || typeof event.code !== "string") return false;
+      block.deliveryState = "error";
+      block.cancelRequested = false;
+      block.errorCode = event.code;
+      block.errorMessage = event.message;
+    }
+    notify();
+    return true;
+  }
+  function acceptToolPromptRequest(event: Extract<ServerEvent, { type: "prompt.request" }>): boolean {
+    const keys = Object.keys(event);
+    if (keys.length !== 5 || keys.some((key) => !["type", "request_id", "run_id", "session_id", "prompt"].includes(key))
+      || typeof event.request_id !== "string" || !USER_MESSAGE_REQUEST_UUID.test(event.request_id)
+      || typeof event.run_id !== "string" || !event.run_id || event.run_id !== model.executionRunId
+      || typeof event.session_id !== "string" || !event.session_id || event.session_id !== model.sessionId
+      || typeof event.prompt !== "string" || !["running"].includes(model.executionState)) return false;
+    const existing = model.pendingToolPrompt;
+    if (existing) {
+      return existing.requestId === event.request_id && existing.runId === event.run_id && existing.sessionId === event.session_id;
+    }
+    const block: ToolPromptBlock = {
+      kind: "tool-prompt", requestId: event.request_id, runId: event.run_id, sessionId: event.session_id,
+      prompt: event.prompt, responseText: "", state: "waiting",
+    };
+    model.blocks.push(block);
+    model.pendingToolPrompt = block;
+    notify();
+    return true;
+  }
+
+  function beginToolPromptResponse(requestId: string, runId: string, sessionId: string, text: string): boolean {
+    const pending = model.pendingToolPrompt;
+    if (!pending || pending.requestId !== requestId || pending.runId !== runId || pending.sessionId !== sessionId
+      || sessionId !== model.sessionId || runId !== model.executionRunId || model.executionState !== "running"
+      || model.cancelRequested || model.confirmPending || typeof text !== "string" || text.length > 4000
+      || (pending.state !== "waiting" && pending.state !== "rejected")) return false;
+    pending.responseText = text;
+    pending.state = "sending";
+    pending.reason = undefined;
+    notify();
+    return true;
+  }
+
+  function handlePromptResponseResult(event: Extract<ServerEvent, { type: "prompt.response.result" }>): boolean {
+    const keys = Object.keys(event);
+    const pending = model.pendingToolPrompt;
+    if (keys.length !== 5 || keys.some((key) => !["type", "request_id", "run_id", "session_id", "accepted"].includes(key))
+      || typeof event.accepted !== "boolean" || !pending || pending.state !== "sending"
+      || event.request_id !== pending.requestId || event.run_id !== pending.runId || event.session_id !== pending.sessionId
+      || event.session_id !== model.sessionId || event.run_id !== model.executionRunId) return false;
+    if (event.accepted) {
+      pending.state = "accepted";
+      model.pendingToolPrompt = null;
+    } else {
+      pending.state = "rejected";
+      pending.reason = "后台未接受；回复已保留，且未发送为普通消息";
+    }
+    notify();
+    return true;
+  }
+
+  function expirePendingToolPrompt(reason: string): void {
+    const pending = model.pendingToolPrompt;
+    if (!pending) return;
+    pending.state = "rejected";
+    pending.reason = reason;
+    model.pendingToolPrompt = null;
   }
 
   function pushReviewSubagentCard(
@@ -923,6 +1119,8 @@ export function createChatSession(
       "activity.update",
       "confirm.request",
       "confirm.done",
+      "prompt.request",
+      "prompt.response.result",
       "tool.start",
       "tool.end",
       "tool.progress",
@@ -966,6 +1164,29 @@ export function createChatSession(
   function handleEvent(event: ServerEvent): boolean {
     if (isStaleRunEvent(event)) return false;
     switch (event.type) {
+      case "prompt.request":
+        return acceptToolPromptRequest(event);
+      case "prompt.response.result":
+        return handlePromptResponseResult(event);
+      case "chat.start":
+      case "chat.delta":
+      case "chat.done":
+      case "chat.error":
+      case "chat.cancel.result":
+        return handleParallelChatEvent(event);
+      case "work.instruction.state":
+        return handleWorkInstructionState(event);
+      case "execution.stop.result": {
+        const runId = normalizedRunId(event.run_id);
+        if (!runId || runId !== normalizedRunId(model.executionRunId)) return false;
+        if (!event.accepted && !model.confirmPending && model.cancelRequested
+          && ["queued", "running"].includes(model.executionState)) {
+          model.cancelRequested = false;
+          clearCancelWatchdog();
+        }
+        notify();
+        break;
+      }
       case "user.message.persisted": {
         if (!acceptPersistedUserMessage(event)) return false;
         break;
@@ -985,6 +1206,9 @@ export function createChatSession(
         if (model.sessionId && model.sessionId !== event.session_id) markPendingUserMessagesUnknown(model.sessionId);
         if (model.sessionId !== event.session_id) { postTurnConfirmations.clear(); requirementVerificationConfirmations.clear(); postTurnResults.clear(); }
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
+        if (model.pendingToolPrompt && (sessionChanged || model.pendingToolPrompt.sessionId !== event.session_id)) {
+          expirePendingToolPrompt("会话已切换；工具输入未发送为普通消息");
+        }
         if (!sessionChanged && turnIsBusy()) {
           model.sessionId = event.session_id;
           hooks.onSessionBanner?.(event.session_id);
@@ -1037,6 +1261,9 @@ export function createChatSession(
           beginTurnActivity();
           model.cancelRequested = true;
         } else {
+          if (model.pendingToolPrompt && model.pendingToolPrompt.runId === runId) {
+            expirePendingToolPrompt("工作已结束；工具输入未发送为普通消息");
+          }
           model.turnActive = false;
           model.turnFinished = true;
           model.cancelRequested = false;
@@ -1459,10 +1686,6 @@ export function createChatSession(
         notify();
         break;
       }
-      case "prompt.request":
-        model.blocks.push({ kind: "notice", text: event.prompt });
-        notify();
-        break;
       default:
         break;
     }
@@ -1478,6 +1701,10 @@ export function createChatSession(
     resetTurnActivity,
     isWorking,
     pushUserMessage,
+    beginToolPromptResponse,
+    addParallelChatRequest,
+    addWorkInstructionRequest,
+    requestParallelChatCancel,
     pushReviewSubagentCard,
     updateReviewSubagentCard,
     toggleProcessCollapsed,

@@ -1887,6 +1887,10 @@ class Agent:
     tool_loop_max: int = DEFAULT_TOOL_LOOP_MAX
     stream_handlers: StreamHandlers | None = None
     on_turn_event: Any | None = field(default=None, repr=False)
+    _work_instruction_checkpoint: Callable[[str, Session, list[dict[str, Any]] | None], Any] | None = field(
+        default=None, repr=False,
+    )
+    _work_instruction_context: list[dict[str, str]] = field(default_factory=list, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _cancel_finish_reason_fn: Callable[[], str | None] | None = field(default=None, repr=False)
     _pause_turn_wall: Callable[[], None] | None = field(default=None, repr=False)
@@ -3652,6 +3656,9 @@ class Agent:
             dynamic_system = loaded_system.dynamic_prompt
 
         for _ in range(max_rounds):
+            checkpoint = self._work_instruction_checkpoint
+            if callable(checkpoint):
+                checkpoint("prepare", self.session, None)
             llm_transport_attempts = 0
             if self.cancel_event.is_set():
                 return ToolLoopSegmentResult(
@@ -3767,6 +3774,9 @@ class Agent:
                 )
                 recall_injected = True
 
+            if self._work_instruction_context:
+                working.extend(dict(row) for row in self._work_instruction_context)
+
             while True:
                 try:
                     if getattr(self.executor.session, "segment_failure_budget_hit", False) or getattr(
@@ -3774,6 +3784,16 @@ class Agent:
                     ):
                         tools_payload = None
                     self._emit_turn_event({"type": "llm.pending"})
+                    checkpoint = self._work_instruction_checkpoint
+                    if callable(checkpoint):
+                        delivered = checkpoint("deliver", self.session, working)
+                        if isinstance(delivered, list):
+                            self._work_instruction_context.extend(
+                                {"role": "user", "content": row["content"]}
+                                for row in delivered
+                                if type(row) is dict and row.get("role") == "user"
+                                and type(row.get("content")) is str
+                            )
                     response = self.llm.chat(
                         build_chat_messages(
                             working,
@@ -5372,6 +5392,7 @@ class Agent:
         on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
         self._active_current_dialogue_recall_context = None
+        self._work_instruction_context.clear()
         if _is_multi_project_card_refresh(user_text):
             session = self.session
             session.ensure_messages_loaded()
