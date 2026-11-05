@@ -15,6 +15,8 @@ if str(_CORE) not in sys.path:
 
 from server import WsSessionHandler, _format_day_journal_result, _parse_day_journal_request
 from day_journal import DayJournal
+from paths import AgentPaths
+from project_session_store import append_segment_pointer
 
 
 @pytest.fixture
@@ -50,6 +52,40 @@ def test_result_text_reports_absence_and_empty_summary_without_claiming_nothing_
     assert "摘要为空" in empty
     assert "session-" not in empty
     assert "path" not in empty.lower()
+
+
+def test_result_text_includes_project_store_pointers_without_opening_sessions():
+    rendered = _format_day_journal_result({
+        "status": "ok",
+        "records": [{
+            "date": "2026-11-05",
+            "summary": "聊了项目",
+            "projects": ["proj-a"],
+            "segments": [{
+                "project_id": "proj-a",
+                "segment_id": "boundary:one",
+                "summary": "做了什么：接口草案",
+                "source": {"kind": "session", "session_id": "sess-one"},
+            }],
+            "project_store": [{
+                "project_id": "proj-a",
+                "date": "2026-11-05",
+                "segments": [{
+                    "segment_id": "boundary:one",
+                    "session_id": "sess-one",
+                    "occurred_at": "2026-11-05T10:00:00+08:00",
+                }],
+            }],
+        }],
+        "issues": [],
+        "message": "仅返回本地日记中明确记载的信息。",
+    })
+    assert "做了什么：接口草案" in rendered
+    assert "boundary:one" in rendered
+    assert "sess-one" in rendered
+    assert "项目按天会话指针" in rendered
+    assert "请走记忆" in rendered
+    assert "path" not in rendered.lower()
 
 
 class FakeBridge:
@@ -116,6 +152,46 @@ def test_server_recall_runs_as_visible_local_chat_turn_without_model(tmp_path, q
     assert expected in bridge.events[1]["text"]
     assert any(event.get("type") == "turn.end" and event["ok"] for event in bridge.events)
     assert not any(event.get("type", "").startswith("tool.") for event in bridge.events)
+
+
+def test_server_recall_attaches_project_store_pointers(tmp_path):
+    root = tmp_path / "enabled-journal"
+    root.mkdir(parents=True)
+    day = "2026-11-05"
+    (root / f"{day}.json").write_text(json.dumps({
+        "date": day, "summary": "日摘要", "projects": ["proj-a"], "segments": [], "revision": 1,
+    }, ensure_ascii=False), encoding="utf-8")
+    paths = AgentPaths(tmp_path, tmp_path / "workspace", tmp_path / "data", tmp_path / "evolve")
+    append_segment_pointer(
+        paths,
+        project_id="proj-a",
+        day_key=day,
+        segment_id="boundary:one",
+        session_id="sess-one",
+        occurred_at="2026-11-05T02:00:00+00:00",
+    )
+    session_dir = paths.data / "sessions" / "sess-one"
+    session_dir.mkdir(parents=True)
+    (session_dir / "messages.jsonl").write_text(
+        json.dumps({"role": "user", "content": "把召回接到项目库"}, ensure_ascii=False) + "\n"
+        + json.dumps({"role": "assistant", "content": "已按坐标写入指针"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    session = FakeSession()
+    repl = type("Repl", (), {"session": session})()
+    bridge = FakeBridge()
+    handler = WsSessionHandler.__new__(WsSessionHandler)
+    handler.paths = paths
+    handler.project_boundary_journal = DayJournal(root)
+
+    asyncio.run(handler._handle_day_journal_recall("查2026-11-05的项目日记", day, repl, bridge))
+
+    text = bridge.events[1]["text"]
+    assert "日摘要" in text
+    assert "proj-a 2026-11-05 boundary:one → sess-one" in text
+    assert "会话原文摘录（sess-one" in text
+    assert "已按坐标写入指针" in text
+    assert "请走记忆" in text
 
 
 def test_server_unsupported_date_phrase_does_not_read_or_enumerate(tmp_path):

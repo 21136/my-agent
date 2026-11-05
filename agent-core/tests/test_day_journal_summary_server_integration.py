@@ -23,8 +23,12 @@ from work_records import WorkRecordStore
 
 def _seed_session_boundary(journal, at, session_id="synthetic-session", project_id="synthetic-project"):
     return journal.record_segment(
-        at, project_id, None, segment_id="boundary:" + session_id,
+        at,
+        None,
+        segment_id="boundary:" + session_id,
         source={"kind": "session", "session_id": session_id},
+        scope="project",
+        project_id=project_id,
     )
 
 
@@ -278,7 +282,14 @@ def test_other_project_requirement_is_not_a_current_project_source(tmp_path):
     journal = DayJournal(tmp_path / "journal")
     journal.save_day(now, None, ["synthetic-project", "other-project"])
     _seed_session_boundary(journal, now)
-    journal.record_segment(now, "other-project", None, segment_id="boundary-other-project", source={"kind": "session", "session_id": "synthetic-session"})
+    journal.record_segment(
+        now,
+        None,
+        segment_id="boundary-other-project",
+        source={"kind": "session", "session_id": "synthetic-session"},
+        scope="project",
+        project_id="other-project",
+    )
     bridge = _Bridge()
     handler = _bare_handler(paths, journal)
     handler.day_journal_summary_service_factory = lambda **kwargs: pytest.fail("other project source must not be selected")

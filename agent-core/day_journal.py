@@ -9,7 +9,7 @@ import time
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -36,7 +36,9 @@ class JournalLockTimeout(JournalError):
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _RECORD_FIELDS = {"date", "summary", "projects", "segments", "revision"}
-_SEGMENT_FIELDS = {"project_id", "date", "segment_id", "summary", "source", "occurred_at"}
+_SEGMENT_FIELDS = {"scope", "project_id", "date", "segment_id", "summary", "source", "occurred_at"}
+_LEGACY_SEGMENT_FIELDS = {"project_id", "date", "segment_id", "summary", "source", "occurred_at"}
+SegmentScope = Literal["ordinary", "project"]
 _SUMMARY_METADATA_FIELDS = {"kind", "verified", "source_ids", "source_fingerprint", "context_fingerprint"}
 _LEGACY_SUMMARY_METADATA_FIELDS = {"kind", "verified", "source_ids", "snapshot_sha256", "source_snapshot"}
 _WINDOWS_LOCK_TIMEOUT_SECONDS = 5.0
@@ -116,7 +118,11 @@ class DayJournal:
                     return current
                 self._check_revision(current, expected_revision)
                 removed_projects = set(current["projects"]) - set(projects)
-                referenced_projects = {segment["project_id"] for segment in current["segments"]}
+                referenced_projects = {
+                    segment["project_id"]
+                    for segment in current["segments"]
+                    if self._segment_scope(segment) == "project" and segment.get("project_id")
+                }
                 if removed_projects & referenced_projects:
                     raise JournalConflict("cannot remove a project_id referenced by a day segment")
                 record = {**current, "summary": summary, "projects": projects, "revision": current["revision"] + 1}
@@ -145,23 +151,23 @@ class DayJournal:
         source = self._validate_source(source)
         if summary_metadata is not None:
             summary_metadata = self._validate_summary_metadata(summary_metadata)
+        proposed = self._build_segment_proposed(
+            day_key,
+            instant,
+            segment_id=segment_id,
+            summary=summary,
+            source=source,
+            scope="project",
+            project_id=project_id,
+            summary_metadata=summary_metadata,
+        )
         with self._locked(day_key):
             current = self._read_unlocked(day_key)
             if current is None:
                 raise JournalConflict("create the day entry before adding a segment")
-            proposed = {
-                "project_id": project_id,
-                "date": day_key,
-                "segment_id": segment_id,
-                "summary": summary,
-                "source": source,
-                "occurred_at": instant.isoformat(),
-            }
-            if summary_metadata is not None:
-                proposed["summary_metadata"] = summary_metadata
             for segment in current["segments"]:
                 if segment["segment_id"] == segment_id:
-                    if segment == proposed:
+                    if self._segments_equivalent(segment, proposed):
                         return current
                     raise JournalConflict("segment_id already exists with different content")
             self._check_revision(current, expected_revision)
@@ -174,38 +180,43 @@ class DayJournal:
     def record_segment(
         self,
         at: datetime,
-        project_id: str,
         summary: str | None,
         *,
         segment_id: str,
         source: dict,
+        scope: SegmentScope,
+        project_id: str | None = None,
         summary_authorized: bool = False,
     ) -> dict:
-        """Atomically ensure the day/project identity and append one segment."""
+        """Atomically ensure the day record exists and append one scoped segment."""
         day_key, instant = self._instant(at)
-        project_id = self._validate_id(project_id, "project_id")
         segment_id = self._validate_id(segment_id, "segment_id")
         self._validate_summary(summary)
         if summary is not None and summary_authorized is not True:
             raise ValueError("summary requires explicit caller authorization")
         source = self._validate_source(source)
-        proposed = {
-            "project_id": project_id,
-            "date": day_key,
-            "segment_id": segment_id,
-            "summary": summary,
-            "source": source,
-            "occurred_at": instant.isoformat(),
-        }
+        scope = self._validate_scope(scope)
+        project_id = self._validate_scope_project_id(scope, project_id)
+        proposed = self._build_segment_proposed(
+            day_key,
+            instant,
+            segment_id=segment_id,
+            summary=summary,
+            source=source,
+            scope=scope,
+            project_id=project_id,
+        )
         with self._locked(day_key):
             current = self._read_unlocked(day_key)
             if current is not None:
                 for segment in current["segments"]:
                     if segment["segment_id"] == segment_id:
-                        if segment == proposed:
+                        if self._segments_equivalent(segment, proposed):
                             return current
                         raise JournalConflict("segment_id already exists with different content")
-                projects = sorted(set(current["projects"]) | {project_id})
+                projects = list(current["projects"])
+                if scope == "project" and project_id and project_id not in projects:
+                    projects = sorted(set(projects) | {project_id})
                 record = {
                     **current,
                     "projects": projects,
@@ -213,13 +224,49 @@ class DayJournal:
                     "revision": current["revision"] + 1,
                 }
             else:
+                projects = [project_id] if scope == "project" and project_id else []
                 record = {
                     "date": day_key,
                     "summary": None,
-                    "projects": [project_id],
+                    "projects": projects,
                     "segments": [proposed],
                     "revision": 1,
                 }
+            self._write_unlocked(day_key, record)
+            return record
+
+    def patch_segment_summary(
+        self,
+        day: str | date,
+        segment_id: str,
+        summary: str | None,
+        *,
+        summary_authorized: bool = False,
+        expected_revision: int,
+    ) -> dict:
+        """Update one segment summary without changing its stable source coordinate."""
+        day_key = self._date_key(day)
+        segment_id = self._validate_id(segment_id, "segment_id")
+        self._validate_summary(summary)
+        if summary is not None and summary_authorized is not True:
+            raise ValueError("summary requires explicit caller authorization")
+        with self._locked(day_key):
+            current = self._read_unlocked(day_key)
+            if current is None:
+                raise JournalConflict("day does not exist")
+            self._check_revision(current, expected_revision)
+            updated_segments: list[dict] = []
+            found = False
+            for segment in current["segments"]:
+                if segment["segment_id"] != segment_id:
+                    updated_segments.append(segment)
+                    continue
+                found = True
+                patched = {**segment, "summary": summary}
+                updated_segments.append(patched)
+            if not found:
+                raise JournalConflict("segment_id not found")
+            record = {**current, "segments": updated_segments, "revision": current["revision"] + 1}
             self._write_unlocked(day_key, record)
             return record
 
@@ -268,13 +315,83 @@ class DayJournal:
             raise ValueError(f"{field} must be a stable identifier, not a display name or path")
         return value
 
+    @staticmethod
+    def _validate_scope(scope: str) -> SegmentScope:
+        if scope not in ("ordinary", "project"):
+            raise ValueError("scope must be ordinary or project")
+        return scope  # type: ignore[return-value]
+
+    @classmethod
+    def _validate_scope_project_id(cls, scope: SegmentScope, project_id: str | None) -> str | None:
+        if scope == "project":
+            if not project_id:
+                raise ValueError("project scope requires project_id")
+            return cls._validate_id(project_id, "project_id")
+        if project_id is not None:
+            raise ValueError("ordinary scope must not carry project_id")
+        return None
+
+    @classmethod
+    def _segment_scope(cls, segment: dict) -> SegmentScope:
+        raw = segment.get("scope")
+        if raw is None:
+            pid = segment.get("project_id")
+            if pid is None:
+                return "ordinary"
+            return "project"
+        return cls._validate_scope(raw)
+
+    @classmethod
+    def _build_segment_proposed(
+        cls,
+        day_key: str,
+        instant: datetime,
+        *,
+        segment_id: str,
+        summary: str | None,
+        source: dict,
+        scope: SegmentScope,
+        project_id: str | None,
+        summary_metadata: dict | None = None,
+    ) -> dict:
+        proposed: dict = {
+            "scope": scope,
+            "project_id": project_id,
+            "date": day_key,
+            "segment_id": segment_id,
+            "summary": summary,
+            "source": source,
+            "occurred_at": instant.isoformat(),
+        }
+        if summary_metadata is not None:
+            proposed["summary_metadata"] = summary_metadata
+        return proposed
+
+    @staticmethod
+    def _segments_equivalent(left: dict, right: dict) -> bool:
+        return left == right
+
     @classmethod
     def _validate_source(cls, source: dict) -> dict:
-        # This is a non-dereferenced stable coordinate, not proof of source existence.
-        if not isinstance(source, dict) or set(source) != {"kind", "session_id"} or source.get("kind") != "session":
-            raise ValueError("source must be an existing stable session coordinate {kind, session_id}")
-        session_id = cls._validate_id(source.get("session_id"), "session_id")
-        return {"kind": "session", "session_id": session_id}
+        if not isinstance(source, dict):
+            raise ValueError("source must be a dict")
+        kind = source.get("kind")
+        if kind == "session":
+            if set(source) != {"kind", "session_id"}:
+                raise ValueError("source must be an existing stable session coordinate {kind, session_id}")
+            session_id = cls._validate_id(source.get("session_id"), "session_id")
+            return {"kind": "session", "session_id": session_id}
+        if kind == "work_record":
+            session_id = cls._validate_id(source.get("session_id"), "session_id")
+            item_id = cls._validate_id(source.get("item_id"), "item_id")
+            out: dict = {"kind": "work_record", "session_id": session_id, "item_id": item_id}
+            for optional in ("requirement_id", "result_id"):
+                if optional in source:
+                    out[optional] = cls._validate_id(source[optional], optional)
+            if set(source) != set(out):
+                raise ValueError("work_record source has unexpected fields")
+            return out
+        raise ValueError("source kind must be session or work_record")
 
     @classmethod
     def _validate_summary_metadata(cls, metadata: dict) -> dict:
@@ -393,10 +510,24 @@ class DayJournal:
                 raise ValueError("project identities are not canonical")
             seen: set[str] = set()
             for segment in data["segments"]:
-                if (not isinstance(segment, dict)
-                        or set(segment) not in (_SEGMENT_FIELDS, _SEGMENT_FIELDS | {"summary_metadata"})):
+                if not isinstance(segment, dict):
                     raise ValueError("invalid segment fields")
-                self._validate_id(segment["project_id"], "project_id")
+                field_set = set(segment)
+                if field_set not in (
+                    _SEGMENT_FIELDS,
+                    _SEGMENT_FIELDS | {"summary_metadata"},
+                    _LEGACY_SEGMENT_FIELDS,
+                    _LEGACY_SEGMENT_FIELDS | {"summary_metadata"},
+                ):
+                    raise ValueError("invalid segment fields")
+                scope = self._segment_scope(segment)
+                pid = segment.get("project_id")
+                if scope == "project":
+                    if pid is None:
+                        raise ValueError("project segment requires project_id")
+                    pid = self._validate_id(pid, "project_id")
+                elif pid is not None:
+                    raise ValueError("ordinary segment must not carry project_id")
                 segment_id = self._validate_id(segment["segment_id"], "segment_id")
                 self._validate_summary(segment["summary"])
                 self._validate_source(segment["source"])
@@ -408,7 +539,9 @@ class DayJournal:
                 local_date = occurred_at.astimezone(self._zone).date().isoformat()
                 if local_date != day_key:
                     raise ValueError("segment timestamp local date does not match day key")
-                if segment["date"] != day_key or segment["project_id"] not in projects or segment_id in seen:
+                if segment["date"] != day_key or segment_id in seen:
+                    raise ValueError("segment identity mismatch")
+                if scope == "project" and pid not in projects:
                     raise ValueError("segment identity mismatch")
                 seen.add(segment_id)
             return data

@@ -25,10 +25,13 @@ from llm_client import (
 
 class LlmClientCacheMessageTests(unittest.TestCase):
     def test_vendor_support(self):
-        self.assertFalse(vendor_supports_system_prompt_cache("0x567"))
-        self.assertFalse(vendor_supports_system_prompt_cache("deepseek"))
+        self.assertTrue(vendor_supports_system_prompt_cache("0x567"))
+        self.assertTrue(vendor_supports_system_prompt_cache("DeepSeek"))
+        self.assertTrue(vendor_supports_system_prompt_cache("sophnet"))
+        self.assertFalse(vendor_supports_system_prompt_cache("tokeness"))
+        self.assertFalse(vendor_supports_system_prompt_cache(""))
 
-    def test_0x567_split_system_with_cache_marker(self) -> None:
+    def test_0x567_split_keeps_static_prefix(self) -> None:
         messages = build_chat_messages(
             [{"role": "user", "content": "hi"}],
             system_prompt="STATIC\n---\nDYNAMIC",
@@ -36,9 +39,9 @@ class LlmClientCacheMessageTests(unittest.TestCase):
             dynamic_system="DYNAMIC",
             vendor="0x567",
         )
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0], {"role": "system", "content": "STATIC\n---\nDYNAMIC"})
-        self.assertEqual(messages[1], {"role": "user", "content": "hi"})
+        self.assertEqual(messages[0], {"role": "system", "content": "STATIC"})
+        self.assertEqual(messages[1], {"role": "system", "content": "DYNAMIC"})
+        self.assertEqual(messages[2], {"role": "user", "content": "hi"})
 
     def test_0x567_static_only(self) -> None:
         messages = build_chat_messages(
@@ -51,14 +54,33 @@ class LlmClientCacheMessageTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["role"], "system")
 
-    def test_deepseek_uses_full_prompt_order(self) -> None:
+    def test_deepseek_static_prefix_survives_dynamic_change(self) -> None:
+        first = build_chat_messages(
+            [{"role": "user", "content": "x"}],
+            system_prompt="A\n---\nB\n---\nC",
+            static_system="A\n---\nC",
+            dynamic_system="B1",
+            vendor="deepseek",
+        )
+        second = build_chat_messages(
+            [{"role": "user", "content": "x"}],
+            system_prompt="A\n---\nB\n---\nC",
+            static_system="A\n---\nC",
+            dynamic_system="B2",
+            vendor="deepseek",
+        )
+        self.assertEqual(first[0], second[0])
+        self.assertEqual(first[0], {"role": "system", "content": "A\n---\nC"})
+        self.assertNotEqual(first[1], second[1])
+
+    def test_unknown_vendor_keeps_combined_system_prompt(self) -> None:
         full = "A\n---\nB\n---\nC"
         messages = build_chat_messages(
             [{"role": "user", "content": "x"}],
             system_prompt=full,
             static_system="A\n---\nC",
             dynamic_system="B",
-            vendor="deepseek",
+            vendor="tokeness",
         )
         self.assertEqual(messages[0], {"role": "system", "content": full})
 

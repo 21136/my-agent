@@ -279,6 +279,22 @@ export type ServerEvent =
   | { type: "checker.verdict"; tool_name: string; verdict: "pass" | "fail" | "warn" }
   | { type: "turn.end"; ok: boolean; finish_reason: string; run_id?: string }
   | { type: "evolve.proposals"; items: ProposalItem[] }
+  | {
+      type: "memory.proposal.accept.request";
+      request_id: string;
+      proposal_id: string;
+      summary?: string;
+      target_path?: string | null;
+      topics?: string[];
+      mode?: string;
+      message?: string;
+    }
+  | {
+      type: "memory.proposal.accept.done";
+      request_id?: string;
+      proposal_id?: string;
+      applied?: boolean;
+    }
   | { type: "evolve.memories"; items: MemoryItem[] }
   | { type: "evolution.bound"; evolution_id: string; conversation_id: string; host_run_id: string }
   | { type: "evolution.denied"; conversation_id: string }
@@ -516,6 +532,91 @@ export type ServerEvent =
       previous_session_id: string;
       message: string;
       session_replaced: boolean;
+    }
+  | {
+      type: "session.restart_today.done";
+      request_id: string;
+      session_id: string;
+      previous_session_id: string;
+      segment_id: string;
+      message: string;
+      session_replaced: boolean;
+      journal_notice?: string | null;
+    }
+  | {
+      type: "day_journal.directory";
+      days: Array<{
+        date: string;
+        summary?: string | null;
+        projects: string[];
+        segment_count: number;
+        segments: Array<{
+          scope?: string;
+          project_id?: string | null;
+          date: string;
+          segment_id: string;
+          summary?: string | null;
+          source: { kind: string; session_id: string };
+        }>;
+      }>;
+    }
+  | {
+      type: "day_journal.read.done";
+      status: string;
+      records: unknown[];
+      issues: unknown[];
+      message?: string;
+    }
+  | {
+      type: "day_journal.summary.status";
+      ready?: boolean;
+      status?: string;
+      day?: string;
+      project_id?: string;
+      source_count?: number;
+      message?: string;
+      request_id?: string;
+    }
+  | {
+      type: "day_journal.refresh_mechanical.done";
+      ok?: boolean;
+      updated?: boolean;
+      day?: string;
+      message?: string;
+      request_id?: string;
+    }
+  | {
+      type: "day_journal.suggest_summary.done";
+      ok?: boolean;
+      saved?: boolean;
+      message?: string;
+      request_id?: string;
+    }
+  | {
+      type: "day_journal.project_store";
+      project_id: string;
+      days: Array<{
+        date: string;
+        segment_count: number;
+        segments: Array<{
+          segment_id: string;
+          session_id: string;
+          occurred_at: string;
+        }>;
+      }>;
+    }
+  | {
+      type: "session.turn_mode.request";
+      request_id: string;
+      from_mode?: string;
+      to_mode: "agent" | "ask";
+      message?: string;
+    }
+  | {
+      type: "session.turn_mode.done";
+      request_id?: string;
+      applied?: boolean;
+      to_mode?: string;
     }
   | {
       type: "context.switch.request";
@@ -1895,8 +1996,13 @@ export class AgentWsClient {
     this.send({ type: "turn.cancel" });
   }
 
-  acceptProposal(proposalId: string): void {
-    this.send({ type: "proposal.accept", proposal_id: proposalId });
+  acceptProposal(proposalId: string, options?: { confirm?: boolean; requestId?: string }): void {
+    this.send({
+      type: "proposal.accept",
+      proposal_id: proposalId,
+      ...(options?.confirm ? { confirm: true } : {}),
+      ...(options?.requestId ? { request_id: options.requestId } : {}),
+    });
   }
 
   rejectProposal(proposalId: string): void {
@@ -2132,12 +2238,25 @@ export class AgentWsClient {
     });
   }
 
+  restartToday(requestId?: string): void {
+    this.updateEvolutionConversationId(null);
+    this.send({
+      type: "session.restart_today",
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  }
+
   listHostScope(): void {
     this.send({ type: "host_scope.list" });
   }
 
-  setTurnMode(mode: "agent" | "ask"): void {
-    this.send({ type: "session.set_turn_mode", mode });
+  setTurnMode(mode: "agent" | "ask", options?: { confirm?: boolean; requestId?: string }): void {
+    this.send({
+      type: "session.set_turn_mode",
+      mode,
+      ...(options?.confirm ? { confirm: true } : {}),
+      ...(options?.requestId ? { request_id: options.requestId } : {}),
+    });
   }
 
   addHostScope(payload: {

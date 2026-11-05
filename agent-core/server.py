@@ -47,6 +47,8 @@ from execution_lifecycle import ExecutionLifecycle
 from llm_models import models_list_event
 from main import ConversationRepl, ReplConfig, WorkRecordControllerFactory
 from paths import AgentPaths
+from day_journal_follow import attach_session_excerpts, resolve_recall_project_id
+from project_session_store import attach_project_store_pointers
 from sidecar_logging import SIDECAR_LOGGER_NAME, configure_sidecar_logging, log_sidecar_exception, log_sidecar_ws_error
 from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
@@ -168,7 +170,41 @@ def _format_day_journal_result(result: dict[str, Any]) -> str:
                 detail = "摘要为空"
             else:
                 detail = segment_summary
-            lines.append(f"- {segment.get('project_id', '项目未知')}：{detail}")
+            pointer = _format_day_journal_segment_pointer(segment)
+            label = segment.get("project_id") or "普通对话"
+            lines.append(f"- {label}{pointer}：{detail}")
+        store = record.get("project_store")
+        if isinstance(store, list) and store:
+            lines.append("项目按天会话指针：")
+            for entry in store:
+                if not isinstance(entry, dict):
+                    continue
+                pid = entry.get("project_id") or "项目未知"
+                day_key = entry.get("date") or record.get("date") or "日期未知"
+                for item in entry.get("segments") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    seg_id = item.get("segment_id")
+                    session_id = item.get("session_id")
+                    if not isinstance(seg_id, str) or not seg_id or not isinstance(session_id, str) or not session_id:
+                        continue
+                    lines.append(f"  - {pid} {day_key} {seg_id} → {session_id}")
+    for excerpt in result.get("session_excerpts") or []:
+        if not isinstance(excerpt, dict):
+            continue
+        session_id = excerpt.get("session_id")
+        messages = excerpt.get("messages")
+        if not isinstance(session_id, str) or not session_id or not isinstance(messages, list) or not messages:
+            continue
+        lines.append(f"\n会话原文摘录（{session_id}，最近片段，非全文）：")
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            text = item.get("text")
+            if role not in {"user", "assistant"} or not isinstance(text, str) or not text:
+                continue
+            lines.append(f"- {role}：{text}")
     issues = result.get("issues", [])
     if issues:
         labels = {"corrupt": "损坏", "unsafe_path": "路径不安全", "unsafe_root": "目录不安全",
@@ -176,7 +212,23 @@ def _format_day_journal_result(result: dict[str, Any]) -> str:
         for issue in issues:
             if isinstance(issue, dict):
                 lines.append(f"\n{issue.get('date') or '日记目录'}：{labels.get(issue.get('status'), '不可读取')}。")
+    lines.append("\n跨天仍成立的偏好、约定不在按天日记里，请走记忆。")
     return "\n".join(lines)
+
+
+def _format_day_journal_segment_pointer(segment: dict[str, Any]) -> str:
+    parts: list[str] = []
+    segment_id = segment.get("segment_id")
+    if isinstance(segment_id, str) and segment_id.strip():
+        parts.append(segment_id.strip())
+    source = segment.get("source")
+    if isinstance(source, dict) and source.get("kind") == "session":
+        session_id = source.get("session_id")
+        if isinstance(session_id, str) and session_id.strip():
+            parts.append(session_id.strip())
+    if not parts:
+        return ""
+    return f"（{' / '.join(parts)}）"
 
 
 class _DayJournalQuestionPersistenceFailure(Exception):
@@ -3183,6 +3235,7 @@ def _record_project_switch_boundary(
             occurred_at=datetime.now(timezone.utc),
             event_id=event_id,
             journal=journal,
+            paths=session.paths,
         )
     except Exception:
         if report is not None:
@@ -6053,13 +6106,18 @@ class WsSessionHandler:
         self, bridge: WsBridge | None, session: Session, switch_event: dict[str, Any] | None,
         report: Callable[[str], None] | None = None,
     ) -> bool:
-        if bridge is None or not bridge.project_journal_enabled:
+        if bridge is None:
             return False
+        if self.project_boundary_recorder is None or self.project_boundary_journal is None:
+            from day_journal import DayJournal
+            from day_journal_events import record_project_boundary
+
+            self.project_boundary_journal = DayJournal(self.paths.data / "day-journal")
+            self.project_boundary_recorder = record_project_boundary
 
         def fail_closed_notice(_text: str) -> None:
-            bridge.project_journal_enabled = False
             if report is not None:
-                report("\u9879\u76ee\u5207\u6362\u5df2\u5b8c\u6210\uff0c\u4f46\u672c\u5730\u65e5\u8bb0\u5199\u5165\u5931\u8d25\uff1b\u5df2\u81ea\u52a8\u5173\u95ed\u672c\u8fde\u63a5\u8bb0\u5f55\u3002")
+                report("\u9879\u76ee\u5207\u6362\u5df2\u5b8c\u6210\uff0c\u4f46\u672c\u5730\u65e5\u8bb0\u5199\u5165\u5931\u8d25\u3002")
 
         return _record_project_switch_boundary(
             session=session,
@@ -6115,7 +6173,14 @@ class WsSessionHandler:
         return {"action": "uncertain", "start_date": None, "end_date": None}
 
     async def _handle_day_journal_summary(
-        self, text: str, repl: ConversationRepl, bridge: WsBridge, *, request_id: Any = None,
+        self,
+        text: str,
+        repl: ConversationRepl,
+        bridge: WsBridge,
+        *,
+        request_id: Any = None,
+        persist_user_question: bool = True,
+        ws_done: dict[str, Any] | None = None,
     ) -> None:
         """Summarize one unambiguous, current-session requirement into an existing day entry."""
         if not bridge.begin_turn(mode="ordinary"):
@@ -6134,16 +6199,18 @@ class WsSessionHandler:
         journal_publish_started = False
         try:
             try:
-                if not _append_day_journal_question(
-                    session, repl, text,
-                    on_persisted=lambda persisted: _emit_day_journal_user_message_persisted(
-                        bridge=bridge, repl=repl, session=persisted, request_id=request_id,
-                    ),
-                ):
-                    raise _DayJournalQuestionPersistenceFailure
-                question_persisted = True
+                if persist_user_question:
+                    if not _append_day_journal_question(
+                        session, repl, text,
+                        on_persisted=lambda persisted: _emit_day_journal_user_message_persisted(
+                            bridge=bridge, repl=repl, session=persisted, request_id=request_id,
+                        ),
+                    ):
+                        raise _DayJournalQuestionPersistenceFailure
+                    question_persisted = True
                 _raise_if_day_journal_cancelled(bridge)
                 from day_journal import DayJournal
+                from day_journal_project_summary import discover_same_day_requirement_keys
                 from day_journal_summary import DayJournalSummaryService
                 from day_journal_summary_accept import SummaryAcceptanceError, accept_summary_candidate
                 from day_journal_summary_sources import DayJournalSummarySourceSelector
@@ -6187,48 +6254,13 @@ class WsSessionHandler:
                             selector = DayJournalSummarySourceSelector(store, session, timezone_name="Asia/Shanghai")
 
                             def discover_candidates(items: list[dict[str, Any]] | None = None) -> list[tuple[str, str]] | None:
-                                # The owning store is bound to this exact Session/project. Never
-                                # skip malformed in-scope history: it could hide a same-day source.
-                                if items is None:
-                                    items = store.list_items()
-                                if not isinstance(items, list) or len(items) > 200:
-                                    return None
-                                found: list[tuple[str, str]] = []
-                                seen: set[tuple[str, str]] = set()
-                                for item in items:
-                                    if not isinstance(item, dict):
-                                        return None
-                                    if item.get("scope") != {"kind": "project", "project_id": project_id}:
-                                        continue
-                                    history = item.get("history")
-                                    if not isinstance(history, list) or len(history) > 200:
-                                        return None
-                                    for event in history:
-                                        if not isinstance(event, dict):
-                                            return None
-                                        if event.get("kind") != "requirement_added":
-                                            continue
-                                        event_at = event.get("at")
-                                        if isinstance(event_at, bool) or not isinstance(event_at, (int, float)):
-                                            return None
-                                        try:
-                                            event_day = datetime.fromtimestamp(event_at, timezone.utc).astimezone(zone).date().isoformat()
-                                        except (OverflowError, OSError, ValueError):
-                                            return None
-                                        if event_day != day_key:
-                                            continue
-                                        item_id, event_id = item.get("item_id"), event.get("event_id")
-                                        if not isinstance(item_id, str) or not isinstance(event_id, str):
-                                            return None
-                                        pair = (item_id, event_id)
-                                        if pair in seen:
-                                            return None
-                                        seen.add(pair)
-                                        found.append(pair)
-                                        if len(found) > 20:
-                                            return None
-                                # Canonical order makes set comparison and provider provenance stable.
-                                return sorted(found)
+                                return discover_same_day_requirement_keys(
+                                    store,
+                                    project_id=project_id,
+                                    day_key=day_key,
+                                    zone=zone,
+                                    items=items,
+                                )
 
                             candidate_keys = discover_candidates()
                             if candidate_keys is None or not candidate_keys:
@@ -6385,22 +6417,43 @@ class WsSessionHandler:
             except asyncio.CancelledError:
                 ok = False
                 finish_reason = "cancelled"
-                response = ("日记发布结果无法确认；原问题已记录，请核对当天日记后再决定下一步。"
-                            if journal_publish_started else "日记处理已取消；原问题已记录，查询结果未确认。")
+                if question_persisted:
+                    response = ("日记发布结果无法确认；原问题已记录，请核对当天日记后再决定下一步。"
+                                if journal_publish_started else "日记处理已取消；原问题已记录，查询结果未确认。")
+                else:
+                    response = ("日记发布结果无法确认；请核对当天日记后再决定下一步。"
+                                if journal_publish_started else "日记摘要已取消。")
             except Exception:
                 ok = False
                 finish_reason = "error"
-                # Once atomic journal publication starts, an I/O failure may leave the
-                # result indeterminate; never claim that no write occurred or expose exception text.
-                response = ("日记发布结果无法确认；原问题已记录，请检查当天日记。"
-                            if journal_publish_started else "日记摘要未能安全处理；原问题已记录，普通对话仍可继续。")
+                if question_persisted:
+                    response = ("日记发布结果无法确认；原问题已记录，请检查当天日记。"
+                                if journal_publish_started else "日记摘要未能安全处理；原问题已记录，普通对话仍可继续。")
+                else:
+                    response = ("日记发布结果无法确认；请检查当天日记。"
+                                if journal_publish_started else "日记摘要未能安全处理。")
 
             if question_persisted and not journal_saved and _day_journal_cancel_requested(bridge):
                 ok = False
                 finish_reason = "cancelled"
                 response = ("日记发布结果无法确认；原问题已记录，请检查当天日记。"
                             if journal_publish_started else "日记处理已取消；原问题已记录，查询结果未确认。")
-            if not question_persisted:
+            if ws_done is not None:
+                bridge.emit({
+                    **ws_done,
+                    "ok": ok and finish_reason == "completed",
+                    "saved": journal_saved,
+                    "message": response,
+                })
+                if journal_saved:
+                    from day_journal_directory import build_directory_payload
+
+                    payload = await asyncio.to_thread(
+                        build_directory_payload,
+                        self.paths.data / "day-journal",
+                    )
+                    bridge.emit(payload)
+            elif not question_persisted:
                 bridge.emit_assistant(response)
             else:
                 persist_status = _persist_day_journal_assistant(session, repl, response)
@@ -6487,6 +6540,16 @@ class WsSessionHandler:
                         else:
                             query_kwargs.update(start_date=start_date, end_date=end_date)
                         result = await asyncio.to_thread(query, journal_root, **query_kwargs)
+                        meta = getattr(repl.session, "meta", None)
+                        current_project_id = getattr(meta, "project_id", None) if meta is not None else None
+                        project_id = resolve_recall_project_id(
+                            text, result, current_project_id=current_project_id,
+                        )
+                        if project_id:
+                            query_kwargs["project_id"] = project_id
+                            result = await asyncio.to_thread(query, journal_root, **query_kwargs)
+                        result = attach_project_store_pointers(self.paths, result)
+                        result = attach_session_excerpts(self.paths, result)
                         _raise_if_day_journal_cancelled(bridge)
                         response = _format_day_journal_result(result)
                     except (OSError, PermissionError):
@@ -8469,6 +8532,40 @@ class WsSessionHandler:
             bridge.emit({"type": "session.list", "sessions": summaries})
             return
 
+        if msg_type == "session.restart_today":
+            await self._dispatch_session_control(message, repl, bridge)
+            return
+
+        if msg_type == "day_journal.summary.status":
+            await self._emit_day_journal_summary_status(repl, bridge, message)
+            return
+
+        if msg_type == "day_journal.refresh_mechanical":
+            await self._handle_day_journal_refresh_mechanical(repl, bridge, message)
+            return
+
+        if msg_type == "day_journal.suggest_summary":
+            if bridge._turn_busy.is_set():
+                emit_error(bridge, "回合进行中，结束后再生成项目摘要")
+                return
+            request_id = message.get("request_id")
+            ws_done = {"type": "day_journal.suggest_summary.done"}
+            if request_id is not None:
+                ws_done["request_id"] = request_id
+            await self._handle_day_journal_summary(
+                "",
+                repl,
+                bridge,
+                request_id=request_id,
+                persist_user_question=False,
+                ws_done=ws_done,
+            )
+            return
+
+        if isinstance(msg_type, str) and msg_type.startswith("day_journal."):
+            await self._dispatch_day_journal(message, bridge)
+            return
+
         if msg_type == "session.open":
             session_id = message.get("session_id")
             if not isinstance(session_id, str) or not session_id.strip():
@@ -8567,12 +8664,40 @@ class WsSessionHandler:
             if bridge._turn_busy.is_set():
                 emit_error(bridge, "回合进行中，结束后再切换模式")
                 return
+            confirm = message.get("confirm") is True
+            current_mode = repl.session.meta.turn_mode
+            if current_mode != mode_raw and not confirm:
+                if mode_raw == "agent":
+                    prompt = "切换到动手模式将允许写文件与执行命令。"
+                else:
+                    prompt = "切换到只聊模式将禁止写文件与执行命令。"
+                request_id = message.get("request_id")
+                rid = request_id.strip() if isinstance(request_id, str) and request_id.strip() else str(uuid.uuid4())
+                bridge.emit(
+                    {
+                        "type": "session.turn_mode.request",
+                        "request_id": rid,
+                        "from_mode": current_mode,
+                        "to_mode": mode_raw,
+                        "message": prompt,
+                    }
+                )
+                return
             repl.session.set_turn_mode(mode_raw)
             repl.agent.executor.session.turn_mode = repl.session.meta.turn_mode
             repl.session.save()
             bridge.emit_session_state(repl.session)
             label = "动手 (Agent)" if repl.session.meta.turn_mode == "agent" else "只聊 (Ask)"
             bridge.emit({"type": "notice", "text": f"已切换模式：{label}"})
+            if confirm:
+                bridge.emit(
+                    {
+                        "type": "session.turn_mode.done",
+                        "request_id": message.get("request_id"),
+                        "applied": True,
+                        "to_mode": repl.session.meta.turn_mode,
+                    }
+                )
             return
 
         if msg_type == "memory.list":
@@ -8582,16 +8707,49 @@ class WsSessionHandler:
 
         if msg_type == "proposal.accept":
             proposal_id = message.get("proposal_id")
-            if not isinstance(proposal_id, str):
+            if not isinstance(proposal_id, str) or not proposal_id.strip():
                 emit_error(bridge, "proposal.accept requires proposal_id")
                 return
+            pid = proposal_id.strip()
+            confirm = message.get("confirm") is True
+            request_id = message.get("request_id")
+            rid = request_id.strip() if isinstance(request_id, str) and request_id.strip() else None
             try:
+                from memory_proposal_confirm import (
+                    build_memory_proposal_accept_request,
+                    memory_proposal_accept_requires_confirm,
+                )
+                from evolve import find_proposal_path, load_proposal_file
+
+                proposal_path = find_proposal_path(self.paths.evolve, pid)
+                needs_memory_confirm = False
+                if proposal_path is not None:
+                    record = load_proposal_file(proposal_path)
+                    needs_memory_confirm = memory_proposal_accept_requires_confirm(record)
+                    if needs_memory_confirm and not confirm:
+                        bridge.emit(
+                            build_memory_proposal_accept_request(
+                                self.paths,
+                                pid,
+                                request_id=rid,
+                            )
+                        )
+                        return
                 result = accept_proposal(
-                    proposal_id,
+                    pid,
                     paths=self.paths,
                     conversation_id=repl.session.conversation_id,
                 )
                 bridge.emit({"type": "notice", "text": result.message})
+                if confirm and needs_memory_confirm:
+                    bridge.emit(
+                        {
+                            "type": "memory.proposal.accept.done",
+                            "request_id": rid,
+                            "proposal_id": pid,
+                            "applied": True,
+                        }
+                    )
                 bridge.emit(_proposals_payload(self.paths))
                 bridge.emit(_memories_payload(self.paths))
             except EvolveError as exc:
@@ -9024,6 +9182,97 @@ class WsSessionHandler:
         except Exception as exc:
             log_sidecar_exception("project dispatch failed", exc)
             emit_error(bridge, f"project request failed: {exc}")
+
+    async def _dispatch_session_control(
+        self,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        from session_api import SessionApiError, dispatch_session_message
+
+        try:
+            payload = await asyncio.to_thread(
+                dispatch_session_message,
+                repl.session,
+                self.paths,
+                message,
+            )
+            if isinstance(payload, dict) and "_events" in payload:
+                if "_session" in payload:
+                    repl.session = payload["_session"]
+                    repl._rebind_agent()
+                _refresh_repl_project_binding(repl)
+                for event in payload["_events"]:
+                    bridge.emit(event)
+                bridge.emit_session_state(repl.session)
+                return
+            bridge.emit(payload)
+        except SessionApiError as exc:
+            emit_error(bridge, str(exc))
+        except Exception as exc:
+            log_sidecar_exception("session control dispatch failed", exc)
+            emit_error(bridge, f"session request failed: {exc}")
+
+    async def _emit_day_journal_summary_status(
+        self,
+        repl: ConversationRepl,
+        bridge: WsBridge,
+        message: dict[str, Any],
+    ) -> None:
+        from day_journal import DayJournal
+        from day_journal_project_summary import evaluate_summary_readiness
+
+        journal = self.project_boundary_journal
+        if journal is None:
+            journal = DayJournal(self.paths.data / "day-journal")
+        result = await asyncio.to_thread(evaluate_summary_readiness, repl.session, journal)
+        payload = {"type": "day_journal.summary.status", **result}
+        request_id = message.get("request_id")
+        if request_id is not None:
+            payload["request_id"] = request_id
+        bridge.emit(payload)
+
+    async def _handle_day_journal_refresh_mechanical(
+        self,
+        repl: ConversationRepl,
+        bridge: WsBridge,
+        message: dict[str, Any],
+    ) -> None:
+        from day_journal_compact import refresh_mechanical_day_summary
+        from day_journal_directory import build_directory_payload
+
+        result = await asyncio.to_thread(refresh_mechanical_day_summary, repl.session, self.paths)
+        payload = {
+            "type": "day_journal.refresh_mechanical.done",
+            "ok": bool(result.get("updated")),
+            **result,
+        }
+        request_id = message.get("request_id")
+        if request_id is not None:
+            payload["request_id"] = request_id
+        bridge.emit(payload)
+        directory = await asyncio.to_thread(
+            build_directory_payload,
+            self.paths.data / "day-journal",
+        )
+        bridge.emit(directory)
+
+    async def _dispatch_day_journal(
+        self,
+        message: dict[str, Any],
+        bridge: WsBridge,
+    ) -> None:
+        from day_journal_api import DayJournalApiError, dispatch_day_journal_message
+
+        try:
+            payload = await asyncio.to_thread(dispatch_day_journal_message, self.paths, message)
+            bridge.emit(payload)
+        except DayJournalApiError as exc:
+            emit_error(bridge, str(exc))
+        except Exception as exc:
+            log_sidecar_exception("day journal dispatch failed", exc)
+            emit_error(bridge, f"day journal request failed: {exc}")
 
     async def _dispatch_host_scope(
         self,

@@ -46,6 +46,7 @@ def test_explicit_zoned_time_and_day_directory_plus_project_fragment(tmp_path):
     assert row["summary"] == "synthetic daily summary"
     assert row["projects"] == ["project:alpha"]
     assert row["segments"] == [{
+        "scope": "project",
         "project_id": "project:alpha", "date": "2026-10-29",
         "segment_id": "segment:stable-1", "summary": "synthetic work summary",
         "source": {"kind": "session", "session_id": "session:stable-7"},

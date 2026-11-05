@@ -3763,10 +3763,17 @@ class Agent:
                     include_images=bool(getattr(model_entry, "supports_image_input", False)),
                 )
 
+            chat_system = full_system
+            chat_dynamic = dynamic_system
             if not getattr(model_entry, "supports_image_input", False) and has_image_attachment(
                 self.session.messages
             ):
-                full_system = f"{full_system}\n\n{IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE}"
+                chat_system = f"{full_system}\n\n{IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE}"
+                chat_dynamic = (
+                    f"{dynamic_system}\n\n{IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE}"
+                    if dynamic_system.strip()
+                    else IMAGE_UNSUPPORTED_MODEL_SYSTEM_MESSAGE
+                )
 
             if recall_soft_reminder and not recall_injected:
                 self.session.append_message(
@@ -3797,9 +3804,9 @@ class Agent:
                     response = self.llm.chat(
                         build_chat_messages(
                             working,
-                            system_prompt=full_system,
+                            system_prompt=chat_system,
                             static_system=static_system,
-                            dynamic_system=dynamic_system,
+                            dynamic_system=chat_dynamic,
                             vendor=vendor,
                         ),
                         model=model,

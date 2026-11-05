@@ -270,9 +270,16 @@ def resolve_model_entry(model: str) -> ModelEntry | None:
     return get_registry().resolve(model)
 
 
+# OpenAI-compatible prefix cache (DeepSeek / 0x567 / Sophnet): no cache_control
+# markers. Splitting static then dynamic keeps the cached prefix stable.
+_PREFIX_CACHE_VENDORS = frozenset({"deepseek", "0x567", "sophnet", "openai"})
+
+
 def vendor_supports_system_prompt_cache(vendor: str) -> bool:
-    """Return whether a provider accepts explicit system prompt cache markers."""
-    return False
+    """Return whether chat assembly should keep a stable static system prefix."""
+    if not isinstance(vendor, str) or not vendor.strip():
+        return False
+    return vendor.strip().casefold() in _PREFIX_CACHE_VENDORS
 
 
 def as_cached_system_message(prompt: str) -> dict[str, Any]:

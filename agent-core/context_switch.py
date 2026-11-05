@@ -166,6 +166,14 @@ def _apply_session_new(
     If the previous session was project-bound, the project mapping is left alone (parked);
     the new session is unbound ordinary chat.
     """
+    from dialogue_archive import archive_dialogue_line
+
+    archive_dialogue_line(
+        session,
+        paths,
+        reason=proposal.reason or "新会话",
+        event_id=f"session-new:{session.conversation_id}",
+    )
     fresh = create_new(paths)
     _inject_seed(fresh, session, proposal.reason)
     write_last_conversation_id(paths, fresh.conversation_id)

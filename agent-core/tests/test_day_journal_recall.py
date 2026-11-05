@@ -41,7 +41,7 @@ def test_exact_day_returns_only_explicit_local_facts_and_stable_coordinate(tmp_p
     assert result["status"] == "ok"
     assert result["records"] == [{
         "date": "2026-10-28", "summary": "记录摘要", "projects": ["proj-1"],
-        "segments": [{"project_id": "proj-1", "date": "2026-10-28", "segment_id": "seg-2",
+        "segments": [{"scope": "project", "project_id": "proj-1", "date": "2026-10-28", "segment_id": "seg-2",
                       "summary": "完成只读接口草案", "source": {"kind": "session", "session_id": "session-9"}}],
     }]
     assert "path" not in json.dumps(result).lower()
@@ -112,8 +112,12 @@ def test_native_default_timezone_contract_accepts_shanghai_local_day(tmp_path):
     journal = DayJournal(root)
     journal.record_segment(
         __import__("datetime").datetime.fromisoformat("2026-10-27T16:30:00+00:00"),
-        "proj-1", "项目摘要", segment_id="seg-1",
-        source={"kind": "session", "session_id": "session-1"}, summary_authorized=True,
+        "项目摘要",
+        segment_id="seg-1",
+        source={"kind": "session", "session_id": "session-1"},
+        scope="project",
+        project_id="proj-1",
+        summary_authorized=True,
     )
     result = query_day_journal(root, day="2026-10-28", authorized=True)
     assert result["status"] == "summary_missing"  # native record has no day-level summary

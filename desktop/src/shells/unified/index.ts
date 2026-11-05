@@ -248,15 +248,15 @@ export function mountUnifiedShell(
   let sessionsTab: "chat" | "project" = "chat";
 
   function syncTopbarFromProject(): void {
+    const restartCta = { action: "restart_today", label: "今日重来" };
     if (projectState.projectId) {
       topbarState.projectLabel = projectState.projectId;
       topbarState.contextLabel = "";
-      // Task-driven header CTAs (开始任务 / 确认开工) were removed with the task subsystem.
-      topbarState.headerCtas = [];
+      topbarState.headerCtas = [restartCta];
     } else {
       topbarState.projectLabel = "";
       topbarState.contextLabel = "";
-      topbarState.headerCtas = [];
+      topbarState.headerCtas = [restartCta];
     }
   }
 
@@ -1318,8 +1318,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (!target || !modeToggleEl.contains(target)) return;
     const next = target.dataset.modeValue === "ask" ? "ask" : "agent";
     if (next === currentTurnMode) return;
-    syncModeToggleUi(next);
-    updatePlaceholder();
     try {
       client.setTurnMode(next);
     } catch (err) {
@@ -1550,6 +1548,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       syncComposerSendEnabled();
     } else {
       sendBtn.disabled = true;
+    }
+  }
+
+  async function handleRestartToday(): Promise<void> {
+    if (chat.isWorking()) {
+      setStatus("助手执行中，请稍后再今日重来");
+      return;
+    }
+    const ok = await showWorkbenchConfirm(
+      "将清空当前聊天区并开始新一段对话；上一段仍保留在磁盘，并记入按天日记。文件改动不会自动回滚。继续？",
+    );
+    if (!ok) return;
+    try {
+      client.restartToday();
+      setStatus("正在今日重来…");
+    } catch (err) {
+      setStatus(`今日重来失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -2256,6 +2271,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         setStatus("助手执行中，请稍后再切换项目");
         return;
       }
+      const previousProjectId = projectState.projectId.trim();
       selectRailTab("now");
       beginAtomicProjectSwitch(projectState, target);
       clearChatForSwitch();
@@ -2264,8 +2280,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       syncSessionSwitchMask();
       refreshTopbar();
       renderSidebar();
+      const crossProject = Boolean(previousProjectId && previousProjectId !== target);
       try {
-        client.switchProject(target, { confirm: true });
+        client.switchProject(target, { confirm: !crossProject });
       } catch (err) {
         projectState.switchInProgress = false;
         projectState.pendingPickerId = "";
@@ -3494,6 +3511,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         return;
       case "stop-turn":
         projectCallbacks.onStopTurn();
+        return;
+      case "restart_today":
+        void handleRestartToday();
         return;
       default:
         return;
@@ -6223,6 +6243,54 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         handleProposalsEvent(event.items);
         break;
 
+      case "session.turn_mode.request":
+        void (async () => {
+          const ok = await showWorkbenchConfirm(
+            typeof event.message === "string" && event.message.trim()
+              ? event.message.trim()
+              : "切换对话模式？",
+          );
+          if (!ok) return;
+          try {
+            client.setTurnMode(event.to_mode, {
+              confirm: true,
+              requestId: event.request_id,
+            });
+          } catch (err) {
+            setStatus(err instanceof Error ? err.message : String(err));
+          }
+        })();
+        break;
+
+      case "memory.proposal.accept.request":
+        void (async () => {
+          const ok = await showWorkbenchConfirm(
+            typeof event.message === "string" && event.message.trim()
+              ? event.message.trim()
+              : "接受这条记忆提案？",
+          );
+          if (!ok) return;
+          try {
+            client.acceptProposal(event.proposal_id, {
+              confirm: true,
+              requestId: event.request_id,
+            });
+          } catch (err) {
+            setStatus(err instanceof Error ? err.message : String(err));
+          }
+        })();
+        break;
+
+      case "memory.proposal.accept.done":
+        proposalsState.expandOpen = false;
+        syncProposalsState();
+        refreshTopbar();
+        renderProposalsPanel();
+        if (memoryShelfState.expandOpen) {
+          client.listMemories();
+        }
+        break;
+
       case "evolve.memories":
         handleMemoriesEvent(event.items);
         break;
@@ -6561,6 +6629,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (projectState.projectId) {
           refreshTopbar();
         }
+        syncArchivedViewUi();
+        updatePlaceholder();
+        updateWorkbenchEmpty();
+        composerWire.syncSendEnabled();
+        setStatus(event.message);
+        break;
+
+      case "session.restart_today.done":
+        projectState.currentSessionId = event.session_id;
+        if (projectState.projectId) {
+          projectState.activeSessionId = event.session_id;
+        }
+        client.listProjects();
+        renderSidebar();
+        refreshTopbar();
         syncArchivedViewUi();
         updatePlaceholder();
         updateWorkbenchEmpty();

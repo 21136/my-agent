@@ -950,6 +950,22 @@ def compact_context(
             f" {len(to_digest)} 条 → digest.md §压缩 {section_number}；"
             f"保留最近 {cfg.keep_turns} 轮。"
         )
+    try:
+        from day_journal_compact import refresh_day_journal_after_compact, touch_day_projects_after_compact
+
+        touch_day_projects_after_compact(session, session.paths)
+        refresh_day_journal_after_compact(
+            session,
+            session.paths,
+            CompactResult(
+                compacted=True,
+                message=base_message,
+                digest_section=section_number,
+                digested_message_count=len(to_digest),
+            ),
+        )
+    except Exception:
+        pass
     return CompactResult(
         compacted=True,
         message=base_message,

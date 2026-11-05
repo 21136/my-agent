@@ -13,7 +13,7 @@ if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 
 from day_journal import DayJournal, JournalConflict
-from day_journal_events import record_project_boundary
+from day_journal_events import record_dialogue_segment, record_project_boundary
 from paths import AgentPaths
 from session import Session, SessionMeta
 
@@ -37,12 +37,14 @@ def test_records_current_session_boundary_with_explicit_local_date(tmp_path):
 
     assert row["date"] == "2026-10-29"
     assert row["projects"] == ["project:alpha"]
-    assert row["segments"] == [{
-        "project_id": "project:alpha", "date": "2026-10-29",
-        "segment_id": "boundary:enter-1", "summary": None,
-        "source": {"kind": "session", "session_id": "session-live-1"},
-        "occurred_at": at.isoformat(),
-    }]
+    seg = row["segments"][0]
+    assert seg["scope"] == "project"
+    assert seg["project_id"] == "project:alpha"
+    assert seg["date"] == "2026-10-29"
+    assert seg["segment_id"] == "boundary:enter-1"
+    assert seg["summary"] and "做了什么：" in seg["summary"]
+    assert seg["source"] == {"kind": "session", "session_id": "session-live-1"}
+    assert seg["occurred_at"] == at.isoformat()
 
 
 def test_replay_is_idempotent_and_conflict_fails_closed(tmp_path):
@@ -64,7 +66,30 @@ def test_project_must_match_persisted_current_session_meta_and_source_identity(t
     assert list((tmp_path / "journal").glob("*.json")) == []
 
 
-def test_timezone_naive_and_unbound_session_are_rejected(tmp_path):
+def test_unbound_session_records_ordinary_scope(tmp_path):
+    data = tmp_path / "data"
+    session_dir = data / "sessions" / "session-grow-1"
+    session_dir.mkdir(parents=True)
+    meta = SessionMeta(project_id="")
+    (session_dir / "meta.json").write_text(json.dumps(meta.to_dict()), encoding="utf-8")
+    paths = AgentPaths(tmp_path, tmp_path / "workspace", data, tmp_path / "evolve")
+    session = Session("session-grow-1", session_dir, "", meta, [], paths)
+    journal = DayJournal(tmp_path / "journal")
+    row = record_dialogue_segment(
+        session,
+        occurred_at=datetime.now(timezone.utc),
+        event_id="restart:demo",
+        journal=journal,
+        paths=paths,
+        reason="今日重来",
+    )
+    seg = row["segments"][0]
+    assert seg["scope"] == "ordinary"
+    assert seg["project_id"] is None
+    assert row["projects"] == []
+
+
+def test_timezone_naive_and_unbound_project_boundary_still_rejected(tmp_path):
     session = current_session(tmp_path, project_id="")
     journal = DayJournal(tmp_path / "journal")
     with pytest.raises(ValueError):

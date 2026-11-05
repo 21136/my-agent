@@ -47,10 +47,10 @@ class ProjectBoundaryServerWiringTests(unittest.TestCase):
         session = self.session("session-a", "project-a")
         calls = []
 
-        def recorder(session, *, occurred_at, event_id, journal):
+        def recorder(session, *, occurred_at, event_id, journal, paths=None):
             calls.append((session, occurred_at, event_id, journal))
             return __import__("day_journal_events").record_project_boundary(
-                session, occurred_at=occurred_at, event_id=event_id, journal=journal
+                session, occurred_at=occurred_at, event_id=event_id, journal=journal, paths=paths
             )
 
         result = _record_project_switch_boundary(
@@ -120,11 +120,11 @@ class ProjectBoundaryServerWiringTests(unittest.TestCase):
         repl._rebind_agent = rebind_agent
         repl._rebind_agent()
 
-        def recorder(session, *, occurred_at, event_id, journal):
+        def recorder(session, *, occurred_at, event_id, journal, paths=None):
             observed.append(session)
             observed_thread_ids.append(threading.get_ident())
             return __import__("day_journal_events").record_project_boundary(
-                session, occurred_at=occurred_at, event_id=event_id, journal=journal
+                session, occurred_at=occurred_at, event_id=event_id, journal=journal, paths=paths
             )
 
         handler = WsSessionHandler(

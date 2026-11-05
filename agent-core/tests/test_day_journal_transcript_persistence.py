@@ -83,8 +83,12 @@ def _seed_summary(paths, session, tmp_path, monkeypatch):
     journal = DayJournal(tmp_path / "journal")
     journal.save_day(now, None, [session.meta.project_id])
     journal.record_segment(
-        now, session.meta.project_id, None, segment_id="boundary:" + session.conversation_id,
+        now,
+        None,
+        segment_id="boundary:" + session.conversation_id,
         source={"kind": "session", "session_id": session.conversation_id},
+        scope="project",
+        project_id=session.meta.project_id,
     )
     records = WorkRecordStore(session)
     item = records.create_item(title="fixture requirement", scope={

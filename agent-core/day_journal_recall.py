@@ -13,7 +13,8 @@ from day_journal import DayJournal
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REQUIRED_FIELDS = {"date", "summary", "projects", "segments", "revision"}
-_SEGMENT_FIELDS = {"project_id", "date", "segment_id", "summary", "source", "occurred_at"}
+_SEGMENT_FIELDS = {"scope", "project_id", "date", "segment_id", "summary", "source", "occurred_at"}
+_LEGACY_SEGMENT_FIELDS = {"project_id", "date", "segment_id", "summary", "source", "occurred_at"}
 _DEFAULT_MAX_RECORD_BYTES = 64 * 1024
 _MAX_RANGE_DAYS = 31
 
@@ -124,6 +125,40 @@ def _parse_date(value: str) -> str:
         raise ValueError("invalid calendar date") from exc
 
 
+def _validate_public_source(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        raise ValueError("invalid stable source coordinate")
+    kind = source.get("kind")
+    if kind == "session":
+        if set(source) != {"kind", "session_id"}:
+            raise ValueError("invalid stable source coordinate")
+        session_id = source["session_id"]
+        if not isinstance(session_id, str) or not _ID_RE.fullmatch(session_id):
+            raise ValueError("invalid stable source coordinate")
+        return {"kind": "session", "session_id": session_id}
+    if kind == "work_record":
+        allowed = {"kind", "session_id", "item_id", "requirement_id", "result_id"}
+        if not allowed.issuperset(source) or "session_id" not in source or "item_id" not in source:
+            raise ValueError("invalid stable source coordinate")
+        session_id = source["session_id"]
+        item_id = source["item_id"]
+        if not isinstance(session_id, str) or not _ID_RE.fullmatch(session_id):
+            raise ValueError("invalid stable source coordinate")
+        if not isinstance(item_id, str) or not _ID_RE.fullmatch(item_id):
+            raise ValueError("invalid stable source coordinate")
+        public: dict[str, Any] = {"kind": "work_record", "session_id": session_id, "item_id": item_id}
+        for optional in ("requirement_id", "result_id"):
+            if optional in source:
+                value = source[optional]
+                if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+                    raise ValueError("invalid stable source coordinate")
+                public[optional] = value
+        if set(source) != set(public):
+            raise ValueError("invalid stable source coordinate")
+        return public
+    raise ValueError("invalid stable source coordinate")
+
+
 def _validated_public_record(payload: Any, requested_day: str, project_filter: str | None, zone) -> tuple[dict[str, Any] | None, bool]:
     if not isinstance(payload, dict) or set(payload) != _REQUIRED_FIELDS or payload.get("date") != requested_day:
         raise ValueError("record schema or date mismatch")
@@ -141,13 +176,29 @@ def _validated_public_record(payload: Any, requested_day: str, project_filter: s
     public_segments = []
     seen_segment_ids: set[str] = set()
     for segment in payload["segments"]:
-        if (not isinstance(segment, dict)
-                or set(segment) not in (_SEGMENT_FIELDS, _SEGMENT_FIELDS | {"summary_metadata"})):
+        if not isinstance(segment, dict):
             raise ValueError("invalid segment")
-        pid, sid = segment["project_id"], segment["segment_id"]
-        if (not isinstance(pid, str) or not _ID_RE.fullmatch(pid) or pid not in projects
-                or not isinstance(sid, str) or not _ID_RE.fullmatch(sid)
-                or segment["date"] != requested_day):
+        field_set = set(segment)
+        if field_set not in (
+            _SEGMENT_FIELDS,
+            _SEGMENT_FIELDS | {"summary_metadata"},
+            _LEGACY_SEGMENT_FIELDS,
+            _LEGACY_SEGMENT_FIELDS | {"summary_metadata"},
+        ):
+            raise ValueError("invalid segment")
+        scope = segment.get("scope")
+        if scope is None:
+            scope = "project" if segment.get("project_id") else "ordinary"
+        if scope not in ("ordinary", "project"):
+            raise ValueError("invalid segment scope")
+        pid = segment.get("project_id")
+        if scope == "project":
+            if not isinstance(pid, str) or not _ID_RE.fullmatch(pid) or pid not in projects:
+                raise ValueError("invalid segment identity")
+        elif pid is not None:
+            raise ValueError("invalid segment identity")
+        sid = segment["segment_id"]
+        if not isinstance(sid, str) or not _ID_RE.fullmatch(sid) or segment["date"] != requested_day:
             raise ValueError("invalid segment identity")
         if sid in seen_segment_ids:
             raise ValueError("duplicate segment_id")
@@ -160,10 +211,7 @@ def _validated_public_record(payload: Any, requested_day: str, project_filter: s
             public_metadata = {"kind": metadata["kind"], "verified": False,
                                "source_ids": metadata["source_ids"]}
         source = segment["source"]
-        if (not isinstance(source, dict) or set(source) != {"kind", "session_id"}
-                or source.get("kind") != "session" or not isinstance(source.get("session_id"), str)
-                or not _ID_RE.fullmatch(source["session_id"])):
-            raise ValueError("invalid stable source coordinate")
+        public_source = _validate_public_source(source)
         if not isinstance(segment["occurred_at"], str):
             raise ValueError("invalid timestamp")
         occurred_at = datetime.fromisoformat(segment["occurred_at"])
@@ -171,9 +219,15 @@ def _validated_public_record(payload: Any, requested_day: str, project_filter: s
             raise ValueError("timestamp must retain timezone")
         if occurred_at.astimezone(zone).date().isoformat() != requested_day:
             raise ValueError("timestamp local date does not match day key")
-        if project_filter is None or pid == project_filter:
-            public_segment = {"project_id": pid, "date": requested_day, "segment_id": sid,
-                              "summary": seg_summary, "source": {"kind": "session", "session_id": source["session_id"]}}
+        if project_filter is None or (scope == "project" and pid == project_filter):
+            public_segment: dict[str, Any] = {
+                "scope": scope,
+                "project_id": pid,
+                "date": requested_day,
+                "segment_id": sid,
+                "summary": seg_summary,
+                "source": public_source,
+            }
             if public_metadata is not None:
                 public_segment["summary_metadata"] = public_metadata
             public_segments.append(public_segment)

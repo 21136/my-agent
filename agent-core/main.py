@@ -510,6 +510,14 @@ class ConversationRepl:
 
     def start_new_session(self) -> None:
         prev = self.session
+        from dialogue_archive import archive_dialogue_line
+
+        archive_dialogue_line(
+            prev,
+            self.paths,
+            reason="用户发起新会话",
+            event_id=f"session-new:{prev.conversation_id}",
+        )
         self.session = create_new(self.paths)
         # E1: carry previous session context as a seed message
         if prev is not None and prev.conversation_id:

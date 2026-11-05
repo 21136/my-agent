@@ -318,6 +318,10 @@ def start_new_project_thread(
             f"当前不是项目 {pid} 的活线；请先切回活线再新开线"
         )
 
+    from dialogue_archive import archive_dialogue_line
+
+    archive_dialogue_line(session, paths, reason="项目新开线", event_id=f"thread-new:{old_cid}")
+
     fresh = create_new(paths)
     _inherit_project_meta(fresh, session, pid)
     fresh.save()

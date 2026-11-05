@@ -37,7 +37,7 @@ class SessionAgnosticToolAccessTests(unittest.TestCase):
     def _names(session, registry: ToolRegistry) -> set[str]:
         return {
             item["function"]["name"]
-            for item in build_llm_tools(session, registry=registry)
+            for item in build_llm_tools(session, registry=registry, include_dialogue_recall=True)
         }
 
     def test_agent_mode_tool_definitions_match_for_ordinary_and_project_sessions(self) -> None:

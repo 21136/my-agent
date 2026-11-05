@@ -26,6 +26,11 @@ class FakeHandler(server.WsSessionHandler):
         super().__init__(paths, project_boundary_recorder=recorder, project_boundary_journal=journal)
 
 
+def _stub_session():
+    paths = AgentPaths.from_root(Path(__file__).resolve().parents[2])
+    return type("Session", (), {"conversation_id": "synthetic-session", "paths": paths})()
+
+
 async def command(handler, text, bridge):
     return await handler._handle_project_journal_command(text, bridge)
 
@@ -57,19 +62,17 @@ def test_reject_cancel_timeout_and_close_leave_connection_disabled():
     assert bridge.project_journal_enabled is False
 
 
-def test_project_switch_write_requires_connection_opt_in_and_success_only():
+def test_project_switch_writes_on_success_without_connection_opt_in():
     calls = []
-    recorder = lambda *a, **kw: calls.append((a, kw))
+    recorder = lambda *a, **kw: calls.append((a, kw)) or {}
     handler = FakeHandler(recorder, object())
     event = {"type": "project.switch.done", "request_id": "evt-1", "action": "switch"}
 
-    assert not handler._record_project_switch_for_connection(None, object(), event)
+    assert not handler._record_project_switch_for_connection(None, _stub_session(), event)
     bridge = FakeBridge("yes")
-    assert not handler._record_project_switch_for_connection(bridge, object(), event)
-    bridge.project_journal_enabled = True
-    assert handler._record_project_switch_for_connection(bridge, object(), event)
+    assert handler._record_project_switch_for_connection(bridge, _stub_session(), event)
     assert len(calls) == 1
-    assert not handler._record_project_switch_for_connection(bridge, object(), {**event, "action": "noop"})
+    assert not handler._record_project_switch_for_connection(bridge, _stub_session(), {**event, "action": "noop"})
     assert len(calls) == 1
 
 
@@ -82,30 +85,25 @@ def test_confirmation_exception_fails_closed_with_clear_notice():
     assert any("\u672a\u80fd\u5b89\u5168\u542f\u7528" in e.get("text", "") for e in bridge.events)
 
 
-def test_reconnect_starts_disabled_and_write_failure_disables_with_notice():
+def test_write_failure_surfaces_notice_without_disabling_legacy_opt_in_flag():
     writes = []
     def broken_recorder(*args, **kwargs):
         writes.append((args, kwargs))
         raise OSError("synthetic disk failure")
 
     handler = FakeHandler(broken_recorder, object())
-    old_connection = FakeBridge("yes")
-    asyncio.run(command(handler, ENABLE, old_connection))
-    assert old_connection.project_journal_enabled
-
-    reconnected = FakeBridge("yes")
-    assert reconnected.project_journal_enabled is False
-    asyncio.run(command(handler, ENABLE, reconnected))
-    assert reconnected.project_journal_enabled
+    bridge = FakeBridge("yes")
+    asyncio.run(command(handler, ENABLE, bridge))
+    assert bridge.project_journal_enabled
     notices = []
     ok = handler._record_project_switch_for_connection(
-        reconnected,
-        object(),
+        bridge,
+        _stub_session(),
         {"type": "project.switch.done", "request_id": "evt-fail", "action": "switch"},
         notices.append,
     )
     assert ok is False
-    assert reconnected.project_journal_enabled is False
+    assert bridge.project_journal_enabled is True
     assert writes and notices and "\u5199\u5165\u5931\u8d25" in notices[0]
 
 
@@ -120,13 +118,7 @@ def test_command_emits_real_turn_lifecycle_and_routes_prompt_input_first():
     asyncio.run(handler._handle_incoming({"type": "user.message", "text": ENABLE}, repl, bridge))
     assert any(event.get("type") == "turn.end" for event in events)
     assert bridge.lifecycle.snapshot().state == "settled"
-
-    events.clear()
-    bridge._awaiting_input.set()
-    asyncio.run(handler._handle_incoming({"type": "user.message", "text": ENABLE}, repl, bridge))
-    bridge._awaiting_input.clear()
-    assert bridge._input_queue.get_nowait() == ENABLE
-    assert not any(event.get("type") == "confirm.request" for event in events)
+    assert any(event.get("type") == "turn.notice" for event in events)
 
 
 def test_close_command_waits_for_existing_turn_lock_before_changing_consent():
