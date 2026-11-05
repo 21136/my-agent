@@ -533,10 +533,15 @@ def build_llm_messages(
         metadata = message.get(HOST_INTERNAL_METADATA_KEY)
         return isinstance(metadata, dict) and metadata.get("stream_incomplete") is True
 
+    def is_work_instruction_message(message: dict[str, Any]) -> bool:
+        metadata = message.get(HOST_INTERNAL_METADATA_KEY)
+        return isinstance(metadata, dict) and metadata.get("work_instruction") is True
+
     if has_anchor_message(session) and not _is_internal_work_card_message(messages[0]):
         anchor = messages[0]
         tail = [message for message in messages[start:]
-                if not _is_internal_work_card_message(message) and not is_interrupted_stream(message)]
+                if not _is_internal_work_card_message(message) and not is_interrupted_stream(message)
+                and not is_work_instruction_message(message)]
         if start <= 1 and not tail:
             result = repair_tool_messages([anchor])
         elif start <= 1:
@@ -546,7 +551,8 @@ def build_llm_messages(
     else:
         result = repair_tool_messages([message for message in messages[start:]
                                        if not _is_internal_work_card_message(message)
-                                       and not is_interrupted_stream(message)])
+                                       and not is_interrupted_stream(message)
+                                       and not is_work_instruction_message(message)])
     # Legacy [Harness]/狂奔续接 lines in old transcripts never reach the model.
     result = _drop_harness_chat_messages(result)
     # Only the top-level reserved namespace is host-private. Never mutate the

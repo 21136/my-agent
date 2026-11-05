@@ -177,3 +177,50 @@ html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assist
   html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-prose { padding: 0.5rem 0 0; }
   html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-user:is(.unified-message-bubble, .unified-message-reading) .unified-turn-body { max-width: 96%; padding-inline: .875rem; }
 }
+
+/* Keep assistant prose on one calm surface: the turn wrapper is structural,
+   while the optional reading opener is only a text marker, never a second bubble. */
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-bubble,
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-reading {
+  padding: 0.35rem 0.85rem 0.45rem;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ma-surface) 92%, transparent);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-bubble::before,
+html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-opener::before {
+  content: none;
+  display: none;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant:is(.unified-message-bubble, .unified-message-reading) .unified-markdown {
+  line-height: 1.72;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-opener {
+  padding: 0.2rem 0 0.1rem 0.65rem;
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--ma-accent) 28%, var(--ma-border));
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-prose {
+  padding-top: 0.4rem;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-prose > p {
+  margin-bottom: 0.75rem;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-prose :is(h1, h2, h3) {
+  margin-top: 1.15rem;
+  margin-bottom: 0.5rem;
+}
+@media (max-width: 640px) {
+  html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-bubble,
+  html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-reading {
+    padding: 0.3rem 0.7rem 0.4rem;
+  }
+  html[data-theme] .unified-shell[data-perspective="project"] .unified-reading-opener {
+    padding: 0.15rem 0 0.1rem 0.55rem;
+  }
+}

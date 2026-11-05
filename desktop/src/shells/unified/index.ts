@@ -580,7 +580,6 @@ export function mountUnifiedShell(
   let projectWorkerProgressVisible = false;
   let cancelledStatusTimer: number | null = null;
   let composerWhisperTimer: number | null = null;
-  let cancelSafetyTimer: number | null = null;
   let destroyed = false;
   let renderThrottleTimer: number | null = null;
   let processToggleAnchor: { turnKey: string; top: number; focus: boolean } | null = null;
@@ -605,12 +604,6 @@ export function mountUnifiedShell(
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 
-  function clearCancelSafety(): void {
-    if (cancelSafetyTimer !== null) {
-      window.clearTimeout(cancelSafetyTimer);
-      cancelSafetyTimer = null;
-    }
-  }
 
   // ---- chat session ----
   const workCardPresentations = new WorkCardPresentationRegistry("");
@@ -623,6 +616,7 @@ export function mountUnifiedShell(
         renderChat();
         renderWorkActivity();
         renderConfirmGlass();
+        syncPromptComposerUi();
         syncWorkingVisual();
       },
       onHistoryLoaded: (history) => {
@@ -722,8 +716,7 @@ export function mountUnifiedShell(
       },
       onTurnEnd: (_ok, finishReason) => {
         syncWorkingVisual();
-        clearCancelSafety();
-        setComposerEnabled(true);
+        setComposerEnabled(!chat.model.confirmPending);
         if (!chat.model.confirmPending) {
           setTurnEndStatus(finishReason);
         }
@@ -742,10 +735,6 @@ export function mountUnifiedShell(
             });
           }
         }
-      },
-      onCancelTimeout: () => {
-        setComposerEnabled(true);
-        setTurnEndStatus("cancelled");
       },
       onError: () => {
         setComposerEnabled(true);
@@ -1163,6 +1152,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function updatePlaceholder(): void {
+    if (chat.model.pendingToolPrompt) {
+      input.placeholder = "工具正在等待输入；回复会只发给这次工具请求";
+      return;
+    }
     if (isViewingArchivedThread(projectState)) {
       input.placeholder = "归档线只读回看；点顶栏「回到活线」继续工作";
       return;
@@ -1207,7 +1200,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       if (isViewingArchivedThread(projectState)) return false;
       return true;
     },
-    onChange: () => composerWire.syncSendEnabled(),
+    onChange: () => {
+      syncComposerSendEnabled();
+      if (hasActiveWorkRun() && fileDrop.getAttachments().length) {
+        setStatus("工作进行中暂不支持发送附件；请移除附件后再发送文字");
+      }
+    },
     onNotice: (text) => setStatus(text),
   });
 
@@ -1255,6 +1253,39 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return base;
     },
   });
+
+  function hasActiveWorkRun(): boolean {
+    return chat.model.executionState === "running" && Boolean(chat.model.executionRunId);
+  }
+
+  function canSendDuringWork(): boolean {
+    return hasActiveWorkRun() && !chat.model.confirmPending && !chat.model.cancelRequested
+      && !isViewingArchivedThread(projectState) && isWorkbenchChatAllowed()
+      && input.value.trim().length > 0 && fileDrop.getAttachments().length === 0;
+  }
+
+  function syncPromptComposerUi(): void {
+    const pending = chat.model.pendingToolPrompt;
+    sendBtn.setAttribute("aria-label", pending ? "提交工具输入" : "发送消息");
+    sendBtn.title = pending ? "将回复发送给正在等待的工具" : "发送消息";
+    updatePlaceholder();
+  }
+
+  function syncComposerSendEnabled(): void {
+    composerWire.syncSendEnabled();
+    if (input.disabled) return;
+    const prompt = chat.model.pendingToolPrompt;
+    if (prompt) {
+      sendBtn.disabled = prompt.state === "sending" || chat.model.confirmPending || chat.model.cancelRequested
+        || !input.value.trim() || fileDrop.getAttachments().length > 0;
+      return;
+    }
+    if (hasActiveWorkRun() && !chat.model.confirmPending && !chat.model.cancelRequested) {
+      sendBtn.disabled = !canSendDuringWork();
+    }
+  }
+
+  input.addEventListener("input", syncComposerSendEnabled);
 
   // ---- visual sync ----
   let lastSidebarWorking = false;
@@ -1318,7 +1349,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (working && (statusText === "发送中…" || statusText.startsWith("发送中"))) {
       setStatus("处理中…");
     }
-    composerWire.syncSendEnabled();
+    syncComposerSendEnabled();
     syncToolElapsedTimer();
     syncModeToggleUi();
     setAgentBusy(working, perspective === "project" ? "project" : "grow");
@@ -1331,24 +1362,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function sendStopRequest(): void {
     const activeTurn = chat.isWorking() || chat.model.confirmPending;
     if (activeTurn) {
+      const runId = chat.model.executionRunId.trim();
+      if (!runId) {
+        setStatus("无法安全停止：当前工作缺少 run_id");
+        return;
+      }
       if (!chat.requestCancel()) return;
       setComposerEnabled(false);
       setStatus("正在停止…");
-      clearCancelSafety();
-      cancelSafetyTimer = window.setTimeout(() => {
-        if (chat.model.cancelRequested) {
-          chat.model.cancelRequested = false;
-          chat.model.confirmPending = false;
-          setComposerEnabled(true);
-          setStatus("就绪");
-          syncWorkingVisual();
-        }
-        cancelSafetyTimer = null;
-      }, 3000);
       try {
-        client.sendTurnCancel();
+        client.sendExecutionStop(runId);
       } catch (err) {
-        clearCancelSafety();
         chat.model.cancelRequested = false;
         setComposerEnabled(!chat.model.confirmPending);
         setStatus(`停止发送失败：${err instanceof Error ? err.message : String(err)}`);
@@ -1523,7 +1547,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     input.disabled = !enabled;
     composer.classList.toggle("disabled", !enabled);
     if (enabled) {
-      composerWire.syncSendEnabled();
+      syncComposerSendEnabled();
     } else {
       sendBtn.disabled = true;
     }
@@ -4134,6 +4158,59 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         <div class="unified-turn-body">${formatUserMessageHtml(block.text)}${persistenceHtml}</div>
       </article>`;
     }
+    if (block.kind === "work-instruction") {
+      const stateLabel = block.state === "sending"
+        ? "正在发送，等待后台分类…"
+        : block.state === "queued"
+          ? "消息已排队，等待进入工作上下文"
+          : block.state === "delivered" && block.deliveryStage === "next_model_request_context"
+            ? "已进入下一次模型请求上下文（不代表已遵循或完成）"
+            : block.state === "undelivered"
+              ? `消息未送达${block.reason ? `（${escapeHtml(block.reason)}）` : ""}`
+              : "工作状态无法核实";
+      return `<article class="unified-turn unified-turn-user work-instruction-message" data-work-instruction="${escapeHtml(block.requestId)}">
+        <div class="unified-turn-label">你</div>
+        <div class="unified-turn-body">${formatUserMessageHtml(block.text)}<div class="unified-message-persistence" role="status">${stateLabel}</div></div>
+      </article>`;
+    }
+    if (block.kind === "tool-prompt") {
+      const stateLabel = block.state === "waiting" ? "工具正在等待输入"
+        : block.state === "sending" ? "正在提交工具输入…"
+          : block.state === "accepted" ? "工具已接受输入；这不代表工具已完成"
+            : block.reason || "工具未接受输入；回复未发送为普通消息";
+      const response = block.responseText
+        ? `<div class="unified-message-persistence">你的回复：${formatUserMessageHtml(block.responseText)}</div>`
+        : "";
+      return `<article class="unified-turn unified-turn-user tool-prompt-message" data-tool-prompt="${escapeHtml(block.requestId)}">
+        <div class="unified-turn-label">工具交互输入</div>
+        <div class="unified-turn-body">${escapeHtml(block.prompt)}<div class="unified-message-persistence" role="status">${escapeHtml(stateLabel)}</div>${response}</div>
+      </article>`;
+    }
+    if (block.kind === "parallel-chat") {
+      const deliveryLabel = block.deliveryState === "pending"
+        ? "正在发送聊天"
+        : block.deliveryState === "delivered"
+          ? (block.cancelRequested ? "正在取消聊天…" : "聊天已接收，未传给工作")
+          : block.deliveryState === "done" ? "已回复，未传给工作" : "聊天未完成，未传给工作";
+      const userHtml = `<article class="unified-turn unified-turn-user parallel-chat-user" data-chat-request="${escapeHtml(block.requestId)}">
+        <div class="unified-turn-label">你 <small class="unified-message-persistence" role="status">· ${deliveryLabel}</small></div>
+        <div class="unified-turn-body">${formatUserMessageHtml(block.promptText)}<div class="unified-message-persistence" role="note">仅聊天；未传给工作。</div></div>
+      </article>`;
+      const responseHtml = block.responseText
+        ? renderMarkdown(block.responseText)
+        : block.deliveryState === "delivered" ? "<span class=\"text-muted\">正在回复…</span>" : "";
+      const assistantHtml = block.deliveryState === "delivered" || block.deliveryState === "done"
+        ? `<article class="unified-turn unified-turn-assistant parallel-chat-response">
+            <div class="unified-turn-label">助手${block.deliveryState === "delivered" ? ` <button type="button" class="unified-inline-action" data-parallel-chat-cancel="${escapeHtml(block.requestId)}" ${block.cancelRequested ? "disabled" : ""}>${block.cancelRequested ? "取消中…" : "取消聊天"}</button>` : ""}</div>
+            <div class="unified-turn-body unified-markdown">${responseHtml}</div>
+          </article>`
+        : "";
+      const errorLabel = block.errorCode === "cancelled" ? "聊天已取消" : "聊天失败";
+      const errorHtml = block.deliveryState === "error"
+        ? `<div class="unified-sys-line" role="alert">${errorLabel}${block.errorCode ? `（${escapeHtml(block.errorCode)}）` : ""}：${escapeHtml(block.errorMessage || "未知错误")}</div>`
+        : "";
+      return `<div class="parallel-chat-thread" data-parallel-chat="${escapeHtml(block.requestId)}">${userHtml}${assistantHtml}${errorHtml}</div>`;
+    }
     if (block.kind === "review-subagent") {
       const title =
         block.status === "running"
@@ -4265,6 +4342,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         return `A${block.turnIndex}:${block.text.length}`;
       case "assistant-streaming":
         return `AS${block.turnIndex}:${block.turnKey}:${block.text.length}`;
+      case "work-instruction":
+        return `WI:${block.requestId}:${block.state}:${block.deliveryStage ?? ""}:${block.reason ?? ""}:${block.text}`;
+      case "tool-prompt":
+        return `TP:${block.requestId}:${block.state}:${block.responseText}:${block.reason ?? ""}`;
+      case "parallel-chat":
+        return `PC:${block.requestId}:${block.deliveryState}:${block.cancelRequested ? 1 : 0}:${block.promptText.length}:${block.responseText}:${block.errorCode ?? ""}:${block.errorMessage ?? ""}`;
       case "work-card-reference": {
         const entry = workCardPresentations.get(block.presentationId);
         return `WC:${block.presentationId}:${entry?.status ?? "missing"}:${entry?.cardId ?? block.cardId}`;
@@ -4751,6 +4834,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   chatEl.addEventListener("click", (ev) => {
+    const parallelChatCancel = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-parallel-chat-cancel]");
+    if (parallelChatCancel?.dataset.parallelChatCancel) {
+      const requestId = parallelChatCancel.dataset.parallelChatCancel;
+      if (!chat.requestParallelChatCancel(requestId)) return;
+      try {
+        client.cancelParallelChat(requestId);
+      } catch (err) {
+        chat.handleEvent({ type: "chat.cancel.result", request_id: requestId, accepted: false });
+        setStatus(`聊天取消请求未发送：${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
     const careBtn = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-companion-care]");
     if (careBtn?.dataset.companionCare) {
       onCompanionCare(careBtn.dataset.companionCare as "coffee" | "glasses" | "music");
@@ -4878,7 +4973,73 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   // ---- input events ----
+  function sendToolPromptResponse(): void {
+    const pending = chat.model.pendingToolPrompt;
+    if (!pending || chat.model.confirmPending || chat.model.cancelRequested || isViewingArchivedThread(projectState)) return;
+    if (fileDrop.getAttachments().length) {
+      setStatus("工具交互输入暂不支持附件；请移除附件后再发送");
+      return;
+    }
+    const text = input.value;
+    if (!text.trim() || text.length > 4000) {
+      if (text.length > 4000) setStatus("工具输入最多 4000 个字符；当前回复未发送");
+      return;
+    }
+    if (!chat.beginToolPromptResponse(pending.requestId, pending.runId, pending.sessionId, text)) {
+      setStatus("工具输入请求已变化；回复保留在输入框，未发送为普通消息");
+      return;
+    }
+    try {
+      client.sendPromptResponse(pending.requestId, pending.runId, pending.sessionId, text);
+    } catch (err) {
+      chat.handleEvent({ type: "prompt.response.result", request_id: pending.requestId, run_id: pending.runId,
+        session_id: pending.sessionId, accepted: false });
+      setStatus(`工具输入未发送：${err instanceof Error ? err.message : String(err)}；回复仍保留`);
+      return;
+    }
+    setStatus("工具输入已发送，等待后台确认接收…");
+    syncComposerSendEnabled();
+  }
+
+  function sendMessageDuringWork(): void {
+    if (!hasActiveWorkRun() || chat.model.confirmPending || chat.model.cancelRequested
+      || isViewingArchivedThread(projectState) || !isWorkbenchChatAllowed()) return;
+    const attachments = fileDrop.getAttachments();
+    if (attachments.length) {
+      setStatus("工作进行中暂不支持发送附件；请移除附件后再发送文字");
+      return;
+    }
+    const text = input.value.trim();
+    const sessionId = chat.model.sessionId;
+    const workRunId = chat.model.executionRunId;
+    if (!text || !sessionId || !workRunId) return;
+    const requestId = crypto.randomUUID();
+    if (!chat.addWorkInstructionRequest(text, requestId, sessionId, workRunId)) return;
+    try {
+      client.sendMessage(text, undefined, { requestId, sessionId, turnMode: currentTurnMode });
+    } catch (err) {
+      chat.handleEvent({ type: "work.instruction.state", request_id: requestId, run_id: workRunId,
+        session_id: sessionId, state: "undelivered", reason: err instanceof Error ? err.message : "send_failed" });
+      setStatus(`消息发送失败：${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    input.value = "";
+    input.style.height = "";
+    topbarState.intentLabel = "";
+    resetUserScrollPin();
+    setStatus("消息已发送，等待后台分类与回执…");
+    syncComposerSendEnabled();
+  }
+
   function sendComposerMessage(): void {
+    if (chat.model.pendingToolPrompt) {
+      sendToolPromptResponse();
+      return;
+    }
+    if (hasActiveWorkRun()) {
+      sendMessageDuringWork();
+      return;
+    }
     const text = input.value.trim();
     const attachmentIds = fileDrop.getAttachments().map((item) => item.id);
     composerWire.sendCurrentMessage();
@@ -6721,8 +6882,68 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         showProjectWorkerProgress(event);
         break;
 
+      case "chat.start":
+      case "chat.delta":
+      case "chat.done":
+      case "chat.error":
+      case "chat.cancel.result":
+        if (!chat.handleEvent(event)) break;
+        if (event.type === "chat.start") setStatus("后台已判定为对话；回复仍在当前会话中");
+        else if (event.type === "chat.done") setStatus("对话回复完成；后台工作继续");
+        else if (event.type === "chat.error") setStatus(`消息处理失败：${event.message}；后台工作状态不变`);
+        else if (event.type === "chat.cancel.result" && !event.accepted) setStatus("对话取消未被接受；后台工作不受影响");
+        break;
+
+      case "prompt.request":
+        if (!chat.handleEvent(event)) break;
+        setStatus("工具请求交互输入；请在同一输入框回复");
+        syncPromptComposerUi();
+        syncComposerSendEnabled();
+        requestAnimationFrame(() => scrollToBottomIfNear());
+        break;
+
+      case "prompt.response.result": {
+        const pending = chat.model.pendingToolPrompt;
+        if (!chat.handleEvent(event)) break;
+        if (event.accepted) {
+          if (pending && input.value === pending.responseText) {
+            input.value = "";
+            input.style.height = "";
+          }
+          setStatus("工具已接受输入；等待当前工作继续");
+        } else {
+          setStatus("工具未接受输入；回复已保留，且未发送为普通消息");
+        }
+        syncPromptComposerUi();
+        syncComposerSendEnabled();
+        break;
+      }
+
+      case "work.instruction.state":
+        if (!chat.handleEvent(event)) break;
+        if (event.state === "queued") setStatus("消息已排队，等待进入工作上下文");
+        else if (event.state === "delivered" && event.delivery_stage === "next_model_request_context") {
+          setStatus("消息已进入下一次模型请求上下文（不代表已遵循或完成）");
+        } else if (event.state === "undelivered") {
+          setStatus(`消息未送达${event.reason ? `：${event.reason}` : ""}`);
+        }
+        break;
+
+      case "execution.stop.result":
+        if (!chat.handleEvent(event)) break;
+        if (!event.accepted) {
+          setComposerEnabled(!chat.model.confirmPending);
+          setStatus("停止请求未被接受；工作仍按当前生命周期状态显示");
+        }
+        syncWorkingVisual();
+        break;
+
       case "execution.state":
         if (!chat.handleEvent(event)) break;
+        if (["settled", "paused", "failed"].includes(event.state)) {
+          setComposerEnabled(!chat.model.confirmPending);
+          if (!chat.model.confirmPending && event.finish_reason) setTurnEndStatus(event.finish_reason);
+        }
         if (event.state !== "running") clearProjectWorkerProgressStatus();
         if (event.run_id) {
           const previousOverviewState = currentWorkOverviewExecutionStates.get(event.run_id);
@@ -6961,7 +7182,6 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     destroyed = true;
     clearProjectWorkerProgressStatus();
     if (cancelledStatusTimer !== null) window.clearTimeout(cancelledStatusTimer);
-    clearCancelSafety();
     if (toolElapsedTimer !== null) window.clearInterval(toolElapsedTimer);
     if (renderThrottleTimer !== null) window.clearTimeout(renderThrottleTimer);
     if (terminalPollTimerId !== null) window.clearTimeout(terminalPollTimerId);

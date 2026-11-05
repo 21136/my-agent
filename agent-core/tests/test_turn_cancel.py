@@ -125,9 +125,13 @@ class TurnCancelTests(unittest.TestCase):
         bridge = self._bridge()
         handler = WsSessionHandler(self.paths)
         calls: list[str] = []
+        self.assertTrue(bridge.begin_turn(mode="ordinary"))
+        active = bridge.lifecycle.snapshot()
+        self.assertIsNotNone(active)
         bridge._turn_busy.set()
         bridge._cancel_turn = lambda: calls.append("cancel")
 
+        # Terminal and legacy clients send no run_id; preserve current-turn behavior.
         self.assertTrue(handler._dispatch_inline({"type": "turn.cancel"}, bridge))
         self.assertTrue(handler._dispatch_inline({"type": "turn.cancel"}, bridge))
         self.assertEqual(calls, ["cancel"])

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,19 @@ const esbuild = require("esbuild");
 const playwrightPath = process.env.CODEX_PLAYWRIGHT_PATH || path.join(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
 const edgePath = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const syntheticReply = ["## 隔离预览：长回复", "", ...Array.from({ length: 30 }, (_, i) => `这是第 ${i + 1} 段用于检查聊天阅读节奏的示例文本。内容为合成文本，不代表真实任务结果。`)].join("\n\n");
+const syntheticHistory = [
+  { role: "user", text: "帮我把今天的工作安排整理成清单。" },
+  { role: "assistant", text: [
+    "可以，先处理有截止时间的材料，再推进需要沟通确认的事项。报销资料核对完后，把缺项集中列出，避免在不同文件之间来回查找。",
+    "",
+    "建议按这个顺序安排：",
+    "",
+    "- 上午：核对报销单、发票与审批记录，集中标记并补齐缺失凭证。",
+    "- 午后：和设计同事确认首页反馈，分别记录已确认项和待决问题。",
+    "- 收尾：更新验收记录，为需要他人确认的事项注明负责人和时间。",
+  ].join("\n") },
+  { role: "user", text: "好，我先处理报销材料。" },
+];
 
 test("real unified shell mount keeps work activity in left whitespace without changing chat geometry", {
   skip: !existsSync(playwrightPath) || !existsSync(edgePath), timeout: 60000,
@@ -25,12 +37,14 @@ test("real unified shell mount keeps work activity in left whitespace without ch
     logLevel: "silent",
   });
   const themeCss = readFileSync(path.join(desktopRoot, "src/styles/theme.css"), "utf8");
-  const shellCss = ["unified.css", "neon-twin.css", "sidebar-v2.css", "single-chat-tools.css", "composer-companion.css", "current-work-overview.css"]
+  const shellCss = ["unified.css", "neon-twin.css", "sidebar-v2.css", "single-chat-tools.css", "composer-companion.css", "current-work-overview.css", "message-reading.css"]
     .map(file => readFileSync(path.join(desktopRoot, "src/shells/unified", file), "utf8")).join("\n");
   const candidate = readFileSync(path.join(desktopRoot, "src/shells/unified/assets/chat-background-candidate.png")).toString("base64");
   const css = `${themeCss}\n${shellCss.replaceAll('url("./assets/chat-background-candidate.png")', `url("data:image/png;base64,${candidate}")`)}`;
   const browser = await require(playwrightPath).chromium.launch({ headless: true, executablePath: edgePath, args: ["--disable-background-networking", "--no-first-run"] });
-  const output = path.join(os.tmpdir(), `work-activity-mounted-${process.pid}`);
+  const outputDir = path.join(os.tmpdir(), "my-agent-main-chat-visual-adjustment");
+  mkdirSync(outputDir, { recursive: true });
+  const output = path.join(outputDir, "daily-chat.png");
   const screens = [["wide", 1920, 1080], ["ordinary", 960, 720], ["narrow", 720, 480], ["tight", 640, 480]];
   try {
     for (const [label, width, height] of screens) {
@@ -46,7 +60,7 @@ test("real unified shell mount keeps work activity in left whitespace without ch
       const page = await context.newPage();
       page.on("pageerror", error => errors.push(error.message));
       await page.goto("https://isolated.invalid/");
-      await page.addStyleTag({ content: `html,body,#root{height:100%;margin:0}${css}` });
+      await page.addStyleTag({ content: `html,body,#root{height:100%;margin:0}${css}body::after{content:"合成内容 · 隔离 shell 渲染";position:fixed;right:12px;bottom:10px;z-index:99999;padding:4px 8px;border-radius:4px;background:#18212be8;color:#fff;font:12px/1.4 sans-serif;pointer-events:none}` });
       await page.addScriptTag({ content: bundle.outputFiles[0].text });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";
@@ -60,7 +74,7 @@ test("real unified shell mount keeps work activity in left whitespace without ch
       });
       assert.equal(await page.locator("#unified-sidebar").isVisible(), false);
       assert.equal(await page.locator("#sidebar-new-chat").isVisible(), false);
-      await page.evaluate(({ label, text }) => {
+      await page.evaluate(({ label, history }) => {
         window.emitSynthetic({ type: "session.banner", session_id: `isolated-${label}`, project_id: "fixture", project_plan_status: "draft", topics: [], turn_mode: "agent", turn_mode_label: "", phase: "S4" });
         const run = `fixture-run-${label}`;
         window.emitSynthetic({ type: "turn.start", run_id: run, intent: "execute", intent_label: "执行" });
@@ -70,10 +84,15 @@ test("real unified shell mount keeps work activity in left whitespace without ch
         }
         window.emitSynthetic({ type: "tool.start", run_id: run, call_id: "fixture-fail", tool: "file_write", summary: "保存文件" });
         window.emitSynthetic({ type: "tool.end", run_id: run, call_id: "fixture-fail", tool: "file_write", ok: false, summary: "权限拒绝：合成失败详情", logs_tail: "fixture permission denied" });
-        window.emitSynthetic({ type: "assistant.delta", run_id: run, text });
-        window.emitSynthetic({ type: "assistant.done", run_id: run, text });
         window.emitSynthetic({ type: "turn.end", run_id: run, ok: true, finish_reason: "stop" });
-      }, { label, text: syntheticReply });
+        window.emitSynthetic({ type: "session.history", session_id: `isolated-${label}`, items: history });
+      }, { label, history: syntheticHistory });
+      const assistant = page.locator("#unified-chat .unified-turn-assistant").first();
+      const assistantStyles = await assistant.evaluate(el => { const s = getComputedStyle(el); return { borderWidth: s.borderWidth, borderStyle: s.borderStyle, boxShadow: s.boxShadow, backgroundColor: s.backgroundColor, paddingBlockStart: s.paddingBlockStart, paddingBlockEnd: s.paddingBlockEnd }; });
+      assert.equal(assistantStyles.borderStyle, "none", "assistant wrapper is not a second decorative bubble");
+      assert.equal(assistantStyles.boxShadow, "none", "assistant reply has no exaggerated outer shadow");
+      assert.notEqual(assistantStyles.backgroundColor, "rgba(0, 0, 0, 0)", "single assistant surface preserves contrast over the existing wallpaper");
+      assert.ok(parseFloat(assistantStyles.paddingBlockStart) <= 8 && parseFloat(assistantStyles.paddingBlockEnd) <= 8, "assistant vertical padding stays compact");
       const rail = page.locator("#work-activity-rail");
       const shouldShow = label === "wide";
       assert.equal(await rail.isVisible(), shouldShow, "rail appears only when the measured left gutter can contain it");
@@ -116,7 +135,6 @@ test("real unified shell mount keeps work activity in left whitespace without ch
         composer: document.querySelector("#unified-composer-dock").getBoundingClientRect().toJSON(),
       }));
       assert.deepEqual(chatWithHistory, chatBeforeHistory, "temporary history does not compress chat or composer");
-      if (label === "wide") await page.screenshot({ path: `${output}-history.png` });
       await page.keyboard.press("Escape");
       assert.equal(await history.isVisible(), false, "Escape closes the temporary history");
       await historyEntry.click();
@@ -126,21 +144,26 @@ test("real unified shell mount keeps work activity in left whitespace without ch
         const card = await rail.boundingBox();
         const text = await page.locator("#unified-chat .unified-turn-assistant").first().boundingBox();
         assert.ok(card && text && card.x + card.width <= text.x, "rail stays entirely in measured left whitespace and clear of message text");
+        await page.screenshot({ path: output });
         await page.setViewportSize({ width: 960, height: 720 });
         await page.waitForTimeout(50);
         assert.equal(await rail.isVisible(), false, "resizing to an ordinary window hides the rail when left whitespace is insufficient");
         assert.ok(await page.locator("#work-activity-compact-toggle").isVisible(), "hidden rail has an overlay entry without changing chat geometry");
       }
-      assert.ok(await page.locator("#unified-chat .unified-markdown p").count() >= 10, "long message renders in chat");
-      assert.equal(await page.locator("#unified-chat").evaluate(el => el.scrollHeight > el.clientHeight), true, "long chat remains scrollable behind the independent composer");
+      const renderedTurns = await page.locator("#unified-chat .unified-turn-user, #unified-chat .unified-turn-assistant").evaluateAll(nodes => nodes.map(node => ({ role: node.classList.contains("unified-turn-user") ? "user" : "assistant", text: node.querySelector(".unified-turn-body")?.innerText.trim() ?? "" })));
+      assert.deepEqual(renderedTurns.map(({ role }) => role), ["user", "assistant", "user"], "screenshot contains exactly three alternating chat messages");
+      assert.equal(renderedTurns[0].text, syntheticHistory[0].text);
+      assert.match(renderedTurns[1].text, /可以，先处理有截止时间的材料/);
+      assert.match(renderedTurns[1].text, /建议按这个顺序安排/);
+      assert.match(renderedTurns[1].text, /上午：.*午后：.*收尾：/s, "assistant reply keeps all three distinct list items");
+      assert.equal(renderedTurns[2].text, syntheticHistory[2].text);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal overflow");
-      await page.screenshot({ path: `${output}-${label}.png` });
       assert.deepEqual(errors, [], "no renderer exceptions");
       assert.ok(requests.every(url => url.startsWith("https://isolated.invalid/")), "isolated mount made no backend/model/network requests");
       await page.evaluate(() => window.disposeUnified());
       await context.close();
     }
-    console.log(`Isolated real-shell screenshots (synthetic fixture data; no backend/model): ${screens.map(([label]) => `${output}-${label}.png`).join(", ")}; expanded: ${output}-expanded.png`);
+    console.log(`Isolated real-shell screenshot (synthetic daily conversation; no backend/model): ${output}`);
   } finally {
     await browser.close();
   }
