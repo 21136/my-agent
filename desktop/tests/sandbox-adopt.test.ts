@@ -344,6 +344,22 @@ test("syncSandboxWithStable fast-forwards a clean sandbox", async () => {
   assert.match(result.message, /刷入|无需/);
 });
 
+test("untracked local extras in sandbox do not block sync", async () => {
+  const f = fixture();
+  put(f.sandbox, "side-left-canvas.png", "local screenshot\n");
+  mkdirSync(path.join(f.sandbox, "小魔王回忆录"), { recursive: true });
+  put(f.sandbox, "小魔王回忆录/clip.mp4", "local clip\n");
+  put(f.root, "desktop/main.txt", "stable newer\n");
+  git(f.root, "add", "desktop/main.txt");
+  git(f.root, "commit", "-m", "stable ahead with extras");
+  const status = await f.service.getStatus();
+  assert.equal(status.syncBlockers.some((item) => item.includes("发布范围外")), false, JSON.stringify(status.syncBlockers));
+  assert.equal(status.fatalBlockers.some((item) => item.includes("发布范围外")), false, JSON.stringify(status.fatalBlockers));
+  const result = await f.service.syncSandboxWithStable();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(readFileSync(path.join(f.sandbox, "side-left-canvas.png"), "utf8"), "local screenshot\n");
+});
+
 test("syncSandboxWithStable refuses dirty sandbox and lists blockers", async () => {
   const f = fixture();
   put(f.root, "desktop/main.txt", "stable tip\n");

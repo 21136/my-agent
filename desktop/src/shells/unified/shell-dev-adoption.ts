@@ -69,7 +69,7 @@ export function formatDualLaneStrip(status: Record<string, unknown> | undefined)
   let sandboxStatus = `已对齐 · ${sandboxHead}`;
   let stableTone: "ok" | "warn" | "blocked" | "" = "ok";
   let sandboxTone: "ok" | "warn" | "blocked" | "" = "ok";
-  let hint = "已对齐。";
+  let hint = "已对齐。可开实验会话，让助手改实验版。";
 
   if (status.needsSandboxSync === true && stableAheadNum > 0) {
     stableStatus = `领先实验 ${stableAheadNum} · ${stableHead}`;
@@ -102,7 +102,7 @@ export function formatDualLaneStrip(status: Record<string, unknown> | undefined)
     if (syncBlockers.length) sandboxTone = "blocked";
     if (usefulFatal.length) sandboxTone = "blocked";
   } else if (aligned) {
-    hint = "已对齐。";
+    hint = "已对齐。可开实验会话，让助手改实验版。";
     stableStatus = `已对齐 · ${stableHead}`;
     sandboxStatus = `已对齐 · ${sandboxHead}`;
     stableTone = "ok";

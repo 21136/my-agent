@@ -23,6 +23,7 @@ test("product dual-lane default shows status + peer CTAs, details collapsed", ()
   assert.match(html, /data-shell-dev-sync-stable/);
   assert.match(html, /data-shell-dev-one-click/);
   assert.match(html, /用稳定刷实验/);
+  assert.match(html, /开实验会话/);
   assert.match(html, /合入稳定/);
   assert.doesNotMatch(html, /一键完成合入/);
   assert.doesNotMatch(html, /壳开发预览/);
@@ -60,6 +61,7 @@ test("product dual-lane default shows status + peer CTAs, details collapsed", ()
   // Blockers live on the adopt (experiment) card, not a nested Host flow.
   const sandboxCard = html.slice(html.indexOf('data-lane="sandbox"'), html.indexOf("dual-lane-preview"));
   assert.match(sandboxCard, /data-shell-dev-dual-blockers/);
+  assert.match(sandboxCard, /data-shell-dev-sandbox-session/);
   assert.match(sandboxCard, /data-shell-dev-one-click/);
 });
 
@@ -88,8 +90,9 @@ test("legacy / advanced entry points collapse under help, review starts closed",
   assert.match(html, /data-shell-dev-help/);
   assert.match(html, /帮助与旧入口/);
   const helpIdx = html.indexOf("data-shell-dev-help");
+  const sessionIdx = html.indexOf("data-shell-dev-sandbox-session");
+  assert.ok(sessionIdx >= 0 && sessionIdx < helpIdx, "开实验会话 is the sandbox-card primary CTA");
   for (const sel of [
-    "data-shell-dev-sandbox-session",
     "data-shell-dev-adopt-status",
     "data-shell-dev-managed-review",
     "data-shell-dev-adopt-merge",
@@ -105,7 +108,7 @@ test("legacy / advanced entry points collapse under help, review starts closed",
   assert.ok(hintMatch);
   assert.equal(hintMatch[1].includes("旧整支合入按钮仅用于隔离夹具"), false);
   assert.ok(hintMatch[1].length < 40, `hint too long: ${hintMatch[1]}`);
-  assert.match(hintMatch[1], /刷实验|合入/);
+  assert.match(hintMatch[1], /实验会话|合入/);
 });
 
 test("dual-lane expands the existing tool region while keeping chat and composer mounted", () => {

@@ -14,7 +14,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     <header class="dual-lane-heading">
       <div class="shell-dev-heading-copy">
         <h1 id="shell-dev-page-heading">双车道</h1>
-        <p class="shell-dev-hint">刷实验与合入并排；详情里看分支与地址。</p>
+        <p class="shell-dev-hint">先开实验会话让助手改自己；满意后再合入。</p>
       </div>
       <button type="button" class="unified-btn dual-lane-refresh" data-shell-dev-refresh-status title="刷新状态">刷新</button>
     </header>
@@ -43,6 +43,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
           <h2>实验</h2>
           <p class="dual-lane-status" data-shell-dev-sandbox-status>读取中…</p>
         </header>
+        <button type="button" class="unified-btn unified-btn-accent dual-lane-peer-cta" data-shell-dev-sandbox-session title="在实验 sidecar 新建会话，助手直接改实验树">开实验会话</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入；取消不会改代码">合入稳定</button>
         <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>
         <details class="dual-lane-details" data-shell-dev-sandbox-details>
@@ -79,24 +80,22 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
       <div class="shell-dev-web-slot" data-shell-dev-web-slot aria-label="Desktop Vite preview"></div>
     </section>
 
-    <section class="shell-dev-evolution" aria-label="当前会话演化状态">
-      <div class="shell-dev-evolution-heading">
-        <strong>当前会话演化</strong>
-        <span role="status" aria-live="polite" data-evolution-status>未查询</span>
-      </div>
-      <div class="shell-dev-evolution-actions">
-        <button type="button" class="unified-btn unified-btn-accent" data-evolution-begin>开始演化</button>
-        <button type="button" class="unified-btn" data-evolution-inspect>查看状态</button>
-        <button type="button" class="unified-btn" data-evolution-stop disabled>停止候选</button>
-      </div>
-      <p class="shell-dev-evolution-checks" data-evolution-checks></p>
-    </section>
-
     <details class="shell-dev-help shell-dev-notes" data-shell-dev-help>
       <summary>帮助与旧入口</summary>
-      <p>刷实验 = 同步稳定进实验（有未提交会拦）。合入稳定 = 项目真实合入。预览切主壳只改 URL。</p>
+      <p>开实验会话 = 助手写实验树。刷实验 = 同步稳定进实验。合入稳定 = 项目真实合入。预览切主壳只改 URL。</p>
+      <section class="shell-dev-evolution" aria-label="当前会话演化状态">
+        <div class="shell-dev-evolution-heading">
+          <strong>固定测试 Host 演化</strong>
+          <span role="status" aria-live="polite" data-evolution-status>未查询</span>
+        </div>
+        <div class="shell-dev-evolution-actions">
+          <button type="button" class="unified-btn" data-evolution-begin>开始演化</button>
+          <button type="button" class="unified-btn" data-evolution-inspect>查看状态</button>
+          <button type="button" class="unified-btn" data-evolution-stop disabled>停止候选</button>
+        </div>
+        <p class="shell-dev-evolution-checks" data-evolution-checks></p>
+      </section>
       <div class="shell-dev-actions shell-dev-actions-advanced-inline">
-        <button type="button" class="unified-btn" data-shell-dev-sandbox-session title="旧入口：将当前会话切到候选 sidecar">在候选中试用（旧入口）</button>
         <button type="button" class="unified-btn" data-shell-dev-adopt-status>检查合入状态</button>
         <button type="button" class="unified-btn" data-shell-dev-managed-review>只读源码审查</button>
         <button type="button" class="unified-btn" data-shell-dev-adopt-merge title="旧整支合入仅用于隔离夹具；普通项目由 E0 gate 拒绝。">旧整支合入（仅隔离夹具）</button>

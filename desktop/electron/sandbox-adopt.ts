@@ -78,6 +78,11 @@ async function dirty(cwd: string): Promise<Dirty[]> {
   return entries;
 }
 function label(entry: Dirty): string { return entry.xy + " " + entry.file; }
+/** Untracked local extras (screenshots, memoir media) must not freeze dual-lane. Tracked/staged files still do. */
+function isLaneBlockingDirty(entry: Dirty): boolean {
+  if (releasePath(entry.file)) return true;
+  return entry.xy !== "??";
+}
 /** Keep dual-lane blocker cards readable when hundreds of dirty paths exist. */
 function summarizePaths(prefix: string, items: string[], limit = 8): string {
   if (!items.length) return prefix;
@@ -153,7 +158,7 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
       status.stableDirtyProduct = stableSource.map(label);
       status.sandboxDirtyProduct = sandboxSource.map(label);
       status.stableDirtyOutside = stableEntries.filter((e) => !releasePath(e.file)).map(label);
-      const unsupported = sandboxEntries.filter((e) => !releasePath(e.file));
+      const unsupported = sandboxEntries.filter((e) => isLaneBlockingDirty(e) && !releasePath(e.file));
       if (unsupported.length) status.fatalBlockers.push(summarizePaths("Sandbox 含发布范围外改动，不会自动提交：", unsupported.map((e) => e.file)));
       if (stableEntries.some((e) => !releasePath(e.file) && e.xy[0] !== " " && e.xy !== "??")) status.fatalBlockers.push("稳定区存在发布范围外的已暂存改动，不会混入合并提交。");
       status.needsStableStash = stableSource.length > 0;
@@ -327,7 +332,7 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
       const recovery = await restoreStable();
       if (recovery) return fail("代码已合入，但稳定改动恢复未完成；这不是完整成功。本次备份仍保留。", recovery);
       const stableHead = await scopedGit(stableRoot, ["rev-parse", "HEAD"]);
-      const syncStatus = await dirty(sandboxRoot);
+      const syncStatus = (await dirty(sandboxRoot)).filter(isLaneBlockingDirty);
       if (syncStatus.length || await scopedGit(sandboxRoot, ["symbolic-ref", "--short", "HEAD"]) !== SANDBOX_BRANCH
         || await scopedGit(sandboxRoot, ["rev-parse", "HEAD"]) !== sandboxHead) return fail("代码已合入，但实验区有新改动，未自动同步；请检查后重试同步。");
       await scopedGit(sandboxRoot, ["merge", "--ff-only", stableHead]);
@@ -377,7 +382,7 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
         beforeStableHead, beforeSandboxHead, afterSandboxHead: beforeSandboxHead,
       };
     }
-    const dirtyNow = await dirty(sandboxRoot);
+    const dirtyNow = (await dirty(sandboxRoot)).filter(isLaneBlockingDirty);
     if (dirtyNow.length) {
       return {
         ok: false, message: "实验区工作树不干净，拒绝刷入。",

@@ -67,6 +67,17 @@ class SandboxWriteScopeTests(unittest.TestCase):
         reloaded = SessionMeta.from_dict(session.meta.to_dict())
         self.assertEqual(reloaded.write_scope_root, ".worktrees/sandbox")
 
+    def test_create_sandbox_session_from_sandbox_sidecar(self) -> None:
+        sandbox = self.paths.agent_root / ".worktrees" / "sandbox"
+        (sandbox / "data").mkdir(exist_ok=True)
+        (sandbox / "workspace").mkdir(exist_ok=True)
+        sandbox_paths = AgentPaths.from_root(sandbox)
+        session = create_sandbox_evolution_session(sandbox_paths)
+        self.assertEqual(session.meta.write_scope_root, "")
+        seed = session.messages[0]["content"]
+        self.assertIn("实验树", seed)
+        self.assertIn("自我修改", seed)
+
     def test_validate_session_write_scope_blocks_stable_path(self) -> None:
         exec_session = ExecutorSession(write_scope_root=".worktrees/sandbox")
         result = _validate_session_write_scope(

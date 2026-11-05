@@ -3158,10 +3158,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       if (slot) shellDevViewResizeObserver.observe(slot);
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", async () => {
         try {
-          shellDevFeedback("正在启动实验运行时并打开会话…", "busy");
+          shellDevFeedback("正在打开实验会话…", "busy");
           await client.createSandboxSession();
           setPerspective("project", "session");
-          shellDevFeedback("已在实验运行时请求打开会话。", "ok");
+          shellDevFeedback("已打开实验会话。直接说要改什么，助手会写实验树。", "ok");
         } catch (error) {
           shellDevFeedback(error instanceof Error ? error.message : String(error), "error");
         }

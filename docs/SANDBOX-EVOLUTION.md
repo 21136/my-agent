@@ -54,7 +54,7 @@ init-sandbox.bat
 1. **稳定**：只用仓库根目录 `start-desktop.bat`；聊天、做项目；**不要**在根目录改实验性壳/工具。
 2. **实验**：Agent / 你只改 `.worktrees/sandbox/**`（`agent-core`、`desktop` 等）。
 3. **预览**：重启 `start-desktop.bat` 后，**5173 = 稳定 desktop**，**5174 = sandbox desktop**（存在 sandbox 时自动）。预览轨已对齐稳定版的 **生成图 hydrate + lightbox**（`inline_images` / `show_images`）；改完后刷新 5174 或重启 dev。
-4. **试新 agent-core**：优先 **壳预览 → 开实验进化会话**（8766）；旧路：设置 → 候选 Host 切到 sandbox（**会替换全局 sidecar**，不如双轨）。
+4. **试新 agent-core**：优先 **双车道 → 开实验会话**（8766）；旧路：设置 → 候选 Host 切到 sandbox（**会替换全局 sidecar**，不如双轨）。
 5. **合入**（界面或命令行）：
    - 桌面 **壳预览** → **一键合入实验分支**：可自动 **在 sandbox 提交**、**stash 稳定树 product 改动**，再 `git merge experiment/sandbox`（整支，含 **agent-core、desktop**）。做不了的事（缺 sandbox、没有可合入提交等）会一句话说明，不堆手册式提示。**采用预览为主壳**只换 5173/5174 地址，不算合入。
    ```bat
@@ -73,7 +73,7 @@ init-sandbox.bat
 
 | 场景 | 改哪里 |
 |------|--------|
-| **桌面里 my-agent 助手**（实验进化会话） | 只写 `.worktrees/sandbox/**`；5174 验收 |
+| **桌面里 my-agent 助手**（双车道 → 开实验会话） | 写实验树（8766 整树，或稳定侧的 `.worktrees/sandbox/**`）；5174 验收 |
 | **Cursor 里你或我** | 可直接改稳定树或 sandbox；不受 `write_scope_root` 限制 |
 | **合入稳定** | `check-stable-before-sandbox-merge.bat` → `git merge experiment/sandbox` |
 
@@ -81,7 +81,7 @@ init-sandbox.bat
 
 ## 实验进化会话（推荐）
 
-侧栏 **壳预览** → **开实验进化会话**：新建桌面会话，`meta.write_scope_root = .worktrees/sandbox`。
+侧栏 **双车道** → **开实验会话**：接到 sandbox sidecar（8766）。若进程已在实验树内，写入范围是整棵实验树；从稳定 sidecar 打开时 `write_scope_root = .worktrees/sandbox`。
 
 - 写文件类工具（`write_text` / `patch_file` / `write_evolve` / `generate_image` 落盘等）**只能**落在该目录下；稳定树与其它路径可读不可写。
 - 会话列表标题带 `[实验]`；主聊天区顶栏显示蓝色写入范围提示。
@@ -124,4 +124,4 @@ init-sandbox.bat
 | sandbox worktree 切错分支 | 合入/提交报分支不对 | 在 `.worktrees/sandbox` 保持 `experiment/sandbox` |
 | 只改 desktop 未切候选 Host | 新工具在 sidecar 不生效 | 设置里候选 Host 指 sandbox（验收后切回稳定根） |
 
-**推荐闭环：** 实验会话改 sandbox → 5174 验收 → sandbox commit → **一键合入** → **同步 sandbox** → 重启 → 5173 验收 → 继续下一轮实验。
+**推荐闭环：** 双车道 → **开实验会话**（8766，助手直接改实验树）→ 5174 验收 → **合入稳定** → **用稳定刷实验** → 重启 → 5173 验收。不要把自我修改默认交给 Cursor。

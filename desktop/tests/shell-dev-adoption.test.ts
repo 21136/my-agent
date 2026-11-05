@@ -222,7 +222,8 @@ test("formatDualLaneStrip product status is aligned by default", () => {
   });
   assert.equal(strip.stableStatus, "已对齐 · e689e0e");
   assert.equal(strip.sandboxStatus, "已对齐 · e689e0e");
-  assert.equal(strip.hint, "已对齐。");
+  assert.match(strip.hint, /已对齐/);
+  assert.match(strip.hint, /实验会话/);
   assert.equal(strip.openDetails, false);
   assert.equal(strip.showBlockers, false);
 });
