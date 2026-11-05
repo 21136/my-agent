@@ -778,13 +778,9 @@ html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has
   background-repeat: no-repeat;
 }
 
-/* In normal desktop windows, move the character clear of the right-aligned user bubble. */
-@media (min-width: 901px) and (max-width: 1500px) {
-  html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant),
-  html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
-    background-position: calc(100% + 220px) center;
-  }
-}
+/* Dropped the old 901–1500px calc(100% + 220px) rule: it shifts the wallpaper off-canvas and
+   shows a white/empty strip when the window is narrowed into that width band. Wide (>1500) and
+   default right center are unchanged from before that trial offset existed. */
 
 /* One comfortable, slightly-left lane aligns turns and composer without touching the edge. */
 html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat {
@@ -850,11 +846,6 @@ html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="cha
 }
 
 @media (max-width: 640px) {
-  html[data-theme="light"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant),
-  html[data-theme="dark"] .unified-shell[data-main-focus="chat"] .unified-main:has(.unified-turn-user, .unified-turn-assistant) {
-    background-position: right center;
-    background-size: cover;
-  }
   html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] .unified-chat {
     padding: 0.7rem 0.75rem 0.9rem;
   }

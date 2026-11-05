@@ -1,4 +1,5 @@
 import type { WorkRecordsOverviewGroup, WorkRecordsOverviewPageFacts, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import { WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS } from "./work-card-presentation.ts";
 
 export const CURRENT_WORK_OVERVIEW_QUERY = "当前工作整体概况";
 export type CurrentWorkOverviewRequestResult = "sent" | "busy" | "unavailable" | "failed";
@@ -197,7 +198,7 @@ function renderGroupSummary(group: WorkRecordsOverviewResultEvent["groups"][numb
   const aggregateStatus = GROUP_STATUS_LABELS[group.status] ?? "状态待确认";
   return `<div class="unified-current-work-group-summary"><span class="unified-current-work-group-status">${aggregateStatus}</span><span class="unified-current-work-group-counts">${countSummary}</span></div>`;
 }
-const DETAIL_BATCH_SIZE = 5;
+const DETAIL_BATCH_SIZE = WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS;
 
 function itemAttentionRank(item: WorkRecordsOverviewGroup["items"][number]): number {
   const order = ["blocked", "unknown", "in_progress", "stopped", "pending", "completed"];

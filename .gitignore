@@ -48,6 +48,13 @@ Thumbs.db
 # Git worktrees (sandbox evolution); never commit nested checkout
 .worktrees/
 
+# Dual-lane local media (not product; would block sandbox merge)
+/side-left-canvas.png
+/side-left-tight.png
+/side-right-canvas.png
+/side-right-tight.png
+/小魔王回忆录/
+
 # Local scratch / probe trees (never source)
 .vp/
 .x/
