@@ -124,6 +124,7 @@ def run(
         relative_path = paths.to_agent_relative(output_path)
         result_data = {
             "path": relative_path,
+            "display_paths": [relative_path],
             "request_id": request_id,
             "bytes": video_size,
             "mime_type": "video/mp4",
@@ -345,3 +346,4 @@ def write_video_exclusive(path: Path, video_bytes: bytes) -> None:
 
 def _elapsed_ms(started: float) -> int:
     return max(0, int((time.perf_counter() - started) * 1000))
+

@@ -60,7 +60,7 @@
 | name | 作用 | confirm | dry-run |
 |------|------|---------|---------|
 | `propose_context_switch` | 提议切换 project/shell 上下文 | **是** | 否 |
-| `show_images` | 在 Desktop 聊天内联展示已有图片文件（只读、无 API 费用） | 否 | 否 |
+| `show_images` | 在 Desktop 聊天内联展示本机图片、视频或文本/代码（只读、无 API 费用） | 否 | 否 |
 | `generate_image` | 0x567 GPT Image 生图或参考图编辑；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
 | `generate_video` | 0x567 Grok 文生视频或 PNG 图生视频；仅响应用户明确请求，调用前确认，可能消耗额度 | **是** | 否 |
 | `deliverable_review` | 只读交付审查；绑定项目默认当前项目，普通会话须 `project_id` | 否 | 否 |
@@ -411,17 +411,17 @@ DeepSeek 搜索**不是**独立 REST，而是经 Anthropic 兼容端点 `https:/
 - 参数：`prompt`；可选 `model`、`duration`（1～15 秒）、`resolution`、`aspect_ratio`、`reference_image_path`（agent 根目录内本地 PNG），或使用 `reference_context` / `reference_id` 选择会话图片。默认 `grok-imagine-video-1.5`（标准版）、5 秒、480p、16:9。已有任务可只传 `request_id` 续查，避免再次提交产生费用。
 - 参考图：目前只支持小于 50 MiB 的本地 PNG，不支持图片 URL、JPEG 或 WebP；本轮附件使用 `current_attachment`，历史图按上下文选择，多个候选时先询问。确认卡展示来源，确认后才将图片编码上传至 0x567；不同引用方式及续查不能混用。图片内容、Base64 和密钥不得记入日志。
 - 后端从与图片工具相同的 `LLM_0x567_KEY` 环境变量或本机密钥设置读取凭据，不接受密钥工具参数。使用 0x567 的视频生成与查询接口，具体模型权限和价格以网关为准。
-- 返回的 MP4 经校验后独占创建；项目输出 `artifacts/generated-videos/`，普通会话输出 `workspace/_drops/<session>/generated-videos/`。结果返回路径，不声称聊天内联播放。
+- 返回的 MP4 经校验后独占创建；项目输出 `artifacts/generated-videos/`，普通会话输出 `workspace/_drops/<session>/generated-videos/`。成功时 `data.display_paths` 经 `tool.end` 送 Desktop 内联播放。
 - 创建请求不自动重试；提交超时且没有 request_id 时先查服务商任务记录。轮询或下载失败时保留已知 request_id，供确认后续查。
 
 ### 7.5.2 `show_images`
 
 | 项 | 说明 |
 |----|------|
-| 参数 | `paths[]`（1～12，agent 相对）；可选 `reference_context` / `reference_id`（与 `generate_image` 相同解析规则）。 |
+| 参数 | `paths[]`（1～12；图/视频/txt/md/ts/js 等）；或 `query` 在桌面/下载/文档/图片/视频浅搜；可选 `reference_context` / `reference_id`。 |
 | 模式 | **只读**；`read_only` 轮次与 **ask** 模式均可调用（无 confirm）。 |
-| 输出 | `display_paths`、`displayed[]`；无效路径汇总在 `skipped`；全无有效图 → `no_images`。 |
-| UI | 仅 Desktop unified；Terminal 不保证内联图。 |
+| 输出 | `display_paths`、`displayed[]`；agent 根外的文件为 `local:<posix>`；无效路径汇总在 `skipped`；全无有效媒体 → `no_images`。 |
+| UI | 仅 Desktop unified；Terminal 不保证内联。凭证、`.ssh`、系统目录仍拒绝。 |
 
 ### 7.6 `run_evolved`
 

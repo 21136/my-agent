@@ -8,10 +8,12 @@ const stylesheet = readFileSync(
 );
 
 test("inline chat images cap height so portrait wallpapers do not fill the viewport", () => {
-  const imgRule = stylesheet.match(/\.unified-generated-image\s*\{([^}]*)\}/s);
-  assert.ok(imgRule, "missing .unified-generated-image rule");
-  assert.match(imgRule[1], /max-height:\s*min\(38vh,\s*16rem\)/);
-  assert.match(imgRule[1], /max-width:\s*100%/);
+  const mediaRule = stylesheet.match(
+    /\.unified-generated-image,\s*\.unified-generated-video\s*\{([^}]*)\}/s,
+  );
+  assert.ok(mediaRule, "missing shared image/video rule");
+  assert.match(mediaRule[1], /max-height:\s*min\(38vh,\s*16rem\)/);
+  assert.match(mediaRule[1], /max-width:\s*100%/);
   const wrapRule = stylesheet.match(/\.unified-generated-image-wrap\s*\{([^}]*)\}/s);
   assert.ok(wrapRule, "missing .unified-generated-image-wrap rule");
   assert.match(wrapRule[1], /max-width:\s*min\(100%,\s*18rem\)/);

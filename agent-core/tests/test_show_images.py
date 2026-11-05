@@ -43,6 +43,7 @@ class ShowImagesBuiltinTests(unittest.TestCase):
         self.assertEqual(definition["function"]["name"], "show_images")
         props = definition["function"]["parameters"]["properties"]
         self.assertIn("paths", props)
+        self.assertIn("query", props)
 
 
 class DisplayPathsHelperTests(unittest.TestCase):

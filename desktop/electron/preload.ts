@@ -95,8 +95,15 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
     ipcRenderer.invoke("staging:write-temp", name, data) as Promise<string>,
   readClipboardImageToTemp: () =>
     ipcRenderer.invoke("clipboard:read-image-temp") as Promise<string | null>,
-  readAgentImageDataUrl: (agentRelativePath: string) =>
-    ipcRenderer.invoke("agent:read-image-data-url", agentRelativePath) as Promise<string | null>,
+  readAgentImageDataUrl: (displayRef: string) =>
+    ipcRenderer.invoke("agent:read-image-data-url", displayRef) as Promise<string | null>,
+  readAgentTextPreview: (displayRef: string) =>
+    ipcRenderer.invoke("agent:read-text-preview", displayRef) as Promise<{
+      text: string;
+      truncated: boolean;
+      language: string;
+      filename: string;
+    } | null>,
 });
 
 export type MyAgentDesktopApi = {
@@ -143,7 +150,13 @@ export type MyAgentDesktopApi = {
   getPathForFile: (file: File) => string;
   writeTempStagingFile: (name: string, data: Uint8Array) => Promise<string>;
   readClipboardImageToTemp: () => Promise<string | null>;
-  readAgentImageDataUrl: (agentRelativePath: string) => Promise<string | null>;
+  readAgentImageDataUrl: (displayRef: string) => Promise<string | null>;
+  readAgentTextPreview: (displayRef: string) => Promise<{
+    text: string;
+    truncated: boolean;
+    language: string;
+    filename: string;
+  } | null>;
   readConstellation: () => Promise<{ version: 1; stars: unknown[]; links: unknown[] }>;
   writeConstellation: (payload: { version: 1; stars: unknown[]; links: unknown[] }) => Promise<boolean>;
   clearConstellation: () => Promise<boolean>;

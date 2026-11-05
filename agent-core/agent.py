@@ -1221,18 +1221,22 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "(HTML stripped). Pair with web_search for page bodies."
     ),
     "show_images": (
-        "Show one or more existing image files inline in the Desktop chat UI. "
+        "Show existing local files inline in the Desktop chat UI (images, video, txt/md/ts/js and other text). "
         "Read-only: no API cost and no user confirm. On success the user already sees the "
-        "image(s) in chat (tool result includes desktop_chat_inline_display and llm_hint); "
-        "do not ask whether to show them again. Use when the user asks to see saved PNG/JPEG/WebP "
-        "paths, or to re-display a prior output. Pass agent-relative paths in paths[]."
+        "file(s) in chat (tool result includes desktop_chat_inline_display and llm_hint); "
+        "do not ask whether to show them again. Use when the user asks to see a file on this "
+        "computer or a prior output. Prefer query= for a filename/phrase to search Desktop, "
+        "Downloads, Documents, Pictures, and Videos (shallow). If local_selection_required, "
+        "ask which candidate then retry with paths[]. Or pass agent-relative, host:, ~/..., "
+        "or absolute paths in paths[]. Do not pass secret/credential files."
     ),
     "generate_video": (
         "Generate or continue a video generation job. This may use account credits and requires user confirmation. "
         "Call only when the user explicitly asks to generate a video. Defaults: Grok Imagine Video 1.5, 5 seconds, 480p, 16:9. "
         "For image-to-video, use either reference_image_path (an authorized local PNG path) or reference_context/reference_id to resolve a chat attachment; never combine these or use references with request_id polling. "
         "Ambiguous chat-image matches require user selection. The source path/origin is shown for approval before image bytes are sent. "
-        "Pass request_id only to continue polling a previously created job."
+        "Pass request_id only to continue polling a previously created job. On success Desktop chat "
+        "already plays the MP4 inline (display_paths); do not ask whether to show it again."
     ),
     "generate_image": (
         "Generate one image with 0x567 GPT Image; this is a paid, user-confirmed action. "
@@ -1474,7 +1478,7 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                 "items": {"type": "string", "minLength": 1},
                 "minItems": 1,
                 "maxItems": 12,
-                "description": "Agent-relative image file paths to show inline in chat",
+                "description": "Local file paths (images, video, or text/code) to show inline in chat",
             },
             "reference_context": {
                 "type": "string",
@@ -1484,6 +1488,12 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             "reference_id": {
                 "type": "string",
                 "description": "Opaque candidate id when prior-image search was ambiguous",
+            },
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "Filename or short phrase to search personal folders when paths are unknown",
             },
         },
         "additionalProperties": False,

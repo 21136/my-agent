@@ -17,6 +17,8 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  net as electronNet,
+  protocol,
   screen,
   shell,
   Tray,
@@ -32,7 +34,20 @@ import { assertEvolutionTestProfileLoaded, detectEvolutionTestLaunchIntent } fro
 import { bindEvolutionIpc, type EvolutionIpcAdapter, type EvolutionIpcEvent } from "./evolution/main-bridge";
 import { startEvolutionTestRendererServer, type EvolutionTestRendererServer } from "./evolution/sealed-renderer-server";
 import { buildBilibiliSearchUrl, isOfficialBilibiliUrl } from "./bilibili-search";
-import { readAgentImageDataUrl } from "./agent-file-preview";
+import {
+  displayRefFromAgentMediaUrl,
+  isDisplayVideoPath,
+  readAgentImageDataUrl,
+  readAgentTextPreview,
+  resolveDisplayFile,
+} from "./agent-file-preview";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "agent-media",
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+  },
+]);
 import { clampMusicViewBounds, type MusicViewBounds } from "./music-view-bounds";
 import {
   configuredShellDevPreviewBase,
@@ -2115,6 +2130,11 @@ ipcMain.handle("agent:read-image-data-url", (_event, rawPath: unknown) => {
   return readAgentImageDataUrl(fixedHostContext?.binding.instance_root ?? activeSidecarRoot, rawPath.trim());
 });
 
+ipcMain.handle("agent:read-text-preview", (_event, rawPath: unknown) => {
+  if (typeof rawPath !== "string" || !rawPath.trim()) return null;
+  return readAgentTextPreview(fixedHostContext?.binding.instance_root ?? activeSidecarRoot, rawPath.trim());
+});
+
 ipcMain.handle("clipboard:read-image-temp", async () => {
   const image = await readClipboardNativeImage();
   if (!image) return null;
@@ -2198,6 +2218,15 @@ ipcMain.handle("constellation:clear", () => {
 });
 
 app.whenReady().then(async () => {
+  protocol.handle("agent-media", (request) => {
+    const displayRef = displayRefFromAgentMediaUrl(request.url);
+    const root = fixedHostContext?.binding.instance_root ?? activeSidecarRoot;
+    const abs = displayRef ? resolveDisplayFile(root, displayRef) : null;
+    if (!abs || !isDisplayVideoPath(abs)) {
+      return new Response(null, { status: 404 });
+    }
+    return electronNet.fetch(pathToFileURL(abs).href);
+  });
   if (!workbenchInstance.ownsInstance) return;
   if (process.platform === "win32") {
     app.setAppUserModelId("my-agent.desktop");

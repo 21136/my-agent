@@ -1,4 +1,4 @@
-"""Present local image files in the Desktop chat UI (read-only; no API cost)."""
+"""Present local image and video files in the Desktop chat UI (read-only; no API cost)."""
 
 from __future__ import annotations
 
@@ -11,24 +11,29 @@ _AGENT_CORE = Path(__file__).resolve().parents[2]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from display_media import (
+    is_showable_suffix,
+    resolve_display_path,
+    search_user_media,
+    to_display_ref,
+)
+from host_scope import HostPathDeniedError
+from image_references import find_image_references
 from paths import AgentPaths, PathOutOfBoundsError
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok
 
 TOOL_NAME = "show_images"
 MAX_PATHS = 12
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 
-def _is_image_file(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES
+def _is_showable_file(path: Path) -> bool:
+    return path.is_file() and is_showable_suffix(path)
 
 
-def _resolve_image_path(paths: AgentPaths, raw: str) -> Path:
-    from tools.builtin.read_file import resolve_read_path
-
-    resolved = resolve_read_path(paths, raw)
-    if not _is_image_file(resolved):
-        raise ValueError(f"not an image file: {raw}")
+def _resolve_showable_path(paths: AgentPaths, raw: str) -> Path:
+    resolved = resolve_display_path(paths, raw)
+    if not _is_showable_file(resolved):
+        raise ValueError(f"not a displayable file: {raw}")
     return resolved
 
 
@@ -49,8 +54,6 @@ def run(
     reference_id = arguments.get("reference_id")
     reference_context = arguments.get("reference_context")
     if reference_id or reference_context:
-        from image_references import find_image_references
-
         search = find_image_references(
             str(reference_context or ""),
             paths=paths,
@@ -69,20 +72,56 @@ def run(
                 duration_ms=_elapsed_ms(started),
             )
         if search.status == "selected" and search.selected is not None:
-            path_list.append(search.selected.path)
+            path_list.append(str(search.selected.path))
+
+    query = arguments.get("query")
+    if not path_list and isinstance(query, str) and query.strip():
+        found = search_user_media(query)
+        if found.status == "too_broad":
+            return tool_ok(
+                TOOL_NAME,
+                {
+                    "status": "query_too_broad",
+                    "display_paths": [],
+                    "displayed": [],
+                    "llm_hint": "Ask the user for a file name or a more specific phrase; do not scan further.",
+                },
+                duration_ms=_elapsed_ms(started),
+            )
+        if found.status == "ambiguous":
+            return tool_ok(
+                TOOL_NAME,
+                {
+                    "status": "local_selection_required",
+                    "candidates": [item.to_public_dict() for item in found.candidates],
+                    "display_paths": [],
+                    "displayed": [],
+                    "llm_hint": "Ask the user which file to show, then retry show_images with that candidate path.",
+                },
+                duration_ms=_elapsed_ms(started),
+            )
+        if found.status == "selected" and found.selected is not None:
+            path_list.append(str(found.selected.path))
+        else:
+            return tool_fail(
+                TOOL_NAME,
+                "no_images",
+                "no matching file in Desktop, Downloads, Documents, Pictures, or Videos",
+                duration_ms=_elapsed_ms(started),
+            )
 
     if not path_list:
         return tool_fail(
             TOOL_NAME,
             ToolErrorCode.VALIDATION_ERROR,
-            "paths or reference_id/reference_context is required",
+            "paths, query, or reference_id/reference_context is required",
             duration_ms=_elapsed_ms(started),
         )
     if len(path_list) > MAX_PATHS:
         return tool_fail(
             TOOL_NAME,
             ToolErrorCode.VALIDATION_ERROR,
-            f"at most {MAX_PATHS} images per call",
+            f"at most {MAX_PATHS} files per call",
             duration_ms=_elapsed_ms(started),
         )
 
@@ -91,18 +130,18 @@ def run(
     display_paths: list[str] = []
     for raw in path_list:
         try:
-            resolved = _resolve_image_path(paths, raw)
-            rel = paths.to_agent_relative(resolved)
-            displayed.append({"path": rel})
-            display_paths.append(rel)
-        except (FileNotFoundError, PathOutOfBoundsError, ValueError, OSError) as exc:
+            resolved = _resolve_showable_path(paths, raw)
+            ref = to_display_ref(paths, resolved)
+            displayed.append({"path": ref})
+            display_paths.append(ref)
+        except (FileNotFoundError, PathOutOfBoundsError, HostPathDeniedError, ValueError, OSError) as exc:
             errors.append({"path": raw, "error": str(exc)})
 
     if not displayed:
         return tool_fail(
             TOOL_NAME,
             "no_images",
-            "no valid image paths to display",
+            "no valid files to display",
             duration_ms=_elapsed_ms(started),
             details={"errors": errors},
         )

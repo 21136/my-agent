@@ -1,5 +1,5 @@
 import { createShellDevAdoptionController, formatDualLaneStrip } from "./shell-dev-adoption";
-import { hydrateAgentImageElements } from "../../agent-image-hydrate";
+import { hydrateAgentImageElements, hydrateAgentTextElements, hydrateAgentVideoElements } from "../../agent-image-hydrate";
 import { bindImageLightboxClick } from "../../image-lightbox";
 import { setAgentBusy } from "../../agent-busy";
 import { wireComposerAttachments } from "../../composer-attachments";
@@ -12,7 +12,7 @@ import { activityRevealScrollDelta } from "./activity-scroll";
 import { ProjectWorkerProgressStatus, PROJECT_WORKER_PROGRESS_TTL_MS } from "./project-worker-progress";
 import { formatTerminalOutputForDisplay } from "./terminal-output";
 import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProcessBlocks, type ChatRenderSegment } from "../turn-card-layout";
-import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ThinkEntry } from "../activity-state";
+import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
 import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
@@ -145,6 +145,12 @@ async function openSessionThenBeginSwitch(
 
 function isRecallIntent(intent: string, intentLabel: string): boolean {
   return intent === "recall" || intentLabel.includes("回顾");
+}
+
+function mediaFileName(displayRef: string): string {
+  const trimmed = displayRef.startsWith("local:") ? displayRef.slice("local:".length) : displayRef;
+  const parts = trimmed.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || trimmed;
 }
 
 function recentTurnIndices(blocks: ChatBlock[], k: number): number[] {
@@ -4262,10 +4268,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       </article>`;
     }
     if (block.kind === "generated-image") {
-      const fileName = block.agentPath.split("/").pop() || block.agentPath;
+      const fileName = mediaFileName(block.agentPath);
       return `<figure class="unified-generated-image-wrap" data-turn-index="${block.turnIndex}">
         <img class="unified-generated-image" alt="${escapeHtml(fileName)}" data-agent-path="${escapeHtml(block.agentPath)}" loading="lazy" />
         <figcaption class="unified-generated-image-caption text-muted">${escapeHtml(fileName)}</figcaption>
+      </figure>`;
+    }
+    if (block.kind === "generated-video") {
+      const fileName = mediaFileName(block.agentPath);
+      return `<figure class="unified-generated-image-wrap" data-turn-index="${block.turnIndex}">
+        <video class="unified-generated-video" controls playsinline preload="metadata" data-agent-path="${escapeHtml(block.agentPath)}"></video>
+        <figcaption class="unified-generated-image-caption text-muted">${escapeHtml(fileName)}</figcaption>
+      </figure>`;
+    }
+    if (block.kind === "inline-file") {
+      const fileName = mediaFileName(block.agentPath);
+      const markdown = /\.(md|markdown)$/i.test(fileName);
+      return `<figure class="unified-inline-file" data-turn-index="${block.turnIndex}">
+        <figcaption class="unified-inline-file-caption text-muted">${escapeHtml(fileName)}</figcaption>
+        <div class="unified-inline-file-body${markdown ? " unified-markdown" : ""}" data-agent-path="${escapeHtml(block.agentPath)}" data-file-kind="${markdown ? "markdown" : "code"}">正在打开…</div>
       </figure>`;
     }
     if (block.kind === "work-card-reference") {
@@ -4376,6 +4397,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         return `N:${block.text.length}`;
       case "generated-image":
         return `GI${block.turnIndex}:${block.agentPath}`;
+      case "generated-video":
+        return `GV${block.turnIndex}:${block.agentPath}`;
+      case "inline-file":
+        return `IF${block.turnIndex}:${block.agentPath}`;
       case "process": {
         ensureProcessEntries(block);
         const entriesSig = activityEntriesPrint(
@@ -4387,6 +4412,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       }
       case "confirm":
         return `C${block.requestId}:${block.resolved ?? "_"}`;
+      default: {
+        const _exhaustive: never = block;
+        return _exhaustive;
+      }
     }
   }
 
@@ -4745,6 +4774,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   async function hydrateGeneratedImages(root: ParentNode): Promise<void> {
     await hydrateAgentImageElements(root, "img.unified-generated-image[data-agent-path]");
+    await hydrateAgentVideoElements(root, "video.unified-generated-video[data-agent-path]");
+    await hydrateAgentTextElements(root, ".unified-inline-file-body[data-agent-path]");
   }
 
   function renderChat(): void {

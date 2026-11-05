@@ -95,7 +95,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool("fetch_url", "Fetch URL body as text", confirm=False, dry_run_supported=False),
     BuiltinTool(
         "show_images",
-        "Show existing image files inline in Desktop chat (read-only; no API cost)",
+        "Show existing local files inline in Desktop chat (images, video, text/code; read-only; no API cost)",
         confirm=False,
         dry_run_supported=False,
     ),

@@ -231,7 +231,7 @@ export type ServerEvent =
       session_id?: string;
       project_id?: string | null;
       items: Array<
-        | { role: "user" | "assistant"; text: string; inline_images?: string[] }
+        | { role: "user" | "assistant"; text: string; inline_images?: string[]; inline_videos?: string[]; inline_files?: string[] }
         | { role: "work_card"; type: "work_card_reference"; presentation_id: string; card_id: string; text: string }
       >;
       truncated?: boolean;
@@ -2447,6 +2447,12 @@ declare global {
       writeTempStagingFile?: (name: string, data: Uint8Array) => Promise<string>;
       readClipboardImageToTemp?: () => Promise<string | null>;
       readAgentImageDataUrl?: (agentRelativePath: string) => Promise<string | null>;
+      readAgentTextPreview?: (displayRef: string) => Promise<{
+        text: string;
+        truncated: boolean;
+        language: string;
+        filename: string;
+      } | null>;
       readConstellation: () => Promise<{ version: 1; stars: unknown[]; links: unknown[] }>;
       writeConstellation: (payload: { version: 1; stars: unknown[]; links: unknown[] }) => Promise<boolean>;
       clearConstellation: () => Promise<boolean>;

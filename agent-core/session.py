@@ -1942,7 +1942,14 @@ def session_history_max_items() -> int:
 
 
 _CHAT_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
-_CHAT_IMAGE_TOOLS = frozenset({"generate_image", "show_images"})
+_CHAT_VIDEO_SUFFIXES = (".mp4", ".webm", ".mov")
+_CHAT_TEXT_SUFFIXES = (
+    ".txt", ".md", ".markdown", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".jsx",
+    ".json", ".py", ".toml", ".css", ".html", ".htm", ".yml", ".yaml", ".xml",
+    ".sh", ".bash", ".bat", ".ps1", ".rs", ".go", ".java", ".kt", ".sql",
+    ".csv", ".log", ".ini", ".cfg", ".vue", ".svelte",
+)
+_CHAT_MEDIA_TOOLS = frozenset({"generate_image", "show_images", "generate_video"})
 
 
 def _is_chat_image_rel_path(value: str) -> bool:
@@ -1950,37 +1957,59 @@ def _is_chat_image_rel_path(value: str) -> bool:
     return any(lowered.endswith(ext) for ext in _CHAT_IMAGE_SUFFIXES)
 
 
-def _image_paths_from_tool_message(message: dict[str, Any]) -> list[str]:
+def _is_chat_video_rel_path(value: str) -> bool:
+    lowered = value.strip().lower().replace("\\", "/")
+    return any(lowered.endswith(ext) for ext in _CHAT_VIDEO_SUFFIXES)
+
+
+def _is_chat_text_rel_path(value: str) -> bool:
+    lowered = value.strip().lower().replace("\\", "/")
+    return any(lowered.endswith(ext) for ext in _CHAT_TEXT_SUFFIXES)
+
+
+def _media_paths_from_tool_message(message: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     if message.get("role") != "tool":
-        return []
+        return [], [], []
     content = message.get("content")
     if not isinstance(content, str):
-        return []
+        return [], [], []
     try:
         payload = json.loads(content)
     except json.JSONDecodeError:
-        return []
+        return [], [], []
     if not isinstance(payload, dict) or not payload.get("ok"):
-        return []
+        return [], [], []
     tool = str(payload.get("tool") or "")
-    if tool not in _CHAT_IMAGE_TOOLS:
-        return []
+    if tool not in _CHAT_MEDIA_TOOLS:
+        return [], [], []
     data = payload.get("data")
     if not isinstance(data, dict):
-        return []
-    paths: list[str] = []
+        return [], [], []
+    images: list[str] = []
+    videos: list[str] = []
+    files: list[str] = []
     raw = data.get("display_paths")
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, str) and item.strip():
                 normalized = item.strip().replace("\\", "/")
                 if _is_chat_image_rel_path(normalized):
-                    paths.append(normalized)
-    if not paths and tool == "generate_image":
+                    images.append(normalized)
+                elif _is_chat_video_rel_path(normalized):
+                    videos.append(normalized)
+                elif _is_chat_text_rel_path(normalized):
+                    files.append(normalized)
+    if not images and not videos and not files:
         path = data.get("path")
-        if isinstance(path, str) and _is_chat_image_rel_path(path):
-            paths.append(path.strip().replace("\\", "/"))
-    return paths
+        if isinstance(path, str):
+            normalized = path.strip().replace("\\", "/")
+            if tool == "generate_image" and _is_chat_image_rel_path(normalized):
+                images.append(normalized)
+            elif tool == "generate_video" and _is_chat_video_rel_path(normalized):
+                videos.append(normalized)
+            elif tool == "show_images" and _is_chat_text_rel_path(normalized):
+                files.append(normalized)
+    return images, videos, files
 
 
 def _append_chat_history_item(
@@ -2003,6 +2032,8 @@ def _build_chat_history_from_messages(
     items: list[dict[str, Any]] = []
     total = 0
     pending_images: list[str] = []
+    pending_videos: list[str] = []
+    pending_files: list[str] = []
 
     for message in messages:
         if not isinstance(message, dict):
@@ -2015,16 +2046,27 @@ def _build_chat_history_from_messages(
                     "presentation_id": message["presentation_id"], "card_id": message["card_id"],
                     "text": "工作卡回查引用；仅记录待恢复投递，不表示已送达、已查看或验收。"}, max_items=max_items)
                 pending_images = []
+                pending_videos = []
+                pending_files = []
             continue
         if role == "tool":
-            for path in _image_paths_from_tool_message(message):
+            images, videos, files = _media_paths_from_tool_message(message)
+            for path in images:
                 if path not in pending_images:
                     pending_images.append(path)
+            for path in videos:
+                if path not in pending_videos:
+                    pending_videos.append(path)
+            for path in files:
+                if path not in pending_files:
+                    pending_files.append(path)
             continue
 
         content = message.get("content")
         if role == "user":
             pending_images = []
+            pending_videos = []
+            pending_files = []
             if not isinstance(content, str):
                 continue
             text = content.strip()
@@ -2053,6 +2095,12 @@ def _build_chat_history_from_messages(
             if pending_images:
                 item["inline_images"] = list(pending_images)
                 pending_images = []
+            if pending_videos:
+                item["inline_videos"] = list(pending_videos)
+                pending_videos = []
+            if pending_files:
+                item["inline_files"] = list(pending_files)
+                pending_files = []
             total += 1
             _append_chat_history_item(items, item, max_items=max_items)
 

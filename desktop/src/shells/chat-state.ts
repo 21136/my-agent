@@ -40,6 +40,8 @@ export type ChatBlock =
   | { kind: "notice"; text: string; plainText?: boolean }
   | { kind: "work-card-reference"; presentationId: string; cardId: string; text: string }
   | { kind: "generated-image"; agentPath: string; turnIndex: number }
+  | { kind: "generated-video"; agentPath: string; turnIndex: number }
+  | { kind: "inline-file"; agentPath: string; turnIndex: number }
   | (ProcessActivityBlock & { kind: "process" })
   | {
       kind: "confirm";
@@ -213,8 +215,10 @@ export type SessionHistoryItem =
   | {
       role: "user" | "assistant";
       text: string;
-      /** Agent-relative image paths to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
+      /** Display refs to rehydrate after session.history (CHAT-IMAGE-DISPLAY). */
       inline_images?: string[];
+      inline_videos?: string[];
+      inline_files?: string[];
     }
   | {
       role: "work_card";
@@ -262,10 +266,22 @@ export function historyFromItems(
       }
       const assistantTurn = turnIndex || 1;
       const imageExt = /\.(png|jpe?g|webp|gif|bmp)$/i;
+      const videoExt = /\.(mp4|webm|mov)$/i;
+      const textExt = /\.(txt|md|markdown|ts|tsx|js|mjs|cjs|jsx|json|py|toml|css|html|htm|yml|yaml|xml|sh|bash|bat|ps1|rs|go|java|kt|sql|csv|log|ini|cfg|vue|svelte)$/i;
       for (const rawPath of item.inline_images ?? []) {
         const agentPath = rawPath.trim().replace(/\\/g, "/");
         if (!agentPath || !imageExt.test(agentPath)) continue;
         blocks.push({ kind: "generated-image", agentPath, turnIndex: assistantTurn });
+      }
+      for (const rawPath of item.inline_videos ?? []) {
+        const agentPath = rawPath.trim().replace(/\\/g, "/");
+        if (!agentPath || !videoExt.test(agentPath)) continue;
+        blocks.push({ kind: "generated-video", agentPath, turnIndex: assistantTurn });
+      }
+      for (const rawPath of item.inline_files ?? []) {
+        const agentPath = rawPath.trim().replace(/\\/g, "/");
+        if (!agentPath || !textExt.test(agentPath)) continue;
+        blocks.push({ kind: "inline-file", agentPath, turnIndex: assistantTurn });
       }
       blocks.push({ kind: "assistant", text: item.text, turnIndex: assistantTurn });
       seeds.push({ role: "assistant", turnIndex: assistantTurn });
@@ -836,7 +852,7 @@ export function createChatSession(
     if (event.session_id !== model.sessionId || typeof event.request_id !== "string" || typeof event.run_id !== "string") return false;
     const block = model.blocks.find((item) => item.kind === "work-instruction" && item.requestId === event.request_id
       && item.sessionId === event.session_id && item.workRunId === event.run_id);
-    if (!block) return false;
+    if (!block || block.kind !== "work-instruction") return false;
     if (event.state === "queued") {
       if (block.state !== "sending" && block.state !== "queued") return false;
       block.state = "queued";
@@ -861,7 +877,7 @@ export function createChatSession(
 
   function requestParallelChatCancel(requestId: string): boolean {
     const block = model.blocks.find((item) => item.kind === "parallel-chat" && item.requestId === requestId);
-    if (!block || block.deliveryState !== "delivered" || block.cancelRequested) return false;
+    if (!block || block.kind !== "parallel-chat" || block.deliveryState !== "delivered" || block.cancelRequested) return false;
     block.cancelRequested = true;
     notify();
     return true;
@@ -890,7 +906,7 @@ export function createChatSession(
         model.blocks[pendingIndex] = block;
       }
     }
-    if (!block) return false;
+    if (!block || block.kind !== "parallel-chat") return false;
     if (event.type === "chat.cancel.result") {
       if (block.deliveryState !== "delivered" || typeof event.accepted !== "boolean") return false;
       block.cancelRequested = event.accepted;
@@ -1420,19 +1436,38 @@ export function createChatSession(
         if (event.ok) {
           const displayPaths = normalizeDisplayPaths(event.display_paths);
           const imageExt = /\.(png|jpe?g|webp|gif|bmp)$/i;
-          const pushImageBlock = (agentPath: string) => {
-            if (!imageExt.test(agentPath)) return;
-            model.blocks.push({
-              kind: "generated-image",
-              agentPath,
-              turnIndex: currentTurnIndex(),
-            });
+          const videoExt = /\.(mp4|webm|mov)$/i;
+          const textExt = /\.(txt|md|markdown|ts|tsx|js|mjs|cjs|jsx|json|py|toml|css|html|htm|yml|yaml|xml|sh|bash|bat|ps1|rs|go|java|kt|sql|csv|log|ini|cfg|vue|svelte)$/i;
+          const pushMediaBlock = (agentPath: string) => {
+            if (imageExt.test(agentPath)) {
+              model.blocks.push({
+                kind: "generated-image",
+                agentPath,
+                turnIndex: currentTurnIndex(),
+              });
+              return;
+            }
+            if (videoExt.test(agentPath)) {
+              model.blocks.push({
+                kind: "generated-video",
+                agentPath,
+                turnIndex: currentTurnIndex(),
+              });
+              return;
+            }
+            if (textExt.test(agentPath)) {
+              model.blocks.push({
+                kind: "inline-file",
+                agentPath,
+                turnIndex: currentTurnIndex(),
+              });
+            }
           };
           if (displayPaths.length) {
-            for (const p of displayPaths) pushImageBlock(p);
-          } else if (/generate_image|show_images/i.test(event.tool || "")) {
-            const imagePath = event.path?.trim() || event.output_path?.trim() || "";
-            if (imagePath) pushImageBlock(imagePath.replace(/\\/g, "/"));
+            for (const p of displayPaths) pushMediaBlock(p);
+          } else if (/generate_image|show_images|generate_video/i.test(event.tool || "")) {
+            const mediaPath = event.path?.trim() || event.output_path?.trim() || "";
+            if (mediaPath) pushMediaBlock(mediaPath.replace(/\\/g, "/"));
           }
         }
         // When all tools done after an approve, flip confirm label to terminal state.

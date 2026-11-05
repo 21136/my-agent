@@ -4197,13 +4197,13 @@ def _attach_desktop_inline_display_hint(result: ToolResult) -> ToolResult:
     count = len(paths)
     if count == 1:
         data["llm_hint"] = (
-            "Desktop unified chat already shows this image inline (display_paths). "
+            "Desktop unified chat already shows this file inline (display_paths). "
             "The user can see it in the chat UI. Do not ask whether to show or display it again; "
             "describe what they should see and suggest next steps only."
         )
     else:
         data["llm_hint"] = (
-            f"Desktop unified chat already shows all {count} images inline (display_paths). "
+            f"Desktop unified chat already shows all {count} files inline (display_paths). "
             "The user can see them in the chat UI. Do not ask whether to show or display them again; "
             "describe what they should see and suggest next steps only."
         )
@@ -4235,7 +4235,7 @@ def _tool_result_summary(result: ToolResult) -> str:
     display_paths = _tool_end_display_paths(data)
     if display_paths:
         n = len(display_paths)
-        return "已在聊天内联展示图片" if n == 1 else f"已在聊天内联展示 {n} 张图片"
+        return "已在聊天内联展示" if n == 1 else f"已在聊天内联展示 {n} 项"
     change_line = _result_change_line(data)
     if change_line:
         return change_line

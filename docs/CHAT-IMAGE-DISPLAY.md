@@ -8,13 +8,13 @@
 用户在 **Desktop 聊天主区** 看到图片本身，而不是只有 `workspace/.../foo.png` 路径文本。
 
 - **生图**：`generate_image` 成功后自动内联展示输出 PNG。
-- **已有图**：Agent 调用只读 builtin **`show_images`**，把 agent root 下已有图片文件展示在同一条时间线里。
-- **统一通道**：工具结果里的 **`display_paths`**（agent 相对路径字符串数组）经 `tool.end` 事件送到前端；前端不依赖工具名硬编码（`generate_image` 仅作旧事件回退）。
+- **已有图/视频**：Agent 调用只读 builtin **`show_images`**，把本机已有图片或视频展示在同一条时间线里（含 agent 根外的用户文件）。不知道路径时用 `query` 在桌面/下载/文档等目录浅搜。
+- **统一通道**：工具结果里的 **`display_paths`**（agent 相对或 `local:<posix>`）经 `tool.end` 事件送到前端；前端不依赖工具名硬编码（`generate_image` 仅作旧事件回退）。
 
 ## 2. 非目标
 
-- 不在聊天里嵌入任意 URL 或 `file://`（安全与 SSRF 边界见 `fetch_url` / 预览 Phase 65）。
-- 不做全盘图片索引或后台扫描（历史附件解析仍仅限 `image_references` 会话 JSONL，与 `generate_image` 一致）。
+- 不在聊天里嵌入任意 URL 或裸 `file://`（本机媒体走 `agent-media://` 与 IPC；安全边界见 `fetch_url`）。
+- 不做全盘索引或后台扫描；用户问到的路径才解析。凭证与系统目录仍拒绝展示。
 - Terminal 壳不保证内联渲染（维护面；Desktop 为验收面）。
 
 ## 3. 数据流
@@ -33,7 +33,7 @@ sequenceDiagram
 
 | 阶段 | 责任方 | 说明 |
 |------|--------|------|
-| 路径校验 | `show_images` / `generate_image` | `resolve_read_path` + 图片后缀白名单 |
+| 路径校验 | `show_images` / `generate_image` / `generate_video` | `resolve_display_path` + 图/视频后缀；本机绝对路径允许，密钥与系统目录拒绝 |
 | 结构化结果 | `ToolResult.data` | `display_paths: string[]`（agent 相对） |
 | 事件 | `ToolExecutor` | `tool.end.display_paths` 透传 |
 | UI | `chat-state.ts` | 每路径一个 `generated-image` block |

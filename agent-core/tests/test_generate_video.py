@@ -170,7 +170,7 @@ class GenerateVideoTests(unittest.TestCase):
         self.assertNotIn("duration", result.data)
         self.assertNotIn("resolution", result.data)
         self.assertNotIn("aspect_ratio", result.data)
-        self.assertNotIn("display_paths", result.data)
+        self.assertEqual(result.data["display_paths"], [result.data["path"]])
 
     def test_lite_model_is_rejected_before_submission(self) -> None:
         with patch.dict(os.environ, {"LLM_0x567_KEY": "test-secret"}), patch(
@@ -239,3 +239,5 @@ class GenerateVideoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
