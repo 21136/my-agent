@@ -1127,6 +1127,9 @@ def _validate_session_write_scope(
                 paths_to_check.append(raw.strip())
     for rel in paths_to_check:
         try:
+            from sandbox_evolution import coerce_session_write_path
+
+            rel = coerce_session_write_path(agent_paths, rel, scope)
             resolved = agent_paths.resolve_under_agent(rel, must_exist=False)
             agent_paths.assert_within_session_write_scope(
                 resolved,

@@ -850,8 +850,10 @@ function stopSidecar(): void {
 }
 
 function legacySandboxLaneAllowed(): boolean {
+  // Unpackaged dev desktop can always start the experiment sidecar.
+  // Requiring VITE_DEV_SERVER_URL made 开实验会话 die whenever that env var was missing.
   return !fixedHostContext && !evolutionTestHostContext && !evolutionTestHostContextError
-    && !app.isPackaged && Boolean(process.env.VITE_DEV_SERVER_URL);
+    && !app.isPackaged;
 }
 
 const legacySandboxLane = createLegacySandboxLane({
@@ -1313,10 +1315,12 @@ const legacySandboxLaneIpc = createTrustedLegacyLaneHandlers({
   allowed: legacySandboxLaneAllowed,
   get: () => legacySandboxLane.get(),
   ensure: ensureSandboxSidecar,
+  restart: () => legacySandboxLane.restart(),
 });
 ipcMain.handle("sidecar:session-lane-capabilities", (event) => legacySandboxLaneIpc.capabilities(event));
 ipcMain.handle("sidecar:get-sandbox", (event) => legacySandboxLaneIpc.get(event));
 ipcMain.handle("sidecar:ensure-sandbox", (event) => legacySandboxLaneIpc.ensure(event));
+ipcMain.handle("sidecar:restart-sandbox", (event) => legacySandboxLaneIpc.restart(event));
 ipcMain.handle("sidecar:switch-candidate", (_event, rawRoot: unknown) => switchSidecarCandidate(rawRoot));
 ipcMain.handle("app:switch-to-cli", () => switchToCli());
 

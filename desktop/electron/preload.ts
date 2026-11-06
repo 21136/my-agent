@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
   getSessionLaneCapabilities: () => ipcRenderer.invoke("sidecar:session-lane-capabilities") as Promise<{ legacySessionLanes: boolean }>,
   getSandboxSidecar: () => ipcRenderer.invoke("sidecar:get-sandbox") as Promise<{ host: string; port: number } | null>,
   ensureSandboxSidecar: () => ipcRenderer.invoke("sidecar:ensure-sandbox") as Promise<{ ok: boolean; host?: string; port?: number; message?: string }>,
+  restartSandboxSidecar: () => ipcRenderer.invoke("sidecar:restart-sandbox") as Promise<{ ok: boolean; host?: string; port?: number; message?: string }>,
   switchSidecarCandidate: (root: string) => ipcRenderer.invoke("sidecar:switch-candidate", root),
   switchToCli: () => ipcRenderer.invoke("app:switch-to-cli"),
   openWorkbench: () => ipcRenderer.invoke("app:open-workbench") as Promise<void>,
@@ -116,6 +117,7 @@ export type MyAgentDesktopApi = {
   getSessionLaneCapabilities: () => Promise<{ legacySessionLanes: boolean }>;
   getSandboxSidecar: () => Promise<{ host: string; port: number } | null>;
   ensureSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
+  restartSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
   switchSidecarCandidate: (root: string) => Promise<Record<string, unknown>>;
   switchToCli: () => Promise<void>;
   openWorkbench: () => Promise<void>;

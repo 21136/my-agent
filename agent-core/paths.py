@@ -270,6 +270,11 @@ class AgentPaths:
             raise PathDeniedForWriteError(
                 f"固定 Host 的 evolve 代码为只读路径：{raw!r}", path=raw,
             )
+        scope = active_write_scope_root()
+        if scope:
+            from sandbox_evolution import coerce_session_write_path
+
+            raw = coerce_session_write_path(self, raw, scope)
         resolved = self._resolve(raw, base=self.agent_root, must_exist=must_exist)
         try:
             rel = self.to_agent_relative(resolved)

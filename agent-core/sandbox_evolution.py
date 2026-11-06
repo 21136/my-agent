@@ -72,6 +72,48 @@ def sandbox_write_scope_relative(paths: AgentPaths) -> str:
     return normalize_write_scope_root(rel)
 
 
+def coerce_session_write_path(paths: AgentPaths, raw: str, scope_root: str) -> str:
+    """Map a repo-relative write onto the session sandbox tree.
+
+    Experiment sessions are often told to edit ``desktop/…`` or ``agent-core/…``.
+    Those paths are the stable checkout when the sidecar is not already inside
+    the worktree. Put them under the write scope instead of rejecting the turn.
+    """
+    scope = scope_root.strip().replace("\\", "/").strip("/")
+    text = raw.strip().replace("\\", "/")
+    if not scope or not text or text.lower().startswith("host:"):
+        return raw
+    if any(part == ".." for part in text.split("/")):
+        return raw
+    if text == scope or text.startswith(scope + "/"):
+        return text
+    candidate = Path(raw.strip())
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve()
+            agent = paths.agent_root.resolve()
+            scope_dir = (agent / scope).resolve()
+            if _path_is_within(resolved, scope_dir):
+                return resolved.relative_to(agent).as_posix()
+            if _path_is_within(resolved, agent):
+                rel = resolved.relative_to(agent).as_posix()
+                if rel == scope or rel.startswith(scope + "/"):
+                    return rel
+                return f"{scope}/{rel}"
+        except (OSError, ValueError):
+            return raw
+        return raw
+    return f"{scope}/{text.lstrip('/')}"
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def normalize_write_scope_root(raw: str) -> str:
     text = raw.strip().replace("\\", "/").strip("/")
     if not text or ".." in text.split("/"):

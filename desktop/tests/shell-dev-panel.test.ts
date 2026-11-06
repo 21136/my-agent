@@ -62,6 +62,8 @@ test("product dual-lane default shows status + peer CTAs, details collapsed", ()
   const sandboxCard = html.slice(html.indexOf('data-lane="sandbox"'), html.indexOf("dual-lane-preview"));
   assert.match(sandboxCard, /data-shell-dev-dual-blockers/);
   assert.match(sandboxCard, /data-shell-dev-sandbox-session/);
+  assert.match(sandboxCard, /data-shell-dev-restart-sandbox/);
+  assert.match(sandboxCard, /重载实验运行时/);
   assert.match(sandboxCard, /data-shell-dev-one-click/);
 });
 

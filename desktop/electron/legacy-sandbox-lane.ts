@@ -49,7 +49,7 @@ export function createLegacySandboxLane(options: {
   type ChildState = { child: LaneChild; root: string; info: LegacyLaneInfo | null; closing: boolean; cancel: () => void };
   let active: ChildState | null = null;
   let pending: Promise<LegacyLaneResult> | null = null;
-  const disabled = (): LegacyLaneResult => ({ ok: false, message: "legacy sandbox lane is disabled for this Host" });
+  const disabled = (): LegacyLaneResult => ({ ok: false, message: "实验运行时未启用。请用 start-desktop.bat 打开未打包的开发桌面。" });
   function primary(root: string): LegacyLaneInfo | null {
     const current = options.primary?.();
     return current?.owned && current.running && samePath(current.root, root) && validInfo(current.info)
@@ -134,7 +134,30 @@ export function createLegacySandboxLane(options: {
     pending = published;
     return published;
   }
-  return { get, ensure, stop: () => active?.cancel() };
+  function restart(): Promise<LegacyLaneResult> {
+    if (!options.allowed()) return Promise.resolve(disabled());
+    const current = active;
+    if (!current) return ensure();
+    return new Promise((resolve, reject) => {
+      let started = false;
+      const finish = () => {
+        if (started) return;
+        started = true;
+        clearTimeout(timer);
+        ensure().then(resolve, reject);
+      };
+      const timer = setTimeout(() => {
+        if (started) return;
+        started = true;
+        reject(new Error("实验运行时没有退出，无法重载。"));
+      }, options.readyTimeoutMs);
+      current.child.on("exit", finish);
+      current.child.on("close", finish);
+      current.cancel();
+      if (active !== current) finish();
+    });
+  }
+  return { get, ensure, restart, stop: () => active?.cancel() };
 }
 
 /** Caller validation always precedes endpoint/root access and is repeated after startup. */
@@ -143,6 +166,7 @@ export function createTrustedLegacyLaneHandlers<Event>(options: {
   allowed: () => boolean;
   get: () => LegacyLaneInfo | null;
   ensure: () => Promise<LegacyLaneResult>;
+  restart?: () => Promise<LegacyLaneResult>;
 }) {
   return {
     capabilities: (event: Event): { legacySessionLanes: boolean } => ({
@@ -153,6 +177,13 @@ export function createTrustedLegacyLaneHandlers<Event>(options: {
       if (!options.allowed() || !options.isTrusted(event)) return { ok: false, message: "workbench unavailable" };
       const result = await options.ensure();
       if (!options.allowed() || !options.isTrusted(event)) return { ok: false, message: "workbench unavailable" };
+      return result;
+    },
+    restart: async (event: Event): Promise<LegacyLaneResult> => {
+      if (!options.allowed() || !options.isTrusted(event)) return { ok: false, message: "实验运行时只能在开发桌面里重载。" };
+      const restartLane = options.restart ?? options.ensure;
+      const result = await restartLane();
+      if (!options.allowed() || !options.isTrusted(event)) return { ok: false, message: "实验运行时只能在开发桌面里重载。" };
       return result;
     },
   };

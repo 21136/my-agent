@@ -129,6 +129,26 @@ test("primary reuse rejects either unowned same-root or owned foreign-root endpo
   }
 });
 
+test("restart kills the owned child and publishes the next ready endpoint", async (t) => {
+  const f = fixture(t);
+  const children = [new FakeChild(), new FakeChild()];
+  let spawned = 0;
+  const lane = api().createLegacySandboxLane({
+    agentRoot: f.sandbox, allowed: () => true,
+    spawn: () => children[spawned++],
+    readyTimeoutMs: 1000,
+  });
+  t.after(() => lane.stop());
+  const first = lane.ensure();
+  children[0].ready(1111);
+  assert.equal((await first).port, 1111);
+  const again = lane.restart();
+  children[1].ready(2222);
+  assert.deepEqual(await again, { ok: true, host: "127.0.0.1", port: 2222 });
+  assert.equal(children[0].kills, 1);
+  assert.equal(spawned, 2);
+});
+
 test("concurrent ensure requests create one child", async (t) => {
   const f = laneFor(t);
   const first = f.lane.ensure(), second = f.lane.ensure();

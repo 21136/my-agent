@@ -124,4 +124,4 @@ init-sandbox.bat
 | sandbox worktree 切错分支 | 合入/提交报分支不对 | 在 `.worktrees/sandbox` 保持 `experiment/sandbox` |
 | 只改 desktop 未切候选 Host | 新工具在 sidecar 不生效 | 设置里候选 Host 指 sandbox（验收后切回稳定根） |
 
-**推荐闭环：** 双车道 → **开实验会话**（8766，助手直接改实验树）→ 5174 验收 → **合入稳定** → **用稳定刷实验** → 重启 → 5173 验收。不要把自我修改默认交给 Cursor。
+**推荐闭环：** 双车道 → **开实验会话**（8766，助手直接改实验树；写 `desktop/`、`agent-core/` 即可，不必手写 `.worktrees/sandbox` 前缀）→ 5174 看界面。改了 agent-core 后点 **重载实验运行时**，不必整桌面重启。满意再 **合入稳定** → **用稳定刷实验**。不要把自我修改默认交给 Cursor。

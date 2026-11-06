@@ -1097,7 +1097,7 @@ export class AgentWsClient {
   private async resolveSidecarInfo(lane: SidecarLane): Promise<{ host: string; port: number }> {
     const capabilities = await this.laneCapabilities();
     if (!isLegacyLaneQueryAllowed(capabilities)) {
-      throw new Error("fixed managed Host cannot query legacy sidecar lanes");
+      throw new Error("实验运行时没连上。请用 start-desktop.bat 重启桌面后再开实验会话。");
     }
     const api = window.myAgentDesktop;
     if (!api) throw new Error("myAgentDesktop preload API missing");
@@ -1122,6 +1122,10 @@ export class AgentWsClient {
       this.reconnectTimer = null;
     }
     await this.connect();
+  }
+
+  async reconnectActiveLane(): Promise<void> {
+    await this.switchLane(this.lane);
   }
 
   async switchLane(lane: SidecarLane): Promise<void> {
@@ -2404,6 +2408,7 @@ declare global {
       getSidecar: () => Promise<{ host: string; port: number } | null>;
       getSessionLaneCapabilities?: () => Promise<SessionLaneCapabilities>;
       ensureSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
+      restartSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
       getSandboxSidecar?: () => Promise<{ host: string; port: number } | null>;
       syncSandboxWorktree?: () => Promise<{ ok: boolean; message: string; detail?: string }>;
       resetShellDevMainLane?: () => Promise<{ ok: boolean; message: string; mainUrl?: string }>;

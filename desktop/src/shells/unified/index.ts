@@ -3161,7 +3161,26 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           shellDevFeedback("正在打开实验会话…", "busy");
           await client.createSandboxSession();
           setPerspective("project", "session");
-          shellDevFeedback("已打开实验会话。直接说要改什么，助手会写实验树。", "ok");
+          shellDevFeedback("已打开实验会话。直接说要改什么；写 desktop/、agent-core/ 即可。", "ok");
+        } catch (error) {
+          shellDevFeedback(error instanceof Error ? error.message : String(error), "error");
+        }
+      });
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-restart-sandbox]")?.addEventListener("click", async () => {
+        const restart = window.myAgentDesktop?.restartSandboxSidecar;
+        if (!restart) {
+          shellDevFeedback("请完全退出后用 start-desktop.bat 重启，才能重载实验运行时。", "error");
+          return;
+        }
+        shellDevFeedback("正在重载实验运行时…", "busy");
+        try {
+          const result = await restart();
+          if (!result?.ok) {
+            shellDevFeedback(result?.message || "实验运行时没有起来。", "error");
+            return;
+          }
+          await client.reconnectActiveLane();
+          shellDevFeedback("实验运行时已重载。回到实验会话继续；界面改动刷新 5174。", "ok");
         } catch (error) {
           shellDevFeedback(error instanceof Error ? error.message : String(error), "error");
         }

@@ -44,6 +44,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
           <p class="dual-lane-status" data-shell-dev-sandbox-status>读取中…</p>
         </header>
         <button type="button" class="unified-btn unified-btn-accent dual-lane-peer-cta" data-shell-dev-sandbox-session title="在实验 sidecar 新建会话，助手直接改实验树">开实验会话</button>
+        <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-restart-sandbox title="关掉实验 sidecar 再拉起，让刚改的 agent-core 生效">重载实验运行时</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入；取消不会改代码">合入稳定</button>
         <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>
         <details class="dual-lane-details" data-shell-dev-sandbox-details>

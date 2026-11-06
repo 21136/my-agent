@@ -8,10 +8,12 @@ from pathlib import Path
 
 from paths import AgentPaths, PathDeniedForWriteError, session_write_scope
 from sandbox_evolution import (
+    coerce_session_write_path,
     is_sandbox_agent_root,
     normalize_write_scope_root,
     sandbox_write_scope_relative,
 )
+from loader import format_session_overlay
 from session import SessionMeta, create_new, create_sandbox_evolution_session
 from tools.executor import ExecutorSession, _validate_session_write_scope
 
@@ -51,8 +53,14 @@ class SandboxWriteScopeTests(unittest.TestCase):
                 must_exist=False,
             )
             self.assertTrue(str(ok).endswith("foo.ts"))
-            with self.assertRaises(PathDeniedForWriteError):
-                self.paths.resolve_under_agent_for_write("desktop/foo.ts", must_exist=False)
+            coerced = self.paths.resolve_under_agent_for_write("desktop/foo.ts", must_exist=False)
+            self.assertIn(".worktrees", str(coerced).replace("\\", "/"))
+            self.assertTrue(str(coerced).endswith("foo.ts"))
+            stable_abs = str(self.paths.agent_root / "agent-core" / "server.py")
+            from_abs = self.paths.resolve_under_agent_for_write(stable_abs, must_exist=False)
+            self.assertIn(".worktrees", str(from_abs).replace("\\", "/"))
+            with self.assertRaises(Exception):
+                self.paths.resolve_under_agent_for_write("../escape.ts", must_exist=False)
 
     def test_sandbox_agent_root_has_no_write_scope(self) -> None:
         sandbox = self.paths.agent_root / ".worktrees" / "sandbox"
@@ -78,7 +86,7 @@ class SandboxWriteScopeTests(unittest.TestCase):
         self.assertIn("实验树", seed)
         self.assertIn("自我修改", seed)
 
-    def test_validate_session_write_scope_blocks_stable_path(self) -> None:
+    def test_validate_session_write_scope_accepts_repo_relative_product_path(self) -> None:
         exec_session = ExecutorSession(write_scope_root=".worktrees/sandbox")
         result = _validate_session_write_scope(
             exec_session,
@@ -89,10 +97,33 @@ class SandboxWriteScopeTests(unittest.TestCase):
                 "arguments": {"path": "desktop/hack.ts", "content": "x"},
             },
         )
-        self.assertIsNotNone(result)
-        assert result is not None
-        err_text = (result.error.message if result.error else "") or ""
-        self.assertIn("写入范围", err_text)
+        self.assertIsNone(result)
+        denied = _validate_session_write_scope(
+            exec_session,
+            self.paths,
+            "write_text",
+            {
+                "tool_name": "write_text",
+                "arguments": {"path": "../outside.ts", "content": "x"},
+            },
+        )
+        self.assertIsNotNone(denied)
+
+    def test_overlay_tells_the_model_to_edit_here(self) -> None:
+        session = create_sandbox_evolution_session(self.paths)
+        overlay = format_session_overlay(session)
+        self.assertIn("实验自我修改", overlay)
+        self.assertIn("desktop/", overlay)
+        self.assertIn("不要让用户去 Cursor", overlay)
+
+    def test_coerce_does_not_double_prefix(self) -> None:
+        scope = ".worktrees/sandbox"
+        already = coerce_session_write_path(self.paths, ".worktrees/sandbox/desktop/a.ts", scope)
+        self.assertEqual(already, ".worktrees/sandbox/desktop/a.ts")
+        self.assertEqual(
+            coerce_session_write_path(self.paths, "../desktop/a.ts", scope),
+            "../desktop/a.ts",
+        )
 
 
 if __name__ == "__main__":

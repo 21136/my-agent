@@ -513,27 +513,56 @@ def _format_ci_repair_policy(session: Session) -> str:
     return "(none)"
 
 
+def _sandbox_self_modify_overlay(session: Session) -> str:
+    """Keep self-modify instructions in the system prompt, including after resume."""
+    scope = (session.meta.write_scope_root or "").strip()
+    goal = session.goal or ""
+    if not scope and "实验进化" not in goal:
+        return ""
+    if scope:
+        where = (
+            f"写入范围是 {scope}。直接写 desktop/、agent-core/、docs/、evolve/ 这种仓库相对路径，"
+            "运行时会放进实验树；不要改稳定树，也不要自己加 .worktrees/sandbox 前缀。"
+        )
+    else:
+        where = (
+            "你已经在实验树里。直接写 desktop/、agent-core/、docs/、evolve/。"
+            "这里没有下一层 .worktrees/sandbox。"
+        )
+    return "\n".join(
+        [
+            "[实验自我修改]",
+            where,
+            "这就是改自己：用 write_text / patch_file / write_evolve 落地，不要让用户去 Cursor 或 Codex。",
+            "desktop 改动看 5174。agent-core 改动后请用户在双车道点「重载实验运行时」，再回这个会话继续。",
+            "满意后请用户点「合入稳定」。",
+        ]
+    )
+
+
 def format_session_overlay(session: Session) -> str:
     topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     goal = session.goal.strip() or "(unset)"
     subagent = "used" if session.subagent_overlay else "none"
     intent = session.turn_intent or "(pending)"
-    return "\n".join(
-        [
-            "[本次会议]",
-            f"harness: {session.meta.harness}",
-            f"conversation_id: {session.conversation_id}",
-            f"goal: {goal}",
-            f"topics: {topics}",
-            f"llm_model: {session.meta.llm_model}",
-            f"turn_mode: {session.meta.turn_mode}",
-            f"turn_intent: {intent}",
-            f"subagent: {subagent}",
-            f"self_change_transaction: {getattr(session, '_self_change_transaction_id', '') or '(none)'}",
-            f"ci_repair: {_format_ci_repair_overlay(session)}",
-            f"ci_repair_policy: {_format_ci_repair_policy(session)}",
-        ]
-    )
+    lines = [
+        "[本次会议]",
+        f"harness: {session.meta.harness}",
+        f"conversation_id: {session.conversation_id}",
+        f"goal: {goal}",
+        f"topics: {topics}",
+        f"llm_model: {session.meta.llm_model}",
+        f"turn_mode: {session.meta.turn_mode}",
+        f"turn_intent: {intent}",
+        f"subagent: {subagent}",
+        f"self_change_transaction: {getattr(session, '_self_change_transaction_id', '') or '(none)'}",
+        f"ci_repair: {_format_ci_repair_overlay(session)}",
+        f"ci_repair_policy: {_format_ci_repair_policy(session)}",
+    ]
+    sandbox = _sandbox_self_modify_overlay(session)
+    if sandbox:
+        lines.extend(["", sandbox])
+    return "\n".join(lines)
 
 
 def format_terminal_scope_overlay(session: Session) -> str:
