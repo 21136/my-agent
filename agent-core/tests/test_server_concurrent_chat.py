@@ -401,6 +401,7 @@ def test_execution_stop_wire_rejects_missing_or_stale_id():
         assert handler._dispatch_inline({"type": "execution.stop"}, bridge)
         assert bridge.lifecycle.snapshot().state == "running"
         assert not bridge.cancel_event.is_set()
+        assert bridge._accepted_user_stop is None
         results = [event for event in events if event.get("type") == "execution.stop.result"]
         assert [row["accepted"] for row in results] == [False, False]
         assert results[0]["run_id"] == "stale"
@@ -450,6 +451,9 @@ def test_execution_stop_wire_accepts_only_the_current_run():
         assert current is not None and current.run_id == active.run_id
         assert current.state == "stopping" and current.cancel_requested
         assert bridge.cancel_event.is_set()
+        assert bridge._accepted_user_stop is not None
+        assert bridge._accepted_user_stop[0] == active.run_id
+        assert bridge._accepted_user_stop[1]
         result = [event for event in events if event.get("type") == "execution.stop.result"][-1]
         assert result == {"type": "execution.stop.result", "accepted": True, "run_id": active.run_id}
 

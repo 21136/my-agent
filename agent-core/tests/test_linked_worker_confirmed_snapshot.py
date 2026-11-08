@@ -34,7 +34,9 @@ def test_binding_persists_confirmed_item_digests_and_rejects_changes_or_missing_
     assert view["verification"] == "not_verified"
     assert ConversationWorkRecordBindings(parent).project_authorized_worker_status(
         binding_id=a["binding_id"], source=sources["project-a"]) == view
-    assert bindings.project_authorized_worker_status(binding_id=b["binding_id"], source=sources["project-b"]) is None
+    missing_lifecycle = bindings.project_authorized_worker_status(binding_id=b["binding_id"], source=sources["project-b"])
+    assert missing_lifecycle["host_status"] == "unknown"
+    assert missing_lifecycle["finish_reason"] == "unknown"
     assert {p: _reader_for(s.store)._path.read_bytes() for p,s in sources.items()} == source_bytes
     source = _reader_for(sources["project-a"].store)
     source.add_requirement(tasks[0].item_id, "new requirement", event_id="source-change")

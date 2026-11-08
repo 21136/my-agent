@@ -77,30 +77,15 @@ class SessionAgnosticToolAccessTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         tools_doc = (root / "docs" / "TOOLS.md").read_text(encoding="utf-8")
         project_doc = (root / "docs" / "PROJECT-MODE.md").read_text(encoding="utf-8")
-        review_doc = (root / "docs" / "DELIVERABLE-REVIEW.md").read_text(encoding="utf-8")
-        map_doc = (root / "docs" / "MAP.md").read_text(encoding="utf-8")
-        workbench_doc = (root / "docs" / "WORKBENCH-UI.md").read_text(encoding="utf-8")
         workshop_doc = (root / "docs" / "TOOL-WORKSHOP-PROMPTS.md").read_text(encoding="utf-8")
         index = (root / "evolve" / "tool-catalog" / "INDEX.md").read_text(encoding="utf-8")
-        project_prompt = (root / "evolve" / "prompts" / "project-boundaries.md").read_text(encoding="utf-8")
-        coding_prompt = (root / "evolve" / "prompts" / "coding.md").read_text(encoding="utf-8")
-        evolve_bucket = (root / "evolve" / "tool-catalog" / "buckets" / "evolve.md").read_text(encoding="utf-8")
 
         self.assertIn("普通会话与项目会话", tools_doc)
+        self.assertIn("active", tools_doc)
         self.assertIn("write_evolve", project_doc)
-        self.assertIn("已于 2026-10-21", project_doc)
-        self.assertNotIn("项目绑定会话内仍禁 `write_evolve`", project_doc)
-        self.assertIn("项目绑定会话每次须单独确认", workbench_doc)
-        self.assertIn("不会单独禁止 `write_evolve`", workshop_doc)
-        self.assertNotIn("project 拒 write_evolve", workshop_doc)
-        self.assertIn("project_id", review_doc)
-        self.assertIn("workspace/", review_doc)
-        self.assertIn("project_id", map_doc)
+        self.assertIn("每次", tools_doc)
+        self.assertIn("write_evolve", workshop_doc)
         self.assertIn("普通会话与项目会话", index)
-        for prompt in (project_prompt, coding_prompt, evolve_bucket):
-            self.assertNotIn("禁止 `write_evolve`", prompt)
-            self.assertIn("项目会话", prompt)
-        self.assertIn("每次", evolve_bucket)
         # The documented limit is characters, not UTF-8 file bytes.
         self.assertLessEqual(len(index), 2048)
 

@@ -8,6 +8,7 @@ sys.path.insert(0, str(_CORE))
 
 from paths import AgentPaths
 from project_worker_host import ProjectWorkerHostOutcome, ProjectWorkerHostRequest
+from project_worker_model_loop import ProjectWorkerModelOutcome, ProjectWorkerWriteReceipt
 from session import Session, SessionMeta
 from work_record_settlement import BoundExecution, ExecutionReceipt
 from work_records import WorkRecordStore
@@ -223,3 +224,36 @@ def test_single_parent_run_binding_rejects_wrong_actual_host_reservation(tmp_pat
         assert settle_project_worker_work_record(store, binding, bad, sequence=7).status == "rejected"
         assert store.get_item(item_id)["runs"] == []
     assert settle_project_worker_work_record(store, binding, outcome, sequence=7).status == "recorded"
+
+
+def test_worker_settlement_persists_verified_write_receipts_without_claiming_completion(tmp_path):
+    session, store, item_id, requirement_id, binding, outcome = _fixture(tmp_path)
+    model_turn = ProjectWorkerModelOutcome(
+        project_id="project-a", status="model_turn_finished",
+        writes=(ProjectWorkerWriteReceipt(
+            path="NOTES.md", status="written", verification="content_match",
+            characters_read_back=123, readback_succeeded=True,
+        ),),
+    )
+    outcome = ProjectWorkerHostOutcome(
+        worker_id=outcome.worker_id, run_id=outcome.run_id, turn_epoch=outcome.turn_epoch,
+        conversation_id=outcome.conversation_id, project_id=outcome.project_id,
+        task_id=outcome.task_id, status="model_turn_finished", model_turn=model_turn,
+        acceptance_status="not_run",
+    )
+
+    result = settle_project_worker_work_record(store, binding, outcome, sequence=8)
+
+    assert result.status == "recorded"
+    item = WorkRecordStore(session).get_item(item_id)
+    requirement = next(row for row in item["requirements"] if row["requirement_id"] == requirement_id)
+    run = next(row for row in item["runs"] if row["run_id"] == "worker-run")
+    assert requirement["status"] == run["status"] == "unknown"
+    assert run["verification"]["status"] == "not_verified"
+    assert run["result_summary"] == (
+        "Worker write receipts: 1 target(s) were read back and matched; overall requirement outcome remains unverified."
+    )
+    assert run["verification"]["host_execution"]["project_worker_write_receipts"] == [{
+        "path": "NOTES.md", "status": "written", "verification": "content_match",
+        "characters_read_back": 123, "readback_succeeded": True, "error_code": "",
+    }]

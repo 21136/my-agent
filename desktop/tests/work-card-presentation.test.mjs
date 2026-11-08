@@ -10,7 +10,7 @@ const js = ts.transpileModule(readFileSync(url, "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 new Function("exports", js)(exports);
-const { WorkCardPresentationRegistry, renderWorkCardSnapshot, failPendingHistoryCardRead, requestHistoryCardRead, renderWorkCardEntry, isExplicitResultDetailExpansion, receiveWorkCardPresentation, buildWorkCardResultViewRequest } = exports;
+const { WorkCardPresentationRegistry, renderWorkCardSnapshot, failPendingHistoryCardRead, requestHistoryCardRead, renderWorkCardEntry, isExplicitResultDetailExpansion, receiveWorkCardPresentation, buildWorkCardResultViewRequest, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads } = exports;
 
 const SESSION = "20261030-abcdef12";
 const PRESENTATION = "7cfe09c0-4f54-4d04-9f14-9815b4374e58";
@@ -154,6 +154,29 @@ test("receipt follows accepted/merged exact presentation, retries after send fai
   assert.equal(mergedHistory.mutation.kind,"resolved");assert.equal(mergedHistory.receiptAttempt,"attempted");
   assert.equal(history.get(PRESENTATION).card.viewed_at,null,"receipt does not mark the card viewed");
 });
+test("same-session banner after history hydration preserves pending history card reads", () => {
+  assert.equal(shouldClearPendingHistoryCardReads(SESSION, SESSION), false);
+  assert.equal(shouldClearPendingHistoryCardReads("", SESSION), false);
+  assert.equal(shouldClearPendingHistoryCardReads(SESSION, "next-session"), true);
+});
+
+test("disconnect clears pending history reads so same-session hydration retries", () => {
+  const registry = new WorkCardPresentationRegistry(SESSION);
+  registry.reference({ presentationId: PRESENTATION, cardId: CARD_ID, text: "history" });
+  const pendingReads = new Map();
+  const sent = [];
+  const request = () => requestHistoryCardRead({
+    cardId: CARD_ID, sessionId: SESSION, currentSessionId: SESSION, pendingReads, registry,
+    request: (id) => sent.push(id),
+  });
+
+  assert.equal(request(), "requested");
+  assert.equal(request(), "duplicate", "a live connection still deduplicates pending reads");
+  clearPendingHistoryCardReads(pendingReads);
+  assert.equal(request(), "requested", "the next history hydration retries after disconnect");
+  assert.deepEqual(sent, [CARD_ID, CARD_ID]);
+});
+
 test("history reference resolves only in its original current session and missing is explicit", () => {
   const registry = new WorkCardPresentationRegistry(SESSION);
   const block = registry.reference({ presentationId: PRESENTATION, cardId: CARD_ID, text: "工作卡片暂不可用" });
@@ -183,7 +206,7 @@ test("switching sessions clears presentations and late results cannot repopulate
 test("snapshot defaults to five prioritized known statuses and explicitly exposes all requirements", () => {
   const requirements = [req(1), req(2), req(3, "completed"), req(4, "blocked"), req(5), req(6, "in_progress"), req(7, "completed")];
   const html = renderWorkCardSnapshot(card(requirements));
-  assert.match(html, /查看全部 7 项/);
+  assert.match(html, /查看 7 项要求与结果/);
   assert.match(html, /2026-10-30T00:59:00Z/);
   assert.match(html, /受阻/);
   assert.match(html, /进行中/);
@@ -192,7 +215,8 @@ test("snapshot defaults to five prioritized known statuses and explicitly expose
   assert.match(html, /src-1/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
-  assert.match(html, /当时状态/);
+  assert.match(html, /捕获时：受阻/);
+  assert.match(html, /技术与来源信息/);
 });
 
 test("unique change focus moves a requirement from beyond the default five and keeps every row expandable", () => {
@@ -210,13 +234,14 @@ test("unique change focus moves a requirement from beyond the default five and k
   const visible = html.match(/<ol class="work-card-requirements">([\s\S]*?)<\/ol>/)?.[1] ?? "";
   const all = html.match(/<details class="work-card-all">[\s\S]*?<\/ol><\/details>/)?.[0] ?? "";
 
-  assert.match(visible, /req-7/);
-  assert.ok(visible.indexOf("req-7") < visible.indexOf("req-1"), "the uniquely bound update is shown first");
+  assert.match(visible, /本次更新/);
+  assert.ok(visible.indexOf("本次更新") < visible.indexOf("要求 1"), "the uniquely bound natural-language request is shown first");
   assert.match(visible, /本次更新/);
   assert.equal((html.match(/class="work-card-change-focus"/g) ?? []).length, 2,
-    "the same identity is labeled in the default view and complete expansion");
-  assert.match(html, /查看全部 7 项/);
-  for (let index = 1; index <= 7; index += 1) assert.match(all, new RegExp(`req-${index}`));
+    "the same update remains identified in both the focused row and complete list");
+  assert.match(html, /查看全部 7 项要求/);
+  for (let index = 1; index <= 7; index += 1) assert.match(all, new RegExp(`要求 ${index}`));
+  assert.match(html.match(/<details class="work-card-technical-detail"><summary>技术与来源信息[\s\S]*?<\/details>/)?.[0] ?? "", /req-7/);
 });
 
 test("legacy cards and text-only mentions never infer a change focus", () => {
@@ -227,7 +252,7 @@ test("legacy cards and text-only mentions never infer a change focus", () => {
 
   assert.doesNotMatch(html, /class="work-card-change-focus"/);
   assert.doesNotMatch(visible, /req-7/);
-  assert.match(html, /查看全部 7 项/);
+  assert.match(html, /查看全部 7 项要求/);
 });
 
 test("ambiguous duplicate focus identity is ignored instead of guessed", () => {
@@ -309,7 +334,7 @@ test("a stale history get failure cannot clear another session's pending read", 
   assert.equal(registry.get(PRESENTATION).status, "loading");
 });
 
-test("requirements with five or fewer rows keep result, verification and sources available in row details", () => {
+test("requirements open as readable requests, with result details and technical sources separately expandable", () => {
   const requirements = [req(1, "completed"), req(2, "in_progress")];
   requirements[0].latest_result = {
     session_id: SESSION, project_id: "demo-project", item_id: "item-1", requirement_id: "req-1",
@@ -317,11 +342,14 @@ test("requirements with five or fewer rows keep result, verification and sources
     verification_status: "passed", sources: [{ kind: "result", id: "result-source-1" }],
   };
   const html = renderWorkCardSnapshot(card(requirements));
-  assert.match(html, /查看结果、验证与来源/);
+  assert.match(html, /查看结果与验证说明/);
   assert.match(html, /verified summary/);
-  assert.match(html, /验证：passed/);
+  assert.match(html, /验证已通过/);
+  assert.match(html, /验证已通过/);
+  assert.match(html, /技术与来源信息/);
+  assert.match(html, /结果 ID：result-1/);
   assert.match(html, /result-source-1/);
-  assert.match(html, /<details class="work-card-requirement-detail">/);
+  assert.match(html, /<details class="work-card-requirement-detail"[^>]*>/);
   assert.doesNotMatch(html, /work-card-all/);
 });
 
@@ -399,8 +427,13 @@ test("project-scoped card is validated as one exact project's full projection in
   assert.equal(result.kind, "added");
   const html = renderWorkCardEntry(result.entry);
   assert.match(html, /project_scoped/);
+  assert.match(html, /查看 7 项要求与结果/);
+  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  assert.doesNotMatch(preview, /demo-project|result-1|run-1|状态未知|not_verified|synthetic lifecycle/);
   assert.match(html, /项目：demo-project/);
-  assert.match(html, /查看全部 7 项/);
+  assert.match(html, /结果 ID：result-7/);
+  assert.match(html, /回合 ID：run-7/);
+  assert.match(html, /查看全部 7 项要求/);
   assert.equal((html.match(/class="work-card-requirement"/g) ?? []).length, 5);
   assert.equal((html.match(/class="work-card-requirement work-card-requirement-all"/g) ?? []).length, 7);
   assert.equal(result.entry.card.snapshot.cards[0].requirements.length, 7, "rendering keeps the complete snapshot");
@@ -421,15 +454,12 @@ test("linked item copy renders as one captured requirement, separate from worker
   const result = registry.present(event);
   assert.equal(result.kind, "added");
   const html = renderWorkCardEntry(result.entry);
-  assert.match(html, /来源单事项副本/);
-  assert.match(html, /仅一项要求/);
-  assert.match(html, /不是项目全览/);
-  assert.match(html, /来源事项状态（捕获时）/);
-  assert.match(html, /来源要求状态（捕获时）/);
-  assert.match(html, /已完成/);
-  assert.match(html, /工作器主机回合已结束/);
-  assert.match(html, /操作结果未知/);
-  assert.match(html, /未验证/);
+  assert.match(html, /一项要求/);
+  assert.match(html, /不是项目全貌/);
+  assert.match(html, /以下是单项要求的历史副本/);
+  assert.match(html, /捕获时事项状态：已完成/);
+  assert.match(html, /工作器主机回合：model_turn_finished/);
+  assert.match(html, /没有可确认的操作结果/);
   assert.match(html, /重新授权/);
   assert.doesNotMatch(html, /查看结果、验证与来源|data-work-card-result-detail|data-result-id/);
   assert.doesNotMatch(html, /查看全部|项目要求全览/);
@@ -468,32 +498,26 @@ test("linked item copy escapes copied source text and keeps legacy cards accepte
   }).kind, "added", "legacy project cards remain compatible");
 });
 
-test("linked project-session copy renders bounded captured requirements separately from worker receipts", () => {
+test("linked project-session copy expands to natural-language requests before collapsed source metadata", () => {
   const copy = linkedProjectCopy(2, 4);
   const registry = new WorkCardPresentationRegistry(SESSION);
-  const event = { type: "work-card.present", session_id: SESSION,
-    presentation_id: PRESENTATION, card_id: CARD_ID, card: copy };
-  const result = registry.present(event);
+  const result = registry.present({ type: "work-card.present", session_id: SESSION, presentation_id: PRESENTATION, card_id: CARD_ID, card: copy });
   assert.equal(result.kind, "added");
   const html = renderWorkCardEntry(result.entry);
-  assert.match(html, /指定来源会话快照/);
-  assert.match(html, /不代表项目全部历史/);
-  assert.match(html, /未断言当前映射/);
-  assert.match(html, /来源事项状态（捕获时）/);
-  assert.match(html, /来源要求状态（捕获时）/);
-  assert.match(html, /来源修订（捕获时）：17/);
-  assert.match(html, /工作器宿主生命周期/);
-  assert.match(html, /操作结果未知/);
-  assert.match(html, /未验证/);
-  assert.match(html, /宿主回合结束和来源状态都不表示本次操作完成/);
-  assert.doesNotMatch(html, /当前对话中的项目要求全览|最近结果：|data-work-card-result-detail|data-result-id|result_id/);
-  assert.match(html, /查看全部 8 项要求/);
-  assert.equal((html.match(/class="work-card-requirement"/g) ?? []).length, 5);
-  assert.equal((html.match(/class="work-card-requirement work-card-requirement-all"/g) ?? []).length, 8);
-  const full = html.match(/<details class="work-card-all">[\s\S]*?<\/details>/)?.[0];
-  assert.ok(full);
-  assert.match(full, /来源要求 2-4/);
-  assert.match(html, /工作器宿主报告受阻/);
+  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  assert.match(preview, /历史副本/);
+  assert.match(preview, /不代表项目全貌/);
+  assert.match(preview, /查看 8 项要求与结果/);
+  assert.doesNotMatch(preview, /demo-project|20261030|unknown|未验证|2026-/);
+  assert.match(html, /来源要求 2-4/);
+  assert.match(html, /部分工作在执行前受阻；其余回合结束也不能确认操作结果或验证结论/);
+  assert.equal((html.match(/class="work-card-requirement"/g) ?? []).length, 8);
+  assert.match(html, /<details class="work-card-technical-detail"><summary>技术与来源信息/);
+  assert.match(html, /来源修订：17/);
+  assert.match(html, /来源范围：authorized_source_session_only · 映射：not_asserted/);
+  assert.match(html, /工作器 ID：worker-1 · 回合 ID：worker-run-1/);
+  assert.match(html, /操作结果：unknown · 验证：not_verified/);
+  assert.doesNotMatch(html, /操作结果未知|未验证.*未验证/);
 });
 
 test("linked project-session copy rejects malformed, cross-session, mapped, or success-claim snapshots", () => {
@@ -583,7 +607,7 @@ test("linked snapshot explicit detail action is session-bound and never marks vi
     const entry = registry.present({type:"work-card.present",session_id:SESSION,presentation_id:PRESENTATION,card_id:CARD_ID,card:copy}).entry;
     const html = renderWorkCardEntry(entry);
     assert.match(html, /<details[^>]*data-work-card-snapshot-detail/);
-    assert.match(html, /<summary>查看详情<\/summary>/);
+    assert.match(html, /<summary>查看/);
     const expected = {type:"work-card.snapshot.view",session_id:SESSION,presentation_id:PRESENTATION,card_id:CARD_ID};
     assert.deepEqual(exports.buildWorkCardSnapshotViewRequest(entry,SESSION),expected);
     assert.equal(exports.buildWorkCardSnapshotViewRequest(entry,"other"),null);
@@ -716,4 +740,101 @@ test("malformed pre-start blocked lifecycle JSON is hidden instead of being surf
   assert.match(html, /受阻/);
   assert.doesNotMatch(html, /must-not-leak|private-reservation|project_worker_host_lifecycle|host_error_code/);
   assert.doesNotMatch(html, /已启动|验收通过|已完成/);
+});
+
+test("historical snapshot keeps temporal context with the requirement list and distinguishes same-title records", () => {
+  const snapshot = card([req(1, "blocked")]);
+  const second = {
+    ...snapshot.snapshot.cards[0], item_id: "item-2", title: "项目 <unsafe>", status: "unknown",
+    requirements: [{ ...req(2, "in_progress"), item_id: "item-2", requirement_id: "req-2" }],
+  };
+  snapshot.snapshot.cards.push(second);
+  snapshot.snapshot.requirement_count = 2;
+  const html = renderWorkCardSnapshot(snapshot);
+  const listStart = html.indexOf('<ol class="work-card-requirements">');
+  const requirementHeading = html.indexOf("捕获时：受阻");
+  assert.ok(requirementHeading > listStart, "captured status stays available in advanced details after the request list");
+  assert.ok(html.indexOf("以下为保存时的历史记录") < listStart,
+    "the historical boundary appears once before the natural-language records");
+  assert.match(html, /事项 ID：item-2/);
+  assert.match(html, /捕获时：受阻/);
+  assert.match(html, /捕获时：进行中/);
+  assert.equal((html.match(/class="work-card-requirement(?: work-card-requirement-all)?"/g) ?? []).length, 2,
+    "same-title entries remain as two separate captured requirements");
+});
+
+test("project snapshots keep the chat preview compact and put complete historical detail behind a native disclosure", () => {
+  const requirements = Array.from({ length: 7 }, (_, index) => req(index + 1, index < 2 ? "completed" : "blocked"));
+  requirements[0].text = "超长项目要求".repeat(80);
+  requirements[0].requirement_id = `requirement-${"x".repeat(60)}`;
+  const snapshot = card(requirements);
+  snapshot.snapshot.cards[0].item_id = `item-${"i".repeat(60)}`;
+  const html = renderWorkCardSnapshot(snapshot);
+  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+
+  assert.match(preview, /历史快照[^<]*非实时/);
+  assert.match(preview, /项目工作记录/);
+  assert.doesNotMatch(preview, /进行中|状态未知|demo-project|2026-|来源：/);
+  assert.match(preview, /查看 7 项要求与结果/);
+  assert.doesNotMatch(preview, /超长项目要求|requirement-x{20}|item-i{20}|来源：/);
+  assert.match(html, /<details class="work-card-snapshot-detail">\s*<summary>查看 7 项要求与结果/);
+  assert.match(html, new RegExp("超长项目要求"));
+  assert.match(html, new RegExp(`requirement-x{60}`));
+  assert.match(html, new RegExp(`item-i{60}`));
+  assert.doesNotMatch(html, /data-work-card-snapshot-detail/, "ordinary snapshot disclosure must not add a view acknowledgement");
+});
+
+test("linked historical copies keep source IDs and long metadata inside the existing explicit-view disclosure", () => {
+  for (const copy of [linkedCopy(), linkedProjectCopy()]) {
+    const registry = new WorkCardPresentationRegistry(SESSION);
+    const entry = registry.present({type:"work-card.present",session_id:SESSION,presentation_id:PRESENTATION,card_id:CARD_ID,card:copy}).entry;
+    const html = renderWorkCardEntry(entry);
+    const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+    assert.match(preview, /历史副本[^<]*非实时/);
+    assert.match(preview, /Linked item|项目工作记录/);
+    assert.doesNotMatch(preview, /来源 Session|来源修订|事项：item-1|要求：req-1|2026-10-30T00:59:00Z/);
+    assert.match(html, /<details data-work-card-snapshot-detail><summary>查看/);
+    assert.match(html, /2026-10-30T00:59:00Z/);
+  }
+});
+
+
+test("work cards keep chat previews quiet and put natural-language evidence before technical metadata", () => {
+  const requirement = req(1, "unknown");
+  requirement.text = "修复登录页键盘导航并补充定向测试";
+  requirement.latest_result = {
+    session_id: SESSION, project_id: "demo-project", item_id: "item-1", requirement_id: "req-1",
+    result_id: "result-private-1", run_id: "run-private-1", status: "unknown",
+    summary: "已调整焦点顺序并运行桌面定向测试", verification_status: "not_verified",
+    sources: [{ kind: "file", id: "src/private-view.ts" }],
+  };
+  const snapshot = card([requirement]);
+  const html = renderWorkCardSnapshot(snapshot, { sessionId: SESSION, presentationId: PRESENTATION, cardId: CARD_ID });
+  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  assert.match(preview, /历史快照/);
+  assert.match(preview, /项目 &lt;unsafe&gt;/);
+  assert.match(preview, /查看 1 项要求与结果/);
+  assert.doesNotMatch(preview, /abcdef12|demo-project|2026-|result-private|run-private|src\/private|状态未知|来源：|状态：/);
+  assert.match(html, /修复登录页键盘导航并补充定向测试/);
+  assert.match(html, /已调整焦点顺序并运行桌面定向测试/);
+  assert.match(html, /<details class="work-card-technical-detail"><summary>技术与来源信息/);
+  assert.match(html, /src\/private-view\.ts/);
+  assert.match(html, /data-work-card-result-detail/);
+  const visibleResult = html.match(/<p class="work-card-result-summary">([\s\S]*?)<\/p>/)?.[1] ?? "";
+  assert.equal(visibleResult, "已调整焦点顺序并运行桌面定向测试");
+  assert.equal((html.match(/已调整焦点顺序并运行桌面定向测试/g) ?? []).length, 1, "the natural-language summary is not repeated in its disclosure");
+});
+
+test("linked-copy history preview hides identifiers and duplicate unknown states while retaining read affordance", () => {
+  const html = renderWorkCardSnapshot(linkedCopy(), { sessionId: SESSION, presentationId: PRESENTATION, cardId: CARD_ID });
+  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  assert.match(preview, /历史副本/);
+  assert.match(preview, /Linked item/);
+  assert.match(preview, /查看要求与结果/);
+  assert.doesNotMatch(preview, /demo-project|20261030|item-1|req-1|worker-|unknown|未知|未验证|2026-/);
+  assert.match(html, /Linked requirement/);
+  assert.match(html, /没有可确认的操作结果/);
+  assert.match(html, /<details class="work-card-technical-detail"><summary>技术与来源信息/);
+  assert.match(html, /来源 Session/);
+  assert.match(html, /data-work-card-snapshot-detail/);
 });

@@ -8,8 +8,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-DEFAULT_TURN_WALL_SEC = 900.0
-DEFAULT_STALL_WATCHDOG_SEC = 0.0
+DEFAULT_TURN_WALL_SEC = 0.0
+DEFAULT_STALL_WATCHDOG_SEC = 900.0
 DEFAULT_WRITE_INLINE_MAX_CHARS = 8192
 DEFAULT_AUTO_DEMO_ON_WRITE_EVOLVE = True
 DEFAULT_CHECKER_AUTO_ON_SCAFFOLD = False
@@ -71,10 +71,11 @@ def stall_watchdog_sec() -> float:
 
 @dataclass
 class TurnWatchdog:
-    """Wall-clock + optional stall watchdog for one user turn (segment does not reset wall).
+    """Optional total-wall cap plus inactivity watchdog for one user turn.
 
-    Wall clock pauses while a tool is running (tool.start → tool.end): long installs
-    must not burn the turn budget, or users see auto-stop mid-npm-install.
+    The default has no total-wall cap. The inactivity timer measures observable
+    transport activity, not semantic task progress. Tool and confirmation waits
+    pause both clocks so long operations and human approval do not look stalled.
     """
 
     cancel_event: threading.Event
@@ -136,9 +137,14 @@ class TurnWatchdog:
                 return
             self._wall_pause_depth -= 1
             if self._wall_pause_depth == 0 and self._wall_paused_at is not None:
-                paused_for = time.monotonic() - self._wall_paused_at
+                resumed_at = time.monotonic()
+                paused_for = resumed_at - self._wall_paused_at
                 self._started_at += paused_for
-                self._last_progress_at = time.monotonic()
+                if self._last_progress_at <= self._wall_paused_at:
+                    self._last_progress_at += paused_for
+                else:
+                    # A real event during the pause is newer than the pause start.
+                    self._last_progress_at = resumed_at
                 self._wall_paused_at = None
 
     def request_user_cancel(self) -> None:
@@ -218,8 +224,8 @@ def _demo() -> int:
     watchdog.end()
     assert cancel.is_set()
     assert watchdog.resolve_finish_reason() == "timeout"
-    assert turn_wall_sec() == 900.0
-    assert stall_watchdog_sec() == 0.0
+    assert turn_wall_sec() == 0.0
+    assert stall_watchdog_sec() == 900.0
     assert write_inline_max_chars() == 8192
     assert auto_demo_on_write_evolve() is True
     assert checker_auto_on_scaffold() is False

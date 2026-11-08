@@ -96,8 +96,10 @@ def test_mixed_worker_outcomes_preserve_verified_tasks_and_mark_only_conflicts_u
     assert unknown[0]["error_code"]=="worker_outcome_identity_mismatch"
     assert unexpected_count==1
 
-@pytest.mark.parametrize("prestart_mode", ["work_record_capture", "queued_activation"])
-def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkeypatch, prestart_mode):
+@pytest.mark.parametrize(("prestart_mode", "copy_choice"), [
+    ("work_record_capture", "y"), ("queued_activation", "y"), ("work_record_capture", "n"),
+])
+def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkeypatch, prestart_mode, copy_choice):
     with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:
         project_ids = ("project-alpha", "project-beta", "project-gamma", "project-delta", "project-epsilon")
         marker_prefix = {
@@ -248,7 +250,11 @@ def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkey
             while not run_task.done():
                 pending_id = bridge._pending_confirm_id
                 if pending_id:
-                    assert bridge.deliver_confirm(pending_id, "y")
+                    pending = next(event for event in reversed(events)
+                                   if event.get("type") == "confirm.request"
+                                   and event.get("request_id") == pending_id)
+                    choice = (copy_choice if "LINKED_PROJECT_SESSION_COPY_BATCH_CONFIRM" in pending["preview"] else "y")
+                    assert bridge.deliver_confirm(pending_id, choice)
                 if asyncio.get_running_loop().time() >= deadline:
                     bridge.request_cancel()
                     raise AssertionError("Agent/WsBridge worker dispatch timed out")
@@ -287,25 +293,45 @@ def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkey
         outbound_previews = [text for text in previews if text.startswith("项目 worker 即将向 0x567 gpt-6-luna 外发")]
         write_previews = [text for text in previews if text.startswith("项目 worker 文件写入确认：")]
         item_copy_previews = [text for text in previews if "LINKED_WORK_ITEM_COPY_CONFIRM" in text]
-        project_copy_previews = [text for text in previews if "LINKED_PROJECT_SESSION_COPY_CONFIRM" in text]
-        # The original 77 execution/read/bind confirmations remain, with one
-        # separate consent for parent-persisting selected linked items and one
-        # broader source-session-copy consent per selected project (five here).
-        assert (len(source_previews), len(batch_binding_previews), len(scope_previews),
-                len(outbound_previews), len(write_previews), len(item_copy_previews),
-                len(project_copy_previews)) == (1, 1, 15, 45, 15, 1, 5)
-        assert len(confirm_events) == sum((1, 1, 15, 45, 15, 1, 5)) == 83
+        project_copy_previews = [text for text in previews
+                                 if text.startswith("LINKED_PROJECT_SESSION_COPY_BATCH_CONFIRM\n")]
+        batch_authorization_previews = [
+            text for text in previews if text.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+        ]
+        # Independent record/source and worker-execution permissions remain
+        # separate. The session-copy page is one exact all-or-none source set.
+        assert (len(source_previews), len(batch_binding_previews), len(batch_authorization_previews),
+                len(scope_previews), len(outbound_previews), len(write_previews),
+                len(item_copy_previews), len(project_copy_previews)) == (1, 1, 1, 0, 0, 0, 1, 1)
+        assert len(confirm_events) == 5
         assert all(marker in item_copy_previews[0] for marker in markers)
-        for project_id in project_ids:
-            selected_copy = [text for text in project_copy_previews if project_id in text]
-            assert len(selected_copy) == 1, f"expected one explicitly scoped project-session copy consent for {project_id}"
-            own_markers = [marker for task_project, marker in task_specs if task_project == project_id]
-            other_markers = [marker for task_project, marker in task_specs if task_project != project_id]
-            assert all(marker in selected_copy[0] for marker in own_markers)
-            assert all(marker not in selected_copy[0] for marker in other_markers), "project copy consent leaked another source project's requirements"
-            assert "并非整个项目的全部历史" in selected_copy[0]
-            assert "不保证该 Session 仍是项目当前映射" in selected_copy[0]
-            assert "不授权写来源或未来重读" in selected_copy[0]
+        batch_copy_text = project_copy_previews[0]
+        batch_copy = json.loads(batch_copy_text[batch_copy_text.index("{"):])
+        assert batch_copy["destination"] == {
+            "conversation_id": session.conversation_id,
+            "scope": "current_parent_conversation_binding_store",
+        }
+        assert batch_copy["scope"] == "authorized_source_session_only"
+        assert batch_copy_text.startswith("LINKED_PROJECT_SESSION_COPY_BATCH_CONFIRM\n")
+        assert "批准 = 仅批准此页完整列出的全部来源和内容范围" in batch_copy_text
+        assert "拒绝/取消 = 不保存其中任何新副本" in batch_copy_text
+        assert "不会授权读取或外发未列出的数据" in batch_copy_text
+        assert "写入来源项目、后续重读来源或重新执行" in batch_copy_text
+        assert "PARENT_SECRET_MUST_NOT_LEAK" not in batch_copy_text
+        source_rows = batch_copy["sources"]
+        assert {row["project_id"] for row in source_rows} == set(project_ids)
+        assert {row["source_session_id"] for row in source_rows} == set(project_source_ids.values())
+        for row in source_rows:
+            own_markers = {marker for task_project, marker in task_specs if task_project == row["project_id"]}
+            other_markers = set(markers) - own_markers
+            content = json.dumps(row["snapshot"], ensure_ascii=False)
+            assert own_markers <= {marker for marker in markers if marker in content}
+            assert not (other_markers & {marker for marker in markers if marker in content}), (
+                "a source section included another project's task data"
+            )
+            assert row["snapshot"]["project_id"] == row["project_id"]
+            assert row["snapshot"]["source_session_id"] == row["source_session_id"]
+            assert row["snapshot"]["scope"] == "authorized_source_session_only"
         request_ids = [event["request_id"] for event in confirm_events]
         assert len(set(request_ids)) == len(request_ids)
         active_run = next(event["run_id"] for event in events
@@ -318,13 +344,21 @@ def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkey
                    for project_id, source_id in project_source_ids.items())
         assert len(batch_binding_previews) == 1
         assert all(marker in batch_binding_previews[0] for marker in markers)
-        scope_previews = [text.split("\n", 1)[1] for text in scope_previews]
-        outbound_previews = [text.split("\n", 1)[1] for text in outbound_previews]
-        assert len(scope_previews) == 15 and len(outbound_previews) == 45 and len(write_previews) == 15
-        assert all((doc := json.loads(text))["run_id"] == run_snapshot["run_id"]
-                   and doc["turn_epoch"] == run_snapshot["sequence"] for text in scope_previews)
-        assert all((doc := json.loads(text))["scope"]["run_id"] == run_snapshot["run_id"]
-                   and doc["scope"]["turn_epoch"] == run_snapshot["sequence"] for text in outbound_previews)
+        binding_payload = json.loads(batch_binding_previews[0][batch_binding_previews[0].index("{"):])
+        assert all(row["read_targets"] == ["README.md"]
+                   and row["write_targets"] == ["PROJECT.md"]
+                   for row in binding_payload["tasks"])
+        assert all(row["requirement_text"] == row["task_input"]
+                   for row in binding_payload["tasks"])
+        auth_payload = json.loads(batch_authorization_previews[0].split("\n", 1)[1])
+        assert auth_payload["schema_version"] == 1
+        assert auth_payload["purpose"] == "project_worker_batch_authorization"
+        assert auth_payload["authorization"]["scope"] == "per_project_per_worker_only"
+        assert len(auth_payload["projects"]) == len(workers) == 15
+        assert {row["project_id"] for row in auth_payload["projects"]} == set(project_ids)
+        assert all(row["read_targets"] == ["README.md"]
+                   and row["write_targets"] == ["PROJECT.md"] for row in auth_payload["projects"])
+        assert auth_payload["not_disclosed"] == ["parent_conversation", "memory", "unlisted_project_data"]
         assert repl.agent._project_worker_live_binding is None
         assert repl.agent.project_worker_host._reservations == {}
         assert repl.agent.project_worker_host._reservations_by_parent == {}
@@ -352,6 +386,11 @@ def test_agent_run_line_dispatches_five_project_tasks_with_two_active_cap(monkey
                    for row in result_data["workers"] for attempt in row["read_attempts"])
         binding_rows = ConversationWorkRecordBindings(session).list_bindings()
         assert len(binding_rows) == 15
+        copied_rows = [row for row in binding_rows if "project_session_copy" in row]
+        assert len(copied_rows) == (len(project_ids) if copy_choice == "y" else 0)
+        assert {row["project_session_copy"]["snapshot"]["project_id"] for row in copied_rows} == (
+            set(project_ids) if copy_choice == "y" else set()
+        )
         assert {(row["project_id"], row["task_input"], row["source_session_id"]) for row in binding_rows} == {
             (project_id, f"Write result marker {marker}.", project_source_ids[project_id])
             for project_id, marker in task_specs
@@ -552,13 +591,28 @@ def test_user_can_explicitly_run_unlinked_when_no_existing_record_is_available(m
 
         asyncio.run(run_and_choose_unlinked())
         confirms = [event["preview"] for event in events if event.get("type") == "confirm.request"]
-        assert len(confirms) == 7
+        assert len(confirms) == 4
         assert sum("WORK_RECORD_SOURCE_READ_CONFIRM" in text for text in confirms) == 1
         assert sum("CURRENT_DIALOGUE_WORK_RECORD_BATCH_CONFIRM" in text for text in confirms) == 1
         assert sum("PROJECT_WORKER_UNLINKED_EXECUTION_CONFIRM" in text for text in confirms) == 1
-        assert sum(text.startswith("项目 worker 范围确认：") for text in confirms) == 1
-        assert sum(text.startswith("项目 worker 即将向 0x567 gpt-6-luna 外发") for text in confirms) == 2
-        assert sum(text.startswith("项目 worker 文件写入确认：") for text in confirms) == 1
+        batch_authorization = [
+            text for text in confirms if text.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+        ]
+        assert len(batch_authorization) == 1
+        assert not any(text.startswith(("项目 worker 范围确认：",
+                                       "项目 worker 即将向 0x567 gpt-6-luna 外发",
+                                       "项目 worker 文件写入确认：")) for text in confirms)
+        authorization_payload = json.loads(batch_authorization[0].split("\n", 1)[1])
+        assert authorization_payload["authorization"]["scope"] == "per_project_per_worker_only"
+        assert len(authorization_payload["projects"]) == 1
+        authorized_project = authorization_payload["projects"][0]
+        assert authorized_project["project_id"] == "project-alpha"
+        assert isinstance(authorized_project["task_id"], str) and authorized_project["task_id"]
+        assert authorized_project["task"] == "Update the existing project file."
+        assert authorized_project["project_root"] == "workspace/project-alpha"
+        assert authorized_project["read_targets"] == ["README.md"]
+        assert authorized_project["write_targets"] == ["PROJECT.md"]
+        assert "only to write_targets" in authorized_project["generated_content_write"]
         assert calls == 2
         assert (paths.workspace / "project-alpha" / "PROJECT.md").read_text(encoding="utf-8") == "Unlinked work completed."
         assert WorkRecordStore(project_session).list_items() == []
@@ -1282,6 +1336,112 @@ def test_current_dialogue_record_creation_stops_between_atomic_writes_on_cancel(
     items = WorkRecordStore(session).list_items()
     assert len(items) == 1
     assert [row["text"] for row in items[0]["requirements"]] == ["Original multi-project request."]
+
+
+
+
+@pytest.mark.parametrize("authorization_choice", ["n", "timeout"])
+def test_batch_authorization_rejection_or_timeout_never_dispatches_worker(monkeypatch, authorization_choice):
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:
+        create_project(paths, "project-alpha", project_template="light")
+        session = create_new(paths, conversation_id="20261106-00000032")
+        session.meta.turn_mode = "agent"
+        session.meta.harness = "desktop"
+        session.meta.active_shell = "project"
+        session.meta.project_id = "project-alpha"
+        session.meta.project_root = "workspace/project-alpha"
+        session._ordinary_work_intent = "execute"
+        session.messages.append({"role": "user", "content": "Update PROJECT.md in project-alpha."})
+        events = []
+        bridge = WsBridge(emit=events.append, paths=paths, confirm_timeout=3)
+        repl = _build_repl(session, paths, bridge, work_record_controller_factory=lambda *_: None)
+        host = repl.agent.project_worker_host
+        host.run_many = lambda *_args, **_kwargs: pytest.fail("worker dispatch must not occur")
+        repl.agent.executor.confirm_fn = lambda *_args: "y"  # only record/source gates; not batch permission
+        repl.agent.bind_project_worker_live_context(
+            "parent-run-denied", 5,
+            lambda candidate, run_id, epoch: (
+                candidate is session and run_id == "parent-run-denied" and epoch == 5
+            ),
+        )
+        auth_previews = []
+        repl.agent.task_authorization_confirm_fn = lambda preview: auth_previews.append(preview) or authorization_choice
+        before_file = (paths.workspace / "project-alpha" / "PROJECT.md").read_bytes()
+
+        result = repl.agent._dispatch_project_workers_tool({"workers": [{
+            "project_id": "project-alpha", "task": "Update project documentation.",
+            "read_targets": ["README.md"], "write_targets": ["PROJECT.md"],
+        }]})
+
+        assert result.ok is False
+        assert len(auth_previews) == 1
+        assert auth_previews[0].startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+        assert len(host._reservations) == 1  # reserved, but no worker run was started
+        assert (paths.workspace / "project-alpha" / "PROJECT.md").read_bytes() == before_file
+        assert not any(event.get("type") == "activity.update"
+                       and event.get("activity_source") == "project_workers" for event in events)
+        host.release_parent_run(
+            conversation_id=session.conversation_id, parent_run_id="parent-run-denied", turn_epoch=5,
+        )
+
+
+def test_batch_authorization_cleanup_is_safe_when_dispatch_setup_raises_early(monkeypatch):
+    import builtins
+
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:
+        create_project(paths, "project-alpha", project_template="light")
+        session = create_new(paths, conversation_id="20261106-00000031")
+        session.meta.turn_mode = "agent"
+        session.meta.harness = "desktop"
+        session.meta.active_shell = "project"
+        session.meta.project_id = "project-alpha"
+        session.meta.project_root = "workspace/project-alpha"
+        session._ordinary_work_intent = "execute"
+        events = []
+        bridge = WsBridge(emit=events.append, paths=paths, confirm_timeout=3)
+        repl = _build_repl(session, paths, bridge, work_record_controller_factory=lambda *_: None)
+        repl.agent.llm = _ParentModel([{
+            "project_id": "project-alpha", "task": "Update project file.",
+            "read_targets": [], "write_targets": ["PROJECT.md"],
+        }])
+        original_import = builtins.__import__
+
+        def fail_preflight_import(name, *args, **kwargs):
+            if name == "worker_preflight_notice":
+                raise RuntimeError("injected early dispatch setup failure")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fail_preflight_import)
+        queued = bridge.lifecycle.enqueue("ordinary")
+        bridge.lifecycle_conversation_id = session.conversation_id
+        bridge._turn_busy.set()
+
+        async def run_and_confirm():
+            turn = asyncio.create_task(_run_line(
+                repl, bridge, "Update project-alpha PROJECT.md.", paths,
+                lock_held=True, prestarted_run_id=queued.run_id,
+            ))
+            deadline = asyncio.get_running_loop().time() + 8
+            while not turn.done():
+                pending_id = bridge._pending_confirm_id
+                if pending_id:
+                    assert bridge.deliver_confirm(pending_id, "y")
+                if asyncio.get_running_loop().time() >= deadline:
+                    bridge.request_cancel()
+                    raise AssertionError("early dispatch error path did not settle")
+                await asyncio.sleep(0.005)
+            await turn
+
+        asyncio.run(run_and_confirm())
+        tool_results = [json.loads(message["content"]) for message in session.messages
+                        if message.get("role") == "tool"]
+        result = next(item for item in tool_results if item.get("tool") == "run_project_workers")
+        assert result["ok"] is False
+        assert "worker_dispatch_failed" in result["error"]["code"]
+        assert "UnboundLocalError" not in result["error"]["message"]
+        assert not any(event.get("type") == "confirm.request"
+                       and event.get("preview", "").startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+                       for event in events)
 
 
 def test_agent_worker_batch_schema_and_runtime_follow_host_limit(monkeypatch):

@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from paths import AgentPaths
 from tests.isolation_helpers import _build_temp_root, _cleanup_temp_root
 
 
@@ -21,13 +20,39 @@ class IsolationHelperCleanupTests(unittest.TestCase):
         self.source_core.mkdir()
         self.sentinel = self.source_core / "user-data-sentinel.txt"
         self.sentinel.write_text("must remain untouched", encoding="utf-8")
-        self.discover = patch(
-            "tests.isolation_helpers.AgentPaths.discover",
-            return_value=AgentPaths.from_root(self.fixture),
-        )
-        self.discover.start()
-        self.addCleanup(self.discover.stop)
+        self.code_root = patch("tests.isolation_helpers._CODE_ROOT", self.fixture)
+        self.code_root.start()
+        self.addCleanup(self.code_root.stop)
         self.addCleanup(self.temp.cleanup)
+
+    def test_build_uses_explicit_code_root_without_discovery_or_data_access(self) -> None:
+        forbidden_data = self.fixture / "data"
+        original_is_file = Path.is_file
+        original_open = Path.open
+
+        def reject_data_path(path: Path) -> None:
+            try:
+                path.absolute().relative_to(forbidden_data.absolute())
+            except ValueError:
+                return
+            self.fail("helper attempted filesystem access under the code root data directory")
+
+        def guarded_is_file(path: Path) -> bool:
+            reject_data_path(path)
+            return original_is_file(path)
+
+        def guarded_open(path: Path, *args, **kwargs):
+            reject_data_path(path)
+            return original_open(path, *args, **kwargs)
+
+        with (
+            patch("tests.isolation_helpers.AgentPaths.discover", side_effect=AssertionError("discovery forbidden")),
+            patch.object(Path, "is_file", guarded_is_file),
+            patch.object(Path, "open", guarded_open),
+        ):
+            root = _build_temp_root()
+        self.addCleanup(_cleanup_temp_root, root)
+        self.assertEqual((root / "agent-core").resolve(), self.source_core.resolve())
 
     def test_cleanup_removes_only_registered_helper_root_and_preserves_core_target(self) -> None:
         root = _build_temp_root()

@@ -45,12 +45,16 @@ class ProjectWorkerExecutionTests(unittest.TestCase):
                 write_targets=("result.txt",), executor=executor,
                 host_binding_check=lambda: True,
             )
-            result = run_project_worker(
-                spec, lambda worker: worker.run(
-                    "write_text", {"path": "result.txt", "content": "real write\n"}
-                ),
-            )
+            with self.assertLogs("my_agent.sidecar", level="INFO") as captured:
+                result = run_project_worker(
+                    spec, lambda worker: worker.run(
+                        "write_text", {"path": "result.txt", "content": "real write\n"}
+                    ),
+                )
             self.assertTrue(result.ok, result.error)
+            timing = [row for row in captured.output if "event=project_worker_timing" in row]
+            self.assertTrue(any("phase=lease_wait" in row and "duration_ms=" in row for row in timing))
+            self.assertTrue(all("result.txt" not in row and "chat-1" not in row for row in timing))
             self.assertEqual((root / "result.txt").read_text(encoding="utf-8"), "real write\n")
 
     def test_worker_cannot_write_undeclared_or_cross_root_target(self):

@@ -42,7 +42,7 @@ from evolve import (
     maybe_soft_deposit_after_compact,
     run_explicit_checkpoint,
 )
-from loader import log_session_start, log_topics_confirmed
+from loader import log_session_start
 from tools.logging import EvolveLog, read_events
 from llm_client import (
     LLMCancelledError,
@@ -54,20 +54,8 @@ from llm_client import (
 from paths import AgentPaths
 from router import (
     ParsedRegisterTopicCommand,
-    ParsedTopicCommand,
-    TopicCommandKind,
-    TopicProposal,
-    TopicRoutingError,
-    apply_topic_command,
-    apply_topic_confirmation,
-    build_topic_confirm_prompt,
-    format_proposal_banner,
     parse_register_topic_command,
-    parse_topic_command,
-    registered_topic_ids,
-    resolve_topic_confirmation,
     run_register_topic_flow,
-    run_topic_routing_s2,
 )
 from session import (
     GOAL_PROMPT,
@@ -302,7 +290,7 @@ class ConversationRepl:
         self._log_session_start()
         self._print_session_banner()
         self.output_fn(
-            "Commands: 新会话 | 只聊 | 动手 | 主题 … | 加主题 … | 注册主题 … | 换主题 | 项目 … | 托管目录 … | 压缩 | 探索 … | 验收 … | check … | proposals | exit [--record]"
+            "Commands: 新会话 | 只聊 | 动手 | 注册主题 … | 项目 … | 托管目录 … | 压缩 | 探索 … | 验收 … | check … | proposals | exit [--record]"
         )
 
         while not self._stop:
@@ -430,11 +418,6 @@ class ConversationRepl:
                 self._print_session_banner()
             return "continue"
 
-        topic_cmd = parse_topic_command(stripped)
-        if topic_cmd is not None:
-            self._handle_topic_command(topic_cmd)
-            return "continue"
-
         try:
             result = self.agent.run_turn(stripped)
             self.last_turn_finish_reason = result.finish_reason
@@ -543,54 +526,6 @@ class ConversationRepl:
         )
         if registered:
             self._rebind_agent()
-
-    def _handle_topic_command(self, command: ParsedTopicCommand) -> None:
-        if command.kind == TopicCommandKind.RE_ROUTE:
-            self._run_topic_flow(mode="replace", header="换主题")
-            self._rebind_agent()
-            return
-
-        try:
-            apply_topic_command(self.session, command)
-        except TopicRoutingError as exc:
-            self.output_fn(f"error: {exc}")
-            return
-
-        self._log_topics_confirmed()
-        self._rebind_agent()
-        topics = ", ".join(self.session.meta.topics) or "(none)"
-        self.output_fn(f"topics updated: {topics} | model: {self.session.meta.llm_model}")
-
-    def _run_topic_flow(self, *, mode: Literal["replace", "append"], header: str) -> None:
-        try:
-            proposal = run_topic_routing_s2(self.session)
-        except LLMMissingApiKeyError:
-            proposal = TopicProposal(topics=(), reason="LLM_API_KEY not set")
-        except LLMError as exc:
-            self.output_fn(f"topic routing failed: {exc}")
-            proposal = TopicProposal(topics=(), reason="routing error")
-
-        self.output_fn(format_proposal_banner(proposal, header=header))
-
-        answer = self._prompt_line(build_topic_confirm_prompt(proposal))
-        confirmation = resolve_topic_confirmation(
-            answer,
-            proposal,
-            valid_topic_ids=registered_topic_ids(self.paths),
-        )
-        if confirmation.action in {"reject", "empty"} or not confirmation.topics:
-            self.output_fn("主题未变更。")
-            return
-
-        try:
-            apply_topic_confirmation(self.session, confirmation, mode=mode)
-        except TopicRoutingError as exc:
-            self.output_fn(f"error: {exc}")
-            return
-
-        self._log_topics_confirmed()
-        topics = ", ".join(self.session.meta.topics)
-        self.output_fn(f"已确认主题: {topics} | model: {self.session.meta.llm_model}")
 
     def _prompt_line(self, prompt: str) -> str:
         try:
@@ -916,11 +851,10 @@ class ConversationRepl:
         self.agent.on_turn_event = on_turn_event
 
     def _print_session_banner(self) -> None:
-        topics = ", ".join(self.session.meta.topics) if self.session.meta.topics else "(none)"
         goal = self.session.goal.strip() or "(unset)"
         self.output_fn(
             f"--- session {self.session.conversation_id} | goal: {goal} | "
-            f"topics: {topics} | mode: {self.session.meta.turn_mode} | "
+            f"mode: {self.session.meta.turn_mode} | "
             f"effort: {self.session.meta.reasoning_effort} ---"
         )
         self._print_corruption_notices()
@@ -936,10 +870,6 @@ class ConversationRepl:
 
     def _log_session_start(self) -> None:
         log_session_start(self.session)
-
-    def _log_topics_confirmed(self) -> None:
-        registry = self.agent.executor.registry if self.agent is not None else None
-        log_topics_confirmed(self.session, registry=registry)
 
     def _log_session_end(self, *, record_mode: RecordMode) -> None:
         EvolveLog.for_agent(self.paths).log_session_end(
@@ -1230,7 +1160,7 @@ def _demo() -> int:
         [
             "grep source directory",  # chat
             "压缩",  # manual compact
-            "主题 workflow",  # shortcut
+            "继续处理当前目标",  # ordinary conversation
             "exit --record",
         ]
     )
@@ -1245,10 +1175,11 @@ def _demo() -> int:
     assert code == 0
     assert any("agent-core/ is listed in MAP" in line for line in outputs)
     assert any("已压缩" in line for line in outputs)
-    assert any("topics updated" in line for line in outputs)
+    assert any(line.startswith("--- session ") and "topics:" not in line for line in outputs)
+    assert any("Commands:" in line and "主题 …" not in line and "换主题" not in line for line in outputs)
     assert any("archived:" in line for line in outputs)
     assert chat_session.digest_path.is_file()
-    print("[PASS] scripted REPL: chat, 压缩, 主题, exit --record")
+    print("[PASS] scripted REPL: chat, 压缩, exit --record; session metadata hidden")
 
     new_inputs = iter(["unused"])
     new_outputs: list[str] = []
@@ -1267,56 +1198,8 @@ def _demo() -> int:
     assert new_repl.session.meta.topics == []
     assert new_repl.session.meta.phase == "S4"
     assert not any(GOAL_PROMPT in line for line in new_outputs)
-    assert not any("已确认主题" in line for line in new_outputs)
+    assert not any("topics:" in line or "已确认主题" in line for line in new_outputs)
     print("[PASS] 新会话: 直接开聊 (no goal/S2)")
-
-    import sys
-
-    mod = sys.modules[__name__]
-    original_s2 = mod.run_topic_routing_s2
-
-    def fake_s2(session, client=None, paths=None):
-        return TopicProposal(topics=("coding", "workflow"), reason="demo")
-
-    reject_inputs = iter(["n"])
-    reject_session = create_new(paths, conversation_id="_repl_reject")
-    reject_outputs: list[str] = []
-    reject_repl = ConversationRepl.from_session(
-        reject_session,
-        paths=paths,
-        input_fn=lambda p: next(reject_inputs),
-        output_fn=lambda t: reject_outputs.append(t),
-    )
-    reject_repl.session.set_goal("test")
-    reject_repl.session.set_topics(["writing"], phase="S4")
-    reject_repl.session.save()
-    mod.run_topic_routing_s2 = fake_s2
-    try:
-        reject_repl._run_topic_flow(mode="replace", header="换主题")
-        assert reject_repl.session.meta.topics == ["writing"]
-        assert any("主题未变更" in line for line in reject_outputs)
-        print("[PASS] T-304: user can reject topic proposal (n)")
-    finally:
-        mod.run_topic_routing_s2 = original_s2
-
-    override_inputs = iter(["writing"])
-    override_session = create_new(paths, conversation_id="_repl_override")
-    override_outputs: list[str] = []
-    override_repl = ConversationRepl.from_session(
-        override_session,
-        paths=paths,
-        input_fn=lambda p: next(override_inputs),
-        output_fn=lambda t: override_outputs.append(t),
-    )
-    override_repl.session.set_goal("test override")
-    mod.run_topic_routing_s2 = fake_s2
-    try:
-        override_repl._run_topic_flow(mode="replace", header="新会话")
-        assert override_repl.session.meta.topics == ["writing"]
-        assert any("已确认主题: writing" in line for line in override_outputs)
-        print("[PASS] T-304: user can override proposal with manual ids")
-    finally:
-        mod.run_topic_routing_s2 = original_s2
 
     goal_inputs = iter([])
     goal_outputs: list[str] = []

@@ -621,6 +621,20 @@ def is_explicit_image_generation_request(user_text: str) -> bool:
     return False
 
 
+_SCOPED_READ_ONLY_FILE_RE = re.compile(
+    r"只读(?:\s*自身(?:的)?\s*|\s+)(?:`[^`]+\.[A-Za-z0-9]{1,8}`|[A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]{1,8})",
+    re.IGNORECASE,
+)
+_AFFIRMATIVE_WRITE_INTENT_RE = re.compile(
+    r"(?:只写|写入|修改|改成|改一下|修复|创建|更新|write|modify|implement|fix|create|update)"
+    r"\s*[^。！？?!\n]{1,100}(?:$|[。！？?!])",
+    re.IGNORECASE,
+)
+_NEGATED_WRITE_INTENT_RE = re.compile(
+    r"(?:不要|不|别|不需要|无需|禁止|不能|不可|勿|do not|don't|never)"
+    r"\s*[^。！？?!；;\n]{0,16}?(?:只)?(?:写|写入|修改|改成|改一下|修复|创建|更新|delete|write|modify|fix|create|update)",
+    re.IGNORECASE,
+)
 _ORDINARY_READ_ONLY_MARKERS = (
     "只查看",
     "只读",
@@ -653,9 +667,25 @@ def _has_explicit_ordinary_plan_only(text: str) -> bool:
 
 def _has_explicit_ordinary_read_only(text: str) -> bool:
     folded = text.casefold()
+    for marker in _ORDINARY_READ_ONLY_MARKERS:
+        if marker.casefold() not in folded:
+            continue
+        if marker == "只读":
+            matches = list(re.finditer(re.escape(marker), text, flags=re.IGNORECASE))
+            all_file_scoped = bool(matches) and all(
+                _SCOPED_READ_ONLY_FILE_RE.match(text, match.start()) for match in matches
+            )
+            if all_file_scoped:
+                scoped_write_exception = (
+                    not _NEGATED_WRITE_INTENT_RE.search(text)
+                    and bool(_AFFIRMATIVE_WRITE_INTENT_RE.search(text))
+                    and _has_explicit_ordinary_execute(text, folded)
+                )
+                if scoped_write_exception:
+                    continue
+        return True
     return (
-        any(marker.casefold() in folded for marker in _ORDINARY_READ_ONLY_MARKERS)
-        or (_is_explanation_request(folded)
+        (_is_explanation_request(folded)
          and not (_has_explicit_execution_request(text, folded) or has_action_intent(text)))
         or _negated_english_execution_only(text)
     )
@@ -840,10 +870,48 @@ def project_explore_autospawn_disabled(
     return False
 
 
+def _is_self_contained_explicit_worker_batch_dispatch(user_text: str) -> bool:
+    """Skip implicit explore only when the user supplied a concrete worker batch."""
+    body = user_text_without_attachment_block(user_text)
+    if not re.search(r"\brun_project_workers\b", body, re.IGNORECASE):
+        return False
+    dispatch_near_tool = re.search(
+        r"(?:调用|执行|运行|启动|提交|dispatch|call).{0,24}\brun_project_workers\b"
+        r"|\brun_project_workers\b.{0,24}(?:调用|执行|运行|启动|提交|dispatch|call)",
+        body,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not dispatch_near_tool:
+        return False
+
+    # Require at least two concrete project/task identifiers plus task-level
+    # language. A bare tool mention or underspecified batch still gets explore.
+    identifiers = set(re.findall(
+        r"\bproject[-_][a-z0-9][a-z0-9_-]*\b"
+        r"|\b[a-z0-9][a-z0-9_-]*[-_]project\b"
+        r"|\b(?:[a-z0-9]+-)?batch-\d{4,}-[a-z0-9][a-z0-9_-]*\b"
+        r"|项目\s*[A-Za-z0-9_-]+",
+        body,
+        re.IGNORECASE,
+    ))
+    if len(identifiers) < 2 or not re.search(r"任务|tasks?|workers?", body, re.IGNORECASE):
+        return False
+
+    task_actions = re.findall(
+        r"实现|处理|修改|检查|读取|验证|创建|更新|完成|修复|分析|整理|测试|改造|补充"
+        r"|implement|inspect|read|verify|create|update|fix|analy[sz]e|test",
+        body,
+        re.IGNORECASE,
+    )
+    return len(task_actions) >= 2
+
+
 def should_spawn_explore(user_text: str, *, explicit: bool = False) -> bool:
     """Whether kernel runs explore subagent before parent loop (ORCHESTRATION §4.2, §8)."""
     if explicit:
         return True
+    if _is_self_contained_explicit_worker_batch_dispatch(user_text):
+        return False
     if not auto_explore_enabled():
         return False
     intent = classify_turn(user_text)

@@ -51,6 +51,65 @@ export type ConfirmPreviewView = {
   compact: boolean;
 };
 
+const PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX = "PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n";
+const PROJECT_WORKER_AUTHORIZATION_PROVIDER = "0x567";
+const PROJECT_WORKER_AUTHORIZATION_HOST = "api-cdn.0x567.com";
+const PROJECT_WORKER_DISCLOSED_CATEGORIES = ["listed_worker_tasks", "worker_system_and_developer_instructions", "contents_of_listed_read_targets_only", "worker_multi_turn_model_and_tool_exchange_with_named_endpoint", "model_generated_content_for_listed_write_targets"] as const;
+const PROJECT_WORKER_NOT_DISCLOSED = ["parent_conversation", "memory", "unlisted_project_data"] as const;
+const PROJECT_WORKER_GENERATED_WRITE = "Model-generated content may be written only to write_targets through ToolExecutor/write_policy and existing lease/source-snapshot/readback checks.";
+const PROJECT_WORKER_CANCEL_EFFECT = "blocks_future_posts_and_write_starts; cannot recall already-sent request or undo an already-started write";
+type ProjectWorkerBatchAuthorization = {
+  endpoint: { provider: string; model_id: string; model: string; url: string };
+  expiresInSeconds: number;
+  projects: Array<{ project_id: string; task_id: string; task: string; project_root: string; read_targets: string[]; write_targets: string[]; generated_content_write: string }>
+};
+const exactKeys = (value: Record<string, unknown>, expected: string[]) => Object.keys(value).length === expected.length && expected.every(key => Object.hasOwn(value, key));
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const isTrimmedText = (value: unknown): value is string => typeof value === "string" && !!value.trim() && value === value.trim();
+function exactStringList(value: unknown, expected: readonly string[]): boolean { return Array.isArray(value) && value.length === expected.length && expected.every((item, index) => value[index] === item); }
+function isSafeProjectTarget(value: unknown): value is string {
+  return typeof value === "string" && !!value && value === value.trim() && !value.includes("\\") && !value.startsWith("/") && !/^[A-Za-z]:/.test(value) && value.split("/").every(part => !!part && part !== "." && part !== "..");
+}
+function parseProjectWorkerBatchAuthorization(preview: string): ProjectWorkerBatchAuthorization | null {
+  if (!preview.startsWith(PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX) || new TextEncoder().encode(preview).byteLength > 4 * 1024 * 1024) return null;
+  try {
+    const value: unknown = JSON.parse(preview.slice(PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX.length));
+    if (!isRecord(value) || !exactKeys(value, ["schema_version", "purpose", "endpoint", "projects", "disclosed_data_categories", "not_disclosed", "authorization"]) || value.schema_version !== 1 || value.purpose !== "project_worker_batch_authorization") return null;
+    const endpoint = value.endpoint;
+    if (!isRecord(endpoint) || !exactKeys(endpoint, ["provider", "model_id", "model", "url"])
+        || endpoint.provider !== PROJECT_WORKER_AUTHORIZATION_PROVIDER || !isTrimmedText(endpoint.model_id)
+        || !isTrimmedText(endpoint.model) || !isTrimmedText(endpoint.url)) return null;
+    const endpointUrl = new URL(endpoint.url);
+    if (endpointUrl.protocol !== "https:" || endpointUrl.hostname.toLowerCase() !== PROJECT_WORKER_AUTHORIZATION_HOST
+        || endpointUrl.username || endpointUrl.password || endpointUrl.search || endpointUrl.hash
+        || !endpointUrl.pathname.endsWith("/chat/completions")) return null;
+    if (!Array.isArray(value.projects) || value.projects.length < 1 || value.projects.length > 32) return null;
+    const projects: ProjectWorkerBatchAuthorization["projects"] = [];
+    const seenTasks = new Set<string>();
+    for (const project of value.projects) {
+      if (!isRecord(project) || !exactKeys(project, ["project_id", "task_id", "task", "project_root", "read_targets", "write_targets", "generated_content_write"]) || !isTrimmedText(project.project_id) || !/^[A-Za-z0-9_-]+$/.test(project.project_id) || !isTrimmedText(project.task_id) || !isTrimmedText(project.task) || project.project_root !== "workspace/" + project.project_id || project.generated_content_write !== PROJECT_WORKER_GENERATED_WRITE || !Array.isArray(project.read_targets) || !Array.isArray(project.write_targets) || !project.write_targets.length || !project.read_targets.every(isSafeProjectTarget) || !project.write_targets.every(isSafeProjectTarget) || new Set(project.read_targets).size !== project.read_targets.length || new Set(project.write_targets).size !== project.write_targets.length || seenTasks.has(project.task_id)) return null;
+      seenTasks.add(project.task_id);
+      projects.push(project as ProjectWorkerBatchAuthorization["projects"][number]);
+    }
+    const authorization = value.authorization;
+    if (!exactStringList(value.disclosed_data_categories, PROJECT_WORKER_DISCLOSED_CATEGORIES) || !exactStringList(value.not_disclosed, PROJECT_WORKER_NOT_DISCLOSED) || !isRecord(authorization) || !exactKeys(authorization, ["scope", "expires_in_seconds", "requests_per_worker", "effects_on_cancel"]) || authorization.scope !== "per_project_per_worker_only" || typeof authorization.expires_in_seconds !== "number" || !Number.isInteger(authorization.expires_in_seconds) || authorization.expires_in_seconds < 1 || authorization.expires_in_seconds > 3600 || authorization.requests_per_worker !== "bounded_by_existing_worker_request_limit" || authorization.effects_on_cancel !== PROJECT_WORKER_CANCEL_EFFECT) return null;
+    return { endpoint: endpoint as ProjectWorkerBatchAuthorization["endpoint"], expiresInSeconds: authorization.expires_in_seconds as number, projects };
+  } catch { return null; }
+}
+export function isProjectWorkerBatchAuthorizationPreview(preview: string): boolean { return preview.startsWith(PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX); }
+function disableBatchApprovalButtons(actionsHtml: string): string {
+  return actionsHtml.replace(/<button\b([^>]*\bdata-confirm="(?:y|a)"[^>]*)>/g, (_match, attributes: string) => /\sdisabled(?:\s|$)/.test(attributes) ? "<button" + attributes + ">" : "<button" + attributes + " disabled>");
+}
+export function renderProjectWorkerBatchAuthorizationHtml(preview: string): string {
+  const authorization = parseProjectWorkerBatchAuthorization(preview);
+  if (!authorization) return "<section class=\"unified-project-worker-batch-auth is-invalid\" role=\"alert\" aria-label=\"集中授权无法核对\"><strong>授权字段、版本或模型接收方无法核对，暂不可批准；请拒绝。</strong><div class=\"unified-project-worker-batch-auth-scroll\"><pre>" + escapeHtml(preview) + "</pre></div></section>";
+  const projects = authorization.projects.map((project, index) => "<section class=\"unified-project-worker-auth-project\" aria-label=\"项目任务 " + (index + 1) + "\"><h3>项目 " + (index + 1) + "：" + escapeHtml(project.project_id) + "</h3><dl><dt>任务</dt><dd>" + escapeHtml(project.task) + "</dd><dt>任务 ID</dt><dd><code>" + escapeHtml(project.task_id) + "</code></dd><dt>项目根</dt><dd><code>" + escapeHtml(project.project_root) + "</code></dd><dt>读取目标</dt><dd>" + (project.read_targets.length ? "<ul>" + project.read_targets.map(path => "<li><code>" + escapeHtml(path) + "</code></li>").join("") + "</ul>" : "无") + "</dd><dt>写入目标</dt><dd><ul>" + project.write_targets.map(path => "<li><code>" + escapeHtml(path) + "</code></li>").join("") + "</ul></dd><dt>模型生成内容写入</dt><dd><strong>模型生成内容仅会写入该项目本任务列出的写入目标。</strong><br>" + escapeHtml(project.generated_content_write) + "</dd></dl></section>").join("");
+  const categoryLabels: Record<string, string> = { listed_worker_tasks: "每个 worker 的任务说明", worker_system_and_developer_instructions: "worker 系统与开发指令", contents_of_listed_read_targets_only: "逐项列明的读取目标文件内容", worker_multi_turn_model_and_tool_exchange_with_named_endpoint: "worker 与指定模型端点之间的多轮模型及工具往返", model_generated_content_for_listed_write_targets: "面向列明写入目标的模型生成内容" };
+  const disclosures = PROJECT_WORKER_DISCLOSED_CATEGORIES.map(category => "<li><strong>" + escapeHtml(categoryLabels[category] || category) + "</strong> <code>" + escapeHtml(category) + "</code></li>").join("");
+  const exclusions = PROJECT_WORKER_NOT_DISCLOSED.map(category => "<li><code>" + escapeHtml(category) + "</code></li>").join("");
+  return "<section class=\"unified-project-worker-batch-auth\" data-project-worker-batch-authorization role=\"region\" aria-label=\"项目 worker 集中授权完整披露\"><p>一次确认仅在本次任务运行期内授权以下各 worker；授权按项目和 worker 分别限定，不跨项目共享范围。原工作记录授权仍可能需要单独确认，本次不合并或扩大记录权限。</p>" + projects + "<h3>模型接收方</h3><p><strong>" + escapeHtml(authorization.endpoint.provider) + "</strong> · model_id " + escapeHtml(authorization.endpoint.model_id) + " · " + escapeHtml(authorization.endpoint.model) + " · <code>" + escapeHtml(authorization.endpoint.url) + "</code></p><h3>发送/处理的数据类别</h3><ul>" + disclosures + "</ul><h3>不会提供</h3><ul>" + exclusions + "</ul><h3>授权期限与取消边界</h3><p>有效期 " + authorization.expiresInSeconds + " 秒；每个 worker 的请求次数受现有限额约束。取消会阻止后续发送和写入开始，但无法撤回已发送请求或撤销已开始的写入。</p><div class=\"unified-project-worker-auth-raw\"><h3>完整机器可读授权字段（未省略）</h3><pre>" + escapeHtml(preview) + "</pre></div></section>";
+}
+
 const CONFIRM_POLICY_LABELS: Record<string, string> = {
   "confirm:plan_domain": "计划文档（PROJECT / TASKS / ENV 等）修改前需你确认",
   "confirm:sensitive": "敏感路径写入前需你确认",
@@ -237,7 +296,9 @@ export function renderWorkCardRecallReadable(preview: string): string {
 
 /** Opening details is a UI gate, not proof that the contents were read. */
 export function isConfirmChoiceAllowed(preview: string, choice: "y" | "n" | "a", detailsOpen: boolean): boolean {
-  return choice === "n" || !isWorkCardRecallPreview(preview) || detailsOpen;
+  if (choice === "n") return true;
+  if (isProjectWorkerBatchAuthorizationPreview(preview) && !parseProjectWorkerBatchAuthorization(preview)) return false;
+  return !isWorkCardRecallPreview(preview) || detailsOpen;
 }
 
 export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
@@ -263,6 +324,16 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
   }
 
   const text = preview.trim();
+  if (isProjectWorkerBatchAuthorizationPreview(preview)) {
+    const valid = parseProjectWorkerBatchAuthorization(preview) !== null;
+    return {
+      headline: valid ? "集中授权项目 worker 执行" : "集中授权信息无法核对",
+      targetPath: "",
+      reason: valid ? "仅对下方逐项列出的项目、任务、读写路径、模型接收方及数据类别授权；不会合并跨项目权限。" : "授权字段、版本或模型接收方缺失/不匹配；为安全起见不能批准，请拒绝。",
+      detail: preview,
+      compact: true,
+    };
+  }
   if (!text) {
     return {
       headline: "待确认的工具操作",
@@ -273,6 +344,24 @@ export function summarizeConfirmPreview(preview: string): ConfirmPreviewView {
     };
   }
 
+  if (text.startsWith("CURRENT_DIALOGUE_WORK_RECORD_BATCH_CONFIRM\n")) {
+    return {
+      headline: "创建当前会话独立工作记录",
+      targetPath: "",
+      reason: "只在当前会话创建独立工作记录，保存原始请求及每个 worker 的任务和项目归属；项目归属仅作说明，不会授予文件权限，也不会修改其他项目会话。这张确认仅授权创建记录；后续 worker 的项目范围、每次外发和文件写入仍需分别确认。",
+      detail: text,
+      compact: true,
+    };
+  }
+  if (text.startsWith("PROJECT_WORKER_UNLINKED_EXECUTION_CONFIRM\n")) {
+    return {
+      headline: "授权启动项目 worker（不关联工作记录）",
+      targetPath: "",
+      reason: "批准后将按下方所列项目、任务及读写范围启动 worker；不会读取、创建或绑定工作记录，也不会记录 worker 生命周期。项目范围、每次外发和文件写入仍需分别确认。",
+      detail: text,
+      compact: true,
+    };
+  }
   const lines = text.split(/\n/).map((l) => l.trim()).filter(Boolean);
   const writeLine = lines.find((l) => l.startsWith("写入文件：") || l.startsWith("修补文件："));
   const contentLine = lines.find((l) => l.startsWith("内容："));
@@ -368,6 +457,12 @@ export function renderConfirmCardHtml(
       <span class="unified-confirm-status-text">${escapeHtml(opts.resolvedStatus)}</span>
       <span class="unified-confirm-status-hint">${escapeHtml(view.headline)}</span>
     </div>`;
+  }
+
+  if (isProjectWorkerBatchAuthorizationPreview(preview)) {
+    const valid = parseProjectWorkerBatchAuthorization(preview) !== null;
+    const actions = valid ? actionsHtml : disableBatchApprovalButtons(actionsHtml);
+    return '<div class="unified-surface unified-confirm is-compact-pending" data-project-worker-batch-confirm role="region" aria-label="项目 worker 集中授权确认"><div class="unified-confirm-kicker">需要确认</div><div class="unified-confirm-headline">' + (valid ? '集中授权项目 worker 执行' : '集中授权信息无法核对') + '</div>' + renderProjectWorkerBatchAuthorizationHtml(preview) + '<div class="unified-confirm-actions">' + actions + '</div></div>';
   }
 
   if (opts?.confirmSubtype === "project_worker_requirement_verification") {

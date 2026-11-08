@@ -4,7 +4,7 @@
 - Start with `docs/MAP.md` for existing source entry points and `docs/README.md` for topic-specific documentation. Do not load all design documents by default.
 - The repository's old `docs/TASKS.md`, Phase backlog, plan-agent/Progress Gate and runaway scheduling documents are retired. Do not reconstruct their workflows from Git history or old local handoff artifacts.
 - Goal Runtime P0 is a separate lightweight goal/budget layer; its presence is not evidence that the retired scheduler or full autonomous delivery has returned.
-- Multi-project orchestration (main agent + per-project workers) is a **proposal only**: see docs/MULTI-PROJECT-ORCHESTRATION.md. Do not treat it as implemented.
+- Multi-project worker dispatch and scoped execution exist in the current source tree; the complete multi-workspace, multi-item workbench remains unfinished and must not be treated as accepted. Use docs/MULTI-PROJECT-ORCHESTRATION.md for current implementation boundaries and verified scope.
 - Keep tests that protect current behavior, permissions, data integrity and compatibility. Old age or a failing assertion alone is not grounds for deleting a test.
 
 ## Evolution sandbox (stable edits experiment)

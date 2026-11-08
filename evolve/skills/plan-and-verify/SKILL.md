@@ -22,7 +22,7 @@ version: 1.0.0
 
 # Plan and verify
 
-This skill is advice, not a gate. Nothing here blocks writing code, and there is no task list to maintain.
+This skill is advice, not a gate. Nothing here blocks writing code, and there is no task list to maintain. If the request is read-only or plan-only, do not write code or run state-changing commands; the skill does not change that scope.
 
 1. Before a non-trivial change, say in 1–3 sentences what you will change and which files are involved. Skip this for small, obvious edits.
 2. Pick the verify command up front: the project's tests, build, lint, or a one-off script. Prefer the narrowest command that would fail if the change were wrong.

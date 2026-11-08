@@ -354,10 +354,23 @@ class SkillRegistry:
         return _parse_skill(package.descriptor.path, source_id=package.descriptor.source_id)
 
     @staticmethod
-    def _score(descriptor: SkillDescriptor, folded: str) -> int:
+    def _trigger_matches(trigger: str, folded: str) -> bool:
+        normalized = trigger.casefold()
+        if not normalized:
+            return False
+        if normalized.isascii() and len(normalized) < 4 and normalized.isalnum():
+            # Short English triggers are especially prone to substring collisions
+            # (for example, "bug" inside "debugging"). Keep CJK matching below
+            # as substring-based for compatibility with existing Skills.
+            pattern = rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])"
+            return re.search(pattern, folded) is not None
+        return normalized in folded
+
+    @classmethod
+    def _score(cls, descriptor: SkillDescriptor, folded: str) -> int:
         score = 0
         for trigger in descriptor.triggers:
-            if trigger and trigger.casefold() in folded:
+            if cls._trigger_matches(trigger, folded):
                 score += 3 if len(trigger) >= 4 else 1
         if descriptor.name.casefold() in folded:
             score += 8
@@ -373,6 +386,11 @@ class SkillRegistry:
             if score:
                 scored.append((score, package))
         scored.sort(key=lambda item: (-item[0], item[1].descriptor.name))
+        # A one-Skill automatic selection must not turn an equal score into an
+        # arbitrary name-sorted choice. Callers requesting multiple candidates
+        # retain the existing ranked-list behavior.
+        if limit == 1 and len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return ()
         return tuple(
             SkillSelection(descriptor=package.descriptor, package=package, score=score)
             for score, package in scored[:limit]

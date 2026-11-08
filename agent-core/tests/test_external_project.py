@@ -68,6 +68,27 @@ class ExternalProjectAdoptionTests(unittest.TestCase):
         self.assertTrue((self.external / "continued.py").is_file())
         self.assertIsNone(validate_external_binding(self.paths, "partial-app"))
 
+    def test_binding_fails_closed_when_registered_root_is_replaced_by_junction(self) -> None:
+        backup = self.external.with_name(self.external.name + "-original")
+        replacement = Path(tempfile.mkdtemp(prefix="external-replacement-target-"))
+        (replacement / "PROJECT.md").write_text("replacement project\\n", encoding="utf-8")
+        self.addCleanup(lambda: __import__("shutil").rmtree(replacement, ignore_errors=True))
+        scan = scan_external_project(self.paths, str(self.external), project_id="partial-app")
+        from unittest.mock import patch
+        with patch("external_project._create_junction", side_effect=ExternalProjectError("fallback")):
+            apply_external_project(self.paths, scan)
+
+        try:
+            self.external.rename(backup)
+            from external_project import _create_junction
+            _create_junction(self.external, replacement)
+            self.assertIsNone(validate_external_binding(self.paths, "partial-app"))
+        finally:
+            if self.external.is_symlink() or getattr(self.external, "is_junction", lambda: False)():
+                os.rmdir(self.external)
+            if backup.exists():
+                backup.rename(self.external)
+
     def test_apply_does_not_replace_an_existing_logical_project(self) -> None:
         project_id = normalize_project_id("partial-app")
         (self.paths.workspace / project_id).mkdir(parents=True)

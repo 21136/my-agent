@@ -16,7 +16,20 @@ const overviewJs = ts.transpileModule(overviewSource, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const overviewModule = {};
-new Function("exports", overviewJs)(overviewModule);
+new Function("exports", "require", overviewJs)(overviewModule, specifier => {
+  if (specifier.startsWith(".")) {
+    const resolved = path.resolve(path.dirname(path.join(desktopRoot, "src/shells/unified/current-work-overview.ts")),
+      specifier.endsWith(".ts") ? specifier : `${specifier}.ts`);
+    const dependencySource = readFileSync(resolved, "utf8");
+    const dependencyJs = ts.transpileModule(dependencySource, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const dependencyExports = {};
+    new Function("exports", dependencyJs)(dependencyExports);
+    return dependencyExports;
+  }
+  return createRequire(path.join(desktopRoot, "package.json"))(specifier);
+});
 const css = readFileSync(path.join(desktopRoot, "src/shells/unified/current-work-overview.css"), "utf8");
 
 function syntheticGroup(kind, id, prefix) {
@@ -29,6 +42,7 @@ function syntheticGroup(kind, id, prefix) {
       requirements: [1, 2].map(reqIndex => ({
         requirement_id: `${prefix}-r-${itemIndex}-${reqIndex}`,
         text: `${prefix}事项${itemIndex + 1}要求${reqIndex}`, status: "in_progress",
+        ...(reqIndex === 2 ? { depends_on: [`${prefix}-r-${itemIndex}-1`] } : {}),
       })), current_results: [],
     })),
   };
@@ -36,7 +50,7 @@ function syntheticGroup(kind, id, prefix) {
 
 const projects = Array.from({ length: 5 }, (_, index) => syntheticGroup("project", `合成项目${index + 1}`, `P${index + 1}`));
 const independent = syntheticGroup("independent", "internal-independent-id-must-not-display", "独立");
-independent.items = [{ ...independent.items[0], title: "修改简历" }];
+independent.items = [{ ...independent.items[0], title: "修改简历", requirements: independent.items[0].requirements.map((requirement, index) => index === 1 ? { ...requirement, depends_on: ["not-in-this-authorized-item"] } : requirement) }];
 independent.item_count = 1;
 independent.requirement_count = 2;
 independent.status_counts = { in_progress: 2 };
@@ -49,7 +63,22 @@ const result = {
   page: { page_size: 20, offset: 0, total_groups: groups.length, total_visible_groups: groups.length,
     total_visible_items: 11, total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null },
 };
+result.aggregation_scope = "selected_project_sessions";
+result.schedule_preview = {
+  state: "visible",
+  candidates: [{ project_id: "project-a", item_id: "item-1", requirement_id: "req-ready", priority: 4 }],
+  blocked: [{ project_id: "project-b", item_id: "item-2", requirement_id: "req-wait", priority: 3, reasons: ["依赖 dep 状态为 queued，尚未完成"] }],
+  limitations: ["只读预览；不会启动任务或修改事项状态"],
+};
 const panel = overviewModule.buildCurrentWorkOverviewPanel(result, { open: true });
+assert.match(panel.bodyHtml, /只读调度预览/);
+assert.match(panel.bodyHtml, /req-ready/);
+assert.match(panel.bodyHtml, /req-wait/);
+assert.match(panel.bodyHtml, /不会启动任务/);
+assert.match(panel.bodyHtml, /依赖关系（1）/);
+assert.match(panel.bodyHtml, /当前要求受阻/);
+assert.match(panel.bodyHtml, /依赖未包含在当前授权事项中，状态无法核实/);
+assert.match(css, /unified-current-work-dependency-edges/);
 const screenshotBase = path.join(os.tmpdir(), `current-work-overview-render-${process.pid}-${Date.now()}`);
 const screenshotPath = `${screenshotBase}.png`;
 const independentScreenshot = `${screenshotBase}-independent.png`;
@@ -236,7 +265,7 @@ test("current-work overview renders five multi-requirement projects and an indep
       titles:[...document.querySelectorAll('.unified-current-work-group h4')].map(x=>x.innerText),
       visibleGroups:[...document.querySelectorAll('.unified-current-work-group')].filter(x=>{ const r=x.getBoundingClientRect(); return r.top>=bounds.top && r.bottom<=bounds.bottom; }).length,
       groupSummaries:[...document.querySelectorAll('.unified-current-work-group-counts')].map(x=>x.innerText),
-      requirements:[...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('li').length) }); })()`);
+      requirements:[...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('details.unified-current-work-requirements > ul > li').length) }); })()`);
     assert.equal(initial.groups, 6, "five projects plus one independent group render");
     assert.equal(initial.disclosures, 11, "each of 11 items has a disclosure");
     assert.equal(initial.open, 0, "requirements default to collapsed");

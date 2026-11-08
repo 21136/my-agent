@@ -161,3 +161,25 @@ html[data-theme] .unified-shell[data-perspective="project"][data-rail="settings"
   .settings-pane .settings-role-models > label { grid-template-columns: 1fr; gap: 6px; }
   .settings-pane .settings-semantic-recognition { align-items: flex-start; }
 }
+
+.settings-pane .settings-approval-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.settings-pane .settings-approval-heading p { margin: 6px 0 0; color: var(--ma-text-muted); font-size: 12px; line-height: 1.7; }
+.settings-pane .settings-approval-options { min-width: 0; margin: 18px 0 0; padding: 0; border: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.settings-pane .settings-approval-option { min-width: 0; cursor: pointer; }
+.settings-pane .settings-approval-option > input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.settings-pane .settings-approval-card { height: 100%; min-height: 144px; box-sizing: border-box; display: flex; flex-direction: column; gap: 9px; padding: 16px; border: 1px solid var(--settings-line); border-radius: 12px; background: var(--ma-surface); }
+.settings-pane .settings-approval-option input:checked + .settings-approval-card { border-color: var(--ma-accent); box-shadow: 0 0 0 1px var(--ma-accent); background: color-mix(in srgb, var(--settings-chip) 48%, var(--ma-surface)); }
+.settings-pane .settings-approval-option input:focus-visible + .settings-approval-card { outline: 2px solid var(--ma-focus, var(--ma-accent)); outline-offset: 3px; }
+.settings-pane .settings-approval-option input:disabled + .settings-approval-card { opacity: .58; cursor: not-allowed; }
+.settings-pane .settings-approval-card strong { font-size: 13px; }
+.settings-pane .settings-approval-card small { color: var(--ma-accent); font-size: 10px; }
+.settings-pane .settings-approval-card > span { color: var(--ma-text-muted); font-size: 11px; line-height: 1.7; }
+.settings-pane .settings-approval-boundary { margin: 14px 0 0; padding: 12px 14px; border-radius: 9px; background: var(--settings-soft); color: var(--ma-text-muted); font-size: 11px; line-height: 1.8; }
+.settings-pane .settings-approval-shell-warning { margin: 14px 0 0; padding: 14px 16px; border: 1px solid color-mix(in srgb, #c2410c 36%, var(--settings-line)); border-left: 4px solid #c2410c; border-radius: 9px; background: color-mix(in srgb, #fb923c 12%, var(--ma-surface)); color: var(--ma-text); font-size: 12px; line-height: 1.8; }
+.settings-pane .settings-approval-shell-warning strong { color: #9a3412; }
+.settings-pane .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 900px) { .settings-pane .settings-approval-options { grid-template-columns: 1fr; } .settings-pane .settings-approval-card { min-height: auto; } }
+@media (max-width: 720px) { .settings-pane .settings-approval-heading { align-items: flex-start; flex-direction: column; } }
+
+.settings-pane .settings-approval-saved-note { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 16px 0 0; padding: 12px 14px; border: 1px solid var(--settings-line); border-radius: 9px; color: var(--ma-text-muted); font-size: 11px; line-height: 1.75; }
+@media (max-width: 720px) { .settings-pane .settings-approval-saved-note { align-items: flex-start; flex-direction: column; } }

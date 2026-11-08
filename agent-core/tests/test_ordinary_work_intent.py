@@ -27,6 +27,44 @@ class OrdinaryWorkIntentTests(unittest.TestCase):
             "plan_only",
         )
 
+    def test_scoped_read_only_alone_does_not_inherit_agent_mode_write_authority(self) -> None:
+        for text in (
+            "只读 PROJECT.md", "请只读 PROJECT.md", "各项目只读 PROJECT.md",
+            "只读 PROJECT.md，同时只写 NOTES.md",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
+                    "read_only",
+                )
+
+    def test_scoped_read_only_exception_requires_same_turn_execute_and_affirmative_write(self) -> None:
+        text = "请重新执行刚才未完成的三项目批次，各项目只读 PROJECT.md，只写 NOTES.md，一次 run_project_workers"
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
+            "execute",
+        )
+        mixed = "请执行批次：项目 A 只读 PROJECT.md，项目 B 修改 NOTES.md"
+        self.assertEqual(
+            turn_intent.resolve_ordinary_work_intent(mixed, turn_intent.classify_turn(mixed), turn_mode="agent"),
+            "execute",
+        )
+
+    def test_scoped_read_only_never_overrides_negative_or_global_read_only(self) -> None:
+        for text in (
+            "请重新执行批次，各项目只读 PROJECT.md，不要写 NOTES.md",
+            "只读 PROJECT.md，不修改 NOTES.md",
+            "只读 PROJECT.md，不写 NOTES.md",
+            "请重新执行批次，只读 PROJECT.md，但不要执行写入 NOTES.md",
+            "本轮只读，各项目只读 PROJECT.md，只写 NOTES.md，请执行批次",
+            "只读，不要改任何文件",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    turn_intent.resolve_ordinary_work_intent(text, turn_intent.classify_turn(text), turn_mode="agent"),
+                    "read_only",
+                )
+
     def test_ask_mode_questions_and_recall_are_read_only(self) -> None:
         for text, classified in (
             ("这个项目现在进度怎么样？", "qa"),

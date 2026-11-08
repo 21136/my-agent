@@ -40,8 +40,8 @@ class _TimeoutLLM:
 
 class TurnWatchdogTests(unittest.TestCase):
     def test_defaults(self) -> None:
-        self.assertEqual(turn_wall_sec(), 900.0)
-        self.assertEqual(stall_watchdog_sec(), 0.0)
+        self.assertEqual(turn_wall_sec(), 0.0)
+        self.assertEqual(stall_watchdog_sec(), 900.0)
 
     def test_stall_triggers_timeout_once(self) -> None:
         cancel = threading.Event()
@@ -89,6 +89,63 @@ class TurnWatchdogTests(unittest.TestCase):
         time.sleep(0.08)
         watchdog.note_progress_event("assistant.delta")
         time.sleep(0.08)
+        watchdog.end()
+        self.assertFalse(cancel.is_set())
+
+    def test_active_streaming_is_not_cut_off_by_total_wall_limit(self) -> None:
+        cancel = threading.Event()
+        watchdog = TurnWatchdog(
+            cancel_event=cancel,
+            on_auto_timeout=lambda _m: None,
+            wall_sec=0,
+            stall_sec=0.2,
+        )
+        watchdog.begin()
+        for _ in range(4):
+            time.sleep(0.06)
+            watchdog.note_progress_event("assistant.delta")
+        watchdog.end()
+        self.assertFalse(cancel.is_set())
+
+    def test_server_confirmation_wait_does_not_trigger_inactivity_timeout(self) -> None:
+        paths = AgentPaths.discover()
+        events = []
+        bridge = WsBridge(emit=events.append, paths=paths, confirm_timeout=1.0)
+        assert bridge.begin_turn()
+        assert bridge.turn_watchdog is not None
+        bridge.turn_watchdog.wall_sec = 0
+        bridge.turn_watchdog.stall_sec = 0.05
+        result = []
+        waiter = threading.Thread(target=lambda: result.append(bridge.confirm_with_receipt("approval preview", False)))
+        waiter.start()
+        deadline = time.monotonic() + 1
+        while bridge._pending_confirm_id is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        request_id = bridge._pending_confirm_id
+        self.assertIsNotNone(request_id)
+        time.sleep(0.15)
+        self.assertFalse(bridge.cancel_event.is_set())
+        self.assertTrue(bridge.deliver_confirm(request_id, "y"))
+        waiter.join(timeout=1)
+        bridge.end_turn()
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(result, [("y", request_id)])
+
+    def test_stall_clock_pauses_for_slow_tool_or_human_confirmation(self) -> None:
+        cancel = threading.Event()
+        watchdog = TurnWatchdog(
+            cancel_event=cancel,
+            on_auto_timeout=lambda _m: None,
+            wall_sec=0,
+            stall_sec=0.06,
+        )
+        watchdog.begin()
+        watchdog.pause_wall()
+        time.sleep(0.2)
+        self.assertFalse(cancel.is_set())
+        watchdog.resume_wall()
+        watchdog.note_progress_event("assistant.delta")
+        time.sleep(0.02)
         watchdog.end()
         self.assertFalse(cancel.is_set())
 

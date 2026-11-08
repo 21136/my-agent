@@ -87,11 +87,14 @@ import { shellDevPreviewBounds } from "./shell-dev-view-bounds";
 import { createManagedReviewController } from "./shell-dev-review";
 import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
-import type { AgentWsClient, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
+import { buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "./schedule-launch";
+import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
-import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt } from "./confirm-preview";
-import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
-import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
+import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
+import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import {
@@ -120,6 +123,7 @@ import "./unified.css";
 import "./topbar-shortcuts.css";
 import "./work-card.css";
 import "./current-work-overview.css";
+import "./schedule-launch.css";
 import { projectRecentWorkActivity } from "./work-activity";
 import "./neon-twin.css";
 import "./composer-companion.css";
@@ -214,8 +218,13 @@ export function mountUnifiedShell(
   const globalRoleModels: { preferences: LlmRoleModelPreferences; models: LlmModelListItem[]; pendingRole: "main" | "subagent" | ""; error: string } = {
     preferences: { main: "", subagent: "" }, models: [], pendingRole: "", error: "",
   };
+  let approvalPreferences: { mode: ApprovalPreferenceMode; savedMode: ApprovalPreferenceMode; known: boolean; pending: boolean; available: boolean; error: boolean; message: string } = {
+    mode: "manual", savedMode: "manual", known: false, pending: false, available: false, error: false, message: "",
+  };
   let currentWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
+  let currentSessionWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
   let currentWorkOverviewOpen = false;
+  const selectedMultiProjectOverviewIds = new Set<string>();
   const currentWorkOverviewExpandedRequirementItemIds = new Set<string>();
   let currentWorkOverviewLoadingMore = false;
   let currentWorkOverviewUnavailable = false;
@@ -227,7 +236,9 @@ export function mountUnifiedShell(
   let currentWorkOverviewDetailLoadingCursor: string | null = null;
   let currentWorkOverviewDetailPagingSupported = true;
   type OverviewDetailTarget = { kind: "items" | "requirements"; groupKind: "project" | "independent" | "linked_source_snapshot"; groupId: string; itemId?: string };
-  const currentWorkOverviewRequests = new Map<string, { sessionId: string; cursor?: string; detail?: OverviewDetailTarget; detailPaging: boolean }>();
+  const currentWorkOverviewRequests = new Map<string, { sessionId: string; cursor?: string; detail?: OverviewDetailTarget; history?: { projectId: string; itemId: string; requirementId: string }; mergedHistory?: { cursor?: string }; detailPaging: boolean; projectIds?: string[] }>();
+  let mergedHistory: MergedHistoryState = { rows: [], page: null, sources: [] };
+  const clearMergedHistoryState = (): void => { mergedHistory = clearMergedHistory(mergedHistory); };
   const topbarState: TopbarState = {
     proposals: [] as ProposalItem[],
     intentLabel: "",
@@ -287,31 +298,97 @@ export function mountUnifiedShell(
   }
   function queryStructuredCurrentWorkOverview(
     cursor?: string, sessionId = chat.model.sessionId, detail?: OverviewDetailTarget,
+    projectIds?: string[],
+    history?: { projectId: string; itemId: string; requirementId: string; cursor?: string },
+    mergedHistory?: { cursor?: string },
   ): void {
     if (!sessionId) return;
     if ([...currentWorkOverviewRequests.values()].some(request => request.sessionId === sessionId)) return;
     try {
       const detailPaging = currentWorkOverviewDetailPagingSupported;
-      const requestId = client.queryWorkRecordsOverview({ pageSize: 6, detailPaging, ...(cursor ? { cursor } : {}) });
-      currentWorkOverviewRequests.set(requestId, { sessionId, detailPaging, ...(cursor ? { cursor } : {}), ...(detail ? { detail } : {}) });
+      const requestId = client.queryWorkRecordsOverview({ pageSize: 6, detailPaging, ...(cursor ? { cursor } : {}), ...(projectIds ? { projectIds } : {}), ...(history ? { history } : {}), ...(mergedHistory ? { projectIds, mergedHistory } : {}) });
+      currentWorkOverviewRequests.set(requestId, { sessionId, detailPaging, ...(cursor ? { cursor } : {}), ...(detail ? { detail } : {}), ...(history ? { history: { projectId: history.projectId, itemId: history.itemId, requirementId: history.requirementId } } : {}), ...(mergedHistory ? { mergedHistory: { ...(mergedHistory.cursor ? { cursor: mergedHistory.cursor } : {}) } } : {}), ...(projectIds ? { projectIds: [...projectIds] } : {}) });
       currentWorkOverviewActiveRequest = requestId;
       currentWorkOverviewLoadingMore = Boolean(cursor) && !detail;
       currentWorkOverviewDetailLoadingCursor = detail ? cursor ?? null : null;
       // A same-session recheck must retain the last server projection until its replacement arrives.
       if (!cursor && currentWorkOverviewResult?.session_id !== sessionId) {
         currentWorkOverviewResult = null;
+        currentSessionWorkOverviewResult = null;
         currentWorkOverviewUnavailable = true;
       }
       refreshTopbar();
     } catch (error) {
       currentWorkOverviewLoadingMore = false;
       currentWorkOverviewDetailLoadingCursor = null;
+      if (mergedHistory) clearMergedHistoryState();
       if (!cursor && currentWorkOverviewResult?.session_id !== sessionId) {
         currentWorkOverviewResult = null;
+        currentSessionWorkOverviewResult = null;
         currentWorkOverviewUnavailable = true;
       }
       refreshTopbar();
       setStatus(`当前工作概况查询未发送：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function applyCurrentWorkControl(button: HTMLButtonElement): void {
+    const itemId = button.dataset.itemId;
+    const requirementId = button.dataset.requirementId;
+    const action = button.dataset.action;
+    const expectedStatus = button.dataset.expectedStatus;
+    const priority = button.dataset.priority;
+    const sourceProjectId = button.dataset.sourceProjectId;
+    const sourceRevision = button.dataset.sourceRevision;
+    const sessionId = chat.model.sessionId;
+    if (!itemId || !sessionId || !action
+        || currentWorkOverviewResult?.session_id !== sessionId) return;
+    if (action !== "set_priority" && (!requirementId
+        || (action !== "copy_requirement_to_new_item" && !expectedStatus)
+        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "copy_requirement_to_new_item", "inspect_unknown_claim"].includes(action))) return;
+    if (action === "set_priority" && (!priority || !Number.isInteger(Number(priority)))) return;
+    if (sourceProjectId ? (!Number.isSafeInteger(Number(sourceRevision)) || Number(sourceRevision) < 0)
+        : !Number.isSafeInteger(currentWorkOverviewResult?.work_record_revision)) {
+      setStatus("当前记录版本不可用，请先刷新当前工作。");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const revisionScope = sourceProjectId
+        ? { projectId: sourceProjectId, expectedSourceRevision: Number(sourceRevision) }
+        : { expectedRevision: currentWorkOverviewResult!.work_record_revision! };
+      if (action === "set_priority") client.controlWorkRecord({ itemId, action, priority: Number(priority), ...revisionScope });
+      else if (action === "copy_requirement_to_new_item") client.controlWorkRecord({ itemId, requirementId, action, ...revisionScope });
+      else if (action === "set_dependencies") {
+        const container = button.closest<HTMLElement>(".unified-current-work-item");
+        const dependsOn = Array.from(container?.querySelectorAll<HTMLInputElement>("input[data-work-dependency]:checked") ?? [])
+          .filter(input => input.dataset.workDependencyFor === requirementId)
+          .map(input => input.dataset.workDependency).filter((value): value is string => Boolean(value));
+        const dependsOnRefs = collectWorkRecordDependencyRefs(container, requirementId);
+        client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, dependsOn, dependsOnRefs, ...revisionScope });
+      } else if (action === "revise_requirement") {
+        const container = button.closest<HTMLElement>(".unified-current-work-item");
+        const editor = Array.from(container?.querySelectorAll<HTMLTextAreaElement>("textarea[data-work-record-new-text-for]") ?? [])
+          .find(candidate => candidate.dataset.workRecordNewTextFor === requirementId);
+        const newText = editor?.value.trim() ?? "";
+        if (!newText) throw new Error("请先填写修订后的要求文本。");
+        client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, newText, ...revisionScope });
+      } else if (action === "inspect_unknown_claim") {
+        if (!sourceProjectId || expectedStatus !== "unknown") return;
+        const container = button.closest<HTMLElement>(".unified-current-work-item");
+        const editor = Array.from(container?.querySelectorAll<HTMLTextAreaElement>("textarea[data-claim-inspection-for]") ?? [])
+          .find(candidate => candidate.dataset.claimInspectionFor === requirementId);
+        const inspectionEvidence = editor?.value.trim() ?? "";
+        if (!inspectionEvidence) throw new Error("请先记录实际核查对象与观察到的证据；不能只确认已阅读提示。");
+        client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, inspectionEvidence, ...revisionScope });
+      } else if (action === "cancel_execution") {
+        if (sourceProjectId) return;
+        client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, ...revisionScope });
+      } else client.controlWorkRecord({ itemId, requirementId, action: action as "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue", expectedStatus, ...revisionScope });
+      setStatus("已提交事项控制；等待服务端核对状态。");
+    } catch (error) {
+      button.disabled = false;
+      setStatus(`事项控制未发送：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -401,11 +478,28 @@ export function mountUnifiedShell(
     topbarState.memoryCount = memoryShelfState.memories.length;
     topbarState.pendingMemoryCount = memoryShelfState.pending.length || topbarState.proposals.length;
     topbarState.autoRecognition = { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error };
+    const mappedProjectChoices = projectState.projects.filter(project => Boolean(project.sessionId)
+      && project.id !== projectState.projectId && project.sessionId !== chat.model.sessionId);
+    const mappedProjectChoiceIds = new Set(mappedProjectChoices.map(project => project.id));
+    for (const selectedId of selectedMultiProjectOverviewIds) {
+      if (!mappedProjectChoiceIds.has(selectedId)) selectedMultiProjectOverviewIds.delete(selectedId);
+    }
+    const multiProjectAvailable = mappedProjectChoices.length > 0;
     topbarState.currentWorkOverview = buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
-      open: currentWorkOverviewOpen, loadingMore: currentWorkOverviewLoadingMore, unavailable: currentWorkOverviewUnavailable,
+      open: currentWorkOverviewOpen, loadingMore: currentWorkOverviewLoadingMore,
+      unavailable: currentWorkOverviewUnavailable || (multiProjectAvailable && !currentWorkOverviewResult),
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
     });
+    if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
+      && currentWorkOverviewResult.schedule_preview) {
+      topbarState.currentWorkOverview.bodyHtml += renderScheduleLaunchForm(currentWorkOverviewResult);
+    }
+    if (mergedHistory.page && mergedHistory.sources.length) {
+      const rows = mergedHistory.rows.map((row: MergedHistoryRow) => `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_title ?? row.item_id)} · ${escapeHtml(row.requirement_text ?? "")} · ${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
+      const next = mergedHistory.page.has_more && mergedHistory.page.next_cursor ? `<button type="button" data-merged-history-next data-cursor="${escapeHtml(mergedHistory.page.next_cursor)}">加载下一页统一历史</button>` : "";
+      topbarState.currentWorkOverview.bodyHtml += `<section data-merged-history><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
+    }
     renderTopbar(
       topbarEl,
       topbarState,
@@ -421,11 +515,117 @@ export function mountUnifiedShell(
       expandStructuredCurrentWorkOverview,
       selectSingleChatTool,
     );
+    if (multiProjectAvailable) {
+      const choices = mappedProjectChoices.map(project => {
+        const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
+        return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
+      }).join("");
+      topbarEl.insertAdjacentHTML("beforeend", `<details class="unified-selected-project-overview" data-selected-project-overview><summary>其他项目概况（${mappedProjectChoices.length}）</summary><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p>仅读取确认的项目记录；最多选择 6 个。</p></div></details>`);
+    }
     if (projectState.mainFocus === "settings") renderSettingsStage();
     sizeCurrentWorkPopover();
     topbarEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
       button.addEventListener("click", () => requestCurrentWorkOverviewDetail(button));
     });
+    const scheduleForm = topbarEl.querySelector<HTMLElement>("[data-schedule-launch]");
+    const scheduleSelect = scheduleForm?.querySelector<HTMLSelectElement>("[data-schedule-candidate]");
+    const scheduleSourceTask = scheduleForm?.querySelector<HTMLElement>("[data-schedule-source-task]");
+    scheduleSelect?.addEventListener("change", () => {
+      const selected = scheduledWorkerCandidates(currentWorkOverviewResult)[Number(scheduleSelect.value)];
+      if (scheduleSourceTask) scheduleSourceTask.textContent = selected ? `来源要求：${selected.task}` : "候选已变化，请重新读取当前工作概况。";
+    });
+    scheduleForm?.querySelector<HTMLButtonElement>("[data-schedule-launch-send]")?.addEventListener("click", () => {
+      if (chat.isWorking() || chat.model.confirmPending || !isWorkbenchChatAllowed()
+        || currentWorkOverviewResult?.session_id !== chat.model.sessionId) {
+        setStatus("当前回合繁忙或会话已变化；未发送启动请求。"); return;
+      }
+      const task = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-task]");
+      const read = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-read]");
+      const write = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-write]");
+      try {
+        const message = buildScheduleLaunchMessage(currentWorkOverviewResult,
+          Number(scheduleSelect?.value), task?.value ?? "", read?.value ?? "", write?.value ?? "");
+        const dispatch = client.sendMessage(message, undefined, { turnMode: "agent" });
+        chat.pushUserMessage(message, { requestId: dispatch.requestId, sessionId: dispatch.sessionId, receiptEligible: true });
+        resetUserScrollPin();
+        topbarState.intentLabel = "";
+        setStatus("启动请求已作为真实用户消息发送；等待服务端检查及必要确认。模型未调用工具时不会启动任务。");
+        syncComposerSendEnabled();
+      } catch (error) {
+        setStatus(`启动请求未发送：${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    topbarEl.querySelector<HTMLButtonElement>("[data-run-selected-project-history]")?.addEventListener("click", () => {
+      const selected = [...selectedMultiProjectOverviewIds];
+      if (!selected.length) { setStatus("请至少选择一个项目来源。"); return; }
+      clearMergedHistoryState();
+      queryStructuredCurrentWorkOverview(undefined, chat.model.sessionId, undefined, selected, undefined, {});
+      setStatus("正在逐页核实所选项目历史及来源版本…");
+    });
+    topbarEl.querySelector<HTMLButtonElement>("button[data-merged-history-next]")?.addEventListener("click", button => {
+      const cursor = (button.currentTarget as HTMLButtonElement).dataset.cursor;
+      const selected = mergedHistory.sources.map(source => source.project_id);
+      if (!cursor || !selected.length || selected.some(id => !selectedMultiProjectOverviewIds.has(id))) {
+        clearMergedHistoryState();
+        setStatus("所选项目范围发生变化；统一历史游标已清除，请重新加载。"); refreshTopbar(); return;
+      }
+      queryStructuredCurrentWorkOverview(undefined, chat.model.sessionId, undefined, selected, undefined, { cursor });
+      setStatus("正在核实统一历史下一页及来源版本…");
+    });
+    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-requirement-history]").forEach(button => {
+      button.addEventListener("click", () => {
+        const projectId = button.dataset.projectId, itemId = button.dataset.itemId, requirementId = button.dataset.requirementId;
+        const sessionId = chat.model.sessionId;
+        if (!projectId || !itemId || !requirementId || !sessionId || !currentWorkOverviewResult?.selected_project_ids?.includes(projectId)) return;
+        queryStructuredCurrentWorkOverview(undefined, sessionId, undefined, currentWorkOverviewResult.selected_project_ids,
+          { projectId, itemId, requirementId, ...(button.dataset.cursor ? { cursor: button.dataset.cursor } : {}) });
+        button.disabled = true;
+        setStatus("正在重新确认项目来源，并加载此单个要求的历史页…");
+      });
+    });
+    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-work-record-control]").forEach(button => {
+      button.addEventListener("click", () => applyCurrentWorkControl(button));
+    });
+    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-open-source-session]").forEach(button => {
+      button.addEventListener("click", () => {
+        const sourceSessionId = button.dataset.openSourceSession;
+        const projectId = button.dataset.openSourceProject || "";
+        if (!sourceSessionId || chat.isWorking()) {
+          setStatus("当前回合进行中或来源会话不可用，未切换会话。");
+          return;
+        }
+        void client.openSession(sourceSessionId).then(() => {
+          if (projectId) setStatus(`已切换到项目 ${projectId} 的来源会话。`);
+        }).catch(error => setStatus(`打开来源会话失败：${error instanceof Error ? error.message : String(error)}`));
+      });
+    });
+    const selectedProjectPanel = topbarEl.querySelector<HTMLElement>("[data-selected-project-overview]");
+    if (selectedProjectPanel) {
+      selectedProjectPanel.querySelectorAll<HTMLInputElement>("input[data-project-overview-id]").forEach(input => {
+        input.addEventListener("change", () => {
+          const id = input.dataset.projectOverviewId;
+          if (!id) return;
+          if (input.checked) {
+            if (!selectedMultiProjectOverviewIds.has(id) && selectedMultiProjectOverviewIds.size >= 6) {
+              input.checked = false;
+              setStatus("一次最多选择 6 个项目来源。");
+              return;
+            }
+            selectedMultiProjectOverviewIds.add(id);
+          } else selectedMultiProjectOverviewIds.delete(id);
+          if (mergedHistory.sources.length && mergedHistory.sources.some(source => !selectedMultiProjectOverviewIds.has(source.project_id))) {
+            clearMergedHistoryState();
+            refreshTopbar();
+          }
+        });
+      });
+      selectedProjectPanel.querySelector<HTMLButtonElement>("[data-run-selected-project-overview]")?.addEventListener("click", () => {
+        const selected = [...selectedMultiProjectOverviewIds];
+        if (!selected.length) { setStatus("请至少选择一个项目来源。"); return; }
+        queryStructuredCurrentWorkOverview(undefined, chat.model.sessionId, undefined, selected);
+        setStatus("已提交多项目来源请求；确认其 Session 来源后才读取记录。");
+      });
+    }
     topbarEl.querySelectorAll<HTMLDetailsElement>(".unified-current-work-requirements[data-current-work-item-id]").forEach(details => {
       details.addEventListener("toggle", () => {
         const itemId = details.dataset.currentWorkItemId;
@@ -443,6 +643,53 @@ export function mountUnifiedShell(
     } catch {
       globalRoleModels.error = "无法读取最新的全局模型选择。";
       refreshTopbar();
+    }
+  }
+
+  let approvalPreferenceTimeout: number | null = null;
+  function clearApprovalPreferenceTimeout(): void {
+    if (approvalPreferenceTimeout !== null) window.clearTimeout(approvalPreferenceTimeout);
+    approvalPreferenceTimeout = null;
+  }
+
+  function scheduleApprovalPreferenceTimeout(): void {
+    clearApprovalPreferenceTimeout();
+    approvalPreferenceTimeout = window.setTimeout(() => {
+      approvalPreferenceTimeout = null;
+      if (!approvalPreferences.pending) return;
+      approvalPreferences = { ...approvalPreferences, known: false, pending: false, available: false, error: true, message: "审批设置响应超时，无法确认当前实际档位；切换已禁用。重新打开此分类可重试。" };
+      refreshApprovalSettingsView();
+    }, 15_000);
+  }
+
+  function refreshApprovalSettingsView(): void {
+    settingsRenderedModelState = "";
+    if (projectState.mainFocus === "settings" && (projectState.settingsSection || "appearance") === "models") renderSettingsStage();
+  }
+
+  function refreshApprovalPreferences(): void {
+    if (approvalPreferences.pending) return;
+    approvalPreferences = { ...approvalPreferences, pending: true, available: false, error: false, message: "" };
+    refreshApprovalSettingsView();
+    try {
+      client.getApprovalPreferences();
+      scheduleApprovalPreferenceTimeout();
+    } catch {
+      approvalPreferences = { ...approvalPreferences, known: false, pending: false, available: false, error: true, message: "读取审批设置失败，当前实际档位未知；切换已禁用。重新打开此分类可重试。" };
+      refreshApprovalSettingsView();
+    }
+  }
+
+  function setApprovalPreference(mode: ApprovalPreferenceMode): void {
+    if (!approvalPreferences.available || approvalPreferences.pending) return;
+    approvalPreferences = { ...approvalPreferences, pending: true, error: false, message: "" };
+    refreshApprovalSettingsView();
+    try {
+      client.setApprovalMode(mode);
+      scheduleApprovalPreferenceTimeout();
+    } catch {
+      approvalPreferences = { ...approvalPreferences, known: false, pending: false, available: false, error: true, message: "请求未能发送；当前实际档位未知，切换已禁用。重新打开此分类可重试。" };
+      refreshApprovalSettingsView();
     }
   }
 
@@ -615,6 +862,7 @@ export function mountUnifiedShell(
   const workCardPresentations = new WorkCardPresentationRegistry("");
   const workCardResultExcerpts = new WorkCardResultExcerptView();
   const pendingHistoryCardReads = new Map<string, string>();
+  let historyCardReadSessionId = "";
   const chat = createChatSession(
     { showProcess: true, confirmInBlocks: true },
     {
@@ -640,8 +888,10 @@ export function mountUnifiedShell(
         if (autoRecognition.sessionId !== sessionId) autoRecognition = { sessionId, enabled: false, pending: "", action: "", error: false };
         workCardResultExcerpts.setSession(sessionId);
         workCardPresentations.setSession(sessionId);
-        pendingHistoryCardReads.clear();
+        if (shouldClearPendingHistoryCardReads(historyCardReadSessionId, sessionId)) pendingHistoryCardReads.clear();
+        historyCardReadSessionId = sessionId;
         currentWorkOverviewRequests.clear();
+        clearMergedHistoryState();
         if (currentWorkOverviewRefreshTimer !== null) window.clearTimeout(currentWorkOverviewRefreshTimer);
         currentWorkOverviewRefreshTimer = null;
         clearCurrentWorkVisibilityRecheck();
@@ -650,6 +900,7 @@ export function mountUnifiedShell(
         currentWorkOverviewActiveRequest = null;
         currentWorkOverviewDetailPagingSupported = true;
         currentWorkOverviewResult = null;
+        currentSessionWorkOverviewResult = null;
         currentWorkOverviewOpen = false;
         currentWorkOverviewExpandedRequirementItemIds.clear();
         currentWorkOverviewLoadingMore = false;
@@ -834,8 +1085,10 @@ export function mountUnifiedShell(
         </div>
         <div class="sandbox-write-scope-banner hidden" id="sandbox-write-scope-banner" role="status">
           <span class="sandbox-write-scope-banner-text" id="sandbox-write-scope-banner-text"></span>
+          <button type="button" class="unified-btn" id="sandbox-back-to-chat">回到普通对话</button>
         </div>
         <section class="unified-context-region hidden" id="unified-goal-card" aria-label="项目上下文"></section>
+        <div id="unified-goal-budget" class="unified-goal-budget hidden"></div>
         <div class="workbench-empty" id="workbench-empty" hidden>
           <div class="workbench-empty-card">
             <h2 class="workbench-empty-title">选择或新建项目</h2>
@@ -976,12 +1229,24 @@ export function mountUnifiedShell(
   const chatEl = root.querySelector<HTMLElement>("#unified-chat")!;
   bindImageLightboxClick(chatEl, "img.unified-generated-image");
   const toolRegion = root.querySelector<HTMLElement>("#unified-tool-region")!;
+  const goalBudgetNoticeEl = root.querySelector<HTMLElement>("#unified-goal-budget")!;
+  let activeGoalSessionId = "";
+
   const toolTitle = root.querySelector<HTMLElement>("#unified-tool-title")!;
   const runtimeTool = root.querySelector<HTMLElement>("#unified-runtime-tool")!;
   let runtimeToolOpen = false;
-  root.querySelector<HTMLButtonElement>("#unified-tool-close")!.addEventListener("click", () => {
-    if (runtimeToolOpen) { runtimeToolOpen = false; syncMainFocusView(); }
-    else showNowChat();
+  const toolCloseBtn = root.querySelector<HTMLButtonElement>("#unified-tool-close")!;
+  toolCloseBtn.addEventListener("click", () => {
+    if (runtimeToolOpen) {
+      runtimeToolOpen = false;
+      syncMainFocusView();
+      return;
+    }
+    if (projectState.mainFocus === "shell-dev" && sandboxSessionActive) {
+      void openLatestOrdinarySession();
+      return;
+    }
+    showNowChat();
   });
   const documentEl = root.querySelector<HTMLElement>("#unified-document")!;
   const projectsEl = root.querySelector<HTMLElement>("#unified-projects")!;
@@ -1176,9 +1441,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     composerWire.syncSendEnabled();
   }
 
+  let sandboxSessionActive = false;
+
   function syncSandboxWriteScopeBanner(label?: string): void {
     const text = (label || "").trim();
     const show = Boolean(text);
+    sandboxSessionActive = show;
     sandboxWriteScopeBannerEl.classList.toggle("hidden", !show);
     if (sandboxWriteScopeBannerTextEl) {
       sandboxWriteScopeBannerTextEl.textContent = show
@@ -1717,6 +1985,36 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       }
     })();
   }
+
+  async function openLatestOrdinarySession(): Promise<void> {
+    showNowChat();
+    if (chat.isWorking()) {
+      setStatus("助手执行中，先回到了对话；结束后再换回普通会话");
+      return;
+    }
+    if (!sidebarSessionsLoaded) {
+      await refreshSidebarSessionsMerged();
+    }
+    const current = chat.model.sessionId || "";
+    const ordinary = sessionsDropdown
+      .filter((item) => item.session_id && item.session_id !== current && !item.title.startsWith("[实验]"))
+      .sort((left, right) => (right.updated_at || "").localeCompare(left.updated_at || ""));
+    const next = ordinary[0];
+    if (next) {
+      openSidebarSession(next.session_id, next.project_id || "", next.execution_lane === "sandbox" ? "sandbox" : "stable");
+      return;
+    }
+    try {
+      client.sendCommand("新会话");
+      setStatus("正在回到普通对话…");
+    } catch (err) {
+      setStatus(`回到普通对话失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  root.querySelector<HTMLButtonElement>("#sandbox-back-to-chat")?.addEventListener("click", () => {
+    void openLatestOrdinarySession();
+  });
 
   function handleSidebarNewSession(): void {
     if (projectState.projectId) {
@@ -2699,6 +2997,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     toolRegion.hidden = !toolOpen;
     runtimeTool.hidden = !runtimeToolOpen;
     toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
+    toolCloseBtn.textContent = pageToolOpen ? "回到对话" : "关闭";
+    toolCloseBtn.title = pageToolOpen ? "离开这一页，回到对话" : "关闭";
     // Full-page tools own the stage (完整页面). Chat stays mounted but is not left-split.
     shellEl.dataset.mainFocus = focus;
     shellEl.dataset.rail = projectState.railTab;
@@ -2764,7 +3064,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const name = currentPartnerName();
     const counts = settingsRuntimeCounts();
     // Async sidebar/runtime events must not replace inputs or interrupt a drag.
-    const modelStateKey = section === "models" ? JSON.stringify([globalRoleModels, autoRecognition.enabled, !!autoRecognition.pending, autoRecognition.error, autoRecognition.sessionId === chat.model.sessionId]) : "";
+    const modelStateKey = section === "models" ? JSON.stringify([globalRoleModels, autoRecognition.enabled, !!autoRecognition.pending, autoRecognition.error, autoRecognition.sessionId === chat.model.sessionId, approvalPreferences]) : "";
     if (settingsRenderedSection !== section || settingsRenderedName !== name || (section === "models" && settingsRenderedModelState !== modelStateKey)) {
       settingsEl.innerHTML = renderSettingsSidebar(section) + renderSettingsPane({
         section, partnerName: name, nicknameDraft: settingsNicknameDraft ?? name,
@@ -2775,6 +3075,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         fontControlHtml: renderChatFontControl(), feedback: settingsFeedback,
         roleModels: globalRoleModels,
         autoRecognition: { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error },
+        approvalPolicy: approvalPreferences,
       });
       if (settingsRenderedSection !== section) settingsEl.scrollTop = 0;
       settingsRenderedSection = section;
@@ -2801,9 +3102,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     settingsFeedback = "";
     settingsRenderedSection = null;
     renderSidebar();
+    if (section === "models") {
+      refreshGlobalRoleModels();
+      refreshApprovalPreferences();
+    }
     renderSettingsStage();
     settingsNotice("");
-    if (section === "models") refreshGlobalRoleModels();
   }
 
   shellEl.addEventListener("click", event => {
@@ -2821,6 +3125,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       case "settings-open-host-scope": document.querySelector<HTMLButtonElement>("#chrome-settings")?.click(); break;
       case "settings-open-runtime-status": selectSingleChatTool("runtime"); break;
       case "settings-auto-recognition": setAutoRecognition(autoRecognition.enabled ? "revoke" : "enable"); break;
+      case "settings-approval-reset": setApprovalPreference("manual"); break;
+      case "settings-approval-apply-saved": setApprovalPreference(approvalPreferences.savedMode); break;
       case "settings-switch-cli": document.querySelector<HTMLButtonElement>("#chrome-cli")?.click(); break;
       case "settings-prune-runtime":
         try {
@@ -2842,6 +3148,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (target instanceof HTMLSelectElement && target.matches(".settings-role-model-select")) {
       const role = target.dataset.role;
       if ((role === "main" || role === "subagent") && target.value) setGlobalRoleModel(role, target.value);
+    } else if (target instanceof HTMLInputElement && target.name === "settings-approval-mode") {
+      const mode = target.value;
+      if (mode === "manual" || mode === "auto" || mode === "full") setApprovalPreference(mode);
     } else if (target instanceof HTMLInputElement && target.dataset.settingsTheme) {
       const theme = target.dataset.settingsTheme === "dark" ? "dark" : "light";
       try {
@@ -3156,12 +3465,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       shellDevEl.querySelector<HTMLButtonElement>("[data-evolution-stop]")?.addEventListener("click", () => { void requestEvolutionAction("stop"); });
       const slot = shellDevEl.querySelector<HTMLElement>("[data-shell-dev-web-slot]");
       if (slot) shellDevViewResizeObserver.observe(slot);
+      shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-back-chat]")?.addEventListener("click", () => {
+        if (sandboxSessionActive) {
+          void openLatestOrdinarySession();
+          return;
+        }
+        showNowChat();
+      });
       shellDevEl.querySelector<HTMLButtonElement>("[data-shell-dev-sandbox-session]")?.addEventListener("click", async () => {
         try {
           shellDevFeedback("正在打开实验会话…", "busy");
           await client.createSandboxSession();
           setPerspective("project", "session");
-          shellDevFeedback("已打开实验会话。直接说要改什么；写 desktop/、agent-core/ 即可。", "ok");
+          shellDevFeedback("已打开实验会话，还是这条连接。直接说要改什么，助手写实验树，5174 能看到。", "ok");
         } catch (error) {
           shellDevFeedback(error instanceof Error ? error.message : String(error), "error");
         }
@@ -3237,7 +3553,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           inspect: () => window.myAgentDesktop?.inspectManagedSourceReview?.()
             ?? Promise.resolve({ ok: false as const, message: "当前运行环境不支持管理源码审查。" }),
           button: managedReviewButton,
-          output: managedReviewOutput,
+          output: managedReviewOutput as unknown as { textContent: string | null; hidden: boolean },
           isDesktop: Boolean(window.myAgentDesktop?.inspectManagedSourceReview),
           onReset: () => { managedReviewBrowser.clear(); managedSourceSelection.clear(); managedReviewOutput.textContent = ""; managedReviewOutput.hidden = true; },
           onReport: (report) => { managedReviewBrowser.show(report); managedSourceSelection.show(report); },
@@ -4282,7 +4598,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       const markdownHtml = lazy ? escapeHtml(block.text) : renderMarkdown(block.text);
       const bodyHtml = !lazy && readingLayout === "reading" ? readingBodyHtml(markdownHtml) : markdownHtml;
       return `<article class="${cls}" data-turn-index="${block.turnIndex}">
-        <div class="unified-turn-label">助手</div>
+        <div class="unified-turn-label">助手${block.kind === "assistant" ? renderHistoricalGoalPauseMarker(block.text) : ""}</div>
         <div class="${bodyCls}"${bodyAttr}>${bodyHtml}</div>
       </article>`;
     }
@@ -5011,7 +5327,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     confirmGlass.classList.remove("hidden");
     const disabled = confirm.resolved ? "disabled" : "";
     const recall = isWorkCardRecallPreview(confirm.preview);
-    const approvalDisabled = confirm.resolved || recall ? "disabled" : "";
+    const batchAuthorization = isProjectWorkerBatchAuthorizationPreview(confirm.preview);
+    const batchAuthorizationInvalid = batchAuthorization && !isConfirmChoiceAllowed(confirm.preview, "y", true);
+    const approvalDisabled = confirm.resolved || recall || batchAuthorizationInvalid ? "disabled" : "";
     const resolved = confirm.resolved
       ? `<div class="unified-confirm-resolved">${escapeHtml(confirm.resolved)}</div>`
       : `
@@ -5034,7 +5352,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         <div class="unified-confirm-kicker">需要确认</div>
         <div class="unified-confirm-glass-title">${escapeHtml(view.headline)}</div>
         ${reasonBlock}
-        ${view.compact
+        ${batchAuthorization ? renderProjectWorkerBatchAuthorizationHtml(confirm.preview) : view.compact
           ? `<details class="unified-confirm-details"><summary class="unified-confirm-details-toggle">查看详情</summary>${recall ? `<div class="unified-recall-scroll">${renderWorkCardRecallReadable(confirm.preview)}<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre></div>` : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}</details>`
           : `<pre class="unified-confirm-glass-preview">${escapeHtml(view.detail)}</pre>`}
         ${resolved}
@@ -6130,6 +6448,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function hydrateHistoryWorkCards(blocks: ChatBlock[]): void {
     const sessionId = chat.model.sessionId;
+    historyCardReadSessionId = sessionId;
     workCardResultExcerpts.setSession(sessionId);
     workCardPresentations.setSession(sessionId);
     const cardIds = new Set<string>();
@@ -6174,12 +6493,30 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   const off = client.onEvent((event: ServerEvent) => {
     switch (event.type) {
       case "client.connection.closed":
+        clearApprovalPreferenceTimeout();
+        clearPendingHistoryCardReads(pendingHistoryCardReads);
         chat.handleEvent(event);
         autoRecognition = { sessionId: "", enabled: false, pending: "", action: "", error: false };
+        approvalPreferences = { ...approvalPreferences, known: false, pending: false, available: false, error: true, message: "连接已关闭，无法确认当前实际审批档位；切换已禁用。" };
+        refreshApprovalSettingsView();
         refreshTopbar();
         break;
       case "user.message.persisted":
         chat.handleEvent(event);
+        break;
+      case "approval_preferences.state":
+      case "approval_preferences.done":
+        clearApprovalPreferenceTimeout();
+        const stateKnown = event.status === "ok" && event.state_known !== false;
+        approvalPreferences = {
+          mode: stateKnown ? event.approval_mode : approvalPreferences.mode,
+          savedMode: stateKnown ? event.saved_approval_mode : approvalPreferences.savedMode,
+          known: stateKnown, pending: false, available: stateKnown,
+          error: event.status !== "ok" || !stateKnown,
+          message: stateKnown ? ""
+            : (event.message || "当前实际档位未知，无法确认或切换。"),
+        };
+        refreshApprovalSettingsView();
         break;
       case "llm_role_models.state":
       case "llm_role_models.done": {
@@ -6214,8 +6551,26 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           scheduleCurrentWorkOverviewRefresh();
         }
         break;
+      case "goal.state":
+        if (event.session_id && event.session_id !== chat.model.sessionId) break;
+        if (activeGoalSessionId && event.session_id && event.session_id !== activeGoalSessionId) break;
+        if (event.session_id) activeGoalSessionId = event.session_id;
+        const goalNotice = renderGoalBudgetNotice(event);
+        if (goalNotice) {
+          goalBudgetNoticeEl.innerHTML = goalNotice;
+          goalBudgetNoticeEl.classList.remove("hidden");
+        } else {
+          goalBudgetNoticeEl.replaceChildren();
+          goalBudgetNoticeEl.classList.add("hidden");
+        }
+        break;
       case "session.banner":
         if (!shouldApplyProjectEvent(projectState, event.project_id)) break;
+        if (event.session_id !== activeGoalSessionId) {
+          activeGoalSessionId = event.session_id;
+          goalBudgetNoticeEl.replaceChildren();
+          goalBudgetNoticeEl.classList.add("hidden");
+        }
         // Session list in 当下 follows every new/opened session (debounced via threads timer).
         window.setTimeout(() => refreshSidebarSessions(), 0);
         if ((event.project_id || "") !== projectState.projectId) {
@@ -6458,11 +6813,149 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         }
         break;
 
+      case "work-record.control.done":
+        if (event.session_id !== chat.model.sessionId) break;
+        setStatus(event.message);
+        if (event.status === "applied") {
+          if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
+              && currentWorkOverviewResult.selected_project_ids?.length) {
+            queryStructuredCurrentWorkOverview(undefined, event.session_id, undefined,
+              currentWorkOverviewResult.selected_project_ids);
+          } else scheduleCurrentWorkOverviewRefresh();
+        } else refreshTopbar();
+        break;
+
       case "work-records.overview.result": {
         if (event.session_id !== chat.model.sessionId) break;
         const request = currentWorkOverviewRequests.get(event.request_id);
         currentWorkOverviewRequests.delete(event.request_id);
         if (!request || request.sessionId !== event.session_id || currentWorkOverviewActiveRequest !== event.request_id) break;
+        if (request.mergedHistory) {
+          const page = event.history_page;
+          const expectedProjects = request.projectIds ?? [];
+          const sources = event.history_sources;
+          const validSources = event.history_scope === "selected_projects_history" && page?.scope === "selected_projects_history"
+            && (event.state === "visible" || event.state === "no_records") && Array.isArray(sources) && sources.length === expectedProjects.length
+            && JSON.stringify([...sources.map(source => source.project_id)].sort()) === JSON.stringify([...expectedProjects].sort())
+            && new Set(sources.map(source => source.project_id)).size === expectedProjects.length
+            && sources.every(source => typeof source.project_id === "string" && typeof source.session_id === "string" && source.session_id.length > 0
+              && Number.isSafeInteger(source.revision) && source.revision >= 0)
+            && page.page_size === 10 && Number.isSafeInteger(page.offset) && page.offset >= 0
+            && typeof page.has_more === "boolean" && (page.has_more ? typeof page.next_cursor === "string" && page.next_cursor.length > 0 : page.next_cursor === null);
+          const sourceByProject = new Map((Array.isArray(sources) ? sources : []).map(source => [source.project_id, source]));
+          const validRows = Array.isArray(event.history) && event.history.length <= (page?.page_size ?? 0)
+            && (!page?.has_more || event.history.length === page.page_size)
+            && (event.state !== "no_records" || event.history.length === 0)
+            && event.history.every(row => sourceByProject.get(row.project_id)?.session_id === row.session_id);
+          if (!validSources || !page || !validRows || (request.mergedHistory.cursor !== undefined
+              && (!mergedHistory.page?.has_more || mergedHistory.page.next_cursor !== request.mergedHistory.cursor
+                || JSON.stringify([...(mergedHistory.sources.map(source => `${source.project_id}\u0000${source.session_id}\u0000${source.revision}`))].sort())
+                  !== JSON.stringify([...(event.history_sources ?? []).map(source => `${source.project_id}\u0000${source.session_id}\u0000${source.revision}`)].sort())))) {
+            clearMergedHistoryState();
+            setStatus(event.state === "error" || event.state === "expired" ? "统一历史授权或来源版本已变化；已清除旧游标，请重新请求首屏。" : "统一历史回执范围无效，已丢弃。");
+          } else {
+            const appended = appendMergedHistoryPage(mergedHistory, page, event.history_sources!, event.history!, request.mergedHistory.cursor);
+            if (!appended) {
+              clearMergedHistoryState();
+              setStatus("统一历史页游标、来源版本或身份连续性无效；已清除分页内容，请重新加载。");
+            } else {
+              mergedHistory = appended as MergedHistoryState;
+              setStatus("已加载所选项目统一历史页；来源会话与记录版本已核对。");
+            }
+          }
+          refreshTopbar();
+          break;
+        }
+        if (request.history) {
+          currentWorkOverviewDetailLoadingCursor = null;
+          const current = currentWorkOverviewResult;
+          // A declined per-page authorization is expected, not a stale projection.
+          // Preserve the already-authorized overview so retrying the history button
+          // requests that page again instead of silently triggering a new overview read.
+          if (event.state === "error" && event.reason === "multi_project_source_unavailable") {
+            setStatus("未授权读取此要求的历史页；已保留当前已授权概况。");
+            refreshTopbar();
+            break;
+          }
+          const validHistory = event.state === "visible" && event.history_page?.scope === "this_requirement_only"
+            && event.history_project_id === request.history.projectId && event.history_item_id === request.history.itemId
+            && event.history_requirement_id === request.history.requirementId && event.source?.project_id === request.history.projectId
+            && Array.isArray(event.history) && current?.selected_project_ids?.includes(request.history.projectId)
+            && current.groups.some(group => group.kind === "project" && group.id === request.history.projectId
+              && group.source_session_id === event.source.session_id && group.source_revision === event.source.revision);
+          if (!validHistory || !current) {
+            currentWorkOverviewUnavailable = true;
+            setStatus(event.state === "expired" ? "项目来源版本已变化；历史游标失效，正在重新核实来源。" : "单要求历史页不可用或来源版本不匹配；当前仅显示已核实内容。");
+            refreshTopbar();
+            queryStructuredCurrentWorkOverview(undefined, event.session_id, undefined, request.projectIds);
+            break;
+          }
+          const group = current.groups.find(row => row.kind === "project" && row.id === request.history!.projectId)!;
+          const targetItem = group.items.find(row => row.item_id === request.history!.itemId);
+          const requirement = targetItem?.requirements.find(row => row.requirement_id === request.history!.requirementId);
+          if (!requirement) { currentWorkOverviewUnavailable = true; refreshTopbar(); break; }
+          const existing = requirement.history ?? [];
+          const incoming = event.history!;
+          const mergedHistory = request.history && event.history_page!.offset > 0 ? [...existing, ...incoming] : incoming;
+          currentWorkOverviewResult = { ...current, groups: current.groups.map(row => row !== group ? row : {
+            ...group, items: group.items.map(item => item !== targetItem ? item : { ...item, requirements: item.requirements.map(req => req !== requirement ? req : {
+              ...req, history: mergedHistory, history_page: event.history_page,
+            }) }),
+          }) };
+          currentWorkOverviewUnavailable = false;
+          setStatus("已加载单个要求范围内的来源历史页；不代表项目或全局历史完整。");
+          refreshTopbar();
+          break;
+        }
+        if (request.projectIds) {
+          const selected = request.projectIds;
+          if (event.aggregation_scope !== "selected_project_sessions"
+              || !Array.isArray(event.selected_project_ids)
+              || JSON.stringify([...event.selected_project_ids].sort()) !== JSON.stringify([...selected].sort())) {
+            setStatus("多项目概况的授权来源回执无法核对；结果已丢弃。");
+            currentWorkOverviewUnavailable = true;
+            refreshTopbar();
+            break;
+          }
+          if (event.state !== "visible" && event.state !== "no_records") {
+            currentWorkOverviewUnavailable = true;
+            setStatus("所选项目来源未能完整核对；保留当前会话概况，未用部分远端结果替代。");
+            refreshTopbar();
+            break;
+          }
+          const local = currentSessionWorkOverviewResult?.session_id === event.session_id
+            ? currentSessionWorkOverviewResult : null;
+          const localGroups = (local?.groups ?? []).filter(group => !selected.includes(group.id));
+          const localVisibleCount = local?.groups.filter(group => group.visibility === "visible").length ?? 0;
+          const localOmittedGroups = local?.page.has_more
+            ? Math.max(0, local.page.total_visible_groups - localVisibleCount) : 0;
+          const groups = [...localGroups, ...event.groups.filter(group => !localGroups.some(existing => existing.kind === group.kind && existing.id === group.id))];
+          const visibleGroups = groups.filter(group => group.visibility === "visible");
+          const collapsedGroups = groups.filter(group => group.visibility === "collapsed");
+          const visibleItems = visibleGroups.reduce((sum, group) => sum + group.item_count, 0);
+          const collapsedItems = collapsedGroups.reduce((sum, group) => sum + group.item_count, 0);
+          currentWorkOverviewResult = {
+            ...event,
+            session_id: event.session_id,
+            groups: visibleGroups,
+            unread_status: "unknown",
+            visibility_limitations: [...new Set([...(event.visibility_limitations ?? []), ...(local?.visibility_limitations ?? []), "mixed_current_and_confirmed_project_snapshots", ...(localOmittedGroups > 0 ? [`local_groups_omitted:${localOmittedGroups}`] : [])])],
+            unread_important_results: local?.unread_important_results ?? [],
+            unread_important_results_total: local?.unread_important_results_total,
+            unread_important_results_truncated: local?.unread_important_results_truncated,
+            work_record_revision: local?.work_record_revision,
+            visibility_counts: { visible_groups: visibleGroups.length, visible_items: visibleItems,
+              collapsed_groups: collapsedGroups.length, collapsed_items: collapsedItems },
+            page: { ...event.page, total_groups: visibleGroups.length, total_visible_groups: visibleGroups.length,
+              total_visible_items: visibleItems, total_collapsed_groups: collapsedGroups.length,
+              total_collapsed_items: collapsedItems, has_more: false, next_cursor: null },
+          };
+          currentWorkOverviewUnavailable = false;
+          currentWorkOverviewLoadingMore = false;
+          currentWorkOverviewOpen = true;
+          refreshTopbar();
+          break;
+        }
         if (shouldFallbackOverviewDetailPaging(request.detailPaging, event.state, event.reason)) {
           currentWorkOverviewDetailPagingSupported = false;
           currentWorkOverviewLoadingMore = false;
@@ -6524,6 +7017,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           currentWorkOverviewResult = appended;
         } else {
           currentWorkOverviewResult = { ...event, groups: event.groups.filter(group => group.visibility === "visible") };
+          currentSessionWorkOverviewResult = currentWorkOverviewResult;
         }
         currentWorkOverviewLoadingMore = false;
         currentWorkOverviewUnavailable = false;
@@ -6650,6 +7144,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         applyProjectListEvent(projectState, event);
         renderSidebar();
         if (projectState.mainFocus === "projects") renderProjectsPane();
+        refreshTopbar();
         break;
 
       case "project.verify.done":

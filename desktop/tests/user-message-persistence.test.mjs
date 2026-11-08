@@ -85,7 +85,9 @@ test("sendMessage creates a request identity, binds the active session, and send
   const dispatch = client.sendMessage("hello");
   assert.match(dispatch.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(dispatch.sessionId, SESSION);
-  assert.deepEqual(socket.sent.at(-1), { type: "user.message", request_id: dispatch.requestId, text: "hello" });
+  assert.deepEqual(socket.sent.at(-1), {
+    type: "user.message", request_id: dispatch.requestId, session_id: SESSION, text: "hello",
+  });
   const secondDispatch = client.sendMessage("another");
   assert.notEqual(secondDispatch.requestId, dispatch.requestId);
   assert.equal(secondDispatch.sessionId, SESSION);

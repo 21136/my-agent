@@ -24,6 +24,8 @@ test("product dual-lane default shows status + peer CTAs, details collapsed", ()
   assert.match(html, /data-shell-dev-one-click/);
   assert.match(html, /用稳定刷实验/);
   assert.match(html, /开实验会话/);
+  assert.match(html, /data-shell-dev-back-chat/);
+  assert.match(html, /回到对话/);
   assert.match(html, /合入稳定/);
   assert.doesNotMatch(html, /一键完成合入/);
   assert.doesNotMatch(html, /壳开发预览/);

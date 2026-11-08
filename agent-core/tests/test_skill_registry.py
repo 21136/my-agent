@@ -103,6 +103,60 @@ version: 1.0.0
         self.assertEqual(registry.select("审查代码", limit=1)[0].name, "code-review")
         self.assertEqual(registry.select("准备发布前检查", limit=1)[0].name, "release-readiness")
 
+    def test_short_english_trigger_requires_word_boundaries(self) -> None:
+        self._write(
+            "bug-triage",
+            """---
+name: bug-triage
+description: Triage a reported bug.
+triggers: [bug]
+allowed_tools: []
+risk_level: low
+verification: inspect report
+version: 1.0.0
+---
+
+Triage.
+""",
+        )
+        registry = SkillRegistry.discover(self.root)
+
+        self.assertEqual(registry.select("debugging", limit=1), ())
+        self.assertEqual(
+            [item.name for item in registry.select("a bug occurred", limit=1)],
+            ["bug-triage"],
+        )
+
+    def test_equal_top_skill_matches_fail_closed_for_single_selection(self) -> None:
+        for name in ("project-alpha", "project-beta"):
+            self._write(
+                name,
+                f"""---
+name: {name}
+description: Handle a project request.
+triggers: [验收]
+allowed_tools: []
+risk_level: low
+verification: inspect result
+version: 1.0.0
+---
+
+Handle request.
+""",
+            )
+        registry = SkillRegistry.discover(self.root)
+
+        self.assertEqual(registry.select_packages("请做验收", limit=1), ())
+        self.assertEqual(registry.select("请做验收", limit=1), ())
+        self.assertEqual(
+            {item.name for item in registry.select("请做验收", limit=2)},
+            {"project-alpha", "project-beta"},
+        )
+        self.assertEqual(
+            [item.name for item in registry.select("请做 project-beta 验收", limit=1)],
+            ["project-beta"],
+        )
+
     def test_load_rejects_path_escape_and_unknown_skill(self) -> None:
         registry = SkillRegistry.discover(self.root)
         with self.assertRaises(SkillRegistryError):

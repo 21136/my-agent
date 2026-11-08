@@ -15,7 +15,7 @@
 - 桌面/工作台：[DESKTOP](./DESKTOP.md) · [WORKBENCH-UI](./WORKBENCH-UI.md) · [会话线程](./PROJECT-THREADS.md)
 - 记忆（现行 + 草案）：[MEMORY](./MEMORY.md) · [按天日记记忆草案（未实现）](./DAY-JOURNAL-MEMORY.md)
 - Agent 与工具：[AGENT-HARNESS](./AGENT-HARNESS.md) · [ORCHESTRATION](./ORCHESTRATION.md) · [TOOLS](./TOOLS.md) · [TOOL-CATALOG](./TOOL-CATALOG.md)
-- 多项目编排草案（未实现）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)（主 Agent 调度 · 按项目 worker）
+- 多项目 worker（实现存在，产品级端到端验收未完成）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)（单主会话 · 按项目隔离派工）
 - 生命周期/长任务：[执行可观测](./EXEC-OBSERVABILITY.md) · [执行可靠性](./EXEC-RELIABILITY.md) · `agent-core/execution_lifecycle.py` · `agent-core/goal_runtime.py`
 - 稳定/实验双车道：[SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md) · [SANDBOX-STORAGE](./SANDBOX-STORAGE.md)
 - Managed 发布：[MANAGED-POSTMERGE-RELEASE](./MANAGED-POSTMERGE-RELEASE.md) · [MANAGED-SELECTED-MERGE](./MANAGED-SELECTED-MERGE.md) · [SELF-HOSTING-SECURITY](./SELF-HOSTING-SECURITY.md)
@@ -34,4 +34,4 @@
 
 ## 读取边界
 
-Goal Runtime 是 P0 的轻量目标状态与预算骨架，不等于旧 runaway 自动执行、TASKS/Progress Gate、跨进程恢复或自动发布。不要把历史路线、旧验收现场或曾经的测试数字当作当前承诺；不得宣称未执行的全量测试或生产验收通过。
+Goal Runtime 是 P0 的轻量目标状态与预算骨架：累计用量保留作记录，不直接阻断人工新回合，也不等于语义进度；单 Run 自动续段受本 Run 上限约束。默认不按总墙钟时长取消，改由无活动监测兜底。它不等于旧 runaway 自动执行、TASKS/Progress Gate、跨进程恢复或自动发布。不要把历史路线、旧验收现场或曾经的测试数字当作当前承诺；不得宣称未执行的全量测试或生产验收通过。

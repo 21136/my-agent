@@ -7,8 +7,11 @@ check, an already configured ToolExecutor, and the model/tool loop callback.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import errno
 import hashlib
+import logging
+import re
 import json
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -28,6 +31,48 @@ from project_worker_read import ProjectReadError, ProjectReadTransientError, Pro
 T = TypeVar("T")
 WorkerKind = Literal["project", "independent"]
 PROJECT_READ_RETRY_BACKOFF_SECONDS = 0.05
+
+
+def _log_worker_timing(phase: str, duration_ms: int, **fields: int) -> None:
+    """Emit content-free worker timings through the established sidecar logger."""
+    metrics = " ".join(f"{key}={value}" for key, value in fields.items())
+    logging.getLogger("my_agent.sidecar").info(
+        "event=project_worker_timing phase=%s duration_ms=%d%s",
+        phase, duration_ms, f" {metrics}" if metrics else "",
+    )
+
+
+def _project_worker_batch_time() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _log_project_worker_batch_event(
+    phase: str, *, batch_id: str, project_id: str, index: int,
+    queued_at: str, at: str, status: str = "",
+) -> None:
+    """Append a content-free batch lifecycle event using a strict field allowlist."""
+    if (phase not in {"queued", "authorized", "started", "ended"}
+            or type(batch_id) is not str or not re.fullmatch(r"[0-9a-f]{32}", batch_id)
+            or type(project_id) is not str or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", project_id)
+            or type(index) is not int or index < 0
+            or type(queued_at) is not str
+            or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", queued_at)
+            or type(at) is not str
+            or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", at)):
+        return
+    fields = [
+        "event=project_worker_batch", f"phase={phase}", f"batch_id={batch_id}",
+        f"project_id={project_id}", f"index={index}", f"queued_at={queued_at}", f"at={at}",
+    ]
+    if phase == "authorized":
+        fields.append(f"authorized_at={at}")
+    elif phase == "started":
+        fields.append(f"started_at={at}")
+    elif phase == "ended":
+        if status not in {"model_turn_finished", "blocked", "failed", "cancelled", "limit_reached"}:
+            return
+        fields.extend((f"ended_at={at}", f"status={status}"))
+    logging.getLogger("my_agent.sidecar").info(" ".join(fields))
 
 
 def _lock_file_for_identity(identity: tuple[object, ...]) -> Path:
@@ -312,6 +357,7 @@ class ProjectWorkerCoordinator:
             conversation_id, project_id, project_root, write_targets, kind,
             allow_missing_parents=allow_missing_parents,
         )
+        admission_started = time.perf_counter()
         with self._condition:
             ticket = self._next_ticket
             self._next_ticket += 1
@@ -334,6 +380,8 @@ class ProjectWorkerCoordinator:
                 self._admitted.discard(ticket)
                 self._schedule_locked()
                 raise
+        admission_wait_ms = max(0, int((time.perf_counter() - admission_started) * 1000))
+        cross_process_wait_ms = 0
         try:
             # Re-resolve after both local admission and OS-lock waiting. A path key
             # bridges new->file transitions; inode keys serialize hard-link aliases.
@@ -341,7 +389,9 @@ class ProjectWorkerCoordinator:
             identity_retries = 0
             while True:
                 lock_ids = frozenset({current.root_identity, *current.targets, *current.path_targets})
+                lock_started = time.perf_counter()
                 with _cross_process_file_locks(lock_ids, cancel_event):
+                    cross_process_wait_ms += max(0, int((time.perf_counter() - lock_started) * 1000))
                     refreshed = self._prepare_lease(
                         conversation_id, project_id, project_root, write_targets, kind,
                         allow_missing_parents=allow_missing_parents,
@@ -360,6 +410,10 @@ class ProjectWorkerCoordinator:
                             refreshed.kind, lease.ticket,
                         )
                         continue
+                    _log_worker_timing(
+                        "lease_wait", admission_wait_ms + cross_process_wait_ms,
+                        admission_ms=admission_wait_ms, cross_process_lock_ms=cross_process_wait_ms,
+                    )
                     yield current
                     break
         finally:
@@ -401,6 +455,17 @@ class ProjectWorkerCoordinator:
         return identity
 
     @staticmethod
+    def _directory_stat_identity(path: Path) -> tuple[int, int]:
+        """Return the OS file identity used to pin an admitted root across phases."""
+        try:
+            info = path.stat()
+            if not path.is_dir() or not info.st_ino:
+                raise ValueError
+            return info.st_dev, info.st_ino
+        except Exception:
+            raise PermissionError("project root identity is unavailable") from None
+
+    @staticmethod
     def _assert_no_reparse_chain(path: Path) -> None:
         """Check the declared path, not only its resolved destination."""
         absolute = Path(path).absolute()
@@ -437,21 +502,49 @@ class ProjectWorkerCoordinator:
             declared_project = declared_workspace / spec.project_id
             declared_spec_root = Path(spec.project_root).absolute()
             ProjectWorkerCoordinator._assert_no_reparse_chain(declared_workspace)
-            ProjectWorkerCoordinator._assert_no_reparse_chain(declared_project)
-            ProjectWorkerCoordinator._assert_no_reparse_chain(declared_spec_root)
             ProjectWorkerCoordinator._secure_directory_identity(declared_workspace)
-            expected_identity = ProjectWorkerCoordinator._secure_directory_identity(declared_project)
+
+            try:
+                from external_project import validate_external_binding
+                from project_mode import project_dir
+                external_binding = validate_external_binding(paths, spec.project_id)
+            except Exception:
+                external_binding = None
+
+            if external_binding is not None:
+                # Keep the logical workspace binding validated by the external
+                # registry, but pin worker I/O to the canonical target itself.
+                # The declared target must remain a non-reparse path and match the
+                # registry's current physical identity at every validation point.
+                registered_root = Path(external_binding.external_root).resolve(strict=True)
+                ProjectWorkerCoordinator._assert_no_reparse_chain(registered_root)
+                declared_root = Path(project_dir(paths, spec.project_id)).resolve(strict=True)
+                if (registered_root != declared_root
+                        or str(registered_root) != external_binding.external_root):
+                    raise PermissionError("external project binding changed")
+                expected_identity = ProjectWorkerCoordinator._secure_directory_identity(registered_root)
+                if declared_spec_root.resolve(strict=True) != registered_root:
+                    raise PermissionError("worker root does not match the registered external project")
+                project_root = registered_root
+                expected = registered_root
+                workspace = declared_workspace.resolve(strict=True)
+                expected_identity_root = expected_identity
+            else:
+                ProjectWorkerCoordinator._assert_no_reparse_chain(declared_project)
+                ProjectWorkerCoordinator._assert_no_reparse_chain(declared_spec_root)
+                expected_identity_root = ProjectWorkerCoordinator._secure_directory_identity(declared_project)
+                project_root = declared_spec_root.resolve(strict=True)
+                workspace = declared_workspace.resolve(strict=True)
+                expected = declared_project.resolve(strict=True)
+
             spec_identity = ProjectWorkerCoordinator._secure_directory_identity(declared_spec_root)
-            if expected_identity != spec_identity:
+            if expected_identity_root != spec_identity:
                 raise PermissionError("declared project root identity does not match the executor binding")
-            project_root = declared_spec_root.resolve(strict=True)
-            workspace = declared_workspace.resolve(strict=True)
-            expected = declared_project.resolve(strict=True)
         except PermissionError:
             raise
         except Exception:
             raise PermissionError("project root is unavailable") from None
-        if expected.parent != workspace or expected != declared_project:
+        if external_binding is None and (expected.parent != workspace or expected != declared_project):
             raise PermissionError("declared project root is aliased or escapes the workspace")
         if (project_root != expected or not project_root.is_dir()
                 or (session.active_shell or "").strip() != "project"
@@ -487,13 +580,14 @@ class ProjectWorkerCoordinator:
 class ScopedProjectTools:
     """Only declared flat file writes; every call passes through ToolExecutor."""
 
-    __slots__ = ("_spec", "_root", "_agent_relative_root", "_declared", "_read_declared",
+    __slots__ = ("_spec", "_root", "_root_identity", "_agent_relative_root", "_declared", "_read_declared",
                  "_leased_targets", "_write_attempted", "_read_attempts", "_read_sequence")
 
     def __init__(self, spec: ProjectWorkerSpec, root: Path, agent_relative_root: str,
                  leased_targets: dict[str, tuple[object, ...]]) -> None:
         self._spec = spec
         self._root = root
+        self._root_identity = ProjectWorkerCoordinator._directory_stat_identity(root)
         self._agent_relative_root = agent_relative_root
         self._declared = frozenset(spec.write_targets)
         self._read_declared = frozenset(spec.read_targets)
@@ -504,7 +598,14 @@ class ScopedProjectTools:
 
     def _assert_current_binding(self) -> None:
         root, _ = ProjectWorkerCoordinator._validate_spec(self._spec)
-        if root != self._root or not ProjectWorkerCoordinator._host_is_current(self._spec):
+        try:
+            identity_matches = (
+                root == self._root
+                and ProjectWorkerCoordinator._directory_stat_identity(root) == self._root_identity
+            )
+        except Exception:
+            identity_matches = False
+        if not identity_matches or not ProjectWorkerCoordinator._host_is_current(self._spec):
             raise PermissionError("host project/session binding changed")
 
     def assert_current_binding(self) -> None:

@@ -61,6 +61,7 @@ class OrdinaryFileWritePromptTests(unittest.TestCase):
 
         class _Meta:
             topics: list[str] = []
+            project_id = ""
 
         class _Session:
             meta = _Meta()
@@ -77,7 +78,7 @@ class OrdinaryFileWritePromptTests(unittest.TestCase):
         write_line = next(line for line in catalog.splitlines() if line.startswith("- write_text:"))
         patch_line = next(line for line in catalog.splitlines() if line.startswith("- patch_file:"))
         self.assertIn("改已有文件用 patch_file", write_line)
-        self.assertIn("不要改用 write_text", patch_line)
+        self.assertIn("先 read_file", patch_line)
 
     def test_evolved_catalog_does_not_nest_flat_writes(self) -> None:
         with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:

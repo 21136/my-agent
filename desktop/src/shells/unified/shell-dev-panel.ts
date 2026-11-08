@@ -14,9 +14,12 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     <header class="dual-lane-heading">
       <div class="shell-dev-heading-copy">
         <h1 id="shell-dev-page-heading">双车道</h1>
-        <p class="shell-dev-hint">先开实验会话让助手改自己；满意后再合入。</p>
+        <p class="shell-dev-hint">开实验会话不换进程，直接改实验树。</p>
       </div>
-      <button type="button" class="unified-btn dual-lane-refresh" data-shell-dev-refresh-status title="刷新状态">刷新</button>
+      <div class="dual-lane-heading-actions">
+        <button type="button" class="unified-btn unified-btn-accent dual-lane-back-chat" data-shell-dev-back-chat title="离开双车道，回到对话">回到对话</button>
+        <button type="button" class="unified-btn dual-lane-refresh" data-shell-dev-refresh-status title="刷新状态">刷新</button>
+      </div>
     </header>
 
     <section class="dual-lane-cards" aria-label="双车道" data-shell-dev-dual-status>
@@ -43,7 +46,7 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
           <h2>实验</h2>
           <p class="dual-lane-status" data-shell-dev-sandbox-status>读取中…</p>
         </header>
-        <button type="button" class="unified-btn unified-btn-accent dual-lane-peer-cta" data-shell-dev-sandbox-session title="在实验 sidecar 新建会话，助手直接改实验树">开实验会话</button>
+        <button type="button" class="unified-btn unified-btn-accent dual-lane-peer-cta" data-shell-dev-sandbox-session title="仍用当前连接。新会话只能写实验树，改坏也不会弄断这次聊天">开实验会话</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-restart-sandbox title="关掉实验 sidecar 再拉起，让刚改的 agent-core 生效">重载实验运行时</button>
         <button type="button" class="unified-btn dual-lane-peer-cta" data-shell-dev-one-click title="先检查合入状态，再走项目真实合入；取消不会改代码">合入稳定</button>
         <p class="shell-dev-dual-blockers" role="status" aria-live="polite" data-shell-dev-dual-blockers hidden></p>

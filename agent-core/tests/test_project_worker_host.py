@@ -19,7 +19,7 @@ import llm_client
 from llm_client import LLMClient, LLMConfig
 from project_mode import create_project
 from project_worker_execution import PROJECT_WORKER_COORDINATOR
-from project_worker_host import ProjectWorkerHost, ProjectWorkerHostRequest
+from project_worker_host import ProjectWorkerCancelTarget, ProjectWorkerHost, ProjectWorkerHostRequest
 from session import create_new
 from tests.isolation_helpers import temporary_agent_paths
 
@@ -281,6 +281,155 @@ def test_denial_cancel_and_unregistered_directory_fail_closed(monkeypatch):
         assert traversal.error_code == "invalid_target_scope"
         assert called == []
 
+
+
+def test_registered_external_project_worker_uses_canonical_target_and_remains_scoped(monkeypatch):
+    import tempfile
+    from unittest.mock import patch
+
+    from external_project import apply_external_project, scan_external_project
+
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
+        external_root = Path(tempfile.mkdtemp(prefix="worker-external-root-"))
+        (external_root / ".git").mkdir()
+        source = external_root / "README.md"
+        source.write_text("external source\\n", encoding="utf-8")
+        try:
+            scan = scan_external_project(paths, str(external_root), project_id="external-app")
+            # Exercise the supported logical mapping fallback: worker I/O is pinned
+            # to the validated external root, not a workspace junction path.
+            with patch("external_project._create_junction",
+                       side_effect=__import__("external_project").ExternalProjectError("unsupported")):
+                apply_external_project(paths, scan)
+            from project_worker_host import _resolve_bound_project
+            assert _resolve_bound_project(paths, "external-app") == external_root.resolve()
+
+            session = create_new(paths, conversation_id="20261107-ext00001")
+            session._ordinary_work_intent = "execute"
+            model_requests: list[dict[str, Any]] = []
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                body = json.loads(request.content.decode("utf-8"))
+                model_requests.append(body)
+                if len(model_requests) == 1:
+                    message = {"role": "assistant", "content": None,
+                               "tool_calls": [_tool_call("read_project_file", {"path": "README.md"}, 1)]}
+                    return _response(request, message, "tool_calls")
+                if len(model_requests) == 2:
+                    message = {"role": "assistant", "content": None,
+                               "tool_calls": [_tool_call("write_project_file", {
+                                   "path": "README.md", "content": "external updated\\n"}, 2)]}
+                    return _response(request, message, "tool_calls")
+                return _response(request, {"role": "assistant", "content": "Updated the registered external project."}, "stop")
+
+            host, _clients = _host(paths, monkeypatch, handler)
+            result = _run(host, session,
+                          _request("external-app", "external-task", "Update the external README.",
+                                   reads=("README.md",), writes=("README.md",)),
+                          _callbacks())
+            assert result.status == "model_turn_finished", (result.status, result.error_code, result.model_turn)
+            assert source.read_text(encoding="utf-8") == "external updated\\n"
+            assert result.project_id == "external-app"
+            assert result.acceptance_status == "not_run"
+            assert len(model_requests) == 3
+        finally:
+            __import__("shutil").rmtree(external_root, ignore_errors=True)
+
+
+def test_external_project_root_replacement_during_scope_confirmation_fails_closed(monkeypatch):
+    import tempfile
+    from unittest.mock import patch
+
+    from external_project import ExternalProjectError, apply_external_project, scan_external_project
+
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
+        external_root = Path(tempfile.mkdtemp(prefix="worker-external-replaced-"))
+        backup_root = external_root.with_name(external_root.name + "-original")
+        (external_root / ".git").mkdir()
+        (external_root / "README.md").write_text("original root\\n", encoding="utf-8")
+        try:
+            scan = scan_external_project(paths, str(external_root), project_id="external-replace")
+            with patch("external_project._create_junction", side_effect=ExternalProjectError("fallback")):
+                apply_external_project(paths, scan)
+
+            session = create_new(paths, conversation_id="20261107-ext00002")
+            session._ordinary_work_intent = "execute"
+            host, clients = _host(paths, monkeypatch, lambda request: pytest.fail("must not POST"))
+
+            def replace_root(_preview):
+                external_root.rename(backup_root)
+                external_root.mkdir()
+                (external_root / ".git").mkdir()
+                (external_root / "README.md").write_text("replacement root\\n", encoding="utf-8")
+                return "y"
+
+            result = _run(host, session,
+                          _request("external-replace", "replacement-task", "Update README."),
+                          (replace_root, lambda _preview: "y", lambda _preview, _allow: "y"))
+            assert result.status == "blocked"
+            assert result.error_code == "project_binding_changed"
+            assert clients == []
+            assert (backup_root / "README.md").read_text(encoding="utf-8") == "original root\\n"
+            assert (external_root / "README.md").read_text(encoding="utf-8") == "replacement root\\n"
+        finally:
+            __import__("shutil").rmtree(external_root, ignore_errors=True)
+            __import__("shutil").rmtree(backup_root, ignore_errors=True)
+
+
+def test_external_project_root_replacement_after_model_response_blocks_worker_write(monkeypatch):
+    import tempfile
+    from unittest.mock import patch
+
+    from external_project import ExternalProjectError, apply_external_project, scan_external_project
+
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
+        external_root = Path(tempfile.mkdtemp(prefix="worker-external-late-replaced-"))
+        backup_root = external_root.with_name(external_root.name + "-original")
+        (external_root / ".git").mkdir()
+        source = external_root / "README.md"
+        source.write_text("original root\\n", encoding="utf-8")
+        replaced = False
+        try:
+            scan = scan_external_project(paths, str(external_root), project_id="external-late-replace")
+            with patch("external_project._create_junction", side_effect=ExternalProjectError("fallback")):
+                apply_external_project(paths, scan)
+
+            session = create_new(paths, conversation_id="20261107-ext00003")
+            session._ordinary_work_intent = "execute"
+            posts: list[dict[str, Any]] = []
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                posts.append(json.loads(request.content.decode("utf-8")))
+                return _response(request, {"role": "assistant", "content": None,
+                    "tool_calls": [_tool_call("write_project_file", {
+                        "path": "README.md", "content": "must not write\\n"}, 1)]}, "tool_calls")
+
+            host, _clients = _host(paths, monkeypatch, handler)
+            original_chat = LLMClient.chat_confirmed_tools
+
+            def replace_after_model_response(client, *args, **kwargs):
+                nonlocal replaced
+                response = original_chat(client, *args, **kwargs)
+                if not replaced:
+                    external_root.rename(backup_root)
+                    external_root.mkdir()
+                    (external_root / ".git").mkdir()
+                    (external_root / "README.md").write_text("replacement root\\n", encoding="utf-8")
+                    replaced = True
+                return response
+
+            monkeypatch.setattr(LLMClient, "chat_confirmed_tools", replace_after_model_response)
+            result = _run(host, session,
+                          _request("external-late-replace", "late-replacement-task", "Update README."),
+                          _callbacks())
+            assert result.status == "blocked"
+            assert result.error_code == "host_binding_changed"
+            assert len(posts) == 1
+            assert source.read_text(encoding="utf-8") == "replacement root\\n"
+            assert (backup_root / "README.md").read_text(encoding="utf-8") == "original root\\n"
+        finally:
+            __import__("shutil").rmtree(external_root, ignore_errors=True)
+            __import__("shutil").rmtree(backup_root, ignore_errors=True)
 
 
 def test_executor_write_confirmation_is_separate_from_scope_and_outbound_approval(monkeypatch):
@@ -1106,6 +1255,185 @@ def test_partial_pool_submit_failure_keeps_started_real_outcomes_and_marks_unsta
         assert queued.reservation_id==reservations[2].reservation_id
         assert len(clients)==2
 
+def test_active_worker_cancel_requires_exact_target_and_only_sets_its_signal(monkeypatch):
+    with temporary_agent_paths(copy_tool_dirs=()) as paths:
+        create_project(paths, "project-alpha", project_template="light")
+        session = create_new(paths, conversation_id="20261108-cancel-target")
+        host, _clients = _host(paths, monkeypatch, lambda _request: pytest.fail("cancel target test must not POST"))
+        request = _request("project-alpha", "task-cancel-exact", "Task cancellation identity.", reads=(), writes=("out.txt",))
+        reservation = host.reserve_many(
+            session, [request], parent_run_id="cancel-parent", turn_epoch=8,
+            live_binding_check=_reservation_live(session, "cancel-parent", 8),
+        )[0]
+        target = ProjectWorkerCancelTarget(
+            conversation_id=session.conversation_id, parent_run_id="cancel-parent", turn_epoch=8,
+            project_id=request.project_id, item_id="item-exact", requirement_id="req-exact",
+            task_id=request.task_id, worker_id=reservation.worker_id,
+            worker_run_id=reservation.worker_run_id, reservation_id=reservation.reservation_id,
+        )
+        signal = threading.Event()
+        current = {"yes": True}
+        with host._reservation_lock:
+            host._reservations[reservation.reservation_id] = (reservation, True)
+            active_entry = (
+                reservation, target, signal, lambda got, reserved: (
+                    got == target and reserved == reservation and current["yes"]
+                ),
+            )
+            host._active_worker_cancels[target.reservation_id] = active_entry
+
+        # Ambiguous host-owned matches must fail closed without signalling either.
+        with host._reservation_lock:
+            host._active_worker_cancels["duplicate-active-entry"] = active_entry
+        assert host.request_cancel_for_record(
+            session, item_id="item-exact", requirement_id="req-exact",
+        ) == "ambiguous"
+        assert not signal.is_set()
+        with host._reservation_lock:
+            host._active_worker_cancels.pop("duplicate-active-entry")
+
+        wrong = ProjectWorkerCancelTarget(
+            conversation_id=target.conversation_id, parent_run_id=target.parent_run_id,
+            turn_epoch=target.turn_epoch, project_id=target.project_id, item_id=target.item_id,
+            requirement_id="other-requirement", task_id=target.task_id, worker_id=target.worker_id,
+            worker_run_id=target.worker_run_id, reservation_id=target.reservation_id,
+        )
+        assert host.cancel_worker(session, wrong) == "identity_mismatch"
+        bool_epoch = ProjectWorkerCancelTarget(
+            conversation_id=target.conversation_id, parent_run_id=target.parent_run_id,
+            turn_epoch=True, project_id=target.project_id, item_id=target.item_id,
+            requirement_id=target.requirement_id, task_id=target.task_id,
+            worker_id=target.worker_id, worker_run_id=target.worker_run_id,
+            reservation_id=target.reservation_id,
+        )
+        assert host.cancel_worker(session, bool_epoch) == "identity_mismatch"
+        malformed = ProjectWorkerCancelTarget(
+            conversation_id=target.conversation_id, parent_run_id=target.parent_run_id,
+            turn_epoch=target.turn_epoch, project_id=target.project_id, item_id=target.item_id,
+            requirement_id=target.requirement_id, task_id=target.task_id,
+            worker_id=target.worker_id, worker_run_id=target.worker_run_id,
+            reservation_id=" ",
+        )
+        assert host.cancel_worker(session, malformed) == "identity_mismatch"
+        assert not signal.is_set()
+        assert host.cancel_worker(session, target) == "signal_set"
+        assert signal.is_set()
+        signal.clear()
+        current["yes"] = False
+        assert host.cancel_worker(session, target) == "already_finished"
+        assert host.request_cancel_for_record(
+            session, item_id="item-exact", requirement_id="req-exact",
+        ) == "already_finished"
+        assert host.request_cancel_for_record(
+            session, item_id="missing-item", requirement_id="req-exact",
+        ) == "not_found"
+        assert not signal.is_set()
+        with host._reservation_lock:
+            host._active_worker_cancels.clear()
+
+
+def test_cancel_one_running_worker_preserves_sibling_and_parent_signal(monkeypatch):
+    from project_worker_host import ProjectWorkerCancelTarget
+
+    with temporary_agent_paths(copy_tool_dirs=()) as paths:
+        project_ids = ("project-alpha", "project-beta")
+        for project_id in project_ids:
+            create_project(paths, project_id, project_template="light")
+        session = create_new(paths, conversation_id="20261108-cancel-race")
+        session._ordinary_work_intent = "execute"
+        requests = [_request(pid, f"cancel-{pid}", f"Run {pid}.", reads=(), writes=("out.txt",))
+                    for pid in project_ids]
+        entered = threading.Barrier(2)
+        release = threading.Event()
+        host, _clients = _host(paths, monkeypatch, lambda request: (
+            entered.wait(4), release.wait(4),
+            _response(request, {"role": "assistant", "content": "finished", "tool_calls": []}, "stop"),
+        )[-1])
+        reservations = host.reserve_many(
+            session, requests, parent_run_id="cancel-race-parent", turn_epoch=9,
+            live_binding_check=_reservation_live(session, "cancel-race-parent", 9),
+        )
+        targets = {
+            reservation.reservation_id: ProjectWorkerCancelTarget(
+                conversation_id=session.conversation_id, parent_run_id=reservation.parent_run_id,
+                turn_epoch=reservation.turn_epoch, project_id=reservation.project_id,
+                item_id=f"item-{reservation.project_id}", requirement_id=f"req-{reservation.project_id}",
+                task_id=reservation.task_id, worker_id=reservation.worker_id,
+                worker_run_id=reservation.worker_run_id, reservation_id=reservation.reservation_id,
+            ) for reservation in reservations
+        }
+        cancel = threading.Event()
+        outcomes = []
+        thread = threading.Thread(target=lambda: outcomes.extend(host.run_many(
+            session, requests, scope_confirm_fn=lambda _preview: "y",
+            outbound_request_confirm_fn=lambda _preview: "y", write_confirm_fn=lambda *_args: "y",
+            cancel_event=cancel, parent_run_id="cancel-race-parent", turn_epoch=9,
+            live_binding_check=_reservation_live(session, "cancel-race-parent", 9),
+            reservations=reservations,
+            before_worker_start=lambda *_args: True,
+            cancel_target_for_worker=lambda _request, reservation: targets[reservation.reservation_id],
+            cancel_target_is_current=lambda _target, _reservation: True,
+        )), daemon=True)
+        thread.start()
+        try:
+            entered.wait(5)
+            selected = targets[reservations[0].reservation_id]
+            assert host.request_cancel_for_record(
+                session, item_id=selected.item_id, requirement_id=selected.requirement_id,
+            ) == "signal_set"
+            # A per-reservation signal must not set the parent batch or sibling signal.
+            assert not cancel.is_set()
+            sibling = targets[reservations[1].reservation_id]
+            assert not host._active_worker_cancels[sibling.reservation_id][2].is_set()
+        finally:
+            release.set()
+            thread.join(8)
+        assert not thread.is_alive()
+        by_task = {row.task_id: row for row in outcomes}
+        assert by_task[requests[0].task_id].status == "cancelled"
+        assert by_task[requests[0].task_id].error_code == "cancelled"
+        # The sibling may independently fail its synthetic provider exchange, but
+        # it must not be marked cancelled by this reservation's signal.
+        assert by_task[requests[1].task_id].status != "cancelled"
+        assert by_task[requests[1].task_id].error_code != "cancelled"
+        assert host._active_worker_cancels == {}
+        selected_reservation = reservations[0]
+        selected_outcome = by_task[requests[0].task_id]
+        assert host._terminal_user_stops.get(selected_reservation.reservation_id) is not None
+        assert host._accepted_worker_stops.get(selected_reservation.reservation_id) == targets[selected_reservation.reservation_id]
+        assert host._reservations.get(selected_reservation.reservation_id) == (selected_reservation, True)
+        forged_target = ProjectWorkerCancelTarget(
+            conversation_id=targets[selected_reservation.reservation_id].conversation_id,
+            parent_run_id=targets[selected_reservation.reservation_id].parent_run_id,
+            turn_epoch=targets[selected_reservation.reservation_id].turn_epoch,
+            project_id=targets[selected_reservation.reservation_id].project_id,
+            item_id=targets[selected_reservation.reservation_id].item_id,
+            requirement_id="forged-requirement",
+            task_id=targets[selected_reservation.reservation_id].task_id,
+            worker_id=targets[selected_reservation.reservation_id].worker_id,
+            worker_run_id=targets[selected_reservation.reservation_id].worker_run_id,
+            reservation_id=targets[selected_reservation.reservation_id].reservation_id,
+        )
+        assert host.consume_accepted_worker_stop(
+            forged_target, selected_reservation, selected_outcome,
+        ) is None
+        # A rejected identity must leave the genuine one-shot terminal proof intact.
+        terminal_receipt = host.consume_accepted_worker_stop(
+            targets[selected_reservation.reservation_id], selected_reservation, selected_outcome,
+        )
+        assert terminal_receipt is not None
+        assert terminal_receipt.reservation_id == selected_reservation.reservation_id
+        assert isinstance(terminal_receipt.user_action_id, str) and terminal_receipt.user_action_id
+        assert host.consume_accepted_worker_stop(
+            targets[selected_reservation.reservation_id], selected_reservation, selected_outcome,
+        ) is None
+        sibling_reservation = reservations[1]
+        assert host.consume_accepted_worker_stop(
+            targets[sibling_reservation.reservation_id], sibling_reservation,
+            by_task[requests[1].task_id],
+        ) is None
+
+
 def test_scope_confirmation_rejection_never_records_a_worker_start(monkeypatch):
     with temporary_agent_paths(copy_tool_dirs=()) as paths:
         create_project(paths, "project-alpha", project_template="light")
@@ -1292,3 +1620,126 @@ def test_twenty_six_task_batch_is_rejected_before_reservation_or_model_dispatch(
         assert outcomes[0].error_code == "worker_batch_limit_or_shape_invalid"
         assert host._reservations == {}
         assert clients == []
+
+def _batch_trace_rows(caplog):
+    rows = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if "event=project_worker_batch" not in message:
+            continue
+        fields = dict(item.split("=", 1) for item in message.split() if "=" in item)
+        rows.append(fields)
+    return rows
+
+
+def test_worker_batch_trace_correlates_safe_queue_authorization_and_end(monkeypatch, caplog):
+    from datetime import datetime
+
+    with temporary_agent_paths(copy_tool_dirs=()) as paths:
+        for project_id in ("project-alpha", "project-beta"):
+            create_project(paths, project_id, project_template="light")
+        session = create_new(paths, conversation_id="20261107-trace0001")
+        session._ordinary_work_intent = "execute"
+        requests = [
+            _request("project-alpha", "task-private-a", "PRIVATE_TASK_SENTINEL_A", reads=(), writes=("result-a.txt",)),
+            _request("project-beta", "task-private-b", "PRIVATE_TASK_SENTINEL_B", reads=(), writes=("result-b.txt",)),
+        ]
+        host, _clients = _host(
+            paths, monkeypatch,
+            lambda http_request: _response(
+                http_request, {"role": "assistant", "content": "done", "tool_calls": []}, "stop",
+            ),
+        )
+        reservations = host.reserve_many(
+            session, requests, parent_run_id="trace-parent", turn_epoch=21,
+            live_binding_check=_reservation_live(session, "trace-parent", 21),
+        )
+        caplog.set_level("INFO", logger="my_agent.sidecar")
+        outcomes = host.run_many(
+            session, requests, scope_confirm_fn=lambda _preview: "y",
+            outbound_request_confirm_fn=lambda _preview: "y", write_confirm_fn=lambda *_args: "y",
+            cancel_event=threading.Event(), parent_run_id="trace-parent", turn_epoch=21,
+            live_binding_check=_reservation_live(session, "trace-parent", 21), reservations=reservations,
+        )
+
+        assert all(row.status == "model_turn_finished" for row in outcomes)
+        rows = _batch_trace_rows(caplog)
+        assert len(rows) == 6
+        assert len({row["batch_id"] for row in rows}) == 1
+        assert {row["project_id"] for row in rows} == {"project-alpha", "project-beta"}
+        for project_id in ("project-alpha", "project-beta"):
+            project_rows = [row for row in rows if row["project_id"] == project_id]
+            assert [row["phase"] for row in project_rows] == ["queued", "authorized", "ended"]
+            assert project_rows[-1]["status"] == "model_turn_finished"
+            assert project_rows[0]["queued_at"] == project_rows[0]["at"]
+            assert project_rows[1]["authorized_at"] == project_rows[1]["at"]
+            assert project_rows[2]["ended_at"] == project_rows[2]["at"]
+            timestamps = [datetime.fromisoformat(row["at"].replace("Z", "+00:00")) for row in project_rows]
+            assert timestamps == sorted(timestamps)
+        trace_text = "\n".join(record.getMessage() for record in caplog.records)
+        for private_value in ("PRIVATE_TASK_SENTINEL", "task-private", session.conversation_id,
+                              "trace-parent", "result-a.txt", "result-b.txt"):
+            assert private_value not in trace_text
+
+
+def test_worker_batch_trace_marks_denial_and_cancellation_without_false_authorization(monkeypatch, caplog):
+    with temporary_agent_paths() as paths:
+        for project_id in ("project-alpha", "project-beta"):
+            create_project(paths, project_id, project_template="light")
+        session = create_new(paths, conversation_id="20261107-trace0002")
+        session._ordinary_work_intent = "execute"
+        requests = [_request("project-alpha", "denied", "deny me", reads=(), writes=("a.txt",)),
+                    _request("project-beta", "cancelled", "cancel me", reads=(), writes=("b.txt",))]
+        host, _clients = _host(paths, monkeypatch, lambda _request: pytest.fail("must not POST"))
+        reservations = host.reserve_many(
+            session, requests, parent_run_id="trace-parent-2", turn_epoch=22,
+            live_binding_check=_reservation_live(session, "trace-parent-2", 22),
+        )
+        caplog.set_level("INFO", logger="my_agent.sidecar")
+        denied = host.run_many(
+            session, [requests[0]], scope_confirm_fn=lambda _preview: "n",
+            outbound_request_confirm_fn=lambda _preview: "n", write_confirm_fn=lambda *_args: "n",
+            cancel_event=threading.Event(), parent_run_id="trace-parent-2", turn_epoch=22,
+            live_binding_check=_reservation_live(session, "trace-parent-2", 22), reservations=(reservations[0],),
+        )
+        cancelled_event = threading.Event()
+        cancelled_event.set()
+        cancelled = host.run_many(
+            session, [requests[1]], scope_confirm_fn=lambda _preview: "y",
+            outbound_request_confirm_fn=lambda _preview: "y", write_confirm_fn=lambda *_args: "y",
+            cancel_event=cancelled_event, parent_run_id="trace-parent-2", turn_epoch=22,
+            live_binding_check=_reservation_live(session, "trace-parent-2", 22), reservations=(reservations[1],),
+        )
+
+        assert denied[0].status == "blocked"
+        assert cancelled[0].status == "cancelled"
+        assert _batch_trace_rows(caplog) == [], "pre-start denial/cancellation is outside real-worker telemetry"
+
+
+def test_worker_batch_trace_marks_model_failure_failed_without_error_details(monkeypatch, caplog):
+    with temporary_agent_paths() as paths:
+        create_project(paths, "project-alpha", project_template="light")
+        session = create_new(paths, conversation_id="20261107-trace0003")
+        session._ordinary_work_intent = "execute"
+        request = _request("project-alpha", "failure-task", "private failure task", reads=(), writes=("result.txt",))
+        host, _clients = _host(
+            paths, monkeypatch,
+            lambda http_request: httpx.Response(503, request=http_request, text="PRIVATE_PROVIDER_ERROR"),
+        )
+        reservations = host.reserve_many(
+            session, [request], parent_run_id="trace-parent-3", turn_epoch=23,
+            live_binding_check=_reservation_live(session, "trace-parent-3", 23),
+        )
+        caplog.set_level("INFO", logger="my_agent.sidecar")
+        outcomes = host.run_many(
+            session, [request], scope_confirm_fn=lambda _preview: "y",
+            outbound_request_confirm_fn=lambda _preview: "y", write_confirm_fn=lambda *_args: "y",
+            cancel_event=threading.Event(), parent_run_id="trace-parent-3", turn_epoch=23,
+            live_binding_check=_reservation_live(session, "trace-parent-3", 23), reservations=reservations,
+        )
+
+        assert outcomes[0].status == "failed"
+        rows = _batch_trace_rows(caplog)
+        assert [row["phase"] for row in rows] == ["queued", "authorized", "ended"]
+        assert rows[-1]["status"] == "failed"
+        assert "PRIVATE_PROVIDER_ERROR" not in "\n".join(row.getMessage() for row in caplog.records)

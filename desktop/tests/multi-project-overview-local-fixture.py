@@ -70,6 +70,7 @@ current_dir.mkdir(parents=True)
 current = Session(current_id, current_dir, "", SessionMeta(project_id=""), [], paths)
 current.save()
 project_sessions: dict[str, str] = {}
+seed_history = "--with-history" in sys.argv[3:]
 for index in range(1, 6):
     project_id = f"synthetic-project-{index}"
     session_id = f"20261030-{index + 1:08x}"
@@ -86,8 +87,21 @@ for index in range(1, 6):
     session.save()
     store = WorkRecordStore(session)
     item = store.create_item(title=f"{project_id} recorded item", scope={"kind": "project", "project_id": project_id})
-    for requirement_index in range(1, 1 + (2 if index % 2 else 3)):
-        store.add_requirement(item["item_id"], f"{project_id} requirement {requirement_index}", event_id=f"{project_id}-requirement-{requirement_index}")
+    requirements = [store.add_requirement(item["item_id"], f"{project_id} requirement {requirement_index}", event_id=f"{project_id}-requirement-{requirement_index}")
+                    for requirement_index in range(1, 1 + (2 if index % 2 else 3))]
+    if seed_history and index == 2:
+        for requirement_index, requirement in enumerate(requirements[:1]):
+            current_run = None
+            for history_index in range(12):
+                run_id = f"synthetic-history-run-{requirement_index:02d}-{history_index:02d}"
+                store.begin_requirement_run(item["item_id"], requirement["requirement_id"],
+                                           run_id=run_id, expected_current_run_id=current_run)
+                store.record_result_if_current_run(item["item_id"], requirement["requirement_id"],
+                    run_id=run_id, result_id=f"synthetic-history-result-{requirement_index:02d}-{history_index:02d}", status="unknown",
+                    summary=("<img src=x onerror=alert(1)>" if history_index == 0
+                             else f"synthetic history row {requirement_index}-{history_index}"),
+                    verification={"status": "not_verified"})
+                current_run = run_id
     record_project_session(paths, project_id, session_id)
     project_sessions[project_id] = session_id
 

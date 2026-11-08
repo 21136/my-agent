@@ -533,15 +533,14 @@ def _sandbox_self_modify_overlay(session: Session) -> str:
         [
             "[实验自我修改]",
             where,
-            "这就是改自己：用 write_text / patch_file / write_evolve 落地，不要让用户去 Cursor 或 Codex。",
-            "desktop 改动看 5174。agent-core 改动后请用户在双车道点「重载实验运行时」，再回这个会话继续。",
+            "这就是改自己：用 write_text / patch_file / write_evolve 直接落地，不要让用户去 Cursor 或 Codex，也不要换到另一个进程。",
+            "当前聊天仍由正在跑的运行时执行，所以改坏文件不会把这次对话弄断。界面改动看 5174。",
             "满意后请用户点「合入稳定」。",
         ]
     )
 
 
 def format_session_overlay(session: Session) -> str:
-    topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     goal = session.goal.strip() or "(unset)"
     subagent = "used" if session.subagent_overlay else "none"
     intent = session.turn_intent or "(pending)"
@@ -550,7 +549,6 @@ def format_session_overlay(session: Session) -> str:
         f"harness: {session.meta.harness}",
         f"conversation_id: {session.conversation_id}",
         f"goal: {goal}",
-        f"topics: {topics}",
         f"llm_model: {session.meta.llm_model}",
         f"turn_mode: {session.meta.turn_mode}",
         f"turn_intent: {intent}",
@@ -937,16 +935,9 @@ def topics_confirmed_log_fields(
     registry: ToolRegistry | None = None,
 ) -> dict[str, Any]:
     """Fields for ``topics_confirmed`` evolve_log event (MEMORY §8)."""
-    evolve_dir = session.paths.evolve
-    topic_index = load_topic_index(evolve_dir)
-    by_id = {entry.id: entry for entry in topic_index}
+    # Topic metadata remains available for audit/compatibility, but no topic
+    # prompt is automatically injected into the current conversation.
     prompt_files: list[str] = []
-    for topic_id, _ in load_confirmed_topic_prompts(
-        evolve_dir, session.meta.topics, index=topic_index
-    ):
-        entry = by_id.get(topic_id)
-        if entry is not None:
-            prompt_files.append(entry.prompt)
     reg = registry or ToolRegistry.load(session.paths)
     evolved_tools = sorted(session_evolved_allowlist(session, registry=reg))
     return {
@@ -1067,11 +1058,6 @@ def format_capability_hints(
             f"- 项目历史接续（仅用户明确要求接续时）：run_evolved → project_catalog(arguments={{include_threads:true, project_id:{project_id}}})；"
             "只从本项目 state=archived 的候选中按用户提到的任务/时间选择，当前活线不是旧线候选；候选有歧义时先询问；选中后 read_file 对应 messages_path（跨会话须 confirm）；"
             "只整理用户要求的交接范围，不自动继承旧线；旧聊天中的完成声明不是代码事实，继续操作前复核当前项目状态。",
-        )
-    if session.meta.topics:
-        lines.insert(
-            2,
-            f"- 已加载主题 prompt：{', '.join(session.meta.topics)}（管习惯/记忆，不管工具锁）",
         )
     return "\n".join(lines)
 
@@ -1377,11 +1363,6 @@ def build_system_prompt(
                 except Exception:
                     # A malformed/oversized Skill must not block the turn.
                     pass
-
-        for topic_id, prompt_text in load_confirmed_topic_prompts(
-            evolve_dir, session.meta.topics, index=topic_index
-        ):
-            sections.append((f"topic_prompt:{topic_id}", prompt_text))
 
         if is_workshop_eligible(session) and not terminal:
             sections.append(("tool_workshop", load_tool_workshop_prompt(evolve_dir)))

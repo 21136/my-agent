@@ -46,11 +46,11 @@
 
 | 子层 | 位置 | 职责 |
 |------|------|------|
-| **Prompt（特殊要求）** | `evolve/prompts/<topic>.md` | 硬规则；按主题拆分；会话确认主题后加载 |
-| **久远记忆** | `evolve/memories/<topic>/*.md` | 软事实；启动注入 **id + summary** 索引 |
+| **Prompt（特殊要求）** | `evolve/prompts/<topic>.md` | 硬规则资产；按主题归档，当前会话不由 `meta.topics` 决定加载 |
+| **久远记忆** | `evolve/memories/<topic>/*.md` | 软事实；主题用于资产分类，启动注入 **id + summary** 索引 |
 | **短期记忆** | `data/sessions/<id>/goal.md` + 对话 | 本次会议目标；**不进化**进 evolve |
 
-- **主题路由**：读 `prompts/_index.toml` → LLM 输出 `topics[]` → **用户确认** → 加载对应 prompt
+- **主题分类**：`topics` / `_index.toml` 用于 prompt 与 memory 资产的索引、分类和发现；历史会话主题不驱动当前 prompt 加载，也不控制工具权限。当前注入与工具执行以运行时代码及 [MEMORY.md](./MEMORY.md)、[TOOL-CATALOG.md](./TOOL-CATALOG.md) 为准。
 - **可晚于 tool 一步**：没有 memory，agent 也能靠对话 + tool 干活
 
 ### 2.3a 当前 Skill Registry（2026-10-16）

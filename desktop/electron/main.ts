@@ -26,6 +26,7 @@ import {
 } from "electron";
 import { promoteCandidateWithRestart } from "./candidate-promotion";
 import { SidecarSupervisor } from "./sidecar-supervisor";
+import { parseApprovalControlBootstrap, requestApprovalPreferences, type ApprovalControlBootstrap, type ApprovalPreferenceMode, type ApprovalPreferencesPayload } from "./approval-control-client";
 import { createLegacySandboxLane, createTrustedLegacyLaneHandlers } from "./legacy-sandbox-lane";
 import { SidecarBootstrapRegistry, sidecarBootstrapLaunch, type EvolutionSidecarBootstrap } from "./evolution/sidecar-bootstrap";
 import { createEvolutionSupervisorHost, type EvolutionSupervisorHost } from "./evolution/supervisor-host";
@@ -312,6 +313,7 @@ let shellDevPopoutWindow: BrowserWindow | null = null;
 let shellDevPreviewBaseUrl = defaultShellDevPreviewBase();
 let sidecar: ChildProcess | null = null;
 let sidecarInfo: { host: string; port: number } | null = null;
+let approvalControl: ApprovalControlBootstrap | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 const workbenchInstance = installWorkbenchSingleInstance({
@@ -533,7 +535,7 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
     const script = ordinaryChatH1 ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
     if(fixedHostContext && selectedBootstrap) throw Error("fixed E0 layout cannot be mixed with evolution test bootstrap");
     const fixedFrame=fixedHostContext?.sidecarLayoutFrame();
-    const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", String(DEFAULT_WS_PORT), ...privateLaunch.args];
+    const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", String(DEFAULT_WS_PORT), ...privateLaunch.args, "--enable-approval-control"];
     sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
       cwd: ordinaryChatH1 ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
       stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
@@ -570,6 +572,7 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
         return;
       }
       if (payload.ready === true && typeof payload.port === "number") {
+        approvalControl = parseApprovalControlBootstrap(payload);
         if (!settled) {
           settled = true;
           settledRef.value = true;
@@ -613,6 +616,7 @@ function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: Evo
       const wasReady = sidecarInfo !== null;
       sidecar = null;
       sidecarInfo = null;
+      approvalControl = null;
 
       if (!settled) {
         settled = true;
@@ -799,6 +803,7 @@ async function ensureSidecar(): Promise<void> {
   if (DEFAULT_WS_PORT !== 0 && !sidecarOwned && (await waitForPortOpen("127.0.0.1", DEFAULT_WS_PORT))) {
     console.log(`[sidecar] reusing listener on 127.0.0.1:${DEFAULT_WS_PORT}`);
     sidecarInfo = { host: "127.0.0.1", port: DEFAULT_WS_PORT };
+    approvalControl = null;
     setPreferredUi("electron");
     return;
   }
@@ -1309,6 +1314,41 @@ function registerShortcuts(): void {
 }
 
 ipcMain.handle("sidecar:get", () => sidecarInfo);
+ipcMain.handle("approval-preferences:get", async (event): Promise<ApprovalPreferencesPayload> => {
+  if (!assertShellDevWorkbenchSender(event)) throw new Error("审批设置仅允许可信工作台主页面读取");
+  const control = approvalControl;
+  if (!control) return unavailableApprovalPreferences("当前 sidecar 未提供可信审批控制接口，无法确认当前实际审批档位；切换已禁用。");
+  try { return await requestApprovalPreferences(control); }
+  catch { return unavailableApprovalPreferences("可信审批控制接口不可用，无法确认当前实际审批档位；切换已禁用。"); }
+});
+ipcMain.handle("approval-preferences:set", async (event, rawMode: unknown): Promise<ApprovalPreferencesPayload> => {
+  if (!assertShellDevWorkbenchSender(event)) throw new Error("审批设置仅允许可信工作台主页面修改");
+  if (rawMode !== "manual" && rawMode !== "auto" && rawMode !== "full") throw new Error("审批档位无效");
+  const control = approvalControl;
+  if (!control) return unavailableApprovalPreferences("当前 sidecar 未提供可信审批控制接口，无法确认当前实际审批档位；切换已禁用。");
+  const mode = rawMode as ApprovalPreferenceMode;
+  const description = mode === "manual" ? "恢复所有操作均需逐项确认" : mode === "auto" ? "启用受限的自动审批" : "启用完整自动审批：命令可能删除文件、访问网络或密钥，并越过项目目录与专用工具保护";
+  const parent = workbenchWindow;
+  if (!parent || parent.isDestroyed()) return unavailableApprovalPreferences("工作台窗口已关闭，设置未更改。");
+  const answer = await dialog.showMessageBox(parent, {
+    type: "warning", title: "确认更改审批设置",
+    message: `是否将审批设置切换为“${mode}”？`, detail: `${description}。只有点击“确认切换”后才会保存。`,
+    buttons: ["确认切换", "取消"], defaultId: 1, cancelId: 1, noLink: true,
+  });
+  if (answer.response !== 0 || !assertShellDevWorkbenchSender(event) || workbenchWindow !== parent || parent.isDestroyed()) {
+    try {
+      const current = await requestApprovalPreferences(control);
+      return { ...current, type: "approval_preferences.done", status: "rejected", state_known: true, message: "用户未确认切换；请重新读取当前审批档位。" };
+    } catch { return unavailableApprovalPreferences("用户未确认切换；请重新读取当前审批档位。"); }
+  }
+  if (approvalControl !== control) return unavailableApprovalPreferences("sidecar 已切换，设置未更改，请刷新后重试。");
+  try { return await requestApprovalPreferences(control, mode); }
+  catch { return unavailableApprovalPreferences("可信审批控制接口不可用，设置结果及当前实际档位均无法确认；切换已禁用。"); }
+});
+
+function unavailableApprovalPreferences(message: string): ApprovalPreferencesPayload {
+  return { type: "approval_preferences.done", status: "rejected", approval_mode: "manual", saved_approval_mode: "manual", available_modes: ["manual", "auto", "full"], state_known: false, message };
+}
 const legacySandboxLaneIpc = createTrustedLegacyLaneHandlers({
   isTrusted: (event: IpcMainInvokeEvent) => Boolean(legacySessionWorkbenchOrigin)
     && assertShellDevWorkbenchSender(event, legacySessionWorkbenchOrigin),

@@ -18,7 +18,7 @@
 - Terminal 使用 `terminal-ui/` 与 `agent-core/terminal_*`，有独立启动入口和会话边界。
 - 项目核心制品是 `PROJECT.md`、`DESIGN.md`、`VERIFY.md`。旧 TASKS 队列、计划代理、进度门和狂奔阶段调度已下线；兼容字段或旧项目文件不代表这些能力仍启用。
 - 普通项目执行权限依据请求意图、项目绑定与根目录、目标路径、操作风险和确认策略；不以历史 Phase/任务状态授予权限。
-- Goal Runtime P0 已接入动手回合：保存 `goal-state.json`、累计预算、停止/暂停和验收结果。入口是 `agent-core/goal_runtime.py` 与 `agent-core/agent.py`，不是旧狂奔调度器，也不代表已完成无人值守产品验收。
+- Goal Runtime P0 已接入动手回合：保存 `goal-state.json`、累计用量、停止/暂停和验收结果。累计用量不直接阻断人工新回合，也不代表语义进度；单 Run 自动续段另受本 Run 上限约束。默认不按总墙钟时长取消，而由无活动监测兜底。入口是 `agent-core/goal_runtime.py`、`agent-core/agent.py` 与 `runtime_guards.py`；这不是旧狂奔调度器，也不代表已完成无人值守产品验收。
 - 普通 Agent 工作台与 managed 原生记录入口是不同路径。`desktop/src/main.ts` 检测到 `myAgentManaged` 后进入记录视图；不要把该路径的记录持久化验证说成完整聊天/模型/工具验收。
 
 ## 3. 源码定位
@@ -30,6 +30,8 @@
 | 项目接入、制品与验收 | `agent-core/project_mode.py`、`project_manifest.py`、`project_verify.py`、`external_project.py` |
 | 权限、路径与工具执行 | `agent-core/tools/executor.py`、`write_policy.py`、`boundaries.py`、`host_scope.py` |
 | 工具与子代理 | `agent-core/tools/`、`subagent.py`、`evolve/tools/`、`evolve/subagents/` |
+| 多项目 worker 派工与隔离执行 | `agent-core/agent.py`、`project_worker_host.py`、`project_worker_model_loop.py`、`project_worker_execution.py`；桌面进度 `desktop/src/shells/unified/project-worker-progress.ts`；验收边界见 [MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md) |
+| 会话事项记录、概况与控制 | `agent-core/work_records.py`、`work_records_overview_api.py`、`multi_project_work_records_overview_api.py`、`server.py`；Desktop `desktop/src/shells/unified/current-work-overview.ts`；当前会话概况 + 用户确认的已映射项目只读聚合，非全局调度器 |
 | 生图与视频一方工具 | `agent-core/tools/builtin/generate_image.py`、`generate_video.py`；Agent 指引见 `evolve/tool-catalog/INDEX.md` 和 `docs/TOOLS.md` |
 | Skill 注册与按需加载 | `agent-core/skill_registry.py`、`evolve/skills/` |
 | 模型、路由和凭据读取 | `agent-core/llm_client.py`、`llm_routing.py`、`llm_models.py`、`llm_secrets.py` |

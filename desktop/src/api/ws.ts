@@ -13,6 +13,18 @@ export type LlmModelListItem = {
 };
 
 export type LlmRoleModelPreferences = { main: string; subagent: string };
+export type ApprovalPreferenceMode = "manual" | "auto" | "full";
+type ApprovalPreferencesPayload = {
+  status: "ok" | "rejected";
+  state_known?: boolean;
+  approval_mode: ApprovalPreferenceMode;
+  saved_approval_mode: ApprovalPreferenceMode;
+  available_modes: ApprovalPreferenceMode[];
+  message?: string;
+};
+export type ApprovalPreferencesEvent =
+  | ({ type: "approval_preferences.state" } & ApprovalPreferencesPayload)
+  | ({ type: "approval_preferences.done" } & ApprovalPreferencesPayload);
 export type LlmRoleModelsEvent = {
   type: "llm_role_models.state" | "llm_role_models.done";
   status: "ok" | "rejected";
@@ -141,23 +153,34 @@ export type WorkCardSnapshotViewEvent = { type: "work-card.snapshot.view.done"; 
 export type LocalAssistantReplyExcerptDetail = { session_id: string; item_id: string; requirement_id: string; result_id: string; label: string; escaped_excerpt_text: string; source_availability: "available" | "unavailable"; result_status: "unknown"; verification_status: "not_verified" };
 export type WorkCardResultViewEvent = { type: "work-card.result.view.done"; status: WorkCardResultViewStatus; message: string; session_id: string; presentation_id: string; card_id: string; result_id: string; requirement_id: string; request_id?: string; local_assistant_reply_excerpt_detail?: LocalAssistantReplyExcerptDetail };
 
+export type WorkRecordControlAction = "set_dependencies" | "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue" | "cancel_execution" | "revise_requirement" | "set_priority" | "copy_requirement_to_new_item" | "inspect_unknown_claim";
+export type WorkRecordControlDoneEvent = { type: "work-record.control.done"; session_id: string; request_id: string; item_id: string; project_id?: string; requirement_id?: string; action: WorkRecordControlAction; status: "applied" | "rejected"; message: string };
 export type OverviewResultState = "no_records" | "visible" | "collapsed" | "cancelled" | "error" | "expired";
 export type OverviewReadStatus = "viewed" | "unread" | "unknown";
 export type WorkRecordsOverviewPageFacts = { kind: "items" | "requirements"; group_kind: "project" | "independent" | "linked_source_snapshot"; group_id: string; item_id: string | null; offset: number; total: number; has_more: boolean; next_cursor: string | null };
-export type WorkRecordsOverviewRequirement = { requirement_id: string; text: string; status: string; status_at_capture?: string; worker_facts?: unknown[] };
+export type WorkRecordsOverviewRunHistory = { run_id: string; result_id: string; status: string; summary: string; verification_status: string; recorded_at: number | null };
+export type AuthorizedRequirementHistoryEvent = WorkRecordsOverviewRunHistory & { type: "work-records.overview.result"; session_id: string; request_id: string; state: OverviewResultState; aggregation_scope: "selected_project_sessions"; selected_project_ids: string[]; history_project_id: string; history_item_id: string; history_requirement_id: string; history_page: { page_size: number; offset: number; has_more: boolean; next_cursor: string | null; scope: "this_requirement_only" }; source: { project_id: string; session_id: string; revision: number }; history: WorkRecordsOverviewRunHistory[]; };
+export type WorkRecordsOverviewRequirement = { requirement_id: string; text: string; status: string; depends_on?: string[]; depends_on_refs?: Array<{ item_id: string; requirement_id: string }>; history?: WorkRecordsOverviewRunHistory[]; history_page?: { page_size: number; offset: number; has_more: boolean; next_cursor: string | null; scope: "this_requirement_only" }; status_at_capture?: string; worker_facts?: unknown[]; claim_recovery_needed?: boolean };
 export type WorkRecordsOverviewCurrentResult = { requirement_id: string; result_id: string; status: string; read_status: OverviewReadStatus };
-export type WorkRecordsOverviewItem = { item_id: string; title: string; status: string; status_at_capture?: string; status_counts: Record<string, number>; requirements: WorkRecordsOverviewRequirement[]; current_results: WorkRecordsOverviewCurrentResult[]; requirements_page?: WorkRecordsOverviewPageFacts };
+export type WorkRecordsOverviewItem = { item_id: string; title: string; priority?: number; status: string; status_at_capture?: string; status_counts: Record<string, number>; requirements: WorkRecordsOverviewRequirement[]; current_results: WorkRecordsOverviewCurrentResult[]; omitted_requirement_count?: number; requirements_page?: WorkRecordsOverviewPageFacts };
 export type WorkRecordsOverviewSourceSnapshot = { scope: "authorized_source_session_only"; mapping_claim: "not_asserted"; project_id: string; source_session_id: string; source_revision: number; captured_at: string; copy_id: string; intent_state: "pending" | "reference_queued"; card_id: string | null; viewed_at: string | null; superseded_snapshot_count: number; superseded_unviewed_count: number };
-export type WorkRecordsOverviewGroup = { id: string; visibility: "visible" | "collapsed"; status: string; status_counts: Record<string, number>; item_count: number; requirement_count: number; items: WorkRecordsOverviewItem[]; items_page?: WorkRecordsOverviewPageFacts | null } & ({ kind: "project" | "independent" } | { kind: "linked_source_snapshot"; status: "unknown"; source_snapshot: WorkRecordsOverviewSourceSnapshot } & ({ visibility: "visible"; attention_status: "unknown"; attention_reason: "publication_pending" | "captured_requirement_unresolved" | "superseded_snapshot_attention" | "view_evidence_unavailable" | "view_not_confirmed" | "superseded_snapshot_unviewed" | "worker_result_unverified"; visibility_timer_status: "unknown" | "waiting" | "not_viewed" | "unavailable" | "elapsed" } | { visibility: "collapsed"; attention_status: "none"; attention_reason: "elapsed_terminal_capture"; visibility_timer_status: "elapsed" }));
+export type WorkRecordsOverviewGroup = { id: string; visibility: "visible" | "collapsed"; status: string; status_counts: Record<string, number>; item_count: number; requirement_count: number; items: WorkRecordsOverviewItem[]; items_page?: WorkRecordsOverviewPageFacts | null; source_session_id?: string; source_revision?: number; omitted_item_count?: number } & ({ kind: "project" | "independent" } | { kind: "linked_source_snapshot"; status: "unknown"; source_snapshot: WorkRecordsOverviewSourceSnapshot } & ({ visibility: "visible"; attention_status: "unknown"; attention_reason: "publication_pending" | "captured_requirement_unresolved" | "superseded_snapshot_attention" | "view_evidence_unavailable" | "view_not_confirmed" | "superseded_snapshot_unviewed" | "worker_result_unverified"; visibility_timer_status: "unknown" | "waiting" | "not_viewed" | "unavailable" | "elapsed" } | { visibility: "collapsed"; attention_status: "none"; attention_reason: "elapsed_terminal_capture"; visibility_timer_status: "elapsed" }));
 export type WorkRecordsOverviewUnreadResult = { group: [string, string]; item_id: string; requirement_id: string; result_id: string };
+export type WorkRecordsSchedulePreview = { state: "visible" | "unavailable"; candidates: Array<{ project_id: string; item_id: string; requirement_id: string; priority: number }>; blocked: Array<{ project_id: string; item_id: string; requirement_id: string; priority: number; reasons: string[] }>; limitations: string[]; omissions?: string[] };
 export type WorkRecordsOverviewResultEvent = {
-  type: "work-records.overview.result"; session_id: string; request_id: string; state: OverviewResultState;
+  type: "work-records.overview.result"; session_id: string; request_id: string; state: OverviewResultState; work_record_revision?: number;
+  aggregation_scope?: "selected_project_sessions"; selected_project_ids?: string[]; schedule_preview?: WorkRecordsSchedulePreview;
   reason?: string; groups: WorkRecordsOverviewGroup[]; detail_page?: WorkRecordsOverviewPageFacts | null;
   unread_important_results: WorkRecordsOverviewUnreadResult[];
   unread_important_results_total?: number; unread_important_results_truncated?: boolean;
   unread_status: "known" | "unknown"; visibility_limitations: string[];
   visibility_counts: { visible_groups: number; visible_items: number; collapsed_groups: number; collapsed_items: number };
   snapshot_id: string | null;
+  history_project_id?: string; history_item_id?: string; history_requirement_id?: string;
+  history_scope?: "selected_projects_history"; history_sources?: Array<{ project_id: string; session_id: string; revision: number }>;
+  history?: WorkRecordsOverviewRunHistory[];
+  history_page?: { page_size: number; offset: number; has_more: boolean; next_cursor: string | null; scope: "this_requirement_only" | "selected_projects_history" };
+  source?: { project_id: string; session_id: string; revision: number };
   visibility_recheck_after_ms?: number;
   page: { page_size: number; offset: number; total_groups: number; total_visible_groups: number; total_visible_items: number;
     total_collapsed_groups: number; total_collapsed_items: number; has_more: boolean; next_cursor: string | null };
@@ -178,11 +201,33 @@ export type WorkCardEvent =
 export type AutoRecognitionDoneEvent = { type: "work-record.auto-recognition.done"; session_id: string; request_id: string; action: "enable" | "revoke"; status: "ok" | "rejected"; enabled: boolean };
 export type AutoRecognitionStateEvent = { type: "work-record.auto-recognition.state"; session_id: string; enabled: boolean };
 
+export type GoalBudgetState = {
+  tool_turns_used: number;
+  tool_turns_limit: number;
+  wall_seconds_used: number;
+  wall_seconds_limit: number;
+  repair_count: number;
+  repair_limit: number;
+};
+export type GoalStateEvent = {
+  type: "goal.state";
+  goal_id: string;
+  goal_text: string;
+  status: "idle" | "active" | "paused" | "done" | "failed" | "stopped";
+  pause_reason: string | null;
+  next_step: string;
+  budgets: GoalBudgetState;
+  can_auto_continue: boolean;
+  session_id?: string;
+};
 export type ProjectWorkerVerificationPayload = { session_id: string; project_id: string; item_id: string; requirement_id: string; project_name: string; requirement_text: string; pytest_target: string; worker_run_id: string; reservation_id: string };
 
 export type ServerEvent =
+  | ApprovalPreferencesEvent
   | AutoRecognitionDoneEvent
   | AutoRecognitionStateEvent
+  | WorkRecordControlDoneEvent
+  | GoalStateEvent
   | LlmRoleModelsEvent
   | { type: "client.connection.closed" }
   | { type: "user.message.persisted"; session_id: string; request_id: string }
@@ -1070,6 +1115,7 @@ export class AgentWsClient {
   private linkedProjectSessionCopyIdentities = new Map<string, { projectId: string; mappingClaim: "not_asserted" }>();
   private receiptBacklogSignature = "";
   private overviewPending = new Map<string, string>();
+  private workRecordControlPending = new Map<string, { sessionId: string; itemId: string; projectId: string; requirementId: string; action: WorkRecordControlAction }>();
   private destroyed = false;
   private lane: SidecarLane = "stable";
   private legacyLaneQueriesAllowed = false;
@@ -1163,6 +1209,7 @@ export class AgentWsClient {
     this.cardRetired.clear();
     this.cardProjectId = null;
     this.overviewPending.clear();
+    this.workRecordControlPending.clear();
     const url = `ws://${this.host}:${this.port}`;
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -1216,6 +1263,18 @@ export class AgentWsClient {
             || data.session_id !== this.currentConversationId
             || typeof data.request_id !== "string" || !WORK_CARD_UUID.test(data.request_id)
           )) return;
+          if ((data.type === "approval_preferences.state" || data.type === "approval_preferences.done") && (
+            (data.status !== "ok" && data.status !== "rejected")
+            || !["manual", "auto", "full"].includes(data.approval_mode)
+            || !["manual", "auto", "full"].includes(data.saved_approval_mode)
+            || !Array.isArray(data.available_modes)
+            || data.available_modes.length !== 3
+            || new Set(data.available_modes).size !== 3
+            || !["manual", "auto", "full"].every(mode => data.available_modes.includes(mode as ApprovalPreferenceMode))
+            || Object.keys(data).some(key => !["type", "status", "approval_mode", "saved_approval_mode", "available_modes", "message"].includes(key))
+            || (data.message !== undefined && typeof data.message !== "string")
+          )) return;
+          if (data.type === "approval_preferences.state" || data.type === "approval_preferences.done") return; // Only authenticated Electron IPC may update this view.
           if (data.type === "session.banner") {
             if (data.session_id !== this.currentConversationId) this.autoRecognitionPending = null;
             const nextProject = typeof data.project_id === "string" ? data.project_id : "";
@@ -1250,7 +1309,9 @@ export class AgentWsClient {
           }
           if (data.type === "work-record.post-turn.result" &&
               (!this.currentConversationId || data.session_id !== this.currentConversationId)) return;
-          if (data.type === "work-records.overview.result") {
+          if (data.type === "work-record.control.done") {
+            if (!this.acceptWorkRecordControlDone(data)) return;
+          } else if (data.type === "work-records.overview.result") {
             if (!this.acceptWorkRecordsOverviewResult(data)) return;
           } else if (data.type === "work-card.present") {
             if (!this.acceptWorkCardPresent(data)) return;
@@ -1283,6 +1344,7 @@ export class AgentWsClient {
       this.cardRetired.clear();
       this.cardProjectId = null;
       this.overviewPending.clear();
+    this.workRecordControlPending.clear();
       settle(new Error("WebSocket closed before connection opened"));
       if (this.destroyed) return;
       this.updateEvolutionConversationId(null);
@@ -1380,13 +1442,93 @@ export class AgentWsClient {
     return requestId;
   }
 
-  queryWorkRecordsOverview(options: { cursor?: string; pageSize?: number; detailPaging?: boolean } = {}): string {
-    if (!cardObject(options) || Object.keys(options).some(key => key !== "cursor" && key !== "pageSize" && key !== "detailPaging")) throw new Error("invalid work-records overview options");
+  controlWorkRecord(options: {
+    itemId: string; requirementId?: string; projectId?: string; action: WorkRecordControlAction; expectedStatus?: string;
+    expectedRevision?: number; expectedSourceRevision?: number; dependsOn?: string[]; dependsOnRefs?: Array<{ item_id: string; requirement_id: string }>; priority?: number; newText?: string; inspectionEvidence?: string;
+  }): string {
+    if (!cardObject(options) || !nonempty(options.itemId) || !this.currentConversationId
+        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "set_priority", "copy_requirement_to_new_item", "inspect_unknown_claim"].includes(options.action)) {
+      throw new Error("invalid work-record control request");
+    }
+    const action = options.action;
+    const requirementId = options.requirementId ?? "";
+    if (action === "set_priority") {
+      if (!Number.isInteger(options.priority) || (options.priority as number) < 0 || (options.priority as number) > 5) throw new Error("invalid work-record priority");
+    } else if (!nonempty(requirementId) || (action !== "copy_requirement_to_new_item" && !nonempty(options.expectedStatus))) {
+      throw new Error("requirement controls require identity and expected status");
+    }
+    if (action === "revise_requirement" && !nonempty(options.newText)) throw new Error("revision text is required");
+    if (action !== "revise_requirement" && options.newText !== undefined) throw new Error("unexpected revision text");
+    if (action === "inspect_unknown_claim" && (!nonempty(options.inspectionEvidence) || options.inspectionEvidence.length > 4000)) throw new Error("inspection evidence is required");
+    if (action !== "inspect_unknown_claim" && options.inspectionEvidence !== undefined) throw new Error("unexpected inspection evidence");
+    if (options.dependsOn !== undefined && (!Array.isArray(options.dependsOn)
+        || options.dependsOn.length > 128 || options.dependsOn.some(value => !nonempty(value)))) throw new Error("invalid dependency list");
+    if (options.dependsOnRefs !== undefined && (!Array.isArray(options.dependsOnRefs)
+        || options.dependsOnRefs.length > 128 || options.dependsOnRefs.some(ref => !cardObject(ref)
+          || !nonempty(ref.item_id) || !nonempty(ref.requirement_id)))) throw new Error("invalid cross-item dependency list");
+    const sessionId = this.currentConversationId;
+    const requestId = crypto.randomUUID();
+    const eventId = crypto.randomUUID();
+    if (!WORK_CARD_UUID.test(requestId) || !WORK_CARD_UUID.test(eventId) || this.workRecordControlPending.has(requestId)) throw new Error("invalid or reused work-record control identity");
+    const projectId = options.projectId ?? "";
+    if (projectId) {
+      if (!nonempty(projectId) || !Number.isSafeInteger(options.expectedSourceRevision) || (options.expectedSourceRevision as number) < 0) {
+        throw new Error("remote project control requires a source revision");
+      }
+    } else if (!Number.isSafeInteger(options.expectedRevision) || (options.expectedRevision as number) < 0) {
+      throw new Error("local work-record control requires a revision");
+    }
+    this.workRecordControlPending.set(requestId, { sessionId, itemId: options.itemId, projectId, requirementId, action });
+    try {
+      this.send({ type: "work-record.control", session_id: sessionId, request_id: requestId,
+        item_id: options.itemId, expected_revision: options.expectedRevision ?? 0,
+        ...(projectId ? { project_id: projectId, expected_source_revision: options.expectedSourceRevision } : {}),
+        ...(requirementId ? { requirement_id: requirementId } : {}), action,
+        ...(options.expectedStatus ? { expected_status: options.expectedStatus } : {}),
+        ...(options.dependsOn ? { depends_on: options.dependsOn } : {}),
+        ...(options.dependsOnRefs ? { depends_on_refs: options.dependsOnRefs } : {}),
+        ...(options.newText === undefined ? {} : { new_text: options.newText }),
+        ...(options.inspectionEvidence === undefined ? {} : { inspection_evidence: options.inspectionEvidence }),
+        ...(options.priority === undefined ? {} : { priority: options.priority }),
+        event_id: eventId, idempotency_key: requestId });
+    } catch (error) {
+      this.workRecordControlPending.delete(requestId);
+      throw error;
+    }
+    return requestId;
+  }
+
+  private acceptWorkRecordControlDone(event: unknown): event is WorkRecordControlDoneEvent {
+    if (!cardObject(event) || event.type !== "work-record.control.done"
+        || typeof event.request_id !== "string" || typeof event.session_id !== "string"
+        || event.session_id !== this.currentConversationId || typeof event.item_id !== "string"
+        || typeof event.action !== "string" || !["applied", "rejected"].includes(String(event.status))
+        || typeof event.message !== "string") return false;
+    const pending = this.workRecordControlPending.get(event.request_id);
+    if (!pending || pending.sessionId !== event.session_id || pending.itemId !== event.item_id
+        || pending.projectId !== (typeof event.project_id === "string" ? event.project_id : "")
+        || pending.requirementId !== (typeof event.requirement_id === "string" ? event.requirement_id : "")
+        || pending.action !== event.action) return false;
+    if (Object.keys(event).some(key => !["type", "request_id", "session_id", "item_id", "project_id", "requirement_id", "action", "status", "message"].includes(key))) return false;
+    this.workRecordControlPending.delete(event.request_id);
+    return true;
+  }
+
+  queryWorkRecordsOverview(options: { cursor?: string; pageSize?: number; detailPaging?: boolean; projectIds?: string[]; history?: { projectId: string; itemId: string; requirementId: string; cursor?: string }; mergedHistory?: { cursor?: string } } = {}): string {
+    if (!cardObject(options) || Object.keys(options).some(key => !["cursor", "pageSize", "detailPaging", "projectIds", "history", "mergedHistory"].includes(key))) throw new Error("invalid work-records overview options");
+    if (options.history && (!options.projectIds?.includes(options.history.projectId) || !nonempty(options.history.itemId)
+      || !nonempty(options.history.requirementId) || options.mergedHistory !== undefined
+      || (options.history.cursor !== undefined && (!nonempty(options.history.cursor) || options.history.cursor.length > 2048)))) throw new Error("invalid authorized history scope");
+    if (options.mergedHistory && (!options.projectIds?.length || (options.mergedHistory.cursor !== undefined
+      && (!nonempty(options.mergedHistory.cursor) || options.mergedHistory.cursor.length > 2048)))) throw new Error("invalid merged history scope");
     const pageSize = options.pageSize ?? 6;
     const detailPaging = options.detailPaging ?? true;
     if (typeof detailPaging !== "boolean") throw new Error("invalid work-records overview detail paging option");
     if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) throw new Error("invalid work-records overview page size");
     if (options.cursor !== undefined && (typeof options.cursor !== "string" || !options.cursor || options.cursor.length > 4096)) throw new Error("invalid work-records overview cursor");
+    if (options.projectIds !== undefined && (!Array.isArray(options.projectIds) || !options.projectIds.length || options.projectIds.length > 6
+        || options.projectIds.some(value => !nonempty(value)) || new Set(options.projectIds).size !== options.projectIds.length
+        || options.cursor !== undefined)) throw new Error("invalid selected project overview scope");
     if (!this.currentConversationId) throw new Error("work-records overview requires a current session banner");
     const requestId = crypto.randomUUID();
     if (!WORK_CARD_UUID.test(requestId) || this.overviewPending.has(requestId)) throw new Error("invalid or reused work-records overview request UUID");
@@ -1395,7 +1537,13 @@ export class AgentWsClient {
     try {
       this.send({ type: "work-records.overview.query", session_id: sessionId, request_id: requestId,
         ...(options.cursor === undefined ? {} : { cursor: options.cursor }), page_size: pageSize,
-        ...(detailPaging ? { detail_paging: true } : {}) });
+        ...(detailPaging ? { detail_paging: true } : {}),
+        ...(options.projectIds ? { project_ids: options.projectIds } : {}),
+        ...(options.history ? { history_project_id: options.history.projectId, history_item_id: options.history.itemId,
+          history_requirement_id: options.history.requirementId, history_page_size: 10,
+          ...(options.history.cursor ? { history_cursor: options.history.cursor } : {}) } : {}),
+        ...(options.mergedHistory ? { history_scope: "selected_projects_history", history_page_size: 10,
+          ...(options.mergedHistory.cursor ? { history_cursor: options.mergedHistory.cursor } : {}) } : {}) });
     } catch (error) {
       this.overviewPending.delete(requestId);
       throw error;
@@ -1424,12 +1572,67 @@ export class AgentWsClient {
   }
 
   private acceptWorkRecordsOverviewResult(event: unknown): event is WorkRecordsOverviewResultEvent {
+    if (cardObject(event) && event.type === "work-records.overview.result" && event.history_page !== undefined) {
+      const page = event.history_page;
+      const source = event.source;
+      const mergedSources = event.history_sources;
+      const rows = event.history;
+      if (event.history_scope === "selected_projects_history") {
+        if (typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id)
+          || event.session_id !== this.currentConversationId || this.overviewPending.get(event.request_id) !== event.session_id
+          || event.aggregation_scope !== "selected_project_sessions" || !Array.isArray(event.selected_project_ids)
+          || !["visible", "no_records"].includes(String(event.state)) || !Array.isArray(mergedSources) || !Array.isArray(rows)
+          || (event.state === "no_records" && rows.length !== 0)
+          || !cardObject(page) || page.scope !== "selected_projects_history" || !nonnegative(page.page_size)
+          || page.page_size < 1 || page.page_size > 20 || !nonnegative(page.offset) || typeof page.has_more !== "boolean"
+          || !(page.total === null || nonnegative(page.total))
+          || (page.has_more ? !nonempty(page.next_cursor) : page.next_cursor !== null)
+          || mergedSources.length !== event.selected_project_ids.length
+          || new Set(event.selected_project_ids as string[]).size !== event.selected_project_ids.length
+          || [...(event.selected_project_ids as string[])].sort().some((id, index) => id !== [...mergedSources.map(source => cardObject(source) ? source.project_id : "")].sort()[index])
+          || mergedSources.some(source => !cardObject(source) || !nonempty(source.project_id)
+            || !event.selected_project_ids!.includes(source.project_id as string) || !nonempty(source.session_id) || !nonnegative(source.revision))
+          || new Set(mergedSources.filter(cardObject).map(source => source.project_id)).size !== mergedSources.length
+          || rows.length > page.page_size || (page.has_more && rows.length !== page.page_size)
+          || (event.state === "no_records" && rows.length !== 0)
+          || rows.some(row => !cardObject(row) || !nonempty(row.project_id)
+            || !nonempty(row.session_id)
+            || !mergedSources.some(source => cardObject(source) && source.project_id === row.project_id && source.session_id === row.session_id)
+            || !nonempty(row.item_id) || !nonempty(row.requirement_id)
+            || !nonempty(row.run_id) || !nonempty(row.result_id) || !nonempty(row.status)
+            || typeof row.summary !== "string" || !nonempty(row.verification_status)
+            || !(row.recorded_at === null || typeof row.recorded_at === "number" && Number.isFinite(row.recorded_at)))) return false;
+        this.overviewPending.delete(event.request_id);
+        return true;
+      }
+      if (typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id)
+        || event.session_id !== this.currentConversationId || this.overviewPending.get(event.request_id) !== event.session_id
+        || event.aggregation_scope !== "selected_project_sessions" || !Array.isArray(event.selected_project_ids)
+        || !event.selected_project_ids.includes(event.history_project_id as string)
+        || !nonempty(event.history_item_id) || !nonempty(event.history_requirement_id)
+        || event.state !== "visible" || !cardObject(source) || source.project_id !== event.history_project_id
+        || !nonempty(source.session_id) || !nonnegative(source.revision) || !Array.isArray(rows)
+        || !cardObject(page) || page.scope !== "this_requirement_only" || !nonnegative(page.page_size)
+        || page.page_size < 1 || page.page_size > 20 || !nonnegative(page.offset) || typeof page.has_more !== "boolean"
+        || (page.has_more ? !nonempty(page.next_cursor) : page.next_cursor !== null)
+        || rows.length > page.page_size || rows.some(row => !cardObject(row) || !nonempty(row.run_id)
+          || !nonempty(row.result_id) || !nonempty(row.status) || typeof row.summary !== "string"
+          || !nonempty(row.verification_status) || !(row.recorded_at === null || typeof row.recorded_at === "number" && Number.isFinite(row.recorded_at)))) return false;
+      this.overviewPending.delete(event.request_id);
+      return true;
+    }
     if (!cardObject(event) || event.type !== "work-records.overview.result"
       || typeof event.request_id !== "string" || !WORK_CARD_UUID.test(event.request_id)
       || typeof event.session_id !== "string" || event.session_id !== this.currentConversationId
       || this.overviewPending.get(event.request_id) !== event.session_id
       || !["no_records", "visible", "collapsed", "cancelled", "error", "expired"].includes(String(event.state))
+      || (event.work_record_revision !== undefined && (!Number.isSafeInteger(event.work_record_revision) || Number(event.work_record_revision) < 0))
       || !Array.isArray(event.groups) || !Array.isArray(event.unread_important_results)
+      || (event.aggregation_scope !== undefined && event.aggregation_scope !== "selected_project_sessions")
+      || (event.selected_project_ids !== undefined && (!Array.isArray(event.selected_project_ids)
+        || event.selected_project_ids.length < 1 || event.selected_project_ids.length > 6
+        || event.selected_project_ids.some(value => !nonempty(value))
+        || new Set(event.selected_project_ids).size !== event.selected_project_ids.length))
       || !["known", "unknown"].includes(String(event.unread_status))
       || !Array.isArray(event.visibility_limitations) || !event.visibility_limitations.every(value => typeof value === "string")
       || !cardObject(event.visibility_counts) || !cardObject(event.page)
@@ -1525,7 +1728,10 @@ export class AgentWsClient {
       || !nonempty(value.id) || value.visibility !== "visible" || !nonempty(value.status)
       || !cardObject(value.status_counts) || !Array.isArray(value.items)
       || !nonnegative(value.item_count) || !nonnegative(value.requirement_count)
-      || value.items.length > value.item_count) return false;
+      || value.items.length > value.item_count
+      || (value.source_session_id !== undefined && !nonempty(value.source_session_id))
+      || (value.source_revision !== undefined && !nonnegative(value.source_revision))
+      || (value.omitted_item_count !== undefined && !nonnegative(value.omitted_item_count))) return false;
     if (value.kind === "linked_source_snapshot" && !this.validSourceOverview(value)) return false;
     const hasItemsPage = Object.prototype.hasOwnProperty.call(value, "items_page");
     const itemsPage = value.items_page as WorkRecordsOverviewPageFacts | null | undefined;
@@ -1542,11 +1748,28 @@ export class AgentWsClient {
     let requirementCount = 0;
     for (const item of value.items) {
       if (!cardObject(item) || !nonempty(item.item_id) || typeof item.title !== "string" || !nonempty(item.status)
+        || (item.priority !== undefined && (!Number.isInteger(item.priority) || Number(item.priority) < 0 || Number(item.priority) > 5))
+        || (item.omitted_requirement_count !== undefined && !nonnegative(item.omitted_requirement_count))
         || !cardObject(item.status_counts) || !Object.values(item.status_counts).every(nonnegative)
         || !Array.isArray(item.requirements) || !Array.isArray(item.current_results)) return false;
       requirementCount += item.requirements.length;
-      if (!item.requirements.every((req: unknown) => cardObject(req) && nonempty(req.requirement_id)
-        && typeof req.text === "string" && nonempty(req.status))) return false;
+      if (!item.requirements.every((req: unknown) => {
+        if (!cardObject(req) || !nonempty(req.requirement_id) || typeof req.text !== "string" || !nonempty(req.status)) return false;
+        if (req.depends_on !== undefined
+            && (!Array.isArray(req.depends_on) || !req.depends_on.every(nonempty))) return false;
+        if (req.depends_on_refs !== undefined
+            && (!Array.isArray(req.depends_on_refs) || req.depends_on_refs.length > 128
+              || !req.depends_on_refs.every((ref: unknown) => cardObject(ref)
+                && Object.keys(ref).length === 2 && nonempty(ref.item_id) && nonempty(ref.requirement_id)))) return false;
+        if (req.history !== undefined) {
+          if (!Array.isArray(req.history) || req.history.length > 10) return false;
+          if (!req.history.every((row: unknown) => cardObject(row) && nonempty(row.run_id)
+              && nonempty(row.result_id) && nonempty(row.status) && typeof row.summary === "string"
+              && nonempty(row.verification_status)
+              && (row.recorded_at === null || typeof row.recorded_at === "number" && Number.isFinite(row.recorded_at)))) return false;
+        }
+        return true;
+      })) return false;
       if (Object.prototype.hasOwnProperty.call(item, "requirements_page")
         && (!this.validOverviewPageFacts(item.requirements_page, "requirements", value.kind, value.id, item.item_id)
           || item.requirements_page.offset + item.requirements.length > item.requirements_page.total
@@ -1784,12 +2007,18 @@ export class AgentWsClient {
           ? validLinkedParentCardScope(event.source_scope, pending.session, linkedItemSnapshot)
           : linkedProjectSnapshot
             ? validLinkedProjectSessionCopyScope(event.source_scope, pending.session, linkedProjectSnapshot)
-            : validCardScope(event.source_scope, pending.session))
+            : snapshot?.kind === "project_scoped"
+              ? cardObject(event.source_scope)
+                && exactCardKeys(event.source_scope, ["session_id", "project_id"])
+                && event.source_scope.session_id === pending.session
+                && event.source_scope.project_id === this.cardProjectId
+              : validCardScope(event.source_scope, pending.session))
         && validWorkCard(event.card, pending.session, identity)
         && (linkedItemSnapshot !== undefined || linkedProjectSnapshot !== undefined
-          || (!!ordinarySnapshot && (ordinarySnapshot.kind === "independent"
-            ? cardObject(event.source_scope) && event.source_scope.kind === "independent"
-            : cardObject(event.source_scope) && event.source_scope.project_id === ordinarySnapshot.project_id)));
+          || (!!ordinarySnapshot && (ordinarySnapshot.kind === "project_scoped"
+            || (ordinarySnapshot.kind === "independent"
+              ? cardObject(event.source_scope) && event.source_scope.kind === "independent"
+              : cardObject(event.source_scope) && event.source_scope.project_id === ordinarySnapshot.project_id))));
       if (valid && linkedItemSnapshot && typeof identity === "string") {
         this.linkedItemCopyIdentities.set(identity, {
           projectId: linkedItemSnapshot.project_id, itemId: linkedItemSnapshot.item_id,
@@ -2084,7 +2313,9 @@ export class AgentWsClient {
   }
 
   async createSandboxSession(): Promise<void> {
-    await this.ensureLane("sandbox");
+    // Keep the current sidecar. The experiment tree is a write fence, not a second process.
+    // Switching lanes drops the chat whenever the other runtime is down or restarting.
+    if (this.ws?.readyState !== WebSocket.OPEN) await this.ensureLane(this.lane);
     this.updateEvolutionConversationId(null);
     this.send({ type: "session.create_sandbox" });
   }
@@ -2109,6 +2340,23 @@ export class AgentWsClient {
 
   listRoleModels(): void {
     this.send({ type: "llm_role_models.get" });
+  }
+
+  getApprovalPreferences(): void {
+    const api = window.myAgentDesktop?.getApprovalPreferences;
+    if (!api) throw new Error("trusted Electron approval control is unavailable");
+    void api().then((event) => this.handlers.forEach((handler) => handler(event))).catch(() => {
+      this.handlers.forEach((handler) => handler({ type: "approval_preferences.state", status: "rejected", state_known: false, approval_mode: "manual", saved_approval_mode: "manual", available_modes: ["manual", "auto", "full"], message: "可信审批控制接口不可用；当前实际审批档位未知，切换已禁用，请重新打开设置重试。" }));
+    });
+  }
+
+  setApprovalMode(mode: ApprovalPreferenceMode): void {
+    if (mode !== "manual" && mode !== "auto" && mode !== "full") throw new Error("invalid approval mode");
+    const api = window.myAgentDesktop?.setApprovalMode;
+    if (!api) throw new Error("trusted Electron approval control is unavailable");
+    void api(mode).then((event) => this.handlers.forEach((handler) => handler(event))).catch(() => {
+      this.handlers.forEach((handler) => handler({ type: "approval_preferences.done", status: "rejected", approval_mode: "manual", saved_approval_mode: "manual", available_modes: ["manual", "auto", "full"], message: "可信审批控制接口不可用；设置结果未能确认，当前实际档位未知，切换已禁用，请重新打开设置重试。" }));
+    });
   }
 
   setRoleModel(role: "main" | "subagent", model: string): void {
@@ -2406,6 +2654,8 @@ declare global {
       setEvolutionConversationId?: (sessionId: string | null) => Promise<boolean>;
       onEvolutionRequest?: (handler: (request: EvolutionHostRequest) => void) => () => void;
       getSidecar: () => Promise<{ host: string; port: number } | null>;
+      getApprovalPreferences?: () => Promise<ApprovalPreferencesEvent & { type: "approval_preferences.state" }>;
+      setApprovalMode?: (mode: ApprovalPreferenceMode) => Promise<ApprovalPreferencesEvent & { type: "approval_preferences.done" }>;
       getSessionLaneCapabilities?: () => Promise<SessionLaneCapabilities>;
       ensureSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;
       restartSandboxSidecar?: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;

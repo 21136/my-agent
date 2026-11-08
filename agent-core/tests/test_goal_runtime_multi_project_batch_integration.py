@@ -63,6 +63,8 @@ def test_goal_multi_project_gate_is_written_only_at_first_worker_start(monkeypat
         ])
         events = []
         start_marker_snapshots = []
+        rejected_batch_authorizations = []
+        worker_requests = []
 
         def emit(event):
             events.append(event)
@@ -86,6 +88,7 @@ def test_goal_multi_project_gate_is_written_only_at_first_worker_start(monkeypat
             )
 
         def provider(request: httpx.Request) -> httpx.Response:
+            worker_requests.append(request)
             request_body = json.loads(request.content.decode("utf-8"))
             if reject_worker and "project_id is 'project-beta'" in request_body["messages"][0]["content"]:
                 raise httpx.ConnectError("synthetic beta worker failure", request=request)
@@ -115,9 +118,11 @@ def test_goal_multi_project_gate_is_written_only_at_first_worker_start(monkeypat
                 pending_id = bridge._pending_confirm_id
                 if pending_id:
                     prompt = next(event.get("preview", "") for event in events if event.get("request_id") == pending_id)
-                    is_worker_scope = prompt.startswith("\u9879\u76ee worker \u8303\u56f4\u786e\u8ba4\uff1a")
-                    choice = "n" if reject_confirmation and is_worker_scope else "y"
+                    is_batch_authorization = prompt.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+                    choice = "n" if reject_confirmation and is_batch_authorization else "y"
                     assert bridge.deliver_confirm(pending_id, choice)
+                    if choice == "n":
+                        rejected_batch_authorizations.append(pending_id)
                 if asyncio.get_running_loop().time() >= deadline:
                     bridge.request_cancel()
                     raise AssertionError("Goal-enabled two-project worker batch timed out")
@@ -154,8 +159,12 @@ def test_goal_multi_project_gate_is_written_only_at_first_worker_start(monkeypat
             assert state["status"] == "active"
             return
         if reject_confirmation:
-            rejected_rows = batch_result["data"]["workers"]
-            assert rejected_rows and all(row["status"] == "blocked" for row in rejected_rows)
+            assert len(rejected_batch_authorizations) == 1
+            assert batch_result["ok"] is False
+            assert batch_result["data"] is None
+            assert batch_result["error"]["code"] == "permission_denied"
+            assert "PROJECT_WORKER_BATCH_AUTHORIZATION_DENIED_OR_EXPIRED" in batch_result["error"]["message"]
+            assert not worker_requests
             assert state["multi_project_unverified"] is False
             assert state["multi_project_ids"] == []
             assert state["status"] == "active"
@@ -186,5 +195,8 @@ def test_goal_multi_project_gate_is_written_only_at_first_worker_start(monkeypat
         reloaded = __import__("goal_runtime").GoalRuntime(Path(session.session_dir))
         loaded = reloaded.load()
         assert loaded is not None
-        assert loaded.status == "paused"
+        # Reloading another runtime object in this same process is not a process
+        # restart; an active Goal must remain active while its multi-project gate stays open.
+        assert loaded.status == "active"
+        assert loaded.pause_reason is None
         assert loaded.multi_project_unverified is True

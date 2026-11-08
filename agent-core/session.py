@@ -236,6 +236,11 @@ class SessionMeta:
             llm_model = ""
 
         llm_model_override = bool(payload.get("llm_model_override", False))
+        if not llm_model_override:
+            # Older sessions persisted an auto-picked pro model from `topics`.
+            # Keep topics readable, but do not let that legacy classification pin
+            # today's model; explicit user model preferences remain untouched.
+            llm_model = resolve_session_model([])
 
         execution_model = payload.get("execution_model", "")
         if not isinstance(execution_model, str):
@@ -465,10 +470,9 @@ class Session:
         )
 
     def set_topics(self, topics: list[str], *, phase: SessionPhase | None = None) -> None:
+        """Store legacy classification metadata without changing the selected model."""
         cleaned = [topic.strip() for topic in topics if topic.strip()]
         self.meta.topics = cleaned
-        if not self.meta.llm_model_override:
-            self.meta.llm_model = resolve_session_model(cleaned)
         if phase is not None:
             self.meta.phase = phase
 
@@ -1792,6 +1796,7 @@ def create_sandbox_evolution_session(paths: AgentPaths) -> Session:
     scope = sandbox_write_scope_relative(paths)
     session = create_new(paths, write_scope_root=scope)
     session.goal = "实验进化（sandbox）"
+    session.meta.turn_mode = "agent"
     session.append_message(
         {"role": "user", "content": sandbox_session_seed_content(scope)},
         persist=False,
@@ -1877,12 +1882,10 @@ def resume_or_create(paths: AgentPaths | None = None) -> Session:
 
 def build_anchor_message(session: Session) -> dict[str, str]:
     """Fixed anchor block inserted before S4 history (RUNTIME.md §5)."""
-    topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     content = (
         f"{ANCHOR_HEADER}\n"
         f"conversation_id: {session.conversation_id}\n"
         f"目标: {session.goal.strip() or '(unset)'}\n"
-        f"主题: {topics}\n"
         f"说明: 工作区 workspace/；进化目录 evolve/；动手只用 Builtin 与 run_evolved。"
     )
     return {"role": "user", "content": content}

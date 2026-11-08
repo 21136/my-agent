@@ -84,6 +84,20 @@ html[data-theme] .unified-shell[data-perspective="project"]:has(#unified-shell-d
   max-width: 28rem;
 }
 
+.dual-lane-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.dual-lane-back-chat {
+  flex: 0 0 auto;
+  min-height: 2.65rem;
+  padding-inline: 1.1rem;
+  border-radius: 999px;
+}
+
 .dual-lane-refresh {
   flex: 0 0 auto;
   opacity: 0.85;

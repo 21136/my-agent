@@ -21,10 +21,12 @@ _WORKER_BATCH_ORIGINAL_KEY = re.compile(r"^worker-batch-original:([0-9a-f]{64})$
 _STATUS_RANK = {
     "blocked": 0,
     "unknown": 1,
-    "in_progress": 2,
-    "stopped": 3,
-    "pending": 4,
-    "completed": 5,
+    "waiting_confirmation": 2,
+    "in_progress": 3,
+    "stopped": 4,
+    "queued": 5,
+    "pending": 6,
+    "completed": 7,
 }
 
 
@@ -71,6 +73,10 @@ def _requirement_status(status: Any) -> str:
     if status == "in_progress":
         # A persisted start/current_run_id is not evidence that a process is still alive.
         return "执行状态待确认"
+    if status == "queued":
+        return "排队中"
+    if status == "waiting_confirmation":
+        return "等待确认"
     if status == "stopped":
         return "已停止"
     if status == "completed":
@@ -95,8 +101,12 @@ def _aggregate_status(items: tuple[dict[str, Any], ...]) -> str:
         return "有要求结果待确认"
     if "in_progress" in statuses:
         return "有要求执行状态待确认"
+    if "waiting_confirmation" in statuses:
+        return "有要求等待确认"
     if "stopped" in statuses:
         return "有要求已停止"
+    if "queued" in statuses:
+        return "有要求排队中"
     if "pending" in statuses:
         return "有要求待开始"
     if statuses == {"completed"}:
@@ -109,7 +119,8 @@ def _status_counts(items: tuple[dict[str, Any], ...]) -> str:
     """Count all persisted requirements, including those omitted from details."""
     labels = {
         "blocked": "受阻", "unknown": "结果待确认", "in_progress": "执行状态待确认",
-        "stopped": "已停止", "pending": "待开始", "completed": "已记录完成",
+        "stopped": "已停止", "queued": "排队中", "waiting_confirmation": "等待确认",
+        "pending": "待开始", "completed": "已记录完成",
         "other": "状态待确认",
     }
     counts = {key: 0 for key in labels}
@@ -283,15 +294,18 @@ def _make_groups(items: list[dict[str, Any]]) -> list[_OverviewGroup]:
 
     groups: list[_OverviewGroup] = []
     for key, members in grouped.items():
-        members.sort(key=lambda item: (_status_rank(item), str(item.get("title", "")).casefold(), item.get("item_id", "")))
+        members.sort(key=lambda item: (_status_rank(item), -int(item.get("priority", 3)),
+                                       str(item.get("title", "")).casefold(), item.get("item_id", "")))
         label = f"项目 {_safe_text(key[1], _MAX_TITLE_CHARS)}" if key[0] == "project" else "独立事项"
         member_tuple = tuple(members)
         priorities = [_status_rank(item) for item in member_tuple]
+        attention = min(priorities, default=_STATUS_RANK["pending"])
+        user_priority = max((int(item.get("priority", 3)) for item in member_tuple), default=3)
         groups.append(_OverviewGroup(
             key=key,
             label=label,
             items=member_tuple,
-            priority=min(priorities, default=_STATUS_RANK["pending"]),
+            priority=attention * 10 + (5 - user_priority),
             requirement_count=sum(
                 len(item.get("requirements", []))
                 for item in member_tuple

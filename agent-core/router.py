@@ -39,9 +39,6 @@ ROUTE_USER_MESSAGE_TEMPLATE = """本次会议目标：
 
 请根据 system 中的主题索引，提议应加载的 topics。只输出 JSON：{{"topics":[],"reason":""}}"""
 
-TOPIC_CONFIRM_PROMPT_TEMPLATE = "确认主题 {hint}？(y/n/或直接输入 id，逗号分隔)"
-
-
 class TopicRoutingError(ValueError):
     """Invalid topic command or proposal."""
 
@@ -78,25 +75,6 @@ class TopicConfirmation:
 
     topics: tuple[str, ...]
     action: Literal["accept", "reject", "override", "empty"]
-
-
-def build_topic_confirm_prompt(proposal: TopicProposal) -> str:
-    """CLI prompt for S3 topic confirmation (RUNTIME §3 S3, MEMORY §4.2)."""
-    hint = ", ".join(proposal.topics) if proposal.topics else "(none)"
-    return TOPIC_CONFIRM_PROMPT_TEMPLATE.format(hint=hint)
-
-
-def format_proposal_banner(proposal: TopicProposal, *, header: str) -> str:
-    """Human-readable S2 proposal line for REPL."""
-    if proposal.topics:
-        line = f"{header} — 建议主题: {', '.join(proposal.topics)}"
-        if proposal.reason:
-            line += f" ({proposal.reason})"
-    else:
-        line = f"{header} — 无 LLM 主题建议，请手动输入。"
-    if proposal.rejected:
-        line += f" [已忽略未注册: {', '.join(proposal.rejected)}]"
-    return line
 
 
 def parse_manual_topic_ids(
@@ -526,12 +504,6 @@ def _demo() -> None:
         reason="dev docs",
         rejected=("unknown",),
     )
-    assert "coding, workflow" in build_topic_confirm_prompt(proposal_s2)
-    banner = format_proposal_banner(proposal_s2, header="新会话")
-    assert "建议主题: coding, workflow" in banner
-    assert "已忽略未注册: unknown" in banner
-    print("[PASS] T-304: S2 proposal banner + S3 confirm prompt")
-
     accept = resolve_topic_confirmation("y", proposal_s2, valid_topic_ids=valid)
     assert accept.action == "accept"
     assert accept.topics == ("coding", "workflow")
@@ -550,7 +522,7 @@ def _demo() -> None:
             goal="Router demo",
             meta=SessionMeta(
                 topics=["writing"],
-                llm_model="deepseek-v4-flash",
+                llm_model=load_config().model,
                 updated_at=utc_now_iso(),
                 phase="S2",
             ),
@@ -559,16 +531,16 @@ def _demo() -> None:
         )
         session.session_dir.mkdir(parents=True, exist_ok=True)
 
+        cfg = load_config()
         apply_confirmed_topics(session, ["coding"], mode="replace", save=False)
         assert session.meta.topics == ["coding"]
-        cfg = load_config()
-        assert session.meta.llm_model == cfg.model_coding
-        print("[PASS] replace sets llm_model to pro when coding selected")
+        assert session.meta.llm_model == cfg.model
+        print("[PASS] replace stores topic metadata without changing model")
 
         apply_confirmed_topics(session, ["workflow"], mode="append", save=False)
         assert session.meta.topics == ["coding", "workflow"]
-        assert session.meta.llm_model == cfg.model_coding
-        print("[PASS] append unions topics; keeps pro model")
+        assert session.meta.llm_model == cfg.model
+        print("[PASS] append unions topic metadata without changing model")
 
         shortcut = parse_topic_command("主题 writing")
         assert shortcut is not None
@@ -576,7 +548,7 @@ def _demo() -> None:
         assert applied is not None
         assert session.meta.topics == ["writing"]
         assert session.meta.llm_model == cfg.model
-        print("[PASS] 主题 shortcut replaces topics + flash model")
+        print("[PASS] legacy topic shortcut updates metadata only")
 
         reroute_result = apply_topic_command(session, reroute, save=False)
         assert reroute_result is None

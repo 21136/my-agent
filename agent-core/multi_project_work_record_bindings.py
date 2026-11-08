@@ -82,6 +82,10 @@ class ReadOnlyWorkRecordStore:
     def list_items(self) -> list[dict[str, Any]]:
         return _reader_for(self).list_items()
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return a validated point-in-time copy of the sidecar and its revision."""
+        return _reader_for(self).with_locked_data(lambda data: data)
+
     def get_item(self, item_id: str) -> dict[str, Any] | None:
         return _reader_for(self).get_item(item_id)
 
@@ -1259,6 +1263,141 @@ class ConversationWorkRecordBindings:
                 return copy
             return preview
 
+    def prepare_project_session_copies_batch(self, *, entries: list[dict[str, Any]],
+                                             expected: dict[str, Any] | None = None,
+                                             is_current: Any = None, commit: bool = False) -> dict[str, Any]:
+        """Preview or atomically persist copies from multiple authorized project Sessions.
+
+        A batch is one all-or-none decision over the exact source snapshots shown
+        in the preview. It grants no source reads, outbound disclosure, execution,
+        or writes to the source projects.
+        """
+        if (type(entries) is not list or not 2 <= len(entries) <= 25
+                or (expected is not None and type(expected) is not dict)
+                or (commit and (expected is None or not callable(is_current)))):
+            raise ValueError("invalid project session copy batch")
+        normalized = []
+        seen_projects: set[str] = set()
+        seen_bindings: set[str] = set()
+        total_bindings = 0
+        for entry in entries:
+            if type(entry) is not dict or set(entry) != {"project_id", "binding_ids", "source"}:
+                raise ValueError("invalid project session copy batch entry")
+            project_id, binding_ids, source = entry["project_id"], entry["binding_ids"], entry["source"]
+            if (not _valid_id(project_id) or project_id in seen_projects
+                    or type(binding_ids) is not list or not binding_ids or len(binding_ids) > 20
+                    or len(set(binding_ids)) != len(binding_ids)
+                    or any(not _valid_id(value) for value in binding_ids)
+                    or any(value in seen_bindings for value in binding_ids)
+                    or type(source) is not AuthorizedProjectRecordSource
+                    or not _is_issued_authorized_project_record_source(source)
+                    or source.conversation_id != self._conversation_id
+                    or source.project_id != project_id or source.store.project_id != project_id
+                    or source.store.agent_root != self._agent_root):
+                raise PermissionError("exact distinct authorized project sources required")
+            seen_projects.add(project_id)
+            seen_bindings.update(binding_ids)
+            total_bindings += len(binding_ids)
+            normalized.append({"project_id": project_id, "binding_ids": list(binding_ids), "source": source})
+        if total_bindings > 200:
+            raise ValueError("project session copy batch exceeds binding limit")
+        normalized.sort(key=lambda row: row["project_id"])
+        lock_paths = {str(path.resolve(strict=False)).casefold(): path
+                      for path in [self._dialog_lock_path,
+                                   *(row["source"].store.lock_path for row in normalized)]}
+        with ExitStack() as stack:
+            for path in sorted(lock_paths.values(), key=lambda value: str(value).casefold()):
+                stack.enter_context(_file_lock(path, self._lock_timeout))
+            self._validate_scope()
+            data = self._read()
+            snapshots = []
+            prepared = []
+            for entry in normalized:
+                project_id, binding_ids, source = entry["project_id"], entry["binding_ids"], entry["source"]
+                if not _is_issued_authorized_project_record_source(source):
+                    raise PermissionError("source authorization changed")
+                reader = _reader_for(source.store)
+                reader._validate_scope()
+                source_payload = reader._read()
+                source_items = [item for item in source_payload["items"]
+                                if item.get("scope") == {"kind": "project", "project_id": project_id}]
+                items = [{"item_id": item["item_id"], "title": item["title"], "status": item["status"],
+                          "requirements": [{"requirement_id": req["requirement_id"], "text": req["text"],
+                                            "status": req["status"]} for req in item["requirements"]]}
+                         for item in source_items]
+                facts = []
+                for binding_id in binding_ids:
+                    matches = [row for batch in data["batches"] for row in batch["bindings"]
+                               if row["binding_id"] == binding_id]
+                    if len(matches) != 1:
+                        raise WorkRecordBindingConflict("binding missing")
+                    row = matches[0]
+                    source_matches = [item for item in source_items if item["item_id"] == row["item_id"]]
+                    if (row["project_id"] != project_id or row["authorization_id"] != source.authorization_id
+                            or row["source_session_id"] != source.store.session_id
+                            or len(source_matches) != 1 or type(row.get("source_item_digest")) is not str
+                            or _digest(source_matches[0]) != row["source_item_digest"]
+                            or type(row.get("start_receipt")) is not dict or type(row.get("lifecycle")) is not dict
+                            or row["start_receipt"]["turn_epoch"] != row["lifecycle"]["sequence"]):
+                        raise WorkRecordBindingConflict("source or host lifecycle changed")
+                    facts.append({"binding_id": binding_id, "item_id": row["item_id"],
+                                  "requirement_id": row["requirement_id"], "worker_id": row["worker_id"],
+                                  "worker_run_id": row["run_id"], "host_start": row["start_receipt"],
+                                  "host_lifecycle": row["lifecycle"], "operation_result": "unknown",
+                                  "verification": "not_verified"})
+                snapshot = {"scope": "authorized_source_session_only", "mapping_claim": "not_asserted",
+                            "project_id": project_id, "source_session_id": source.store.session_id,
+                            "source_revision": source_payload["revision"], "items": items, "worker_facts": facts}
+                snapshot = json.loads(json.dumps(snapshot, ensure_ascii=False))
+                from work_card_ledger import WorkCardLedgerCorrupt, _validate_linked_project_session_copy
+                candidate = {"kind": "linked_project_session_copy", "session_id": self._conversation_id,
+                             "captured_at": datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                             "copy_id": _digest(snapshot), "binding_id": binding_ids[0], "source": snapshot}
+                try:
+                    _validate_linked_project_session_copy(candidate, self._conversation_id)
+                except (WorkCardLedgerCorrupt, TypeError, ValueError, UnicodeError) as exc:
+                    raise WorkRecordBindingConflict("source session snapshot is not representable as a work card") from exc
+                anchor = next(row for batch in data["batches"] for row in batch["bindings"]
+                              if row["binding_id"] == binding_ids[0])
+                previous = anchor.get("project_session_copy")
+                if previous is not None and previous["snapshot"] != snapshot:
+                    raise WorkRecordBindingConflict("immutable project session copy exists; refresh is not available")
+                snapshots.append({"project_id": project_id, "source_session_id": source.store.session_id,
+                                  "snapshot": snapshot})
+                prepared.append((anchor["binding_id"], snapshot, previous))
+            preview = {"scope": "authorized_source_session_only",
+                       "destination": {"conversation_id": self._conversation_id,
+                                       "scope": "current_parent_conversation_binding_store"},
+                       "sources": snapshots}
+            preview = json.loads(json.dumps(preview, ensure_ascii=False))
+            if len(json.dumps(preview, ensure_ascii=False).encode("utf-8")) > 65536:
+                raise WorkRecordBindingConflict("project session copy batch exceeds confirmation limit")
+            if expected is not None and expected != preview:
+                raise WorkRecordBindingConflict("project session copy batch changed after preview")
+            if commit:
+                if is_current() is not True:
+                    raise WorkRecordBindingConflict("copy batch confirmation is no longer current")
+                changed = False
+                for binding_id, snapshot, previous in prepared:
+                    if previous is not None:
+                        continue
+                    copy = {"snapshot": snapshot,
+                            "confirmed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                            "intent": {"copy_id": _digest(snapshot), "state": "pending"}}
+                    anchor = next(row for batch in data["batches"] for row in batch["bindings"]
+                                  if row["binding_id"] == binding_id)
+                    anchor["project_session_copy"] = copy
+                    changed = True
+                if changed:
+                    data["revision"] += 1
+                    self._validate_payload(data)
+                    if (is_current() is not True
+                            or any(not _is_issued_authorized_project_record_source(row["source"])
+                                   for row in normalized)):
+                        raise WorkRecordBindingConflict("copy batch authorization changed")
+                    self._publish(data)
+            return preview
+
     def prepare_project_session_refresh(self, *, project_id: str, binding_ids: list[str],
                                      source: AuthorizedProjectRecordSource,
                                      expected: dict[str, Any] | None = None,
@@ -1558,9 +1697,15 @@ class ConversationWorkRecordBindings:
                     or row["source_session_id"] != reader.session_id):
                 raise PermissionError("source does not match binding")
             start, lifecycle = row.get("start_receipt"), row.get("lifecycle")
-            if (type(start) is not dict or type(lifecycle) is not dict
-                    or start["turn_epoch"] != lifecycle["sequence"]):
-                return None
+            # A read grant and persisted binding do not provide a live cancellation
+            # channel. If start/lifecycle evidence is absent or inconsistent, report
+            # uncertainty rather than infer that the worker is stopped or cancelable.
+            host_status = "unknown"
+            finish_reason = "unknown"
+            if (type(start) is dict and type(lifecycle) is dict
+                    and start.get("turn_epoch") == lifecycle.get("sequence")):
+                host_status = lifecycle["status"]
+                finish_reason = lifecycle["finish_reason"]
             items = [item for item in reader._read_items_locked() if item.get("item_id") == row["item_id"]]
             if len(items) != 1 or items[0].get("scope") != {"kind": "project", "project_id": row["project_id"]}:
                 return None
@@ -1571,7 +1716,8 @@ class ConversationWorkRecordBindings:
             if snapshot_digest is not None and _digest(items[0]) != snapshot_digest:
                 return None
             return {"project_id": row["project_id"], "binding_id": row["binding_id"],
-                    "host_status": lifecycle["status"], "finish_reason": lifecycle["finish_reason"],
+                    "worker_run_id": row["run_id"], "host_status": host_status,
+                    "finish_reason": finish_reason, "cancellation_status": "unknown",
                     "operation_result": "unknown", "verification": "not_verified",
                     "source_snapshot_verified": snapshot_digest is not None}
 

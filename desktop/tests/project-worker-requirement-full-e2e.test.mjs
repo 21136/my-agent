@@ -11,7 +11,7 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const desktopRoot = fileURLToPath(new URL("../", import.meta.url));
 const repoRoot = path.resolve(desktopRoot, "..");
-const python = path.resolve(repoRoot, "..", "..", ".venv", "Scripts", "python.exe");
+const python = path.join(repoRoot, ".venv", "Scripts", "python.exe");
 const playwrightPath = process.env.CODEX_PLAYWRIGHT_PATH || path.join(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
 const browserPath = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 

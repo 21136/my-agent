@@ -67,7 +67,7 @@ class SkillPromptIntegrationTests(unittest.TestCase):
         session.messages = [{"role": "user", "content": "请查看项目状态"}]
         first = build_system_prompt(session, paths=paths, agent_core_dir=_AGENT_CORE)
         self.assertNotIn("skill_context", first.section_names)
-        session.messages.append({"role": "user", "content": "修复这个报错并跑回归测试"})
+        session.messages.append({"role": "user", "content": "这个程序发生崩溃了"})
         second = build_system_prompt(session, paths=paths, agent_core_dir=_AGENT_CORE)
         self.assertIn("skill_context", second.section_names)
         self.assertIn("systematic-debugging", second.prompt)

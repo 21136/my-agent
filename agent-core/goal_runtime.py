@@ -22,6 +22,7 @@ from file_guard import atomic_write_text
 
 GOAL_STATE_FILENAME = "goal-state.json"
 SCHEMA_VERSION = 1
+_PROCESS_INSTANCE_ID = uuid.uuid4().hex
 
 GoalStatus = Literal["idle", "active", "paused", "done", "failed", "stopped"]
 
@@ -29,6 +30,10 @@ _TERMINAL_STATUSES = frozenset({"done", "failed", "stopped"})
 _DEFAULT_TOOL_TURNS_LIMIT = 50
 _DEFAULT_WALL_SECONDS_LIMIT = 900.0
 _DEFAULT_REPAIR_LIMIT = 3
+_DEFAULT_AUTO_CONTINUE_TOOL_TURNS_LIMIT = 50
+_DEFAULT_AUTO_CONTINUE_WALL_SECONDS_LIMIT = 900.0
+_MAX_WALL_EXTENSION_SECONDS = 900
+_MAX_WALL_SECONDS_LIMIT = 3600.0
 _TAIL_MAX = 1200
 
 
@@ -149,6 +154,7 @@ class GoalState:
     pause_reason: str | None = None
     stop_requested: bool = False
     last_run_id: str | None = None
+    process_instance_id: str | None = None
     schema_version: int = SCHEMA_VERSION
     created_at: str = ""
     updated_at: str = ""
@@ -174,6 +180,7 @@ class GoalState:
             "pause_reason": self.pause_reason,
             "stop_requested": bool(self.stop_requested),
             "last_run_id": self.last_run_id,
+            "process_instance_id": self.process_instance_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -219,6 +226,9 @@ class GoalState:
             stop_requested=bool(raw.get("stop_requested")),
             last_run_id=(
                 str(raw["last_run_id"]) if raw.get("last_run_id") is not None else None
+            ),
+            process_instance_id=(
+                str(raw["process_instance_id"]) if raw.get("process_instance_id") is not None else None
             ),
             schema_version=int(raw.get("schema_version") or SCHEMA_VERSION),
             created_at=str(raw.get("created_at") or ""),
@@ -300,13 +310,19 @@ class GoalRuntime:
         run_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.session_dir = Path(session_dir)
-        self._clock = clock or time.time
+        self._clock = clock or time.monotonic
         self.lifecycle = lifecycle or ExecutionLifecycle(
             run_id_factory=run_id_factory,
             clock=self._clock,
         )
         self._state: GoalState | None = None
         self._run_wall_started_at: float | None = None
+        self._pending_wall_seconds = 0.0
+        self._wall_clock_pause_depth = 0
+        self._run_auto_tool_turns_used = 0
+        self._run_auto_wall_seconds_used = 0.0
+        self._run_auto_tool_turns_limit = _DEFAULT_AUTO_CONTINUE_TOOL_TURNS_LIMIT
+        self._run_auto_wall_seconds_limit = _DEFAULT_AUTO_CONTINUE_WALL_SECONDS_LIMIT
 
     @property
     def path(self) -> Path:
@@ -330,13 +346,26 @@ class GoalRuntime:
             self._state = None
             return None
         state = GoalState.from_dict(payload)
-        # Never revive a Run across restart: clear last_run_id linkage to lifecycle.
-        # Status stays so UI / budgets persist; auto-continue is gated separately.
-        if state.status == "active" and not state.stop_requested:
-            # Soft-land as paused so a restart does not silently keep running.
+        # An active Goal may outlive an individual Run in the same process. Only
+        # reinterpret it as interrupted when its owning process differs.
+        if (state.status == "active" and not state.stop_requested
+                and state.process_instance_id != _PROCESS_INSTANCE_ID):
             state.status = "paused"
             state.pause_reason = state.pause_reason or "process_restart"
             state.next_step = state.next_step or "等待用户确认后继续"
+        legacy_budget_recovery = (
+            state.status == "idle" and state.pause_reason is None
+        ) or (
+            state.status == "paused" and state.pause_reason == "budget_exhausted"
+        )
+        if (not state.stop_requested and state.status not in _TERMINAL_STATUSES
+                and legacy_budget_recovery
+                and (state.budgets.tool_exhausted() or state.budgets.wall_exhausted())):
+            # Reconcile only legacy budget/restart states; never downgrade a
+            # repair, authorization, or unknown safety pause.
+            state.status = "paused"
+            state.pause_reason = "budget_exhausted"
+            state.next_step = "累计预算已用尽；可收窄目标，或显式扩展 wall 预算"
         self._state = state
         return state
 
@@ -387,6 +416,9 @@ class GoalRuntime:
             self.save()
             return current
 
+        if current is not None:
+            self._archive_goal(current)
+
         now = utc_now_iso()
         budgets = GoalBudgets(
             tool_turns_limit=max(
@@ -420,25 +452,35 @@ class GoalRuntime:
         self.save()
         return state
 
-    def begin_run(self, mode: str = "agent") -> tuple[GoalState, ExecutionSnapshot]:
+    def begin_run(
+        self,
+        mode: str = "agent",
+        *,
+        auto_continue_tool_turns_limit: int = _DEFAULT_AUTO_CONTINUE_TOOL_TURNS_LIMIT,
+        auto_continue_wall_seconds_limit: float = _DEFAULT_AUTO_CONTINUE_WALL_SECONDS_LIMIT,
+    ) -> tuple[GoalState, ExecutionSnapshot]:
         state = self._require_state()
         if state.stop_requested or state.status == "stopped":
             raise RuntimeError("goal is stopped; refuse to begin_run")
         if state.status in {"done", "failed"}:
             raise RuntimeError(f"goal is {state.status}; refuse to begin_run")
-        if state.budgets.tool_exhausted() or state.budgets.wall_exhausted():
-            state.status = "paused"
-            state.pause_reason = "budget_exhausted"
-            state.next_step = "预算已用尽，需用户扩预算或收窄目标"
-            self.save()
-            raise RuntimeError("goal budget exhausted; refuse to begin_run")
-
+        if state.status == "paused" and state.pause_reason not in {
+            "budget_exhausted", "process_restart", "budget_extended",
+        }:
+            raise RuntimeError("paused goal requires explicit recovery")
         snapshot = self.lifecycle.start_or_activate(mode)
         state.status = "active"
         state.pause_reason = None
         state.last_run_id = snapshot.run_id
+        state.process_instance_id = _PROCESS_INSTANCE_ID
         state.next_step = state.next_step or "执行中"
         self._run_wall_started_at = self._clock()
+        self._pending_wall_seconds = 0.0
+        self._wall_clock_pause_depth = 0
+        self._run_auto_tool_turns_used = 0
+        self._run_auto_wall_seconds_used = 0.0
+        self._run_auto_tool_turns_limit = max(1, int(auto_continue_tool_turns_limit))
+        self._run_auto_wall_seconds_limit = max(1.0, float(auto_continue_wall_seconds_limit))
         self.save()
         return state, snapshot
 
@@ -451,34 +493,92 @@ class GoalRuntime:
     ) -> GoalState:
         """Accumulate budgets across segments — never reset mid-goal."""
         state = self._require_state()
-        state.budgets.tool_turns_used += max(0, int(tool_turns))
+        normalized_tool_turns = max(0, int(tool_turns))
+        state.budgets.tool_turns_used += normalized_tool_turns
+        self._run_auto_tool_turns_used += normalized_tool_turns
         if wall_seconds is None:
             if self._run_wall_started_at is not None:
-                wall_seconds = max(0.0, self._clock() - self._run_wall_started_at)
+                wall_seconds = self._pending_wall_seconds + max(0.0, self._clock() - self._run_wall_started_at)
+                self._pending_wall_seconds = 0.0
                 self._run_wall_started_at = self._clock()
             else:
                 wall_seconds = 0.0
-        state.budgets.wall_seconds_used += max(0.0, float(wall_seconds))
+        normalized_wall_seconds = max(0.0, float(wall_seconds))
+        state.budgets.wall_seconds_used += normalized_wall_seconds
+        self._run_auto_wall_seconds_used += normalized_wall_seconds
         if repair_delta:
             state.budgets.repair_count += max(0, int(repair_delta))
-        if state.budgets.tool_exhausted() or state.budgets.wall_exhausted():
-            state.status = "paused"
-            state.pause_reason = "budget_exhausted"
-            state.next_step = "预算已用尽，已暂停"
+        self.save()
+        return state
+
+    def pause_wall_clock(self) -> None:
+        """Exclude synchronous human-confirmation waits from active wall usage."""
+        self._wall_clock_pause_depth += 1
+        if self._wall_clock_pause_depth == 1 and self._run_wall_started_at is not None:
+            self._pending_wall_seconds += max(0.0, self._clock() - self._run_wall_started_at)
+            self._run_wall_started_at = None
+
+    def resume_wall_clock(self) -> None:
+        """Resume accounting after the outermost confirmation callback returns."""
+        if self._wall_clock_pause_depth <= 0:
+            return
+        self._wall_clock_pause_depth -= 1
+        if self._wall_clock_pause_depth == 0 and self._run_wall_started_at is None:
+            self._run_wall_started_at = self._clock()
+
+    def _archive_goal(self, state: GoalState) -> None:
+        """Retain replaced Goal records instead of silently dropping their budgets/evidence."""
+        path = self.session_dir / "goal-history.json"
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("goal history is unreadable; refusing to replace the current goal") from exc
+        if (not isinstance(rows, list) or any(
+                not isinstance(row, dict) or not isinstance(row.get("goal_id"), str)
+                or not isinstance(row.get("budgets"), dict)
+                for row in rows
+        )):
+            raise RuntimeError("goal history has an invalid shape; refusing to replace the current goal")
+        if not any(row.get("goal_id") == state.goal_id for row in rows):
+            rows.append(state.to_dict())
+        try:
+            atomic_write_text(path, json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
+        except OSError as exc:
+            raise RuntimeError("goal history could not be written; refusing to replace the current goal") from exc
+
+    def extend_wall_budget(self, seconds: int) -> GoalState:
+        """Explicitly extend a paused Goal's wall cap; never starts or auto-resumes a Run."""
+        if type(seconds) is not int or not 1 <= seconds <= _MAX_WALL_EXTENSION_SECONDS:
+            raise ValueError(f"wall budget extension must be 1..{_MAX_WALL_EXTENSION_SECONDS} seconds")
+        state = self._require_state()
+        if state.status != "paused" or state.pause_reason != "budget_exhausted":
+            raise RuntimeError("only a budget-exhausted paused Goal can be extended")
+        if state.budgets.tool_exhausted() or state.budgets.repair_exhausted():
+            raise RuntimeError("tool-turn or repair budget is also exhausted; wall-only extension is insufficient")
+        new_limit = state.budgets.wall_seconds_limit + seconds
+        if new_limit > _MAX_WALL_SECONDS_LIMIT:
+            raise ValueError(f"wall budget limit cannot exceed {_MAX_WALL_SECONDS_LIMIT:g} seconds")
+        state.budgets.wall_seconds_limit = new_limit
+        if not state.budgets.wall_exhausted():
+            state.pause_reason = "budget_extended"
+            state.next_step = "预算已扩展；等待用户在新回合明确继续，不会自动执行"
         self.save()
         return state
 
     def remaining_tool_budget(self) -> int:
+        """Legacy cumulative counter view; never used to gate manual execution."""
         state = self._state
         if state is None:
             return 0
         return state.budgets.tool_budget_remaining()
 
     def should_auto_continue(self) -> bool:
-        """Segments may chain only while active, not stopped, and under budget.
+        """Gate only same-Run automatic segments, never a new human request.
 
-        Stop is sticky: after ``request_stop`` this returns False forever for
-        this goal (including after reload), so restart never auto-continues.
+        The round and elapsed-wall counters reset at ``begin_run``. Elapsed wall
+        is checked only after a segment returns, so it cannot interrupt active
+        first-segment work. Progress events are transport activity, not evidence
+        that the task is semantically advancing. Stop is sticky across reloads.
         """
         state = self._state if self._state is not None else self.load()
         if state is None:
@@ -487,9 +587,14 @@ class GoalRuntime:
             return False
         if state.status == "paused":
             return False
-        if state.budgets.tool_exhausted() or state.budgets.wall_exhausted():
+        # These counters are cumulative telemetry. Only the per-run loop bound
+        # limits an explicitly requested execution; repair exhaustion gates
+        # automatic continuation until a human initiates another turn.
+        if state.budgets.repair_exhausted():
             return False
-        if state.budgets.repair_exhausted() and state.pause_reason == "repair_exhausted":
+        if self._run_auto_tool_turns_used >= self._run_auto_tool_turns_limit:
+            return False
+        if self._run_auto_wall_seconds_used >= self._run_auto_wall_seconds_limit:
             return False
         return state.status in {"idle", "active"}
 
@@ -555,7 +660,8 @@ class GoalRuntime:
             state.next_step = ""
             self._finish_lifecycle(ok=True, finish_reason="acceptance_passed")
         else:
-            # Failure feeds the next turn — stay active (or paused if budget gone).
+            # Failure feeds a later human turn. Cumulative usage is telemetry;
+            # only the repair circuit-breaker may pause this Goal here.
             state.budgets.repair_count += 1
             if state.budgets.repair_exhausted():
                 state.status = "paused"
@@ -565,13 +671,6 @@ class GoalRuntime:
                     f"期望 {verdict['expected_exit_code']}）；修复次数已用尽"
                 )
                 self._finish_lifecycle(ok=False, finish_reason="repair_exhausted")
-            elif state.budgets.tool_exhausted() or state.budgets.wall_exhausted():
-                state.status = "paused"
-                state.pause_reason = "budget_exhausted"
-                state.next_step = (
-                    f"验收失败（exit={verdict['exit_code']}）；预算已用尽"
-                )
-                self._finish_lifecycle(ok=False, finish_reason="budget_exhausted")
             else:
                 state.status = "active"
                 state.pause_reason = None
@@ -599,7 +698,7 @@ class GoalRuntime:
         state = self._require_state()
         state.status = "paused"
         state.pause_reason = "budget_exhausted"
-        state.next_step = "预算已用尽，已暂停"
+        state.next_step = "本回合工具执行额度已用尽，自动续段已停止；检查进展后可由用户发起新回合"
         self._finish_lifecycle(ok=False, finish_reason="total_cap_exceeded")
         self.save()
         return state
@@ -647,6 +746,7 @@ class GoalRuntime:
         if self._state is None:
             return None
         payload = self._state.to_dict()
+        payload.pop("process_instance_id", None)
         payload["type"] = "goal.state"
         payload["can_auto_continue"] = self.should_auto_continue()
         return payload
@@ -684,6 +784,46 @@ def goal_runtime_for_session(
     runtime = GoalRuntime(Path(session_dir), lifecycle=lifecycle)
     runtime.load()
     return runtime
+
+
+def resolve_turn_goal_text(
+    current: GoalState | None, session_goal: str, explicit_new_goal: str | None = None,
+) -> str:
+    """Keep persisted Goal identity stable; only the explicit control action replaces it."""
+    if explicit_new_goal is not None:
+        return explicit_new_goal
+    if current is not None and current.goal_text.strip():
+        return current.goal_text
+    return (session_goal or "").strip() or "动手任务"
+
+
+def resolve_goal_action_intent(classified_intent: str, explicit_new_goal: str | None) -> str:
+    """The explicit new-Goal command always routes its task body to Agent execution."""
+    return "execute" if explicit_new_goal is not None else classified_intent
+
+
+def explicit_new_goal_from_request(request: str) -> str | None:
+    """Parse the deliberate `/goal new: ...` budget-boundary action; never infer from prose."""
+    if type(request) is not str:
+        return None
+    import re
+    match = re.fullmatch(r"\s*/goal\s+new:\s*(.+?)\s*", request, flags=re.IGNORECASE | re.DOTALL)
+    if match is None:
+        return None
+    text = match.group(1).strip()
+    return text if text else None
+
+
+def explicit_wall_budget_extension(request: str) -> int | None:
+    """Parse only the standalone `/goal extend: N` manual budget action."""
+    if type(request) is not str:
+        return None
+    import re
+    match = re.fullmatch(r"\s*/goal\s+extend:\s*(\d+)\s*", request, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    seconds = int(match.group(1))
+    return seconds if 1 <= seconds <= _MAX_WALL_EXTENSION_SECONDS else None
 
 
 def resolve_workspace_scope(session: Any) -> str:

@@ -1,6 +1,6 @@
 # 开发与代码（coding）
 
-本文件在会话加载 **coding** 主题 prompt 时注入 system（与 `agent-core/prompts/core.txt` 叠加；冲突时 **本文件 + safety** 优先）。  
+本文件仅在会话已确认加载 **coding** 主题时注入 system；项目绑定本身不代表 coding 主题已加载。加载时与常驻 `agent-core/prompts/core.txt` 及适用的项目提示共同生效；冲突按各提示的适用范围和明确优先级处理。
 下列工具凡 `status=active` 均可 `run_evolved`，**不**因未确认 coding 主题而拒调。导引：`evolve/tool-catalog/INDEX.md`。
 
 ## 项目模式建议
@@ -20,7 +20,7 @@
 
 - Python **3.12+**；依赖见根目录 `requirements.txt`（httpx / websockets / rich / prompt_toolkit / python-docx 等；以文件为准）。
 - 在 `agent-core/` 下开发；`from paths import AgentPaths`（目录名带连字符，**不要** `import agent_core`）。
-- **先读** 本仓库 `docs/MAP.md`、`docs/TASKS.md` 当前 task，再改代码；严格对照 `TOOLS.md` / `RUNTIME.md` / `MEMORY.md` 已决条款。
+- 维护内核前参考本仓库 `docs/MAP.md` 与 `docs/README.md`，并按改动查阅相关源码和专题文档；不要依赖已移除的 `docs/TASKS.md` 队列或旧 Phase 硬要求。
 - 小步交付：每步可 `python <module>.py` 或 `python main.py --demo`；也可用 evolved **`run_demo`**。
 - **不要**未经用户要求 `git commit` / `git push`；提交前可用 **`git_snapshot`** / **`git_diff`**；分支用 **`git_branch`**；推送用 **`git_push`**（禁 force，须确认）；开 PR 用 **`gh_pr`**（需本机 `gh`）。
 

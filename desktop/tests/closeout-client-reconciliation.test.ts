@@ -271,22 +271,19 @@ test("failed session open leaves the current chat view untouched", async () => {
   assert.equal(view, "current chat");
 });
 
-test("explicit sandbox session switch retires old socket and clears evolution conversation", async () => {
+test("experiment session stays on the current sidecar instead of opening another process", async () => {
   const { client, Socket, timers, calls } = harness();
   await client.connect();
-  const old = Socket.instances[0];
-  old.emit("message", { data: JSON.stringify({ type: "session.banner", session_id: "01234567-89ab-4cde-8123-456789abcdef" }) });
+  const current = Socket.instances[0];
+  current.emit("message", { data: JSON.stringify({ type: "session.banner", session_id: "01234567-89ab-4cde-8123-456789abcdef" }) });
   await client.createSandboxSession();
-  assert.equal(client.getLane(), "sandbox");
-  assert.equal(Socket.instances.at(-1).url, "ws://127.0.0.1:18765");
-  assert.equal(Socket.instances.at(-1).sent.at(-1).type, "session.create_sandbox");
+  assert.equal(client.getLane(), "stable");
+  assert.equal(Socket.instances.length, 1);
+  assert.equal(current.sent.at(-1).type, "session.create_sandbox");
+  assert.equal(calls.ensure, 0);
   assert.equal(calls.conversations.at(-1), null);
-  assert.equal(timers.size, 0, "retired socket must not reconnect");
-  const count = calls.conversations.length;
-  old.emit("message", { data: JSON.stringify({ type: "session.banner", session_id: "stale" }) });
-  assert.equal(calls.conversations.length, count, "retired socket must not bind evolution");
+  assert.equal(timers.size, 0);
   client.destroy();
-  assert.equal(timers.size, 0, "destroy must not reconnect");
 });
 
 test("sandbox reconnect keeps its lane instead of falling back to stable", async () => {

@@ -2,7 +2,7 @@
 id: downloads-sort
 topics: [workflow]
 status: active
-summary: workspace 下载夹按扩展名整理：workflow 主题下用 sort_by_extension，先 dry_run 再执行
+summary: workspace 下载夹按扩展名整理：按 workflow 主题分类的历史资产；工具执行由 executor 与逐次授权决定，先 dry_run 再执行
 use_count: 5
 last_used_at: "2026-08-09T00:41:37.812629Z"
 ---
@@ -13,7 +13,7 @@ workspace 里有个「待整理」目录（模拟下载夹、收件箱），顶�
 
 ## 工具
 
-确认 **workflow** 主题后，用 evolved 工具 **`sort_by_extension`**（`evolve/tools/workflow/sort_by_extension/`），经 Builtin `run_evolved` 调用。
+本条的 `workflow` 是历史/资产分类，不是会话加载或工具权限开关。需要时可通过 Builtin `run_evolved` 调用 evolved 工具 **`sort_by_extension`**（`evolve/tools/workflow/sort_by_extension/`）；是否执行由现有 executor 策略及每次调用的授权决定，主题不会获取或扩大权限。
 
 | 参数 | 说明 |
 |------|------|
@@ -30,9 +30,9 @@ workspace 里有个「待整理」目录（模拟下载夹、收件箱），顶�
 
 ## 推荐流程
 
-1. 确认 session 主题为 `workflow`（system 清单含 `sort_by_extension`）。
+1. 按工具索引/名称发现 `sort_by_extension`；无需设置或确认 session 主题。
 2. `run_evolved` + `dry_run: true` → 核对 `moved` 列表。
-3. `dry_run: false` 正式移动。
+3. 按现有 executor 授权流程逐次授权后，`dry_run: false` 正式移动。
 4. 用 `list_dir` 抽查子目录结果。
 
 ## CLI 快测（PowerShell）

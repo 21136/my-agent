@@ -1,4 +1,4 @@
-"""Versioned, current-session-only work records (not yet wired into the agent)."""
+"""Versioned current-session work records and append-only item lifecycle controls."""
 from __future__ import annotations
 
 import contextlib
@@ -22,6 +22,7 @@ from guard_snapshots import STAMP, safe_container
 
 _FILENAME = "work-records.v1.json"
 _SCHEMA_VERSION = 1
+_WORK_RECORD_PROCESS_INSTANCE_ID = str(uuid.uuid4())
 _MAX_BYTES = 4 * 1024 * 1024
 _MAX_EVENTS = 10_000
 MAX_WORK_RECORD_RESULT_EXCERPT_BYTES = 4096
@@ -435,8 +436,8 @@ class WorkRecordStore:
                 or type(data.get("revision")) is not int or data["revision"] < 0
                 or not isinstance(data.get("items"), list)):
             raise WorkRecordCorrupt("sidecar schema or conversation identity is invalid")
-        item_statuses = {"active", "completed", "in_progress", "unknown", "blocked", "stopped"}
-        requirement_statuses = {"pending", "completed", "in_progress", "unknown", "blocked", "stopped"}
+        item_statuses = {"active", "queued", "waiting_confirmation", "completed", "in_progress", "unknown", "blocked", "stopped"}
+        requirement_statuses = {"pending", "queued", "waiting_confirmation", "completed", "in_progress", "unknown", "blocked", "stopped"}
         result_statuses = {"completed", "blocked", "stopped", "unknown", "in_progress"}
         item_ids: set[str] = set()
         for item in data["items"]:
@@ -480,8 +481,47 @@ class WorkRecordStore:
                 if "current_run_id" in req and (
                         not isinstance(req["current_run_id"], str) or not req["current_run_id"]):
                     raise WorkRecordCorrupt("sidecar requirement current run identity is invalid")
+                if "execution_owner_id" in req and (
+                        type(req["execution_owner_id"]) is not str or not req["execution_owner_id"]):
+                    raise WorkRecordCorrupt("sidecar requirement execution owner identity is invalid")
                 if "source_ref" in req:
                     self._validate_source_ref(req["source_ref"], corrupt=True)
+                if "schedule_claim" in req:
+                    claim = req["schedule_claim"]
+                    claim_fields = {"source_session_id", "project_id", "item_id", "requirement_id",
+                                    "revision", "requirement_digest", "owner_id", "reservation_id",
+                                    "parent_run_id", "state"}
+                    if (type(claim) is not dict or set(claim) != claim_fields
+                            or claim.get("source_session_id") != self._conversation_id
+                            or claim.get("project_id") != self._bound_project_id
+                            or claim.get("item_id") != item["item_id"]
+                            or claim.get("requirement_id") != req["requirement_id"]
+                            or type(claim.get("revision")) is not int or claim["revision"] < 0
+                            or type(claim.get("requirement_digest")) is not str
+                            or re.fullmatch(r"[0-9a-f]{64}", claim["requirement_digest"]) is None
+                            or any(type(claim.get(key)) is not str or not claim[key].strip()
+                                   for key in ("owner_id", "reservation_id", "parent_run_id"))
+                            or claim.get("state") not in {"claimed", "unknown"}):
+                        raise WorkRecordCorrupt("persistent schedule claim is invalid")
+                dependencies = req.get("depends_on", [])
+                dependency_refs = req.get("depends_on_refs", [])
+                if (type(dependency_refs) is not list or any(
+                        type(ref) is not dict or set(ref) != {"item_id", "requirement_id"}
+                        or type(ref.get("item_id")) is not str or not ref["item_id"]
+                        or type(ref.get("requirement_id")) is not str or not ref["requirement_id"]
+                        for ref in dependency_refs)
+                        or len({(ref["item_id"], ref["requirement_id"]) for ref in dependency_refs}) != len(dependency_refs)):
+                    raise WorkRecordCorrupt("cross-item requirement dependencies are invalid")
+                if (type(dependencies) is not list
+                        or any(type(dependency) is not str or not dependency
+                               or dependency == req["requirement_id"] for dependency in dependencies)
+                        or len(set(dependencies)) != len(dependencies)):
+                    raise WorkRecordCorrupt("requirement dependencies are invalid")
+            for req in item["requirements"]:
+                if any(dependency not in requirement_ids for dependency in req.get("depends_on", [])):
+                    raise WorkRecordCorrupt("requirement dependency references a missing requirement")
+            if "priority" in item and (type(item["priority"]) is not int or not 0 <= item["priority"] <= 5):
+                raise WorkRecordCorrupt("work-record priority is invalid")
             result_ids: set[str] = set()
             for run in item["runs"]:
                 if (not isinstance(run, dict) or not all(isinstance(run.get(key), str) and run[key]
@@ -529,6 +569,41 @@ class WorkRecordStore:
                            and event.get("digest") == _digest(excerpt)]
                 if len(matches) != 1:
                     raise WorkRecordCorrupt("assistant reply excerpt audit event is missing or inconsistent")
+        # New references are session-local and scope-exact. Build one graph across all
+        # items so legacy local edges participate in cycle detection too.
+        item_by_id = {item["item_id"]: item for item in data["items"]}
+        requirement_by_key = {}
+        graph = {}
+        for item in data["items"]:
+            for req in item["requirements"]:
+                key = (item["item_id"], req["requirement_id"])
+                requirement_by_key[key] = (item, req)
+                graph[key] = [(item["item_id"], dep) for dep in req.get("depends_on", [])]
+        for item in data["items"]:
+            for req in item["requirements"]:
+                key = (item["item_id"], req["requirement_id"])
+                for ref in req.get("depends_on_refs", []):
+                    target = item_by_id.get(ref["item_id"])
+                    target_req = requirement_by_key.get((ref["item_id"], ref["requirement_id"]))
+                    if target is None or target_req is None:
+                        raise WorkRecordCorrupt("cross-item dependency references a missing requirement")
+                    if target.get("scope") != item.get("scope"):
+                        raise WorkRecordScopeError("cross-item dependencies must have exactly matching scope")
+                    graph[key].append((ref["item_id"], ref["requirement_id"]))
+        visiting, visited = set(), set()
+        def visit_dependency(key):
+            if key in visiting:
+                raise WorkRecordCorrupt("work-record dependency graph contains a cycle")
+            if key in visited:
+                return
+            visiting.add(key)
+            for target in graph.get(key, []):
+                visit_dependency(target)
+            visiting.remove(key)
+            visited.add(key)
+        for key in graph:
+            visit_dependency(key)
+
         legacy_digest = data.get(LEGACY_OUTBOX_DIGEST_KEY)
         if (legacy_digest is not None
                 and (type(legacy_digest) is not str or _PUBLICATION_SHA256.fullmatch(legacy_digest) is None)):
@@ -1481,18 +1556,367 @@ class WorkRecordStore:
             return requirement, True
         return self._mutate(change, return_commit_status=return_commit_status)
 
+    def copy_requirement_to_new_item(
+        self, source_item_id: str, source_requirement_id: str, *,
+        expected_revision: int, event_id: str, idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Copy requirement text into a fresh pending independent item.
+
+        The source item and its evidence are read-only. Revision comparison,
+        source resolution and destination creation happen in one store mutation
+        under the sidecar lock. Provenance is recorded on the new item's history.
+        """
+        if (type(source_item_id) is not str or not source_item_id.strip()
+                or type(source_requirement_id) is not str or not source_requirement_id.strip()
+                or type(expected_revision) is not int or expected_revision < 0
+                or type(event_id) is not str or not event_id.strip()
+                or type(idempotency_key) is not str or not idempotency_key.strip()):
+            raise ValueError("source identities, revision and stable audit identities are required")
+        key = self._require_idempotency_key(idempotency_key, event_id)
+        operation = {"kind": "copy_requirement_to_new_item",
+                     "source_item_id": source_item_id,
+                     "source_requirement_id": source_requirement_id}
+        digest = _digest(operation)
+        def change(data):
+            prior = self._find_idempotent_event(data, key)
+            if prior is not None:
+                prior_item, event = prior
+                payload = event.get("payload", {})
+                if (prior_item.get("item_id") != payload.get("new_item_id")
+                        or event.get("kind") != "requirement_copied_to_new_item"
+                        or event.get("idempotency_digest") != digest
+                        or event.get("event_id") != event_id
+                        or payload.get("source_session_id") != self._conversation_id
+                        or payload.get("source_item_id") != source_item_id
+                        or payload.get("source_requirement_id") != source_requirement_id):
+                    raise WorkRecordConflict("copy idempotency key reused for another source or operation")
+                copied_requirements = [row for row in prior_item.get("requirements", [])
+                                       if row.get("requirement_id") == payload.get("new_requirement_id")]
+                if (len(copied_requirements) != 1
+                        or copied_requirements[0].get("status") != "pending"
+                        or copied_requirements[0].get("source_ref") is not None
+                        or copied_requirements[0].get("depends_on", [])
+                        or prior_item.get("runs")):
+                    raise WorkRecordCorrupt("copied requirement identity or state is inconsistent")
+                return prior_item, False
+            if any(event.get("event_id") == event_id
+                   for item in data["items"] for event in item["history"]):
+                raise WorkRecordConflict("event_id is already bound to another operation")
+            if data["revision"] != expected_revision:
+                raise WorkRecordConflict("work-record revision changed after copy preview")
+            source_item = self._find(data, source_item_id)
+            if source_item.get("scope") != {"kind": "independent", "object_ref": None}:
+                raise WorkRecordConflict("only current-session independent items can be copied")
+            matches = [req for req in source_item["requirements"]
+                       if req.get("requirement_id") == source_requirement_id]
+            if len(matches) != 1:
+                raise KeyError(source_requirement_id)
+            source_req = matches[0]
+            text = source_req.get("text")
+            if type(text) is not str or not text.strip():
+                raise WorkRecordCorrupt("source requirement text is invalid")
+            new_item_id, new_requirement_id = str(uuid.uuid4()), str(uuid.uuid4())
+            source_text_digest = _digest({"text": text})
+            payload = {
+                "source_session_id": self._conversation_id,
+                "source_item_id": source_item_id,
+                "source_requirement_id": source_requirement_id,
+                "source_text_digest": source_text_digest,
+                "new_item_id": new_item_id,
+                "new_requirement_id": new_requirement_id,
+            }
+            item = {
+                "item_id": new_item_id,
+                "scope": {"kind": "independent", "object_ref": None},
+                "title": source_item["title"], "status": "active",
+                "requirements": [{"requirement_id": new_requirement_id,
+                                  "text": text, "status": "pending"}],
+                "runs": [],
+                "history": [
+                    {"event_id": str(uuid.uuid4()), "kind": "created",
+                     "payload": {"title": source_item["title"], "scope": {"kind": "independent", "object_ref": None}},
+                     "at": time.time()},
+                    {"event_id": event_id, "kind": "requirement_copied_to_new_item",
+                     "payload": payload, "digest": digest,
+                     "idempotency_key": key, "idempotency_digest": digest,
+                     "at": time.time()},
+                ],
+            }
+            data["items"].append(item)
+            return item, True
+
+        item = self._mutate(change)
+        return json.loads(json.dumps(item))
+
+    def set_requirement_control(
+        self, item_id: str, requirement_id: str, *, action: str,
+        expected_status: str, event_id: str, idempotency_key: str,
+        expected_snapshot: dict[str, Any] | None = None,
+        depends_on: list[str] | None = None,
+        depends_on_refs: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a safe queue/confirmation/stop/continue control without running tools.
+
+        This method never claims to cancel a live worker. An in-progress requirement
+        must be stopped through the host cancellation path and settled from its
+        actual terminal receipt; a user-visible stop request alone is insufficient.
+        """
+        allowed_actions = {"set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue"}
+        if (action not in allowed_actions or type(expected_status) is not str
+                or type(event_id) is not str or not event_id.strip()
+                or type(idempotency_key) is not str or not idempotency_key.strip()):
+            raise ValueError("invalid work-record control request")
+        key = self._require_idempotency_key(idempotency_key, event_id)
+        normalized_refs = None
+        if depends_on_refs is not None:
+            if (type(depends_on_refs) is not list or any(
+                    type(ref) is not dict or set(ref) != {"item_id", "requirement_id"}
+                    or type(ref.get("item_id")) is not str or not ref["item_id"]
+                    or type(ref.get("requirement_id")) is not str or not ref["requirement_id"]
+                    for ref in depends_on_refs)
+                    or len({(ref["item_id"], ref["requirement_id"]) for ref in depends_on_refs}) != len(depends_on_refs)):
+                raise ValueError("cross-item dependency references must be unique stable identities")
+            normalized_refs = [dict(ref) for ref in depends_on_refs]
+        normalized_dependencies = None
+        if depends_on is not None:
+            if (type(depends_on) is not list or any(type(value) is not str or not value for value in depends_on)
+                    or len(set(depends_on)) != len(depends_on)):
+                raise ValueError("dependency list must contain unique requirement identities")
+            normalized_dependencies = list(depends_on)
+        expected = None if expected_snapshot is None else json.loads(json.dumps(expected_snapshot))
+        digest = _digest({"kind": "requirement_control", "item_id": item_id,
+                          "requirement_id": requirement_id, "action": action,
+                          "expected_status": expected_status, "depends_on": normalized_dependencies,
+                          "depends_on_refs": normalized_refs})
+
+        def change(data):
+            prior = self._find_idempotent_event(data, key)
+            if prior is not None:
+                prior_item, prior_event = prior
+                if (prior_item.get("item_id") != item_id or prior_event.get("kind") != "requirement_control"
+                        or prior_event.get("idempotency_digest") != digest):
+                    raise WorkRecordConflict("control idempotency key reused with a different operation")
+                return dict(prior_event["payload"]), False
+            if any(event.get("event_id") == event_id for row in data["items"] for event in row["history"]):
+                raise WorkRecordConflict("event_id is already bound to another operation")
+            if expected is not None and data != expected:
+                raise WorkRecordConflict("work-record snapshot changed after control preview")
+            item = self._find(data, item_id)
+            reqs = item["requirements"]
+            req = next((row for row in reqs if row["requirement_id"] == requirement_id), None)
+            if req is None:
+                raise KeyError(requirement_id)
+            current = req["status"]
+            if current != expected_status:
+                raise WorkRecordConflict("requirement status changed after control preview")
+            if current == "in_progress":
+                raise WorkRecordConflict("live execution requires host cancellation and terminal receipt")
+            if action == "set_dependencies":
+                if current in {"in_progress", "unknown", "completed"}:
+                    raise WorkRecordConflict("dependencies cannot change for running, uncertain or completed work")
+                next_status = current
+            elif action == "queue":
+                if current not in {"pending", "stopped", "blocked"}:
+                    raise WorkRecordConflict("only pending, stopped or blocked work can be queued")
+                if current in {"stopped", "blocked"}:
+                    raise WorkRecordConflict("stopped/blocked work must be explicitly continued before queueing")
+                next_status = "queued"
+            elif action == "wait_confirmation":
+                if current not in {"pending", "queued"}:
+                    raise WorkRecordConflict("only not-started work can wait for confirmation")
+                next_status = "waiting_confirmation"
+            elif action == "release_confirmation":
+                if current != "waiting_confirmation":
+                    raise WorkRecordConflict("requirement is not waiting for confirmation")
+                next_status = "pending"
+            elif action == "stop":
+                if current not in {"pending", "queued", "waiting_confirmation", "blocked"}:
+                    raise WorkRecordConflict("only non-running work can be stopped directly")
+                next_status = "stopped"
+            else:
+                if current not in {"stopped", "blocked", "unknown"}:
+                    raise WorkRecordConflict("only stopped, blocked or unknown work can be continued")
+                if current == "unknown":
+                    raise WorkRecordConflict("unknown side effects must be inspected before continuation")
+                next_status = "pending"
+            if normalized_dependencies is not None or normalized_refs is not None:
+                next_local = req.get("depends_on", []) if normalized_dependencies is None else normalized_dependencies
+                next_refs = req.get("depends_on_refs", []) if normalized_refs is None else normalized_refs
+                if requirement_id in next_local or any(
+                        ref["item_id"] == item_id and ref["requirement_id"] == requirement_id for ref in next_refs):
+                    raise WorkRecordConflict("a requirement cannot depend on itself")
+                if any(dep not in {row["requirement_id"] for row in reqs} for dep in next_local):
+                    raise WorkRecordConflict("legacy dependency must reference another requirement in this item")
+                by_item = {row["item_id"]: row for row in data["items"]}
+                for ref in next_refs:
+                    target_item = by_item.get(ref["item_id"])
+                    target = next((r for r in target_item["requirements"]
+                                   if r["requirement_id"] == ref["requirement_id"]), None) if target_item else None
+                    if target is None or target_item["scope"] != item["scope"]:
+                        raise WorkRecordConflict("dependency target must exist in this session with exactly matching scope")
+                graph = {}
+                for row_item in data["items"]:
+                    for row_req in row_item["requirements"]:
+                        graph_key = (row_item["item_id"], row_req["requirement_id"])
+                        graph[graph_key] = [(row_item["item_id"], dep) for dep in row_req.get("depends_on", [])]
+                        graph[graph_key].extend((ref["item_id"], ref["requirement_id"])
+                                          for ref in row_req.get("depends_on_refs", []))
+                graph[(item_id, requirement_id)] = [(item_id, dep) for dep in next_local]
+                graph[(item_id, requirement_id)].extend((ref["item_id"], ref["requirement_id"]) for ref in next_refs)
+                visiting, visited = set(), set()
+                def check_cycle(key):
+                    if key in visiting:
+                        raise WorkRecordConflict("dependency cycle is not allowed")
+                    if key in visited:
+                        return
+                    visiting.add(key)
+                    for target_key in graph.get(key, []):
+                        check_cycle(target_key)
+                    visiting.remove(key)
+                    visited.add(key)
+                for graph_node in graph:
+                    check_cycle(graph_node)
+                req["depends_on"] = list(next_local)
+                req["depends_on_refs"] = [dict(ref) for ref in next_refs]
+            req["status"] = next_status
+            item["status"] = self._derive_item_status(reqs)
+            payload = {"requirement_id": requirement_id, "action": action,
+                       "old_status": current, "new_status": next_status,
+                       "depends_on": req.get("depends_on", []),
+                       "depends_on_refs": req.get("depends_on_refs", [])}
+            item["history"].append({"event_id": event_id, "kind": "requirement_control",
+                "payload": payload, "digest": digest, "idempotency_key": key,
+                "idempotency_digest": digest, "at": time.time()})
+            return payload, True
+
+        return self._mutate(change)
+
+    def set_item_priority(
+        self, item_id: str, priority: int, *, event_id: str, idempotency_key: str,
+        expected_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Set a 0–5 attention priority; this changes display ordering only."""
+        if type(priority) is not int or not 0 <= priority <= 5:
+            raise ValueError("priority must be an integer from 0 through 5")
+        key = self._require_idempotency_key(idempotency_key, event_id)
+        expected = None if expected_snapshot is None else json.loads(json.dumps(expected_snapshot))
+        digest = _digest({"kind": "item_priority_changed", "item_id": item_id, "priority": priority})
+        def change(data):
+            prior = self._find_idempotent_event(data, key)
+            if prior is not None:
+                prior_item, event = prior
+                if (prior_item.get("item_id") != item_id or event.get("kind") != "item_priority_changed"
+                        or event.get("idempotency_digest") != digest):
+                    raise WorkRecordConflict("priority idempotency key reused")
+                return dict(event["payload"]), False
+            if expected is not None and data != expected:
+                raise WorkRecordConflict("work-record snapshot changed after priority preview")
+            if any(event.get("event_id") == event_id for row in data["items"] for event in row["history"]):
+                raise WorkRecordConflict("event_id is already bound to another operation")
+            item = self._find(data, item_id)
+            previous = item.get("priority", 3)
+            item["priority"] = priority
+            payload = {"old_priority": previous, "new_priority": priority}
+            item["history"].append({"event_id": event_id, "kind": "item_priority_changed",
+                "payload": payload, "digest": digest, "idempotency_key": key,
+                "idempotency_digest": digest, "at": time.time()})
+            return payload, True
+        return self._mutate(change)
+
+    def mark_interrupted_runs_unknown(
+        self, *, event_id_prefix: str, current_owner_id: str = _WORK_RECORD_PROCESS_INSTANCE_ID,
+    ) -> int:
+        """Conservatively recover persisted in-progress rows after a process restart.
+
+        Call only from an explicit startup recovery pass after confirming there is no
+        matching live host execution. This records uncertainty; it never resumes work.
+        """
+        if (type(event_id_prefix) is not str or not event_id_prefix.strip()
+                or type(current_owner_id) is not str or not current_owner_id.strip()):
+            raise ValueError("recovery identity is required")
+        def change(data):
+            changed = 0
+            for item in data["items"]:
+                for req in item["requirements"]:
+                    if (req.get("status") != "in_progress"
+                            or req.get("execution_owner_id") == current_owner_id):
+                        continue
+                    run_id = req.get("current_run_id")
+                    req["status"] = "unknown"
+                    req.pop("execution_owner_id", None)
+                    # Keep any schedule claim as a durable exclusion marker. A
+                    # caller may only recover it after independently confirming
+                    # that no host execution is still live.
+                    event_id = f"{event_id_prefix}:{item['item_id']}:{req['requirement_id']}"
+                    existing = next((event for event in item["history"] if event.get("event_id") == event_id), None)
+                    if existing is None:
+                        payload = {"requirement_id": req["requirement_id"], "run_id": run_id,
+                                   "reason": "application_interrupted", "outcome": "unknown"}
+                        item["history"].append({"event_id": event_id, "kind": "requirement_interrupted",
+                            "payload": payload, "digest": _digest(payload), "at": time.time()})
+                    changed += 1
+                item["status"] = self._derive_item_status(item["requirements"])
+            return changed, changed > 0
+        return self._mutate(change)
+
+    def record_schedule_claim_inspection(
+        self, item_id: str, requirement_id: str, *, evidence: str, event_id: str,
+        idempotency_key: str, expected_snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record a human check while preserving an unresolved exclusion claim."""
+        if (type(evidence) is not str or not evidence.strip() or len(evidence.strip()) > 4000
+                or type(item_id) is not str or not item_id.strip()
+                or type(requirement_id) is not str or not requirement_id.strip()
+                or type(event_id) is not str or not event_id.strip()):
+            raise ValueError("inspection evidence and identities are required")
+        key = self._require_idempotency_key(idempotency_key, event_id)
+        evidence = evidence.strip()
+        digest = _digest({"kind": "schedule_claim_inspected", "item_id": item_id,
+                          "requirement_id": requirement_id, "evidence": evidence,
+                          "disposition": "unresolved_claim_retained"})
+        expected = None if expected_snapshot is None else json.loads(json.dumps(expected_snapshot))
+        def change(data):
+            prior = self._find_idempotent_event(data, key)
+            if prior is not None:
+                prior_item, event = prior
+                if (prior_item.get("item_id") != item_id or event.get("kind") != "schedule_claim_inspected"
+                        or event.get("idempotency_digest") != digest):
+                    raise WorkRecordConflict("inspection idempotency key reused")
+                return dict(event["payload"]), False
+            if expected is not None and data != expected:
+                raise WorkRecordConflict("work-record snapshot changed before claim inspection")
+            if any(event.get("event_id") == event_id for row in data["items"] for event in row["history"]):
+                raise WorkRecordConflict("event_id is already bound to another operation")
+            item = self._find(data, item_id)
+            req = next((row for row in item["requirements"] if row.get("requirement_id") == requirement_id), None)
+            claim = req.get("schedule_claim") if type(req) is dict else None
+            if (type(claim) is not dict or claim.get("state") != "unknown"
+                    or req.get("status") != "unknown"):
+                raise WorkRecordConflict("only an unknown persisted claim may be inspected")
+            payload = {"requirement_id": requirement_id, "evidence": evidence,
+                       "claim_state": "unknown", "disposition": "unresolved_claim_retained",
+                       "worker_stop_proven": False, "claim_released": False}
+            item["history"].append({"event_id": event_id, "kind": "schedule_claim_inspected",
+                "payload": payload, "digest": digest, "idempotency_key": key,
+                "idempotency_digest": digest, "at": time.time()})
+            return payload, True
+        return self._mutate(change)
+
     def revise_requirement(
         self, item_id: str, requirement_id: str, *, expected_text: str, new_text: str,
         event_id: str, idempotency_key: str | None = None,
         expected_snapshot: dict[str, Any] | None = None,
         return_commit_status: bool = False,
+        allow_project_scope: bool = False,
     ) -> dict[str, Any] | tuple[dict[str, Any], bool]:
-        """CAS-revise one exact requirement; this does not coordinate worker dispatch.
+        """CAS-revise one exact requirement; project scope needs trusted coordination.
 
         Callers must separately prevent any reserved/unstarted dispatch and obtain
         authorization. In-progress or uncertain runs are never revised here.
         """
         key = self._require_idempotency_key(idempotency_key, event_id)
+        if type(allow_project_scope) is not bool:
+            raise ValueError("allow_project_scope must be an explicit boolean")
         if (type(item_id) is not str or not item_id.strip()
                 or type(requirement_id) is not str or not requirement_id.strip()
                 or type(expected_text) is not str or not expected_text.strip()
@@ -1523,7 +1947,9 @@ class WorkRecordStore:
             if len(matches) != 1:
                 raise KeyError(requirement_id)
             req = matches[0]
-            if item["scope"].get("kind") == "project":
+            if "schedule_claim" in req:
+                raise WorkRecordConflict("persistent schedule claim must be inspected before revision")
+            if item["scope"].get("kind") == "project" and not allow_project_scope:
                 raise WorkRecordConflict("project requirement requires cross-session dispatch coordination")
             if req["text"] != expected_text:
                 raise WorkRecordConflict("requirement text changed since revision expectation")
@@ -1550,6 +1976,7 @@ class WorkRecordStore:
             req["text"] = replacement
             req["status"] = "pending"
             req.pop("current_run_id", None)
+            req.pop("execution_owner_id", None)
             item["status"] = self._derive_item_status(item["requirements"])
             item["history"].append({"event_id": event_id, "kind": "requirement_revised",
                 "payload": payload, "digest": digest, "idempotency_key": key,
@@ -1557,6 +1984,146 @@ class WorkRecordStore:
             return dict(payload), True
 
         return self._mutate(change, return_commit_status=return_commit_status)
+
+    def claim_scheduled_requirement(
+        self, project_id: str, item_id: str, requirement_id: str, *,
+        expected_revision: int, owner_id: str, reservation_id: str, parent_run_id: str,
+    ) -> dict[str, Any]:
+        """Persist one exclusive source-record claim; never reclaim an existing claim.
+
+        The source WorkRecord lock serializes contenders across processes. A lost
+        response is safely replayable only by the identical owner/reservation/run;
+        any previously claimed execution remains unknown until explicit recovery.
+        """
+        values = (project_id, item_id, requirement_id, owner_id, reservation_id, parent_run_id)
+        if any(type(value) is not str or not value.strip() for value in values):
+            raise ValueError("complete schedule claim identities are required")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("expected source revision is required")
+        if project_id != self._bound_project_id:
+            raise WorkRecordScopeError("schedule claim project does not match source Session")
+
+        def change(data):
+            item = self._find(data, item_id)
+            if item.get("scope") != {"kind": "project", "project_id": project_id}:
+                raise WorkRecordScopeError("schedule claim source item is not in the exact project scope")
+            matches = [row for row in item["requirements"] if row.get("requirement_id") == requirement_id]
+            if len(matches) != 1:
+                raise KeyError(requirement_id)
+            req = matches[0]
+            digest = _digest({"text": req["text"]})
+            claim = {
+                "source_session_id": self._conversation_id, "project_id": project_id,
+                "item_id": item_id, "requirement_id": requirement_id,
+                "revision": expected_revision, "requirement_digest": digest,
+                "owner_id": owner_id, "reservation_id": reservation_id,
+                "parent_run_id": parent_run_id, "state": "claimed",
+            }
+            existing = req.get("schedule_claim")
+            if existing is not None:
+                if existing == claim:
+                    return existing, False
+                raise WorkRecordConflict("requirement already has a persistent claim")
+            if req.get("status") not in {"queued", "pending"}:
+                raise WorkRecordConflict("only untouched queued or pending requirements may be claimed")
+            if data["revision"] != expected_revision:
+                raise WorkRecordConflict("source WorkRecord revision changed before claim")
+            req["schedule_claim"] = claim
+            return claim, True
+
+        claim = self._mutate(change)
+        return json.loads(json.dumps(claim))
+
+    def mark_schedule_claim_unknown(
+        self, item_id: str, requirement_id: str, *, owner_id: str,
+        reservation_id: str, parent_run_id: str,
+    ) -> dict[str, Any]:
+        """Mark an exact persisted claim uncertain without releasing or retrying it."""
+        if any(type(value) is not str or not value.strip()
+               for value in (item_id, requirement_id, owner_id, reservation_id, parent_run_id)):
+            raise ValueError("complete schedule claim identities are required")
+
+        def change(data):
+            item = self._find(data, item_id)
+            req = next((row for row in item["requirements"]
+                        if row.get("requirement_id") == requirement_id), None)
+            if req is None:
+                raise KeyError(requirement_id)
+            claim = req.get("schedule_claim")
+            if type(claim) is not dict or any(claim.get(key) != value for key, value in (
+                    ("owner_id", owner_id), ("reservation_id", reservation_id),
+                    ("parent_run_id", parent_run_id))):
+                raise WorkRecordConflict("schedule claim identity changed before recovery")
+            if claim["state"] == "unknown":
+                return claim, False
+            claim["state"] = "unknown"
+            return claim, True
+
+        return json.loads(json.dumps(self._mutate(change)))
+
+    def begin_claimed_schedule_run(
+        self, project_id: str, item_id: str, requirement_id: str, *,
+        run_id: str, owner_id: str, reservation_id: str, parent_run_id: str,
+        expected_requirement_text: str,
+    ) -> dict[str, Any]:
+        """Atomically consume the exact persistent claim at worker start."""
+        if any(type(value) is not str or not value.strip() for value in (
+                project_id, item_id, requirement_id, run_id, owner_id,
+                reservation_id, parent_run_id, expected_requirement_text)):
+            raise ValueError("complete claimed schedule start identities are required")
+        if project_id != self._bound_project_id:
+            raise WorkRecordScopeError("schedule start project does not match source Session")
+        start_id = "schedule-start-" + hashlib.sha256(
+            f"{item_id}\\0{requirement_id}\\0{run_id}\\0{reservation_id}".encode("utf-8")
+        ).hexdigest()
+
+        def change(data):
+            item = self._find(data, item_id)
+            req = next((row for row in item["requirements"] if row["requirement_id"] == requirement_id), None)
+            expected_claim = req.get("schedule_claim") if req is not None else None
+            if (item.get("scope") != {"kind": "project", "project_id": project_id}
+                    or type(req) is not dict or req.get("text") != expected_requirement_text
+                    or type(expected_claim) is not dict
+                    or any(expected_claim.get(key) != value for key, value in (
+                        ("owner_id", owner_id), ("reservation_id", reservation_id),
+                        ("parent_run_id", parent_run_id), ("project_id", project_id),
+                        ("item_id", item_id), ("requirement_id", requirement_id),
+                    ))):
+                raise WorkRecordConflict("exact persistent schedule claim changed before worker start")
+            if req.get("current_run_id") == run_id and req.get("status") == "in_progress":
+                return req, False
+            if (expected_claim.get("state") != "claimed"
+                    or req.get("status") not in {"queued", "pending"}
+                    or req.get("current_run_id") is not None):
+                raise WorkRecordConflict("schedule requirement is no longer safely startable")
+            for dependency in req.get("depends_on", []):
+                target = next((row for row in item["requirements"]
+                               if row.get("requirement_id") == dependency), None)
+                if target is None or target.get("status") != "completed":
+                    raise WorkRecordConflict("requirement dependencies are not all completed")
+            by_item = {row["item_id"]: row for row in data["items"]}
+            for ref in req.get("depends_on_refs", []):
+                target_item = by_item.get(ref["item_id"])
+                target_req = next((row for row in target_item["requirements"]
+                                   if row.get("requirement_id") == ref["requirement_id"]), None) if target_item else None
+                if (target_req is None or target_item.get("scope") != item.get("scope")
+                        or target_req.get("status") != "completed"):
+                    raise WorkRecordConflict("referenced requirement dependencies are not all completed")
+            req["current_run_id"] = run_id
+            req["execution_owner_id"] = _WORK_RECORD_PROCESS_INSTANCE_ID
+            req["status"] = "in_progress"
+            item["history"].append({
+                "event_id": start_id, "kind": "requirement_run_started",
+                "payload": {"run_id": run_id, "requirement_id": requirement_id,
+                            "reservation_id": reservation_id},
+                "digest": _digest({"run_id": run_id, "requirement_id": requirement_id,
+                                   "reservation_id": reservation_id}),
+                "at": time.time(),
+            })
+            item["status"] = self._derive_item_status(item["requirements"])
+            return req, True
+
+        return self._mutate(change)
 
     def begin_requirement_run(
         self, item_id: str, requirement_id: str, *, run_id: str,
@@ -1588,6 +2155,8 @@ class WorkRecordStore:
             req = next((row for row in item["requirements"] if row["requirement_id"] == requirement_id), None)
             if req is None:
                 raise KeyError(requirement_id)
+            if "schedule_claim" in req:
+                raise WorkRecordConflict("persistent schedule claim must be inspected before run start")
             revised = any(event.get("kind") == "requirement_revised"
                           and event.get("payload", {}).get("requirement_id") == requirement_id
                           for event in item["history"])
@@ -1597,11 +2166,30 @@ class WorkRecordStore:
             current = req.get("current_run_id")
             if current == run_id:
                 return req, False
+            local_dependencies_incomplete = any(
+                next(row for row in item["requirements"] if row["requirement_id"] == dependency)["status"] != "completed"
+                for dependency in req.get("depends_on", [])
+            )
+            by_item = {row["item_id"]: row for row in data["items"]}
+            referenced_dependencies_incomplete = False
+            for ref in req.get("depends_on_refs", []):
+                target_item = by_item.get(ref["item_id"])
+                target_req = next((row for row in target_item["requirements"]
+                                   if row["requirement_id"] == ref["requirement_id"]), None) if target_item else None
+                if target_req is None or target_item["scope"] != item["scope"]:
+                    raise WorkRecordConflict("dependency target is missing or outside the exact scope")
+                if target_req["status"] != "completed":
+                    referenced_dependencies_incomplete = True
+            if local_dependencies_incomplete or referenced_dependencies_incomplete:
+                raise WorkRecordConflict("requirement dependencies are not all completed")
+            if req.get("status") == "waiting_confirmation":
+                raise WorkRecordConflict("requirement is waiting for user confirmation")
             if current != expected_current_run_id:
                 raise WorkRecordStaleRun("current run changed since begin expectation")
             if any(event.get("event_id") == start_id for event in item["history"]):
                 raise WorkRecordStaleRun("a superseded run cannot be started again")
             req["current_run_id"] = run_id
+            req["execution_owner_id"] = _WORK_RECORD_PROCESS_INSTANCE_ID
             req["status"] = "in_progress"
             item["history"].append({
                 "event_id": start_id,
@@ -1817,8 +2405,19 @@ class WorkRecordStore:
                     raise WorkRecordCorrupt("result history has no matching run record")
                 stored_run = prior_run
             else:
+                if req.get("status") != "in_progress":
+                    raise WorkRecordStaleRun("result cannot settle a requirement that is no longer in progress")
                 item["runs"].append(run)
                 req["status"] = status
+                claim = req.get("schedule_claim")
+                host_execution = verification.get("host_execution") if type(verification) is dict else None
+                if (type(claim) is dict and claim.get("state") in {"claimed", "unknown"}
+                        and type(host_execution) is dict
+                        and host_execution.get("reservation_id") == claim.get("reservation_id")
+                        and host_execution.get("parent_run_id") == claim.get("parent_run_id")):
+                    # The terminal current-run CAS also consumes the scheduling
+                    # marker; settled requirements must not stay permanently claimed.
+                    req.pop("schedule_claim", None)
                 item["history"].append({
                     "event_id": result_id, "kind": "result_recorded",
                     "payload": {"run_id": run_id, "requirement_id": requirement_id},
@@ -2234,8 +2833,12 @@ class WorkRecordStore:
             return "unknown"
         if "blocked" in statuses:
             return "blocked"
+        if "waiting_confirmation" in statuses:
+            return "waiting_confirmation"
         if "stopped" in statuses:
             return "stopped"
+        if "queued" in statuses:
+            return "queued"
         if statuses == {"completed"}:
             return "completed"
         return "active"

@@ -43,10 +43,6 @@ _ROLE_DEFAULT_TIER: dict[LlmRole, str] = {
 }
 
 
-def _meta_session_model(meta: SessionMeta) -> str:
-    return (meta.execution_model or "").strip() or (meta.llm_model or "").strip()
-
-
 def _resolve_raw_id(raw: str, registry: ModelRegistry) -> str | None:
     key = (raw or "").strip()
     if not key:
@@ -108,26 +104,28 @@ def resolve_model_id_for_role(
         if resolved:
             return resolved
 
+    raw = ""
+    if role == "main_turn":
+        # Explicit global selection wins above; otherwise honor explicit per-session
+        # execution/model choices before applying the global default.
+        raw = (session_meta.execution_model or "").strip()
+        if not raw and session_meta.llm_model_override:
+            raw = (session_meta.llm_model or "").strip()
+    # All subagent roles are independent of the parent session model. Their
+    # explicit global role preference / env override was checked above; absent
+    # those, use the role-specific default.
+
+    if raw:
+        # Session fields may contain stale provider/model strings from an older
+        # registry. Only registered session choices pin a role; otherwise the
+        # configured role default remains authoritative.
+        resolved_entry = reg.resolve(raw)
+        if resolved_entry is not None:
+            return resolved_entry.id
+
     if role_settings is not None:
         selected_entry = reg.resolve(role_settings["preferences"][preference_role])
         if selected_entry is not None:
             return selected_entry.id
-
-    raw = ""
-    if role == "main_turn":
-        # The main role honors explicit execution and session model selections.
-        # Auto-selected session defaults (override=False) do not pin every role.
-        raw = (session_meta.execution_model or "").strip()
-        if not raw and session_meta.llm_model_override:
-            raw = (session_meta.llm_model or "").strip()
-    elif role == "topic_routing":
-        raw = _meta_session_model(session_meta)
-    # Explore/checker/deliverable-review are independent roles: their explicit
-    # role env override was checked above; otherwise use their role-specific default.
-
-    if raw:
-        resolved = _resolve_raw_id(raw, reg)
-        if resolved:
-            return resolved
 
     return _default_for_role(role, reg)

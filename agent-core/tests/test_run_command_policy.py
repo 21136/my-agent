@@ -16,6 +16,7 @@ from run_command_policy import (
     load_quality_command_argv,
     matches_quality_command,
     run_command_requires_confirm,
+    is_pure_arithmetic_python_command,
     working_dir_under_project,
 )
 from tests.isolation_helpers import temporary_agent_paths
@@ -33,6 +34,23 @@ quality:
 
 
 class RunCommandPolicyTests(unittest.TestCase):
+    def test_removed_arithmetic_compatibility_hook_never_exempts_commands(self) -> None:
+        for command in (
+            'python -c "print(40 + 2)"',
+            'C:\\Python314\\python.exe -c "print(1 + 1)"',
+            "rm -rf workspace",
+        ):
+            with self.subTest(command=command):
+                self.assertIs(is_pure_arithmetic_python_command(command), False)
+        python_calc = 'python -c "print(40 + 2)"'
+        self.assertEqual(classify_run_command(python_calc), "other")
+        needs_confirm, _ = run_command_requires_confirm(
+            command=python_calc,
+            working_dir="workspace/demo",
+            project_root="workspace/demo",
+        )
+        self.assertTrue(needs_confirm)
+
     def test_classes(self) -> None:
         self.assertEqual(classify_run_command("rm -rf tmp"), "danger")
         self.assertEqual(classify_run_command("npm install"), "install")

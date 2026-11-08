@@ -4,17 +4,23 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const ts = createRequire(import.meta.url)("typescript");
-function loadTs(relative) {
-  const url = new URL(relative, import.meta.url);
+const tsCache = new Map();
+function loadTs(relativeOrUrl) {
+  const url = relativeOrUrl instanceof URL ? relativeOrUrl : new URL(relativeOrUrl, import.meta.url);
+  if (tsCache.has(url.href)) return tsCache.get(url.href);
+  const exports = {}; tsCache.set(url.href, exports);
   const js = ts.transpileModule(readFileSync(url, "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const exports = {};
-  new Function("exports", js)(exports);
+  const localRequire = specifier => {
+    if (specifier.startsWith(".")) return loadTs(new URL(specifier.endsWith(".ts") ? specifier : `${specifier}.ts`, url));
+    return createRequire(import.meta.url)(specifier);
+  };
+  new Function("exports", "require", js)(exports, localRequire);
   return exports;
 }
 const overviewModule = loadTs("../src/shells/unified/current-work-overview.ts");
-const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS } = overviewModule;
+const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs } = overviewModule;
 
 const basePage = { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
   total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null };
@@ -32,6 +38,23 @@ function completedViewedGroup() {
       current_results: [{ requirement_id: "r1", result_id: "res1", status: "completed", read_status: "viewed" }] }] };
 }
 
+test("only a local in-progress project requirement exposes an explicit worker stop request", () => {
+  const group = { kind: "project", id: "project-alpha", visibility: "visible", status: "in_progress",
+    status_counts: { in_progress: 1 }, item_count: 1, requirement_count: 1,
+    items: [{ item_id: "item-live", title: "live task", status: "in_progress", status_counts: { in_progress: 1 },
+      requirements: [{ requirement_id: "req-live", text: "work", status: "in_progress" }], current_results: [] }] };
+  const result = overview({ state: "visible", groups: [group], unread_status: "unknown",
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
+  const panel = buildCurrentWorkOverviewPanel(result, { open: true });
+  assert.match(panel.bodyHtml, /data-action="cancel_execution" data-expected-status="in_progress">请求停止 worker/);
+  const remote = { ...group, source_session_id: "source-session", source_revision: 4 };
+  const remotePanel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [remote], unread_status: "unknown",
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
+  assert.doesNotMatch(remotePanel.bodyHtml, /data-action="cancel_execution"/);
+});
+
 test("natural-language query dispatch remains available and respects current-session send guards", () => {
   const sent = [];
   assert.equal(dispatchCurrentWorkOverviewRequest({ busy: false, allowed: true, send: value => sent.push(value) }), "sent");
@@ -41,6 +64,94 @@ test("natural-language query dispatch remains available and respects current-ses
   assert.equal(dispatchCurrentWorkOverviewRequest({ busy: false, allowed: false, send: value => sent.push(value) }), "unavailable");
   assert.equal(dispatchCurrentWorkOverviewRequest({ busy: false, allowed: true, send: () => { throw new Error("offline"); } }), "failed");
   assert.deepEqual(sent, [CURRENT_WORK_OVERVIEW_QUERY]);
+});
+
+test("confirmed multi-project overview remains visible, identifies its source and scopes remote controls", () => {
+  const remote = { kind: "project", id: "project-beta", source_session_id: "20261107-00000002", source_revision: 7,
+    visibility: "visible", status: "queued", status_counts: { queued: 1 }, item_count: 1, requirement_count: 1,
+    items: [{ item_id: "remote-item", title: "beta task", priority: 4, status: "queued", status_counts: { queued: 1 },
+      requirements: [{ requirement_id: "remote-req", text: "work safely", status: "queued", depends_on: [],
+        history: [{ run_id: "old-run", result_id: "old-result", status: "blocked", summary: "stopped at scope gate",
+          verification_status: "not_verified", recorded_at: 10 }] }], current_results: [] }] };
+  const result = overview({ state: "visible", aggregation_scope: "selected_project_sessions",
+    selected_project_ids: ["project-beta"], unread_status: "unknown", visibility_limitations: ["cross_session_result_read_receipts_not_projected"],
+    groups: [remote], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
+  assert.equal(shouldShowCurrentWorkOverview(result), true);
+  const panel = buildCurrentWorkOverviewPanel(result, { open: true });
+  assert.match(panel.bodyHtml, /来源项目 project-beta · 会话 20261107-00000002 · 记录版本 7/);
+  assert.match(panel.bodyHtml, /历史尝试/);
+  assert.match(panel.bodyHtml, /data-work-record-control[^>]*data-source-project-id="project-beta"/);
+  assert.match(panel.bodyHtml, /data-open-source-session="20261107-00000002"/);
+  assert.match(panel.bodyHtml, /data-work-record-new-text-for="remote-req"/);
+  assert.match(panel.bodyHtml, /data-action="revise_requirement"/);
+  assert.match(panel.bodyHtml, /状态待确认|结果查看状态未知/);
+});
+
+test("dependencies omitted from authorized local and remote projections render as unverified and escaped", () => {
+  const hostileId = 'missing<"&dependency';
+  const makeGroup = (kind, id) => ({ kind, id, visibility: "visible", status: "pending", status_counts: { pending: 1 },
+    item_count: 1, requirement_count: 1, source_session_id: "synthetic-source", source_revision: 1,
+    items: [{ item_id: "synthetic-item", title: "synthetic task", status: "pending", status_counts: { pending: 1 },
+      requirements: [{ requirement_id: "synthetic-requirement", text: "safe <requirement>", status: "pending", depends_on: [hostileId] }], current_results: [] }] });
+  for (const group of [makeGroup("independent", "local"), makeGroup("project", "remote")]) {
+    const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group],
+      visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+      page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
+    assert.match(panel.bodyHtml, /依赖关系（1）/);
+    assert.match(panel.bodyHtml, /依赖未包含在当前授权事项中，状态无法核实/);
+    assert.match(panel.bodyHtml, /missing&lt;&quot;&amp;dependency/);
+    assert.match(panel.bodyHtml, /safe &lt;requirement&gt;/);
+    assert.doesNotMatch(panel.bodyHtml, /missing<"&dependency|safe <requirement>/);
+  }
+});
+
+test("independent cross-item dependencies render real per-requirement editable controls", () => {
+  const local = { kind: "independent", id: "current", visibility: "visible", status: "pending",
+    status_counts: { pending: 2 }, item_count: 2, requirement_count: 2,
+    items: [
+      { item_id: "upstream-item", title: "upstream task", status: "pending", status_counts: { pending: 1 },
+        requirements: [{ requirement_id: "upstream-req", text: "finish upstream", status: "pending" }], current_results: [] },
+      { item_id: "downstream-item", title: "downstream task", status: "pending", status_counts: { pending: 1 },
+        requirements: [{ requirement_id: "downstream-req", text: "finish downstream", status: "pending" }], current_results: [] },
+    ] };
+  const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [local],
+    visibility_counts: { visible_groups: 1, visible_items: 2, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 2 } }), { open: true });
+  assert.match(panel.bodyHtml, /fieldset data-work-dependency-editor-for="downstream-req"/);
+  assert.match(panel.bodyHtml, /data-work-dependency-ref-item="upstream-item" data-work-dependency-ref-requirement="upstream-req"/);
+  assert.match(panel.bodyHtml, /data-action="set_dependencies"/);
+});
+
+test("dependency editor collects only the checked references for its own requirement", () => {
+  const inputs = [
+    { checked: true, dataset: { workDependencyRefItem: "upstream-a", workDependencyRefRequirement: "req-a" } },
+    { checked: true, dataset: { workDependencyRefItem: "upstream-b", workDependencyRefRequirement: "req-b" } },
+  ];
+  const editors = [
+    { dataset: { workDependencyEditorFor: "dependent-a" }, querySelectorAll: () => [inputs[0]] },
+    { dataset: { workDependencyEditorFor: "dependent-b" }, querySelectorAll: () => [inputs[1]] },
+  ];
+  const item = { querySelectorAll: () => editors };
+  assert.deepEqual(collectWorkRecordDependencyRefs(item, "dependent-a"), [
+    { item_id: "upstream-a", requirement_id: "req-a" },
+  ]);
+  assert.deepEqual(collectWorkRecordDependencyRefs(item, "missing"), []);
+});
+
+test("independent current-session requirements expose a revision editor with no remote controls", () => {
+  const local = { kind: "independent", id: "current", visibility: "visible", status: "pending",
+    status_counts: { pending: 1 }, item_count: 1, requirement_count: 1,
+    items: [{ item_id: "local-item", title: "local task", status: "pending", status_counts: { pending: 1 },
+      requirements: [{ requirement_id: "local-req", text: "original", status: "pending" }], current_results: [] }] };
+  const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [local],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
+  assert.match(panel.bodyHtml, /data-work-record-new-text-for="local-req"/);
+  assert.match(panel.bodyHtml, /data-action="revise_requirement"/);
+  assert.match(panel.bodyHtml, /data-action="copy_requirement_to_new_item">复制到新事项/);
+  assert.doesNotMatch(panel.bodyHtml, /data-source-project-id|data-open-source-session/);
+  assert.doesNotMatch(panel.bodyHtml, /data-action="queue"/);
 });
 
 test("execution refresh triggers only on meaningful state transitions", () => {
@@ -478,6 +589,40 @@ test("group and item details use precise conservative status labels", () => {
 });
 
 
+test("single-requirement history renders safely and exposes a fresh cursor for each authorized page", () => {
+  const group = { ...completedViewedGroup(), source_session_id: "synthetic-source", source_revision: 4 };
+  group.items[0].requirements[0].history = [{ run_id: "run-1", result_id: "result-1", status: "blocked",
+    verification_status: "unknown", summary: "<img src=x onerror=alert(1)>", recorded_at: 1 }];
+  group.items[0].requirements[0].history_page = { page_size: 1, offset: 0, has_more: true,
+    next_cursor: "synthetic-cursor-2", scope: "this_requirement_only" };
+  const result = overview({ state: "visible", aggregation_scope: "selected_project_sessions", selected_project_ids: ["p1"],
+    groups: [group], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
+
+  const firstPage = buildCurrentWorkOverviewPanel(result, { open: true }).bodyHtml;
+  assert.match(firstPage, /历史尝试（1\/1\+）/);
+  assert.match(firstPage, /data-requirement-history[^>]*data-project-id="p1"[^>]*data-item-id="i1"[^>]*data-requirement-id="r1"[^>]*data-cursor="synthetic-cursor-2"/);
+  assert.match(firstPage, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(firstPage, /<img src=x/);
+
+  const finalPage = { ...result, groups: [{ ...group, items: [{ ...group.items[0], requirements: [{
+    ...group.items[0].requirements[0],
+    history: [{ run_id: "run-2", result_id: "result-2", status: "completed", verification_status: "verified", summary: "synthetic final page", recorded_at: 2 }],
+    history_page: { page_size: 1, offset: 1, has_more: false, next_cursor: null, scope: "this_requirement_only" },
+  }] }] }] };
+  const finalHtml = buildCurrentWorkOverviewPanel(finalPage, { open: true }).bodyHtml;
+  assert.match(finalHtml, /历史尝试（1\/2）/);
+  assert.match(finalHtml, /synthetic final page/);
+  assert.doesNotMatch(finalHtml, /加载下一页历史/);
+});
+
+test("history errors remain visible as unavailable without rendering untrusted response text", () => {
+  const error = buildCurrentWorkOverviewPanel(overview({ state: "error", error: "<script>unsafe</script>" }), { open: true });
+  assert.equal(error.visible, true);
+  assert.match(error.bodyHtml, /概况暂不可确认/);
+  assert.doesNotMatch(error.bodyHtml, /<script>/);
+});
+
 test("source snapshot overview presents capture provenance without claiming live state", () => {
   const group = {kind:"linked_source_snapshot",id:"linked-source-"+"a".repeat(64),visibility:"visible",status:"unknown",status_counts:{unknown:1},item_count:1,requirement_count:2,attention_status:"unknown",attention_reason:"superseded_snapshot_unviewed",
     source_snapshot:{scope:"authorized_source_session_only",mapping_claim:"not_asserted",project_id:"p<1>",source_session_id:"source-1",source_revision:3,captured_at:"2026-10-30T01:00:00Z",copy_id:"a".repeat(64),intent_state:"reference_queued",card_id:null,viewed_at:null,superseded_snapshot_count:2,superseded_unviewed_count:1},
@@ -511,6 +656,48 @@ test("source snapshot detail paging merges only the same snapshot without duplic
   assert.equal(overviewModule.mergeCurrentWorkOverviewDetailPage(merged,next),null);
   assert.equal(overviewModule.mergeCurrentWorkOverviewDetailPage(current,{...next,snapshot_id:"other"}),null);
   assert.match(buildCurrentWorkOverviewPanel(merged,{open:true}).bodyHtml,/来源2/);
+});
+
+test("schedule preview is shown only for selected-project scope and remains read-only", () => {
+  const preview = {
+    state: "visible",
+    candidates: [{ project_id: "<project>", item_id: "item-1", requirement_id: "ready&safe", priority: 4 }],
+    blocked: [{ project_id: "project-b", item_id: "item-2", requirement_id: "waiting", priority: 2,
+      reasons: ["dependency is pending", "<script>unsafe</script>"] }],
+    limitations: ["Some selected projects are unavailable"],
+    omissions: ["project-c was omitted"],
+  };
+  const selected = buildCurrentWorkOverviewPanel(overview({
+    state: "visible", aggregation_scope: "selected_project_sessions", schedule_preview: preview,
+    visibility_limitations: ["project_sessions_partial"],
+    groups: [completedViewedGroup()],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  assert.match(selected.bodyHtml, /只读调度预览/);
+  assert.match(selected.bodyHtml, /不会启动任务，也不代表运行授权/);
+  assert.match(selected.bodyHtml, /&lt;project&gt; · item-1 · ready&amp;safe · 优先级 4/);
+  assert.match(selected.bodyHtml, /dependency is pending；&lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.match(selected.bodyHtml, /Some selected projects are unavailable/);
+  assert.match(selected.bodyHtml, /部分事项按保守范围展示/);
+  assert.doesNotMatch(selected.bodyHtml, /<script>/);
+
+  const local = buildCurrentWorkOverviewPanel(overview({
+    state: "visible", schedule_preview: preview, groups: [completedViewedGroup()],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  assert.doesNotMatch(local.bodyHtml, /只读调度预览|ready&amp;safe/,
+    "a preview-shaped payload cannot be exposed without selected-project aggregation scope");
+
+  const unavailable = buildCurrentWorkOverviewPanel(overview({
+    state: "error", aggregation_scope: "selected_project_sessions",
+    schedule_preview: { state: "unavailable", candidates: [], blocked: [], limitations: ["Preview unavailable"] },
+  }), { open: true });
+  assert.match(unavailable.bodyHtml, /概况暂不可确认/);
+  assert.match(unavailable.bodyHtml, /当前没有可显示的候选/);
+  assert.match(unavailable.bodyHtml, /Preview unavailable/);
+  assert.doesNotMatch(unavailable.bodyHtml, /data-work-record-control/);
 });
 
 test("source snapshot timer labels remain conservative and collapsed rows do not reappear", () => {

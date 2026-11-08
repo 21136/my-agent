@@ -18,6 +18,8 @@ from pathlib import Path
 
 from paths import AgentPaths
 
+_CODE_ROOT = Path(__file__).resolve().parents[2]
+
 _DEFAULT_INDEX = (
     '[[topic]]\nid = "common"\n\n'
     '[[topic]]\nid = "coding"\n\n'
@@ -88,7 +90,8 @@ def _build_temp_root(
     copy_tool_dirs: tuple[str, ...] = (),
     prefix: str = "stab-iso-",
 ) -> Path:
-    live = AgentPaths.discover()
+    # Bind to this sandbox checkout explicitly; discovery can inspect data/state.json.
+    live = AgentPaths.from_root(_CODE_ROOT)
     tmp = Path(tempfile.mkdtemp(prefix=prefix)).absolute()
     (tmp / "evolve").mkdir(parents=True)
     (tmp / "evolve" / "_index.core.toml").write_text(_DEFAULT_INDEX, encoding="utf-8")

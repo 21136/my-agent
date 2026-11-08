@@ -29,7 +29,7 @@ test('mounted unified chat + real WS handler: scoped multi-project overview read
     PYTHONDONTWRITEBYTECODE: '1', PYTHONNOUSERSITE: '1',
     HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root,
   };
-  const child = spawn(python, [path.join(desktop, 'tests/multi-project-overview-local-fixture.py'), root, core], {
+  const child = spawn(python, [path.join(desktop, 'tests/multi-project-overview-local-fixture.py'), root, core, '--with-history'], {
     cwd: desktop, env, stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stderr = '';
@@ -132,6 +132,101 @@ test('mounted unified chat + real WS handler: scoped multi-project overview read
       assert.doesNotMatch(transcript, new RegExp(`${project} recorded item`));
       assert.doesNotMatch(transcript, new RegExp(`${project} requirement`));
     }
+    // Exercise the structured multi-project panel and a separately confirmed
+    // remote record control. No worker or project-file mutation is requested.
+    await page.evaluate(() => window.client.listProjects());
+    await page.waitForFunction(() => window.events.some(event => event.type === 'project.list'));
+    const selectedPanel = page.locator('[data-selected-project-overview]');
+    try { await selectedPanel.locator('summary').waitFor({ state: 'visible', timeout: 3000 }); }
+    catch (error) { throw new Error(`${error.message}\\nprojectEvents=${JSON.stringify(await page.evaluate(() => window.events.filter(event => event.type.startsWith('project.'))))}`); }
+    await page.evaluate(ids => {
+      const panel = document.querySelector('[data-selected-project-overview]');
+      if (!(panel instanceof HTMLDetailsElement)) throw new Error('selected-project overview panel missing');
+      panel.open = true;
+      for (const id of ids) {
+        const input = panel.querySelector(`input[data-project-overview-id="${CSS.escape(id)}"]`);
+        if (!(input instanceof HTMLInputElement)) throw new Error(`project selector missing: ${id}`);
+        input.checked = true;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, selected);
+    const overviewEventCount = await page.evaluate(() => window.events.filter(event => event.type === 'work-records.overview.result').length);
+    const sourceConfirmCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await page.evaluate(() => document.querySelector('[data-run-selected-project-overview]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: sourceConfirmCount });
+    await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'work-records.overview.result').length > previous,
+      { previous: overviewEventCount });
+    // The client records protocol events before the mounted shell consumes them.
+    // Wait for the rendered projection too, so its per-session request lock has
+    // been released before issuing the next independently authorized query.
+    await page.getByText(`${selected[0]} recorded item`, { exact: true }).waitFor({ state: 'visible' });
+
+    // Each selected-project unified-history page is separately authorized.
+    const openSelectedPanel = () => page.evaluate(() => {
+      const panel = document.querySelector('[data-selected-project-overview]');
+      if (panel instanceof HTMLDetailsElement) panel.open = true;
+    });
+    const historyResultsBeforeDenial = await page.evaluate(() => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history').length);
+    let confirmationCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await openSelectedPanel();
+    await page.locator('[data-run-selected-project-history]').click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: confirmationCount });
+    await page.locator('[data-confirm="n"]:not([disabled])').last().click();
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history').length), historyResultsBeforeDenial,
+      'declining history authorization returns no history page');
+
+    confirmationCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await openSelectedPanel();
+    await page.locator('[data-run-selected-project-history]').click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: confirmationCount });
+    await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history').length > previous,
+      { previous: historyResultsBeforeDenial });
+    const firstHistoryResult = await page.evaluate(() => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history').at(-1));
+    assert.equal(firstHistoryResult.history.length, 10);
+    assert.equal(firstHistoryResult.history_page.has_more, true);
+    assert.deepEqual(firstHistoryResult.history_sources.map(source => source.project_id).sort(), [...selected].sort());
+    assert.match(await page.locator('[data-merged-history]').textContent(), /<img src=x onerror=alert\(1\)>/);
+    assert.equal(await page.locator('[data-merged-history] img').count(), 0, 'history summaries render as escaped text');
+    const nextHistoryButton = page.locator('[data-merged-history-next]');
+    await nextHistoryButton.waitFor({ state: 'visible' });
+    confirmationCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await nextHistoryButton.click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: confirmationCount });
+    await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history').length > previous,
+      { previous: historyResultsBeforeDenial + 1 });
+    const historyPages = await page.evaluate(() => window.events.filter(event => event.type === 'work-records.overview.result' && event.history_scope === 'selected_projects_history'));
+    assert.equal(historyPages.at(-1).history.length, 2);
+    assert.equal(historyPages.at(-1).history_page.has_more, false);
+    assert.equal(new Set(historyPages.flatMap(event => event.history.map(row => row.result_id))).size, 12,
+      'separately authorized pages contain twelve unique synthetic history entries');
+
+    await page.waitForSelector('[data-work-record-control][data-action="queue"]');
+    const authConfirmCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await page.locator(`[data-work-record-control][data-action="queue"][data-source-project-id="${selected[1]}"]`).first().click();
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: authConfirmCount });
+    await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    const operationConfirmCount = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').length);
+    await page.waitForFunction(({ previous }) => window.events.filter(event => event.type === 'confirm.request').length > previous,
+      { previous: operationConfirmCount });
+    const operationPreview = await page.evaluate(() => window.events.filter(event => event.type === 'confirm.request').at(-1).preview);
+    assert.match(operationPreview, /确认更新另一个项目 Session/);
+    assert.match(operationPreview, /仅变更工作记录元数据/);
+    await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    await page.waitForFunction(() => window.events.some(event => event.type === 'work-record.control.done' && event.status === 'applied'));
+    const controlEvent = await page.evaluate(() => window.events.filter(event => event.type === 'work-record.control.done').at(-1));
+    assert.equal(controlEvent.project_id, selected[1]);
+    assert.equal(controlEvent.action, 'queue');
+    assert.match(controlEvent.message, /未启动 worker/);
+
     const reads = readFileSync(sidecarLedger, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line).session_id);
     assert.deepEqual(new Set(reads), new Set(selected.map(project => `20261030-${(projects.indexOf(project) + 2).toString(16).padStart(8, "0")}`)));
     assert.deepEqual(errors, []);

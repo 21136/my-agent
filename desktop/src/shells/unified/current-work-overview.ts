@@ -200,6 +200,16 @@ function renderGroupSummary(group: WorkRecordsOverviewResultEvent["groups"][numb
 }
 const DETAIL_BATCH_SIZE = WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS;
 
+export function collectWorkRecordDependencyRefs(
+  itemElement: Pick<HTMLElement, "querySelectorAll"> | null,
+  requirementId: string,
+): Array<{ item_id: string; requirement_id: string }> {
+  const editor = Array.from(itemElement?.querySelectorAll<HTMLElement>("fieldset[data-work-dependency-editor-for]") ?? [])
+    .find(candidate => candidate.dataset.workDependencyEditorFor === requirementId);
+  return Array.from(editor?.querySelectorAll<HTMLInputElement>("input[data-work-dependency-ref-item]:checked") ?? [])
+    .map(input => ({ item_id: input.dataset.workDependencyRefItem ?? "", requirement_id: input.dataset.workDependencyRefRequirement ?? "" }));
+}
+
 function itemAttentionRank(item: WorkRecordsOverviewGroup["items"][number]): number {
   const order = ["blocked", "unknown", "in_progress", "stopped", "pending", "completed"];
   const rank = order.indexOf(item.status);
@@ -219,7 +229,7 @@ function detailLoadButton(page: WorkRecordsOverviewPageFacts | null | undefined,
 }
 
 function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds: ReadonlySet<string>,
-  loadingDetailCursor?: string | null): string {
+  dependencyCandidateItems: WorkRecordsOverviewGroup["items"], loadingDetailCursor?: string | null): string {
   const sortedItems = group.items.map((item, index) => ({ item, index }))
     .sort((left, right) => Number(itemNeedsAttention(right.item)) - Number(itemNeedsAttention(left.item))
       || itemAttentionRank(left.item) - itemAttentionRank(right.item) || left.index - right.index)
@@ -236,11 +246,46 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
   const shownIds = new Set(initialItems.map(item => item.item_id));
   const renderItem = (item: WorkRecordsOverviewGroup["items"][number]) => {
     const status = group.kind === "linked_source_snapshot" ? `捕获时：${STATUS_LABELS[item.status_at_capture ?? ""] ?? "状态待确认"}` : STATUS_LABELS[item.status] ?? "状态待确认";
+    const requirementsById = new Map(item.requirements.map(requirement => [requirement.requirement_id, requirement]));
     const allRequirementRows = item.requirements.map(requirement => {
       const reqStatus = group.kind === "linked_source_snapshot" ? `捕获时：${STATUS_LABELS[requirement.status_at_capture ?? ""] ?? "状态待确认"}` : STATUS_LABELS[requirement.status] ?? "状态待确认";
-      return `<li>${escapeHtml(requirement.text || "（要求文本为空）")} · ${reqStatus}</li>`;
+      const dependencies = Array.isArray(requirement.depends_on) ? requirement.depends_on : [];
+      const dependencyRefs = Array.isArray(requirement.depends_on_refs) ? requirement.depends_on_refs : [];
+      const dependencyRows = dependencies.map(dependencyId => {
+        const dependency = requirementsById.get(dependencyId);
+        const dependencyStatus = dependency
+          ? group.kind === "linked_source_snapshot"
+            ? STATUS_LABELS[dependency.status_at_capture ?? ""] ?? "状态待确认"
+            : STATUS_LABELS[dependency.status] ?? "状态待确认"
+          : "依赖未包含在当前授权事项中，状态无法核实";
+        const isBlocked = !dependency || (group.kind === "linked_source_snapshot"
+          ? dependency.status_at_capture !== "completed" : dependency.status !== "completed");
+        return `<li>${escapeHtml(dependency?.text || dependencyId)} · ${escapeHtml(dependencyStatus)}${isBlocked ? "（尚未完成，当前要求受阻）" : "（已完成）"}</li>`;
+      }).join("");
+      const referenceRows = dependencyRefs.map(ref => {
+        const targetItem = group.items.find(candidate => candidate.item_id === ref.item_id);
+        const target = targetItem?.requirements.find(candidate => candidate.requirement_id === ref.requirement_id);
+        const state = target ? (group.kind === "linked_source_snapshot"
+          ? STATUS_LABELS[target.status_at_capture ?? ""] ?? "状态待确认"
+          : STATUS_LABELS[target.status] ?? "状态待确认") : "目标未包含在当前来源概况中，状态无法核实";
+        const sourceLabel = targetItem ? `${targetItem.title || targetItem.item_id} · ${target?.text || ref.requirement_id}` : `${ref.item_id} · ${ref.requirement_id}`;
+        return `<li>跨事项依赖：${escapeHtml(sourceLabel)} · ${escapeHtml(state)}</li>`;
+      }).join("");
+      const edgeCount = dependencies.length + dependencyRefs.length;
+      const dependencySummary = edgeCount
+        ? `<details class="unified-current-work-dependency-edges"><summary>依赖关系（${edgeCount}）</summary><ul>${dependencyRows}${referenceRows}</ul></details>` : "";
+      return `<li>${escapeHtml(requirement.text || "（要求文本为空）")} · ${reqStatus}${dependencySummary}</li>`;
     });
     const requirementPage = item.requirements_page;
+    const history = item.requirements.map(requirement => {
+      const rows = requirement.history ?? [];
+      const page = requirement.history_page;
+      if (!rows.length && !page?.has_more) return "";
+      const summary = rows.map(row => `<li>${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
+      const projectId = group.kind === "project" ? group.id : "";
+      const load = page?.has_more && page.next_cursor ? `<button type="button" data-requirement-history data-project-id="${escapeHtml(projectId)}" data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(requirement.requirement_id)}" data-cursor="${escapeHtml(page.next_cursor)}">加载下一页历史</button>` : "";
+      return `<details><summary>历史尝试（${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}）</summary><ul>${summary}</ul>${load}</details>`;
+    }).join("");
     const localRequirementRemainder = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
       ? `<details class="unified-current-work-requirements-more"><summary>还有 ${allRequirementRows.length - DETAIL_BATCH_SIZE} 项要求，展开</summary><ul>${allRequirementRows.slice(DETAIL_BATCH_SIZE).join("")}</ul></details>` : "";
     const requirementRows = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
@@ -252,7 +297,12 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
     const resultMarkers = item.current_results.map(result => result.read_status === "unread"
       ? `<span class="unified-current-work-unread">未读结果</span>`
       : result.read_status === "unknown" ? `<span class="unified-current-work-unknown">查看状态未知</span>` : "").join("");
-    return `<section class="unified-current-work-item"><div><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</div>${requirementDetails}</section>`;
+    const canReviseHere = group.kind === "independent";
+    const canReviseRemote = group.kind === "project" && Number.isSafeInteger(group.source_revision) && group.source_revision! >= 0;
+    const canCancelLocalWorker = group.kind === "project" && !group.source_session_id;
+    const remoteControls = canReviseHere || canReviseRemote || canCancelLocalWorker
+      ? `<div class="unified-current-work-controls">${canReviseRemote ? `<button type="button" data-open-source-session="${escapeHtml(group.source_session_id ?? "")}" data-open-source-project="${escapeHtml(group.id)}">打开来源会话</button>` : ""}${item.requirements.map(req => `<div><textarea data-work-record-new-text-for="${escapeHtml(req.requirement_id)}" aria-label="修订要求">${escapeHtml(req.text)}</textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="revise_requirement" data-expected-status="${escapeHtml(req.status)}"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>修订要求</button>${canCancelLocalWorker && req.status === "in_progress" ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="cancel_execution" data-expected-status="in_progress">请求停止 worker</button>` : ""}${canReviseHere ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="copy_requirement_to_new_item">复制到新事项</button>` : ""}${!canReviseRemote && group.kind === "independent" && ["pending", "queued", "waiting_confirmation", "stopped", "blocked"].includes(req.status) ? `<fieldset data-work-dependency-editor-for="${escapeHtml(req.requirement_id)}"><legend>依赖目标（同会话、同范围）</legend>${dependencyCandidateItems.flatMap(candidate => candidate.requirements.map(target => ({ candidate, target }))).filter(({ candidate, target }) => candidate.item_id !== item.item_id || target.requirement_id !== req.requirement_id).map(({ candidate, target }) => `<label><input type="checkbox" data-work-dependency-ref-item="${escapeHtml(candidate.item_id)}" data-work-dependency-ref-requirement="${escapeHtml(target.requirement_id)}"${(req.depends_on_refs ?? []).some(ref => ref.item_id === candidate.item_id && ref.requirement_id === target.requirement_id) ? " checked" : ""}>${escapeHtml(candidate.title || candidate.item_id)} · ${escapeHtml(target.text)} · ${escapeHtml(STATUS_LABELS[target.status] ?? "状态待确认")}</label>`).join("")}<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="set_dependencies" data-expected-status="${escapeHtml(req.status)}">保存依赖</button></fieldset>` : ""}${canReviseRemote ? ["queue", "stop", "continue", "wait_confirmation", "release_confirmation"].map(action => `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="${action}" data-expected-status="${escapeHtml(req.status)}" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">${action}</button>`).join("") : ""}${canReviseRemote && req.status === "unknown" && req.claim_recovery_needed ? `<fieldset><legend>人工检查未知执行 claim</legend><p>须先核对该运行的进程/host 状态。没有权威停止证据时只能记录核查，claim 仍保留为未解决；不会释放或重派。</p><textarea data-claim-inspection-for="${escapeHtml(req.requirement_id)}" aria-label="人工核查证据" maxlength="4000" placeholder="记录核查对象、时间、观察到的证据；不确定请明确写明"></textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="inspect_unknown_claim" data-expected-status="unknown" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">记录核查（保持未解决）</button></fieldset>` : ""}</div>`).join("")}</div>` : "";
+    return `<section class="unified-current-work-item"><div><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</div>${requirementDetails}${history}${remoteControls}</section>`;
   };
   const itemRows = initialItems.map(renderItem).join("");
   const itemMore = serverPaged
@@ -263,10 +313,12 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
     })();
   const title = group.kind === "linked_source_snapshot" ? "来源会话快照" : group.kind === "project" ? `项目 · ${group.id}` : group.items.length === 1 && group.items[0].title.trim() ? group.items[0].title.trim() : "独立事项组";
   const source = group.kind === "linked_source_snapshot" ? group.source_snapshot : undefined;
+  const remoteSource = group.kind === "project" && group.source_session_id
+    ? `<p>来源项目 ${escapeHtml(group.id)} · 会话 ${escapeHtml(group.source_session_id)} · 记录版本 ${group.source_revision ?? 0}</p>` : "";
   const timerLabels: Record<string, string> = { waiting: "查看计时尚未完成", not_viewed: "明确查看尚未确认", unavailable: "查看计时证据不可用", unknown: "查看计时状态未知", elapsed: "查看计时已到期" };
   const timer = group.kind === "linked_source_snapshot" ? timerLabels[group.visibility_timer_status] ?? "查看计时状态未知" : "";
   const provenance = source ? `<p>项目 ${escapeHtml(source.project_id)} · 来源会话 ${escapeHtml(source.source_session_id)} · 捕获时间 ${escapeHtml(source.captured_at)}</p><p>仅为来源会话捕获时状态，不代表当前映射；结果未知、未验证。${source.viewed_at === null ? "卡片查看状态未确认。" : `卡片查看时间 ${escapeHtml(source.viewed_at)}；不代表各项结果已查看。`}${timer}，不代表当前工作完成。${source.superseded_unviewed_count > 0 ? `旧快照 ${source.superseded_unviewed_count} 个查看计时尚未确认。` : ""}</p>` : "";
-  return `<article class="unified-current-work-group"><h4>${escapeHtml(title)}</h4>${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
+  return `<article class="unified-current-work-group"><h4>${escapeHtml(title)}</h4>${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
 }
 
 export function buildCurrentWorkOverviewPanel(
@@ -296,9 +348,14 @@ export function buildCurrentWorkOverviewPanel(
   if (result.state === "error" || result.state === "cancelled") statusHtml += `<p class="unified-current-work-warning" role="status">概况暂不可确认，可刷新重试。</p>`;
   if (result.state === "expired") statusHtml += `<p class="unified-current-work-warning" role="status">概况数据已变化，正在重新查询。</p>`;
   if (result.visibility_limitations.length) statusHtml += `<p class="unified-current-work-warning">部分事项按保守范围展示。</p>`;
+  if (result.aggregation_scope === "selected_project_sessions" && result.schedule_preview) {
+    const preview = result.schedule_preview;
+    statusHtml += `<section><strong>只读调度预览</strong><p>不会启动任务，也不代表运行授权。</p>${preview.candidates.length ? "" : "<p>当前没有可显示的候选</p>"}${preview.candidates.map(row => `<p>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)} · 优先级 ${row.priority}</p>`).join("")}${preview.blocked.map(row => `<p>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)}：${row.reasons.map(escapeHtml).join("；")}</p>`).join("")}${preview.limitations.map(escapeHtml).join("；")}</section>`;
+  }
   const activeGroups = result.groups.filter(group => group.visibility === "visible");
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
-  const groupsHtml = activeGroups.map(group => renderGroup(group, expandedRequirementItemIds, options.detailLoadingCursor)).join("");
+  const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
+  const groupsHtml = activeGroups.map(group => renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor)).join("");
   const remaining = Math.max(0, result.page.total_visible_groups - activeGroups.length);
   const canExpand = result.state === "visible" && result.page.has_more && Boolean(result.page.next_cursor);
   const unreadSummary = result.unread_status === "known" && unreadCountText !== null

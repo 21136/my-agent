@@ -17,6 +17,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 import llm_client
+import project_worker_execution as worker_execution
 from llm_client import LLMClient, LLMConfig
 from project_mode import create_project
 from project_worker_execution import PROJECT_WORKER_COORDINATOR, ProjectWorkerSpec
@@ -103,7 +104,8 @@ def _harness(paths, monkeypatch, responses, *, after_response=None, confirm=None
     return client, spec, cancel, requests, request_urls
 
 
-def test_real_llmclient_protocol_reads_then_writes_only_declared_temp_project(monkeypatch):
+def test_real_llmclient_protocol_reads_then_writes_only_declared_temp_project(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="my_agent.sidecar")
     with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
         model_responses = [
             ({"role": "assistant", "content": None,
@@ -119,6 +121,12 @@ def test_real_llmclient_protocol_reads_then_writes_only_declared_temp_project(mo
         result = run_project_worker_model_loop(
             spec, "Create result.txt based on the source README.", client=client,
         )
+        timing = [record.getMessage() for record in caplog.records
+                  if "event=project_worker_timing" in record.getMessage()]
+        assert any("phase=outbound_confirmation" in row and "duration_ms=" in row for row in timing)
+        assert any("phase=model_request_cycle" in row and "duration_ms=" in row for row in timing)
+        assert any("phase=write_tool" in row and "duration_ms=" in row for row in timing)
+        assert all("synthetic worker output" not in row and "README.md" not in row for row in timing)
         assert result.status == "model_turn_finished"
         assert result.project_id == "worker-a"
         assert result.model_id == "0x567-flash"
@@ -160,16 +168,84 @@ def test_unsupported_tool_is_rejected_without_any_write_or_retry(monkeypatch):
         assert len(requests) == 1
 
 
-def test_undeclared_read_path_fails_closed_before_next_model_request(monkeypatch):
+def test_undeclared_read_is_not_attempted_and_worker_can_correct_itself(monkeypatch):
     with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
-        responses = [({"role": "assistant", "content": None,
-                       "tool_calls": [_tool_call("read_project_file", {"path": "PROJECT.md"})]}, "tool_calls")]
+        responses = [
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("read_project_file", {"path": "secret.md"}, "bad-read")]}, "tool_calls"),
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("read_project_file", {"path": "README.md"}, "good-read")]}, "tool_calls"),
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("write_project_file", {
+                  "path": "result.txt", "content": "completed from allowed input"}, "write-result")]}, "tool_calls"),
+            ({"role": "assistant", "content": "Completed using the authorized input.",
+              "tool_calls": []}, "stop"),
+        ]
         client, spec, _cancel, requests, _urls = _harness(paths, monkeypatch, responses)
-        result = run_project_worker_model_loop(spec, "Read only an authorized file.", client=client)
+        (paths.workspace / "worker-a" / "README.md").write_text("authorized source\n", encoding="utf-8")
+        attempted_snapshot_paths: list[str] = []
+        original_read_snapshot = worker_execution.ScopedProjectTools.read_snapshot
+
+        def record_snapshot_attempt(scoped, relative_path):
+            attempted_snapshot_paths.append(relative_path)
+            return original_read_snapshot(scoped, relative_path)
+
+        monkeypatch.setattr(worker_execution.ScopedProjectTools, "read_snapshot", record_snapshot_attempt)
+        result = run_project_worker_model_loop(
+            spec, "Read an authorized source and create the result.", client=client, max_requests=4,
+        )
+
+        assert result.status == "model_turn_finished"
+        assert result.requests == 4
+        assert len(spec.outbound_request_confirm_fn.previews) == 4
+        assert result.writes[0].path == "result.txt"
+        assert "README.md" in attempted_snapshot_paths
+        assert "secret.md" not in attempted_snapshot_paths
+        correction = next(message for message in requests[1]["messages"]
+                          if message["role"] == "tool" and message["tool_call_id"] == "bad-read")
+        correction_payload = json.loads(correction["content"])
+        assert correction_payload == {
+            "ok": False, "error": "read_target_not_declared",
+            "allowed_targets": ["README.md"],
+        }
+        assert "secret.md" not in correction["content"]
+
+
+def test_repeated_undeclared_reads_fail_without_reading_or_extra_requests(monkeypatch):
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
+        responses = [
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("read_project_file", {"path": "secret-a.md"}, "bad-read-1")]}, "tool_calls"),
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("read_project_file", {"path": "secret-b.md"}, "bad-read-2")]}, "tool_calls"),
+        ]
+        client, spec, _cancel, requests, _urls = _harness(paths, monkeypatch, responses)
+        attempted_snapshot_paths: list[str] = []
+        original_read_snapshot = worker_execution.ScopedProjectTools.read_snapshot
+
+        def record_snapshot_attempt(scoped, relative_path):
+            attempted_snapshot_paths.append(relative_path)
+            return original_read_snapshot(scoped, relative_path)
+
+        monkeypatch.setattr(worker_execution.ScopedProjectTools, "read_snapshot", record_snapshot_attempt)
+        result = run_project_worker_model_loop(
+            spec, "Read an authorized source.", client=client, max_requests=4,
+        )
+
         assert result.status == "failed"
         assert result.error_code == "read_target_not_declared"
-        assert result.requests == 1
-        assert len(requests) == 1
+        assert result.requests == 2
+        assert result.tool_calls == 2
+        assert len(requests) == 2
+        assert attempted_snapshot_paths == []
+        assert result.read_attempts == ()
+        first_correction = next(message for message in requests[1]["messages"]
+                                if message["role"] == "tool" and message["tool_call_id"] == "bad-read-1")
+        assert json.loads(first_correction["content"]) == {
+            "ok": False, "error": "read_target_not_declared",
+            "allowed_targets": ["README.md"],
+        }
+        assert "secret-a.md" not in first_correction["content"]
 
 
 def test_denied_existing_executor_confirmation_is_not_retried(monkeypatch):

@@ -43,12 +43,130 @@ async function ready() {
   return { ...h, socket };
 }
 
+test("work-record controls are session-bound and reject stale or mismatched replies", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const requestId = client.controlWorkRecord({ itemId: "item-1", requirementId: "req-1", action: "stop", expectedStatus: "queued", expectedRevision: 1 });
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.type, "work-record.control");
+  assert.equal(sent.session_id, SESSION);
+  assert.equal(sent.request_id, requestId);
+  assert.equal(sent.item_id, "item-1");
+  assert.equal(sent.action, "stop");
+  socket.message({ type: "work-record.control.done", request_id: "33333333-3333-4333-8333-333333333333",
+    session_id: SESSION, item_id: "item-1", requirement_id: "req-1", action: "stop", status: "applied", message: "wrong id" });
+  socket.message({ type: "work-record.control.done", request_id: requestId,
+    session_id: "20261030-fedcba98", item_id: "item-1", requirement_id: "req-1", action: "stop", status: "applied", message: "wrong session" });
+  assert.equal(received.filter(event => event.type === "work-record.control.done").length, 0);
+  socket.message({ type: "work-record.control.done", request_id: requestId,
+    session_id: SESSION, item_id: "item-1", requirement_id: "req-1", action: "stop", status: "applied", message: "stopped" });
+  socket.message({ type: "work-record.control.done", request_id: requestId,
+    session_id: SESSION, item_id: "item-1", requirement_id: "req-1", action: "stop", status: "applied", message: "duplicate" });
+  assert.equal(received.filter(event => event.type === "work-record.control.done").length, 1);
+  await client.openSession("20261030-fedcba98");
+  socket.message({ type: "session.banner", session_id: "20261030-fedcba98" });
+  const remoteRequestId = client.controlWorkRecord({ itemId: "remote-item", requirementId: "remote-req",
+    projectId: "project-beta", expectedSourceRevision: 8, action: "stop", expectedStatus: "queued" });
+  assert.equal(socket.sent.at(-1).project_id, "project-beta");
+  socket.message({ type: "work-record.control.done", request_id: remoteRequestId, session_id: "20261030-fedcba98",
+    item_id: "remote-item", project_id: "project-beta", requirement_id: "remote-req",
+    action: "stop", status: "applied", message: "remote stopped" });
+  assert.equal(received.at(-1).project_id, "project-beta");
+  const revisionRequestId = client.controlWorkRecord({ itemId: "remote-item", requirementId: "remote-req",
+    projectId: "project-beta", expectedSourceRevision: 8, action: "revise_requirement", expectedStatus: "stopped",
+    newText: "revised exact requirement" });
+  assert.equal(socket.sent.at(-1).action, "revise_requirement");
+  assert.equal(socket.sent.at(-1).new_text, "revised exact requirement");
+  socket.message({ type: "work-record.control.done", request_id: revisionRequestId, session_id: "20261030-fedcba98",
+    item_id: "remote-item", project_id: "project-beta", requirement_id: "remote-req",
+    action: "revise_requirement", status: "applied", message: "revised" });
+  assert.equal(received.at(-1).action, "revise_requirement");
+  const stale = client.controlWorkRecord({ itemId: "item-2", requirementId: "req-2", action: "continue", expectedStatus: "stopped", expectedRevision: 2 });
+  const beforeControlCount = received.filter(event => event.type === "work-record.control.done").length;
+  await client.openSession("20261030-12345678");
+  socket.message({ type: "session.banner", session_id: "20261030-12345678" });
+  socket.message({ type: "work-record.control.done", request_id: stale, session_id: "20261030-fedcba98",
+    item_id: "item-2", requirement_id: "req-2", action: "continue", status: "applied", message: "late" });
+  assert.equal(received.filter(event => event.type === "work-record.control.done").length, beforeControlCount);
+  client.destroy();
+});
+
+test("explicit schedule launch is sent as a normal agent user message in the active session", async () => {
+  const { client, socket } = await ready();
+  const message = "synthetic explicit schedule launch request";
+  const dispatch = client.sendMessage(message, undefined, { turnMode: "agent" });
+  assert.deepEqual(socket.sent.at(-1), {
+    type: "user.message", request_id: dispatch.requestId, session_id: SESSION,
+    text: message, turn_mode: "agent",
+  });
+  assert.equal(dispatch.sessionId, SESSION);
+  client.destroy();
+});
+
 test("structured overview query uses current session, a fresh UUID, and server cursor fields", async () => {
   const { client, socket } = await ready();
   const request_id = client.queryWorkRecordsOverview({ pageSize: 6, cursor: "cursor-token" });
   assert.deepEqual(socket.sent.at(-1), { type: "work-records.overview.query", session_id: SESSION,
     request_id, page_size: 6, cursor: "cursor-token", detail_paging: true });
   assert.match(request_id, /^[0-9a-f-]{36}$/);
+  client.destroy();
+});
+
+test("selected-project overview query carries only validated project IDs and no caller session IDs", async () => {
+  const { client, socket } = await ready();
+  const requestId = client.queryWorkRecordsOverview({ pageSize: 6, projectIds: ["project-alpha", "project-beta"] });
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.type, "work-records.overview.query");
+  assert.deepEqual(sent.project_ids, ["project-alpha", "project-beta"]);
+  assert.equal("source_session_ids" in sent, false);
+  assert.equal("cursor" in sent, false);
+  assert.ok(requestId);
+  assert.throws(() => client.queryWorkRecordsOverview({ projectIds: ["same", "same"] }));
+  assert.throws(() => client.queryWorkRecordsOverview({ projectIds: Array.from({ length: 7 }, (_, index) => `p${index}`) }));
+  client.destroy();
+});
+
+test("selected-project history pages reject rows outside the authorized source sessions", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview({ projectIds: ["project-alpha", "project-beta"], mergedHistory: {} });
+  const page = { page_size: 10, offset: 0, has_more: false, next_cursor: null, scope: "selected_projects_history", total: null };
+  const sources = [
+    { project_id: "project-alpha", session_id: "source-alpha", revision: 2 },
+    { project_id: "project-beta", session_id: "source-beta", revision: 3 },
+  ];
+  const row = { project_id: "project-alpha", session_id: "source-alpha", item_id: "item", requirement_id: "req",
+    run_id: "run", result_id: "result", status: "completed", summary: "synthetic", verification_status: "verified", recorded_at: 10 };
+  const valid = response(SESSION, request_id, { state: "visible", aggregation_scope: "selected_project_sessions",
+    selected_project_ids: ["project-alpha", "project-beta"], history_scope: "selected_projects_history",
+    history_sources: sources, history: [row], history_page: page });
+  socket.message({ ...valid, history: [{ ...row, project_id: "project-beta" }] });
+  socket.message({ ...valid, history: [{ ...row, session_id: "unselected-session" }] });
+  socket.message({ ...valid, history_page: { ...page, page_size: 0 } });
+  assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 0);
+  socket.message(valid);
+  assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 1);
+  client.destroy();
+});
+
+test("authorized single-requirement history request is scoped and validates revision-bearing pages", async () => {
+  const { client, socket } = await ready(); const received = []; client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview({ projectIds: ["project-alpha"], history: {
+    projectId: "project-alpha", itemId: "item-one", requirementId: "req-one", cursor: "synthetic-cursor",
+  } });
+  const sent = socket.sent.at(-1);
+  assert.equal(sent.history_project_id, "project-alpha");
+  assert.equal(sent.history_item_id, "item-one");
+  assert.equal(sent.history_requirement_id, "req-one");
+  assert.equal(sent.history_cursor, "synthetic-cursor");
+  assert.equal("source_session_ids" in sent, false);
+  const event = response(SESSION, request_id, { state: "visible", aggregation_scope: "selected_project_sessions",
+    selected_project_ids: ["project-alpha"], history_project_id: "project-alpha", history_item_id: "item-one",
+    history_requirement_id: "req-one", source: { project_id: "project-alpha", session_id: "authorized-source", revision: 4 },
+    history: [{ run_id: "run-synthetic", result_id: "result-synthetic", status: "completed", summary: "synthetic", verification_status: "unknown", recorded_at: 10 }],
+    history_page: { page_size: 10, offset: 0, has_more: false, next_cursor: null, scope: "this_requirement_only" } });
+  socket.message({ ...event, history_page: { ...event.history_page, scope: "all_history" } });
+  assert.equal(received.length, 0, "scope mismatch is rejected");
+  socket.message(event);
+  assert.equal(received.length, 1);
   client.destroy();
 });
 

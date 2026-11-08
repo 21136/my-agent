@@ -2,7 +2,7 @@
 
 > 当前实现导航；不包含已移除的 plan/adoption 队列或旧 PlanAgent 权限模型。
 
-`agent-core/subagent.py` 实现请求内的子代理调度与隔离上下文。当前类型包括 explore、checker、plan、review 与 terminal_plan；具体可用角色随调用入口和配置而定。只读角色使用受限工具集，子代理结果是供主 Agent 判断的报告，不直接构成用户确认、发布批准或测试通过证据。
+`agent-core/subagent.py` 实现请求内的只读子代理调度与隔离上下文。当前类型包括 explore、checker、plan、review 与 terminal_plan；具体可用角色随调用入口和配置而定。项目写入 worker 不属于这套只读 SubagentRunner，而由 `agent-core/project_worker_host.py` 经主 Agent 的 `run_project_workers` 工具调度。只读角色的结果是供主 Agent 判断的报告，不直接构成用户确认、发布批准或测试通过证据。
 
 ## 执行边界
 
@@ -27,4 +27,4 @@
 
 ## 相关草案
 
-- 多项目、主 Agent 调度按项目 worker（**未实现**）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)
+- 多项目 worker 当前已有主 Agent 派工与隔离执行实现；产品级 GUI / 真实模型 / 多项目端到端验收仍未完成：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)。

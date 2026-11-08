@@ -625,6 +625,9 @@ def test_mixed_multi_project_results_without_ack_proof_remain_visible_without_ob
     agent.work_record_recall_controller = SimpleNamespace(_store=store)
     agent.enable_work_record_recording = False
     agent.work_record_recording_controller = None
+    # `run_turn` clears the per-turn work-instruction buffer before routing; the
+    # synthetic Agent bypasses __init__, so mirror that constructor field.
+    agent._work_instruction_context = []
     agent._run_turn_without_work_record_recording = lambda *_args, **_kwargs: (_ for _ in ()).throw(
         AssertionError("current project overview must not fall through to the model"))
     routed = agent.run_turn("当前项目情况如何？")
@@ -837,6 +840,59 @@ def test_identical_result_repost_does_not_require_another_ack_or_timer(tmp_path,
     monkeypatch.setattr(clock_module, "sample_elapsed_clock", lambda: Sample(
         "boot-api", 1_000_000_000 + 30 * 60 * 1_000_000_000, "2026-10-30T00:30:00Z"))
     assert query_work_records_overview(session)["state"] == "collapsed"
+
+
+def test_overview_exposes_control_priority_dependencies_and_queue_status(tmp_path):
+    session, store = _session(tmp_path)
+    item = store.create_item(title="queued work", scope={"kind": "project", "project_id": "project-api"})
+    prerequisite = store.add_requirement(item["item_id"], "prerequisite", event_id="overview-prereq")
+    queued = store.add_requirement(item["item_id"], "queued task", event_id="overview-queued")
+    store.set_requirement_control(
+        item["item_id"], prerequisite["requirement_id"], action="set_dependencies", expected_status="pending",
+        event_id="overview-dependency", idempotency_key="overview-dependency-key",
+        depends_on=[],
+    )
+    store.set_requirement_control(
+        item["item_id"], queued["requirement_id"], action="set_dependencies", expected_status="pending",
+        event_id="overview-depends", idempotency_key="overview-depends-key",
+        depends_on=[prerequisite["requirement_id"]],
+    )
+    store.set_requirement_control(
+        item["item_id"], queued["requirement_id"], action="queue", expected_status="pending",
+        event_id="overview-queue", idempotency_key="overview-queue-key",
+    )
+    store.set_item_priority(item["item_id"], 5, event_id="overview-priority", idempotency_key="overview-priority-key")
+
+    overview = query_work_records_overview(session)
+    projected = overview["groups"][0]["items"][0]
+    assert projected["priority"] == 5
+    requirement = next(row for row in projected["requirements"] if row["requirement_id"] == queued["requirement_id"])
+    assert requirement["status"] == "queued"
+    assert requirement["depends_on"] == [prerequisite["requirement_id"]]
+
+
+def test_overview_preserves_dependencies_even_when_the_target_requirement_is_omitted_by_paging(tmp_path):
+    session, store = _session(tmp_path)
+    item = store.create_item(title="paged dependency", scope={"kind": "independent"})
+    requirements = [
+        store.add_requirement(item["item_id"], f"requirement {index}", event_id=f"paged-requirement-{index}")
+        for index in range(7)
+    ]
+    dependent, omitted_target = requirements[0], requirements[-1]
+    store.set_requirement_control(
+        item["item_id"], dependent["requirement_id"], action="set_dependencies", expected_status="pending",
+        event_id="paged-dependency", idempotency_key="paged-dependency-key",
+        depends_on=[omitted_target["requirement_id"]],
+    )
+
+    overview = query_work_records_overview(session, detail_paging=True)
+
+    projected = overview["groups"][0]["items"][0]
+    assert projected["requirements_page"]["total"] == 7
+    assert len(projected["requirements"]) == 5
+    visible = {row["requirement_id"]: row for row in projected["requirements"]}
+    assert visible[dependent["requirement_id"]]["depends_on"] == [omitted_target["requirement_id"]]
+    assert omitted_target["requirement_id"] not in visible
 
 
 def test_new_current_result_stays_unread_despite_old_result_ack(tmp_path, monkeypatch):

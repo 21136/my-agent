@@ -403,3 +403,39 @@ test('project-scoped pending without a result remains identity-bound at WS and p
   assert.deepEqual(socket.sent.filter(e=>e.type.startsWith('work-card.')),[]);
   client.destroy();
 });
+
+test('history GET accepts project-scoped snapshots only with their exact parent session binding', async () => {
+  for (const parentProject of ['', 'parent-project']) {
+    const { client, Socket } = loadClient();
+    await client.connect();
+    const socket = Socket.instances[0];
+    socket.message({ type: 'session.banner', session_id: SESSION, project_id: parentProject });
+    const received = [];
+    client.onEvent(event => received.push(event));
+    const scoped = structuredClone(card);
+    scoped.snapshot.kind = 'project_scoped';
+    const item = scoped.snapshot.cards[0];
+    item.status = 'unknown';
+    item.source_refs = [{ kind: 'project', id: 'project-1' }];
+    Object.assign(item.requirements[0], {
+      status: 'pending', source_ref: { kind: 'project', id: 'project-1' },
+      latest_result: null, result_count: 0, omitted_result_count: 0,
+      current_result_missing: false, current_run_id: null, latest_result_is_current: null,
+    });
+    client.getWorkCard(CARD_ID);
+    const found = { type: 'work-card.get.done', status: 'found', message: 'found', card_id: CARD_ID,
+      card: scoped, source_scope: { session_id: SESSION, project_id: parentProject } };
+    for (const source_scope of [
+      { ...found.source_scope, session_id: NEXT_SESSION },
+      { ...found.source_scope, project_id: 'foreign-parent' },
+      { ...found.source_scope, extra: true },
+    ]) socket.message({ ...found, source_scope });
+    const mixed = structuredClone(scoped);
+    mixed.snapshot.cards[0].project_id = 'foreign-project';
+    socket.message({ ...found, card: mixed });
+    assert.equal(received.filter(event => event.type === 'work-card.get.done').length, 0);
+    socket.message(found);
+    assert.deepEqual(received.filter(event => event.type === 'work-card.get.done'), [found]);
+    client.destroy();
+  }
+});

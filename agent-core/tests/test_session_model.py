@@ -50,14 +50,16 @@ class SessionModelPickerTests(unittest.TestCase):
 
         reloaded.meta.llm_model_override = False
         reloaded.set_topics(["coding"])
-        self.assertEqual(reloaded.meta.llm_model, DEFAULT_MODEL_CODING)
+        self.assertEqual(reloaded.meta.llm_model, DEFAULT_MODEL)
 
     def test_banner_includes_model(self) -> None:
         session = create_new(self.paths, conversation_id=f"_mb-{secrets.token_hex(3)}")
         session.set_llm_model("deepseek-v4-pro")
         banner = session_banner_event(session, paths=self.paths)
-        self.assertEqual(banner["llm_model"], "0x567-pro")
-        self.assertIn("GPT-6.1 Terra", banner["llm_model_label"])
+        # An explicit session model must remain authoritative; the global main-role
+        # default (0x567 Terra) must not rewrite this user's DeepSeek Pro selection.
+        self.assertEqual(banner["llm_model"], "deepseek-v4-pro")
+        self.assertEqual(banner["llm_model_label"], "DeepSeek Pro")
         self.assertTrue(banner["llm_model_override"])
         self.assertEqual(llm_model_label(DEFAULT_MODEL), "DeepSeek Flash")
 

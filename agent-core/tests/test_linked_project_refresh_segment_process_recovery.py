@@ -186,6 +186,8 @@ def _child(root: Path, mode: str, phase: str, refresh_id: str, expected: int = 0
     keep={"PATH","SYSTEMROOT","WINDIR","TEMP","TMP","USERPROFILE","HOMEDRIVE","HOMEPATH"}
     env={key:value for key,value in os.environ.items() if key.upper() in keep}
     env["PYTHONDONTWRITEBYTECODE"]="1"
+    env["PYTHONUTF8"]="1"
+    env["PYTHONIOENCODING"]="utf-8"
     env["MY_AGENT_ROOT"]=str(root.resolve(strict=True))
     result=subprocess.run([sys.executable,"-c",_CHILD,str(root),mode,phase,refresh_id],
         cwd=_CORE,env=env,stdin=subprocess.DEVNULL,capture_output=True,text=True,

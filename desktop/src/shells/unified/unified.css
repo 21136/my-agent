@@ -887,6 +887,12 @@
   margin-bottom: 1.25rem;
 }
 
+.unified-message-history-status {
+  margin-left: 0.5rem;
+  color: var(--text-muted, #8b91a0);
+  font-size: 0.78em;
+  font-weight: 400;
+}
 .unified-turn-label {
   font-size: 0.8rem;
   font-weight: 600;
@@ -901,6 +907,12 @@
 }
 
 /* ── Output display refresh (project chat) ── */
+.unified-shell[data-perspective="project"] .unified-message-history-status {
+  margin-left: 0.5rem;
+  color: var(--text-muted, #8b91a0);
+  font-size: 0.78em;
+  font-weight: 400;
+}
 .unified-shell[data-perspective="project"] .unified-turn-label {
   position: absolute;
   width: 1px;
@@ -3744,11 +3756,18 @@
 }
 
 .sandbox-write-scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.45rem 0.85rem;
   border-bottom: 1px solid color-mix(in srgb, #3d8bfd 35%, var(--ma-border));
   background: color-mix(in srgb, #3d8bfd 10%, var(--ma-surface));
   font-size: 0.82rem;
   color: var(--ma-text-muted);
+}
+.sandbox-write-scope-banner .unified-btn {
+  flex: 0 0 auto;
 }
 .sandbox-write-scope-banner.hidden {
   display: none;
@@ -4909,3 +4928,127 @@
 
 /* Complete authorized candidate values remain in the conversation flow. */
 [data-work-record-auto-candidate] > .unified-confirm-preview { max-height: none !important; overflow: visible; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+
+.unified-project-worker-batch-auth {
+  max-height: min(62vh, 42rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.85rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 0.85rem;
+  white-space: normal;
+}
+.unified-project-worker-batch-auth-scroll,
+.unified-project-worker-auth-raw {
+  max-height: min(38vh, 26rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.unified-project-worker-auth-project {
+  margin-block: 0.8rem;
+  padding: 0.7rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 0.65rem;
+}
+.unified-project-worker-auth-project dd { overflow-wrap: anywhere; }
+.unified-project-worker-auth-raw pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.unified-project-worker-batch-auth.is-invalid { border-color: var(--ma-danger, #c33); }
+
+
+/* Goal Runtime pause notice: quiet and compact; routine work has no budget panel. */
+.unified-goal-budget { padding: 0.25rem 1rem 0; }
+.goal-budget-notice {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 0.42rem 0.7rem;
+  border-left: 2px solid var(--ma-warning, #d99131);
+  color: var(--ma-text, inherit);
+  font-size: 0.8rem;
+}
+.goal-budget-heading { display: flex; flex-wrap: wrap; gap: 0.25rem 0.65rem; align-items: baseline; }
+.goal-budget-pause-reason { opacity: .82; }
+.goal-budget-guidance { margin: 0.15rem 0 0; line-height: 1.4; opacity: .88; }
+@media (max-width: 700px) { .unified-goal-budget { padding: 0.2rem 0.5rem 0; } }
+
+/* ================================================================
+   Chat reading rhythm — quieter chrome, clearer transcript
+   Scoped to the active project chat so workbench/tool surfaces stay unchanged.
+   ================================================================ */
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-stage {
+  background: color-mix(in srgb, var(--ma-bg) 38%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-chat {
+  padding: 1.05rem clamp(1rem, 2vw, 1.75rem) 1.25rem;
+  scroll-padding-block: 1.15rem;
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-topbar {
+  min-height: 44px;
+  padding: 0.35rem clamp(0.65rem, 1.4vw, 1rem);
+  background: color-mix(in srgb, var(--ma-surface) 76%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 68%, transparent);
+  backdrop-filter: blur(12px) saturate(112%);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--ma-text) 4%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-chat > * + * {
+  margin-block-start: 0.35rem;
+}
+
+/* The wallpaper remains visible in the gaps; message surfaces do the reading work. */
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] #unified-chat .unified-turn-assistant:is(.unified-message-bubble, .unified-message-reading) {
+  background: color-mix(in srgb, var(--ma-surface) 97%, transparent);
+  border-color: color-mix(in srgb, var(--ma-border) 82%, transparent);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ma-text) 6%, transparent);
+  backdrop-filter: blur(12px) saturate(108%);
+}
+
+html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] #unified-chat .unified-turn-user .unified-turn-body {
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--ma-text) 7%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock {
+  padding: 0.55rem clamp(0.75rem, 1.4vw, 1.15rem) 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 86%, transparent);
+  backdrop-filter: blur(16px) saturate(116%);
+  box-shadow: 0 -4px 18px color-mix(in srgb, var(--ma-text) 5%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta {
+  min-height: 1.65rem;
+  padding: 0.05rem 0.5rem 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 58%, transparent);
+}
+
+html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta .unified-status {
+  line-height: 1.45;
+}
+
+@media (max-width: 640px) {
+  html[data-theme] .unified-shell[data-main-focus="chat"][data-perspective="project"] .unified-chat {
+    padding: 0.8rem 0.75rem 1rem;
+  }
+
+  html[data-theme] .unified-shell[data-perspective="project"][data-main-focus="chat"] #unified-chat .unified-turn-user .unified-turn-body {
+    max-width: 96%;
+  }
+
+  html[data-theme] .unified-shell[data-main-focus="chat"] .unified-topbar {
+    min-height: 40px;
+    gap: 0.3rem;
+    padding-inline: 0.45rem;
+  }
+
+  html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-dock {
+    padding: 0.4rem 0.55rem 0.55rem;
+  }
+
+  html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta {
+    padding-inline: 0.35rem;
+  }
+}

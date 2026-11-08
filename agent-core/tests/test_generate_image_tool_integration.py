@@ -143,6 +143,20 @@ class GenerateImageToolIntegrationTests(unittest.TestCase):
         self.assertNotIn(str(self.paths.workspace), previews[0])
         post.assert_not_called()
 
+    def test_rejected_confirmation_without_reference_context_never_calls_provider(self) -> None:
+        current = self._new_session("plain-image-chat", "Image request")
+        previews: list[str] = []
+        executor = self._executor(current, lambda preview, _allow: previews.append(preview) or "n")
+
+        with patch("tools.builtin.generate_image.httpx.post") as post:
+            result = executor.run("generate_image", {"prompt": "draw a blue kite"})
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "confirm_rejected")
+        self.assertEqual(len(previews), 1)
+        self.assertIn("draw a blue kite", previews[0])
+        post.assert_not_called()
+
     def test_selected_current_attachment_is_sent_only_after_confirmation(self) -> None:
         current = self._new_session("current-chat", "Current image", "Use this image")
         self._attach_image(current, "current.png", "当前消息的参考图。")

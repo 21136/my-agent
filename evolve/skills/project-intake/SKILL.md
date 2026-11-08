@@ -21,6 +21,8 @@ version: 1.0.0
 
 # Project intake
 
+`allowed_tools` above is advisory metadata, not an access-control list or permission grant. The executor determines which tools are exposed and what they may do; follow the user's authorization and executor policy. This intake remains read-only regardless of the tools listed: do not write files or run state-changing commands.
+
 1. Establish the project root and current request intent. A read-only intake never writes code, creates a plan, or changes project state.
 2. Inspect the real project facts: Git status, README/PROJECT, package or Python manifests, `VERIFY.md`, tests, build commands, and recent evidence.
 3. For an external project, use the external-adoption scan first; never copy or modify the original during reconnaissance.

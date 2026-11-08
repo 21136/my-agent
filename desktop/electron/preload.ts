@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("myAgentDesktop", {
     return () => ipcRenderer.removeListener("evolution:request", listener);
   },
   getSidecar: () => ipcRenderer.invoke("sidecar:get"),
+  getApprovalPreferences: () => ipcRenderer.invoke("approval-preferences:get"),
+  setApprovalMode: (mode: "manual" | "auto" | "full") => ipcRenderer.invoke("approval-preferences:set", mode),
   getSessionLaneCapabilities: () => ipcRenderer.invoke("sidecar:session-lane-capabilities") as Promise<{ legacySessionLanes: boolean }>,
   getSandboxSidecar: () => ipcRenderer.invoke("sidecar:get-sandbox") as Promise<{ host: string; port: number } | null>,
   ensureSandboxSidecar: () => ipcRenderer.invoke("sidecar:ensure-sandbox") as Promise<{ ok: boolean; host?: string; port?: number; message?: string }>,
@@ -114,6 +116,8 @@ export type MyAgentDesktopApi = {
   setEvolutionConversationId: (sessionId: string | null) => Promise<boolean>;
   onEvolutionRequest: (handler: (request: EvolutionHostRequest) => void) => () => void;
   getSidecar: () => Promise<{ host: string; port: number } | null>;
+  getApprovalPreferences: () => Promise<{ type: "approval_preferences.state"; status: "ok" | "rejected"; state_known?: boolean; approval_mode: "manual" | "auto" | "full"; saved_approval_mode: "manual" | "auto" | "full"; available_modes: ("manual" | "auto" | "full")[]; message?: string }>,
+  setApprovalMode: (mode: "manual" | "auto" | "full") => Promise<{ type: "approval_preferences.done"; status: "ok" | "rejected"; approval_mode: "manual" | "auto" | "full"; saved_approval_mode: "manual" | "auto" | "full"; available_modes: ("manual" | "auto" | "full")[]; message?: string }>,
   getSessionLaneCapabilities: () => Promise<{ legacySessionLanes: boolean }>;
   getSandboxSidecar: () => Promise<{ host: string; port: number } | null>;
   ensureSandboxSidecar: () => Promise<{ ok: boolean; host?: string; port?: number; message?: string }>;

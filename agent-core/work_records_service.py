@@ -112,6 +112,28 @@ def is_explicit_record_request(text: str) -> bool:
     return isinstance(text, str) and len(text) <= 20_000 and bool(_RECORD_INTENT.search(text)) and not bool(_RECALL_INTENT.search(text))
 
 
+def is_explicit_worker_batch_record_request(text: str) -> bool:
+    """Route explicit worker-batch record choices to the worker flow, not single-item capture.
+
+    The worker tool owns the complete per-project record confirmation. This narrow
+    lexical gate only prevents the earlier optional single-record classifier from
+    preempting that flow; it grants no project, model-disclosure, or write authority.
+    Explicit negative choices are routed the same way so they are not misread as a
+    positive one-shot capture request.
+    """
+    if not isinstance(text, str) or len(text) > 20_000:
+        return False
+    normalized = __import__("re").sub(r"\s+", "", text).casefold()
+    return (
+        "run_project_workers" in normalized
+        and "工作记录" in normalized
+        and any(marker in normalized for marker in ("独立", "当前会话", "当前对话"))
+        and any(marker in normalized for marker in (
+            "创建", "新建", "关联", "不创建", "不要创建", "无需创建", "不新建", "不要新建", "不关联",
+        ))
+    )
+
+
 class WorkRecordCaptureService:
     """Capture exactly one explicitly submitted text into this Session's local store.
 

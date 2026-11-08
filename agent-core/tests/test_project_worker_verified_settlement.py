@@ -171,6 +171,12 @@ def test_exact_host_user_action_receipt_maps_cancelled_worker_to_stopped(tmp_pat
     from project_worker_host import ProjectWorkerReservation
 
     session, store, item_id, _requirement_id, binding, _outcome = _fixture(tmp_path)
+    store.begin_requirement_run(item_id, binding.execution.requirement_id,
+                                run_id="parent-run", expected_current_run_id="worker-run")
+    binding = ProjectWorkerWorkRecordBinding(
+        BoundExecution(session.conversation_id, item_id, binding.execution.requirement_id, "parent-run"),
+        binding.request,
+    )
     reservation = ProjectWorkerReservation(
         reservation_id="reservation-cancel", worker_id="worker-1", worker_run_id="worker-run",
         parent_run_id="parent-run", turn_epoch=4, conversation_id=session.conversation_id,

@@ -61,6 +61,8 @@ class RecordingFakeWorkerHost:
         self.calls = 0
         self.request_batches: list[tuple[tuple[str, str, str], ...]] = []
         self.scope_previews: list[str] = []
+        self.authorization_previews: list[str] = []
+        self.batch_authorization = object()
         self.reservations: tuple[ProjectWorkerReservation, ...] = ()
         self.release_calls = []
 
@@ -79,12 +81,32 @@ class RecordingFakeWorkerHost:
         ) for index, request in enumerate(requests))
         return self.reservations
 
+    def authorize_batch(self, session, requests, reservations, *, confirm_fn, cancel_event,
+                        parent_run_id, turn_epoch, live_binding_check):
+        assert session.conversation_id == self.session_id
+        assert reservations == self.reservations
+        assert callable(confirm_fn) and callable(live_binding_check)
+        assert not cancel_event.is_set()
+        assert live_binding_check(session, parent_run_id, turn_epoch) is True
+        preview = "PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n" + json.dumps({
+            "project_ids": [request.project_id for request in requests],
+            "task_ids": [request.task_id for request in requests],
+        })
+        self.authorization_previews.append(preview)
+        return self.batch_authorization if confirm_fn(preview) == "y" else None
+
+    def revoke_batch_authorization(self, authorization):
+        assert authorization is self.batch_authorization
+
     def release_parent_run(self, **kwargs):
         self.release_calls.append(kwargs)
         return len(self.reservations)
 
-    def run_many(self, session, requests, *, scope_confirm_fn, reservations=None, **_kwargs):
+    def run_many(self, session, requests, *, scope_confirm_fn, reservations=None,
+                 batch_authorization=None, **_kwargs):
         self.calls += 1
+        if reservations is not None:
+            assert batch_authorization is self.batch_authorization
         self.request_batches.append(tuple(
             (request.project_id, request.task_id, request.task) for request in requests
         ))
@@ -207,6 +229,7 @@ def test_parent_record_remains_independent_from_multi_project_worker_bindings(
                 return (replace(outcomes[0], reservation_id="different-reservation"),)
             fake_host.run_many = wrong_reservation
         repl.agent.project_worker_host = fake_host
+        repl.agent.task_authorization_confirm_fn = lambda preview: "y"
         original_handle_line = repl.handle_line
 
         def handle_line(text: str):
@@ -232,6 +255,9 @@ def test_parent_record_remains_independent_from_multi_project_worker_bindings(
         should_run_worker = link_choice == "y"
         expected_dispatch_count = count if should_run_worker else 0
         assert fake_host.calls == expected_dispatch_count
+        assert len(fake_host.authorization_previews) == (1 if should_run_worker else 0)
+        assert all(preview.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
+                   for preview in fake_host.authorization_previews)
         assert len(fake_host.request_batches) == expected_dispatch_count
         assert all(len(batch) == 1 for batch in fake_host.request_batches)
         dispatched_requests = [request for batch in fake_host.request_batches for request in batch]
@@ -245,10 +271,12 @@ def test_parent_record_remains_independent_from_multi_project_worker_bindings(
             assert len({(project_id, task_id) for project_id, task_id, _task in dispatched_requests}) == count
             assert len(fake_host.reservations) == count
         if should_run_worker and count == 1:
+            assert result["data"] is not None, result.get("error")
             mapping_prompts = [text for text in confirmations if "WORK_RECORD_LINK_CONFIRM" in text]
             assert len(mapping_prompts) == 1
             assert "Change requirement 1." in mapping_prompts[0]
             assert "Change requirement 1." in fake_host.scope_previews[0]
+            assert result["data"] is not None, result.get("error")
             assert result["data"]["workers"][0]["record_binding_status"] == ("mismatch" if mismatch else "confirmed")
             assert result["data"]["work_record_binding_status"] == ("mismatch" if mismatch else "confirmed")
         elif should_run_worker:

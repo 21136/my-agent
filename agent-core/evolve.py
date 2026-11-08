@@ -52,7 +52,7 @@ CHECKPOINT_USER_TEMPLATE = """用户触发词：{trigger_phrase}
 
 请根据上下文生成进化 proposal（JSON）。最多 {max_proposals} 条。
 topics 只能来自：{valid_topics}
-默认 topic 优先用本次会议 topics：{session_topics}
+默认 topic 选 workflow（若已注册），否则选注册 topic 中排序最前者；不得依据会话元数据推断。
 
 输出 JSON 对象（不要 markdown fence）：
 {{
@@ -674,7 +674,6 @@ def build_checkpoint_messages(
 ) -> list[dict[str, str]]:
     agent_paths = paths or session.paths
     valid_topics = sorted(registered_topic_ids(agent_paths))
-    session_topics = ", ".join(session.meta.topics) if session.meta.topics else "(none)"
     index_block = build_evolve_index_block(agent_paths)
     dialogue = format_recent_dialogue(session)
     goal = session.goal.strip() or "(unset)"
@@ -684,7 +683,6 @@ def build_checkpoint_messages(
             "你是 my-agent 进化写入助手。只输出一个 JSON 对象，用于生成 evolve proposal 文件。",
             index_block,
             f"本次会议 goal: {goal}",
-            f"本次会议 topics: {session_topics}",
             f"conversation_id: {session.conversation_id}",
         ]
     )
@@ -693,7 +691,6 @@ def build_checkpoint_messages(
         user_line=user_line.strip() or trigger_phrase,
         max_proposals=MAX_PROPOSALS_PER_CHECKPOINT,
         valid_topics=", ".join(valid_topics),
-        session_topics=session_topics,
         max_evidence=MAX_EVIDENCE_PER_PROPOSAL,
     )
     user += f"\n\n[最近对话]\n{dialogue}"
@@ -736,10 +733,8 @@ def _normalize_evidence(raw: Any, *, fallback_ref: str) -> EvidenceItem | None:
     return EvidenceItem(role=role, quote=quote.strip(), ref=ref_text)
 
 
-def _default_topic(session: Session, valid_ids: frozenset[str]) -> str:
-    for topic in session.meta.topics:
-        if topic in valid_ids:
-            return topic
+def _default_topic(valid_ids: frozenset[str]) -> str:
+    """Choose a stable default asset category, independent of session metadata."""
     if "workflow" in valid_ids:
         return "workflow"
     if valid_ids:
@@ -806,7 +801,7 @@ def parse_proposal_batch(
     if not isinstance(raw_list, list):
         raise EvolveError("proposals must be an array")
 
-    default_topic = _default_topic(session, valid_topic_ids)
+    default_topic = _default_topic(valid_topic_ids)
     date_prefix = datetime.now(UTC).strftime("%Y%m%d")
     seq_start = _next_seq(session.paths.evolve, date_prefix)
     drafts: list[ProposalDraft] = []

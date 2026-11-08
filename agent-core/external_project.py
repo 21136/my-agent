@@ -187,7 +187,31 @@ def _is_link_or_junction(path: Path) -> bool:
                 return True
         except OSError:
             pass
-    return path.is_symlink() or os.path.islink(path)
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (path.is_symlink() or os.path.islink(path)
+            or bool(getattr(info, "st_file_attributes", 0) & 0x400))
+
+
+def _assert_no_reparse_chain(path: Path) -> None:
+    """Reject a stored external root that was replaced by a link/reparse path."""
+    absolute = Path(os.path.abspath(path))
+    if not absolute.anchor:
+        raise ExternalProjectError("外部项目路径必须是绝对路径")
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        if component in (".", ".."):
+            raise ExternalProjectError("外部项目路径包含目录穿越")
+        current = current / component
+        try:
+            info = current.lstat()
+        except OSError as exc:
+            raise ExternalProjectError("外部项目路径已不可用") from exc
+        if (_is_link_or_junction(current)
+                or bool(getattr(info, "st_file_attributes", 0) & 0x400)):
+            raise ExternalProjectError("外部项目路径包含链接或重解析点")
 
 
 def _create_junction(link: Path, target: Path) -> None:
@@ -370,7 +394,13 @@ def validate_external_binding(
     if not entry:
         return None
     try:
-        external = _canonical_root(entry["external_root"])
+        raw_external = Path(entry["external_root"]).expanduser()
+        if not raw_external.is_absolute():
+            return None
+        _assert_no_reparse_chain(raw_external)
+        external = _canonical_root(str(raw_external))
+        if os.path.normcase(str(Path(os.path.abspath(raw_external)))) != os.path.normcase(str(external)):
+            return None
         logical = paths.workspace / pid
         if os.path.lexists(logical):
             if not _is_link_or_junction(logical):

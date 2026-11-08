@@ -34,7 +34,7 @@ _MAX_PAGE_SIZE = 50
 _MAX_CURSOR_CHARS = 4096
 _DETAIL_PAGE_SIZE = 5
 _MAX_UNREAD_SAMPLE = 100
-_STATUS_ORDER = ("blocked", "unknown", "in_progress", "stopped", "pending", "completed")
+_STATUS_ORDER = ("blocked", "unknown", "waiting_confirmation", "in_progress", "stopped", "queued", "pending", "completed")
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -850,6 +850,8 @@ def query_work_records_overview(
                     presentation_data, previous=previous_presentation_data,
                 )
             overview_items = _overview_items(source_data["items"])
+            raw_items_by_id = {row.get("item_id"): row for row in source_data["items"]
+                               if type(row) is dict and type(row.get("item_id")) is str}
             grouped = _make_groups(overview_items)
             visibility_limitations: list[str] = []
             group_rows = list(linked_source_groups)
@@ -889,10 +891,46 @@ def query_work_records_overview(
                             continue
                         requirement_id = requirement.get("requirement_id")
                         status = requirement.get("status") if type(requirement.get("status")) is str else "unknown"
+                        dependencies = requirement.get("depends_on", [])
+                        raw_item = raw_items_by_id.get(item.get("item_id"), {})
+                        history_rows = []
+                        events_by_run = {}
+                        for history_event in raw_item.get("history", []):
+                            if (type(history_event) is dict and history_event.get("kind") == "result_recorded"
+                                    and type(history_event.get("payload")) is dict):
+                                payload = history_event["payload"]
+                                if payload.get("requirement_id") == requirement_id and type(payload.get("run_id")) is str:
+                                    events_by_run[payload["run_id"]] = history_event
+                        for run in raw_item.get("runs", []):
+                            if (type(run) is not dict or run.get("requirement_id") != requirement_id
+                                    or type(run.get("run_id")) is not str or type(run.get("result_id")) is not str):
+                                continue
+                            # A pre-start blocked worker receipt is displayable only
+                            # when the immutable current project card independently
+                            # proves its exact source. Do not leak its receipt/result
+                            # identity through the generic run-history projection.
+                            if (run.get("status") == "blocked"
+                                    and requirement.get("current_run_id") is None):
+                                continue
+                            verification = run.get("verification")
+                            event_row = events_by_run.get(run["run_id"], {})
+                            history_rows.append({
+                                "run_id": run["run_id"], "result_id": run["result_id"],
+                                "status": run.get("status", "unknown"),
+                                "summary": run.get("result_summary", "") if type(run.get("result_summary")) is str else "",
+                                "verification_status": verification.get("status", "unknown") if type(verification) is dict else "unknown",
+                                "recorded_at": event_row.get("at") if type(event_row.get("at")) in (int, float) else None,
+                            })
+                        history_rows = history_rows[-10:]
                         requirements.append({
                             "requirement_id": requirement_id,
                             "text": requirement.get("text", "") if type(requirement.get("text")) is str else "",
                             "status": status,
+                            "depends_on": dependencies if type(dependencies) is list else [],
+                            "depends_on_refs": requirement.get("depends_on_refs", []) if type(requirement.get("depends_on_refs", [])) is list else [],
+                            "claim_recovery_needed": (type(requirement.get("schedule_claim")) is dict
+                                and requirement["schedule_claim"].get("state") == "unknown"),
+                            "history": history_rows,
                         })
                         item_results = current_results_by_item.get(item.get("item_id"), {})
                         current_pair = next((pair for pair in item_results if pair[0] == requirement_id), None)
@@ -916,6 +954,7 @@ def query_work_records_overview(
                     item_rows.append({
                         "item_id": item.get("item_id"),
                         "title": item.get("title", "") if type(item.get("title")) is str else "",
+                        "priority": item.get("priority", 3) if type(item.get("priority", 3)) is int else 3,
                         "status": _status((item,)),
                         "status_counts": _status_counts((item,)),
                         "requirements": requirements,
@@ -1023,6 +1062,7 @@ def query_work_records_overview(
             page_groups = [_bounded_group(g, scope, fingerprint) for g in page_groups]
         return {
             "state": state,
+            "work_record_revision": source_data["revision"],
             "groups": page_groups,
             "detail_page": detail_page,
             "unread_important_results_total": len(unread),

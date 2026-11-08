@@ -9,7 +9,7 @@
 
 ## 0. 一句话
 
-**同一套工具、不同步用不同模型**——规划/复杂推理走 **pro**，主聊 tool 循环默认 **flash**；不靠加长 prompt，靠 **Harness 层 H** 在 `chat()` 调用点选模型。
+**同一套工具、不同步骤用不同模型**——主代理默认走 **pro**，explore/checker/review 等子代理默认走 **flash**；由 Harness 路由在调用点选模型。当前模型目录映射为 `0x567-pro` → `gpt-6.1-terra`、`0x567-flash` → `gpt-6-luna`。
 
 **非目标**：为每个 tool 单独配模型；引入第二套 Agent 产品。
 
@@ -33,7 +33,7 @@ P4/P5 解决「失败饮食」；P3 解决「**哪一步值得用强模型**」�
 |----|------|
 | **J0** | **不新增 LLM function**；只改 `resolve_*_model` 与 session 元数据 |
 | **J1** | 路由表以 **调用角色（role）** 为主，不以 tool 名为单位 |
-| **J2** | 默认：**主聊 tool 循环 = flash**；**plan_partner = pro**（可配置） |
+| **J2** | 默认：**主代理 tool 循环 = pro**；**子代理 = flash**（可配置） |
 | **J3** | **explore / checker** 默认 flash；用户可 env 覆盖（现有 `CHECKER_MODEL` 保留） |
 | **J4** | **不按 turn_intent 自动升 pro**（M0）；避免费用失控；M1 可选「单轮用户显式 / 设置项」 |
 | **J5** | 模型 id 真源 = **`llm_models` registry**；`meta.json` 只存选用 id，不存 endpoint 密钥 |
@@ -53,10 +53,10 @@ P4/P5 解决「失败饮食」；P3 解决「**哪一步值得用强模型**」�
 
 | 调用角色 | 代码落点 | 默认 tier | 覆盖 env / meta |
 |----------|----------|-----------|-----------------|
-| **main_turn** | `Agent.run_turn` → `llm_client.chat` | flash | `meta.llm_model`（用户已选则尊重） |
-| **plan_partner** | `SubagentRunner.run_plan` / `PlanAgent` | pro | `PLAN_PARTNER_MODEL` → 空则 pro |
-| **explore** | `run_explore` | flash | `SUBAGENT_EXPLORE_MODEL`（新增，空=跟 session） |
-| **checker** | `run_checker` | flash | `CHECKER_MODEL`（已有） |
+| **main_turn** | `Agent.run_turn` → `llm_client.chat` | pro | 显式全局主角色选择 → 当前 session 显式 `execution_model` / `llm_model` → `OX567_MODEL_PRO` 配置的 registry 默认 |
+| **explore** | `run_explore` | flash | 显式全局子代理选择 → `SUBAGENT_EXPLORE_MODEL` → registry 默认 flash |
+| **checker** | `run_checker` | flash | 显式全局子代理选择 → `CHECKER_MODEL` → registry 默认 flash |
+| **deliverable_review / topic_routing** | review / `propose_topics_with_llm` | flash | 显式全局子代理选择；topic routing 也可 `PLAN_SPAWN_MODEL` 覆盖 |
 | **topic_routing** | `propose_topics_with_llm` | flash | 保持现状 |
 | **evolve_checkpoint** | `evolve.py` proposal LLM | flash | 保持现状 |
 | **audit** | `governance/audit.py` | pro | 保持现状（治理低频） |

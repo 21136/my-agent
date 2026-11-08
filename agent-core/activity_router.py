@@ -57,7 +57,9 @@ _PROJECT_MARKERS = ("做项目", "项目模式", "项目 新建", "项目 打开
 
 
 def _project_topics(session: Session) -> tuple[str, ...]:
-    return ("coding",) if "coding" not in session.meta.topics else ()
+    """Project routing is independent of legacy session topic metadata."""
+    _ = session
+    return ()
 
 
 def _is_project_turn(text: str, lower: str) -> bool:
@@ -167,7 +169,7 @@ def compute_activity_route(
     scope = infer_topic_scope(text, paths=paths)
 
     if scope == "workflow" or any(name in lower for name in _WORKFLOW_TOOL_NAMES):
-        topics = ("workflow",) if "workflow" not in session.meta.topics else ()
+        topics = ("workflow",) if scope == "workflow" or "workflow" in lower else ()
         return ActivityRoute("daily", topics, "使用 workflow 工具")
 
     grow_execute = intent == "execute" and any(
@@ -186,9 +188,6 @@ def compute_activity_route(
     if intent in {"qa", "recall", "plan"}:
         return ActivityRoute("daily", (), "对话 / 方案")
 
-    if "coding" in session.meta.topics:
-        return ActivityRoute("grow", (), "当前主题为 coding")
-
     return ActivityRoute("daily", (), "继续当前任务")
 
 
@@ -204,11 +203,6 @@ def compute_session_route(session: Session, paths: AgentPaths) -> ActivityRoute:
     if pending > 0:
         return ActivityRoute("grow", (), f"{pending} 条 proposal 待处理")
 
-    topics = session.meta.topics
-    if "coding" in topics and session.meta.active_shell == "grow":
-        return ActivityRoute("grow", (), "续接 · coding 主题")
-    if topics:
-        return ActivityRoute("daily", (), f"续接 · {', '.join(topics)}")
     return ActivityRoute("daily", (), "续接会话")
 
 

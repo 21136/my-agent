@@ -96,11 +96,13 @@ def _open_child(parent: int, name: str, *, directory: bool) -> int:
         raise ProjectReadError('component unavailable')
     return handle.value
 
-def _inspect(handle: int, *, directory: bool) -> _Info:
+def _inspect(handle: int, *, directory: bool, allow_zero_file_id: bool = False) -> _Info:
     info=_Info()
     if (not _k.GetFileInformationByHandle(handle,ctypes.byref(info)) or _k.GetFileType(handle)!=1
             or info.attributes & 0x400 or bool(info.attributes & 0x10) != directory
-            or not (info.index_high or info.index_low) or (not directory and info.links != 1)):
+            or not info.volume
+            or (not (info.index_high or info.index_low) and not (allow_zero_file_id and directory))
+            or (not directory and info.links != 1)):
         raise ProjectReadError('unsafe component')
     return info
 
@@ -129,13 +131,13 @@ class ProjectTextReader:
 
     def _root(self, stack: ExitStack) -> tuple[int,_Info]:
         path=self._project_root; anchor=path.anchor
-        if (not re.fullmatch(r'[A-Za-z]:\\',anchor) or _k.GetDriveTypeW(anchor)!=3
+        if (not re.fullmatch(r'[A-Za-z]:\\',anchor) or not path.parts[1:] or _k.GetDriveTypeW(anchor)!=3
                 or any(not _valid_relative_path(part) for part in path.parts[1:])):
             raise ProjectReadError('invalid project binding')
         root=_k.CreateFileW(anchor,0x80,1,None,3,0x02200000,None)
         if root == ctypes.c_void_p(-1).value: raise ProjectReadError('root unavailable')
         stack.callback(_k.CloseHandle,root)
-        info=_inspect(root,directory=True); volume=info.volume
+        info=_inspect(root,directory=True,allow_zero_file_id=True); volume=info.volume
         for component in path.parts[1:]:
             root,info=_child(stack,root,component,directory=True)
             if info.volume != volume: raise ProjectReadError('volume changed')

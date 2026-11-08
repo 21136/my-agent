@@ -436,6 +436,7 @@ def _match_project_worker_tasks_to_existing_requirements(requests, authorized_so
             "requirement_id": requirement["requirement_id"],
             "requirement_text": requirement["text"],
             "requirement_status": requirement.get("status", "unknown"),
+            "priority": item.get("priority", 3),
         })
     return matches
 
@@ -473,6 +474,21 @@ def _latest_current_user_request(session: Session) -> str | None:
             content = message.get("content")
             return content if type(content) is str and content.strip() else None
     return None
+
+
+def _requests_independent_current_dialogue_worker_record(session: Session) -> bool:
+    """Honor an explicit request to create worker records in this dialogue, not source projects."""
+    request = _latest_current_user_request(session)
+    if request is None:
+        return False
+    normalized = re.sub(r"\s+", "", request).lower()
+    if any(marker in normalized for marker in ("不要创建", "不创建", "无需创建", "不要新建", "不新建")):
+        return False
+    return (
+        "工作记录" in normalized
+        and any(marker in normalized for marker in ("创建", "新建", "记录到"))
+        and any(marker in normalized for marker in ("独立", "当前对话"))
+    )
 
 
 def _independent_target_is_explicit_in_current_request(session: Session, target_path: str) -> bool:
@@ -1293,8 +1309,8 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     ),
     "run_project_workers": (
         "Dispatch explicitly identified project tasks (at most two different projects edited in parallel) and optionally one independent file write through the trusted host. "
-        "Only use project workers when the user task names each project and actionable requirements clearly. Use independent_write only when its exact target_path is literally named in the current user request; otherwise ask first. "
-        "if a project or task is ambiguous, ask first. Historical-record linkage requires one read-only "
+        "Dispatch workers for explicitly named project tasks, or for a user-triggered continuation of the persisted work-record queue after reading its authorized overview. A continuation request selects only the next one or two ready requirements in priority order; it is not permission to skip scope, outbound-request, or write confirmations, and it never authorizes a later turn or restart. Each selected task must exactly match its stored requirement text, with explicit worker paths and the existing per-run confirmations. Use independent_write only when its exact target_path is literally named in the current user request; otherwise ask first. "
+        "if a project or task is ambiguous, ask first. A user-confirmed exact schedule_candidate may claim and start one queued requirement only in the same Session; cross-session source mutation is rejected. Historical-record linkage requires one read-only "
         "source authorization for all involved project work-record sidecars and one exact-text batch "
         "confirmation. If no unique historical match exists, offer "
         "one current-dialogue independent record creation confirmation or an explicitly unlinked path; "
@@ -1762,6 +1778,33 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                     "additionalProperties": False,
                 },
             },
+            "schedule_candidate": {
+                "type": "object",
+                "description": "Optional exact legacy single candidate from a fresh authorized schedule preview.",
+                "properties": {
+                    "project_id": {"type": "string", "minLength": 1},
+                    "item_id": {"type": "string", "minLength": 1},
+                    "requirement_id": {"type": "string", "minLength": 1},
+                    "priority": {"type": "integer", "minimum": 0, "maximum": 5},
+                },
+                "required": ["project_id", "item_id", "requirement_id", "priority"],
+                "additionalProperties": False,
+            },
+            "schedule_candidates": {
+                "type": "array", "minItems": 1, "maxItems": 2,
+                "description": "Explicit one-live-turn batch of up to two exact candidates. Every worker task and read/write target must still be provided explicitly; candidate projection supplies identity/priority only.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "project_id": {"type": "string", "minLength": 1},
+                        "item_id": {"type": "string", "minLength": 1},
+                        "requirement_id": {"type": "string", "minLength": 1},
+                        "priority": {"type": "integer", "minimum": 0, "maximum": 5},
+                    },
+                    "required": ["project_id", "item_id", "requirement_id", "priority"],
+                    "additionalProperties": False,
+                },
+            },
             "independent_write": {
                 "type": "object",
                 "description": "Optional single independent file write; use only when the user's current request explicitly names this exact target path.",
@@ -1918,11 +1961,15 @@ class Agent:
     enable_work_record_recording: bool = False
     work_record_recording_controller: Any | None = field(default=None, repr=False)
     project_worker_host: Any | None = field(default=None, repr=False)
+    task_authorization_confirm_fn: Callable[[str], str] | None = field(default=None, repr=False)
     _project_worker_live_binding: tuple[str, int, Callable[[Session, str, int], bool]] | None = field(
         default=None, repr=False,
     )
     _active_goal_runtime: Any | None = field(default=None, repr=False)
+    _explicit_new_goal_this_turn: str | None = field(default=None, repr=False)
+    _goal_confirm_base_fn: Callable[..., Any] | None = field(default=None, repr=False)
     _multi_project_batch_requested: bool = field(default=False, repr=False)
+    _multi_project_batch_project_ids: tuple[str, ...] = field(default_factory=tuple, repr=False)
     _project_worker_progress_lock: Any = field(default_factory=threading.Lock, repr=False)
     _project_worker_progress_scope: tuple[str, str, int] | None = field(default=None, repr=False)
     _project_worker_progress_batch_seq: int = field(default=0, repr=False)
@@ -1940,6 +1987,9 @@ class Agent:
         if callable(setter):
             setter(self.cancel_event)
         self.executor.cancel_event = self.cancel_event
+        self._goal_confirm_base_fn = self.executor.confirm_fn
+        if callable(self._goal_confirm_base_fn):
+            self.executor.confirm_fn = self._confirm_without_goal_budget_time
         if self.executor.session.evolution_id != self.session.meta.evolution_id:
             self.executor.session.evolution_authorization_id = ""
             self.executor.session.evolution_stop_authorization_id = ""
@@ -1952,6 +2002,32 @@ class Agent:
             )
         self.executor.project_worker_host_dispatch = self._dispatch_project_workers_tool
         self.executor.dialogue_recall_host_dispatch = self._dispatch_current_dialogue_recall_tool
+
+    def _install_goal_confirmation_timer_wrapper(self) -> None:
+        current = self.executor.confirm_fn
+        if (getattr(current, "__self__", None) is self
+                and getattr(current, "__func__", None) is Agent._confirm_without_goal_budget_time):
+            return
+        self._goal_confirm_base_fn = current
+        if callable(current):
+            self.executor.confirm_fn = self._confirm_without_goal_budget_time
+
+    def _call_confirmation_without_goal_budget_time(
+        self, callback: Callable[..., Any], *args: Any, **kwargs: Any,
+    ) -> Any:
+        runtime = self._active_goal_runtime
+        if runtime is None:
+            return callback(*args, **kwargs)
+        runtime.pause_wall_clock()
+        try:
+            return callback(*args, **kwargs)
+        finally:
+            runtime.resume_wall_clock()
+
+    def _confirm_without_goal_budget_time(self, *args: Any, **kwargs: Any) -> Any:
+        return self._call_confirmation_without_goal_budget_time(
+            self._goal_confirm_base_fn, *args, **kwargs,
+        )
 
     def _dialogue_recall_tool_enabled(self) -> bool:
         controller = self.work_record_recall_controller
@@ -2031,8 +2107,9 @@ class Agent:
         def denied(code: str) -> ToolResult:
             return tool_fail("run_project_workers", ToolErrorCode.PERMISSION_DENIED, code)
 
-        if type(arguments) is not dict or not arguments or not set(arguments) <= {"workers", "independent_write"}:
-            return denied("worker dispatch accepts only workers and one independent_write request")
+        if type(arguments) is not dict or not arguments or not set(arguments) <= {
+                "workers", "independent_write", "schedule_candidate", "schedule_candidates"}:
+            return denied("worker dispatch accepts only explicit workers, schedule candidates, and one independent_write request")
         worker_items = arguments.get("workers")
         if "workers" in arguments and (
             type(worker_items) is not list or not 1 <= len(worker_items) <= _MAX_WORKER_BATCH_SIZE
@@ -2040,6 +2117,25 @@ class Agent:
             return denied(
                 f"project worker batch must be a one-to-{_MAX_WORKER_BATCH_SIZE}-item list"
             )
+        schedule_claim_requested = ("schedule_candidate" in arguments or "schedule_candidates" in arguments)
+        if "schedule_candidate" in arguments and "schedule_candidates" in arguments:
+            return denied("provide either one schedule_candidate or a schedule_candidates batch, not both")
+        schedule_candidates = ([arguments["schedule_candidate"]]
+                               if "schedule_candidate" in arguments
+                               else arguments.get("schedule_candidates", []))
+        if schedule_claim_requested and (
+                type(schedule_candidates) is not list or not 1 <= len(schedule_candidates) <= 2
+                or any(type(candidate) is not dict
+                       or set(candidate) != {"project_id", "item_id", "requirement_id", "priority"}
+                       or any(type(candidate.get(key)) is not str or not candidate[key].strip()
+                              for key in ("project_id", "item_id", "requirement_id"))
+                       or type(candidate.get("priority")) is not int or not 0 <= candidate["priority"] <= 5
+                       for candidate in schedule_candidates)
+                or len({(c["project_id"], c["item_id"], c["requirement_id"])
+                        for c in schedule_candidates}) != len(schedule_candidates)):
+            return denied("schedule candidates must name one or two distinct exact project/item/requirement identities")
+        if schedule_claim_requested and (worker_items is None or len(worker_items) != len(schedule_candidates)):
+            return denied("each schedule candidate requires one explicitly supplied worker task with explicit read/write targets")
         independent_spec = arguments.get("independent_write")
         if "independent_write" in arguments and independent_spec is None:
             return denied("independent_write must be a single explicit object")
@@ -2088,6 +2184,9 @@ class Agent:
         if requested_tests and (len(requests) != 1 or not self._project_worker_work_record_required):
             return denied("pytest target requires one explicitly bound recorded requirement")
         if len({request.project_id for request in requests}) > 1:
+            self._multi_project_batch_project_ids = tuple(dict.fromkeys(
+                (*self._multi_project_batch_project_ids, *(request.project_id for request in requests))
+            ))
             # Track this only in memory until a worker clears its user scope gate.
             # A refused/unstarted proposal must not permanently lock the Goal.
             self._multi_project_batch_requested = True
@@ -2123,6 +2222,8 @@ class Agent:
         worker_batch_unlinked = False
         worker_batch_tracking_mode = None
         worker_batch_start_fn = None
+        linked_schedule_sources = {}
+        linked_schedule_claims = {}
         if self._project_worker_work_record_required and len(requests) == 1:
             record_context = self._project_worker_work_record_context
             if record_context is None:
@@ -2215,9 +2316,9 @@ class Agent:
                     "record_access": "none; do not read or write work-record sidecars",
                     "record_effect": "unlinked; no task-to-requirement binding or lifecycle tracking",
                     "execution_gates": [
-                        "each worker project scope is confirmed separately",
-                        "each exact outbound model request is confirmed separately",
-                        "each project file write is confirmed separately",
+                        "this record decision does not authorize project reads, model disclosure, or writes",
+                        "before multi-worker dispatch, a separate confirmation page will show every per-project task, exact read/write target, endpoint, and data category",
+                        "only that separately confirmed batch scope may reuse disclosed data and listed targets during its live run; ToolExecutor, write policy, leases, source snapshots, and readback remain active",
                     ],
                     "acceptance": "not_run",
                 }, ensure_ascii=False, indent=2)
@@ -2248,9 +2349,9 @@ class Agent:
                     "record_effect": "preserve original request plus one requirement per worker in the current dialogue",
                     "failure_boundary": "if the complete record batch cannot be persisted, no worker is dispatched",
                     "execution_gates": [
-                        "each worker project scope is confirmed separately",
-                        "each exact outbound model request is confirmed separately",
-                        "each project file write is confirmed separately",
+                        "this record decision only stores the original request and per-project task descriptions in the current dialogue; it grants no project access",
+                        "before multi-worker dispatch, a separate confirmation page will show every per-project task, exact read/write target, endpoint, and data category",
+                        "only that separately confirmed batch scope may reuse disclosed data and listed targets during its live run; ToolExecutor, write policy, leases, source snapshots, and readback remain active",
                     ],
                     "acceptance": "not_run",
                 }, ensure_ascii=False, indent=2)
@@ -2367,38 +2468,63 @@ class Agent:
                 return True
 
             project_ids = tuple(dict.fromkeys(request.project_id for request in requests))
-            try:
-                authorized_sources = authorize_project_record_sources(
-                    self.session, project_ids,
-                    confirm_fn=lambda preview, _allow: confirm_record_gate(
-                        preview, "WORK_RECORD_SOURCE_READ_CONFIRM",
-                    ),
-                    cancel_event=self.cancel_event,
-                )
-            except Exception:
-                if self.cancel_event.is_set():
-                    return denied("WORK_RECORD_SOURCE_READ_CANCELLED: the batch was not dispatched.")
+            if (not schedule_claim_requested
+                    and _requests_independent_current_dialogue_worker_record(self.session)):
                 tracking_result = create_current_dialogue_tracking(
-                    "existing project-session records were not authorized or unavailable",
+                    "the user explicitly requested an independent current-dialogue work record",
                 )
                 if isinstance(tracking_result, ToolResult):
                     return tracking_result
                 if tracking_result is False:
-                    if not confirm_unlinked_execution("current-dialogue record creation was declined"):
+                    return denied(
+                        "CURRENT_DIALOGUE_RECORD_NOT_AUTHORIZED: the requested independent record was not confirmed; "
+                        "no worker was dispatched."
+                    )
+                authorized_sources = None
+                matches = None
+            else:
+                try:
+                    authorized_sources = authorize_project_record_sources(
+                        self.session, project_ids,
+                        confirm_fn=lambda preview, _allow: confirm_record_gate(
+                            preview, "WORK_RECORD_SOURCE_READ_CONFIRM",
+                        ),
+                        cancel_event=self.cancel_event,
+                    )
+                except Exception:
+                    if schedule_claim_requested:
                         return denied(
-                            "WORK_RECORD_SOURCE_READ_NOT_AUTHORIZED: current-dialogue tracking and unlinked execution "
-                            "were both declined; no project file or worker action occurred."
+                            "SCHEDULE_CANDIDATE_SOURCE_NOT_AUTHORIZED: the exact source Session could not be "
+                            "authorized; no fallback record, unlinked execution, or worker dispatch is allowed."
                         )
-                    worker_batch_unlinked = True
-                else:
-                    authorized_sources = None
-                    matches = None
+                    if self.cancel_event.is_set():
+                        return denied("WORK_RECORD_SOURCE_READ_CANCELLED: the batch was not dispatched.")
+                    tracking_result = create_current_dialogue_tracking(
+                        "existing project-session records were not authorized or unavailable",
+                    )
+                    if isinstance(tracking_result, ToolResult):
+                        return tracking_result
+                    if tracking_result is False:
+                        if not confirm_unlinked_execution("current-dialogue record creation was declined"):
+                            return denied(
+                                "WORK_RECORD_SOURCE_READ_NOT_AUTHORIZED: current-dialogue tracking and unlinked execution "
+                                "were both declined; no project file or worker action occurred."
+                            )
+                        worker_batch_unlinked = True
+                    else:
+                        authorized_sources = None
+                        matches = None
 
             if not worker_batch_unlinked and worker_batch_tracking_mode is None:
                 try:
                     matches = _match_project_worker_tasks_to_existing_requirements(requests, authorized_sources)
                 except _ProjectWorkerRecordMatchError as exc:
                     reason = f"WORK_RECORD_REQUIREMENT_{exc.reason.upper()}"
+                    if schedule_claim_requested:
+                        return denied(
+                            f"SCHEDULE_CANDIDATE_NOT_BINDABLE: {reason} for exact selected candidate; "
+                            "no fallback record, unlinked execution, or worker dispatch is allowed."
+                        )
                     if self.cancel_event.is_set():
                         return denied(f"{reason}: no worker was dispatched.")
                     tracking_result = create_current_dialogue_tracking(
@@ -2414,6 +2540,11 @@ class Agent:
                             )
                         worker_batch_unlinked = True
                 except Exception:
+                    if schedule_claim_requested:
+                        return denied(
+                            "SCHEDULE_CANDIDATE_SOURCE_UNREADABLE: the exact selected candidate could not be "
+                            "verified; no fallback record, unlinked execution, or worker dispatch is allowed."
+                        )
                     if self.cancel_event.is_set():
                         return denied("WORK_RECORD_SOURCE_UNREADABLE: no worker was dispatched.")
                     tracking_result = create_current_dialogue_tracking(
@@ -2429,6 +2560,61 @@ class Agent:
                         worker_batch_unlinked = True
 
             if not worker_batch_unlinked and worker_batch_tracking_mode is None:
+                if schedule_claim_requested:
+                    # Rebuild a complete fresh preview only from the exact, authorized
+                    # source stores. This is identity/priority metadata only; worker task
+                    # text and both target lists remain the explicit tool arguments.
+                    try:
+                        from work_records_schedule_preview import build_schedule_preview, pick_schedule_batch
+                        schedule_groups = []
+                        for project_id, source in authorized_sources.items():
+                            source.store.validate_scope()
+                            source_items = source.store.list_items()
+                            source.store.validate_scope()
+                            schedule_groups.append({
+                                "kind": "project", "id": project_id, "omitted_item_count": 0,
+                                "items": [{
+                                    "item_id": item.get("item_id"),
+                                    "priority": item.get("priority", 3),
+                                    "omitted_requirement_count": 0,
+                                    "requirements": [{
+                                        "requirement_id": req.get("requirement_id"),
+                                        "status": req.get("status"),
+                                        "depends_on": req.get("depends_on", []),
+                                        "schedule_claim": req.get("schedule_claim"),
+                                    } for req in item.get("requirements", [])],
+                                } for item in source_items if type(item) is dict
+                                    and item.get("scope") == {"kind": "project", "project_id": project_id}],
+                            })
+                        schedule_preview = build_schedule_preview(schedule_groups)
+                        # A user-triggered continuation consumes only the next item(s)
+                        # in the complete priority order. One-item requests do not bypass
+                        # a higher-priority ready requirement; two remains the hard live
+                        # batch ceiling. This picker is not authorization: each launch
+                        # still needs the live-turn and per-operation confirmations below.
+                        picked = pick_schedule_batch(
+                            schedule_preview, enabled=True, limit=len(schedule_candidates),
+                        )
+                        eligible = picked
+                        eligible_ids = {(row["project_id"], row["item_id"], row["requirement_id"], row["priority"])
+                                        for row in eligible}
+                        requested_ids = {(row["project_id"], row["item_id"], row["requirement_id"], row["priority"])
+                                         for row in schedule_candidates}
+                        if not requested_ids <= eligible_ids or (len(schedule_candidates) == 2
+                                                                  and eligible_ids != requested_ids):
+                            raise ValueError("the complete authorized preview does not select these exact candidates")
+                        if len(matches) != len(schedule_candidates) or any(
+                                not any(candidate["project_id"] == match["project_id"]
+                                        and candidate["item_id"] == match["item_id"]
+                                        and candidate["requirement_id"] == match["requirement_id"]
+                                        and candidate["priority"] == match["priority"]
+                                        and match["requirement_status"] in {"queued", "pending"}
+                                        for candidate in schedule_candidates)
+                                for match in matches):
+                            raise ValueError("candidate does not match one exact queued worker requirement")
+                    except Exception:
+                        return denied("SCHEDULE_BATCH_CANDIDATES_NOT_AUTHORIZED: a complete fresh preview or exact candidate match is unavailable; no worker dispatched.")
+
                 # Derive stable task identities from exact trusted source lineage so a later
                 # parent run can continue the same task without reusing worker/run credentials.
                 from project_worker_host import ProjectWorkerHostRequest
@@ -2466,6 +2652,8 @@ class Agent:
                         "requirement_text": match["requirement_text"],
                         "requirement_status": match["requirement_status"],
                         "task_input": request.task,
+                        "read_targets": list(request.read_targets),
+                        "write_targets": list(request.write_targets),
                         "task_id": reservation.task_id,
                         "worker_id": reservation.worker_id,
                         "worker_run_id": reservation.worker_run_id,
@@ -2488,7 +2676,9 @@ class Agent:
                     "parent_run_id": run_id,
                     "turn_epoch": turn_epoch,
                     "tasks": confirmation_rows,
-                    "record_effect": "bind existing records only; no project requirement is created or changed",
+                    "record_effect": ("claim and start exactly the selected queued requirement in this same Session, then settle its actual worker receipt"
+                                      if schedule_claim_requested else "bind existing records only; no project requirement is created or changed"),
+                    **({"schedule_candidates": schedule_candidates} if schedule_claim_requested else {}),
                     "acceptance": "not_run; lifecycle remains unknown and not_verified",
                 }, ensure_ascii=False, indent=2)
                 batch_choice = confirm_record_gate(
@@ -2501,6 +2691,28 @@ class Agent:
                     return denied("WORK_RECORD_BATCH_BINDING_STALE: parent run is no longer live; no worker dispatched.")
 
                 batch_id = f"batch-{run_id}-{turn_epoch}-{uuid4().hex}"
+                if schedule_claim_requested and len(matches) != len(schedule_candidates):
+                    return denied("SCHEDULE_CANDIDATE_SOURCE_MISMATCH: selected candidates differ from the fresh exact source matches; no worker was dispatched.")
+                cross_session_schedule_capabilities = {}
+                if schedule_claim_requested:
+                    from cross_session_schedule_write import authorize_cross_session_schedule_write
+                    for match, reservation in zip(matches, worker_batch_reservations):
+                        source = authorized_sources[match["project_id"]]
+                        if source.store.session_id == self.session.conversation_id:
+                            continue
+                        try:
+                            cross_session_schedule_capabilities[reservation.reservation_id] = authorize_cross_session_schedule_write(
+                                source, item_id=match["item_id"], requirement_id=match["requirement_id"],
+                                task=match["requirement_text"], request=match["request"],
+                                reservation=reservation,
+                                confirm_fn=lambda preview: confirm_record_gate(preview, "CROSS_SESSION_SCHEDULE_SOURCE_WRITE_CONFIRM"),
+                                cancel_event=self.cancel_event, live_binding_check=live_binding_check,
+                                parent_session=self.session,
+                            )
+                        except Exception:
+                            return denied(
+                                "SCHEDULE_CROSS_SESSION_SOURCE_WRITE_NOT_AUTHORIZED: every exact source revision needs a distinct explicit per-task confirmation; no worker was dispatched."
+                            )
                 binding_store = ConversationWorkRecordBindings(self.session)
                 try:
                     worker_batch_bindings = binding_store.bind_existing_tasks(
@@ -2542,6 +2754,15 @@ class Agent:
                     reservation.reservation_id: (row, request, reservation)
                     for row, request, reservation in zip(worker_batch_bindings, bound_requests, worker_batch_reservations)
                 }
+                if schedule_claim_requested:
+                    from work_records import WorkRecordStore
+                    linked_schedule_sources = {}
+                    for row in worker_batch_bindings:
+                        source = authorized_sources[row["project_id"]]
+                        linked_schedule_sources[row["binding_id"]] = (
+                            WorkRecordStore(self.session) if source.store.session_id == self.session.conversation_id
+                            else source.store
+                        )
                 def begin_linked_worker(request, reservation):
                     entry = linked_by_reservation.get(reservation.reservation_id)
                     if (entry is None or entry[1] != request or entry[2] != reservation
@@ -2551,12 +2772,73 @@ class Agent:
                             or live_binding_check(self.session, run_id, turn_epoch) is not True):
                         return False
                     row = entry[0]
-                    binding_store.record_worker_start(
-                        binding_id=row["binding_id"], worker_id=reservation.worker_id,
-                        run_id=reservation.worker_run_id, reservation_id=reservation.reservation_id,
-                        parent_run_id=reservation.parent_run_id, turn_epoch=reservation.turn_epoch,
-                        project_id=reservation.project_id, task_id=reservation.task_id,
-                    )
+                    capability = None
+                    if schedule_claim_requested:
+                        source_store = linked_schedule_sources.get(row["binding_id"])
+                        source_session = getattr(source_store, "_session", None)
+                        capability = cross_session_schedule_capabilities.get(reservation.reservation_id)
+                        if capability is None:
+                            # Same-session scheduling retains its existing local claim boundary.
+                            if (source_store is None or source_session is None
+                                    or source_session.conversation_id != self.session.conversation_id
+                                    or Path(source_session.session_dir).resolve()
+                                    != Path(self.session.session_dir).resolve()):
+                                return False
+                            try:
+                                snapshot = source_store._read()
+                                from work_records import _digest
+                                live_item = source_store.get_item(row["item_id"])
+                                if (_digest(live_item) != row["source_item_digest"]
+                                        or live_item.get("scope") != {
+                                            "kind": "project", "project_id": reservation.project_id,
+                                        }):
+                                    return False
+                                claim = source_store.claim_scheduled_requirement(
+                                    reservation.project_id, row["item_id"], row["requirement_id"],
+                                    expected_revision=snapshot["revision"], owner_id=reservation.worker_id,
+                                    reservation_id=reservation.reservation_id, parent_run_id=reservation.parent_run_id,
+                                )
+                                if claim.get("state") != "claimed" or claim.get("owner_id") != reservation.worker_id:
+                                    return False
+                                started_requirement = source_store.begin_claimed_schedule_run(
+                                    reservation.project_id, row["item_id"], row["requirement_id"],
+                                    run_id=reservation.worker_run_id, owner_id=reservation.worker_id,
+                                    reservation_id=reservation.reservation_id, parent_run_id=reservation.parent_run_id,
+                                    expected_requirement_text=row["requirement_text"],
+                                )
+                                if (started_requirement.get("current_run_id") != reservation.worker_run_id
+                                        or started_requirement.get("status") != "in_progress"):
+                                    return False
+                                linked_schedule_claims[row["binding_id"]] = (source_store, row, request, reservation, None)
+                            except Exception:
+                                return False
+                        else:
+                            try:
+                                from cross_session_schedule_write import claim_and_start_cross_session_schedule
+                                started = claim_and_start_cross_session_schedule(
+                                    capability, parent_session=self.session, cancel_event=self.cancel_event,
+                                    live_binding_check=live_binding_check,
+                                )
+                                source_store = started["store"]
+                                linked_schedule_claims[row["binding_id"]] = (
+                                    source_store, row, request, reservation, capability,
+                                )
+                            except Exception:
+                                return False
+                    try:
+                        binding_store.record_worker_start(
+                            binding_id=row["binding_id"], worker_id=reservation.worker_id,
+                            run_id=reservation.worker_run_id, reservation_id=reservation.reservation_id,
+                            parent_run_id=reservation.parent_run_id, turn_epoch=reservation.turn_epoch,
+                            project_id=reservation.project_id, task_id=reservation.task_id,
+                        )
+                    except Exception:
+                        if capability is not None:
+                            from cross_session_schedule_write import recover_cross_session_schedule_unknown
+                            recover_cross_session_schedule_unknown(
+                                capability, source_authorization=authorized_sources[request.project_id],
+                            )
+                        return False
                     return True
                 worker_batch_start_fn = begin_linked_worker
                 worker_batch_tracking_mode = "linked_existing"
@@ -2570,6 +2852,63 @@ class Agent:
 
         def confirm_write(preview: str, _allow_all: bool) -> str:
             return confirm_fn("项目 worker 文件写入确认：\n" + preview, False)
+
+        # Only the one-worker path with a server-captured current WorkRecord run
+        # can expose an exact host cancellation target. A batch or an unlinked
+        # worker gets no inferred record identity and therefore no cancel route.
+        def cancel_target_for_worker(request, reservation):
+            from project_worker_host import ProjectWorkerCancelTarget
+            bound = worker_record_binding
+            if (bound is None or len(requests) != 1
+                    or bound.execution.run_id != reservation.parent_run_id
+                    or bound.execution.session_id != reservation.conversation_id
+                    or bound.request != request):
+                return None
+            return ProjectWorkerCancelTarget(
+                conversation_id=reservation.conversation_id,
+                parent_run_id=reservation.parent_run_id,
+                turn_epoch=reservation.turn_epoch,
+                project_id=reservation.project_id,
+                item_id=bound.execution.item_id,
+                requirement_id=bound.execution.requirement_id,
+                task_id=reservation.task_id,
+                worker_id=reservation.worker_id,
+                worker_run_id=reservation.worker_run_id,
+                reservation_id=reservation.reservation_id,
+            )
+
+        def cancel_target_is_current(target, reservation):
+            bound = worker_record_binding
+            if (bound is None or target.conversation_id != self.session.conversation_id
+                    or target.parent_run_id != run_id or target.turn_epoch != turn_epoch
+                    or target.reservation_id != reservation.reservation_id
+                    or bound.execution.run_id != reservation.parent_run_id
+                    or bound.execution.item_id != target.item_id
+                    or bound.execution.requirement_id != target.requirement_id
+                    or bound.request.project_id != reservation.project_id
+                    or bound.request.task_id != reservation.task_id
+                    or self.cancel_event.is_set()
+                    or live_binding_check(self.session, run_id, turn_epoch) is not True):
+                return False
+            try:
+                bound_store, execution = self._project_worker_work_record_context
+                if (bound_store is not store or execution != bound.execution
+                        or bound_store._session is not self.session):
+                    return False
+                bound_store._validate_scope()
+                item = bound_store.get_item(execution.item_id)
+                if (type(item) is not dict or item.get("scope") != {
+                        "kind": "project", "project_id": reservation.project_id,
+                    }):
+                    return False
+                rows = [row for row in item.get("requirements", [])
+                        if type(row) is dict and row.get("requirement_id") == execution.requirement_id]
+                return (len(rows) == 1 and rows[0].get("text") == request.task
+                        and rows[0].get("status") == "in_progress"
+                        and rows[0].get("current_run_id") == execution.run_id
+                        and execution.run_id == reservation.parent_run_id)
+            except Exception:
+                return False
 
         independent_pool = None
         independent_future = None
@@ -2645,6 +2984,71 @@ class Agent:
         multi_project_start_lock = threading.Lock()
         multi_project_gate_checked = False
 
+        from project_worker_execution import (
+            _log_project_worker_batch_event, _project_worker_batch_time,
+        )
+        outer_batch_id = uuid4().hex
+        outer_queued_at = _project_worker_batch_time()
+        outer_batch_requests = tuple(requests)
+
+        def log_outer_batch_phase(phase):
+            """Record content-free queue and batch-authorization evidence."""
+            phase_at = _project_worker_batch_time()
+            for index, request in enumerate(outer_batch_requests):
+                try:
+                    _log_project_worker_batch_event(
+                        phase, batch_id=outer_batch_id, project_id=request.project_id,
+                        index=index, queued_at=outer_queued_at, at=phase_at,
+                    )
+                except Exception:
+                    # Lifecycle telemetry must never change authorization or dispatch behavior.
+                    pass
+
+        outer_batch_ended_indexes = set()
+        outer_batch_started_indexes = set()
+
+        def log_outer_batch_start(request, reservation):
+            """Record the host scheduler's admitted, durable worker-start boundary."""
+            index = next((i for i, item in enumerate(outer_batch_requests)
+                          if item.project_id == request.project_id and item.task_id == request.task_id), None)
+            if index is None or index in outer_batch_started_indexes:
+                return
+            if (getattr(reservation, "project_id", None) != request.project_id
+                    or getattr(reservation, "task_id", None) != request.task_id):
+                return
+            outer_batch_started_indexes.add(index)
+            try:
+                _log_project_worker_batch_event(
+                    "started", batch_id=outer_batch_id, project_id=request.project_id,
+                    index=index, queued_at=outer_queued_at, at=_project_worker_batch_time(),
+                )
+            except Exception:
+                # Lifecycle telemetry must never change authorization or dispatch behavior.
+                pass
+
+        def log_outer_batch_end(index, status):
+            """Log an outcome as soon as the Agent scheduler observes that project return."""
+            if index in outer_batch_ended_indexes:
+                return
+            outer_batch_ended_indexes.add(index)
+            request = outer_batch_requests[index]
+            if status not in {"model_turn_finished", "blocked", "failed", "cancelled", "limit_reached"}:
+                status = "failed"
+            try:
+                _log_project_worker_batch_event(
+                    "ended", batch_id=outer_batch_id, project_id=request.project_id,
+                    index=index, queued_at=outer_queued_at, at=_project_worker_batch_time(), status=status,
+                )
+            except Exception:
+                # Lifecycle telemetry must never change authorization or dispatch behavior.
+                pass
+
+        def log_outer_batch_unended(status):
+            for index in range(len(outer_batch_requests)):
+                log_outer_batch_end(index, status)
+
+        log_outer_batch_phase("queued")
+
         def before_project_worker_start(request, reservation):
             nonlocal multi_project_gate_checked
             if len({item.project_id for item in requests}) > 1:
@@ -2664,12 +3068,17 @@ class Agent:
                         # Goal makes persistence mandatory before worker execution.
                         multi_project_gate_checked = True
             if worker_batch_start_fn is None:
+                log_outer_batch_start(request, reservation)
                 return True
             try:
-                return worker_batch_start_fn(request, reservation) is True
+                started = worker_batch_start_fn(request, reservation) is True
             except Exception:
                 return False
+            if started:
+                log_outer_batch_start(request, reservation)
+            return started
 
+        batch_authorization = None
         try:
             from project_worker_host import (
                 _host_failure, _resolve_bound_project, project_worker_outcome_matches_reservation,
@@ -2702,6 +3111,42 @@ class Agent:
                     except Exception:
                         pass
 
+            if requests and (reservations is None or len(reservations) != len(requests)):
+                log_outer_batch_unended("blocked")
+                return denied("PROJECT_WORKER_BATCH_RESERVATION_FAILED: the complete batch could not be bound; no worker was dispatched.")
+
+            if (requests and reservations is not None
+                    and len(reservations) == len(requests)):
+                from project_worker_host import ProjectWorkerReservation
+                if any(type(item) is not ProjectWorkerReservation for item in reservations):
+                    log_outer_batch_unended("blocked")
+                    return denied("PROJECT_WORKER_BATCH_AUTHORIZATION_INVALID: worker reservations are not trusted; no worker was dispatched.")
+                try:
+                    task_authorization_confirm_fn = self.task_authorization_confirm_fn
+                    if callable(task_authorization_confirm_fn):
+                        raw_task_authorization_confirm_fn = task_authorization_confirm_fn
+                        task_authorization_confirm_fn = lambda *args, **kwargs: self._call_confirmation_without_goal_budget_time(
+                            raw_task_authorization_confirm_fn, *args, **kwargs,
+                        )
+                    if not callable(task_authorization_confirm_fn):
+                        log_outer_batch_unended("blocked")
+                        return denied("PROJECT_WORKER_BATCH_AUTHORIZATION_UNAVAILABLE: task-scoped confirmation is unavailable; no worker was dispatched.")
+                    batch_authorization = host.authorize_batch(
+                        self.session, requests, reservations,
+                        confirm_fn=task_authorization_confirm_fn,
+                        cancel_event=self.cancel_event, parent_run_id=run_id,
+                        turn_epoch=turn_epoch, live_binding_check=live_binding_check,
+                    )
+                except Exception:
+                    batch_authorization = None
+                if batch_authorization is None:
+                    log_outer_batch_unended("blocked")
+                    return denied(
+                        "PROJECT_WORKER_BATCH_AUTHORIZATION_DENIED_OR_EXPIRED: the complete per-project scope and data disclosure "
+                        "was not confirmed; no worker was dispatched. Existing independent work-record confirmation, if applicable, remains separate."
+                    )
+                log_outer_batch_phase("authorized")
+
             if reservations is None or len(reservations) != len(requests):
                 # Preserve the host fallback without claiming an unverified
                 # identity; this branch must not emit an early notice.
@@ -2729,8 +3174,11 @@ class Agent:
                     turn_epoch=turn_epoch,
                     live_binding_check=live_binding_check,
                     reservations=reservations,
+                    batch_authorization=batch_authorization,
                     before_worker_start=before_project_worker_start,
                     on_worker_progress=report_worker_progress,
+                    cancel_target_for_worker=(cancel_target_for_worker if worker_record_binding is not None else None),
+                    cancel_target_is_current=(cancel_target_is_current if worker_record_binding is not None else None),
                 )
                 if (len(outcomes) == 1
                         and project_worker_outcome_matches_reservation(reservations[0], outcomes[0])
@@ -2774,6 +3222,7 @@ class Agent:
                                     turn_epoch=turn_epoch,
                                     live_binding_check=live_binding_check,
                                     reservations=(reservation,),
+                                    batch_authorization=batch_authorization,
                                     before_worker_start=before_project_worker_start,
                                     on_worker_progress=report_worker_progress,
                                 )
@@ -2786,6 +3235,7 @@ class Agent:
                                     status="blocked", reservation=reservation,
                                 )
                                 outcomes_by_index[eligible] = outcome
+                                log_outer_batch_end(eligible, outcome.status)
                                 if project_worker_outcome_matches_reservation(reservation, outcome):
                                     notice = format_worker_preflight_notice(
                                         outcome.error_code, project_display_names.get(outcome.task_id),
@@ -2817,6 +3267,7 @@ class Agent:
                             # fabricating a result here would let an unverified task
                             # bind to a real worker reservation.
                             outcomes_by_index[index] = outcome
+                            log_outer_batch_end(index, getattr(outcome, "status", "failed"))
                             if (outcome is None or outcome.status != "blocked"
                                     or outcome.model_turn is not None
                                     or not project_worker_outcome_matches_reservation(reservation, outcome)):
@@ -2834,7 +3285,20 @@ class Agent:
                                     # skip result persistence/card publication.
                                     pass
                 outcomes = tuple(outcome for outcome in outcomes_by_index if outcome is not None)
+            outcomes_by_identity = {
+                (getattr(outcome, "project_id", None), getattr(outcome, "task_id", None)): outcome
+                for outcome in outcomes
+            }
+            for index, request in enumerate(outer_batch_requests):
+                outcome = outcomes_by_identity.get((request.project_id, request.task_id))
+                log_outer_batch_end(index, getattr(outcome, "status", "failed"))
         except Exception as exc:
+            log_outer_batch_unended("failed")
+            if batch_authorization is not None:
+                try:
+                    host.revoke_batch_authorization(batch_authorization)
+                except Exception:
+                    pass
             independent_partial = None
             if independent_future is not None:
                 try:
@@ -2859,6 +3323,8 @@ class Agent:
                 f"project worker host dispatch failed safely ({type(exc).__name__}); independent lane status is included when it was requested",
                 details=details,
             )
+        if batch_authorization is not None:
+            host.revoke_batch_authorization(batch_authorization)
         independent_result = None
         if independent_future is not None:
             try:
@@ -2983,6 +3449,40 @@ class Agent:
                         raise ValueError("worker tracking mode is unavailable")
                     if worker_batch_tracking_mode != "created_current_dialogue":
                         batch_lifecycle_by_task[outcome.task_id] = "unknown_recorded"
+                    schedule_claim = linked_schedule_claims.get(binding_row.get("binding_id"))
+                    if schedule_claim is not None:
+                        source_store, _claim_row, claim_request, claim_reservation, cross_capability = schedule_claim
+                        if cross_capability is not None:
+                            from cross_session_schedule_write import (
+                                recover_cross_session_schedule_unknown, settle_cross_session_schedule,
+                            )
+                            settlement = settle_cross_session_schedule(
+                                source_store, capability=cross_capability,
+                                source_authorization=authorized_sources[claim_request.project_id],
+                                outcome=outcome, sequence=claim_reservation.turn_epoch,
+                            )
+                            if settlement.status != "recorded":
+                                recover_cross_session_schedule_unknown(
+                                    cross_capability, source_authorization=authorized_sources[claim_request.project_id],
+                                )
+                        else:
+                            from project_worker_work_record_settlement import (
+                                ProjectWorkerWorkRecordBinding, settle_project_worker_work_record,
+                            )
+                            from work_record_settlement import BoundExecution
+                            settlement = settle_project_worker_work_record(
+                                source_store,
+                                ProjectWorkerWorkRecordBinding(
+                                    BoundExecution(self.session.conversation_id, binding_row["item_id"],
+                                                   binding_row["requirement_id"], claim_reservation.worker_run_id,
+                                                   reservation_id=claim_reservation.reservation_id,
+                                                   parent_run_id=claim_reservation.parent_run_id),
+                                    claim_request, reservation=claim_reservation,
+                                ),
+                                outcome, sequence=claim_reservation.turn_epoch,
+                            )
+                        if settlement.status not in {"recorded", "rejected"}:
+                            batch_lifecycle_by_task[outcome.task_id] = "unknown_not_recorded"
                 except Exception:
                     batch_lifecycle_by_task[outcome.task_id] = "unknown_not_recorded"
         linked_copy_status = "not_applicable"
@@ -3020,31 +3520,80 @@ class Agent:
                         linked_copy_status = "not_authorized"
                 except Exception:
                     linked_copy_status = "not_confirmed_unavailable_or_stale"
-            # Separate consent per source Session; the existing item-copy decision
-            # does not authorize copying the larger set of records.
+            # The broader project-session copy is one exact all-or-none choice
+            # across all distinct source projects in this worker batch.
             project_session_copy_saved = []
-            if selected_rows and copy_binding_current():
-                for project_id in sorted({row["project_id"] for row in selected_rows}):
-                    try:
+            project_ids = sorted({row["project_id"] for row in selected_rows})
+            if selected_rows and copy_binding_current() and len(project_ids) > 1:
+                try:
+                    from multi_project_work_records import _read_project_sessions
+                    entries = []
+                    for project_id in project_ids:
                         project_rows = [row for row in selected_rows if row["project_id"] == project_id]
-                        source = authorized_sources[project_id]
+                        entries.append({
+                            "project_id": project_id,
+                            "binding_ids": [row["binding_id"] for row in project_rows],
+                            "source": authorized_sources[project_id],
+                        })
+
+                    def project_copy_batch_current():
+                        try:
+                            current = _read_project_sessions(self.session.paths)
+                            return (copy_binding_current()
+                                    and all(current.get(entry["project_id"]) == entry["source"].store.session_id
+                                            for entry in entries))
+                        except Exception:
+                            return False
+
+                    if project_copy_batch_current():
+                        proposal = binding_store.prepare_project_session_copies_batch(entries=entries)
+                        preview = json.dumps(proposal, ensure_ascii=False, indent=2)
+                        choice = confirm_record_gate(
+                            preview,
+                            "LINKED_PROJECT_SESSION_COPY_BATCH_CONFIRM\n"
+                            "是否一次性复制并持久保存下列全部项目来源 Session 的已列出事项、要求、状态及宿主生命周期事实？\n"
+                            "批准 = 仅批准此页完整列出的全部来源和内容范围；拒绝/取消 = 不保存其中任何新副本。\n"
+                            "这不是项目全部历史；不会授权读取或外发未列出的数据、写入来源项目、后续重读来源或重新执行。"
+                            "仅保存待发布意图；不代表已发布、操作完成或验证通过。",
+                        )
+                        if choice == "y" and project_copy_batch_current():
+                            binding_store.prepare_project_session_copies_batch(
+                                entries=entries, expected=proposal,
+                                is_current=project_copy_batch_current, commit=True,
+                            )
+                            project_session_copy_saved = project_ids
+                        else:
+                            linked_copy_status = "not_authorized"
+                except Exception:
+                    if copy_binding_current():
+                        self._emit_turn_event({"type": "turn.notice", "level": "warn",
+                                               "text": "多项目来源 Session 副本未能作为完整批次安全确认或保存；未将其标记为已确认。"})
+            elif selected_rows and copy_binding_current():
+                # Keep the established single-project confirmation wording and path.
+                project_id = project_ids[0]
+                try:
+                    project_rows = [row for row in selected_rows if row["project_id"] == project_id]
+                    source = authorized_sources[project_id]
+
+                    def project_copy_current():
+                        try:
+                            from multi_project_work_records import _read_project_sessions
+                            return (copy_binding_current()
+                                    and _read_project_sessions(self.session.paths).get(project_id) == source.store.session_id)
+                        except Exception:
+                            return False
+
+                    if project_copy_current():
                         ids = [row["binding_id"] for row in project_rows]
-                        def project_copy_current():
-                            try:
-                                from multi_project_work_records import _read_project_sessions
-                                return (copy_binding_current()
-                                        and _read_project_sessions(self.session.paths).get(project_id) == source.store.session_id)
-                            except Exception:
-                                return False
-                        if not project_copy_current():
-                            continue
                         proposal = binding_store.prepare_project_session_copy(
                             project_id=project_id, binding_ids=ids, source=source)
                         preview = json.dumps(proposal, ensure_ascii=False, indent=2)
                         choice = confirm_record_gate(preview,
                             "LINKED_PROJECT_SESSION_COPY_CONFIRM\n"
-                            "\u662f\u5426\u590d\u5236\u5e76\u6301\u4e45\u4fdd\u5b58\u4ee5\u4e0b\u6307\u5b9a\u6765\u6e90 Session \u7684\u5f53\u524d\u9879\u76ee\u4e8b\u9879\u3001\u8981\u6c42\u53ca\u72b6\u6001\u4e0e\u5bbf\u4e3b\u751f\u547d\u5468\u671f\u5230\u5f53\u524d\u4f1a\u8bdd\uff1f\n"
-                            "\u8fd9\u5e76\u975e\u6574\u4e2a\u9879\u76ee\u7684\u5168\u90e8\u5386\u53f2\uff1b\u4ec5\u4ee3\u8868\u5df2\u6388\u6743\u7684\u6307\u5b9a\u6765\u6e90 Session\uff0c\u4e0d\u4fdd\u8bc1\u8be5 Session \u4ecd\u662f\u9879\u76ee\u5f53\u524d\u6620\u5c04\u3002\u590d\u5236\u540e\u53ef\u91cd\u8fde\u4fdd\u7559\uff0c\u4e0d\u6388\u6743\u5199\u6765\u6e90\u6216\u672a\u6765\u91cd\u8bfb\uff0c\u4e0d\u91cd\u65b0\u6267\u884c\u3002\u4ec5\u4fdd\u5b58\u5f85\u53d1\u5e03\u610f\u56fe\uff0c\u5c1a\u672a\u53d1\u5e03\uff1b\u5bbf\u4e3b\u8fd4\u56de\u4e0d\u4ee3\u8868\u64cd\u4f5c\u6210\u529f\u6216\u9a8c\u8bc1\u901a\u8fc7\u3002"
+                            "是否复制并持久保存以下指定来源 Session 的当前项目事项、要求及状态与宿主生命周期到当前会话？\n"
+                            "这并非整个项目的全部历史；仅代表已授权的指定来源 Session，不保证该 Session 仍是项目当前映射。"
+                            "复制后可重连保留，不授权写来源或未来重读来源，不重新执行。仅保存待发布意图，尚未发布；"
+                            "宿主返回不代表操作成功或验证通过。"
                         )
                         if choice == "y" and project_copy_current():
                             binding_store.prepare_project_session_copy(
@@ -3052,10 +3601,9 @@ class Agent:
                                 expected=proposal, is_current=project_copy_current, commit=True,
                             )
                             project_session_copy_saved.append(project_id)
-                    except Exception:
-                        if copy_binding_current():
-                            self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": "来源 Session 项目副本未能安全确认或保存；未将其标记为已确认。"})
-                        continue
+                except Exception:
+                    if copy_binding_current():
+                        self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": "来源 Session 项目副本未能安全确认或保存；未将其标记为已确认。"})
             if project_session_copy_saved and copy_binding_current():
                 self._emit_turn_event({"type": "turn.notice", "level": "info", "text": "已保存经确认的来源 Session 项目记录副本；这是待发布投影，不表示操作完成或验证通过。"})
             if copy_binding_current():
@@ -4505,22 +5053,39 @@ class Agent:
             goal_runtime_for_session,
             maybe_run_project_acceptance,
             resolve_acceptance_from_session,
+            resolve_turn_goal_text,
             resolve_workspace_scope,
         )
 
         self._active_goal_runtime = None
         self._multi_project_batch_requested = False
+        self._multi_project_batch_project_ids = ()
+        recovered_budget_pause = False
         goal_rt = goal_runtime_for_session(self.session)
         if goal_rt is not None:
             accept_cmd, accept_exit = resolve_acceptance_from_session(self.session)
-            goal_text = (self.session.goal or "").strip() or "动手任务"
-            goal_rt.ensure_goal(
-                goal_text=goal_text,
-                workspace_scope=resolve_workspace_scope(self.session),
-                acceptance_command=accept_cmd,
-                expected_exit_code=accept_exit,
-                tool_turns_limit=total_max,
+            explicit_new_goal = self._explicit_new_goal_this_turn
+            self._explicit_new_goal_this_turn = None
+            # Persisted Goal identity wins over stale session.goal unless the user used
+            # the exact `/goal new: ...` control action.
+            goal_text = resolve_turn_goal_text(
+                goal_rt.state, self.session.goal or "", explicit_new_goal,
             )
+            try:
+                goal_rt.ensure_goal(
+                    goal_text=goal_text,
+                    workspace_scope=resolve_workspace_scope(self.session),
+                    acceptance_command=accept_cmd,
+                    expected_exit_code=accept_exit,
+                )
+            except RuntimeError as exc:
+                message = f"无法安全切换目标：{exc}；旧目标记录未修改。"
+                self.session.append_message({"role": "assistant", "content": message})
+                self.session.save()
+                return TurnResult(
+                    assistant_text=message, tool_rounds=0, finish_reason="goal_archive_error",
+                    turn_intent=intent, total_tool_rounds=0, notices=["goal_archive_error"],
+                )
             if goal_rt.state is not None and goal_rt.state.stop_requested:
                 stop_text = "目标已停止，不会自动续跑。发送新目标或清除停止状态后再动手。"
                 self.session.append_message({"role": "assistant", "content": stop_text})
@@ -4533,31 +5098,32 @@ class Agent:
                     total_tool_rounds=0,
                     notices=["goal_stopped"],
                 )
-            if not goal_rt.should_auto_continue() and goal_rt.state is not None and goal_rt.state.status == "paused":
-                # Allow explicit new user turn to resume a paused goal by clearing pause.
-                if goal_rt.state.pause_reason in {"budget_exhausted", "repair_exhausted"}:
-                    paused_text = (
-                        f"目标已暂停（{goal_rt.state.pause_reason}）："
-                        f"{goal_rt.state.next_step or '请扩预算或收窄目标后再继续。'}"
-                    )
-                    self.session.append_message({"role": "assistant", "content": paused_text})
+            if goal_rt.state is not None and goal_rt.state.status == "paused":
+                # Only documented budget/restart recovery pauses can be resumed by
+                # a fresh human request. Repair, authorization and unknown pauses
+                # remain fail-closed; /goal new creates a separately archived Goal.
+                if goal_rt.state.pause_reason not in {
+                    "budget_exhausted", "process_restart", "budget_extended",
+                }:
+                    reason = goal_rt.state.pause_reason or "unknown"
+                    paused_event = goal_rt.status_event()
+                    if paused_event is not None:
+                        self._emit_turn_event(paused_event)
+                    reply = f"目标保持安全暂停（{reason}）；不会清除暂停或自动重试。请检查状态，或明确创建新目标。"
+                    self.session.append_message({"role": "assistant", "content": reply})
                     self.session.save()
-                    return TurnResult(
-                        assistant_text=paused_text,
-                        tool_rounds=0,
-                        finish_reason="budget_exhausted"
-                        if goal_rt.state.pause_reason == "budget_exhausted"
-                        else "repair_exhausted",
-                        turn_intent=intent,
-                        total_tool_rounds=goal_rt.state.budgets.tool_turns_used,
-                        notices=["goal_paused"],
-                    )
-                # process_restart / soft pause: resume on this explicit user turn
+                    return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="goal_safety_paused",
+                                      turn_intent=intent, total_tool_rounds=0, notices=["goal_safety_paused"])
+                recovered_budget_pause = goal_rt.state.pause_reason == "budget_exhausted"
                 goal_rt.state.status = "idle"
                 goal_rt.state.pause_reason = None
                 goal_rt.save()
             try:
-                goal_rt.begin_run("agent")
+                goal_rt.begin_run(
+                    "agent", auto_continue_tool_turns_limit=total_max,
+                    auto_continue_wall_seconds_limit=900.0,
+                )
+                self._install_goal_confirmation_timer_wrapper()
             except RuntimeError as exc:
                 err_text = f"无法开始目标 Run：{exc}"
                 self.session.append_message({"role": "assistant", "content": err_text})
@@ -4579,6 +5145,13 @@ class Agent:
         segment = 1
         retry_error_fingerprints: set[str] = set()
         notices: list[str] = []
+        if recovered_budget_pause:
+            recovery_notice = (
+                "[Goal 状态更新] 上一回合因预算上限暂停；当前回合已由新的用户请求恢复并正在执行。"
+                "历史暂停提示不代表当前状态。"
+            )
+            self.session.append_message({"role": "assistant", "content": recovery_notice})
+            notices.append(recovery_notice)
         final_text = ""
         finish_reason: str | None = None
         tool_loop_exceeded = False
@@ -4586,27 +5159,6 @@ class Agent:
         while total_tool_rounds < total_max:
             remaining = total_max - total_tool_rounds
             this_segment_max = min(segment_max, remaining)
-            if goal_rt is not None:
-                goal_remaining = goal_rt.remaining_tool_budget()
-                if goal_remaining <= 0:
-                    goal_rt.mark_budget_paused()
-                    finish_reason = "total_cap_exceeded"
-                    final_text = final_text or (
-                        goal_rt.state.next_step
-                        if goal_rt.state is not None
-                        else "目标预算已用尽，已暂停。"
-                    )
-                    if final_text and not any(
-                        isinstance(m, dict)
-                        and m.get("role") == "assistant"
-                        and m.get("content") == final_text
-                        for m in self.session.messages[-3:]
-                    ):
-                        self.session.append_message(
-                            {"role": "assistant", "content": final_text}
-                        )
-                    break
-                this_segment_max = min(this_segment_max, goal_remaining)
             segment_start_index = len(self.session.messages)
             self.executor.begin_execute_segment()
 
@@ -4690,7 +5242,7 @@ class Agent:
                 final_text = format_segment_pause_message(
                     segment=segment,
                     total_tool_rounds=total_tool_rounds,
-                    auto_continue=auto_continue,
+                    auto_continue=auto_continue and goal_allows_continue,
                 )
                 finish_reason = "segment_cap_pause"
             else:
@@ -4719,10 +5271,14 @@ class Agent:
             finish_reason = "total_cap_exceeded"
             self.session.append_message({"role": "assistant", "content": final_text})
 
+        post_loop_tool_rounds = 0
         ci_repair_line = self._ci_repair_continuation_text()
-        if ci_repair_line and total_tool_rounds < total_max and finish_reason not in {
-            "cancelled", "timeout", "error", "provider_error", "context_switched"
-        }:
+        goal_allows_ci_repair_continue = goal_rt is None or goal_rt.should_auto_continue()
+        if (ci_repair_line and total_tool_rounds < total_max and goal_allows_ci_repair_continue
+                and finish_reason not in {
+                    "cancelled", "timeout", "error", "provider_error", "context_switched",
+                    "segment_cap_pause", "tool_loop_exceeded", "total_cap_exceeded",
+                }):
             self._mark_ci_repair_continuation()
             self.session.append_message({"role": "system", "content": ci_repair_line}, persist=False)
             repair_loop = self._run_parent_tool_loop(
@@ -4732,6 +5288,7 @@ class Agent:
                 segment_start_index=len(self.session.messages),
             )
             total_tool_rounds += repair_loop.tool_rounds
+            post_loop_tool_rounds += repair_loop.tool_rounds
             if repair_loop.final_text:
                 final_text = repair_loop.final_text
             finish_reason = repair_loop.finish_reason
@@ -4746,6 +5303,7 @@ class Agent:
             final_text=final_text,
             finish_reason=finish_reason,
         )
+        post_loop_tool_rounds += checker_tool_rounds
 
         final_text = self._apply_service_postcondition_gate(
             final_text=final_text,
@@ -4814,17 +5372,14 @@ class Agent:
                         ok=finish_reason not in {"error", "provider_error"},
                         finish_reason=finish_reason or "completed",
                     )
-            if multi_project_unverified:
-                projects = "、".join(goal_rt.state.multi_project_ids) if goal_rt.state else "涉及项目"
+            if multi_project_unverified and self._multi_project_batch_requested:
+                projects = "、".join(self._multi_project_batch_project_ids) or "本次批次项目"
                 notice = (
                     "[Goal] 多项目 worker 批次未逐项验收，父 Goal 保持未完成："
                     f"{projects}。未自动运行项目验收命令。"
                 )
                 notices.append(notice)
                 self.session.append_message({"role": "assistant", "content": notice})
-                self._emit_turn_event(
-                    {"type": "turn.notice", "level": "warn", "text": notice}
-                )
             elif self._multi_project_batch_requested:
                 notice = (
                     "[Goal] 多项目批次未获完整范围授权或尚未启动；本回合跳过单项目验收，"
@@ -4832,14 +5387,16 @@ class Agent:
                 )
                 notices.append(notice)
                 self.session.append_message({"role": "assistant", "content": notice})
-                self._emit_turn_event(
-                    {"type": "turn.notice", "level": "warn", "text": notice}
-                )
+            # The primary execute loop is recorded segment-by-segment above.
+            # Account for follow-up work outside that loop without double-counting
+            # its wall interval.
+            goal_rt.record_segment_usage(tool_turns=post_loop_tool_rounds)
             event = goal_rt.status_event()
             if event is not None:
                 self._emit_turn_event(event)
             self._active_goal_runtime = None
         self._multi_project_batch_requested = False
+        self._multi_project_batch_project_ids = ()
         self.session.save()
         self.executor.end_execute_segments()
         return TurnResult(
@@ -5408,6 +5965,61 @@ class Agent:
         force_skip_plan_spawn: bool = False,
         on_external_user_message_persisted: Callable[[Session], None] | None = None,
     ) -> TurnResult:
+        from goal_runtime import (
+            explicit_new_goal_from_request,
+            explicit_wall_budget_extension,
+            goal_runtime_for_session,
+        )
+        if user_text.strip().lower().startswith("/goal extend:"):
+            requested_seconds = explicit_wall_budget_extension(user_text)
+            session = self.session
+            session.ensure_messages_loaded()
+            self._append_user_message_with_result_reply(
+                session, user_text,
+                on_external_user_message_persisted=on_external_user_message_persisted,
+            )
+            if requested_seconds is None:
+                reply = "扩预算语法无效。请使用 /goal extend: 秒数（1–900）；此命令只扩展当前暂停目标，不会执行。"
+                session.append_message({"role": "assistant", "content": reply})
+                session.save()
+                return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="goal_extension_invalid",
+                                  turn_intent="execute", total_tool_rounds=0, notices=["goal_extension_invalid"])
+            runtime = goal_runtime_for_session(session)
+            try:
+                if runtime is None or runtime.state is None:
+                    raise RuntimeError("当前会话没有可恢复的动手目标")
+                runtime.extend_wall_budget(requested_seconds)
+            except (RuntimeError, ValueError) as exc:
+                reply = f"原目标预算未改变：{exc}。"
+                session.append_message({"role": "assistant", "content": reply})
+                session.save()
+                return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="goal_extension_rejected",
+                                  turn_intent="execute", total_tool_rounds=0, notices=["goal_extension_rejected"])
+            event = runtime.status_event()
+            if event is not None:
+                event["extension_seconds"] = requested_seconds
+                event["action"] = "wall_budget_extended"
+                self._emit_turn_event(event)
+            reply = (f"原目标 wall 预算增加 {requested_seconds} 秒；累计已用 {runtime.state.budgets.wall_seconds_used:.1f} 秒，"
+                     f"新上限 {runtime.state.budgets.wall_seconds_limit:.1f} 秒。预算和验收证据均未重置；本命令未执行目标。"
+                     "请在之后的新人工回合明确发送原任务的执行请求以继续。")
+            session.append_message({"role": "assistant", "content": reply})
+            session.save()
+            return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="goal_budget_extended",
+                              turn_intent="execute", total_tool_rounds=0, notices=["goal_budget_extended"])
+        explicit_goal = explicit_new_goal_from_request(user_text)
+        self._explicit_new_goal_this_turn = explicit_goal
+        if explicit_goal is not None:
+            user_text = explicit_goal
+            # This control action is an explicit execution route, not ordinary prose to
+            # the recall/plan router. The task body (without `/goal new:`) enters Agent Loop.
+            self._active_current_dialogue_recall_context = None
+            self._work_instruction_context.clear()
+            return self._run_turn_impl(
+                user_text, spawn_explore=spawn_explore,
+                force_skip_plan_spawn=force_skip_plan_spawn,
+                on_external_user_message_persisted=on_external_user_message_persisted,
+            )
         self._active_current_dialogue_recall_context = None
         self._work_instruction_context.clear()
         if _is_multi_project_card_refresh(user_text):
@@ -5489,6 +6101,7 @@ class Agent:
                 execute=lambda: self._run_turn_without_work_record_recording(
                     user_text, spawn_explore=spawn_explore,
                     force_skip_plan_spawn=force_skip_plan_spawn,
+                    on_external_user_message_persisted=on_external_user_message_persisted,
                 ),
             )
             if outcome.turn is not None:
@@ -5506,7 +6119,10 @@ class Agent:
                 return turn
             reply = outcome.reply or "事项未执行，请补充明确要求与范围。"
             self.session.ensure_messages_loaded()
-            self._append_user_message_with_result_reply(self.session, user_text)
+            self._append_user_message_with_result_reply(
+                self.session, user_text,
+                on_external_user_message_persisted=on_external_user_message_persisted,
+            )
             self.session.append_message({"role": "assistant", "content": reply})
             return TurnResult(assistant_text=reply, tool_rounds=0, finish_reason="work_record_uncertain")
         return self._run_turn_without_work_record_recording(
@@ -6473,6 +7089,11 @@ class Agent:
     ) -> TurnResult:
         """Append user message, optional explore subagent, then parent tool loop."""
 
+        from goal_runtime import explicit_new_goal_from_request
+        parsed_goal_action = explicit_new_goal_from_request(user_text)
+        if parsed_goal_action is not None:
+            self._explicit_new_goal_this_turn = parsed_goal_action
+            user_text = parsed_goal_action
         self.session.ensure_messages_loaded()
         preflight_session = self.session
         try:
@@ -6532,7 +7153,10 @@ class Agent:
         from loader import detect_scaffold_tool_turn
         from turn_intent import classify_turn, intent_label, should_spawn_explore_for_turn
 
-        intent = classify_turn(user_text)
+        from goal_runtime import resolve_goal_action_intent
+        intent = resolve_goal_action_intent(
+            classify_turn(user_text), self._explicit_new_goal_this_turn,
+        )
         from turn_intent import resolve_ordinary_work_intent
         ordinary_work_intent = resolve_ordinary_work_intent(
             user_text,
@@ -6600,27 +7224,12 @@ class Agent:
                 subagent_tool_rounds=0,
             )
 
-        from activity_router import apply_route_topics, infer_topic_scope
-
-        scope = infer_topic_scope(user_text, paths=self.session.paths)
-        topics_to_add: tuple[str, ...] = ()
-        if scope and scope not in {"common"}:
-            topics_to_add = (scope,)
-        elif scope == "common":
-            topics_to_add = ()
-
-        from project_mode import project_plan_gate_open
         from session import is_terminal_harness
 
         terminal = is_terminal_harness(self.session.meta)
-        if project_plan_gate_open(self.session.meta) and not terminal:
-            # Keep active_shell=project during draft (PROJECT-MODE §0e F2).
-            # activity_router already routes plan-gate turns to project.
-            topics_to_add = topics_to_add or ("coding",)
-
-        topics_changed = apply_route_topics(self.session, topics_to_add)
-        if topics_changed:
-            self._sync_allowed_evolved()
+        # Session topics remain readable legacy metadata. Ordinary turns no longer
+        # classify and persist topics; project/tool access continues to be governed
+        # by explicit project binding, safety checks, and the actual tool allowlist.
         self._sync_turn_mode()
         self.executor._ensure_project_scope_tools_allowed()
         self.executor.begin_turn()

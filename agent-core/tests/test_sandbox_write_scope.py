@@ -15,7 +15,7 @@ from sandbox_evolution import (
 )
 from loader import format_session_overlay
 from session import SessionMeta, create_new, create_sandbox_evolution_session
-from tools.executor import ExecutorSession, _validate_session_write_scope
+from tools.executor import ExecutorSession, _validate_session_write_scope, resolve_write_confirm
 
 
 class SandboxWriteScopeTests(unittest.TestCase):
@@ -71,6 +71,7 @@ class SandboxWriteScopeTests(unittest.TestCase):
     def test_create_sandbox_session_meta(self) -> None:
         session = create_sandbox_evolution_session(self.paths)
         self.assertEqual(session.meta.write_scope_root, ".worktrees/sandbox")
+        self.assertEqual(session.meta.turn_mode, "agent")
         self.assertTrue(session.messages_path.is_file())
         reloaded = SessionMeta.from_dict(session.meta.to_dict())
         self.assertEqual(reloaded.write_scope_root, ".worktrees/sandbox")
@@ -115,6 +116,25 @@ class SandboxWriteScopeTests(unittest.TestCase):
         self.assertIn("实验自我修改", overlay)
         self.assertIn("desktop/", overlay)
         self.assertIn("不要让用户去 Cursor", overlay)
+
+    def test_sandbox_scope_write_does_not_ask_for_confirm(self) -> None:
+        exec_session = ExecutorSession(write_scope_root=".worktrees/sandbox")
+        needs, reason = resolve_write_confirm(
+            evolved_name="write_text",
+            arguments={"tool_name": "write_text", "arguments": {"path": "desktop/foo.ts", "content": "x"}},
+            session=exec_session,
+            agent_paths=self.paths,
+        )
+        self.assertFalse(needs)
+        self.assertEqual(reason, "skip:sandbox_write_scope")
+        secret, secret_reason = resolve_write_confirm(
+            evolved_name="write_text",
+            arguments={"tool_name": "write_text", "arguments": {"path": ".env", "content": "x"}},
+            session=exec_session,
+            agent_paths=self.paths,
+        )
+        self.assertTrue(secret)
+        self.assertNotEqual(secret_reason, "skip:sandbox_write_scope")
 
     def test_coerce_does_not_double_prefix(self) -> None:
         scope = ".worktrees/sandbox"

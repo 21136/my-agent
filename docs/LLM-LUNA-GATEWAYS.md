@@ -12,10 +12,10 @@ my-agent 当前内置的 OpenAI-compatible 网关默认模型如下：
 | 注册 ID | 网关 | 请求模型名 | 上下文 | Base URL |
 |---------|------|------------|--------|----------|
 | `0x567-flash` | 0x567 | `gpt-6-luna` | 1M | `https://api-cdn.0x567.com` |
-| `0x567-pro` | 0x567 | `gpt-6-sol` | 1M | `https://api-cdn.0x567.com` |
+| `0x567-pro` | 0x567 | `gpt-6.1-terra` | 1M | `https://api-cdn.0x567.com` |
 | `tokeness-luna` | Tokeness | `gpt-5.6-luna` | 372k | `https://n.tokeness.dev` |
 
-以上是本地内置配置的默认请求名；下方 2026-09-03 的 0x567 live 记录是旧模型实测，不能证明当前 GPT-6 上游路由已通过真实 API 验证。
+以上是本地内置配置的默认请求名与上下文上限；`0x567-pro` 的 1M 是注册表配置，不代表已验证上游实际上下文能力。下方 2026-09-03 的 live 记录及 GPT-6 Luna / Sol 相关兼容性结论均不验证 `gpt-6.1-terra` 的上游路由或请求行为。
 
 agent 主循环几乎每轮都带 `tools` + 会话 `reasoning_effort`（默认 `medium`）。
 

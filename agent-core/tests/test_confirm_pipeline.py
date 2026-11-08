@@ -275,5 +275,133 @@ class ConfirmPipelineTests(unittest.TestCase):
         self.assertFalse(end["ok"])
 
 
+    def test_ordinary_confirm_events_carry_the_bound_session(self) -> None:
+        bridge = WsBridge(emit=self.events.append, paths=self.paths, confirm_timeout=1)
+        self.assertTrue(bridge.begin_turn(mode="agent"))
+        bridge.lifecycle_conversation_id = "session-a"
+        result: list[str] = []
+        worker = threading.Thread(target=lambda: result.append(bridge.confirm_fn("preview", False)), daemon=True)
+        worker.start()
+        request = None
+        for _ in range(100):
+            request = next((event for event in self.events if event.get("type") == "confirm.request"), None)
+            if request is not None:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(request)
+        assert request is not None
+        self.assertEqual(request.get("session_id"), "session-a")
+        self.assertTrue(bridge.deliver_confirm(request["request_id"], "y"))
+        worker.join(timeout=2)
+        self.assertEqual(result, ["y"])
+        done = next(event for event in self.events if event.get("type") == "confirm.done")
+        self.assertEqual(done.get("session_id"), "session-a")
+
+    def test_completed_confirmation_id_cannot_authorize_a_later_pending_request(self) -> None:
+        bridge = self._bridge()
+        first_result: list[str] = []
+        first_worker = threading.Thread(
+            target=lambda: first_result.append(bridge.confirm_fn("first preview", False)), daemon=True,
+        )
+        first_worker.start()
+        first_id = None
+        for _ in range(100):
+            first_id = bridge._pending_confirm_id
+            if first_id:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(first_id)
+        self.assertTrue(bridge.deliver_confirm(first_id or "", "y"))
+        first_worker.join(timeout=2)
+        self.assertFalse(first_worker.is_alive())
+        self.assertEqual(first_result, ["y"])
+        self.assertIsNone(bridge._pending_confirm_id)
+        self.assertFalse(bridge.deliver_confirm(first_id or "", "y"))
+
+        second_result: list[str] = []
+        second_worker = threading.Thread(
+            target=lambda: second_result.append(bridge.confirm_fn("second preview", False)), daemon=True,
+        )
+        second_worker.start()
+        second_id = None
+        for _ in range(100):
+            second_id = bridge._pending_confirm_id
+            if second_id:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(second_id)
+        self.assertNotEqual(first_id, second_id)
+        self.assertFalse(bridge.deliver_confirm(first_id or "", "y"))
+        time.sleep(0.05)
+        self.assertTrue(second_worker.is_alive())
+        self.assertEqual(bridge._pending_confirm_id, second_id)
+        self.assertEqual(second_result, [])
+        self.assertTrue(bridge.deliver_confirm(second_id or "", "y"))
+        second_worker.join(timeout=2)
+        self.assertFalse(second_worker.is_alive())
+        self.assertEqual(second_result, ["y"])
+
+    def test_confirmation_from_previous_session_cannot_be_delivered(self) -> None:
+        bridge = self._bridge()
+        first_session = type("BoundSession", (), {"conversation_id": "session-a"})()
+        current_session = [first_session]
+        bridge._session_provider = lambda: current_session[0]
+        bridge.lifecycle_conversation_id = first_session.conversation_id
+        self.assertTrue(bridge.begin_turn(mode="agent"))
+        result: list[str] = []
+        worker = threading.Thread(target=lambda: result.append(bridge.confirm_fn("session-bound preview", False)), daemon=True)
+        worker.start()
+        request = None
+        for _ in range(100):
+            request = next((event for event in self.events if event.get("type") == "confirm.request"), None)
+            if request is not None:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(request)
+        assert request is not None
+        self.assertEqual(request.get("session_id"), "session-a")
+        current_session[0] = type("BoundSession", (), {"conversation_id": "session-b"})()
+
+        self.assertFalse(bridge.deliver_confirm(request["request_id"], "y"))
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, ["n"])
+        done = next(event for event in reversed(self.events) if event.get("type") == "confirm.done")
+        self.assertEqual(done.get("request_id"), request["request_id"])
+        self.assertEqual(done.get("session_id"), "session-a")
+        self.assertEqual(done.get("choice"), "cancelled")
+
+    def test_old_run_confirmation_cannot_authorize_after_lifecycle_advances(self) -> None:
+        bridge = self._bridge()
+        session = type("BoundSession", (), {"conversation_id": "session-a"})()
+        bridge._session_provider = lambda: session
+        bridge.lifecycle_conversation_id = session.conversation_id
+        self.assertTrue(bridge.begin_turn(mode="agent"))
+        old_run = bridge.lifecycle.snapshot()
+        self.assertIsNotNone(old_run)
+        result: list[str] = []
+        worker = threading.Thread(target=lambda: result.append(bridge.confirm_fn("sensitive preview", False)), daemon=True)
+        worker.start()
+        request = None
+        for _ in range(100):
+            request = next((event for event in self.events if event.get("type") == "confirm.request"), None)
+            if request is not None:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(request)
+        assert request is not None
+        self.assertEqual(request.get("run_id"), old_run.run_id)
+        self.assertTrue(bridge.finish_execution("completed", ok=True, run_id=old_run.run_id))
+        self.assertTrue(bridge.begin_turn(mode="agent"))
+
+        self.assertFalse(bridge.deliver_confirm(request["request_id"], "y"))
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result, ["n"])
+        done = next(event for event in reversed(self.events) if event.get("type") == "confirm.done")
+        self.assertEqual(done.get("request_id"), request["request_id"])
+        self.assertEqual(done.get("run_id"), old_run.run_id)
+        self.assertEqual(done.get("choice"), "cancelled")
+
 if __name__ == "__main__":
     unittest.main()

@@ -171,6 +171,8 @@ class ExecutorSession:
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
     ordinary_visible_confirms_this_turn: int = 0
+    approval_mode: str = "manual"
+    approval_mode_blocked_this_turn: bool = False
     # Request-scoped ordinary policy; never persisted in SessionMeta.
     ordinary_work_intent: str = "execute"
     ordinary_task_scope: str = ""
@@ -1287,6 +1289,9 @@ class ToolExecutor:
         agent_paths = paths or AgentPaths.discover()
         registry = ToolRegistry.load(agent_paths)
         session = ExecutorSession.load(session_dir, allowed_evolved=allowed_evolved)
+        from approval_preferences import load_approval_preferences
+
+        session.approval_mode = load_approval_preferences(agent_paths)
         return cls(
             registry=registry,
             session=session,
@@ -1333,6 +1338,14 @@ class ToolExecutor:
         self.session.git_review_must_continue = False
         self.session.git_review_listed = False
         self.session.ordinary_visible_confirms_this_turn = 0
+        self.session.approval_mode_blocked_this_turn = False
+        try:
+            from approval_preferences import load_approval_preferences
+
+            self.session.approval_mode = load_approval_preferences(self.registry.agent_paths)
+        except Exception:
+            # Preference failures must not elevate or disrupt the existing confirm flow.
+            self.session.approval_mode = "manual"
         self._emit_turn_evidence()
 
     def _emit_turn_evidence(self) -> None:
@@ -1731,6 +1744,7 @@ class ToolExecutor:
         prepared_image_reference = None
         video_reference_image_path = None
         video_confirm_context = None
+        image_confirm_context = None
         if name == "generate_video" and args.get("reference_image_path"):
             raw_reference_path = str(args["reference_image_path"])
             try:
@@ -1803,7 +1817,12 @@ class ToolExecutor:
 
         evolved_target = self._resolve_evolved_target(name, args) if name == "run_evolved" else None
         if self._needs_confirm(builtin, evolved_target, args, tool_name=name):
-            if self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
+            approval_mode = self._approval_mode_confirmation_source(
+                builtin, evolved_target, args, tool_name=name,
+            )
+            if approval_mode:
+                confirm_decision = approval_mode
+            elif self._ordinary_confirm_is_covered(builtin, evolved_target, args, tool_name=name):
                 confirm_decision = "ordinary_budget"
             else:
                 confirm_decision = self._ask_confirm(
@@ -1824,6 +1843,7 @@ class ToolExecutor:
                         99,
                     )
             if confirm_decision == "n":
+                self.session.approval_mode_blocked_this_turn = True
                 result = tool_fail(
                     name,
                     ToolErrorCode.CONFIRM_REJECTED,
@@ -3508,7 +3528,7 @@ class ToolExecutor:
         *,
         tool_name: str,
     ) -> bool:
-        """True for danger/network/host/outside-project work that must always confirm."""
+        """True for side-effecting, executable, host-scoped, or outside-project work."""
         if evolved is None:
             return bool(getattr(builtin, "confirm", False))
         name = evolved.name
@@ -3533,7 +3553,9 @@ class ToolExecutor:
 
             command = inner.get("command") if isinstance(inner.get("command"), str) else ""
             kind = classify_run_command(command)
-            if kind in {"danger", "install", "network"}:
+            if kind in {"danger", "install", "network", "build_test", "other"}:
+                # Arbitrary scripts, build/test runners, and unclassified commands
+                # cannot be safely inferred from their names or project cwd.
                 return True
             working = ""
             for key in ("working_dir", "cwd"):
@@ -3586,6 +3608,50 @@ class ToolExecutor:
         shown = int(getattr(self.session, "ordinary_visible_confirms_this_turn", 0) or 0)
         return shown >= 1
 
+    def _approval_mode_confirmation_source(
+        self,
+        builtin: BuiltinTool,
+        evolved: EvolvedTool | None,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+    ) -> str:
+        """Return an audit label only for explicitly supported scoped ordinary actions."""
+        if (tool_name != "run_evolved" or evolved is None
+                or self.session.turn_mode != "agent"
+                or self.session.approval_mode_blocked_this_turn):
+            return ""
+        from approval_preferences import approval_mode_allows, load_approval_preferences
+        from tools.builtin import run_evolved as _run_evolved_mod
+
+        # Read the process-local active mode per action so an explicit switch back to
+        # manual immediately revokes any not-yet-started ordinary action.
+        self.session.approval_mode = load_approval_preferences(self.registry.agent_paths)
+        inner = _run_evolved_mod.coalesce_tool_arguments(arguments)
+        path = inner.get("path") if isinstance(inner.get("path"), str) else ""
+        command = inner.get("command") if isinstance(inner.get("command"), str) else ""
+        cwd = ""
+        for key in ("working_dir", "cwd"):
+            value = inner.get(key)
+            if isinstance(value, str) and value.strip():
+                cwd = value.strip()
+                break
+        allowed = approval_mode_allows(
+            mode=self.session.approval_mode,
+            project_id=self.session.project_id,
+            project_root=self.session.project_root,
+            active_shell=self.session.active_shell,
+            work_intent=self.session.ordinary_work_intent,
+            task_scope=self.session.ordinary_task_scope,
+            tool_name=evolved.name,
+            path=path,
+            command=command,
+            cwd=cwd,
+            background=bool(inner.get("background")),
+        )
+        if not allowed:
+            return ""
+        return f"approval_mode_{self.session.approval_mode}"
 
     def _resolve_evolved_target(self, tool_name: str, arguments: dict[str, Any]) -> EvolvedTool | None:
         if tool_name != "run_evolved":
@@ -4358,6 +4424,14 @@ def resolve_write_confirm(
             dry_run=dry_run,
         )
     path = inner.get("path") if isinstance(inner.get("path"), str) else ""
+    scope = (session.write_scope_root or "").strip().replace("\\", "/").strip("/")
+    if scope and path.strip() and not path.strip().lower().startswith("host:"):
+        from sandbox_evolution import coerce_session_write_path
+        from write_policy import is_sensitive_write_path
+
+        coerced = coerce_session_write_path(agent_paths, path.strip(), scope).replace("\\", "/")
+        if (coerced == scope or coerced.startswith(scope + "/")) and not is_sensitive_write_path(coerced):
+            return False, "skip:sandbox_write_scope"
     on_conflict = inner.get("on_conflict") if isinstance(inner.get("on_conflict"), str) else "skip"
     file_exists: bool | None = None
     if evolved_name == "write_text" and path.strip():

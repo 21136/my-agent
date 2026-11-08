@@ -63,7 +63,7 @@ test("composer stays centered and legible without changing the continuous chat w
   assert.match(widthRule[1], /max-width:\s*920px/);
   assert.match(widthRule[1], /width:\s*100%/);
   assert.match(widthRule[1], /margin-inline:\s*auto/);
-  assert.match(composerStylesheet, /background:\s*color-mix\(in srgb, var\(--ma-surface\) 96%, var\(--ma-accent\) 4%\)/);
+  assert.match(composerStylesheet, /background:\s*color-mix\(in srgb, var\(--ma-surface\) 97%, var\(--ma-accent\) 3%\)/);
   assert.match(composerStylesheet, /#unified-composer-dock\s*\{[^}]*background:\s*transparent/s);
 });
 test("session switch surfaces reference themed JPG wallpapers", () => {

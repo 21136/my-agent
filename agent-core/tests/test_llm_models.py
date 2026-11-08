@@ -50,8 +50,8 @@ class LlmModelRegistryTests(unittest.TestCase):
             "https://api-cdn.0x567.com/v1/chat/completions",
         )
         self.assertEqual(pro.api_key_env, "OX567_API_KEY")
-        self.assertEqual(pro.name, "0x567 GPT-6 Sol (1M)")
-        self.assertEqual(pro.provider_model, "gpt-6-sol")
+        self.assertEqual(pro.name, "0x567 GPT-6.1 Terra (1M)")
+        self.assertEqual(pro.provider_model, "gpt-6.1-terra")
         flash = registry.get("0x567-flash")
         self.assertIsNotNone(flash)
         assert flash is not None
@@ -169,7 +169,7 @@ class LlmModelRegistryTests(unittest.TestCase):
         self.assertEqual(resolve_context_limit("tokeness-luna"), 372_000)
         self.assertEqual(resolve_context_limit("0x567-flash"), 1_000_000)
         self.assertEqual(resolve_context_limit("gpt-6-luna"), 1_000_000)
-        self.assertEqual(resolve_context_limit("gpt-6-sol"), 1_000_000)
+        self.assertEqual(resolve_context_limit("gpt-6.1-terra"), 1_000_000)
         self.assertEqual(resolve_context_limit("gpt-5.6-luna"), 372_000)
         self.assertEqual(resolve_context_limit("luna"), 372_000)
 

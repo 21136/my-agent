@@ -14,7 +14,7 @@ async function panel() {
   assert.ok(existsSync(moduleUrl), 'production settings panel must exist');
   return import(moduleUrl.href);
 }
-const data = {section:'appearance',partnerName:'小魔王',nicknameDraft:'小魔王',avatarSrc:'/pet.webp',daysTogether:3,theme:'light',inactiveTerminals:0,stoppedServices:0,fontControlHtml:'<div data-chat-font-control></div>',feedback:'',roleModels:{preferences:{main:'m1',subagent:'m2'},models:[{id:'m1',name:'Model 1',configured:true},{id:'m2',name:'Model 2',configured:true}],pendingRole:'',error:''},autoRecognition:{enabled:false,pending:false,available:true,error:false}};
+const data = {section:'appearance',partnerName:'小魔王',nicknameDraft:'小魔王',avatarSrc:'/pet.webp',daysTogether:3,theme:'light',inactiveTerminals:0,stoppedServices:0,fontControlHtml:'<div data-chat-font-control></div>',feedback:'',roleModels:{preferences:{main:'m1',subagent:'m2'},models:[{id:'m1',name:'Model 1',configured:true},{id:'m2',name:'Model 2',configured:true}],pendingRole:'',error:''},autoRecognition:{enabled:false,pending:false,available:true,error:false},approvalPolicy:{mode:'manual',savedMode:'manual',pending:false,available:true,error:false}};
 test('settings sidebar contains navigation, not cramped controls', async () => {
   const p = await panel();
   const html = p.renderSettingsSidebar('appearance');
@@ -51,6 +51,56 @@ test('model section delegates to existing real configuration entries', async () 
   assert.match(html, /settings-open-host-scope/);
   assert.ok(!html.includes('预览不会'));
 });
+test('models section accurately scopes approval and preserves a manual reset', async () => {
+  const p = await panel();
+  const defaultHtml = p.renderSettingsPane({...data,section:'models'});
+  const approvalStyles = readFileSync(new URL('../src/shells/unified/settings-panel.css', import.meta.url), 'utf8');
+  assert.match(defaultHtml, /默认逐项确认/);
+  assert.match(defaultHtml, /自动审批/);
+  assert.match(defaultHtml, /项目内增强审批（full）/);
+  assert.doesNotMatch(defaultHtml, /完全放行/);
+  assert.match(defaultHtml, /已绑定项目.*本回合意图为执行/);
+  assert.match(defaultHtml, /自动审批.*具有明确任务范围/);
+  assert.match(defaultHtml, /精确允许清单/);
+  assert.match(defaultHtml, /默认手动确认/);
+  assert.doesNotMatch(defaultHtml, /未分类的简单前台命令/);
+  assert.match(defaultHtml, /壳名称本身不授予自动审批/);
+  assert.match(defaultHtml, /data-approval-mode="manual"[^>]*checked/);
+  assert.match(defaultHtml, /data-action="settings-approval-reset"/);
+  assert.match(defaultHtml, /full 不是沙箱/);
+  assert.match(defaultHtml, /class="settings-approval-shell-warning"/);
+  assert.match(approvalStyles, /settings-approval-shell-warning[^{]*\{[^}]*border-left/);
+  assert.match(defaultHtml, /项目外文件.*读取密钥.*删除文件.*联网/);
+  assert.match(defaultHtml, /专用工具的单独授权不会限制 shell/);
+  assert.match(defaultHtml, /不保证未识别的风险会被拦截/);
+  assert.doesNotMatch(defaultHtml, /项目外路径.*仍按原规则拦截/);
+  const fullHtml = p.renderSettingsPane({...data,section:'models',approvalPolicy:{mode:'full',savedMode:'auto',pending:false,available:true,error:false}});
+  assert.match(fullHtml, /data-approval-mode="full"[^>]*checked/);
+  assert.match(fullHtml, /本次运行实际生效/);
+  assert.match(fullHtml, /重启后回到默认逐项确认/);
+  assert.match(fullHtml, /不要求单独任务范围/);
+  assert.match(fullHtml, /普通.*run_command.*自动审批/);
+  assert.match(fullHtml, /项目外.*密钥.*删除.*联网/);
+  assert.match(fullHtml, /专用工具的单独授权不会限制 shell/);
+  assert.match(defaultHtml, /默认.*手动确认/);
+  assert.match(defaultHtml, /自动审批.*任务范围/);
+  assert.match(fullHtml, /data-action="settings-approval-apply-saved"/);
+  assert.match(fullHtml, /data-approval-mode="auto"/);
+  assert.match(fullHtml, /<strong>自动审批<\/strong>/);
+  const unavailableHtml = p.renderSettingsPane({...data,section:'models',approvalPolicy:{mode:'manual',savedMode:'manual',pending:false,available:false,error:false}});
+  assert.match(unavailableHtml, /disabled/);
+  assert.match(unavailableHtml, /不会本地模拟/);
+  const unknownHtml = p.renderSettingsPane({...data,section:'models',approvalPolicy:{mode:'manual',savedMode:'manual',known:false,pending:false,available:false,error:true,message:'当前实际档位未知，无法确认或切换。'}});
+  assert.match(unknownHtml, /当前实际审批档位未知/);
+  assert.doesNotMatch(unknownHtml, /data-approval-mode="manual"[^>]*checked/);
+  assert.match(unknownHtml, /无法确认或切换/);
+  const pendingHtml = p.renderSettingsPane({...data,section:'models',approvalPolicy:{mode:'manual',savedMode:'manual',pending:true,available:false,error:false}});
+  assert.doesNotMatch(pendingHtml, /审批设置接口暂不可用/);
+  assert.match(pendingHtml, /正在读取或保存审批设置/);
+  const invalidHtml = p.renderSettingsPane({...data,section:'models',approvalPolicy:{mode:'unknown',savedMode:'full',pending:false,available:true,error:false}} as typeof data);
+  assert.match(invalidHtml, /data-approval-mode="manual"[^>]*checked/);
+});
+
 test('runtime reflects real counts and disables cleanup only when empty', async () => {
   const p = await panel();
   const empty = p.renderSettingsPane({...data,section:'runtime'});
@@ -82,6 +132,58 @@ test('models section lets the user choose main and subagent models and control s
   assert.match(shell, /setAutoRecognition\(autoRecognition\.enabled \? "revoke" : "enable"\)/);
   assert.match(transport, /type: "llm_role_models\.get"/);
   assert.match(transport, /type: "llm_role_models\.set"/);
+});
+
+test('approval settings use trusted Electron IPC with security rejection and settings wiring', async () => {
+  const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+  const transport = readFileSync(new URL('../src/api/ws.ts', import.meta.url), 'utf8');
+  const shell = readFileSync(new URL('../src/shells/unified/index.ts', import.meta.url), 'utf8');
+  const browserBridge = readFileSync(new URL('../src/browser-desktop-bridge.ts', import.meta.url), 'utf8');
+
+  assert.match(preload, /getApprovalPreferences: \(\) => ipcRenderer\.invoke\("approval-preferences:get"\)/);
+  assert.match(preload, /setApprovalMode: \(mode: "manual" \| "auto" \| "full"\) => ipcRenderer\.invoke\("approval-preferences:set", mode\)/);
+  const getStart = main.indexOf('ipcMain.handle("approval-preferences:get"');
+  const setStart = main.indexOf('ipcMain.handle("approval-preferences:set"');
+  const unavailableStart = main.indexOf('function unavailableApprovalPreferences', setStart);
+  assert.ok(getStart >= 0 && setStart > getStart && unavailableStart > setStart, 'main process must register both approval IPC handlers');
+  const getHandler = main.slice(getStart, setStart);
+  const setHandler = main.slice(setStart, unavailableStart);
+  assert.match(getHandler, /assertShellDevWorkbenchSender\(event\)/);
+  assert.match(getHandler, /审批设置仅允许可信工作台主页面读取/);
+  assert.match(setHandler, /assertShellDevWorkbenchSender\(event\)/);
+  assert.match(setHandler, /审批设置仅允许可信工作台主页面修改/);
+  assert.match(setHandler, /rawMode !== "manual" && rawMode !== "auto" && rawMode !== "full"/);
+  assert.match(setHandler, /审批档位无效/);
+  assert.match(setHandler, /dialog\.showMessageBox\(parent/);
+  assert.match(setHandler, /buttons: \["确认切换", "取消"\], defaultId: 1, cancelId: 1/);
+  assert.match(setHandler, /answer\.response !== 0 \|\| !assertShellDevWorkbenchSender\(event\) \|\| workbenchWindow !== parent \|\| parent\.isDestroyed\(\)/);
+  assert.match(setHandler, /用户未确认切换；请重新读取当前审批档位/);
+  assert.match(setHandler, /approvalControl !== control/);
+
+  assert.match(transport, /getApprovalPreferences\(\): void/);
+  assert.match(transport, /window\.myAgentDesktop\?\.getApprovalPreferences/);
+  assert.match(transport, /setApprovalMode\(mode: ApprovalPreferenceMode\): void/);
+  assert.match(transport, /window\.myAgentDesktop\?\.setApprovalMode/);
+  assert.match(transport, /invalid approval mode/);
+  assert.match(transport, /Only authenticated Electron IPC may update this view/);
+  assert.match(browserBridge, /status: "rejected"/);
+  assert.match(browserBridge, /浏览器预览不提供审批设置授权/);
+
+  assert.match(shell, /client\.getApprovalPreferences\(\)/);
+  assert.match(shell, /client\.setApprovalMode\(mode\)/);
+  assert.match(shell, /case "approval_preferences\.state":/);
+  assert.match(shell, /case "approval_preferences\.done":/);
+  assert.match(shell, /const stateKnown = event\.status === "ok" && event\.state_known !== false/);
+  assert.match(shell, /known: stateKnown, pending: false, available: stateKnown/);
+  assert.match(shell, /known: false, pending: false, available: false, error: true/);
+  assert.match(shell, /event\.state_known !== false/);
+  assert.match(shell, /known: false, pending: false, available: false, error: true, message: "读取审批设置失败/);
+  assert.match(shell, /known: false, pending: false, available: false, error: true, message: "请求未能发送/);
+  assert.match(main, /state_known: false/);
+  assert.match(transport, /当前实际审批档位未知/);
+  assert.match(shell, /case "settings-approval-reset": setApprovalPreference\("manual"\)/);
+  assert.match(shell, /case "settings-approval-apply-saved": setApprovalPreference\(approvalPreferences\.savedMode\)/);
 });
 
 test('runtime settings provides access to the existing terminal and service controls', async () => {

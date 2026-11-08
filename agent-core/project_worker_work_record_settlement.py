@@ -273,6 +273,10 @@ def _record_explicit_lifecycle_result(store: Any, binding: ProjectWorkerWorkReco
             verification={"status": "not_verified", "evidence_refs": [],
                           "host_execution": {
                               "sequence": sequence, "host_status": status,
+                              **({} if binding.reservation is None else {
+                                  "reservation_id": binding.reservation.reservation_id,
+                                  "parent_run_id": binding.reservation.parent_run_id,
+                              }),
                               **({} if project_worker_read_attempts is None else {
                                   "project_worker_read_attempts": project_worker_read_attempts,
                               }),
@@ -317,7 +321,10 @@ def _user_cancellation_matches(binding: ProjectWorkerWorkRecordBinding,
         and receipt.session_id == binding.execution.session_id == reservation.conversation_id
         and receipt.item_id == binding.execution.item_id
         and receipt.requirement_id == binding.execution.requirement_id
-        and receipt.run_id == binding.execution.run_id == reservation.worker_run_id
+        # WorkRecord's current run is the parent turn that authorized dispatch;
+        # the cancellation receipt's run_id names the exact host worker run.
+        and binding.execution.run_id == reservation.parent_run_id
+        and receipt.run_id == reservation.worker_run_id
         and receipt.project_id == binding.request.project_id == reservation.project_id
         and receipt.task_id == binding.request.task_id == reservation.task_id
         and receipt.reservation_id == reservation.reservation_id == outcome.reservation_id
@@ -467,7 +474,23 @@ def settle_project_worker_work_record(
                     return SettlementResult("recorded", result_id, "unknown", reason="project_self_reported_pass")
         except Exception:
             return SettlementResult("rejected", record_status="unknown", reason="worker_self_report_not_recorded")
-    receipt = replace(receipt, project_worker_read_attempts=worker_read_receipt)
+    worker_write_receipts = None
+    if outcome.model_turn is not None:
+        try:
+            writes = outcome.model_turn.writes
+            if type(writes) is not tuple or len(writes) > 64:
+                return SettlementResult("rejected", record_status="unknown", reason="invalid_project_worker_write_receipts")
+            worker_write_receipts = [{
+                "path": row.path, "status": row.status, "verification": row.verification,
+                "characters_read_back": row.characters_read_back,
+                "readback_succeeded": row.readback_succeeded, "error_code": row.error_code,
+            } for row in writes]
+        except Exception:
+            return SettlementResult("rejected", record_status="unknown", reason="invalid_project_worker_write_receipts")
+    receipt = replace(
+        receipt, project_worker_read_attempts=worker_read_receipt,
+        project_worker_write_receipts=worker_write_receipts,
+    )
     return WorkRecordSettlementAdapter(store, binding.execution).settle(
         receipt,
         publish_project_update=publish_project_update,

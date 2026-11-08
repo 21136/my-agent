@@ -413,6 +413,7 @@ export function createChatSession(
   const postTurnConfirmations = new Map<string, { sessionId: string; done: boolean; subtype?: "work_record_reply_excerpt" | "work_record_auto_candidate" }>();
   const requirementVerificationConfirmations = new Map<string, { sessionId: string; runId: string; done: boolean; payload: unknown; preview: string }>();
   const postTurnResults = new Set<string>();
+  const controlConfirmations = new Set<string>();
 
   let turnKeySeq = 0;
   /** Unique per turn: two turns started in the same millisecond used to share one 过程 key. */
@@ -721,6 +722,10 @@ export function createChatSession(
     }
     const pendingLabel = choice === "n" ? "提交拒绝…" : "提交中…";
     markConfirmResolved(requestId, pendingLabel);
+    if (controlConfirmations.has(requestId)) {
+      notify();
+      return true;
+    }
     model.confirmSubmitting = true;
     beginTurnActivity();
     notify();
@@ -1220,7 +1225,7 @@ export function createChatSession(
       }
       case "session.banner": {
         if (model.sessionId && model.sessionId !== event.session_id) markPendingUserMessagesUnknown(model.sessionId);
-        if (model.sessionId !== event.session_id) { postTurnConfirmations.clear(); requirementVerificationConfirmations.clear(); postTurnResults.clear(); }
+        if (model.sessionId !== event.session_id) { postTurnConfirmations.clear(); requirementVerificationConfirmations.clear(); postTurnResults.clear(); controlConfirmations.clear(); }
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
         if (model.pendingToolPrompt && (sessionChanged || model.pendingToolPrompt.sessionId !== event.session_id)) {
           expirePendingToolPrompt("会话已切换；工具输入未发送为普通消息");
@@ -1615,6 +1620,7 @@ export function createChatSession(
           notify();
           break;
         }
+        if (event.session_id !== undefined && event.session_id !== model.sessionId) return false;
         if (event.project_worker_verification !== undefined || (event.confirm_subtype !== undefined
             && event.confirm_subtype !== "work_record_reply_excerpt" && event.confirm_subtype !== "work_record_auto_candidate")) return false;
         if (event.confirm_kind === "work_record_post_turn") {
@@ -1636,6 +1642,9 @@ export function createChatSession(
           notify();
           break;
         }
+        const terminalExecution = Boolean(model.executionRunId)
+          && !["queued", "running", "stopping"].includes(model.executionState);
+        if (terminalExecution) controlConfirmations.add(event.request_id);
         model.confirmPending = true;
         model.confirmSubmitting = false;
         expirePreviousConfirms(event.request_id);
@@ -1700,7 +1709,9 @@ export function createChatSession(
           notify();
           break;
         }
+        if (event.session_id !== undefined && event.session_id !== model.sessionId) return false;
         const isCurrent = model.confirmOverlay?.requestId === event.request_id;
+        controlConfirmations.delete(event.request_id);
         const resolved = CONFIRM_LABELS[event.choice] ?? event.choice;
         markConfirmResolved(event.request_id, resolved);
         if (!isCurrent) {
@@ -1714,7 +1725,7 @@ export function createChatSession(
           event.choice === "timeout" ||
           event.choice === "stale" ||
           event.choice === "cancelled";
-        if (!rejected) {
+        if (!rejected && ["queued", "running", "stopping"].includes(model.executionState)) {
           beginTurnActivity();
         }
         hooks.onConfirmDone?.(event.choice);

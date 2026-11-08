@@ -352,3 +352,254 @@ def test_overview_started_during_session_binding_transition_is_rejected_without_
         assert repl.session is other
 
     asyncio.run(run())
+
+
+def test_ws_cross_item_dependency_requires_confirmation_persists_and_blocks_start(tmp_path):
+    async def run():
+        session, store = _session(tmp_path, "20261108-cross-dependency")
+        prerequisite_item = store.create_item(title="Synthetic prerequisite", scope={"kind": "independent"})
+        prerequisite = store.add_requirement(prerequisite_item["item_id"], "Synthetic prerequisite task", event_id="dependency-prerequisite")
+        dependent_item = store.create_item(title="Synthetic dependent", scope={"kind": "independent"})
+        dependent = store.add_requirement(dependent_item["item_id"], "Synthetic dependent task", event_id="dependency-dependent")
+        events, previews = [], []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        handler = WsSessionHandler(session.paths)
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+
+        def request(choice):
+            request_id = str(uuid.uuid4())
+            bridge.confirm_with_receipt = lambda preview, _allow: (previews.append(preview) or (choice, "synthetic-receipt"))
+            return {"type": "work-record.control", "session_id": session.conversation_id,
+                    "request_id": request_id, "event_id": str(uuid.uuid4()), "idempotency_key": request_id,
+                    "expected_revision": store.with_locked_data(lambda data: data["revision"]),
+                    "item_id": dependent_item["item_id"], "requirement_id": dependent["requirement_id"],
+                    "expected_status": "pending", "action": "set_dependencies", "depends_on": [],
+                    "depends_on_refs": [{"item_id": prerequisite_item["item_id"],
+                                         "requirement_id": prerequisite["requirement_id"]}]}
+
+        await handler._handle_incoming(request("n"), repl, bridge)
+        assert events[-1]["type"] == "work-record.control.done"
+        assert events[-1]["status"] == "rejected"
+        assert "Synthetic prerequisite" in previews[-1] and "Synthetic prerequisite task" in previews[-1]
+        assert WorkRecordStore(session).get_item(dependent_item["item_id"])["requirements"][0].get("depends_on_refs", []) == []
+
+        await handler._handle_incoming(request("y"), repl, bridge)
+        assert events[-1]["status"] == "applied", events[-1].get("message")
+        persisted = WorkRecordStore(session).get_item(dependent_item["item_id"])
+        assert persisted["requirements"][0]["depends_on_refs"] == [{
+            "item_id": prerequisite_item["item_id"], "requirement_id": prerequisite["requirement_id"]}]
+        from work_records import WorkRecordConflict
+        with pytest.raises(WorkRecordConflict, match="depend"):
+            store.begin_requirement_run(dependent_item["item_id"], dependent["requirement_id"],
+                                       run_id="synthetic-blocked-run", expected_current_run_id=None)
+        assert WorkRecordStore(session).get_item(dependent_item["item_id"])["requirements"][0]["status"] == "pending"
+
+    asyncio.run(run())
+
+
+def _control_request(session, store, item_id, requirement_id, action, **extra):
+    request_id = str(uuid.uuid4())
+    request = {
+        "type": "work-record.control", "session_id": session.conversation_id,
+        "request_id": request_id, "item_id": item_id, "requirement_id": requirement_id,
+        "action": action, "expected_revision": store.with_locked_data(lambda data: data["revision"]),
+        "event_id": str(uuid.uuid4()), "idempotency_key": request_id,
+    }
+    if action != "copy_requirement_to_new_item":
+        request["expected_status"] = "pending"
+    request.update(extra)
+    return request
+
+
+def _control_done(events, request):
+    return next(event for event in reversed(events)
+                if event.get("type") == "work-record.control.done"
+                and event.get("request_id") == request["request_id"])
+
+
+def test_ws_cancel_execution_signals_only_current_local_worker_and_does_not_claim_terminal(tmp_path):
+    async def run():
+        session, _unused_store = _session(tmp_path, "20261108-cancel-ws")
+        session.meta.project_id = "project-alpha"
+        store = WorkRecordStore(session)
+        item = store.create_item(title="Synthetic running task", scope={"kind": "project", "project_id": "project-alpha"})
+        requirement = store.add_requirement(item["item_id"], "Synthetic running requirement", event_id="cancel-req")
+        store.begin_requirement_run(item["item_id"], requirement["requirement_id"],
+                                    run_id="synthetic-worker-run", expected_current_run_id=None)
+        signals = []
+        host = SimpleNamespace(request_cancel_for_record=lambda bound_session, **identity:
+                               signals.append((bound_session, identity)) or "signal_set")
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session, project_worker_host=host))
+        events = []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        handler = WsSessionHandler(session.paths)
+        request = _control_request(session, store, item["item_id"], requirement["requirement_id"],
+                                  "cancel_execution", expected_status="in_progress")
+
+        await handler._handle_incoming(request, repl, bridge)
+
+        done = _control_done(events, request)
+        assert done["status"] == "applied"
+        assert "不代表它已停止" in done["message"]
+        assert signals == [(session, {"item_id": item["item_id"],
+                                      "requirement_id": requirement["requirement_id"]})]
+        assert WorkRecordStore(session).get_item(item["item_id"])["requirements"][0]["status"] == "in_progress"
+
+        remote_request = {**request, "request_id": str(uuid.uuid4()), "idempotency_key": str(uuid.uuid4()),
+                          "event_id": str(uuid.uuid4()), "project_id": "project-beta",
+                          "expected_source_revision": store.with_locked_data(lambda data: data["revision"])}
+        await handler._handle_incoming(remote_request, repl, bridge)
+        assert _control_done(events, remote_request)["status"] == "rejected"
+        assert len(signals) == 1, "remote cancellation must never reach the local host"
+
+    asyncio.run(run())
+
+
+def test_ws_revise_requirement_confirms_text_and_preserves_existing_history(tmp_path):
+    async def run():
+        session, store = _session(tmp_path, "20261108-revise-confirm")
+        item = store.create_item(title="Synthetic revision", scope={"kind": "independent"})
+        requirement = store.add_requirement(item["item_id"], "Old synthetic text", event_id="old-requirement")
+        run_id = "synthetic-completed-run"
+        store.begin_requirement_run(item["item_id"], requirement["requirement_id"],
+                                   run_id=run_id, expected_current_run_id=None)
+        store.record_result_if_current_run(
+            item["item_id"], requirement["requirement_id"], run_id=run_id,
+            result_id="synthetic-result", status="completed", summary="Synthetic evidence summary",
+            verification={"status": "passed", "evidence_refs": ["synthetic://evidence"]},
+            sources=[{"kind": "result", "id": "synthetic-source-1"}],
+        )
+        before = store.get_item(item["item_id"])
+        events, previews = [], []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        bridge.confirm_with_receipt = lambda preview, _allow: (previews.append(preview) or "y", "receipt")
+        handler = WsSessionHandler(session.paths)
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+        request = _control_request(session, store, item["item_id"], requirement["requirement_id"],
+                                   "revise_requirement", expected_status="completed",
+                                   new_text="New synthetic text")
+
+        await handler._handle_incoming(request, repl, bridge)
+
+        assert _control_done(events, request)["status"] == "applied"
+        assert "原文：Old synthetic text" in previews[0]
+        assert "新文：New synthetic text" in previews[0]
+        after = WorkRecordStore(session).get_item(item["item_id"])
+        assert after["requirements"][0]["text"] == "New synthetic text"
+        assert after["runs"] == before["runs"]
+        assert after["runs"][0]["verification"]["evidence_refs"] == ["synthetic://evidence"]
+        assert after["runs"][0]["sources"] == [{"kind": "result", "id": "synthetic-source-1"}]
+        assert after["history"][:-1] == before["history"]
+        assert after["history"][-1]["kind"] == "requirement_revised"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("confirmation_outcome", ["deny", "disconnect", "session_switch", "stale_revision"])
+def test_ws_revise_requirement_confirmation_failures_leave_record_unchanged(
+        tmp_path, confirmation_outcome):
+    async def run():
+        session, store = _session(tmp_path, f"20261108-revise-{confirmation_outcome}")
+        other, _ = _session(tmp_path, f"20261108-other-{confirmation_outcome}")
+        item = store.create_item(title="Synthetic revision", scope={"kind": "independent"})
+        requirement = store.add_requirement(item["item_id"], "Old synthetic text", event_id="old-requirement")
+        before = store.with_locked_data(lambda data: data)
+        events = []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+        def confirm(_preview, _allow):
+            if confirmation_outcome == "disconnect":
+                bridge._connection_closed.set()
+            elif confirmation_outcome == "session_switch":
+                repl.session = other
+            elif confirmation_outcome == "stale_revision":
+                store.create_item(title="Concurrent synthetic item", scope={"kind": "independent"})
+            return ("n" if confirmation_outcome == "deny" else "y", "receipt")
+        bridge.confirm_with_receipt = confirm
+        handler = WsSessionHandler(session.paths)
+        request = _control_request(session, store, item["item_id"], requirement["requirement_id"],
+                                   "revise_requirement", new_text="New synthetic text")
+
+        await handler._handle_incoming(request, repl, bridge)
+
+        assert _control_done(events, request)["status"] == "rejected"
+        current = store.with_locked_data(lambda data: data)
+        if confirmation_outcome == "stale_revision":
+            assert current["revision"] == before["revision"] + 1
+            assert store.get_item(item["item_id"])["requirements"][0]["text"] == "Old synthetic text"
+        else:
+            assert current == before
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("confirmation_outcome", ["deny", "disconnect", "session_switch", "stale_revision"])
+def test_ws_copy_requirement_confirmation_failures_do_not_copy_or_alter_source(
+        tmp_path, confirmation_outcome):
+    async def run():
+        session, store = _session(tmp_path, f"20261108-copy-{confirmation_outcome}")
+        other, _ = _session(tmp_path, f"20261108-copy-other-{confirmation_outcome}")
+        item = store.create_item(title="Synthetic source", scope={"kind": "independent"})
+        requirement = store.add_requirement(item["item_id"], "Synthetic source text", event_id="source-requirement")
+        before_item = store.get_item(item["item_id"])
+        before_revision = store.with_locked_data(lambda data: data["revision"])
+        events = []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+        def confirm(_preview, _allow):
+            if confirmation_outcome == "disconnect":
+                bridge._connection_closed.set()
+            elif confirmation_outcome == "session_switch":
+                repl.session = other
+                repl.agent.session = other
+            elif confirmation_outcome == "stale_revision":
+                store.create_item(title="Concurrent synthetic item", scope={"kind": "independent"})
+            return ("n" if confirmation_outcome == "deny" else "y", "receipt")
+        bridge.confirm_with_receipt = confirm
+        handler = WsSessionHandler(session.paths)
+        request = _control_request(session, store, item["item_id"], requirement["requirement_id"],
+                                   "copy_requirement_to_new_item")
+
+        await handler._handle_incoming(request, repl, bridge)
+
+        assert _control_done(events, request)["status"] == "rejected"
+        assert store.get_item(item["item_id"]) == before_item
+        items = store.with_locked_data(lambda data: data["items"])
+        assert len(items) == (2 if confirmation_outcome == "stale_revision" else 1)
+        if confirmation_outcome == "stale_revision":
+            assert store.with_locked_data(lambda data: data["revision"]) == before_revision + 1
+
+    asyncio.run(run())
+
+
+def test_ws_copy_requirement_approval_creates_independent_copy_and_preserves_source(tmp_path):
+    async def run():
+        session, store = _session(tmp_path, "20261108-copy-approved")
+        item = store.create_item(title="Synthetic source", scope={"kind": "independent"})
+        requirement = store.add_requirement(item["item_id"], "Synthetic source text", event_id="source-requirement")
+        source_before = store.get_item(item["item_id"])
+        previews, events = [], []
+        bridge = WsBridge(emit=events.append, paths=session.paths)
+        bridge.confirm_with_receipt = lambda preview, _allow: (previews.append(preview) or "y", "receipt")
+        handler = WsSessionHandler(session.paths)
+        repl = SimpleNamespace(session=session, agent=SimpleNamespace(session=session))
+        request = _control_request(session, store, item["item_id"], requirement["requirement_id"],
+                                   "copy_requirement_to_new_item")
+
+        await handler._handle_incoming(request, repl, bridge)
+
+        assert _control_done(events, request)["status"] == "applied"
+        assert "Synthetic source text" in previews[0]
+        assert store.get_item(item["item_id"]) == source_before
+        copied = [row for row in store.with_locked_data(lambda data: data["items"])
+                  if row["item_id"] != item["item_id"]]
+        assert len(copied) == 1
+        assert copied[0]["scope"] == {"kind": "independent", "object_ref": None}
+        assert copied[0]["requirements"][0]["text"] == "Synthetic source text"
+        assert copied[0]["requirements"][0]["status"] == "pending"
+        copied_event = next(event for event in copied[0]["history"]
+                            if event["kind"] == "requirement_copied_to_new_item")
+        assert copied_event["payload"]["source_item_id"] == item["item_id"]
+        assert copied_event["payload"]["source_requirement_id"] == requirement["requirement_id"]
+
+    asyncio.run(run())

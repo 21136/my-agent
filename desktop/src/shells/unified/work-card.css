@@ -42,3 +42,92 @@
 .work-card-host-receipts { margin: .35rem 0 .35rem 1.1rem; padding-left: .9rem; font-size: .82rem; }
 .work-card-host-receipts li { padding: .12rem 0; }
 .work-card-host-receipts code { overflow-wrap: anywhere; }
+.work-card-temporal-guard {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 0 .65rem;
+  padding: .5rem .7rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent, #78aaff) 42%, var(--ma-border, #888));
+  border-radius: 9px;
+  background: var(--ma-surface, #171b25);
+  color: var(--ma-text, inherit);
+  font-size: .82rem;
+  font-weight: 650;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+}
+.work-card-item-id { color: var(--ma-text-muted, #9299a8); font-size: .76rem; font-weight: 500; }
+
+.work-card-snapshot-detail {
+  margin-top: .35rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border, #888) 45%, transparent);
+}
+.work-card-snapshot-detail > summary {
+  width: fit-content;
+  max-width: 100%;
+  padding: .45rem .1rem;
+  cursor: pointer;
+  color: var(--ma-accent, #78aaff);
+  font-size: .82rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.work-card-snapshot-detail > summary:focus-visible,
+.work-card-requirement-detail > summary:focus-visible,
+.work-card-all > summary:focus-visible,
+.work-card-snapshot [data-work-card-snapshot-detail] > summary:focus-visible {
+  outline: 2px solid var(--ma-accent, #78aaff);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.work-card-preview-meta,
+.work-card-preview-state {
+  margin: .22rem 0;
+  font-size: .82rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.work-card-preview-meta { color: var(--ma-text-muted, #9299a8); }
+.work-card-preview-state { color: var(--ma-text, inherit); }
+.work-card-preview-state strong { color: var(--ma-text-muted, #9299a8); font-weight: 600; }
+.work-card-snapshot-detail-content { padding-top: .25rem; }
+.work-card-snapshot-detail-content > .work-card-project-id,
+.work-card-snapshot-detail-content > .work-card-project-sources,
+.work-card-snapshot-detail-content > .work-card-captured { overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .work-card-snapshot { margin: .5rem 0; padding: .75rem; border-radius: 12px; }
+  .work-card-snapshot h3 { font-size: 1rem; overflow-wrap: anywhere; }
+  .work-card-preview-meta, .work-card-preview-state { font-size: .78rem; }
+  .work-card-temporal-guard { position: static; box-shadow: none; }
+}
+/* Keep the in-chat card as a compact historical link; evidence opens on demand. */
+.work-card-snapshot { margin: .4rem 0; padding: .65rem .8rem; border-radius: 12px; }
+.work-card-snapshot-label { margin: 0; }
+.work-card-snapshot h3 { margin: .12rem 0 .15rem; font-size: .98rem; }
+.work-card-preview-meta { margin: 0; font-size: .76rem; }
+.work-card-snapshot-detail,
+.work-card-snapshot [data-work-card-snapshot-detail] { margin-top: .12rem; border-top: 0; }
+.work-card-snapshot-detail > summary,
+.work-card-snapshot [data-work-card-snapshot-detail] > summary {
+  padding: .3rem 0 .1rem;
+  font-size: .8rem;
+}
+.work-card-snapshot-detail-content { padding-top: .25rem; }
+.work-card-temporal-guard {
+  position: static;
+  margin: .25rem 0 .55rem;
+  padding: .35rem .5rem;
+  box-shadow: none;
+  font-size: .78rem;
+  font-weight: 500;
+}
+.work-card-result-summary { margin: .2rem 0; color: var(--ma-text-muted, #9299a8); font-size: .84rem; white-space: pre-wrap; }
+.work-card-technical-detail { margin-top: .65rem; border-top: 1px solid color-mix(in srgb, var(--ma-border, #888) 45%, transparent); }
+.work-card-technical-detail > summary { padding: .4rem 0; cursor: pointer; color: var(--ma-text-muted, #9299a8); font-size: .78rem; }
+.work-card-technical-detail > ol,
+.work-card-technical-detail > ul { margin: .2rem 0; padding-left: 1.2rem; }
+.work-card-technical-detail li { padding: .2rem 0; overflow-wrap: anywhere; font-size: .78rem; }
+.work-card-technical-detail p { margin: .25rem 0; color: var(--ma-text-muted, #9299a8); font-size: .78rem; overflow-wrap: anywhere; }
+.work-card-requirement { padding: .38rem 0 .45rem .2rem; }
+.work-card-requirement-text { margin: .18rem 0; }
+.work-card-requirement-detail > summary { font-size: .76rem; }

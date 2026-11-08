@@ -12,6 +12,11 @@ from typing import Any, Literal
 
 CommandClass = Literal["danger", "install", "network", "build_test", "readonly", "other"]
 
+
+def is_pure_arithmetic_python_command(command: str) -> bool:
+    """Deprecated import-compatibility hook; it never grants an exemption."""
+    return False
+
 _PYTHON_LAUNCHERS = ("python", "python3", "py")
 
 _ANY_DELETE_RE = re.compile(r"(?is)(?:^|[\s;&|(])(?:rm|del|erase|rmdir|unlink)\s")

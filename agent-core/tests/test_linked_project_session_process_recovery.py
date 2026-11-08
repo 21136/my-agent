@@ -155,6 +155,8 @@ def _safe_child_env() -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key.upper() in keep}
     env["PYTHONPATH"] = os.pathsep.join((str(_CORE), str(_TESTS)))
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 

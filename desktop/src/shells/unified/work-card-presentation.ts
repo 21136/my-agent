@@ -381,6 +381,14 @@ export function requestHistoryCardRead(options: {
     return "failed";
   }
 }
+export function shouldClearPendingHistoryCardReads(previousSessionId: string, nextSessionId: string): boolean {
+  return previousSessionId !== "" && previousSessionId !== nextSessionId;
+}
+
+export function clearPendingHistoryCardReads(pendingReads: Map<string, string>): void {
+  pendingReads.clear();
+}
+
 export function escapeWorkCardHtml(value: unknown): string {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
@@ -396,6 +404,16 @@ function statusLabel(status: unknown): string {
     unknown: "状态未知",
   };
   return labels[String(status)] ?? `状态：${String(status ?? "未提供")}`;
+}
+
+function statusSummary(records: unknown[], getStatus: (record: Record<string, any>) => unknown): string {
+  const counts = new Map<string, number>();
+  for (const record of records) {
+    if (!object(record)) continue;
+    const label = statusLabel(getStatus(record));
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([label, count]) => `${label} ${count}`).join(" · ") || "状态未记录";
 }
 
 interface RequirementRow {
@@ -593,20 +611,24 @@ function renderProjectTestSelfReport(result: Record<string, any>, isCurrent: boo
     + escapeWorkCardHtml(report.pytest_target) + '</code></p>';
 }
 
-function renderLatestResult(result: Record<string, any>, snapshot: Record<string, any>, isCurrent: boolean): string {
+function renderLatestResult(result: Record<string, any>, snapshot: Record<string, any>, isCurrent: boolean, includeSummary = true): string {
   const lifecycle = lifecycleSummary(result.summary, result, snapshot);
   if (lifecycle.kind === "invalid") return '<p class="work-card-result">机器回执未通过校验，已隐藏内部字段。</p>';
   const selfReport = renderProjectTestSelfReport(result, isCurrent);
   if (lifecycle.kind === "valid") return lifecycle.html! + selfReport;
-  return `<p class="work-card-result"><strong>最近结果：</strong>${escapeWorkCardHtml(result.summary || "摘要未提供")} · ${escapeWorkCardHtml(statusLabel(result.status))}${result.verification_status ? ` · 验证：${escapeWorkCardHtml(result.verification_status)}` : " · 验证信息未提供"}</p>` + selfReport;
+  if (includeSummary) return `<p class="work-card-result"><strong>最近结果：</strong>${escapeWorkCardHtml(result.summary || "摘要未提供")} · ${escapeWorkCardHtml(statusLabel(result.status))}${result.verification_status ? ` · 验证：${escapeWorkCardHtml(result.verification_status)}` : " · 验证信息未提供"}</p>` + selfReport;
+  const qualifiers = [];
+  if (result.status && result.status !== "unknown") qualifiers.push(`记录状态：${statusLabel(result.status)}`);
+  if (result.verification_status === "passed") qualifiers.push("验证已通过");
+  else if (result.verification_status === "failed") qualifiers.push("验证未通过");
+  else if (result.verification_status === "not_verified") qualifiers.push("尚未验证");
+  return `<p class="work-card-result">${qualifiers.join(" · ") || "没有其他验证信息记录。"}</p>` + selfReport;
 }
 
 function renderCardViewedState(card: Record<string, any>): string {
   if (!Object.hasOwn(card, "viewed_at")) return "";
   const viewed = card.viewed_at;
-  if (viewed === null) {
-    return '<p class="work-card-viewed-state is-unknown">卡片查看状态未确认；展开详情后将尝试记录。</p>';
-  }
+  if (viewed === null) return "";
   if (typeof viewed === "string" && viewed.trim()) {
     const at = escapeWorkCardHtml(viewed.trim());
     return `<p class="work-card-viewed-state is-viewed">已查看详情 · <time datetime="${at}">${at}</time> · 不代表认可或验收</p>`;
@@ -616,21 +638,28 @@ function renderCardViewedState(card: Record<string, any>): string {
 
 function renderRequirement(row: RequirementRow, full = false, changeFocus: ChangeFocus | null = null): string {
   const requirement = row.requirement;
-  const title = row.itemTitle ? `<span class="work-card-item-title">${escapeWorkCardHtml(row.itemTitle)} · </span>` : "";
-  const id = typeof requirement.requirement_id === "string" ? `<span class="work-card-requirement-id">${escapeWorkCardHtml(requirement.requirement_id)}</span>` : "";
-  const focusLabel = changeFocusMatches(row, changeFocus)
-    ? '<span class="work-card-change-focus">本次更新</span>' : "";
-  const result = object(requirement.latest_result)
-    ? renderLatestResult(requirement.latest_result, row.snapshot, requirement.latest_result_is_current === true)
-    : '<p class="work-card-result">尚无结果记录。</p>';
-  const freshness = requirement.latest_result_is_current === false || requirement.current_result_missing === true
-    ? '<p class="work-card-stale-note">此快照未能确认当前结果；不代表实时状态。</p>' : "";
+  const title = row.itemTitle ? `<span class="work-card-item-title">${escapeWorkCardHtml(row.itemTitle)}</span>` : "";
+  const focusLabel = changeFocusMatches(row, changeFocus) ? '<span class="work-card-change-focus">本次更新</span>' : "";
+  const summary = object(requirement.latest_result) && typeof requirement.latest_result.summary === "string" ? requirement.latest_result.summary.trim() : "";
+  const result = object(requirement.latest_result) ? renderLatestResult(requirement.latest_result, row.snapshot, requirement.latest_result_is_current === true, !summary) : '<p class="work-card-result">暂未附结果记录。</p>';
+  const freshness = requirement.latest_result_is_current === false || requirement.current_result_missing === true ? '<p class="work-card-stale-note">这份历史记录无法确认是否为最新结果。</p>' : "";
   const latest = object(requirement.latest_result) ? requirement.latest_result : null;
-  const resultAttrs = latest && typeof latest.result_id === "string" && latest.result_id && typeof requirement.requirement_id === "string"
-    ? ` data-work-card-result-detail data-result-id="${escapeWorkCardHtml(latest.result_id)}" data-requirement-id="${escapeWorkCardHtml(requirement.requirement_id)}"`
-    : "";
-  const detail = `<details class="work-card-requirement-detail"${resultAttrs}><summary>查看结果、验证与来源</summary>${result}${freshness}<div class="work-card-sources">${renderSources(requirement)}</div></details>`;
-  return `<li class="work-card-requirement${full ? " work-card-requirement-all" : ""}"><div class="work-card-requirement-heading">${title}${id}${focusLabel}<span class="work-card-status">${escapeWorkCardHtml(statusLabel(requirement.status))}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(requirement.text)}</p>${detail}</li>`;
+  const resultAttrs = latest && typeof latest.result_id === "string" && latest.result_id && typeof requirement.requirement_id === "string" ? ` data-work-card-result-detail data-result-id="${escapeWorkCardHtml(latest.result_id)}" data-requirement-id="${escapeWorkCardHtml(requirement.requirement_id)}"` : "";
+  const detail = latest ? `<details class="work-card-requirement-detail"${resultAttrs}><summary>查看结果与验证说明</summary>${result}${freshness}</details>` : freshness;
+  const resultSummary = summary && !summary.includes(LIFECYCLE_KIND) ? `<p class="work-card-result-summary">${escapeWorkCardHtml(summary)}</p>` : "";
+  return `<li class="work-card-requirement${full ? " work-card-requirement-all" : ""}"><div class="work-card-requirement-heading">${title}${focusLabel}</div><p class="work-card-requirement-text">${escapeWorkCardHtml(requirement.text)}</p>${resultSummary}${detail}</li>`;
+}
+
+function renderRequirementTechnicalDetails(rows: RequirementRow[]): string {
+  const content = rows.map(row => {
+    const requirement = row.requirement;
+    const ids = [row.itemId ? `事项 ID：${escapeWorkCardHtml(row.itemId)}` : "", typeof requirement.requirement_id === "string" ? `要求 ID：${escapeWorkCardHtml(requirement.requirement_id)}` : ""].filter(Boolean).join(" · ");
+    const status = `<span class="work-card-status">捕获时：${escapeWorkCardHtml(statusLabel(requirement.status))}</span>`;
+    const latest = object(requirement.latest_result) ? requirement.latest_result : null;
+    const resultIdentity = latest ? `<div>结果 ID：${escapeWorkCardHtml(latest.result_id ?? "未提供")} · 回合 ID：${escapeWorkCardHtml(latest.run_id ?? "未提供")}</div><div>结果状态：${escapeWorkCardHtml(statusLabel(latest.status))} · 验证：${escapeWorkCardHtml(latest.verification_status ?? "未提供")}</div>` : "";
+    return `<li>${row.itemTitle ? `${escapeWorkCardHtml(row.itemTitle)} · ` : ""}${ids}<div>${status}</div>${resultIdentity}<div class="work-card-sources">${renderSources(requirement)}</div></li>`;
+  }).join("");
+  return `<details class="work-card-technical-detail"><summary>技术与来源信息</summary><ol>${content}</ol></details>`;
 }
 
 export function renderWorkCardSnapshot(card: unknown, presentationIdentity?: { sessionId: string; presentationId: string; cardId: string }): string {
@@ -675,97 +704,57 @@ export function renderWorkCardSnapshot(card: unknown, presentationIdentity?: { s
   const identityAttrs = presentationIdentity
     ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"`
     : "";
-  const itemStates = items.filter(object).map((item: Record<string, any>) => `<li class="work-card-item-state"><strong>${escapeWorkCardHtml(item.title ?? "事项标题未提供")}</strong><span>${escapeWorkCardHtml(statusLabel(item.status))}</span></li>`).join("");
   const all = rows.length > WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS
-    ? `<details class="work-card-all"><summary>查看全部 ${rows.length} 项</summary><ol class="work-card-requirements work-card-all-list">${allRows}</ol></details>`
-    : "";
+    ? `<details class="work-card-all"><summary>查看全部 ${rows.length} 项要求</summary><ol class="work-card-requirements work-card-all-list">${allRows}</ol></details>` : "";
   const kindAttr = ` data-snapshot-kind="${escapeWorkCardHtml(snapshot.kind ?? (isIndependent ? "independent" : "project"))}"`;
-  const scopeLabel = projectScoped ? '<p class="work-card-scope-label">项目专属工作卡 · 当前对话中的项目要求全览</p>' : "";
-  const completenessNote = projectScoped && snapshot.history_complete === false
-    ? `<p class="work-card-stale-note">部分历史结果未纳入（${escapeWorkCardHtml(snapshot.omitted_result_count ?? 0)} 条）；当前结果仍以卡片记录为准。</p>` : "";
   const viewedState = renderCardViewedState(card);
-  return `<article class="work-card-snapshot ${isIndependent ? "is-independent" : "is-project"}" data-work-card-snapshot${kindAttr}${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史快照 · 非实时状态</p>${scopeLabel}<h3>${escapeWorkCardHtml(title)}</h3>${identity}${sourceSummary}<p class="work-card-captured">快照时间：<time datetime="${capturedAt}">${capturedAt}</time></p>${viewedState}</header><section class="work-card-items">${completenessNote}<h4>${isIndependent ? "独立事项当时状态" : "项目事项当时状态"}</h4><ul class="work-card-item-states">${itemStates}</ul><h4>要求状态</h4><ol class="work-card-requirements">${requirements || '<li class="work-card-empty">快照未记录要求</li>'}</ol>${all}</section></article>`;
+  const temporalGuard = '<p class="work-card-temporal-guard" role="note">以下为保存时的历史记录，不会自动刷新当前状态。</p>';
+  const requirementsLabel = rows.length ? `查看 ${rows.length} 项要求与结果` : "查看工作记录";
+  const preview = `<p class="work-card-preview-meta">${isIndependent ? "独立事项" : "项目工作记录"}</p>`;
+  const itemStates = items.filter(object).map((item: Record<string, any>) => `<li class="work-card-item-state"><strong>${escapeWorkCardHtml(item.title ?? "事项标题未提供")}</strong><span>${escapeWorkCardHtml(statusLabel(item.status))}</span></li>`).join("");
+  const itemTechnical = `<details class="work-card-technical-detail"><summary>事项状态与内部字段</summary><ul class="work-card-item-states">${itemStates}</ul><p>项目：${escapeWorkCardHtml(snapshot.project_id ?? "未提供")}</p>${identity}${sourceSummary}</details>`;
+  const completenessNote = projectScoped && snapshot.history_complete === false ? '<p class="work-card-stale-note">部分历史结果未纳入；此卡仅展示已保存内容。</p>' : "";
+  const detailBody = `<div class="work-card-snapshot-detail-content">${temporalGuard}${completenessNote}<section class="work-card-items"><ol class="work-card-requirements">${requirements || '<li class="work-card-empty">这张卡没有保存要求。</li>'}</ol>${all}${renderRequirementTechnicalDetails(rows)}${itemTechnical}<details class="work-card-technical-detail"><summary>保存时间与已读记录</summary><p class="work-card-captured">快照时间：<time datetime="${capturedAt}">${capturedAt}</time></p>${viewedState}</details></section></div>`;
+  return `<article class="work-card-snapshot ${isIndependent ? "is-independent" : "is-project"}" data-work-card-snapshot${kindAttr}${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史快照 · 非实时</p><h3>${escapeWorkCardHtml(title)}</h3>${preview}</header><details class="work-card-snapshot-detail"><summary>${requirementsLabel}</summary>${detailBody}</details></article>`;
 }
 
 function renderLinkedProjectSessionCopySnapshot(
   snapshot: Record<string, any>,
   presentationIdentity?: { sessionId: string; presentationId: string; cardId: string },
 ): string {
+  const identityAttrs = presentationIdentity ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"` : "";
   const source = snapshot.source;
-  const identityAttrs = presentationIdentity
-    ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"`
-    : "";
-  const capturedAt = escapeWorkCardHtml(snapshot.captured_at);
-  const hostLabels: Record<string, string> = {
-    model_turn_finished: "工作器宿主回合已结束",
-    blocked: "工作器宿主报告受阻",
-    failed: "工作器宿主报告失败",
-    cancelled: "工作器宿主回合取消",
-    limit_reached: "工作器宿主报告达到运行限制",
-    unknown: "工作器宿主状态未知",
-  };
-  const finishLabels: Record<string, string> = {
-    completed: "宿主结束原因：completed",
-    cancelled: "宿主结束原因：cancelled",
-    timeout: "宿主结束原因：timeout",
-    error: "宿主结束原因：error",
-    paused: "宿主结束原因：paused",
-    unknown: "宿主结束原因未知",
-  };
+  const requirements = (source.items as Record<string, any>[]).flatMap(item => (item.requirements as Record<string, any>[]).map(requirement => ({ item, requirement })));
   const factsByRequirement = new Map<string, Record<string, any>[]>();
   for (const fact of source.worker_facts as Record<string, any>[]) {
     const key = `${fact.item_id}\0${fact.requirement_id}`;
     factsByRequirement.set(key, [...(factsByRequirement.get(key) ?? []), fact]);
   }
-  const requirements = (source.items as Record<string, any>[]).flatMap(item =>
-    (item.requirements as Record<string, any>[]).map(requirement => ({ item, requirement })));
-  const renderRequirement = ({ item, requirement }: { item: Record<string, any>; requirement: Record<string, any> }, full = false) => {
-    const key = `${item.item_id}\0${requirement.requirement_id}`;
-    const facts = factsByRequirement.get(key) ?? [];
-    const receipts = facts.length
-      ? `<ul class="work-card-host-receipts">${facts.map(fact => `<li><strong>${escapeWorkCardHtml(hostLabels[fact.host_lifecycle.status])}</strong> · ${escapeWorkCardHtml(finishLabels[fact.host_lifecycle.finish_reason])} · 操作结果未知 · 未验证</li>`).join("")}</ul>`
-      : '<p class="work-card-stale-note">此要求没有随副本附带 worker 生命周期回执；不据此推断未执行。</p>';
-    return `<li class="work-card-requirement${full ? " work-card-requirement-all" : ""}"><div class="work-card-requirement-heading"><span class="work-card-item-title">${escapeWorkCardHtml(item.title)} · 来源事项状态（捕获时）：${escapeWorkCardHtml(statusLabel(item.status))}</span><span class="work-card-status">要求状态（捕获时）：${escapeWorkCardHtml(statusLabel(requirement.status))}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(requirement.text)}</p><div class="work-card-result"><strong>关联工作器宿主生命周期回执</strong>${receipts}</div></li>`;
-  };
-  const defaultRows = requirements.slice(0, WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS).map(row => renderRequirement(row)).join("");
-  const allRows = requirements.map(row => renderRequirement(row, true)).join("");
-  const allRequirements = requirements.length > WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS
-    ? `<details class="work-card-all"><summary>查看全部 ${requirements.length} 项要求</summary><ol class="work-card-requirements work-card-all-list">${allRows}</ol></details>`
-    : "";
-  const itemRows = (source.items as Record<string, any>[]).map(item =>
-    `<li class="work-card-item-state"><strong>${escapeWorkCardHtml(item.title)}</strong><span>来源事项状态（捕获时）：${escapeWorkCardHtml(statusLabel(item.status))}</span></li>`).join("");
-  const allItems = source.items.length > WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS
-    ? `<details class="work-card-all"><summary>查看全部 ${source.items.length} 项来源事项</summary><ul class="work-card-item-states">${itemRows}</ul></details>`
-    : `<ul class="work-card-item-states">${itemRows}</ul>`;
+  const rows = requirements.map(({item, requirement}) => {
+    const resultFacts = factsByRequirement.get(`${item.item_id}\0${requirement.requirement_id}`) ?? [];
+    return `<li class="work-card-requirement"><div class="work-card-requirement-heading"><span class="work-card-item-title">${escapeWorkCardHtml(item.title)}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(requirement.text)}</p></li>`;
+  }).join("");
+  const technicalRows = requirements.map(({item, requirement}) => `<li>${escapeWorkCardHtml(item.title)} · 事项 ID：${escapeWorkCardHtml(item.item_id)} · 要求 ID：${escapeWorkCardHtml(requirement.requirement_id)}<div>捕获时：${escapeWorkCardHtml(statusLabel(requirement.status))}</div></li>`).join("");
+  const workerTechnical = (source.worker_facts as Record<string, any>[]).map(fact => `<li>工作器 ID：${escapeWorkCardHtml(fact.worker_id)} · 回合 ID：${escapeWorkCardHtml(fact.worker_run_id)}<div>宿主状态：${escapeWorkCardHtml(fact.host_lifecycle.status)} · 结束原因：${escapeWorkCardHtml(fact.host_lifecycle.finish_reason)} · 操作结果：${escapeWorkCardHtml(fact.operation_result)} · 验证：${escapeWorkCardHtml(fact.verification)}</div><div>绑定 ID：${escapeWorkCardHtml(fact.binding_id)} · 保留 ID：${escapeWorkCardHtml(fact.host_start.reservation_id)} · 序号：${escapeWorkCardHtml(fact.host_lifecycle.sequence)}</div></li>`).join("");
+  const hasBlockedReceipt = (source.worker_facts as Record<string, any>[]).some(fact => fact.host_lifecycle.status === "blocked");
+  const resultNote = source.worker_facts.length
+    ? hasBlockedReceipt ? "部分工作在执行前受阻；其余回合结束也不能确认操作结果或验证结论。" : "工作器回合结束，但副本没有可确认的操作结果或验证结论。"
+    : "此副本没有附带操作结果记录。";
+  const viewLabel = requirements.length ? `查看 ${requirements.length} 项要求与结果` : "查看来源记录";
+  const capturedAt = escapeWorkCardHtml(snapshot.captured_at);
   const sourceRevision = escapeWorkCardHtml(source.source_revision);
-  return `<article class="work-card-snapshot is-linked-project-session-copy" data-work-card-snapshot data-snapshot-kind="linked_project_session_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 捕获时来源状态，非实时</p><p class="work-card-scope-label">指定来源会话快照；不代表项目全部历史；未断言当前映射</p><h3>来源项目：${escapeWorkCardHtml(source.project_id)}</h3><p class="work-card-project-sources">指定来源 Session：${escapeWorkCardHtml(source.source_session_id)} · 来源修订（捕获时）：${sourceRevision}</p><p class="work-card-captured">确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p></header><details data-work-card-snapshot-detail><summary>查看详情</summary><section class="work-card-items"><h4>来源事项状态（捕获时）</h4>${allItems}<h4>来源要求状态（捕获时）</h4><ol class="work-card-requirements">${defaultRows || '<li class="work-card-empty">此来源快照没有要求记录</li>'}</ol>${allRequirements}<p class="work-card-stale-note"><strong>worker 操作结果未知；验证未进行。</strong>宿主回合结束和来源状态都不表示本次操作完成或验证通过。</p><p class="work-card-stale-note">不重新读取来源；查看来源当前状态需重新授权。</p></section></details></article>`;
+  const detailBody = `<section class="work-card-items"><p class="work-card-temporal-guard" role="note">以下内容来自指定来源会话的历史副本，不代表项目全貌或当前状态。</p><ol class="work-card-requirements">${rows || '<li class="work-card-empty">此副本没有保存要求。</li>'}</ol><p class="work-card-result-summary">${resultNote}</p><details class="work-card-technical-detail"><summary>技术与来源信息</summary><p>来源项目：${escapeWorkCardHtml(source.project_id)} · 来源 Session：${escapeWorkCardHtml(source.source_session_id)} · 来源修订：${sourceRevision}</p><p class="work-card-captured">确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p><p>来源范围：${escapeWorkCardHtml(source.scope)} · 映射：${escapeWorkCardHtml(source.mapping_claim)}</p><ol>${technicalRows}</ol><h4>工作器回执（技术字段）</h4><ol>${workerTechnical}</ol><p>工作器回执仅用于说明执行边界；不构成操作结果或验收证明。查看来源当前状态需重新授权。</p></details></section>`;
+  return `<article class="work-card-snapshot is-linked-project-session-copy" data-work-card-snapshot data-snapshot-kind="linked_project_session_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">来自指定会话 · 不代表项目全貌</p><h3>项目工作记录</h3><p class="work-card-preview-meta">${requirements.length} 项要求</p></header><details data-work-card-snapshot-detail><summary>${viewLabel}</summary>${detailBody}</details></article>`;
 }
 
 function renderLinkedItemCopySnapshot(
   snapshot: Record<string, any>,
   presentationIdentity?: { sessionId: string; presentationId: string; cardId: string },
 ): string {
-  const identityAttrs = presentationIdentity
-    ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"`
-    : "";
+  const identityAttrs = presentationIdentity ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"` : "";
   const capturedAt = escapeWorkCardHtml(snapshot.captured_at);
-  const hostLabels: Record<string, string> = {
-    model_turn_finished: "工作器主机回合已结束",
-    blocked: "工作器主机报告受阻",
-    failed: "工作器主机报告失败",
-    cancelled: "工作器主机回合已取消",
-    limit_reached: "工作器主机报告达到运行限制",
-    unknown: "工作器主机状态未知",
-  };
-  const finishLabels: Record<string, string> = {
-    completed: "回合结束原因：completed",
-    cancelled: "回合结束原因：cancelled",
-    timeout: "回合结束原因：timeout",
-    error: "回合结束原因：error",
-    paused: "回合结束原因：paused",
-    unknown: "回合结束原因未知",
-  };
-  return `<article class="work-card-snapshot is-linked-item-copy" data-work-card-snapshot data-snapshot-kind="linked_item_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 捕获时状态，非实时</p><p class="work-card-scope-label">来源单事项副本 · 仅一项要求 · 不是项目全览</p><h3>${escapeWorkCardHtml(snapshot.item_title)}</h3><p class="work-card-project-id">来源项目：${escapeWorkCardHtml(snapshot.project_id)}</p><p class="work-card-project-sources">来源 Session：${escapeWorkCardHtml(snapshot.source_session_id)} · 事项：${escapeWorkCardHtml(snapshot.item_id)} · 要求：${escapeWorkCardHtml(snapshot.requirement_id)}</p><p class="work-card-captured">副本确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p></header><details data-work-card-snapshot-detail><summary>查看详情</summary><section class="work-card-items"><h4>来源事项状态（捕获时）</h4><p class="work-card-status">${escapeWorkCardHtml(statusLabel(snapshot.item_status_at_capture))}</p><h4>来源要求状态（捕获时）</h4><p class="work-card-requirement-text">${escapeWorkCardHtml(snapshot.requirement_text)}</p><p class="work-card-status">${escapeWorkCardHtml(statusLabel(snapshot.requirement_status_at_capture))}</p><h4>关联工作器主机回执</h4><p class="work-card-result"><strong>${escapeWorkCardHtml(hostLabels[snapshot.host_lifecycle.status])}</strong> · ${escapeWorkCardHtml(finishLabels[snapshot.host_lifecycle.finish_reason])}</p><p class="work-card-stale-note"><strong>操作结果未知；未验证（验证未进行）。</strong>主机回合结束不等于要求完成或验收通过。</p><p class="work-card-stale-note">此卡只保留获准复制的字段；查询来源当前状态需重新授权。</p></section></details></article>`;
+  const detailBody = `<section class="work-card-items"><p class="work-card-temporal-guard" role="note">以下是单项要求的历史副本，不代表项目全貌或当前状态。</p><ol class="work-card-requirements"><li class="work-card-requirement"><div class="work-card-requirement-heading"><span class="work-card-item-title">${escapeWorkCardHtml(snapshot.item_title)}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(snapshot.requirement_text)}</p><p class="work-card-result-summary">${snapshot.host_lifecycle.status === "blocked" ? "执行前遇到阻碍；没有确认操作结果。" : "此副本没有可确认的操作结果或验证结论。"}</p></li></ol><details class="work-card-technical-detail"><summary>技术与来源信息</summary><p>来源项目：${escapeWorkCardHtml(snapshot.project_id)} · 来源 Session：${escapeWorkCardHtml(snapshot.source_session_id)}</p><p>事项：${escapeWorkCardHtml(snapshot.item_id)} · 要求：${escapeWorkCardHtml(snapshot.requirement_id)}</p><p class="work-card-captured">副本确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p><p>捕获时事项状态：${escapeWorkCardHtml(statusLabel(snapshot.item_status_at_capture))}</p><p>捕获时要求状态：${escapeWorkCardHtml(statusLabel(snapshot.requirement_status_at_capture))}</p><p>工作器主机回合：${escapeWorkCardHtml(snapshot.host_lifecycle.status)} · 结束原因：${escapeWorkCardHtml(snapshot.host_lifecycle.finish_reason)}</p><p>仅保留获准复制的字段；查询来源当前状态需重新授权。</p></details></section>`;
+  return `<article class="work-card-snapshot is-linked-item-copy" data-work-card-snapshot data-snapshot-kind="linked_item_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">一项要求 · 不是项目全貌</p><h3>${escapeWorkCardHtml(snapshot.item_title)}</h3></header><details data-work-card-snapshot-detail><summary>查看要求与结果</summary>${detailBody}</details></article>`;
 }
 
 export function renderWorkCardEntry(entry: WorkCardPresentationEntry): string {

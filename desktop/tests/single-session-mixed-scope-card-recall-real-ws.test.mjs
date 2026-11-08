@@ -10,7 +10,7 @@ import test from "node:test";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, "..");
-const repo = path.resolve(desktop, "..", "..", "..");
+const repo = path.resolve(desktop, "..");
 const core = path.join(desktop, "..", "agent-core");
 const python = path.join(repo, ".venv", "Scripts", "python.exe");
 const require = createRequire(path.join(desktop, "package.json"));
@@ -184,6 +184,64 @@ test("one reloaded session keeps five project requirements and an independent ev
     assert.ok(overviewText.includes("Synthetic independent event"));
     assert.ok(overviewText.includes("Synthetic independent event detail"));
     assert.doesNotMatch(overviewText, /FOREIGN-SESSION-PRIVATE/);
+
+    // Copy an independent requirement through the mounted UI and the actual
+    // WsSessionHandler. Refusal must leave the persisted current-session store
+    // unchanged; approval must publish a distinct item without replacing source.
+    await page.locator('#unified-request-current-work').click();
+    await page.waitForSelector('[data-work-record-control][data-action="copy_requirement_to_new_item"]');
+    await page.evaluate(() => document.querySelectorAll('.unified-current-work-requirements').forEach(details => { details.open = true; }));
+    const copyControl = page.locator('[data-work-record-control][data-action="copy_requirement_to_new_item"]').first();
+    await copyControl.waitFor({ state: "visible" });
+    const copyItemId = await copyControl.getAttribute("data-item-id");
+    const copyRequirementId = await copyControl.getAttribute("data-requirement-id");
+    assert.ok(copyItemId && copyRequirementId);
+    const overviewResultCount = () => page.evaluate(() => window.__received.filter(event => event.type === "work-records.overview.result").length);
+    const currentOverview = () => page.evaluate(() => {
+      const event = window.__received.filter(row => row.type === "work-records.overview.result").at(-1);
+      if (!event) return null;
+      const { request_id: _requestId, ...snapshot } = event;
+      return snapshot;
+    });
+    const originalBeforeCopy = await currentOverview();
+    const originalItemBeforeCopy = originalBeforeCopy.groups.flatMap(group => group.items).find(item => item.item_id === copyItemId);
+    assert.ok(originalItemBeforeCopy, "source independent item must come from the real overview response");
+    const originalRequirementBeforeCopy = originalItemBeforeCopy.requirements.find(requirement => requirement.requirement_id === copyRequirementId);
+    assert.ok(originalRequirementBeforeCopy);
+
+    const firstConfirmCount = await page.evaluate(() => window.__received.filter(event => event.type === "confirm.request").length);
+    await copyControl.click();
+    await page.waitForFunction(count => window.__received.filter(event => event.type === "confirm.request").length > count, firstConfirmCount);
+    await page.locator('[data-confirm="n"]:visible').last().click();
+    await page.waitForFunction(() => window.__received.some(event => event.type === "confirm.done" && event.choice === "n"));
+    await page.waitForFunction(() => window.__received.some(event => event.type === "work-record.control.done" && event.action === "copy_requirement_to_new_item"));
+    const deniedCopy = await page.evaluate(() => window.__received.filter(event => event.type === "work-record.control.done" && event.action === "copy_requirement_to_new_item").at(-1));
+    assert.equal(deniedCopy.status, "rejected");
+    assert.deepEqual(await currentOverview(), originalBeforeCopy, "refusal must not mutate overview state or revision");
+
+    const approvedCopyControl = page.locator(`[data-work-record-control][data-action="copy_requirement_to_new_item"][data-item-id="${copyItemId}"][data-requirement-id="${copyRequirementId}"]`);
+    const confirmCountBeforeApproval = await page.evaluate(() => window.__received.filter(event => event.type === "confirm.request").length);
+    await approvedCopyControl.click();
+    await page.waitForFunction(count => window.__received.filter(event => event.type === "confirm.request").length > count, confirmCountBeforeApproval);
+    const operationPreview = await page.evaluate(() => window.__received.filter(event => event.type === "confirm.request").at(-1).preview);
+    assert.match(operationPreview, /复制为当前会话的新独立事项/);
+    await page.locator('[data-confirm="y"]:visible').last().click();
+    await page.waitForFunction(() => window.__received.some(event => event.type === "work-record.control.done" && event.action === "copy_requirement_to_new_item" && event.status === "applied"));
+    const approvedCopy = await page.evaluate(() => window.__received.filter(event => event.type === "work-record.control.done" && event.action === "copy_requirement_to_new_item").at(-1));
+    assert.equal(approvedCopy.session_id, ready.session_id);
+    assert.match(approvedCopy.message, /原事项不变/);
+    await page.waitForFunction(count => window.__received.filter(event => event.type === "work-records.overview.result").length > count, await overviewResultCount());
+    let copiedOverview = await currentOverview();
+    let copiedItem = copiedOverview.groups.flatMap(group => group.items).find(item => item.item_id !== copyItemId && item.title === originalItemBeforeCopy.title);
+    assert.ok(copiedItem, "approved copy must appear as a separate item from the real current-session overview response");
+    assert.equal(copiedItem.requirements.length, 1);
+    assert.equal(copiedItem.requirements[0].text, originalRequirementBeforeCopy.text);
+    assert.equal(copiedItem.requirements[0].status, "pending");
+    assert.deepEqual(copiedItem.current_results, []);
+    assert.ok(copiedOverview.work_record_revision > originalBeforeCopy.work_record_revision, "approved copy advances the persisted work-record revision");
+    const preservedOriginal = copiedOverview.groups.flatMap(group => group.items).find(item => item.item_id === copyItemId);
+    assert.deepEqual(preservedOriginal, originalItemBeforeCopy, "copy must preserve the original item and requirement exactly");
+
     const ask = "请找回之前关于SYNTHETIC-ALPHA-ORBIT的工作卡";
     const sendRecall = async () => {
       const priorCards = await page.locator("[data-work-card-recall]").count();

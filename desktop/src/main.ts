@@ -10,6 +10,10 @@ import { mountShell } from "./shell-router";
 import { mountContextSwitchOverlay } from "./context-switch-overlay";
 import { applyChatFontSize, applyTheme } from "./settings";
 import { mountManagedSessionView } from "./managed-session-view";
+import { installBrowserDesktopBridge } from "./browser-desktop-bridge";
+
+// Browser support is inert unless the Vite dev server and URL both opt in.
+installBrowserDesktopBridge();
 
 async function boot(): Promise<void> {
   const app = document.querySelector<HTMLElement>("#app");

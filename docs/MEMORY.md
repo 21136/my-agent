@@ -1,7 +1,7 @@
 # 记忆系统设计（MEMORY）
 
 > 版本 0.2.4 · 2026-07-31 · 与 `RUNTIME.md` 配套  
-> **工具执行面**已与主题解绑：见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)（Phase 23）。本文件主题路由仍管 **prompt / memory** 按需加载。
+> **工具执行面**已与主题解绑：见 [TOOL-CATALOG.md](./TOOL-CATALOG.md)（Phase 23）。更正：topic 仅作历史/资产分类与索引；会话中的 `meta.topics` 不决定 prompt 或 memory 加载，也不授予/扩大工具权限。本文 §3–§9 中描述“会话主题确认后加载”的流程是历史设计记录，不是当前运行规则；当前行为见 `agent-core/loader.py`、[TOOLS.md](./TOOLS.md) 与 [TOOL-CATALOG.md](./TOOL-CATALOG.md)。
 
 ---
 
@@ -17,8 +17,8 @@
 
 | 层 | 是什么 | 典型内容 | 物理位置 | 注入方式 |
 |----|--------|----------|----------|----------|
-| **Prompt（特殊要求）** | 必须遵守的硬规则 | 编码习惯、路径边界、确认策略 | `evolve/prompts/<topic>.md` | 主题确认后注入 **system** |
-| **久远记忆** | 跨会话的软事实与背景 | 项目背景、历史做法、参考资料摘要 | `evolve/memories/<topic>/*.md` | 启动注入 **id + summary 索引**；正文按需 `read_file` |
+| **Prompt（特殊要求）** | 必须遵守的硬规则 | 编码习惯、路径边界、确认策略 | `evolve/prompts/<topic>.md` | 按主题组织的资产；当前不由会话 `meta.topics` 自动加载 |
+| **久远记忆** | 跨会话的软事实与背景 | 项目背景、历史做法、参考资料摘要 | `evolve/memories/<topic>/*.md` | 启动注入全局 **id + summary 索引**；正文按需 `read_file` |
 | **短期记忆** | 仅本 thread 有效的工作上下文 | 本次会议目标、多轮对话、压缩摘要 | `goal.md` + `messages.jsonl` + `digest.md` | 锚定块 + messages；见 [RUNTIME.md](./RUNTIME.md) |
 
 **桌面呈现（T-905d）**：磁盘 `messages.jsonl` 仍 **完整**；grow 聊天区仅显示过滤后的 user/assistant 可见行（`session.history`），与顶栏条数元数据（`session.memory`）分工见 [DESKTOP.md](./DESKTOP.md) §5.2.1。
@@ -36,7 +36,7 @@
 ### 3.1 为何按主题
 
 - 单文件 prompt / memory 会把所有领域挤进同一段 system context，**有效记录容量**受 token 限制而非磁盘限制。
-- 按主题拆分后，每个主题文件可以写得更细；**会话开始时只加载相关主题**，避免「记录得越多越用不上」。
+- 按主题拆分可让资产更易组织与发现；**当前会话不按 `meta.topics` 加载主题 prompt**，避免把历史分类误作运行时加载开关。
 
 磁盘（个人 2TB 级）不是瓶颈；**context 窗口**才是。主题拆分的目的是 **组织与按需加载**，不是省硬盘。
 
@@ -52,7 +52,7 @@ description = "Python、agent-core、Git、工具实现、文档结构"
 prompt = "prompts/coding.md"
 memory_dirs = ["memories/coding"]
 tool_dirs = ["tools/coding"]
-llm_model = "deepseek-v4-pro"   # 可选；含 coding 主题时会话用 pro
+llm_model = "deepseek-v4-pro"   # 历史设计字段示例；当前不由 session topics 选择会话模型
 
 [[topic]]
 id = "writing"
@@ -116,9 +116,11 @@ data/sessions/<conversation_id>/
 
 ---
 
-## 4. 两阶段主题路由（「两次提问」）
+## 4. 历史设计：两阶段主题路由（「两次提问」）
 
-**不是**每条用户消息都路由两次 LLM；而是在 **session 开头** 用两次交互完成「定调 + 加载」。
+> 本节保留原设计记录，不代表当前运行流程。当前 `meta.topics` 不触发主题 prompt 加载；`build_system_prompt` 注入 topic 索引和 memory 索引，但没有按会话主题注入 `prompts/<topic>.md`。工具执行权限独立于 topics，按工具现有 executor 策略与逐次授权处理。
+
+**历史方案**不是每条用户消息都路由两次 LLM；而是在 **session 开头** 用两次交互完成「定调 + 加载」。
 
 ### 4.1 阶段 0 — 启动（固定注入）
 

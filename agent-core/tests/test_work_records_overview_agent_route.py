@@ -29,6 +29,7 @@ class FakeSession:
 def make_agent(*, enabled=True, bound=True):
     agent = object.__new__(Agent)
     agent.session = FakeSession()
+    agent._work_instruction_context = []
     agent.executor = SimpleNamespace(confirm_fn=None)
     agent.enable_work_record_recall = enabled
     agent.work_record_recall_controller = SimpleNamespace(

@@ -249,12 +249,10 @@ def load_config() -> LLMConfig:
     )
 
 
-def resolve_session_model(topics: list[str], *, config: LLMConfig | None = None) -> str:
-    """Pick session model: coding topic → pro tier default, else flash (§6.1)."""
-    registry = get_registry()
-    if "coding" in topics:
-        return registry.default_pro_id
-    return registry.default_flash_id
+def resolve_session_model(topics: list[str] | None = None, *, config: LLMConfig | None = None) -> str:
+    """Return the default session model; legacy topics no longer route model choice."""
+    _ = topics, config  # Retained for call-site compatibility with older session data.
+    return get_registry().default_flash_id
 
 
 def normalize_session_model(raw: str, *, config: LLMConfig | None = None) -> str | None:
@@ -1351,12 +1349,12 @@ def _demo() -> None:
     assert cfg.timeout_sec == DEFAULT_TIMEOUT_SEC, cfg.timeout_sec
     print("[PASS] default config from env")
 
-    # Session model resolution (§6.1)
+    # Session model resolution ignores legacy topic classification.
     assert resolve_session_model([], config=cfg) == DEFAULT_MODEL
     assert resolve_session_model(["workflow"], config=cfg) == DEFAULT_MODEL
-    assert resolve_session_model(["coding"], config=cfg) == DEFAULT_MODEL_CODING
-    assert resolve_session_model(["workflow", "coding"], config=cfg) == DEFAULT_MODEL_CODING
-    print("[PASS] resolve_session_model: flash vs coding pro")
+    assert resolve_session_model(["coding"], config=cfg) == DEFAULT_MODEL
+    assert resolve_session_model(["workflow", "coding"], config=cfg) == DEFAULT_MODEL
+    print("[PASS] resolve_session_model: default is topic-independent")
 
     # Context limits (§6.1)
     assert resolve_context_limit(cfg.model, config=cfg) == FLASH_CONTEXT_LIMIT

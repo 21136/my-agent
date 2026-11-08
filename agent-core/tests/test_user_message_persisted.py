@@ -471,3 +471,84 @@ def test_loopback_attachment_on_special_dialogue_recall_path_does_not_ack(tmp_pa
             await listener.wait_closed()
 
     asyncio.run(exercise())
+
+
+def test_loopback_recording_wrapper_forwards_persistence_receipt(tmp_path, monkeypatch):
+    from work_records import WorkRecordStore
+    from work_records_agent_recording import WorkRecordAgentRecording
+
+    paths, handler = _loopback(tmp_path, monkeypatch)
+    original_build_repl = server._build_repl
+
+    def build_recording_repl(*args, **kwargs):
+        repl = original_build_repl(*args, **kwargs)
+        repl.agent.enable_work_record_recording = True
+        repl.agent.work_record_recording_controller = WorkRecordAgentRecording(
+            agent=repl.agent,
+            store=WorkRecordStore(repl.session),
+            recognizer=lambda _text, _items: {"action": "none"},
+        )
+        return repl
+
+    monkeypatch.setattr(server, "_build_repl", build_recording_repl)
+    request_id = str(uuid.uuid4())
+    text = "ordinary message through recording wrapper"
+
+    async def exercise():
+        listener, ws, session_id = await _connect(handler)
+        try:
+            events = await _send_turn(ws, text, request_id)
+            assert [event for event in events if event.get("type") == "user.message.persisted"] == [{
+                "type": "user.message.persisted",
+                "session_id": session_id,
+                "request_id": request_id,
+            }]
+            rows = [json.loads(line) for line in
+                    (paths.data / "sessions" / session_id / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert {"role": "user", "content": text} in rows
+        finally:
+            await ws.close()
+            listener.close()
+            await listener.wait_closed()
+
+    asyncio.run(exercise())
+
+def test_loopback_recording_fallback_receipts_only_after_user_append(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    paths, handler = _loopback(tmp_path, monkeypatch)
+    original_build_repl = server._build_repl
+
+    class UncertainController:
+        def run_turn(self, _text, *, execute):
+            return SimpleNamespace(turn=None, reply="记录状态待核验。", storage_error=False)
+
+    def build_fallback_repl(*args, **kwargs):
+        repl = original_build_repl(*args, **kwargs)
+        repl.agent.enable_work_record_recording = True
+        repl.agent.work_record_recording_controller = UncertainController()
+        return repl
+
+    monkeypatch.setattr(server, "_build_repl", build_fallback_repl)
+    request_id = str(uuid.uuid4())
+    text = "fallback user message"
+
+    async def exercise():
+        listener, ws, session_id = await _connect(handler)
+        try:
+            events = await _send_turn(ws, text, request_id)
+            assert [event for event in events if event.get("type") == "user.message.persisted"] == [{
+                "type": "user.message.persisted",
+                "session_id": session_id,
+                "request_id": request_id,
+            }]
+            rows = [json.loads(line) for line in
+                    (paths.data / "sessions" / session_id / "messages.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert {"role": "user", "content": text} in rows
+        finally:
+            await ws.close()
+            listener.close()
+            await listener.wait_closed()
+
+    asyncio.run(exercise())
+

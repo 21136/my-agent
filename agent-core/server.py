@@ -54,6 +54,7 @@ from host_scope import load_host_scope
 from runtime_guards import TurnWatchdog, stall_watchdog_sec, turn_wall_sec
 from session import Session, SessionError, HarnessMismatchError, create_new, create_sandbox_evolution_session, emit_corruption_notices, list_session_summaries, load_session_for_harness, normalize_turn_mode, resume_desktop_or_create, session_banner_event, session_history_event, turn_mode_label
 from tools.executor import build_confirm_preview
+from request_timing import is_valid_user_request_id, log_main_request_timing
 
 try:
     from websockets.asyncio.server import ServerConnection, serve
@@ -67,6 +68,7 @@ EmitFn = Callable[[dict[str, Any]], None]
 _DUPLICATE_CAPTURE_RUN = object()
 _UNCONFIRMED_CAPTURE_RUN = object()
 _WORK_RECORDS_OVERVIEW_QUERY = "work-records.overview.query"
+_WORK_RECORD_RECOVERY_PROCESS_ID = str(uuid.uuid4())
 _WORK_RECORDS_OVERVIEW_RESPONSE = "work-records.overview.result"
 _WORK_CARD_MESSAGE_TYPES = frozenset({
     "work-card.create", "work-card.get", "work-card.seen", "work-card.list",
@@ -84,6 +86,20 @@ _CAPTURE_RECONCILIATION_MESSAGES = {
     "uncertain": "分类或上下文校验未能确认，不能排除并发提交；本轮未自动执行，请核对当前记录和运行状态。",
 }
 DEFAULT_HOST = "127.0.0.1"
+
+def _websocket_origin_policy() -> tuple[str | None, ...]:
+    """Allow only native clients, packaged Electron, and configured local Vite origins."""
+    return (
+        None,  # Native CLI clients do not send an Origin header.
+        "file://",  # Verified Electron loadFile origin.
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://[::1]:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://[::1]:5174",
+    )
+
 DEFAULT_CONFIRM_TIMEOUT_SEC = 90.0
 TURN_LOCK = asyncio.Lock()
 SESSION_SWITCH_WAIT_SECONDS = 10.0
@@ -324,6 +340,17 @@ def confirm_timeout_sec() -> float:
 
 
 
+def task_authorization_confirm_timeout_sec() -> float:
+    """Dedicated finite review window for server-issued task authorization only."""
+    try:
+        value = float(os.environ.get("TASK_AUTHORIZATION_CONFIRM_TIMEOUT_SEC", "900"))
+    except (ValueError, TypeError):
+        return 900.0
+    if not math.isfinite(value):
+        return 900.0
+    return min(1800.0, max(120.0, value))
+
+
 def work_card_batch_confirm_timeout_sec() -> float:
     """Dedicated finite human review window, independent of normal confirms."""
     try:
@@ -434,6 +461,7 @@ class WsBridge:
     cancel_event: threading.Event = field(default_factory=threading.Event)
     confirm_timeout: float = field(default_factory=confirm_timeout_sec)
     batch_confirm_timeout: float = field(default_factory=work_card_batch_confirm_timeout_sec)
+    task_authorization_confirm_timeout: float = field(default_factory=task_authorization_confirm_timeout_sec)
     _session_provider: Callable[[], Any] | None = field(default=None, init=False, repr=False)
     _connection_closed: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     _post_turn_send_gate: Any | None = field(default=None, init=False, repr=False)
@@ -466,6 +494,7 @@ class WsBridge:
     lifecycle: ExecutionLifecycle = field(default_factory=ExecutionLifecycle, repr=False)
     lifecycle_conversation_id: str = field(default="", init=False, repr=False)
     _pending_confirm_id: str | None = field(default=None, init=False)
+    _pending_confirm_binding: tuple[Any, str, str, int, float] | None = field(default=None, init=False, repr=False)
     _cancel_turn: Callable[[], None] | None = field(default=None, init=False, repr=False)
     # Consent belongs to this WebSocket connection, never to the shared handler.
     project_journal_enabled: bool = field(default=False, init=False, repr=False)
@@ -478,6 +507,7 @@ class WsBridge:
     _parallel_chat_seen_requests: set[str] = field(default_factory=set, init=False, repr=False)
     _work_instruction_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _work_instructions: dict[str, _WorkInstruction] = field(default_factory=dict, init=False, repr=False)
+    _accepted_user_stop: tuple[str, str] | None = field(default=None, init=False, repr=False)
     _active_message_route_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _active_route_slots: threading.BoundedSemaphore = field(
         default_factory=lambda: threading.BoundedSemaphore(16), init=False, repr=False,
@@ -1102,7 +1132,12 @@ class WsBridge:
         return changed
 
     def emit_turn_event(self, event: dict[str, Any]) -> None:
-        self.emit(self._scope_run_event(dict(event)))
+        payload = self._scope_run_event(dict(event))
+        if payload.get("type") == "goal.state" and callable(self._session_provider):
+            session = self._session_provider()
+            if session is not None:
+                payload.setdefault("session_id", session.conversation_id)
+        self.emit(payload)
 
     def end_turn(self) -> None:
         if self.turn_watchdog is not None:
@@ -1379,6 +1414,122 @@ class WsBridge:
             return "n"
         return result
 
+    def confirm_task_authorization(self, preview: str) -> str:
+        """Wait for task-level authorization using server-owned run/session context.
+
+        This callable is wired only into the trusted ProjectWorkerHost authorization
+        path. Its eligibility is never inferred from preview text; the prefix is a
+        display protocol for the client only.
+        """
+        if (type(preview) is not str or not preview or len(preview.encode("utf-8")) > 2 * 1024 * 1024
+                or not callable(self._session_provider)):
+            return "n"
+        try:
+            session = self._session_provider()
+            session_id = session.conversation_id
+            snapshot = self.lifecycle.snapshot()
+            if (session is None or type(session_id) is not str or not session_id
+                    or snapshot is None or snapshot.state != "running" or snapshot.cancel_requested
+                    or self.lifecycle_conversation_id != session_id
+                    or self._session_provider() is not session or self.cancel_event.is_set()
+                    or self._connection_closed.is_set()
+                    or not math.isfinite(self.task_authorization_confirm_timeout)
+                    or not 0 < self.task_authorization_confirm_timeout <= 1800):
+                return "n"
+        except Exception:
+            return "n"
+
+        request_id = str(uuid.uuid4())
+        responses: queue.Queue[str] = queue.Queue(maxsize=1)
+        deadline = time.monotonic() + self.task_authorization_confirm_timeout
+        pending = (request_id, deadline, responses)
+        with self._batch_confirm_lock:
+            if self._batch_confirm_pending is not None or self._pending_confirm_id is not None:
+                return "n"
+            self._batch_confirm_pending = pending
+            self._pending_confirm_id = request_id
+
+        result = "n"
+        done = "cancelled"
+        watchdog = self.turn_watchdog
+        wall_paused = False
+        try:
+            if watchdog is not None:
+                watchdog.pause_wall()
+                wall_paused = True
+            self.emit(self._scope_run_event({
+                "type": "confirm.request", "request_id": request_id,
+                "preview": preview,
+                "allow_approve_all": False,
+                "session_id": session_id, "run_id": snapshot.run_id,
+            }))
+            self._touch_progress()
+            while True:
+                current = self.lifecycle.snapshot()
+                if (self.cancel_event.is_set() or self._connection_closed.is_set()
+                        or self._session_provider() is not session or session.conversation_id != session_id
+                        or self.lifecycle_conversation_id != session_id or current is None
+                        or current.run_id != snapshot.run_id or current.sequence != snapshot.sequence
+                        or current.state != "running" or current.cancel_requested):
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    done = "timeout"
+                    break
+                try:
+                    choice = responses.get(timeout=min(.1, remaining))
+                except queue.Empty:
+                    continue
+                current = self.lifecycle.snapshot()
+                if (time.monotonic() >= deadline or self.cancel_event.is_set()
+                        or self._connection_closed.is_set() or self._session_provider() is not session
+                        or session.conversation_id != session_id or self.lifecycle_conversation_id != session_id
+                        or current is None or current.run_id != snapshot.run_id
+                        or current.sequence != snapshot.sequence or current.state != "running"
+                        or current.cancel_requested):
+                    done = "timeout" if time.monotonic() >= deadline else "cancelled"
+                    break
+                if choice == "y":
+                    result, done = "y", "y"
+                else:
+                    done = "n"
+                break
+        except Exception:
+            result, done = "n", "cancelled"
+        finally:
+            with self._batch_confirm_lock:
+                if self._batch_confirm_pending is pending:
+                    self._batch_confirm_pending = None
+                if self._pending_confirm_id == request_id:
+                    self._pending_confirm_id = None
+            try:
+                self.emit(self._scope_run_event({
+                    "type": "confirm.done", "request_id": request_id, "choice": done,
+                    "session_id": session_id, "run_id": snapshot.run_id,
+                }))
+                self._touch_progress()
+            except Exception:
+                result = "n"
+            finally:
+                if wall_paused:
+                    try:
+                        watchdog.resume_wall()
+                    except Exception:
+                        result = "n"
+
+        try:
+            current = self.lifecycle.snapshot()
+            if (self.cancel_event.is_set() or self._connection_closed.is_set()
+                    or self._session_provider() is not session or session.conversation_id != session_id
+                    or self.lifecycle_conversation_id != session_id or current is None
+                    or current.run_id != snapshot.run_id or current.sequence != snapshot.sequence
+                    or current.state != "running" or current.cancel_requested
+                    or time.monotonic() >= deadline):
+                return "n"
+        except Exception:
+            return "n"
+        return result
+
     def confirm_with_receipt(self, preview: str, allow_approve_all: bool) -> tuple[str, str]:
         with self._batch_confirm_lock:
             if self._batch_confirm_pending is not None:
@@ -1392,33 +1543,72 @@ class WsBridge:
                 request_id = str(uuid.uuid4())
         else:
             request_id = str(uuid.uuid4())
-        self._pending_confirm_id = request_id
-        if not context_switch:
-            self.emit(
-                self._scope_run_event(
-                    {
-                        "type": "confirm.request",
-                        "request_id": request_id,
-                        "preview": preview,
-                        "allow_approve_all": allow_approve_all,
-                    }
+        confirmation_session = self.lifecycle_conversation_id
+        confirmation_deadline = time.monotonic() + self.confirm_timeout
+        confirmation_binding = None
+        try:
+            bound_session = self._session_provider() if callable(self._session_provider) else None
+            snapshot = self.lifecycle.snapshot()
+            if (bound_session is not None and type(getattr(bound_session, "conversation_id", None)) is str
+                    and confirmation_session == bound_session.conversation_id
+                    and snapshot is not None and snapshot.state == "running"):
+                confirmation_binding = (
+                    bound_session, bound_session.conversation_id, snapshot.run_id, snapshot.sequence,
+                    confirmation_deadline,
                 )
-            )
+                confirmation_session = bound_session.conversation_id
+        except Exception:
+            confirmation_binding = None
+        confirmation_identity_fields = (
+            {"session_id": confirmation_binding[1], "run_id": confirmation_binding[2]}
+            if confirmation_binding is not None else
+            ({"session_id": confirmation_session} if confirmation_session else {})
+        )
+
+        def binding_is_current() -> bool:
+            if confirmation_binding is None:
+                return not self._connection_closed.is_set()
+            try:
+                current = self.lifecycle.snapshot()
+                return bool(
+                    not self.cancel_event.is_set() and not self._connection_closed.is_set()
+                    and callable(self._session_provider)
+                    and self._session_provider() is confirmation_binding[0]
+                    and confirmation_binding[0].conversation_id == confirmation_binding[1]
+                    and self.lifecycle_conversation_id == confirmation_binding[1]
+                    and current is not None and current.run_id == confirmation_binding[2]
+                    and current.sequence == confirmation_binding[3] and current.state == "running"
+                    and not current.cancel_requested
+                )
+            except Exception:
+                return False
+
+        def emit_confirmation_event(event: dict[str, Any]) -> None:
+            event.update(confirmation_identity_fields)
+            self.emit(event if confirmation_binding is not None else self._scope_run_event(event))
+
+        with self._batch_confirm_lock:
+            if self._pending_confirm_id is not None or self._batch_confirm_pending is not None:
+                return "n", ""
+            self._pending_confirm_id = request_id
+            self._pending_confirm_binding = confirmation_binding
+        if not context_switch:
+            emit_confirmation_event({
+                "type": "confirm.request", "request_id": request_id,
+                "preview": preview, "allow_approve_all": allow_approve_all,
+            })
         self._touch_progress()
-        deadline = time.monotonic() + self.confirm_timeout
+        watchdog = self.turn_watchdog
+        if watchdog is not None:
+            watchdog.pause_wall()
+        deadline = confirmation_deadline
         try:
             while True:
-                if self.cancel_event.is_set():
+                if self.cancel_event.is_set() or not binding_is_current():
                     if not context_switch:
-                        self.emit(
-                            self._scope_run_event(
-                                {
-                                    "type": "confirm.done",
-                                    "request_id": request_id,
-                                    "choice": "cancelled",
-                                }
-                            )
-                        )
+                        emit_confirmation_event({
+                            "type": "confirm.done", "request_id": request_id, "choice": "cancelled",
+                        })
                     self._touch_progress()
                     return "n", request_id
                 remaining = deadline - time.monotonic()
@@ -1431,20 +1621,16 @@ class WsBridge:
                         continue
                     raise
                 if resp_id == request_id:
-                    if self.cancel_event.is_set():
+                    if time.monotonic() >= deadline:
+                        choice = "timeout"
+                    elif self.cancel_event.is_set() or not binding_is_current():
                         choice = "cancelled"
                     if not context_switch:
-                        self.emit(
-                            self._scope_run_event(
-                                {
-                                    "type": "confirm.done",
-                                    "request_id": request_id,
-                                    "choice": choice,
-                                }
-                            )
-                        )
+                        emit_confirmation_event({
+                            "type": "confirm.done", "request_id": request_id, "choice": choice,
+                        })
                     self._touch_progress()
-                    return ("n" if choice == "cancelled" else choice), request_id
+                    return ("n" if choice in {"cancelled", "timeout"} else choice), request_id
                 # C1: never put stale ids back — that spins forever (BUG-008).
                 self.emit(
                     {
@@ -1471,13 +1657,19 @@ class WsBridge:
                             "type": "confirm.done",
                             "request_id": request_id,
                             "choice": "timeout",
+                            **confirmation_identity_fields,
                         }
                     )
                 )
             self._touch_progress()
             return "n", request_id
         finally:
-            self._pending_confirm_id = None
+            if watchdog is not None:
+                watchdog.resume_wall()
+            with self._batch_confirm_lock:
+                if self._pending_confirm_id == request_id:
+                    self._pending_confirm_id = None
+                    self._pending_confirm_binding = None
 
     def on_executor_event(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type in {"tool.start", "tool.end", "tool.progress"}:
@@ -1780,6 +1972,7 @@ class WsBridge:
             if not changed or snapshot is None:
                 return False
             self.emit(snapshot.to_event())
+            self._accepted_user_stop = (run_id, uuid.uuid4().hex)
             if self.turn_watchdog is not None and self._turn_busy.is_set():
                 self.turn_watchdog.request_user_cancel()
             self.cancel_event.set()
@@ -1836,10 +2029,14 @@ class WsBridge:
                 return True
         if not request_id:
             return False
-        if self.cancel_event.is_set():
+        if self.cancel_event.is_set() or self._connection_closed.is_set():
             return False
         pending = self._pending_confirm_id
-        if pending is not None and request_id != pending:
+        if pending is None:
+            # Never queue unsolicited or completed IDs; they could otherwise be
+            # consumed by a later ordinary confirm wait.
+            return False
+        if request_id != pending:
             # C1 ingress: reject stale cards before they enter the queue.
             self.emit(
                 {
@@ -1857,12 +2054,35 @@ class WsBridge:
                 )
             )
             return False
+        binding = self._pending_confirm_binding
+        if binding is not None:
+            try:
+                current = self.lifecycle.snapshot()
+                if (not callable(self._session_provider) or self._session_provider() is not binding[0]
+                        or binding[0].conversation_id != binding[1]
+                        or self.lifecycle_conversation_id != binding[1] or current is None
+                        or current.run_id != binding[2] or current.sequence != binding[3]
+                        or current.state != "running" or current.cancel_requested
+                        or time.monotonic() >= binding[4]):
+                    return False
+            except Exception:
+                return False
         self._confirm_queue.put((request_id, choice))
         return True
 
     def emit_session_state(self, session: Session) -> None:
         quick_memory = not session._messages_fully_loaded
         self.emit(_session_banner_payload(session, self.paths))
+        try:
+            from goal_runtime import goal_runtime_for_session
+            goal_runtime = goal_runtime_for_session(session)
+            goal_event = goal_runtime.status_event() if goal_runtime is not None else None
+            if goal_event is not None:
+                goal_event["session_id"] = session.conversation_id
+                self.emit(goal_event)
+        except Exception:
+            # Session hydration remains available even if optional Goal state is unreadable.
+            pass
         self.sync_auto_recognition_session(session)
         # History before heavy project.state so chat hydrates first (UI-5972).
         self.emit(session_history_event(session))
@@ -3032,6 +3252,7 @@ def _patch_repl(
     bridge._session_provider = lambda: repl.session
     bridge.init_post_turn_send_gate(repl.session)
     repl.agent.work_card_batch_confirm_fn = bridge.confirm_work_card_batch
+    repl.agent.task_authorization_confirm_fn = bridge.confirm_task_authorization
     repl.agent.project_worker_verification_fn = bridge.verify_project_worker_requirement
     _bind_work_card_reference_intent(repl, bridge)
     repl.agent.work_card_result_reply_turn = _WorkCardResultReplyTurn(repl, bridge)
@@ -3063,6 +3284,7 @@ def _patch_repl(
     def rebind() -> None:
         original_rebind()
         repl.agent.work_card_batch_confirm_fn = bridge.confirm_work_card_batch
+        repl.agent.task_authorization_confirm_fn = bridge.confirm_task_authorization
         repl.agent.project_worker_verification_fn = bridge.verify_project_worker_requirement
         _bind_work_card_reference_intent(repl, bridge)
         repl.agent.work_card_result_reply_turn = _WorkCardResultReplyTurn(repl, bridge)
@@ -3910,6 +4132,33 @@ def _execute_post_turn_candidate(candidate: _FrozenPostTurnCandidate, bridge: Ws
         bridge.finish_post_turn(ticket, candidate.session)
 
 
+def _external_user_message_receipt_request_id(
+    request_id: Any,
+    *,
+    prestarted_run_id: str | None,
+    attachments: tuple[Any, ...] | list[Any],
+    attachment_ids: tuple[str, ...] | list[str],
+    current_session: Session,
+    attachment_session: Session | None,
+) -> str | None:
+    """Return the accepted-message receipt identity when append ownership is unambiguous.
+
+    Work-record bindings describe result settlement and must not suppress this
+    independent acknowledgment that the user's message row was persisted.
+    """
+    if prestarted_run_id is not None or type(request_id) is not str:
+        return None
+    try:
+        if str(uuid.UUID(request_id)) != request_id:
+            return None
+    except (ValueError, AttributeError):
+        return None
+    if attachment_ids and not (
+        len(attachments) == len(attachment_ids) and current_session is attachment_session
+    ):
+        return None
+    return request_id
+
 async def _run_line(
     repl: ConversationRepl,
     bridge: WsBridge,
@@ -3924,8 +4173,17 @@ async def _run_line(
     explicit_result_capture: bool = False,
     external_user_message_request_id: str | None = None,
     external_user_message_attachment_session_id: str | None = None,
+    main_request_id: str | None = None,
 ) -> _FrozenPostTurnCandidate | _FrozenExplicitRunExcerpt | None:
     repl.last_turn_finish_reason = None
+    turn_started_at = time.perf_counter()
+    timing_request_id = main_request_id
+    try:
+        if type(timing_request_id) is not str or str(uuid.UUID(timing_request_id)) != timing_request_id:
+            timing_request_id = None
+    except (ValueError, AttributeError):
+        timing_request_id = None
+    log_main_request_timing("agent_turn_started", timing_request_id, 0)
     post_turn_candidate = None
     try:
         if type(post_turn_request_id) is not str or str(uuid.UUID(post_turn_request_id)) != post_turn_request_id:
@@ -4123,6 +4381,10 @@ async def _run_line(
                         if receipt_sent:
                             return
                         receipt_sent = True
+                    log_main_request_timing(
+                        "user_message_persisted", timing_request_id,
+                        max(0, int((time.perf_counter() - turn_started_at) * 1000)),
+                    )
                     _emit_safely(bridge.emit, {
                         "type": "user.message.persisted",
                         "session_id": bound_session.conversation_id,
@@ -4174,6 +4436,8 @@ async def _run_line(
     stream_journal = None
     pending_stream_commit = None
     stream_request_id = None
+    model_request_started_at = None
+    first_model_delta_logged = False
     stream_journal_lock = threading.RLock()
     original_append_message = bound_session.append_message
     original_session_save = bound_session.save
@@ -4299,7 +4563,14 @@ async def _run_line(
         bound_session.save = save_with_stream_identity
 
         def capture_content_delta(text: str) -> None:
-            nonlocal stream_journal, stream_journal_started
+            nonlocal stream_journal, stream_journal_started, first_model_delta_logged
+            if (isinstance(text, str) and text and model_request_started_at is not None
+                    and not first_model_delta_logged):
+                first_model_delta_logged = True
+                log_main_request_timing(
+                    "model_first_delta", timing_request_id,
+                    max(0, int((time.perf_counter() - model_request_started_at) * 1000)),
+                )
             if isinstance(text, str) and text:
                 with stream_journal_lock:
                     journal = stream_journal
@@ -4322,6 +4593,14 @@ async def _run_line(
                 bridge.emit_content_delta(text)
 
         def forward_reasoning_delta(text: str) -> None:
+            nonlocal first_model_delta_logged
+            if (isinstance(text, str) and text and model_request_started_at is not None
+                    and not first_model_delta_logged):
+                first_model_delta_logged = True
+                log_main_request_timing(
+                    "model_first_delta", timing_request_id,
+                    max(0, int((time.perf_counter() - model_request_started_at) * 1000)),
+                )
             callback = getattr(original_stream_handlers, "on_reasoning_delta", None)
             if callable(callback):
                 callback(text)
@@ -4336,6 +4615,7 @@ async def _run_line(
         if callable(original_chat):
             def tracked_chat(*args: Any, **kwargs: Any) -> Any:
                 nonlocal stream_request_id, pending_stream_commit, stream_request_start_index
+                nonlocal model_request_started_at, first_model_delta_logged
                 # A successful provider request that did not reach its matching
                 # assistant append is closed as an incomplete retry before reuse.
                 if stream_journal is not None and not persist_streamed_content("request_retry"):
@@ -4343,6 +4623,9 @@ async def _run_line(
                 bound_session.ensure_messages_loaded()
                 stream_request_start_index = len(bound_session.messages)
                 stream_request_id = uuid.uuid4().hex
+                model_request_started_at = time.perf_counter()
+                first_model_delta_logged = False
+                log_main_request_timing("model_request_started", timing_request_id, 0)
                 try:
                     result = original_chat(*args, **kwargs)
                 except Exception as exc:
@@ -4361,6 +4644,12 @@ async def _run_line(
                         pending_stream_commit = stream_journal
                     return result
                 finally:
+                    if model_request_started_at is not None:
+                        log_main_request_timing(
+                            "model_request_finished", timing_request_id,
+                            max(0, int((time.perf_counter() - model_request_started_at) * 1000)),
+                        )
+                    model_request_started_at = None
                     stream_request_id = None
 
             try:
@@ -5103,10 +5392,51 @@ def _settle_work_record_run(
                 and type(worker_work_record_result[1]) is ProjectWorkerHostOutcome
                 and worker_work_record_result[0].execution == binding):
             worker_binding, worker_outcome = worker_work_record_result
+            cancellation_receipt = None
+            accepted_stop = getattr(bridge, "_accepted_user_stop", None)
+            reservation = worker_binding.reservation
+            host = getattr(agent, "project_worker_host", None)
+            terminal_stop_receipt = None
+            if (worker_outcome.status == "cancelled" and reservation is not None and host is not None):
+                from project_worker_host import ProjectWorkerCancelTarget
+                target = ProjectWorkerCancelTarget(
+                    conversation_id=reservation.conversation_id,
+                    parent_run_id=reservation.parent_run_id,
+                    turn_epoch=reservation.turn_epoch,
+                    project_id=reservation.project_id,
+                    item_id=worker_binding.execution.item_id,
+                    requirement_id=worker_binding.execution.requirement_id,
+                    task_id=reservation.task_id,
+                    worker_id=reservation.worker_id,
+                    worker_run_id=reservation.worker_run_id,
+                    reservation_id=reservation.reservation_id,
+                )
+                terminal_stop_receipt = host.consume_accepted_worker_stop(target, reservation, worker_outcome)
+            parent_stop_action_id = (
+                accepted_stop[1] if type(accepted_stop) is tuple and len(accepted_stop) == 2
+                and accepted_stop[0] == worker_binding.execution.run_id else None
+            )
+            user_action_id = (terminal_stop_receipt.user_action_id if terminal_stop_receipt is not None
+                              else parent_stop_action_id)
+            if (worker_outcome.status == "cancelled" and user_action_id is not None
+                    and reservation is not None):
+                from project_worker_work_record_settlement import ProjectWorkerCancellationReceipt
+                cancellation_receipt = ProjectWorkerCancellationReceipt(
+                    session_id=worker_binding.execution.session_id,
+                    item_id=worker_binding.execution.item_id,
+                    requirement_id=worker_binding.execution.requirement_id,
+                    run_id=reservation.worker_run_id,
+                    project_id=worker_binding.request.project_id,
+                    task_id=worker_binding.request.task_id,
+                    reservation_id=reservation.reservation_id,
+                    user_action_id=user_action_id,
+                    source="user_action",
+                )
             result = settle_project_worker_work_record(
                 store, worker_binding, worker_outcome,
                 sequence=receipt.sequence,
                 execution_receipt=receipt,
+                cancellation_receipt=cancellation_receipt,
                 verification_receipt=worker_verification_receipt,
                 verification_host=getattr(agent, "project_worker_host", None),
                 verification_bridge=bridge,
@@ -5953,6 +6283,23 @@ def _begin_work_record_capture_turn(repl: ConversationRepl, bridge: WsBridge) ->
     return snapshot.run_id
 
 
+def _recover_interrupted_work_records(session: Session) -> bool:
+    """Report whether persisted execution state needs recovery without mutating it.
+
+    A persisted in-progress row or schedule claim may belong to a live worker in
+    another process. Without an authoritative cross-process host check, preserve
+    it and report recovery as unverified; never release claims or restart work.
+    """
+    from work_records import WorkRecordStore
+
+    items = WorkRecordStore(session).list_items()
+    return not any(
+        requirement.get("status") == "in_progress" or "schedule_claim" in requirement
+        for item in items
+        for requirement in item.get("requirements", [])
+    )
+
+
 class WsSessionHandler:
     # Fail closed until the store accepts the lifecycle's exact host run ID and
     # the full synthetic WebSocket acceptance gate has passed.
@@ -6006,6 +6353,10 @@ class WsSessionHandler:
             loop.call_soon_threadsafe(outbox.put_nowait, event)
 
         bridge = WsBridge(emit=emit, paths=self.paths)
+        try:
+            bridge.client_origin = websocket.request.headers.get("Origin")
+        except Exception:
+            bridge.client_origin = None
         session = resume_desktop_or_create(self.paths)
         repl = _build_repl(
             session,
@@ -6014,9 +6365,13 @@ class WsSessionHandler:
             evolution_client=self.evolution_client,
             work_record_controller_factory=self.work_record_controller_factory,
         )
+        recovery_verified = await asyncio.to_thread(_recover_interrupted_work_records, repl.session)
 
         sender_task = asyncio.create_task(self._sender(websocket, outbox, bridge))
         bridge.emit_session_state(repl.session)
+        if not recovery_verified:
+            bridge.emit({"type": "notice", "level": "warn",
+                         "text": "无法核对已保存事项的执行状态；概况可能显示状态待确认，未自动恢复或重新执行。"})
         emit_corruption_notices(bridge.emit, repl.session)
         _emit_pending_work_card_references(repl, bridge)
 
@@ -6685,6 +7040,8 @@ class WsSessionHandler:
         bridge: WsBridge,
     ) -> None:
         """Process one client frame without blocking the websocket read loop."""
+        if is_valid_user_request_id(message.get("type"), message.get("request_id")):
+            log_main_request_timing("message_handler_entered", message.get("request_id"), 0)
         if self._dispatch_inline(message, bridge):
             return
 
@@ -6807,6 +7164,7 @@ class WsSessionHandler:
 
         if (msg_type in {"user.message", "command", "work-record.capture"} | _WORK_CARD_MESSAGE_TYPES
                 and not changes_session_binding):
+            lock_wait_started_at = time.perf_counter()
             with bridge._result_view_write_lock:
                 auto_session = getattr(repl, 'session', None)
                 auto_enabled = (msg_type == 'user.message' and bridge._auto_recognition_session is auto_session
@@ -6814,6 +7172,11 @@ class WsSessionHandler:
                 auto_generation = bridge._post_turn_generation if auto_enabled else None
             candidate = None
             async with TURN_LOCK:
+                if is_valid_user_request_id(msg_type, message.get("request_id")):
+                    log_main_request_timing(
+                        "turn_lock_acquired", message.get("request_id"),
+                        max(0, int((time.perf_counter() - lock_wait_started_at) * 1000)),
+                    )
                 # Limited staged-path replay barrier, before any dispatch side effect.
                 # Connection-local only: this is not a cross-reconnect execution ledger.
                 if msg_type == "user.message" and (getattr(self, '_post_turn_commit_ready', False) or auto_enabled):
@@ -7450,6 +7813,346 @@ class WsSessionHandler:
                 "item_id": None,
             })
 
+    async def _dispatch_work_record_control(
+        self,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        """Apply a CAS-bound current or separately confirmed remote record control."""
+        allowed = {"type", "session_id", "request_id", "item_id", "project_id", "expected_source_revision",
+                   "requirement_id", "action", "expected_status", "expected_revision", "depends_on", "depends_on_refs", "priority",
+                   "new_text", "inspection_evidence", "event_id", "idempotency_key"}
+        session = getattr(repl, "session", None)
+        session_id = getattr(session, "conversation_id", None)
+        request_id = message.get("request_id")
+        project_id = message.get("project_id") if type(message.get("project_id")) is str else ""
+        success_message = "事项状态已更新；执行不会因概况操作而自动启动。"
+        try:
+            if set(message) - allowed or type(message.get("session_id")) is not str or message["session_id"] != session_id:
+                raise ValueError
+            if any(type(message.get(key)) is not str or not message[key]
+                   for key in ("request_id", "item_id", "action", "event_id", "idempotency_key")):
+                raise ValueError
+            if (str(uuid.UUID(message["request_id"])) != message["request_id"]
+                    or type(message.get("expected_revision")) is not int or message["expected_revision"] < 0
+                    or str(uuid.UUID(message["event_id"])) != message["event_id"]
+                    or message["idempotency_key"] != message["request_id"]):
+                raise ValueError
+            item_id = message["item_id"]
+            action = message["action"]
+            remote = bool(project_id)
+            if remote != ("expected_source_revision" in message):
+                raise ValueError
+            if remote and (type(message.get("expected_source_revision")) is not int or message["expected_source_revision"] < 0):
+                raise ValueError
+            if action == "set_priority":
+                expected_keys = {"type", "session_id", "request_id", "item_id", "action", "priority", "expected_revision", "event_id", "idempotency_key"}
+                if remote:
+                    expected_keys |= {"project_id", "expected_source_revision"}
+                if set(message) != expected_keys:
+                    raise ValueError
+            else:
+                if (type(message.get("requirement_id")) is not str or not message["requirement_id"]
+                        or (action != "copy_requirement_to_new_item"
+                            and (type(message.get("expected_status")) is not str or not message["expected_status"]))):
+                    raise ValueError
+                control_fields = {"type", "session_id", "request_id", "item_id", "requirement_id",
+                                  "action", "expected_revision", "event_id", "idempotency_key"}
+                if action != "copy_requirement_to_new_item":
+                    control_fields.add("expected_status")
+                if remote:
+                    control_fields |= {"project_id", "expected_source_revision"}
+                if action == "copy_requirement_to_new_item":
+                    if remote or set(message) != control_fields:
+                        raise ValueError
+                elif action == "set_dependencies":
+                    dependency_fields = {"depends_on"}
+                    if "depends_on_refs" in message:
+                        dependency_fields.add("depends_on_refs")
+                    if (set(message) != control_fields | dependency_fields
+                            or type(message.get("depends_on", [])) is not list
+                            or len(message.get("depends_on", [])) > 128
+                            or any(type(value) is not str for value in message.get("depends_on", []))
+                            or type(message.get("depends_on_refs", [])) is not list
+                            or len(message.get("depends_on_refs", [])) > 128
+                            or any(type(ref) is not dict or set(ref) != {"item_id", "requirement_id"}
+                                   or type(ref.get("item_id")) is not str or not ref["item_id"]
+                                   or type(ref.get("requirement_id")) is not str or not ref["requirement_id"]
+                                   for ref in message.get("depends_on_refs", []))):
+                        raise ValueError
+                elif action == "inspect_unknown_claim":
+                    if (set(message) != control_fields | {"inspection_evidence"}
+                            or type(message.get("inspection_evidence")) is not str
+                            or not message["inspection_evidence"].strip()
+                            or len(message["inspection_evidence"]) > 4000):
+                        raise ValueError
+                elif action == "revise_requirement":
+                    if (set(message) != control_fields | {"new_text"}
+                            or type(message.get("new_text")) is not str or not message["new_text"].strip()
+                            or len(message["new_text"]) > 24_000):
+                        raise ValueError
+                elif set(message) != control_fields:
+                    raise ValueError
+            from work_records import WorkRecordConflict, WorkRecordStore
+            if type(session) is not Session or getattr(getattr(repl, "agent", None), "session", None) is not session:
+                raise ValueError
+            target_session = session
+            if remote:
+                from multi_project_work_record_authorization import authorize_project_record_sources
+                from multi_project_work_records import (
+                    META_FILENAME, _load_project_meta, _mapping_matches, _read_project_sessions,
+                    _validate_project_selection, _validate_session_directory,
+                )
+                from project_worker_host import _resolve_bound_project
+                from project_worker_execution import ProjectWorkerCoordinator
+                selected = _validate_project_selection([project_id])
+                before_mapping = _read_project_sessions(session.paths)
+                if project_id not in before_mapping:
+                    raise ValueError
+                source_session_id = before_mapping[project_id]
+                target_root = _resolve_bound_project(session.paths, project_id)
+                target_root_identity = ProjectWorkerCoordinator._directory_stat_identity(target_root)
+                sources = await asyncio.to_thread(
+                    authorize_project_record_sources, session, selected,
+                    confirm_fn=lambda preview_text, allow_all: bridge.confirm_with_receipt(preview_text, allow_all)[0],
+                    cancel_event=bridge.cancel_event,
+                )
+                source_snapshot = sources[project_id].store.snapshot()
+                if source_snapshot.get("revision") != message["expected_source_revision"]:
+                    raise WorkRecordConflict("source record changed before control authorization")
+                source_item = next((row for row in source_snapshot.get("items", [])
+                                    if type(row) is dict and row.get("item_id") == item_id), None)
+                if source_item is None or source_item.get("scope") != {"kind": "project", "project_id": project_id}:
+                    raise WorkRecordConflict("project work record binding does not match confirmed source")
+                source_requirement = None
+                if action != "set_priority":
+                    source_requirement = next((row for row in source_item.get("requirements", [])
+                                               if type(row) is dict and row.get("requirement_id") == message["requirement_id"]), None)
+                    if source_requirement is None or source_requirement.get("status") != message["expected_status"]:
+                        raise WorkRecordConflict("source requirement changed before control confirmation")
+                    remote_status = source_requirement.get("status")
+                    allowed_remote_states = {
+                        "set_dependencies": {"pending", "queued", "waiting_confirmation", "stopped", "blocked"},
+                        "revise_requirement": {"pending", "queued", "waiting_confirmation", "stopped", "blocked", "completed"},
+                        "queue": {"pending"},
+                        "wait_confirmation": {"pending", "queued"},
+                        "release_confirmation": {"waiting_confirmation"},
+                        "stop": {"pending", "queued", "waiting_confirmation", "blocked"},
+                        "continue": {"stopped", "blocked"},
+                        "inspect_unknown_claim": {"unknown"},
+                    }
+                    if action not in allowed_remote_states or remote_status not in allowed_remote_states[action]:
+                        raise WorkRecordConflict("remote item state does not allow this control")
+                    if action == "inspect_unknown_claim":
+                        claim = source_requirement.get("schedule_claim")
+                        if type(claim) is not dict or claim.get("state") != "unknown":
+                            raise WorkRecordConflict("no unknown persisted schedule claim is available for inspection")
+                dependency_labels = []
+                if action == "set_dependencies":
+                    labels = {row.get("requirement_id"): row.get("text", "")
+                              for row in source_item.get("requirements", []) if type(row) is dict}
+                    dependency_labels = [f"- {labels.get(value, '[未知要求]')} ({value})"
+                                         for value in message.get("depends_on", [])]
+                    all_items = {row.get("item_id"): row for row in source_snapshot.get("items", []) if type(row) is dict}
+                    for ref in message.get("depends_on_refs", []):
+                        target_item = all_items.get(ref["item_id"])
+                        target_req = next((row for row in target_item.get("requirements", [])
+                                           if row.get("requirement_id") == ref["requirement_id"]), None) if target_item else None
+                        dependency_labels.append(
+                            f"- 跨事项：{target_item.get('title', ref['item_id']) if target_item else ref['item_id']} · "
+                            f"{target_req.get('text', ref['requirement_id']) if target_req else ref['requirement_id']}"
+                        )
+                if action == "set_priority":
+                    operation_detail = f"新优先级：{message.get('priority')}"
+                elif action == "revise_requirement":
+                    operation_detail = (f"要求修订：\\n原文：{source_requirement.get('text', '')}\\n"
+                                        f"新文：{message.get('new_text', '')}\\n历史版本保留")
+                elif action == "set_dependencies":
+                    operation_detail = "新依赖：\\n" + ("\\n".join(dependency_labels) if dependency_labels else "无")
+                elif action == "inspect_unknown_claim":
+                    operation_detail = (f"持久执行 claim：{source_requirement.get('schedule_claim', {}).get('reservation_id', '未知')}\\n"
+                                        f"人工核查记录：{message['inspection_evidence']}\\n"
+                                        "仅记录检查事实；停止证据不足，状态仍为未知；不会释放 claim 或重派。")
+                else:
+                    status_label = {"queue": "排队", "wait_confirmation": "等待确认", "release_confirmation": "待开始",
+                                    "stop": "已停止（仅未运行项）", "continue": "待开始；不自动执行"}.get(action, action)
+                    operation_detail = (f"要求：{source_requirement.get('text', '')}\\n"
+                                        f"状态：{message['expected_status']} → {status_label}")
+                preview = ("确认更新另一个项目 Session 中的工作事项记录：\\n"
+                           f"项目：{project_id}\\n来源 Session：{source_session_id}\\n"
+                           f"事项：{source_item.get('title', item_id)}\\n{operation_detail}\\n"
+                           f"记录版本：{message['expected_source_revision']}\\n"
+                           "仅变更工作记录元数据，不修改项目文件、不启动或取消 worker。")
+                choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                if choice != "y" or bridge._connection_closed.is_set() or repl.session is not session:
+                    raise ValueError
+                after_mapping = _read_project_sessions(session.paths)
+                if not _mapping_matches({project_id: source_session_id}, after_mapping, selected):
+                    raise WorkRecordConflict("project source mapping changed after confirmation")
+                source_session_dir = _validate_session_directory(session.paths, source_session_id)
+                meta = _load_project_meta(source_session_dir / META_FILENAME, project_id)
+                target_session = Session(
+                    conversation_id=source_session_id,
+                    session_dir=source_session_dir,
+                    goal="", meta=meta, messages=[], paths=session.paths,
+                )
+                target_root_after = _resolve_bound_project(session.paths, project_id)
+                if (target_root_after != target_root
+                        or ProjectWorkerCoordinator._directory_stat_identity(target_root_after) != target_root_identity):
+                    raise WorkRecordConflict("project root changed after confirmation")
+                success_message = f"项目 {project_id} 的事项记录已更新；仅更改记录元数据，未启动 worker。"
+            store = WorkRecordStore(target_session)
+            expected_snapshot = store.with_locked_data(lambda data: data)
+            required_revision = message.get("expected_source_revision") if remote else message["expected_revision"]
+            if expected_snapshot.get("revision") != required_revision:
+                raise WorkRecordConflict("work-record overview revision is stale; refresh before applying control")
+            item = store.get_item(item_id)
+            if item is None or (remote and item.get("scope") != {"kind": "project", "project_id": project_id}):
+                raise WorkRecordConflict("project work record binding does not match confirmed source")
+            if action == "copy_requirement_to_new_item":
+                if remote:
+                    raise ValueError
+                requirement = next((row for row in item.get("requirements", [])
+                                    if type(row) is dict and row.get("requirement_id") == message["requirement_id"]), None)
+                if requirement is None or type(requirement.get("text")) is not str or not requirement["text"].strip():
+                    raise WorkRecordConflict("source requirement is unavailable")
+                preview = ("确认将以下要求文本复制为当前会话的新独立事项：\\n"
+                           f"来源事项：{item.get('title', item_id)}\\n"
+                           f"来源要求：{requirement['text']}\\n"
+                           f"新事项标题：{item.get('title', item_id)}（沿用来源事项标题）\\n"
+                           "新事项将仅包含上述一条待开始要求；不复制依赖、运行记录、结果或证据。\\n"
+                           f"来源记录版本：{required_revision}\\n"
+                           "拒绝、取消、连接断开或会话切换均不会写入；复制不会修改原事项，也不会启动执行。")
+                choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                if (choice != "y" or bridge._connection_closed.is_set() or repl.session is not session
+                        or getattr(getattr(repl, "agent", None), "session", None) is not session):
+                    raise ValueError
+                copied = store.copy_requirement_to_new_item(
+                    item_id, message["requirement_id"], expected_revision=required_revision,
+                    event_id=message["event_id"], idempotency_key=message["idempotency_key"],
+                )
+                success_message = "已确认复制为新事项；原事项不变，不含依赖、运行记录或证据，且未启动执行。"
+                requirement_id = message["requirement_id"]
+            elif action == "set_priority":
+                store.set_item_priority(item_id, message["priority"], event_id=message["event_id"],
+                                        idempotency_key=message["idempotency_key"],
+                                        expected_snapshot=expected_snapshot)
+                requirement_id = ""
+            elif action == "revise_requirement":
+                requirement_id = message["requirement_id"]
+                requirement = next((row for row in item.get("requirements", [])
+                                    if type(row) is dict and row.get("requirement_id") == requirement_id), None)
+                if requirement is None or requirement.get("status") != message["expected_status"]:
+                    raise WorkRecordConflict("requirement changed before revision")
+                if not remote:
+                    preview = ("确认修订当前会话中的工作要求：\\n"
+                               f"事项：{item.get('title', item_id)}\\n"
+                               f"原文：{requirement.get('text', '')}\\n"
+                               f"新文：{message['new_text']}\\n"
+                               f"记录版本：{message['expected_revision']}\\n"
+                               "仅追加修订审计并更新要求；不删除运行证据、不重写历史、不启动或取消执行。")
+                    choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                    if choice != "y" or bridge._connection_closed.is_set() or repl.session is not session:
+                        raise ValueError
+                store.revise_requirement(
+                    item_id, requirement_id, expected_text=requirement.get("text", ""),
+                    new_text=message["new_text"], event_id=message["event_id"],
+                    idempotency_key=message["idempotency_key"], expected_snapshot=expected_snapshot,
+                    allow_project_scope=remote,
+                )
+            elif action == "inspect_unknown_claim":
+                if not remote:
+                    raise ValueError
+                store.record_schedule_claim_inspection(
+                    item_id, message["requirement_id"], evidence=message["inspection_evidence"],
+                    event_id=message["event_id"], idempotency_key=message["idempotency_key"],
+                    expected_snapshot=expected_snapshot,
+                )
+                requirement_id = message["requirement_id"]
+                success_message = "已记录人工核查；停止状态仍未证实，unknown claim 保留，未释放或重派。"
+            elif action == "cancel_execution":
+                if remote or item.get("scope") != {
+                        "kind": "project", "project_id": getattr(session.meta, "project_id", "")
+                    }:
+                    raise ValueError
+                requirement = next((row for row in item.get("requirements", [])
+                                    if type(row) is dict and row.get("requirement_id") == message["requirement_id"]), None)
+                if requirement is None or requirement.get("status") != "in_progress":
+                    raise WorkRecordConflict("only a currently running project requirement can be cancelled")
+                host = getattr(getattr(repl, "agent", None), "project_worker_host", None)
+                if host is None or not callable(getattr(host, "request_cancel_for_record", None)):
+                    raise WorkRecordConflict("the active project worker host is unavailable")
+                cancellation = host.request_cancel_for_record(
+                    session, item_id=item_id, requirement_id=message["requirement_id"],
+                )
+                if cancellation != "signal_set":
+                    raise WorkRecordConflict(f"active worker cancellation was not accepted: {cancellation}")
+                requirement_id = message["requirement_id"]
+                success_message = "停止请求已发给当前 worker；这不代表它已停止，工作记录将在 host 确认终态后结算。"
+            elif action in {"set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue"}:
+                if action == "set_dependencies" and not remote:
+                    requirements_by_identity = {
+                        (row_item.get("item_id"), row_req.get("requirement_id")): (row_item, row_req)
+                        for row_item in expected_snapshot.get("items", []) if type(row_item) is dict
+                        for row_req in row_item.get("requirements", []) if type(row_req) is dict
+                    }
+                    dependency_labels = []
+                    for dependency_id in message.get("depends_on", []):
+                        target = requirements_by_identity.get((item_id, dependency_id))
+                        dependency_labels.append(
+                            f"- {target[0].get('title', item_id)} · {target[1].get('text', dependency_id)}"
+                            if target else f"- 未知要求 ({dependency_id})")
+                    for ref in message.get("depends_on_refs", []):
+                        target = requirements_by_identity.get((ref["item_id"], ref["requirement_id"]))
+                        dependency_labels.append(
+                            f"- 跨事项：{target[0].get('title', ref['item_id'])} · {target[1].get('text', ref['requirement_id'])}"
+                            if target else f"- 跨事项：未知目标 ({ref['item_id']} · {ref['requirement_id']})")
+                    dependency_detail = "\\n".join(dependency_labels) if dependency_labels else "无"
+                    preview = ("确认更新当前会话事项的依赖关系：\\n"
+                               f"事项：{item.get('title', item_id)}\\n"
+                               f"要求：{message['requirement_id']}\\n"
+                               f"新依赖：\\n{dependency_detail}\\n"
+                               f"记录版本：{required_revision}\\n"
+                               "仅更新依赖元数据，不启动或取消执行。")
+                    choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                    if (choice != "y" or bridge._connection_closed.is_set() or repl.session is not session
+                            or getattr(getattr(repl, "agent", None), "session", None) is not session):
+                        raise ValueError
+                store.set_requirement_control(
+                    item_id, message["requirement_id"], action=action,
+                    expected_status=message["expected_status"], event_id=message["event_id"],
+                    idempotency_key=message["idempotency_key"],
+                    expected_snapshot=expected_snapshot,
+                    depends_on=message.get("depends_on"),
+                    depends_on_refs=message.get("depends_on_refs"),
+                )
+                requirement_id = message["requirement_id"]
+            else:
+                raise ValueError
+            bridge.emit({"type": "work-record.control.done", "request_id": request_id,
+                         "session_id": session_id, "item_id": item_id,
+                         **({"project_id": project_id} if remote else {}),
+                         **({"requirement_id": requirement_id} if requirement_id else {}),
+                         "action": action, "status": "applied", "message": success_message})
+        except Exception as control_error:
+            from work_records import WorkRecordConflict
+            if isinstance(control_error, WorkRecordConflict):
+                message_text = "事项记录版本或状态已变化，控制未应用；请刷新概况后重试。"
+            elif isinstance(control_error, PermissionError):
+                message_text = "来源授权或项目绑定无法核对，控制未应用。"
+            elif isinstance(control_error, ValueError):
+                message_text = "事项控制请求无效，控制未应用。"
+            else:
+                message_text = "事项控制暂不可用；未修改记录，请刷新概况核对。"
+            bridge.emit({"type": "work-record.control.done", "request_id": request_id if type(request_id) is str else "",
+                         "session_id": session_id if type(session_id) is str else "",
+                         "item_id": message.get("item_id") if type(message.get("item_id")) is str else "",
+                         **({"project_id": project_id} if project_id else {}),
+                         **({"requirement_id": message["requirement_id"]} if type(message.get("requirement_id")) is str else {}),
+                         "action": message.get("action") if type(message.get("action")) is str else "",
+                         "status": "rejected", "message": message_text})
+
     async def _dispatch_work_records_overview(
         self,
         message: dict[str, Any],
@@ -7505,7 +8208,8 @@ class WsSessionHandler:
             })
             return payload
 
-        allowed = {"type", "session_id", "request_id", "cursor", "page_size", "detail_paging"}
+        allowed = {"type", "session_id", "request_id", "cursor", "page_size", "detail_paging", "project_ids",
+                   "history_project_id", "history_item_id", "history_requirement_id", "history_cursor", "history_page_size", "history_scope"}
         if (set(message) - allowed or not valid_request_id
                 or ("detail_paging" in message and type(message["detail_paging"]) is not bool)
                 or (message.get("detail_paging") is True and type(message.get("cursor")) is str
@@ -7514,7 +8218,29 @@ class WsSessionHandler:
                 or ("cursor" in message and message["cursor"] is not None
                     and type(message["cursor"]) is not str)
                 or ("page_size" in message and
-                    (type(message["page_size"]) is not int or isinstance(message["page_size"], bool)))):
+                    (type(message["page_size"]) is not int or isinstance(message["page_size"], bool)))
+                or ("project_ids" in message and (
+                    type(message["project_ids"]) is not list or not 1 <= len(message["project_ids"]) <= 6
+                    or any(type(project_id) is not str or not project_id for project_id in message["project_ids"])
+                    or len(set(message["project_ids"])) != len(message["project_ids"])
+                    or message.get("cursor") is not None))
+                or ("history_cursor" in message and message["history_cursor"] is not None
+                    and (type(message["history_cursor"]) is not str or len(message["history_cursor"]) > 2048))
+                or ("history_page_size" in message and
+                    (type(message["history_page_size"]) is not int or isinstance(message["history_page_size"], bool)
+                     or not 1 <= message["history_page_size"] <= 20))
+                or (any(key in message for key in ("history_project_id", "history_item_id", "history_requirement_id"))
+                    and (not all(type(message.get(key)) is str and message[key]
+                                 for key in ("history_project_id", "history_item_id", "history_requirement_id"))
+                         or "project_ids" not in message
+                         or message.get("history_project_id") not in message.get("project_ids", [])))
+                or ("history_scope" in message and message["history_scope"] != "selected_projects_history")
+                or (message.get("history_scope") == "selected_projects_history"
+                    and ("project_ids" not in message or any(key in message for key in
+                        ("history_project_id", "history_item_id", "history_requirement_id"))))
+                or ("history_cursor" in message and message.get("history_cursor") is not None
+                    and not (message.get("history_scope") == "selected_projects_history" or all(
+                        key in message for key in ("history_project_id", "history_item_id", "history_requirement_id"))))):
             _emit_safely(bridge.emit, response("error", "invalid_request"),
                          "work-records overview invalid request response failed")
             return
@@ -7537,15 +8263,45 @@ class WsSessionHandler:
         cancel_was_set = bridge.cancel_event.is_set()
         try:
             try:
-                from work_records_overview_api import query_work_records_overview
-                kwargs: dict[str, Any] = {"cursor": message.get("cursor")}
-                if "page_size" in message:
-                    kwargs["page_size"] = message["page_size"]
-                if "detail_paging" in message:
-                    kwargs["detail_paging"] = message["detail_paging"]
-                result = await asyncio.to_thread(query_work_records_overview, session, **kwargs)
-            except Exception:
-                result = {"state": "error", "reason": "service_unavailable"}
+                if "project_ids" in message:
+                    from multi_project_work_record_authorization import authorize_project_record_sources
+                    from multi_project_work_records_overview_api import query_authorized_project_records_overview
+                    selected_project_ids = tuple(message["project_ids"])
+                    def authorize_sources():
+                        return authorize_project_record_sources(
+                            session, selected_project_ids,
+                            confirm_fn=lambda preview, allow_all: bridge.confirm_with_receipt(preview, allow_all)[0],
+                            cancel_event=query_cancel,
+                        )
+                    sources = await asyncio.to_thread(authorize_sources)
+                    if (repl.session is not session or bridge._session_binding_transitions
+                            or query_cancel.is_set() or bridge._connection_closed.is_set()):
+                        raise PermissionError("overview source authorization became stale")
+                    history_kwargs = {}
+                    for key in ("history_project_id", "history_item_id", "history_requirement_id",
+                                "history_cursor", "history_page_size", "history_scope"):
+                        if key in message:
+                            history_kwargs[key] = message[key]
+                    result = await asyncio.to_thread(
+                        query_authorized_project_records_overview, session, selected_project_ids,
+                        sources, cancel_event=query_cancel, **history_kwargs,
+                    )
+                    if (repl.session is not session or bridge._session_binding_transitions
+                            or query_cancel.is_set() or bridge._connection_closed.is_set()):
+                        result = {"state": "error", "reason": "session_changed", "groups": []}
+                    result["aggregation_scope"] = "selected_project_sessions"
+                    result["selected_project_ids"] = list(selected_project_ids)
+                else:
+                    from work_records_overview_api import query_work_records_overview
+                    kwargs: dict[str, Any] = {"cursor": message.get("cursor")}
+                    if "page_size" in message:
+                        kwargs["page_size"] = message["page_size"]
+                    if "detail_paging" in message:
+                        kwargs["detail_paging"] = message["detail_paging"]
+                    result = await asyncio.to_thread(query_work_records_overview, session, **kwargs)
+            except Exception as exc:
+                reason = "multi_project_source_unavailable" if "project_ids" in message else "service_unavailable"
+                result = {"state": "error", "reason": reason}
             if query_cancel.is_set() or (not cancel_was_set and bridge.cancel_event.is_set()):
                 result = {"state": "cancelled", "reason": "cancelled"}
             elif bridge._connection_closed.is_set():
@@ -8136,7 +8892,7 @@ class WsSessionHandler:
             emit_error(bridge, "missing type")
             return
         if (self.managed_readonly_context is not None
-                and (msg_type in _WORK_CARD_MESSAGE_TYPES or msg_type == _WORK_RECORDS_OVERVIEW_QUERY)):
+                and (msg_type in _WORK_CARD_MESSAGE_TYPES or msg_type in {_WORK_RECORDS_OVERVIEW_QUERY, "work-record.control"})):
             emit_error(bridge, "managed read-only mode rejects work-card protocol")
             return
         if (
@@ -8154,6 +8910,9 @@ class WsSessionHandler:
             return
         if msg_type == "work-record.capture":
             await self._dispatch_work_record_capture(message, repl, bridge)
+            return
+        if msg_type == "work-record.control":
+            await self._dispatch_work_record_control(message, repl, bridge)
             return
 
         if msg_type == _WORK_RECORDS_OVERVIEW_QUERY:
@@ -8229,8 +8988,13 @@ class WsSessionHandler:
             # record-classification consent flow. Normal chat and recall stay quiet.
             if not attachments:
                 try:
-                    from work_records_service import is_explicit_record_request, WorkRecordCaptureService
-                    if is_explicit_record_request(text):
+                    from work_records_service import (
+                        is_explicit_record_request,
+                        is_explicit_worker_batch_record_request,
+                        WorkRecordCaptureService,
+                    )
+                    if (is_explicit_record_request(text)
+                            and not is_explicit_worker_batch_record_request(text)):
                         # Begin this message's run before consent: this clears a
                         # stale cancel_event from an older run and makes a new
                         # turn.cancel stop both capture and the follow-up _run_line.
@@ -8410,13 +9174,14 @@ class WsSessionHandler:
                         post_turn_source_text=(text if not attachments else None),
                         explicit_result_capture=(getattr(self, '_explicit_run_excerpt_ready', False)
                             and work_record_binding is not None),
-                        external_user_message_request_id=(
-                            message.get("request_id")
-                            if prestarted_run_id is None and work_record_binding is None
-                            and (not attachment_ids or (
-                                len(attachments) == len(attachment_ids)
-                                and repl.session is attachment_session
-                            )) else None
+                        main_request_id=message.get("request_id"),
+                        external_user_message_request_id=_external_user_message_receipt_request_id(
+                            message.get("request_id"),
+                            prestarted_run_id=prestarted_run_id,
+                            attachments=attachments,
+                            attachment_ids=attachment_ids,
+                            current_session=repl.session,
+                            attachment_session=attachment_session,
                         ),
                         external_user_message_attachment_session_id=(
                             attachment_session.conversation_id
@@ -8582,8 +9347,12 @@ class WsSessionHandler:
 
             try:
                 repl.session = await asyncio.to_thread(_open_session)
+                recovery_verified = await asyncio.to_thread(_recover_interrupted_work_records, repl.session)
                 repl._rebind_agent()
                 bridge.emit_session_state(repl.session)
+                if not recovery_verified:
+                    bridge.emit({"type": "notice", "level": "warn",
+                                 "text": "无法核对已保存事项的执行状态；概况可能显示状态待确认，未自动恢复或重新执行。"})
                 emit_corruption_notices(bridge.emit, repl.session)
                 _emit_pending_work_card_references(repl, bridge)
             except (SessionError, HarnessMismatchError) as exc:
@@ -8784,6 +9553,10 @@ class WsSessionHandler:
 
         if isinstance(msg_type, str) and msg_type.startswith("llm_role_models."):
             await self._dispatch_llm_role_models(message, bridge)
+            return
+
+        if isinstance(msg_type, str) and msg_type.startswith("approval_preferences."):
+            await self._dispatch_approval_preferences(message, bridge)
             return
 
         if isinstance(msg_type, str) and msg_type.startswith("services."):
@@ -9316,6 +10089,43 @@ class WsSessionHandler:
         except LlmRoleModelPreferenceError as exc:
             bridge.emit({"type": "llm_role_models.done", "status": "rejected", "message": str(exc)})
 
+    async def _dispatch_approval_preferences(
+        self,
+        message: dict[str, Any],
+        bridge: WsBridge,
+    ) -> None:
+        from approval_preferences import ApprovalPreferenceError, dispatch_approval_preferences_message
+
+        if message.get("type") == "approval_preferences.set":
+            from approval_preferences import load_approval_preferences, load_saved_approval_mode
+
+            bridge.emit({
+                "type": "approval_preferences.done",
+                "status": "rejected",
+                "approval_mode": load_approval_preferences(self.paths),
+                "saved_approval_mode": load_saved_approval_mode(self.paths),
+                "available_modes": ["manual", "auto", "full"],
+                "message": "审批设置写入仅允许可信 Electron 主进程控制接口",
+            })
+            return
+        try:
+            payloads = await asyncio.to_thread(
+                dispatch_approval_preferences_message, self.paths, message,
+            )
+            for payload in payloads:
+                bridge.emit(payload)
+        except ApprovalPreferenceError as exc:
+            from approval_preferences import load_approval_preferences, load_saved_approval_mode
+
+            bridge.emit({
+                "type": "approval_preferences.done",
+                "status": "rejected",
+                "approval_mode": load_approval_preferences(self.paths),
+                "saved_approval_mode": load_saved_approval_mode(self.paths),
+                "available_modes": ["manual", "auto", "full"],
+                "message": str(exc),
+            })
+
     async def _dispatch_llm_keys(
         self,
         message: dict[str, Any],
@@ -9533,7 +10343,7 @@ async def _run_managed_application_server(host, port, app, control_stream):
             loop.call_soon_threadsafe(lambda: controls.put_nowait(b""))
 
     try:
-        async with serve(handle, host, port, max_size=MAX_MESSAGE_BYTES) as listener:
+        async with serve(handle, host, port, max_size=MAX_MESSAGE_BYTES, origins=_websocket_origin_policy()) as listener:
             if not listener.sockets:
                 raise OSError("managed listener is unavailable")
             ready = {"ready": True, "mode": "managed_application", "access": "fenced_application",
@@ -9579,6 +10389,7 @@ async def run_server(
     work_record_controller_factory: WorkRecordControllerFactory | None = None,
     project_boundary_recorder: Callable[..., Any] | None = None,
     project_boundary_journal: Any | None = None,
+    approval_control_enabled: bool = False,
 ) -> int:
     if managed_application is not None:
         from managed_application import ManagedApplication
@@ -9674,7 +10485,7 @@ async def run_server(
     )
 
     try:
-        async with serve(handler.handle, host, port) as server:
+        async with serve(handler.handle, host, port, origins=_websocket_origin_policy()) as server:
             sockets = server.sockets
             if not sockets:
                 raise RuntimeError("server failed to bind")
@@ -9703,6 +10514,17 @@ async def run_server(
                     ready.update(managed_readonly_context.revalidate())
                     ready.update(mode="managed_host_readonly", host_nonce=managed_readonly_context.host_nonce,
                                  profile_intent_digest=managed_readonly_context.profile_intent_digest)
+            approval_control_server = None
+            if approval_control_enabled and managed_readonly_context is None:
+                try:
+                    from approval_preferences import start_approval_control_server
+                    approval_control_server, approval_control_token, approval_control_port = await start_approval_control_server(paths)
+                    ready.update(approval_control_available=True, approval_control_port=approval_control_port,
+                                 approval_control_token=approval_control_token)
+                except Exception:
+                    ready.update(approval_control_available=False)
+            else:
+                ready.update(approval_control_available=False)
             print(json.dumps(ready, separators=(",", ":")), flush=True)
             if managed_readonly_context is not None and hasattr(managed_readonly_context, "host_nonce"):
                 from managed_application import canonical
@@ -9735,7 +10557,12 @@ async def run_server(
                 except Exception:
                     print('{"ready":false,"error":"managed_host_readonly_control_rejected"}', flush=True)
                     return 4
-            await server.serve_forever()
+            try:
+                await server.serve_forever()
+            finally:
+                if approval_control_server is not None:
+                    approval_control_server.close()
+                    await approval_control_server.wait_closed()
     except OSError as exc:
         if managed_readonly_context is not None:
             print(json.dumps({"ready": False, "error": "managed_readonly_bind_failed"}), flush=True)
@@ -9763,6 +10590,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="my-agent WebSocket sidecar for Electron")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=8765, help="0 = OS-assigned port")
+    parser.add_argument("--enable-approval-control", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--takeover",
         action="store_true",
@@ -9813,6 +10641,7 @@ def main(argv: list[str] | None = None) -> int:
                 takeover=args.takeover,
                 evolution_bootstrap=evolution_bootstrap,
                 fixed_host_layout=fixed_host_layout,
+                approval_control_enabled=args.enable_approval_control,
             )
         )
     except KeyboardInterrupt:
