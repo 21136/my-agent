@@ -15,7 +15,9 @@
 
 “当前工作”仍是当前会话的概况，不是跨所有项目会话的全局视图。所选项目统一历史是逐页、逐次授权的有限来源视图，不应解读为全局完整历史。桌面端会核验分页连续性、来源会话/修订和结果身份；后端跨 Session 检查属于乐观校验，不是跨 Session 原子快照，因此并发来源变更仍可能造成页面间不一致，不保证多页处于同一时刻快照。事项控制会写入带 CAS/幂等身份的当前会话记录；排队/等待/停止等控制元数据不会自动启动 worker，运行中的任务必须通过 host 的实际取消链结束。当前尚不构成完整的跨工作区调度器或重启恢复工作台。故障重开后的 honest 状态（`unknown` / 保守标签、未完成 warn、不自动续跑）已有 **agent-core** 合成 `session.open`/`mark_interrupted`（`test_workbench_crash_reopen_recovery_harness.py` · 3）+ 桌面渲染回归（`workbench-crash-reopen-recovery.test.mjs` · 3）+ **晚到 WS / 重连 GUI 合约**（`workbench-crash-reopen-recovery-fixture.py` + `workbench-crash-reopen-recovery-gui-harness.test.mjs` · 4，POSIX；Win32 Playwright：`workbench-crash-reopen-recovery-browser-e2e.test.mjs` · 1，Linux skip）。夹具模拟异常退出后晚连 WS、warn 状态栏、概况 `unknown` 与可取消的 live worker；**不**宣称真实 Electron 杀进程/托盘已 full green。机器门禁 real Electron：`docs/WORKBENCH-CRASH-REOPEN-ELECTRON-E2E.md`（杀进程 + 冷启动；托盘未自动化）。
 
-**多项目调度工作台（合成夹具，#60–#72）**：`schedule-workbench-multi-project-fixture.py` + `schedule-workbench-multi-project-harness.test.mjs`（POSIX 2）证明调度 tab 路径：选择来源 → fail-closed 授权 → 只读 `schedule_preview` → `work-records.schedule.dispatch` → 概况 `in_progress` + 映射来源 `cancel_execution` 控件。Win32 Playwright：`schedule-workbench-multi-project-browser-e2e.test.mjs`（1）经顶栏 **`button.unified-topbar-current-work`** 展开 **`#unified-current-work` 壳内浮层**；夹具须在 `session.banner` 触发的首次概况探测后保持入口可见（`no_records` + `unread_status: unknown`，见 harness 内 `shouldShowCurrentWorkOverview` 合约测试）。Linux 默认 skip。不宣称真实模型/Electron 杀进程/托盘恢复已绿。
+**多项目调度工作台（合成夹具，#60–#72）**：`schedule-workbench-multi-project-fixture.py` + harness/browser（**fixture WS only**）。不宣称真实 worker host。
+
+**多项目 schedule 真 host（#91 · mock HTTP）**：伴侣小魔王空间 + 当前工作调度 tab → 真实 `work-records.schedule.dispatch` → `run_project_workers`。[MULTI-PROJECT-SCHEDULE-REAL-HOST-E2E.md](./MULTI-PROJECT-SCHEDULE-REAL-HOST-E2E.md) · `test_multi_project_schedule_dispatch_real_ws_e2e.py` · `multi-project-schedule-real-host-harness.test.mjs` · Win32 opt-in Playwright。不宣称付费真模型/Electron 托盘已绿。
 
 稳定与实验 lane 见 [SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md)。本页不保留旧 PlanAgent 队列、TASKS 采纳流程或历史 UI milestone。
 

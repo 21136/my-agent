@@ -1,0 +1,49 @@
+# Multi-project schedule — real `run_project_workers` host E2E
+
+## Coverage map (honest)
+
+| Layer | What it proves | Model / host |
+| --- | --- | --- |
+| `schedule-workbench-multi-project-*` (#60–#72) | UI + WS **fixture** ack only | No Agent, no worker host |
+| `project-worker-batch-browser-e2e` | Chat `user.message` → real host, two projects, mixed UI text | Mock HTTP transport |
+| `project-worker-requirement-full-e2e` | Single project requirement + pytest | Mock HTTP transport |
+| **`test_multi_project_schedule_dispatch_real_ws_e2e.py`** | Companion **`work-records.schedule.dispatch`** → real host, 2 mapped projects | Mock HTTP transport |
+| **`multi-project-schedule-real-host-harness.test.mjs`** | Same path + desktop `buildScheduleDispatchWorkers` | Mock HTTP transport |
+| **`multi-project-schedule-real-host-browser-e2e.test.mjs`** | Full unified shell 当前工作 schedule tab | Mock HTTP transport; **Win32** |
+
+**Not claimed:** paid live LLM, Electron tray, merge/split 事项 UI.
+
+POSIX CI uses a **test-only** parent-binding publish shim (production bind publication is Win32-native). Win32 local runs use native publication.
+
+## Win32 GUI opt-in
+
+```bat
+set REAL_MULTI_PROJECT_SCHEDULE_OPT_IN=1
+set REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN=1
+node --test desktop\tests\multi-project-schedule-real-host-browser-e2e.test.mjs
+```
+
+Or:
+
+```bat
+desktop\_run79-schedule-real-host.cmd
+```
+
+Evidence: dispatch `status=applied`, per-project `workers[]` statuses (e.g. `model_turn_finished` + `failed`), companion session remains **unbound** (`project_id` empty).
+
+## POSIX / CI (no Playwright)
+
+```bash
+python3 -m pytest agent-core/tests/test_multi_project_schedule_dispatch_real_ws_e2e.py -q
+node --test desktop/tests/multi-project-schedule-real-host-harness.test.mjs
+```
+
+## Product fix bundled here
+
+`agent.py` schedule-preview rebuild for `schedule_candidates` now includes requirement **`text`**, so `work-records.schedule.dispatch` can authorize the same candidates the overview preview showed.
+
+## Still open
+
+- Live-LLM multi-project GUI green (needs local keys + opt-in run above with real transport).
+- Merge/split 事项 UI.
+- Tray double-click automation.
