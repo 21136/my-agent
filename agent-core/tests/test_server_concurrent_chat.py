@@ -256,6 +256,77 @@ def test_active_work_simultaneous_multi_project_uses_orchestration_not_instructi
         ]
         assert len(dispatching) == 1 and dispatching[0]["request_id"] == request_id
         assert session.messages == []
+        assert bridge._work_instructions[request_id].surface_text == text
+
+
+def test_companion_orchestration_persists_surface_text_not_model_preamble(tmp_path, monkeypatch):
+    from active_work_multi_project import build_companion_orchestration_instruction
+    from agent import Agent
+    from llm_client import LLMResponse
+    from session import build_session_chat_history
+    from tools.executor import ExecutorSession, ToolExecutor
+    from tools.registry import ToolRegistry
+
+    class CaptureLLM:
+        def __init__(self):
+            self.payloads = []
+
+        def set_cancel_event(self, _event):
+            pass
+
+        def chat(self, messages, **_kwargs):
+            self.payloads.append(messages)
+            return LLMResponse("fixture", "ack", [], "stop", None, {})
+
+    with temporary_agent_paths() as paths:
+        session, events, bridge, repl, handler = _active_fixture(paths)
+        session.meta.turn_mode = "agent"
+        snapshot = bridge.lifecycle.snapshot()
+        assert snapshot is not None
+        user_text = "同时写一个能随机出4个数和随机出5个数的两个项目"
+        request_id = str(uuid.uuid4())
+        asyncio.run(handler._handle_incoming({
+            "type": "user.message", "request_id": request_id,
+            "session_id": session.conversation_id, "text": user_text,
+        }, repl, bridge))
+
+        llm = CaptureLLM()
+        executor = ToolExecutor(
+            registry=ToolRegistry.load(paths),
+            session=ExecutorSession(session_dir=session.session_dir),
+            confirm_fn=lambda _request: True,
+        )
+        agent = Agent(session=session, executor=executor, llm=llm)
+        repl.agent = agent
+
+        def instruction_checkpoint(phase, current, model_context):
+            if phase == "prepare":
+                bridge.prepare_work_instructions_at_checkpoint(current, snapshot.run_id)
+            elif phase == "deliver":
+                return bridge.commit_work_instruction_delivery(current, snapshot.run_id, model_context)
+
+        agent._work_instruction_checkpoint = instruction_checkpoint
+        agent.run_turn("continue work")
+
+        persisted_rows = [
+            row for row in session.messages
+            if row.get("_host_internal", {}).get("work_instruction_request_id") == request_id
+        ]
+        assert persisted_rows
+        assert persisted_rows[0]["content"] == user_text
+        assert "run_project_workers" not in persisted_rows[0]["content"]
+        history = build_session_chat_history(session)
+        assert any(item.get("text") == user_text for item in history)
+        assert all("【主会话并行多项目编排" not in (item.get("text") or "") for item in history)
+        delivered = [
+            row.get("content", "") for row in llm.payloads[0]
+            if row.get("role") == "user"
+        ]
+        assert any(build_companion_orchestration_instruction(user_text) in content for content in delivered)
+        assert not any(
+            event.get("type") == "turn.notice" and "并行多项目编排" in (event.get("text") or "")
+            for event in events
+        )
 
 
 def test_active_work_explicit_supplement_queues_for_agent_checkpoint(tmp_path, monkeypatch):

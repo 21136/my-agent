@@ -7665,7 +7665,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "companion.orchestration.state":
         if (!chat.handleEvent(event)) break;
-        if (event.state === "dispatching") setStatus("并行多项目编排进行中…");
+        if (event.state === "dispatching") setStatus("正在安排各项目…");
         else if (event.state === "active") setStatus("并行编排已进入当前工作，各项目在 worker 中执行");
         else if (event.state === "undelivered") {
           setStatus(`并行编排未送达${event.reason ? `：${event.reason}` : ""}`);

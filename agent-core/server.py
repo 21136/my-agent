@@ -426,6 +426,7 @@ class _WorkInstruction:
     prepared: bool = False
     reason: str | None = None
     companion_orchestration: bool = False
+    surface_text: str | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -1918,6 +1919,7 @@ class WsBridge:
         session: Session,
         text: str,
         companion_orchestration: bool = False,
+        surface_text: str | None = None,
     ) -> str:
         """Queue only an explicitly targeted instruction for the exact live run/session."""
         session_id = session.conversation_id if isinstance(session, Session) else ""
@@ -1933,6 +1935,7 @@ class WsBridge:
                 session_id,
                 text if type(text) is str else "",
                 companion_orchestration=companion_orchestration,
+                surface_text=(surface_text.strip() if type(surface_text) is str and surface_text.strip() else None),
             )
             snapshot = self.lifecycle.snapshot()
             reason = None
@@ -1993,9 +1996,14 @@ class WsBridge:
                         }
                         if instruction.companion_orchestration:
                             metadata["companion_multi_project_orchestration"] = True
+                        persist_content = (
+                            instruction.surface_text
+                            if instruction.surface_text is not None
+                            else instruction.text
+                        )
                         session.append_message({
                             "role": "user",
-                            "content": instruction.text,
+                            "content": persist_content,
                             HOST_INTERNAL_METADATA_KEY: metadata,
                         })
                         if instruction.companion_orchestration:
@@ -7665,6 +7673,7 @@ class WsSessionHandler:
                 run_id=work_snapshot.run_id,
                 session=session,
                 text=build_companion_orchestration_instruction(text),
+                surface_text=text.strip(),
                 companion_orchestration=True,
             )
             return

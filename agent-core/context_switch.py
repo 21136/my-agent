@@ -438,8 +438,8 @@ def _apply_project_open(
         target = normalize_project_id(project_id)
         if current_pid and target != current_pid:
             raise ContextSwitchError(
-                "当前是主会话并行多项目编排；不能 project.open 切换会话绑定去写其它项目。"
-                "请 project.create（若缺少 workspace）后用 run_project_workers 在该 project_id 下施工。"
+                "正在同时推进多个项目：不能通过切换项目绑定去写其它项目。"
+                "若缺少工作目录请先新建项目登记，再为对应项目分别派工施工。"
             )
     try:
         return open_project_on_session(paths, session, project_id)

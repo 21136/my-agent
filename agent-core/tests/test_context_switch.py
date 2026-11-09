@@ -373,7 +373,7 @@ class ContextSwitchTests(unittest.TestCase):
         )
         self.assertFalse(result.ok, result)
         message = result.error.message if result.error else ""
-        self.assertIn("run_project_workers", message)
+        self.assertIn("分别派工", message)
         self.assertIn(self.pid_a, self.session.meta.project_id)
 
     def test_multi_project_orchestration_blocks_parent_workspace_write(self) -> None:
@@ -408,7 +408,7 @@ class ContextSwitchTests(unittest.TestCase):
             )
             self.assertFalse(result.ok, result)
             self.assertEqual(result.error.code if result.error else None, ToolErrorCode.PERMISSION_DENIED)
-            self.assertIn("run_project_workers", result.error.message if result.error else "")
+            self.assertIn("独立施工", result.error.message if result.error else "")
 
     def test_multi_project_orchestration_apply_blocks_project_open(self) -> None:
         from context_switch import ContextSwitchError, apply_context_switch, normalize_proposal
@@ -421,7 +421,7 @@ class ContextSwitchTests(unittest.TestCase):
         )
         with self.assertRaises(ContextSwitchError) as ctx:
             apply_context_switch(self.paths, self.session, proposal)
-        self.assertIn("run_project_workers", str(ctx.exception))
+        self.assertIn("分别派工", str(ctx.exception))
 
     def test_main_home_open_existing_auto_applies_without_switch_request(self) -> None:
         from project_mode import create_project

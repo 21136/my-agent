@@ -1919,6 +1919,13 @@ def _ui_skip_chat_text(text: str) -> bool:
     """Hide kernel/harness routing lines from Desktop chat history."""
     if any(text.startswith(prefix) for prefix in _UI_SKIP_USER_PREFIXES):
         return True
+    try:
+        from active_work_multi_project import COMPANION_ORCHESTRATION_UI_SKIP_PREFIX
+
+        if text.startswith(COMPANION_ORCHESTRATION_UI_SKIP_PREFIX):
+            return True
+    except Exception:
+        pass
     if text.startswith("狂奔模式：") or text.startswith("狂奔模式:"):
         return True
     try:

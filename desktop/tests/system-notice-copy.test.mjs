@@ -26,6 +26,15 @@ test("polishSystemNoticeText silences routine save acks", () => {
   assert.equal(copy.polishSystemNoticeText("会话已保存"), null);
 });
 
+test("polishSystemNoticeText silences companion orchestration routing notices", () => {
+  assert.equal(
+    copy.polishSystemNoticeText(
+      "并行多项目编排：主模型只路由；每个项目各开一个 workspace，对每个 project_id 调用 run_project_workers。",
+    ),
+    null,
+  );
+});
+
 test("polishSystemNoticeText rewrites evolved allowance and strips internal prefixes", () => {
   assert.equal(
     copy.polishSystemNoticeText("本会话 workspace evolved 均已允许。"),
