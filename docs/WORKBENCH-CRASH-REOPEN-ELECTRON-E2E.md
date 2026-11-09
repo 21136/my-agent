@@ -27,7 +27,27 @@ Tray reopen remains **manual** until a dedicated UI driver exists; cold relaunch
 
 ## Run on Win32 (local)
 
-Prerequisites: repo `.venv` with deps, `desktop/node_modules` + Electron binary, built desktop (runner triggers H1 esbuild/vite freeze).
+### Prerequisites
+
+1. **Evolution sandbox worktree** — canonical tree is `.worktrees/sandbox` (run `init-sandbox.bat` once). The runner auto-selects that worktree when you invoke from stable and redirects H1 paths there. Override with `MY_AGENT_EVOLUTION_SANDBOX_ROOT` if needed.
+2. **`artifacts/evolution-control-build/control-release.js`** — required by H1 freeze (`verify-evolution-a.mjs`). The runner **auto-builds** it when missing (via `desktop/scripts/build-evolution-control.mjs` and a marked `artifacts/evolution-control-prep` run). Manual prebuild:
+
+   ```bat
+   cd .worktrees\sandbox\desktop
+   mkdir ..\artifacts\evolution-control-prep 2>nul
+   echo evolution-a> ..\artifacts\evolution-control-prep\.evolution-test-run
+   set EVOLUTION_TEST_ROOT=%CD%\..\artifacts\evolution-control-prep
+   node scripts\build-evolution-control.mjs
+   ```
+
+3. **`.venv`**, `desktop/node_modules` + Electron, TypeScript (`desktop/node_modules/typescript`) for the control build.
+4. H1 **main/renderer freeze** still runs inside the runner (esbuild + vite); first run is slow.
+
+Tray double-click reopen is **still manual**; the harness only automates process-tree kill + **cold** relaunch.
+
+### Commands
+
+From **sandbox** (preferred) or stable (runner forwards to sandbox when present):
 
 ```bat
 set REAL_ELECTRON_WORKBENCH_RECOVERY_OPT_IN=1
@@ -43,7 +63,7 @@ set REAL_ELECTRON_WORKBENCH_RECOVERY_GUI_OPT_IN=1
 node --test desktop\tests\workbench-crash-reopen-recovery-electron.optin.test.mjs
 ```
 
-Evidence JSON is written under `artifacts/workbench-crash-reopen-recovery/run-<uuid>/`.
+Evidence JSON is written under `<sandbox>/artifacts/workbench-crash-reopen-recovery/run-<uuid>/` (fields include `evolution_sandbox_root`, `evolution_control_build_built_this_run`).
 
 ## Keep synthetic regression green (POSIX / Win32 CI)
 

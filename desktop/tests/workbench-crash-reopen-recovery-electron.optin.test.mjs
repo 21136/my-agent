@@ -3,15 +3,18 @@
  * GUI kill/reopen: Win32 only when both REAL_ELECTRON_WORKBENCH_RECOVERY_* opt-ins are set.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   WORKBENCH_RECOVERY_ELECTRON_PROFILE,
+  buildEvolutionControlPrepHint,
   countRecoveryWarns,
+  isEvolutionControlBuildReady,
   requireWorkbenchRecoveryElectronGuiOptIn,
   requireWorkbenchRecoveryElectronOptIn,
+  resolveWorkbenchRecoverySandboxRoot,
 } from "../scripts/workbench-crash-reopen-recovery-electron.optin.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -35,8 +38,22 @@ test("coverage map: synthetic vs real Electron recovery", () => {
   assert.match(runner, /synthetic_ws_equivalent:\s*false/);
   assert.match(runner, /tray_reopen_automated:\s*false/);
   assert.match(runner, /WORKBENCH_RECOVERY_ELECTRON_PROFILE/, "runner must use the shared opt-in profile constant");
+  assert.match(runner, /ensureEvolutionControlBuild/, "runner must ensure evolution control-release before H1 freeze");
+  assert.match(runner, /resolveWorkbenchRecoverySandboxRoot/, "runner must resolve evolution sandbox root");
   const optin = readFileSync(path.join(repo, "desktop/scripts/workbench-crash-reopen-recovery-electron.optin.mjs"), "utf8");
   assert.match(optin, new RegExp(`export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "${WORKBENCH_RECOVERY_ELECTRON_PROFILE}"`));
+  const hint = buildEvolutionControlPrepHint(repo);
+  assert.match(hint, /control-release\.js/);
+  assert.match(hint, /build-evolution-control/);
+  assert.match(hint, /tray reopen remains manual/i);
+});
+
+test("sandbox root: prefers .worktrees/sandbox when stable lacks control-release", () => {
+  const resolved = resolveWorkbenchRecoverySandboxRoot(repo);
+  const sandbox = path.join(repo, ".worktrees", "sandbox");
+  if (existsSync(path.join(sandbox, "desktop", "package.json")) && !isEvolutionControlBuildReady(repo)) {
+    assert.equal(resolved, path.resolve(sandbox));
+  }
 });
 
 test("warn counter accepts server recovery copy", () => {
