@@ -51,6 +51,15 @@ _WINDOWS_RESERVED = re.compile(
 )
 _MAX_PATH_CHARS = 256
 _MAX_TARGETS = 32
+_MAX_RECOVERED_SCOPE_CORRECTIONS = 8
+_SCOPE_ERROR_DETAIL_KEYS = frozenset({
+    "error", "operation", "project_id", "requested_path", "path_redacted",
+    "declared_read_targets", "declared_write_targets", "allowed_targets",
+    "match_result", "normalized_path", "closest_declared_target", "hint",
+})
+_SCOPE_ERROR_DETAIL_PUBLIC_KEYS = _SCOPE_ERROR_DETAIL_KEYS | frozenset({
+    "recovered", "recovered_corrections",
+})
 
 
 def _is_safe_relative_path(path: str) -> bool:
@@ -431,9 +440,39 @@ def build_scope_error_detail(tool_error: dict[str, Any]) -> dict[str, Any]:
     for optional in ("normalized_path", "closest_declared_target"):
         if optional in tool_error:
             detail[optional] = tool_error[optional]
-    if not validate_scope_error_detail(detail):
+    if not _validate_scope_error_detail_core(detail):
         raise ValueError("scope error detail failed validation")
     return detail
+
+
+def build_recovered_scope_correction_detail(tool_error: dict[str, Any]) -> dict[str, Any]:
+    detail = build_scope_error_detail(tool_error)
+    recovered = {**detail, "recovered": True}
+    if not validate_scope_recovery_entry(recovered):
+        raise ValueError("recovered scope correction failed validation")
+    return recovered
+
+
+def aggregate_recovered_scope_error_detail(
+    corrections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if (type(corrections) is not list or not corrections
+            or len(corrections) > _MAX_RECOVERED_SCOPE_CORRECTIONS):
+        raise ValueError("invalid recovered scope corrections")
+    normalized: list[dict[str, Any]] = []
+    for entry in corrections:
+        if type(entry) is not dict or not validate_scope_recovery_entry(entry):
+            raise ValueError("invalid recovered scope correction entry")
+        normalized.append(dict(entry))
+    primary = {key: value for key, value in normalized[0].items() if key != "recovered"}
+    aggregated = {
+        **primary,
+        "recovered": True,
+        "recovered_corrections": normalized,
+    }
+    if not validate_scope_error_detail(aggregated):
+        raise ValueError("aggregated scope error detail failed validation")
+    return aggregated
 
 
 def _paths_valid(targets: list[str]) -> bool:
@@ -458,6 +497,7 @@ _BATCH_OUTBOUND_SCOPE_TOOL_ERROR_KEYS = frozenset({
     "closest_declared_target",
 })
 _IN_LOOP_UNDECLARED_READ_SCOPE_ERRORS = frozenset({"read_target_not_declared"})
+_IN_LOOP_UNDECLARED_WRITE_SCOPE_ERRORS = frozenset({"write_target_not_declared"})
 
 
 def batch_outbound_undeclared_read_correction_matches(
@@ -484,6 +524,34 @@ def batch_outbound_undeclared_read_correction_matches(
     if (list(tool_result.get("declared_read_targets", [])) != list(read_targets)
             or list(tool_result.get("declared_write_targets", [])) != list(write_targets)
             or list(tool_result.get("allowed_targets", [])) != list(read_targets)):
+        return False
+    return True
+
+
+def batch_outbound_undeclared_write_correction_matches(
+    *,
+    attempted_path: str,
+    tool_result: Any,
+    project_id: str,
+    read_targets: tuple[str, ...],
+    write_targets: tuple[str, ...],
+) -> bool:
+    """True when a tool result is the in-loop undeclared-write correction the model loop appends."""
+    if (type(attempted_path) is not str or attempted_path in write_targets
+            or not _is_safe_relative_path(attempted_path)):
+        return False
+    if (type(tool_result) is not dict or set(tool_result) - _BATCH_OUTBOUND_SCOPE_TOOL_ERROR_KEYS
+            or not validate_scope_tool_error(tool_result)):
+        return False
+    if tool_result.get("error") not in _IN_LOOP_UNDECLARED_WRITE_SCOPE_ERRORS:
+        return False
+    if (tool_result.get("operation") != "write_project_file"
+            or tool_result.get("project_id") != project_id
+            or tool_result.get("requested_path") != attempted_path):
+        return False
+    if (list(tool_result.get("declared_read_targets", [])) != list(read_targets)
+            or list(tool_result.get("declared_write_targets", [])) != list(write_targets)
+            or list(tool_result.get("allowed_targets", [])) != list(write_targets)):
         return False
     return True
 
@@ -518,15 +586,8 @@ def validate_scope_tool_error(payload: Any) -> bool:
     return True
 
 
-def validate_scope_error_detail(detail: Any) -> bool:
-    if type(detail) is not dict:
-        return False
-    allowed_keys = {
-        "error", "operation", "project_id", "requested_path", "path_redacted",
-        "declared_read_targets", "declared_write_targets", "allowed_targets",
-        "match_result", "normalized_path", "closest_declared_target", "hint",
-    }
-    if not set(detail) <= allowed_keys:
+def _validate_scope_error_detail_core(detail: dict[str, Any]) -> bool:
+    if not set(detail) <= _SCOPE_ERROR_DETAIL_KEYS:
         return False
     if detail.get("error") not in _TOOL_SCOPE_ERROR_CODES:
         return False
@@ -554,6 +615,33 @@ def validate_scope_error_detail(detail: Any) -> bool:
         if optional in detail and not _is_safe_relative_path(detail[optional]):
             return False
     return True
+
+
+def validate_scope_recovery_entry(entry: Any) -> bool:
+    if type(entry) is not dict or entry.get("recovered") is not True:
+        return False
+    stripped = {key: value for key, value in entry.items() if key != "recovered"}
+    return _validate_scope_error_detail_core(stripped)
+
+
+def validate_scope_error_detail(detail: Any) -> bool:
+    if type(detail) is not dict or not set(detail) <= _SCOPE_ERROR_DETAIL_PUBLIC_KEYS:
+        return False
+    if detail.get("recovered") is True:
+        corrections = detail.get("recovered_corrections")
+        if (type(corrections) is not list or not corrections
+                or len(corrections) > _MAX_RECOVERED_SCOPE_CORRECTIONS
+                or not all(validate_scope_recovery_entry(item) for item in corrections)):
+            return False
+        primary = {key: value for key, value in corrections[0].items() if key != "recovered"}
+        payload = {key: value for key, value in detail.items()
+                   if key not in {"recovered", "recovered_corrections"}}
+        if payload != primary:
+            return False
+        return True
+    if "recovered" in detail or "recovered_corrections" in detail:
+        return False
+    return _validate_scope_error_detail_core(detail)
 
 
 def serialize_scope_error_detail(model_turn: Any) -> tuple[bool, dict[str, Any] | None]:

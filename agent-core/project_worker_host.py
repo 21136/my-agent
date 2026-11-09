@@ -28,12 +28,14 @@ from project_worker_execution import (
 from project_worker_model_loop import (
     MAX_REQUESTS,
     MAX_UNDECLARED_READ_CORRECTIONS,
+    MAX_UNDECLARED_WRITE_CORRECTIONS,
     MODEL_ID, PROVIDER_HOST, PROVIDER_MODEL,
     ProjectWorkerModelOutcome, TOOL_DEFINITIONS, build_worker_system_prompt,
     run_project_worker_model_loop,
 )
 from project_worker_scope_diagnostics import (
     batch_outbound_undeclared_read_correction_matches,
+    batch_outbound_undeclared_write_correction_matches,
     is_safe_worker_relative_path,
 )
 from session import Session, sessions_root
@@ -665,6 +667,7 @@ class ProjectWorkerHost:
             # the immutable task. Validate each pair and each path, not merely their role.
             pending: dict[str, tuple[str, str]] = {}
             undeclared_read_corrections = 0
+            undeclared_write_corrections = 0
             for message in messages[2:]:
                 if type(message) is not dict:
                     return False
@@ -696,6 +699,11 @@ class ProjectWorkerHost:
                         pending[call_id] = (name, path)
                     elif (name == "write_project_file" and set(args) == {"path", "content"}
                           and type(path) is str and path in request.write_targets
+                          and type(args.get("content")) is str):
+                        pending[call_id] = (name, path)
+                    elif (name == "write_project_file" and set(args) == {"path", "content"}
+                          and type(path) is str and path not in request.write_targets
+                          and is_safe_worker_relative_path(path)
                           and type(args.get("content")) is str):
                         pending[call_id] = (name, path)
                     elif (name == "patch_project_file" and set(args) == {"path", "find", "replacement"}
@@ -731,10 +739,25 @@ class ProjectWorkerHost:
                                 return False
                         else:
                             return False
-                    elif (type(result) is not dict or set(result) != {"ok", "path", "written", "readback_verified"}
-                            or result.get("ok") is not True or result.get("path") != path
-                            or result.get("written") is not True
-                            or result.get("readback_verified") is not True):
+                    elif name == "write_project_file":
+                        if (type(result) is dict and set(result) == {"ok", "path", "written", "readback_verified"}
+                                and result.get("ok") is True and result.get("path") == path
+                                and result.get("written") is True
+                                and result.get("readback_verified") is True):
+                            pass
+                        elif batch_outbound_undeclared_write_correction_matches(
+                            attempted_path=path,
+                            tool_result=result,
+                            project_id=request.project_id,
+                            read_targets=request.read_targets,
+                            write_targets=request.write_targets,
+                        ):
+                            undeclared_write_corrections += 1
+                            if undeclared_write_corrections > MAX_UNDECLARED_WRITE_CORRECTIONS:
+                                return False
+                        else:
+                            return False
+                    else:
                         return False
                 else:
                     return False

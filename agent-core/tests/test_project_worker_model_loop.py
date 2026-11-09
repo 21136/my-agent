@@ -128,6 +128,7 @@ def test_real_llmclient_protocol_reads_then_writes_only_declared_temp_project(mo
         assert any("phase=write_tool" in row and "duration_ms=" in row for row in timing)
         assert all("synthetic worker output" not in row and "README.md" not in row for row in timing)
         assert result.status == "model_turn_finished"
+        assert result.scope_error_detail is None
         assert result.project_id == "worker-a"
         assert result.model_id == "0x567-flash"
         assert result.requests == 3
@@ -213,6 +214,48 @@ def test_undeclared_read_is_not_attempted_and_worker_can_correct_itself(monkeypa
         assert correction_payload["declared_write_targets"] == ["result.txt"]
         assert correction_payload["match_result"] == "not_declared"
         assert correction_payload["hint"]
+        assert result.scope_error_detail is not None
+        assert result.scope_error_detail["recovered"] is True
+        assert result.scope_error_detail["requested_path"] == "secret.md"
+        assert result.scope_error_detail["error"] == "read_target_not_declared"
+        assert result.scope_error_detail["operation"] == "read_project_file"
+        assert len(result.scope_error_detail["recovered_corrections"]) == 1
+        assert result.scope_error_detail["recovered_corrections"][0]["requested_path"] == "secret.md"
+
+
+def test_undeclared_write_can_correct_and_success_still_surfaces_scope_detail(monkeypatch):
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text",)) as paths:
+        responses = [
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("read_project_file", {"path": "README.md"}, "good-read")]}, "tool_calls"),
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("write_project_file", {
+                  "path": "wrong.txt", "content": "should not land"}, "bad-write")]}, "tool_calls"),
+            ({"role": "assistant", "content": None,
+              "tool_calls": [_tool_call("write_project_file", {
+                  "path": "result.txt", "content": "authorized write\n"}, "good-write")]}, "tool_calls"),
+            ({"role": "assistant", "content": "Wrote the authorized target.",
+              "tool_calls": []}, "stop"),
+        ]
+        client, spec, _cancel, requests, _urls = _harness(paths, monkeypatch, responses)
+        (paths.workspace / "worker-a" / "README.md").write_text("authorized source\n", encoding="utf-8")
+        result = run_project_worker_model_loop(
+            spec, "Write the authorized result.", client=client, max_requests=4,
+        )
+        assert result.status == "model_turn_finished"
+        assert result.writes[0].path == "result.txt"
+        assert not (paths.workspace / "worker-a" / "wrong.txt").exists()
+        correction = next(message for message in requests[2]["messages"]
+                          if message["role"] == "tool" and message["tool_call_id"] == "bad-write")
+        correction_payload = json.loads(correction["content"])
+        assert correction_payload["error"] == "write_target_not_declared"
+        assert correction_payload["operation"] == "write_project_file"
+        assert correction_payload["requested_path"] == "wrong.txt"
+        assert result.scope_error_detail is not None
+        assert result.scope_error_detail["recovered"] is True
+        assert result.scope_error_detail["operation"] == "write_project_file"
+        assert result.scope_error_detail["requested_path"] == "wrong.txt"
+        assert result.scope_error_detail["recovered_corrections"][0]["error"] == "write_target_not_declared"
 
 
 def test_repeated_undeclared_reads_fail_without_reading_or_extra_requests(monkeypatch):
@@ -512,6 +555,7 @@ def test_model_stop_without_tools_is_only_turn_finished_not_task_completion(monk
         assert result.writes == ()
         assert result.tests_run == ()
         assert result.verification_level == "no_file_changes"
+        assert result.scope_error_detail is None
         assert len(requests) == 1
 
 

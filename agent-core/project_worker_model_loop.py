@@ -27,6 +27,8 @@ from project_worker_execution import (
     run_project_worker,
 )
 from project_worker_scope_diagnostics import (
+    aggregate_recovered_scope_error_detail,
+    build_recovered_scope_correction_detail,
     build_scope_error_detail,
     build_worker_tool_scope_error,
     executor_scope_payload,
@@ -41,6 +43,7 @@ PROVIDER_HOST = "api-cdn.0x567.com"
 DEFAULT_MAX_REQUESTS = 8
 MAX_REQUESTS = 16
 MAX_UNDECLARED_READ_CORRECTIONS = 1
+MAX_UNDECLARED_WRITE_CORRECTIONS = 1
 MAX_TASK_CHARS = 8_000
 MAX_TOOL_ARGUMENT_CHARS = 16_000
 MAX_READ_CHARS = 12_000
@@ -303,8 +306,20 @@ def run_project_worker_model_loop(
         requests = 0
         tool_calls = 0
         undeclared_read_corrections = 0
+        undeclared_write_corrections = 0
+        recovered_scope_corrections: list[dict[str, Any]] = []
         writes: list[ProjectWorkerWriteReceipt] = []
         read_snapshots: dict[str, tuple[tuple[object, ...], str]] = {}
+
+        def record_recovered_scope_correction(scope_tool_error: dict[str, Any]) -> None:
+            recovered_scope_corrections.append(
+                build_recovered_scope_correction_detail(scope_tool_error),
+            )
+
+        def recovered_scope_error_detail() -> dict[str, Any] | None:
+            if not recovered_scope_corrections:
+                return None
+            return aggregate_recovered_scope_error_detail(recovered_scope_corrections)
 
         def record_unknown_write(path: str, code: str, *, status: str = "failed") -> ProjectWorkerModelOutcome:
             try:
@@ -462,6 +477,7 @@ def run_project_worker_model_loop(
                             writes=tuple(writes), verification_level=(
                                 _verification_level(tuple(writes)) if writes else "no_file_changes"
                             ), tests_run=(),
+                            scope_error_detail=recovered_scope_error_detail(),
                         )
                     if len(response.tool_calls) != 1 or response.finish_reason != "tool_calls":
                         return _failure(spec, "failed", "multiple_or_malformed_tool_calls",
@@ -502,6 +518,7 @@ def run_project_worker_model_loop(
                                     scope_error_detail=build_scope_error_detail(scope_tool_error),
                                 )
                             undeclared_read_corrections += 1
+                            record_recovered_scope_correction(scope_tool_error)
                             messages.append({"role": "assistant", "content": response.content,
                                              "tool_calls": response.tool_calls})
                             messages.append(_tool_message(call_id, scope_tool_error))
@@ -581,6 +598,15 @@ def run_project_worker_model_loop(
                                 operation=op,
                                 requested_path=path,
                             )
+                            if (not is_patch
+                                    and undeclared_write_corrections < MAX_UNDECLARED_WRITE_CORRECTIONS
+                                    and requests < max_requests):
+                                undeclared_write_corrections += 1
+                                record_recovered_scope_correction(scope_tool_error)
+                                messages.append({"role": "assistant", "content": response.content,
+                                                 "tool_calls": response.tool_calls})
+                                messages.append(_tool_message(call_id, scope_tool_error))
+                                continue
                             return _failure(
                                 spec, "failed", "write_target_not_declared",
                                 requests=requests, tool_calls=tool_calls, writes=writes,
