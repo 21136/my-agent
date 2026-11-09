@@ -26,6 +26,11 @@ const SILENT_COMPANION_AUTOMATION_LINES: RegExp[] = [
   /^已在主界面创建项目\s+workspace\//u,
   /^\[Goal\]\s*多项目/u,
   /^多项目 worker 批次/u,
+  /^正在为 \d+ 个项目准备 worker 派工/u,
+  /^授权与写入确认只会在当前小魔王空间出现/u,
+  /^忽略过期确认/u,
+  /^另有一项授权确认/u,
+  /^确认已过期，请以输入区下方的确认条为准/u,
 ];
 
 const PHRASE_REWRITES: Array<[RegExp, string]> = [

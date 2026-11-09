@@ -5825,6 +5825,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       }
       if (resolveActiveOrdinaryConfirmRequestId(chat.model) === id && !canSubmitOrdinaryConfirm(chat.model, id)) {
         setStatus("确认已提交，等待服务端…");
+      } else if (companionComposerPrimary) {
+        setStatus("确认已过期或不可用，请使用输入区下方的确认条");
       } else {
         setStatus("请点最新一张工具确认卡");
       }

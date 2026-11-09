@@ -30,6 +30,17 @@ test("polishSystemNoticeText silences companion confirm and project-create autom
   assert.equal(copy.polishSystemNoticeText("需要在当前小魔王空间确认后继续；请查看聊天中的确认卡。"), null);
   assert.equal(copy.polishSystemNoticeText("已在主界面创建项目 workspace/random-number-4（未换线）"), null);
   assert.equal(copy.polishSystemNoticeText("[Goal] 多项目 worker 批次未逐项验收，父 Goal 保持未完成：a。"), null);
+  assert.equal(
+    copy.polishSystemNoticeText(
+      "正在为 3 个项目准备 worker 派工；授权与写入确认只会在当前小魔王空间出现，请留意聊天确认卡。",
+    ),
+    null,
+  );
+  assert.equal(copy.polishSystemNoticeText("忽略过期确认（请点最新一张工具确认卡）"), null);
+  assert.equal(
+    copy.polishSystemNoticeText("另有一项授权确认正在进行；请先在输入区下方的确认条完成现有授权。"),
+    null,
+  );
 });
 
 test("stripCompanionOrchestrationProse keeps user-readable summary", () => {
