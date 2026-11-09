@@ -137,8 +137,19 @@ function confirmRequestCount(page) {
   return page.evaluate(() => window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0);
 }
 
+function scheduleDispatchApplied(page) {
+  return page.evaluate(() => {
+    const done = window.receivedEvents?.findLast(event => event.type === "work-records.schedule.dispatch.done");
+    return done?.status === "applied" && done?.tool_ok === true;
+  });
+}
+
 /** Companion-home ordinary confirms: composer dock is the actionable surface (see chat-state companionHomeComposerOwnsOrdinaryConfirm). */
-async function acceptComposerOrdinaryConfirm(page, { timeout = 45000, minConfirmRequests = 0 } = {}) {
+async function acceptComposerOrdinaryConfirm(page, {
+  timeout = 45000,
+  minConfirmRequests = 0,
+  requireHintClear = true,
+} = {}) {
   await page.waitForFunction(
     min => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > min,
     minConfirmRequests,
@@ -172,7 +183,48 @@ async function acceptComposerOrdinaryConfirm(page, { timeout = 45000, minConfirm
     requestId,
     { timeout },
   );
-  await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
+  if (requireHintClear) {
+    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"), null, { timeout });
+  }
+}
+
+async function acceptDispatchConfirmsUntilApplied(page, confirmRequestsSeen, { timeout = 240_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  let baseline = confirmRequestsSeen;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (await scheduleDispatchApplied(page)) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const slice = Math.min(remaining, 90_000);
+    try {
+      await page.waitForFunction(
+        ([min]) => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > min
+          || Boolean(document.querySelector("[data-pending-confirm-hint]"))
+          || Boolean(window.receivedEvents?.some(event => event.type === "work-records.schedule.dispatch.done"
+            && event.status === "applied" && event.tool_ok === true)),
+        [baseline],
+        { timeout: slice },
+      );
+    } catch {
+      if (await scheduleDispatchApplied(page)) return;
+      break;
+    }
+    if (await scheduleDispatchApplied(page)) return;
+    await acceptComposerOrdinaryConfirm(page, {
+      timeout: slice,
+      minConfirmRequests: baseline,
+      requireHintClear: false,
+    });
+    baseline = await confirmRequestCount(page);
+  }
+  if (!(await scheduleDispatchApplied(page))) {
+    const rejected = await page.evaluate(() => window.receivedEvents?.findLast(
+      event => event.type === "work-records.schedule.dispatch.done",
+    ));
+    throw new Error(rejected
+      ? `schedule.dispatch.done rejected: ${rejected.message ?? rejected.status}`
+      : "schedule.dispatch.done never reached applied");
+  }
 }
 
 test("companion schedule GUI: two projects, real host dispatch, distinct outcomes", {
@@ -279,18 +331,7 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
     await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
     await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await launch.locator("[data-schedule-launch-send]").click();
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const applied = await page.evaluate(() => {
-        const done = window.receivedEvents?.findLast(event => event.type === "work-records.schedule.dispatch.done");
-        return done?.status === "applied" && done?.tool_ok === true;
-      });
-      if (applied) break;
-      await acceptComposerOrdinaryConfirm(page, { timeout: 90_000, minConfirmRequests: confirmRequestsSeen });
-      confirmRequestsSeen = await confirmRequestCount(page);
-    }
-
-    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
-      && e.status === "applied" && e.tool_ok === true), null, { timeout: 30_000 });
+    await acceptDispatchConfirmsUntilApplied(page, confirmRequestsSeen, { timeout: 240_000 });
     const done = await page.evaluate(() => window.receivedEvents.findLast(e => e.type === "work-records.schedule.dispatch.done"));
     const workers = done.workers ?? [];
     const statuses = Object.fromEntries(workers.map(row => [row.project_id, row.status]));
