@@ -23,44 +23,33 @@ const goal = (overrides: Partial<GoalStateEvent> = {}): GoalStateEvent => ({
   ...overrides,
 });
 
-test("normal active work hides cumulative usage and budget controls", () => {
+test("goal pause/budget top banner stays hidden for active work", () => {
   assert.equal(renderGoalBudgetNotice(goal()), "");
 });
 
-test("budget_exhausted explains an explicit human request can recover the original goal", () => {
-  const html = renderGoalBudgetNotice(goal({ status: "paused", pause_reason: "budget_exhausted" }));
-  assert.match(html, /检查当前进展/);
-  assert.match(html, /明确发送下一步请求/);
-  assert.doesNotMatch(html, /累计用量|工具轮次|运行时间|扩额|\/goal|button|data-action/);
-});
-
-test("process restart and budget extension are identified as recoverable by a manual request", () => {
-  for (const pause_reason of ["process_restart", "budget_extended"]) {
-    const html = renderGoalBudgetNotice(goal({ status: "paused", pause_reason }));
-    assert.match(html, /明确发送下一步请求/, pause_reason);
-    assert.doesNotMatch(html, /原目标保持暂停|新建目标|\/goal new:/, pause_reason);
-  }
-});
-
-test("non-recoverable and unknown pauses keep the original goal paused and direct the user to a new goal", () => {
-  for (const pause_reason of ["repair_exhausted", "user", "cancelled", "authorization_required", "custom <reason>", null]) {
-    const html = renderGoalBudgetNotice(goal({ status: "paused", pause_reason }));
-    assert.match(html, /原目标保持暂停/, String(pause_reason));
-    assert.match(html, /普通请求不会解除/, String(pause_reason));
-    assert.match(html, /当前会话.*动手模式/s, String(pause_reason));
-    assert.match(html, /\/goal new: &lt;新目标内容&gt;/, String(pause_reason));
-    assert.match(html, /发送后会新建目标并开始处理/, String(pause_reason));
-    assert.match(html, /原目标记录/, String(pause_reason));
-    assert.match(html, /权限.*确认/, String(pause_reason));
-    assert.doesNotMatch(html, /明确发送下一步请求/, String(pause_reason));
-    assert.doesNotMatch(html, /&lt;reason&gt;[^<]*可恢复/, String(pause_reason));
+test("goal pause/budget top banner stays hidden for every pause reason", () => {
+  for (const pause_reason of [
+    "budget_exhausted",
+    "process_restart",
+    "budget_extended",
+    "repair_exhausted",
+    "user",
+    "cancelled",
+    "authorization_required",
+    "custom <reason>",
+    null,
+  ]) {
+    assert.equal(
+      renderGoalBudgetNotice(goal({ status: "paused", pause_reason })),
+      "",
+      String(pause_reason),
+    );
   }
 });
 
 test("terminal goals do not leave a stale pause notice", () => {
   assert.equal(renderGoalBudgetNotice(goal({ status: "done" })), "");
 });
-
 
 test("historical pause messages are marked as historical without asserting recovery", () => {
   for (const text of [
@@ -71,7 +60,7 @@ test("historical pause messages are marked as historical without asserting recov
     const marker = renderHistoricalGoalPauseMarker(text);
     assert.match(marker, /历史暂停记录/);
     assert.match(marker, /仅描述当时状态，不代表当前状态/);
-    assert.doesNotMatch(marker, /已恢复|正在执行|当前已/);
+    assert.doesNotMatch(marker, /已恢复|正在执行|当前目标/);
   }
 });
 
