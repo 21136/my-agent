@@ -365,6 +365,8 @@ export function buildCurrentWorkOverviewPanel(
     expandedRequirementItemIds?: ReadonlySet<string>;
     detailLoadingCursor?: string | null;
     liveSession?: CurrentWorkLiveSessionInput | null;
+    /** Unbound companion-home: mapped project sessions available for multi-project schedule tab. */
+    mappedMultiProjectSchedule?: boolean;
   },
 ): CurrentWorkOverviewPanel {
   const liveSession = options.liveSession ?? null;
@@ -393,7 +395,8 @@ export function buildCurrentWorkOverviewPanel(
       loadingMore: false,
     };
   }
-  const visible = shouldShowCurrentWorkOverview(result) || liveCount > 0;
+  const mappedScheduleEntry = Boolean(options.mappedMultiProjectSchedule);
+  const visible = shouldShowCurrentWorkOverview(result) || liveCount > 0 || mappedScheduleEntry;
   const unreadCountText = unreadCountSummary(result);
   const unreadCount = unreadCountText === null ? null : Number.parseInt(unreadCountText.replace(/\D/g, ""), 10);
   const attentionCount = groupAttentionCount(result);
@@ -426,7 +429,9 @@ export function buildCurrentWorkOverviewPanel(
     return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
   }).join("");
   const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(groupsHtml, activeGroups.length, liveSession);
-  const label = liveConfirmPending && !activeGroups.length
+  const label = mappedScheduleEntry && !shouldShowCurrentWorkOverview(result) && liveCount === 0
+    ? "当前工作 · 多项目调度"
+    : liveConfirmPending && !activeGroups.length
     ? "当前工作 · 等待确认"
     : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
     ? "当前工作 · 状态待确认"

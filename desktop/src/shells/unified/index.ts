@@ -513,6 +513,11 @@ export function mountUnifiedShell(
     };
   }
 
+  function mappedMultiProjectScheduleAvailable(): boolean {
+    return projectState.projects.some(project => Boolean(project.sessionId)
+      && project.id !== projectState.projectId && project.sessionId !== chat.model.sessionId);
+  }
+
   function refreshTopbar(): void {
     syncTopbarFromProject();
     topbarState.memoryCount = memoryShelfState.memories.length;
@@ -532,6 +537,7 @@ export function mountUnifiedShell(
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
       liveSession: currentWorkLiveSessionInput(),
+      mappedMultiProjectSchedule: multiProjectAvailable,
     });
     let currentWorkExtras = "";
     if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
@@ -572,6 +578,8 @@ export function mountUnifiedShell(
   }
 
   function renderCurrentWorkStage(extrasHtml?: string): void {
+    const mappedScheduleChoices = projectState.projects.filter(project => Boolean(project.sessionId)
+      && project.id !== projectState.projectId && project.sessionId !== chat.model.sessionId);
     const panel = topbarState.currentWorkOverview ?? buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
       open: true,
       loadingMore: currentWorkOverviewLoadingMore,
@@ -579,6 +587,7 @@ export function mountUnifiedShell(
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
       liveSession: currentWorkLiveSessionInput(),
+      mappedMultiProjectSchedule: mappedScheduleChoices.length > 0,
     });
     let extras = extrasHtml;
     if (extras === undefined) {
@@ -7333,6 +7342,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (!buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
           open: currentWorkOverviewOpen,
           liveSession: currentWorkLiveSessionInput(),
+          mappedMultiProjectSchedule: mappedMultiProjectScheduleAvailable(),
         }).visible) currentWorkOverviewOpen = false;
         refreshTopbar();
         flushQueuedCurrentWorkOverviewRefresh();

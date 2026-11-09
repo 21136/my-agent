@@ -84,6 +84,12 @@ test("local no_records overview: known unread hides work entry; unknown keeps it
   const panelUnknown = buildCurrentWorkOverviewPanel({ ...base, unread_status: "unknown" }, { open: false, unavailable: true });
   assert.equal(panelKnown.visible, false);
   assert.equal(panelUnknown.visible, true);
+  const panelCompanionSchedule = buildCurrentWorkOverviewPanel(
+    { ...base, unread_status: "known" },
+    { open: false, mappedMultiProjectSchedule: true },
+  );
+  assert.equal(panelCompanionSchedule.visible, true);
+  assert.match(panelCompanionSchedule.label, /多项目调度/);
 });
 
 function wsJson(url) {
