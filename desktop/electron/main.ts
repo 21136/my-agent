@@ -169,7 +169,10 @@ try {
 assertEvolutionTestProfileLoaded(evolutionTestLaunchIntent, evolutionTestHostContext, evolutionTestHostContextError);
 if (fixedHostContext && evolutionTestHostContext) throw Error("fixed and rehearsal Host identities cannot be combined");
 const ordinaryChatH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
+const workbenchCrashReopenH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "workbench-crash-reopen-recovery-v1";
+const sealedChatH1Fixture = Boolean(ordinaryChatH1 || workbenchCrashReopenH1);
 const ordinaryChatH1Isolation = ordinaryChatH1 && evolutionTestHostContext ? assertOrdinaryChatH1Isolation(evolutionTestHostContext) : null;
+const workbenchCrashReopenH1Isolation = workbenchCrashReopenH1 && evolutionTestHostContext ? assertWorkbenchCrashReopenH1Isolation(evolutionTestHostContext) : null;
 const DATA_ROOT = fixedHostContext?.dataRoot ?? path.join(AGENT_ROOT, "data");
 const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostContext.binding.state_root, {
   installation_id:fixedHostContext.binding.installation_id, release_id:fixedHostContext.binding.release.release_id, binding_digest:fixedHostContext.bindingDigest,
@@ -206,13 +209,38 @@ function assertOrdinaryChatH1Isolation(context: EvolutionTestHostContext): { tem
   if (process.env.PYTHONNOUSERSITE !== "1" || process.env.PYTHONDONTWRITEBYTECODE !== "1") throw Error("ordinary-chat H1 Python isolation flags are missing");
   return { temp: expected.TEMP, userData: expected.MY_AGENT_ELECTRON_USER_DATA, sessionData: expected.MY_AGENT_ELECTRON_SESSION_DATA };
 }
-const controlledH1 = evolutionTestHostContext?.profile.candidate_fixture_profile === "t4-recovery-node-v1" || ordinaryChatH1;
-const h1Control = ordinaryChatH1
+function assertWorkbenchCrashReopenH1Isolation(context: EvolutionTestHostContext): { temp: string; userData: string; sessionData: string } {
+  const { app_root: appRoot, run_root: runRoot, profile, sandbox_root: sandboxRoot } = context;
+  const profileRoot = profile.profile_root, runId = path.basename(runRoot);
+  if (profile.chat_run_id !== runId || !samePath(appRoot, path.join(runRoot, "host", "app")) || !samePath(profileRoot, path.join(runRoot, "host", "profile")) || !samePath(path.join(sandboxRoot, "artifacts"), path.dirname(path.dirname(runRoot)))) throw Error("workbench crash/reopen H1 run/profile identity does not match the marked sandbox run");
+  const identityPath = path.join(runRoot, ".workbench-crash-reopen-recovery.json"), identityInfo = lstatSync(identityPath);
+  if (!identityInfo.isFile() || identityInfo.isSymbolicLink() || !samePath(realpathSync.native(identityPath), identityPath)) throw Error("workbench crash/reopen H1 run identity marker is linked or non-regular");
+  let identity: any; try { identity = JSON.parse(readFileSync(identityPath, "utf8")); } catch { throw Error("workbench crash/reopen H1 run identity marker is invalid"); }
+  if (!identity || Object.keys(identity).length !== 4 || identity.format !== 1 || identity.fixture !== "workbench-crash-reopen-recovery-v1" || identity.run_id !== runId) throw Error("workbench crash/reopen H1 run identity marker changed");
+  const expected = {
+    MY_AGENT_ROOT: appRoot, MY_AGENT_H1_PROFILE_ROOT: profileRoot, MY_AGENT_H1_RUN_ID: runId,
+    USERPROFILE: path.join(profileRoot, "userprofile"), APPDATA: path.join(profileRoot, "appdata", "Roaming"), LOCALAPPDATA: path.join(profileRoot, "appdata", "Local"),
+    HOME: path.join(profileRoot, "home"), XDG_CONFIG_HOME: path.join(profileRoot, "xdg-config"), XDG_DATA_HOME: path.join(profileRoot, "xdg-data"), XDG_CACHE_HOME: path.join(profileRoot, "xdg-cache"),
+    TEMP: path.join(profileRoot, "tmp"), TMP: path.join(profileRoot, "tmp"), MY_AGENT_ELECTRON_USER_DATA: path.join(profileRoot, "electron-userData"), MY_AGENT_ELECTRON_SESSION_DATA: path.join(profileRoot, "electron-sessionData"),
+  };
+  for (const [key, target] of Object.entries(expected)) if (process.env[key] !== target || !samePath(process.env[key] ?? "", target)) throw Error("workbench crash/reopen H1 environment path is not bound to the sealed profile: " + key);
+  for (const target of [profileRoot, ...Object.values(expected).filter(value => value !== appRoot && value !== profileRoot && value !== runId), path.join(appRoot, "data"), path.join(appRoot, "data", "sessions"), path.join(appRoot, "workspace"), path.join(appRoot, "evolve")]) {
+    const info = lstatSync(target); if (!info.isDirectory() || info.isSymbolicLink() || !samePath(realpathSync.native(target), target)) throw Error("workbench crash/reopen H1 runtime root is missing, linked, or escaped its sealed run");
+  }
+  if (JSON.stringify(readdirSync(path.join(appRoot, "data")).sort()) !== JSON.stringify(["sessions"]) || readdirSync(path.join(appRoot, "data", "sessions")).length !== 1) throw Error("workbench crash/reopen H1 agent data root must contain exactly one seeded session");
+  if (JSON.stringify(readdirSync(profileRoot).sort()) !== JSON.stringify(["appdata", "electron-sessionData", "electron-userData", "home", "tmp", "userprofile", "xdg-cache", "xdg-config", "xdg-data"])) throw Error("workbench crash/reopen H1 profile has unexpected entries");
+  if (JSON.stringify(readdirSync(path.join(profileRoot, "appdata")).sort()) !== JSON.stringify(["Local", "Roaming"])) throw Error("workbench crash/reopen H1 appdata root has unexpected entries");
+  for (const marker of [path.join(appRoot, "evolve", "_index.core.toml"), path.join(appRoot, "evolve", "_index.toml")]) { const info = lstatSync(marker); if (!info.isFile() || info.isSymbolicLink() || !samePath(realpathSync.native(marker), marker)) throw Error("workbench crash/reopen H1 AgentPaths root marker is invalid"); }
+  if (process.env.PYTHONNOUSERSITE !== "1" || process.env.PYTHONDONTWRITEBYTECODE !== "1") throw Error("workbench crash/reopen H1 Python isolation flags are missing");
+  return { temp: expected.TEMP, userData: expected.MY_AGENT_ELECTRON_USER_DATA, sessionData: expected.MY_AGENT_ELECTRON_SESSION_DATA };
+}
+const controlledH1 = evolutionTestHostContext?.profile.candidate_fixture_profile === "t4-recovery-node-v1" || sealedChatH1Fixture;
+const h1Control = sealedChatH1Fixture
   ? { bootstrap: "ordinary-chat-h1.control.bootstrap", shutdown: "ordinary-chat-h1.control.shutdown", ready: "ordinary-chat-h1-host-ready" }
   : { bootstrap: "t9.control.bootstrap", shutdown: "t9.control.shutdown", ready: "evolution-test-host-ready" };
 const h1ShutdownStages = new Set<string>();
 function h1ShutdownStage(stage: "stdin_listening" | "stdin_data_received" | "stdin_end" | "stdin_closed" | "stdin_unreadable" | "stdin_tty" | "stdin_overflow" | "stdin_invalid_json" | "stdin_invalid_frame" | "stdin_unrecognized_frame" | "bootstrap_rejected" | "bootstrap_accepted" | "shutdown_accepted" | "shutdown_rejected" | "before_quit" | "adoption_blocked" | "sidecars_stop_started" | "sidecars_stop_finished" | "cleanup_reentry" | "renderer_close_started" | "renderer_close_finished" | "renderer_close_failed" | "supervisor_close_started" | "supervisor_close_finished" | "supervisor_close_failed" | "quit_reissued" | "window_all_closed" | "will_quit"): void {
-  if (!ordinaryChatH1 || h1ShutdownStages.has(stage)) return;
+  if (!sealedChatH1Fixture || h1ShutdownStages.has(stage)) return;
   h1ShutdownStages.add(stage);
   try { process.stderr.write(JSON.stringify({ type: "ordinary-chat-h1.shutdown-stage", stage }) + "\n"); } catch { /* diagnostics must not affect shutdown */ }
 }
@@ -236,7 +264,7 @@ if (controlledH1) {
       else h1ShutdownStage("stdin_unrecognized_frame");
     }
   });
-  if (ordinaryChatH1) {
+  if (sealedChatH1Fixture) {
     process.stdin.on("end", () => h1ShutdownStage("stdin_end"));
     process.stdin.on("close", () => h1ShutdownStage("stdin_closed"));
     if (process.stdin.readable === false || process.stdin.destroyed || process.stdin.readableEnded) h1ShutdownStage("stdin_unreadable");
@@ -257,9 +285,9 @@ if (fixedHostContext) {
   mkdirSync(userData,{recursive:true});mkdirSync(sessionData,{recursive:true});mkdirSync(tempRoot,{recursive:true});
   app.setPath("temp",tempRoot);
   app.setPath("userData",userData);app.setPath("sessionData",sessionData);
-} else if (ordinaryChatH1 && evolutionTestHostContext) {
-  const isolated = ordinaryChatH1Isolation;
-  if (!isolated) throw Error("ordinary-chat H1 isolation proof is incomplete");
+} else if (sealedChatH1Fixture && evolutionTestHostContext) {
+  const isolated = workbenchCrashReopenH1 ? workbenchCrashReopenH1Isolation : ordinaryChatH1Isolation;
+  if (!isolated) throw Error("sealed chat H1 isolation proof is incomplete");
   app.setPath("temp", isolated.temp); app.setPath("userData", isolated.userData); app.setPath("sessionData", isolated.sessionData);
   try {
     const temp = app.getPath("temp"), userData = app.getPath("userData"), sessionData = app.getPath("sessionData");
@@ -413,7 +441,7 @@ if (process.platform === "win32" && process.env.VITE_DEV_SERVER_URL) {
 }
 
 function pythonCommand(root: string = AGENT_ROOT, trustedHost = false): string {
-  if (ordinaryChatH1) {
+  if (sealedChatH1Fixture) {
     const context = evolutionTestHostContext;
     if (!context || path.resolve(root) !== context.app_root) throw Error("ordinary-chat H1 cannot load another sidecar root");
     return context.profile.trusted_python_executable;
@@ -526,18 +554,18 @@ function lockUiLabel(ui: string): string {
 
 function startSidecar(root: string = activeSidecarRoot, evolutionBootstrap?: EvolutionSidecarBootstrap): Promise<SidecarStartResult> {
   return new Promise((resolve, reject) => {
-    if (ordinaryChatH1 && (!evolutionTestHostContext || path.resolve(root) !== evolutionTestHostContext.app_root)) throw Error("ordinary-chat H1 sidecar root is not the sealed host app");
+    if (sealedChatH1Fixture && (!evolutionTestHostContext || path.resolve(root) !== evolutionTestHostContext.app_root)) throw Error("sealed chat H1 sidecar root is not the sealed host app");
     const selectedBootstrap = evolutionBootstrap ?? evolutionSupervisorHost?.getSidecarBootstrap(root) ?? undefined;
     if (selectedBootstrap) evolutionSidecarBootstraps.register(root, selectedBootstrap);
     const privateFrame = selectedBootstrap ? evolutionSidecarBootstraps.forRoot(root) : null;
     const privateLaunch = sidecarBootstrapLaunch(privateFrame);
-    if (ordinaryChatH1 && (!selectedBootstrap || privateLaunch.privateInput === null)) throw Error("ordinary-chat H1 requires its private sidecar bootstrap");
-    const script = ordinaryChatH1 ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
+    if (sealedChatH1Fixture && (!selectedBootstrap || privateLaunch.privateInput === null)) throw Error("sealed chat H1 requires its private sidecar bootstrap");
+    const script = sealedChatH1Fixture ? path.join(evolutionTestHostContext!.app_root, "agent-core", "server.py") : path.join(root, "agent-core", fixedHostContext ? "fixed_host_entry.py" : "server.py");
     if(fixedHostContext && selectedBootstrap) throw Error("fixed E0 layout cannot be mixed with evolution test bootstrap");
     const fixedFrame=fixedHostContext?.sidecarLayoutFrame();
     const args = fixedHostContext ? ["-I","-B","-S",script,"--port","0"] : [script, "--port", String(DEFAULT_WS_PORT), ...privateLaunch.args, "--enable-approval-control"];
     sidecar = spawn(pythonCommand(root, privateLaunch.privateInput !== null), args, {
-      cwd: ordinaryChatH1 ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
+      cwd: sealedChatH1Fixture ? evolutionTestHostContext!.app_root : fixedHostContext?.binding.instance_root ?? root,
       stdio: [fixedHostContext ? "pipe" : privateLaunch.stdin, "pipe", "pipe"],
       env: fixedHostContext ? {...cleanHostEnvironment(),TEMP:path.join(fixedHostContext.profileRoot,"tmp"),TMP:path.join(fixedHostContext.profileRoot,"tmp")} : sidecarSpawnEnv(),
       windowsHide:true, shell:false,
@@ -742,7 +770,7 @@ function startCandidateSidecar(root: string, port: number): Promise<CandidateSid
 }
 
 async function switchSidecarCandidate(rawRoot: unknown): Promise<Record<string, unknown>> {
-  if (ordinaryChatH1) return { ok: false, state: "blocked", recovered: false, error: "ordinary-chat H1 disables candidate sidecar switching" };
+  if (sealedChatH1Fixture) return { ok: false, state: "blocked", recovered: false, error: "sealed chat H1 disables candidate sidecar switching" };
   if(fixedHostContext || adoptionInProgress) return {ok:false,state:"blocked",error:"固定控制入口不支持旧候选直接替换 sidecar；采用中也不切换。"};
   if (typeof rawRoot !== "string" || !rawRoot.trim()) {
     return { ok: false, state: "blocked", recovered: false, error: "candidate root is required" };
@@ -1271,7 +1299,7 @@ async function openWorkbenchWindow(): Promise<void> {
 }
 
 async function switchToCli(): Promise<void> {
-  if (ordinaryChatH1) { await dialog.showMessageBox({ type: "info", message: "ordinary-chat H1 disables CLI switching", buttons: ["知道了"] }); return; }
+  if (sealedChatH1Fixture) { await dialog.showMessageBox({ type: "info", message: "ordinary-chat H1 disables CLI switching", buttons: ["知道了"] }); return; }
   if(fixedHostContext || adoptionInProgress){await dialog.showMessageBox({type:"info",message:"固定控制入口不从可变源码启动旧 CLI；采用期间也不切换。",buttons:["知道了"]});return;}
   const { response } = await dialog.showMessageBox({
     type: "question",
@@ -2215,7 +2243,7 @@ async function runSidecarStartup(): Promise<void> {
     if (controlledH1) {
       const renderer = evolutionTestRendererServer;
       const ready = { type: h1Control.ready, host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 };
-      process.stdout.write(`${JSON.stringify(ordinaryChatH1 && renderer ? { ...ready, renderer_host: "127.0.0.1", renderer_port: renderer.port } : ready)}\n`);
+      process.stdout.write(`${JSON.stringify(sealedChatH1Fixture && renderer ? { ...ready, renderer_host: "127.0.0.1", renderer_port: renderer.port } : ready)}\n`);
     }
   }
 }

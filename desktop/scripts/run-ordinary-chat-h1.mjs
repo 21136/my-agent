@@ -161,7 +161,7 @@ export function assertRunLocalRenderer(manifest, rendererRoot, runRoot) {
   return true;
 }
 
-async function connectCdp(wsUrl) {
+export async function connectCdp(wsUrl) {
   if (typeof WebSocket !== 'function') deny('Node built-in WebSocket is unavailable; GUI automation refused');
   const socket = new WebSocket(assertLoopbackUrl(wsUrl, 'ws:'));
   const events = [], commandHistory = [], pending = new Map(); let nextId = 0, closed = false, connectionError = null;
@@ -414,7 +414,7 @@ export function selectSealedRendererTarget(targets, { cdpPort, rendererPort }) {
   return { target: acceptedTargets[0] ?? null, diagnostics };
 }
 
-async function discoverElectronPage(cdpPort, rendererPort, runRoot) {
+export async function discoverElectronPage(cdpPort, rendererPort, runRoot) {
   const endpoint = assertLoopbackUrl('http://127.0.0.1:' + cdpPort + '/json/list', 'http:');
   const deadline = Date.now() + 30_000; const history = new Map(); const diagnosticsPath = path.join(runRoot, 'ordinary-chat-h1-cdp-target-diagnostics.json');
   const remember = items => {

@@ -15,7 +15,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 let defaultControlReleaseQueue = Promise.resolve();
 
 function deny(message) { const error = new Error(`permission_denied: ${message}`); error.code = "permission_denied"; throw error; }
-function assertH1LaunchProfileEnabled(profile, options = {}) { if (profile?.chat_fixture_profile === "ordinary-chat-h1-v1") { if (process.env.REAL_ELECTRON_CHAT_H1_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_OPT_IN=1 to launch ordinary-chat H1"); if (process.env.REAL_ELECTRON_CHAT_H1_GUI_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_GUI_OPT_IN=1 to launch ordinary-chat H1"); if (options.capturePythonEnvironment !== undefined) deny("custom Python environment attestation is forbidden for ordinary-chat H1 native launch"); } }
+function assertH1LaunchProfileEnabled(profile, options = {}) {
+  if (profile?.chat_fixture_profile === "ordinary-chat-h1-v1") {
+    if (process.env.REAL_ELECTRON_CHAT_H1_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_OPT_IN=1 to launch ordinary-chat H1");
+    if (process.env.REAL_ELECTRON_CHAT_H1_GUI_OPT_IN !== "1") deny("set REAL_ELECTRON_CHAT_H1_GUI_OPT_IN=1 to launch ordinary-chat H1");
+    if (options.capturePythonEnvironment !== undefined) deny("custom Python environment attestation is forbidden for ordinary-chat H1 native launch");
+  }
+  if (profile?.chat_fixture_profile === "workbench-crash-reopen-recovery-v1") {
+    if (process.env.REAL_ELECTRON_WORKBENCH_RECOVERY_OPT_IN !== "1") deny("set REAL_ELECTRON_WORKBENCH_RECOVERY_OPT_IN=1 to launch workbench crash/reopen Electron H1");
+    if (process.env.REAL_ELECTRON_WORKBENCH_RECOVERY_GUI_OPT_IN !== "1") deny("set REAL_ELECTRON_WORKBENCH_RECOVERY_GUI_OPT_IN=1 to launch workbench crash/reopen Electron GUI");
+    if (options.capturePythonEnvironment !== undefined) deny("custom Python environment attestation is forbidden for workbench recovery H1 native launch");
+  }
+}
 function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function within(parent, child) { const rel = path.relative(parent, child); return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); }
 function samePath(a, b) { const left = path.resolve(a), right = path.resolve(b); return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right; }
@@ -112,7 +123,7 @@ export async function completeH1ExitLifecycle({ child, stdoutPath, stderrPath, e
   return record;
 }
 export function createH1LifecycleProtocol(profile, token) {
-  const ordinaryChat = profile === "ordinary-chat-h1-v1";
+  const ordinaryChat = profile === "ordinary-chat-h1-v1" || profile === "workbench-crash-reopen-recovery-v1";
   if (!ordinaryChat && profile !== "t4-recovery-node-v1") deny("H1 lifecycle profile is not an approved synthetic profile");
   if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) deny("H1 lifecycle shutdown token is invalid");
   const controlType = ordinaryChat ? "ordinary-chat-h1.control" : "t9.control";
@@ -413,7 +424,7 @@ export async function freezeHostFixture(input, options = {}) {
   const expectedInputFields = recoveryFixture ? [...inputFields, "candidateFixtureProfile"] : chatFixture ? [...inputFields, "chatFixtureProfile"] : inputFields;
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== expectedInputFields.length || expectedInputFields.some(key => !Object.hasOwn(input, key))) deny("H1 fixture input fields are invalid");
   if (recoveryFixture && input.candidateFixtureProfile !== "t4-recovery-node-v1") deny("H1 candidate fixture profile is unsupported");
-  if (chatFixture && input.chatFixtureProfile !== "ordinary-chat-h1-v1") deny("H1 ordinary chat fixture profile is unsupported");
+  if (chatFixture && input.chatFixtureProfile !== "ordinary-chat-h1-v1" && input.chatFixtureProfile !== "workbench-crash-reopen-recovery-v1") deny("H1 sealed chat fixture profile is unsupported");
   const { sandboxRoot, runRoot } = validateRunRoot(input.sandboxRoot, input.runRoot);
   const pythonExecutable = regularFile(input.trustedPythonExecutable, "trusted fixture Python executable");
   const electron = distributionFingerprint(input.electronExecutable);
@@ -493,7 +504,7 @@ export async function freezeHostFixture(input, options = {}) {
     if (!pythonEnvironment || typeof pythonEnvironment.digest !== "string" || !pythonEnvironment.digest.startsWith("sha256:")) deny("trusted Python environment attestation is invalid");
     const electronRuntime = { executable: electron.executable, executable_sha256: electron.executable_sha256, distribution_root: electron.distribution_root, distribution_digest: electron.distribution_digest, file_count: electron.file_count, byte_length: electron.byte_length };
     const pythonRuntime = { executable: pythonExecutable, executable_sha256: sha256(readFileSync(pythonExecutable)), environment: pythonEnvironment };
-    const profile = { profile_root: path.join(runRoot, "host", "profile"), control_release_root: release.root, trusted_python_executable: pythonExecutable, ws_port: 0, renderer_port: 0, fixture_scope_id: randomUUID(), ...(recoveryFixture ? { candidate_fixture_profile: "t4-recovery-node-v1" } : chatFixture ? { chat_fixture_profile: "ordinary-chat-h1-v1", chat_run_id: path.basename(runRoot) } : {}) };
+    const profile = { profile_root: path.join(runRoot, "host", "profile"), control_release_root: release.root, trusted_python_executable: pythonExecutable, ws_port: 0, renderer_port: 0, fixture_scope_id: randomUUID(), ...(recoveryFixture ? { candidate_fixture_profile: "t4-recovery-node-v1" } : chatFixture ? { chat_fixture_profile: input.chatFixtureProfile, chat_run_id: path.basename(runRoot) } : {}) };
     const profileBytes = Buffer.from(`${JSON.stringify(profile, null, 2)}\n`, "utf8"); writeFileSync(path.join(stageRoot, "evolution-test-profile.json"), profileBytes, { flag: "wx" });
     const sourceInputs = [];
     const desktopSource = path.join(sandboxRoot, "desktop");
@@ -611,7 +622,7 @@ export function verifyFrozenHostFixture(input, options = {}) {
   const recoveryFixture = !!profile && Object.hasOwn(profile, "candidate_fixture_profile");
   const chatFixture = !!profile && Object.hasOwn(profile, "chat_fixture_profile");
   if (recoveryFixture && chatFixture) deny("T4 recovery and ordinary chat fixture profiles are mutually exclusive");
-  if (!profile || Object.keys(profile).length !== (recoveryFixture ? 7 : chatFixture ? 8 : 6) || recoveryFixture && profile.candidate_fixture_profile !== "t4-recovery-node-v1" || chatFixture && (profile.chat_fixture_profile !== "ordinary-chat-h1-v1" || profile.chat_run_id !== path.basename(runRoot)) || profile.ws_port !== 0 || profile.renderer_port !== 0 || !UUID_RE.test(String(profile.fixture_scope_id)) || !samePath(profile.profile_root, profileRoot)) deny("frozen H1 profile violates the dynamic-port fixture contract");
+  if (!profile || Object.keys(profile).length !== (recoveryFixture ? 7 : chatFixture ? 8 : 6) || recoveryFixture && profile.candidate_fixture_profile !== "t4-recovery-node-v1" || chatFixture && ((profile.chat_fixture_profile !== "ordinary-chat-h1-v1" && profile.chat_fixture_profile !== "workbench-crash-reopen-recovery-v1") || profile.chat_run_id !== path.basename(runRoot)) || profile.ws_port !== 0 || profile.renderer_port !== 0 || !UUID_RE.test(String(profile.fixture_scope_id)) || !samePath(profile.profile_root, profileRoot)) deny("frozen H1 profile violates the dynamic-port fixture contract");
   if (!path.isAbsolute(profile.control_release_root) || !within(runRoot, path.resolve(profile.control_release_root))) deny("fixed release path escaped the marked run root");
   const expected = new Map();
   for (const item of manifest.files) {
@@ -805,10 +816,10 @@ export async function startFrozenHost(input, options = {}) {
   assertH1LaunchProfileEnabled(verified.profile, options);
   verifyAgentPathsBeforeH1Start(verified);
   if (options.spawnProcess !== undefined) deny("custom spawnProcess is forbidden; use native H1 spawn with the strict CDP option");
-  const ordinaryChat = verified.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
-  const profile = ordinaryChat ? "ordinary-chat-h1-v1" : verified.profile.candidate_fixture_profile;
-  if (profile !== "ordinary-chat-h1-v1" && profile !== "t4-recovery-node-v1") deny("H1 controlled launcher requires an explicit synthetic T4 or ordinary chat profile");
-  if (ordinaryChat && options.cdp?.enabled !== true) deny("ordinary-chat H1 requires the existing dynamic CDP close path");
+  const sealedChat = verified.profile.chat_fixture_profile === "ordinary-chat-h1-v1" || verified.profile.chat_fixture_profile === "workbench-crash-reopen-recovery-v1";
+  const profile = sealedChat ? verified.profile.chat_fixture_profile : verified.profile.candidate_fixture_profile;
+  if (profile !== "ordinary-chat-h1-v1" && profile !== "workbench-crash-reopen-recovery-v1" && profile !== "t4-recovery-node-v1") deny("H1 controlled launcher requires an explicit synthetic T4 or sealed chat profile");
+  if (sealedChat && options.cdp?.enabled !== true) deny("sealed chat H1 requires the existing dynamic CDP close path");
   resolveH1HostCwd(verified);
   const plan = buildH1NativeLaunchPlan(verified, { mode: "controlled", cdp: options.cdp, sourceEnvironment: process.env });
   const env = plan.options.env;

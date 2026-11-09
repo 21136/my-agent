@@ -30,6 +30,7 @@ export function detectEvolutionTestLaunchIntent(appRoot, argv = process.argv, en
   return [
     path.join(runRoot, ".evolution-test-run"),
     path.join(runRoot, ".ordinary-chat-h1.json"),
+    path.join(runRoot, ".workbench-crash-reopen-recovery.json"),
     path.join(hostRoot, "evolution-test-profile.json"),
   ].some(presentOrUncertain);
 }
