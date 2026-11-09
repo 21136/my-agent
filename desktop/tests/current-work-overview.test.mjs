@@ -20,7 +20,7 @@ function loadTs(relativeOrUrl) {
   return exports;
 }
 const overviewModule = loadTs("../src/shells/unified/current-work-overview.ts");
-const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs } = overviewModule;
+const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel } = overviewModule;
 
 const basePage = { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
   total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null };
@@ -699,6 +699,27 @@ test("schedule preview is shown only for selected-project scope and remains read
   assert.match(unavailable.bodyHtml, /当前没有可显示的候选/);
   assert.match(unavailable.bodyHtml, /Preview unavailable/);
   assert.doesNotMatch(unavailable.bodyHtml, /data-work-record-control/);
+});
+
+test("schedule tab empty state explains read-only multi-project preview entry", () => {
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    groups: [completedViewedGroup()],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  assert.match(panel.bodyHtml, /只读预览/);
+  assert.match(panel.bodyHtml, /选择项目来源/);
+  assert.match(panel.bodyHtml, /查看所选项目/);
+  assert.match(panel.bodyHtml, /不会自动开跑/);
+  assert.match(panel.bodyHtml, /准备启动/);
+  assert.doesNotMatch(panel.bodyHtml, /当前没有调度预览；选择项目来源后会显示在这里。/);
+
+  const extras = `<section data-selected-project-overview aria-label="选择项目来源"><h3>选择项目来源（2）</h3></section>`;
+  const shell = renderCurrentWorkShellPanel(panel, extras, "schedule");
+  assert.match(shell, /data-cw-segment="schedule"/);
+  assert.match(shell, /data-cw-schedule-slot/);
+  assert.match(shell, /选择项目来源（2）/);
 });
 
 test("source snapshot timer labels remain conservative and collapsed rows do not reappear", () => {
