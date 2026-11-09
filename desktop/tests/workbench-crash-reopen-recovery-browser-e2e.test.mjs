@@ -115,7 +115,13 @@ test("crash reopen GUI: late WS recovery warn, honest labels, cancel after recon
     });
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.evaluate(async port => {
-      window.myAgentDesktop = { setBilibiliViewState: async () => {}, setShellDevViewState: async () => {} };
+      const sidecar = { host: "127.0.0.1", port };
+      window.myAgentDesktop = {
+        setBilibiliViewState: async () => {},
+        setShellDevViewState: async () => {},
+        getSidecar: async () => sidecar,
+        getSessionLaneCapabilities: async () => ({ legacySessionLanes: false }),
+      };
       window.client = new UnifiedUnderTest.AgentWsClient("127.0.0.1", port);
       window.receivedEvents = [];
       window.client.onEvent(event => window.receivedEvents.push(event));
@@ -159,6 +165,13 @@ test("crash reopen GUI: late WS recovery warn, honest labels, cancel after recon
       const ws = window.client.ws;
       if (ws && ws.readyState === WebSocket.OPEN) ws.close();
     });
+    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "client.connection.closed"));
+    await page.evaluate(async () => {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (window.client.ws?.readyState !== WebSocket.OPEN) {
+        await window.client.connect();
+      }
+    });
     await page.waitForFunction(() => window.receivedEvents?.filter(e => e.type === "notice" && e.level === "warn").length >= 2);
     await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
     await page.waitForFunction(() => {
@@ -171,8 +184,9 @@ test("crash reopen GUI: late WS recovery warn, honest labels, cancel after recon
     await context.close();
   } catch (error) {
     const events = page ? await page.evaluate(() => window.receivedEvents) : [];
+    const wsFrames = page ? await page.evaluate(() => window.wsFrames) : [];
     const body = page ? await page.locator("body").innerText() : "";
-    throw new Error(`${error.message}\nbody=${body}\nevents=${JSON.stringify(events)}\nstderr=${stderr}`);
+    throw new Error(`${error.message}\nbody=${body}\nevents=${JSON.stringify(events)}\nwsFrames=${JSON.stringify(wsFrames)}\nstderr=${stderr}`);
   } finally {
     await browser.close();
     child.stdin.end("\n");
