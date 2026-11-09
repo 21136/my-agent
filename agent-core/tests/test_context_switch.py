@@ -351,6 +351,30 @@ class ContextSwitchTests(unittest.TestCase):
             old_cid,
         )
 
+    def test_multi_project_orchestration_blocks_project_open_on_another_project(self) -> None:
+        from project_mode import create_project
+
+        create_project(self.paths, self.pid_b)
+        self.session.meta.project_id = self.pid_a
+        self.session.meta.project_root = f"workspace/{self.pid_a}"
+        self.session.meta.active_shell = "project"
+        setattr(self.session, "_companion_multi_project_orchestration_active", True)
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(self.session.session_dir),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        executor.bound_session = self.session
+        result = executor.run(
+            "propose_context_switch",
+            {"action": "project.open", "target": self.pid_b, "reason": "orchestration test"},
+        )
+        self.assertFalse(result.ok, result)
+        message = result.error.message if result.error else ""
+        self.assertIn("run_project_workers", message)
+        self.assertIn(self.pid_a, self.session.meta.project_id)
+
     def test_main_home_open_existing_auto_applies_without_switch_request(self) -> None:
         from project_mode import create_project
 

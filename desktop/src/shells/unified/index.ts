@@ -4612,13 +4612,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (block.kind === "work-instruction") {
       const stateLabel = block.state === "sending"
         ? "正在发送，等待后台分类…"
-        : block.state === "queued"
-          ? "消息已排队，等待进入工作上下文"
-          : block.state === "delivered" && block.deliveryStage === "next_model_request_context"
-            ? "已进入下一次模型请求上下文（不代表已遵循或完成）"
-            : block.state === "undelivered"
-              ? `消息未送达${block.reason ? `（${escapeHtml(block.reason)}）` : ""}`
-              : "工作状态无法核实";
+        : block.state === "orchestration_dispatching"
+          ? "并行项目编排进行中（不经排队等待工作上下文）"
+          : block.state === "orchestration_active"
+            ? "并行编排已进入当前工作轮次（各项目由 worker 施工）"
+            : block.state === "queued"
+              ? "消息已排队，等待进入工作上下文"
+              : block.state === "delivered" && block.deliveryStage === "next_model_request_context"
+                ? "已进入下一次模型请求上下文（不代表已遵循或完成）"
+                : block.state === "undelivered"
+                  ? `消息未送达${block.reason ? `（${escapeHtml(block.reason)}）` : ""}`
+                  : "工作状态无法核实";
       return `<article class="unified-turn unified-turn-user work-instruction-message" data-work-instruction="${escapeHtml(block.requestId)}">
         <div class="unified-turn-label">你</div>
         <div class="unified-turn-body">${formatUserMessageHtml(block.text)}<div class="unified-message-persistence" role="status">${stateLabel}</div></div>
@@ -7644,6 +7648,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           setStatus("消息已进入下一次模型请求上下文（不代表已遵循或完成）");
         } else if (event.state === "undelivered") {
           setStatus(`消息未送达${event.reason ? `：${event.reason}` : ""}`);
+        }
+        break;
+
+      case "companion.orchestration.state":
+        if (!chat.handleEvent(event)) break;
+        if (event.state === "dispatching") setStatus("并行多项目编排进行中…");
+        else if (event.state === "active") setStatus("并行编排已进入当前工作，各项目在 worker 中执行");
+        else if (event.state === "undelivered") {
+          setStatus(`并行编排未送达${event.reason ? `：${event.reason}` : ""}`);
         }
         break;
 

@@ -7194,6 +7194,15 @@ class Agent:
             )
         self.session.scaffold_tool_turn = detect_scaffold_tool_turn(user_text)
         self.executor.session.scaffold_tool_turn = self.session.scaffold_tool_turn
+        if getattr(self.session, "_companion_multi_project_orchestration_active", False):
+            self._emit_turn_event({
+                "type": "turn.notice",
+                "level": "info",
+                "text": (
+                    "并行多项目编排：保持主会话当前项目绑定；其它项目只用 project.create + "
+                    "run_project_workers 派工，勿 project.open 切换后直接写文件。"
+                ),
+            })
 
         from project_mode import should_treat_ordinary_direct_implement
 

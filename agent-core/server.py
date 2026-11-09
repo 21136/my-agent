@@ -425,6 +425,7 @@ class _WorkInstruction:
     state: str = "queued"
     prepared: bool = False
     reason: str | None = None
+    companion_orchestration: bool = False
 
 
 @dataclass
@@ -1870,12 +1871,53 @@ class WsBridge:
 
     def _emit_work_instruction_state(self, instruction: _WorkInstruction, state: str, *, reason: str | None = None) -> None:
         try:
+            if instruction.companion_orchestration:
+                self._emit_companion_orchestration_state(instruction, state, reason=reason)
+                if state in {"delivered", "undelivered"}:
+                    self.emit(self._work_instruction_event(instruction, state, reason=reason))
+                return
             self.emit(self._work_instruction_event(instruction, state, reason=reason))
         except Exception as exc:
             _log_notification_failure("work instruction state notification failed", exc)
 
+    @staticmethod
+    def _companion_orchestration_event(
+        instruction: _WorkInstruction, state: str, *, reason: str | None = None,
+    ) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": "companion.orchestration.state",
+            "request_id": instruction.request_id,
+            "run_id": instruction.run_id,
+            "session_id": instruction.session_id,
+            "state": state,
+        }
+        if reason or instruction.reason:
+            event["reason"] = reason or instruction.reason
+        return event
+
+    def _emit_companion_orchestration_state(
+        self, instruction: _WorkInstruction, state: str, *, reason: str | None = None,
+    ) -> None:
+        mapped = {
+            "queued": "dispatching",
+            "delivered": "active",
+            "undelivered": "undelivered",
+        }.get(state)
+        if mapped is None:
+            return
+        try:
+            self.emit(self._companion_orchestration_event(instruction, mapped, reason=reason))
+        except Exception as exc:
+            _log_notification_failure("companion orchestration state notification failed", exc)
+
     def enqueue_work_instruction(
-        self, *, request_id: str, run_id: str, session: Session, text: str,
+        self,
+        *,
+        request_id: str,
+        run_id: str,
+        session: Session,
+        text: str,
+        companion_orchestration: bool = False,
     ) -> str:
         """Queue only an explicitly targeted instruction for the exact live run/session."""
         session_id = session.conversation_id if isinstance(session, Session) else ""
@@ -1885,8 +1927,13 @@ class WsBridge:
             if existing is not None:
                 self._emit_work_instruction_state(existing, existing.state)
                 return existing.state
-            instruction = _WorkInstruction(request_key, run_id if type(run_id) is str else "", session_id,
-                                           text if type(text) is str else "")
+            instruction = _WorkInstruction(
+                request_key,
+                run_id if type(run_id) is str else "",
+                session_id,
+                text if type(text) is str else "",
+                companion_orchestration=companion_orchestration,
+            )
             snapshot = self.lifecycle.snapshot()
             reason = None
             if len(self._work_instructions) >= 4096 and existing is None:
@@ -1933,15 +1980,22 @@ class WsBridge:
                 prepared = 0
                 for index, instruction in enumerate(ready):
                     try:
+                        metadata = {
+                            "work_instruction": True,
+                            "work_instruction_request_id": instruction.request_id,
+                            "work_instruction_run_id": run_id,
+                        }
+                        if instruction.companion_orchestration:
+                            metadata["companion_multi_project_orchestration"] = True
                         session.append_message({
                             "role": "user",
                             "content": instruction.text,
-                            HOST_INTERNAL_METADATA_KEY: {
-                                "work_instruction": True,
-                                "work_instruction_request_id": instruction.request_id,
-                                "work_instruction_run_id": run_id,
-                            },
+                            HOST_INTERNAL_METADATA_KEY: metadata,
                         })
+                        if instruction.companion_orchestration:
+                            from active_work_multi_project import mark_session_companion_multi_project_orchestration
+
+                            mark_session_companion_multi_project_orchestration(session, active=True)
                     except Exception:
                         instruction.state = "undelivered"
                         instruction.reason = "persistence_failed"
@@ -4879,6 +4933,12 @@ async def _run_line(
             bound_agent._session_binding_transition = previous_binding_transition
         if hasattr(bound_agent, "_work_instruction_checkpoint"):
             bound_agent._work_instruction_checkpoint = previous_work_instruction_checkpoint
+        try:
+            from active_work_multi_project import mark_session_companion_multi_project_orchestration
+
+            mark_session_companion_multi_project_orchestration(bound_session, active=False)
+        except Exception:
+            pass
         bridge._turn_busy.clear()
         try:
             bridge.end_turn()
@@ -7539,6 +7599,20 @@ class WsSessionHandler:
                          "message": "\u672c\u8fde\u63a5\u7684\u8bf7\u6c42\u53bb\u91cd\u5bb9\u91cf\u5df2\u8fbe\u4e0a\u9650\uff1b\u672c\u6761\u672a\u5904\u7406\u3002"})
             return
         bridge._active_message_seen_requests.add(request_id)
+        from active_work_multi_project import (
+            build_companion_orchestration_instruction,
+            is_companion_multi_project_orchestration_request,
+        )
+
+        if is_companion_multi_project_orchestration_request(text):
+            bridge.enqueue_work_instruction(
+                request_id=request_id,
+                run_id=work_snapshot.run_id,
+                session=session,
+                text=build_companion_orchestration_instruction(text),
+                companion_orchestration=True,
+            )
+            return
         route, reason = await self._classify_active_work_message(text, session)
         current = self._active_work_run_for_session(bridge, session)
         if (current is None or current.run_id != work_snapshot.run_id or current.state != "running"
@@ -9322,6 +9396,14 @@ class WsSessionHandler:
                         message.get("companion_world_context")
                     )
                 repl.session._turn_companion_world_context = world_context
+                if not attachments:
+                    from active_work_multi_project import (
+                        is_companion_multi_project_orchestration_request,
+                        mark_session_companion_multi_project_orchestration,
+                    )
+
+                    if is_companion_multi_project_orchestration_request(text):
+                        mark_session_companion_multi_project_orchestration(repl.session, active=True)
                 # TURN_LOCK is held by _handle_incoming for user.message / command.
                 try:
                     post_turn_candidate = await _run_line(

@@ -150,6 +150,12 @@ def should_auto_apply_context_switch(
     """In-place project actions on the companion UI never show the 换线 overlay."""
     if _session_new_blocked_for_project_work(session, proposal):
         return False
+    if getattr(session, "_companion_multi_project_orchestration_active", False):
+        current_pid = (session.meta.project_id or "").strip()
+        if proposal.action == "project.open" and current_pid and proposal.target.strip() != current_pid:
+            return False
+        if proposal.action == "project.switch":
+            return False
     if proposal.action in ("project.create", "project.open"):
         return True
     if proposal.action == "project.switch":
@@ -388,6 +394,14 @@ def _apply_project_open(
     session: Session,
     project_id: str,
 ) -> tuple[Session, str]:
+    if getattr(session, "_companion_multi_project_orchestration_active", False):
+        current_pid = (session.meta.project_id or "").strip()
+        target = normalize_project_id(project_id)
+        if current_pid and target != current_pid:
+            raise ContextSwitchError(
+                "当前是主会话并行多项目编排；不能 project.open 切换会话绑定去写其它项目。"
+                "请 project.create（若缺少 workspace）后用 run_project_workers 在该 project_id 下施工。"
+            )
     try:
         return open_project_on_session(paths, session, project_id)
     except ProjectModeError as exc:
