@@ -137,7 +137,12 @@ def _overview(
 
 
 def _local_overview(request_id: str) -> dict:
-    """Session-local probe: keep the work entry visible while mapped sources exist."""
+    """Session-local probe after session.banner auto-query.
+
+    `shouldShowCurrentWorkOverview` treats `no_records` + `unread_status: known` as hidden
+    before `visibility_limitations` are consulted; use `unknown` so the topbar pill stays
+    mounted while mapped project sources are available.
+    """
     return {
         "type": "work-records.overview.result",
         "session_id": SESSION,
@@ -145,11 +150,36 @@ def _local_overview(request_id: str) -> dict:
         "state": "no_records",
         "groups": [],
         "unread_important_results": [],
-        "unread_status": "known",
+        "unread_status": "unknown",
         "visibility_limitations": ["mapped_project_sources_available_for_schedule"],
         "visibility_counts": {"visible_groups": 0, "visible_items": 0, "collapsed_groups": 0, "collapsed_items": 0},
         "snapshot_id": None,
         "page": _page(0, 0),
+    }
+
+
+def _session_banner() -> dict:
+    return {
+        "type": "session.banner",
+        "session_id": SESSION,
+        "topics": [],
+        "turn_mode": "agent",
+        "turn_mode_label": "动手",
+        "phase": "S4",
+        "active_shell": "grow",
+    }
+
+
+def _session_list() -> dict:
+    return {
+        "type": "session.list",
+        "sessions": [{
+            "session_id": SESSION,
+            "title": "Harness companion session",
+            "preview": "multi-project schedule GUI bootstrap",
+            "updated_at": "2026-11-09T12:00:00.000Z",
+            "message_count": 0,
+        }],
     }
 
 
@@ -163,7 +193,8 @@ def _confirm_preview(project_ids: list[str]) -> str:
 
 
 async def handle(socket) -> None:
-  await socket.send(json.dumps({"type": "session.banner", "session_id": SESSION}))
+  await socket.send(json.dumps(_session_banner()))
+  await socket.send(json.dumps(_session_list()))
   await socket.send(json.dumps({
       "type": "project.list",
       "projects": [{
@@ -182,6 +213,10 @@ async def handle(socket) -> None:
   async for raw in socket:
       event = json.loads(raw)
       kind = event.get("type")
+
+      if kind == "session.list":
+          await socket.send(json.dumps(_session_list()))
+          continue
 
       if kind == "work-records.overview.query":
           request_id = event["request_id"]

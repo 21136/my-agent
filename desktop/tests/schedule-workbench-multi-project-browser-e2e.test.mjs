@@ -41,7 +41,11 @@ const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
 const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
 async function openCurrentWorkOverlay(page) {
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "project.list"));
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
+    && e.unread_status === "unknown"));
   const entry = page.locator(CURRENT_WORK_ENTRY);
   await entry.waitFor({ state: "visible" });
   await entry.click();
