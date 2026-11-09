@@ -42,7 +42,7 @@ test("schedule launcher ties visible candidate to exact projected text and emits
 test("schedule launch leaves the composer draft untouched and reports synchronous send failures", () => {
   const source = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
   const handlerStart = source.indexOf('scheduleForm?.querySelector<HTMLButtonElement>("[data-schedule-launch-send]")');
-  const handlerEnd = source.indexOf('topbarEl.querySelector<HTMLButtonElement>("[data-run-selected-project-history]")', handlerStart);
+  const handlerEnd = source.indexOf("data-run-selected-project-history", handlerStart + 1);
   assert.notEqual(handlerStart, -1);
   const handler = source.slice(handlerStart, handlerEnd);
   assert.doesNotMatch(handler, /input\.value\s*=/, "launching must not replace or clear a draft in the composer");

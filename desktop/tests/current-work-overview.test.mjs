@@ -451,11 +451,11 @@ test("legacy full-response groups remain readable with explicit client-side rema
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 9 },
   }), { open: true });
   const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group">[\s\S]*?<\/article>/)?.[0] ?? "";
-  const firstBatch = groupHtml.split('<details class="unified-current-work-items-more">')[0];
-  const remainder = groupHtml.match(/<details class="unified-current-work-items-more">[\s\S]*?<\/div><\/details>/)?.[0] ?? "";
+  const firstBatch = groupHtml.split('<div class="unified-current-work-items-more">')[0];
+  const remainder = groupHtml.match(/<div class="unified-current-work-items-more">[\s\S]*/)?.[0] ?? "";
   assert.equal((firstBatch.match(/class="unified-current-work-item"/g) ?? []).length, 5);
   assert.match(firstBatch, /legacy item 0/);
-  assert.match(groupHtml, /还有 4 项（已优先显示需关注事项），展开查看/);
+  assert.match(groupHtml, /还有 4 项（已优先显示需关注事项）/);
   for (let index = 5; index < 9; index += 1) assert.match(remainder, new RegExp(`legacy item ${index}`));
   assert.doesNotMatch(groupHtml, /data-current-work-detail-cursor/);
 });
@@ -515,8 +515,8 @@ test("requirements are collapsed per item while status, read markers, counts, an
 
   const panel = buildCurrentWorkOverviewPanel(result, { open: true });
   assert.match(panel.bodyHtml, /data-current-work-item-id="\[&quot;project&quot;,&quot;p\\&quot;&lt;1&quot;,&quot;item-1&quot;\]"/);
-  assert.doesNotMatch(panel.bodyHtml, /<details[^>]*\bopen\b/);
-  assert.match(panel.bodyHtml, /<summary>要求（2）<\/summary>/);
+  assert.doesNotMatch(panel.bodyHtml, /data-selected="1"|is-selected/);
+  assert.match(panel.bodyHtml, /<h5>要求（2）<\/h5>/);
   assert.match(panel.bodyHtml, /受阻/);
   assert.match(panel.bodyHtml, /未读结果/);
   assert.match(panel.bodyHtml, /未读结果数未知/);
@@ -526,7 +526,9 @@ test("requirements are collapsed per item while status, read markers, counts, an
 
   const firstGroupKey = JSON.stringify(["project", 'p"<1', "item-1"]);
   const restored = buildCurrentWorkOverviewPanel(result, { open: true, expandedRequirementItemIds: new Set([firstGroupKey]) });
-  assert.equal((restored.bodyHtml.match(/<details[^>]*\bopen\b/g) ?? []).length, 1, "same item_id in another project stays collapsed");
+  assert.ok(((restored.bodyHtml.match(/data-selected="1"/g) ?? []).length) >= 1, "selected item reveals its detail panes");
+  assert.match(restored.bodyHtml, /is-selected/);
+  assert.doesNotMatch(restored.bodyHtml, /<details\b/, "no accordion fold markup");
 });
 
 const topbarSource = new URL("../src/shells/unified/topbar.ts", import.meta.url);
@@ -537,21 +539,21 @@ const topbarExports = {};
 new Function("exports", "require", topbarJs)(topbarExports, () => ({ escapeHtml: value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;") }));
 const state = (currentWorkOverview) => ({ proposals: [], intentLabel: "", checkerLabel: "", memoryLabel: "", memoryCount: 0,
   pendingMemoryCount: 0, projectLabel: "", contextLabel: "", sessionCount: 0, headerCtas: [], currentWorkOverview });
-test("topbar conditionally renders the structured entry and retains natural-language query action", () => {
+test("topbar conditionally renders the structured entry that opens the full-page workbench", () => {
   const listeners = new Map();
   const elements = new Map();
   const makeButton = selector => ({ addEventListener: (event, listener) => listeners.set(selector, listener) });
   elements.set("#unified-request-current-work", makeButton("#unified-request-current-work"));
-  elements.set("#unified-current-work-more", makeButton("#unified-current-work-more"));
-  elements.set("#unified-current-work-ask", makeButton("#unified-current-work-ask"));
   const container = { innerHTML: "", classList: { add() {}, remove() {} }, querySelector: selector => elements.get(selector) ?? null, querySelectorAll: () => [] };
   topbarExports.renderTopbarV2(container, state({ visible: true, open: true, label: "当前工作", bodyHtml: "<b>live</b>",
     canExpand: true, moreLabel: "展开更多", loadingMore: false }), {
     onToggleCurrentWorkOverview() {}, onLoadMoreCurrentWorkOverview() {}, onRequestCurrentWorkOverview() {},
   });
   assert.match(container.innerHTML, /id="unified-request-current-work"/);
-  assert.match(container.innerHTML, /id="unified-current-work-more"/);
-  assert.match(container.innerHTML, /id="unified-current-work-ask"/);
+  assert.match(container.innerHTML, /aria-controls="unified-current-work"/);
+  assert.match(container.innerHTML, /打开当前工作全页工作台/);
+  // Expand / ask live on the full-page workbench, not inside the topbar pill.
+  assert.doesNotMatch(container.innerHTML, /id="unified-current-work-more"|id="unified-current-work-ask"|unified-current-work-popover/);
   assert.doesNotMatch(container.innerHTML, /cached cards|快照时间/);
   topbarExports.renderTopbarV2(container, state(undefined), { onRequestCurrentWorkOverview() {} });
   assert.doesNotMatch(container.innerHTML, /unified-request-current-work|查询当前概况/);

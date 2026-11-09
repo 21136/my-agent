@@ -1,5 +1,5 @@
-/** Main stage owned by the active rail tab. */
-export type MainFocus = "chat" | "document" | "projects" | "settings" | "music" | "shell-dev";
+/** Main stage owned by the active rail tab (plus full-page overlays like current-work). */
+export type MainFocus = "chat" | "document" | "projects" | "settings" | "music" | "shell-dev" | "current-work";
 
 /** Left icon rail. Each tab owns sidebar context and main stage together. */
 export type RailTab = "now" | "docs" | "projects" | "settings" | "music" | "shell-dev";

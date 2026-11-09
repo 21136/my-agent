@@ -91,9 +91,6 @@ function bindTopbarHandlers(container: HTMLElement, handlers: TopbarHandlers): v
   container.querySelector<HTMLButtonElement>("#unified-open-proposal")?.addEventListener("click", () => handlers.onOpenProposals?.());
   container.querySelector<HTMLButtonElement>("#unified-open-memory")?.addEventListener("click", () => handlers.onOpenMemory?.());
   container.querySelector<HTMLButtonElement>("#unified-request-current-work")?.addEventListener("click", () => handlers.onToggleCurrentWorkOverview?.());
-  container.querySelector<HTMLButtonElement>("#unified-current-work-close")?.addEventListener("click", () => handlers.onToggleCurrentWorkOverview?.());
-  container.querySelector<HTMLButtonElement>("#unified-current-work-more")?.addEventListener("click", () => handlers.onLoadMoreCurrentWorkOverview?.());
-  container.querySelector<HTMLButtonElement>("#unified-current-work-ask")?.addEventListener("click", () => handlers.onRequestCurrentWorkOverview?.());
   container.querySelectorAll<HTMLButtonElement>(".unified-header-cta").forEach(button => {
     button.addEventListener("click", () => handlers.onHeaderAction?.(button.dataset.action || ""));
   });
@@ -124,8 +121,9 @@ export function renderTopbarV2(container: HTMLElement, state: TopbarState, handl
     : "";
 
   const overview = state.currentWorkOverview;
+  // Entry only: content lives on the full-page current-work workbench.
   const currentWorkButton = overview?.visible
-    ? `<div class="unified-topbar-current-work-wrap"><button type="button" class="unified-btn unified-btn-ghost unified-topbar-current-work" id="unified-request-current-work" aria-controls="unified-current-work-popover" aria-expanded="${overview.open ? "true" : "false"}" title="查看当前会话工作概况">${escapeHtml(overview.label)}</button>${overview.open ? `<section id="unified-current-work-popover" class="unified-current-work-popover" aria-label="当前工作概况"><header class="unified-current-work-heading"><div><span>当前会话</span><h3>工作概况</h3></div><button type="button" class="unified-current-work-close" id="unified-current-work-close" aria-label="关闭工作概况" title="关闭">×</button></header><div class="unified-current-work-content">${overview.bodyHtml}</div><div class="unified-current-work-actions">${overview.canExpand ? `<button type="button" class="unified-btn unified-btn-ghost" id="unified-current-work-more" ${overview.loadingMore ? "disabled" : ""}>${escapeHtml(overview.moreLabel)}</button>` : ""}<button type="button" class="unified-btn unified-btn-ghost" id="unified-current-work-ask">在对话中查询</button></div></section>` : ""}</div>`
+    ? `<div class="unified-topbar-current-work-wrap"><button type="button" class="unified-btn unified-btn-ghost unified-topbar-current-work" id="unified-request-current-work" aria-controls="unified-current-work" aria-expanded="${overview.open ? "true" : "false"}" title="打开当前工作全页工作台">${escapeHtml(overview.label)}</button></div>`
     : "";
   const trailing = `<div class="unified-topbar-trailing">${currentWorkButton}${memoryButton}${sessionsButton}</div>`;
   const headerCtas = state.headerCtas.length
