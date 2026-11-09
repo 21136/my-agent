@@ -144,6 +144,52 @@ function scheduleDispatchApplied(page) {
   });
 }
 
+function latestUnsettledConfirmRequestId(page) {
+  return page.evaluate(() => {
+    const requests = window.receivedEvents?.filter(event => event.type === "confirm.request") ?? [];
+    for (let index = requests.length - 1; index >= 0; index -= 1) {
+      const id = requests[index]?.request_id;
+      if (typeof id !== "string" || !id) continue;
+      const settled = window.receivedEvents?.some(event => event.type === "confirm.done"
+        && event.request_id === id && ["y", "n", "timeout"].includes(event.choice));
+      if (!settled) return id;
+    }
+    return null;
+  });
+}
+
+async function tryAcceptUnsettledComposerConfirm(page, { timeout = 20_000 } = {}) {
+  const requestId = await latestUnsettledConfirmRequestId(page);
+  if (!requestId) return false;
+  try {
+    await page.waitForFunction(
+      id => {
+        const btn = document.querySelector(
+          `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
+        );
+        return btn instanceof HTMLButtonElement && !btn.disabled;
+      },
+      requestId,
+      { timeout },
+    );
+  } catch {
+    return false;
+  }
+  const approve = page.locator(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`);
+  const disclosure = page.locator("[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary");
+  if (await disclosure.count()) await disclosure.first().click();
+  await approve.scrollIntoViewIfNeeded();
+  await approve.click({ force: true });
+  await page.waitForFunction(
+    id => window.receivedEvents?.some(
+      event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
+    ),
+    requestId,
+    { timeout },
+  );
+  return true;
+}
+
 /** Companion-home ordinary confirms: composer dock is the actionable surface (see chat-state companionHomeComposerOwnsOrdinaryConfirm). */
 async function acceptComposerOrdinaryConfirm(page, {
   timeout = 45000,
@@ -188,41 +234,42 @@ async function acceptComposerOrdinaryConfirm(page, {
   }
 }
 
-async function acceptDispatchConfirmsUntilApplied(page, confirmRequestsSeen, { timeout = 240_000 } = {}) {
+async function acceptDispatchConfirmsUntilApplied(page, _confirmRequestsSeen, { timeout = 240_000 } = {}) {
   const deadline = Date.now() + timeout;
-  let baseline = confirmRequestsSeen;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  while (Date.now() < deadline) {
     if (await scheduleDispatchApplied(page)) return;
+    const rejected = await page.evaluate(() => {
+      const done = window.receivedEvents?.findLast(event => event.type === "work-records.schedule.dispatch.done");
+      return done?.status === "rejected" ? done : null;
+    });
+    if (rejected) {
+      throw new Error(`schedule.dispatch.done rejected: ${rejected.message ?? rejected.status}`);
+    }
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
-    const slice = Math.min(remaining, 90_000);
-    try {
-      await page.waitForFunction(
-        ([min]) => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > min
-          || Boolean(document.querySelector("[data-pending-confirm-hint]"))
-          || Boolean(window.receivedEvents?.some(event => event.type === "work-records.schedule.dispatch.done"
-            && event.status === "applied" && event.tool_ok === true)),
-        [baseline],
-        { timeout: slice },
-      );
-    } catch {
-      if (await scheduleDispatchApplied(page)) return;
-      break;
-    }
-    if (await scheduleDispatchApplied(page)) return;
-    await acceptComposerOrdinaryConfirm(page, {
-      timeout: slice,
-      minConfirmRequests: baseline,
-      requireHintClear: false,
+    const accepted = await tryAcceptUnsettledComposerConfirm(page, {
+      timeout: Math.min(remaining, 15_000),
     });
-    baseline = await confirmRequestCount(page);
+    if (accepted) continue;
+    await page.waitForFunction(
+      () => {
+        const requests = window.receivedEvents?.filter(event => event.type === "confirm.request") ?? [];
+        const latestId = requests.at(-1)?.request_id;
+        const unsettled = latestId && !window.receivedEvents?.some(event => event.type === "confirm.done"
+          && event.request_id === latestId && ["y", "n", "timeout"].includes(event.choice));
+        if (unsettled && document.querySelector("[data-pending-confirm-hint]")) return true;
+        return window.receivedEvents?.some(event => event.type === "work-records.schedule.dispatch.done"
+          && event.status === "applied" && event.tool_ok === true)
+          || Boolean(document.querySelector("[data-pending-confirm-hint]"));
+      },
+      null,
+      { timeout: Math.min(remaining, 1_500) },
+    ).catch(() => {});
   }
   if (!(await scheduleDispatchApplied(page))) {
-    const rejected = await page.evaluate(() => window.receivedEvents?.findLast(
-      event => event.type === "work-records.schedule.dispatch.done",
-    ));
-    throw new Error(rejected
-      ? `schedule.dispatch.done rejected: ${rejected.message ?? rejected.status}`
+    const pending = await latestUnsettledConfirmRequestId(page);
+    throw new Error(pending
+      ? `schedule.dispatch never applied; unsettled confirm ${pending}`
       : "schedule.dispatch.done never reached applied");
   }
 }

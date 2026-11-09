@@ -22,6 +22,7 @@ test("opt-in env gates for real multi-project schedule GUI", () => {
   assert.match(browser, /acceptComposerOrdinaryConfirm/);
   assert.match(browser, /minConfirmRequests/);
   assert.match(browser, /acceptDispatchConfirmsUntilApplied/);
+  assert.match(browser, /tryAcceptUnsettledComposerConfirm/);
   assert.match(browser, /requireHintClear/);
   const run79 = readFileSync(path.join(repo, "desktop/_run79-schedule-real-host.cmd"), "utf8");
   assert.match(run79, /multi-project-schedule-real-host-browser-e2e\.test\.mjs/);
