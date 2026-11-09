@@ -771,6 +771,17 @@ class ProjectWorkerHost:
         with self._batch_authorization_lock:
             self._batch_authorizations.pop(grant.grant_id, None)
 
+    def active_writing_project_ids(self, conversation_id: str) -> frozenset[str]:
+        """Parent-session projects that currently hold a started worker reservation."""
+        if type(conversation_id) is not str or not conversation_id:
+            return frozenset()
+        with self._reservation_lock:
+            return frozenset(
+                reservation.project_id
+                for reservation, started in self._reservations.values()
+                if started and reservation.conversation_id == conversation_id
+            )
+
     def request_cancel_for_record(
         self, session: Session, *, item_id: str, requirement_id: str,
     ) -> str:

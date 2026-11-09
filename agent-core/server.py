@@ -6389,20 +6389,62 @@ def _begin_work_record_capture_turn(repl: ConversationRepl, bridge: WsBridge) ->
 
 
 def _recover_interrupted_work_records(session: Session) -> bool:
-    """Report whether persisted execution state needs recovery without mutating it.
-
-    A persisted in-progress row or schedule claim may belong to a live worker in
-    another process. Without an authoritative cross-process host check, preserve
-    it and report recovery as unverified; never release claims or restart work.
-    """
+    """Mark stale foreign-owner runs unknown, then report whether anything remains unresolved."""
     from work_records import WorkRecordStore
 
-    items = WorkRecordStore(session).list_items()
+    store = WorkRecordStore(session)
+    try:
+        store.mark_interrupted_runs_unknown(
+            event_id_prefix=f"session-open:{session.conversation_id}",
+        )
+    except Exception:
+        return False
+    items = store.list_items()
     return not any(
         requirement.get("status") == "in_progress" or "schedule_claim" in requirement
         for item in items
         for requirement in item.get("requirements", [])
     )
+
+
+def _bind_live_project_worker_turn(
+    repl: ConversationRepl, bridge: WsBridge, run_snapshot: Any,
+) -> tuple[str, int] | None:
+    """Bind the active parent lifecycle for a one-shot project worker dispatch."""
+    bound_agent = repl.agent
+    bound_session = repl.session
+    if (run_snapshot is None or run_snapshot.state != "running"
+            or type(bound_agent).__name__ != "Agent"):
+        return None
+    bind_project_worker_context = getattr(bound_agent, "bind_project_worker_live_context", None)
+    if not callable(bind_project_worker_context):
+        return None
+    captured_run_id = run_snapshot.run_id
+    captured_epoch = run_snapshot.sequence
+    captured_conversation_id = bound_session.conversation_id
+
+    def live_project_worker_binding(candidate_session: Session, run_id: str, turn_epoch: int) -> bool:
+        current = bridge.lifecycle.snapshot()
+        return bool(
+            candidate_session is bound_session
+            and repl.session is bound_session
+            and repl.agent is bound_agent
+            and bound_session.conversation_id == captured_conversation_id
+            and run_id == captured_run_id
+            and turn_epoch == captured_epoch
+            and bridge.lifecycle_conversation_id == captured_conversation_id
+            and bridge._turn_busy.is_set()
+            and current is not None
+            and current.run_id == captured_run_id
+            and current.sequence == captured_epoch
+            and current.state == "running"
+            and not current.cancel_requested
+            and not bridge.cancel_event.is_set()
+            and not bridge._connection_closed.is_set()
+        )
+
+    bind_project_worker_context(captured_run_id, captured_epoch, live_project_worker_binding)
+    return captured_run_id, captured_epoch
 
 
 class WsSessionHandler:
@@ -7851,6 +7893,106 @@ class WsSessionHandler:
 
         return False
 
+    async def _dispatch_work_records_schedule(
+        self,
+        message: dict[str, Any],
+        repl: ConversationRepl,
+        bridge: WsBridge,
+    ) -> None:
+        """Explicit user-confirmed dispatch into the trusted run_project_workers host path."""
+        allowed = {"type", "session_id", "request_id", "project_ids", "workers"}
+        request_id = message.get("request_id")
+        session_id = message.get("session_id")
+        if (set(message) - allowed or session_id != repl.session.conversation_id
+                or type(request_id) is not str or not request_id.strip()
+                or str(uuid.UUID(request_id)) != request_id):
+            bridge.emit({"type": "work-records.schedule.dispatch.done", "request_id": request_id if type(request_id) is str else "",
+                         "session_id": repl.session.conversation_id, "status": "rejected",
+                         "message": "调度启动请求无效。"})
+            return
+        if bridge._turn_busy.is_set():
+            bridge.emit({"type": "work-records.schedule.dispatch.done", "request_id": request_id,
+                         "session_id": repl.session.conversation_id, "status": "rejected",
+                         "message": "当前回合繁忙，未启动调度。"})
+            return
+        from multi_project_work_record_authorization import authorize_project_record_sources
+        from multi_project_work_records import _validate_project_selection
+        from work_records_schedule_advance import (
+            build_run_project_workers_arguments,
+            schedule_advance_limit,
+            validate_schedule_dispatch,
+        )
+
+        workers = message.get("workers")
+        project_ids = message.get("project_ids")
+        ok = False
+        finish_reason = "error"
+        turn_started = False
+        try:
+            selected = _validate_project_selection(project_ids)
+            if type(workers) is not list or not workers:
+                raise ValueError("worker list is required")
+            host = getattr(getattr(repl, "agent", None), "project_worker_host", None)
+            if host is None:
+                raise PermissionError("project worker host is unavailable")
+            allowed_count = schedule_advance_limit(
+                host, repl.session.conversation_id, requested=len(workers),
+            )
+            if allowed_count < len(workers):
+                raise PermissionError("concurrency cap prevents starting this many workers now")
+            if not bridge.begin_turn(mode="ordinary"):
+                raise PermissionError("live parent turn is unavailable")
+            turn_started = True
+            bridge.lifecycle_conversation_id = repl.session.conversation_id
+            run_snapshot = bridge.lifecycle.snapshot()
+            if _bind_live_project_worker_turn(repl, bridge, run_snapshot) is None:
+                raise PermissionError("worker live binding is unavailable")
+            bridge._turn_busy.set()
+            repl.session._ordinary_work_intent = "execute"
+            if getattr(repl.session.meta, "turn_mode", "") != "agent":
+                repl.session.meta.turn_mode = "agent"
+            sources = await asyncio.to_thread(
+                authorize_project_record_sources, repl.session, selected,
+                confirm_fn=lambda preview_text, allow_all: bridge.confirm_with_receipt(preview_text, allow_all)[0],
+                cancel_event=bridge.cancel_event,
+            )
+            normalized = validate_schedule_dispatch(sources, workers[:allowed_count])
+            tool_args = build_run_project_workers_arguments(normalized)
+            preview = ("确认按当前工作调度预览启动下列 worker（不经由模型改写）：\n"
+                       + json.dumps(tool_args, ensure_ascii=False, indent=2, sort_keys=True))
+            choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+            if choice != "y" or bridge.cancel_event.is_set():
+                raise PermissionError("schedule dispatch confirmation declined")
+            dispatch = getattr(repl.agent.executor, "project_worker_host_dispatch", None)
+            if not callable(dispatch):
+                raise PermissionError("project worker dispatch is unavailable")
+            dispatch_result = await asyncio.to_thread(dispatch, tool_args)
+            data = getattr(dispatch_result, "data", None) if dispatch_result is not None else None
+            ok = bool(getattr(dispatch_result, "ok", False))
+            finish_reason = "completed" if ok else "error"
+            bridge.emit({"type": "work-records.schedule.dispatch.done", "request_id": request_id,
+                         "session_id": repl.session.conversation_id,
+                         "status": "applied" if ok else "rejected",
+                         "message": ("调度请求已进入 host 生命周期；这不代表事项已完成或验证通过。"
+                                     if ok else "调度请求被 host 拒绝。"),
+                         "tool_ok": ok,
+                         "workers": (data.get("workers") if type(data) is dict else None)})
+        except Exception as exc:
+            bridge.emit({"type": "work-records.schedule.dispatch.done", "request_id": request_id,
+                         "session_id": repl.session.conversation_id, "status": "rejected",
+                         "message": f"调度未能启动 worker。 ({exc})" if str(exc) else "调度未能启动 worker。"})
+        finally:
+            if turn_started:
+                bound_agent = getattr(repl, "agent", None)
+                if bound_agent is not None and callable(getattr(bound_agent, "clear_project_worker_live_context", None)):
+                    snapshot = bridge.lifecycle.snapshot()
+                    if snapshot is not None:
+                        bound_agent.clear_project_worker_live_context(snapshot.run_id, snapshot.sequence)
+                bridge._turn_busy.clear()
+                bridge.end_turn()
+                if bridge.finish_execution(finish_reason, ok=ok):
+                    bridge.emit_turn_event({"type": "turn.end", "ok": ok, "finish_reason": finish_reason})
+
     async def _dispatch_work_record_capture(
         self,
         message: dict[str, Any],
@@ -8060,6 +8202,7 @@ class WsSessionHandler:
                         "stop": {"pending", "queued", "waiting_confirmation", "blocked"},
                         "continue": {"stopped", "blocked"},
                         "inspect_unknown_claim": {"unknown"},
+                        "cancel_execution": {"in_progress"},
                     }
                     if action not in allowed_remote_states or remote_status not in allowed_remote_states[action]:
                         raise WorkRecordConflict("remote item state does not allow this control")
@@ -8067,6 +8210,37 @@ class WsSessionHandler:
                         claim = source_requirement.get("schedule_claim")
                         if type(claim) is not dict or claim.get("state") != "unknown":
                             raise WorkRecordConflict("no unknown persisted schedule claim is available for inspection")
+                if action == "cancel_execution":
+                    preview = ("确认停止映射来源 Session 中正在运行的 project worker：\n"
+                               f"项目：{project_id}\n来源 Session：{source_session_id}\n"
+                               f"事项：{source_item.get('title', item_id)}\n"
+                               f"要求：{source_requirement.get('text', '')}\n"
+                               f"记录版本：{message['expected_source_revision']}\n"
+                               "仅向当前主会话 host 发送真实停止信号；不会改写来源记录元数据，也不假装已停止。")
+                    choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
+                    if (choice != "y" or bridge._connection_closed.is_set() or repl.session is not session
+                            or getattr(getattr(repl, "agent", None), "session", None) is not session):
+                        raise ValueError
+                    after_mapping = _read_project_sessions(session.paths)
+                    if not _mapping_matches({project_id: source_session_id}, after_mapping, [project_id]):
+                        raise WorkRecordConflict("project source mapping changed after confirmation")
+                    if source_snapshot.get("revision") != message["expected_source_revision"]:
+                        raise WorkRecordConflict("source record changed after cancellation confirmation")
+                    host = getattr(getattr(repl, "agent", None), "project_worker_host", None)
+                    if host is None or not callable(getattr(host, "request_cancel_for_record", None)):
+                        raise WorkRecordConflict("the active project worker host is unavailable")
+                    cancellation = host.request_cancel_for_record(
+                        session, item_id=item_id, requirement_id=message["requirement_id"],
+                    )
+                    if cancellation != "signal_set":
+                        raise WorkRecordConflict(f"active worker cancellation was not accepted: {cancellation}")
+                    bridge.emit({"type": "work-record.control.done", "request_id": request_id,
+                                 "session_id": session.conversation_id, "item_id": item_id,
+                                 "project_id": project_id, "requirement_id": message["requirement_id"],
+                                 "action": action, "status": "applied",
+                                 "message": ("远程 worker 停止请求已发给主会话 host；这不代表它已停止，"
+                                             "来源记录将在 host 终态结算后更新。")})
+                    return
                 dependency_labels = []
                 if action == "set_dependencies":
                     labels = {row.get("requirement_id"): row.get("text", "")
@@ -8191,7 +8365,9 @@ class WsSessionHandler:
                 requirement_id = message["requirement_id"]
                 success_message = "已记录人工核查；停止状态仍未证实，unknown claim 保留，未释放或重派。"
             elif action == "cancel_execution":
-                if remote or item.get("scope") != {
+                if remote:
+                    raise ValueError
+                if item.get("scope") != {
                         "kind": "project", "project_id": getattr(session.meta, "project_id", "")
                     }:
                     raise ValueError
@@ -9161,6 +9337,9 @@ class WsSessionHandler:
             return
         if msg_type == "work-record.capture":
             await self._dispatch_work_record_capture(message, repl, bridge)
+            return
+        if msg_type == "work-records.schedule.dispatch":
+            await self._dispatch_work_records_schedule(message, repl, bridge)
             return
         if msg_type == "work-record.control":
             await self._dispatch_work_record_control(message, repl, bridge)

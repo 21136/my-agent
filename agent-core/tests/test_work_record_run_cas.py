@@ -486,6 +486,26 @@ def test_startup_recovery_does_not_release_an_unstarted_schedule_claim(tmp_path)
     assert after["requirements"][0]["status"] == "pending"
 
 
+def test_session_open_recovery_marks_foreign_owner_in_progress_unknown(tmp_path):
+    from work_records import _WORK_RECORD_PROCESS_INSTANCE_ID
+
+    session = _session(tmp_path)
+    store = WorkRecordStore(session)
+    item = store.create_item(title="stale", scope={"kind": "independent"})
+    requirement = store.add_requirement(item["item_id"], "stale work", event_id="stale-req")
+    store.begin_requirement_run(
+        item["item_id"], requirement["requirement_id"], run_id="stale-run",
+        expected_current_run_id=None,
+    )
+    store._mutate(lambda data: (
+        next(row for row in data["items"][0]["requirements"]
+             if row["requirement_id"] == requirement["requirement_id"]).__setitem__(
+                 "execution_owner_id", "previous-process-instance"), True))
+    assert _recover_interrupted_work_records(session) is True
+    req = WorkRecordStore(session).get_item(item["item_id"])["requirements"][0]
+    assert req["status"] == "unknown"
+
+
 def test_startup_recovery_warns_only_when_persisted_execution_is_unresolved(tmp_path):
     session = _session(tmp_path)
     store = WorkRecordStore(session)
