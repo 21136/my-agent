@@ -101,6 +101,7 @@ def test_prestart_blocked_workers_keep_tasks_without_fabricating_runs(monkeypatc
         candidates = repl.agent._current_dialogue_project_card_candidates
         assert len(candidates) == 1
         assert candidates[0]["project_ids"] == ("project-alpha", "project-beta")
+        assert candidates[0]["defer_chat_surface"] is True
 
         # Exercise the actual server publisher/ledger/desktop-event boundary with
         # only the synthetic blocked facts; skip only the coalescing delay.
@@ -110,9 +111,14 @@ def test_prestart_blocked_workers_keep_tasks_without_fabricating_runs(monkeypatc
         monkeypatch.setattr(ProjectScopedCardOutbox,"remaining_seconds",lambda self,intent:0)
         store=WorkRecordStore(session)
         for project_id in candidates[0]["project_ids"]:
-            assert _publish_current_dialogue_project_work_card(repl,bridge,session,store,project_id) is True
-        payloads=[event for event in desktop_events if event.get("type")=="work-card.present"]
-        assert len(payloads)==2
+            assert _publish_current_dialogue_project_work_card(
+                repl, bridge, session, store, project_id, chat_delivery=False,
+            ) is True
+            assert _publish_current_dialogue_project_work_card(
+                repl, bridge, session, store, project_id, chat_delivery=True,
+            ) is True
+        payloads = [event for event in desktop_events if event.get("type") == "work-card.present"]
+        assert len(payloads) == 2
         by_project={event["card"]["snapshot"]["project_id"]:event for event in payloads}
         assert set(by_project)=={"project-alpha","project-beta"}
         cards=WorkCardLedger(session,store).list_cards()

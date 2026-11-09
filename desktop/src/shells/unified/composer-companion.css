@@ -109,6 +109,38 @@ html[data-theme] #unified-composer #unified-send {
 }
 html[data-theme] #unified-send::before { content: none; }
 
+html[data-theme] .unified-pending-confirm-hint {
+  margin: 0 auto 0.5rem;
+  max-width: 920px;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 35%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-surface) 92%, var(--ma-accent) 8%);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--ma-text) 5%, transparent);
+}
+
+html[data-theme] .unified-pending-confirm-hint-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+html[data-theme] .unified-pending-confirm-hint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+html[data-theme] .unified-pending-confirm-hint-detail {
+  margin: 0;
+  font-size: 0.92rem;
+  color: color-mix(in srgb, var(--ma-text) 85%, transparent);
+}
+
 @media (max-width: 680px) {
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
     padding-inline: 0.6rem;

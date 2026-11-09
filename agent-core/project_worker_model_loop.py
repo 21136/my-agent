@@ -128,6 +128,7 @@ class ProjectWorkerModelOutcome:
     writes: tuple[ProjectWorkerWriteReceipt, ...] = ()
     error_code: str = ""
     error_type: str = ""
+    error_message: str = ""
     scope_error_detail: dict[str, Any] | None = None
     verification_level: str = "not_verified"
     tests_run: tuple[str, ...] = ()
@@ -196,6 +197,7 @@ def _scope_from_spec(
 def _failure(spec: object, status: str, code: str, *, requests: int = 0,
              tool_calls: int = 0, writes: list[ProjectWorkerWriteReceipt] | None = None,
              error_type: str = "",
+             error_message: str = "",
              scope_error_detail: dict[str, Any] | None = None) -> ProjectWorkerModelOutcome:
     project_id = spec.project_id if type(spec) is ProjectWorkerSpec else ""
     receipts = tuple(writes or ())
@@ -207,6 +209,7 @@ def _failure(spec: object, status: str, code: str, *, requests: int = 0,
         writes=receipts,
         error_code=code,
         error_type=error_type,
+        error_message=error_message[:320] if isinstance(error_message, str) else "",
         scope_error_detail=scope_error_detail,
         verification_level=_verification_level(receipts),
         tests_run=(),
@@ -440,7 +443,8 @@ def run_project_worker_model_loop(
                     except LLMOutboundRequestError as exc:
                         return _failure(spec, "failed", "provider_request_failed",
                                         requests=requests, tool_calls=tool_calls,
-                                        writes=writes, error_type=type(exc).__name__)
+                                        writes=writes, error_type=type(exc).__name__,
+                                        error_message=str(exc))
                     except Exception as exc:
                         return _failure(spec, "failed", "confirmed_request_failed",
                                         requests=requests, tool_calls=tool_calls,

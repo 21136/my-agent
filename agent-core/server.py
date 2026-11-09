@@ -4896,9 +4896,15 @@ async def _run_line(
                             project_ids.update(project_id for project_id in candidate["project_ids"]
                                                if type(project_id) is str)
                     if project_ids:
+                        from current_dialogue_project_card_chat import candidate_defers_chat_surface
+
+                        chat_delivery = not any(
+                            candidate_defers_chat_surface(candidate) for candidate in candidates
+                        )
                         _schedule_current_dialogue_project_work_cards(
                             repl=repl, bridge=bridge, session=bound_session,
                             project_ids=tuple(sorted(project_ids)),
+                            chat_delivery=chat_delivery,
                         )
             if finish_reason in {"cancelled", "timeout"}:
                 ok = False
@@ -5872,7 +5878,7 @@ def _retry_saved_project_scoped_card_reference(
 
 def _publish_current_dialogue_project_work_card(
     repl: ConversationRepl, bridge: WsBridge, session: Session,
-    store: Any, project_id: str,
+    store: Any, project_id: str, *, chat_delivery: bool = True,
 ) -> bool:
     """Save once, then durably queue/retry the reference; never equate save with delivery."""
     if (repl.session is not session or getattr(repl.agent, "session", None) is not session
@@ -5908,6 +5914,8 @@ def _publish_current_dialogue_project_work_card(
         if intent["state"] == "reference_queued":
             return False  # history owns retry; this is queued, not delivered
         if intent["state"] == "card_saved":
+            if not chat_delivery:
+                return True
             return _retry_saved_project_scoped_card_reference(
                 repl, bridge, session, store, intent,
             )
@@ -5928,8 +5936,8 @@ def _publish_current_dialogue_project_work_card(
                 bridge._work_card_update_coalescer = coalescer
             coalescer.schedule(
                 f"current-dialogue:{session.conversation_id}:{project_id}",
-                lambda: _publish_current_dialogue_project_work_card(
-                    repl, bridge, session, store, project_id,
+                lambda project_id=project_id, chat_delivery=chat_delivery: _publish_current_dialogue_project_work_card(
+                    repl, bridge, session, store, project_id, chat_delivery=chat_delivery,
                 ),
                 delay_seconds=max(remaining, 0.001),
             )
@@ -5970,6 +5978,8 @@ def _publish_current_dialogue_project_work_card(
                           if row["project_id"] == project_id and row["generation"] == intent["generation"]), None)
         if refreshed is None:
             return False
+        if not chat_delivery:
+            return True
         return _retry_saved_project_scoped_card_reference(
             repl, bridge, session, store, refreshed,
         )
@@ -5983,6 +5993,7 @@ def _publish_current_dialogue_project_work_card(
 def _schedule_current_dialogue_project_work_cards(
     *, repl: ConversationRepl, bridge: WsBridge, session: Session,
     project_ids: tuple[str, ...], defer_immediate: bool = False,
+    chat_delivery: bool = True,
 ) -> int:
     """Coalesce current-dialogue project updates on a first-update 30-second deadline."""
     if (repl.session is not session or getattr(repl.agent, "session", None) is not session
@@ -6003,12 +6014,15 @@ def _schedule_current_dialogue_project_work_cards(
             coalescer = ProjectWorkCardUpdateCoalescer(delay_seconds=PROJECT_WORK_CARD_MERGE_SECONDS)
             bridge._work_card_update_coalescer = coalescer
         scheduled = 0
+        from current_dialogue_project_card_chat import project_scoped_snapshot_deferred_from_chat
+
         for project_id in tuple(dict.fromkeys(project_ids)):
             if type(project_id) is not str or not project_id:
                 continue
             snapshot = build_project_scoped_work_record_cards(store, project_id)
             if snapshot.completeness != "complete" or not snapshot.cards or snapshot.result_count <= 0:
                 continue
+            deliver_to_chat = chat_delivery and not project_scoped_snapshot_deferred_from_chat(snapshot)
             request_id = project_scoped_snapshot_request_id(snapshot)
             intent = durable_outbox.record_update(
                 project_id, request_id, window_seconds=PROJECT_WORK_CARD_MERGE_SECONDS,
@@ -6022,8 +6036,8 @@ def _schedule_current_dialogue_project_work_cards(
             key = f"current-dialogue:{session.conversation_id}:{project_id}"
             coalescer.schedule(
                 key,
-                lambda project_id=project_id: _publish_current_dialogue_project_work_card(
-                    repl, bridge, session, store, project_id,
+                lambda project_id=project_id, chat_delivery=deliver_to_chat: _publish_current_dialogue_project_work_card(
+                    repl, bridge, session, store, project_id, chat_delivery=chat_delivery,
                 ),
                 immediate=remaining <= 0 and not defer_immediate,
                 delay_seconds=max(remaining, 0.001),

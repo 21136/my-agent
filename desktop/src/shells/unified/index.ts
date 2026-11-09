@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -103,6 +103,7 @@ import { evolutionView, type EvolutionProjection, type EvolutionView } from "../
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
 import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkWorkbenchPage, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import {
@@ -481,6 +482,16 @@ export function mountUnifiedShell(
   // Full-page workbench owns its scroll; keep a no-op for older resize hooks.
   function sizeCurrentWorkPopover(): void {}
 
+  function currentWorkLiveSessionInput(): CurrentWorkLiveSessionInput {
+    return {
+      confirmPending: chat.model.confirmPending,
+      confirmOverlay: chat.model.confirmOverlay,
+      turnActive: chat.model.turnActive,
+      executionState: chat.model.executionState,
+      blocks: chat.model.blocks,
+    };
+  }
+
   function refreshTopbar(): void {
     syncTopbarFromProject();
     topbarState.memoryCount = memoryShelfState.memories.length;
@@ -499,6 +510,7 @@ export function mountUnifiedShell(
       unavailable: currentWorkOverviewUnavailable || (multiProjectAvailable && !currentWorkOverviewResult),
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
+      liveSession: currentWorkLiveSessionInput(),
     });
     let currentWorkExtras = "";
     if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
@@ -535,6 +547,7 @@ export function mountUnifiedShell(
     if (projectState.mainFocus === "settings") renderSettingsStage();
     if (projectState.mainFocus === "current-work") renderCurrentWorkStage(currentWorkExtras);
     else sizeCurrentWorkPopover();
+    syncPendingConfirmComposerHint();
   }
 
   function renderCurrentWorkStage(extrasHtml?: string): void {
@@ -544,6 +557,7 @@ export function mountUnifiedShell(
       unavailable: currentWorkOverviewUnavailable,
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
+      liveSession: currentWorkLiveSessionInput(),
     });
     let extras = extrasHtml;
     if (extras === undefined) {
@@ -1014,7 +1028,7 @@ function refreshGlobalRoleModels(): void {
       },
       onLlmPending: () => {
         if (!chat.model.cancelRequested) {
-          setStatus("处理中…");
+          setStatus(chatSessionAwaitingUserConfirm(chat.model) ? "等待确认…" : "处理中…");
         }
         syncToolElapsedTimer();
         requestAnimationFrame(() => scrollToBottomIfNear());
@@ -1755,6 +1769,60 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const showMeta = statusVisible || tokenVisible;
     composerMetaEl.classList.toggle("hidden", !showMeta);
     composerMetaEl.hidden = !showMeta;
+  }
+
+  function pendingConfirmRequestId(): string | null {
+    const overlay = chat.model.confirmOverlay;
+    if (overlay?.requestId && (!overlay.resolved || isConfirmInProgressLabel(overlay.resolved))) {
+      return overlay.requestId;
+    }
+    for (let index = chat.model.blocks.length - 1; index >= 0; index -= 1) {
+      const block = chat.model.blocks[index];
+      if (block.kind !== "confirm") continue;
+      if (block.confirmKind === "work_record_post_turn") continue;
+      if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
+    }
+    return null;
+  }
+
+  function syncPendingConfirmComposerHint(): void {
+    const awaiting = chatSessionAwaitingUserConfirm(chat.model);
+    let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
+    if (!awaiting) {
+      hint?.remove();
+      return;
+    }
+    const preview = primaryPendingConfirmPreview(chat.model);
+    const requestId = pendingConfirmRequestId();
+    if (!preview.trim() || !requestId) {
+      hint?.remove();
+      return;
+    }
+  const summary = summarizeConfirmPreview(preview);
+    const batchAuthorization = isProjectWorkerBatchAuthorizationPreview(preview);
+    if (!hint) {
+      hint = document.createElement("section");
+      hint.dataset.pendingConfirmHint = "1";
+      hint.className = "unified-pending-confirm-hint";
+      hint.setAttribute("role", "region");
+      hint.setAttribute("aria-label", "待确认授权");
+      composerDock.insertBefore(hint, composerMetaEl);
+    }
+    const detail = batchAuthorization
+      ? renderProjectWorkerBatchAuthorizationHtml(preview)
+      : `<p class="unified-pending-confirm-hint-detail">${escapeHtml(summary.headline)}</p>`;
+    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong><button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button></div>${detail}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}">同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}">拒绝</button></div>`;
+  }
+
+  function appendPendingConfirmFallbackHtml(html: string): string {
+    if (!chatSessionAwaitingUserConfirm(chat.model)) return html;
+    if (html.includes("unified-confirm") || html.includes("data-project-worker-batch-confirm")) return html;
+    const preview = primaryPendingConfirmPreview(chat.model);
+    const requestId = pendingConfirmRequestId();
+    if (!preview.trim() || !requestId) return html;
+    const actions = `<button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}">允许此次</button>`
+      + `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${escapeHtml(requestId)}">拒绝</button>`;
+    return `${html}<div class="unified-pending-confirm-fallback">${renderConfirmCardHtml(preview, actions)}</div>`;
   }
 
   function clearProjectWorkerProgressStatus(): void {
@@ -4330,7 +4398,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const elapsedMs = Math.max(maxRunningMs, maxLlmWaitMs, turnElapsedMs);
     if (elapsedMs >= 1000 && !chat.model.cancelRequested) {
       const sec = Math.floor(elapsedMs / 1000);
-      if (chat.model.confirmPending) {
+      if (chatSessionAwaitingUserConfirm(chat.model)) {
         setStatus(`等待确认… ${sec}s`);
         return;
       }
@@ -4338,7 +4406,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (
       elapsedMs >= 1000 &&
       !chat.model.cancelRequested &&
-      !chat.model.confirmPending
+      !chatSessionAwaitingUserConfirm(chat.model)
     ) {
       const sec = Math.floor(elapsedMs / 1000);
       if (maxRunningMs >= 1000) {
@@ -4540,7 +4608,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       hasReply: blocks.some((block) => block.kind === "assistant" && block.text.trim() !== ""),
       toolFailed: Boolean(lastFailedTool(tools)),
       hasNotice: blocks.some((block) => block.kind === "notice" && (block.plainText || !adoptPathFromNotice(block.text))),
-      confirmPending: blocks.some((block) => block.kind === "confirm" && !block.resolved) || chat.model.confirmPending,
+      confirmPending: chatSessionAwaitingUserConfirm(chat.model),
     };
   }
 
@@ -4592,11 +4660,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (!blocks.length && !chat.isWorking()) {
       return renderIntimatePresenceStageHtml(escapeHtml(projectState.projectId || ""), totalChatMessagesCount());
     }
-    if (!useTurnCardLayout()) {
-      return renderBlocksFlat(blocks);
-    }
-    const segs = segmentChatBlocks(blocks);
-    return segs.map((seg, idx) => renderChatSegment(seg, idx === segs.length - 1)).join("");
+    const grouped = !useTurnCardLayout()
+      ? renderBlocksFlat(blocks)
+      : segmentChatBlocks(blocks).map((seg, idx) => renderChatSegment(seg, idx === segs.length - 1)).join("");
+    return appendPendingConfirmFallbackHtml(grouped);
   }
 
   function renderBlock(block: ChatBlock): string {
@@ -5218,6 +5285,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function renderChat(): void {
     // Immediate paint; coalesce bursty follow-ups (streaming deltas) into one trailing pass.
     doRender();
+    syncPendingConfirmComposerHint();
     settlePetAvatars();
     syncLiveThinkingDom();
     void hydrateGeneratedImages(chatEl);
@@ -5708,7 +5776,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   // ---- confirm clicks ----
-  chatEl.addEventListener("click", (ev) => {
+  const handleConfirmButtonClick = (ev: Event) => {
     const target = ev.target as HTMLElement | null;
     const btn = target?.closest<HTMLButtonElement>("[data-confirm]");
     if (!btn || btn.disabled) return;
@@ -5716,6 +5784,16 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const choice = btn.dataset.confirm as "y" | "n" | "a" | undefined;
     if (!id || !choice) return;
     submitConfirmById(id, choice);
+  };
+  chatEl.addEventListener("click", handleConfirmButtonClick);
+  composerDock.addEventListener("click", (ev) => {
+    const jump = (ev.target as HTMLElement)?.closest<HTMLButtonElement>("[data-pending-confirm-jump]");
+    if (jump) {
+      ev.preventDefault();
+      scrollPendingConfirmIntoView();
+      return;
+    }
+    handleConfirmButtonClick(ev);
   });
 
   // ---- confirm glass clicks (night perspective) ----
@@ -7136,7 +7214,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         currentWorkOverviewUnavailable = false;
         if (event.state === "no_records" || event.state === "collapsed" || (event.state === "visible" && event.visibility_counts.visible_groups === 0)) clearCurrentWorkVisibilityRecheck();
         else scheduleCurrentWorkVisibilityRecheck(currentWorkOverviewResult, event.session_id);
-        if (!buildCurrentWorkOverviewPanel(currentWorkOverviewResult, { open: currentWorkOverviewOpen }).visible) currentWorkOverviewOpen = false;
+        if (!buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
+          open: currentWorkOverviewOpen,
+          liveSession: currentWorkLiveSessionInput(),
+        }).visible) currentWorkOverviewOpen = false;
         refreshTopbar();
         flushQueuedCurrentWorkOverviewRefresh();
         break;

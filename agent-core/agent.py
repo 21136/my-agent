@@ -3697,6 +3697,13 @@ class Agent:
                     and batch_binding is not None and batch_reservation is not None
                     else "mismatch"
                 )
+            model_error_code = None
+            model_error_type = None
+            model_error_message = None
+            if model_turn is not None:
+                model_error_code = getattr(model_turn, "error_code", None)
+                model_error_type = getattr(model_turn, "error_type", None)
+                model_error_message = getattr(model_turn, "error_message", None)
             rows.append({
                 "worker_id": outcome.worker_id,
                 "run_id": outcome.run_id,
@@ -3729,7 +3736,17 @@ class Agent:
                 "record_requirement_id": batch_binding.get("requirement_id") if worker_batch_tracking_mode == "created_current_dialogue" and batch_binding is not None else None,
                 "record_tracking_mode": worker_batch_tracking_mode or ("unlinked" if worker_batch_unlinked else "not_linked"),
                 "error_code": outcome.error_code,
+                "model_error_code": model_error_code,
+                "model_error_type": model_error_type,
+                "model_error_message": model_error_message,
             })
+        try:
+            from worker_outcome_user_copy import format_worker_batch_failure_notice
+            failure_notice = format_worker_batch_failure_notice(rows)
+            if failure_notice:
+                self._emit_turn_event({"type": "turn.notice", "level": "warn", "text": failure_notice})
+        except Exception:
+            pass
         if worker_batch_tracking_mode == "created_current_dialogue" and batch_tracking_rows is not None:
             recorded_projects = tuple(sorted({
                 row["project_id"] for row in rows
@@ -3744,12 +3761,15 @@ class Agent:
                 and type(row.get("record_item_id")) is str
             }))
             if recorded_projects and item_ids and len(item_ids) == 1:
+                from current_dialogue_project_card_chat import worker_batch_should_defer_project_cards_to_chat
+
                 self._current_dialogue_project_card_candidates.append({
                     "session_id": self.session.conversation_id,
                     "parent_run_id": run_id,
                     "turn_epoch": turn_epoch,
                     "item_id": item_ids[0],
                     "project_ids": recorded_projects,
+                    "defer_chat_surface": worker_batch_should_defer_project_cards_to_chat(rows),
                 })
 
         if independent_error is not None:
