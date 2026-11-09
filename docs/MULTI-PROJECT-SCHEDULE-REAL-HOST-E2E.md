@@ -23,7 +23,7 @@ On **unbound** companion-home, local `work-records.overview.result` is often `no
 
 Multi-project **只读概况** and **schedule.dispatch** each gate on host `confirm.request` / `confirm.response`. On companion-home the actionable surface is the composer **等待你的确认** strip (`data-pending-confirm-hint`); the browser E2E waits for `confirm.request`, clicks **同意** there, then waits for `confirm.done` before expecting `selected_project_sessions` overview or dispatch.
 
-Real `work-records.schedule.dispatch` re-runs **project work-record source authorization** and then asks for a **launch preview** confirm (`confirm_with_receipt` on the normalized worker list). Additional work-record source-read confirms may follow before the host applies dispatch. The GUI harness accepts each **new** `confirm.request` in order (count-based) until `dispatch.done` is `applied`, without requiring the composer hint to clear between back-to-back confirms (the next prompt may replace it immediately). The synthetic WS fixture skips these server-side confirms.
+Real `work-records.schedule.dispatch` re-runs **project work-record source authorization** and then asks for a **launch preview** confirm (`confirm_with_receipt` on the normalized worker list). Additional work-record source-read confirms may follow before the host applies dispatch. The GUI harness **polls** for unsettled `confirm.request` entries (no matching `confirm.done`) and clicks composer **同意** as soon as the button is enabled — interleaved with waiting for `dispatch.done`, so a fourth `WORK_RECORD_SOURCE_READ_CONFIRM` is not left on the bar while the test blocks on a long single `waitForFunction`. The synthetic WS fixture skips these server-side confirms.
 
 ## Win32 GUI opt-in
 
