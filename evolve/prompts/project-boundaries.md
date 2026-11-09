@@ -13,9 +13,10 @@
 用户说「新项目 …」「另做一个 …」「改做 xxx」「去普通窗造工具」「这个话题清一下重来」等，**不要**在错误上下文里直接写盘。
 
 1. **新建项目**（`workspace/<id>/` 尚不存在）：`propose_context_switch` · **`action=project.create`**，或 `项目 新建 <id>` / `新项目 <id>`。**主界面就地创建并登记**，不换线、不替换聊天记录。
-2. **继续 / 打开已有项目**（主界面小魔王空间、用户说写完/接着做/打开某项目）：**`action=project.open`**（首选）或 **`project.switch`**（与 open 等价时会就地绑定）。**不要**提议「专用会话并切换」；**不要**用 **`session.new`** 代替打开项目。
-3. **已绑定项目 A 再换到 B**：`project.switch` 可能加载 B 的专用会话（换线确认）；确认前禁止写目标项目目录。主界面未绑定任何项目时，打开/继续项目**不弹**换线卡。
-4. **新话题 / 清空聊天**：仅当用户**明确**要求（「新话题」「新开一局」「清一下聊天」）才 `session.new`；**禁止**为项目开工/续做使用 `session.new`。
+2. **继续 / 打开已有项目**（主界面小魔王空间）：**`action=project.open`** 只登记 `workspace/<id>/`，**不绑定本会话写租约**（跨项目施工用 `run_project_workers`）。误绑单项目时用 **`action=project.release`**。**不要**用 **`session.new`** 代替打开项目。
+3. **删除一个或多个 workspace 项目**（含「删掉这些随机数项目」）：**`trash_workspace_projects`**（默认软删到 agent `_trash/`，可 `glob_pattern`）；永久删除须 `confirm_permanent`。**不要**对每个项目 `project.open` 再 `move_to_trash`。
+4. **已绑定项目 A 再换到 B**（专用会话线）：`project.switch` 可能加载 B 的专用会话（换线确认）；确认前禁止写目标项目目录。
+5. **新话题 / 清空聊天**：仅当用户**明确**要求（「新话题」「新开一局」「清一下聊天」）才 `session.new`；**禁止**为项目开工/续做使用 `session.new`。
 
 显式命令 `项目 新建` / `新项目` / `项目 打开` / `项目 切换` / `项目 新开线` / `新会话` 由内核处理，无需再 propose。
 

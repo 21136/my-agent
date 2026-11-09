@@ -444,6 +444,25 @@ def bind_project_session(
     return root
 
 
+def clear_session_project_binding(session: Session) -> bool:
+    """Clear project write binding on this chat without replacing the session (companion home)."""
+    if not (session.meta.project_id or "").strip():
+        return False
+    from session import DEFAULT_ACTIVE_SHELL
+
+    session.meta.project_id = ""
+    session.meta.project_root = ""
+    session.meta.active_shell = DEFAULT_ACTIVE_SHELL
+    session.meta.project_plan_status = ""
+    session.meta.project_plan_confirmed_at = ""
+    session.meta.project_doc_fingerprint = ""
+    session.meta.project_phase_fingerprint = ""
+    session.meta.project_workflow_stage = ""
+    session.meta.project_active_task_id = ""
+    session.meta.updated_at = utc_now_iso()
+    return True
+
+
 def confirm_direct_implement(session: Session) -> str:
     """Arm one ordinary execute request without persisting a permission mode."""
     if session.meta.active_shell != "project":

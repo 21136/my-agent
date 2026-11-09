@@ -1283,13 +1283,19 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
     ),
     "propose_context_switch": (
         "Project context on the main home companion: project.create (new workspace, "
-        "in-place, no 换线), project.open (continue/bind existing project on this chat, "
-        "no 换线), project.switch (cross-project or resume a parked dedicated session "
-        "only when already project-bound — may replace chat). "
+        "in-place, no 换线), project.open (register an existing workspace on this chat "
+        "without binding write lease), project.release (clear erroneous single-project "
+        "binding without 换线), project.switch (dedicated session hop — may replace chat). "
         "session.new = blank chat only when the user explicitly asks to clear the topic "
         "(never for finishing/opening project work on the main UI). "
-        "Call BEFORE writing under a different workspace/<id>/. "
-        "project.create / project.open auto-apply without a 换线 card."
+        "Cross-project file work: run_project_workers; batch delete: trash_workspace_projects. "
+        "project.create / project.open / project.release auto-apply without a 换线 card."
+    ),
+    "trash_workspace_projects": (
+        "Soft-delete one or more workspace/<project_id>/ trees to agent _trash/ from the "
+        "companion without rebinding the session per project; optional glob_pattern "
+        "(e.g. random-number*). Permanent removal requires confirm_permanent=true plus user "
+        "confirm. Cascades work-card soft tombstones for matched projects."
     ),
     "bind_project_dir": (
         "Bind an absolute local directory as this session's current project "
@@ -1643,13 +1649,14 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                     "project.create",
                     "project.open",
                     "project.switch",
+                    "project.release",
                     "session.new",
                 ],
                 "description": (
                     "project.create = new workspace/<id> in-place (no 换线, same chat); "
-                    "project.open = bind/open existing project on this chat (default for "
-                    "「继续/写完」from main home); project.switch = cross-project hop or "
-                    "load a dedicated session when already bound to another project "
+                    "project.open = register existing workspace without binding this session; "
+                    "project.release = clear single-project write binding (companion home); "
+                    "project.switch = dedicated-session hop when already bound "
                     "(may replace chat + confirm); session.new = explicit blank chat only "
                     "(not for project work on main home)"
                 ),
@@ -1698,6 +1705,31 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["path"],
+        "additionalProperties": False,
+    },
+    "trash_workspace_projects": {
+        "type": "object",
+        "properties": {
+            "project_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Explicit workspace project ids to trash",
+            },
+            "glob_pattern": {
+                "type": "string",
+                "description": "Optional shell-style pattern against registered projects (e.g. random-number*)",
+            },
+            "confirm_permanent": {
+                "type": "boolean",
+                "description": "When true, permanently delete workspace trees (not recoverable)",
+                "default": False,
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "Preview targets without moving files",
+                "default": False,
+            },
+        },
         "additionalProperties": False,
     },
     "deliverable_review": {

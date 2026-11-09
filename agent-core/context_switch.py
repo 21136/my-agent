@@ -27,9 +27,11 @@ from project_switch import (
 )
 from session import Session, build_seed_message, create_new, write_last_conversation_id
 
-ContextAction = Literal["project.create", "project.open", "project.switch", "session.new"]
+ContextAction = Literal[
+    "project.create", "project.open", "project.switch", "project.release", "session.new"
+]
 SUPPORTED_ACTIONS = frozenset(
-    {"project.create", "project.open", "project.switch", "session.new"}
+    {"project.create", "project.open", "project.switch", "project.release", "session.new"}
 )
 
 _SESSION_NEW_PROJECT_MARKERS = (
@@ -129,6 +131,18 @@ def normalize_proposal(
             project_id=pid,
         )
 
+    if act == "project.release":
+        shell = target.strip().casefold() or "current"
+        if shell not in {"current", ""}:
+            raise ContextSwitchError("project.release target must be current")
+        return ContextSwitchProposal(
+            action=act,
+            target="current",
+            reason=reason_text,
+            request_id=rid,
+            project_id=None,
+        )
+
     pid_target = normalize_project_id(target)
     template_id = (template or "").strip() or None
     return ContextSwitchProposal(
@@ -156,11 +170,11 @@ def should_auto_apply_context_switch(
             return False
         if proposal.action == "project.switch":
             return False
-    if proposal.action in ("project.create", "project.open"):
+    if proposal.action in ("project.create", "project.open", "project.release"):
         return True
     if proposal.action == "project.switch":
         plan = plan_project_switch(paths, session, proposal.target)
-        return plan.action in {"noop", "bind_current"}
+        return plan.action in {"noop", "bind_current", "register_only"}
     return False
 
 
@@ -180,9 +194,13 @@ def build_context_switch_request(
         side_effects.append("在主界面登记该项目，不换线、不替换聊天记录")
         title = f"新建项目 · {proposal.target}"
     elif proposal.action == "project.open":
-        side_effects.append(f"在本会话绑定并打开 workspace/{proposal.target}")
-        side_effects.append("不换线、不替换聊天记录")
+        side_effects.append(f"在主界面登记 workspace/{proposal.target}")
+        side_effects.append("不绑定本会话、不换线、不替换聊天记录")
         title = f"打开项目 · {proposal.target}"
+    elif proposal.action == "project.release":
+        side_effects.append("解除本会话对单个项目的写入绑定")
+        side_effects.append("不换线、不替换聊天记录")
+        title = "解除项目绑定"
     elif proposal.action == "project.switch":
         replaces = (
             context_switch_replaces_session(paths, session, proposal)
@@ -227,7 +245,7 @@ def apply_context_switch(
 ) -> tuple[Session, str]:
     """Apply confirmed proposal. Returns (possibly new) session + message."""
     if getattr(session, "_companion_multi_project_orchestration_active", False):
-        if proposal.action != "project.create":
+        if proposal.action not in ("project.create", "project.release"):
             from active_work_multi_project import ORCHESTRATION_SWITCH_BLOCKED_MESSAGE
 
             raise ContextSwitchError(ORCHESTRATION_SWITCH_BLOCKED_MESSAGE)
@@ -240,6 +258,8 @@ def apply_context_switch(
         )
     if proposal.action == "project.open":
         return _apply_project_open(paths, session, proposal.target)
+    if proposal.action == "project.release":
+        return _apply_project_release(session)
     if proposal.action == "project.switch":
         return _apply_project_switch(paths, session, proposal.target)
     if proposal.action == "session.new":
@@ -392,6 +412,19 @@ def _create_template_note(template: str | None, project_template: str | None) ->
     if raw_recipe in {"light", "standard", "lite", "full"}:
         selected = normalize_project_template(raw_recipe)
     return " · 轻量模板" if selected == "light" else ""
+
+
+def _apply_project_release(session: Session) -> tuple[Session, str]:
+    from project_cli import clear_session_project_binding
+
+    if not clear_session_project_binding(session):
+        return session, "当前会话未绑定项目"
+    session.save()
+    return (
+        session,
+        "已解除本会话的项目绑定（不换线）。跨项目施工请用 run_project_workers；"
+        "批量删除项目请用 trash_workspace_projects。",
+    )
 
 
 def _apply_project_open(
