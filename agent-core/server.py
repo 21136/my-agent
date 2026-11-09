@@ -72,6 +72,7 @@ _WORK_RECORD_RECOVERY_PROCESS_ID = str(uuid.uuid4())
 _WORK_RECORDS_OVERVIEW_RESPONSE = "work-records.overview.result"
 _WORK_CARD_MESSAGE_TYPES = frozenset({
     "work-card.create", "work-card.get", "work-card.seen", "work-card.list",
+    "work-card.trash", "work-card.restore", "work-card.purge",
     "work-card.result.view", "work-card.snapshot.view", "work-card.received", "work-card.receipt.continue",
 })
 PROJECT_WORK_CARD_MERGE_SECONDS = 30.0
@@ -2288,7 +2289,7 @@ def _record_work_card_result_view(
             return "unavailable"
         if presentation.status != "found" or presentation.fact is None or presentation.fact.card_id != card_id:
             return "rejected"
-        record = ledger.get_card(card_id)
+        record = ledger.get_visible_card(card_id)
         if type(record) is not dict:
             return "unavailable"
         from work_card_presentations import WorkCardPresentations as _WorkCardPresentations
@@ -2525,7 +2526,7 @@ def _emit_work_card_reference(
 
         store = WorkRecordStore(session)
         ledger = WorkCardLedger(session, store)
-        record = ledger.get_card(card_id)
+        record = ledger.get_visible_card(card_id)
         card = _public_work_card(record)
         if card is None:
             _work_card_publish_notice(
@@ -8361,6 +8362,81 @@ class WsSessionHandler:
                     "message": "请求字段无效；只接受当前会话中的规范 card_id。",
                 }, "work-card invalid request response failed")
                 return
+        elif msg_type in {"work-card.trash", "work-card.purge", "work-card.restore"}:
+            mutation_request_id = message.get("request_id")
+            valid_mutation_request_id = False
+            if type(mutation_request_id) is str:
+                try:
+                    valid_mutation_request_id = str(uuid.UUID(mutation_request_id)) == mutation_request_id
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            if not valid_mutation_request_id:
+                _emit_safely(bridge.emit, {
+                    "type": f"{msg_type}.done", "status": "invalid_request",
+                    "message": "删除请求缺少规范 request_id；未修改工作卡。",
+                }, "work-card invalid dispose request response failed")
+                return
+            if msg_type == "work-card.restore":
+                if (set(message) != {"type", "request_id", "card_id"} or type(card_id) is not str
+                        or re.fullmatch(r"wc-[0-9a-f]{64}", card_id) is None):
+                    _emit_safely(bridge.emit, {
+                        "type": "work-card.restore.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "恢复请求无效；只接受当前会话中的规范 card_id。",
+                    }, "work-card invalid restore response failed")
+                    return
+            else:
+                has_card = "card_id" in message
+                has_project = "project_id" in message
+                if has_card == has_project:
+                    _emit_safely(bridge.emit, {
+                        "type": f"{msg_type}.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "删除请求必须且只能指定 card_id 或 project_id 之一。",
+                    }, "work-card invalid dispose scope response failed")
+                    return
+                allowed = {"type", "request_id"} | ({"card_id"} if has_card else {"project_id"})
+                if "include_bindings" in message:
+                    allowed.add("include_bindings")
+                if msg_type == "work-card.purge":
+                    allowed.add("confirm_permanent")
+                if set(message) != allowed:
+                    _emit_safely(bridge.emit, {
+                        "type": f"{msg_type}.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "删除请求包含不支持字段；未修改工作卡。",
+                    }, "work-card invalid dispose fields response failed")
+                    return
+                if has_card and (type(card_id) is not str or re.fullmatch(r"wc-[0-9a-f]{64}", card_id) is None):
+                    _emit_safely(bridge.emit, {
+                        "type": f"{msg_type}.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "删除请求的 card_id 无效。",
+                    }, "work-card invalid dispose card response failed")
+                    return
+                if has_project:
+                    project_target = message.get("project_id")
+                    if type(project_target) is not str or not project_target.strip():
+                        _emit_safely(bridge.emit, {
+                            "type": f"{msg_type}.done", "status": "invalid_request",
+                            "request_id": mutation_request_id,
+                            "message": "删除请求的 project_id 无效。",
+                        }, "work-card invalid dispose project response failed")
+                        return
+                if "include_bindings" in message and type(message.get("include_bindings")) is not bool:
+                    _emit_safely(bridge.emit, {
+                        "type": f"{msg_type}.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "include_bindings 必须是布尔值。",
+                    }, "work-card invalid dispose binding flag response failed")
+                    return
+                if msg_type == "work-card.purge" and message.get("confirm_permanent") is not True:
+                    _emit_safely(bridge.emit, {
+                        "type": "work-card.purge.done", "status": "invalid_request",
+                        "request_id": mutation_request_id,
+                        "message": "永久删除必须显式设置 confirm_permanent=true；模糊「删」不会硬删。",
+                    }, "work-card purge confirmation response failed")
+                    return
         elif msg_type == "work-card.snapshot.view":
             presentation_id = message.get("presentation_id")
             requested_session_id = message.get("session_id")
@@ -8480,7 +8556,7 @@ class WsSessionHandler:
                 "status": status,
                 "message": text,
             }
-            if operation in {"create", "list"}:
+            if operation in {"create", "list", "trash", "restore", "purge"}:
                 payload["request_id"] = request_id
             elif isinstance(card_id, str):
                 payload["card_id"] = card_id
@@ -8679,7 +8755,7 @@ class WsSessionHandler:
                     if (fact.status != "found" or fact.fact is None or fact.fact.card_id != card_id
                             or fact.fact.run_id not in (None, run_id)):
                         return response("rejected", "展示身份不匹配；未记录查看。")
-                    record = ledger.get_card(card_id)
+                    record = ledger.get_visible_card(card_id)
                     if (type(record) is not dict or type(record.get("snapshot")) is not dict
                             or record["snapshot"].get("kind") not in {"linked_item_copy", "linked_project_session_copy"}):
                         return response("rejected", "卡片不是当前 Session 来源快照；未记录查看。")
@@ -8734,8 +8810,65 @@ class WsSessionHandler:
                     if status == "unavailable":
                         return response(status, "结果查看确认未能安全完成；未确认结果。")
                     return response("rejected", "结果查看身份或其不可变快照不匹配；未确认结果。")
+                if msg_type in {"work-card.trash", "work-card.purge", "work-card.restore"}:
+                    from work_card_disposition import WorkCardDisposition
+                    disposition = WorkCardDisposition(session, store, ledger)
+                    include_bindings = message.get("include_bindings", True)
+                    if msg_type == "work-card.restore":
+                        result = disposition.restore(request_id, card_id=card_id)
+                        status_map = {
+                            "restored": ("restored", "工作卡已从回收站恢复；不代表重新投递或已查看。"),
+                            "already_active": ("already_active", "工作卡本就处于可见状态；未修改。"),
+                            "rejected": ("rejected", "无法恢复：可能已永久删除或请求无效。"),
+                            "failed": ("unavailable", "恢复操作未能安全完成。"),
+                            "uncertain": ("unavailable", "恢复结果无法确认；请用同一 request_id 复核。"),
+                        }
+                        code, text = status_map.get(
+                            result.status, ("unavailable", "恢复操作未能安全完成。"),
+                        )
+                        return response(
+                            code, text,
+                            card_id=card_id,
+                            affected_card_ids=list(result.affected_card_ids),
+                        )
+                    permanent = msg_type == "work-card.purge"
+                    target_card = message.get("card_id") if "card_id" in message else None
+                    target_project = message.get("project_id") if "project_id" in message else None
+                    if permanent:
+                        result = disposition.hard_delete(
+                            request_id, card_id=target_card, project_id=target_project,
+                            confirm_permanent=True, include_bindings=include_bindings,
+                        )
+                    else:
+                        result = disposition.soft_delete(
+                            request_id, card_id=target_card, project_id=target_project,
+                            include_bindings=include_bindings,
+                        )
+                    success_states = {"trashed", "already_trashed", "purged", "already_purged"}
+                    code = result.status if result.status in success_states else {
+                        "rejected": "rejected",
+                        "failed": "unavailable",
+                        "uncertain": "unavailable",
+                    }.get(result.status, "unavailable")
+                    if result.reason == "confirm_permanent_required":
+                        text = "永久删除必须显式设置 confirm_permanent=true。"
+                    elif result.reason == "nothing_matched":
+                        text = "没有匹配的工作卡或关联快照；未修改。"
+                    elif permanent:
+                        text = "已永久移除匹配的工作卡与关联索引；不可恢复，账本保留只读证据。"
+                    elif code in {"trashed", "already_trashed"}:
+                        text = "已将匹配项移入可回收删除状态；列表与历史快照展示将隐藏，可恢复。"
+                    else:
+                        text = "删除操作未能安全完成；未假定已删除。"
+                    return response(
+                        code, text,
+                        affected_card_ids=list(result.affected_card_ids),
+                        affected_binding_ids=list(result.affected_binding_ids),
+                        affected_refresh_ids=list(result.affected_refresh_ids),
+                    )
+
                 if msg_type == "work-card.get":
-                    card = public_card(ledger.get_card(card_id))
+                    card = public_card(ledger.get_visible_card(card_id))
                     if card is None:
                         return response("not_found", "当前 Session ledger 中没有该工作卡；未读取其他 Session。")
                     return response(
@@ -8746,7 +8879,7 @@ class WsSessionHandler:
                 if msg_type == "work-card.list":
                     page_limit = message.get("limit", 20)
                     cursor = message.get("before_card_id")
-                    records = ledger.list_cards()
+                    records = ledger.list_visible_cards()
                     if repl.session is not session or getattr(repl.agent, "session", None) is not session:
                         return response("session_changed", "Session 已切换；未返回其他 Session 的卡片索引。")
                     store._validate_scope()
@@ -8835,7 +8968,7 @@ class WsSessionHandler:
 
                 # Read first to establish the current-Session card's kind/scope before
                 # acknowledging. The ledger itself rejects unknown and foreign IDs.
-                existing = public_card(ledger.get_card(card_id))
+                existing = public_card(ledger.get_visible_card(card_id))
                 if existing is None:
                     return response("rejected", "当前 Session ledger 未确认此工作卡；未访问其他 Session。")
                 ack = ledger.acknowledge_viewed(card_id)
