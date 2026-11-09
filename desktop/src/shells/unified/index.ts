@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -1801,7 +1801,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const detail = batchAuthorization
       ? renderProjectWorkerBatchAuthorizationHtml(preview)
       : `<p class="unified-pending-confirm-hint-detail">${escapeHtml(summary.headline)}</p>`;
-    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong><button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button></div>${detail}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}">同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}">拒绝</button></div>`;
+    const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
+    const disabled = canAct ? "" : " disabled";
+    const inFlight = !canAct && resolveActiveOrdinaryConfirmRequestId(chat.model) === requestId;
+    const statusNote = inFlight
+      ? `<p class="unified-pending-confirm-hint-detail text-muted" role="status">确认已提交，等待服务端…</p>`
+      : "";
+    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong><button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button></div>${detail}${statusNote}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
   }
 
   function appendPendingConfirmFallbackHtml(html: string): string {
@@ -1810,8 +1816,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const preview = primaryPendingConfirmPreview(chat.model);
     const requestId = pendingConfirmRequestId();
     if (!preview.trim() || !requestId) return html;
-    const actions = `<button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}">允许此次</button>`
-      + `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${escapeHtml(requestId)}">拒绝</button>`;
+    const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
+    const disabled = canAct ? "" : " disabled";
+    const actions = `<button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>允许此次</button>`
+      + `<button type="button" class="unified-btn unified-btn-ghost" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button>`;
     return `${html}<div class="unified-pending-confirm-fallback">${renderConfirmCardHtml(preview, actions)}</div>`;
   }
 
@@ -5647,31 +5655,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   // ---- confirm keyboard shortcuts ----
   document.addEventListener("keydown", (ev) => {
     if (destroyed) return;
-    if (!chat.model.confirmPending) return;
+    if (!chatSessionAwaitingUserConfirm(chat.model)) return;
     // don't steal keys from the input field
     if (document.activeElement === input) return;
     const key = ev.key.toLowerCase();
     if (!["y", "n", "a"].includes(key)) return;
 
+    const requestId = pendingConfirmRequestId();
+    if (!requestId || !canSubmitOrdinaryConfirm(chat.model, requestId)) return;
     const overlay = chat.model.confirmOverlay;
-    let requestId: string | null = null;
-    let allowApproveAll = false;
-    if (overlay) {
-      requestId = overlay.requestId;
-      allowApproveAll = overlay.allowApproveAll;
-    } else {
-      // find most recent unresolved inline confirm block
-      const blocks = chat.model.blocks;
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        const b = blocks[i];
-        if (b.kind === "confirm" && !b.resolved) {
-          requestId = b.requestId;
-          allowApproveAll = b.allowApproveAll;
-          break;
-        }
-      }
-    }
-    if (!requestId) return;
+    const block = chat.model.blocks.find(
+      (item) => item.kind === "confirm" && item.requestId === requestId,
+    );
+    const allowApproveAll = overlay?.requestId === requestId
+      ? overlay.allowApproveAll
+      : block?.kind === "confirm"
+        ? block.allowApproveAll
+        : false;
     if (key === "a" && !allowApproveAll) return;
 
     ev.preventDefault();
@@ -5742,7 +5742,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return;
     }
     if (!chat.submitConfirm(id, choice)) {
-      setStatus("请点最新一张工具确认卡");
+      if (resolveActiveOrdinaryConfirmRequestId(chat.model) === id && !canSubmitOrdinaryConfirm(chat.model, id)) {
+        setStatus("确认已提交，等待服务端…");
+      } else {
+        setStatus("请点最新一张工具确认卡");
+      }
       return;
     }
     try {

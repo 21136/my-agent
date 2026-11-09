@@ -62,7 +62,7 @@ function confirmBlocks(input: CurrentWorkLiveSessionInput): CurrentWorkLiveConfi
     seen.add(row.requestId);
     rows.push(row);
   };
-  if (input.confirmPending && input.confirmOverlay?.requestId) {
+  if (input.confirmOverlay?.requestId) {
     push({
       requestId: input.confirmOverlay.requestId,
       preview: input.confirmOverlay.preview,
