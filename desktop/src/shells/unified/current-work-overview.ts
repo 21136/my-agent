@@ -9,6 +9,17 @@ import { WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS } from "./work-card-presentation
 export const CURRENT_WORK_OVERVIEW_QUERY = "当前工作整体概况";
 export type CurrentWorkOverviewRequestResult = "sent" | "busy" | "unavailable" | "failed";
 
+/** Shown in the 调度 tab before selected-project overview + schedule_preview are authorized. */
+export const CURRENT_WORK_SCHEDULE_EMPTY_MARKUP = `<div class="current-work-zone-empty current-work-schedule-empty" role="status">
+<p>调度是多项目<strong>只读预览</strong>入口，不是自动排队控制台。</p>
+<ol class="cw-schedule-empty-steps">
+<li>在下方「选择项目来源」勾选最多 6 个已映射项目</li>
+<li>点「查看所选项目」，并在对话中逐项确认读取授权</li>
+<li>确认后此处会列出候选与受阻项的只读预览；<strong>不会自动开跑</strong></li>
+</ol>
+<p class="cw-schedule-empty-note">「准备启动」仅在预览中出现可跑候选后才会显示。</p>
+</div>`;
+
 export interface CurrentWorkOverviewPanel {
   visible: boolean;
   open: boolean;
@@ -437,7 +448,7 @@ export function buildCurrentWorkOverviewPanel(
   const summaryLine = `${result.visibility_counts.visible_groups} 组当前可见 · ${unreadSummary}${visibleAttentionCount ? ` · ${visibleAttentionCount} 组需关注` : ""}`;
   const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未读</span><strong>${escapeHtml(unreadCountText ?? "未知")}</strong></div></div></section>`;
   const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${queueCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
-  const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || `<p class="current-work-zone-empty">当前没有调度预览；选择项目来源后会显示在这里。</p>`}<div data-cw-schedule-slot></div></section>`;
+  const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || CURRENT_WORK_SCHEDULE_EMPTY_MARKUP}<div data-cw-schedule-slot></div></section>`;
   const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;
   return {
     visible, open: options.open, label, bodyHtml, canExpand,
@@ -479,7 +490,7 @@ function splitCurrentWorkPanelBodies(bodyHtml: string, extrasHtml: string): Reco
   return {
     overview: overview || `<p class="current-work-zone-empty">暂无概况数据。</p>`,
     queue: queue || `<p class="current-work-zone-empty">暂无进行中的工作。</p>`,
-    schedule: schedule || `<p class="current-work-zone-empty">当前没有可调度项。</p>`,
+    schedule: schedule || CURRENT_WORK_SCHEDULE_EMPTY_MARKUP,
   };
 }
 

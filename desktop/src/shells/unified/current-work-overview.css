@@ -235,6 +235,17 @@ html[data-theme="dark"] .current-work-board {
   background: color-mix(in srgb, var(--ma-accent) 9%, transparent);
 }
 .current-work-zone-body { display: flex; flex-direction: column; gap: 0.45rem; min-height: 5.5rem; }
+.current-work-schedule-empty ol.cw-schedule-empty-steps {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.current-work-schedule-empty .cw-schedule-empty-note {
+  margin: 0;
+  opacity: 0.85;
+  font-size: 0.92em;
+}
+
 .current-work-zone-empty {
   margin: 0.35rem 0 0;
   color: var(--ma-text-muted);
