@@ -5052,3 +5052,9 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta .
     padding-inline: 0.35rem;
   }
 }
+
+/* Top pause/budget banner retired — keep mount point out of layout. */
+.unified-goal-budget,
+.goal-budget-notice {
+  display: none !important;
+}
