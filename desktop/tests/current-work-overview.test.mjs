@@ -723,6 +723,31 @@ test("schedule tab empty state explains read-only multi-project preview entry", 
   assert.match(shell, /选择项目来源（2）/);
 });
 
+test("schedule shell split keeps slot and launch when preview wraps nested block markup", () => {
+  const preview = {
+    state: "visible",
+    candidates: [{ project_id: "synthetic-a", item_id: "item-1", requirement_id: "req-1", priority: 4 }],
+    blocked: [],
+    limitations: [],
+    omissions: [],
+  };
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    aggregation_scope: "selected_project_sessions",
+    schedule_preview: preview,
+    groups: [completedViewedGroup()],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  const extras = '<form data-schedule-launch><button type="button" data-schedule-launch-send>按预览启动</button></form>';
+  const shell = renderCurrentWorkShellPanel(panel, extras, "schedule");
+  assert.match(shell, /data-cw-schedule-slot/);
+  assert.match(shell, /data-schedule-launch/);
+  assert.match(shell, /只读调度预览/);
+  assert.match(shell, /按预览启动/);
+  assert.doesNotMatch(shell, /<section class="cw-panel[^"]*" data-cw-panel="schedule"[^>]*>[\s\S]*<section class="cw-panel/);
+});
+
 test("source snapshot timer labels remain conservative and collapsed rows do not reappear", () => {
  const group={kind:"linked_source_snapshot",id:"linked-source-"+"a".repeat(64),visibility:"visible",status:"unknown",status_counts:{unknown:1},item_count:1,requirement_count:1,attention_status:"unknown",attention_reason:"captured_requirement_unresolved",visibility_timer_status:"waiting",source_snapshot:{scope:"authorized_source_session_only",mapping_claim:"not_asserted",project_id:"p",source_session_id:"s",source_revision:1,captured_at:"2026-10-30T01:00:00Z",copy_id:"a".repeat(64),intent_state:"reference_queued",card_id:null,viewed_at:null,superseded_snapshot_count:0,superseded_unviewed_count:0},items:[{item_id:"i",title:"捕获事项",status:"unknown",status_at_capture:"in_progress",status_counts:{unknown:1},requirements:[{requirement_id:"r",text:"捕获要求",status:"unknown",status_at_capture:"in_progress",worker_facts:[]}],current_results:[]}]};
  const mk = g=>overview({state:"visible",groups:[g],visibility_counts:{visible_groups:1,visible_items:1,collapsed_groups:0,collapsed_items:0},page:{...basePage,total_groups:1,total_visible_groups:1,total_visible_items:1}});
