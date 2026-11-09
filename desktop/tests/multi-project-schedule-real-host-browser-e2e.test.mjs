@@ -158,36 +158,53 @@ function latestUnsettledConfirmRequestId(page) {
   });
 }
 
+/** Clicks composer 同意 in-page so a strip re-render does not detach a Playwright locator mid-accept. */
+async function acceptComposerConfirmById(page, requestId, { timeout = 20_000 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const alreadyDone = await page.evaluate(id => window.receivedEvents?.some(
+      event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
+    ), requestId);
+    if (alreadyDone) return true;
+
+    const stillTarget = await latestUnsettledConfirmRequestId(page);
+    if (stillTarget !== requestId) return false;
+
+    const clickState = await page.evaluate((id) => {
+      const btn = document.querySelector(
+        `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
+      );
+      if (!(btn instanceof HTMLButtonElement)) return "missing";
+      if (btn.disabled) return "disabled";
+      const summary = document.querySelector(
+        "[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary",
+      );
+      if (summary instanceof HTMLElement) summary.click();
+      btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+      btn.click();
+      return "clicked";
+    }, requestId);
+
+    if (clickState === "clicked") {
+      await page.waitForFunction(
+        id => window.receivedEvents?.some(
+          event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
+        ),
+        requestId,
+        { timeout: Math.max(deadline - Date.now(), 1_000) },
+      );
+      return true;
+    }
+
+    await page.waitForTimeout(150);
+  }
+  return false;
+}
+
 async function tryAcceptUnsettledComposerConfirm(page, { timeout = 20_000 } = {}) {
   const requestId = await latestUnsettledConfirmRequestId(page);
   if (!requestId) return false;
-  try {
-    await page.waitForFunction(
-      id => {
-        const btn = document.querySelector(
-          `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
-        );
-        return btn instanceof HTMLButtonElement && !btn.disabled;
-      },
-      requestId,
-      { timeout },
-    );
-  } catch {
-    return false;
-  }
-  const approve = page.locator(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`);
-  const disclosure = page.locator("[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary");
-  if (await disclosure.count()) await disclosure.first().click();
-  await approve.scrollIntoViewIfNeeded();
-  await approve.click({ force: true });
-  await page.waitForFunction(
-    id => window.receivedEvents?.some(
-      event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
-    ),
-    requestId,
-    { timeout },
-  );
-  return true;
+  return acceptComposerConfirmById(page, requestId, { timeout });
 }
 
 /** Companion-home ordinary confirms: composer dock is the actionable surface (see chat-state companionHomeComposerOwnsOrdinaryConfirm). */
@@ -205,30 +222,8 @@ async function acceptComposerOrdinaryConfirm(page, {
     () => window.receivedEvents.filter(event => event.type === "confirm.request").at(-1)?.request_id,
   );
   assert.ok(requestId, "confirm.request missing request_id");
-  const approve = page.locator(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`);
-  await page.waitForFunction(
-    id => {
-      const btn = document.querySelector(
-        `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
-      );
-      return btn instanceof HTMLButtonElement && !btn.disabled;
-    },
-    requestId,
-    { timeout },
-  );
-  const disclosure = page.locator("[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary");
-  if (await disclosure.count()) {
-    await disclosure.first().click();
-  }
-  await approve.scrollIntoViewIfNeeded();
-  await approve.click({ force: true });
-  await page.waitForFunction(
-    id => window.receivedEvents?.some(
-      event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
-    ),
-    requestId,
-    { timeout },
-  );
+  const accepted = await acceptComposerConfirmById(page, requestId, { timeout });
+  assert.ok(accepted, `composer confirm not accepted: ${requestId}`);
   if (requireHintClear) {
     await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"), null, { timeout });
   }
