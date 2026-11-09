@@ -17,6 +17,8 @@ POSIX CI uses a **test-only** parent-binding publish shim (production bind publi
 
 The GUI fixture keeps **real** `WsBridge.emit_session_state` (same as `project-worker-batch-browser-fixture.py`) so the unified shell receives `session.banner`, `session.list`, and the initial `work-records.overview.result` probe.
 
+Unlike the **synthetic** schedule WS fixture, the real host answers `project.list` only after the client sends it (mount-time `listProjects()` runs before the socket is open and is skipped). The browser E2E explicitly calls `client.listProjects()` after `session.banner`, matching production companion-home behavior.
+
 ## Win32 GUI opt-in
 
 ```bat

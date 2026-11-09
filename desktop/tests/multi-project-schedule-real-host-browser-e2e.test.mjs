@@ -88,13 +88,19 @@ async function waitForVisibleScheduleLaunch(work, page) {
   return launch;
 }
 
-async function openCurrentWorkOverlay(page) {
+async function ensureMappedProjectCatalog(page, minProjects = 2) {
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
-  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
-  await page.waitForFunction(() => {
+  await page.evaluate(() => window.client.listProjects());
+  await page.waitForFunction(min => {
     const listed = window.receivedEvents?.findLast(e => e.type === "project.list");
-    return Array.isArray(listed?.projects) && listed.projects.length >= 2;
-  });
+    if (!Array.isArray(listed?.projects)) return false;
+    return listed.projects.filter(p => typeof p?.session_id === "string" && p.session_id).length >= min;
+  }, minProjects);
+}
+
+async function openCurrentWorkOverlay(page) {
+  await ensureMappedProjectCatalog(page);
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"));
   const entry = page.locator(CURRENT_WORK_ENTRY);
   await entry.waitFor({ state: "visible" });
@@ -208,8 +214,7 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
       await window.client.connect();
     }, ready.port);
 
-    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner")
-      && window.receivedEvents?.some(e => e.type === "project.list"));
+    await ensureMappedProjectCatalog(page);
     const bannerEvent = await page.evaluate(() => window.receivedEvents.find(e => e.type === "session.banner"));
     assert.equal(bannerEvent?.project_id ?? "", "");
 
