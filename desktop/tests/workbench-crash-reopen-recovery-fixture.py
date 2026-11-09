@@ -49,6 +49,7 @@ def _recovery_overview(request_id: str) -> dict:
             "collapsed_items": 0,
         },
         "snapshot_id": "recovery-synthetic",
+        "unread_important_results": [],
         "page": _page(2, 3),
         "groups": [
             {
@@ -133,6 +134,7 @@ def _claim_overview(request_id: str) -> dict:
             "collapsed_items": 0,
         },
         "snapshot_id": "claim-recovery",
+        "unread_important_results": [],
         "page": _page(1, 1),
         "groups": [{
             "kind": "project",
@@ -188,6 +190,10 @@ def _session_list() -> dict:
 
 async def _late_bootstrap(socket) -> None:
     await asyncio.sleep(LATE_WS_MS / 1000.0)
+    await _send_session_bootstrap(socket)
+
+
+async def _send_session_bootstrap(socket) -> None:
     await socket.send(json.dumps({
         "type": "notice",
         "level": "warn",
@@ -204,8 +210,13 @@ async def handle(socket) -> None:
             event = json.loads(raw)
             kind = event.get("type")
 
-            if kind == "session.list":
-                await socket.send(json.dumps(_session_list()))
+            if kind in {"terminal.list", "session.list"}:
+                if kind == "session.list":
+                    await socket.send(json.dumps(_session_list()))
+                continue
+
+            if kind == "session.open":
+                await _send_session_bootstrap(socket)
                 continue
 
             if kind == "work-records.overview.query":
@@ -229,14 +240,6 @@ async def handle(socket) -> None:
                     "message": "合成夹具记录协调；未触碰真实 host。",
                 }))
                 continue
-
-            if kind == "session.open":
-                await socket.send(json.dumps({
-                    "type": "notice",
-                    "level": "warn",
-                    "text": RECOVERY_WARN,
-                }))
-                await socket.send(json.dumps(_session_banner()))
     finally:
         bootstrap.cancel()
         with contextlib.suppress(asyncio.CancelledError):

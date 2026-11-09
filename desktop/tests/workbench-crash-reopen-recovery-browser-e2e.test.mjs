@@ -126,6 +126,9 @@ test("crash reopen GUI: late WS recovery warn, honest labels, cancel after recon
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "notice" && e.level === "warn"
       && /未自动续跑/.test(e.text ?? "")));
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
+    await page.evaluate(() => {
+      window.client.queryWorkRecordsOverview({ pageSize: 6, detailPaging: true });
+    });
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.unread_status === "unknown"));
 
