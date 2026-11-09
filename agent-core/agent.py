@@ -1282,15 +1282,14 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "Write main.py before tool.toml. Supports dry_run."
     ),
     "propose_context_switch": (
-        "Propose switching conversation context: new/switch workspace project, "
-        "or start a fresh ordinary chat (session.new). "
-        "Use when the user wants a NEW project, another project, "
-        "to leave project for write_evolve / tool scaffolding, "
-        "or a clean chat ('新话题'/'新开一局'). "
-        "From a project-bound session, session.new parks the project and opens grow "
-        "(unbound) chat where write_evolve is allowed. "
-        "ALWAYS call this BEFORE writing files under a different workspace/<id>/ "
-        "or before evolve writes from project shell. Requires user confirm/reject."
+        "Project context on the main home companion: project.create (new workspace, "
+        "in-place, no 换线), project.open (continue/bind existing project on this chat, "
+        "no 换线), project.switch (cross-project or resume a parked dedicated session "
+        "only when already project-bound — may replace chat). "
+        "session.new = blank chat only when the user explicitly asks to clear the topic "
+        "(never for finishing/opening project work on the main UI). "
+        "Call BEFORE writing under a different workspace/<id>/. "
+        "project.create / project.open auto-apply without a 换线 card."
     ),
     "bind_project_dir": (
         "Bind an absolute local directory as this session's current project "
@@ -1642,14 +1641,17 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                 "type": "string",
                 "enum": [
                     "project.create",
+                    "project.open",
                     "project.switch",
                     "session.new",
                 ],
                 "description": (
-                    "project.create = new workspace/<id> on the main home UI (no 换线, "
-                    "same chat); project.switch = switch to an existing project session; "
-                    "session.new = blank ordinary chat (active_shell=grow; parks project "
-                    "session if any — use before write_evolve from project window)"
+                    "project.create = new workspace/<id> in-place (no 换线, same chat); "
+                    "project.open = bind/open existing project on this chat (default for "
+                    "「继续/写完」from main home); project.switch = cross-project hop or "
+                    "load a dedicated session when already bound to another project "
+                    "(may replace chat + confirm); session.new = explicit blank chat only "
+                    "(not for project work on main home)"
                 ),
             },
             "target": {

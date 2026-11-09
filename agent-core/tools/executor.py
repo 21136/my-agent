@@ -906,8 +906,8 @@ def _validate_foreign_project_write(
                 ToolErrorCode.VALIDATION_ERROR,
                 (
                     f"路径 {path!r} 属于其他项目 workspace/{foreign}/；"
-                    "请先 propose_context_switch（project.create 或 project.switch）"
-                    "并经用户确认后再写"
+                    "请先 propose_context_switch（project.open 或 project.create）"
+                    "在工作区内就地打开项目后再写"
                 ),
                 details={
                     "guard_type": "foreign_project_write",
@@ -2172,6 +2172,7 @@ class ToolExecutor:
     ) -> ToolResult:
         from context_switch import (
             ContextSwitchError,
+            _session_new_blocked_for_project_work,
             apply_context_switch,
             build_context_switch_request,
             done_events,
@@ -2222,8 +2223,22 @@ class ToolExecutor:
         previous = self._bound_persist_session()
         if previous is None:
             previous = Session.load(paths, self.session.session_dir.name)
-        request = build_context_switch_request(previous, proposal)
-        auto_apply = should_auto_apply_context_switch(proposal)
+        blocked = _session_new_blocked_for_project_work(previous, proposal)
+        if blocked:
+            result = tool_fail(
+                name,
+                ToolErrorCode.VALIDATION_ERROR,
+                blocked,
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+        request = build_context_switch_request(previous, proposal, paths=paths)
+        auto_apply = should_auto_apply_context_switch(
+            proposal,
+            paths=paths,
+            session=previous,
+        )
 
         call_id = str(uuid.uuid4())
         self._emit_event(

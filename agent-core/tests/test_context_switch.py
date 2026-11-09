@@ -15,10 +15,13 @@ if str(_AGENT_CORE) not in sys.path:
 from agent import Agent
 from context_switch import (
     build_context_switch_request,
+    context_switch_replaces_session,
     foreign_workspace_project_write,
+    is_main_home_companion_session,
     normalize_proposal,
     should_auto_apply_context_switch,
 )
+from project_switch import record_project_session
 from project_cli import parse_project_command, run_project_command
 from project_mode import create_project, normalize_project_id, project_dir
 from project_switch import read_project_sessions
@@ -160,7 +163,14 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertEqual(read_project_sessions(self.paths).get(pid_a), old_cid)
         self.assertNotIn(normalize_project_id(self.pid_b), read_project_sessions(self.paths))
         self.assertTrue(any(line.startswith("error:") for line in outputs))
-        self.assertTrue(any("项目 打开" in line or "项目 切换" in line for line in outputs))
+        self.assertTrue(
+            any(
+                "项目 打开" in line
+                or "项目 切换" in line
+                or "project.open" in line
+                for line in outputs
+            )
+        )
 
     def test_foreign_write_path_detection(self) -> None:
         self.assertEqual(
@@ -341,10 +351,68 @@ class ContextSwitchTests(unittest.TestCase):
             old_cid,
         )
 
-    def test_propose_context_switch_reject(self) -> None:
+    def test_main_home_open_existing_auto_applies_without_switch_request(self) -> None:
         from project_mode import create_project
 
         create_project(self.paths, self.pid_a)
+        old_cid = self.session.conversation_id
+        pid = normalize_project_id(self.pid_a)
+        events: list[tuple[str, dict]] = []
+
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(self.session.session_dir),
+            confirm_fn=lambda _p, _a: "n",
+            on_event=lambda et, payload: events.append((et, payload)),
+        )
+        result = executor.run(
+            "propose_context_switch",
+            {"action": "project.open", "target": self.pid_a, "reason": "finish project"},
+        )
+        self.assertTrue(result.ok, result.error.message if result.error else "")
+        self.assertEqual(self.session.conversation_id, old_cid)
+        from session import Session
+
+        rebound = Session.load(self.paths, old_cid)
+        self.assertEqual(rebound.meta.project_id, pid)
+        types = [et for et, _ in events]
+        self.assertNotIn("context.switch.request", types)
+
+    def test_main_home_switch_synonym_auto_applies_in_place(self) -> None:
+        from project_mode import create_project
+
+        create_project(self.paths, self.pid_a)
+        old_cid = self.session.conversation_id
+        events: list[tuple[str, dict]] = []
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(self.session.session_dir),
+            confirm_fn=lambda _p, _a: "n",
+            on_event=lambda et, payload: events.append((et, payload)),
+        )
+        result = executor.run(
+            "propose_context_switch",
+            {"action": "project.switch", "target": self.pid_a, "reason": "continue"},
+        )
+        self.assertTrue(result.ok, result.error.message if result.error else "")
+        self.assertEqual(self.session.conversation_id, old_cid)
+        self.assertNotIn("context.switch.request", [et for et, _ in events])
+
+    def test_main_home_open_rebinds_over_stale_dedicated_mapping(self) -> None:
+        from project_mode import create_project
+
+        create_project(self.paths, self.pid_a)
+        pid = normalize_project_id(self.pid_a)
+        dedicated = create_new(
+            self.paths,
+            conversation_id=f"_dedicated_{secrets.token_hex(3)}",
+        )
+        record_project_session(self.paths, pid, dedicated.conversation_id)
+        old_cid = self.session.conversation_id
+        self.assertTrue(is_main_home_companion_session(self.session))
+
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor(
             registry=registry,
@@ -353,14 +421,36 @@ class ContextSwitchTests(unittest.TestCase):
         )
         result = executor.run(
             "propose_context_switch",
-            {"action": "project.switch", "target": self.pid_a},
+            {"action": "project.open", "target": self.pid_a},
+        )
+        self.assertTrue(result.ok, result.error.message if result.error else "")
+        self.assertEqual(self.session.conversation_id, old_cid)
+        self.assertEqual(read_project_sessions(self.paths).get(pid), old_cid)
+        from session import Session
+
+        rebound = Session.load(self.paths, old_cid)
+        self.assertEqual(rebound.meta.project_id, pid)
+
+    def test_session_new_rejected_for_project_work_on_main_home(self) -> None:
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(self.session.session_dir),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        result = executor.run(
+            "propose_context_switch",
+            {
+                "action": "session.new",
+                "target": "current",
+                "reason": "打开项目 random-number-test 并完成实现",
+            },
         )
         self.assertFalse(result.ok)
         self.assertEqual(
             result.error.code if result.error else None,
-            ToolErrorCode.CONFIRM_REJECTED,
+            ToolErrorCode.VALIDATION_ERROR,
         )
-        self.assertEqual(self.session.meta.project_id, "")
 
     def test_propose_project_switch_reject_keeps_binding(self) -> None:
         run_project_command(
@@ -376,11 +466,19 @@ class ContextSwitchTests(unittest.TestCase):
             output_fn=lambda _l: None,
         )
         pid_a = self._bind_project_workspace(self.pid_a)
+        pid_b = normalize_project_id(self.pid_b)
+        dedicated_b = create_new(
+            self.paths,
+            conversation_id=f"_dedicated_b_{secrets.token_hex(3)}",
+        )
+        record_project_session(self.paths, pid_b, dedicated_b.conversation_id)
+        events: list[tuple[str, dict]] = []
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor(
             registry=registry,
             session=ExecutorSession.load(self.session.session_dir),
             confirm_fn=lambda _p, _a: "n",
+            on_event=lambda et, payload: events.append((et, payload)),
         )
         result = executor.run(
             "propose_context_switch",
@@ -389,6 +487,7 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(self.session.meta.project_id, pid_a)
         self.assertEqual(self.session.meta.active_shell, "project")
+        self.assertIn("context.switch.request", [et for et, _ in events])
 
     def test_propose_session_new_on_project_parks_binding(self) -> None:
         """UX-POLISH §7.6 D6/D8: session.new leaves project mapping; new chat is unbound."""
@@ -437,11 +536,37 @@ class ContextSwitchTests(unittest.TestCase):
             target=self.pid_a,
             reason="quiet create",
         )
-        self.assertTrue(should_auto_apply_context_switch(proposal))
-        request = build_context_switch_request(self.session, proposal)
+        self.assertTrue(
+            should_auto_apply_context_switch(
+                proposal,
+                paths=self.paths,
+                session=self.session,
+            )
+        )
+        request = build_context_switch_request(self.session, proposal, paths=self.paths)
         effects = request.get("side_effects") or []
         self.assertTrue(any("未换线" in line or "不换线" in line for line in effects))
         self.assertFalse(any("专用会话" in line for line in effects))
+
+    def test_context_switch_replaces_session_only_for_chat_swap_actions(self) -> None:
+        from project_mode import create_project
+
+        create_project(self.paths, self.pid_a)
+        proposal_open = normalize_proposal(action="project.open", target=self.pid_a)
+        self.assertFalse(
+            context_switch_replaces_session(self.paths, self.session, proposal_open)
+        )
+        self._bind_project_workspace(self.pid_a)
+        proposal_cross = normalize_proposal(action="project.switch", target=self.pid_b)
+        create_project(self.paths, self.pid_b)
+        record_project_session(
+            self.paths,
+            normalize_project_id(self.pid_b),
+            create_new(self.paths, conversation_id=f"_other_{secrets.token_hex(3)}").conversation_id,
+        )
+        self.assertTrue(
+            context_switch_replaces_session(self.paths, self.session, proposal_cross)
+        )
 
 
 if __name__ == "__main__":
