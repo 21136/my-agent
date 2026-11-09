@@ -1964,7 +1964,13 @@ class WsBridge:
             self._emit_work_instruction_state(instruction, "queued")
             return "queued"
 
-    def prepare_work_instructions_at_checkpoint(self, session: Session, run_id: str) -> int:
+    def prepare_work_instructions_at_checkpoint(
+        self,
+        session: Session,
+        run_id: str,
+        *,
+        executor: object | None = None,
+    ) -> int:
         """Durably stage queued text at the exact round boundary; it is not delivered until added to next prompt."""
         with self._result_view_write_lock:
             with self._work_instruction_lock:
@@ -1995,7 +2001,9 @@ class WsBridge:
                         if instruction.companion_orchestration:
                             from active_work_multi_project import mark_session_companion_multi_project_orchestration
 
-                            mark_session_companion_multi_project_orchestration(session, active=True)
+                            mark_session_companion_multi_project_orchestration(
+                                session, active=True, executor=executor,
+                            )
                     except Exception:
                         instruction.state = "undelivered"
                         instruction.reason = "persistence_failed"
@@ -4379,7 +4387,9 @@ async def _run_line(
                 return
             if phase == "prepare":
                 bridge.prepare_work_instructions_at_checkpoint(
-                    candidate_session, captured_instruction_run_id,
+                    candidate_session,
+                    captured_instruction_run_id,
+                    executor=getattr(bound_agent, "executor", None),
                 )
             elif phase == "deliver" and model_context is not None:
                 return bridge.commit_work_instruction_delivery(
@@ -4936,7 +4946,11 @@ async def _run_line(
         try:
             from active_work_multi_project import mark_session_companion_multi_project_orchestration
 
-            mark_session_companion_multi_project_orchestration(bound_session, active=False)
+            mark_session_companion_multi_project_orchestration(
+                bound_session,
+                active=False,
+                executor=getattr(getattr(repl, "agent", None), "executor", None),
+            )
         except Exception:
             pass
         bridge._turn_busy.clear()
@@ -9403,7 +9417,11 @@ class WsSessionHandler:
                     )
 
                     if is_companion_multi_project_orchestration_request(text):
-                        mark_session_companion_multi_project_orchestration(repl.session, active=True)
+                        mark_session_companion_multi_project_orchestration(
+                            repl.session,
+                            active=True,
+                            executor=getattr(getattr(repl, "agent", None), "executor", None),
+                        )
                 # TURN_LOCK is held by _handle_incoming for user.message / command.
                 try:
                     post_turn_candidate = await _run_line(

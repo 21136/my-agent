@@ -26,4 +26,5 @@ def test_orchestration_instruction_mandates_workers_not_session_switch():
     built = build_companion_orchestration_instruction("同时写项目 A 和 B")
     assert "run_project_workers" in built
     assert "不要" in built and "project.open" in built
+    assert "workspace" in built
     assert "同时写项目 A 和 B" in built

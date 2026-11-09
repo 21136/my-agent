@@ -366,6 +366,7 @@ class ContextSwitchTests(unittest.TestCase):
             confirm_fn=lambda _p, _a: "y",
         )
         executor.bound_session = self.session
+        executor.session.companion_multi_project_orchestration_active = True
         result = executor.run(
             "propose_context_switch",
             {"action": "project.open", "target": self.pid_b, "reason": "orchestration test"},
@@ -374,6 +375,53 @@ class ContextSwitchTests(unittest.TestCase):
         message = result.error.message if result.error else ""
         self.assertIn("run_project_workers", message)
         self.assertIn(self.pid_a, self.session.meta.project_id)
+
+    def test_multi_project_orchestration_blocks_parent_workspace_write(self) -> None:
+        create_project(self.paths, self.pid_a)
+        create_project(self.paths, self.pid_b)
+        self._bind_project_workspace(self.pid_a)
+        setattr(self.session, "_companion_multi_project_orchestration_active", True)
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession(
+                session_dir=self.session.session_dir,
+                allowed_evolved={"write_text"},
+                active_shell="project",
+                project_root=f"workspace/{normalize_project_id(self.pid_a)}",
+                project_id=normalize_project_id(self.pid_a),
+                companion_multi_project_orchestration_active=True,
+            ),
+            confirm_fn=lambda _p, _a: "y",
+        )
+        executor.bound_session = self.session
+        for rel in (
+            f"workspace/{normalize_project_id(self.pid_a)}/index.html",
+            f"workspace/{normalize_project_id(self.pid_b)}/index.html",
+        ):
+            result = executor.run(
+                "run_evolved",
+                {
+                    "tool_name": "write_text",
+                    "arguments": {"path": rel, "content": "<html></html>"},
+                },
+            )
+            self.assertFalse(result.ok, result)
+            self.assertEqual(result.error.code if result.error else None, ToolErrorCode.PERMISSION_DENIED)
+            self.assertIn("run_project_workers", result.error.message if result.error else "")
+
+    def test_multi_project_orchestration_apply_blocks_project_open(self) -> None:
+        from context_switch import ContextSwitchError, apply_context_switch, normalize_proposal
+
+        create_project(self.paths, self.pid_b)
+        self._bind_project_workspace(self.pid_a)
+        setattr(self.session, "_companion_multi_project_orchestration_active", True)
+        proposal = normalize_proposal(
+            action="project.open", target=self.pid_b, reason="test",
+        )
+        with self.assertRaises(ContextSwitchError) as ctx:
+            apply_context_switch(self.paths, self.session, proposal)
+        self.assertIn("run_project_workers", str(ctx.exception))
 
     def test_main_home_open_existing_auto_applies_without_switch_request(self) -> None:
         from project_mode import create_project

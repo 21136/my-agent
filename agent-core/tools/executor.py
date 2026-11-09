@@ -178,6 +178,7 @@ class ExecutorSession:
     ordinary_work_intent: str = "execute"
     ordinary_task_scope: str = ""
     write_scope_root: str = ""
+    companion_multi_project_orchestration_active: bool = False
 
     def __post_init__(self) -> None:
         # Construction establishes generation zero; later run changes take effect only at begin_turn.
@@ -401,6 +402,7 @@ _EVOLVE_TOOL_SCAFFOLD_PATH_RE = re.compile(
     r"(?P<file>main\.py|tool\.toml|README\.md)$"
 )
 _WORKSPACE_WRITE_TOOLS = frozenset({"write_text", "append_text", "copy_move"})
+_ORCHESTRATION_WORKSPACE_WRITE_TOOLS = _WORKSPACE_WRITE_TOOLS | frozenset({"patch_file"})
 _INLINE_WRITE_TOOLS = frozenset({"write_text", "append_text"})
 
 
@@ -879,6 +881,47 @@ def _validate_project_mode_call(
     )
 
 
+def _validate_orchestration_parent_project_write(
+    executor: "ToolExecutor",
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> ToolResult | None:
+    from active_work_multi_project import (
+        ORCHESTRATION_USE_WORKERS_MESSAGE,
+        orchestration_active_for_executor,
+    )
+
+    if not orchestration_active_for_executor(executor) or tool_name != "run_evolved":
+        return None
+    evolved_name = arguments.get("tool_name")
+    if not isinstance(evolved_name, str) or evolved_name.strip() not in _ORCHESTRATION_WORKSPACE_WRITE_TOOLS:
+        return None
+    from project_mode import extract_run_evolved_paths
+    from paths import AgentPaths
+
+    paths = executor.registry.agent_paths
+    workspace = Path(paths.workspace).resolve()
+    for raw in extract_run_evolved_paths(tool_name, arguments):
+        try:
+            resolved = paths.resolve_under_agent(raw, must_exist=False).resolve()
+        except (OSError, ValueError):
+            continue
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            continue
+        return tool_fail(
+            tool_name,
+            ToolErrorCode.PERMISSION_DENIED,
+            ORCHESTRATION_USE_WORKERS_MESSAGE,
+            details={
+                "guard_type": "companion_multi_project_orchestration_parent_write",
+                "path": raw,
+            },
+        )
+    return None
+
+
 def _validate_foreign_project_write(
     session: ExecutorSession,
     tool_name: str,
@@ -896,12 +939,27 @@ def _validate_foreign_project_write(
     from context_switch import foreign_workspace_project_write
     from project_mode import extract_run_evolved_paths
 
+    from active_work_multi_project import ORCHESTRATION_USE_WORKERS_MESSAGE
+
+    orchestration = bool(getattr(session, "companion_multi_project_orchestration_active", False))
+
     for path in extract_run_evolved_paths(tool_name, arguments):
         foreign = foreign_workspace_project_write(
             path,
             current_project_root=session.project_root,
         )
         if foreign:
+            if orchestration:
+                return tool_fail(
+                    tool_name,
+                    ToolErrorCode.PERMISSION_DENIED,
+                    ORCHESTRATION_USE_WORKERS_MESSAGE,
+                    details={
+                        "guard_type": "companion_multi_project_orchestration_parent_write",
+                        "foreign_project_id": foreign,
+                        "path": path,
+                    },
+                )
             return tool_fail(
                 tool_name,
                 ToolErrorCode.VALIDATION_ERROR,
@@ -2218,6 +2276,21 @@ class ToolExecutor:
             self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
             return result
 
+        from active_work_multi_project import (
+            ORCHESTRATION_SWITCH_BLOCKED_MESSAGE,
+            orchestration_active_for_executor,
+        )
+
+        if orchestration_active_for_executor(self) and proposal.action != "project.create":
+            result = tool_fail(
+                name,
+                ToolErrorCode.PERMISSION_DENIED,
+                ORCHESTRATION_SWITCH_BLOCKED_MESSAGE,
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="skipped", started=started)
+            return result
+
         if self.session.session_dir is None:
             result = tool_fail(
                 name,
@@ -3136,6 +3209,10 @@ class ToolExecutor:
             if host_block is not None:
                 return host_block
             return None
+
+        orch_block = _validate_orchestration_parent_project_write(self, name, arguments)
+        if orch_block is not None:
+            return orch_block
 
         foreign_error = _validate_foreign_project_write(self.session, name, arguments)
         if foreign_error is not None:
