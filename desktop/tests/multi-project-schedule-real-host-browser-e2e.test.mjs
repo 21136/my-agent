@@ -18,6 +18,92 @@ const repo = path.resolve(desktop, "..");
 const PROJECTS = ["mp-host-alpha", "mp-host-beta"];
 const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
+const EDGE_LAUNCH_ARGS = [
+  "--disable-background-networking",
+  "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessRestrictions,BlockInsecurePrivateNetworkRequests",
+  "--no-first-run",
+];
+
+async function readCurrentWorkLayout(page) {
+  return page.evaluate(() => {
+    const describe = el => {
+      if (!(el instanceof HTMLElement)) return null;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return {
+        hidden: el.hidden,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        clientHeight: el.clientHeight,
+        visibility: style.visibility,
+        display: style.display,
+      };
+    };
+    const popover = document.querySelector("#unified-current-work-popover");
+    const schedulePanel = document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]');
+    const launch = document.querySelector("#unified-current-work [data-schedule-launch]");
+    return { popover: describe(popover), schedulePanel: describe(schedulePanel), launch: describe(launch) };
+  });
+}
+
+async function waitForCurrentWorkPopoverSized(page, minHeight = 80) {
+  await page.waitForFunction(min => {
+    const popover = document.querySelector("#unified-current-work-popover");
+    if (!(popover instanceof HTMLElement)) return false;
+    return popover.getBoundingClientRect().height >= min
+      && getComputedStyle(popover).visibility !== "hidden";
+  }, minHeight);
+}
+
+async function activateScheduleSegment(work, page, { retries = 8 } = {}) {
+  const tab = work.locator('[data-cw-segment-select="schedule"]');
+  const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
+  let lastError;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      await tab.click();
+      await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached", timeout: 4000 });
+      await panel.waitFor({ state: "visible", timeout: 4000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]:not([hidden])');
+        return el instanceof HTMLElement && el.getBoundingClientRect().height > 0;
+      });
+      return panel;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const layout = await readCurrentWorkLayout(page);
+  throw new Error(`${lastError?.message ?? "schedule segment did not become visible"}\nlayout=${JSON.stringify(layout)}`);
+}
+
+async function waitForVisibleScheduleLaunch(work, page) {
+  await work.locator("[data-schedule-launch]").waitFor({ state: "attached" });
+  const panel = await activateScheduleSegment(work, page);
+  const launch = panel.locator("[data-schedule-launch]");
+  await launch.waitFor({ state: "visible" });
+  await page.waitForFunction(() => {
+    const el = document.querySelector("#unified-current-work [data-schedule-launch]");
+    return el instanceof HTMLElement && el.clientHeight > 0;
+  });
+  return launch;
+}
+
+async function openCurrentWorkOverlay(page) {
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "project.list"));
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
+    && e.unread_status === "unknown"));
+  const entry = page.locator(CURRENT_WORK_ENTRY);
+  await entry.waitFor({ state: "visible" });
+  await entry.click();
+  await page.waitForFunction(() => {
+    const host = document.querySelector("#unified-current-work");
+    return Boolean(host && !host.hidden && host.querySelector("[data-current-work-shell]"));
+  });
+  return page.locator("#unified-current-work");
+}
+
 function resolvePython() {
   for (const candidate of [
     path.join(repo, ".venv", "Scripts", "python.exe"),
@@ -90,8 +176,7 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
     + readFileSync(path.join(desktop, "src/shells/unified/current-work-overview.css"), "utf8")
     + readFileSync(path.join(desktop, "src/shells/unified/schedule-launch.css"), "utf8");
 
-  const browser = await chromium.launch({ headless: true, executablePath: edge,
-    args: ["--disable-background-networking", "--no-first-run"] });
+  const browser = await chromium.launch({ headless: true, executablePath: edge, args: EDGE_LAUNCH_ARGS });
   let page;
   try {
     const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1200, height: 900 } });
@@ -99,6 +184,7 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
       ? r.fulfill({ status: 200, contentType: "text/html", body: `<!doctype html><style>${css}</style><div id="root"></div>` })
       : r.abort());
     page = await context.newPage();
+    page.setDefaultTimeout(20000);
     const errors = [];
     page.on("pageerror", e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${ready.port}/`);
@@ -120,22 +206,23 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
       await window.client.connect();
     }, ready.port);
 
-    const banner = await page.waitForFunction(() => window.receivedEvents?.find(e => e.type === "session.banner"));
-    const bannerEvent = await banner.jsonValue();
-    assert.equal(bannerEvent.project_id ?? "", "");
+    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner")
+      && window.receivedEvents?.some(e => e.type === "project.list"));
+    const bannerEvent = await page.evaluate(() => window.receivedEvents.find(e => e.type === "session.banner"));
+    assert.equal(bannerEvent?.project_id ?? "", "");
 
-    const entry = page.locator(CURRENT_WORK_ENTRY);
-    await entry.waitFor({ state: "visible" });
-    await entry.click();
-    const work = page.locator("#unified-current-work");
-    await work.locator('[data-cw-segment-select="schedule"]').click();
-    const schedulePanel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
-    await schedulePanel.waitFor({ state: "visible" });
+    const work = await openCurrentWorkOverlay(page);
+    const schedulePanel = await activateScheduleSegment(work, page);
+    const sourcePanel = schedulePanel.locator("[data-selected-project-overview]");
+    await sourcePanel.waitFor({ state: "visible" });
 
     await page.evaluate(projectIds => {
-      const panel = document.querySelector('[data-selected-project-overview]');
+      const host = document.querySelector("#unified-current-work");
+      const panel = host?.querySelector("[data-selected-project-overview]");
+      if (!(panel instanceof HTMLElement)) throw new Error("source selector missing in overlay");
       for (const id of projectIds) {
         const input = panel.querySelector(`input[data-project-overview-id="${CSS.escape(id)}"]`);
+        if (!(input instanceof HTMLInputElement)) throw new Error(`missing checkbox for ${id}`);
         input.checked = true;
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }
@@ -144,9 +231,11 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
     await approvePendingConfirms(page);
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
+    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
+    await waitForCurrentWorkPopoverSized(page, 80);
 
-    const launch = schedulePanel.locator("[data-schedule-launch]");
-    await launch.waitFor({ state: "visible" });
+    const launch = await waitForVisibleScheduleLaunch(work, page);
+    await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
     await launch.locator("[data-schedule-launch-send]").click();
     await approvePendingConfirms(page, 40);
 
@@ -162,7 +251,10 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
     await page.evaluate(() => { window.dispose(); window.client.destroy(); });
     await context.close();
   } catch (error) {
-    throw new Error(`${error.message}\nbody=${page ? await page.locator("body").innerText() : ""}\nstderr=${stderr}`);
+    const events = page ? await page.evaluate(() => window.receivedEvents) : [];
+    const body = page ? await page.locator("body").innerText() : "";
+    const layout = page ? await readCurrentWorkLayout(page) : null;
+    throw new Error(`${error.message}\nbody=${body}\nlayout=${JSON.stringify(layout)}\nevents=${JSON.stringify(events)}\nstderr=${stderr}`);
   } finally {
     await browser.close();
     child.stdin.end("\n");

@@ -14,5 +14,8 @@ test("opt-in env gates for real multi-project schedule GUI", () => {
   const browser = readFileSync(path.join(here, "multi-project-schedule-real-host-browser-e2e.test.mjs"), "utf8");
   assert.match(browser, /synthetic_model_transport|mock/i);
   assert.match(browser, /work-records\.schedule\.dispatch\.done/);
+  assert.match(browser, /LocalNetworkAccessChecks/);
+  const run79 = readFileSync(path.join(repo, "desktop/_run79-schedule-real-host.cmd"), "utf8");
+  assert.match(run79, /multi-project-schedule-real-host-browser-e2e\.test\.mjs/);
 });
 
