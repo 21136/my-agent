@@ -108,6 +108,8 @@ export interface ChatSessionModel {
   executionSequence: number;
   executionFinishReason: string | null;
   _toolTimers: Map<string, number>;
+  /** Server-acked ordinary confirm ids — hide composer strip after confirm.done. */
+  settledOrdinaryConfirmIds: ReadonlySet<string>;
 }
 
 export interface ChatSessionOptions {
@@ -385,15 +387,21 @@ export function isConfirmInProgressLabel(label: string | undefined): boolean {
 
 /** True when the user must act on an authorization or worker-verification confirm in this session. */
 export function chatSessionAwaitingUserConfirm(
-  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
 ): boolean {
   if (model.confirmPending) return true;
+  const settled = model.settledOrdinaryConfirmIds;
   if (model.confirmOverlay) {
-    if (!model.confirmOverlay.resolved || isConfirmInProgressLabel(model.confirmOverlay.resolved)) return true;
+    if (settled.has(model.confirmOverlay.requestId)) {
+      // Server acked; execution may continue but composer is no longer blocked.
+    } else if (!model.confirmOverlay.resolved || isConfirmInProgressLabel(model.confirmOverlay.resolved)) {
+      return true;
+    }
   }
   return model.blocks.some((block) => {
     if (block.kind !== "confirm") return false;
     if (block.confirmKind === "work_record_post_turn") return false;
+    if (settled.has(block.requestId)) return false;
     if (!block.resolved) return true;
     return isConfirmInProgressLabel(block.resolved);
   });
@@ -476,16 +484,22 @@ function rehydrateOrdinaryConfirmOverlay(model: ChatSessionModel): void {
 
 /** Request id for the ordinary/tool confirm the UI should treat as actionable (overlay or latest live block). */
 export function resolveActiveOrdinaryConfirmRequestId(
-  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
 ): string | null {
+  const settled = model.settledOrdinaryConfirmIds;
   const overlay = model.confirmOverlay;
-  if (overlay?.requestId && (!overlay.resolved || isConfirmInProgressLabel(overlay.resolved))) {
+  if (
+    overlay?.requestId
+    && !settled.has(overlay.requestId)
+    && (!overlay.resolved || isConfirmInProgressLabel(overlay.resolved))
+  ) {
     return overlay.requestId;
   }
   for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
     const block = model.blocks[index];
     if (block.kind !== "confirm") continue;
     if (block.confirmKind === "work_record_post_turn") continue;
+    if (settled.has(block.requestId)) continue;
     if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
   }
   return null;
@@ -540,7 +554,7 @@ export function composerShouldShowOrdinaryConfirmActions(
   if (!chatSessionAwaitingUserConfirm(model)) return false;
   const requestId = resolveActiveOrdinaryConfirmRequestId(model);
   if (!requestId || !primaryPendingConfirmPreview(model).trim()) return false;
-  if (ui.companionComposerPrimary) return true;
+  if (ui.companionComposerPrimary) return canSubmitOrdinaryConfirm(model, requestId);
   return !ui.chatRendersOrdinaryConfirm && !ui.overlayRendersOrdinaryConfirm;
 }
 
@@ -561,6 +575,7 @@ export function createChatSession(
   options: ChatSessionOptions,
   hooks: ChatSessionHooks = {},
 ): ChatSession {
+  const ordinaryConfirmSettled = new Set<string>();
   const model: ChatSessionModel = {
     sessionId: "",
     confirmPending: false,
@@ -581,6 +596,7 @@ export function createChatSession(
     executionSequence: 0,
     executionFinishReason: null,
     _toolTimers: new Map<string, number>(),
+    settledOrdinaryConfirmIds: ordinaryConfirmSettled,
   };
 
   let cancelWatchdog: ReturnType<typeof setTimeout> | null = null;
@@ -1492,7 +1508,13 @@ export function createChatSession(
       }
       case "session.banner": {
         if (model.sessionId && model.sessionId !== event.session_id) markPendingUserMessagesUnknown(model.sessionId);
-        if (model.sessionId !== event.session_id) { postTurnConfirmations.clear(); requirementVerificationConfirmations.clear(); postTurnResults.clear(); controlConfirmations.clear(); }
+        if (model.sessionId !== event.session_id) {
+          postTurnConfirmations.clear();
+          requirementVerificationConfirmations.clear();
+          postTurnResults.clear();
+          controlConfirmations.clear();
+          ordinaryConfirmSettled.clear();
+        }
         const sessionChanged = Boolean(model.sessionId) && model.sessionId !== event.session_id;
         if (model.pendingToolPrompt && (sessionChanged || model.pendingToolPrompt.sessionId !== event.session_id)) {
           expirePendingToolPrompt("会话已切换；工具输入未发送为普通消息");
@@ -1934,6 +1956,7 @@ export function createChatSession(
         const terminalExecution = Boolean(model.executionRunId)
           && !["queued", "running", "stopping"].includes(model.executionState);
         if (terminalExecution) controlConfirmations.add(event.request_id);
+        ordinaryConfirmSettled.delete(event.request_id);
         model.confirmPending = true;
         model.confirmSubmitting = false;
         expirePreviousConfirms(event.request_id);
@@ -2019,6 +2042,7 @@ export function createChatSession(
           break;
         }
         model.confirmSubmitting = false;
+        ordinaryConfirmSettled.add(event.request_id);
         syncOrdinaryConfirmPending(model);
         if (
           !isConfirmInProgressLabel(resolved)

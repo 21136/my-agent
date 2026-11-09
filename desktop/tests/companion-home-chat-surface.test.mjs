@@ -25,10 +25,12 @@ const workCards = load(new URL("../src/shells/unified/work-card-presentation.ts"
 const preview = load(new URL("../src/shells/unified/confirm-preview.ts", import.meta.url));
 
 const {
+  chatSessionAwaitingUserConfirm,
   companionHomeComposerOwnsOrdinaryConfirm,
   composerShouldShowOrdinaryConfirmActions,
   createChatSession,
   ordinaryConfirmWouldRenderInChat,
+  resolveActiveOrdinaryConfirmRequestId,
 } = chatState;
 
 function session() {
@@ -131,6 +133,37 @@ test("confirm.done terminal choice clears composer pending strip", () => {
     }),
     false,
   );
+});
+
+test("companion composer hides strip after submit and after confirm.done while turn still running", () => {
+  const chat = session();
+  chat.handleEvent({ type: "execution.state", run_id: "run-companion", state: "running", sequence: 1 });
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "companion-home",
+    run_id: "run-companion",
+    request_id: "trash-in-flight",
+    preview: "软删除到 _trash workspace 项目\nids=alpha",
+    allow_approve_all: false,
+  });
+  const companionUi = {
+    chatRendersOrdinaryConfirm: false,
+    overlayRendersOrdinaryConfirm: false,
+    companionComposerPrimary: true,
+  };
+  assert.equal(chat.submitConfirm("trash-in-flight", "y"), true);
+  assert.equal(chat.model.confirmOverlay?.resolved, "提交中…");
+  assert.equal(composerShouldShowOrdinaryConfirmActions(chat.model, companionUi), false);
+  assert.equal(chat.model.confirmPending, false);
+  chat.handleEvent({
+    type: "confirm.done",
+    session_id: "companion-home",
+    request_id: "trash-in-flight",
+    choice: "y",
+  });
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), null);
+  assert.equal(composerShouldShowOrdinaryConfirmActions(chat.model, companionUi), false);
+  assert.equal(chatSessionAwaitingUserConfirm(chat.model), false);
 });
 
 test("companion home defers project-scoped work-card.present from chat blocks", () => {
