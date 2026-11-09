@@ -40,6 +40,16 @@ const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
 /** In-shell overlay entry (work-entry-surface.test.mjs): topbar pill, not a removed full-page route. */
 const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
+async function activateScheduleSegment(work) {
+  await work.locator('[data-cw-segment-select="schedule"]').click();
+  await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached" });
+  const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
+  await panel.waitFor({ state: "visible" });
+  const launch = panel.locator("[data-schedule-launch]");
+  await launch.waitFor({ state: "visible" });
+  return launch;
+}
+
 async function openCurrentWorkOverlay(page) {
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
@@ -136,9 +146,9 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       && window.receivedEvents?.some(e => e.type === "project.list"));
 
     const work = await openCurrentWorkOverlay(page);
-    await work.locator('[data-cw-segment-select="schedule"]').click();
-    const sourcePanel = work.locator("[data-selected-project-overview]");
-    await sourcePanel.waitFor({ state: "attached" });
+    await activateScheduleSegment(work);
+    const sourcePanel = work.locator('[data-cw-segment-panel="schedule"] [data-selected-project-overview]');
+    await sourcePanel.waitFor({ state: "visible" });
 
     await page.evaluate(projectIds => {
       const host = document.querySelector("#unified-current-work");
@@ -158,8 +168,7 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
 
-    const schedule = work.locator("[data-schedule-launch]");
-    await schedule.waitFor({ state: "attached" });
+    const schedule = await activateScheduleSegment(work);
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);
     await schedule.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
@@ -171,7 +180,8 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       && e.groups?.some(g => g.status === "in_progress")).length >= 1);
 
     await work.locator('[data-cw-segment-select="overview"]').click();
-    const cancel = work.locator('[data-action="cancel_execution"][data-expected-status="in_progress"]').first();
+    await work.locator('[data-cw-segment-panel="overview"]:not([hidden])').waitFor({ state: "visible" });
+    const cancel = work.locator('[data-cw-segment-panel="overview"] [data-action="cancel_execution"][data-expected-status="in_progress"]').first();
     await cancel.waitFor({ state: "visible" });
     await cancel.click();
     await page.waitForFunction(() => window.wsFrames?.some(e => e.type === "work-record.control"
