@@ -183,6 +183,14 @@ const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
 let adoptionInProgress = false;
 
 function samePath(left: string, right: string): boolean { const a = path.resolve(left), b = path.resolve(right); return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b; }
+const H1_CONVERSATION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+function listH1ConversationDirectories(sessionsRoot: string): string[] {
+  return readdirSync(sessionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .map((entry) => entry.name)
+    .filter((name) => name !== "." && name !== ".." && H1_CONVERSATION_ID_RE.test(name))
+    .sort();
+}
 function assertOrdinaryChatH1Isolation(context: EvolutionTestHostContext): { temp: string; userData: string; sessionData: string } {
   const { app_root: appRoot, run_root: runRoot, profile, sandbox_root: sandboxRoot } = context;
   const profileRoot = profile.profile_root, runId = path.basename(runRoot);
@@ -216,7 +224,11 @@ function assertWorkbenchCrashReopenH1Isolation(context: EvolutionTestHostContext
   const identityPath = path.join(runRoot, ".workbench-crash-reopen-recovery.json"), identityInfo = lstatSync(identityPath);
   if (!identityInfo.isFile() || identityInfo.isSymbolicLink() || !samePath(realpathSync.native(identityPath), identityPath)) throw Error("workbench crash/reopen H1 run identity marker is linked or non-regular");
   let identity: any; try { identity = JSON.parse(readFileSync(identityPath, "utf8")); } catch { throw Error("workbench crash/reopen H1 run identity marker is invalid"); }
-  if (!identity || Object.keys(identity).length !== 4 || identity.format !== 1 || identity.fixture !== "workbench-crash-reopen-recovery-v1" || identity.run_id !== runId) throw Error("workbench crash/reopen H1 run identity marker changed");
+  const identityKeys = ["format", "run_id", "fixture", "created_at", "session_id"] as const;
+  if (!identity || identity.format !== 1 || identity.fixture !== "workbench-crash-reopen-recovery-v1" || identity.run_id !== runId
+      || identityKeys.some((key) => !Object.hasOwn(identity, key)) || Object.keys(identity).length !== identityKeys.length) throw Error("workbench crash/reopen H1 run identity marker changed");
+  const seededSessionId = String(identity.session_id);
+  if (!H1_CONVERSATION_ID_RE.test(seededSessionId)) throw Error("workbench crash/reopen H1 seeded session id is invalid");
   const expected = {
     MY_AGENT_ROOT: appRoot, MY_AGENT_H1_PROFILE_ROOT: profileRoot, MY_AGENT_H1_RUN_ID: runId,
     USERPROFILE: path.join(profileRoot, "userprofile"), APPDATA: path.join(profileRoot, "appdata", "Roaming"), LOCALAPPDATA: path.join(profileRoot, "appdata", "Local"),
@@ -227,7 +239,11 @@ function assertWorkbenchCrashReopenH1Isolation(context: EvolutionTestHostContext
   for (const target of [profileRoot, ...Object.values(expected).filter(value => value !== appRoot && value !== profileRoot && value !== runId), path.join(appRoot, "data"), path.join(appRoot, "data", "sessions"), path.join(appRoot, "workspace"), path.join(appRoot, "evolve")]) {
     const info = lstatSync(target); if (!info.isDirectory() || info.isSymbolicLink() || !samePath(realpathSync.native(target), target)) throw Error("workbench crash/reopen H1 runtime root is missing, linked, or escaped its sealed run");
   }
-  if (JSON.stringify(readdirSync(path.join(appRoot, "data")).sort()) !== JSON.stringify(["sessions"]) || readdirSync(path.join(appRoot, "data", "sessions")).length !== 1) throw Error("workbench crash/reopen H1 agent data root must contain exactly one seeded session");
+  const dataEntries = readdirSync(path.join(appRoot, "data")).sort();
+  const allowedDataEntries = ["sessions", "state.json"].sort();
+  if (JSON.stringify(dataEntries) !== JSON.stringify(allowedDataEntries)) throw Error("workbench crash/reopen H1 agent data root has unexpected entries");
+  const sessionDirs = listH1ConversationDirectories(path.join(appRoot, "data", "sessions"));
+  if (sessionDirs.length !== 1 || sessionDirs[0] !== seededSessionId) throw Error(`workbench crash/reopen H1 agent data root must contain exactly one seeded session (${seededSessionId})`);
   if (JSON.stringify(readdirSync(profileRoot).sort()) !== JSON.stringify(["appdata", "electron-sessionData", "electron-userData", "home", "tmp", "userprofile", "xdg-cache", "xdg-config", "xdg-data"])) throw Error("workbench crash/reopen H1 profile has unexpected entries");
   if (JSON.stringify(readdirSync(path.join(profileRoot, "appdata")).sort()) !== JSON.stringify(["Local", "Roaming"])) throw Error("workbench crash/reopen H1 appdata root has unexpected entries");
   for (const marker of [path.join(appRoot, "evolve", "_index.core.toml"), path.join(appRoot, "evolve", "_index.toml")]) { const info = lstatSync(marker); if (!info.isFile() || info.isSymbolicLink() || !samePath(realpathSync.native(marker), marker)) throw Error("workbench crash/reopen H1 AgentPaths root marker is invalid"); }

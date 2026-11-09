@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,33 @@ export async function forceKillProcessTree(child) {
     return;
   }
   try { child.kill("SIGKILL"); } catch { /* ignore */ }
+}
+
+const H1_CONVERSATION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+export function listWorkbenchRecoveryConversationDirectories(sessionsRoot) {
+  return readdirSync(sessionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .map((entry) => entry.name)
+    .filter((name) => H1_CONVERSATION_ID_RE.test(name))
+    .sort();
+}
+
+export function assertWorkbenchRecoverySeedLayout(appRoot, sessionId = WORKBENCH_RECOVERY_SESSION_ID) {
+  const root = path.resolve(appRoot);
+  const dataRoot = path.join(root, "data");
+  const sessionsRoot = path.join(dataRoot, "sessions");
+  const dataEntries = existsSync(dataRoot) ? readdirSync(dataRoot).sort() : [];
+  const allowedData = ["sessions", "state.json"].sort();
+  if (JSON.stringify(dataEntries) !== JSON.stringify(allowedData)) {
+    deny(`workbench recovery seed data root must be sessions+state.json; got: ${dataEntries.join(", ") || "(missing)"}`);
+  }
+  const sessionDirs = listWorkbenchRecoveryConversationDirectories(sessionsRoot);
+  if (sessionDirs.length !== 1 || sessionDirs[0] !== sessionId) {
+    deny(`workbench recovery seed must leave exactly one session directory (${sessionId}); found: ${sessionDirs.join(", ") || "(none)"}`);
+  }
+  const metaPath = path.join(sessionsRoot, sessionId, "meta.json");
+  if (!existsSync(metaPath)) deny(`workbench recovery seed missing ${metaPath}`);
 }
 
 export function resolveDefaultElectronExecutable(repoRoot) {
