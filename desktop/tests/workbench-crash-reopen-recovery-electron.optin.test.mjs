@@ -28,12 +28,15 @@ test("opt-in: workbench recovery Electron requires explicit env", () => {
 });
 
 test("coverage map: synthetic vs real Electron recovery", () => {
+  assert.equal(WORKBENCH_RECOVERY_ELECTRON_PROFILE, "workbench-crash-reopen-recovery-v1");
   const browser = readFileSync(path.join(here, "workbench-crash-reopen-recovery-browser-e2e.test.mjs"), "utf8");
   assert.match(browser, /not real Electron kill/);
   const runner = readFileSync(path.join(repo, "desktop/scripts/run-workbench-crash-reopen-recovery-electron.mjs"), "utf8");
   assert.match(runner, /synthetic_ws_equivalent:\s*false/);
   assert.match(runner, /tray_reopen_automated:\s*false/);
-  assert.match(runner, new RegExp(WORKBENCH_RECOVERY_ELECTRON_PROFILE));
+  assert.match(runner, /WORKBENCH_RECOVERY_ELECTRON_PROFILE/, "runner must use the shared opt-in profile constant");
+  const optin = readFileSync(path.join(repo, "desktop/scripts/workbench-crash-reopen-recovery-electron.optin.mjs"), "utf8");
+  assert.match(optin, new RegExp(`export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "${WORKBENCH_RECOVERY_ELECTRON_PROFILE}"`));
 });
 
 test("warn counter accepts server recovery copy", () => {
