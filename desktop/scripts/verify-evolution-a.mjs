@@ -643,7 +643,23 @@ export function verifyFrozenHostFixture(input, options = {}) {
   }
   const actual = listFiles(appRoot, { skipDirectory: rel => rel === "data", includeFile: () => true }).map(item => item.relative);
   const expectedPaths = [...expected.keys(), ...mutablePaths].sort((a, b) => a.localeCompare(b, "en"));
-  if (actual.join("\n") !== expectedPaths.join("\n")) deny("frozen H1 app contains missing or unmanifested files");
+  const workbenchRecoveryRuntimeAllowed = chatFixture && profile.chat_fixture_profile === "workbench-crash-reopen-recovery-v1"
+    ? ["evolve/user_profile.md"]
+    : [];
+  const actualForContract = actual.filter(rel => !workbenchRecoveryRuntimeAllowed.includes(rel));
+  const extra = actualForContract.filter(rel => !expectedPaths.includes(rel));
+  const missing = expectedPaths.filter(rel => !actualForContract.includes(rel));
+  if (extra.length || missing.length) {
+    const error = new Error("frozen H1 app contains missing or unmanifested files");
+    error.code = "permission_denied";
+    error.diagnostics = {
+      extra,
+      missing,
+      runtime_allowed_app_paths: workbenchRecoveryRuntimeAllowed,
+      unfiltered_extra: actual.filter(rel => !expectedPaths.includes(rel)),
+    };
+    throw error;
+  }
   const sourceRoots = { desktop: path.join(sandboxRoot, "desktop") };
   for (const item of manifest.source_inputs) {
     if (!item || typeof item !== "object" || Object.keys(item).length !== 3 || typeof item.path !== "string" || !item.path.startsWith("desktop/") || !Number.isSafeInteger(item.byte_length) || !/^[0-9a-f]{64}$/.test(item.sha256)) deny("frozen H1 source-input entry is invalid");
