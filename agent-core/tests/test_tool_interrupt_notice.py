@@ -22,6 +22,11 @@ class ToolInterruptNoticeTests(unittest.TestCase):
         self.assertIn("run_command", text)
         self.assertNotIn("segment", text.lower())
 
+    def test_confirm_superseded_is_not_user_rejection(self) -> None:
+        text = format_tool_interrupt_notice("confirm_superseded", tool_label="run_command")
+        self.assertIn("不是工具回合上限", text)
+        self.assertNotIn("被拒绝或超时", text)
+
     def test_confirm_rejected_points_to_repair_node_modules(self) -> None:
         text = format_tool_interrupt_notice(
             "confirm_rejected", tool_label="repair_node_modules"
@@ -47,6 +52,13 @@ class ToolInterruptNoticeTests(unittest.TestCase):
             "tool call rejected by user",
         )
         self.assertEqual(_tool_interrupt_kind(rejected), "confirm_rejected")
+        superseded = tool_fail(
+            "run_evolved",
+            ToolErrorCode.CONFIRM_REJECTED,
+            "tool confirmation superseded before approval",
+            details={"confirm_outcome": "cancelled"},
+        )
+        self.assertEqual(_tool_interrupt_kind(superseded), "confirm_superseded")
 
         cancelled = tool_fail(
             "run_evolved",

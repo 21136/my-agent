@@ -7616,6 +7616,13 @@ def _tool_interrupt_kind(result: ToolResult) -> str | None:
     if result.ok or not result.error:
         return None
     if result.error.code == ToolErrorCode.CONFIRM_REJECTED:
+        details = getattr(result.error, "details", None) or {}
+        outcome = details.get("confirm_outcome")
+        message = (result.error.message or "").lower()
+        if outcome in {"cancelled", "stale"} or "superseded" in message:
+            return "confirm_superseded"
+        if outcome == "timeout":
+            return "timeout"
         return "confirm_rejected"
     msg = (result.error.message or "").lower()
     if "cancelled" in msg or "canceled" in msg:

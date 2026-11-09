@@ -371,6 +371,73 @@ class ConfirmPipelineTests(unittest.TestCase):
         self.assertEqual(done.get("session_id"), "session-a")
         self.assertEqual(done.get("choice"), "cancelled")
 
+    def test_confirm_survives_queued_to_running_activation_on_same_run(self) -> None:
+        bridge = self._bridge()
+        session = type("BoundSession", (), {"conversation_id": "session-a"})()
+        bridge._session_provider = lambda: session
+        bridge.lifecycle_conversation_id = session.conversation_id
+        bridge._turn_busy.set()
+        queued = bridge.lifecycle.enqueue("ordinary")
+        self.assertEqual(queued.state, "queued")
+        result: list[str] = []
+        worker = threading.Thread(
+            target=lambda: result.append(bridge.confirm_fn("run_command preview", False)),
+            daemon=True,
+        )
+        worker.start()
+        request = None
+        for _ in range(100):
+            request = next((event for event in self.events if event.get("type") == "confirm.request"), None)
+            if request is not None:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(request)
+        assert request is not None
+        running = bridge.lifecycle.start_or_activate("ordinary")
+        self.assertEqual(running.run_id, queued.run_id)
+        self.assertEqual(running.state, "running")
+        self.assertGreater(running.sequence, queued.sequence)
+        time.sleep(0.2)
+        self.assertFalse(result, "confirm must not cancel on queued→running activation")
+        self.assertTrue(worker.is_alive())
+        self.assertTrue(bridge.deliver_confirm(request["request_id"], "y"))
+        worker.join(timeout=2)
+        self.assertEqual(result, ["y"])
+        done = next(
+            event for event in reversed(self.events)
+            if event.get("type") == "confirm.done" and event.get("request_id") == request["request_id"]
+        )
+        self.assertEqual(done.get("choice"), "y")
+
+    def test_confirm_waits_through_session_binding_transition(self) -> None:
+        bridge = self._bridge()
+        session = type("BoundSession", (), {"conversation_id": "session-a"})()
+        bridge._session_provider = lambda: session
+        bridge.lifecycle_conversation_id = session.conversation_id
+        bridge.begin_turn(mode="agent")
+        result: list[str] = []
+        worker = threading.Thread(
+            target=lambda: result.append(bridge.confirm_fn("sensitive preview", False)),
+            daemon=True,
+        )
+        worker.start()
+        request = None
+        for _ in range(100):
+            request = next((event for event in self.events if event.get("type") == "confirm.request"), None)
+            if request is not None:
+                break
+            time.sleep(0.01)
+        self.assertIsNotNone(request)
+        assert request is not None
+        bridge.begin_session_binding_change()
+        time.sleep(0.2)
+        self.assertFalse(result, "confirm must wait during session binding transition")
+        self.assertTrue(worker.is_alive())
+        bridge.end_session_binding_change()
+        self.assertTrue(bridge.deliver_confirm(request["request_id"], "y"))
+        worker.join(timeout=2)
+        self.assertEqual(result, ["y"])
+
     def test_old_run_confirmation_cannot_authorize_after_lifecycle_advances(self) -> None:
         bridge = self._bridge()
         session = type("BoundSession", (), {"conversation_id": "session-a"})()
