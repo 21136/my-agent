@@ -1468,6 +1468,7 @@ class WsBridge:
                 "allow_approve_all": False,
                 "session_id": session_id, "run_id": snapshot.run_id,
             }))
+            _emit_confirm_wait_notice(self, preview)
             self._touch_progress()
             while True:
                 current = self.lifecycle.snapshot()
@@ -1566,6 +1567,13 @@ class WsBridge:
     def confirm_with_receipt(self, preview: str, allow_approve_all: bool) -> tuple[str, str]:
         with self._batch_confirm_lock:
             if self._batch_confirm_pending is not None:
+                try:
+                    self.emit({
+                        "type": "notice",
+                        "text": "另有一项授权确认正在进行；请先在当前小魔王空间聊天区完成现有确认卡。",
+                    })
+                except Exception:
+                    pass
                 return "n", ""
         from tools.executor import CONTEXT_SWITCH_CONFIRM_PREFIX
 
@@ -1615,6 +1623,7 @@ class WsBridge:
                 "type": "confirm.request", "request_id": request_id,
                 "preview": preview, "allow_approve_all": allow_approve_all,
             })
+            _emit_confirm_wait_notice(self, preview)
         self._touch_progress()
         watchdog = self.turn_watchdog
         if watchdog is not None:
@@ -3510,6 +3519,76 @@ def _repl_refreshes_session_state(line: str) -> bool:
     """REPL meta-commands that replace session overlay / chat history on desktop."""
     lower = line.strip().casefold()
     return lower in {"新会话", "new", "换主题"}
+
+
+def _ws_message_changes_session_binding(
+    msg_type: str,
+    message: dict[str, Any],
+    *,
+    repl: ConversationRepl,
+    paths: AgentPaths,
+) -> bool:
+    """Only project or session operations that may replace ``repl.session`` need the switch lock.
+
+    In-place register-only project open (main home) and read-mostly project queries must
+    not queue behind an active parent orchestration turn; otherwise worker confirms look
+    stuck while the UI waits on session binding busy errors.
+    """
+    if not isinstance(msg_type, str):
+        return False
+    if msg_type in {"session.open", "session.create_sandbox"}:
+        return True
+    if msg_type == "project.open":
+        project_id = message.get("project_id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            return True
+        try:
+            from project_switch import plan_project_open
+
+            plan = plan_project_open(paths, repl.session, project_id.strip())
+            return plan.action not in {"noop", "register_only"}
+        except Exception:
+            return True
+    if msg_type in {"project.switch", "project.thread.new"}:
+        return True
+    if msg_type.startswith("project.") and msg_type != "project.state":
+        return False
+    return False
+
+
+_SESSION_BINDING_BUSY_QUERY = (
+    "当前主会话仍在编排或确认中，暂时无法切换项目查询；请稍后在聊天区完成确认或等待本轮结束。"
+)
+_SESSION_BINDING_BUSY_SWITCH = (
+    "当前主会话仍在编排或确认中，暂时无法换线；请在聊天区完成待确认项，或等待本轮结束后再切换。"
+)
+
+
+def _user_facing_binding_busy_message(msg_type: str) -> str:
+    if msg_type == "project.state":
+        return _SESSION_BINDING_BUSY_QUERY
+    return _SESSION_BINDING_BUSY_SWITCH
+
+
+def _emit_confirm_wait_notice(bridge: WsBridge, preview: str) -> None:
+    """Surface a short chat notice whenever a turn blocks on user confirmation."""
+    if preview.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM"):
+        text = (
+            "需要在当前小魔王空间确认：是否授权本轮各项目 worker 按披露范围施工。"
+            "请在聊天确认卡中批准或拒绝；未确认前不会派发 worker。"
+        )
+    elif preview.startswith("项目 worker"):
+        text = "需要在当前小魔王空间确认一项项目 worker 操作；请在聊天确认卡中批准或拒绝。"
+    else:
+        text = "需要在当前小魔王空间确认后继续；请查看聊天中的确认卡。"
+    try:
+        bridge.emit(bridge._scope_run_event({
+            "type": "turn.notice",
+            "level": "info",
+            "text": text,
+        }))
+    except Exception:
+        pass
 
 
 def _line_may_rebind_session(line: Any) -> bool:
@@ -7290,8 +7369,10 @@ class WsSessionHandler:
                 return
 
         line = message.get("text") if msg_type == "user.message" else message.get("name")
-        changes_session_binding = msg_type in {"session.open", "session.create_sandbox"} or (
-            isinstance(msg_type, str) and msg_type.startswith("project.") and msg_type != "project.state"
+        changes_session_binding = (
+            _ws_message_changes_session_binding(
+                msg_type, message, repl=repl, paths=self.paths,
+            ) if isinstance(msg_type, str) else False
         ) or (msg_type in {"user.message", "command"} and _line_may_rebind_session(line))
 
         if msg_type == "evolution.scripted":
@@ -7429,7 +7510,7 @@ class WsSessionHandler:
             try:
                 await asyncio.wait_for(TURN_LOCK.acquire(), timeout=SESSION_SWITCH_WAIT_SECONDS)
             except asyncio.TimeoutError:
-                emit_error(bridge, "session binding is busy; retry the project state query after the active operation finishes")
+                emit_error(bridge, _user_facing_binding_busy_message("project.state"))
                 return
             try:
                 await self._dispatch(message, repl, bridge)
@@ -7455,7 +7536,7 @@ class WsSessionHandler:
                     remaining = max(0.0, deadline - asyncio.get_running_loop().time())
                     await asyncio.wait_for(TURN_LOCK.acquire(), timeout=remaining)
                 except asyncio.TimeoutError:
-                    emit_error(bridge, "session binding is busy; retry the session switch after the active operation finishes")
+                    emit_error(bridge, _user_facing_binding_busy_message(str(msg_type)))
                     return
                 try:
                     await self._dispatch(message, repl, bridge)

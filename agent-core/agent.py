@@ -3153,6 +3153,22 @@ class Agent:
                 log_outer_batch_unended("blocked")
                 return denied("PROJECT_WORKER_BATCH_RESERVATION_FAILED: the complete batch could not be bound; no worker was dispatched.")
 
+            if requests:
+                from active_work_multi_project import companion_multi_project_orchestration_active
+
+                if companion_multi_project_orchestration_active(self.session):
+                    try:
+                        self._emit_turn_event({
+                            "type": "turn.notice",
+                            "level": "info",
+                            "text": (
+                                f"正在为 {len(requests)} 个项目准备 worker 派工；"
+                                "授权与写入确认只会在当前小魔王空间出现，请留意聊天确认卡。"
+                            ),
+                        })
+                    except Exception:
+                        pass
+
             if (requests and reservations is not None
                     and len(reservations) == len(requests)):
                 from project_worker_host import ProjectWorkerReservation

@@ -222,6 +222,10 @@ test("docs requests and error status stay useful without a project", () => {
   assert.equal(userFacingErrorStatus("错误"), "出了点问题，请重试");
   assert.equal(userFacingErrorStatus(""), "出了点问题，请重试");
   assert.match(userFacingErrorStatus("disk full"), /^出错了：/);
+  assert.match(
+    userFacingErrorStatus("session binding is busy; retry the session switch"),
+    /聊天区完成确认/,
+  );
 });
 
 test("session ids stay out of status, notices, and thread titles", () => {
