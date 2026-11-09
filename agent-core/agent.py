@@ -1646,8 +1646,8 @@ _BUILTIN_PARAMETERS: dict[str, dict[str, Any]] = {
                     "session.new",
                 ],
                 "description": (
-                    "project.create = new workspace project + dedicated session; "
-                    "project.switch = switch to an existing project session; "
+                    "project.create = new workspace/<id> on the main home UI (no 换线, "
+                    "same chat); project.switch = switch to an existing project session; "
                     "session.new = blank ordinary chat (active_shell=grow; parks project "
                     "session if any — use before write_evolve from project window)"
                 ),

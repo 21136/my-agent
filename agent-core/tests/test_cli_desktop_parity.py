@@ -105,7 +105,7 @@ class MetaCommandHandleLineTests(unittest.TestCase):
         self.assertTrue(kwargs.get("force"))
 
     def test_project_new_meta_command_creates_workspace_triad(self) -> None:
-        """M14 · 项目 新建: handle_line binds project shell and workspace triad."""
+        """M14 · 项目 新建: handle_line creates triad on main home without 换线."""
         project_id = f"parity-hl-{secrets.token_hex(4)}"
         self._project_ids.append(project_id)
         outcome = self.repl.handle_line(f"项目 新建 {project_id}")
@@ -118,10 +118,9 @@ class MetaCommandHandleLineTests(unittest.TestCase):
             self.assertTrue((dest / name).is_file(), f"missing {name}")
         self.assertFalse((dest / "TASKS.md").is_file())
 
-        self.assertEqual(self.repl.session.meta.active_shell, "project")
-        self.assertEqual(self.repl.session.meta.project_id, pid)
-        self.assertEqual(self.repl.session.meta.project_plan_status, "draft")
-        self.assertTrue(any("计划待确认" in line for line in self.outputs))
+        self.assertNotEqual(self.repl.session.meta.active_shell, "project")
+        self.assertEqual(self.repl.session.meta.project_id, "")
+        self.assertTrue(any("未换线" in line for line in self.outputs))
 
 
 class WsMetaCommandParityTests(unittest.TestCase):

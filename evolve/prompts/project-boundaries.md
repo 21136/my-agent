@@ -12,11 +12,9 @@
 
 用户说「新项目 …」「另做一个 …」「改做 xxx」「去普通窗造工具」「这个话题清一下重来」等，**不要**在错误上下文里直接写盘。
 
-1. 先调用 builtin **`propose_context_switch`**：
-   - `action=project.create|project.switch`，`target=<project-id>`
-   - 或 `action=session.new`，`target=current`（同线空白会话；项目窗保留当前项目绑定）
-2. **等用户确认/拒绝**；确认前禁止写目标项目目录。工具沉淀是独立的显式请求，仍需执行器按工具目标和确认策略处理。
-3. 拒绝后留在当前线；确认后会话可能已切换，再继续。
+1. **新建项目**（`workspace/<id>/` 尚不存在）：调用 **`propose_context_switch` `action=project.create`**，或让用户/内核执行 `项目 新建 <id>` / `新项目 <id>`。二者都在**主界面就地创建并登记**，**不换线、不新建专用会话、不替换聊天记录**；**不要**向用户提议「专用会话并切换」。
+2. **切换到已有项目** / **新会话**：`action=project.switch` 或 `session.new`（`target=current`）仍会走用户确认门闩；确认前禁止写目标项目目录。
+3. 拒绝后留在当前线；`project.switch` 确认后才会话/聊天区可能替换。
 
 显式命令 `项目 新建 <id>` / `新项目 <id>` / `项目 切换 <id>` / `项目 新开线` / `新会话` 由内核处理，无需再 propose。
 

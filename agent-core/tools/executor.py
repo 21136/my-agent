@@ -2164,6 +2164,7 @@ class ToolExecutor:
             build_context_switch_request,
             done_events,
             normalize_proposal,
+            should_auto_apply_context_switch,
         )
         from project_mode import ProjectModeError
         from session import Session
@@ -2208,7 +2209,7 @@ class ToolExecutor:
         paths = self.registry.agent_paths
         previous = Session.load(paths, self.session.session_dir.name)
         request = build_context_switch_request(previous, proposal)
-        self._emit_event("context.switch.request", request)
+        auto_apply = should_auto_apply_context_switch(proposal)
 
         call_id = str(uuid.uuid4())
         self._emit_event(
@@ -2227,7 +2228,10 @@ class ToolExecutor:
 
         confirm_decision = "n"
         try:
-            if self.confirm_fn is not None:
+            if auto_apply:
+                confirm_decision = "y"
+            elif self.confirm_fn is not None:
+                self._emit_event("context.switch.request", request)
                 confirm_decision = _normalize_confirm_choice(
                     self.confirm_fn(
                         f"{CONTEXT_SWITCH_CONFIRM_PREFIX}{proposal.request_id}",
@@ -2236,6 +2240,7 @@ class ToolExecutor:
                     False,
                 )
             else:
+                self._emit_event("context.switch.request", request)
                 preview = (
                     f"{request.get('title', '换线')}\n"
                     f"当前项目: {(previous.meta.project_id or '（无）')}\n"

@@ -24,7 +24,7 @@ from project_mode import (
     should_treat_ordinary_direct_implement,
 )
 from session import Session, SessionMeta, create_new
-from tests.isolation_helpers import make_temp_agent_paths
+from tests.isolation_helpers import create_project_workspace, make_temp_agent_paths
 
 
 class DirectImplementMarkersTests(unittest.TestCase):
@@ -177,9 +177,7 @@ class ProjectDirectImplementCliTests(unittest.TestCase):
     def _new_project(self, project_id: str) -> tuple[object, object]:
         paths = make_temp_agent_paths(self, prefix="entry-cli-")
         session = create_new(paths, conversation_id=f"cli-{project_id}")
-        command = parse_project_command(f"项目 新建 {project_id}")
-        assert command is not None
-        run_project_command(session, paths, command, output_fn=lambda _line: None)
+        create_project_workspace(session, paths, project_id)
         return session, paths
 
     def test_cli_success_sets_entry_and_confirms(self) -> None:

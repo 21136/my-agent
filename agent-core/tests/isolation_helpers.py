@@ -216,3 +216,27 @@ def make_temp_agent_paths(
     tmp = _build_temp_root(copy_tool_dirs=copy_tool_dirs, prefix=prefix)
     test.addCleanup(_cleanup_temp_root, tmp)
     return AgentPaths.from_root(tmp)
+
+
+def create_project_workspace(
+    session: "Session",
+    paths: AgentPaths,
+    project_id: str,
+    *,
+    bind_shell: bool = True,
+    plan_status: str = "draft",
+) -> str:
+    """Create ``workspace/<id>/``; optionally bind project shell (legacy test helper)."""
+    from project_cli import bind_project_session, parse_project_command, run_project_command
+    from project_mode import normalize_project_id
+    from session import Session
+
+    assert isinstance(session, Session)
+    command = parse_project_command(f"项目 新建 {project_id}")
+    assert command is not None
+    run_project_command(session, paths, command, output_fn=lambda _line: None)
+    pid = normalize_project_id(project_id)
+    if bind_shell:
+        bind_project_session(session, pid, plan_status=plan_status)
+        session.save()
+    return pid

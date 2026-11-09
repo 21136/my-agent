@@ -27,6 +27,7 @@ from session import create_new
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode, tool_ok
+from tests.isolation_helpers import create_project_workspace
 
 
 class ProjectLifecycleTests(unittest.TestCase):
@@ -105,22 +106,13 @@ class ProjectLifecycleTests(unittest.TestCase):
             self.assertGreater(len(artifact.read_text(encoding="utf-8")), 0)
 
         self.assertTrue(result.meta_changed)
-        self.assertEqual(self.session.meta.active_shell, "project")
-        self.assertEqual(self.session.meta.project_id, pid)
-        self.assertEqual(self.session.meta.project_root, f"workspace/{pid}")
-        self.assertEqual(self.session.meta.project_plan_status, "draft")
-        self.assertTrue(any("计划待确认" in line for line in outputs))
+        self.assertNotEqual(self.session.meta.active_shell, "project")
+        self.assertEqual(self.session.meta.project_id, "")
+        self.assertTrue(any("未换线" in line for line in outputs))
         self.assertEqual(read_project_sessions(self.paths).get(pid), self.session.conversation_id)
 
     def _run_project_new(self) -> None:
-        command = parse_project_command(f"项目 新建 {self.project_id}")
-        assert command is not None
-        run_project_command(
-            self.session,
-            self.paths,
-            command,
-            output_fn=lambda _line: None,
-        )
+        create_project_workspace(self.session, self.paths, self.project_id)
         self.assertEqual(self.session.meta.project_plan_status, "draft")
 
     def _run_project_confirm(self) -> None:
@@ -140,7 +132,7 @@ class ProjectLifecycleTests(unittest.TestCase):
             "tool_name": "run_command",
             "arguments": {
                 "command": "python main.py",
-                "working_dir": pid,
+                "working_dir": f"workspace/{pid}",
                 "dry_run": True,
             },
         }
