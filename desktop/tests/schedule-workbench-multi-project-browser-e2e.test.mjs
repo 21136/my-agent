@@ -101,6 +101,28 @@ async function waitForCurrentWorkPopoverSized(page, minHeight = 80) {
   }, minHeight);
 }
 
+async function activateQueueSegment(work, page, { retries = 8 } = {}) {
+  const tab = work.locator('[data-cw-segment-select="queue"]');
+  const panel = work.locator('[data-cw-segment-panel="queue"]:not([hidden])');
+  let lastError;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      await tab.click();
+      await work.locator('[data-current-work-shell][data-cw-segment="queue"]').waitFor({ state: "attached", timeout: 4000 });
+      await panel.waitFor({ state: "visible", timeout: 4000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('#unified-current-work [data-cw-segment-panel="queue"]:not([hidden])');
+        return el instanceof HTMLElement && el.getBoundingClientRect().height > 0;
+      });
+      return panel;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const layout = await readCurrentWorkLayout(page);
+  throw new Error(`${lastError?.message ?? "queue segment did not become visible"}\nlayout=${JSON.stringify(layout)}`);
+}
+
 async function activateScheduleSegment(work, page, { retries = 8 } = {}) {
   const tab = work.locator('[data-cw-segment-select="schedule"]');
   const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
@@ -273,9 +295,11 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
     await page.waitForFunction(() => window.receivedEvents?.filter(e => e.type === "work-records.overview.result"
       && e.groups?.some(g => g.status === "in_progress")).length >= 1);
 
-    await work.locator('[data-cw-segment-select="overview"]').click();
-    await work.locator('[data-cw-segment-panel="overview"]:not([hidden])').waitFor({ state: "visible" });
-    const cancel = work.locator('[data-cw-segment-panel="overview"] [data-action="cancel_execution"][data-expected-status="in_progress"]').first();
+    const queuePanel = await activateQueueSegment(work, page);
+    const inProgressItem = queuePanel.locator(".unified-current-work-item-head").filter({ hasText: "in_progress" }).first();
+    await inProgressItem.waitFor({ state: "visible" });
+    await inProgressItem.click();
+    const cancel = queuePanel.locator('[data-action="cancel_execution"][data-expected-status="in_progress"]').first();
     await cancel.waitFor({ state: "visible" });
     await cancel.click();
     await page.waitForFunction(() => window.wsFrames?.some(e => e.type === "work-record.control"
