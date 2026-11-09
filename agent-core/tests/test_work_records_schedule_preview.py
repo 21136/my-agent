@@ -212,3 +212,17 @@ def test_preview_projects_task_and_suggested_paths_for_workbench_prefill():
     assert candidate["task"] == "Update NOTES.md after reading PROJECT.md"
     assert "PROJECT.md" in candidate["suggested_read_targets"]
     assert candidate["suggested_write_targets"] == ["NOTES.md"]
+
+
+def test_preview_write_default_falls_back_to_first_file_mention_without_notes():
+    result = build_schedule_preview([{
+        "kind": "project", "id": "project-a", "items": [{
+            "item_id": "item", "priority": 3, "requirements": [
+                {"requirement_id": "r", "text": "Adjust README.md for the launch", "status": "queued",
+                 "depends_on": [], "schedule_claim": None},
+            ],
+        }],
+    }])
+    candidate = result["candidates"][0]
+    assert candidate["suggested_read_targets"] == ["README.md"]
+    assert candidate["suggested_write_targets"] == ["README.md"]

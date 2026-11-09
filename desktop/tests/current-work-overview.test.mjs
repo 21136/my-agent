@@ -712,7 +712,7 @@ test("schedule tab empty state explains read-only multi-project preview entry", 
   assert.match(panel.bodyHtml, /选择项目来源/);
   assert.match(panel.bodyHtml, /查看所选项目/);
   assert.match(panel.bodyHtml, /不会自动开跑/);
-  assert.match(panel.bodyHtml, /准备启动/);
+  assert.match(panel.bodyHtml, /按预览启动/);
   assert.doesNotMatch(panel.bodyHtml, /当前没有调度预览；选择项目来源后会显示在这里。/);
 
   const extras = `<section data-selected-project-overview aria-label="选择项目来源"><h3>选择项目来源（2）</h3></section>`;
