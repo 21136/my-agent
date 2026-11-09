@@ -42,6 +42,8 @@ test("coverage map: synthetic vs real Electron recovery", () => {
   assert.match(runner, /resolveWorkbenchRecoverySandboxRoot/, "runner must resolve evolution sandbox root");
   const optin = readFileSync(path.join(repo, "desktop/scripts/workbench-crash-reopen-recovery-electron.optin.mjs"), "utf8");
   assert.match(optin, new RegExp(`export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "${WORKBENCH_RECOVERY_ELECTRON_PROFILE}"`));
+  assert.match(runner, /session_id:\s*WORKBENCH_RECOVERY_SESSION_ID/);
+  assert.match(runner, /assertWorkbenchRecoverySeedLayout/);
   const hint = buildEvolutionControlPrepHint(repo);
   assert.match(hint, /control-release\.js/);
   assert.match(hint, /build-evolution-control/);

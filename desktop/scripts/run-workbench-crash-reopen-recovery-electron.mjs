@@ -23,6 +23,7 @@ import {
   requireWorkbenchRecoveryElectronOptIn,
   resolveDefaultElectronExecutable,
   resolveWorkbenchRecoverySandboxRoot,
+  assertWorkbenchRecoverySeedLayout,
 } from "./workbench-crash-reopen-recovery-electron.optin.mjs";
 import {
   assertRunLocalRenderer,
@@ -63,6 +64,7 @@ function newMarkedRun(sandboxRoot) {
     format: 1,
     run_id: path.basename(runRoot),
     fixture: WORKBENCH_RECOVERY_ELECTRON_PROFILE,
+    session_id: WORKBENCH_RECOVERY_SESSION_ID,
     created_at: new Date().toISOString(),
   }), { flag: "wx" });
   return runRoot;
@@ -72,7 +74,13 @@ function seedRecoverySession(appRoot, pythonExecutable, sandboxRoot) {
   const seed = path.join(scriptDir, "workbench-crash-reopen-recovery-electron-seed.py");
   const run = spawnSync(pythonExecutable, [seed, appRoot], {
     cwd: sandboxRoot,
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", WORKBENCH_RECOVERY_SESSION_ID },
+    env: {
+      ...process.env,
+      MY_AGENT_ROOT: appRoot,
+      PYTHONDONTWRITEBYTECODE: "1",
+      PYTHONNOUSERSITE: "1",
+      WORKBENCH_RECOVERY_SESSION_ID,
+    },
     encoding: "utf8",
   });
   if (run.status !== 0) deny(`recovery seed failed: ${run.stderr || run.stdout}`);
@@ -164,6 +172,7 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     const seedMarker = seedRecoverySession(verified.app_root, python, controlBuild.sandboxRoot);
     if (seedMarker.project_bound) deny("companion seed must stay project-agnostic");
     if (seedMarker.conversation_id !== WORKBENCH_RECOVERY_SESSION_ID) deny("seed session id mismatch");
+    assertWorkbenchRecoverySeedLayout(verified.app_root, WORKBENCH_RECOVERY_SESSION_ID);
 
     host = await startFrozenHost(frozenInput, { cdp: { enabled: true } });
     const firstPass = await observeRecoveryPass(host, verified, runRoot, "first_launch");
