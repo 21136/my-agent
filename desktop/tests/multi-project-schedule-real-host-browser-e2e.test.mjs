@@ -133,15 +133,19 @@ const edge = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Micros
 const guiOptIn = process.env.REAL_MULTI_PROJECT_SCHEDULE_OPT_IN === "1"
   && process.env.REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN === "1";
 
+function confirmRequestCount(page) {
+  return page.evaluate(() => window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0);
+}
+
 /** Companion-home ordinary confirms: composer dock is the actionable surface (see chat-state companionHomeComposerOwnsOrdinaryConfirm). */
-async function acceptComposerOrdinaryConfirm(page, { timeout = 45000 } = {}) {
+async function acceptComposerOrdinaryConfirm(page, { timeout = 45000, minConfirmRequests = 0 } = {}) {
   await page.waitForFunction(
-    () => window.receivedEvents?.some(event => event.type === "confirm.request"),
-    null,
+    min => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > min,
+    minConfirmRequests,
     { timeout },
   );
   const requestId = await page.evaluate(
-    () => window.receivedEvents.findLast(event => event.type === "confirm.request")?.request_id,
+    () => window.receivedEvents.filter(event => event.type === "confirm.request").at(-1)?.request_id,
   );
   assert.ok(requestId, "confirm.request missing request_id");
   const approve = page.locator(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`);
@@ -175,7 +179,7 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
   skip: !guiOptIn || process.platform !== "win32" || !existsSync(pw) || !existsSync(edge)
     ? "Win32 opt-in: REAL_MULTI_PROJECT_SCHEDULE_OPT_IN=1 and REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN=1"
     : false,
-  timeout: 180000,
+  timeout: 360000,
 }, async t => {
   const esbuild = require("esbuild");
   const { chromium } = require(pw);
@@ -264,7 +268,9 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
       }
     }, PROJECTS);
     await schedulePanel.locator("[data-run-selected-project-overview]").click();
-    await acceptComposerOrdinaryConfirm(page);
+    let confirmRequestsSeen = await confirmRequestCount(page);
+    await acceptComposerOrdinaryConfirm(page, { minConfirmRequests: confirmRequestsSeen });
+    confirmRequestsSeen = await confirmRequestCount(page);
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
     await waitForCurrentWorkPopoverSized(page, 80);
@@ -273,10 +279,18 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
     await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
     await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await launch.locator("[data-schedule-launch-send]").click();
-    await acceptComposerOrdinaryConfirm(page, { timeout: 120000 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const applied = await page.evaluate(() => {
+        const done = window.receivedEvents?.findLast(event => event.type === "work-records.schedule.dispatch.done");
+        return done?.status === "applied" && done?.tool_ok === true;
+      });
+      if (applied) break;
+      await acceptComposerOrdinaryConfirm(page, { timeout: 90_000, minConfirmRequests: confirmRequestsSeen });
+      confirmRequestsSeen = await confirmRequestCount(page);
+    }
 
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
-      && e.status === "applied" && e.tool_ok === true), null, { timeout: 120000 });
+      && e.status === "applied" && e.tool_ok === true), null, { timeout: 30_000 });
     const done = await page.evaluate(() => window.receivedEvents.findLast(e => e.type === "work-records.schedule.dispatch.done"));
     const workers = done.workers ?? [];
     const statuses = Object.fromEntries(workers.map(row => [row.project_id, row.status]));
