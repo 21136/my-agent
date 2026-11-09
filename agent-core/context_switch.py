@@ -21,10 +21,8 @@ from project_mode import (
 )
 from project_switch import (
     execute_project_switch,
-    lookup_project_session,
     plan_project_switch,
     record_project_session,
-    session_exists,
 )
 from session import Session, build_seed_message, create_new, write_last_conversation_id
 
@@ -95,6 +93,11 @@ def normalize_proposal(
     )
 
 
+def should_auto_apply_context_switch(proposal: ContextSwitchProposal) -> bool:
+    """``project.create`` always applies in place on the main home UI (no 换线 gate)."""
+    return proposal.action == "project.create"
+
+
 def build_context_switch_request(
     session: Session,
     proposal: ContextSwitchProposal,
@@ -106,8 +109,7 @@ def build_context_switch_request(
         side_effects.append(f"创建 workspace/{proposal.target}/ 三件套（若不存在）")
         if proposal.template:
             side_effects.append(f"运行配方 scaffold {proposal.template}（phase=init）")
-        side_effects.append("新建专用会话并切换到 project 壳")
-        side_effects.append("聊天区将替换为新会话历史")
+        side_effects.append("在主界面登记该项目，不换线、不替换聊天记录")
         title = f"新建项目 · {proposal.target}"
     elif proposal.action == "project.switch":
         side_effects.append(f"切换到项目 workspace/{proposal.target}")
@@ -246,7 +248,7 @@ def _apply_project_create(
         raise ContextSwitchError(str(exc)) from exc
 
     current_pid = (session.meta.project_id or "").strip()
-    # Already on this project in project shell — noop bind.
+    # Already on this project in project shell — refresh mapping only.
     if current_pid == pid and session.meta.active_shell == "project":
         record_project_session(paths, pid, session.conversation_id)
         write_last_conversation_id(paths, session.conversation_id)
@@ -258,57 +260,26 @@ def _apply_project_create(
             pass
         return session, f"已创建项目 workspace/{pid}（当前会话）"
 
-    # D6: project already has a dedicated session → resume it (never open a second).
-    mapped = lookup_project_session(paths, pid)
-    if mapped and session_exists(paths, mapped) and mapped != session.conversation_id:
-        loaded = Session.load(paths, mapped)
-        if (loaded.meta.project_id or "").strip() != pid:
-            from project_cli import bind_project_session
+    return _register_new_project_workspace(
+        paths,
+        session,
+        pid,
+        template=template,
+        project_template=project_template,
+    )
 
-            bind_project_session(loaded, pid, plan_status="draft")
-            loaded.save()
-        record_project_session(paths, pid, loaded.conversation_id)
-        write_last_conversation_id(paths, loaded.conversation_id)
-        try:
-            from project_env import ensure_project_env
 
-            ensure_project_env(paths, pid)
-        except Exception:
-            pass
-        return loaded, f"已续接项目 {pid}"
-
-    # Unbound session may bind in place; bound to another project → new session for NEW project only.
-    if not current_pid:
-        from project_cli import bind_project_session
-
-        bind_project_session(session, pid, plan_status="draft")
-        session.save()
-        _bind_ordinary_light_entry(session, paths, pid)
-        record_project_session(paths, pid, session.conversation_id)
-        write_last_conversation_id(paths, session.conversation_id)
-        try:
-            from project_env import ensure_project_env
-
-            ensure_project_env(paths, pid)
-        except Exception:
-            pass
-        note = _create_template_note(template, project_template)
-        if (
-            str(getattr(session.meta, "project_entry", "") or "") == "direct"
-            or getattr(session, "next_work_intent", None) == "execute"
-        ):
-            return session, f"已创建并打开项目 workspace/{pid}（可直接按当前请求实现{note}）"
-        return session, f"已创建并打开项目 workspace/{pid}（计划待确认{note}）"
-
-    fresh = create_new(paths)
-    _inject_seed(fresh, session, reason=f"切换到项目 {pid}")
-    from project_cli import bind_project_session
-
-    bind_project_session(fresh, pid, plan_status="draft")
-    fresh.save()
-    _bind_ordinary_light_entry(fresh, paths, pid)
-    record_project_session(paths, pid, fresh.conversation_id)
-    write_last_conversation_id(paths, fresh.conversation_id)
+def _register_new_project_workspace(
+    paths: AgentPaths,
+    session: Session,
+    pid: str,
+    *,
+    template: str | None = None,
+    project_template: str | None = None,
+) -> tuple[Session, str]:
+    """Register a new workspace on disk without switching session, shell, or chat history."""
+    record_project_session(paths, pid, session.conversation_id)
+    write_last_conversation_id(paths, session.conversation_id)
     try:
         from project_env import ensure_project_env
 
@@ -316,12 +287,12 @@ def _apply_project_create(
     except Exception:
         pass
     note = _create_template_note(template, project_template)
-    if (
-        str(getattr(fresh.meta, "project_entry", "") or "") == "direct"
-        or getattr(fresh, "next_work_intent", None) == "execute"
-    ):
-        return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 可直接按当前请求实现{note}）"
-    return fresh, f"已创建并切换到项目 workspace/{pid}（新会话 · 计划待确认{note}）"
+    current_pid = (session.meta.project_id or "").strip()
+    if not current_pid:
+        return session, f"已在主界面创建项目 workspace/{pid}（未换线{note}）"
+    if current_pid == pid:
+        return session, f"已创建项目 workspace/{pid}（当前会话{note}）"
+    return session, f"已创建项目 workspace/{pid}（仍留在 {current_pid}{note}）"
 
 
 def _create_template_note(template: str | None, project_template: str | None) -> str:

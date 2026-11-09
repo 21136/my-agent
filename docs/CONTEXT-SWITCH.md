@@ -153,8 +153,8 @@ LLM 本轮
 
 桌面可复用 confirm 块样式，文案模板例如：
 
-> 要 **新建项目 `java-doudizhu`** 并切换到新会话吗？  
-> 当前仍在 `stab-r1-demo`。确认后聊天区会换成新会话。  
+> **`project.create`（主界面）**：就地创建 `workspace/<id>/` 并登记，**不弹换线卡**、不换会话。  
+> **`project.switch` / `session.new`** 仍可用换线确认卡，例如切换到已有项目专用会话。  
 > [确认换线] [拒绝]
 
 ### 4.3 CLI

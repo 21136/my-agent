@@ -19,16 +19,14 @@ from project_cli import (
 )
 from project_mode import project_dir
 from session import create_new
-from tests.isolation_helpers import make_temp_agent_paths
+from tests.isolation_helpers import create_project_workspace, make_temp_agent_paths
 
 
 class OrdinaryProjectStatePolicyTests(unittest.TestCase):
     def _new(self, name: str):
         paths = make_temp_agent_paths(self, prefix="ordinary-state-")
         session = create_new(paths, conversation_id=name)
-        command = parse_project_command(f"项目 新建 {name}")
-        assert command is not None
-        run_project_command(session, paths, command, output_fn=lambda _text: None)
+        create_project_workspace(session, paths, name)
         return session, paths
 
     def test_direct_implement_arms_request_without_persisting_stage_or_plan_gate(self) -> None:

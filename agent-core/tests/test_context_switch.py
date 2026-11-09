@@ -14,8 +14,10 @@ if str(_AGENT_CORE) not in sys.path:
 
 from agent import Agent
 from context_switch import (
+    build_context_switch_request,
     foreign_workspace_project_write,
     normalize_proposal,
+    should_auto_apply_context_switch,
 )
 from project_cli import parse_project_command, run_project_command
 from project_mode import create_project, normalize_project_id, project_dir
@@ -83,6 +85,14 @@ class ContextSwitchTests(unittest.TestCase):
             conversation_id=f"_test_ctx_{secrets.token_hex(4)}",
         )
 
+    def _bind_project_workspace(self, project_id: str, *, plan_status: str = "draft") -> str:
+        from project_cli import bind_project_session
+
+        pid = normalize_project_id(project_id)
+        bind_project_session(self.session, pid, plan_status=plan_status)
+        self.session.save()
+        return pid
+
     def test_alias_xin_xiangmu(self) -> None:
         cmd = parse_project_command(f"新项目 {self.pid_b}")
         self.assertIsNotNone(cmd)
@@ -90,16 +100,20 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertEqual(cmd.kind, "new")
         self.assertEqual(cmd.project_id, self.pid_b)
 
-    def test_project_new_when_bound_replaces_session(self) -> None:
-        """T-1904: already bound → new project gets a new conversation_id."""
+    def test_project_new_when_bound_stays_on_current_session(self) -> None:
+        """Main home policy: creating another project does not replace the chat session."""
         run_project_command(
             self.session,
             self.paths,
             parse_project_command(f"项目 新建 {self.pid_a}"),
             output_fn=lambda _l: None,
         )
-        self.assertEqual(self.session.meta.project_id, normalize_project_id(self.pid_a))
+        from project_cli import bind_project_session
+
+        bind_project_session(self.session, normalize_project_id(self.pid_a), plan_status="draft")
+        self.session.save()
         old_cid = self.session.conversation_id
+        pid_a = normalize_project_id(self.pid_a)
 
         outputs: list[str] = []
         result = run_project_command(
@@ -108,19 +122,16 @@ class ContextSwitchTests(unittest.TestCase):
             parse_project_command(f"项目 新建 {self.pid_b}"),
             output_fn=outputs.append,
         )
-        self.assertIsNotNone(result.session)
-        assert result.session is not None
-        self.assertNotEqual(result.session.conversation_id, old_cid)
-        self.assertEqual(result.session.meta.project_id, normalize_project_id(self.pid_b))
-        self.assertEqual(
-            read_project_sessions(self.paths).get(normalize_project_id(self.pid_a)),
-            old_cid,
-        )
+        self.assertIsNone(result.session)
+        self.assertEqual(self.session.conversation_id, old_cid)
+        self.assertEqual(self.session.meta.project_id, pid_a)
+        self.assertEqual(read_project_sessions(self.paths).get(pid_a), old_cid)
         self.assertEqual(
             read_project_sessions(self.paths).get(normalize_project_id(self.pid_b)),
-            result.session.conversation_id,
+            old_cid,
         )
         self.assertTrue(project_dir(self.paths, self.pid_b).is_dir())
+        self.assertTrue(any("未换线" in line or "仍留在" in line for line in outputs))
 
     def test_project_new_existing_id_rejects_without_rebinding(self) -> None:
         """A new command must not silently open an existing project."""
@@ -145,7 +156,7 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertFalse(result.meta_changed)
         self.assertIsNone(result.session)
         self.assertEqual(self.session.conversation_id, old_cid)
-        self.assertEqual(self.session.meta.project_id, pid_a)
+        self.assertEqual(self.session.meta.project_id, "")
         self.assertEqual(read_project_sessions(self.paths).get(pid_a), old_cid)
         self.assertNotIn(normalize_project_id(self.pid_b), read_project_sessions(self.paths))
         self.assertTrue(any(line.startswith("error:") for line in outputs))
@@ -179,6 +190,7 @@ class ContextSwitchTests(unittest.TestCase):
             parse_project_command(f"项目 新建 {self.pid_a}"),
             output_fn=lambda _l: None,
         )
+        self._bind_project_workspace(self.pid_a)
         # confirm plan so write gate is not plan_draft
         from project_cli import confirm_project_plan
 
@@ -209,13 +221,8 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertEqual(result.error.code if result.error else None, ToolErrorCode.VALIDATION_ERROR)
         self.assertIn("propose_context_switch", result.error.message if result.error else "")
 
-    def test_propose_context_switch_confirm_y(self) -> None:
-        run_project_command(
-            self.session,
-            self.paths,
-            parse_project_command(f"项目 新建 {self.pid_a}"),
-            output_fn=lambda _l: None,
-        )
+    def test_propose_project_create_auto_applies_without_switch_request(self) -> None:
+        """project.create on main home: no 换线 overlay, same session."""
         old_cid = self.session.conversation_id
         events: list[tuple[str, dict]] = []
 
@@ -223,7 +230,7 @@ class ContextSwitchTests(unittest.TestCase):
         executor = ToolExecutor(
             registry=registry,
             session=ExecutorSession.load(self.session.session_dir),
-            confirm_fn=lambda _p, _a: "y",
+            confirm_fn=lambda _p, _a: "n",
             on_event=lambda et, payload: events.append((et, payload)),
         )
         result = executor.run(
@@ -236,19 +243,22 @@ class ContextSwitchTests(unittest.TestCase):
         )
         self.assertTrue(result.ok, result.error.message if result.error else "")
         assert isinstance(result.data, dict)
-        self.assertTrue(result.data.get("session_replaced"))
-        self.assertNotEqual(result.data.get("session_id"), old_cid)
+        self.assertFalse(result.data.get("session_replaced"))
+        self.assertEqual(result.data.get("session_id"), old_cid)
+        self.assertEqual(self.session.meta.project_id, "")
         types = [et for et, _ in events]
-        self.assertIn("context.switch.request", types)
+        self.assertNotIn("context.switch.request", types)
         self.assertIn("context.switch.done", types)
+        self.assertTrue(project_dir(self.paths, self.pid_b).is_dir())
+        self.assertEqual(
+            read_project_sessions(self.paths).get(normalize_project_id(self.pid_b)),
+            old_cid,
+        )
 
     def test_propose_context_switch_reject(self) -> None:
-        run_project_command(
-            self.session,
-            self.paths,
-            parse_project_command(f"项目 新建 {self.pid_a}"),
-            output_fn=lambda _l: None,
-        )
+        from project_mode import create_project
+
+        create_project(self.paths, self.pid_a)
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor(
             registry=registry,
@@ -257,27 +267,29 @@ class ContextSwitchTests(unittest.TestCase):
         )
         result = executor.run(
             "propose_context_switch",
-            {"action": "project.create", "target": self.pid_b},
+            {"action": "project.switch", "target": self.pid_a},
         )
         self.assertFalse(result.ok)
         self.assertEqual(
             result.error.code if result.error else None,
             ToolErrorCode.CONFIRM_REJECTED,
         )
-        self.assertEqual(self.session.meta.project_id, normalize_project_id(self.pid_a))
-        # rejected create must not rebind current session
-        self.assertFalse(
-            read_project_sessions(self.paths).get(normalize_project_id(self.pid_b))
-            == self.session.conversation_id
-        )
+        self.assertEqual(self.session.meta.project_id, "")
 
-    def test_propose_shell_switch_reject(self) -> None:
+    def test_propose_project_switch_reject_keeps_binding(self) -> None:
         run_project_command(
             self.session,
             self.paths,
             parse_project_command(f"项目 新建 {self.pid_a}"),
             output_fn=lambda _l: None,
         )
+        run_project_command(
+            self.session,
+            self.paths,
+            parse_project_command(f"项目 新建 {self.pid_b}"),
+            output_fn=lambda _l: None,
+        )
+        pid_a = self._bind_project_workspace(self.pid_a)
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor(
             registry=registry,
@@ -286,10 +298,10 @@ class ContextSwitchTests(unittest.TestCase):
         )
         result = executor.run(
             "propose_context_switch",
-            {"action": "shell.switch", "target": "daily"},
+            {"action": "project.switch", "target": self.pid_b},
         )
         self.assertFalse(result.ok)
-        self.assertEqual(self.session.meta.project_id, normalize_project_id(self.pid_a))
+        self.assertEqual(self.session.meta.project_id, pid_a)
         self.assertEqual(self.session.meta.active_shell, "project")
 
     def test_propose_session_new_on_project_parks_binding(self) -> None:
@@ -300,12 +312,12 @@ class ContextSwitchTests(unittest.TestCase):
             parse_project_command(f"项目 新建 {self.pid_a}"),
             output_fn=lambda _l: None,
         )
+        pid = self._bind_project_workspace(self.pid_a)
         from project_cli import confirm_project_plan
 
         confirm_project_plan(self.session)
         self.session.save()
         old_cid = self.session.conversation_id
-        pid = normalize_project_id(self.pid_a)
 
         registry = ToolRegistry.load(self.paths)
         executor = ToolExecutor(
@@ -332,6 +344,18 @@ class ContextSwitchTests(unittest.TestCase):
     def test_normalize_shell_switch_rejects_bad_target(self) -> None:
         with self.assertRaises(Exception):
             normalize_proposal(action="shell.switch", target="pet")
+
+    def test_project_create_request_describes_in_place_create(self) -> None:
+        proposal = normalize_proposal(
+            action="project.create",
+            target=self.pid_a,
+            reason="quiet create",
+        )
+        self.assertTrue(should_auto_apply_context_switch(proposal))
+        request = build_context_switch_request(self.session, proposal)
+        effects = request.get("side_effects") or []
+        self.assertTrue(any("未换线" in line or "不换线" in line for line in effects))
+        self.assertFalse(any("专用会话" in line for line in effects))
 
 
 if __name__ == "__main__":
