@@ -1,4 +1,4 @@
-/* Current-work: split beside companion chat — no full-viewport landing page. */
+/* Current-work: in-shell slide-over beside full-width chat — no 50/50 split, no full-page landing. */
 
 .unified-current-work {
   flex: 1;
@@ -10,10 +10,44 @@
 }
 .unified-current-work[hidden] { display: none !important; }
 
-.unified-shell.is-current-work-split .unified-tool-heading {
-  flex: 0 0 auto;
-  padding: 0.55rem 0.85rem 0.35rem;
-  border-bottom: 1px solid var(--ma-border);
+.unified-shell.is-current-work-overlay .unified-stage > .unified-chat {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+.unified-shell.is-current-work-overlay .unified-tool-heading {
+  display: none;
+}
+.unified-shell.is-current-work-overlay .unified-tool-region {
+  position: absolute;
+  z-index: 8;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 48vw);
+  max-width: 100%;
+  flex: none !important;
+  overflow: hidden;
+  border-left: 1px solid var(--ma-border);
+  background: var(--ma-bg);
+  box-shadow: -16px 0 48px color-mix(in srgb, var(--ma-text) 14%, transparent);
+}
+.unified-shell.is-current-work-overlay .unified-stage::before {
+  content: "";
+  position: absolute;
+  z-index: 7;
+  inset: 0;
+  right: min(440px, 48vw);
+  background: color-mix(in srgb, var(--ma-bg) 42%, transparent);
+  pointer-events: none;
+}
+@media (max-width: 800px) {
+  .unified-shell.is-current-work-overlay .unified-tool-region {
+    width: min(100%, 420px);
+  }
+  .unified-shell.is-current-work-overlay .unified-stage::before {
+    right: min(100%, 420px);
+  }
 }
 
 .current-work-shell {

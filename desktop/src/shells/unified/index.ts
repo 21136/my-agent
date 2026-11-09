@@ -3224,7 +3224,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     shellEl.dataset.mainFocus = focus;
     shellEl.dataset.rail = projectState.railTab;
     shellEl.classList.toggle("is-tool-fullpage", pageToolOpen);
-    shellEl.classList.toggle("is-current-work-split", currentWorkShellOpen);
+    shellEl.classList.toggle("is-current-work-overlay", currentWorkShellOpen);
     shellEl.classList.remove("is-docs-split");
     chatEl.classList.toggle("hidden", pageToolOpen);
     documentEl.classList.toggle("hidden", focus !== "document");

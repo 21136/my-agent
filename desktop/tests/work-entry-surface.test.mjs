@@ -32,7 +32,7 @@ test("existing real-state work entry toggles an in-shell panel without a modal o
   renderTopbarV2(el, state(false), { onToggleCurrentWorkOverview: () => toggles++ });
   assert.match(el.innerHTML, /aria-expanded="false"/);
 });
-test("in-shell panel renders dismiss control and overview body beside chat", () => {
+test("in-shell panel renders dismiss control and overview body in overlay drawer", () => {
   const { renderCurrentWorkShellPanel } = load(new URL("../src/shells/unified/current-work-overview.ts", import.meta.url));
   const html = renderCurrentWorkShellPanel({ visible: true, open: true, label: "当前工作", bodyHtml: "<div class=\"current-work-page-body\"><section class=\"cw-panel\" data-cw-panel=\"queue\"><p>项目与独立事项</p></section></div>", canExpand: false, moreLabel: "", loadingMore: false });
   assert.match(html, /id="unified-current-work-close"/);
@@ -42,10 +42,15 @@ test("in-shell panel renders dismiss control and overview body beside chat", () 
 test("popover sizing reserves the current composer region rather than relying on a blocking overlay", () => {
   const index = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
   const css = readFileSync(new URL("../src/shells/unified/current-work-overview.css", import.meta.url), "utf8");
+  const toolsCss = readFileSync(new URL("../src/shells/unified/single-chat-tools.css", import.meta.url), "utf8");
   assert.match(index, /function sizeCurrentWorkPopover\(/);
   assert.match(index, /composerDock\.getBoundingClientRect\(\)\.top/);
   assert.match(index, /currentWork.*ResizeObserver/s);
+  assert.match(index, /is-current-work-overlay/);
+  assert.doesNotMatch(index, /is-current-work-split/);
   assert.match(css, /\.unified-current-work-popover[\s\S]*box-sizing:\s*border-box/);
+  assert.match(css, /\.unified-shell\.is-current-work-overlay[\s\S]*position:\s*absolute/);
+  assert.match(toolsCss, /:not\(\.is-current-work-overlay\)/);
 });
 
 test("the actual size function tracks composer movement and hides when no safe space remains", () => {
