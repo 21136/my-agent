@@ -21,6 +21,8 @@ Unlike the **synthetic** schedule WS fixture, the real host answers `project.lis
 
 On **unbound** companion-home, local `work-records.overview.result` is often `no_records` with `unread_status: known`, which normally hides the 当前工作 topbar pill. When mapped project sessions exist, `buildCurrentWorkOverviewPanel` keeps the entry visible (`mappedMultiProjectSchedule`) so the schedule overlay remains reachable without binding the companion session.
 
+Multi-project **只读概况** and **schedule.dispatch** each gate on host `confirm.request` / `confirm.response`. On companion-home the actionable surface is the composer **等待你的确认** strip (`data-pending-confirm-hint`); the browser E2E waits for `confirm.request`, clicks **同意** there, then waits for `confirm.done` before expecting `selected_project_sessions` overview or dispatch.
+
 ## Win32 GUI opt-in
 
 ```bat
