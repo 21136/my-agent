@@ -6,6 +6,7 @@ import json
 import pytest
 
 from project_worker_scope_diagnostics import (
+    batch_outbound_undeclared_read_correction_matches,
     build_scope_error_detail,
     build_target_scope_tool_error,
     build_worker_tool_scope_error,
@@ -151,6 +152,31 @@ def test_scope_error_detail_is_host_safe_subset():
     assert detail["project_id"] == _PID
     assert detail["requested_path"] == "secret.md"
     assert validate_scope_error_detail(detail)
+
+
+def test_batch_matcher_accepts_in_loop_undeclared_read_scope_error():
+    payload = build_worker_tool_scope_error(
+        error_code="read_target_not_declared",
+        operation="read_project_file",
+        requested_path="secret.md",
+        project_id=_PID,
+        read_targets=("PROJECT.md",),
+        write_targets=("NOTES.md",),
+    )
+    assert batch_outbound_undeclared_read_correction_matches(
+        attempted_path="secret.md",
+        tool_result=payload,
+        project_id=_PID,
+        read_targets=("PROJECT.md",),
+        write_targets=("NOTES.md",),
+    )
+    assert not batch_outbound_undeclared_read_correction_matches(
+        attempted_path="PROJECT.md",
+        tool_result=payload,
+        project_id=_PID,
+        read_targets=("PROJECT.md",),
+        write_targets=("NOTES.md",),
+    )
 
 
 def test_build_rejects_unsafe_declared_targets():

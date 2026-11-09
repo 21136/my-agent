@@ -272,3 +272,113 @@ def test_outbound_grant_accepts_only_exact_worker_transcript_and_listed_read_sou
         unlisted_source[3] = {"role": "tool", "tool_call_id": "read-call",
             "content": json.dumps({"ok": True, "path": "PRIVATE.md", "content": "not authorized", "truncated": False})}
         assert not host._batch_outbound_preview_matches(preview_for(unlisted_source), grant, session, request, reservation)
+
+
+def test_outbound_grant_accepts_in_loop_undeclared_read_scope_error_then_continues(monkeypatch):
+    from project_worker_model_loop import TOOL_DEFINITIONS, build_worker_system_prompt
+    from project_worker_scope_diagnostics import build_worker_tool_scope_error
+
+    with temporary_agent_paths(copy_tool_dirs=("common/write_text", "coding/patch_file")) as paths:
+        create_project(paths, "project-alpha", project_template="light")
+        session = create_new(paths, conversation_id="20261109-bbbb0001")
+        session._ordinary_work_intent = "execute"
+        host, _clients = _host(paths, monkeypatch, lambda _request: pytest.fail("must not POST"))
+        request = _request(
+            "project-alpha",
+            "task-a",
+            "Update the README",
+            reads=("README.md",),
+            writes=("NOTES.md",),
+        )
+        reservation = host.reserve_many(
+            session,
+            [request],
+            parent_run_id="source-run",
+            turn_epoch=12,
+            live_binding_check=_reservation_live(session, "source-run", 12),
+        )[0]
+        from project_worker_host import ProjectWorkerBatchAuthorization, _worker_model_snapshot
+
+        model_id, provider, provider_model, endpoint = _worker_model_snapshot(paths)
+        grant = ProjectWorkerBatchAuthorization(
+            grant_id="preview-grant",
+            conversation_id=session.conversation_id,
+            parent_run_id="source-run",
+            turn_epoch=12,
+            expires_at=time.time() + 3600,
+            model_id=model_id,
+            provider=provider,
+            provider_model=provider_model,
+            endpoint=endpoint,
+            rows=(),
+        )
+        system = build_worker_system_prompt("project-alpha", ("README.md",), ("NOTES.md",))
+        scope = {
+            "project_id": "project-alpha",
+            "project_root": "workspace/project-alpha",
+            "read_targets": ["README.md"],
+            "write_targets": ["NOTES.md"],
+            "run_id": "source-run",
+            "turn_epoch": 12,
+            "request_number": 3,
+        }
+        scope_tool_error = build_worker_tool_scope_error(
+            error_code="read_target_not_declared",
+            operation="read_project_file",
+            requested_path="secret.md",
+            project_id="project-alpha",
+            read_targets=("README.md",),
+            write_targets=("NOTES.md",),
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "Update the README"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "bad-read", "type": "function",
+                "function": {
+                    "name": "read_project_file",
+                    "arguments": json.dumps({"path": "secret.md"}),
+                },
+            }]},
+            {"role": "tool", "tool_call_id": "bad-read",
+             "content": json.dumps(scope_tool_error, ensure_ascii=False, sort_keys=True)},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "good-read", "type": "function",
+                "function": {
+                    "name": "read_project_file",
+                    "arguments": json.dumps({"path": "README.md"}),
+                },
+            }]},
+            {"role": "tool", "tool_call_id": "good-read",
+             "content": json.dumps({
+                 "ok": True, "path": "README.md",
+                 "content": "listed project text", "truncated": False,
+             })},
+        ]
+
+        def preview_for(transcript):
+            return json.dumps({
+                "method": "POST", "model_id": grant.model_id, "vendor": grant.provider,
+                "endpoint": grant.endpoint,
+                "headers": {"Authorization": "[redacted]", "Content-Type": "application/json"},
+                "session_id": grant.conversation_id, "scope": scope,
+                "provider_payload": {
+                    "model": grant.provider_model, "messages": transcript,
+                    "temperature": 0.0, "stream": False, "tools": TOOL_DEFINITIONS,
+                },
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+        assert host._batch_outbound_preview_matches(
+            preview_for(messages), grant, session, request, reservation,
+        )
+        forged = [dict(row) for row in messages]
+        forged[3] = {
+            "role": "tool", "tool_call_id": "bad-read",
+            "content": json.dumps({
+                **scope_tool_error,
+                "declared_read_targets": ["PRIVATE.md"],
+            }, ensure_ascii=False, sort_keys=True),
+        }
+        assert not host._batch_outbound_preview_matches(
+            preview_for(forged), grant, session, request, reservation,
+        )
