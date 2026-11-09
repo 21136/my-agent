@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "../src/shells/unified/schedule-launch.ts";
+import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "../src/shells/unified/schedule-launch.ts";
 
 const result = {
   type: "work-records.overview.result", session_id: "s1", request_id: "r1", state: "visible",
@@ -17,6 +17,13 @@ const result = {
   page: { page_size: 6, offset: 0, total_groups: 1, total_visible_groups: 1, total_visible_items: 1,
     total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null },
 } as any;
+
+test("schedule dispatch payload matches authorized candidate and explicit paths", () => {
+  const payload = buildScheduleDispatchWorkers(result, 0, "Fix the exact bug", "PROJECT.md", "NOTES.md");
+  assert.equal(payload.workers[0].task, "Fix the exact bug");
+  assert.deepEqual(payload.workers[0].write_targets, ["NOTES.md"]);
+  assert.deepEqual(payload.workers[0].read_targets, ["PROJECT.md"]);
+});
 
 test("schedule launcher ties visible candidate to exact projected text and emits explicit bounded user request", () => {
   assert.equal(scheduledWorkerCandidates(result)[0].task, "Fix the exact bug");
@@ -39,15 +46,14 @@ test("schedule launcher ties visible candidate to exact projected text and emits
   assert.deepEqual(scheduledWorkerCandidates(completedHead), []);
 });
 
-test("schedule launch leaves the composer draft untouched and reports synchronous send failures", () => {
+test("schedule launch uses direct work-records.schedule.dispatch instead of chat", () => {
   const source = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
   const handlerStart = source.indexOf('scheduleForm?.querySelector<HTMLButtonElement>("[data-schedule-launch-send]")');
   const handlerEnd = source.indexOf("data-run-selected-project-history", handlerStart + 1);
   assert.notEqual(handlerStart, -1);
   const handler = source.slice(handlerStart, handlerEnd);
-  assert.doesNotMatch(handler, /input\.value\s*=/, "launching must not replace or clear a draft in the composer");
-  assert.match(handler, /catch \(error\)[\s\S]*setStatus\(`启动请求未发送：/,
-    "send failures must be surfaced as not sent rather than reported as successful");
+  assert.match(handler, /dispatchScheduleWorkers/);
+  assert.doesNotMatch(handler, /sendMessage\(/);
 });
 
 test("schedule launcher fails closed for stale, truncated, or mismatched projections", () => {

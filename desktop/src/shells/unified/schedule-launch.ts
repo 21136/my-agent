@@ -53,6 +53,33 @@ function pathsFromTextarea(value: string): string[] {
 }
 
 /** Build explicit user intent from the selected candidate and user-entered file scope. */
+export function buildScheduleDispatchWorkers(
+  result: WorkRecordsOverviewResultEvent | null,
+  candidateIndex: number,
+  taskText: string,
+  readText: string,
+  writeText: string,
+) {
+  const candidate = scheduledWorkerCandidates(result)[candidateIndex];
+  if (!candidate) throw new Error("候选已变化或不可用，请重新读取当前工作概况。");
+  if (typeof taskText !== "string" || !taskText.trim() || taskText.trim() !== candidate.task)
+    throw new Error("请将本次任务完整填写为来源要求原文；来源只读预览本身不会授权启动。");
+  const readTargets = pathsFromTextarea(readText);
+  const writeTargets = pathsFromTextarea(writeText);
+  return {
+    projectIds: result?.selected_project_ids ?? [candidate.projectId],
+    workers: [{
+      project_id: candidate.projectId,
+      item_id: candidate.itemId,
+      requirement_id: candidate.requirementId,
+      priority: candidate.priority,
+      task: taskText.trim(),
+      read_targets: readTargets,
+      write_targets: writeTargets,
+    }],
+  };
+}
+
 export function buildScheduleLaunchMessage(
   result: WorkRecordsOverviewResultEvent | null,
   candidateIndex: number,

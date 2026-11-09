@@ -603,3 +603,86 @@ def test_ws_copy_requirement_approval_creates_independent_copy_and_preserves_sou
         assert copied_event["payload"]["source_requirement_id"] == requirement["requirement_id"]
 
     asyncio.run(run())
+
+
+def test_ws_remote_cancel_execution_confirms_and_signals_parent_host(tmp_path):
+    async def run():
+        from project_switch import record_project_session
+        from session import create_new
+
+        paths = AgentPaths(tmp_path, tmp_path / "workspace", tmp_path / "data", tmp_path / "evolve")
+        paths.workspace.mkdir(parents=True, exist_ok=True)
+        paths.evolve.mkdir(parents=True, exist_ok=True)
+        (paths.evolve / "_index.core.toml").write_text("", encoding="utf-8")
+        parent = create_new(paths, conversation_id="20261109-aaaaaaaa")
+        project_id = "project-beta"
+        (paths.workspace / project_id).mkdir(parents=True)
+        (paths.workspace / project_id / "PROJECT.md").write_text("# beta\n", encoding="utf-8")
+        source_session = Session(
+            "20261109-bbbbbbbb", paths.data / "sessions" / "20261109-bbbbbbbb", "remote source",
+            SessionMeta(project_id=project_id), [], paths,
+        )
+        source_session.session_dir.mkdir(parents=True, exist_ok=True)
+        source_session.save()
+        record_project_session(paths, project_id, source_session.conversation_id)
+        source_store = WorkRecordStore(source_session)
+        item = source_store.create_item(title="Remote run", scope={"kind": "project", "project_id": project_id})
+        requirement = source_store.add_requirement(item["item_id"], "Remote task", event_id="remote-req")
+        source_store.begin_requirement_run(
+            item["item_id"], requirement["requirement_id"],
+            run_id="remote-worker-run", expected_current_run_id=None,
+        )
+        from multi_project_work_record_authorization import authorize_project_record_sources
+        from threading import Event
+
+        authorized = authorize_project_record_sources(
+            parent, [project_id], confirm_fn=lambda *_: "y", cancel_event=Event(),
+        )
+        import multi_project_work_record_authorization as authorization_module
+        import project_worker_host as project_worker_host_module
+
+        authorization_module.authorize_project_record_sources = lambda *_args, **_kwargs: authorized
+        project_worker_host_module._resolve_bound_project = (
+            lambda paths, bound_project_id: paths.workspace / bound_project_id
+        )
+
+        async def _inline_to_thread(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+        import server as server_module
+
+        original_to_thread = asyncio.to_thread
+        asyncio.to_thread = _inline_to_thread
+        server_module.asyncio.to_thread = _inline_to_thread
+        signals = []
+        host = SimpleNamespace(request_cancel_for_record=lambda bound_session, **identity:
+                               signals.append((bound_session, identity)) or "signal_set")
+        events = []
+        previews = []
+        bridge = WsBridge(emit=events.append, paths=parent.paths)
+        bridge.confirm_with_receipt = lambda preview, _allow: (previews.append(preview) or "y", "receipt")
+        handler = WsSessionHandler(parent.paths)
+        repl = SimpleNamespace(session=parent, agent=SimpleNamespace(session=parent, project_worker_host=host))
+        request_id = str(uuid.uuid4())
+        request = {
+            "type": "work-record.control", "session_id": parent.conversation_id,
+            "request_id": request_id, "item_id": item["item_id"],
+            "requirement_id": requirement["requirement_id"], "project_id": project_id,
+            "action": "cancel_execution", "expected_status": "in_progress",
+            "expected_revision": 0,
+            "expected_source_revision": source_store.with_locked_data(lambda data: data["revision"]),
+            "event_id": str(uuid.uuid4()), "idempotency_key": request_id,
+        }
+        try:
+            await handler._handle_incoming(request, repl, bridge)
+        finally:
+            asyncio.to_thread = original_to_thread
+            server_module.asyncio.to_thread = original_to_thread
+        done = next(event for event in reversed(events) if event.get("type") == "work-record.control.done")
+        assert done["status"] == "applied"
+        assert "远程 worker" in done["message"]
+        assert previews and "来源 Session" in previews[0]
+        assert signals == [(parent, {"item_id": item["item_id"], "requirement_id": requirement["requirement_id"]})]
+        assert source_store.get_item(item["item_id"])["requirements"][0]["status"] == "in_progress"
+
+    asyncio.run(run())

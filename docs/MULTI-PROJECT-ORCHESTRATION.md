@@ -6,7 +6,7 @@
 
 相关现行实现：[AGENT-PARENT-ORCHESTRATION](./AGENT-PARENT-ORCHESTRATION.md) · [EXPLORE-SCOPE-RAILS](./EXPLORE-SCOPE-RAILS.md) · [ORCHESTRATION](./ORCHESTRATION.md) · [PROJECT-THREADS](./PROJECT-THREADS.md) · [PROJECT-SWITCH-STATE-ISOLATION](./PROJECT-SWITCH-STATE-ISOLATION.md) · [SUBAGENT-BUDGET](./SUBAGENT-BUDGET.md) · [DAY-JOURNAL-MEMORY](./DAY-JOURNAL-MEMORY.md)（记忆分层草案） · Goal Runtime P0（agent-core/goal_runtime.py）
 
-## 当前实现与验收状态（2026-11-07）
+## 当前实现与验收状态（2026-11-09）
 
 ### 已有实现（以源码为准）
 
@@ -16,8 +16,8 @@
 - 有批次范围授权、精确模型外发确认、文件写入确认、取消与身份校验；运行结果和验证状态分开记录。worker 返回不等于验收通过，派工结果的 `acceptance_status` 初始为 `not_run`。
 - 桌面端有确认预览和按会话/运行绑定的短时 worker 进度快照；“当前工作”概况现可对当前 Session 的非运行事项写入队列/等待确认/停止/继续准备控制、依赖元数据、优先级，并展示有限历史尝试。运行中的事项不由概况按钮假称停止，需走执行 host 的 Stop。
 - 当前工作可显式选择最多六个已映射项目，主机显示项目→来源 Session 并逐项取得只读授权后，才聚合这些项目 Session 内对应 project scope 的结构化记录；拒绝授权不会读取来源记录。选中来源带 Session/revision provenance，映射或源版本在读取过程中变化则整体拒绝。当前 Session 的 independent/项目记录与所选项目来源分别投影；跨 Session 已读回执未知，不据此隐藏结果。结果每项目最多显示五个事项、每事项最多六条要求，最近十次尝试可展开；剩余数量明确提示，未实现跨来源聚合分页/全历史。
-- 队列/依赖目前是持久化状态控制而非后台调度器：不会自动启动下一项，也不会在用户点击“准备继续”后自动重跑；等待确认状态是事项记录，不自动生成 host 确认。远端来源不会被 overview query 修改；用户对远端某事项执行控制时，需要先取得只读来源授权，再对精确事项操作单独确认，服务端复核 project_sessions、项目根身份及来源 revision 后才写入目标 Session 的 WorkRecordStore。该控制只更新记录元数据，不执行文件操作，也不取消远端运行 worker。
-- 工作记录当前支持排队/等待确认/依赖、CAS 停止/继续准备和 0–5 优先级变更，并写入追加历史；执行中的事项不会被元数据按钮谎称停止，未知副作用也不能直接继续。依赖在 `begin_requirement_run` 时检查。启动/打开 Session 会把其他进程留下的 in-progress 要求标记为 unknown 并追加 interruption 事件，不自动执行；这仍不是运行队列恢复或自动调度。
+- 队列/依赖目前是持久化状态控制；**不会**在应用重开时自动调度。用户在「当前工作」填写范围并确认后，可通过 `work-records.schedule.dispatch` 在活跃父回合内直接调用 `run_project_workers` host 路径（尊重并发上限、来源授权与逐项确认），无需模型先决是否发工具。`continue` / `queue` 控制仍只更新元数据，不会隐式启动 worker。远端来源不会被 overview query 修改；远端事项控制须逐项授权与 CAS；**远端运行中** worker 可通过主会话 host 的真实取消路径协调停止（精确确认 + 来源 revision 复核），不假装元数据已停止。
+- 工作记录当前支持排队/等待确认/依赖、CAS 停止/继续准备和 0–5 优先级变更，并写入追加历史。`session.open` / 主 WS 连接时会对**非本进程 owner** 的 in-progress 要求调用 `mark_interrupted_runs_unknown`（保留 schedule claim），并在仍无法核对时发出警告；不自动继续或重派。跨来源历史：`history_scope=selected_projects_history` 分页已可由桌面「所选项目统一历史」逐页加载（来源 revision 绑定游标）。
 - 当前工作详情可展示已加载要求、最近十次历史尝试并编辑其依赖；更多未加载要求需先分页载入。概况操作提供队列/等待确认/停止未启动项/继续准备和优先级；不提供对运行中 worker 的假停止，也尚未自动执行调度。
 - Desktop 可选择最多六个已映射项目并请求结构化概况；用户逐项授权后才读取来源侧车。远端组显示来源 Session/记录版本，并可直接展开要求、最近历史和跳转到来源会话。远端未运行事项的记录元数据操作会触发额外精确确认和 source revision CAS；不可在概况中假称取消运行中的 worker。跨 Session 结果查看回执未知，不能据此隐藏结果。选择来源、事项操作与迟到 WebSocket 响应均绑定 request/session 身份。
 - 最终定向后端回归：外部项目/worker/工作记录/overview/控制/结算/多项目授权聚合测试 **191 passed、1 skipped、3 subtests passed**；Desktop 当前工作、响应式渲染、多来源选择和控制 WS 测试 **38/38 passed**。synthetic Playwright loopback E2E **1/1 passed**，验证多项目来源须先授权、拒绝读取量为 0、授权后远端事项控制需再次确认且不启动 worker；完整 `tsc -p desktop/tsconfig.json --noEmit` 和 `npm --prefix desktop run build` 均通过。另有 single-worker record/pytest loopback GUI E2E **1/1 passed**（HTTP 模型 transport 为 mock，项目内 pytest 实际运行）；未调用真实模型或真实用户目录。
@@ -30,7 +30,7 @@
 - **混合结果**：多项目批次中分别出现成功、失败、受阻、取消与状态未知，逐项目显示真实结果；任何 worker 返回都不伪装成完成或测试通过。
 - **桌面生命周期**：Stop、切换会话/项目、关闭与重开期间的迟到事件、待确认操作和不确定写入结果，需在实际 UI 验证。当前启动/打开 Session 会把其他进程 owner 留下的 in-progress 要求改为 unknown 并追加 interruption 事件，不自动执行；同进程活跃 run 保留。还需实际应用关闭/重开及故障时序 E2E 验收。
 - **工作区范围**：worker 现在可使用已登记内部项目和通过外部项目流程显式接入的根；不支持对未登记任意路径直接派工。外部根身份、链接替换和窗口变化有后端保护，但目录注册/绑定管理及桌面端实际操作仍须独立验收。
-- **完整多工作区、多事项工作台（产品目标，用户于 2026-11-07 确认）**：目标范围是一个主入口跨多个工作区管理项目事项及独立事项，持久状态、队列/依赖、历史、事项控制与安全恢复。当前已有当前 Session 事项控制、经逐项授权的已映射项目结构化概况/远端未运行事项元数据控制、CAS 要求修订、最近尝试详情和进程 owner 恢复标记；仍缺真正跨项目持久调度与槽位自动排队、跨源历史翻页、运行中远端事项取消协调、事项合并/拆分展示及应用重开端到端状态核验和更完整的混合结果 GUI 验收。不能宣称完整达标。
+- **完整多工作区、多事项工作台（产品目标，用户于 2026-11-07 确认）**：本 PR 落地了显式调度骨架（workbench → `work-records.schedule.dispatch` → host）、跨源合并历史分页 UI、远端 in-progress 取消协调、以及 session 打开时的 conservative unknown 恢复；仍缺无用户填路径的批量自动排队、事项合并/拆分展示、真实模型多项目并行 GUI E2E、以及应用故障时序下的完整恢复验收。不能宣称完整达标。
 - **验证证据**：上列定向测试仅证明其覆盖的后端/组件行为；不代表完整 UI 流程、真实模型、多工作区事项调度或恢复验收通过。真实用户目录未用于测试。
 
 本文以下原始方案与产品愿景仍可作为设计背景；其中“未实现”标注及接口建议不再代表当前源码状态。具体哪些愿景已实现、哪些仍待设计，以本节和现行源码为准。
@@ -309,6 +309,7 @@ un_evolved 写工具，还是只暴露一组固定 builtin 写工具？
 
 | 日期 | 说明 |
 |------|------|
+| 2026-11-09 | 工作台显式 schedule.dispatch、跨源历史分页、远端 host 取消协调、session 打开 unknown 恢复；完整 E2E 仍待验收 |
 | 2026-11-07 | 更新外部项目 worker 绑定支持与身份替换 fail-closed 证据；记录定向后端测试结果；完整工作台仍未达标 |
 | 2026-10-29 | 增补单对话当前工作、独立事项、结果与历史回查的设计边界；当时未实现 |
 | 2026-10-28 | 初稿：兼容地图 + 双项目流程 + 最小扩展；明确未实现 |
