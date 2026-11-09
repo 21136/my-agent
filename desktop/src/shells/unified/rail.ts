@@ -1,4 +1,4 @@
-/** Main stage owned by the active rail tab (plus full-page overlays like current-work). */
+/** Main stage owned by the active rail tab; current-work docks beside chat instead of replacing it. */
 export type MainFocus = "chat" | "document" | "projects" | "settings" | "music" | "shell-dev" | "current-work";
 
 /** Left icon rail. Each tab owns sidebar context and main stage together. */

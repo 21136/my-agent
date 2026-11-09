@@ -121,9 +121,8 @@ export function renderTopbarV2(container: HTMLElement, state: TopbarState, handl
     : "";
 
   const overview = state.currentWorkOverview;
-  // Entry only: content lives on the full-page current-work workbench.
   const currentWorkButton = overview?.visible
-    ? `<div class="unified-topbar-current-work-wrap"><button type="button" class="unified-btn unified-btn-ghost unified-topbar-current-work" id="unified-request-current-work" aria-controls="unified-current-work" aria-expanded="${overview.open ? "true" : "false"}" title="打开当前工作全页工作台">${escapeHtml(overview.label)}</button></div>`
+    ? `<div class="unified-topbar-current-work-wrap"><button type="button" class="unified-btn unified-btn-ghost unified-topbar-current-work" id="unified-request-current-work" aria-controls="unified-current-work-popover" aria-expanded="${overview.open ? "true" : "false"}" title="在主界面展开或收起当前工作">${escapeHtml(overview.label)}</button></div>`
     : "";
   const trailing = `<div class="unified-topbar-trailing">${currentWorkButton}${memoryButton}${sessionsButton}</div>`;
   const headerCtas = state.headerCtas.length

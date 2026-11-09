@@ -109,7 +109,7 @@ export function collectCurrentWorkLiveQueueEntries(input: CurrentWorkLiveSession
         const kind = confirm.confirmKind === "project_worker_requirement_verification"
           ? "项目 worker 核验"
           : "工具 / 批次授权";
-        return `<section class="unified-current-work-live-confirm"><h5>${heading} · ${kind}</h5><p class="cw-live-preview">${escapeHtml(truncatePreview(confirm.preview || "（预览为空）"))}</p><p class="cw-live-hint">授权卡片在对话中；点「回到对话」处理。</p></section>`;
+        return `<section class="unified-current-work-live-confirm"><h5>${heading} · ${kind}</h5><p class="cw-live-preview">${escapeHtml(truncatePreview(confirm.preview || "（预览为空）"))}</p><p class="cw-live-hint">授权在左侧对话输入区处理。</p></section>`;
       }).join(""),
     });
   }

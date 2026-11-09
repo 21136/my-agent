@@ -22,18 +22,22 @@ function fakeContainer() {
     querySelector(selector) { return selector === ".unified-topbar-menu" ? null : { addEventListener: (type, fn) => events.set(`${selector}:${type}`, fn) }; },
     querySelectorAll() { return []; } };
 }
-test("existing real-state work entry has a labelled dismissible nonmodal detail surface", () => {
+test("existing real-state work entry toggles an in-shell panel without a modal overlay", () => {
   const el = fakeContainer(); let toggles = 0;
   renderTopbarV2(el, state(true), { onToggleCurrentWorkOverview: () => toggles++ });
   assert.match(el.innerHTML, /aria-expanded="true"/);
   assert.match(el.innerHTML, /aria-controls="unified-current-work-popover"/);
-  assert.match(el.innerHTML, /id="unified-current-work-close"/);
-  assert.match(el.innerHTML, /项目与独立事项/);
   assert.doesNotMatch(el.innerHTML, /aria-modal="true"|role="dialog"|unified-confirm-glass/);
-  el.events.get("#unified-current-work-close:click")(); assert.equal(toggles, 1);
+  el.events.get("#unified-request-current-work:click")(); assert.equal(toggles, 1);
   renderTopbarV2(el, state(false), { onToggleCurrentWorkOverview: () => toggles++ });
   assert.match(el.innerHTML, /aria-expanded="false"/);
-  assert.doesNotMatch(el.innerHTML, /id="unified-current-work-close"/);
+});
+test("in-shell panel renders dismiss control and overview body beside chat", () => {
+  const { renderCurrentWorkShellPanel } = load(new URL("../src/shells/unified/current-work-overview.ts", import.meta.url));
+  const html = renderCurrentWorkShellPanel({ visible: true, open: true, label: "当前工作", bodyHtml: "<div class=\"current-work-page-body\"><section class=\"cw-panel\" data-cw-panel=\"queue\"><p>项目与独立事项</p></section></div>", canExpand: false, moreLabel: "", loadingMore: false });
+  assert.match(html, /id="unified-current-work-close"/);
+  assert.match(html, /项目与独立事项/);
+  assert.match(html, /data-cw-segment-select="queue"/);
 });
 test("popover sizing reserves the current composer region rather than relying on a blocking overlay", () => {
   const index = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
@@ -41,7 +45,7 @@ test("popover sizing reserves the current composer region rather than relying on
   assert.match(index, /function sizeCurrentWorkPopover\(/);
   assert.match(index, /composerDock\.getBoundingClientRect\(\)\.top/);
   assert.match(index, /currentWork.*ResizeObserver/s);
-  assert.match(css, /\.unified-current-work-popover\s*\{[^}]*box-sizing:\s*border-box/s);
+  assert.match(css, /\.unified-current-work-popover[\s\S]*box-sizing:\s*border-box/);
 });
 
 test("the actual size function tracks composer movement and hides when no safe space remains", () => {
