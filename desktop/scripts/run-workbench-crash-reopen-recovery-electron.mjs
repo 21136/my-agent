@@ -248,7 +248,6 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
       persistH1FailureDiagnostics(runRoot, enriched, diagnosticsStage);
     } catch { /* preserve primary failure */ }
     throw error;
-  }
   } finally {
     if (host) try { await host.close(); } catch { /* preserve primary failure */ }
   }
