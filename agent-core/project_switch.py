@@ -17,7 +17,7 @@ from session import Session, build_seed_message, create_new, sessions_root, writ
 
 PROJECT_SESSIONS_KEY = "project_sessions"
 PROJECT_THREAD_ARCHIVE_KEY = "project_thread_archive"
-SwitchAction = Literal["noop", "bind_current", "load_session", "new_session"]
+SwitchAction = Literal["noop", "register_only", "bind_current", "load_session", "new_session"]
 
 
 def _inject_project_seed(fresh: Session, previous: Session, project_id: str) -> None:
@@ -152,9 +152,9 @@ def plan_project_open(paths: AgentPaths, session: Session, project_id: str) -> P
         archive_project_thread(paths, pid, mapped)
 
     return ProjectSwitchPlan(
-        action="bind_current",
+        action="register_only",
         project_id=pid,
-        message=f"已在本会话打开 workspace/{pid}",
+        message=f"已在主界面登记 workspace/{pid}（未绑定本会话）",
     )
 
 
@@ -211,6 +211,17 @@ def execute_project_switch(
     plan: ProjectSwitchPlan,
 ) -> tuple[Session, str]:
     if plan.action == "noop":
+        try:
+            from project_env import ensure_project_env
+
+            ensure_project_env(paths, plan.project_id)
+        except Exception:
+            pass
+        return session, plan.message
+
+    if plan.action == "register_only":
+        record_project_session(paths, plan.project_id, session.conversation_id)
+        write_last_conversation_id(paths, session.conversation_id)
         try:
             from project_env import ensure_project_env
 
@@ -472,8 +483,8 @@ def _demo() -> None:
 
     session = create_new(paths, conversation_id="project-switch-demo")
     opened, msg = open_project_on_session(paths, session, demo_a)
-    assert opened.meta.project_id == demo_a
-    print(f"[PASS] open bind_current: {msg}")
+    assert not (opened.meta.project_id or "").strip()
+    print(f"[PASS] open register_only: {msg}")
 
     try:
         open_project_on_session(paths, opened, demo_b)

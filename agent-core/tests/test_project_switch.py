@@ -76,18 +76,16 @@ class ProjectSwitchTests(unittest.TestCase):
         create_project(self.paths, self.project_b)
 
     def _open_project_a(self) -> None:
+        from project_cli import bind_project_session
+
         run_project_command(
             self.session,
             self.paths,
             ParsedProjectCommand(kind="new", project_id=self.project_a),
             output_fn=lambda _line: None,
         )
-        run_project_command(
-            self.session,
-            self.paths,
-            ParsedProjectCommand(kind="open", project_id=self.project_a),
-            output_fn=lambda _line: None,
-        )
+        bind_project_session(self.session, normalize_project_id(self.project_a))
+        self.session.save()
         self.assertEqual(self.session.meta.project_id, normalize_project_id(self.project_a))
 
     def test_perform_project_switch_emits_done(self) -> None:

@@ -447,7 +447,7 @@ class ContextSwitchTests(unittest.TestCase):
         from session import Session
 
         rebound = Session.load(self.paths, old_cid)
-        self.assertEqual(rebound.meta.project_id, pid)
+        self.assertFalse((rebound.meta.project_id or "").strip())
         types = [et for et, _ in events]
         self.assertNotIn("context.switch.request", types)
 
@@ -501,7 +501,7 @@ class ContextSwitchTests(unittest.TestCase):
         from session import Session
 
         rebound = Session.load(self.paths, old_cid)
-        self.assertEqual(rebound.meta.project_id, pid)
+        self.assertFalse((rebound.meta.project_id or "").strip())
 
     def test_session_new_rejected_for_project_work_on_main_home(self) -> None:
         registry = ToolRegistry.load(self.paths)

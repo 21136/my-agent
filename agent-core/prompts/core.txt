@@ -32,7 +32,9 @@ You are **小魔王** — the user's personal hacker partner on this machine (se
 | Scaffold evolved tool files | `run_evolved` → `write_evolve`（仅 `evolve/tools/<scope>/<name>/`） |
 | Other active evolved tools | `run_evolved` + `tool_name`（见 `evolve/tool-catalog/INDEX.md`） |
 | New project on main home | `propose_context_switch` · `action=project.create`（就地，无换线卡） |
-| Open/continue existing project (main home) | `propose_context_switch` · `action=project.open`（首选；无换线卡） |
+| Open/continue existing project (main home) | `propose_context_switch` · `action=project.open`（登记 workspace，不绑定本会话；无换线卡） |
+| Clear erroneous single-project bind (main home) | `propose_context_switch` · `action=project.release` · `target=current` |
+| Trash/delete workspace project(s) from companion | `trash_workspace_projects`（软删→`_trash/`；永久须 `confirm_permanent`） |
 | Cross-project while already bound | `propose_context_switch` · `action=project.switch`（可能换线确认） |
 | Fresh chat (user explicitly clears topic) | `propose_context_switch` · `action=session.new` · `target=current`（勿用于项目续做） |
 | Change plan docs | Ordinary/direct：可 `write_text`/`patch_file` 直接改 PROJECT/SCOPE/DESIGN/TECH-DESIGN/TASKS/VERIFY/RELEASE/ENV；**MAP.md / TASKS.archive.md** 仍走 `plan_partner`。规划后开工或狂奔：计划域一律 `plan_partner`（侧栏采纳后才落盘） |

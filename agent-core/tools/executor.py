@@ -1800,6 +1800,8 @@ class ToolExecutor:
 
         if name == "bind_project_dir":
             return self._run_bind_project_dir(args, started=started)
+        if name == "trash_workspace_projects":
+            return self._run_trash_workspace_projects(args, started=started)
         if name == "propose_context_switch":
             return self._run_propose_context_switch(args, started=started)
 
@@ -2155,6 +2157,70 @@ class ToolExecutor:
             self.session.service_postcondition = "fail"
 
 
+    def _run_trash_workspace_projects(
+        self,
+        arguments: dict[str, Any],
+        *,
+        started: float,
+    ) -> ToolResult:
+        from session import Session
+        from tools.builtin import trash_workspace_projects
+
+        name = "trash_workspace_projects"
+        dry_run = bool(arguments.get("dry_run"))
+        confirm_permanent = bool(arguments.get("confirm_permanent"))
+        ids = arguments.get("project_ids")
+        glob_pattern = arguments.get("glob_pattern")
+        summary_parts: list[str] = []
+        if isinstance(ids, list) and ids:
+            summary_parts.append("ids=" + ", ".join(str(item) for item in ids[:8]))
+        if isinstance(glob_pattern, str) and glob_pattern.strip():
+            summary_parts.append(f"glob={glob_pattern.strip()}")
+        mode = "永久删除" if confirm_permanent else "软删除到 _trash"
+        preview = f"{mode} workspace 项目\n" + (" · ".join(summary_parts) or "（未列出）")
+
+        if not dry_run and self.confirm_fn is not None:
+            confirm_decision = _normalize_confirm_choice(self.confirm_fn(preview, False), False)
+        elif not dry_run:
+            confirm_decision = _prompt_confirm_interactive(preview, False)
+        else:
+            confirm_decision = "y"
+
+        if confirm_decision != "y":
+            result = tool_fail(
+                name,
+                ToolErrorCode.CONFIRM_REJECTED,
+                "trash_workspace_projects rejected by user",
+                duration_ms=_elapsed_ms(started),
+            )
+            self._log_tool_call(name, arguments, result, confirm="n", started=started)
+            return result
+
+        session_obj: Any = self._bound_persist_session() or self.session
+        if session_obj is self.session and self.session.session_dir is not None:
+            try:
+                session_obj = Session.load(self.registry.agent_paths, self.session.session_dir.name)
+            except Exception:
+                session_obj = self.session
+
+        result = trash_workspace_projects.run(
+            arguments,
+            paths=self.registry.agent_paths,
+            session=session_obj,
+        )
+        if result.ok and isinstance(result.data, dict):
+            cleared = result.data.get("cleared_session_binding")
+            if cleared and session_obj is not self.session:
+                self.session.project_id = ""
+                self.session.project_root = ""
+                self.session.active_shell = "grow"
+            elif cleared and hasattr(session_obj, "meta"):
+                self.session.project_id = session_obj.meta.project_id
+                self.session.project_root = session_obj.meta.project_root or ""
+                self.session.active_shell = session_obj.meta.active_shell or "grow"
+        self._log_tool_call(name, arguments, result, confirm="y", started=started)
+        return result
+
     def _run_bind_project_dir(
         self,
         arguments: dict[str, Any],
@@ -2281,7 +2347,10 @@ class ToolExecutor:
             orchestration_active_for_executor,
         )
 
-        if orchestration_active_for_executor(self) and proposal.action != "project.create":
+        if orchestration_active_for_executor(self) and proposal.action not in (
+            "project.create",
+            "project.release",
+        ):
             result = tool_fail(
                 name,
                 ToolErrorCode.PERMISSION_DENIED,

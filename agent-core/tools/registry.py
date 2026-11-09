@@ -116,6 +116,12 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         dry_run_supported=True,
     ),
     BuiltinTool(
+        "trash_workspace_projects",
+        "Soft-trash one or more workspace projects to agent _trash/ (or permanently delete only with confirm_permanent); cascades work-card tombstones; does not require binding the companion to each project",
+        confirm=True,
+        dry_run_supported=True,
+    ),
+    BuiltinTool(
         "deliverable_review",
         "Spawn read-only project review; bound sessions default current project, unbound sessions require project_id",
         confirm=False,

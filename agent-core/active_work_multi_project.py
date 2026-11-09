@@ -48,7 +48,7 @@ def is_companion_multi_project_orchestration_request(text: str) -> bool:
 _ORCHESTRATION_PREAMBLE = """\
 【主会话并行多项目编排 — 必须遵守】
 - 每个项目各有独立 workspace/<project_id>/ 目录；并行施工 = 主会话只编排，每个项目各派一个 run_project_workers worker，在各自 workspace 与租约内写文件。
-- 主会话 companion 不换线、不 project.open / project.switch 去绑定「当前会话项目」再写第二个/第三个项目；UI「当前项目」可保持不变。
+- 主会话 companion 不换线；project.open 只登记 workspace、不绑定写租约；跨项目删除用 trash_workspace_projects，跨项目施工用 run_project_workers。
 - 缺少 workspace/<id> 时只用 propose_context_switch · action=project.create 就地登记目录；禁止随后 project.open 切换绑定后在父会话 run_evolved 写项目文件（会被硬拦截）。
 - 每个 worker 必须钉死 project_id、read_targets、write_targets；父 Agent 不得对 workspace 下任何项目目录直接 run_evolved 写工具。
 - 缺项目 id、任务边界或路径时先问用户；不要臆造 worker 结果。
