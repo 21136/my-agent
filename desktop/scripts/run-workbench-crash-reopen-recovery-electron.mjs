@@ -35,6 +35,7 @@ import {
   resolveH1PythonExecutable,
   verifyOrdinaryChatH1AgentPaths,
   waitForH1Workbench,
+  persistH1FailureDiagnostics,
 } from "./run-ordinary-chat-h1.mjs";
 import {
   buildH1ElectronMainOutputs,
@@ -130,6 +131,7 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
   const controlBuild = ensureEvolutionControlBuild(sandboxRoot);
   const runRoot = newMarkedRun(controlBuild.sandboxRoot);
   let host = null;
+  let diagnosticsStage = "preflight";
   let verified = null;
   let baseline = null;
   const python = await resolveH1PythonExecutable();
@@ -174,12 +176,14 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     if (seedMarker.conversation_id !== WORKBENCH_RECOVERY_SESSION_ID) deny("seed session id mismatch");
     assertWorkbenchRecoverySeedLayout(verified.app_root, WORKBENCH_RECOVERY_SESSION_ID);
 
+    diagnosticsStage = "first_launch";
     host = await startFrozenHost(frozenInput, { cdp: { enabled: true } });
     const firstPass = await observeRecoveryPass(host, verified, runRoot, "first_launch");
     await forceKillProcessTree(host.child);
     try { await host.close(); } catch { /* process tree was killed */ }
     rmSync(path.join(runRoot, "host", "logs"), { recursive: true, force: true });
 
+    diagnosticsStage = "reopen";
     host = await startFrozenHost(frozenInput, { cdp: { enabled: true } });
     const reopenPass = await observeRecoveryPass(host, verified, runRoot, "reopen");
     if (reopenPass.warnCount < 1) deny("reopen did not observe a recovery warn after real process kill");
@@ -210,6 +214,9 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     writeFileSync(path.join(runRoot, "workbench-crash-reopen-recovery-electron-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
     (options.output ?? process.stdout).write(`${JSON.stringify(evidence, null, 2)}\n`);
     return evidence;
+  } catch (error) {
+    try { persistH1FailureDiagnostics(runRoot, error, diagnosticsStage); } catch { /* preserve primary failure */ }
+    throw error;
   } finally {
     if (host) try { await host.close(); } catch { /* preserve primary failure */ }
   }

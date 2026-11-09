@@ -2256,10 +2256,18 @@ async function runSidecarStartup(): Promise<void> {
     const hostConfig = await buildEvolutionTestSupervisorConfig(evolutionTestHostContext);
     evolutionSupervisorHost = await createEvolutionSupervisorHost(hostConfig, { bootstrapRegistry: evolutionSidecarBootstraps });
   }
+  if (evolutionTestHostContext && sealedChatH1Fixture) {
+    evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
+    if (evolutionTestRendererServer?.origin) {
+      process.env.MY_AGENT_WS_ALLOWED_ORIGINS = evolutionTestRendererServer.origin;
+    }
+  }
   await ensureSidecar();
   if (legacySandboxLaneAllowed()) void ensureSandboxSidecar().catch((error) => console.warn("[sandbox-sidecar] optional start failed:", error));
   if (evolutionTestHostContext) {
-    evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
+    if (!evolutionTestRendererServer) {
+      evolutionTestRendererServer = await startEvolutionTestRendererServer(path.join(__dirname, "../dist"));
+    }
     if (controlledH1) {
       const renderer = evolutionTestRendererServer;
       const ready = { type: h1Control.ready, host: sidecarInfo?.host ?? "127.0.0.1", port: sidecarInfo?.port ?? 0 };

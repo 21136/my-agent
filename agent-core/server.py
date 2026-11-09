@@ -88,9 +88,58 @@ _CAPTURE_RECONCILIATION_MESSAGES = {
 }
 DEFAULT_HOST = "127.0.0.1"
 
+def _trusted_loopback_http_origin(origin: str) -> bool:
+    """True when origin is credential-free loopback http with an explicit port."""
+    if not isinstance(origin, str):
+        return False
+    origin = origin.strip()
+    if not origin or origin.count("://") != 1:
+        return False
+    scheme, rest = origin.split("://", 1)
+    if scheme != "http":
+        return False
+    if rest.startswith("[") and "]" in rest:
+        host, _, tail = rest[1:].partition("]")
+        if tail.startswith(":"):
+            port_text = tail[1:]
+        else:
+            return False
+    else:
+        host, _, port_text = rest.partition(":")
+        if not port_text:
+            return False
+    if host not in {"127.0.0.1", "localhost", "::1", "[::1]"}:
+        return False
+    if "/" in port_text or "?" in port_text or "#" in port_text or "@" in port_text:
+        return False
+    try:
+        port = int(port_text)
+    except ValueError:
+        return False
+    return 1 <= port <= 65_535
+
+
+def _extra_websocket_origins_from_env() -> tuple[str, ...]:
+    """Sealed H1 injects its dynamic renderer origin via MY_AGENT_WS_ALLOWED_ORIGINS."""
+    raw = os.environ.get("MY_AGENT_WS_ALLOWED_ORIGINS", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return ()
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in raw.split(","):
+        candidate = part.strip()
+        if not candidate or candidate in seen:
+            continue
+        if not _trusted_loopback_http_origin(candidate):
+            continue
+        seen.add(candidate)
+        out.append(candidate)
+    return tuple(out)
+
+
 def _websocket_origin_policy() -> tuple[str | None, ...]:
     """Allow only native clients, packaged Electron, and configured local Vite origins."""
-    return (
+    base = (
         None,  # Native CLI clients do not send an Origin header.
         "file://",  # Verified Electron loadFile origin.
         "http://localhost:5173",
@@ -100,6 +149,8 @@ def _websocket_origin_policy() -> tuple[str | None, ...]:
         "http://127.0.0.1:5174",
         "http://[::1]:5174",
     )
+    extra = _extra_websocket_origins_from_env()
+    return base + extra if extra else base
 
 DEFAULT_CONFIRM_TIMEOUT_SEC = 90.0
 TURN_LOCK = asyncio.Lock()

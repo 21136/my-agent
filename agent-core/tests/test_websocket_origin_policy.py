@@ -1,5 +1,6 @@
 import asyncio
 import ast
+import os
 import unittest
 
 import websockets
@@ -75,6 +76,32 @@ class WebSocketOriginPolicyTests(unittest.TestCase):
                             pass
 
         asyncio.run(exercise())
+
+    def test_sealed_h1_dynamic_renderer_origin_from_env_is_allowed(self):
+        extra = "http://127.0.0.1:57515"
+        previous = os.environ.get("MY_AGENT_WS_ALLOWED_ORIGINS")
+        os.environ["MY_AGENT_WS_ALLOWED_ORIGINS"] = extra
+        try:
+            self.assertIn(extra, server._websocket_origin_policy())
+            self.assertNotIn("http://192.168.1.5:57515", server._websocket_origin_policy())
+        finally:
+            if previous is None:
+                os.environ.pop("MY_AGENT_WS_ALLOWED_ORIGINS", None)
+            else:
+                os.environ["MY_AGENT_WS_ALLOWED_ORIGINS"] = previous
+
+    def test_untrusted_extra_origins_from_env_are_ignored(self):
+        previous = os.environ.get("MY_AGENT_WS_ALLOWED_ORIGINS")
+        os.environ["MY_AGENT_WS_ALLOWED_ORIGINS"] = "https://attacker.example,http://127.0.0.1:57515"
+        try:
+            policy = server._websocket_origin_policy()
+            self.assertIn("http://127.0.0.1:57515", policy)
+            self.assertNotIn("https://attacker.example", policy)
+        finally:
+            if previous is None:
+                os.environ.pop("MY_AGENT_WS_ALLOWED_ORIGINS", None)
+            else:
+                os.environ["MY_AGENT_WS_ALLOWED_ORIGINS"] = previous
 
 
 if __name__ == "__main__":

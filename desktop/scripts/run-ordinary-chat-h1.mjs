@@ -444,6 +444,26 @@ export async function discoverElectronPage(cdpPort, rendererPort, runRoot) {
   deny('no CDP page matched this Electron process and the sealed renderer origin/port/path; metadata diagnostics were retained');
 }
 
+export function persistH1FailureDiagnostics(runRoot, error, stage) {
+  if (typeof runRoot !== 'string' || !path.isAbsolute(runRoot) || !error) return null;
+  const file = path.join(runRoot, 'h1-e2e-diagnostics.json');
+  try {
+    writeFileSync(file, JSON.stringify({
+      format: 1,
+      stage: typeof stage === 'string' ? stage.slice(0, 120) : 'unknown',
+      error: {
+        code: error.code ?? 'fixture_error',
+        message: String(error.message ?? error).slice(0, 2000),
+        diagnostics: error.diagnostics ?? null,
+      },
+      created_at: new Date().toISOString(),
+    }, null, 2) + '\n', { flag: 'wx' });
+    return path.basename(file);
+  } catch {
+    return null;
+  }
+}
+
 function saveCdpRuntimeDiagnostics(runRoot, status, page, cdp, stage, observation, error) {
   const target = page?.url ? { type: page.type, title: typeof page.title === 'string' ? page.title.replace(/[\r\n\t]/g, ' ').slice(0, 120) : '', ...safeCdpUrlMetadata(page.url) } : null;
   const value = { format: 1, status, stage, target, observation: observation ?? null, cdp: cdp?.diagnostics?.() ?? { connection: 'not_opened', event_counts: {}, main_frame_navigations: [], websocket_endpoints: [], recent_commands: [], page_body_captured: false }, error: error ? { code: error.code ?? 'error', method: error.method ?? null, diagnostics: error.diagnostics ?? null } : null, page_body_captured: false, created_at: new Date().toISOString() };
