@@ -414,7 +414,7 @@ export function buildCurrentWorkOverviewPanel(
     const blockedRows = preview.blocked.map(row =>
       `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)}：${row.reasons.map(escapeHtml).join("；")}</li>`).join("");
     const limits = preview.limitations.map(escapeHtml).filter(Boolean).join("；");
-    scheduleHtml = `<section class="unified-current-work-schedule" aria-label="只读调度预览"><header><h4>只读调度预览</h4><p>不会启动任务，也不代表运行授权。</p></header>${preview.candidates.length ? `<ul class="cw-queue-list">${candidateRows}</ul>` : "<p>当前没有可显示的候选</p>"}${blockedRows ? `<h5>受阻</h5><ul class="cw-queue-list is-blocked">${blockedRows}</ul>` : ""}${limits ? `<p class="cw-schedule-limits">${limits}</p>` : ""}</section>`;
+    scheduleHtml = `<div class="unified-current-work-schedule" role="region" aria-label="只读调度预览"><header><h4>只读调度预览</h4><p>不会启动任务，也不代表运行授权。</p></header>${preview.candidates.length ? `<ul class="cw-queue-list">${candidateRows}</ul>` : "<p>当前没有可显示的候选</p>"}${blockedRows ? `<h5>受阻</h5><ul class="cw-queue-list is-blocked">${blockedRows}</ul>` : ""}${limits ? `<p class="cw-schedule-limits">${limits}</p>` : ""}</div>`;
   }
   const activeGroups = result.groups.filter(group => group.visibility === "visible");
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
@@ -475,11 +475,30 @@ export function dispatchCurrentWorkOverviewRequest(options: {
 
 type CurrentWorkShellSegment = "overview" | "queue" | "schedule";
 
+function extractCwPanelInnerHtml(bodyHtml: string, panel: CurrentWorkShellSegment): string {
+  const pattern = new RegExp(`<section\\s+class="cw-panel[^"]*"\\s+data-cw-panel="${panel}"[^>]*>`, "i");
+  const startMatch = bodyHtml.match(pattern);
+  if (!startMatch || startMatch.index === undefined) return "";
+  let index = startMatch.index + startMatch[0].length;
+  let depth = 1;
+  const tagPattern = /<\/section>|<section\b/gi;
+  tagPattern.lastIndex = index;
+  let tagMatch: RegExpExecArray | null;
+  while ((tagMatch = tagPattern.exec(bodyHtml)) !== null) {
+    if (tagMatch[0].toLowerCase() === "</section>") {
+      depth -= 1;
+      if (depth === 0) return bodyHtml.slice(index, tagMatch.index);
+    } else {
+      depth += 1;
+    }
+  }
+  return "";
+}
+
 function splitCurrentWorkPanelBodies(bodyHtml: string, extrasHtml: string): Record<CurrentWorkShellSegment, string> {
-  const inner = (match: RegExpMatchArray | null) => (match ? match[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "") : "");
-  const overview = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="overview"[\s\S]*?<\/section>/));
-  let queue = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="queue"[\s\S]*?<\/section>/));
-  let schedule = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="schedule"[\s\S]*?<\/section>/));
+  const overview = extractCwPanelInnerHtml(bodyHtml, "overview");
+  let queue = extractCwPanelInnerHtml(bodyHtml, "queue");
+  let schedule = extractCwPanelInnerHtml(bodyHtml, "schedule");
   if (extrasHtml) {
     if (schedule.includes("data-cw-schedule-slot")) {
       schedule = schedule.replace('<div data-cw-schedule-slot></div>', `<div data-cw-schedule-slot>${extrasHtml}</div>`);

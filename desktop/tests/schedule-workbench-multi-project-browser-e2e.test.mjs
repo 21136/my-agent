@@ -50,16 +50,44 @@ async function readCurrentWorkLayout(page) {
         hidden: el.hidden,
         rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
         clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+        childElementCount: el.childElementCount,
+        innerHTMLLength: el.innerHTML.length,
         visibility: style.visibility,
         display: style.display,
         maxHeight: style.maxHeight,
         inlineMaxHeight: el.style.maxHeight,
+        inlineMinHeight: el.style.minHeight,
       };
     };
+    const parentChain = el => {
+      const chain = [];
+      let node = el;
+      while (node instanceof HTMLElement && chain.length < 14) {
+        chain.push({
+          id: node.id || undefined,
+          className: typeof node.className === "string" ? node.className : undefined,
+          hidden: node.hidden,
+          display: getComputedStyle(node).display,
+        });
+        node = node.parentElement;
+      }
+      return chain;
+    };
+    const popover = document.querySelector("#unified-current-work-popover");
+    const schedulePanel = document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]');
+    const launch = document.querySelector("#unified-current-work [data-schedule-launch]");
     return {
-      popover: describe(document.querySelector("#unified-current-work-popover")),
-      schedulePanel: describe(document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]')),
-      launch: describe(document.querySelector("#unified-current-work [data-schedule-launch]")),
+      panelCount: popover instanceof HTMLElement
+        ? popover.querySelectorAll("[data-cw-segment-panel]").length
+        : 0,
+      popoverContainsSchedule: Boolean(popover && schedulePanel && popover.contains(schedulePanel)),
+      popoverContainsLaunch: Boolean(popover && launch && popover.contains(launch)),
+      scheduleAncestors: parentChain(schedulePanel),
+      launchAncestors: parentChain(launch),
+      popover: describe(popover),
+      schedulePanel: describe(schedulePanel),
+      launch: describe(launch),
     };
   });
 }
