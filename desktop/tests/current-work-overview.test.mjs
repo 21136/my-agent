@@ -539,7 +539,7 @@ const topbarExports = {};
 new Function("exports", "require", topbarJs)(topbarExports, () => ({ escapeHtml: value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;") }));
 const state = (currentWorkOverview) => ({ proposals: [], intentLabel: "", checkerLabel: "", memoryLabel: "", memoryCount: 0,
   pendingMemoryCount: 0, projectLabel: "", contextLabel: "", sessionCount: 0, headerCtas: [], currentWorkOverview });
-test("topbar conditionally renders the structured entry that opens the full-page workbench", () => {
+test("topbar conditionally renders the structured entry that toggles the in-shell current-work panel", () => {
   const listeners = new Map();
   const elements = new Map();
   const makeButton = selector => ({ addEventListener: (event, listener) => listeners.set(selector, listener) });
@@ -550,10 +550,9 @@ test("topbar conditionally renders the structured entry that opens the full-page
     onToggleCurrentWorkOverview() {}, onLoadMoreCurrentWorkOverview() {}, onRequestCurrentWorkOverview() {},
   });
   assert.match(container.innerHTML, /id="unified-request-current-work"/);
-  assert.match(container.innerHTML, /aria-controls="unified-current-work"/);
-  assert.match(container.innerHTML, /打开当前工作全页工作台/);
-  // Expand / ask live on the full-page workbench, not inside the topbar pill.
-  assert.doesNotMatch(container.innerHTML, /id="unified-current-work-more"|id="unified-current-work-ask"|unified-current-work-popover/);
+  assert.match(container.innerHTML, /aria-controls="unified-current-work-popover"/);
+  assert.match(container.innerHTML, /在主界面展开或收起当前工作/);
+  assert.doesNotMatch(container.innerHTML, /id="unified-current-work-more"|id="unified-current-work-ask"|class="unified-current-work-popover"/);
   assert.doesNotMatch(container.innerHTML, /cached cards|快照时间/);
   topbarExports.renderTopbarV2(container, state(undefined), { onRequestCurrentWorkOverview() {} });
   assert.doesNotMatch(container.innerHTML, /unified-request-current-work|查询当前概况/);
@@ -737,7 +736,7 @@ test("empty structured queue still mirrors pending batch authorization from the 
   assert.doesNotMatch(panel.bodyHtml, /暂无可见工作组/);
   assert.match(panel.bodyHtml, /主会话授权/);
   assert.match(panel.bodyHtml, /music、luna/);
-  assert.match(panel.bodyHtml, /回到对话/);
+  assert.match(panel.bodyHtml, /授权在左侧对话输入区处理/);
 });
 
 test("companion orchestration work-instruction appears before work records exist", () => {

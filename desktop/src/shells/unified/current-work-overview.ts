@@ -462,86 +462,73 @@ export function dispatchCurrentWorkOverviewRequest(options: {
   }
 }
 
-/** Full-page workbench: quiet home by default; focus/schedule surfaces open only on intent. */
-export function renderCurrentWorkWorkbenchPage(panel: CurrentWorkOverviewPanel, extrasHtml = ""): string {
+type CurrentWorkShellSegment = "overview" | "queue" | "schedule";
+
+function splitCurrentWorkPanelBodies(bodyHtml: string, extrasHtml: string): Record<CurrentWorkShellSegment, string> {
+  const inner = (match: RegExpMatchArray | null) => (match ? match[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "") : "");
+  const overview = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="overview"[\s\S]*?<\/section>/));
+  let queue = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="queue"[\s\S]*?<\/section>/));
+  let schedule = inner(bodyHtml.match(/<section class="cw-panel[^"]*" data-cw-panel="schedule"[\s\S]*?<\/section>/));
+  if (extrasHtml) {
+    if (schedule.includes("data-cw-schedule-slot")) {
+      schedule = schedule.replace('<div data-cw-schedule-slot></div>', `<div data-cw-schedule-slot>${extrasHtml}</div>`);
+    } else {
+      schedule += extrasHtml;
+    }
+  }
+  return {
+    overview: overview || `<p class="current-work-zone-empty">暂无概况数据。</p>`,
+    queue: queue || `<p class="current-work-zone-empty">暂无进行中的工作。</p>`,
+    schedule: schedule || `<p class="current-work-zone-empty">当前没有可调度项。</p>`,
+  };
+}
+
+/** In-shell side panel: conversation stays primary; work overview is secondary chrome. */
+export function renderCurrentWorkShellPanel(
+  panel: CurrentWorkOverviewPanel,
+  extrasHtml = "",
+  defaultSegment: CurrentWorkShellSegment = "queue",
+): string {
   if (!panel.visible) {
-    return `<div class="current-work-page" data-current-work-page data-cw-mode="home">
-      <header class="current-work-heading">
-        <div class="current-work-heading-copy"><h1 id="current-work-page-heading">当前工作</h1>
-        <p class="current-work-hint">有进展时再打开；默认保持安静。</p></div>
-        <div class="current-work-heading-actions">
-          <button type="button" class="unified-btn unified-btn-accent" data-current-work-back-chat>回到对话</button>
-        </div>
+    return `<div class="current-work-shell" data-current-work-shell>
+      <header class="unified-current-work-heading">
+        <div><span>当前会话</span><h3 id="current-work-page-heading">当前工作</h3></div>
+        <button type="button" class="unified-current-work-close" id="unified-current-work-close" aria-label="收起当前工作" title="收起">×</button>
       </header>
       <p class="current-work-zone-empty" role="status">暂无可见工作概况。</p>
     </div>`;
   }
-
-  // Split contract body into intent surfaces; home stays empty of panels.
-  let queueHtml = "";
-  let scheduleHtml = "";
-  const body = panel.bodyHtml;
-  const queueMatch = body.match(/<section class="cw-panel[^"]*" data-cw-panel="queue"[\s\S]*?<\/section>/);
-  const scheduleMatch = body.match(/<section class="cw-panel[^"]*" data-cw-panel="schedule"[\s\S]*?<\/section>/);
-  if (queueMatch) {
-    queueHtml = queueMatch[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "");
-  }
-  if (scheduleMatch) {
-    scheduleHtml = scheduleMatch[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "");
-  }
-  if (extrasHtml) {
-    if (scheduleHtml.includes("data-cw-schedule-slot")) {
-      scheduleHtml = scheduleHtml.replace('<div data-cw-schedule-slot></div>', `<div data-cw-schedule-slot>${extrasHtml}</div>`);
-    } else {
-      scheduleHtml += extrasHtml;
-    }
-  }
-  if (!queueHtml) queueHtml = `<p class="current-work-zone-empty">暂无进行中的工作。</p>`;
-  if (!scheduleHtml) scheduleHtml = `<p class="current-work-zone-empty">当前没有可调度项。</p>`;
-
-  // Keep full bodyHtml in a non-visual holder so existing DOM queries / future debug still see contracts.
-  // visually-hidden but present for structure; surfaces are what the user sees.
-  return `<div class="current-work-page" data-current-work-page data-cw-mode="home">
-    <header class="current-work-heading">
-      <div class="current-work-heading-copy">
-        <h1 id="current-work-page-heading">当前工作</h1>
-        <p class="current-work-hint cw-whisper">${escapeHtml(panel.label)}</p>
-      </div>
-      <div class="current-work-heading-actions">
-        <button type="button" class="unified-btn" data-current-work-ask>在对话中查询</button>
-        ${panel.canExpand ? `<button type="button" class="unified-btn" data-current-work-more ${panel.loadingMore ? "disabled" : ""}>${escapeHtml(panel.moreLabel)}</button>` : ""}
-        <button type="button" class="unified-btn unified-btn-accent" data-current-work-back-chat>回到对话</button>
-      </div>
+  const segments = splitCurrentWorkPanelBodies(panel.bodyHtml, extrasHtml);
+  const segmentTab = (id: CurrentWorkShellSegment, label: string) => {
+    const selected = defaultSegment === id;
+    return `<button type="button" class="cw-segment" role="tab" data-cw-segment-select="${id}" aria-selected="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}">${label}</button>`;
+  };
+  const segmentPanel = (id: CurrentWorkShellSegment, html: string) =>
+    `<div class="cw-segment-panel unified-current-work-content" data-cw-segment-panel="${id}" role="tabpanel"${defaultSegment === id ? "" : " hidden"}>${html}</div>`;
+  return `<div class="current-work-shell" data-current-work-shell data-cw-segment="${defaultSegment}">
+    <header class="unified-current-work-heading">
+      <div><span>当前会话</span><h3 id="current-work-page-heading">${escapeHtml(panel.label)}</h3></div>
+      <button type="button" class="unified-current-work-close" id="unified-current-work-close" aria-label="收起当前工作" title="收起">×</button>
     </header>
-
-    <section class="cw-home" data-cw-home aria-label="当前工作首页">
-      <p class="cw-home-lead">需要时再打开。进行中的工作与调度不会默认铺开。</p>
-      <div class="cw-home-actions">
-        <button type="button" class="unified-btn unified-btn-accent" data-cw-open="focus">查看进行中</button>
-        <button type="button" class="unified-btn" data-cw-open="schedule">开始调度</button>
-      </div>
-    </section>
-
-    <section class="cw-surface" data-cw-surface="focus" hidden aria-label="进行中的工作">
-      <header class="cw-surface-bar">
-        <button type="button" class="unified-btn unified-btn-ghost" data-cw-close>返回</button>
-        <h2>进行中</h2>
-      </header>
-      <div class="cw-surface-body unified-current-work-popover current-work-scroll" id="unified-current-work-popover">
-        <div class="unified-current-work-content">${queueHtml}</div>
-      </div>
-    </section>
-
-    <section class="cw-surface" data-cw-surface="schedule" hidden aria-label="调度">
-      <header class="cw-surface-bar">
-        <button type="button" class="unified-btn unified-btn-ghost" data-cw-close>返回</button>
-        <h2>调度</h2>
-      </header>
-      <div class="cw-surface-body current-work-scroll">
-        <div class="unified-current-work-content">${scheduleHtml}</div>
-      </div>
-    </section>
-
+    <nav class="cw-segments" role="tablist" aria-label="当前工作分区">
+      ${segmentTab("overview", "概况")}
+      ${segmentTab("queue", "进行中")}
+      ${segmentTab("schedule", "调度")}
+    </nav>
+    <div class="unified-current-work-popover current-work-scroll" id="unified-current-work-popover">
+      ${segmentPanel("overview", segments.overview)}
+      ${segmentPanel("queue", segments.queue)}
+      ${segmentPanel("schedule", segments.schedule)}
+    </div>
+    <footer class="unified-current-work-actions">
+      ${panel.canExpand ? `<button type="button" class="unified-btn unified-btn-ghost" id="unified-current-work-more" data-current-work-more ${panel.loadingMore ? "disabled" : ""}>${escapeHtml(panel.moreLabel)}</button>` : ""}
+      <button type="button" class="unified-btn unified-btn-ghost" id="unified-current-work-ask" data-current-work-ask>在对话中查询</button>
+    </footer>
     <div class="cw-contract-body" hidden aria-hidden="true">${panel.bodyHtml}</div>
   </div>`;
+}
+
+/** @deprecated Full-page landing removed; kept as alias for tests/importers. */
+export function renderCurrentWorkWorkbenchPage(panel: CurrentWorkOverviewPanel, extrasHtml = ""): string {
+  return renderCurrentWorkShellPanel(panel, extrasHtml);
 }

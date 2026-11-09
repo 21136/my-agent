@@ -102,7 +102,7 @@ import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, typ
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation, companionHomeDefersWorkCardChatPresentation } from "./work-card-presentation";
-import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkWorkbenchPage, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
@@ -443,15 +443,19 @@ export function mountUnifiedShell(
     scheduleCurrentWorkOverviewRefresh();
   }
   function toggleStructuredCurrentWorkOverview(): void {
-    if (projectState.mainFocus === "current-work") {
+    if (currentWorkOverviewOpen) {
       currentWorkOverviewOpen = false;
-      showNowChat();
+      syncMainFocusView();
+      refreshTopbar();
       return;
     }
     currentWorkOverviewOpen = true;
     queryStructuredCurrentWorkOverview();
-    setMainFocus("current-work");
-    refreshTopbar();
+    if (projectState.mainFocus !== "chat") showNowChat();
+    else {
+      syncMainFocusView();
+      refreshTopbar();
+    }
   }
 
   function expandStructuredCurrentWorkOverview(): void {
@@ -479,8 +483,17 @@ export function mountUnifiedShell(
     else if (result === "unavailable") setStatus("当前对话不可发送，未发起概况查询。");
     else if (result === "failed") setStatus("概况查询未能发送；未用旧卡片替代。");
   }
-  // Full-page workbench owns its scroll; keep a no-op for older resize hooks.
-  function sizeCurrentWorkPopover(): void {}
+  function sizeCurrentWorkPopover(): void {
+    const host = typeof document !== "undefined"
+      ? document.querySelector<HTMLElement>("#unified-current-work:not([hidden])")
+      : null;
+    const popover = host?.querySelector<HTMLElement>("#unified-current-work-popover")
+      ?? topbarEl.querySelector<HTMLElement>("#unified-current-work-popover");
+    if (!popover) return;
+    const available = Math.floor(composerDock.getBoundingClientRect().top - popover.getBoundingClientRect().top - 8);
+    popover.style.maxHeight = `${Math.max(0, available)}px`;
+    popover.style.visibility = available < 48 ? "hidden" : "";
+  }
 
   function currentWorkLiveSessionInput(): CurrentWorkLiveSessionInput {
     return {
@@ -505,7 +518,7 @@ export function mountUnifiedShell(
     }
     const multiProjectAvailable = mappedProjectChoices.length > 0;
     topbarState.currentWorkOverview = buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
-      open: currentWorkOverviewOpen || projectState.mainFocus === "current-work",
+      open: currentWorkOverviewOpen,
       loadingMore: currentWorkOverviewLoadingMore,
       unavailable: currentWorkOverviewUnavailable || (multiProjectAvailable && !currentWorkOverviewResult),
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
@@ -545,8 +558,8 @@ export function mountUnifiedShell(
       selectSingleChatTool,
     );
     if (projectState.mainFocus === "settings") renderSettingsStage();
-    if (projectState.mainFocus === "current-work") renderCurrentWorkStage(currentWorkExtras);
-    else sizeCurrentWorkPopover();
+    if (currentWorkOverviewOpen) renderCurrentWorkStage(currentWorkExtras);
+    sizeCurrentWorkPopover();
     syncPendingConfirmComposerHint();
   }
 
@@ -581,15 +594,19 @@ export function mountUnifiedShell(
         extras += `<section data-merged-history class="unified-selected-project-overview"><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
       }
     }
-    currentWorkEl.innerHTML = renderCurrentWorkWorkbenchPage(panel, extras);
+    currentWorkEl.innerHTML = renderCurrentWorkShellPanel(panel, extras);
     bindCurrentWorkPage(currentWorkEl);
+    requestAnimationFrame(() => sizeCurrentWorkPopover());
   }
 
   function bindCurrentWorkPage(rootEl: HTMLElement): void {
-    rootEl.querySelector<HTMLButtonElement>("[data-current-work-back-chat]")?.addEventListener("click", () => {
+    const closeCurrentWork = () => {
       currentWorkOverviewOpen = false;
-      showNowChat();
-    });
+      syncMainFocusView();
+      refreshTopbar();
+    };
+    rootEl.querySelector<HTMLButtonElement>("#unified-current-work-close")?.addEventListener("click", closeCurrentWork);
+    rootEl.querySelector<HTMLButtonElement>("[data-current-work-back-chat]")?.addEventListener("click", closeCurrentWork);
     rootEl.querySelector<HTMLButtonElement>("[data-current-work-ask]")?.addEventListener("click", () => requestCurrentWorkOverview());
     rootEl.querySelector<HTMLButtonElement>("[data-current-work-more]")?.addEventListener("click", () => expandStructuredCurrentWorkOverview());
     rootEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
@@ -692,24 +709,23 @@ export function mountUnifiedShell(
         setStatus("已提交多项目来源请求；确认其 Session 来源后才读取记录。");
       });
     }
-    function setCurrentWorkMode(mode: "home" | "focus" | "schedule"): void {
-      rootEl.querySelector<HTMLElement>("[data-current-work-page]")?.setAttribute("data-cw-mode", mode);
-      rootEl.querySelectorAll<HTMLElement>("[data-cw-surface]").forEach(surface => {
-        const open = surface.dataset.cwSurface === mode;
-        surface.hidden = !open;
-        surface.classList.toggle("is-open", open);
+    function setCurrentWorkSegment(segment: "overview" | "queue" | "schedule"): void {
+      rootEl.querySelector<HTMLElement>("[data-current-work-shell]")?.setAttribute("data-cw-segment", segment);
+      rootEl.querySelectorAll<HTMLElement>("[data-cw-segment-panel]").forEach(panel => {
+        panel.hidden = panel.dataset.cwSegmentPanel !== segment;
       });
-      const home = rootEl.querySelector<HTMLElement>("[data-cw-home]");
-      if (home) home.hidden = mode !== "home";
+      rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-segment-select]").forEach(tab => {
+        const selected = tab.dataset.cwSegmentSelect === segment;
+        tab.setAttribute("aria-selected", selected ? "true" : "false");
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      requestAnimationFrame(() => sizeCurrentWorkPopover());
     }
-    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-open]").forEach(button => {
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-segment-select]").forEach(button => {
       button.addEventListener("click", () => {
-        const mode = button.dataset.cwOpen;
-        if (mode === "focus" || mode === "schedule") setCurrentWorkMode(mode);
+        const segment = button.dataset.cwSegmentSelect;
+        if (segment === "overview" || segment === "queue" || segment === "schedule") setCurrentWorkSegment(segment);
       });
-    });
-    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-close]").forEach(button => {
-      button.addEventListener("click", () => setCurrentWorkMode("home"));
     });
     rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-select-item]").forEach(button => {
       button.addEventListener("click", () => {
@@ -722,16 +738,12 @@ export function mountUnifiedShell(
           currentWorkOverviewExpandedRequirementItemIds.add(itemId);
         }
         refreshTopbar();
-        const page = document.querySelector<HTMLElement>("#unified-current-work [data-current-work-page]");
-        if (page) {
-          page.setAttribute("data-cw-mode", "focus");
-          page.querySelectorAll<HTMLElement>("[data-cw-surface]").forEach(surface => {
-            const open = surface.dataset.cwSurface === "focus";
-            surface.hidden = !open;
-            surface.classList.toggle("is-open", open);
+        const shell = document.querySelector<HTMLElement>("#unified-current-work [data-current-work-shell]");
+        if (shell) {
+          shell.setAttribute("data-cw-segment", "queue");
+          shell.querySelectorAll<HTMLElement>("[data-cw-segment-panel]").forEach(panel => {
+            panel.hidden = panel.dataset.cwSegmentPanel !== "queue";
           });
-          const home = page.querySelector<HTMLElement>("[data-cw-home]");
-          if (home) home.hidden = true;
         }
       });
     });
@@ -1343,6 +1355,12 @@ function refreshGlobalRoleModels(): void {
     if (runtimeToolOpen) {
       runtimeToolOpen = false;
       syncMainFocusView();
+      return;
+    }
+    if (currentWorkOverviewOpen && projectState.mainFocus === "chat") {
+      currentWorkOverviewOpen = false;
+      syncMainFocusView();
+      refreshTopbar();
       return;
     }
     if (projectState.mainFocus === "shell-dev" && sandboxSessionActive) {
@@ -3190,19 +3208,25 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       focus === "projects" ||
       focus === "settings" ||
       focus === "music" ||
-      focus === "shell-dev" ||
-      focus === "current-work";
+      focus === "shell-dev";
+    const currentWorkShellOpen = currentWorkOverviewOpen && focus === "chat" && !runtimeToolOpen;
+    if (pageToolOpen) currentWorkOverviewOpen = false;
     const chatFocus = focus === "chat" && !runtimeToolOpen;
-    const toolOpen = pageToolOpen || runtimeToolOpen;
+    const toolOpen = pageToolOpen || runtimeToolOpen || currentWorkShellOpen;
     toolRegion.hidden = !toolOpen;
     runtimeTool.hidden = !runtimeToolOpen;
-    toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", "current-work": "当前工作", chat: "工具" } as const)[focus];
-    toolCloseBtn.textContent = pageToolOpen ? "回到对话" : "关闭";
-    toolCloseBtn.title = pageToolOpen ? "离开这一页，回到对话" : "关闭";
+    toolTitle.textContent = currentWorkShellOpen
+      ? "当前工作"
+      : runtimeToolOpen
+        ? "终端与服务"
+        : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
+    toolCloseBtn.textContent = pageToolOpen ? "回到对话" : currentWorkShellOpen ? "收起" : "关闭";
+    toolCloseBtn.title = pageToolOpen ? "离开这一页，回到对话" : currentWorkShellOpen ? "收起当前工作面板" : "关闭";
     // Full-page tools own the stage (完整页面). Chat stays mounted but is not left-split.
     shellEl.dataset.mainFocus = focus;
     shellEl.dataset.rail = projectState.railTab;
     shellEl.classList.toggle("is-tool-fullpage", pageToolOpen);
+    shellEl.classList.toggle("is-current-work-split", currentWorkShellOpen);
     shellEl.classList.remove("is-docs-split");
     chatEl.classList.toggle("hidden", pageToolOpen);
     documentEl.classList.toggle("hidden", focus !== "document");
@@ -3216,10 +3240,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     musicEl.classList.toggle("hidden", focus !== "music");
     shellDevEl.hidden = focus !== "shell-dev";
     shellDevEl.classList.toggle("hidden", focus !== "shell-dev");
-    currentWorkEl.hidden = focus !== "current-work";
-    currentWorkEl.classList.toggle("hidden", focus !== "current-work");
-    if (focus === "current-work") currentWorkOverviewOpen = true;
-    else if (focus !== "current-work") currentWorkOverviewOpen = false;
+    currentWorkEl.hidden = !currentWorkShellOpen;
+    currentWorkEl.classList.toggle("hidden", !currentWorkShellOpen);
     composerDock.hidden = pageToolOpen;
     composer.hidden = pageToolOpen;
     statusEl.hidden = pageToolOpen;
@@ -3234,7 +3256,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (focus === "shell-dev") {
       shellDevLastOpenOk = false;
       void renderShellDevStage();
-    } else if (focus === "current-work") {
+    } else if (currentWorkShellOpen) {
       renderCurrentWorkStage();
     } else if (focus === "settings") {
       renderSettingsStage();
