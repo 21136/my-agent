@@ -37,6 +37,21 @@ const edge = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Micros
 
 const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
 
+/** In-shell overlay entry (work-entry-surface.test.mjs): topbar pill, not a removed full-page route. */
+const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
+
+async function openCurrentWorkOverlay(page) {
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "project.list"));
+  const entry = page.locator(CURRENT_WORK_ENTRY);
+  await entry.waitFor({ state: "visible" });
+  await entry.click();
+  await page.waitForFunction(() => {
+    const host = document.querySelector("#unified-current-work");
+    return Boolean(host && !host.hidden && host.querySelector("[data-current-work-shell]"));
+  });
+  return page.locator("#unified-current-work");
+}
+
 test("multi-project schedule workbench GUI: select → authorize → preview → dispatch → in_progress cancel", {
   skip: process.platform !== "win32" || !existsSync(pw) || !existsSync(edge),
   timeout: 120000,
@@ -116,13 +131,15 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner")
       && window.receivedEvents?.some(e => e.type === "project.list"));
 
-    await page.locator("#unified-request-current-work").click();
-    await page.waitForFunction(() => document.querySelector("[data-current-work-shell]"));
-    await page.locator('[data-cw-segment-select="schedule"]').click();
+    const work = await openCurrentWorkOverlay(page);
+    await work.locator('[data-cw-segment-select="schedule"]').click();
+    const sourcePanel = work.locator("[data-selected-project-overview]");
+    await sourcePanel.waitFor({ state: "attached" });
 
     await page.evaluate(projectIds => {
-      const panel = document.querySelector("[data-selected-project-overview]");
-      if (!(panel instanceof HTMLElement)) throw new Error("source selector missing");
+      const host = document.querySelector("#unified-current-work");
+      const panel = host?.querySelector("[data-selected-project-overview]");
+      if (!(panel instanceof HTMLElement)) throw new Error("source selector missing in overlay");
       for (const id of projectIds) {
         const input = panel.querySelector(`input[data-project-overview-id="${CSS.escape(id)}"]`);
         if (!(input instanceof HTMLInputElement)) throw new Error(`missing checkbox for ${id}`);
@@ -130,17 +147,17 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }
     }, PROJECTS);
-    await page.locator("[data-run-selected-project-overview]").click();
+    await work.locator("[data-run-selected-project-overview]").click();
 
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "confirm.request"));
     await page.locator('[data-confirm="y"]:not([disabled])').last().click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
 
-    const schedule = page.locator("[data-schedule-launch]");
+    const schedule = work.locator("[data-schedule-launch]");
     await schedule.waitFor({ state: "attached" });
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);
-    await page.locator("[data-schedule-launch-send]").click();
+    await schedule.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
       && e.status === "applied"));
     const dispatch = await page.evaluate(() => window.wsFrames.findLast(e => e.type === "work-records.schedule.dispatch"));
@@ -149,8 +166,8 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
     await page.waitForFunction(() => window.receivedEvents?.filter(e => e.type === "work-records.overview.result"
       && e.groups?.some(g => g.status === "in_progress")).length >= 1);
 
-    await page.locator('[data-cw-segment-select="overview"]').click();
-    const cancel = page.locator('[data-action="cancel_execution"][data-expected-status="in_progress"]').first();
+    await work.locator('[data-cw-segment-select="overview"]').click();
+    const cancel = work.locator('[data-action="cancel_execution"][data-expected-status="in_progress"]').first();
     await cancel.waitFor({ state: "visible" });
     await cancel.click();
     await page.waitForFunction(() => window.wsFrames?.some(e => e.type === "work-record.control"

@@ -15,7 +15,7 @@
 
 “当前工作”仍是当前会话的概况，不是跨所有项目会话的全局视图。所选项目统一历史是逐页、逐次授权的有限来源视图，不应解读为全局完整历史。桌面端会核验分页连续性、来源会话/修订和结果身份；后端跨 Session 检查属于乐观校验，不是跨 Session 原子快照，因此并发来源变更仍可能造成页面间不一致，不保证多页处于同一时刻快照。事项控制会写入带 CAS/幂等身份的当前会话记录；排队/等待/停止等控制元数据不会自动启动 worker，运行中的任务必须通过 host 的实际取消链结束。当前尚不构成完整的跨工作区调度器或重启恢复工作台。故障重开后的 honest 状态（`unknown` / 保守标签、未完成 warn、不自动续跑）已有合成 WS + 当前工作渲染回归（`test_workbench_crash_reopen_recovery_harness.py`、`workbench-crash-reopen-recovery.test.mjs`）；真实关窗/杀进程 GUI 时序仍待验收。
 
-**多项目调度工作台（合成夹具，#60）**：`schedule-workbench-multi-project-fixture.py` + `schedule-workbench-multi-project-harness.test.mjs`（POSIX 可跑）证明调度 tab 路径：选择来源 → fail-closed 授权 → 只读 `schedule_preview` → `work-records.schedule.dispatch` → 概况 `in_progress` + 映射来源 `cancel_execution` 控件。Win32 上可选 Playwright：`schedule-workbench-multi-project-browser-e2e.test.mjs`（Linux 默认 skip）。不宣称真实模型/Electron 杀进程/托盘恢复已绿。
+**多项目调度工作台（合成夹具，#60）**：`schedule-workbench-multi-project-fixture.py` + `schedule-workbench-multi-project-harness.test.mjs`（POSIX 可跑）证明调度 tab 路径：选择来源 → fail-closed 授权 → 只读 `schedule_preview` → `work-records.schedule.dispatch` → 概况 `in_progress` + 映射来源 `cancel_execution` 控件。Win32 Playwright：`schedule-workbench-multi-project-browser-e2e.test.mjs` 经顶栏 **`button.unified-topbar-current-work`**（`aria-controls="unified-current-work-popover"`）展开 **`#unified-current-work` 壳内浮层**（见 `work-entry-surface.test.mjs`）；Linux 默认 skip。不宣称真实模型/Electron 杀进程/托盘恢复已绿。
 
 稳定与实验 lane 见 [SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md)。本页不保留旧 PlanAgent 队列、TASKS 采纳流程或历史 UI milestone。
 

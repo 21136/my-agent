@@ -137,6 +137,7 @@ def _overview(
 
 
 def _local_overview(request_id: str) -> dict:
+    """Session-local probe: keep the work entry visible while mapped sources exist."""
     return {
         "type": "work-records.overview.result",
         "session_id": SESSION,
@@ -145,7 +146,7 @@ def _local_overview(request_id: str) -> dict:
         "groups": [],
         "unread_important_results": [],
         "unread_status": "known",
-        "visibility_limitations": [],
+        "visibility_limitations": ["mapped_project_sources_available_for_schedule"],
         "visibility_counts": {"visible_groups": 0, "visible_items": 0, "collapsed_groups": 0, "collapsed_items": 0},
         "snapshot_id": None,
         "page": _page(0, 0),
