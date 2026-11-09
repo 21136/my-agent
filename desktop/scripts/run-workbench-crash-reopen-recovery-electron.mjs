@@ -105,7 +105,7 @@ function recoveryObservationFailure(passLabel, reason, frames) {
 async function observeRecoveryPass(host, verified, runRoot, passLabel) {
   const browserWs = await host.waitForCdp();
   const debugPort = Number(new URL(browserWs.replace(/^ws:/, "http:")).port);
-  const discovered = await discoverElectronPage(debugPort, host.renderer_port, runRoot);
+  const discovered = await discoverElectronPage(debugPort, host.renderer_port, runRoot, { diagnosticsTag: passLabel });
   const cdp = await connectCdp(discovered.page.webSocketDebuggerUrl);
   try {
     await cdp.command("Network.enable");

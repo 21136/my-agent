@@ -47,6 +47,7 @@ test("coverage map: synthetic vs real Electron recovery", () => {
   assert.match(runner, /session_id:\s*WORKBENCH_RECOVERY_SESSION_ID/);
   assert.match(runner, /assertWorkbenchRecoverySeedLayout/);
   assert.match(runner, /Page\.reload/, "CDP must reload after Network.enable to capture session-open notices");
+  assert.match(runner, /diagnosticsTag:\s*passLabel/, "reopen must not reuse exclusive first-pass CDP target diagnostics filename");
   assert.match(runner, /reconcileWorkbenchRecoveryRuntimeAppWrites/);
   const verify = readFileSync(path.join(repo, "desktop/scripts/verify-evolution-a.mjs"), "utf8");
   assert.match(verify, /evolve\/user_profile\.md/, "workbench recovery must allow first-run user_profile runtime file");

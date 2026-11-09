@@ -414,9 +414,13 @@ export function selectSealedRendererTarget(targets, { cdpPort, rendererPort }) {
   return { target: acceptedTargets[0] ?? null, diagnostics };
 }
 
-export async function discoverElectronPage(cdpPort, rendererPort, runRoot) {
+export async function discoverElectronPage(cdpPort, rendererPort, runRoot, options = {}) {
   const endpoint = assertLoopbackUrl('http://127.0.0.1:' + cdpPort + '/json/list', 'http:');
-  const deadline = Date.now() + 30_000; const history = new Map(); const diagnosticsPath = path.join(runRoot, 'ordinary-chat-h1-cdp-target-diagnostics.json');
+  const deadline = Date.now() + 30_000; const history = new Map();
+  const diagnosticsTag = typeof options.diagnosticsTag === 'string' && options.diagnosticsTag.length > 0
+    ? `-${options.diagnosticsTag.replace(/[^a-z0-9_-]/gi, '_').slice(0, 64)}`
+    : '';
+  const diagnosticsPath = path.join(runRoot, `ordinary-chat-h1-cdp-target-diagnostics${diagnosticsTag}.json`);
   const remember = items => {
     const now = new Date().toISOString();
     for (const item of items) {
