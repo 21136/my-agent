@@ -16,6 +16,7 @@ import {
   assertWorkbenchRecoveryWin32GuiTarget,
   captureGuiWebSocketFrames,
   countRecoveryWarns,
+  sampleRecoveryNoticeFrames,
   deny,
   ensureEvolutionControlBuild,
   forceKillProcessTree,
@@ -88,6 +89,18 @@ function seedRecoverySession(appRoot, pythonExecutable, sandboxRoot) {
   return JSON.parse(run.stdout.trim());
 }
 
+function recoveryObservationFailure(passLabel, reason, frames) {
+  const received = frames?.receivedFrames ?? [];
+  return Object.assign(new Error(`${passLabel}: ${reason}`), {
+    code: "permission_denied",
+    diagnostics: {
+      warn_count: countRecoveryWarns(received),
+      notice_samples: sampleRecoveryNoticeFrames(received),
+      ws_received_frame_count: received.length,
+    },
+  });
+}
+
 async function observeRecoveryPass(host, verified, runRoot, passLabel) {
   const browserWs = await host.waitForCdp();
   const debugPort = Number(new URL(browserWs.replace(/^ws:/, "http:")).port);
@@ -98,24 +111,28 @@ async function observeRecoveryPass(host, verified, runRoot, passLabel) {
     await cdp.command("Page.enable");
     await cdp.command("Runtime.enable");
     await waitForH1Workbench(cdp, host.renderer_port);
+    // Initial session-open notices are sent before CDP attaches; reload with Network already on.
+    await cdp.command("Page.reload", { ignoreCache: true });
+    await waitForH1Workbench(cdp, host.renderer_port);
     const deadline = Date.now() + 90_000;
     let warnCount = 0;
     let currentWorkVisible = false;
+    let frames = captureGuiWebSocketFrames(cdp.events, host.port);
     while (Date.now() < deadline) {
-      const frames = captureGuiWebSocketFrames(cdp.events, host.port);
+      frames = captureGuiWebSocketFrames(cdp.events, host.port);
       warnCount = countRecoveryWarns(frames.receivedFrames);
       const dom = await cdp.command("Runtime.evaluate", {
         expression: `(() => ({status: document.querySelector("#unified-status")?.textContent ?? "", currentWork: !!document.querySelector('button.unified-topbar-current-work')}))()`,
         returnByValue: true,
       }, 5_000);
       currentWorkVisible = dom?.result?.value?.currentWork === true;
-      if (warnCount >= (passLabel === "reopen" ? 1 : 1) && currentWorkVisible) break;
+      if (warnCount >= 1 && currentWorkVisible) break;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
-    const frames = captureGuiWebSocketFrames(cdp.events, host.port);
+    frames = captureGuiWebSocketFrames(cdp.events, host.port);
     warnCount = countRecoveryWarns(frames.receivedFrames);
-    if (warnCount < 1) deny(`${passLabel}: recovery warn notice was not observed on the real Electron WebSocket`);
-    if (!currentWorkVisible) deny(`${passLabel}: 当前工作 entry did not mount in the real workbench shell`);
+    if (warnCount < 1) throw recoveryObservationFailure(passLabel, "recovery warn notice was not observed on the real Electron WebSocket", frames);
+    if (!currentWorkVisible) throw recoveryObservationFailure(passLabel, "当前工作 entry did not mount in the real workbench shell", frames);
     return { passLabel, warnCount, python_ws_port: host.port, renderer_port: host.renderer_port, frames };
   } finally {
     cdp.close();

@@ -74,6 +74,18 @@ export function countRecoveryWarns(receivedFrames) {
   }).length;
 }
 
+export function sampleRecoveryNoticeFrames(receivedFrames, limit = 24) {
+  return (Array.isArray(receivedFrames) ? receivedFrames : []).map((frame) => {
+    const payload = decodeWsPayload(frame);
+    if (payload?.type !== "notice") return null;
+    return {
+      level: payload.level ?? null,
+      text: typeof payload.text === "string" ? payload.text.slice(0, 500) : null,
+      sequence: frame.sequence ?? null,
+    };
+  }).filter(Boolean).slice(-limit);
+}
+
 export async function forceKillProcessTree(child) {
   if (!child?.pid) return;
   if (process.platform === "win32") {

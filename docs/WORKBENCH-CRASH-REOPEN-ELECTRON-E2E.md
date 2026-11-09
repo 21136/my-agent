@@ -19,7 +19,7 @@ Green Win32 browser/harness results **do not** prove real Electron tray/cold-reo
 ## What this PR adds (Option B — honest machine gate)
 
 - **Profile** `workbench-crash-reopen-recovery-v1` — sealed H1 chat fixture (same control/CDP path as ordinary-chat H1).
-- **Seed** `desktop/scripts/workbench-crash-reopen-recovery-electron-seed.py` — one **project-agnostic** companion session + foreign-owner stale run (independent items only).
+- **Seed** `desktop/scripts/workbench-crash-reopen-recovery-electron-seed.py` — one **project-agnostic** companion session: foreign-owner stale run plus a persisted `schedule_claim` in `unknown` so recovery stays unresolved across Electron process boundaries (independent items only).
 - **Runner** `desktop/scripts/run-workbench-crash-reopen-recovery-electron.mjs` — freeze → seed → Electron+Python → CDP observe warn + 当前工作 → `taskkill /T` → relaunch → observe again.
 - **Tests** `desktop/tests/workbench-crash-reopen-recovery-electron.optin.test.mjs` — POSIX opt-in/contract tests; real GUI test **skipped** unless opt-in on Win32.
 

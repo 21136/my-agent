@@ -11,6 +11,7 @@ import {
   WORKBENCH_RECOVERY_ELECTRON_PROFILE,
   buildEvolutionControlPrepHint,
   countRecoveryWarns,
+  sampleRecoveryNoticeFrames,
   validateWorkbenchRecoveryDataRootEntries,
   isEvolutionControlBuildReady,
   requireWorkbenchRecoveryElectronGuiOptIn,
@@ -45,6 +46,7 @@ test("coverage map: synthetic vs real Electron recovery", () => {
   assert.match(optin, new RegExp(`export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "${WORKBENCH_RECOVERY_ELECTRON_PROFILE}"`));
   assert.match(runner, /session_id:\s*WORKBENCH_RECOVERY_SESSION_ID/);
   assert.match(runner, /assertWorkbenchRecoverySeedLayout/);
+  assert.match(runner, /Page\.reload/, "CDP must reload after Network.enable to capture session-open notices");
   const hint = buildEvolutionControlPrepHint(repo);
   assert.match(hint, /control-release\.js/);
   assert.match(hint, /build-evolution-control/);
@@ -72,6 +74,16 @@ test("warn counter accepts server recovery copy", () => {
     { payload: JSON.stringify({ type: "notice", level: "info", text: "ok" }) },
   ];
   assert.equal(countRecoveryWarns(frames), 1);
+});
+
+test("notice sampler keeps recovery warn payloads", () => {
+  const frames = [
+    { payload: JSON.stringify({ type: "notice", level: "warn", text: "无法核对已保存事项的执行状态" }), sequence: 1 },
+    { payload: JSON.stringify({ type: "assistant.done", text: "x" }), sequence: 2 },
+  ];
+  const samples = sampleRecoveryNoticeFrames(frames);
+  assert.equal(samples.length, 1);
+  assert.match(samples[0].text, /无法核对/);
 });
 
 test("opt-in real Electron kill + cold reopen GUI", {
