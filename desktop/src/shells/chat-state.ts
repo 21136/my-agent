@@ -411,6 +411,64 @@ export function primaryPendingConfirmPreview(
   return "";
 }
 
+function isOrdinaryConfirmBlock(
+  block: ChatBlock,
+): block is Extract<ChatBlock, { kind: "confirm" }> {
+  return block.kind === "confirm"
+    && block.confirmKind !== "work_record_post_turn"
+    && block.confirmKind !== "project_worker_requirement_verification";
+}
+
+/** Whether the active ordinary confirm accepts a new y/n/a choice (not submitting / terminal). */
+export function canSubmitOrdinaryConfirm(
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks">,
+  requestId: string,
+): boolean {
+  const activeId = resolveActiveOrdinaryConfirmRequestId(model);
+  if (!activeId || requestId !== activeId) return false;
+  if (model.confirmOverlay?.requestId === activeId) {
+    return !model.confirmOverlay.resolved;
+  }
+  const block = model.blocks.find(
+    (item) => item.kind === "confirm" && item.requestId === activeId,
+  );
+  if (block?.kind !== "confirm" || !isOrdinaryConfirmBlock(block)) return false;
+  return !block.resolved;
+}
+
+export function syncOrdinaryConfirmPending(
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+): void {
+  const activeId = resolveActiveOrdinaryConfirmRequestId(model);
+  model.confirmPending = Boolean(activeId && canSubmitOrdinaryConfirm(model, activeId));
+}
+
+function rehydrateOrdinaryConfirmOverlay(model: ChatSessionModel): void {
+  const activeId = resolveActiveOrdinaryConfirmRequestId(model);
+  if (!activeId) {
+    model.confirmOverlay = null;
+    syncOrdinaryConfirmPending(model);
+    return;
+  }
+  if (model.confirmOverlay?.requestId === activeId) {
+    syncOrdinaryConfirmPending(model);
+    return;
+  }
+  for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
+    const block = model.blocks[index];
+    if (block.kind !== "confirm" || block.requestId !== activeId) continue;
+    if (!isOrdinaryConfirmBlock(block)) return;
+    model.confirmOverlay = {
+      requestId: block.requestId,
+      preview: block.preview,
+      allowApproveAll: block.allowApproveAll,
+      ...(block.resolved ? { resolved: block.resolved } : {}),
+    };
+    break;
+  }
+  syncOrdinaryConfirmPending(model);
+}
+
 /** Request id for the ordinary/tool confirm the UI should treat as actionable (overlay or latest live block). */
 export function resolveActiveOrdinaryConfirmRequestId(
   model: Pick<ChatSessionModel, "confirmOverlay" | "blocks">,
@@ -656,15 +714,22 @@ export function createChatSession(
             block.kind === "assistant" && block.turnIndex === liveTurn,
         )
       : [];
+    const keptOrdinaryConfirms = sameSession
+      ? model.blocks.filter(
+          (block): block is ChatBlock & { kind: "confirm" } =>
+            isOrdinaryConfirmBlock(block)
+            && !postTurnConfirmations.has(block.requestId)
+            && !requirementVerificationConfirmations.has(block.requestId)
+            && (!block.resolved || isConfirmInProgressLabel(block.resolved)),
+        )
+      : [];
     resetTurnActivity();
-    model.confirmPending = false;
     model.confirmSubmitting = false;
     model.cancelRequested = false;
     model.executionRunId = "";
     model.executionState = "idle";
     model.executionSequence = 0;
     model.executionFinishReason = null;
-    model.confirmOverlay = null;
     const loaded = historyFromItems(event.items);
     model.blocks = sanitizeChatBlocksForHistory(loaded.blocks);
     model.turnCounter = loaded.turnCounter;
@@ -694,6 +759,13 @@ export function createChatSession(
       );
       if (!present) model.blocks.push(assistant);
     }
+    for (const confirm of keptOrdinaryConfirms) {
+      const present = model.blocks.some(
+        (block) => block.kind === "confirm" && block.requestId === confirm.requestId,
+      );
+      if (!present) model.blocks.push(confirm);
+    }
+    rehydrateOrdinaryConfirmOverlay(model);
     hooks.onHistoryLoaded?.(loaded);
     notify();
   }
@@ -800,6 +872,7 @@ export function createChatSession(
     }
     const pendingLabel = choice === "n" ? "提交拒绝…" : "提交中…";
     markConfirmResolved(requestId, pendingLabel);
+    syncOrdinaryConfirmPending(model);
     if (controlConfirmations.has(requestId)) {
       notify();
       return true;
@@ -1390,7 +1463,7 @@ export function createChatSession(
         break;
       }
       case "session.history": {
-        if (turnIsBusy()) {
+        if (turnIsBusy() || chatSessionAwaitingUserConfirm(model)) {
           deferredHistory = event;
           break;
         }
@@ -1491,8 +1564,8 @@ export function createChatSession(
         finalizeInProgressConfirms(event.finish_reason === "cancelled" ? "已取消" : "已完成执行");
         resetTurnActivity();
         model._toolTimers.clear();
-        model.confirmPending = false;
         model.confirmSubmitting = false;
+        rehydrateOrdinaryConfirmOverlay(model);
         const pendingHistory = deferredHistory;
         deferredHistory = null;
         if (pendingHistory) {
@@ -1810,6 +1883,7 @@ export function createChatSession(
           allowApproveAll: event.allow_approve_all,
         };
         model.confirmOverlay = overlay;
+        syncOrdinaryConfirmPending(model);
         if (options.confirmInBlocks) {
           model.blocks.push({
             kind: "confirm",
@@ -1871,11 +1945,12 @@ export function createChatSession(
         const resolved = CONFIRM_LABELS[event.choice] ?? event.choice;
         markConfirmResolved(event.request_id, resolved);
         if (!isCurrent) {
+          rehydrateOrdinaryConfirmOverlay(model);
           notify();
           break;
         }
-        model.confirmPending = false;
         model.confirmSubmitting = false;
+        syncOrdinaryConfirmPending(model);
         const rejected =
           event.choice === "n" ||
           event.choice === "timeout" ||

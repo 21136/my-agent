@@ -17,10 +17,12 @@ function load(url) {
 }
 
 const {
+  canSubmitOrdinaryConfirm,
   chatSessionAwaitingUserConfirm,
   createChatSession,
   primaryPendingConfirmPreview,
   resolveActiveOrdinaryConfirmRequestId,
+  syncOrdinaryConfirmPending,
 } = load(new URL("../src/shells/chat-state.ts", import.meta.url));
 
 function session() {
@@ -94,6 +96,62 @@ test("trash soft-delete confirm submits when overlay was cleared but block remai
   assert.equal(chat.submitConfirm("trash-batch", "y"), true);
   assert.equal(chat.model.confirmOverlay?.requestId, "trash-batch");
   assert.equal(chat.model.confirmOverlay?.resolved, "提交中…");
+});
+
+test("in-flight submit disables another ordinary choice until terminal resolution", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "trash-flight",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  assert.equal(chat.submitConfirm("trash-flight", "y"), true);
+  assert.equal(canSubmitOrdinaryConfirm(chat.model, "trash-flight"), false);
+  assert.equal(chat.submitConfirm("trash-flight", "y"), false);
+  assert.equal(chatSessionAwaitingUserConfirm(chat.model), true);
+});
+
+test("deferred session history preserves the live ordinary confirm after turn end", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "history-trash",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  chat.handleEvent({
+    type: "session.history",
+    session_id: "session-a",
+    items: [{ role: "user", text: "历史消息" }, { role: "assistant", text: "历史回复" }],
+  });
+  assert.equal(chat.model.blocks.some((block) => block.kind === "user" && block.text === "历史消息"), false);
+  chat.handleEvent({ type: "turn.end", run_id: "run-a", ok: true, finish_reason: "completed" });
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), "history-trash");
+  assert.equal(chat.model.confirmOverlay?.requestId, "history-trash");
+  assert.equal(chat.model.blocks.some((block) => block.kind === "user" && block.text === "历史消息"), true);
+  assert.equal(canSubmitOrdinaryConfirm(chat.model, "history-trash"), true);
+  assert.equal(chat.submitConfirm("history-trash", "y"), true);
+});
+
+test("turn end keeps confirmPending while an unresolved ordinary confirm remains", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "turn-end-trash",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  chat.handleEvent({ type: "turn.end", run_id: "run-a", ok: true, finish_reason: "completed" });
+  assert.equal(chat.model.confirmPending, true);
+  assert.equal(canSubmitOrdinaryConfirm(chat.model, "turn-end-trash"), true);
+  assert.equal(chat.submitConfirm("turn-end-trash", "y"), true);
 });
 
 test("stale expired confirm block is not actionable while a newer confirm is pending", () => {
