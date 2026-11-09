@@ -40,15 +40,25 @@ const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
 /** In-shell overlay entry (work-entry-surface.test.mjs): topbar pill, not a removed full-page route. */
 const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
-async function activateScheduleSegment(work) {
-  await work.locator('[data-cw-segment-select="schedule"]').click();
-  await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached" });
+async function activateScheduleSegment(work, { retries = 8 } = {}) {
+  const tab = work.locator('[data-cw-segment-select="schedule"]');
   const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
-  await panel.waitFor({ state: "visible" });
-  return panel;
+  let lastError;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      await tab.click();
+      await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached", timeout: 4000 });
+      await panel.waitFor({ state: "visible", timeout: 4000 });
+      return panel;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("schedule segment did not become visible");
 }
 
 async function waitForVisibleScheduleLaunch(work) {
+  await work.locator("[data-schedule-launch]").waitFor({ state: "attached" });
   const panel = await activateScheduleSegment(work);
   const launch = panel.locator("[data-schedule-launch]");
   await launch.waitFor({ state: "visible" });

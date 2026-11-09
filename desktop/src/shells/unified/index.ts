@@ -233,6 +233,7 @@ export function mountUnifiedShell(
   let currentWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
   let currentSessionWorkOverviewResult: WorkRecordsOverviewResultEvent | null = null;
   let currentWorkOverviewOpen = false;
+  let currentWorkShellSegment: "overview" | "queue" | "schedule" = "queue";
   const selectedMultiProjectOverviewIds = new Set<string>();
   const currentWorkOverviewExpandedRequirementItemIds = new Set<string>();
   let currentWorkOverviewLoadingMore = false;
@@ -593,7 +594,7 @@ export function mountUnifiedShell(
         extras += `<section data-merged-history class="unified-selected-project-overview"><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
       }
     }
-    currentWorkEl.innerHTML = renderCurrentWorkShellPanel(panel, extras);
+    currentWorkEl.innerHTML = renderCurrentWorkShellPanel(panel, extras, currentWorkShellSegment);
     bindCurrentWorkPage(currentWorkEl);
     requestAnimationFrame(() => sizeCurrentWorkPopover());
   }
@@ -601,6 +602,7 @@ export function mountUnifiedShell(
   function bindCurrentWorkPage(rootEl: HTMLElement): void {
     const closeCurrentWork = () => {
       currentWorkOverviewOpen = false;
+      currentWorkShellSegment = "queue";
       syncMainFocusView();
       refreshTopbar();
     };
@@ -709,6 +711,7 @@ export function mountUnifiedShell(
       });
     }
     function setCurrentWorkSegment(segment: "overview" | "queue" | "schedule"): void {
+      currentWorkShellSegment = segment;
       rootEl.querySelector<HTMLElement>("[data-current-work-shell]")?.setAttribute("data-cw-segment", segment);
       rootEl.querySelectorAll<HTMLElement>("[data-cw-segment-panel]").forEach(panel => {
         panel.hidden = panel.dataset.cwSegmentPanel !== segment;
@@ -1014,6 +1017,7 @@ function refreshGlobalRoleModels(): void {
         currentWorkOverviewResult = null;
         currentSessionWorkOverviewResult = null;
         currentWorkOverviewOpen = false;
+        currentWorkShellSegment = "queue";
         currentWorkOverviewExpandedRequirementItemIds.clear();
         currentWorkOverviewLoadingMore = false;
         currentWorkOverviewDetailLoadingCursor = null;
