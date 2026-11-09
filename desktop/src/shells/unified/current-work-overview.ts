@@ -273,7 +273,7 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
       }).join("");
       const edgeCount = dependencies.length + dependencyRefs.length;
       const dependencySummary = edgeCount
-        ? `<details class="unified-current-work-dependency-edges"><summary>依赖关系（${edgeCount}）</summary><ul>${dependencyRows}${referenceRows}</ul></details>` : "";
+        ? `<div class="unified-current-work-dependency-edges" aria-label="依赖关系（${edgeCount}）"><span class="cw-dep-label">依赖关系（${edgeCount}）</span><ul>${dependencyRows}${referenceRows}</ul></div>` : "";
       return `<li>${escapeHtml(requirement.text || "（要求文本为空）")} · ${reqStatus}${dependencySummary}</li>`;
     });
     const requirementPage = item.requirements_page;
@@ -284,15 +284,17 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
       const summary = rows.map(row => `<li>${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
       const projectId = group.kind === "project" ? group.id : "";
       const load = page?.has_more && page.next_cursor ? `<button type="button" data-requirement-history data-project-id="${escapeHtml(projectId)}" data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(requirement.requirement_id)}" data-cursor="${escapeHtml(page.next_cursor)}">加载下一页历史</button>` : "";
-      return `<details><summary>历史尝试（${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}）</summary><ul>${summary}</ul>${load}</details>`;
+      return `<section class="unified-current-work-history" aria-label="历史尝试"><h5>历史尝试（${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}）</h5><ul>${summary}</ul>${load}</section>`;
     }).join("");
     const localRequirementRemainder = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
-      ? `<details class="unified-current-work-requirements-more"><summary>还有 ${allRequirementRows.length - DETAIL_BATCH_SIZE} 项要求，展开</summary><ul>${allRequirementRows.slice(DETAIL_BATCH_SIZE).join("")}</ul></details>` : "";
+      ? `<div class="unified-current-work-requirements-more"><p class="cw-more-caption">还有 ${allRequirementRows.length - DETAIL_BATCH_SIZE} 项要求</p><ul>${allRequirementRows.slice(DETAIL_BATCH_SIZE).join("")}</ul></div>` : "";
     const requirementRows = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
       ? allRequirementRows.slice(0, DETAIL_BATCH_SIZE).join("") : allRequirementRows.join("");
     const requirementCount = requirementPage ? `${item.requirements.length}/${requirementPage.total}` : `${item.requirements.length}`;
+    const itemKey = JSON.stringify([group.kind, group.id, item.item_id]);
+    const selected = expandedRequirementItemIds.has(itemKey);
     const requirementDetails = item.requirements.length
-      ? `<details class="unified-current-work-requirements" data-current-work-item-id="${escapeHtml(JSON.stringify([group.kind, group.id, item.item_id]))}"${expandedRequirementItemIds.has(JSON.stringify([group.kind, group.id, item.item_id])) ? " open" : ""}><summary>要求（${requirementCount}）</summary><ul>${requirementRows}</ul>${localRequirementRemainder}${detailLoadButton(requirementPage, item.requirements.length, "项要求", loadingDetailCursor)}</details>`
+      ? `<section class="unified-current-work-requirements" data-current-work-item-id="${escapeHtml(itemKey)}"${selected ? ' data-selected="1"' : " hidden"}><h5>要求（${requirementCount}）</h5><ul>${requirementRows}</ul>${localRequirementRemainder}${detailLoadButton(requirementPage, item.requirements.length, "项要求", loadingDetailCursor)}</section>`
       : `<span class="unified-current-work-requirement-count">要求（0）</span>`;
     const resultMarkers = item.current_results.map(result => result.read_status === "unread"
       ? `<span class="unified-current-work-unread">未读结果</span>`
@@ -300,16 +302,20 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
     const canReviseHere = group.kind === "independent";
     const canReviseRemote = group.kind === "project" && Number.isSafeInteger(group.source_revision) && group.source_revision! >= 0;
     const canCancelLocalWorker = group.kind === "project" && !group.source_session_id;
-    const remoteControls = canReviseHere || canReviseRemote || canCancelLocalWorker
-      ? `<div class="unified-current-work-controls">${canReviseRemote ? `<button type="button" data-open-source-session="${escapeHtml(group.source_session_id ?? "")}" data-open-source-project="${escapeHtml(group.id)}">打开来源会话</button>` : ""}${item.requirements.map(req => `<div><textarea data-work-record-new-text-for="${escapeHtml(req.requirement_id)}" aria-label="修订要求">${escapeHtml(req.text)}</textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="revise_requirement" data-expected-status="${escapeHtml(req.status)}"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>修订要求</button>${canCancelLocalWorker && req.status === "in_progress" ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="cancel_execution" data-expected-status="in_progress">请求停止 worker</button>` : ""}${canReviseHere ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="copy_requirement_to_new_item">复制到新事项</button>` : ""}${!canReviseRemote && group.kind === "independent" && ["pending", "queued", "waiting_confirmation", "stopped", "blocked"].includes(req.status) ? `<fieldset data-work-dependency-editor-for="${escapeHtml(req.requirement_id)}"><legend>依赖目标（同会话、同范围）</legend>${dependencyCandidateItems.flatMap(candidate => candidate.requirements.map(target => ({ candidate, target }))).filter(({ candidate, target }) => candidate.item_id !== item.item_id || target.requirement_id !== req.requirement_id).map(({ candidate, target }) => `<label><input type="checkbox" data-work-dependency-ref-item="${escapeHtml(candidate.item_id)}" data-work-dependency-ref-requirement="${escapeHtml(target.requirement_id)}"${(req.depends_on_refs ?? []).some(ref => ref.item_id === candidate.item_id && ref.requirement_id === target.requirement_id) ? " checked" : ""}>${escapeHtml(candidate.title || candidate.item_id)} · ${escapeHtml(target.text)} · ${escapeHtml(STATUS_LABELS[target.status] ?? "状态待确认")}</label>`).join("")}<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="set_dependencies" data-expected-status="${escapeHtml(req.status)}">保存依赖</button></fieldset>` : ""}${canReviseRemote ? ["queue", "stop", "continue", "wait_confirmation", "release_confirmation"].map(action => `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="${action}" data-expected-status="${escapeHtml(req.status)}" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">${action}</button>`).join("") : ""}${canReviseRemote && req.status === "unknown" && req.claim_recovery_needed ? `<fieldset><legend>人工检查未知执行 claim</legend><p>须先核对该运行的进程/host 状态。没有权威停止证据时只能记录核查，claim 仍保留为未解决；不会释放或重派。</p><textarea data-claim-inspection-for="${escapeHtml(req.requirement_id)}" aria-label="人工核查证据" maxlength="4000" placeholder="记录核查对象、时间、观察到的证据；不确定请明确写明"></textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="inspect_unknown_claim" data-expected-status="unknown" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">记录核查（保持未解决）</button></fieldset>` : ""}</div>`).join("")}</div>` : "";
-    return `<section class="unified-current-work-item"><div><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</div>${requirementDetails}${history}${remoteControls}</section>`;
+    const remoteControlsInner = canReviseHere || canReviseRemote || canCancelLocalWorker
+      ? `${canReviseRemote ? `<button type="button" data-open-source-session="${escapeHtml(group.source_session_id ?? "")}" data-open-source-project="${escapeHtml(group.id)}">打开来源会话</button>` : ""}${item.requirements.map(req => `<div><textarea data-work-record-new-text-for="${escapeHtml(req.requirement_id)}" aria-label="修订要求">${escapeHtml(req.text)}</textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="revise_requirement" data-expected-status="${escapeHtml(req.status)}"${canReviseRemote ? ` data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}"` : ""}>修订要求</button>${canCancelLocalWorker && req.status === "in_progress" ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="cancel_execution" data-expected-status="in_progress">请求停止 worker</button>` : ""}${canReviseHere ? `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="copy_requirement_to_new_item">复制到新事项</button>` : ""}${!canReviseRemote && group.kind === "independent" && ["pending", "queued", "waiting_confirmation", "stopped", "blocked"].includes(req.status) ? `<fieldset data-work-dependency-editor-for="${escapeHtml(req.requirement_id)}"><legend>依赖目标（同会话、同范围）</legend>${dependencyCandidateItems.flatMap(candidate => candidate.requirements.map(target => ({ candidate, target }))).filter(({ candidate, target }) => candidate.item_id !== item.item_id || target.requirement_id !== req.requirement_id).map(({ candidate, target }) => `<label><input type="checkbox" data-work-dependency-ref-item="${escapeHtml(candidate.item_id)}" data-work-dependency-ref-requirement="${escapeHtml(target.requirement_id)}"${(req.depends_on_refs ?? []).some(ref => ref.item_id === candidate.item_id && ref.requirement_id === target.requirement_id) ? " checked" : ""}>${escapeHtml(candidate.title || candidate.item_id)} · ${escapeHtml(target.text)} · ${escapeHtml(STATUS_LABELS[target.status] ?? "状态待确认")}</label>`).join("")}<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="set_dependencies" data-expected-status="${escapeHtml(req.status)}">保存依赖</button></fieldset>` : ""}${canReviseRemote ? ["queue", "stop", "continue", "wait_confirmation", "release_confirmation"].map(action => `<button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="${action}" data-expected-status="${escapeHtml(req.status)}" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">${action}</button>`).join("") : ""}${canReviseRemote && req.status === "unknown" && req.claim_recovery_needed ? `<fieldset><legend>人工检查未知执行 claim</legend><p>须先核对该运行的进程/host 状态。没有权威停止证据时只能记录核查，claim 仍保留为未解决；不会释放或重派。</p><textarea data-claim-inspection-for="${escapeHtml(req.requirement_id)}" aria-label="人工核查证据" maxlength="4000" placeholder="记录核查对象、时间、观察到的证据；不确定请明确写明"></textarea><button type="button" data-work-record-control data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(req.requirement_id)}" data-action="inspect_unknown_claim" data-expected-status="unknown" data-source-project-id="${escapeHtml(group.id)}" data-source-revision="${group.source_revision}">记录核查（保持未解决）</button></fieldset>` : ""}</div>`).join("")}` : "";
+    const remoteControls = remoteControlsInner
+      ? `<section class="unified-current-work-controls" data-cw-ops${selected ? ' data-selected="1"' : " hidden"}><h5>操作</h5>${remoteControlsInner}</section>`
+      : "";
+    const selectedClass = selected ? " is-selected" : "";
+    return `<section class="unified-current-work-item${selectedClass}" data-cw-item-key="${escapeHtml(itemKey)}"><button type="button" class="unified-current-work-item-head" data-cw-select-item="${escapeHtml(itemKey)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</button>${requirementDetails}${history}${remoteControls}</section>`;
   };
   const itemRows = initialItems.map(renderItem).join("");
   const itemMore = serverPaged
     ? detailLoadButton(group.items_page, group.items.length, "项", loadingDetailCursor)
     : (() => {
       const rest = sortedItems.filter(item => !shownIds.has(item.item_id));
-      return rest.length ? `<details class="unified-current-work-items-more"><summary>还有 ${rest.length} 项（已优先显示需关注事项），展开查看</summary><div>${rest.map(renderItem).join("")}</div></details>` : "";
+      return rest.length ? `<div class="unified-current-work-items-more"><p class="cw-more-caption">还有 ${rest.length} 项（已优先显示需关注事项）</p><div>${rest.map(renderItem).join("")}</div></div>` : "";
     })();
   const title = group.kind === "linked_source_snapshot" ? "来源会话快照" : group.kind === "project" ? `项目 · ${group.id}` : group.items.length === 1 && group.items[0].title.trim() ? group.items[0].title.trim() : "独立事项组";
   const source = group.kind === "linked_source_snapshot" ? group.source_snapshot : undefined;
@@ -348,19 +354,34 @@ export function buildCurrentWorkOverviewPanel(
   if (result.state === "error" || result.state === "cancelled") statusHtml += `<p class="unified-current-work-warning" role="status">概况暂不可确认，可刷新重试。</p>`;
   if (result.state === "expired") statusHtml += `<p class="unified-current-work-warning" role="status">概况数据已变化，正在重新查询。</p>`;
   if (result.visibility_limitations.length) statusHtml += `<p class="unified-current-work-warning">部分事项按保守范围展示。</p>`;
+  let scheduleHtml = "";
   if (result.aggregation_scope === "selected_project_sessions" && result.schedule_preview) {
     const preview = result.schedule_preview;
-    statusHtml += `<section><strong>只读调度预览</strong><p>不会启动任务，也不代表运行授权。</p>${preview.candidates.length ? "" : "<p>当前没有可显示的候选</p>"}${preview.candidates.map(row => `<p>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)} · 优先级 ${row.priority}</p>`).join("")}${preview.blocked.map(row => `<p>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)}：${row.reasons.map(escapeHtml).join("；")}</p>`).join("")}${preview.limitations.map(escapeHtml).join("；")}</section>`;
+    const candidateRows = preview.candidates.map(row =>
+      `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)} · 优先级 ${row.priority}</li>`).join("");
+    const blockedRows = preview.blocked.map(row =>
+      `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_id)} · ${escapeHtml(row.requirement_id)}：${row.reasons.map(escapeHtml).join("；")}</li>`).join("");
+    const limits = preview.limitations.map(escapeHtml).filter(Boolean).join("；");
+    scheduleHtml = `<section class="unified-current-work-schedule" aria-label="只读调度预览"><header><h4>只读调度预览</h4><p>不会启动任务，也不代表运行授权。</p></header>${preview.candidates.length ? `<ul class="cw-queue-list">${candidateRows}</ul>` : "<p>当前没有可显示的候选</p>"}${blockedRows ? `<h5>受阻</h5><ul class="cw-queue-list is-blocked">${blockedRows}</ul>` : ""}${limits ? `<p class="cw-schedule-limits">${limits}</p>` : ""}</section>`;
   }
   const activeGroups = result.groups.filter(group => group.visibility === "visible");
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
-  const groupsHtml = activeGroups.map(group => renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor)).join("");
+  const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
+  // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
+  const groupsHtml = activeGroups.map(group => {
+    const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor);
+    return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
+  }).join("");
   const remaining = Math.max(0, result.page.total_visible_groups - activeGroups.length);
   const canExpand = result.state === "visible" && result.page.has_more && Boolean(result.page.next_cursor);
   const unreadSummary = result.unread_status === "known" && unreadCountText !== null
     ? `${unreadCountText} 项未读结果` : "未读结果数未知";
-  const bodyHtml = `${statusHtml}<p class="unified-current-work-summary">${result.visibility_counts.visible_groups} 组当前可见 · ${unreadSummary}</p>${groupsHtml}`;
+  const summaryLine = `${result.visibility_counts.visible_groups} 组当前可见 · ${unreadSummary}${visibleAttentionCount ? ` · ${visibleAttentionCount} 组需关注` : ""}`;
+  const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未读</span><strong>${escapeHtml(unreadCountText ?? "未知")}</strong></div></div></section>`;
+  const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${activeGroups.length}</span></header><div class="current-work-zone-body">${groupsHtml || `<p class="current-work-zone-empty">暂无可见工作组</p>`}</div></div></section>`;
+  const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || `<p class="current-work-zone-empty">当前没有调度预览；选择项目来源后会显示在这里。</p>`}<div data-cw-schedule-slot></div></section>`;
+  const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;
   return {
     visible, open: options.open, label, bodyHtml, canExpand,
     moreLabel: options.loadingMore ? "正在展开…" : `展开更多${remaining ? `（约 ${remaining} 组）` : ""}`,
@@ -382,4 +403,88 @@ export function dispatchCurrentWorkOverviewRequest(options: {
   } catch {
     return "failed";
   }
+}
+
+/** Full-page workbench: quiet home by default; focus/schedule surfaces open only on intent. */
+export function renderCurrentWorkWorkbenchPage(panel: CurrentWorkOverviewPanel, extrasHtml = ""): string {
+  if (!panel.visible) {
+    return `<div class="current-work-page" data-current-work-page data-cw-mode="home">
+      <header class="current-work-heading">
+        <div class="current-work-heading-copy"><h1 id="current-work-page-heading">当前工作</h1>
+        <p class="current-work-hint">有进展时再打开；默认保持安静。</p></div>
+        <div class="current-work-heading-actions">
+          <button type="button" class="unified-btn unified-btn-accent" data-current-work-back-chat>回到对话</button>
+        </div>
+      </header>
+      <p class="current-work-zone-empty" role="status">暂无可见工作概况。</p>
+    </div>`;
+  }
+
+  // Split contract body into intent surfaces; home stays empty of panels.
+  let queueHtml = "";
+  let scheduleHtml = "";
+  const body = panel.bodyHtml;
+  const queueMatch = body.match(/<section class="cw-panel[^"]*" data-cw-panel="queue"[\s\S]*?<\/section>/);
+  const scheduleMatch = body.match(/<section class="cw-panel[^"]*" data-cw-panel="schedule"[\s\S]*?<\/section>/);
+  if (queueMatch) {
+    queueHtml = queueMatch[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "");
+  }
+  if (scheduleMatch) {
+    scheduleHtml = scheduleMatch[0].replace(/^<section[^>]*>/, "").replace(/<\/section>$/, "");
+  }
+  if (extrasHtml) {
+    if (scheduleHtml.includes("data-cw-schedule-slot")) {
+      scheduleHtml = scheduleHtml.replace('<div data-cw-schedule-slot></div>', `<div data-cw-schedule-slot>${extrasHtml}</div>`);
+    } else {
+      scheduleHtml += extrasHtml;
+    }
+  }
+  if (!queueHtml) queueHtml = `<p class="current-work-zone-empty">暂无进行中的工作。</p>`;
+  if (!scheduleHtml) scheduleHtml = `<p class="current-work-zone-empty">当前没有可调度项。</p>`;
+
+  // Keep full bodyHtml in a non-visual holder so existing DOM queries / future debug still see contracts.
+  // visually-hidden but present for structure; surfaces are what the user sees.
+  return `<div class="current-work-page" data-current-work-page data-cw-mode="home">
+    <header class="current-work-heading">
+      <div class="current-work-heading-copy">
+        <h1 id="current-work-page-heading">当前工作</h1>
+        <p class="current-work-hint cw-whisper">${escapeHtml(panel.label)}</p>
+      </div>
+      <div class="current-work-heading-actions">
+        <button type="button" class="unified-btn" data-current-work-ask>在对话中查询</button>
+        ${panel.canExpand ? `<button type="button" class="unified-btn" data-current-work-more ${panel.loadingMore ? "disabled" : ""}>${escapeHtml(panel.moreLabel)}</button>` : ""}
+        <button type="button" class="unified-btn unified-btn-accent" data-current-work-back-chat>回到对话</button>
+      </div>
+    </header>
+
+    <section class="cw-home" data-cw-home aria-label="当前工作首页">
+      <p class="cw-home-lead">需要时再打开。进行中的工作与调度不会默认铺开。</p>
+      <div class="cw-home-actions">
+        <button type="button" class="unified-btn unified-btn-accent" data-cw-open="focus">查看进行中</button>
+        <button type="button" class="unified-btn" data-cw-open="schedule">开始调度</button>
+      </div>
+    </section>
+
+    <section class="cw-surface" data-cw-surface="focus" hidden aria-label="进行中的工作">
+      <header class="cw-surface-bar">
+        <button type="button" class="unified-btn unified-btn-ghost" data-cw-close>返回</button>
+        <h2>进行中</h2>
+      </header>
+      <div class="cw-surface-body unified-current-work-popover current-work-scroll" id="unified-current-work-popover">
+        <div class="unified-current-work-content">${queueHtml}</div>
+      </div>
+    </section>
+
+    <section class="cw-surface" data-cw-surface="schedule" hidden aria-label="调度">
+      <header class="cw-surface-bar">
+        <button type="button" class="unified-btn unified-btn-ghost" data-cw-close>返回</button>
+        <h2>调度</h2>
+      </header>
+      <div class="cw-surface-body current-work-scroll">
+        <div class="unified-current-work-content">${scheduleHtml}</div>
+      </div>
+    </section>
+
+    <div class="cw-contract-body" hidden aria-hidden="true">${panel.bodyHtml}</div>
+  </div>`;
 }

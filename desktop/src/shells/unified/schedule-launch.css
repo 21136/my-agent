@@ -1,1 +1,60 @@
-.unified-schedule-launch{margin:12px 0;padding:10px 12px;border:1px solid var(--line,#d8dce5);border-radius:12px}.unified-schedule-launch summary{cursor:pointer;font-weight:650}.unified-schedule-launch-form{display:grid;gap:9px;margin-top:10px}.unified-schedule-launch-form label{display:grid;gap:5px;font-size:.88em}.unified-schedule-launch-form select,.unified-schedule-launch-form textarea{box-sizing:border-box;width:100%;max-width:100%;padding:8px;border:1px solid var(--line,#d8dce5);border-radius:8px;background:var(--surface,#fff);color:inherit;font:inherit}.unified-schedule-task{padding:8px 10px;border-left:3px solid var(--accent,#6882ea);background:var(--surface-muted,#f4f6fa);white-space:pre-wrap}.unified-schedule-launch-note{font-size:.82em;opacity:.78}
+.unified-schedule-launch {
+  margin: 0;
+  padding: 1rem 1.1rem 1.15rem;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 28%, var(--ma-border));
+  border-radius: var(--nt-r-md, 12px);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ma-accent) 10%, transparent), transparent 55%),
+    color-mix(in srgb, var(--ma-surface) 90%, transparent);
+  box-shadow: var(--nt-shadow, 0 10px 28px color-mix(in srgb, var(--ma-text) 6%, transparent));
+}
+.unified-schedule-launch-head { margin: 0 0 0.55rem; }
+.unified-schedule-launch-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  font-weight: 650;
+}
+.unified-schedule-launch-form {
+  display: grid;
+  gap: 0.65rem;
+}
+.unified-schedule-launch-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--ma-text-muted);
+}
+.unified-schedule-launch-form select,
+.unified-schedule-launch-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--ma-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
+  color: inherit;
+  font: inherit;
+}
+.unified-schedule-task {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--ma-accent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--ma-accent) 8%, transparent);
+  white-space: pre-wrap;
+  color: var(--ma-text);
+  font-size: 0.8rem;
+}
+.unified-schedule-launch-note {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--ma-text-muted);
+}
+.unified-schedule-launch .unified-btn-accent {
+  justify-self: start;
+  min-height: 2.4rem;
+  padding-inline: 1rem;
+  border-radius: 999px;
+}

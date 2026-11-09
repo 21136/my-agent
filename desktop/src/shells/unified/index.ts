@@ -94,7 +94,7 @@ import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, typ
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
-import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkWorkbenchPage, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
 import {
@@ -434,8 +434,14 @@ export function mountUnifiedShell(
     scheduleCurrentWorkOverviewRefresh();
   }
   function toggleStructuredCurrentWorkOverview(): void {
-    currentWorkOverviewOpen = !currentWorkOverviewOpen;
-    if (currentWorkOverviewOpen) queryStructuredCurrentWorkOverview();
+    if (projectState.mainFocus === "current-work") {
+      currentWorkOverviewOpen = false;
+      showNowChat();
+      return;
+    }
+    currentWorkOverviewOpen = true;
+    queryStructuredCurrentWorkOverview();
+    setMainFocus("current-work");
     refreshTopbar();
   }
 
@@ -464,14 +470,8 @@ export function mountUnifiedShell(
     else if (result === "unavailable") setStatus("当前对话不可发送，未发起概况查询。");
     else if (result === "failed") setStatus("概况查询未能发送；未用旧卡片替代。");
   }
-  // Keep the existing non-modal overview above the live composer, even as it resizes.
-  function sizeCurrentWorkPopover(): void {
-    const popover = topbarEl.querySelector<HTMLElement>("#unified-current-work-popover");
-    if (!popover) return;
-    const available = Math.floor(composerDock.getBoundingClientRect().top - popover.getBoundingClientRect().top - 8);
-    popover.style.maxHeight = `${Math.max(0, available)}px`;
-    popover.style.visibility = available < 48 ? "hidden" : "";
-  }
+  // Full-page workbench owns its scroll; keep a no-op for older resize hooks.
+  function sizeCurrentWorkPopover(): void {}
 
   function refreshTopbar(): void {
     syncTopbarFromProject();
@@ -486,19 +486,28 @@ export function mountUnifiedShell(
     }
     const multiProjectAvailable = mappedProjectChoices.length > 0;
     topbarState.currentWorkOverview = buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
-      open: currentWorkOverviewOpen, loadingMore: currentWorkOverviewLoadingMore,
+      open: currentWorkOverviewOpen || projectState.mainFocus === "current-work",
+      loadingMore: currentWorkOverviewLoadingMore,
       unavailable: currentWorkOverviewUnavailable || (multiProjectAvailable && !currentWorkOverviewResult),
       expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
     });
+    let currentWorkExtras = "";
     if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
       && currentWorkOverviewResult.schedule_preview) {
-      topbarState.currentWorkOverview.bodyHtml += renderScheduleLaunchForm(currentWorkOverviewResult);
+      currentWorkExtras += renderScheduleLaunchForm(currentWorkOverviewResult);
     }
     if (mergedHistory.page && mergedHistory.sources.length) {
       const rows = mergedHistory.rows.map((row: MergedHistoryRow) => `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_title ?? row.item_id)} · ${escapeHtml(row.requirement_text ?? "")} · ${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
       const next = mergedHistory.page.has_more && mergedHistory.page.next_cursor ? `<button type="button" data-merged-history-next data-cursor="${escapeHtml(mergedHistory.page.next_cursor)}">加载下一页统一历史</button>` : "";
-      topbarState.currentWorkOverview.bodyHtml += `<section data-merged-history><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
+      currentWorkExtras += `<section data-merged-history class="unified-selected-project-overview"><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
+    }
+    if (multiProjectAvailable) {
+      const choices = mappedProjectChoices.map(project => {
+        const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
+        return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
+      }).join("");
+      currentWorkExtras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="其他项目概况"><header class="unified-selected-project-overview-head"><h3>其他项目概况（${mappedProjectChoices.length}）</h3></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p>仅读取确认的项目记录；最多选择 6 个。</p></div></section>`;
     }
     renderTopbar(
       topbarEl,
@@ -515,19 +524,56 @@ export function mountUnifiedShell(
       expandStructuredCurrentWorkOverview,
       selectSingleChatTool,
     );
-    if (multiProjectAvailable) {
-      const choices = mappedProjectChoices.map(project => {
-        const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
-        return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
-      }).join("");
-      topbarEl.insertAdjacentHTML("beforeend", `<details class="unified-selected-project-overview" data-selected-project-overview><summary>其他项目概况（${mappedProjectChoices.length}）</summary><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p>仅读取确认的项目记录；最多选择 6 个。</p></div></details>`);
-    }
     if (projectState.mainFocus === "settings") renderSettingsStage();
-    sizeCurrentWorkPopover();
-    topbarEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
+    if (projectState.mainFocus === "current-work") renderCurrentWorkStage(currentWorkExtras);
+    else sizeCurrentWorkPopover();
+  }
+
+  function renderCurrentWorkStage(extrasHtml?: string): void {
+    const panel = topbarState.currentWorkOverview ?? buildCurrentWorkOverviewPanel(currentWorkOverviewResult, {
+      open: true,
+      loadingMore: currentWorkOverviewLoadingMore,
+      unavailable: currentWorkOverviewUnavailable,
+      expandedRequirementItemIds: currentWorkOverviewExpandedRequirementItemIds,
+      detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
+    });
+    let extras = extrasHtml;
+    if (extras === undefined) {
+      extras = "";
+      if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
+        && currentWorkOverviewResult.schedule_preview) {
+        extras += renderScheduleLaunchForm(currentWorkOverviewResult);
+      }
+      const mappedProjectChoices = projectState.projects.filter(project => Boolean(project.sessionId)
+        && project.id !== projectState.projectId && project.sessionId !== chat.model.sessionId);
+      if (mappedProjectChoices.length) {
+        const choices = mappedProjectChoices.map(project => {
+          const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
+          return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
+        }).join("");
+        extras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="其他项目概况"><header class="unified-selected-project-overview-head"><h3>其他项目概况（${mappedProjectChoices.length}）</h3></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p>仅读取确认的项目记录；最多选择 6 个。</p></div></section>`;
+      }
+      if (mergedHistory.page && mergedHistory.sources.length) {
+        const rows = mergedHistory.rows.map((row: MergedHistoryRow) => `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_title ?? row.item_id)} · ${escapeHtml(row.requirement_text ?? "")} · ${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
+        const next = mergedHistory.page.has_more && mergedHistory.page.next_cursor ? `<button type="button" data-merged-history-next data-cursor="${escapeHtml(mergedHistory.page.next_cursor)}">加载下一页统一历史</button>` : "";
+        extras += `<section data-merged-history class="unified-selected-project-overview"><h4>所选项目统一历史（仅授权项目）</h4><p>来源版本：${mergedHistory.sources.map(source => `${escapeHtml(source.project_id)} / ${escapeHtml(source.session_id)} @${source.revision}`).join("；")}</p><ul>${rows}</ul>${next}</section>`;
+      }
+    }
+    currentWorkEl.innerHTML = renderCurrentWorkWorkbenchPage(panel, extras);
+    bindCurrentWorkPage(currentWorkEl);
+  }
+
+  function bindCurrentWorkPage(rootEl: HTMLElement): void {
+    rootEl.querySelector<HTMLButtonElement>("[data-current-work-back-chat]")?.addEventListener("click", () => {
+      currentWorkOverviewOpen = false;
+      showNowChat();
+    });
+    rootEl.querySelector<HTMLButtonElement>("[data-current-work-ask]")?.addEventListener("click", () => requestCurrentWorkOverview());
+    rootEl.querySelector<HTMLButtonElement>("[data-current-work-more]")?.addEventListener("click", () => expandStructuredCurrentWorkOverview());
+    rootEl.querySelectorAll<HTMLButtonElement>(".unified-current-work-detail-more[data-current-work-detail-cursor]").forEach(button => {
       button.addEventListener("click", () => requestCurrentWorkOverviewDetail(button));
     });
-    const scheduleForm = topbarEl.querySelector<HTMLElement>("[data-schedule-launch]");
+    const scheduleForm = rootEl.querySelector<HTMLElement>("[data-schedule-launch]");
     const scheduleSelect = scheduleForm?.querySelector<HTMLSelectElement>("[data-schedule-candidate]");
     const scheduleSourceTask = scheduleForm?.querySelector<HTMLElement>("[data-schedule-source-task]");
     scheduleSelect?.addEventListener("change", () => {
@@ -555,14 +601,14 @@ export function mountUnifiedShell(
         setStatus(`启动请求未发送：${error instanceof Error ? error.message : String(error)}`);
       }
     });
-    topbarEl.querySelector<HTMLButtonElement>("[data-run-selected-project-history]")?.addEventListener("click", () => {
+    rootEl.querySelector<HTMLButtonElement>("[data-run-selected-project-history]")?.addEventListener("click", () => {
       const selected = [...selectedMultiProjectOverviewIds];
       if (!selected.length) { setStatus("请至少选择一个项目来源。"); return; }
       clearMergedHistoryState();
       queryStructuredCurrentWorkOverview(undefined, chat.model.sessionId, undefined, selected, undefined, {});
       setStatus("正在逐页核实所选项目历史及来源版本…");
     });
-    topbarEl.querySelector<HTMLButtonElement>("button[data-merged-history-next]")?.addEventListener("click", button => {
+    rootEl.querySelector<HTMLButtonElement>("button[data-merged-history-next]")?.addEventListener("click", button => {
       const cursor = (button.currentTarget as HTMLButtonElement).dataset.cursor;
       const selected = mergedHistory.sources.map(source => source.project_id);
       if (!cursor || !selected.length || selected.some(id => !selectedMultiProjectOverviewIds.has(id))) {
@@ -572,7 +618,7 @@ export function mountUnifiedShell(
       queryStructuredCurrentWorkOverview(undefined, chat.model.sessionId, undefined, selected, undefined, { cursor });
       setStatus("正在核实统一历史下一页及来源版本…");
     });
-    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-requirement-history]").forEach(button => {
+    rootEl.querySelectorAll<HTMLButtonElement>("button[data-requirement-history]").forEach(button => {
       button.addEventListener("click", () => {
         const projectId = button.dataset.projectId, itemId = button.dataset.itemId, requirementId = button.dataset.requirementId;
         const sessionId = chat.model.sessionId;
@@ -583,10 +629,10 @@ export function mountUnifiedShell(
         setStatus("正在重新确认项目来源，并加载此单个要求的历史页…");
       });
     });
-    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-work-record-control]").forEach(button => {
+    rootEl.querySelectorAll<HTMLButtonElement>("button[data-work-record-control]").forEach(button => {
       button.addEventListener("click", () => applyCurrentWorkControl(button));
     });
-    topbarEl.querySelectorAll<HTMLButtonElement>("button[data-open-source-session]").forEach(button => {
+    rootEl.querySelectorAll<HTMLButtonElement>("button[data-open-source-session]").forEach(button => {
       button.addEventListener("click", () => {
         const sourceSessionId = button.dataset.openSourceSession;
         const projectId = button.dataset.openSourceProject || "";
@@ -599,7 +645,7 @@ export function mountUnifiedShell(
         }).catch(error => setStatus(`打开来源会话失败：${error instanceof Error ? error.message : String(error)}`));
       });
     });
-    const selectedProjectPanel = topbarEl.querySelector<HTMLElement>("[data-selected-project-overview]");
+    const selectedProjectPanel = rootEl.querySelector<HTMLElement>("[data-selected-project-overview]");
     if (selectedProjectPanel) {
       selectedProjectPanel.querySelectorAll<HTMLInputElement>("input[data-project-overview-id]").forEach(input => {
         input.addEventListener("change", () => {
@@ -626,17 +672,52 @@ export function mountUnifiedShell(
         setStatus("已提交多项目来源请求；确认其 Session 来源后才读取记录。");
       });
     }
-    topbarEl.querySelectorAll<HTMLDetailsElement>(".unified-current-work-requirements[data-current-work-item-id]").forEach(details => {
-      details.addEventListener("toggle", () => {
-        const itemId = details.dataset.currentWorkItemId;
+    function setCurrentWorkMode(mode: "home" | "focus" | "schedule"): void {
+      rootEl.querySelector<HTMLElement>("[data-current-work-page]")?.setAttribute("data-cw-mode", mode);
+      rootEl.querySelectorAll<HTMLElement>("[data-cw-surface]").forEach(surface => {
+        const open = surface.dataset.cwSurface === mode;
+        surface.hidden = !open;
+        surface.classList.toggle("is-open", open);
+      });
+      const home = rootEl.querySelector<HTMLElement>("[data-cw-home]");
+      if (home) home.hidden = mode !== "home";
+    }
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-open]").forEach(button => {
+      button.addEventListener("click", () => {
+        const mode = button.dataset.cwOpen;
+        if (mode === "focus" || mode === "schedule") setCurrentWorkMode(mode);
+      });
+    });
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-close]").forEach(button => {
+      button.addEventListener("click", () => setCurrentWorkMode("home"));
+    });
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-select-item]").forEach(button => {
+      button.addEventListener("click", () => {
+        const itemId = button.dataset.cwSelectItem;
         if (!itemId) return;
-        if (details.open) currentWorkOverviewExpandedRequirementItemIds.add(itemId);
-        else currentWorkOverviewExpandedRequirementItemIds.delete(itemId);
+        if (currentWorkOverviewExpandedRequirementItemIds.has(itemId)) {
+          currentWorkOverviewExpandedRequirementItemIds.delete(itemId);
+        } else {
+          currentWorkOverviewExpandedRequirementItemIds.clear();
+          currentWorkOverviewExpandedRequirementItemIds.add(itemId);
+        }
+        refreshTopbar();
+        const page = document.querySelector<HTMLElement>("#unified-current-work [data-current-work-page]");
+        if (page) {
+          page.setAttribute("data-cw-mode", "focus");
+          page.querySelectorAll<HTMLElement>("[data-cw-surface]").forEach(surface => {
+            const open = surface.dataset.cwSurface === "focus";
+            surface.hidden = !open;
+            surface.classList.toggle("is-open", open);
+          });
+          const home = page.querySelector<HTMLElement>("[data-cw-home]");
+          if (home) home.hidden = true;
+        }
       });
     });
   }
 
-  function refreshGlobalRoleModels(): void {
+function refreshGlobalRoleModels(): void {
     if (globalRoleModels.pendingRole) return;
     try {
       client.listRoleModels();
@@ -1112,6 +1193,7 @@ export function mountUnifiedShell(
           <section class="unified-settings hidden" id="unified-settings" aria-labelledby="settings-page-heading" hidden></section>
           <section class="unified-music hidden" id="unified-music" aria-labelledby="music-page-heading" hidden></section>
           <section class="unified-shell-dev hidden" id="unified-shell-dev" aria-labelledby="shell-dev-page-heading" hidden></section>
+          <section class="unified-current-work hidden" id="unified-current-work" aria-labelledby="current-work-page-heading" hidden></section>
           <section id="unified-runtime-tool" class="unified-runtime-tool" hidden></section>
           </section>
         </div>
@@ -1253,6 +1335,7 @@ export function mountUnifiedShell(
   const settingsEl = root.querySelector<HTMLElement>("#unified-settings")!;
   const musicEl = root.querySelector<HTMLElement>("#unified-music")!;
   const shellDevEl = root.querySelector<HTMLElement>("#unified-shell-dev")!;
+  const currentWorkEl = root.querySelector<HTMLElement>("#unified-current-work")!;
   let settingsRenderedSection: SettingsSection | null = null;
   let settingsRenderedName = "";
   let settingsRenderedModelState = "";
@@ -2991,12 +3074,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       focus === "projects" ||
       focus === "settings" ||
       focus === "music" ||
-      focus === "shell-dev";
+      focus === "shell-dev" ||
+      focus === "current-work";
     const chatFocus = focus === "chat" && !runtimeToolOpen;
     const toolOpen = pageToolOpen || runtimeToolOpen;
     toolRegion.hidden = !toolOpen;
     runtimeTool.hidden = !runtimeToolOpen;
-    toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", chat: "工具" } as const)[focus];
+    toolTitle.textContent = runtimeToolOpen ? "终端与服务" : ({ document: "文档", projects: "项目", settings: "设置", music: "听歌", "shell-dev": "双车道", "current-work": "当前工作", chat: "工具" } as const)[focus];
     toolCloseBtn.textContent = pageToolOpen ? "回到对话" : "关闭";
     toolCloseBtn.title = pageToolOpen ? "离开这一页，回到对话" : "关闭";
     // Full-page tools own the stage (完整页面). Chat stays mounted but is not left-split.
@@ -3016,6 +3100,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     musicEl.classList.toggle("hidden", focus !== "music");
     shellDevEl.hidden = focus !== "shell-dev";
     shellDevEl.classList.toggle("hidden", focus !== "shell-dev");
+    currentWorkEl.hidden = focus !== "current-work";
+    currentWorkEl.classList.toggle("hidden", focus !== "current-work");
+    if (focus === "current-work") currentWorkOverviewOpen = true;
+    else if (focus !== "current-work") currentWorkOverviewOpen = false;
     composerDock.hidden = pageToolOpen;
     composer.hidden = pageToolOpen;
     statusEl.hidden = pageToolOpen;
@@ -3030,6 +3118,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (focus === "shell-dev") {
       shellDevLastOpenOk = false;
       void renderShellDevStage();
+    } else if (focus === "current-work") {
+      renderCurrentWorkStage();
     } else if (focus === "settings") {
       renderSettingsStage();
       if (projectState.settingsSection === "models") refreshGlobalRoleModels();

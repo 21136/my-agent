@@ -260,12 +260,12 @@ test("current-work overview renders five multi-requirement projects and an indep
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(html) });
     await delay(150);
     const initial = await evaluate(cdp, `(() => { const pop=document.querySelector('#overview'), bounds=pop.getBoundingClientRect(); return ({ groups:document.querySelectorAll('.unified-current-work-group').length,
-      disclosures:document.querySelectorAll('details.unified-current-work-requirements').length,
-      open:document.querySelectorAll('details.unified-current-work-requirements[open]').length,
+      disclosures:document.querySelectorAll('.unified-current-work-requirements').length,
+      open:document.querySelectorAll('.unified-current-work-requirements[open]').length,
       titles:[...document.querySelectorAll('.unified-current-work-group h4')].map(x=>x.innerText),
       visibleGroups:[...document.querySelectorAll('.unified-current-work-group')].filter(x=>{ const r=x.getBoundingClientRect(); return r.top>=bounds.top && r.bottom<=bounds.bottom; }).length,
       groupSummaries:[...document.querySelectorAll('.unified-current-work-group-counts')].map(x=>x.innerText),
-      requirements:[...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('details.unified-current-work-requirements > ul > li').length) }); })()`);
+      requirements:[...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('.unified-current-work-requirements > ul > li').length) }); })()`);
     assert.equal(initial.groups, 6, "five projects plus one independent group render");
     assert.equal(initial.disclosures, 11, "each of 11 items has a disclosure");
     assert.equal(initial.open, 0, "requirements default to collapsed");
@@ -279,7 +279,7 @@ test("current-work overview renders five multi-requirement projects and an indep
     const initialShot = await cdp.send("Page.captureScreenshot", { format: "png" });
     await writeFile(screenshotPath, Buffer.from(initialShot.data, "base64"));
 
-    await evaluate(cdp, `document.querySelector('details.unified-current-work-requirements summary').click()`);
+    await evaluate(cdp, `document.querySelector('.unified-current-work-requirements summary').click()`);
     const expanded = await evaluate(cdp, `(() => [...document.querySelectorAll('.unified-current-work-group')].map(x=>x.querySelectorAll('details[open]').length))()`);
     assert.deepEqual(expanded, [1, 0, 0, 0, 0, 0], "one disclosure expands without affecting other projects");
     await evaluate(cdp, "document.querySelector(\"#overview\").scrollIntoView({block:\"start\"})");
@@ -290,7 +290,7 @@ test("current-work overview renders five multi-requirement projects and an indep
     await writeFile(independentScreenshot, Buffer.from(independentShot.data, "base64"));
 
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 360, height: 740, deviceScaleFactor: 1, mobile: true });
-    await evaluate(cdp, "document.querySelector('details.unified-current-work-requirements summary').scrollIntoView({block:'start'})");
+    await evaluate(cdp, "document.querySelector('.unified-current-work-requirements summary').scrollIntoView({block:'start'})");
     await delay(150);
     const narrow = await evaluate(cdp, `(() => { const pop=document.querySelector('#overview'), b=pop.getBoundingClientRect(), s=pop.querySelector('summary').getBoundingClientRect();
       return { viewportWidth:document.documentElement.clientWidth, scrollWidth:document.documentElement.scrollWidth,
