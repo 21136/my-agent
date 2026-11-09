@@ -9,7 +9,7 @@ import { createManagedSourceJournal, readManagedSourceJournal } from '../../laun
 
 // Fixtures are intentionally durable: never remove them, including on test failure.
 const sandboxRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-if (path.basename(sandboxRoot) !== 'sandbox' || !existsSync(path.join(sandboxRoot, 'docs/superpowers/plans/2026-10-24-managed-source-transaction.md'))) {
+if (path.basename(sandboxRoot) !== 'sandbox' || !existsSync(path.join(sandboxRoot, 'docs/SANDBOX-EVOLUTION.md'))) {
   throw new Error("Refusing fixture creation outside the verified sandbox root: " + sandboxRoot);
 }
 const fixtureBase = path.join(sandboxRoot, 'artifacts/managed-transaction-20261024/fixtures');

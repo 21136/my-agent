@@ -29,6 +29,11 @@ venv/
 .env.*
 .money-state.json
 .cursor/mcp.json
+evolve/user_profile.md
+
+# 本机品牌图（非产品构建必需）
+/project-avatar.png
+/project-avatar-circle.png
 
 # Node / Electron（desktop/.gitignore 亦有；根级兜底）
 node_modules/

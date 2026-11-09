@@ -51,7 +51,7 @@ my-agent terminal                 # 无参数 = 就用这个 cwd
 | **TM-14** | **Host 狂野（1A）**：R2 `host` 会话在 **effective root 子树内**写/跑与 R1 同档 **免 confirm**；越界仍 confirm |
 | **TM-15** | **M0 默认续接（2A）**：`terminal` 入口 **续接** `state.terminal_last_session`（同 harness）；`新会话` → 新建 id；exit 时写回 last |
 | **TM-16** | **无 segment cap（3A）**：Terminal **关闭** project segment cap / `segment_cap_pause` |
-| **TM-17** | **计划域狂野（4A）**：`docs/TASKS.md` · `docs/MAP.md` 等 **允许直写**，无 plan_partner / 采纳 |
+| **TM-17** | **计划域狂野（4A）**：`docs/MAP.md` 等 **允许直写**，无 plan_partner / 采纳（仓库级 `docs/TASKS.md` 已退役） |
 | **TM-18** | **桌面列表过滤（5A）**：Desktop `session.list` **不展示** `harness=terminal` 会话 |
 | **TM-19** | **锁第三档（6A）**：`interface.lock.ui = "terminal"`；与 `electron` / `cli` **互斥、无 takeover** |
 | **TM-20** | **只读 host 可开（7A）**：R2 只读 host 可启动；写工具在 executor **硬拒** + 可读文案 |
@@ -1000,7 +1000,7 @@ Phase 57 Terminal Ink 收尾。设计真源：docs/TERMINAL-MODE.md v0.3.2（§6
 - start-terminal.bat 应显示 Welcome v0.3.2（非 v0.2.1 legacy）
 - 验证：流式 reasoning 流畅 · thinking 结束后折叠 · auto-plan notice 5s 消失 · status bar 工具/plan 段
 - 跑 terminal-ui npm test + agent-core pytest test_terminal_*
-- 更新 docs/TASKS.md / TERMINAL-MODE §9
+- 更新本文件 §9 与相关专题文档（勿写已退役的仓库级 `docs/TASKS.md`）
 - 不要 git commit（除非用户明确要求）
 - 做完停，等我「继续」
 

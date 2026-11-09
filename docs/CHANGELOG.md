@@ -893,7 +893,7 @@
 - `docs/reviews/2026-07-09-claude-review.md`
 - `docs/reviews/2026-07-09-gpt-5-5-review.md`
 
-整合摘要：`docs/REVIEW-SUMMARY.md`
+整合摘要：见上列 `docs/reviews/` 条目（`REVIEW-SUMMARY.md` 已退役）。
 
 ### PROJECT.md 主要变更
 

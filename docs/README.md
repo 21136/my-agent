@@ -18,6 +18,7 @@
 - 多项目 worker（实现存在，产品级端到端验收未完成）：[MULTI-PROJECT-ORCHESTRATION](./MULTI-PROJECT-ORCHESTRATION.md)（单主会话 · 按项目隔离派工）
 - 生命周期/长任务：[执行可观测](./EXEC-OBSERVABILITY.md) · [执行可靠性](./EXEC-RELIABILITY.md) · `agent-core/execution_lifecycle.py` · `agent-core/goal_runtime.py`
 - 稳定/实验双车道：[SANDBOX-EVOLUTION](./SANDBOX-EVOLUTION.md) · [SANDBOX-STORAGE](./SANDBOX-STORAGE.md)
+- 历史实施计划（`docs/superpowers/plans/`）已从主线移除，追溯见 Git 历史；现行说明以本页与 `docs/MANAGED-*.md` 等专题为准。
 - Managed 发布：[MANAGED-POSTMERGE-RELEASE](./MANAGED-POSTMERGE-RELEASE.md) · [MANAGED-SELECTED-MERGE](./MANAGED-SELECTED-MERGE.md) · [SELF-HOSTING-SECURITY](./SELF-HOSTING-SECURITY.md)
 - 其他模块从[源码地图](./MAP.md)进入。
 
