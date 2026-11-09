@@ -155,6 +155,7 @@ export type WorkCardResultViewEvent = { type: "work-card.result.view.done"; stat
 
 export type WorkRecordControlAction = "set_dependencies" | "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue" | "cancel_execution" | "revise_requirement" | "set_priority" | "copy_requirement_to_new_item" | "inspect_unknown_claim";
 export type WorkRecordControlDoneEvent = { type: "work-record.control.done"; session_id: string; request_id: string; item_id: string; project_id?: string; requirement_id?: string; action: WorkRecordControlAction; status: "applied" | "rejected"; message: string };
+export type WorkRecordScheduleDispatchDoneEvent = { type: "work-records.schedule.dispatch.done"; session_id: string; request_id: string; status: "applied" | "rejected"; message: string; tool_ok?: boolean; workers?: unknown[] };
 export type OverviewResultState = "no_records" | "visible" | "collapsed" | "cancelled" | "error" | "expired";
 export type OverviewReadStatus = "viewed" | "unread" | "unknown";
 export type WorkRecordsOverviewPageFacts = { kind: "items" | "requirements"; group_kind: "project" | "independent" | "linked_source_snapshot"; group_id: string; item_id: string | null; offset: number; total: number; has_more: boolean; next_cursor: string | null };
@@ -1127,6 +1128,7 @@ export class AgentWsClient {
   private receiptBacklogSignature = "";
   private overviewPending = new Map<string, string>();
   private workRecordControlPending = new Map<string, { sessionId: string; itemId: string; projectId: string; requirementId: string; action: WorkRecordControlAction }>();
+  private scheduleDispatchPending = new Map<string, { sessionId: string }>();
   private destroyed = false;
   private lane: SidecarLane = "stable";
   private legacyLaneQueriesAllowed = false;
@@ -1221,6 +1223,7 @@ export class AgentWsClient {
     this.cardProjectId = null;
     this.overviewPending.clear();
     this.workRecordControlPending.clear();
+    this.scheduleDispatchPending.clear();
     const url = `ws://${this.host}:${this.port}`;
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -1322,6 +1325,8 @@ export class AgentWsClient {
               (!this.currentConversationId || data.session_id !== this.currentConversationId)) return;
           if (data.type === "work-record.control.done") {
             if (!this.acceptWorkRecordControlDone(data)) return;
+          } else if (data.type === "work-records.schedule.dispatch.done") {
+            if (!this.acceptScheduleDispatchDone(data)) return;
           } else if (data.type === "work-records.overview.result") {
             if (!this.acceptWorkRecordsOverviewResult(data)) return;
           } else if (data.type === "work-card.present") {
@@ -1356,6 +1361,7 @@ export class AgentWsClient {
       this.cardProjectId = null;
       this.overviewPending.clear();
     this.workRecordControlPending.clear();
+    this.scheduleDispatchPending.clear();
       settle(new Error("WebSocket closed before connection opened"));
       if (this.destroyed) return;
       this.updateEvolutionConversationId(null);
@@ -1507,6 +1513,48 @@ export class AgentWsClient {
       throw error;
     }
     return requestId;
+  }
+
+  dispatchScheduleWorkers(options: {
+    projectIds: string[];
+    workers: Array<{
+      project_id: string; item_id: string; requirement_id: string; priority: number;
+      task: string; read_targets: string[]; write_targets: string[];
+    }>;
+  }): string {
+    if (!cardObject(options) || !Array.isArray(options.projectIds) || !options.projectIds.length
+        || options.projectIds.length > 6 || !Array.isArray(options.workers)
+        || !options.workers.length || options.workers.length > 2 || !this.currentConversationId) {
+      throw new Error("invalid schedule dispatch request");
+    }
+    const sessionId = this.currentConversationId;
+    const requestId = crypto.randomUUID();
+    if (this.scheduleDispatchPending.has(requestId)) throw new Error("invalid schedule dispatch identity");
+    this.scheduleDispatchPending.set(requestId, { sessionId });
+    try {
+      this.send({
+        type: "work-records.schedule.dispatch",
+        session_id: sessionId,
+        request_id: requestId,
+        project_ids: [...new Set(options.projectIds)],
+        workers: options.workers,
+      });
+    } catch (error) {
+      this.scheduleDispatchPending.delete(requestId);
+      throw error;
+    }
+    return requestId;
+  }
+
+  private acceptScheduleDispatchDone(event: unknown): event is WorkRecordScheduleDispatchDoneEvent {
+    if (!cardObject(event) || event.type !== "work-records.schedule.dispatch.done"
+        || typeof event.request_id !== "string" || typeof event.session_id !== "string"
+        || event.session_id !== this.currentConversationId || typeof event.message !== "string"
+        || !["applied", "rejected"].includes(String(event.status))) return false;
+    const pending = this.scheduleDispatchPending.get(event.request_id);
+    if (!pending || pending.sessionId !== event.session_id) return false;
+    this.scheduleDispatchPending.delete(event.request_id);
+    return true;
   }
 
   private acceptWorkRecordControlDone(event: unknown): event is WorkRecordControlDoneEvent {

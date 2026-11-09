@@ -89,7 +89,7 @@ import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
 import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
-import { buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "./schedule-launch";
+import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "./schedule-launch";
 import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
@@ -589,14 +589,12 @@ export function mountUnifiedShell(
       const read = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-read]");
       const write = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-write]");
       try {
-        const message = buildScheduleLaunchMessage(currentWorkOverviewResult,
-          Number(scheduleSelect?.value), task?.value ?? "", read?.value ?? "", write?.value ?? "");
-        const dispatch = client.sendMessage(message, undefined, { turnMode: "agent" });
-        chat.pushUserMessage(message, { requestId: dispatch.requestId, sessionId: dispatch.sessionId, receiptEligible: true });
-        resetUserScrollPin();
-        topbarState.intentLabel = "";
-        setStatus("启动请求已作为真实用户消息发送；等待服务端检查及必要确认。模型未调用工具时不会启动任务。");
-        syncComposerSendEnabled();
+        const payload = buildScheduleDispatchWorkers(
+          currentWorkOverviewResult, Number(scheduleSelect?.value),
+          task?.value ?? "", read?.value ?? "", write?.value ?? "",
+        );
+        client.dispatchScheduleWorkers(payload);
+        setStatus("调度启动请求已提交；等待服务端核对来源、并发上限及逐项确认。");
       } catch (error) {
         setStatus(`启动请求未发送：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -6904,6 +6902,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           refreshTopbar();
           refreshServices();
           refreshProjectThreads();
+        }
+        break;
+
+      case "work-records.schedule.dispatch.done":
+        if (event.session_id !== chat.model.sessionId) break;
+        setStatus(event.message);
+        if (event.status === "applied" && currentWorkOverviewResult?.selected_project_ids?.length) {
+          queryStructuredCurrentWorkOverview(undefined, event.session_id, undefined,
+            currentWorkOverviewResult.selected_project_ids);
+        } else if (event.status === "applied") {
+          scheduleCurrentWorkOverviewRefresh();
         }
         break;
 
