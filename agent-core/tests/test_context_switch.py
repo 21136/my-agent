@@ -22,7 +22,7 @@ from context_switch import (
 from project_cli import parse_project_command, run_project_command
 from project_mode import create_project, normalize_project_id, project_dir
 from project_switch import read_project_sessions
-from session import create_new
+from session import SessionError, create_new
 from tools.executor import ExecutorSession, ToolExecutor
 from tools.registry import ToolRegistry
 from tools.schema import ToolErrorCode
@@ -220,6 +220,92 @@ class ContextSwitchTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.error.code if result.error else None, ToolErrorCode.VALIDATION_ERROR)
         self.assertIn("propose_context_switch", result.error.message if result.error else "")
+
+    def _mid_turn_create_executor(self) -> ToolExecutor:
+        registry = ToolRegistry.load(self.paths)
+        return ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(self.session.session_dir),
+            confirm_fn=lambda _p, _a: "n",
+        )
+
+    def _append_pending_project_create_call(self, *, call_id: str, project_id: str) -> None:
+        self.session.append_message({"role": "user", "content": "建个测试项目"})
+        self.session.append_message(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "propose_context_switch",
+                            "arguments": (
+                                f'{{"action":"project.create","target":"{project_id}","reason":"mid turn"}}'
+                            ),
+                        },
+                    }
+                ],
+            }
+        )
+
+    def test_in_place_project_create_reloads_break_mid_turn_append_without_bound(self) -> None:
+        """Regression: Session.load repair during propose_context_switch invalidates live session."""
+        call_id = "call-project-create-stale"
+        self._append_pending_project_create_call(call_id=call_id, project_id=self.pid_b)
+        executor = self._mid_turn_create_executor()
+        result = executor.run(
+            "propose_context_switch",
+            {"action": "project.create", "target": self.pid_b, "reason": "mid turn"},
+        )
+        self.assertTrue(result.ok, result.error.message if result.error else "")
+        with self.assertRaises(SessionError):
+            self.session.append_message(
+                {"role": "tool", "tool_call_id": call_id, "content": '{"ok":true}'}
+            )
+
+    def test_in_place_project_create_allows_mid_turn_append_with_bound_session(self) -> None:
+        """Agent-bound session must survive in-place project.create within the same tool loop."""
+        fresh = create_new(
+            self.paths,
+            conversation_id=f"_test_ctx_bound_{secrets.token_hex(4)}",
+        )
+        call_id = "call-project-create-bound"
+        fresh.append_message({"role": "user", "content": "建个测试项目"})
+        fresh.append_message(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "propose_context_switch",
+                            "arguments": (
+                                f'{{"action":"project.create","target":"{self.pid_a}","reason":"mid turn"}}'
+                            ),
+                        },
+                    }
+                ],
+            }
+        )
+        registry = ToolRegistry.load(self.paths)
+        executor = ToolExecutor(
+            registry=registry,
+            session=ExecutorSession.load(fresh.session_dir),
+            confirm_fn=lambda _p, _a: "n",
+        )
+        executor.bound_session = fresh
+        result = executor.run(
+            "propose_context_switch",
+            {"action": "project.create", "target": self.pid_a, "reason": "mid turn"},
+        )
+        self.assertTrue(result.ok, result.error.message if result.error else "")
+        fresh.append_message(
+            {"role": "tool", "tool_call_id": call_id, "content": '{"ok":true}'}
+        )
 
     def test_propose_project_create_auto_applies_without_switch_request(self) -> None:
         """project.create on main home: no 换线 overlay, same session."""

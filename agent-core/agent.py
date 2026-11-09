@@ -3842,6 +3842,7 @@ class Agent:
             enable_work_record_recording=enable_work_record_recording,
             work_record_recording_controller=work_record_recording_controller,
         )
+        executor.bound_session = session
         agent.executor.on_registry_reloaded = agent._sync_allowed_evolved
         return agent
 
