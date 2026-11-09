@@ -168,19 +168,6 @@ try {
 }
 assertEvolutionTestProfileLoaded(evolutionTestLaunchIntent, evolutionTestHostContext, evolutionTestHostContextError);
 if (fixedHostContext && evolutionTestHostContext) throw Error("fixed and rehearsal Host identities cannot be combined");
-const ordinaryChatH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
-const workbenchCrashReopenH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "workbench-crash-reopen-recovery-v1";
-const sealedChatH1Fixture = Boolean(ordinaryChatH1 || workbenchCrashReopenH1);
-const ordinaryChatH1Isolation = ordinaryChatH1 && evolutionTestHostContext ? assertOrdinaryChatH1Isolation(evolutionTestHostContext) : null;
-const workbenchCrashReopenH1Isolation = workbenchCrashReopenH1 && evolutionTestHostContext ? assertWorkbenchCrashReopenH1Isolation(evolutionTestHostContext) : null;
-const DATA_ROOT = fixedHostContext?.dataRoot ?? path.join(AGENT_ROOT, "data");
-const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostContext.binding.state_root, {
-  installation_id:fixedHostContext.binding.installation_id, release_id:fixedHostContext.binding.release.release_id, binding_digest:fixedHostContext.bindingDigest,
-}) : null;
-const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
-  stableRoot:fixedHostContext.binding.stable_source_root, sandboxRoot:fixedHostContext.binding.sandbox_source_root,
-}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable,syncSandboxWithStable};
-let adoptionInProgress = false;
 
 function samePath(left: string, right: string): boolean { const a = path.resolve(left), b = path.resolve(right); return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b; }
 const H1_CONVERSATION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
@@ -252,6 +239,21 @@ function assertWorkbenchCrashReopenH1Isolation(context: EvolutionTestHostContext
   if (process.env.PYTHONNOUSERSITE !== "1" || process.env.PYTHONDONTWRITEBYTECODE !== "1") throw Error("workbench crash/reopen H1 Python isolation flags are missing");
   return { temp: expected.TEMP, userData: expected.MY_AGENT_ELECTRON_USER_DATA, sessionData: expected.MY_AGENT_ELECTRON_SESSION_DATA };
 }
+
+const ordinaryChatH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "ordinary-chat-h1-v1";
+const workbenchCrashReopenH1 = evolutionTestHostContext?.profile.chat_fixture_profile === "workbench-crash-reopen-recovery-v1";
+const sealedChatH1Fixture = Boolean(ordinaryChatH1 || workbenchCrashReopenH1);
+const ordinaryChatH1Isolation = ordinaryChatH1 && evolutionTestHostContext ? assertOrdinaryChatH1Isolation(evolutionTestHostContext) : null;
+const workbenchCrashReopenH1Isolation = workbenchCrashReopenH1 && evolutionTestHostContext ? assertWorkbenchCrashReopenH1Isolation(evolutionTestHostContext) : null;
+const DATA_ROOT = fixedHostContext?.dataRoot ?? path.join(AGENT_ROOT, "data");
+const fixedAdoptionJournal = fixedHostContext ? createAdoptionJournal(fixedHostContext.binding.state_root, {
+  installation_id:fixedHostContext.binding.installation_id, release_id:fixedHostContext.binding.release.release_id, binding_digest:fixedHostContext.bindingDigest,
+}) : null;
+const sandboxAdoptionService = fixedHostContext ? createSandboxAdopter({
+  stableRoot:fixedHostContext.binding.stable_source_root, sandboxRoot:fixedHostContext.binding.sandbox_source_root,
+}, {observer:fixedAdoptionJournal!,revalidate:fixedHostContext.revalidate}) : {getStatus:getSandboxAdoptStatus,prepareAndMerge:prepareAndMergeSandboxIntoStable,syncSandboxWithStable};
+let adoptionInProgress = false;
+
 const controlledH1 = evolutionTestHostContext?.profile.candidate_fixture_profile === "t4-recovery-node-v1" || sealedChatH1Fixture;
 const h1Control = sealedChatH1Fixture
   ? { bootstrap: "ordinary-chat-h1.control.bootstrap", shutdown: "ordinary-chat-h1.control.shutdown", ready: "ordinary-chat-h1-host-ready" }
