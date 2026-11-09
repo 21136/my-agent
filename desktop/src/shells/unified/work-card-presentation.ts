@@ -416,6 +416,99 @@ function statusSummary(records: unknown[], getStatus: (record: Record<string, an
   return [...counts].map(([label, count]) => `${label} ${count}`).join(" · ") || "状态未记录";
 }
 
+const PREVIEW_TEXT_CHARS = 56;
+const PREVIEW_RESULT_CHARS = 88;
+
+function previewTextSnippet(value: unknown, max = PREVIEW_TEXT_CHARS): string {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "（无要求文本）";
+  const chars = [...trimmed];
+  return chars.length > max ? `${chars.slice(0, max).join("")}…` : trimmed;
+}
+
+function plainTextFromHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function resultPreviewHeadline(requirement: Record<string, any>, snapshot: Record<string, any>): string {
+  const result = requirement.latest_result;
+  if (!object(result)) return "暂无结果记录";
+  const lifecycle = lifecycleSummary(result.summary, result, snapshot);
+  if (lifecycle.kind === "valid" && lifecycle.html) {
+    const plain = plainTextFromHtml(lifecycle.html);
+    return plain.length > PREVIEW_RESULT_CHARS ? `${plain.slice(0, PREVIEW_RESULT_CHARS)}…` : plain;
+  }
+  if (lifecycle.kind === "invalid") return "机器回执未通过校验";
+  const summary = typeof result.summary === "string" ? result.summary.trim() : "";
+  if (summary && !summary.includes(LIFECYCLE_KIND)) {
+    return summary.length > PREVIEW_RESULT_CHARS ? `${summary.slice(0, PREVIEW_RESULT_CHARS)}…` : summary;
+  }
+  if (result.verification_status === "passed") return "验证已通过";
+  if (result.verification_status === "failed") return "验证未通过";
+  if (result.status && result.status !== "unknown") return statusLabel(result.status);
+  return "结果状态未知";
+}
+
+function renderCollapsedViewedState(viewedAt: unknown): string {
+  if (viewedAt === undefined) return "";
+  if (viewedAt === null) return '<p class="work-card-preview-meta">卡片查看状态未确认</p>';
+  if (typeof viewedAt === "string" && viewedAt.trim()) {
+    const at = escapeWorkCardHtml(viewedAt.trim());
+    return `<p class="work-card-preview-meta">已查看详情 · <time datetime="${at}">${at}</time> · 不代表认可或验收</p>`;
+  }
+  return "";
+}
+
+function renderCollapsedRequirementHighlights(
+  rankedRows: RequirementRow[], items: Record<string, any>[], changeFocus: ChangeFocus | null, limit = 2,
+): string {
+  if (!rankedRows.length) return "";
+  const multiItem = items.length > 1;
+  const lines = rankedRows.slice(0, limit).map(row => {
+    const focus = changeFocusMatches(row, changeFocus) ? " · 本次更新" : "";
+    const itemPrefix = multiItem && row.itemTitle ? `${row.itemTitle} · ` : "";
+    const request = previewTextSnippet(row.requirement.text);
+    const headline = resultPreviewHeadline(row.requirement, row.snapshot);
+    return `<li><span class="work-card-preview-highlight-text">${escapeWorkCardHtml(itemPrefix + request)}</span> · ${escapeWorkCardHtml(headline)} · ${escapeWorkCardHtml(statusLabel(row.requirement.status))}${focus}</li>`;
+  }).join("");
+  return `<ul class="work-card-preview-highlights" aria-label="要求与结果摘要">${lines}</ul>`;
+}
+
+function renderOrdinarySnapshotCollapsedPreview(options: {
+  rows: RequirementRow[];
+  rankedRows: RequirementRow[];
+  items: Record<string, any>[];
+  isIndependent: boolean;
+  capturedAt: string;
+  changeFocus: ChangeFocus | null;
+  viewedAt: unknown;
+}): string {
+  const reqCount = options.rows.length;
+  const requirementRollup = reqCount
+    ? `${reqCount} 项要求 · ${statusSummary(options.rows, row => row.requirement.status)}`
+    : "未保存要求";
+  const kindRollup = options.isIndependent ? "独立事项" : "项目工作记录";
+  const itemRollup = options.items.length > 1
+    ? ` · ${options.items.length} 个事项 · ${statusSummary(options.items, item => item.status)}`
+    : options.items.length === 1
+      ? ` · 事项 ${statusLabel(options.items[0].status)}`
+      : "";
+  const captured = options.capturedAt && options.capturedAt !== "时间未提供"
+    ? `<p class="work-card-preview-meta">快照时间：<time datetime="${options.capturedAt}">${options.capturedAt}</time></p>`
+    : "";
+  return [
+    `<p class="work-card-preview-meta">${kindRollup} · ${requirementRollup}${itemRollup}</p>`,
+    captured,
+    renderCollapsedViewedState(options.viewedAt),
+    renderCollapsedRequirementHighlights(options.rankedRows, options.items, options.changeFocus),
+  ].join("");
+}
+
+function linkedWorkerHostSummary(facts: Record<string, any>[]): string {
+  if (!facts.length) return "无工作器回执";
+  return `${facts.length} 条工作器回执 · ${statusSummary(facts, fact => fact.host_lifecycle?.status ?? "unknown")}`;
+}
+
 interface RequirementRow {
   itemId: string;
   itemTitle: string;
@@ -710,7 +803,10 @@ export function renderWorkCardSnapshot(card: unknown, presentationIdentity?: { s
   const viewedState = renderCardViewedState(card);
   const temporalGuard = '<p class="work-card-temporal-guard" role="note">以下为保存时的历史记录，不会自动刷新当前状态。</p>';
   const requirementsLabel = rows.length ? `查看 ${rows.length} 项要求与结果` : "查看工作记录";
-  const preview = `<p class="work-card-preview-meta">${isIndependent ? "独立事项" : "项目工作记录"}</p>`;
+  const preview = renderOrdinarySnapshotCollapsedPreview({
+    rows, rankedRows: ranked, items: items.filter(object), isIndependent, capturedAt,
+    changeFocus, viewedAt: card.viewed_at,
+  });
   const itemStates = items.filter(object).map((item: Record<string, any>) => `<li class="work-card-item-state"><strong>${escapeWorkCardHtml(item.title ?? "事项标题未提供")}</strong><span>${escapeWorkCardHtml(statusLabel(item.status))}</span></li>`).join("");
   const itemTechnical = `<details class="work-card-technical-detail"><summary>事项状态与内部字段</summary><ul class="work-card-item-states">${itemStates}</ul><p>项目：${escapeWorkCardHtml(snapshot.project_id ?? "未提供")}</p>${identity}${sourceSummary}</details>`;
   const completenessNote = projectScoped && snapshot.history_complete === false ? '<p class="work-card-stale-note">部分历史结果未纳入；此卡仅展示已保存内容。</p>' : "";
@@ -743,8 +839,12 @@ function renderLinkedProjectSessionCopySnapshot(
   const viewLabel = requirements.length ? `查看 ${requirements.length} 项要求与结果` : "查看来源记录";
   const capturedAt = escapeWorkCardHtml(snapshot.captured_at);
   const sourceRevision = escapeWorkCardHtml(source.source_revision);
+  const requirementRollup = requirements.length
+    ? `${requirements.length} 项要求 · ${statusSummary(requirements.map(entry => entry.requirement), requirement => requirement.status)}`
+    : "未保存要求";
+  const preview = `<p class="work-card-preview-meta">${requirementRollup}</p><p class="work-card-preview-state"><strong>结果：</strong>${escapeWorkCardHtml(resultNote)}</p><p class="work-card-preview-meta">${escapeWorkCardHtml(linkedWorkerHostSummary(source.worker_facts as Record<string, any>[]))}</p><p class="work-card-preview-meta">确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p>`;
   const detailBody = `<section class="work-card-items"><p class="work-card-temporal-guard" role="note">以下内容来自指定来源会话的历史副本，不代表项目全貌或当前状态。</p><ol class="work-card-requirements">${rows || '<li class="work-card-empty">此副本没有保存要求。</li>'}</ol><p class="work-card-result-summary">${resultNote}</p><details class="work-card-technical-detail"><summary>技术与来源信息</summary><p>来源项目：${escapeWorkCardHtml(source.project_id)} · 来源 Session：${escapeWorkCardHtml(source.source_session_id)} · 来源修订：${sourceRevision}</p><p class="work-card-captured">确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p><p>来源范围：${escapeWorkCardHtml(source.scope)} · 映射：${escapeWorkCardHtml(source.mapping_claim)}</p><ol>${technicalRows}</ol><h4>工作器回执（技术字段）</h4><ol>${workerTechnical}</ol><p>工作器回执仅用于说明执行边界；不构成操作结果或验收证明。查看来源当前状态需重新授权。</p></details></section>`;
-  return `<article class="work-card-snapshot is-linked-project-session-copy" data-work-card-snapshot data-snapshot-kind="linked_project_session_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">来自指定会话 · 不代表项目全貌</p><h3>项目工作记录</h3><p class="work-card-preview-meta">${requirements.length} 项要求</p></header><details data-work-card-snapshot-detail><summary>${viewLabel}</summary>${detailBody}</details></article>`;
+  return `<article class="work-card-snapshot is-linked-project-session-copy" data-work-card-snapshot data-snapshot-kind="linked_project_session_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">来自指定会话 · 不代表项目全貌</p><h3>项目工作记录</h3>${preview}</header><details data-work-card-snapshot-detail><summary>${viewLabel}</summary>${detailBody}</details></article>`;
 }
 
 function renderLinkedItemCopySnapshot(
@@ -753,8 +853,12 @@ function renderLinkedItemCopySnapshot(
 ): string {
   const identityAttrs = presentationIdentity ? ` data-session-id="${escapeWorkCardHtml(presentationIdentity.sessionId)}" data-presentation-id="${escapeWorkCardHtml(presentationIdentity.presentationId)}" data-card-id="${escapeWorkCardHtml(presentationIdentity.cardId)}"` : "";
   const capturedAt = escapeWorkCardHtml(snapshot.captured_at);
-  const detailBody = `<section class="work-card-items"><p class="work-card-temporal-guard" role="note">以下是单项要求的历史副本，不代表项目全貌或当前状态。</p><ol class="work-card-requirements"><li class="work-card-requirement"><div class="work-card-requirement-heading"><span class="work-card-item-title">${escapeWorkCardHtml(snapshot.item_title)}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(snapshot.requirement_text)}</p><p class="work-card-result-summary">${snapshot.host_lifecycle.status === "blocked" ? "执行前遇到阻碍；没有确认操作结果。" : "此副本没有可确认的操作结果或验证结论。"}</p></li></ol><details class="work-card-technical-detail"><summary>技术与来源信息</summary><p>来源项目：${escapeWorkCardHtml(snapshot.project_id)} · 来源 Session：${escapeWorkCardHtml(snapshot.source_session_id)}</p><p>事项：${escapeWorkCardHtml(snapshot.item_id)} · 要求：${escapeWorkCardHtml(snapshot.requirement_id)}</p><p class="work-card-captured">副本确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p><p>捕获时事项状态：${escapeWorkCardHtml(statusLabel(snapshot.item_status_at_capture))}</p><p>捕获时要求状态：${escapeWorkCardHtml(statusLabel(snapshot.requirement_status_at_capture))}</p><p>工作器主机回合：${escapeWorkCardHtml(snapshot.host_lifecycle.status)} · 结束原因：${escapeWorkCardHtml(snapshot.host_lifecycle.finish_reason)}</p><p>仅保留获准复制的字段；查询来源当前状态需重新授权。</p></details></section>`;
-  return `<article class="work-card-snapshot is-linked-item-copy" data-work-card-snapshot data-snapshot-kind="linked_item_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">一项要求 · 不是项目全貌</p><h3>${escapeWorkCardHtml(snapshot.item_title)}</h3></header><details data-work-card-snapshot-detail><summary>查看要求与结果</summary>${detailBody}</details></article>`;
+  const collapsedResult = snapshot.host_lifecycle.status === "blocked"
+    ? "执行前遇到阻碍；没有确认操作结果。"
+    : "此副本没有可确认的操作结果或验证结论。";
+  const preview = `<p class="work-card-preview-meta">${escapeWorkCardHtml(previewTextSnippet(snapshot.requirement_text))}</p><p class="work-card-preview-state"><strong>结果：</strong>${escapeWorkCardHtml(collapsedResult)}</p><p class="work-card-preview-meta">捕获时 · 事项 ${escapeWorkCardHtml(statusLabel(snapshot.item_status_at_capture))} · 要求 ${escapeWorkCardHtml(statusLabel(snapshot.requirement_status_at_capture))}</p><p class="work-card-preview-meta">副本时间：<time datetime="${capturedAt}">${capturedAt}</time></p>`;
+  const detailBody = `<section class="work-card-items"><p class="work-card-temporal-guard" role="note">以下是单项要求的历史副本，不代表项目全貌或当前状态。</p><ol class="work-card-requirements"><li class="work-card-requirement"><div class="work-card-requirement-heading"><span class="work-card-item-title">${escapeWorkCardHtml(snapshot.item_title)}</span></div><p class="work-card-requirement-text">${escapeWorkCardHtml(snapshot.requirement_text)}</p><p class="work-card-result-summary">${collapsedResult}</p></li></ol><details class="work-card-technical-detail"><summary>技术与来源信息</summary><p>来源项目：${escapeWorkCardHtml(snapshot.project_id)} · 来源 Session：${escapeWorkCardHtml(snapshot.source_session_id)}</p><p>事项：${escapeWorkCardHtml(snapshot.item_id)} · 要求：${escapeWorkCardHtml(snapshot.requirement_id)}</p><p class="work-card-captured">副本确认时间：<time datetime="${capturedAt}">${capturedAt}</time></p><p>捕获时事项状态：${escapeWorkCardHtml(statusLabel(snapshot.item_status_at_capture))}</p><p>捕获时要求状态：${escapeWorkCardHtml(statusLabel(snapshot.requirement_status_at_capture))}</p><p>工作器主机回合：${escapeWorkCardHtml(snapshot.host_lifecycle.status)} · 结束原因：${escapeWorkCardHtml(snapshot.host_lifecycle.finish_reason)}</p><p>仅保留获准复制的字段；查询来源当前状态需重新授权。</p></details></section>`;
+  return `<article class="work-card-snapshot is-linked-item-copy" data-work-card-snapshot data-snapshot-kind="linked_item_copy"${identityAttrs}><header class="work-card-header"><p class="work-card-snapshot-label">历史副本 · 非实时</p><p class="work-card-scope-label">一项要求 · 不是项目全貌</p><h3>${escapeWorkCardHtml(snapshot.item_title)}</h3>${preview}</header><details data-work-card-snapshot-detail><summary>查看要求与结果</summary>${detailBody}</details></article>`;
 }
 
 export function renderWorkCardEntry(entry: WorkCardPresentationEntry): string {
