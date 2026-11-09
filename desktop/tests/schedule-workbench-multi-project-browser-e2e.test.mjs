@@ -262,6 +262,8 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
 
     const schedule = await waitForVisibleScheduleLaunch(work, page);
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);
+    await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
+    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await schedule.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
       && e.status === "applied"));

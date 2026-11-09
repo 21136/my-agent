@@ -208,8 +208,36 @@ test("ordinary confirm requests retain existing overlay, response, and done beha
   assert.equal(chat.model.blocks.some((item) => item.kind === "confirm"), false);
   assert.equal(chat.submitConfirm("ordinary-1", "y"), true);
   assert.equal(chat.model.turnActive, true);
+  assert.equal(chat.isWorking(), true);
   chat.handleEvent({ type: "confirm.done", request_id: "ordinary-1", choice: "y" });
   assert.equal(chat.model.confirmPending, false);
+  assert.equal(chat.model.turnActive, false);
+  assert.equal(chat.isWorking(), false);
+});
+
+test("ordinary confirm.done clears submit-time turn activity when execution stays idle", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "overview-gate",
+    request_id: "overview-confirm",
+    preview: "确认只读读取多项目概况",
+    allow_approve_all: false,
+  });
+  assert.equal(chat.submitConfirm("overview-confirm", "y"), true);
+  assert.equal(chat.model.confirmSubmitting, true);
+  assert.equal(chat.isWorking(), true);
+  chat.handleEvent({
+    type: "confirm.done",
+    session_id: "session-a",
+    request_id: "overview-confirm",
+    choice: "y",
+  });
+  assert.equal(chat.model.confirmSubmitting, false);
+  assert.equal(chat.model.confirmOverlay, null);
+  assert.equal(chat.model.turnActive, false);
+  assert.equal(chat.isWorking(), false);
 });
 test("same-session ordinary confirmation with a different run id is rejected as stale", () => {
   const chat = session();
