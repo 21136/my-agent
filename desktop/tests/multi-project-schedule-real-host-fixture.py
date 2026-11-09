@@ -61,7 +61,7 @@ async def main() -> None:
     if os.name != "nt":
         import multi_project_work_record_bindings as mpb
         mpb._publish_parent_by_handle = _posix_test_publish_parent_by_handle
-    with temporary_agent_paths(copy_tool_dirs=()) as paths:
+    with temporary_agent_paths(copy_tool_dirs=("common/interactive_terminal", "common/run_service")) as paths:
         for project_id in PROJECTS:
             create_project(paths, project_id, project_template="light")
             source = create_new(paths, conversation_id=SOURCE_SESSIONS[project_id])
@@ -96,7 +96,6 @@ async def main() -> None:
             return repl
 
         monkeypatch.setattr(server, "_build_repl", build_repl)
-        monkeypatch.setattr(server.WsBridge, "emit_session_state", lambda *_a: None)
         monkeypatch.setattr(server, "emit_corruption_notices", lambda *_a: None)
         monkeypatch.setattr(server, "_emit_pending_work_card_references", lambda *_a: None)
 
