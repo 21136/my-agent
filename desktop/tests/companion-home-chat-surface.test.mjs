@@ -101,6 +101,38 @@ test("orchestration prose is stripped from assistant bubbles but summaries remai
   assert.match(assistant.text, /三个项目页面已写好/);
 });
 
+test("confirm.done terminal choice clears composer pending strip", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "companion-home",
+    run_id: "run-done",
+    request_id: "trash-done",
+    preview: "软删除到 _trash workspace 项目\nids=alpha",
+    allow_approve_all: false,
+  });
+  assert.equal(composerShouldShowOrdinaryConfirmActions(chat.model, {
+    chatRendersOrdinaryConfirm: false,
+    overlayRendersOrdinaryConfirm: false,
+    companionComposerPrimary: true,
+  }), true);
+  chat.handleEvent({
+    type: "confirm.done",
+    session_id: "companion-home",
+    request_id: "trash-done",
+    choice: "n",
+  });
+  assert.equal(chat.model.confirmOverlay, null);
+  assert.equal(
+    composerShouldShowOrdinaryConfirmActions(chat.model, {
+      chatRendersOrdinaryConfirm: false,
+      overlayRendersOrdinaryConfirm: false,
+      companionComposerPrimary: true,
+    }),
+    false,
+  );
+});
+
 test("companion home defers project-scoped work-card.present from chat blocks", () => {
   const card = {
     card_id: "wc-" + "a".repeat(64),

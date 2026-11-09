@@ -224,7 +224,7 @@ test("docs requests and error status stay useful without a project", () => {
   assert.match(userFacingErrorStatus("disk full"), /^出错了：/);
   assert.match(
     userFacingErrorStatus("session binding is busy; retry the session switch"),
-    /聊天区完成确认/,
+    /输入区下方的确认条/,
   );
 });
 

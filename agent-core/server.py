@@ -1568,9 +1568,13 @@ class WsBridge:
         with self._batch_confirm_lock:
             if self._batch_confirm_pending is not None:
                 try:
+                    from companion_home_surface import confirm_in_flight_notice
+
+                    provider = self._session_provider
+                    session = provider() if callable(provider) else None
                     self.emit({
                         "type": "notice",
-                        "text": "另有一项授权确认正在进行；请先在当前小魔王空间聊天区完成现有确认卡。",
+                        "text": confirm_in_flight_notice(session),
                     })
                 except Exception:
                     pass
@@ -2150,10 +2154,14 @@ class WsBridge:
             return False
         if request_id != pending:
             # C1 ingress: reject stale cards before they enter the queue.
+            from companion_home_surface import stale_confirm_ingress_notice
+
+            provider = self._session_provider
+            session = provider() if callable(provider) else None
             self.emit(
                 {
                     "type": "notice",
-                    "text": "忽略过期确认（请点最新一张工具确认卡）",
+                    "text": stale_confirm_ingress_notice(session),
                 }
             )
             self.emit(
@@ -3556,11 +3564,9 @@ def _ws_message_changes_session_binding(
     return False
 
 
-_SESSION_BINDING_BUSY_QUERY = (
-    "当前主会话仍在编排或确认中，暂时无法切换项目查询；请稍后在聊天区完成确认或等待本轮结束。"
-)
-_SESSION_BINDING_BUSY_SWITCH = (
-    "当前主会话仍在编排或确认中，暂时无法换线；请在聊天区完成待确认项，或等待本轮结束后再切换。"
+from companion_home_surface import (
+    SESSION_BINDING_BUSY_QUERY as _SESSION_BINDING_BUSY_QUERY,
+    SESSION_BINDING_BUSY_SWITCH as _SESSION_BINDING_BUSY_SWITCH,
 )
 
 

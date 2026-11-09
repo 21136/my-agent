@@ -2020,6 +2020,12 @@ export function createChatSession(
         }
         model.confirmSubmitting = false;
         syncOrdinaryConfirmPending(model);
+        if (
+          !isConfirmInProgressLabel(resolved)
+          && !resolveActiveOrdinaryConfirmRequestId(model)
+        ) {
+          model.confirmOverlay = null;
+        }
         const rejected =
           event.choice === "n" ||
           event.choice === "timeout" ||
