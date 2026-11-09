@@ -180,8 +180,13 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
 
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "confirm.request"));
     await page.locator('[data-confirm="y"]:not([disabled])').last().click();
+    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "confirm.done" && e.choice === "y"));
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
+    await page.waitForFunction(() => {
+      const popover = document.querySelector("#unified-current-work-popover");
+      return popover instanceof HTMLElement && getComputedStyle(popover).visibility !== "hidden";
+    });
 
     const schedule = await waitForVisibleScheduleLaunch(work);
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);

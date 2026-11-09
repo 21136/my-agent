@@ -244,7 +244,17 @@ async def handle(socket) -> None:
       if kind == "confirm.response":
           confirm_id = event.get("request_id")
           overview_request = pending_confirm_to_overview.pop(confirm_id, None)
-          if event.get("choice") != "y" or not overview_request:
+          choice = event.get("choice", "n")
+          await socket.send(json.dumps({
+              "type": "confirm.done",
+              "session_id": SESSION,
+              "run_id": "harness-run",
+              "request_id": confirm_id,
+              "choice": choice,
+          }))
+          if choice != "y" or not overview_request:
+              if overview_request:
+                  pending_overview.pop(overview_request, None)
               continue
           project_ids = pending_overview.pop(overview_request, None)
           if not project_ids:

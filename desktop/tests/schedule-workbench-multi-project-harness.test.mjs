@@ -183,6 +183,10 @@ test("multi-project schedule workbench: authorize → preview → dispatch → i
   for (const project of PROJECTS) assert.match(confirm.preview, new RegExp(project));
   client.send({ type: "confirm.response", request_id: confirm.request_id, choice: "y" });
 
+  const confirmDone = await client.next(event => event.type === "confirm.done"
+    && event.request_id === confirm.request_id);
+  assert.equal(confirmDone.choice, "y");
+
   const overview = await client.next(event => event.type === "work-records.overview.result"
     && event.request_id === overviewRequestId);
   assert.equal(overview.aggregation_scope, "selected_project_sessions");
