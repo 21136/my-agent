@@ -483,6 +483,8 @@ export function mountUnifiedShell(
     else if (result === "unavailable") setStatus("当前对话不可发送，未发起概况查询。");
     else if (result === "failed") setStatus("概况查询未能发送；未用旧卡片替代。");
   }
+  const CURRENT_WORK_POPOVER_MIN_HEIGHT_PX = 120;
+
   function sizeCurrentWorkPopover(): void {
     const host = typeof document !== "undefined"
       ? document.querySelector<HTMLElement>("#unified-current-work:not([hidden])")
@@ -491,8 +493,8 @@ export function mountUnifiedShell(
       ?? topbarEl.querySelector<HTMLElement>("#unified-current-work-popover");
     if (!popover) return;
     const available = Math.floor(composerDock.getBoundingClientRect().top - popover.getBoundingClientRect().top - 8);
-    popover.style.maxHeight = `${Math.max(0, available)}px`;
-    popover.style.visibility = available < 48 ? "hidden" : "";
+    popover.style.maxHeight = `${Math.max(CURRENT_WORK_POPOVER_MIN_HEIGHT_PX, available)}px`;
+    popover.style.visibility = "";
   }
 
   function currentWorkLiveSessionInput(): CurrentWorkLiveSessionInput {
@@ -1072,6 +1074,9 @@ function refreshGlobalRoleModels(): void {
           setStatus("执行中…");
         }
         syncPendingConfirmComposerHint();
+        if (currentWorkOverviewOpen) {
+          requestAnimationFrame(() => sizeCurrentWorkPopover());
+        }
       },
       onToolStart: () => {
         setStatus("处理中…");
@@ -8044,6 +8049,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         renderConfirmGlass();
         syncPendingConfirmComposerHint();
         syncWorkingVisual();
+        if (event.type === "confirm.done" && currentWorkOverviewOpen) {
+          requestAnimationFrame(() => sizeCurrentWorkPopover());
+        }
         if (event.type === "confirm.request") {
           requestAnimationFrame(() => {
             requestAnimationFrame(() => scrollPendingConfirmIntoView());
