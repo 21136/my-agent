@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, companionHomeComposerOwnsOrdinaryConfirm, composerShouldShowOrdinaryConfirmActions, createChatSession, escapeHtml, ordinaryConfirmHasOverlayPrimarySurface, ordinaryConfirmWouldRenderInChat, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, companionHomeComposerOwnsOrdinaryConfirm, composerShouldShowOrdinaryConfirmActions, createChatSession, escapeHtml, ordinaryConfirmHasOverlayPrimarySurface, ordinaryConfirmWouldRenderInChat, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, syncOrdinaryConfirmPending, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -1056,6 +1056,7 @@ function refreshGlobalRoleModels(): void {
         } else {
           setStatus("执行中…");
         }
+        syncPendingConfirmComposerHint();
       },
       onToolStart: () => {
         setStatus("处理中…");
@@ -1790,6 +1791,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   function syncPendingConfirmComposerHint(): void {
     const awaiting = chatSessionAwaitingUserConfirm(chat.model);
     let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
+    const overlay = chat.model.confirmOverlay;
+  if (
+      overlay?.requestId
+      && overlay.resolved
+      && !isConfirmInProgressLabel(overlay.resolved)
+    ) {
+      hint?.remove();
+      if (!awaiting) return;
+    }
     if (!awaiting) {
       hint?.remove();
       return;
@@ -5791,6 +5801,28 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return;
     }
     if (!chat.submitConfirm(id, choice)) {
+      const companionComposerPrimary = companionHomeComposerOwnsOrdinaryConfirm({
+        mainFocus: projectState.mainFocus,
+        perspective,
+      });
+      if (
+        companionComposerPrimary
+        && chat.model.confirmOverlay?.requestId === id
+        && canSubmitOrdinaryConfirm(chat.model, id)
+      ) {
+        try {
+          client.sendConfirm(id, choice);
+          setStatus(choice === "n" ? "已提交拒绝…" : "确认中…");
+          renderChat();
+          syncPendingConfirmComposerHint();
+          syncWorkingVisual();
+          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setStatus(`确认发送失败：${message}`);
+          return;
+        }
+      }
       if (resolveActiveOrdinaryConfirmRequestId(chat.model) === id && !canSubmitOrdinaryConfirm(chat.model, id)) {
         setStatus("确认已提交，等待服务端…");
       } else {
@@ -7970,7 +8002,14 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (event.type === "confirm.request" && /当前会话绑定到 local_managed 演化范围/.test(event.preview)) {
           shellDevFeedback("请切回当前会话，在确认卡中核对 owned_paths 并授权。", "busy");
         }
-        if (!chat.handleEvent(event)) break;
+        chat.handleEvent(event);
+        if (event.type === "confirm.done") {
+          syncOrdinaryConfirmPending(chat.model);
+        }
+        renderChat();
+        renderConfirmGlass();
+        syncPendingConfirmComposerHint();
+        syncWorkingVisual();
         if (event.type === "confirm.request") {
           requestAnimationFrame(() => {
             requestAnimationFrame(() => scrollPendingConfirmIntoView());

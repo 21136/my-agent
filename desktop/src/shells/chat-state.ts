@@ -1999,10 +1999,19 @@ export function createChatSession(
           notify();
           break;
         }
-        if (event.session_id !== undefined && event.session_id !== model.sessionId) return false;
+        if (event.session_id !== undefined && event.session_id !== model.sessionId) {
+          if (model.confirmOverlay?.requestId !== event.request_id) return false;
+          if (!model.sessionId) model.sessionId = event.session_id;
+        }
         const isCurrent = model.confirmOverlay?.requestId === event.request_id;
         controlConfirmations.delete(event.request_id);
-        const resolved = CONFIRM_LABELS[event.choice] ?? event.choice;
+        let resolved = CONFIRM_LABELS[event.choice] ?? event.choice;
+        if (
+          event.choice === "y"
+          && !["queued", "running", "stopping"].includes(model.executionState)
+        ) {
+          resolved = "已同意";
+        }
         markConfirmResolved(event.request_id, resolved);
         if (!isCurrent) {
           rehydrateOrdinaryConfirmOverlay(model);
