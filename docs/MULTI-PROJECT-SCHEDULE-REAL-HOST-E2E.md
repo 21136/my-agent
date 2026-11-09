@@ -19,6 +19,8 @@ The GUI fixture keeps **real** `WsBridge.emit_session_state` (same as `project-w
 
 Unlike the **synthetic** schedule WS fixture, the real host answers `project.list` only after the client sends it (mount-time `listProjects()` runs before the socket is open and is skipped). The browser E2E explicitly calls `client.listProjects()` after `session.banner`, matching production companion-home behavior.
 
+On **unbound** companion-home, local `work-records.overview.result` is often `no_records` with `unread_status: known`, which normally hides the 当前工作 topbar pill. When mapped project sessions exist, `buildCurrentWorkOverviewPanel` keeps the entry visible (`mappedMultiProjectSchedule`) so the schedule overlay remains reachable without binding the companion session.
+
 ## Win32 GUI opt-in
 
 ```bat
