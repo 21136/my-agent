@@ -196,9 +196,7 @@ def _session_list() -> dict:
     }
 
 
-async def _late_bootstrap(socket) -> None:
-    await asyncio.sleep(LATE_WS_MS / 1000.0)
-    await _send_session_bootstrap(socket)
+_CONNECTION_SEQ = 0
 
 
 async def _send_session_bootstrap(socket) -> None:
@@ -212,15 +210,36 @@ async def _send_session_bootstrap(socket) -> None:
 
 
 async def handle(socket) -> None:
-    bootstrap = asyncio.create_task(_late_bootstrap(socket))
+    global _CONNECTION_SEQ
+    _CONNECTION_SEQ += 1
+    conn_seq = _CONNECTION_SEQ
+    bootstrapped = False
+
+    async def bootstrap_once() -> None:
+        nonlocal bootstrapped
+        if bootstrapped:
+            return
+        bootstrapped = True
+        await _send_session_bootstrap(socket)
+
+    async def connection_bootstrap() -> None:
+        if conn_seq == 1:
+            await asyncio.sleep(LATE_WS_MS / 1000.0)
+        await bootstrap_once()
+
+    bootstrap = asyncio.create_task(connection_bootstrap())
     try:
         async for raw in socket:
             event = json.loads(raw)
             kind = event.get("type")
 
-            if kind in {"terminal.list", "session.list"}:
-                if kind == "session.list":
-                    await socket.send(json.dumps(_session_list()))
+            if kind == "terminal.list":
+                if conn_seq > 1:
+                    await bootstrap_once()
+                continue
+
+            if kind == "session.list":
+                await socket.send(json.dumps(_session_list()))
                 continue
 
             if kind == "session.open":
