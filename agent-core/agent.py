@@ -2638,7 +2638,7 @@ class Agent:
                                         for row in eligible}
                         requested_ids = {(row["project_id"], row["item_id"], row["requirement_id"], row["priority"])
                                          for row in schedule_candidates}
-                        if not requested_ids <= eligible_ids or (len(schedule_candidates) == 2
+                        if not requested_ids <= eligible_ids or (len(schedule_candidates) > 1
                                                                   and eligible_ids != requested_ids):
                             raise ValueError("the complete authorized preview does not select these exact candidates")
                         if len(matches) != len(schedule_candidates) or any(

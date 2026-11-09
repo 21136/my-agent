@@ -1,4 +1,5 @@
 import type { EvolutionProjection } from "../evolution-state";
+import { SCHEDULE_PARALLEL_BATCH_MAX } from "../shells/unified/schedule-launch";
 import { normalizeEvolutionHostRequest, type EvolutionHostRequest } from "./evolution-bridge";
 
 export type LlmModelListItem = {
@@ -1524,7 +1525,8 @@ export class AgentWsClient {
   }): string {
     if (!cardObject(options) || !Array.isArray(options.projectIds) || !options.projectIds.length
         || options.projectIds.length > 6 || !Array.isArray(options.workers)
-        || !options.workers.length || options.workers.length > 2 || !this.currentConversationId) {
+        || !options.workers.length || options.workers.length > SCHEDULE_PARALLEL_BATCH_MAX
+        || !this.currentConversationId) {
       throw new Error("invalid schedule dispatch request");
     }
     const sessionId = this.currentConversationId;

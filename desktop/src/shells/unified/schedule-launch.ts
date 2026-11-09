@@ -17,6 +17,9 @@ const escapeHtml = (value: unknown): string => String(value ?? "")
 const DEFAULT_READ_TARGETS = ["PROJECT.md", "README.md"];
 const DEFAULT_WRITE_TARGETS = ["NOTES.md"];
 
+/** Matches multi-project overview selection and agent-core schedule_dispatch_batch_max(). */
+export const SCHEDULE_PARALLEL_BATCH_MAX = 6;
+
 function requirementsMap(result: WorkRecordsOverviewResultEvent): Map<string, string> {
   const requirements = new Map<string, string>();
   for (const group of result.groups) {
@@ -58,7 +61,7 @@ function candidateFromPreviewRow(
   };
 }
 
-/** Ordered parallel launch batch: up to two distinct projects from the authorized preview. */
+/** Ordered parallel launch batch: up to SCHEDULE_PARALLEL_BATCH_MAX distinct projects from the preview. */
 export function scheduledWorkerCandidates(result: WorkRecordsOverviewResultEvent | null): ScheduledWorkerCandidate[] {
   if (!result || result.state !== "visible" || result.aggregation_scope !== "selected_project_sessions"
     || !result.groups?.length || result.schedule_preview?.state !== "visible"
@@ -73,7 +76,7 @@ export function scheduledWorkerCandidates(result: WorkRecordsOverviewResultEvent
     if (!candidate || seenProjects.has(candidate.projectId)) continue;
     seenProjects.add(candidate.projectId);
     batch.push(candidate);
-    if (batch.length >= 2) break;
+    if (batch.length >= SCHEDULE_PARALLEL_BATCH_MAX) break;
   }
   return batch;
 }
@@ -91,7 +94,7 @@ export function renderScheduleLaunchForm(result: WorkRecordsOverviewResultEvent 
     return `<article class="unified-schedule-worker" data-schedule-worker data-candidate-index="${index}" aria-label="${escapeHtml(title)}"><header class="unified-schedule-worker-head"><strong>${escapeHtml(title)}</strong></header><p class="unified-schedule-task" data-schedule-source-task>来源要求：${escapeHtml(candidate.task)}</p><textarea data-schedule-task hidden readonly>${escapeHtml(candidate.task)}</textarea><label>可读取路径（每行一项，可微调）<textarea data-schedule-read rows="2" required>${escapeHtml(pathLines(candidate.suggestedReadTargets))}</textarea></label><label>可写入路径（每行一项，可微调）<textarea data-schedule-write rows="2" required>${escapeHtml(pathLines(candidate.suggestedWriteTargets))}</textarea></label></article>`;
   }).join("");
   const batchNote = candidates.length > 1
-    ? "将按预览<strong>并行</strong>提交至多两个不同项目的 worker；这不是把事项放回排队或等待上下文。"
+    ? `将按预览<strong>并行</strong>提交至多 ${SCHEDULE_PARALLEL_BATCH_MAX} 个不同项目的 worker（host 仍按并发上限启动，其余排队）；这不是把事项放回排队或等待上下文。`
     : "将按预览启动一个 worker；任务与范围已根据授权候选预填，仍可微调路径。";
   return `<section class="unified-schedule-launch" data-schedule-launch aria-label="按预览并行启动 worker"><header class="unified-schedule-launch-head"><h3>按预览启动</h3></header><div class="unified-schedule-launch-form"><p class="unified-schedule-launch-lede">上方是只读调度预览；此处根据同一批候选预填任务与相对路径。点启动后走 <code>work-records.schedule.dispatch</code> → <code>run_project_workers</code>，服务端仍会核对来源、并发上限并逐项确认。</p><p class="unified-schedule-launch-batch-note">${batchNote}</p><div class="unified-schedule-worker-rows">${rows}</div><button type="button" class="unified-btn unified-btn-accent" data-schedule-launch-send>按预览启动</button><p class="unified-schedule-launch-note">启动后进度见「当前工作 / 工作动态 / 状态栏」；这不代表事项已完成或验证通过。</p></div></section>`;
 }
@@ -139,7 +142,9 @@ export function buildScheduleDispatchWorkers(
   rows: ScheduleDispatchRowInput[],
 ) {
   const candidates = scheduledWorkerCandidates(result);
-  if (!rows.length || rows.length > 2) throw new Error("一次最多并行启动两个不同项目的 worker。");
+  if (!rows.length || rows.length > SCHEDULE_PARALLEL_BATCH_MAX) {
+    throw new Error(`一次最多并行启动 ${SCHEDULE_PARALLEL_BATCH_MAX} 个不同项目的 worker。`);
+  }
   const workers = rows.map(row => {
     const candidate = candidates[row.candidateIndex];
     if (!candidate) throw new Error("候选已变化或不可用，请重新读取当前工作概况。");

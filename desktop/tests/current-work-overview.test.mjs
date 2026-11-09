@@ -38,7 +38,7 @@ function completedViewedGroup() {
       current_results: [{ requirement_id: "r1", result_id: "res1", status: "completed", read_status: "viewed" }] }] };
 }
 
-test("only a local in-progress project requirement exposes an explicit worker stop request", () => {
+test("in-progress project requirements expose worker stop for local and mapped remote sources", () => {
   const group = { kind: "project", id: "project-alpha", visibility: "visible", status: "in_progress",
     status_counts: { in_progress: 1 }, item_count: 1, requirement_count: 1,
     items: [{ item_id: "item-live", title: "live task", status: "in_progress", status_counts: { in_progress: 1 },
@@ -52,7 +52,8 @@ test("only a local in-progress project requirement exposes an explicit worker st
   const remotePanel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [remote], unread_status: "unknown",
     visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
-  assert.doesNotMatch(remotePanel.bodyHtml, /data-action="cancel_execution"/);
+  assert.match(remotePanel.bodyHtml, /data-action="cancel_execution"[^>]*data-source-project-id="project-alpha"/);
+  assert.match(remotePanel.bodyHtml, /data-source-revision="4"/);
 });
 
 test("natural-language query dispatch remains available and respects current-session send guards", () => {

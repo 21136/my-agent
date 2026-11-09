@@ -391,7 +391,6 @@ export function mountUnifiedShell(
         if (!inspectionEvidence) throw new Error("请先记录实际核查对象与观察到的证据；不能只确认已阅读提示。");
         client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, inspectionEvidence, ...revisionScope });
       } else if (action === "cancel_execution") {
-        if (sourceProjectId) return;
         client.controlWorkRecord({ itemId, requirementId, action, expectedStatus, ...revisionScope });
       } else client.controlWorkRecord({ itemId, requirementId, action: action as "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue", expectedStatus, ...revisionScope });
       setStatus("已提交事项控制；等待服务端核对状态。");

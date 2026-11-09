@@ -19,6 +19,7 @@ import json
 
 from llm_client import LLMClient
 from paths import AgentPaths
+from project_worker_limits import project_worker_max_concurrent
 from project_mode import is_project_dir, list_projects, normalize_project_id, project_dir
 from llm_models import get_registry
 from project_worker_execution import (
@@ -1113,7 +1114,8 @@ class ProjectWorkerHost:
                 record_end(index, outcomes[index])
 
         active: dict[Any, tuple[int, tuple[int, int, int]]] = {}
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="project-worker-host") as pool:
+        concurrent_cap = project_worker_max_concurrent()
+        with ThreadPoolExecutor(max_workers=concurrent_cap, thread_name_prefix="project-worker-host") as pool:
             while pending or active:
                 if cancel_event.is_set():
                     for index in pending:
@@ -1125,7 +1127,7 @@ class ProjectWorkerHost:
                     pending.clear()
                 active_roots = {root_identity for _idx, root_identity in active.values()}
                 for index in list(pending):
-                    if len(active) >= 2:
+                    if len(active) >= concurrent_cap:
                         break
                     root_identity = root_keys[index]
                     if root_identity is None or root_identity in active_roots:
