@@ -133,13 +133,42 @@ const edge = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Micros
 const guiOptIn = process.env.REAL_MULTI_PROJECT_SCHEDULE_OPT_IN === "1"
   && process.env.REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN === "1";
 
-async function approvePendingConfirms(page, rounds = 24) {
-  for (let i = 0; i < rounds; i++) {
-    const approve = page.locator('[data-confirm="y"]:not([disabled])');
-    if (await approve.count() === 0) return;
-    await approve.last().click();
-    await page.waitForTimeout(120);
+/** Companion-home ordinary confirms: composer dock is the actionable surface (see chat-state companionHomeComposerOwnsOrdinaryConfirm). */
+async function acceptComposerOrdinaryConfirm(page, { timeout = 45000 } = {}) {
+  await page.waitForFunction(
+    () => window.receivedEvents?.some(event => event.type === "confirm.request"),
+    null,
+    { timeout },
+  );
+  const requestId = await page.evaluate(
+    () => window.receivedEvents.findLast(event => event.type === "confirm.request")?.request_id,
+  );
+  assert.ok(requestId, "confirm.request missing request_id");
+  const approve = page.locator(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${requestId}"]`);
+  await page.waitForFunction(
+    id => {
+      const btn = document.querySelector(
+        `[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`,
+      );
+      return btn instanceof HTMLButtonElement && !btn.disabled;
+    },
+    requestId,
+    { timeout },
+  );
+  const disclosure = page.locator("[data-pending-confirm-hint] details.unified-pending-confirm-hint-expand > summary");
+  if (await disclosure.count()) {
+    await disclosure.first().click();
   }
+  await approve.scrollIntoViewIfNeeded();
+  await approve.click({ force: true });
+  await page.waitForFunction(
+    id => window.receivedEvents?.some(
+      event => event.type === "confirm.done" && event.request_id === id && event.choice === "y",
+    ),
+    requestId,
+    { timeout },
+  );
+  await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
 }
 
 test("companion schedule GUI: two projects, real host dispatch, distinct outcomes", {
@@ -235,16 +264,16 @@ test("companion schedule GUI: two projects, real host dispatch, distinct outcome
       }
     }, PROJECTS);
     await schedulePanel.locator("[data-run-selected-project-overview]").click();
-    await approvePendingConfirms(page);
+    await acceptComposerOrdinaryConfirm(page);
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
-    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await waitForCurrentWorkPopoverSized(page, 80);
 
     const launch = await waitForVisibleScheduleLaunch(work, page);
     await page.waitForFunction(() => !document.querySelector(".unified-shell.is-working"));
+    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await launch.locator("[data-schedule-launch-send]").click();
-    await approvePendingConfirms(page, 40);
+    await acceptComposerOrdinaryConfirm(page, { timeout: 120000 });
 
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
       && e.status === "applied" && e.tool_ok === true), null, { timeout: 120000 });

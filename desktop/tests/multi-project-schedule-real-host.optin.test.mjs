@@ -18,6 +18,8 @@ test("opt-in env gates for real multi-project schedule GUI", () => {
   const fixture = readFileSync(path.join(here, "multi-project-schedule-real-host-fixture.py"), "utf8");
   assert.doesNotMatch(fixture, /emit_session_state.*lambda/);
   assert.match(browser, /client\.listProjects\(\)/);
+  assert.match(browser, /data-pending-confirm-hint/);
+  assert.match(browser, /acceptComposerOrdinaryConfirm/);
   const run79 = readFileSync(path.join(repo, "desktop/_run79-schedule-real-host.cmd"), "utf8");
   assert.match(run79, /multi-project-schedule-real-host-browser-e2e\.test\.mjs/);
 });
