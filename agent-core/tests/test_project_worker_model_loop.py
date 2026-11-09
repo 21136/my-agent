@@ -204,11 +204,15 @@ def test_undeclared_read_is_not_attempted_and_worker_can_correct_itself(monkeypa
         correction = next(message for message in requests[1]["messages"]
                           if message["role"] == "tool" and message["tool_call_id"] == "bad-read")
         correction_payload = json.loads(correction["content"])
-        assert correction_payload == {
-            "ok": False, "error": "read_target_not_declared",
-            "allowed_targets": ["README.md"],
-        }
-        assert "secret.md" not in correction["content"]
+        assert correction_payload["ok"] is False
+        assert correction_payload["error"] == "read_target_not_declared"
+        assert correction_payload["operation"] == "read_project_file"
+        assert correction_payload["requested_path"] == "secret.md"
+        assert correction_payload["allowed_targets"] == ["README.md"]
+        assert correction_payload["declared_read_targets"] == ["README.md"]
+        assert correction_payload["declared_write_targets"] == ["result.txt"]
+        assert correction_payload["match_result"] == "not_declared"
+        assert correction_payload["hint"]
 
 
 def test_repeated_undeclared_reads_fail_without_reading_or_extra_requests(monkeypatch):
@@ -239,13 +243,15 @@ def test_repeated_undeclared_reads_fail_without_reading_or_extra_requests(monkey
         assert len(requests) == 2
         assert attempted_snapshot_paths == []
         assert result.read_attempts == ()
+        assert result.scope_error_detail is not None
+        assert result.scope_error_detail["requested_path"] == "secret-b.md"
+        assert result.scope_error_detail["allowed_targets"] == ["README.md"]
+        assert result.scope_error_detail["declared_write_targets"] == ["result.txt"]
         first_correction = next(message for message in requests[1]["messages"]
                                 if message["role"] == "tool" and message["tool_call_id"] == "bad-read-1")
-        assert json.loads(first_correction["content"]) == {
-            "ok": False, "error": "read_target_not_declared",
-            "allowed_targets": ["README.md"],
-        }
-        assert "secret-a.md" not in first_correction["content"]
+        first_payload = json.loads(first_correction["content"])
+        assert first_payload["requested_path"] == "secret-a.md"
+        assert first_payload["allowed_targets"] == ["README.md"]
 
 
 def test_denied_existing_executor_confirmation_is_not_retried(monkeypatch):

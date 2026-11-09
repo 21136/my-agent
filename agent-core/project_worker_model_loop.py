@@ -26,6 +26,13 @@ from project_worker_execution import (
     ScopedProjectTools,
     run_project_worker,
 )
+from project_worker_scope_diagnostics import (
+    build_scope_error_detail,
+    build_worker_tool_scope_error,
+    executor_scope_payload,
+    patch_read_prerequisite_error,
+    permission_error_scope_payload,
+)
 from tools.schema import ToolResult
 
 MODEL_ID = "0x567-flash"
@@ -118,6 +125,7 @@ class ProjectWorkerModelOutcome:
     writes: tuple[ProjectWorkerWriteReceipt, ...] = ()
     error_code: str = ""
     error_type: str = ""
+    scope_error_detail: dict[str, Any] | None = None
     verification_level: str = "not_verified"
     tests_run: tuple[str, ...] = ()
     read_attempts: tuple[ProjectReadAttempt, ...] = ()
@@ -163,9 +171,29 @@ def _verification_level(receipts: tuple[ProjectWorkerWriteReceipt, ...]) -> str:
     return "not_verified"
 
 
+def _scope_from_spec(
+    spec: ProjectWorkerSpec,
+    *,
+    error_code: str,
+    operation: str,
+    requested_path: object,
+    match_result: str | None = None,
+) -> dict[str, Any]:
+    return build_worker_tool_scope_error(
+        error_code=error_code,
+        operation=operation,
+        requested_path=requested_path,
+        project_id=spec.project_id,
+        read_targets=spec.read_targets,
+        write_targets=spec.write_targets,
+        match_result=match_result,
+    )
+
+
 def _failure(spec: object, status: str, code: str, *, requests: int = 0,
              tool_calls: int = 0, writes: list[ProjectWorkerWriteReceipt] | None = None,
-             error_type: str = "") -> ProjectWorkerModelOutcome:
+             error_type: str = "",
+             scope_error_detail: dict[str, Any] | None = None) -> ProjectWorkerModelOutcome:
     project_id = spec.project_id if type(spec) is ProjectWorkerSpec else ""
     receipts = tuple(writes or ())
     return ProjectWorkerModelOutcome(
@@ -176,6 +204,7 @@ def _failure(spec: object, status: str, code: str, *, requests: int = 0,
         writes=receipts,
         error_code=code,
         error_type=error_type,
+        scope_error_detail=scope_error_detail,
         verification_level=_verification_level(receipts),
         tests_run=(),
     )
@@ -445,22 +474,37 @@ def run_project_worker_model_loop(
                     tool_calls += 1
                     if name == "read_project_file":
                         if set(arguments) != {"path"} or type(arguments.get("path")) is not str:
-                            return _failure(spec, "failed", "invalid_read_arguments",
-                                            requests=requests, tool_calls=tool_calls, writes=writes)
+                            scope_tool_error = _scope_from_spec(
+                                spec,
+                                error_code="invalid_read_arguments",
+                                operation="read_project_file",
+                                requested_path=arguments.get("path", ""),
+                                match_result="invalid_requested_path",
+                            )
+                            return _failure(
+                                spec, "failed", "invalid_read_arguments",
+                                requests=requests, tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=build_scope_error_detail(scope_tool_error),
+                            )
                         path = arguments["path"]
                         if path not in spec.read_targets:
+                            scope_tool_error = _scope_from_spec(
+                                spec,
+                                error_code="read_target_not_declared",
+                                operation="read_project_file",
+                                requested_path=path,
+                            )
                             if (undeclared_read_corrections >= MAX_UNDECLARED_READ_CORRECTIONS
                                     or requests >= max_requests):
-                                return _failure(spec, "failed", "read_target_not_declared",
-                                                requests=requests, tool_calls=tool_calls, writes=writes)
+                                return _failure(
+                                    spec, "failed", "read_target_not_declared",
+                                    requests=requests, tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=build_scope_error_detail(scope_tool_error),
+                                )
                             undeclared_read_corrections += 1
                             messages.append({"role": "assistant", "content": response.content,
                                              "tool_calls": response.tool_calls})
-                            messages.append(_tool_message(call_id, {
-                                "ok": False,
-                                "error": "read_target_not_declared",
-                                "allowed_targets": list(spec.read_targets),
-                            }))
+                            messages.append(_tool_message(call_id, scope_tool_error))
                             continue
                         try:
                             content, file_identity = scoped.read_snapshot(path)
@@ -472,9 +516,32 @@ def run_project_worker_model_loop(
                             return _failure(spec, "failed", exc.error_code, requests=requests,
                                             tool_calls=tool_calls, writes=writes)
                         except PermissionError as exc:
-                            code = "read_target_not_declared" if "not declared" in str(exc) else "project_read_failed"
-                            return _failure(spec, "failed", code, requests=requests,
-                                            tool_calls=tool_calls, writes=writes)
+                            if "not declared" in str(exc):
+                                scope_tool_error = _scope_from_spec(
+                                    spec,
+                                    error_code="read_target_not_declared",
+                                    operation="read_project_file",
+                                    requested_path=path,
+                                )
+                                return _failure(
+                                    spec, "failed", "read_target_not_declared",
+                                    requests=requests, tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=build_scope_error_detail(scope_tool_error),
+                                )
+                            scope_tool_error = build_worker_tool_scope_error(
+                                error_code="project_read_failed",
+                                operation="read_project_file",
+                                requested_path=path,
+                                project_id=spec.project_id,
+                                read_targets=spec.read_targets,
+                                write_targets=spec.write_targets,
+                                match_result="non_retryable_read_failure",
+                            )
+                            return _failure(
+                                spec, "failed", "project_read_failed", requests=requests,
+                                tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=build_scope_error_detail(scope_tool_error),
+                            )
                         truncated = len(content) > MAX_READ_CHARS
                         messages.append({"role": "assistant", "content": response.content,
                                          "tool_calls": response.tool_calls})
@@ -492,25 +559,69 @@ def run_project_worker_model_loop(
                                                   or type(arguments.get("replacement")) is not str))
                                 or (not is_patch and (type(arguments.get("content")) is not str
                                                        or len(arguments["content"]) > MAX_WRITE_CHARS))):
-                            return _failure(spec, "failed", "invalid_write_arguments",
-                                            requests=requests, tool_calls=tool_calls, writes=writes)
+                            op = "patch_project_file" if is_patch else "write_project_file"
+                            scope_tool_error = _scope_from_spec(
+                                spec,
+                                error_code="invalid_write_arguments",
+                                operation=op,
+                                requested_path=arguments.get("path", ""),
+                                match_result="invalid_requested_path",
+                            )
+                            return _failure(
+                                spec, "failed", "invalid_write_arguments",
+                                requests=requests, tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=build_scope_error_detail(scope_tool_error),
+                            )
                         path = arguments["path"]
                         if path not in spec.write_targets:
-                            return _failure(spec, "failed", "write_target_not_declared",
-                                            requests=requests, tool_calls=tool_calls, writes=writes)
+                            op = "patch_project_file" if is_patch else "write_project_file"
+                            scope_tool_error = _scope_from_spec(
+                                spec,
+                                error_code="write_target_not_declared",
+                                operation=op,
+                                requested_path=path,
+                            )
+                            return _failure(
+                                spec, "failed", "write_target_not_declared",
+                                requests=requests, tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=build_scope_error_detail(scope_tool_error),
+                            )
                         expected_content: str | None = None
                         if is_patch:
                             if path not in spec.read_targets or path not in read_snapshots:
-                                return _failure(spec, "failed", "patch_requires_prior_authorized_read",
-                                                requests=requests, tool_calls=tool_calls, writes=writes)
+                                scope_tool_error = patch_read_prerequisite_error(
+                                    operation="patch_project_file",
+                                    path=path,
+                                    project_id=spec.project_id,
+                                    read_targets=spec.read_targets,
+                                    write_targets=spec.write_targets,
+                                    read_snapshots=set(read_snapshots),
+                                )
+                                return _failure(
+                                    spec, "failed", "patch_requires_prior_authorized_read",
+                                    requests=requests, tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=build_scope_error_detail(scope_tool_error),
+                                )
                             try:
                                 original, patch_identity = scoped.read_snapshot(path)
                             except ProjectWorkerCancelled:
                                 return _failure(spec, "cancelled", "cancelled", requests=requests,
                                                 tool_calls=tool_calls, writes=writes)
                             except PermissionError:
-                                return _failure(spec, "failed", "patch_source_read_failed",
-                                                requests=requests, tool_calls=tool_calls, writes=writes)
+                                scope_tool_error = build_worker_tool_scope_error(
+                                    error_code="patch_source_read_failed",
+                                    operation="patch_project_file",
+                                    requested_path=path,
+                                    project_id=spec.project_id,
+                                    read_targets=spec.read_targets,
+                                    write_targets=spec.write_targets,
+                                    match_result="non_retryable_read_failure",
+                                )
+                                return _failure(
+                                    spec, "failed", "patch_source_read_failed",
+                                    requests=requests, tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=build_scope_error_detail(scope_tool_error),
+                                )
                             previous_identity, previous_content = read_snapshots[path]
                             if original != previous_content or patch_identity != previous_identity:
                                 return _failure(spec, "blocked", "patch_source_changed_since_read",
@@ -552,13 +663,29 @@ def run_project_worker_model_loop(
                             return _failure(spec, "cancelled", "cancelled", requests=requests,
                                             tool_calls=tool_calls, writes=writes)
                         except PermissionError as exc:
+                            op = "patch_project_file" if is_patch else "write_project_file"
+                            scope_tool_error = permission_error_scope_payload(
+                                operation=op,
+                                path=path,
+                                project_id=spec.project_id,
+                                read_targets=spec.read_targets,
+                                write_targets=spec.write_targets,
+                                permission_message=str(exc),
+                            )
+                            detail = build_scope_error_detail(scope_tool_error)
                             if "write_already_attempted" in str(exc):
-                                return _failure(spec, "failed", "write_already_attempted",
-                                                requests=requests, tool_calls=tool_calls, writes=writes)
+                                return _failure(
+                                    spec, "failed", "write_already_attempted",
+                                    requests=requests, tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=detail,
+                                )
                             if scoped.has_write_attempted(path):
                                 return record_unknown_write(path, "write_executor_error")
-                            return _failure(spec, "blocked", "write_scope_denied", requests=requests,
-                                            tool_calls=tool_calls, writes=writes)
+                            return _failure(
+                                spec, "blocked", "write_scope_denied", requests=requests,
+                                tool_calls=tool_calls, writes=writes,
+                                scope_error_detail=detail,
+                            )
                         except Exception as exc:
                             if scoped.has_write_attempted(path):
                                 return record_unknown_write(path, type(exc).__name__)
@@ -577,12 +704,24 @@ def run_project_worker_model_loop(
                                 "confirm_rejected", "permission_denied", "path_denied", "path_out_of_bounds",
                             }
                             if definitely_prewrite:
+                                op = "patch_project_file" if is_patch else "write_project_file"
+                                scope_tool_error = executor_scope_payload(
+                                    operation=op,
+                                    path=path,
+                                    project_id=spec.project_id,
+                                    read_targets=spec.read_targets,
+                                    write_targets=spec.write_targets,
+                                    executor_error_code=code,
+                                )
                                 writes.append(ProjectWorkerWriteReceipt(
                                     path, "not_written", "not_verified", error_code=code,
                                     readback_succeeded=False,
                                 ))
-                                return _failure(spec, "blocked", code, requests=requests,
-                                                tool_calls=tool_calls, writes=writes)
+                                return _failure(
+                                    spec, "blocked", code, requests=requests,
+                                    tool_calls=tool_calls, writes=writes,
+                                    scope_error_detail=build_scope_error_detail(scope_tool_error),
+                                )
                             return record_unknown_write(path, code)
                         readback_started = time.perf_counter()
                         try:
