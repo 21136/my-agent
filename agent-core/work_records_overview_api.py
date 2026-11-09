@@ -518,7 +518,10 @@ def _snapshot_view_evidence_fingerprint(data: dict[str, Any]) -> list[dict[str, 
 def _linked_source_snapshot_groups(session_id: str, binding_data: dict[str, Any],
                                    ledger_data: dict[str, Any], *,
                                    elapsed_by_identity: dict[tuple[str, str], str] | None = None,
-                                   include_view_targets: bool = False):
+                                   include_view_targets: bool = False,
+                                   hidden_card_ids: set[str] | None = None,
+                                   hidden_binding_ids: set[str] | None = None,
+                                   hidden_refresh_ids: set[str] | None = None):
     """Project confirmed parent-copied source snapshots as bounded attention groups.
 
     This consumes only the exact parent binding and immutable ledger sidecars. It
@@ -544,6 +547,9 @@ def _linked_source_snapshot_groups(session_id: str, binding_data: dict[str, Any]
     candidates: list[dict[str, Any]] = []
     view_targets: list[tuple[str, str, str | None]] = []
     elapsed_by_identity = elapsed_by_identity or {}
+    hidden_cards = hidden_card_ids or set()
+    hidden_bindings = hidden_binding_ids or set()
+    hidden_refreshes = hidden_refresh_ids or set()
 
     def add_candidate(binding_id: str, copy: Any, request_id: str, order: int,
                       run_id: str | None) -> None:
@@ -563,6 +569,9 @@ def _linked_source_snapshot_groups(session_id: str, binding_data: dict[str, Any]
             raise WorkRecordCorrupt("source snapshot has duplicate ledger cards")
         record = matches[0] if matches else None
         card_id = record.get("card_id") if record is not None else None
+        if card_id in hidden_cards:
+            card_id = None
+            record = None
         presentation_id = None
         if card_id is not None and type(run_id) is str:
             run_identity = UUID(run_id).hex
@@ -586,6 +595,8 @@ def _linked_source_snapshot_groups(session_id: str, binding_data: dict[str, Any]
     order = 0
     for batch in binding_data.get("batches", []):
         for row in batch.get("bindings", []):
+            if row.get("binding_id") in hidden_bindings:
+                continue
             copy = row.get("project_session_copy")
             if copy is None:
                 continue
@@ -596,6 +607,8 @@ def _linked_source_snapshot_groups(session_id: str, binding_data: dict[str, Any]
             add_candidate(row["binding_id"], copy, request_id, order, run_id)
             order += 1
     for refresh in binding_data.get("project_refreshes", []):
+        if refresh.get("refresh_id") in hidden_refreshes:
+            continue
         copy = refresh["copy"]
         request_id = linked_project_refresh_request_id(session_id, refresh["refresh_id"])
         add_candidate(refresh["binding_id"], copy, request_id, order, refresh["run_id"])
@@ -698,12 +711,16 @@ def _linked_snapshot_view_prepass(session: Session, store: WorkRecordStore, ledg
     bindings = ConversationWorkRecordBindings(session, lock_timeout=store._lock_timeout)
     presentations = WorkCardPresentations(session, store, ledger)
     evidence = LinkedSnapshotViewEvidence(session, store, ledger)
+    disposition = ledger.disposition()
     with _file_lock(store._lock_path, store._lock_timeout):
         binding_data = bindings._view_locked(bindings._read())
         ledger_data = ledger._ledger_store._read()
         presentation_data = presentations._presentations_store._read()
         _groups, targets = _linked_source_snapshot_groups(
             session.conversation_id, binding_data, ledger_data, include_view_targets=True,
+            hidden_card_ids=disposition.hidden_card_ids(),
+            hidden_binding_ids=disposition.hidden_binding_ids(),
+            hidden_refresh_ids=disposition.hidden_refresh_ids(),
         )
         presentation_rows = {row["presentation_id"]: row for row in presentation_data["items"]}
 
@@ -831,9 +848,13 @@ def query_work_records_overview(
                 and view_evidence_data == linked_baseline["evidence"]
             )
             current_elapsed = elapsed_by_identity if evidence_matches_baseline else {}
+            disposition = ledger.disposition()
             linked_source_groups = _linked_source_snapshot_groups(
                 session.conversation_id, binding_data, ledger_data,
                 elapsed_by_identity=current_elapsed,
+                hidden_card_ids=disposition.hidden_card_ids(),
+                hidden_binding_ids=disposition.hidden_binding_ids(),
+                hidden_refresh_ids=disposition.hidden_refresh_ids(),
             )
             previous_presentation_data = copy.deepcopy(presentation_data)
             cards = presentations._cards_locked(presentation_data)

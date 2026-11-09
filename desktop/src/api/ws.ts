@@ -196,6 +196,16 @@ export type WorkCardEvent =
   | { type: "work-card.seen.done"; status: "acknowledged" | "already_acknowledged"; message: string; card_id: string; viewed_at: string; source_scope: WorkCardScope }
   | { type: "work-card.list.done"; status: "ok"; message: string; request_id: string; items: WorkCardIndexItem[]; has_more: boolean; next_cursor: string | null; source_scope: { session_id: string } }
   | { type: "work-card.list.done"; status: WorkCardErrorStatus; message: string; request_id: string }
+  | {
+      type: "work-card.trash.done" | "work-card.purge.done" | "work-card.restore.done";
+      status: string;
+      message: string;
+      request_id: string;
+      card_id?: string;
+      affected_card_ids?: string[];
+      affected_binding_ids?: string[];
+      affected_refresh_ids?: string[];
+    }
   | { type: "work-card.create.done" | "work-card.get.done" | "work-card.seen.done"; status: WorkCardErrorStatus; message: string; request_id?: string; card_id?: string };
 
 export type AutoRecognitionDoneEvent = { type: "work-record.auto-recognition.done"; session_id: string; request_id: string; action: "enable" | "revoke"; status: "ok" | "rejected"; enabled: boolean };

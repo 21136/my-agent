@@ -428,8 +428,9 @@ test("project-scoped card is validated as one exact project's full projection in
   const html = renderWorkCardEntry(result.entry);
   assert.match(html, /project_scoped/);
   assert.match(html, /查看 7 项要求与结果/);
-  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
-  assert.doesNotMatch(preview, /demo-project|result-1|run-1|状态未知|not_verified|synthetic lifecycle/);
+  const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+  assert.match(header, /7 项要求/);
+  assert.doesNotMatch(header, /demo-project|result-1|run-1|not_verified/);
   assert.match(html, /项目：demo-project/);
   assert.match(html, /结果 ID：result-7/);
   assert.match(html, /回合 ID：run-7/);
@@ -504,11 +505,13 @@ test("linked project-session copy expands to natural-language requests before co
   const result = registry.present({ type: "work-card.present", session_id: SESSION, presentation_id: PRESENTATION, card_id: CARD_ID, card: copy });
   assert.equal(result.kind, "added");
   const html = renderWorkCardEntry(result.entry);
-  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
-  assert.match(preview, /历史副本/);
-  assert.match(preview, /不代表项目全貌/);
-  assert.match(preview, /查看 8 项要求与结果/);
-  assert.doesNotMatch(preview, /demo-project|20261030|unknown|未验证|2026-/);
+  const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+  assert.match(header, /历史副本/);
+  assert.match(header, /不代表项目全貌/);
+  assert.match(header, /8 项要求/);
+  assert.match(header, /部分工作在执行前受阻/);
+  assert.match(header, /2026-10-30T00:59:00Z/);
+  assert.doesNotMatch(header, /demo-project|20261030|not_verified/);
   assert.match(html, /来源要求 2-4/);
   assert.match(html, /部分工作在执行前受阻；其余回合结束也不能确认操作结果或验证结论/);
   assert.equal((html.match(/class="work-card-requirement"/g) ?? []).length, 8);
@@ -763,20 +766,22 @@ test("historical snapshot keeps temporal context with the requirement list and d
     "same-title entries remain as two separate captured requirements");
 });
 
-test("project snapshots keep the chat preview compact and put complete historical detail behind a native disclosure", () => {
+test("project snapshots surface collapsed status rollup and hide long evidence until disclosure", () => {
   const requirements = Array.from({ length: 7 }, (_, index) => req(index + 1, index < 2 ? "completed" : "blocked"));
   requirements[0].text = "超长项目要求".repeat(80);
   requirements[0].requirement_id = `requirement-${"x".repeat(60)}`;
   const snapshot = card(requirements);
   snapshot.snapshot.cards[0].item_id = `item-${"i".repeat(60)}`;
   const html = renderWorkCardSnapshot(snapshot);
-  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
 
-  assert.match(preview, /历史快照[^<]*非实时/);
-  assert.match(preview, /项目工作记录/);
-  assert.doesNotMatch(preview, /进行中|状态未知|demo-project|2026-|来源：/);
-  assert.match(preview, /查看 7 项要求与结果/);
-  assert.doesNotMatch(preview, /超长项目要求|requirement-x{20}|item-i{20}|来源：/);
+  assert.match(header, /历史快照[^<]*非实时/);
+  assert.match(header, /7 项要求/);
+  assert.match(header, /已完成 2/);
+  assert.match(header, /受阻 5/);
+  assert.match(header, /2026-10-30T00:59:00Z/);
+  assert.match(header, /work-card-preview-highlights/);
+  assert.doesNotMatch(header, /超长项目要求|requirement-x{20}|item-i{20}|demo-project|来源：/);
   assert.match(html, /<details class="work-card-snapshot-detail">\s*<summary>查看 7 项要求与结果/);
   assert.match(html, new RegExp("超长项目要求"));
   assert.match(html, new RegExp(`requirement-x{60}`));
@@ -784,22 +789,23 @@ test("project snapshots keep the chat preview compact and put complete historica
   assert.doesNotMatch(html, /data-work-card-snapshot-detail/, "ordinary snapshot disclosure must not add a view acknowledgement");
 });
 
-test("linked historical copies keep source IDs and long metadata inside the existing explicit-view disclosure", () => {
+test("linked historical copies summarize outcomes in the header and keep source IDs inside disclosure", () => {
   for (const copy of [linkedCopy(), linkedProjectCopy()]) {
     const registry = new WorkCardPresentationRegistry(SESSION);
     const entry = registry.present({type:"work-card.present",session_id:SESSION,presentation_id:PRESENTATION,card_id:CARD_ID,card:copy}).entry;
     const html = renderWorkCardEntry(entry);
-    const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
-    assert.match(preview, /历史副本[^<]*非实时/);
-    assert.match(preview, /Linked item|项目工作记录/);
-    assert.doesNotMatch(preview, /来源 Session|来源修订|事项：item-1|要求：req-1|2026-10-30T00:59:00Z/);
+    const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+    assert.match(header, /历史副本[^<]*非实时/);
+    assert.match(header, /Linked item|项目工作记录|6 项要求/);
+    assert.match(header, /2026-10-30T00:59:00Z/);
+    assert.doesNotMatch(header, /来源 Session|来源修订|事项：item-1|要求：req-1/);
     assert.match(html, /<details data-work-card-snapshot-detail><summary>查看/);
-    assert.match(html, /2026-10-30T00:59:00Z/);
+    assert.match(html, /来源 Session/);
   }
 });
 
 
-test("work cards keep chat previews quiet and put natural-language evidence before technical metadata", () => {
+test("work cards expose collapsed outcome highlights while keeping technical metadata inside disclosures", () => {
   const requirement = req(1, "unknown");
   requirement.text = "修复登录页键盘导航并补充定向测试";
   requirement.latest_result = {
@@ -810,11 +816,13 @@ test("work cards keep chat previews quiet and put natural-language evidence befo
   };
   const snapshot = card([requirement]);
   const html = renderWorkCardSnapshot(snapshot, { sessionId: SESSION, presentationId: PRESENTATION, cardId: CARD_ID });
-  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
-  assert.match(preview, /历史快照/);
-  assert.match(preview, /项目 &lt;unsafe&gt;/);
-  assert.match(preview, /查看 1 项要求与结果/);
-  assert.doesNotMatch(preview, /abcdef12|demo-project|2026-|result-private|run-private|src\/private|状态未知|来源：|状态：/);
+  const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+  assert.match(header, /历史快照/);
+  assert.match(header, /1 项要求/);
+  assert.match(header, /修复登录页键盘导航并补充定向测试/);
+  assert.match(header, /已调整焦点顺序并运行桌面定向测试/);
+  assert.match(header, /2026-10-30T00:59:00Z/);
+  assert.doesNotMatch(header, /abcdef12|demo-project|result-private|run-private|src\/private|来源：/);
   assert.match(html, /修复登录页键盘导航并补充定向测试/);
   assert.match(html, /已调整焦点顺序并运行桌面定向测试/);
   assert.match(html, /<details class="work-card-technical-detail"><summary>技术与来源信息/);
@@ -822,18 +830,20 @@ test("work cards keep chat previews quiet and put natural-language evidence befo
   assert.match(html, /data-work-card-result-detail/);
   const visibleResult = html.match(/<p class="work-card-result-summary">([\s\S]*?)<\/p>/)?.[1] ?? "";
   assert.equal(visibleResult, "已调整焦点顺序并运行桌面定向测试");
-  assert.equal((html.match(/已调整焦点顺序并运行桌面定向测试/g) ?? []).length, 1, "the natural-language summary is not repeated in its disclosure");
+  assert.equal((html.match(/已调整焦点顺序并运行桌面定向测试/g) ?? []).length, 2, "collapsed highlight and expanded row both keep the readable summary");
 });
 
-test("linked-copy history preview hides identifiers and duplicate unknown states while retaining read affordance", () => {
+test("linked-copy history preview summarizes requirement outcome in the header without leaking identifiers", () => {
   const html = renderWorkCardSnapshot(linkedCopy(), { sessionId: SESSION, presentationId: PRESENTATION, cardId: CARD_ID });
-  const preview = html.match(/<header[\s\S]*?<\/header><details[^>]*><summary>[\s\S]*?<\/summary>/)?.[0] ?? "";
-  assert.match(preview, /历史副本/);
-  assert.match(preview, /Linked item/);
-  assert.match(preview, /查看要求与结果/);
-  assert.doesNotMatch(preview, /demo-project|20261030|item-1|req-1|worker-|unknown|未知|未验证|2026-/);
+  const header = html.match(/<header class="work-card-header">([\s\S]*?)<\/header>/)?.[1] ?? "";
+  assert.match(header, /历史副本/);
+  assert.match(header, /Linked item/);
+  assert.match(header, /Linked requirement/);
+  assert.match(header, /没有可确认的操作结果/);
+  assert.match(header, /已完成/);
+  assert.match(header, /2026-10-30T00:59:00Z/);
+  assert.doesNotMatch(header, /demo-project|20261030|item-1|req-1|worker-|unknown/);
   assert.match(html, /Linked requirement/);
-  assert.match(html, /没有可确认的操作结果/);
   assert.match(html, /<details class="work-card-technical-detail"><summary>技术与来源信息/);
   assert.match(html, /来源 Session/);
   assert.match(html, /data-work-card-snapshot-detail/);

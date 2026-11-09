@@ -1198,6 +1198,19 @@ class WorkCardLedger:
     def list_cards(self) -> list[dict[str, Any]]:
         return self._read_cards()
 
+    def disposition(self):
+        from work_card_disposition import WorkCardDisposition
+        return WorkCardDisposition(self._session, self._store, self)
+
+    def list_visible_cards(self) -> list[dict[str, Any]]:
+        return self.disposition().filter_visible_cards(self.list_cards())
+
+    def get_visible_card(self, card_id: str) -> dict[str, Any] | None:
+        record = self.get_card(card_id)
+        if record is None or not self.disposition().is_card_visible(card_id):
+            return None
+        return record
+
     def acknowledge_viewed(self, card_id: str) -> WorkCardViewAckResult:
         if type(card_id) is not str or _CARD_ID.fullmatch(card_id) is None:
             return WorkCardViewAckResult("rejected", None, None, "invalid_card_id")
