@@ -6,7 +6,7 @@
  * cold-relaunches into the same isolated profile (tray double-click is manual; documented).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -234,8 +234,21 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     (options.output ?? process.stdout).write(`${JSON.stringify(evidence, null, 2)}\n`);
     return evidence;
   } catch (error) {
-    try { persistH1FailureDiagnostics(runRoot, error, diagnosticsStage); } catch { /* preserve primary failure */ }
+    try {
+      const dataRoot = verified?.app_root ? path.join(verified.app_root, "data") : null;
+      const dataRootEntries = dataRoot && existsSync(dataRoot) ? readdirSync(dataRoot).sort() : null;
+      const enriched = dataRootEntries
+        ? Object.assign(error, {
+          diagnostics: {
+            ...(error?.diagnostics ?? null),
+            data_root_entries: dataRootEntries,
+          },
+        })
+        : error;
+      persistH1FailureDiagnostics(runRoot, enriched, diagnosticsStage);
+    } catch { /* preserve primary failure */ }
     throw error;
+  }
   } finally {
     if (host) try { await host.close(); } catch { /* preserve primary failure */ }
   }

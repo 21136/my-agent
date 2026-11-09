@@ -42,7 +42,7 @@ Tray reopen remains **manual** until a dedicated UI driver exists; cold relaunch
 
 3. **`.venv`**, `desktop/node_modules` + Electron, TypeScript (`desktop/node_modules/typescript`) for the control build.
 4. H1 **main/renderer freeze** still runs inside the runner (esbuild + vite); first run is slow.
-5. The seed step writes a real desktop session (`data/sessions/<id>/`, `data/state.json`, and usually `data/.file-guard` / `data/.session-guard` from save backups). Runner preflight and Electron isolation allow only those entries plus exactly one conversation id.
+5. The seed step writes a real desktop session (`data/sessions/<id>/`, `data/state.json`, and usually `data/.file-guard` / `data/.session-guard` from save backups). After a real first open, `data/logs/` and `data/auto-recognition-preference.sqlite3` may also appear; runner preflight and Electron isolation allow those plus exactly one conversation id.
 6. First real sidecar open may write `evolve/user_profile.md` (not in the freeze manifest). Before cold reopen the harness removes it; verify also allowlists that single path for the workbench recovery profile only.
 7. Sealed H1 serves the renderer on a dynamic `http://127.0.0.1:<port>/` origin; Electron main registers that origin on the Python sidecar (`MY_AGENT_WS_ALLOWED_ORIGINS`) before `server.py` accepts the renderer WebSocket.
 

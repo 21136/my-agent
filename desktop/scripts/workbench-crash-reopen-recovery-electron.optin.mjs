@@ -2,6 +2,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, wr
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES } from "../electron/evolution/workbench-recovery-h1-data-allowlist.mjs";
 
 const optinDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -14,12 +15,7 @@ export const WORKBENCH_RECOVERY_SESSION_ID = "workbench-recovery-electron";
 /** Companion user profile materialized on first real sidecar open (not in freeze manifest). */
 export const WORKBENCH_RECOVERY_RUNTIME_APP_REL_PATHS = ["evolve/user_profile.md"];
 
-export const WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES = new Set([
-  "sessions",
-  "state.json",
-  ".file-guard",
-  ".session-guard",
-]);
+export { WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES } from "../electron/evolution/workbench-recovery-h1-data-allowlist.mjs";
 
 export function deny(message) {
   throw Object.assign(new Error(message), { code: "permission_denied" });
@@ -133,12 +129,23 @@ export function assertWorkbenchRecoverySeedLayout(appRoot, sessionId = WORKBENCH
   const dataEntries = existsSync(dataRoot) ? readdirSync(dataRoot).sort() : [];
   const dataLayout = validateWorkbenchRecoveryDataRootEntries(dataEntries);
   if (!dataLayout.ok) {
-    deny(
-      `workbench recovery seed data root layout invalid; `
-      + `allowed: ${[...WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES].sort().join(", ")}; `
-      + `got: ${dataEntries.join(", ") || "(missing)"}`
-      + (dataLayout.unexpected.length ? `; unexpected: ${dataLayout.unexpected.join(", ")}` : "")
-      + (dataLayout.missing.length ? `; missing: ${dataLayout.missing.join(", ")}` : ""),
+    throw Object.assign(
+      new Error(
+        `workbench recovery seed data root layout invalid; `
+        + `allowed: ${[...WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES].sort().join(", ")}; `
+        + `got: ${dataEntries.join(", ") || "(missing)"}`
+        + (dataLayout.unexpected.length ? `; unexpected: ${dataLayout.unexpected.join(", ")}` : "")
+        + (dataLayout.missing.length ? `; missing: ${dataLayout.missing.join(", ")}` : ""),
+      ),
+      {
+        code: "permission_denied",
+        diagnostics: {
+          data_root_entries: dataEntries,
+          unexpected: dataLayout.unexpected,
+          missing: dataLayout.missing,
+          allowed: [...WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES].sort(),
+        },
+      },
     );
   }
   const sessionDirs = listWorkbenchRecoveryConversationDirectories(sessionsRoot);

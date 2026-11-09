@@ -34,6 +34,7 @@ import { buildEvolutionTestSupervisorConfig, loadEvolutionTestHostProfile, type 
 import { assertEvolutionTestProfileLoaded, detectEvolutionTestLaunchIntent } from "./evolution/test-launch-intent.mjs";
 import { bindEvolutionIpc, type EvolutionIpcAdapter, type EvolutionIpcEvent } from "./evolution/main-bridge";
 import { startEvolutionTestRendererServer, type EvolutionTestRendererServer } from "./evolution/sealed-renderer-server";
+import { WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES } from "./evolution/workbench-recovery-h1-data-allowlist.mjs";
 import { buildBilibiliSearchUrl, isOfficialBilibiliUrl } from "./bilibili-search";
 import {
   displayRefFromAgentMediaUrl,
@@ -226,11 +227,15 @@ function assertWorkbenchCrashReopenH1Isolation(context: EvolutionTestHostContext
   for (const target of [profileRoot, ...Object.values(expected).filter(value => value !== appRoot && value !== profileRoot && value !== runId), path.join(appRoot, "data"), path.join(appRoot, "data", "sessions"), path.join(appRoot, "workspace"), path.join(appRoot, "evolve")]) {
     const info = lstatSync(target); if (!info.isDirectory() || info.isSymbolicLink() || !samePath(realpathSync.native(target), target)) throw Error("workbench crash/reopen H1 runtime root is missing, linked, or escaped its sealed run");
   }
-  const workbenchRecoveryAllowedData = new Set(["sessions", "state.json", ".file-guard", ".session-guard"]);
   const dataEntries = readdirSync(path.join(appRoot, "data")).sort();
-  const unexpectedData = dataEntries.filter((name) => !workbenchRecoveryAllowedData.has(name));
+  const unexpectedData = dataEntries.filter((name) => !WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES.has(name));
   const missingData = ["sessions", "state.json"].filter((name) => !dataEntries.includes(name));
-  if (unexpectedData.length || missingData.length) throw Error("workbench crash/reopen H1 agent data root has unexpected entries");
+  if (unexpectedData.length || missingData.length) {
+    throw Error(
+      `workbench crash/reopen H1 agent data root has unexpected entries `
+      + `(extra=${unexpectedData.join(",") || "-"}; missing=${missingData.join(",") || "-"}; got=${dataEntries.join(",")})`,
+    );
+  }
   const sessionDirs = listH1ConversationDirectories(path.join(appRoot, "data", "sessions"));
   if (sessionDirs.length !== 1 || sessionDirs[0] !== seededSessionId) throw Error(`workbench crash/reopen H1 agent data root must contain exactly one seeded session (${seededSessionId})`);
   if (JSON.stringify(readdirSync(profileRoot).sort()) !== JSON.stringify(["appdata", "electron-sessionData", "electron-userData", "home", "tmp", "userprofile", "xdg-cache", "xdg-config", "xdg-data"])) throw Error("workbench crash/reopen H1 profile has unexpected entries");
