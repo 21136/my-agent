@@ -45,6 +45,11 @@ async function activateScheduleSegment(work) {
   await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached" });
   const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
   await panel.waitFor({ state: "visible" });
+  return panel;
+}
+
+async function waitForVisibleScheduleLaunch(work) {
+  const panel = await activateScheduleSegment(work);
   const launch = panel.locator("[data-schedule-launch]");
   await launch.waitFor({ state: "visible" });
   return launch;
@@ -146,8 +151,8 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       && window.receivedEvents?.some(e => e.type === "project.list"));
 
     const work = await openCurrentWorkOverlay(page);
-    await activateScheduleSegment(work);
-    const sourcePanel = work.locator('[data-cw-segment-panel="schedule"] [data-selected-project-overview]');
+    const schedulePanel = await activateScheduleSegment(work);
+    const sourcePanel = schedulePanel.locator("[data-selected-project-overview]");
     await sourcePanel.waitFor({ state: "visible" });
 
     await page.evaluate(projectIds => {
@@ -161,14 +166,14 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
         input.dispatchEvent(new Event("change", { bubbles: true }));
       }
     }, PROJECTS);
-    await work.locator("[data-run-selected-project-overview]").click();
+    await schedulePanel.locator("[data-run-selected-project-overview]").click();
 
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "confirm.request"));
     await page.locator('[data-confirm="y"]:not([disabled])').last().click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
 
-    const schedule = await activateScheduleSegment(work);
+    const schedule = await waitForVisibleScheduleLaunch(work);
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);
     await schedule.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
