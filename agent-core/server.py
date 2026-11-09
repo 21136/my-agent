@@ -496,6 +496,7 @@ class WsBridge:
     lifecycle_conversation_id: str = field(default="", init=False, repr=False)
     _pending_confirm_id: str | None = field(default=None, init=False)
     _pending_confirm_binding: tuple[Any, str, str, int, float] | None = field(default=None, init=False, repr=False)
+    last_confirm_outcome: str = field(default="", init=False, repr=False)
     _cancel_turn: Callable[[], None] | None = field(default=None, init=False, repr=False)
     # Consent belongs to this WebSocket connection, never to the shared handler.
     project_journal_enabled: bool = field(default=False, init=False, repr=False)
@@ -1210,7 +1211,8 @@ class WsBridge:
             return True
 
     def confirm_fn(self, preview: str, allow_approve_all: bool) -> str:
-        return self.confirm_with_receipt(preview, allow_approve_all)[0]
+        choice, _receipt = self.confirm_with_receipt(preview, allow_approve_all)
+        return choice
 
     def verify_project_worker_requirement(self, *, host: Any, session: Session, store: Any,
                                           binding: Any, outcome: Any, target: str,
@@ -1531,6 +1533,34 @@ class WsBridge:
             return "n"
         return result
 
+    @staticmethod
+    def _ordinary_confirm_binding_is_current(
+        bridge: "WsBridge",
+        binding: tuple[Any, str, str, int, float] | None,
+        *,
+        deliver: bool = False,
+    ) -> bool:
+        if binding is None:
+            return not bridge._connection_closed.is_set()
+        try:
+            current = bridge.lifecycle.snapshot()
+            allowed_states = ("running",) if deliver else ("queued", "running")
+            return bool(
+                not bridge.cancel_event.is_set()
+                and not bridge._connection_closed.is_set()
+                and callable(bridge._session_provider)
+                and bridge._session_provider() is binding[0]
+                and binding[0].conversation_id == binding[1]
+                and bridge.lifecycle_conversation_id == binding[1]
+                and current is not None
+                and current.run_id == binding[2]
+                and current.state in allowed_states
+                and not current.cancel_requested
+                and current.sequence >= binding[3]
+            )
+        except Exception:
+            return False
+
     def confirm_with_receipt(self, preview: str, allow_approve_all: bool) -> tuple[str, str]:
         with self._batch_confirm_lock:
             if self._batch_confirm_pending is not None:
@@ -1552,7 +1582,7 @@ class WsBridge:
             snapshot = self.lifecycle.snapshot()
             if (bound_session is not None and type(getattr(bound_session, "conversation_id", None)) is str
                     and confirmation_session == bound_session.conversation_id
-                    and snapshot is not None and snapshot.state == "running"):
+                    and snapshot is not None and snapshot.state in {"queued", "running"}):
                 confirmation_binding = (
                     bound_session, bound_session.conversation_id, snapshot.run_id, snapshot.sequence,
                     confirmation_deadline,
@@ -1567,22 +1597,7 @@ class WsBridge:
         )
 
         def binding_is_current() -> bool:
-            if confirmation_binding is None:
-                return not self._connection_closed.is_set()
-            try:
-                current = self.lifecycle.snapshot()
-                return bool(
-                    not self.cancel_event.is_set() and not self._connection_closed.is_set()
-                    and callable(self._session_provider)
-                    and self._session_provider() is confirmation_binding[0]
-                    and confirmation_binding[0].conversation_id == confirmation_binding[1]
-                    and self.lifecycle_conversation_id == confirmation_binding[1]
-                    and current is not None and current.run_id == confirmation_binding[2]
-                    and current.sequence == confirmation_binding[3] and current.state == "running"
-                    and not current.cancel_requested
-                )
-            except Exception:
-                return False
+            return self._ordinary_confirm_binding_is_current(self, confirmation_binding)
 
         def emit_confirmation_event(event: dict[str, Any]) -> None:
             event.update(confirmation_identity_fields)
@@ -1605,7 +1620,22 @@ class WsBridge:
         deadline = confirmation_deadline
         try:
             while True:
-                if self.cancel_event.is_set() or not binding_is_current():
+                if self.cancel_event.is_set():
+                    self.last_confirm_outcome = "cancelled"
+                    if not context_switch:
+                        emit_confirmation_event({
+                            "type": "confirm.done", "request_id": request_id, "choice": "cancelled",
+                        })
+                    self._touch_progress()
+                    return "n", request_id
+                if not binding_is_current():
+                    if self._session_binding_transitions > 0:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise queue.Empty
+                        time.sleep(min(0.1, remaining))
+                        continue
+                    self.last_confirm_outcome = "cancelled"
                     if not context_switch:
                         emit_confirmation_event({
                             "type": "confirm.done", "request_id": request_id, "choice": "cancelled",
@@ -1626,6 +1656,7 @@ class WsBridge:
                         choice = "timeout"
                     elif self.cancel_event.is_set() or not binding_is_current():
                         choice = "cancelled"
+                    self.last_confirm_outcome = choice if choice in {"y", "n", "a"} else choice
                     if not context_switch:
                         emit_confirmation_event({
                             "type": "confirm.done", "request_id": request_id, "choice": choice,
@@ -1650,6 +1681,7 @@ class WsBridge:
                 )
         except queue.Empty:
             # C2: always pair confirm.done with confirm_fn return (BUG-008b).
+            self.last_confirm_outcome = "timeout"
             self.emit({"type": "notice", "text": "确认超时，已跳过"})
             if not context_switch:
                 self.emit(
@@ -2057,16 +2089,8 @@ class WsBridge:
             return False
         binding = self._pending_confirm_binding
         if binding is not None:
-            try:
-                current = self.lifecycle.snapshot()
-                if (not callable(self._session_provider) or self._session_provider() is not binding[0]
-                        or binding[0].conversation_id != binding[1]
-                        or self.lifecycle_conversation_id != binding[1] or current is None
-                        or current.run_id != binding[2] or current.sequence != binding[3]
-                        or current.state != "running" or current.cancel_requested
-                        or time.monotonic() >= binding[4]):
-                    return False
-            except Exception:
+            if (time.monotonic() >= binding[4]
+                    or not self._ordinary_confirm_binding_is_current(self, binding, deliver=True)):
                 return False
         self._confirm_queue.put((request_id, choice))
         return True
@@ -3259,7 +3283,13 @@ def _patch_repl(
     repl.agent.work_card_result_reply_turn = _WorkCardResultReplyTurn(repl, bridge)
     repl.stream_handlers = bridge.stream_handlers()
     repl.agent.stream_handlers = repl.stream_handlers
-    repl.agent.executor.confirm_fn = bridge.confirm_fn
+
+    def _confirm_with_outcome(preview: str, allow_approve_all: bool) -> str:
+        choice = bridge.confirm_fn(preview, allow_approve_all)
+        repl.agent.executor.session.last_confirm_outcome = bridge.last_confirm_outcome
+        return choice
+
+    repl.agent.executor.confirm_fn = _confirm_with_outcome
     repl.agent.executor.session.evolution_confirm_with_receipt = bridge.confirm_with_receipt
     repl.agent.executor.on_event = bridge.on_executor_event
     repl.agent.on_turn_event = bridge.emit_turn_event
@@ -3293,7 +3323,7 @@ def _patch_repl(
         if evolution_client is not None:
             repl.agent.executor.evolution_client = evolution_client
         repl.agent.stream_handlers = repl.stream_handlers
-        repl.agent.executor.confirm_fn = bridge.confirm_fn
+        repl.agent.executor.confirm_fn = _confirm_with_outcome
         repl.agent.executor.session.evolution_confirm_with_receipt = bridge.confirm_with_receipt
         repl.agent.executor.on_event = bridge.on_executor_event
         repl.agent.on_turn_event = bridge.emit_turn_event

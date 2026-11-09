@@ -1118,6 +1118,13 @@ def format_tool_interrupt_notice(
 ) -> str:
     """User/LLM-facing copy when a tool was cancelled, timed out, or confirm rejected."""
     label = (tool_label or "工具").strip() or "工具"
+    if kind == "confirm_superseded":
+        return (
+            f"{label}确认因会话或运行状态更新被中断（不是工具回合上限，也不是你点了拒绝）。"
+            "若确认框未恢复，请稍候重试或再发「继续」。"
+            "前端依赖损坏请优先 `run_evolved` → `repair_node_modules`，"
+            "勿手写 `rmdir`/`npm install` 拆两步。"
+        )
     if kind == "confirm_rejected":
         return (
             f"{label}确认被拒绝或超时（不是工具回合上限）。"

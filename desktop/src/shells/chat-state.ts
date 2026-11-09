@@ -1120,7 +1120,27 @@ export function createChatSession(
     notify();
   }
 
+  function isPendingOrdinaryConfirmRequest(requestId: string): boolean {
+    if (!requestId.trim()) return false;
+    if (model.confirmOverlay?.requestId === requestId) return true;
+    if (!options.confirmInBlocks) return model.confirmPending;
+    return model.blocks.some(
+      (block) => block.kind === "confirm"
+        && block.requestId === requestId
+        && !block.resolved
+        && !postTurnConfirmations.has(block.requestId)
+        && !requirementVerificationConfirmations.has(block.requestId),
+    );
+  }
+
   function isStaleRunEvent(event: ServerEvent): boolean {
+    if (
+      event.type === "confirm.done"
+      && typeof event.request_id === "string"
+      && isPendingOrdinaryConfirmRequest(event.request_id)
+    ) {
+      return false;
+    }
     if (
       (event.type === "tool.end" || event.type === "tool.progress" || event.type === "tool.start")
       && acceptedCallIds.has(event.call_id)
@@ -1230,7 +1250,7 @@ export function createChatSession(
         if (model.pendingToolPrompt && (sessionChanged || model.pendingToolPrompt.sessionId !== event.session_id)) {
           expirePendingToolPrompt("会话已切换；工具输入未发送为普通消息");
         }
-        if (!sessionChanged && turnIsBusy()) {
+        if (!sessionChanged && (turnIsBusy() || model.confirmPending || model.confirmSubmitting)) {
           model.sessionId = event.session_id;
           hooks.onSessionBanner?.(event.session_id);
           notify();

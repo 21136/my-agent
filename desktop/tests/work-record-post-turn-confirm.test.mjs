@@ -300,3 +300,33 @@ test("same-session confirmation events from a non-current run are rejected", () 
   assert.equal(chat.model.confirmOverlay, null);
   assert.equal(chat.model.blocks.some(block => block.kind === "confirm" && block.requestId === "already-finished"), false);
 });
+
+test("same-session banner refresh preserves an in-flight ordinary confirmation", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request", request_id: "tool-confirm", preview: "执行命令", allow_approve_all: false,
+  });
+  assert.equal(chat.model.confirmPending, true);
+  chat.handleEvent({
+    type: "session.banner", session_id: "session-a", topics: [], turn_mode: "agent",
+    turn_mode_label: "动手", phase: "S4",
+  });
+  assert.equal(chat.model.confirmPending, true);
+  assert.equal(chat.model.confirmOverlay?.requestId, "tool-confirm");
+});
+
+test("confirm.done for a pending request is not dropped as a stale run event", () => {
+  const chat = session();
+  chat.handleEvent({ type: "execution.state", run_id: "visible-run", state: "running", sequence: 2 });
+  chat.handleEvent({
+    type: "confirm.request", request_id: "bind-confirm", session_id: "session-a",
+    run_id: "visible-run", preview: "运行命令", allow_approve_all: false,
+  });
+  chat.handleEvent({ type: "execution.state", run_id: "next-run", state: "running", sequence: 3 });
+  assert.equal(chat.handleEvent({
+    type: "confirm.done", request_id: "bind-confirm", session_id: "session-a",
+    run_id: "visible-run", choice: "timeout",
+  }), true);
+  assert.equal(chat.model.confirmPending, false);
+  assert.equal(chat.model.confirmOverlay?.resolved, "确认超时");
+});

@@ -171,6 +171,7 @@ class ExecutorSession:
     last_review_verdict: str | None = None
     last_review_blockers_count: int = 0
     ordinary_visible_confirms_this_turn: int = 0
+    last_confirm_outcome: str = ""
     approval_mode: str = "manual"
     approval_mode_blocked_this_turn: bool = False
     # Request-scoped ordinary policy; never persisted in SessionMeta.
@@ -1856,11 +1857,19 @@ class ToolExecutor:
                     )
             if confirm_decision == "n":
                 self.session.approval_mode_blocked_this_turn = True
+                outcome = (getattr(self.session, "last_confirm_outcome", "") or "").strip().lower()
+                if outcome == "timeout":
+                    message = "tool confirmation timed out"
+                elif outcome in {"cancelled", "stale"}:
+                    message = "tool confirmation superseded before approval"
+                else:
+                    message = "tool call rejected by user"
                 result = tool_fail(
                     name,
                     ToolErrorCode.CONFIRM_REJECTED,
-                    "tool call rejected by user",
+                    message,
                     duration_ms=_elapsed_ms(started),
+                    details={"confirm_outcome": outcome or "n"},
                 )
                 self._log_tool_call(name, args, result, confirm=confirm_decision, started=started)
                 return result
