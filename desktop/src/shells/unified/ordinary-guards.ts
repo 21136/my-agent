@@ -10,6 +10,10 @@ export function userFacingErrorStatus(message: string | null | undefined): strin
   const text = (message || "").replace(/\s+/g, " ").trim();
   if (!text || text === "错误") return "出了点问题，请重试";
   if (/no active project session/i.test(text)) return "请先打开项目";
+  if (/session binding is busy/i.test(text)) {
+    return "当前会话正忙（编排或确认中），请先在聊天区完成确认，或稍后再切换项目。";
+  }
+  if (/当前主会话仍在编排或确认中/.test(text)) return text.length > 72 ? `${text.slice(0, 72)}…` : text;
   const short = text.length > 72 ? `${text.slice(0, 72)}…` : text;
   return short.startsWith("出错") ? short : `出错了：${short}`;
 }

@@ -4328,6 +4328,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const turnElapsedMs =
       turnStartedAt > 0 && chat.isWorking() ? now - turnStartedAt : 0;
     const elapsedMs = Math.max(maxRunningMs, maxLlmWaitMs, turnElapsedMs);
+    if (elapsedMs >= 1000 && !chat.model.cancelRequested) {
+      const sec = Math.floor(elapsedMs / 1000);
+      if (chat.model.confirmPending) {
+        setStatus(`等待确认… ${sec}s`);
+        return;
+      }
+    }
     if (
       elapsedMs >= 1000 &&
       !chat.model.cancelRequested &&
