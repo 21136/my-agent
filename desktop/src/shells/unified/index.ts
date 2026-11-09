@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, companionHomeComposerOwnsOrdinaryConfirm, composerShouldShowOrdinaryConfirmActions, createChatSession, escapeHtml, ordinaryConfirmHasOverlayPrimarySurface, ordinaryConfirmWouldRenderInChat, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -100,8 +100,8 @@ import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-
 import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "./schedule-launch";
 import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
-import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
-import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation } from "./work-card-presentation";
+import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
+import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation, companionHomeDefersWorkCardChatPresentation } from "./work-card-presentation";
 import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkWorkbenchPage, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
@@ -1775,6 +1775,18 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return resolveActiveOrdinaryConfirmRequestId(chat.model);
   }
 
+  function companionConfirmUi() {
+    const companionComposerPrimary = companionHomeComposerOwnsOrdinaryConfirm({
+      mainFocus: projectState.mainFocus,
+      perspective,
+    });
+    const chatRendersOrdinaryConfirm = perspective !== "night"
+      && ordinaryConfirmWouldRenderInChat(chat.model, { companionComposerPrimary });
+    const overlayRendersOrdinaryConfirm = perspective === "night"
+      && ordinaryConfirmHasOverlayPrimarySurface(chat.model);
+    return { companionComposerPrimary, chatRendersOrdinaryConfirm, overlayRendersOrdinaryConfirm };
+  }
+
   function syncPendingConfirmComposerHint(): void {
     const awaiting = chatSessionAwaitingUserConfirm(chat.model);
     let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
@@ -1788,8 +1800,30 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       hint?.remove();
       return;
     }
-  const summary = summarizeConfirmPreview(preview);
-    const batchAuthorization = isProjectWorkerBatchAuthorizationPreview(preview);
+    const confirmUi = companionConfirmUi();
+    const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
+    const inFlight = !canAct && resolveActiveOrdinaryConfirmRequestId(chat.model) === requestId;
+    const showComposerActions = composerShouldShowOrdinaryConfirmActions(chat.model, {
+      chatRendersOrdinaryConfirm: confirmUi.chatRendersOrdinaryConfirm,
+      overlayRendersOrdinaryConfirm: confirmUi.overlayRendersOrdinaryConfirm,
+      companionComposerPrimary: confirmUi.companionComposerPrimary,
+    });
+    if (!showComposerActions) {
+      if (!inFlight) {
+        hint?.remove();
+        return;
+      }
+      if (!hint) {
+        hint = document.createElement("section");
+        hint.dataset.pendingConfirmHint = "1";
+        hint.className = "unified-pending-confirm-hint";
+        hint.setAttribute("role", "region");
+        hint.setAttribute("aria-label", "待确认授权");
+        composerDock.insertBefore(hint, composerMetaEl);
+      }
+      hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong></div><p class="unified-pending-confirm-hint-detail text-muted" role="status">确认已提交，等待服务端…</p>`;
+      return;
+    }
     if (!hint) {
       hint = document.createElement("section");
       hint.dataset.pendingConfirmHint = "1";
@@ -1798,19 +1832,19 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       hint.setAttribute("aria-label", "待确认授权");
       composerDock.insertBefore(hint, composerMetaEl);
     }
-    const detail = batchAuthorization
-      ? renderProjectWorkerBatchAuthorizationHtml(preview)
-      : `<p class="unified-pending-confirm-hint-detail">${escapeHtml(summary.headline)}</p>`;
-    const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
+    const detail = renderComposerOrdinaryConfirmDetailHtml(preview);
     const disabled = canAct ? "" : " disabled";
-    const inFlight = !canAct && resolveActiveOrdinaryConfirmRequestId(chat.model) === requestId;
     const statusNote = inFlight
       ? `<p class="unified-pending-confirm-hint-detail text-muted" role="status">确认已提交，等待服务端…</p>`
       : "";
-    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong><button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button></div>${detail}${statusNote}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
+    const jump = confirmUi.companionComposerPrimary
+      ? ""
+      : `<button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button>`;
+    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong>${jump}</div>${detail}${statusNote}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
   }
 
   function appendPendingConfirmFallbackHtml(html: string): string {
+    if (companionHomeComposerOwnsOrdinaryConfirm({ mainFocus: projectState.mainFocus, perspective })) return html;
     if (!chatSessionAwaitingUserConfirm(chat.model)) return html;
     if (html.includes("unified-confirm") || html.includes("data-project-worker-batch-confirm")) return html;
     const preview = primaryPendingConfirmPreview(chat.model);
@@ -4810,6 +4844,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (block.kind === "process") return "";
     if (block.kind === "confirm") {
       if (perspective === "night" && block.confirmKind !== "work_record_post_turn" && block.confirmKind !== "project_worker_requirement_verification") return ""; // ordinary confirms use the overlay
+      const companionComposerPrimary = companionHomeComposerOwnsOrdinaryConfirm({
+        mainFocus: projectState.mainFocus,
+        perspective,
+      });
+      const ordinaryInline = block.confirmKind !== "work_record_post_turn"
+        && block.confirmKind !== "project_worker_requirement_verification";
+      if (companionComposerPrimary && ordinaryInline) {
+        const inProgress = isConfirmInProgressLabel(block.resolved);
+        const isTerminal = Boolean(block.resolved) && !inProgress;
+        if (isTerminal) {
+          return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
+        }
+        if (inProgress) return "";
+        return "";
+      }
       const inlineScopedConfirm = block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification";
       const confirmRequestId = inlineScopedConfirm ? escapeHtml(block.requestId) : block.requestId;
       const disabled = block.resolved ? "disabled" : "";
@@ -7218,19 +7267,22 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       }
       case "work-card.present": {
         if (event.session_id !== chat.model.sessionId) break;
+        const deferChat = companionHomeDefersWorkCardChatPresentation(projectState.mainFocus, event.card);
         const received = receiveWorkCardPresentation({
           registry: workCardPresentations,
           event,
-          mergeReference: (entry) => {
-            const prior = chat.model.blocks.find((block): block is Extract<ChatBlock, { kind: "work-card-reference" }> => block.kind === "work-card-reference" && block.presentationId === entry.presentationId);
-            if (prior && prior.cardId !== entry.cardId) throw new Error("work-card presentation identity conflicts with chat history");
-            if (!prior) chat.model.blocks.push({ kind: "work-card-reference", presentationId: entry.presentationId, cardId: entry.cardId, text: "" });
-          },
+          mergeReference: deferChat
+            ? () => {}
+            : (entry) => {
+              const prior = chat.model.blocks.find((block): block is Extract<ChatBlock, { kind: "work-card-reference" }> => block.kind === "work-card-reference" && block.presentationId === entry.presentationId);
+              if (prior && prior.cardId !== entry.cardId) throw new Error("work-card presentation identity conflicts with chat history");
+              if (!prior) chat.model.blocks.push({ kind: "work-card-reference", presentationId: entry.presentationId, cardId: entry.cardId, text: "" });
+            },
           sendReceived: (identity) => client.acknowledgeWorkCardReceived(identity),
         });
         if (received.receiptAttempt === "not_eligible") break;
         if (received.receiptAttempt === "failed") setStatus("卡片接收回执发送失败；未确认接收，等待后续重放重试。");
-        renderChat();
+        if (!deferChat) renderChat();
         scheduleCurrentWorkOverviewRefresh();
         break;
       }

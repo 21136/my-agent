@@ -141,6 +141,28 @@ html[data-theme] .unified-pending-confirm-hint-detail {
   color: color-mix(in srgb, var(--ma-text) 85%, transparent);
 }
 
+html[data-theme] .unified-pending-confirm-hint-expand {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+}
+
+html[data-theme] .unified-pending-confirm-hint-expand summary {
+  cursor: pointer;
+  color: var(--ma-accent);
+  list-style: none;
+}
+
+html[data-theme] .unified-pending-confirm-hint-expand-body {
+  margin-top: 0.45rem;
+  max-height: 9rem;
+  overflow: auto;
+  font-size: 0.78rem;
+}
+
+html[data-theme] .unified-pending-confirm-hint-expand-body .unified-project-worker-batch-auth {
+  padding: 0;
+}
+
 @media (max-width: 680px) {
   html[data-theme] .unified-shell[data-main-focus="chat"] #unified-composer-dock {
     padding-inline: 0.6rem;

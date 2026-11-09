@@ -320,6 +320,16 @@ export type WorkCardReceiveOutcome = {
 /** Merge the current-session presentation before attempting its idempotent receipt.
  * A successful send is only a WebSocket send attempt, not durable client storage or user viewing.
  */
+/** Companion home keeps live project-scoped snapshots in 当前工作, not chat bubbles. */
+export function companionHomeDefersWorkCardChatPresentation(
+  mainFocus: string,
+  card: unknown,
+): boolean {
+  if (mainFocus !== "chat" || !object(card) || !object(card.snapshot)) return false;
+  const kind = card.snapshot.kind;
+  return kind === "project_scoped" || kind === "linked_project_session_copy";
+}
+
 export function receiveWorkCardPresentation(options: {
   registry: WorkCardPresentationRegistry;
   event: unknown;

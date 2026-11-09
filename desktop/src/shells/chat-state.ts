@@ -1,6 +1,11 @@
 import type { ExecutionStateName, ServerEvent } from "../api/ws";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate } from "./unified/confirm-preview";
-import { polishSystemNoticeText, polishToolProgressText } from "./unified/system-notice-copy";
+import {
+  isCompanionOrchestrationOnlyChatText,
+  polishSystemNoticeText,
+  polishToolProgressText,
+  stripCompanionOrchestrationProse,
+} from "./unified/system-notice-copy";
 import { userFacingErrorStatus } from "./unified/ordinary-guards";
 import { settledToolStatus } from "./tool-outcome";
 import { displayToolName } from "../copy/tool-display";
@@ -263,8 +268,8 @@ export function historyFromItems(
       blocks.push({ kind: "user", text: item.text, turnIndex });
       seeds.push({ role: "user", turnIndex });
     } else {
-      const text = item.text.trim();
-      if (isHarnessChatText(text)) {
+      const text = stripCompanionOrchestrationProse(item.text.trim());
+      if (!text || isHarnessChatText(text) || isCompanionOrchestrationOnlyChatText(item.text)) {
         continue;
       }
       const assistantTurn = turnIndex || 1;
@@ -286,7 +291,7 @@ export function historyFromItems(
         if (!agentPath || !textExt.test(agentPath)) continue;
         blocks.push({ kind: "inline-file", agentPath, turnIndex: assistantTurn });
       }
-      blocks.push({ kind: "assistant", text: item.text, turnIndex: assistantTurn });
+      blocks.push({ kind: "assistant", text, turnIndex: assistantTurn });
       seeds.push({ role: "assistant", turnIndex: assistantTurn });
     }
   }
@@ -484,6 +489,59 @@ export function resolveActiveOrdinaryConfirmRequestId(
     if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
   }
   return null;
+}
+
+/** Companion 小魔王空间: composer dock is the sole actionable ordinary-confirm surface. */
+export function companionHomeComposerOwnsOrdinaryConfirm(ui: {
+  mainFocus: string;
+  perspective: string;
+}): boolean {
+  return ui.mainFocus === "chat" && ui.perspective !== "night";
+}
+
+/** Non-night chat shows an ordinary confirm card (live block or composer fallback tail). */
+export function ordinaryConfirmWouldRenderInChat(
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  ui?: { companionComposerPrimary?: boolean },
+): boolean {
+  if (ui?.companionComposerPrimary) return false;
+  if (!chatSessionAwaitingUserConfirm(model)) return false;
+  const requestId = resolveActiveOrdinaryConfirmRequestId(model);
+  if (!requestId) return false;
+  const block = model.blocks.find(
+    (item) => item.kind === "confirm" && item.requestId === requestId,
+  );
+  if (block?.kind === "confirm" && block.confirmKind !== "work_record_post_turn") {
+    const inProgress = isConfirmInProgressLabel(block.resolved);
+    const isTerminal = Boolean(block.resolved) && !inProgress;
+    if (!isTerminal && !inProgress) return true;
+  }
+  return Boolean(primaryPendingConfirmPreview(model).trim());
+}
+
+/** Night overlay owns ordinary confirms when it is live and unresolved. */
+export function ordinaryConfirmHasOverlayPrimarySurface(
+  model: Pick<ChatSessionModel, "confirmOverlay">,
+): boolean {
+  const overlay = model.confirmOverlay;
+  if (!overlay?.requestId) return false;
+  return !overlay.resolved || isConfirmInProgressLabel(overlay.resolved);
+}
+
+/** Composer dock gets y/n only when chat and overlay are not already the primary surface. */
+export function composerShouldShowOrdinaryConfirmActions(
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  ui: {
+    chatRendersOrdinaryConfirm: boolean;
+    overlayRendersOrdinaryConfirm: boolean;
+    companionComposerPrimary?: boolean;
+  },
+): boolean {
+  if (!chatSessionAwaitingUserConfirm(model)) return false;
+  const requestId = resolveActiveOrdinaryConfirmRequestId(model);
+  if (!requestId || !primaryPendingConfirmPreview(model).trim()) return false;
+  if (ui.companionComposerPrimary) return true;
+  return !ui.chatRendersOrdinaryConfirm && !ui.overlayRendersOrdinaryConfirm;
 }
 
 function normalizedRunId(runId: string | undefined): string {
@@ -1739,12 +1797,14 @@ export function createChatSession(
         }
         const streaming = ensureStreamingAssistant();
         streaming.text += event.text;
-        if (isHarnessChatText(streaming.text)) {
+        const cleaned = stripCompanionOrchestrationProse(streaming.text);
+        if (isHarnessChatText(cleaned) || isCompanionOrchestrationOnlyChatText(cleaned)) {
           const idx = model.blocks.lastIndexOf(streaming);
           if (idx >= 0) model.blocks.splice(idx, 1);
           model.assistantBuffer = "";
         } else {
-          model.assistantBuffer = streaming.text;
+          if (cleaned !== streaming.text) streaming.text = cleaned;
+          model.assistantBuffer = cleaned;
         }
         notify();
         break;
@@ -1757,7 +1817,7 @@ export function createChatSession(
             collapseCurrentProcess();
           }
         }
-        const finalText = event.text.trim();
+        const finalText = stripCompanionOrchestrationProse(event.text.trim());
         const turnIndex = currentTurnIndex();
         // Drop every streaming bubble for this turn (key mismatch used to leave orphans).
         for (let i = model.blocks.length - 1; i >= 0; i--) {
@@ -1766,7 +1826,7 @@ export function createChatSession(
             model.blocks.splice(i, 1);
           }
         }
-        if (finalText && !isHarnessChatText(finalText)) {
+        if (finalText && !isHarnessChatText(finalText) && !isCompanionOrchestrationOnlyChatText(finalText)) {
           const last = model.blocks[model.blocks.length - 1];
           // Idempotent: duplicate assistant.done must not create a second identical bubble.
           const dup =

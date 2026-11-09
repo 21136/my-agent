@@ -26,6 +26,24 @@ test("polishSystemNoticeText silences routine save acks", () => {
   assert.equal(copy.polishSystemNoticeText("会话已保存"), null);
 });
 
+test("polishSystemNoticeText silences companion confirm and project-create automation", () => {
+  assert.equal(copy.polishSystemNoticeText("需要在当前小魔王空间确认后继续；请查看聊天中的确认卡。"), null);
+  assert.equal(copy.polishSystemNoticeText("已在主界面创建项目 workspace/random-number-4（未换线）"), null);
+  assert.equal(copy.polishSystemNoticeText("[Goal] 多项目 worker 批次未逐项验收，父 Goal 保持未完成：a。"), null);
+});
+
+test("stripCompanionOrchestrationProse keeps user-readable summary", () => {
+  const raw = [
+    "需要在当前小魔王空间确认后继续；请查看聊天中的确认卡。",
+    "已在主界面创建项目 workspace/random-number-5（未换线）",
+    "",
+    "三个旧项目已软删除并重新创建，页面已写入。",
+  ].join("\n");
+  const stripped = copy.stripCompanionOrchestrationProse(raw);
+  assert.doesNotMatch(stripped, /确认卡/);
+  assert.match(stripped, /软删除并重新创建/);
+});
+
 test("polishSystemNoticeText silences companion orchestration routing notices", () => {
   assert.equal(
     copy.polishSystemNoticeText(

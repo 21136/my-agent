@@ -5460,14 +5460,12 @@ class Agent:
                     f"{projects}。未自动运行项目验收命令。"
                 )
                 notices.append(notice)
-                self.session.append_message({"role": "assistant", "content": notice})
             elif self._multi_project_batch_requested:
                 notice = (
                     "[Goal] 多项目批次未获完整范围授权或尚未启动；本回合跳过单项目验收，"
                     "Goal 未被标记为多项目未验证。"
                 )
                 notices.append(notice)
-                self.session.append_message({"role": "assistant", "content": notice})
             # The primary execute loop is recorded segment-by-segment above.
             # Account for follow-up work outside that loop without double-counting
             # its wall interval.

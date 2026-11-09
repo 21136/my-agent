@@ -3571,24 +3571,8 @@ def _user_facing_binding_busy_message(msg_type: str) -> str:
 
 
 def _emit_confirm_wait_notice(bridge: WsBridge, preview: str) -> None:
-    """Surface a short chat notice whenever a turn blocks on user confirmation."""
-    if preview.startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM"):
-        text = (
-            "需要在当前小魔王空间确认：是否授权本轮各项目 worker 按披露范围施工。"
-            "请在聊天确认卡中批准或拒绝；未确认前不会派发 worker。"
-        )
-    elif preview.startswith("项目 worker"):
-        text = "需要在当前小魔王空间确认一项项目 worker 操作；请在聊天确认卡中批准或拒绝。"
-    else:
-        text = "需要在当前小魔王空间确认后继续；请查看聊天中的确认卡。"
-    try:
-        bridge.emit(bridge._scope_run_event({
-            "type": "turn.notice",
-            "level": "info",
-            "text": text,
-        }))
-    except Exception:
-        pass
+    """Confirm UX is owned by the desktop composer strip on companion home; skip chat notices."""
+    return
 
 
 def _line_may_rebind_session(line: Any) -> bool:
@@ -5880,6 +5864,13 @@ def _publish_current_dialogue_project_work_card(
     repl: ConversationRepl, bridge: WsBridge, session: Session,
     store: Any, project_id: str, *, chat_delivery: bool = True,
 ) -> bool:
+    try:
+        from companion_home_chat import companion_home_defers_project_scoped_chat
+
+        if companion_home_defers_project_scoped_chat(session):
+            chat_delivery = False
+    except Exception:
+        pass
     """Save once, then durably queue/retry the reference; never equate save with delivery."""
     if (repl.session is not session or getattr(repl.agent, "session", None) is not session
             or getattr(store, "_session", None) is not session
@@ -6022,7 +6013,17 @@ def _schedule_current_dialogue_project_work_cards(
             snapshot = build_project_scoped_work_record_cards(store, project_id)
             if snapshot.completeness != "complete" or not snapshot.cards or snapshot.result_count <= 0:
                 continue
-            deliver_to_chat = chat_delivery and not project_scoped_snapshot_deferred_from_chat(snapshot)
+            try:
+                from companion_home_chat import companion_home_defers_project_scoped_chat
+
+                companion_defer = companion_home_defers_project_scoped_chat(session)
+            except Exception:
+                companion_defer = False
+            deliver_to_chat = (
+                chat_delivery
+                and not companion_defer
+                and not project_scoped_snapshot_deferred_from_chat(snapshot)
+            )
             request_id = project_scoped_snapshot_request_id(snapshot)
             intent = durable_outbox.record_update(
                 project_id, request_id, window_seconds=PROJECT_WORK_CARD_MERGE_SECONDS,
