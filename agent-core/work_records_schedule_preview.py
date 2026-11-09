@@ -30,6 +30,20 @@ def preview_contains_candidate(preview: Any, candidate: Any) -> bool:
     return any(schedule_candidate_identity(row) == identity for row in preview.get("candidates", ()))
 
 
+_WRITE_BASENAMES = frozenset({
+    "notes.md", "result.md", "output.md", "changelog.md", "notes.txt",
+})
+
+
+def _pick_write_target(refs: list[str]) -> str:
+    """Prefer explicit write-oriented filenames; otherwise first mention (primary edit target)."""
+    for ref in refs:
+        base = ref.rsplit("/", 1)[-1].casefold()
+        if base in _WRITE_BASENAMES or base.startswith("notes"):
+            return ref
+    return refs[0]
+
+
 def _suggest_targets(task_text: Any) -> tuple[list[str], list[str]]:
     if type(task_text) is not str or not task_text.strip():
         return (["PROJECT.md", "README.md"], ["NOTES.md"])
@@ -41,9 +55,9 @@ def _suggest_targets(task_text: Any) -> tuple[list[str], list[str]]:
             continue
         refs.append(match)
     if refs:
+        write = _pick_write_target(refs)
         reads = refs[:6]
-        writes = [refs[-1]]
-        return (reads, writes)
+        return (reads, [write])
     return (["PROJECT.md", "README.md"], ["NOTES.md"])
 
 
