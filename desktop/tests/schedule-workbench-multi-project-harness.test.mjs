@@ -52,9 +52,39 @@ const {
   renderScheduleLaunchForm,
   scheduledWorkerCandidates,
 } = loadTs("../src/shells/unified/schedule-launch.ts");
-const { buildCurrentWorkOverviewPanel } = loadTs("../src/shells/unified/current-work-overview.ts");
+const {
+  buildCurrentWorkOverviewPanel,
+  shouldShowCurrentWorkOverview,
+} = loadTs("../src/shells/unified/current-work-overview.ts");
 
 const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
+
+const emptyPage = {
+  page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
+  total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null,
+};
+const emptyCounts = { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0 };
+
+test("local no_records overview: known unread hides work entry; unknown keeps it (fixture contract)", () => {
+  const base = {
+    type: "work-records.overview.result",
+    session_id: "s",
+    request_id: "11111111-1111-4111-8111-111111111111",
+    state: "no_records",
+    groups: [],
+    unread_important_results: [],
+    visibility_limitations: ["mapped_project_sources_available_for_schedule"],
+    visibility_counts: emptyCounts,
+    snapshot_id: null,
+    page: emptyPage,
+  };
+  assert.equal(shouldShowCurrentWorkOverview({ ...base, unread_status: "known" }), false);
+  assert.equal(shouldShowCurrentWorkOverview({ ...base, unread_status: "unknown" }), true);
+  const panelKnown = buildCurrentWorkOverviewPanel({ ...base, unread_status: "known" }, { open: false });
+  const panelUnknown = buildCurrentWorkOverviewPanel({ ...base, unread_status: "unknown" }, { open: false, unavailable: true });
+  assert.equal(panelKnown.visible, false);
+  assert.equal(panelUnknown.visible, true);
+});
 
 function wsJson(url) {
   return new Promise((resolve, reject) => {
