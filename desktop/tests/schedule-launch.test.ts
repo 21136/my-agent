@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "../src/shells/unified/schedule-launch.ts";
+import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates, SCHEDULE_PARALLEL_BATCH_MAX } from "../src/shells/unified/schedule-launch.ts";
 
 const result = {
   type: "work-records.overview.result", session_id: "s1", request_id: "r1", state: "visible",
@@ -82,6 +82,28 @@ test("schedule launch uses direct work-records.schedule.dispatch instead of chat
   const handler = source.slice(handlerStart, handlerEnd);
   assert.match(handler, /dispatchScheduleWorkers/);
   assert.doesNotMatch(handler, /sendMessage\(/);
+});
+
+test("parallel batch includes up to six distinct projects from preview order", () => {
+  const projects = Array.from({ length: 7 }, (_, index) => `p${index + 1}`);
+  const candidates = projects.map((projectId, index) => ({
+    project_id: projectId, item_id: `i${index + 1}`, requirement_id: `q${index + 1}`, priority: 5 - Math.min(index, 4),
+    task: `Task ${projectId}`, suggested_read_targets: ["PROJECT.md"], suggested_write_targets: ["NOTES.md"],
+  }));
+  const groups = projects.map((projectId, index) => ({
+    kind: "project", id: projectId, visibility: "visible", status: "queued",
+    status_counts: { queued: 1 }, item_count: 1, requirement_count: 1,
+    items: [{ item_id: `i${index + 1}`, title: "Task", status: "queued", status_counts: { queued: 1 }, priority: 5,
+      requirements: [{ requirement_id: `q${index + 1}`, text: `Task ${projectId}`, status: "queued" }],
+      current_results: [] }], items_page: null,
+  }));
+  const big = {
+    ...result, selected_project_ids: projects, schedule_preview: { ...result.schedule_preview, candidates, blocked: [], omissions: [] },
+    groups,
+  };
+  const batch = scheduledWorkerCandidates(big);
+  assert.equal(batch.length, SCHEDULE_PARALLEL_BATCH_MAX);
+  assert.deepEqual(batch.map(row => row.projectId), projects.slice(0, SCHEDULE_PARALLEL_BATCH_MAX));
 });
 
 test("schedule launcher fails closed for stale, truncated, or mismatched projections", () => {

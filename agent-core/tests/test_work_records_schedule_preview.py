@@ -130,15 +130,18 @@ def test_picker_requires_explicit_opt_in_complete_preview_and_finite_limit():
     import pytest
     with pytest.raises(PermissionError):
         pick_schedule_batch(preview, enabled=False)
-    assert [row["requirement_id"] for row in pick_schedule_batch(preview, enabled=True)] == [
+    assert [row["requirement_id"] for row in pick_schedule_batch(preview, enabled=True, limit=2)] == [
         "r-high", "r-mid",
     ]
     # A continuation requesting only one slot still receives the true queue head.
     assert [row["requirement_id"] for row in pick_schedule_batch(
         preview, enabled=True, limit=1,
     )] == ["r-high"]
+    assert [row["requirement_id"] for row in pick_schedule_batch(preview, enabled=True, limit=3)] == [
+        "r-high", "r-mid", "r-low",
+    ]
     with pytest.raises(ValueError):
-        pick_schedule_batch(preview, enabled=True, limit=3)
+        pick_schedule_batch(preview, enabled=True, limit=7)
     malformed = {**preview, "candidates": [{**preview["candidates"][0], "priority": True}]}
     with pytest.raises(ValueError, match="priority"):
         pick_schedule_batch(malformed, enabled=True)

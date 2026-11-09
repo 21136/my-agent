@@ -5,9 +5,10 @@ from typing import Any, Mapping, Sequence
 
 from multi_project_work_record_bindings import AuthorizedProjectRecordSource, _is_issued_authorized_project_record_source
 from project_worker_host import ProjectWorkerHost
+from project_worker_limits import schedule_dispatch_batch_max
 from work_records_schedule_preview import build_schedule_preview, pick_schedule_batch
 
-_MAX_DISPATCH = 2
+_MAX_DISPATCH = schedule_dispatch_batch_max()
 _MAX_TASK_CHARS = 8_000
 _MAX_TARGETS = 32
 _SAFE_RELATIVE_PATH = __import__("re").compile(
@@ -21,10 +22,10 @@ def active_writing_project_ids(host: ProjectWorkerHost, conversation_id: str) ->
 
 
 def schedule_advance_limit(host: ProjectWorkerHost, conversation_id: str, *, requested: int) -> int:
+    del host, conversation_id  # host retains queueing beyond the live concurrent cap
     if type(requested) is not int or isinstance(requested, bool) or not 1 <= requested <= _MAX_DISPATCH:
-        raise ValueError("schedule advance limit must be one or two")
-    active = active_writing_project_ids(host, conversation_id)
-    return max(0, min(requested, _MAX_DISPATCH - len(active)))
+        raise ValueError(f"schedule advance limit must be 1..{_MAX_DISPATCH}")
+    return min(requested, _MAX_DISPATCH)
 
 
 def _target_paths(value: Any, *, required: bool) -> tuple[str, ...]:
@@ -105,7 +106,7 @@ def validate_schedule_dispatch(
     if enabled is not True:
         raise PermissionError("schedule dispatch requires explicit user opt-in")
     if type(workers) is not list or not 1 <= len(workers) <= _MAX_DISPATCH:
-        raise ValueError("schedule dispatch batch must contain one or two workers")
+        raise ValueError(f"schedule dispatch batch must contain 1..{_MAX_DISPATCH} workers")
     normalized = [_worker_shape(row) for row in workers]
     if len({row["project_id"] for row in normalized}) != len(normalized):
         raise ValueError("schedule dispatch cannot start two workers for the same project")
@@ -121,7 +122,7 @@ def validate_schedule_dispatch(
     picked = pick_schedule_batch(preview, enabled=True, limit=len(schedule_candidates))
     eligible = {(row["project_id"], row["item_id"], row["requirement_id"], row["priority"]) for row in picked}
     requested = {(row["project_id"], row["item_id"], row["requirement_id"], row["priority"]) for row in schedule_candidates}
-    if not requested <= eligible or (len(schedule_candidates) == 2 and eligible != requested):
+    if not requested <= eligible or (len(schedule_candidates) > 1 and eligible != requested):
         raise ValueError("workers are not the next authorized schedule candidates")
     for row in normalized:
         source = sources[row["project_id"]]

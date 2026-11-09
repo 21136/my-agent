@@ -51,12 +51,12 @@ def _fixture(tmp_path):
     return parent, source, item, req
 
 
-def test_schedule_advance_respects_two_project_host_cap(tmp_path):
+def test_schedule_advance_allows_full_batch_for_host_queue(tmp_path):
     parent, source, item, req = _fixture(tmp_path)
     host = ProjectWorkerHost(lambda: SimpleNamespace())
     assert schedule_advance_limit(host, parent.conversation_id, requested=2) == 2
     host._reservations["r1"] = (SimpleNamespace(conversation_id=parent.conversation_id, project_id="p-other"), True)
-    assert schedule_advance_limit(host, parent.conversation_id, requested=2) == 1
+    assert schedule_advance_limit(host, parent.conversation_id, requested=4) == 4
 
 
 def test_validate_schedule_dispatch_aligns_worker_to_authorized_candidate(tmp_path):

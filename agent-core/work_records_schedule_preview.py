@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from project_worker_limits import schedule_dispatch_batch_max
+
 _ELIGIBLE = frozenset({"queued", "pending"})
 _CANDIDATE_IDENTITY = ("project_id", "item_id", "requirement_id", "priority")
 _FILE_REF = re.compile(
@@ -173,7 +175,10 @@ def build_schedule_preview(groups: Any) -> dict[str, Any]:
             "limitations": limitations, "omissions": omissions}
 
 
-def pick_schedule_batch(preview: Any, *, enabled: Any, limit: Any = 2) -> tuple[dict[str, Any], ...]:
+_BATCH_LIMIT = schedule_dispatch_batch_max()
+
+
+def pick_schedule_batch(preview: Any, *, enabled: Any, limit: Any = _BATCH_LIMIT) -> tuple[dict[str, Any], ...]:
     """Select a small priority-ordered batch only after explicit per-turn opt-in.
 
     This is a picker, not a queue lease or execution grant. It refuses truncated
@@ -183,8 +188,8 @@ def pick_schedule_batch(preview: Any, *, enabled: Any, limit: Any = 2) -> tuple[
     """
     if enabled is not True:
         raise PermissionError("schedule batch picking requires explicit user-turn opt-in")
-    if type(limit) is not int or not 1 <= limit <= 2:
-        raise ValueError("schedule batch limit must be one or two")
+    if type(limit) is not int or not 1 <= limit <= _BATCH_LIMIT:
+        raise ValueError(f"schedule batch limit must be 1..{_BATCH_LIMIT}")
     if (type(preview) is not dict or preview.get("state") != "visible"
             or preview.get("omissions") or type(preview.get("candidates")) is not list):
         raise ValueError("complete authorized schedule preview is required for batch picking")
