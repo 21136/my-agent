@@ -590,6 +590,15 @@ function renderSources(requirement: Record<string, any>): string {
 
 const LIFECYCLE_KIND = "project_worker_host_lifecycle";
 const LIFECYCLE_KEYS = ["kind", "result_status", "project_id", "task_id", "worker_id", "worker_run_id", "reservation_id", "parent_run_id", "parent_epoch", "host_status", "acceptance_status", "write_receipts_available", "write_receipts"];
+const LIFECYCLE_READ_ATTEMPT_KEYS = ["read_attempts_available", "read_attempts"] as const;
+const READ_ATTEMPT_ROW_KEYS = ["read_id", "path", "attempt", "result", "error_code"] as const;
+const READ_ATTEMPT_RESULTS = new Set(["success", "retrying", "failed", "cancelled"]);
+const READ_ATTEMPT_ERRORS = new Set([
+  "", "sharing_violation", "file_lock_conflict", "lock_not_granted",
+  "lock_violation", "read_retry_exhausted", "retry_cancel_event_unavailable",
+  "non_retryable",
+]);
+const WINDOWS_RESERVED = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$/i;
 const PRESTART_BLOCKED_LIFECYCLE_KEYS = ["kind", "result_status", "session_id", "item_id", "requirement_id", "project_id", "task_id", "worker_id", "worker_run_id", "reservation_id", "parent_run_id", "parent_epoch", "host_status", "host_error_code", "worker_execution_started", "worker_result_claimed", "acceptance_status"];
 const PRESTART_BLOCKED_REASON_LABELS: Record<string, string> = {
   project_or_target_scope_invalid: "项目或目标范围未通过安全预检",
@@ -617,14 +626,82 @@ const PRESTART_BLOCKED_REASON_LABELS: Record<string, string> = {
 };
 const RECEIPT_KEYS = ["path", "status", "verification", "characters_read_back", "error_code", "readback_succeeded"];
 const HOST_STATUSES = new Set(["model_turn_finished", "blocked", "failed", "cancelled", "limit_reached"]);
-const PARENT_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const PRESTART_PARENT_RUN_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/;
+const PRESTART_PARENT_RUN_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
-function exactKeys(value: Record<string, any>, keys: string[]): boolean {
+function exactKeys(value: Record<string, any>, keys: readonly string[] | string[]): boolean {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
+
+function lifecycleHasExactKeys(payload: Record<string, any>): boolean {
+  return exactKeys(payload, LIFECYCLE_KEYS)
+    || exactKeys(payload, [...LIFECYCLE_KEYS, ...LIFECYCLE_READ_ATTEMPT_KEYS]);
+}
+
+function lifecycleProjectIdMatches(
+  payload: Record<string, any>, result: Record<string, any>, snapshot: Record<string, any>,
+): boolean {
+  if (typeof payload.project_id !== "string" || !payload.project_id.trim()) return false;
+  if (typeof snapshot.project_id === "string") {
+    return payload.project_id === snapshot.project_id
+      && (typeof result.project_id !== "string" || result.project_id === snapshot.project_id);
+  }
+  return typeof result.project_id !== "string" || payload.project_id === result.project_id;
+}
+
+function validParentRunId(value: unknown): boolean {
+  if (typeof value !== "string" || !PRESTART_PARENT_RUN_ID.test(value)) return false;
+  const hex = value.includes("-")
+    ? value.replaceAll("-", "").toLowerCase()
+    : value.toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex)) return false;
+  const canonical = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(canonical);
+}
+
+function workerReadPathSafe(path: string): boolean {
+  if (!path || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
+  const parts = path.split(/[\\/]/);
+  if (parts.includes("..")) return false;
+  return !parts.some(part => !part || part === "." || part === "host" || part.endsWith(" ")
+    || /[\\:<">|?*~]/.test(part) || WINDOWS_RESERVED.test(part));
+}
+
+function validateWorkerReadAttempts(available: unknown, attempts: unknown): boolean {
+  if (typeof available !== "boolean" || !Array.isArray(attempts) || attempts.length > 256) return false;
+  if (!available && attempts.length > 0) return false;
+  const lastByRead = new Map<number, [string, number, string]>();
+  for (const row of attempts) {
+    if (!object(row) || !exactKeys(row, READ_ATTEMPT_ROW_KEYS)) return false;
+    const { read_id: readId, path, attempt, result, error_code: errorCode } = row;
+    if (!Number.isSafeInteger(readId) || readId < 1 || readId > 64
+      || typeof path !== "string" || !workerReadPathSafe(path)
+      || !Number.isSafeInteger(attempt) || attempt < 1 || attempt > 6
+      || typeof result !== "string" || !READ_ATTEMPT_RESULTS.has(result)
+      || typeof errorCode !== "string" || !READ_ATTEMPT_ERRORS.has(errorCode)) {
+      return false;
+    }
+    const previous = lastByRead.get(readId);
+    if (previous === undefined) {
+      if (attempt !== 1) return false;
+    } else if (previous[0] !== path || !(
+      attempt === previous[1] + 1 && previous[2] === "retrying"
+      || attempt === previous[1] && previous[2] === "retrying" && result === "cancelled"
+    )) {
+      return false;
+    }
+    lastByRead.set(readId, [path, attempt, result]);
+  }
+  return true;
+}
+
+const READ_ATTEMPT_RESULT_LABELS: Record<string, string> = {
+  success: "读取成功",
+  retrying: "读取重试中",
+  failed: "读取失败",
+  cancelled: "读取已取消",
+};
 
 function lifecycleSummary(summary: unknown, result: Record<string, any>, snapshot: Record<string, any>): { kind: "not-lifecycle" | "invalid" | "valid"; html?: string } {
   if (typeof summary !== "string") return { kind: "not-lifecycle" };
@@ -637,7 +714,7 @@ function lifecycleSummary(summary: unknown, result: Record<string, any>, snapsho
       && result.verification_status === "not_verified"
       && payload.session_id === snapshot.session_id && payload.session_id === result.session_id
       && payload.item_id === result.item_id && payload.requirement_id === result.requirement_id
-      && payload.project_id === snapshot.project_id && payload.project_id === result.project_id
+      && lifecycleProjectIdMatches(payload, result, snapshot)
       && typeof payload.task_id === "string" && /^task-[0-9a-f]{64}$/.test(payload.task_id)
       && typeof payload.worker_id === "string" && !!payload.worker_id
       && new TextEncoder().encode(payload.worker_id).length <= 128
@@ -659,21 +736,23 @@ function lifecycleSummary(summary: unknown, result: Record<string, any>, snapsho
     return { kind: "valid", html: `<p class="work-card-result"><strong>工作器尚未启动</strong> · 执行前检查受阻：${escapeWorkCardHtml(reason)}。验收未运行；不代表工作已开始、完成或通过验收。</p>` };
   }
   const receipts = payload.write_receipts;
-  const valid = exactKeys(payload, LIFECYCLE_KEYS)
+  const readEvidence = lifecycleHasExactKeys(payload) && exactKeys(payload, [...LIFECYCLE_KEYS, ...LIFECYCLE_READ_ATTEMPT_KEYS]);
+  const valid = lifecycleHasExactKeys(payload)
     && payload.result_status === "unknown" && result.status === "unknown"
     && result.verification_status === "not_verified"
-    && payload.project_id === snapshot.project_id
+    && lifecycleProjectIdMatches(payload, result, snapshot)
     && typeof payload.task_id === "string" && /^task-[0-9a-f]{64}$/.test(payload.task_id)
     && typeof payload.worker_id === "string" && !!payload.worker_id
     && payload.worker_run_id === result.run_id
     && typeof payload.reservation_id === "string" && !!payload.reservation_id
-    && typeof payload.parent_run_id === "string" && PARENT_RUN_ID.test(payload.parent_run_id)
+    && validParentRunId(payload.parent_run_id)
     && Number.isSafeInteger(payload.parent_epoch) && payload.parent_epoch >= 1
     && HOST_STATUSES.has(payload.host_status)
     && payload.acceptance_status === "not_run"
     && typeof payload.write_receipts_available === "boolean"
     && Array.isArray(receipts) && receipts.length <= 32
     && (receipts.length === 0 || payload.write_receipts_available)
+    && (!readEvidence || validateWorkerReadAttempts(payload.read_attempts_available, payload.read_attempts))
     && receipts.every((receipt: unknown) => object(receipt) && exactKeys(receipt, RECEIPT_KEYS)
       && typeof receipt.path === "string" && !!receipt.path && receipt.path.length <= 512
       && !receipt.path.startsWith("/") && !/^[A-Za-z]:/.test(receipt.path)
@@ -695,7 +774,10 @@ function lifecycleSummary(summary: unknown, result: Record<string, any>, snapsho
   const receiptHtml = receipts.length
     ? `<ul class="work-card-host-receipts">${receipts.map((receipt: Record<string, any>) => `<li><code>${escapeWorkCardHtml(receipt.path)}</code> · 回执状态：${escapeWorkCardHtml(receipt.status)} · 验证记录：${escapeWorkCardHtml(receipt.verification)} · ${receipt.readback_succeeded ? `已读回 ${receipt.characters_read_back} 字符` : "未成功读回"}${receipt.error_code ? ` · 错误码：${escapeWorkCardHtml(receipt.error_code)}` : ""}</li>`).join("")}</ul>`
     : '<p>没有可展示的写入回执。</p>';
-  return { kind: "valid", html: `<p class="work-card-result"><strong>${hostLabel[payload.host_status]}</strong> · 验收未运行；不代表工作已完成或通过验收。</p>${receiptHtml}` };
+  const readHtml = readEvidence && payload.read_attempts_available && Array.isArray(payload.read_attempts) && payload.read_attempts.length
+    ? `<ul class="work-card-host-read-attempts">${payload.read_attempts.map((attempt: Record<string, any>) => `<li><code>${escapeWorkCardHtml(attempt.path)}</code> · ${escapeWorkCardHtml(READ_ATTEMPT_RESULT_LABELS[attempt.result] ?? "读取状态未记录")}${attempt.error_code ? ` · 错误码：${escapeWorkCardHtml(attempt.error_code)}` : ""}</li>`).join("")}</ul>`
+    : "";
+  return { kind: "valid", html: `<p class="work-card-result"><strong>${hostLabel[payload.host_status]}</strong> · 验收未运行；不代表工作已完成或通过验收。</p>${receiptHtml}${readHtml}` };
 }
 
 function renderProjectTestSelfReport(result: Record<string, any>, isCurrent: boolean): string {

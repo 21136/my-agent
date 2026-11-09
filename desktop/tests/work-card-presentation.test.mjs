@@ -592,6 +592,80 @@ test("project worker lifecycle machine JSON becomes bounded readable evidence, n
   assert.doesNotMatch(html, /状态：已完成|最近结果：.*completed/);
 });
 
+test("hex parent_run_id and host read-attempt evidence render as readable worker lifecycle", () => {
+  const parentHex = "a1b2c3d4e5f6478890a1b2c3d4e5f678";
+  const scoped = card([req(1)]);
+  scoped.snapshot.kind = "project_scoped";
+  scoped.snapshot.project_id = "demo-project";
+  const requirement = scoped.snapshot.cards[0].requirements[0];
+  scoped.snapshot.cards[0].project_id = "demo-project";
+  requirement.project_id = "demo-project";
+  requirement.source_ref = { kind: "project", id: "demo-project" };
+  requirement.latest_result = {
+    session_id: SESSION, project_id: "demo-project", item_id: "item-1", requirement_id: "req-1",
+    result_id: "result-1", run_id: "worker-run-hex", status: "unknown", verification_status: "not_verified", sources: [],
+    summary: JSON.stringify({
+      kind: "project_worker_host_lifecycle", result_status: "unknown", project_id: "demo-project",
+      task_id: `task-${"b".repeat(64)}`, worker_id: "worker-secret-id", worker_run_id: "worker-run-hex",
+      reservation_id: "reservation-secret-id", parent_run_id: parentHex,
+      parent_epoch: 2, host_status: "model_turn_finished", acceptance_status: "not_run",
+      write_receipts_available: true,
+      write_receipts: [{ path: "index.html", status: "written", verification: "content_match",
+        characters_read_back: 8, error_code: "", readback_succeeded: true }],
+      read_attempts_available: true,
+      read_attempts: [{ read_id: 1, path: "index.html", attempt: 1, result: "success", error_code: "" }],
+    }),
+  };
+  const html = renderWorkCardSnapshot(scoped);
+  assert.match(html, /主机回合已结束/);
+  assert.match(html, /index\.html/);
+  assert.match(html, /读取成功/);
+  assert.doesNotMatch(html, /机器回执未通过校验/);
+  assert.doesNotMatch(html, /worker-secret-id|reservation-secret-id|parent_run_id|project_worker_host_lifecycle/);
+});
+
+test("independent multi-project batch snapshot accepts project-bound lifecycle without snapshot.project_id", () => {
+  const parentHex = "fedcba9876543210fedcba9876543210";
+  const independent = {
+    card_id: CARD_ID, saved_at: "2026-11-09T09:00:00Z", viewed_at: null,
+    snapshot: {
+      kind: "independent", session_id: SESSION, item_id: "batch-item",
+      captured_at: "2026-11-09T09:00:00Z", completeness: "complete",
+      item_count: 1, requirement_count: 1, result_count: 1,
+      omitted_item_count: 0, omitted_requirement_count: 0, omitted_result_count: 0,
+      incomplete_reason: null, persisted: true, history_complete: true,
+      missing_current_result_count: 0,
+      card: {
+        kind: "independent", session_id: SESSION, item_id: "batch-item", title: "多项目任务批次",
+        status: "unknown", source_refs: [{ kind: "project", id: "random-3" }],
+        requirements: [{
+          session_id: SESSION, item_id: "batch-item", requirement_id: "req-batch-1",
+          text: "生成 3 个 0–70 随机整数", status: "unknown",
+          source_ref: { kind: "project", id: "random-3" },
+          latest_result: {
+            session_id: SESSION, item_id: "batch-item", requirement_id: "req-batch-1",
+            result_id: "result-batch-1", run_id: "worker-run-batch", status: "unknown",
+            verification_status: "not_verified", sources: [],
+            summary: JSON.stringify({
+              kind: "project_worker_host_lifecycle", result_status: "unknown", project_id: "random-3",
+              task_id: `task-${"c".repeat(64)}`, worker_id: "worker-batch", worker_run_id: "worker-run-batch",
+              reservation_id: "reservation-batch", parent_run_id: parentHex, parent_epoch: 1,
+              host_status: "model_turn_finished", acceptance_status: "not_run",
+              write_receipts_available: false, write_receipts: [],
+              read_attempts_available: false, read_attempts: [],
+            }),
+          },
+          result_count: 1, omitted_result_count: 0, current_result_missing: false,
+          current_run_id: "worker-run-batch", latest_result_is_current: true,
+        }],
+      },
+    },
+  };
+  const html = renderWorkCardSnapshot(independent);
+  assert.match(html, /主机回合已结束/);
+  assert.doesNotMatch(html, /机器回执未通过校验/);
+});
+
 test("malformed lifecycle JSON is suppressed instead of leaking machine fields", () => {
   const snapshot = card([req(1)]);
   snapshot.snapshot.cards[0].requirements[0].latest_result = {
