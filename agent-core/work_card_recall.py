@@ -133,7 +133,7 @@ def prepare_recall(
             or type(max_title_bytes) is not int or not 1 <= max_title_bytes <= MAX_TITLE_BYTES):
         return RecallPreparation("incomplete", reason="invalid_input")
     try:
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if entries != current:
             return RecallPreparation("incomplete", reason="ledger_entries_changed_or_incomplete")
         if not current:
@@ -193,7 +193,7 @@ def revalidate_preparation(ledger: WorkCardLedger, prepared: RecallPreparation) 
             or prepared._session is not ledger._session):
         return False
     try:
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if _digest(current) != prepared.ledger_digest:
             return False
         fresh = prepare_recall(ledger, current, prepared.question, max_input_tokens=prepared.max_input_tokens,
@@ -217,7 +217,7 @@ def resolve_recall(ledger: WorkCardLedger, prepared: RecallPreparation, model_co
             or finish_reason != "stop"):
         return RecallResolution("incomplete", reason="preparation_invalid")
     try:
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if _digest(current) != prepared.ledger_digest:
             return RecallResolution("incomplete", reason="ledger_changed")
         if not revalidate_preparation(ledger, prepared):
@@ -228,12 +228,12 @@ def resolve_recall(ledger: WorkCardLedger, prepared: RecallPreparation, model_co
             return RecallResolution("uncertain", reason="model_did_not_identify_candidates")
         selected = []
         for card_id in decision.candidate_ids:
-            record = ledger.get_card(card_id)
+            record = ledger.get_visible_card(card_id)
             if record != by_id[card_id]:
                 return RecallResolution("incomplete", reason="selected_card_changed")
             selected.append(record)
         # Detect changes during individual lookups too; never use a partial selection.
-        if _digest(ledger.list_cards()) != prepared.ledger_digest:
+        if _digest(ledger.list_visible_cards()) != prepared.ledger_digest:
             return RecallResolution("incomplete", reason="ledger_changed")
         return RecallResolution(decision.status, tuple(selected))
     except Exception:
@@ -430,7 +430,7 @@ def prepare_batch_recall(
             or not question.strip() or any(type(x) is not int or not low <= x <= high for x, low, high in bounds)):
         return BatchRecallPreparation('incomplete', reason='invalid_input')
     try:
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if entries != current or not current:
             return BatchRecallPreparation('incomplete', reason='ledger_entries_changed_or_empty')
         session = ledger._session
@@ -487,7 +487,7 @@ def revalidate_batch_preparation(ledger: WorkCardLedger, prepared: BatchRecallPr
             or getattr(ledger._store, '_session', None) is not ledger._session):
         return False
     try:
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if _digest(current) != prepared.ledger_digest:
             return False
         fresh = prepare_batch_recall(ledger, current, prepared.question, max_input_tokens=prepared.max_input_tokens,
@@ -547,7 +547,7 @@ def resolve_batch_recall(ledger: WorkCardLedger, prepared: BatchRecallPreparatio
             selected_ids.extend(decision.candidate_ids)
         if not revalidate_batch_preparation(ledger, prepared):
             return RecallResolution('incomplete', reason='ledger_or_preview_changed')
-        current = ledger.list_cards()
+        current = ledger.list_visible_cards()
         if _digest(current) != prepared.ledger_digest:
             return RecallResolution('incomplete', reason='ledger_changed')
         by_id = {row['card_id']: row for row in current}
@@ -556,7 +556,7 @@ def resolve_batch_recall(ledger: WorkCardLedger, prepared: BatchRecallPreparatio
             # get_card() re-reads and validates every ledger shard for each ID.
             # One fresh complete snapshot preserves that fail-closed check without
             # repeating the full ledger read once per selected candidate.
-            verified = ledger.list_cards()
+            verified = ledger.list_visible_cards()
             if _digest(verified) != prepared.ledger_digest:
                 return RecallResolution('incomplete', reason='ledger_changed')
             verified_by_id = {row['card_id']: row for row in verified}
