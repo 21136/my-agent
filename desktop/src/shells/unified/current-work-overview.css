@@ -6,7 +6,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  padding: 0.15rem 0.85rem 0.5rem;
+  padding: 0.35rem 0.95rem 0.65rem;
 }
 .unified-current-work[hidden] { display: none !important; }
 
@@ -21,29 +21,45 @@
 .unified-shell.is-current-work-overlay .unified-tool-region {
   position: absolute;
   z-index: 8;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(440px, 48vw);
-  max-width: 100%;
+  top: 0.45rem;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  width: min(428px, 46vw);
+  max-width: calc(100% - 0.5rem);
   flex: none !important;
   overflow: hidden;
-  border-left: 1px solid var(--ma-border);
-  background: var(--ma-bg);
-  box-shadow: -16px 0 48px color-mix(in srgb, var(--ma-text) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
+  border-right: 0;
+  border-radius: var(--nt-r-lg, 16px) 0 0 var(--nt-r-lg, 16px);
+  background: var(--nt-glass, color-mix(in srgb, var(--ma-surface) 70%, transparent));
+  backdrop-filter: blur(20px) saturate(132%);
+  -webkit-backdrop-filter: blur(20px) saturate(132%);
+  box-shadow:
+    -10px 0 36px color-mix(in srgb, var(--ma-text) 10%, transparent),
+    var(--nt-shadow, 0 10px 28px color-mix(in srgb, var(--ma-text) 8%, transparent));
 }
 .unified-shell.is-current-work-overlay .unified-stage::before {
   content: "";
   position: absolute;
   z-index: 7;
   inset: 0;
-  right: min(440px, 48vw);
-  background: color-mix(in srgb, var(--ma-bg) 42%, transparent);
+  right: min(428px, 46vw);
+  background: color-mix(in srgb, var(--ma-text) 14%, transparent);
+  backdrop-filter: blur(3px) saturate(108%);
+  -webkit-backdrop-filter: blur(3px) saturate(108%);
   pointer-events: none;
+  transition: background 0.2s ease;
+}
+html[data-theme="dark"] .unified-shell.is-current-work-overlay .unified-stage::before {
+  background: color-mix(in srgb, #0a0814 38%, transparent);
 }
 @media (max-width: 800px) {
   .unified-shell.is-current-work-overlay .unified-tool-region {
+    top: 0;
+    right: 0;
+    bottom: 0;
     width: min(100%, 420px);
+    border-radius: var(--nt-r-lg, 16px) 0 0 var(--nt-r-lg, 16px);
   }
   .unified-shell.is-current-work-overlay .unified-stage::before {
     right: min(100%, 420px);
@@ -55,7 +71,7 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  gap: 0.55rem;
+  gap: 0.65rem;
   width: 100%;
   box-sizing: border-box;
 }
@@ -66,57 +82,81 @@
   align-items: flex-start;
   gap: 0.75rem;
   flex: 0 0 auto;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 58%, transparent);
 }
 .unified-current-work-heading span {
-  color: var(--ma-text-muted);
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
+  color: var(--ma-text-faint, var(--ma-text-muted));
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .unified-current-work-heading h3 {
-  margin: 0.12rem 0 0;
-  font-size: 0.95rem;
-  line-height: 1.3;
+  margin: 0.18rem 0 0;
+  font-size: 0.98rem;
+  line-height: 1.32;
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
 }
 .unified-current-work-close {
-  border: 0;
-  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ma-surface) 52%, transparent);
   color: var(--ma-text-muted);
   font: inherit;
-  font-size: 1.3rem;
+  font-size: 1.15rem;
   line-height: 1;
-  padding: 0.15rem 0.3rem;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .unified-current-work-close:hover,
-.unified-current-work-close:focus-visible { color: var(--ma-text); }
+.unified-current-work-close:focus-visible {
+  color: var(--ma-text);
+  border-color: color-mix(in srgb, var(--ma-border) 85%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 78%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--ma-text) 6%, transparent);
+}
 
 .cw-segments {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.2rem;
   flex: 0 0 auto;
+  padding: 0.22rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 78%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 48%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .cw-segment {
   appearance: none;
-  border: 1px solid var(--ma-border);
+  border: 0;
   border-radius: 999px;
   background: transparent;
   color: var(--ma-text-muted);
   font: inherit;
   font-size: 0.72rem;
-  padding: 0.28rem 0.72rem;
+  padding: 0.32rem 0.78rem;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+.cw-segment:hover:not([aria-selected="true"]) {
+  background: color-mix(in srgb, var(--ma-surface) 65%, transparent);
+  color: var(--ma-text);
 }
 .cw-segment[aria-selected="true"] {
-  border-color: color-mix(in srgb, var(--ma-accent) 50%, var(--ma-border));
-  background: color-mix(in srgb, var(--ma-accent) 12%, transparent);
+  background: color-mix(in srgb, var(--ma-accent) 16%, var(--ma-surface));
   color: var(--ma-text);
   font-weight: 600;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ma-accent) 28%, var(--ma-border)),
+    0 2px 10px color-mix(in srgb, var(--ma-accent) 14%, transparent);
 }
 
 .unified-current-work-popover,
@@ -136,10 +176,10 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.4rem;
+  gap: 0.45rem;
   flex: 0 0 auto;
-  padding-top: 0.15rem;
-  border-top: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
+  padding-top: 0.55rem;
+  border-top: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
 }
 
 .cw-contract-body { display: none !important; }
@@ -167,21 +207,56 @@
   flex-direction: column;
   gap: 0.55rem;
   min-width: 0;
-  padding: 0.15rem 0 0;
-  border: 0;
-  background: transparent;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);
+  border-radius: var(--nt-r-md, 12px);
+  background: color-mix(in srgb, var(--ma-surface) 38%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent);
+}
+html[data-theme="dark"] .current-work-board {
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
 }
 .current-work-zone-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.15rem;
 }
-.current-work-zone-head h3 { margin: 0; font-size: 0.92rem; letter-spacing: -0.01em; }
-.current-work-zone-head span { color: var(--ma-text-muted); font-size: 0.75rem; }
-.current-work-zone-body { display: flex; flex-direction: column; gap: 0.45rem; }
-.current-work-zone-empty { margin: 0.2rem 0; color: var(--ma-text-muted); font-size: 0.8rem; }
+.current-work-zone-head h3 { margin: 0; font-size: 0.9rem; font-weight: 650; letter-spacing: -0.01em; }
+.current-work-zone-head span {
+  color: var(--ma-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ma-accent) 22%, var(--ma-border));
+  background: color-mix(in srgb, var(--ma-accent) 9%, transparent);
+}
+.current-work-zone-body { display: flex; flex-direction: column; gap: 0.45rem; min-height: 5.5rem; }
+.current-work-zone-empty {
+  margin: 0.35rem 0 0;
+  color: var(--ma-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  text-align: center;
+  padding: 1.35rem 0.85rem;
+  border-radius: var(--nt-r-sm, 8px);
+  border: 1px dashed color-mix(in srgb, var(--ma-border) 88%, transparent);
+  background: color-mix(in srgb, var(--ma-bg) 24%, transparent);
+}
+.current-work-zone-body > .current-work-zone-empty:only-child::before {
+  content: "";
+  display: block;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: 0 auto 0.65rem;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--ma-accent) 28%, transparent), color-mix(in srgb, var(--ma-accent) 6%, transparent) 72%);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ma-accent) 18%, transparent);
+  opacity: 0.75;
+}
 
 .cw-attention-wrap {
   display: block;
@@ -403,5 +478,28 @@
   border-color: color-mix(in srgb, var(--ma-accent) 60%, var(--ma-border));
   box-shadow: var(--nt-glow, 0 0 16px color-mix(in srgb, var(--ma-accent) 28%, transparent));
 }
-.unified-current-work-summary { margin: 0 0 0.35rem; color: var(--ma-text-muted); font-size: 0.78rem; }
-.unified-current-work-warning { margin: 0 0 0.35rem; color: var(--ma-warning, #b7791f); font-size: 0.8rem; }
+.unified-current-work-summary { margin: 0 0 0.35rem; color: var(--ma-text-muted); font-size: 0.78rem; line-height: 1.5; }
+.unified-current-work-warning { margin: 0 0 0.35rem; color: var(--ma-warning, #b7791f); font-size: 0.78rem; line-height: 1.45; }
+
+/* Neon Twin — current-work drawer matches companion glass chrome */
+html[data-theme] .unified-shell.is-current-work-overlay .unified-tool-region {
+  border-color: color-mix(in srgb, var(--ma-accent) 12%, var(--ma-border));
+}
+html[data-theme] .unified-shell.is-current-work-overlay #unified-current-work {
+  background: transparent;
+}
+html[data-theme] .unified-current-work-popover.current-work-scroll {
+  scrollbar-gutter: stable;
+  padding: 0.2rem 0.15rem 0.4rem;
+}
+html[data-theme] .cw-metric {
+  border-radius: var(--nt-r-sm, 8px);
+  background: color-mix(in srgb, var(--ma-surface) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+html[data-theme] .unified-current-work-actions .unified-btn-ghost {
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  background: color-mix(in srgb, var(--ma-surface) 62%, transparent);
+}
