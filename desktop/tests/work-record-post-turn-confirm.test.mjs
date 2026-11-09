@@ -18,7 +18,10 @@ function load(url) {
   });
   return exports;
 }
-const { createChatSession } = load(new URL("../src/shells/chat-state.ts", import.meta.url));
+const {
+  createChatSession,
+  resolveActiveOrdinaryConfirmRequestId,
+} = load(new URL("../src/shells/chat-state.ts", import.meta.url));
 
 function session() {
   const chat = createChatSession({ showProcess: true, confirmInBlocks: false });
@@ -328,5 +331,7 @@ test("confirm.done for a pending request is not dropped as a stale run event", (
     run_id: "visible-run", choice: "timeout",
   }), true);
   assert.equal(chat.model.confirmPending, false);
-  assert.equal(chat.model.confirmOverlay?.resolved, "确认超时");
+  assert.equal(chat.model.confirmOverlay, null);
+  assert.equal(chat.model.settledOrdinaryConfirmIds.has("bind-confirm"), true);
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), null);
 });
