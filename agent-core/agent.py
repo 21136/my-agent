@@ -704,6 +704,11 @@ def _serialize_project_worker_read_attempts(model_turn: Any) -> tuple[bool, list
     return serialize_project_worker_read_attempts(model_turn)
 
 
+def _serialize_project_worker_scope_error(model_turn: Any) -> tuple[bool, dict[str, Any] | None]:
+    from project_worker_scope_diagnostics import serialize_scope_error_detail
+    return serialize_scope_error_detail(model_turn)
+
+
 def _record_current_dialogue_worker_lifecycle(
     store: Any, *, session_id: str, item_id: str, requirement_id: str,
     outcome: Any, reservation: Any, expected_requirement_text: str,
@@ -3621,6 +3626,10 @@ class Agent:
                 # Evidence is observational only; malformed worker metadata must not
                 # alter the outcome or trigger another execution attempt.
                 read_attempts_available, read_attempts = False, []
+            try:
+                scope_error_available, scope_error_detail = _serialize_project_worker_scope_error(model_turn)
+            except Exception:
+                scope_error_available, scope_error_detail = False, None
             record_binding_status = "not_linked"
             if worker_record_binding is not None:
                 from project_worker_work_record_settlement import project_worker_outcome_matches_binding
@@ -3660,6 +3669,8 @@ class Agent:
                 ],
                 "read_attempts_available": read_attempts_available,
                 "read_attempts": read_attempts,
+                "scope_error_available": scope_error_available,
+                "scope_error_detail": scope_error_detail,
                 "acceptance_status": outcome.acceptance_status,
                 "acceptance_evidence": list(outcome.acceptance_evidence),
                 "record_binding_status": record_binding_status,
