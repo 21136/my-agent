@@ -60,9 +60,14 @@ test("the actual size function tracks composer movement and keeps a usable popov
   const fn = find(ast); assert.ok(fn);
   const js = ts.transpileModule(`const CURRENT_WORK_POPOVER_MIN_HEIGHT_PX = 120;\n${fn.getText(ast)}; return sizeCurrentWorkPopover;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const popover = { style: {}, getBoundingClientRect: () => ({ top: 70 }) };
+  const host = { hidden: false, querySelector: () => popover };
+  const priorDocument = globalThis.document;
+  globalThis.document = { querySelector: () => host };
   let composerTop = 300;
   const size = new Function("topbarEl", "composerDock", js)({ querySelector: () => popover }, { getBoundingClientRect: () => ({ top: composerTop }) });
-  size(); assert.equal(popover.style.maxHeight, "222px"); assert.equal(popover.style.visibility, "");
-  composerTop = 105; size(); assert.equal(popover.style.maxHeight, "120px"); assert.equal(popover.style.visibility, "");
-  composerTop = 400; size(); assert.equal(popover.style.maxHeight, "322px"); assert.equal(popover.style.visibility, "");
+  size(); assert.equal(popover.style.maxHeight, "222px"); assert.equal(popover.style.minHeight, "120px"); assert.equal(popover.style.visibility, "");
+  composerTop = 105; size(); assert.equal(popover.style.maxHeight, "120px"); assert.equal(popover.style.minHeight, "120px"); assert.equal(popover.style.visibility, "");
+  composerTop = 400; size(); assert.equal(popover.style.maxHeight, "322px"); assert.equal(popover.style.minHeight, "120px"); assert.equal(popover.style.visibility, "");
+  host.hidden = true; size(); assert.equal(popover.style.minHeight, ""); assert.equal(popover.style.maxHeight, "");
+  globalThis.document = priorDocument;
 });

@@ -225,6 +225,7 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "confirm.done" && e.choice === "y"));
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
       && e.aggregation_scope === "selected_project_sessions"));
+    await page.waitForFunction(() => !document.querySelector("[data-pending-confirm-hint]"));
     await page.waitForFunction(() => {
       const popover = document.querySelector("#unified-current-work-popover");
       return popover instanceof HTMLElement && getComputedStyle(popover).visibility !== "hidden";

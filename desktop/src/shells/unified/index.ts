@@ -486,14 +486,20 @@ export function mountUnifiedShell(
   const CURRENT_WORK_POPOVER_MIN_HEIGHT_PX = 120;
 
   function sizeCurrentWorkPopover(): void {
-    const host = typeof document !== "undefined"
-      ? document.querySelector<HTMLElement>("#unified-current-work:not([hidden])")
-      : null;
+    if (typeof document === "undefined") return;
+    const host = document.querySelector<HTMLElement>("#unified-current-work");
     const popover = host?.querySelector<HTMLElement>("#unified-current-work-popover")
       ?? topbarEl.querySelector<HTMLElement>("#unified-current-work-popover");
     if (!popover) return;
+    if (!host || host.hidden) {
+      popover.style.minHeight = "";
+      popover.style.maxHeight = "";
+      return;
+    }
     const available = Math.floor(composerDock.getBoundingClientRect().top - popover.getBoundingClientRect().top - 8);
-    popover.style.maxHeight = `${Math.max(CURRENT_WORK_POPOVER_MIN_HEIGHT_PX, available)}px`;
+    const maxHeight = Math.max(CURRENT_WORK_POPOVER_MIN_HEIGHT_PX, available);
+    popover.style.maxHeight = `${maxHeight}px`;
+    popover.style.minHeight = `${Math.min(maxHeight, CURRENT_WORK_POPOVER_MIN_HEIGHT_PX)}px`;
     popover.style.visibility = "";
   }
 
@@ -1075,7 +1081,9 @@ function refreshGlobalRoleModels(): void {
         }
         syncPendingConfirmComposerHint();
         if (currentWorkOverviewOpen) {
-          requestAnimationFrame(() => sizeCurrentWorkPopover());
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => sizeCurrentWorkPopover());
+          });
         }
       },
       onToolStart: () => {
@@ -8050,7 +8058,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         syncPendingConfirmComposerHint();
         syncWorkingVisual();
         if (event.type === "confirm.done" && currentWorkOverviewOpen) {
-          requestAnimationFrame(() => sizeCurrentWorkPopover());
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => sizeCurrentWorkPopover());
+          });
         }
         if (event.type === "confirm.request") {
           requestAnimationFrame(() => {
