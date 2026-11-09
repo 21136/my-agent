@@ -9,6 +9,28 @@ from __future__ import annotations
 from session import Session
 from tools.registry import ToolRegistry
 
+_TOOL_USER_LABELS: dict[str, str] = {
+    "run_command": "命令",
+    "run_evolved": "扩展工具",
+    "run_python": "Python 脚本",
+    "repair_node_modules": "依赖修复",
+    "patch_file": "文件修补",
+    "write_text": "写入文件",
+    "read_file": "读取文件",
+    "grep": "内容搜索",
+    "glob_file_search": "文件查找",
+    "explore": "代码探索",
+    "evolved": "扩展工具",
+}
+
+
+def humanize_tool_user_label(tool: str) -> str:
+    """Short noun for user-visible notices (not canonical tool ids)."""
+    key = (tool or "").strip().lower()
+    if not key:
+        return "该步骤"
+    return _TOOL_USER_LABELS.get(key, "该步骤")
+
 
 
 def format_tool_loop_exceeded_message(
@@ -22,8 +44,6 @@ def format_tool_loop_exceeded_message(
     turn_intent: str | None = None,
 ) -> str:
     """When the tool inner loop ends without a final assistant reply."""
-    from loader import session_evolved_allowlist
-
     intent = (turn_intent or getattr(session, "turn_intent", None) or "").strip()
     mode = getattr(session.meta, "turn_mode", "agent")
 
@@ -72,18 +92,6 @@ def format_tool_loop_exceeded_message(
                 "· 缺少完成该步骤所需的工具能力",
             ]
         )
-
-    if mode == "agent" and intent not in {"qa", "recall", "requirements"}:
-        reg = registry or ToolRegistry.load(session.paths)
-        allowed = sorted(session_evolved_allowlist(session, registry=reg))
-        if allowed:
-            lines.extend(
-                [
-                    "",
-                    f"本会话可用工具：{', '.join(allowed[:12])}"
-                    + ("…" if len(allowed) > 12 else ""),
-                ]
-            )
 
     return "\n".join(lines)
 

@@ -1722,7 +1722,7 @@ class WsBridge:
             self.emit({"type": event_type, **payload})
             return
         if event_type == "session.workspace_evolved_approved":
-            self.emit({"type": "notice", "text": "本会话 workspace evolved 均已允许。"})
+            self.emit({"type": "notice", "text": "本会话扩展区写入均已放行。"})
             return
         if event_type == "guard.notice":
             text = payload.get("text")
@@ -4817,7 +4817,6 @@ async def _run_line(
                 ok = False
                 repl.session.save()
             elif outcome == "stop":
-                bridge.emit({"type": "notice", "text": "会话已保存"})
                 finish_reason = "cancelled"
                 ok = False
             else:

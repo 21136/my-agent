@@ -224,18 +224,27 @@ test("renderer displays persistence state inline inside the existing user messag
   const js = ts.transpileModule(renderBlockSource, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
+  const { userMessagePersistenceLabel } = load(new URL("../src/shells/chat-state.ts", import.meta.url));
   const renderBlock = new Function(
     "perspective", "messageReadingLayout", "parseUserMessage", "isRecentTurnBlock",
-    "recallHighlightTurns", "formatUserMessageHtml",
+    "recallHighlightTurns", "formatUserMessageHtml", "userMessagePersistenceLabel",
     "const exports = {}; " + js + "; return renderBlock;",
-  )("project", () => null, (text) => ({ body: text }), () => true, new Set(), (text) => text);
+  )("project", () => null, (text) => ({ body: text }), () => true, new Set(), (text) => text, userMessagePersistenceLabel);
   const renderState = (state) => renderBlock({
     kind: "user", text: "hello", turnIndex: 1,
     persistence: { requestId: REQUEST, sessionId: SESSION, state, receiptEligible: true },
   });
-  assert.match(renderState("pending"), /待确认/);
-  assert.match(renderState("saved"), /已保存/);
+  assert.doesNotMatch(renderState("pending"), /unified-message-persistence/);
+  assert.doesNotMatch(renderState("saved"), /已保存/);
+  assert.doesNotMatch(renderState("saved"), /unified-message-persistence/);
   assert.match(renderState("unknown"), /结果未知，请核对历史/);
   assert.match(renderState("unknown"), /class="unified-turn-body"/);
+});
+
+test("userMessagePersistenceLabel keeps successful saves silent", () => {
+  const { userMessagePersistenceLabel } = load(new URL("../src/shells/chat-state.ts", import.meta.url));
+  assert.equal(userMessagePersistenceLabel("saved"), "");
+  assert.equal(userMessagePersistenceLabel("pending"), "");
+  assert.match(userMessagePersistenceLabel("unknown"), /核对历史/);
 });
 

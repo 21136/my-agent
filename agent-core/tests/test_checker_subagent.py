@@ -176,8 +176,8 @@ class CheckerTaskFromRecordTests(unittest.TestCase):
         self.assertEqual(target.tool_name, "auto")
 
     def test_verdict_notice_labels(self) -> None:
-        self.assertEqual(format_checker_verdict_notice("mvn_exec", "pass"), "验收 mvn_exec：通过")
-        self.assertEqual(format_checker_verdict_notice("mvn_exec", "fail"), "验收 mvn_exec：失败")
+        self.assertEqual(format_checker_verdict_notice("mvn_exec", "pass"), "自动验收：通过")
+        self.assertEqual(format_checker_verdict_notice("mvn_exec", "fail"), "自动验收：未通过")
 
 
 class CompletionGateTests(unittest.TestCase):

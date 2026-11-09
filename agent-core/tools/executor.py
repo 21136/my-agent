@@ -641,40 +641,32 @@ def _validate_run_python_scaffold_guard(
 def _format_guard_notice(guard_type: str, fields: dict[str, Any]) -> str | None:
     if guard_type == "inline_write_max":
         limit = fields.get("limit", write_inline_max_chars())
-        decoded = fields.get("decoded_chars")
-        return f"[guard] 内联写入超过 {limit} 字符（{decoded}），请改用 workspace/_staging + content_workspace_path"
+        return f"内联写入超过 {limit} 字符，请改走暂存区再写入文件。"
     if guard_type in {"scaffold_demo_auto", "scaffold_demo_manual"}:
-        tool_name = fields.get("tool_name", "?")
         if fields.get("cancelled"):
-            return f"[guard] demo probe · {tool_name}：已取消"
+            return "演示检查已取消"
         if not fields.get("attempted"):
-            reason = fields.get("skipped_reason", "skipped")
-            return f"[guard] demo probe · {tool_name}：跳过（{reason}）"
+            return "演示检查已跳过"
         exit_code = fields.get("exit_code")
         if exit_code == 0:
-            return f"[guard] demo probe · {tool_name}：通过（exit 0）"
-        return f"[guard] demo probe · {tool_name}：失败（exit {exit_code}）"
+            return "演示检查已通过"
+        return "演示检查未通过"
     if guard_type == "node_modules_wipe":
-        return (
-            "[guard] 勿手写删 node_modules；请用 repair_node_modules（一次确认删+装）"
-        )
+        return "不要手写删除依赖目录；请用「修复依赖」一次完成。"
     if guard_type == "run_python_demo_rejected":
-        tool_name = fields.get("tool_name", "?")
-        return f"[guard] 已拒调 run_python demo · {tool_name}（本 segment 已有自动 demo 结果）"
+        return "本段已有演示结果，请勿重复运行演示。"
     if guard_type == "exec_circuit":
-        fp = fields.get("fingerprint", "")
-        return f"[guard] 同类失败已熔断，禁止再调同一命令（{fp}）"
+        return "同类命令连续失败，已暂时禁止重复调用。"
     if guard_type == "exec_circuit_opened":
-        fp = fields.get("fingerprint", "")
-        return f"[guard] 同类失败×{fields.get('count', '?')} 已熔断（{fp}）"
+        return "同类命令多次失败，已熔断保护。"
     if guard_type == "exec_failure_class":
         # AGENT-HARNESS P5: still logged + sidebar failure_class; no chat spam.
         return None
     if guard_type == "exec_playbook":
-        return f"[guard] 剧本建议 · {fields.get('playbook_id', '?')}"
+        return "系统建议换一种更稳妥的执行方式。"
     message = fields.get("message")
     if isinstance(message, str) and message.strip():
-        return f"[guard] {message}"
+        return message.strip()
     return None
 
 

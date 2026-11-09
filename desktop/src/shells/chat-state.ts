@@ -1,6 +1,9 @@
 import type { ExecutionStateName, ServerEvent } from "../api/ws";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate } from "./unified/confirm-preview";
+import { polishSystemNoticeText, polishToolProgressText } from "./unified/system-notice-copy";
+import { userFacingErrorStatus } from "./unified/ordinary-guards";
 import { settledToolStatus } from "./tool-outcome";
+import { displayToolName } from "../copy/tool-display";
 import {
   type ProcessActivityBlock,
   activityEntriesPrint,
@@ -302,6 +305,14 @@ export function checkerVerdictStatusText(verdict: string): string {
   if (verdict === "pass") return "验收：通过";
   if (verdict === "warn") return "验收：警告";
   return "验收：失败";
+}
+
+/** Inline badge on user bubbles: only surface uncertain persistence; success stays silent. */
+export function userMessagePersistenceLabel(
+  state: UserMessagePersistenceState | undefined,
+): string {
+  if (state === "unknown") return "结果未知，请核对历史";
+  return "";
 }
 
 /** Phase 27 M0 — RunningCard elapsed label. */
@@ -1422,10 +1433,14 @@ export function createChatSession(
         hooks.onTurnEnd?.(event.ok, event.finish_reason);
         notify();
         break;
-      case "turn.notice":
-        model.blocks.push({ kind: "notice", text: event.text });
-        notify();
+      case "turn.notice": {
+        const noticeText = polishSystemNoticeText(event.text);
+        if (noticeText) {
+          model.blocks.push({ kind: "notice", text: noticeText });
+          notify();
+        }
         break;
+      }
       case "checker.verdict":
         model.blocks.push({
           kind: "notice",
@@ -1444,10 +1459,15 @@ export function createChatSession(
         const owner = findProcessByCallId(event.call_id);
         if (options.showProcess && !owner) {
           const proc = ensureActiveProcessBlock();
+          const summaryRaw = (event.summary || "").trim();
+          const summary =
+            summaryRaw && summaryRaw !== event.tool
+              ? summaryRaw
+              : displayToolName(event.tool, { summary: summaryRaw });
           addToolStart(proc, {
             callId: event.call_id,
             tool: event.tool,
-            summary: event.summary || event.tool,
+            summary,
             status: "running",
             startedAt: Date.now(),
           });
@@ -1549,7 +1569,7 @@ export function createChatSession(
             proc?.kind === "process" ? findToolEntry(proc, event.call_id) : undefined;
           if (card && card.status === "running") {
             if (typeof event.text === "string" && event.text.trim()) {
-              card.progressText = event.text.trim();
+              card.progressText = polishToolProgressText(event.text);
             } else if (typeof event.elapsed_sec === "number") {
               card.progressText = `仍在执行… ${event.elapsed_sec}s`;
             }
@@ -1642,17 +1662,28 @@ export function createChatSession(
         notify();
         break;
       }
-      case "notice":
-        model.blocks.push({ kind: "notice", text: event.text });
-        notify();
+      case "notice": {
+        const noticeText = polishSystemNoticeText(event.text);
+        if (noticeText) {
+          model.blocks.push({ kind: "notice", text: noticeText });
+          notify();
+        }
         break;
+      }
       case "error":
         markPendingUserMessagesUnknown(model.sessionId);
         if (options.showProcess) {
           // Error ends the turn: without this the pill kept "等待模型…" and refused to collapse.
           settleCurrentTurnProcesses();
         }
-        model.blocks.push({ kind: "notice", text: event.message });
+        {
+          const raw = String(event.message || "").trim();
+          const noticeText =
+            polishSystemNoticeText(raw) ?? userFacingErrorStatus(raw);
+          if (noticeText) {
+            model.blocks.push({ kind: "notice", text: noticeText });
+          }
+        }
         resetTurnActivity();
         hooks.onError?.();
         notify();
