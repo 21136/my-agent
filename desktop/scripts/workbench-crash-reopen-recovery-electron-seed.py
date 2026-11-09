@@ -1,14 +1,14 @@
 """Seed one companion desktop session with interrupted work records for real Electron recovery H1.
 
-Companion session stays project-agnostic (no session.meta.project_id). Mirrors the independent
-slice of agent-core/tests/test_workbench_crash_reopen_recovery_harness.py — no live model.
+Companion session stays project-agnostic (no session.meta.project_id). Foreign-owner
+in_progress rows are fully cleared when the Electron sidecar opens; a persisted
+schedule_claim in state unknown keeps recovery unresolved and emits the warn notice.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
-import uuid
 from pathlib import Path
 
 _CORE = Path(__file__).resolve().parents[2] / "agent-core"
@@ -17,7 +17,7 @@ if str(_CORE) not in sys.path:
 
 from paths import AgentPaths
 from session import Session, SessionMeta
-from work_records import WorkRecordStore, _WORK_RECORD_PROCESS_INSTANCE_ID
+from work_records import WorkRecordStore, _WORK_RECORD_PROCESS_INSTANCE_ID, _digest
 
 CONVERSATION_ID = os.environ.get("WORKBENCH_RECOVERY_SESSION_ID", "workbench-recovery-electron")
 FOREIGN_OWNER = "crashed-electron-sidecar-process"
@@ -36,6 +36,44 @@ def _stamp_foreign_execution_owner(
                     req["execution_owner_id"] = owner_id
                     changed += 1
         return changed, changed > 0
+
+    store._mutate(change)
+
+
+def _seed_unresolved_schedule_claim(
+    store: WorkRecordStore,
+    item_id: str,
+    requirement_id: str,
+    requirement_text: str,
+    conversation_id: str,
+) -> None:
+    """Persist a companion-local schedule_claim (project_id=\"\") in state unknown."""
+
+    digest = _digest({"text": requirement_text})
+
+    def change(data):
+        for item in data["items"]:
+            if item.get("item_id") != item_id:
+                continue
+            for req in item.get("requirements", []):
+                if req.get("requirement_id") != requirement_id:
+                    continue
+                if req.get("text") != requirement_text:
+                    raise RuntimeError("recovery seed requirement text mismatch")
+                req["schedule_claim"] = {
+                    "source_session_id": conversation_id,
+                    "project_id": "",
+                    "item_id": item_id,
+                    "requirement_id": requirement_id,
+                    "revision": data["revision"],
+                    "requirement_digest": digest,
+                    "owner_id": FOREIGN_OWNER,
+                    "reservation_id": "recovery-reservation-1",
+                    "parent_run_id": "recovery-parent-1",
+                    "state": "unknown",
+                }
+                return 1, True
+        return 0, False
 
     store._mutate(change)
 
@@ -62,17 +100,16 @@ def main() -> None:
         run_id="stale-run", expected_current_run_id=None,
     )
 
-    live_item = store.create_item(title="same-process live task", scope={"kind": "independent"})
-    live_req = store.add_requirement(
-        live_item["item_id"], "live in-flight requirement", event_id="live-req",
+    claim_item = store.create_item(title="unresolved schedule claim", scope={"kind": "independent"})
+    claim_text = "claim needs human inspection after crash"
+    claim_req = store.add_requirement(
+        claim_item["item_id"], claim_text, event_id="claim-req",
     )
-    store.begin_requirement_run(
-        live_item["item_id"], live_req["requirement_id"],
-        run_id="live-run", expected_current_run_id=None,
-    )
-
     _stamp_foreign_execution_owner(
         store, crashed_item["item_id"], crashed_req["requirement_id"], FOREIGN_OWNER,
+    )
+    _seed_unresolved_schedule_claim(
+        store, claim_item["item_id"], claim_req["requirement_id"], claim_text, CONVERSATION_ID,
     )
     session.save()
 
@@ -81,6 +118,7 @@ def main() -> None:
         "foreign_owner": FOREIGN_OWNER,
         "process_instance_id": _WORK_RECORD_PROCESS_INSTANCE_ID,
         "project_bound": bool(session.meta.project_id),
+        "durable_unresolved_schedule_claim": True,
     }
     print(json.dumps(marker, ensure_ascii=False))
 
