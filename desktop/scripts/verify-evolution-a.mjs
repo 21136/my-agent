@@ -717,7 +717,7 @@ export async function startH1ControlledLifecycle(child, { profile, token, cdpEna
   if (!child?.stdin || !child?.stdout || !child?.stderr || typeof child.once !== "function" || typeof child.kill !== "function") deny("H1 controlled lifecycle requires an event-capable private-stdin child");
   if (![stdoutPath, stderrPath, exitPath, runRoot, pythonExecutable].every(value => typeof value === "string" && path.isAbsolute(value)) || typeof captureEnvironment !== "function") deny("H1 controlled lifecycle evidence and recheck paths are required");
   const protocol = createH1LifecycleProtocol(profile, token);
-  const ordinaryChat = profile === "ordinary-chat-h1-v1";
+  const ordinaryChat = profile === "ordinary-chat-h1-v1" || profile === "workbench-crash-reopen-recovery-v1";
   const stdout = [], stderr = []; let total = 0, stdoutBuffer = "", startError = null, closed = false, closeRecord = null;
   let shutdownMethod = ordinaryChat ? "cdp_browser_close" : "stdin_control_frame", shutdownRequestSent = false, shutdownRequestAcknowledged = false, shutdownRequestError = null;
   let closeResolve, readyResolve, readyReject;
@@ -841,7 +841,7 @@ export async function startFrozenHost(input, options = {}) {
       captureEnvironment: options.capturePythonEnvironment ?? ((executable, packages) => capturePythonEnvironment(executable, packages, { cwd: verified.sandbox_root })),
     });
     const spawnEnvironmentEvidence = createH1SpawnEnvironmentEvidence(env);
-    return { child, port: lifecycle.ready.port, spawn_environment_evidence: spawnEnvironmentEvidence, ...(lifecycle.waitForCdp ? { waitForCdp: lifecycle.waitForCdp } : {}), ...(ordinaryChat ? { renderer_port: lifecycle.ready.renderer_port } : {}), close: lifecycle.close };
+    return { child, port: lifecycle.ready.port, spawn_environment_evidence: spawnEnvironmentEvidence, ...(lifecycle.waitForCdp ? { waitForCdp: lifecycle.waitForCdp } : {}), ...(sealedChat ? { renderer_port: lifecycle.ready.renderer_port } : {}), close: lifecycle.close };
   } catch (error) {
     await cleanupFailedH1NativeLaunch(child, lifecycle);
     throw error;
