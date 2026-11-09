@@ -11,13 +11,15 @@ import test from "node:test";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, "..");
 const repo = path.resolve(desktop, "..");
-const python = path.join(repo, ".venv", "Scripts", "python.exe");
+const python = existsSync(path.join(repo, ".venv", "Scripts", "python.exe"))
+  ? path.join(repo, ".venv", "Scripts", "python.exe")
+  : "python3";
 const require = createRequire(path.join(desktop, "package.json"));
 const pw = process.env.CODEX_PLAYWRIGHT_PATH || path.join(os.homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright");
 const edge = process.env.ISOLATED_TEST_BROWSER || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 
-test("schedule launcher browser click sends a normal WS user message without running an Agent/worker", {
-  skip: process.platform !== "win32" || !existsSync(python) || !existsSync(pw) || !existsSync(edge), timeout: 90000,
+test("schedule launcher browser click sends work-records.schedule.dispatch without running an Agent/worker", {
+  skip: process.platform !== "win32" || !existsSync(pw) || !existsSync(edge), timeout: 90000,
 }, async t => {
   const esbuild = require("esbuild");
   const { chromium } = require(pw);
@@ -63,42 +65,28 @@ test("schedule launcher browser click sends a normal WS user message without run
     }, ready.port);
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner")
       && window.receivedEvents?.some(e => e.type === "project.list"));
-    // Open current-work overview through the actual UI control; the synthetic server returns a candidate projection.
     await page.locator("#unified-request-current-work").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"));
     const overview = page.locator("[data-schedule-launch]");
     await overview.waitFor({ state: "attached" });
-    await page.evaluate(() => { document.querySelector("[data-schedule-launch]").open = true; });
-    const task = "Synthetic queued requirement; must not execute";
     const draft = "composer draft stays exactly as typed";
     await page.locator("#unified-input").fill(draft);
-    await page.evaluate(({ task, read, write }) => {
-      document.querySelector("[data-schedule-task]").value = task;
-      document.querySelector("[data-schedule-read]").value = read;
-      document.querySelector("[data-schedule-write]").value = write;
-    }, { task, read: "PROJECT.md", write: "../outside" });
-    // Invalid user scope is surfaced in the UI and sends no user.message.
-    await page.evaluate(() => document.querySelector("[data-schedule-launch]").open = true);
-    await page.evaluate(() => document.querySelector("[data-schedule-launch-send]").click());
+  const task = "Synthetic queued requirement; must not execute";
+    await page.locator("[data-schedule-write]").first().fill("../outside");
+    await page.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => (document.querySelector("#unified-status")?.innerText || "").includes("启动请求未发送"));
     assert.equal(await page.locator("#unified-input").inputValue(), draft, "failed validation keeps composer draft intact");
+    assert.equal(await page.evaluate(() => window.wsFrames.filter(e => e.type === "work-records.schedule.dispatch").length), 0);
+    await page.locator("[data-schedule-task]").first().inputValue(); // prefilled
+    await page.locator("[data-schedule-read]").first().inputValue();
+    await page.locator("[data-schedule-write]").first().fill("NOTES.md");
+    await page.locator("[data-schedule-launch-send]").click();
+    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"));
+    const dispatch = await page.evaluate(() => window.wsFrames.findLast(e => e.type === "work-records.schedule.dispatch"));
+    assert.equal(dispatch.session_id, "schedule-launch-browser-session");
+    assert.equal(dispatch.workers[0].task, task);
+    assert.deepEqual(dispatch.workers[0].write_targets, ["NOTES.md"]);
     assert.equal(await page.evaluate(() => window.receivedEvents.filter(e => e.type === "user.message.persisted").length), 0);
-    await page.evaluate(() => {
-      document.querySelector("[data-schedule-task]").value = "Synthetic queued requirement; must not execute";
-      document.querySelector("[data-schedule-read]").value = "PROJECT.md";
-      document.querySelector("[data-schedule-write]").value = "NOTES.md";
-    });
-    await page.evaluate(() => document.querySelector("[data-schedule-launch-send]").click());
-    await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "user.message.persisted"));
-    const persisted = await page.evaluate(() => window.receivedEvents.filter(e => e.type === "user.message.persisted"));
-    assert.equal(persisted.length, 1);
-    assert.equal(persisted[0].session_id, "schedule-launch-browser-session");
-    const message = await page.evaluate(() => window.wsFrames.findLast(e => e.type === "user.message"));
-    assert.equal(message.turn_mode, "agent");
-    assert.match(message.text, /来源要求原文：Synthetic queued requirement; must not execute/);
-    assert.match(message.text, /读取范围：PROJECT\.md/);
-    assert.match(message.text, /写入范围：NOTES\.md/);
-    assert.equal(await page.evaluate(() => window.receivedEvents.filter(e => e.type === "confirm.request").length), 0);
     assert.deepEqual(errors, []);
     await page.evaluate(() => { window.dispose(); window.client.destroy(); });
     await context.close();

@@ -59,6 +59,7 @@ def _schedule_groups(sources: Mapping[str, AuthorizedProjectRecordSource]) -> li
                 "omitted_requirement_count": 0,
                 "requirements": [{
                     "requirement_id": req.get("requirement_id"),
+                    "text": req.get("text", "") if type(req.get("text")) is str else "",
                     "status": req.get("status"),
                     "depends_on": req.get("depends_on", []),
                     "schedule_claim": req.get("schedule_claim"),
