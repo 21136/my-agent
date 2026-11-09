@@ -47,9 +47,10 @@ def is_companion_multi_project_orchestration_request(text: str) -> bool:
 
 _ORCHESTRATION_PREAMBLE = """\
 【主会话并行多项目编排 — 必须遵守】
-- 本条是主会话编排请求：不要为每个新项目 project.open / 换线 / 切换会话绑定；主会话 UI「当前项目」可以保持不变。
-- 缺少 workspace/<id> 时只用 propose_context_switch · action=project.create 就地登记；禁止随后 project.open 把会话绑到非当前 UI 项目去直接写文件。
-- 每个项目的实现代码必须通过 run_project_workers 提交：每个 worker 钉死自己的 project_id、read_targets、write_targets；父 Agent 不要对多个项目根直接 run_evolved 写文件。
+- 每个项目各有独立 workspace/<project_id>/ 目录；并行施工 = 主会话只编排，每个项目各派一个 run_project_workers worker，在各自 workspace 与租约内写文件。
+- 主会话 companion 不换线、不 project.open / project.switch 去绑定「当前会话项目」再写第二个/第三个项目；UI「当前项目」可保持不变。
+- 缺少 workspace/<id> 时只用 propose_context_switch · action=project.create 就地登记目录；禁止随后 project.open 切换绑定后在父会话 run_evolved 写项目文件（会被硬拦截）。
+- 每个 worker 必须钉死 project_id、read_targets、write_targets；父 Agent 不得对 workspace 下任何项目目录直接 run_evolved 写工具。
 - 缺项目 id、任务边界或路径时先问用户；不要臆造 worker 结果。
 - 用简短口吻汇总各 worker 回执；并继续回应用户在本回合的其它要求（如有）。
 
@@ -65,9 +66,49 @@ def build_companion_orchestration_instruction(user_text: str) -> str:
     return f"{_ORCHESTRATION_PREAMBLE}{body}"
 
 
-def mark_session_companion_multi_project_orchestration(session: object, *, active: bool) -> None:
+def companion_multi_project_orchestration_active(session: object | None) -> bool:
+    if session is None:
+        return False
+    return bool(getattr(session, "_companion_multi_project_orchestration_active", False))
+
+
+def orchestration_active_for_executor(executor: object) -> bool:
+    """Read orchestration state from the live Session and mirrored executor session."""
+    if executor is None:
+        return False
+    bound = getattr(executor, "bound_session", None)
+    if companion_multi_project_orchestration_active(bound):
+        return True
+    ex_session = getattr(executor, "session", None)
+    return bool(getattr(ex_session, "companion_multi_project_orchestration_active", False))
+
+
+ORCHESTRATION_USE_WORKERS_MESSAGE = (
+    "主会话并行多项目编排中：每个项目在各自 workspace 内施工，"
+    "请对该 project_id 调用 run_project_workers；"
+    "父 Agent 不得在 workspace 项目目录内直接 run_evolved 写工具。"
+)
+
+
+ORCHESTRATION_SWITCH_BLOCKED_MESSAGE = (
+    "主会话并行多项目编排中：只允许 project.create 就地登记；"
+    "禁止 project.open / project.switch / session.new。"
+    "各项目实现请对每个 project_id 调用 run_project_workers。"
+)
+
+
+def mark_session_companion_multi_project_orchestration(
+    session: object,
+    *,
+    active: bool,
+    executor: object | None = None,
+) -> None:
     """Ephemeral flag for one companion turn; cleared when the host run ends."""
     if active:
         setattr(session, "_companion_multi_project_orchestration_active", True)
     elif hasattr(session, "_companion_multi_project_orchestration_active"):
         delattr(session, "_companion_multi_project_orchestration_active")
+    if executor is not None and getattr(executor, "bound_session", None) is session:
+        ex_session = getattr(executor, "session", None)
+        if ex_session is not None:
+            ex_session.companion_multi_project_orchestration_active = active

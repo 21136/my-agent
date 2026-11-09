@@ -226,6 +226,11 @@ def apply_context_switch(
     proposal: ContextSwitchProposal,
 ) -> tuple[Session, str]:
     """Apply confirmed proposal. Returns (possibly new) session + message."""
+    if getattr(session, "_companion_multi_project_orchestration_active", False):
+        if proposal.action != "project.create":
+            from active_work_multi_project import ORCHESTRATION_SWITCH_BLOCKED_MESSAGE
+
+            raise ContextSwitchError(ORCHESTRATION_SWITCH_BLOCKED_MESSAGE)
     if proposal.action == "project.create":
         return _apply_project_create(
             paths,
