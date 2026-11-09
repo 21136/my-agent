@@ -296,7 +296,7 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       && e.groups?.some(g => g.status === "in_progress")).length >= 1);
 
     const queuePanel = await activateQueueSegment(work, page);
-    const inProgressItem = queuePanel.locator(".unified-current-work-item-head").filter({ hasText: "in_progress" }).first();
+    const inProgressItem = queuePanel.locator(".unified-current-work-item-head").first();
     await inProgressItem.waitFor({ state: "visible" });
     await inProgressItem.click();
     const cancel = queuePanel.locator('[data-action="cancel_execution"][data-expected-status="in_progress"]').first();
