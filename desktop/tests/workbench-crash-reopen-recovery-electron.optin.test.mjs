@@ -11,6 +11,7 @@ import {
   WORKBENCH_RECOVERY_ELECTRON_PROFILE,
   buildEvolutionControlPrepHint,
   countRecoveryWarns,
+  validateWorkbenchRecoveryDataRootEntries,
   isEvolutionControlBuildReady,
   requireWorkbenchRecoveryElectronGuiOptIn,
   requireWorkbenchRecoveryElectronOptIn,
@@ -56,6 +57,13 @@ test("sandbox root: prefers .worktrees/sandbox when stable lacks control-release
   if (existsSync(path.join(sandbox, "desktop", "package.json")) && !isEvolutionControlBuildReady(repo)) {
     assert.equal(resolved, path.resolve(sandbox));
   }
+});
+
+test("post-seed data root allows guard directories", () => {
+  const entries = [".file-guard", ".session-guard", "sessions", "state.json"].sort();
+  assert.equal(validateWorkbenchRecoveryDataRootEntries(entries).ok, true);
+  assert.equal(validateWorkbenchRecoveryDataRootEntries(["sessions", "state.json"]).ok, true);
+  assert.equal(validateWorkbenchRecoveryDataRootEntries(["sessions", "state.json", "extra.json"]).ok, false);
 });
 
 test("warn counter accepts server recovery copy", () => {

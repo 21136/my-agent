@@ -10,6 +10,13 @@ export const EVOLUTION_CONTROL_PREP_RUN_REL = path.join("artifacts", "evolution-
 
 export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "workbench-crash-reopen-recovery-v1";
 export const WORKBENCH_RECOVERY_SESSION_ID = "workbench-recovery-electron";
+/** Post-seed `data/` entries permitted before real Electron launch. */
+export const WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES = new Set([
+  "sessions",
+  "state.json",
+  ".file-guard",
+  ".session-guard",
+]);
 
 export function deny(message) {
   throw Object.assign(new Error(message), { code: "permission_denied" });
@@ -87,14 +94,26 @@ export function listWorkbenchRecoveryConversationDirectories(sessionsRoot) {
     .sort();
 }
 
+export function validateWorkbenchRecoveryDataRootEntries(dataEntries) {
+  const unexpected = dataEntries.filter((name) => !WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES.has(name));
+  const missing = ["sessions", "state.json"].filter((name) => !dataEntries.includes(name));
+  return { ok: unexpected.length === 0 && missing.length === 0, unexpected, missing };
+}
+
 export function assertWorkbenchRecoverySeedLayout(appRoot, sessionId = WORKBENCH_RECOVERY_SESSION_ID) {
   const root = path.resolve(appRoot);
   const dataRoot = path.join(root, "data");
   const sessionsRoot = path.join(dataRoot, "sessions");
   const dataEntries = existsSync(dataRoot) ? readdirSync(dataRoot).sort() : [];
-  const allowedData = ["sessions", "state.json"].sort();
-  if (JSON.stringify(dataEntries) !== JSON.stringify(allowedData)) {
-    deny(`workbench recovery seed data root must be sessions+state.json; got: ${dataEntries.join(", ") || "(missing)"}`);
+  const dataLayout = validateWorkbenchRecoveryDataRootEntries(dataEntries);
+  if (!dataLayout.ok) {
+    deny(
+      `workbench recovery seed data root layout invalid; `
+      + `allowed: ${[...WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES].sort().join(", ")}; `
+      + `got: ${dataEntries.join(", ") || "(missing)"}`
+      + (dataLayout.unexpected.length ? `; unexpected: ${dataLayout.unexpected.join(", ")}` : "")
+      + (dataLayout.missing.length ? `; missing: ${dataLayout.missing.join(", ")}` : ""),
+    );
   }
   const sessionDirs = listWorkbenchRecoveryConversationDirectories(sessionsRoot);
   if (sessionDirs.length !== 1 || sessionDirs[0] !== sessionId) {
