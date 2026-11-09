@@ -149,9 +149,7 @@ def plan_project_open(paths: AgentPaths, session: Session, project_id: str) -> P
         and mapped != session.conversation_id
         and session_exists(paths, mapped)
     ):
-        raise ProjectModeError(
-            f"项目 {pid} 已有专用会话；请用「项目 切换 {pid}」续接"
-        )
+        archive_project_thread(paths, pid, mapped)
 
     return ProjectSwitchPlan(
         action="bind_current",
@@ -179,6 +177,9 @@ def plan_project_switch(paths: AgentPaths, session: Session, project_id: str) ->
             project_id=pid,
             message=f"已是当前项目 workspace/{pid}",
         )
+
+    if not current_pid:
+        return plan_project_open(paths, session, project_id)
 
     mapped = lookup_project_session(paths, pid)
     if mapped and session_exists(paths, mapped):

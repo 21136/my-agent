@@ -82,6 +82,12 @@ class ProjectSwitchTests(unittest.TestCase):
             ParsedProjectCommand(kind="new", project_id=self.project_a),
             output_fn=lambda _line: None,
         )
+        run_project_command(
+            self.session,
+            self.paths,
+            ParsedProjectCommand(kind="open", project_id=self.project_a),
+            output_fn=lambda _line: None,
+        )
         self.assertEqual(self.session.meta.project_id, normalize_project_id(self.project_a))
 
     def test_perform_project_switch_emits_done(self) -> None:

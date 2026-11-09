@@ -21,14 +21,26 @@ from project_mode import (
 )
 from project_switch import (
     execute_project_switch,
+    open_project_on_session,
     plan_project_switch,
     record_project_session,
 )
 from session import Session, build_seed_message, create_new, write_last_conversation_id
 
-ContextAction = Literal["project.create", "project.switch", "session.new"]
+ContextAction = Literal["project.create", "project.open", "project.switch", "session.new"]
 SUPPORTED_ACTIONS = frozenset(
-    {"project.create", "project.switch", "session.new"}
+    {"project.create", "project.open", "project.switch", "session.new"}
+)
+
+_SESSION_NEW_PROJECT_MARKERS = (
+    "项目",
+    "workspace/",
+    "project",
+    "专用会话",
+    "切换项目",
+    "换线",
+    "switch project",
+    "project switch",
 )
 
 
@@ -44,6 +56,42 @@ class ContextSwitchProposal:
 
 class ContextSwitchError(Exception):
     """Invalid context-switch proposal or apply failure."""
+
+
+def is_main_home_companion_session(session: Session) -> bool:
+    """Ordinary 小魔王空间 chat with no project binding on this session."""
+    return not (session.meta.project_id or "").strip()
+
+
+def context_switch_replaces_session(
+    paths: AgentPaths,
+    session: Session,
+    proposal: ContextSwitchProposal,
+) -> bool:
+    """True when applying the proposal would swap conversation_id (chat replace)."""
+    if proposal.action in ("project.create", "project.open"):
+        return False
+    if proposal.action == "project.switch":
+        plan = plan_project_switch(paths, session, proposal.target)
+        return plan.action in {"load_session", "new_session"}
+    if proposal.action == "session.new":
+        return True
+    return False
+
+
+def _session_new_blocked_for_project_work(
+    session: Session,
+    proposal: ContextSwitchProposal,
+) -> str | None:
+    if proposal.action != "session.new" or not is_main_home_companion_session(session):
+        return None
+    text = f"{proposal.reason} {proposal.target}".casefold()
+    if any(marker.casefold() in text for marker in _SESSION_NEW_PROJECT_MARKERS):
+        return (
+            "主界面继续/开工项目请用 propose_context_switch · action=project.open "
+            "（或 project.switch），不要 session.new；新话题清聊天仅当用户明确要求"
+        )
+    return None
 
 
 def _normalize_action(action: str) -> ContextAction:
@@ -93,14 +141,28 @@ def normalize_proposal(
     )
 
 
-def should_auto_apply_context_switch(proposal: ContextSwitchProposal) -> bool:
-    """``project.create`` always applies in place on the main home UI (no 换线 gate)."""
-    return proposal.action == "project.create"
+def should_auto_apply_context_switch(
+    proposal: ContextSwitchProposal,
+    *,
+    paths: AgentPaths,
+    session: Session,
+) -> bool:
+    """In-place project actions on the companion UI never show the 换线 overlay."""
+    if _session_new_blocked_for_project_work(session, proposal):
+        return False
+    if proposal.action in ("project.create", "project.open"):
+        return True
+    if proposal.action == "project.switch":
+        plan = plan_project_switch(paths, session, proposal.target)
+        return plan.action in {"noop", "bind_current"}
+    return False
 
 
 def build_context_switch_request(
     session: Session,
     proposal: ContextSwitchProposal,
+    *,
+    paths: AgentPaths | None = None,
 ) -> dict[str, Any]:
     current_pid = (session.meta.project_id or "").strip()
     side_effects: list[str] = []
@@ -111,10 +173,24 @@ def build_context_switch_request(
             side_effects.append(f"运行配方 scaffold {proposal.template}（phase=init）")
         side_effects.append("在主界面登记该项目，不换线、不替换聊天记录")
         title = f"新建项目 · {proposal.target}"
+    elif proposal.action == "project.open":
+        side_effects.append(f"在本会话绑定并打开 workspace/{proposal.target}")
+        side_effects.append("不换线、不替换聊天记录")
+        title = f"打开项目 · {proposal.target}"
     elif proposal.action == "project.switch":
-        side_effects.append(f"切换到项目 workspace/{proposal.target}")
-        side_effects.append("可能加载该项目专用会话（聊天区替换）")
-        title = f"切换项目 · {proposal.target}"
+        replaces = (
+            context_switch_replaces_session(paths, session, proposal)
+            if paths is not None
+            else True
+        )
+        if replaces:
+            side_effects.append(f"切换到项目 workspace/{proposal.target}")
+            side_effects.append("可能加载该项目专用会话（聊天区替换）")
+            title = f"切换项目 · {proposal.target}"
+        else:
+            side_effects.append(f"在本会话打开 workspace/{proposal.target}")
+            side_effects.append("不换线、不替换聊天记录")
+            title = f"打开项目 · {proposal.target}"
     elif proposal.action == "session.new":
         display_target = "当前"
         side_effects.append("新建空白会话")
@@ -151,6 +227,8 @@ def apply_context_switch(
             proposal.target,
             template=proposal.template,
         )
+    if proposal.action == "project.open":
+        return _apply_project_open(paths, session, proposal.target)
     if proposal.action == "project.switch":
         return _apply_project_switch(paths, session, proposal.target)
     if proposal.action == "session.new":
@@ -236,14 +314,14 @@ def _apply_project_create(
     dest = project_dir(paths, pid)
     if dest.exists():
         raise ContextSwitchError(
-            f"项目 workspace/{pid} 已存在；如需继续该项目，请使用「项目 打开 {pid}」或「项目 切换 {pid}」"
+            f"项目 workspace/{pid} 已存在；请 propose_context_switch · action=project.open · target={pid}"
         )
     try:
         create_project(paths, pid, template=template, project_template=project_template)
     except ProjectModeError as exc:
         if "already exists" in str(exc):
             raise ContextSwitchError(
-                f"项目 workspace/{pid} 已存在；如需继续该项目，请使用「项目 打开 {pid}」或「项目 切换 {pid}」"
+                f"项目 workspace/{pid} 已存在；请 propose_context_switch · action=project.open · target={pid}"
             ) from exc
         raise ContextSwitchError(str(exc)) from exc
 
@@ -303,6 +381,17 @@ def _create_template_note(template: str | None, project_template: str | None) ->
     if raw_recipe in {"light", "standard", "lite", "full"}:
         selected = normalize_project_template(raw_recipe)
     return " · 轻量模板" if selected == "light" else ""
+
+
+def _apply_project_open(
+    paths: AgentPaths,
+    session: Session,
+    project_id: str,
+) -> tuple[Session, str]:
+    try:
+        return open_project_on_session(paths, session, project_id)
+    except ProjectModeError as exc:
+        raise ContextSwitchError(str(exc)) from exc
 
 
 def _apply_project_switch(
