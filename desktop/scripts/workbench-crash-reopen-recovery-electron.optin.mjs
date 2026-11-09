@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,9 @@ export const EVOLUTION_CONTROL_PREP_RUN_REL = path.join("artifacts", "evolution-
 export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "workbench-crash-reopen-recovery-v1";
 export const WORKBENCH_RECOVERY_SESSION_ID = "workbench-recovery-electron";
 /** Post-seed `data/` entries permitted before real Electron launch. */
+/** Companion user profile materialized on first real sidecar open (not in freeze manifest). */
+export const WORKBENCH_RECOVERY_RUNTIME_APP_REL_PATHS = ["evolve/user_profile.md"];
+
 export const WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES = new Set([
   "sessions",
   "state.json",
@@ -20,6 +23,17 @@ export const WORKBENCH_RECOVERY_ALLOWED_DATA_ROOT_ENTRIES = new Set([
 
 export function deny(message) {
   throw Object.assign(new Error(message), { code: "permission_denied" });
+}
+
+export function reconcileWorkbenchRecoveryRuntimeAppWrites(appRoot) {
+  if (typeof appRoot !== "string" || !path.isAbsolute(appRoot)) deny("recovery runtime reconcile requires an absolute app root");
+  for (const rel of WORKBENCH_RECOVERY_RUNTIME_APP_REL_PATHS) {
+    const target = path.join(appRoot, ...rel.split("/"));
+    if (!existsSync(target)) continue;
+    const info = lstatSync(target);
+    if (info.isSymbolicLink()) deny(`recovery runtime reconcile refused a link: ${rel}`);
+    rmSync(target, { force: true });
+  }
 }
 
 export function requireWorkbenchRecoveryElectronOptIn(env = process.env) {

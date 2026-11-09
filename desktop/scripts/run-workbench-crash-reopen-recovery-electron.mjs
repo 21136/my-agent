@@ -25,6 +25,7 @@ import {
   resolveDefaultElectronExecutable,
   resolveWorkbenchRecoverySandboxRoot,
   assertWorkbenchRecoverySeedLayout,
+  reconcileWorkbenchRecoveryRuntimeAppWrites,
 } from "./workbench-crash-reopen-recovery-electron.optin.mjs";
 import {
   assertRunLocalRenderer,
@@ -199,6 +200,7 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     await forceKillProcessTree(host.child);
     try { await host.close(); } catch { /* process tree was killed */ }
     rmSync(path.join(runRoot, "host", "logs"), { recursive: true, force: true });
+    reconcileWorkbenchRecoveryRuntimeAppWrites(verified.app_root);
 
     diagnosticsStage = "reopen";
     host = await startFrozenHost(frozenInput, { cdp: { enabled: true } });
