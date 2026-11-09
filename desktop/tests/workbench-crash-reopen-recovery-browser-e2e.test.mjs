@@ -143,8 +143,7 @@ test("crash reopen GUI: late WS recovery warn, honest labels, cancel after recon
     const body = await work.innerText();
     assert.match(body, /结果待确认/);
     assert.match(body, /执行状态待确认/);
-    assert.match(body, /crashed worker task/);
-    assert.doesNotMatch(body, /crashed worker task[\s\S]{0,80}执行状态待确认/);
+    assert.match(body, /crashed worker task\s*\n\s*结果待确认/);
 
     const queuePanel = await activateQueueSegment(work, page);
     const projectItem = queuePanel.locator(".unified-current-work-item-head").filter({ hasText: "project worker task" });
