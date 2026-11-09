@@ -43,6 +43,7 @@ Tray reopen remains **manual** until a dedicated UI driver exists; cold relaunch
 3. **`.venv`**, `desktop/node_modules` + Electron, TypeScript (`desktop/node_modules/typescript`) for the control build.
 4. H1 **main/renderer freeze** still runs inside the runner (esbuild + vite); first run is slow.
 5. The seed step writes a real desktop session (`data/sessions/<id>/`, `data/state.json`, and usually `data/.file-guard` / `data/.session-guard` from save backups). Runner preflight and Electron isolation allow only those entries plus exactly one conversation id.
+6. Sealed H1 serves the renderer on a dynamic `http://127.0.0.1:<port>/` origin; Electron main registers that origin on the Python sidecar (`MY_AGENT_WS_ALLOWED_ORIGINS`) before `server.py` accepts the renderer WebSocket.
 
 Tray double-click reopen is **still manual**; the harness only automates process-tree kill + **cold** relaunch.
 
