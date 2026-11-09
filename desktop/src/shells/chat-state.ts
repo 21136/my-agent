@@ -378,6 +378,38 @@ export function isConfirmInProgressLabel(label: string | undefined): boolean {
   return label.includes("执行中") || label === "提交中…";
 }
 
+/** True when the user must act on an authorization or worker-verification confirm in this session. */
+export function chatSessionAwaitingUserConfirm(
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+): boolean {
+  if (model.confirmPending) return true;
+  if (model.confirmOverlay) {
+    if (!model.confirmOverlay.resolved || isConfirmInProgressLabel(model.confirmOverlay.resolved)) return true;
+  }
+  return model.blocks.some((block) => {
+    if (block.kind !== "confirm") return false;
+    if (block.confirmKind === "work_record_post_turn") return false;
+    if (!block.resolved) return true;
+    return isConfirmInProgressLabel(block.resolved);
+  });
+}
+
+export function primaryPendingConfirmPreview(
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+): string {
+  if (model.confirmOverlay
+      && (!model.confirmOverlay.resolved || isConfirmInProgressLabel(model.confirmOverlay.resolved))) {
+    return model.confirmOverlay.preview;
+  }
+  for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
+    const block = model.blocks[index];
+    if (block.kind !== "confirm") continue;
+    if (block.confirmKind === "work_record_post_turn") continue;
+    if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.preview;
+  }
+  return "";
+}
+
 function normalizedRunId(runId: string | undefined): string {
   return typeof runId === "string" ? runId.trim() : "";
 }

@@ -1,4 +1,9 @@
 import type { WorkRecordsOverviewGroup, WorkRecordsOverviewPageFacts, WorkRecordsOverviewResultEvent } from "../../api/ws";
+import {
+  type CurrentWorkLiveSessionInput,
+  currentWorkLiveQueueCount,
+  renderCurrentWorkLiveQueueHtml,
+} from "./current-work-live-session.ts";
 import { WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS } from "./work-card-presentation.ts";
 
 export const CURRENT_WORK_OVERVIEW_QUERY = "当前工作整体概况";
@@ -327,14 +332,57 @@ function renderGroup(group: WorkRecordsOverviewGroup, expandedRequirementItemIds
   return `<article class="unified-current-work-group"><h4>${escapeHtml(title)}</h4>${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
 }
 
+function buildLiveQueueSection(
+  groupsHtml: string,
+  structuredGroupCount: number,
+  liveSession: CurrentWorkLiveSessionInput | null | undefined,
+): { bodyHtml: string; queueCount: number } {
+  const liveHtml = renderCurrentWorkLiveQueueHtml(liveSession);
+  const liveCount = currentWorkLiveQueueCount(liveSession);
+  const combined = [groupsHtml, liveHtml].filter(Boolean).join("");
+  const bodyHtml = combined
+    || `<p class="current-work-zone-empty">暂无可见工作组</p>`;
+  return { bodyHtml, queueCount: structuredGroupCount + liveCount };
+}
+
 export function buildCurrentWorkOverviewPanel(
   result: WorkRecordsOverviewResultEvent | null,
-  options: { open: boolean; loadingMore?: boolean; unavailable?: boolean; expandedRequirementItemIds?: ReadonlySet<string>; detailLoadingCursor?: string | null },
+  options: {
+    open: boolean;
+    loadingMore?: boolean;
+    unavailable?: boolean;
+    expandedRequirementItemIds?: ReadonlySet<string>;
+    detailLoadingCursor?: string | null;
+    liveSession?: CurrentWorkLiveSessionInput | null;
+  },
 ): CurrentWorkOverviewPanel {
-  if (!result) return options.unavailable
-    ? { visible: true, open: options.open, label: "当前工作 · 正在核实", bodyHtml: `<p class="unified-current-work-warning" role="status">当前会话概况正在核实，结果返回前不隐藏入口。</p>`, canExpand: false, moreLabel: "", loadingMore: false }
-    : { visible: false, open: options.open, label: "", bodyHtml: "", canExpand: false, moreLabel: "", loadingMore: false };
-  const visible = shouldShowCurrentWorkOverview(result);
+  const liveSession = options.liveSession ?? null;
+  const liveHtml = renderCurrentWorkLiveQueueHtml(liveSession);
+  const liveCount = currentWorkLiveQueueCount(liveSession);
+  const liveConfirmPending = Boolean(liveSession?.confirmPending);
+  if (!result) {
+    if (!options.unavailable) {
+      return { visible: false, open: options.open, label: "", bodyHtml: "", canExpand: false, moreLabel: "", loadingMore: false };
+    }
+    const queueBody = liveHtml || `<p class="current-work-zone-empty">暂无可见工作组</p>`;
+    const label = liveConfirmPending ? "当前工作 · 等待确认"
+      : liveCount ? "当前工作 · 进行中"
+        : "当前工作 · 正在核实";
+    const statusWarning = liveCount
+      ? `<p class="unified-current-work-warning" role="status">工作记录概况尚在核实；下列为当前会话中的实时队列。</p>`
+      : `<p class="unified-current-work-warning" role="status">当前会话概况正在核实，结果返回前不隐藏入口。</p>`;
+    const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${liveCount}</span></header><div class="current-work-zone-body">${queueBody}</div></div></section>`;
+    return {
+      visible: true,
+      open: options.open,
+      label,
+      bodyHtml: `${statusWarning}<div class="current-work-page-body" data-cw-segment="queue">${queuePanel}</div>`,
+      canExpand: false,
+      moreLabel: "",
+      loadingMore: false,
+    };
+  }
+  const visible = shouldShowCurrentWorkOverview(result) || liveCount > 0;
   const unreadCountText = unreadCountSummary(result);
   const unreadCount = unreadCountText === null ? null : Number.parseInt(unreadCountText.replace(/\D/g, ""), 10);
   const attentionCount = groupAttentionCount(result);
@@ -342,14 +390,7 @@ export function buildCurrentWorkOverviewPanel(
     && unreadCount === 0 && unreadCountText !== null && result.visibility_limitations.length === 0 && !result.page.has_more
     && result.groups.length === result.visibility_counts.visible_groups && result.groups.length > 0
     && !result.groups.some(groupNeedsAttention);
-  const label = result.unread_status !== "known"
-    ? "当前工作 · 状态待确认"
-    : unreadCountText === null ? "当前工作 · 未读结果数未知"
-      : unreadCountText.startsWith("至少") ? `当前工作 · 未读 ${unreadCountText}`
-        : unreadCount! > 0 ? `当前工作 · 未读 ${unreadCountText}`
-          : attentionCount > 0 ? `当前工作 · ${attentionCount} 组需关注`
-        : result.page.has_more ? `当前工作 · 还有余项`
-          : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作";  let statusHtml = "";
+  let statusHtml = "";
   if (result.unread_status !== "known") statusHtml = `<p class="unified-current-work-warning" role="status">部分结果的查看状态未知；暂不据此隐藏当前工作。</p>`;
   if (result.state === "error" || result.state === "cancelled") statusHtml += `<p class="unified-current-work-warning" role="status">概况暂不可确认，可刷新重试。</p>`;
   if (result.state === "expired") statusHtml += `<p class="unified-current-work-warning" role="status">概况数据已变化，正在重新查询。</p>`;
@@ -373,13 +414,29 @@ export function buildCurrentWorkOverviewPanel(
     const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor);
     return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
   }).join("");
+  const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(groupsHtml, activeGroups.length, liveSession);
+  const label = liveConfirmPending && !activeGroups.length
+    ? "当前工作 · 等待确认"
+    : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
+    ? "当前工作 · 状态待确认"
+    : result.unread_status !== "known"
+    ? "当前工作 · 概况待核实"
+    : unreadCountText === null ? "当前工作 · 未读结果数未知"
+      : unreadCountText.startsWith("至少") ? `当前工作 · 未读 ${unreadCountText}`
+        : unreadCount! > 0 ? `当前工作 · 未读 ${unreadCountText}`
+          : attentionCount > 0 ? `当前工作 · ${attentionCount} 组需关注`
+        : result.page.has_more ? `当前工作 · 还有余项`
+          : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作";
+  if (liveCount && !activeGroups.length) {
+    statusHtml += `<p class="unified-current-work-warning" role="status">Structured 工作组尚未出现；下列来自当前会话中的编排或授权状态。</p>`;
+  }
   const remaining = Math.max(0, result.page.total_visible_groups - activeGroups.length);
   const canExpand = result.state === "visible" && result.page.has_more && Boolean(result.page.next_cursor);
   const unreadSummary = result.unread_status === "known" && unreadCountText !== null
     ? `${unreadCountText} 项未读结果` : "未读结果数未知";
   const summaryLine = `${result.visibility_counts.visible_groups} 组当前可见 · ${unreadSummary}${visibleAttentionCount ? ` · ${visibleAttentionCount} 组需关注` : ""}`;
   const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未读</span><strong>${escapeHtml(unreadCountText ?? "未知")}</strong></div></div></section>`;
-  const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${activeGroups.length}</span></header><div class="current-work-zone-body">${groupsHtml || `<p class="current-work-zone-empty">暂无可见工作组</p>`}</div></div></section>`;
+  const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${queueCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
   const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || `<p class="current-work-zone-empty">当前没有调度预览；选择项目来源后会显示在这里。</p>`}<div data-cw-schedule-slot></div></section>`;
   const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;
   return {

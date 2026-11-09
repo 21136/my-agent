@@ -712,3 +712,81 @@ test("source snapshot timer labels remain conservative and collapsed rows do not
  const collapsed=buildCurrentWorkOverviewPanel(mk({...group,visibility:"collapsed",attention_status:"none",attention_reason:"elapsed_terminal_capture",visibility_timer_status:"elapsed"}),{open:true});
  assert.doesNotMatch(collapsed.bodyHtml,/捕获事项/);
 });
+
+test("empty structured queue still mirrors pending batch authorization from the live session", () => {
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    unread_status: "unknown",
+    visibility_counts: emptyCounts,
+    page: basePage,
+  }), {
+    open: true,
+    liveSession: {
+      confirmPending: true,
+      confirmOverlay: {
+        requestId: "confirm-batch",
+        preview: "确认向 2 个项目派发 worker：music、luna",
+      },
+      turnActive: true,
+      executionState: "running",
+      blocks: [],
+    },
+  });
+  assert.equal(panel.visible, true);
+  assert.match(panel.label, /等待确认/);
+  assert.doesNotMatch(panel.bodyHtml, /暂无可见工作组/);
+  assert.match(panel.bodyHtml, /主会话授权/);
+  assert.match(panel.bodyHtml, /music、luna/);
+  assert.match(panel.bodyHtml, /回到对话/);
+});
+
+test("companion orchestration work-instruction appears before work records exist", () => {
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "no_records",
+    unread_status: "known",
+    visibility_counts: emptyCounts,
+    page: basePage,
+  }), {
+    open: true,
+    liveSession: {
+      confirmPending: false,
+      confirmOverlay: null,
+      turnActive: true,
+      executionState: "running",
+      blocks: [{
+        kind: "work-instruction",
+        text: "同时推进 music 与 luna 的边界测试",
+        state: "orchestration_active",
+      }],
+    },
+  });
+  assert.match(panel.bodyHtml, /并行多项目编排/);
+  assert.match(panel.bodyHtml, /各项目施工中/);
+  assert.match(panel.bodyHtml, /music 与 luna/);
+  assert.doesNotMatch(panel.bodyHtml, /暂无可见工作组/);
+});
+
+test("post-turn work-record confirms are not mirrored into the live queue", () => {
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    unread_status: "known",
+    groups: [],
+    visibility_counts: emptyCounts,
+    page: basePage,
+  }), {
+    open: true,
+    liveSession: {
+      confirmPending: false,
+      confirmOverlay: null,
+      turnActive: false,
+      executionState: "settled",
+      blocks: [{
+        kind: "confirm",
+        confirmKind: "work_record_post_turn",
+        requestId: "post-turn",
+        preview: "确认写入本次会话工作记录",
+      }],
+    },
+  });
+  assert.match(panel.bodyHtml, /暂无可见工作组/);
+});
