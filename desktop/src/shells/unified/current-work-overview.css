@@ -27,6 +27,9 @@
   width: min(428px, 46vw);
   max-width: calc(100% - 0.5rem);
   flex: none !important;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
   border-right: 0;
@@ -498,6 +501,11 @@ html[data-theme] .unified-shell.is-current-work-overlay .unified-tool-region {
 }
 html[data-theme] .unified-shell.is-current-work-overlay #unified-current-work {
   background: transparent;
+}
+.unified-shell.is-current-work-overlay #unified-current-work:not([hidden]) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
 html[data-theme] .unified-current-work-popover.current-work-scroll {
   scrollbar-gutter: stable;
