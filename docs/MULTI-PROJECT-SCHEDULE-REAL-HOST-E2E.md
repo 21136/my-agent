@@ -23,11 +23,13 @@ set REAL_MULTI_PROJECT_SCHEDULE_GUI_OPT_IN=1
 node --test desktop\tests\multi-project-schedule-real-host-browser-e2e.test.mjs
 ```
 
-Or:
+Or (opt-in contract + browser E2E, same env flags):
 
 ```bat
 desktop\_run79-schedule-real-host.cmd
 ```
+
+Edge launches with Local Network Access checks disabled so loopback WebSocket to the fixture host is allowed (same flags as `schedule-workbench-multi-project-browser-e2e.test.mjs`).
 
 Evidence: dispatch `status=applied`, per-project `workers[]` statuses (e.g. `model_turn_finished` + `failed`), companion session remains **unbound** (`project_id` empty).
 
