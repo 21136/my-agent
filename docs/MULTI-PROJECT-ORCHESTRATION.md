@@ -21,6 +21,7 @@
 - 当前工作详情可展示已加载要求、最近十次历史尝试并编辑其依赖；更多未加载要求需先分页载入。概况操作提供队列/等待确认/停止未启动项/继续准备和优先级；不提供对运行中 worker 的假停止，也尚未自动执行调度。
 - Desktop 可选择最多六个已映射项目并请求结构化概况；用户逐项授权后才读取来源侧车。远端组显示来源 Session/记录版本，并可直接展开要求、最近历史和跳转到来源会话。远端未运行事项的记录元数据操作会触发额外精确确认和 source revision CAS；不可在概况中假称取消运行中的 worker。跨 Session 结果查看回执未知，不能据此隐藏结果。选择来源、事项操作与迟到 WebSocket 响应均绑定 request/session 身份。
 - 最终定向后端回归：外部项目/worker/工作记录/overview/控制/结算/多项目授权聚合测试 **191 passed、1 skipped、3 subtests passed**；Desktop 当前工作、响应式渲染、多来源选择和控制 WS 测试 **38/38 passed**。synthetic Playwright loopback E2E **1/1 passed**，验证多项目来源须先授权、拒绝读取量为 0、授权后远端事项控制需再次确认且不启动 worker；完整 `tsc -p desktop/tsconfig.json --noEmit` 和 `npm --prefix desktop run build` 均通过。另有 single-worker record/pytest loopback GUI E2E **1/1 passed**（HTTP 模型 transport 为 mock，项目内 pytest 实际运行）；未调用真实模型或真实用户目录。
+- **工作台故障重开（自动化，#59 续 #58）**：`agent-core/tests/test_workbench_crash_reopen_recovery_harness.py`（3）+ `desktop/tests/workbench-crash-reopen-recovery.test.mjs`（3）证明 `session.open` 对外进程 `in_progress` 落 `unknown`、概况可见、未决时 warn 且不自动续跑；同进程仍在跑可 `cancel_execution`、queued 可 `stop`；子进程恢复与子进程 `mark_interrupted` 一致。修复：POSIX 上概况 API 不再在持有 work-record 锁时重入 disposition 读。
 - 自动化测试覆盖 host 隔离、批次授权、并发、取消、回执、工作记录控制协议和部分真实模型 opt-in 路径；测试文件存在不代表 GUI 或真实模型验收通过。
 
 ### 尚需验收 / 不应宣称已完成
@@ -28,7 +29,7 @@
 - **单入口 worker 派工 E2E**：仍需在一个主对话中实际分派多个已登记项目（含外部绑定项目），验证任务拆分、worker 执行、逐项目回执和最终总结不串台。当前 loopback E2E 覆盖的是多项目记录概况与远端记录控制，不等于多 worker 派工 E2E。
 - **拒绝 / 歧义**：项目或任务不明确时先问；拒绝确认、确认过期或取消时无 worker 越权启动，UI 和最终回复准确反映状态。
 - **混合结果**：多项目批次中分别出现成功、失败、受阻、取消与状态未知，逐项目显示真实结果；任何 worker 返回都不伪装成完成或测试通过。
-- **桌面生命周期**：Stop、切换会话/项目、关闭与重开期间的迟到事件、待确认操作和不确定写入结果，需在实际 UI 验证。当前启动/打开 Session 会把其他进程 owner 留下的 in-progress 要求改为 unknown 并追加 interruption 事件，不自动执行；同进程活跃 run 保留。还需实际应用关闭/重开及故障时序 E2E 验收。
+- **桌面生命周期**：Stop、切换会话/项目、关闭与重开期间的迟到事件、待确认操作和不确定写入结果，仍需在实际 UI 验证。**自动化已覆盖** synthetic 的 `session.open` + 当前工作概况 + 控制 WS（见上条）；**仍缺**真实 Electron 关窗/杀进程/托盘恢复时序与迟到 WS 的 GUI E2E。
 - **工作区范围**：worker 现在可使用已登记内部项目和通过外部项目流程显式接入的根；不支持对未登记任意路径直接派工。外部根身份、链接替换和窗口变化有后端保护，但目录注册/绑定管理及桌面端实际操作仍须独立验收。
 - **完整多工作区、多事项工作台（产品目标，用户于 2026-11-07 确认）**：调度 tab 已可授权 → 只读预览 → **按预览并行启动**（预填任务/路径 · `schedule.dispatch` · 一次最多 6 个不同项目；host 并发默认 2、`MY_AGENT_PROJECT_WORKER_MAX` 可调 1–6）；概况可对远端 `in_progress` 发起 host 取消协调（#58 批次）。仍缺全自动批量编排、事项合并/拆分展示、真实模型多项目并行 GUI E2E、以及应用故障时序下的完整恢复验收。不能宣称完整达标。
 - **验证证据**：上列定向测试仅证明其覆盖的后端/组件行为；不代表完整 UI 流程、真实模型、多工作区事项调度或恢复验收通过。真实用户目录未用于测试。
@@ -313,7 +314,7 @@ un_evolved 写工具，还是只暴露一组固定 builtin 写工具？
 
 | 日期 | 说明 |
 |------|------|
-| 2026-11-09 | schedule.dispatch 批量上限对齐 6 项目选择；桌面/WS 取消直达远端 host；跨源历史分页、session unknown 恢复 |
+| 2026-11-09 | 工作台 crash/reopen harness（概况锁重入修复 + WS/UI 回归）；schedule.dispatch 批量上限对齐 6 项目选择；桌面/WS 取消直达远端 host |
 | 2026-11-09 | 工作台显式 schedule.dispatch、远端 host 取消协调（服务端）；完整 E2E 仍待验收 |
 | 2026-11-07 | 更新外部项目 worker 绑定支持与身份替换 fail-closed 证据；记录定向后端测试结果；完整工作台仍未达标 |
 | 2026-10-29 | 增补单对话当前工作、独立事项、结果与历史回查的设计边界；当时未实现 |
