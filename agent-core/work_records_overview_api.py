@@ -712,15 +712,18 @@ def _linked_snapshot_view_prepass(session: Session, store: WorkRecordStore, ledg
     presentations = WorkCardPresentations(session, store, ledger)
     evidence = LinkedSnapshotViewEvidence(session, store, ledger)
     disposition = ledger.disposition()
+    hidden_card_ids = disposition.hidden_card_ids()
+    hidden_binding_ids = disposition.hidden_binding_ids()
+    hidden_refresh_ids = disposition.hidden_refresh_ids()
     with _file_lock(store._lock_path, store._lock_timeout):
         binding_data = bindings._view_locked(bindings._read())
         ledger_data = ledger._ledger_store._read()
         presentation_data = presentations._presentations_store._read()
         _groups, targets = _linked_source_snapshot_groups(
             session.conversation_id, binding_data, ledger_data, include_view_targets=True,
-            hidden_card_ids=disposition.hidden_card_ids(),
-            hidden_binding_ids=disposition.hidden_binding_ids(),
-            hidden_refresh_ids=disposition.hidden_refresh_ids(),
+            hidden_card_ids=hidden_card_ids,
+            hidden_binding_ids=hidden_binding_ids,
+            hidden_refresh_ids=hidden_refresh_ids,
         )
         presentation_rows = {row["presentation_id"]: row for row in presentation_data["items"]}
 
@@ -831,6 +834,10 @@ def query_work_records_overview(
         ledger = WorkCardLedger(session, store)
         presentations = WorkCardPresentations(session, store, ledger)
         scope = _session_scope(store)
+        disposition = ledger.disposition()
+        hidden_card_ids = disposition.hidden_card_ids()
+        hidden_binding_ids = disposition.hidden_binding_ids()
+        hidden_refresh_ids = disposition.hidden_refresh_ids()
         linked_bindings, snapshot_view_evidence, elapsed_by_identity, linked_baseline = (
             _linked_snapshot_view_prepass(session, store, ledger)
         )
@@ -848,13 +855,12 @@ def query_work_records_overview(
                 and view_evidence_data == linked_baseline["evidence"]
             )
             current_elapsed = elapsed_by_identity if evidence_matches_baseline else {}
-            disposition = ledger.disposition()
             linked_source_groups = _linked_source_snapshot_groups(
                 session.conversation_id, binding_data, ledger_data,
                 elapsed_by_identity=current_elapsed,
-                hidden_card_ids=disposition.hidden_card_ids(),
-                hidden_binding_ids=disposition.hidden_binding_ids(),
-                hidden_refresh_ids=disposition.hidden_refresh_ids(),
+                hidden_card_ids=hidden_card_ids,
+                hidden_binding_ids=hidden_binding_ids,
+                hidden_refresh_ids=hidden_refresh_ids,
             )
             previous_presentation_data = copy.deepcopy(presentation_data)
             cards = presentations._cards_locked(presentation_data)
