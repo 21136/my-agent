@@ -64,8 +64,15 @@ test("sandbox root: prefers .worktrees/sandbox when stable lacks control-release
   }
 });
 
-test("post-seed data root allows guard directories", () => {
-  const entries = [".file-guard", ".session-guard", "sessions", "state.json"].sort();
+test("post-seed data root allows guard and post-open runtime entries", () => {
+  const entries = [
+    ".file-guard",
+    ".session-guard",
+    "sessions",
+    "state.json",
+    "logs",
+    "auto-recognition-preference.sqlite3",
+  ].sort();
   assert.equal(validateWorkbenchRecoveryDataRootEntries(entries).ok, true);
   assert.equal(validateWorkbenchRecoveryDataRootEntries(["sessions", "state.json"]).ok, true);
   assert.equal(validateWorkbenchRecoveryDataRootEntries(["sessions", "state.json", "extra.json"]).ok, false);
