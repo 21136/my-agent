@@ -1292,18 +1292,17 @@ _BUILTIN_DESCRIPTIONS: dict[str, str] = {
         "project.create / project.open / project.release auto-apply without a 换线 card."
     ),
     "trash_workspace_projects": (
-        "Soft-delete one or more workspace/<project_id>/ trees to agent _trash/ from the "
-        "companion without rebinding the session per project; optional glob_pattern "
-        "(e.g. random-number*). Permanent removal requires confirm_permanent=true plus user "
-        "confirm. Cascades work-card soft tombstones for matched projects."
+        "Soft-delete workspace/<project_id>/ trees to agent _trash/ from the main companion "
+        "without binding this chat to any project. May clear an erroneous single-project bind "
+        "(companion_stays_unbound + companion_hint in tool data). optional glob_pattern. "
+        "Permanent removal requires confirm_permanent=true. Do not tell the user they can "
+        "bind the current session to another project afterward."
     ),
     "bind_project_dir": (
-        "Bind an absolute local directory as this session's current project "
-        "(Codex-like open folder). Scans then junction-adopts in place; "
-        "if the session already has another project, switches to the new one after confirm. "
-        "Use when the user says 把这个目录当项目 / open this folder as project. "
-        "Pass absolute path; optional project_id; dry_run=true only scans. "
-        "Disabled in 只聊 (ask); requires confirm unless dry_run."
+        "Bind an absolute directory as the current session's project — only in dedicated "
+        "project-window sessions (active_shell=project). **Blocked on main home 小魔王空间**; "
+        "there use project.open (register_only) + run_project_workers instead. "
+        "dry_run=true scans without binding. Disabled in 只聊 (ask)."
     ),
     "deliverable_review": (
         "Spawn read-only deliverable review subagent. Bound sessions default to the current project; "

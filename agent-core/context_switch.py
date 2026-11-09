@@ -25,6 +25,10 @@ from project_switch import (
     plan_project_switch,
     record_project_session,
 )
+from companion_home_policy import (
+    companion_home_rejects_session_bind,
+    is_main_home_companion_session,
+)
 from session import Session, build_seed_message, create_new, write_last_conversation_id
 
 ContextAction = Literal[
@@ -58,11 +62,6 @@ class ContextSwitchProposal:
 
 class ContextSwitchError(Exception):
     """Invalid context-switch proposal or apply failure."""
-
-
-def is_main_home_companion_session(session: Session) -> bool:
-    """Ordinary 小魔王空间 chat with no project binding on this session."""
-    return not (session.meta.project_id or "").strip()
 
 
 def context_switch_replaces_session(
@@ -174,6 +173,8 @@ def should_auto_apply_context_switch(
         return True
     if proposal.action == "project.switch":
         plan = plan_project_switch(paths, session, proposal.target)
+        if companion_home_rejects_session_bind(session):
+            return plan.action in {"noop", "register_only"}
         return plan.action in {"noop", "bind_current", "register_only"}
     return False
 

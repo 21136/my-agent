@@ -3028,6 +3028,25 @@ class ToolExecutor:
                 details={"turn_mode": "ask"},
             )
 
+        if name == "bind_project_dir" and not bool(arguments.get("dry_run")):
+            from companion_home_policy import MAIN_HOME_SESSION_BIND_DENIED, companion_home_rejects_session_bind
+            from session import Session
+
+            shell = (self.session.active_shell or "grow").strip() or "grow"
+            rejects = shell != "project"
+            if not rejects and self.session.session_dir is not None:
+                try:
+                    loaded = Session.load(self.registry.agent_paths, self.session.session_dir.name)
+                    rejects = companion_home_rejects_session_bind(loaded)
+                except Exception:
+                    pass
+            if rejects:
+                return tool_fail(
+                    name,
+                    ToolErrorCode.PERMISSION_DENIED,
+                    MAIN_HOME_SESSION_BIND_DENIED,
+                )
+
         if name == "generate_video" and self.session.turn_mode == "ask":
             return tool_fail(name, ToolErrorCode.PERMISSION_DENIED, "generate_video is disabled in ask mode", details={"turn_mode": "ask"})
         if name == "generate_video" and str(self.session.ordinary_work_intent or "").strip() in {"read_only", "plan_only"}:

@@ -51,7 +51,21 @@ class BindProjectDirTests(unittest.TestCase):
         self.assertEqual(result.error.code, ToolErrorCode.PATH_DENIED)
         self.assertIn("禁止接入", result.error.message)
 
-    def test_tool_apply_binds_current_session(self) -> None:
+    def test_tool_apply_rejected_on_main_home_companion(self) -> None:
+        self.assertEqual(self.session.meta.active_shell, "grow")
+        result = bind_project_dir.run(
+            {"path": str(self.external), "project_id": "bind-demo"},
+            paths=self.paths,
+            session=self.session,
+        )
+        self.assertFalse(result.ok)
+        assert result.error is not None
+        self.assertEqual(result.error.code, ToolErrorCode.PERMISSION_DENIED)
+        self.assertIn("主界面小魔王", result.error.message)
+        self.assertFalse((self.session.meta.project_id or "").strip())
+
+    def test_tool_apply_binds_dedicated_project_session(self) -> None:
+        self.session.meta.active_shell = "project"
         result = bind_project_dir.run(
             {"path": str(self.external), "project_id": "bind-demo"},
             paths=self.paths,
@@ -74,6 +88,7 @@ class BindProjectDirTests(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(other, ignore_errors=True))
         (other / "README.md").write_text("# Other\n", encoding="utf-8")
 
+        self.session.meta.active_shell = "project"
         first = bind_external_project_dir(
             self.session, self.paths, str(self.external), project_id="first-app"
         )
@@ -97,6 +112,7 @@ class BindProjectDirTests(unittest.TestCase):
         self.assertEqual(self.session.meta.project_id, "third-app")
 
     def test_already_bound_is_noop(self) -> None:
+        self.session.meta.active_shell = "project"
         bind_external_project_dir(
             self.session, self.paths, str(self.external), project_id="same-app"
         )

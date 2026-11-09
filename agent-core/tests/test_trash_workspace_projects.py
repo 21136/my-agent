@@ -60,6 +60,9 @@ class TrashWorkspaceProjectsTests(unittest.TestCase):
         self.assertFalse((session.meta.project_id or "").strip())
         self.assertFalse(project_dir(self.paths, self.pid_a).exists())
         self.assertFalse(project_dir(self.paths, self.pid_b).exists())
+        self.assertTrue(payload.get("companion_stays_unbound"))
+        self.assertIsInstance(payload.get("companion_hint"), str)
+        self.assertIn("run_project_workers", payload["companion_hint"])
 
     def test_trash_cascades_work_cards(self) -> None:
         pid = f"cascade-{secrets.token_hex(2)}"
