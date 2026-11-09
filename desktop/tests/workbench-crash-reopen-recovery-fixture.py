@@ -13,6 +13,9 @@ import os
 from websockets.asyncio.server import serve
 
 SESSION = "20261109-crash-reopen"
+SOURCE_SESSION = "recovery-source-alpha"
+WORK_RECORD_REVISION = 1
+SOURCE_REVISION = 3
 LATE_WS_MS = float(os.environ.get("WORKBENCH_RECOVERY_LATE_WS_MS", "350"))
 RECOVERY_WARN = (
     "检测到上次异常退出：进行中事项已保守标记为待确认，未自动续跑 worker。"
@@ -40,6 +43,7 @@ def _recovery_overview(request_id: str) -> dict:
         "session_id": SESSION,
         "request_id": request_id,
         "state": "visible",
+        "work_record_revision": WORK_RECORD_REVISION,
         "unread_status": "unknown",
         "visibility_limitations": [],
         "visibility_counts": {
@@ -97,11 +101,14 @@ def _recovery_overview(request_id: str) -> dict:
             {
                 "kind": "project",
                 "id": "project-alpha",
+                "source_session_id": SOURCE_SESSION,
+                "source_revision": SOURCE_REVISION,
                 "visibility": "visible",
                 "status": "in_progress",
                 "status_counts": {"in_progress": 1},
                 "item_count": 1,
                 "requirement_count": 1,
+                "items_page": None,
                 "items": [{
                     "item_id": "worker",
                     "title": "project worker task",
@@ -125,6 +132,7 @@ def _claim_overview(request_id: str) -> dict:
         "session_id": SESSION,
         "request_id": request_id,
         "state": "visible",
+        "work_record_revision": WORK_RECORD_REVISION,
         "unread_status": "unknown",
         "visibility_limitations": [],
         "visibility_counts": {
