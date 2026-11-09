@@ -690,6 +690,15 @@ export function createChatSession(
     model.cancelRequested = false;
   }
 
+  /** Undo submitConfirm's beginTurnActivity when no execution/tools keep the session busy. */
+  function releaseSubmitTurnActivityIfIdle(): void {
+    if (model.toolsRunning > 0) return;
+    if (["queued", "running", "stopping"].includes(model.executionState)) return;
+    model.turnActive = false;
+    model.turnFinished = true;
+    model.turnActivityStartedAt = 0;
+  }
+
   function turnIsBusy(): boolean {
     return (
       model.turnActive
@@ -2057,6 +2066,8 @@ export function createChatSession(
           event.choice === "cancelled";
         if (!rejected && ["queued", "running", "stopping"].includes(model.executionState)) {
           beginTurnActivity();
+        } else {
+          releaseSubmitTurnActivityIfIdle();
         }
         hooks.onConfirmDone?.(event.choice);
         notify();
