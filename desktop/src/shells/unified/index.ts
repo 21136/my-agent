@@ -1807,52 +1807,23 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function syncPendingConfirmComposerHint(): void {
-    const awaiting = chatSessionAwaitingUserConfirm(chat.model);
     let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
-    const overlay = chat.model.confirmOverlay;
-  if (
-      overlay?.requestId
-      && overlay.resolved
-      && !isConfirmInProgressLabel(overlay.resolved)
-    ) {
-      hint?.remove();
-      if (!awaiting) return;
-    }
-    if (!awaiting) {
-      hint?.remove();
-      return;
-    }
     const preview = primaryPendingConfirmPreview(chat.model);
     const requestId = pendingConfirmRequestId();
-    if (!preview.trim() || !requestId) {
+    const confirmUi = companionConfirmUi();
+    const showComposerActions = requestId && preview.trim()
+      ? composerShouldShowOrdinaryConfirmActions(chat.model, {
+        chatRendersOrdinaryConfirm: confirmUi.chatRendersOrdinaryConfirm,
+        overlayRendersOrdinaryConfirm: confirmUi.overlayRendersOrdinaryConfirm,
+        companionComposerPrimary: confirmUi.companionComposerPrimary,
+      })
+      : false;
+    if (!showComposerActions || !requestId || !preview.trim()) {
       hint?.remove();
       return;
     }
-    const confirmUi = companionConfirmUi();
     const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
-    const inFlight = !canAct && resolveActiveOrdinaryConfirmRequestId(chat.model) === requestId;
-    const showComposerActions = composerShouldShowOrdinaryConfirmActions(chat.model, {
-      chatRendersOrdinaryConfirm: confirmUi.chatRendersOrdinaryConfirm,
-      overlayRendersOrdinaryConfirm: confirmUi.overlayRendersOrdinaryConfirm,
-      companionComposerPrimary: confirmUi.companionComposerPrimary,
-    });
-    if (!showComposerActions) {
-      if (!inFlight) {
-        hint?.remove();
-        return;
-      }
-      if (!hint) {
-        hint = document.createElement("section");
-        hint.dataset.pendingConfirmHint = "1";
-        hint.className = "unified-pending-confirm-hint";
-        hint.setAttribute("role", "region");
-        hint.setAttribute("aria-label", "待确认授权");
-        composerDock.insertBefore(hint, composerMetaEl);
-      }
-      hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong></div><p class="unified-pending-confirm-hint-detail text-muted" role="status">确认已提交，等待服务端…</p>`;
-      return;
-    }
-    if (!hint) {
+  if (!hint) {
       hint = document.createElement("section");
       hint.dataset.pendingConfirmHint = "1";
       hint.className = "unified-pending-confirm-hint";
@@ -1862,13 +1833,40 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     }
     const detail = renderComposerOrdinaryConfirmDetailHtml(preview);
     const disabled = canAct ? "" : " disabled";
-    const statusNote = inFlight
-      ? `<p class="unified-pending-confirm-hint-detail text-muted" role="status">确认已提交，等待服务端…</p>`
-      : "";
     const jump = confirmUi.companionComposerPrimary
       ? ""
       : `<button type="button" class="unified-btn unified-btn-ghost" data-pending-confirm-jump>查看确认卡</button>`;
-    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong>${jump}</div>${detail}${statusNote}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
+    hint.innerHTML = `<div class="unified-pending-confirm-hint-head"><strong>等待你的确认</strong>${jump}</div>${detail}<div class="unified-pending-confirm-hint-actions"><button type="button" class="unified-btn unified-btn-accent" data-confirm="y" data-id="${escapeHtml(requestId)}"${disabled}>同意</button><button type="button" class="unified-btn" data-confirm="n" data-id="${escapeHtml(requestId)}"${disabled}>拒绝</button></div>`;
+  }
+
+  const ORDINARY_CONFIRM_RECOVERY_MS = 45_000;
+  let ordinaryConfirmRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  let ordinaryConfirmRecoveryId: string | null = null;
+
+  function clearOrdinaryConfirmRecovery(): void {
+    if (ordinaryConfirmRecoveryTimer !== null) {
+      window.clearTimeout(ordinaryConfirmRecoveryTimer);
+      ordinaryConfirmRecoveryTimer = null;
+    }
+    ordinaryConfirmRecoveryId = null;
+  }
+
+  function scheduleOrdinaryConfirmRecovery(requestId: string): void {
+    clearOrdinaryConfirmRecovery();
+    ordinaryConfirmRecoveryId = requestId;
+    ordinaryConfirmRecoveryTimer = window.setTimeout(() => {
+      ordinaryConfirmRecoveryTimer = null;
+      if (destroyed || ordinaryConfirmRecoveryId !== requestId) return;
+      if (canSubmitOrdinaryConfirm(chat.model, requestId)) return;
+      chat.handleEvent({ type: "confirm.done", request_id: requestId, choice: "timeout" });
+      syncOrdinaryConfirmPending(chat.model);
+      renderChat();
+      renderConfirmGlass();
+      syncPendingConfirmComposerHint();
+      syncWorkingVisual();
+      setStatus("确认超时，已恢复输入");
+      ordinaryConfirmRecoveryId = null;
+    }, ORDINARY_CONFIRM_RECOVERY_MS);
   }
 
   function appendPendingConfirmFallbackHtml(html: string): string {
@@ -4462,7 +4460,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const elapsedMs = Math.max(maxRunningMs, maxLlmWaitMs, turnElapsedMs);
     if (elapsedMs >= 1000 && !chat.model.cancelRequested) {
       const sec = Math.floor(elapsedMs / 1000);
-      if (chatSessionAwaitingUserConfirm(chat.model)) {
+      if (chat.model.confirmPending) {
         setStatus(`等待确认… ${sec}s`);
         return;
       }
@@ -5837,6 +5835,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
           setStatus(choice === "n" ? "已提交拒绝…" : "确认中…");
           renderChat();
           syncPendingConfirmComposerHint();
+          scheduleOrdinaryConfirmRecovery(id);
           syncWorkingVisual();
           return;
         } catch (err) {
@@ -5857,6 +5856,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     try {
       client.sendConfirm(id, choice);
       setStatus(choice === "n" ? "已提交拒绝…" : "确认中…");
+      syncPendingConfirmComposerHint();
+      scheduleOrdinaryConfirmRecovery(id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus(`确认发送失败：${message}`);
@@ -8028,6 +8029,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         }
         chat.handleEvent(event);
         if (event.type === "confirm.done") {
+          if (
+            typeof event.request_id === "string"
+            && event.request_id === ordinaryConfirmRecoveryId
+          ) {
+            clearOrdinaryConfirmRecovery();
+          }
           syncOrdinaryConfirmPending(chat.model);
         }
         renderChat();
