@@ -1,4 +1,12 @@
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const optinDir = path.dirname(fileURLToPath(import.meta.url));
+
+export const EVOLUTION_CONTROL_RELEASE_REL = path.join("artifacts", "evolution-control-build", "control-release.js");
+export const EVOLUTION_CONTROL_PREP_RUN_REL = path.join("artifacts", "evolution-control-prep");
 
 export const WORKBENCH_RECOVERY_ELECTRON_PROFILE = "workbench-crash-reopen-recovery-v1";
 export const WORKBENCH_RECOVERY_SESSION_ID = "workbench-recovery-electron";
@@ -74,4 +82,76 @@ export function resolveDefaultElectronExecutable(repoRoot) {
   const unix = path.join(repoRoot, "desktop", "node_modules", "electron", "dist", "electron");
   if (process.platform === "win32") return win;
   return unix;
+}
+
+function controlReleasePath(sandboxRoot) {
+  return path.join(sandboxRoot, EVOLUTION_CONTROL_RELEASE_REL);
+}
+
+/** Canonical evolution sandbox for H1 freeze (prefer `.worktrees/sandbox` when invoked from stable). */
+export function resolveWorkbenchRecoverySandboxRoot(invokedRoot = path.resolve(optinDir, "../..")) {
+  const root = path.resolve(invokedRoot);
+  const envRoot = process.env.MY_AGENT_EVOLUTION_SANDBOX_ROOT;
+  if (typeof envRoot === "string" && envRoot.length > 0) return path.resolve(envRoot);
+
+  if (existsSync(controlReleasePath(root))) return root;
+
+  const sandboxWt = path.join(root, ".worktrees", "sandbox");
+  if (existsSync(path.join(sandboxWt, "desktop", "package.json"))) {
+    return path.resolve(sandboxWt);
+  }
+
+  return root;
+}
+
+export function isEvolutionControlBuildReady(sandboxRoot) {
+  const modulePath = controlReleasePath(sandboxRoot);
+  if (!existsSync(modulePath)) return false;
+  const info = lstatSync(modulePath);
+  return info.isFile() && !info.isSymbolicLink();
+}
+
+export function buildEvolutionControlPrepHint(sandboxRoot) {
+  const prepRoot = path.join(sandboxRoot, EVOLUTION_CONTROL_PREP_RUN_REL);
+  const desktop = path.join(sandboxRoot, "desktop");
+  return [
+    "H1 freeze requires artifacts/evolution-control-build/control-release.js under the evolution sandbox.",
+    `Use the sandbox worktree (.worktrees/sandbox) after init-sandbox.bat, or set MY_AGENT_EVOLUTION_SANDBOX_ROOT.`,
+    `Prebuild: cd ${desktop} && set EVOLUTION_TEST_ROOT=${prepRoot} && node scripts/build-evolution-control.mjs`,
+    "The runner can auto-build when the prep run marker exists; tray reopen remains manual.",
+  ].join(" ");
+}
+
+/** Ensure compiled control-release exists; runs build-evolution-control.mjs once when missing. */
+export function ensureEvolutionControlBuild(sandboxRoot) {
+  const modulePath = controlReleasePath(sandboxRoot);
+  if (isEvolutionControlBuildReady(sandboxRoot)) {
+    return { modulePath, built: false, sandboxRoot: path.resolve(sandboxRoot) };
+  }
+
+  const prepRoot = path.join(sandboxRoot, EVOLUTION_CONTROL_PREP_RUN_REL);
+  const marker = path.join(prepRoot, ".evolution-test-run");
+  if (!existsSync(prepRoot)) mkdirSync(prepRoot, { recursive: true });
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "evolution-a\n", { flag: "wx" });
+  }
+
+  const buildScript = path.join(sandboxRoot, "desktop", "scripts", "build-evolution-control.mjs");
+  if (!existsSync(buildScript)) {
+    deny(buildEvolutionControlPrepHint(sandboxRoot));
+  }
+
+  const run = spawnSync(process.execPath, [buildScript], {
+    cwd: path.join(sandboxRoot, "desktop"),
+    env: { ...process.env, EVOLUTION_TEST_ROOT: prepRoot },
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+  });
+  if (run.status !== 0 || !isEvolutionControlBuildReady(sandboxRoot)) {
+    const detail = (run.stderr || run.stdout || "").trim().slice(0, 400);
+    deny(`${buildEvolutionControlPrepHint(sandboxRoot)}${detail ? ` (build output: ${detail})` : ""}`);
+  }
+
+  return { modulePath, built: true, sandboxRoot: path.resolve(sandboxRoot) };
 }

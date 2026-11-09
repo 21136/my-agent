@@ -17,10 +17,12 @@ import {
   captureGuiWebSocketFrames,
   countRecoveryWarns,
   deny,
+  ensureEvolutionControlBuild,
   forceKillProcessTree,
   requireWorkbenchRecoveryElectronGuiOptIn,
   requireWorkbenchRecoveryElectronOptIn,
   resolveDefaultElectronExecutable,
+  resolveWorkbenchRecoverySandboxRoot,
 } from "./workbench-crash-reopen-recovery-electron.optin.mjs";
 import {
   assertRunLocalRenderer,
@@ -43,8 +45,7 @@ import {
 } from "./verify-evolution-a.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "../..");
-const artifactsRoot = path.join(repoRoot, "artifacts", "workbench-crash-reopen-recovery");
+const invokedRoot = path.resolve(scriptDir, "../..");
 
 function samePath(a, b) {
   return process.platform === "win32"
@@ -52,7 +53,8 @@ function samePath(a, b) {
     : path.resolve(a) === path.resolve(b);
 }
 
-function newMarkedRun() {
+function newMarkedRun(sandboxRoot) {
+  const artifactsRoot = path.join(sandboxRoot, "artifacts", "workbench-crash-reopen-recovery");
   if (!existsSync(artifactsRoot)) mkdirSync(artifactsRoot, { recursive: true });
   const runRoot = path.join(artifactsRoot, `run-${randomUUID()}`);
   mkdirSync(runRoot, { recursive: false });
@@ -66,10 +68,10 @@ function newMarkedRun() {
   return runRoot;
 }
 
-function seedRecoverySession(appRoot, pythonExecutable) {
+function seedRecoverySession(appRoot, pythonExecutable, sandboxRoot) {
   const seed = path.join(scriptDir, "workbench-crash-reopen-recovery-electron-seed.py");
   const run = spawnSync(pythonExecutable, [seed, appRoot], {
-    cwd: repoRoot,
+    cwd: sandboxRoot,
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", WORKBENCH_RECOVERY_SESSION_ID },
     encoding: "utf8",
   });
@@ -116,27 +118,29 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
   requireWorkbenchRecoveryElectronGuiOptIn(process.env);
   assertWorkbenchRecoveryWin32GuiTarget(process.env);
 
-  const runRoot = newMarkedRun();
+  const sandboxRoot = resolveWorkbenchRecoverySandboxRoot(invokedRoot);
+  const controlBuild = ensureEvolutionControlBuild(sandboxRoot);
+  const runRoot = newMarkedRun(controlBuild.sandboxRoot);
   let host = null;
   let verified = null;
   let baseline = null;
   const python = await resolveH1PythonExecutable();
-  const electron = resolveDefaultElectronExecutable(repoRoot);
+  const electron = resolveDefaultElectronExecutable(controlBuild.sandboxRoot);
   if (!existsSync(electron)) deny(`Electron executable missing at ${electron}`);
 
   const api = await import(pathToFileURL(path.join(scriptDir, "verify-evolution-a.mjs")).href);
   try {
-    baseline = captureStableBaseline(repoRoot, runRoot);
-    const build = await buildH1ElectronMainOutputs({ sandboxRoot: repoRoot, runRoot });
+    baseline = captureStableBaseline(controlBuild.sandboxRoot, runRoot);
+    const build = await buildH1ElectronMainOutputs({ sandboxRoot: controlBuild.sandboxRoot, runRoot });
     const frozen = await freezeHostFixture({
-      sandboxRoot: repoRoot,
+      sandboxRoot: controlBuild.sandboxRoot,
       runRoot,
       trustedPythonExecutable: python,
       electronExecutable: electron,
       chatFixtureProfile: WORKBENCH_RECOVERY_ELECTRON_PROFILE,
     }, { electronBuildRoot: build.output_root, rendererBuild: true });
-    verified = verifyFrozenHostFixture({ sandboxRoot: repoRoot, runRoot, ...frozen });
-    const frozenInput = { sandboxRoot: repoRoot, runRoot, ...frozen };
+    verified = verifyFrozenHostFixture({ sandboxRoot: controlBuild.sandboxRoot, runRoot, ...frozen });
+    const frozenInput = { sandboxRoot: controlBuild.sandboxRoot, runRoot, ...frozen };
     assertSealedAgentRootMarker(verified.app_root);
     assertRunLocalRenderer(JSON.parse(readFileSync(verified.manifest_path, "utf8")), verified.renderer_root, runRoot);
 
@@ -157,7 +161,7 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     buildIsolatedGuiEnvironment(buildH1HostBaseEnvironment(), environmentRoots);
     verifyOrdinaryChatH1AgentPaths(api, verified);
 
-    const seedMarker = seedRecoverySession(verified.app_root, python);
+    const seedMarker = seedRecoverySession(verified.app_root, python, controlBuild.sandboxRoot);
     if (seedMarker.project_bound) deny("companion seed must stay project-agnostic");
     if (seedMarker.conversation_id !== WORKBENCH_RECOVERY_SESSION_ID) deny("seed session id mismatch");
 
@@ -175,7 +179,7 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
     host = null;
     if (exit.forced_termination === true) deny("H1 close should not require forced termination after CDP shutdown");
 
-    verifyStableBaselineUnchanged(baseline, captureStableBaseline(repoRoot, runRoot));
+    verifyStableBaselineUnchanged(baseline, captureStableBaseline(controlBuild.sandboxRoot, runRoot));
 
     const evidence = {
       format: 1,
@@ -189,6 +193,9 @@ export async function runWorkbenchCrashReopenRecoveryElectron(options = {}) {
       first_launch: { warn_count: firstPass.warnCount },
       reopen: { warn_count: reopenPass.warnCount },
       run_root: runRoot,
+      evolution_sandbox_root: controlBuild.sandboxRoot,
+      evolution_control_build_built_this_run: controlBuild.built,
+      invoked_from: invokedRoot,
       created_at: new Date().toISOString(),
     };
     writeFileSync(path.join(runRoot, "workbench-crash-reopen-recovery-electron-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
