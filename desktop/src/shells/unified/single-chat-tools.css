@@ -32,16 +32,16 @@ html[data-theme] .unified-shell[data-perspective="project"]:has(.unified-sidebar
 
 .unified-tool-region[hidden] { display: none !important; }
 /* Runtime-only: keep a closable side tool beside chat. */
-.unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) { display: flex; flex-direction: row; }
-.unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 50%; min-width: 0; min-height: 0; max-height: none; }
-.unified-shell:not(.is-tool-fullpage) .unified-tool-region { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--ma-border); background: var(--ma-bg); }
+.unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) { display: flex; flex-direction: row; }
+.unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 50%; min-width: 0; min-height: 0; max-height: none; }
+.unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-tool-region { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--ma-border); background: var(--ma-bg); }
 .unified-tool-heading { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .4rem .7rem; border-bottom: 1px solid var(--ma-border); }
 .unified-runtime-tool { flex: 1; min-height: 0; overflow: auto; padding: .75rem; }
 .unified-tool-unavailable { margin: 1rem; }
 @media (max-width: 800px) {
-  .unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
-  .unified-shell:not(.is-tool-fullpage) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
-  .unified-shell:not(.is-tool-fullpage) .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
+  .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
+  .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
+  .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
 }
 .unified-tool-region .settings-category-nav { flex-direction: row; flex-wrap: wrap; padding: .4rem .7rem; }
 .unified-tool-region .settings-category-nav button { padding: .4rem .6rem; }
