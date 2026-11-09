@@ -19,7 +19,11 @@ function load(url) {
 const {
   canSubmitOrdinaryConfirm,
   chatSessionAwaitingUserConfirm,
+  companionHomeComposerOwnsOrdinaryConfirm,
+  composerShouldShowOrdinaryConfirmActions,
   createChatSession,
+  ordinaryConfirmHasOverlayPrimarySurface,
+  ordinaryConfirmWouldRenderInChat,
   primaryPendingConfirmPreview,
   resolveActiveOrdinaryConfirmRequestId,
   syncOrdinaryConfirmPending,
@@ -152,6 +156,71 @@ test("turn end keeps confirmPending while an unresolved ordinary confirm remains
   assert.equal(chat.model.confirmPending, true);
   assert.equal(canSubmitOrdinaryConfirm(chat.model, "turn-end-trash"), true);
   assert.equal(chat.submitConfirm("turn-end-trash", "y"), true);
+});
+
+test("companion home uses composer dock as sole actionable ordinary confirm", () => {
+  const chat = session();
+  const preview = "软删除到 _trash workspace 项目\nids=random-number-test, random-number-4, random-number-5";
+  const companionUi = { mainFocus: "chat", perspective: "project" };
+  assert.equal(companionHomeComposerOwnsOrdinaryConfirm(companionUi), true);
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "trash-dup",
+    preview,
+    allow_approve_all: false,
+  });
+  assert.equal(ordinaryConfirmWouldRenderInChat(chat.model, { companionComposerPrimary: true }), false);
+  assert.equal(
+    composerShouldShowOrdinaryConfirmActions(chat.model, {
+      chatRendersOrdinaryConfirm: false,
+      overlayRendersOrdinaryConfirm: false,
+      companionComposerPrimary: true,
+    }),
+    true,
+  );
+  assert.equal(chat.submitConfirm("trash-dup", "y"), true);
+});
+
+test("project workbench still uses in-chat confirm when not companion home", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "trash-fallback",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  assert.equal(ordinaryConfirmWouldRenderInChat(chat.model), true);
+  assert.equal(
+    composerShouldShowOrdinaryConfirmActions(chat.model, {
+      chatRendersOrdinaryConfirm: true,
+      overlayRendersOrdinaryConfirm: false,
+    }),
+    false,
+  );
+});
+
+test("night overlay owns confirm so composer does not duplicate actions", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "night-trash",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  assert.equal(ordinaryConfirmHasOverlayPrimarySurface(chat.model), true);
+  assert.equal(
+    composerShouldShowOrdinaryConfirmActions(chat.model, {
+      chatRendersOrdinaryConfirm: false,
+      overlayRendersOrdinaryConfirm: true,
+    }),
+    false,
+  );
 });
 
 test("stale expired confirm block is not actionable while a newer confirm is pending", () => {

@@ -20,6 +20,14 @@ const PREFIX_STRIP = /^\[(?:guard|Harness|内核|Terminal)\]\s*/i;
 const SILENT_ORCHESTRATION_NOTICE =
   /^并行多项目编排[：:]/u;
 
+/** Host automatic status / confirm routing — composer dock or status bar owns these. */
+const SILENT_COMPANION_AUTOMATION_LINES: RegExp[] = [
+  /^需要在当前小魔王空间确认/u,
+  /^已在主界面创建项目\s+workspace\//u,
+  /^\[Goal\]\s*多项目/u,
+  /^多项目 worker 批次/u,
+];
+
 const PHRASE_REWRITES: Array<[RegExp, string]> = [
   [/^本会话 workspace evolved 均已允许。$/u, "本会话扩展区写入均已放行。"],
   [/来源 Session/gi, "来源会话"],
@@ -55,6 +63,7 @@ export function polishSystemNoticeText(
   if (!out) return null;
   if (SILENT_SYSTEM_ACKS.has(out)) return null;
   if (SILENT_ORCHESTRATION_NOTICE.test(out)) return null;
+  if (SILENT_COMPANION_AUTOMATION_LINES.some((pattern) => pattern.test(out))) return null;
 
   if (!opts?.plainText) {
     out = out.replace(PREFIX_STRIP, "");
@@ -141,6 +150,28 @@ export function toolPromptChatStatusLabel(
       return detail ? `未接受：${detail}` : "工具未接受输入";
     }
   }
+}
+
+export function stripCompanionOrchestrationProse(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const kept: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (kept.length && kept[kept.length - 1] !== "") kept.push("");
+      continue;
+    }
+    if (polishSystemNoticeText(trimmed) === null && SILENT_COMPANION_AUTOMATION_LINES.some((p) => p.test(trimmed))) {
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export function isCompanionOrchestrationOnlyChatText(text: string): boolean {
+  const stripped = stripCompanionOrchestrationProse(text);
+  return !stripped.trim();
 }
 
 export function polishStatusBarNotice(text: string): string {

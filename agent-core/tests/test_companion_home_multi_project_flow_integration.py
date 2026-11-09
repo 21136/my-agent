@@ -166,7 +166,7 @@ def test_companion_worker_batch_authorization_confirm_surfaces_on_parent_ws():
         request = _wait_for_confirm(events, bridge, timeout=1.5)
         assert (request.get("preview") or "").startswith("PROJECT_WORKER_BATCH_AUTHORIZATION_CONFIRM\n")
         assert request["session_id"] == session.conversation_id
-        assert any(
+        assert not any(
             event.get("type") == "turn.notice" and "小魔王空间" in (event.get("text") or "")
             for event in events
         )

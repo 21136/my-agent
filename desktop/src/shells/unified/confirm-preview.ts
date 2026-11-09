@@ -97,6 +97,25 @@ function parseProjectWorkerBatchAuthorization(preview: string): ProjectWorkerBat
   } catch { return null; }
 }
 export function isProjectWorkerBatchAuthorizationPreview(preview: string): boolean { return preview.startsWith(PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX); }
+
+/** Slim composer-strip copy; full disclosure stays collapsed until the user expands it. */
+export function renderComposerOrdinaryConfirmDetailHtml(preview: string): string {
+  if (isProjectWorkerBatchAuthorizationPreview(preview)) {
+    const authorization = parseProjectWorkerBatchAuthorization(preview);
+    if (!authorization) {
+      return '<p class="unified-pending-confirm-hint-detail">集中授权信息无法核对</p>';
+    }
+    const labels = authorization.projects.map((project) => escapeHtml(project.project_id)).join("、");
+    return `<p class="unified-pending-confirm-hint-detail">集中授权 ${authorization.projects.length} 个项目 worker：${labels}</p>`
+      + `<details class="unified-pending-confirm-hint-expand"><summary>查看完整披露</summary>`
+      + `<div class="unified-pending-confirm-hint-expand-body">${renderProjectWorkerBatchAuthorizationHtml(preview)}</div></details>`;
+  }
+  const view = summarizeConfirmPreview(preview);
+  const details = view.compact && view.detail.trim()
+    ? `<details class="unified-pending-confirm-hint-expand"><summary>查看详情</summary><pre class="unified-pending-confirm-hint-detail">${escapeHtml(view.detail)}</pre></details>`
+    : "";
+  return `<p class="unified-pending-confirm-hint-detail">${escapeHtml(view.headline)}</p>${details}`;
+}
 function disableBatchApprovalButtons(actionsHtml: string): string {
   return actionsHtml.replace(/<button\b([^>]*\bdata-confirm="(?:y|a)"[^>]*)>/g, (_match, attributes: string) => /\sdisabled(?:\s|$)/.test(attributes) ? "<button" + attributes + ">" : "<button" + attributes + " disabled>");
 }
