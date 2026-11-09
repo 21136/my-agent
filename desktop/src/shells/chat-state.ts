@@ -397,17 +397,35 @@ export function chatSessionAwaitingUserConfirm(
 export function primaryPendingConfirmPreview(
   model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
 ): string {
-  if (model.confirmOverlay
-      && (!model.confirmOverlay.resolved || isConfirmInProgressLabel(model.confirmOverlay.resolved))) {
+  const requestId = resolveActiveOrdinaryConfirmRequestId(model);
+  if (!requestId) return "";
+  if (model.confirmOverlay?.requestId === requestId) {
     return model.confirmOverlay.preview;
+  }
+  for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
+    const block = model.blocks[index];
+    if (block.kind !== "confirm" || block.requestId !== requestId) continue;
+    if (block.confirmKind === "work_record_post_turn") continue;
+    return block.preview;
+  }
+  return "";
+}
+
+/** Request id for the ordinary/tool confirm the UI should treat as actionable (overlay or latest live block). */
+export function resolveActiveOrdinaryConfirmRequestId(
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks">,
+): string | null {
+  const overlay = model.confirmOverlay;
+  if (overlay?.requestId && (!overlay.resolved || isConfirmInProgressLabel(overlay.resolved))) {
+    return overlay.requestId;
   }
   for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
     const block = model.blocks[index];
     if (block.kind !== "confirm") continue;
     if (block.confirmKind === "work_record_post_turn") continue;
-    if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.preview;
+    if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
   }
-  return "";
+  return null;
 }
 
 function normalizedRunId(runId: string | undefined): string {
@@ -756,11 +774,28 @@ export function createChatSession(
       notify();
       return true;
     }
-    const currentId = model.confirmOverlay?.requestId;
-    if (!currentId || requestId !== currentId) {
+    const activeOrdinaryId = resolveActiveOrdinaryConfirmRequestId(model);
+    if (!activeOrdinaryId || requestId !== activeOrdinaryId) {
       return false;
     }
-    if (model.confirmOverlay?.resolved) {
+    if (!model.confirmOverlay || model.confirmOverlay.requestId !== activeOrdinaryId) {
+      const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === activeOrdinaryId);
+      if (block?.kind !== "confirm"
+          || block.confirmKind === "work_record_post_turn"
+          || block.confirmKind === "project_worker_requirement_verification"
+          || postTurnConfirmations.has(requestId)
+          || requirementVerificationConfirmations.has(requestId)
+          || (block.resolved && !isConfirmInProgressLabel(block.resolved))) {
+        return false;
+      }
+      model.confirmOverlay = {
+        requestId: block.requestId,
+        preview: block.preview,
+        allowApproveAll: block.allowApproveAll,
+        ...(block.resolved ? { resolved: block.resolved } : {}),
+      };
+    }
+    if (model.confirmOverlay.resolved) {
       return false;
     }
     const pendingLabel = choice === "n" ? "提交拒绝…" : "提交中…";
@@ -1200,6 +1235,7 @@ export function createChatSession(
 
   function isPendingOrdinaryConfirmRequest(requestId: string): boolean {
     if (!requestId.trim()) return false;
+    if (resolveActiveOrdinaryConfirmRequestId(model) === requestId) return true;
     if (model.confirmOverlay?.requestId === requestId) return true;
     if (!options.confirmInBlocks) return model.confirmPending;
     return model.blocks.some(

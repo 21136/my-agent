@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { chatSessionAwaitingUserConfirm, createChatSession, escapeHtml, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -1772,17 +1772,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function pendingConfirmRequestId(): string | null {
-    const overlay = chat.model.confirmOverlay;
-    if (overlay?.requestId && (!overlay.resolved || isConfirmInProgressLabel(overlay.resolved))) {
-      return overlay.requestId;
-    }
-    for (let index = chat.model.blocks.length - 1; index >= 0; index -= 1) {
-      const block = chat.model.blocks[index];
-      if (block.kind !== "confirm") continue;
-      if (block.confirmKind === "work_record_post_turn") continue;
-      if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
-    }
-    return null;
+    return resolveActiveOrdinaryConfirmRequestId(chat.model);
   }
 
   function syncPendingConfirmComposerHint(): void {

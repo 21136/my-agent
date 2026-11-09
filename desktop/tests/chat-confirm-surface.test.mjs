@@ -16,9 +16,12 @@ function load(url) {
   return exports;
 }
 
-const { chatSessionAwaitingUserConfirm, createChatSession, primaryPendingConfirmPreview } = load(
-  new URL("../src/shells/chat-state.ts", import.meta.url),
-);
+const {
+  chatSessionAwaitingUserConfirm,
+  createChatSession,
+  primaryPendingConfirmPreview,
+  resolveActiveOrdinaryConfirmRequestId,
+} = load(new URL("../src/shells/chat-state.ts", import.meta.url));
 
 function session() {
   const chat = createChatSession({ showProcess: true, confirmInBlocks: true });
@@ -69,4 +72,49 @@ test("batch authorization overlay counts as awaiting user", () => {
   });
   assert.equal(chatSessionAwaitingUserConfirm(chat.model), true);
   assert.equal(chat.model.confirmPending, true);
+});
+
+test("trash soft-delete confirm submits when overlay was cleared but block remains", () => {
+  const chat = session();
+  const preview = "软删除到 _trash workspace 项目\nids=alpha, beta, gamma";
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "trash-batch",
+    preview,
+    allow_approve_all: false,
+  });
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), "trash-batch");
+  assert.equal(primaryPendingConfirmPreview(chat.model), preview);
+  chat.model.confirmOverlay = null;
+  chat.model.confirmPending = false;
+  assert.equal(chatSessionAwaitingUserConfirm(chat.model), true);
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), "trash-batch");
+  assert.equal(chat.submitConfirm("trash-batch", "y"), true);
+  assert.equal(chat.model.confirmOverlay?.requestId, "trash-batch");
+  assert.equal(chat.model.confirmOverlay?.resolved, "提交中…");
+});
+
+test("stale expired confirm block is not actionable while a newer confirm is pending", () => {
+  const chat = session();
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "older-trash",
+    preview: "软删除旧批次",
+    allow_approve_all: false,
+  });
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "session-a",
+    run_id: "run-a",
+    request_id: "current-trash",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  assert.equal(resolveActiveOrdinaryConfirmRequestId(chat.model), "current-trash");
+  assert.equal(chat.submitConfirm("older-trash", "y"), false);
+  assert.equal(chat.submitConfirm("current-trash", "y"), true);
 });
