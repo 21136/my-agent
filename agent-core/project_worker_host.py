@@ -724,6 +724,7 @@ class ProjectWorkerHost:
                     if name == "read_project_file":
                         if (type(result) is dict and set(result) == {"ok", "path", "content", "truncated"}
                                 and result.get("ok") is True and result.get("path") == path
+                                and path in request.read_targets
                                 and type(result.get("content")) is str
                                 and type(result.get("truncated")) is bool):
                             pass
@@ -742,6 +743,7 @@ class ProjectWorkerHost:
                     elif name == "write_project_file":
                         if (type(result) is dict and set(result) == {"ok", "path", "written", "readback_verified"}
                                 and result.get("ok") is True and result.get("path") == path
+                                and path in request.write_targets
                                 and result.get("written") is True
                                 and result.get("readback_verified") is True):
                             pass
