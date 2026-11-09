@@ -45,6 +45,9 @@ def is_companion_multi_project_orchestration_request(text: str) -> bool:
     return bool(_MULTI_PROJECT_COUNT_RE.search(body) or _NEW_OR_WRITE_PROJECT_RE.search(body))
 
 
+COMPANION_ORCHESTRATION_UI_SKIP_PREFIX = "【主会话并行多项目编排"
+
+
 _ORCHESTRATION_PREAMBLE = """\
 【主会话并行多项目编排 — 必须遵守】
 - 每个项目各有独立 workspace/<project_id>/ 目录；并行施工 = 主会话只编排，每个项目各派一个 run_project_workers worker，在各自 workspace 与租约内写文件。
@@ -84,16 +87,14 @@ def orchestration_active_for_executor(executor: object) -> bool:
 
 
 ORCHESTRATION_USE_WORKERS_MESSAGE = (
-    "主会话并行多项目编排中：每个项目在各自 workspace 内施工，"
-    "请对该 project_id 调用 run_project_workers；"
-    "父 Agent 不得在 workspace 项目目录内直接 run_evolved 写工具。"
+    "正在同时推进多个项目：请为对应项目分别启动独立施工，"
+    "不要在本会话里直接修改各项目目录下的文件。"
 )
 
 
 ORCHESTRATION_SWITCH_BLOCKED_MESSAGE = (
-    "主会话并行多项目编排中：只允许 project.create 就地登记；"
-    "禁止 project.open / project.switch / session.new。"
-    "各项目实现请对每个 project_id 调用 run_project_workers。"
+    "正在同时推进多个项目：此时不能切换或新开会话线。"
+    "如需登记新项目请用「新建项目」；各项目的具体实现请分别派工处理。"
 )
 
 

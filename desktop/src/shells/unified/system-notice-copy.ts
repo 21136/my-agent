@@ -16,6 +16,10 @@ const INTERNAL_KV_RE =
 
 const PREFIX_STRIP = /^\[(?:guard|Harness|内核|Terminal)\]\s*/i;
 
+/** Model-only companion routing copy must never surface as chat notices. */
+const SILENT_ORCHESTRATION_NOTICE =
+  /^并行多项目编排[：:]/u;
+
 const PHRASE_REWRITES: Array<[RegExp, string]> = [
   [/^本会话 workspace evolved 均已允许。$/u, "本会话扩展区写入均已放行。"],
   [/来源 Session/gi, "来源会话"],
@@ -50,6 +54,7 @@ export function polishSystemNoticeText(
   let out = text.replace(/\r\n/g, "\n").trim();
   if (!out) return null;
   if (SILENT_SYSTEM_ACKS.has(out)) return null;
+  if (SILENT_ORCHESTRATION_NOTICE.test(out)) return null;
 
   if (!opts?.plainText) {
     out = out.replace(PREFIX_STRIP, "");
