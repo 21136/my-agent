@@ -33,7 +33,7 @@ export type ChatBlock =
   | { kind: "user"; text: string; turnIndex: number; persistence?: UserMessagePersistence }
   | { kind: "assistant"; text: string; turnIndex: number }
   | { kind: "assistant-streaming"; text: string; turnIndex: number; turnKey: string }
-  | { kind: "work-instruction"; requestId: string; sessionId: string; workRunId: string; text: string; state: "sending" | "queued" | "delivered" | "undelivered"; reason?: string; deliveryStage?: "next_model_request_context" }
+  | { kind: "work-instruction"; requestId: string; sessionId: string; workRunId: string; text: string; state: "sending" | "queued" | "orchestration_dispatching" | "orchestration_active" | "delivered" | "undelivered"; reason?: string; deliveryStage?: "next_model_request_context" }
   | { kind: "parallel-chat"; requestId: string; sessionId: string; workRunId: string; promptText: string; responseText: string; deliveryState: "pending" | "delivered" | "done" | "error"; cancelRequested?: boolean; errorCode?: string; errorMessage?: string }
   | ToolPromptBlock
   | { kind: "review-subagent"; status: "running" | "done"; taskPreview?: string; summary?: string; verdict?: string; blockersCount?: number; turnIndex: number }
@@ -853,6 +853,38 @@ export function createChatSession(
     return true;
   }
 
+  function handleCompanionOrchestrationState(
+    event: Extract<ServerEvent, { type: "companion.orchestration.state" }>,
+  ): boolean {
+    if (event.session_id !== model.sessionId || typeof event.request_id !== "string" || typeof event.run_id !== "string") {
+      return false;
+    }
+    const block = model.blocks.find((item) => item.kind === "work-instruction" && item.requestId === event.request_id
+      && item.sessionId === event.session_id && item.workRunId === event.run_id);
+    if (!block || block.kind !== "work-instruction") return false;
+    if (event.state === "dispatching") {
+      if (block.state !== "sending" && block.state !== "orchestration_dispatching") return false;
+      block.state = "orchestration_dispatching";
+      block.reason = undefined;
+      block.deliveryStage = undefined;
+    } else if (event.state === "active") {
+      if (block.state !== "orchestration_dispatching" && block.state !== "orchestration_active" && block.state !== "delivered") {
+        return false;
+      }
+      block.state = "orchestration_active";
+      block.reason = undefined;
+    } else if (event.state === "undelivered") {
+      if (block.state === "delivered" || block.state === "undelivered") return false;
+      block.state = "undelivered";
+      block.reason = typeof event.reason === "string" ? event.reason : undefined;
+      block.deliveryStage = undefined;
+    } else {
+      return false;
+    }
+    notify();
+    return true;
+  }
+
   function handleWorkInstructionState(event: Extract<ServerEvent, { type: "work.instruction.state" }>): boolean {
     if (event.session_id !== model.sessionId || typeof event.request_id !== "string" || typeof event.run_id !== "string") return false;
     const block = model.blocks.find((item) => item.kind === "work-instruction" && item.requestId === event.request_id
@@ -864,8 +896,11 @@ export function createChatSession(
       block.reason = undefined;
       block.deliveryStage = undefined;
     } else if (event.state === "delivered") {
-      if (event.delivery_stage !== "next_model_request_context" || (block.state !== "queued" && block.state !== "delivered")) return false;
-      block.state = "delivered";
+      const allowed = block.state === "queued" || block.state === "delivered"
+        || block.state === "orchestration_dispatching" || block.state === "orchestration_active";
+      if (event.delivery_stage !== "next_model_request_context" || !allowed) return false;
+      block.state = block.state === "orchestration_dispatching" || block.state === "orchestration_active"
+        ? "orchestration_active" : "delivered";
       block.deliveryStage = event.delivery_stage;
       block.reason = undefined;
     } else if (event.state === "undelivered") {
@@ -1217,6 +1252,8 @@ export function createChatSession(
         return handleParallelChatEvent(event);
       case "work.instruction.state":
         return handleWorkInstructionState(event);
+      case "companion.orchestration.state":
+        return handleCompanionOrchestrationState(event);
       case "execution.stop.result": {
         const runId = normalizedRunId(event.run_id);
         if (!runId || runId !== normalizedRunId(model.executionRunId)) return false;

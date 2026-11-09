@@ -248,6 +248,7 @@ export type ServerEvent =
   | { type: "chat.cancel.result"; request_id: string; accepted: boolean }
   | { type: "execution.stop.result"; run_id?: string; accepted: boolean }
   | { type: "work.instruction.state"; request_id: string; run_id: string; session_id: string; state: "queued" | "delivered" | "undelivered"; reason?: string; delivery_stage?: "next_model_request_context" }
+  | { type: "companion.orchestration.state"; request_id: string; run_id: string; session_id: string; state: "dispatching" | "active" | "undelivered"; reason?: string }
   | WorkCardPresentEvent
   | WorkCardEvent
   | WorkRecordsOverviewResultEvent

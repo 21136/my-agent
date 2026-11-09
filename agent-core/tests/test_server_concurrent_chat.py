@@ -233,6 +233,31 @@ def test_router_unavailable_asks_clarification_without_delivering_or_fake_error(
         assert session.messages[-1]["content"] == terminal[0]["text"]
 
 
+def test_active_work_simultaneous_multi_project_uses_orchestration_not_instruction_queue(tmp_path, monkeypatch):
+    with temporary_agent_paths() as paths:
+        session, events, bridge, repl, handler = _active_fixture(paths)
+        request_id = str(uuid.uuid4())
+        text = "同时写一个能随机出4个数和随机出5个数的两个项目"
+        asyncio.run(handler._handle_incoming({
+            "type": "user.message", "request_id": request_id,
+            "session_id": session.conversation_id, "text": text,
+        }, repl, bridge))
+
+        assert request_id in bridge._work_instructions
+        assert bridge._work_instructions[request_id].companion_orchestration is True
+        assert "run_project_workers" in bridge._work_instructions[request_id].text
+        assert not any(
+            event.get("type") == "work.instruction.state" and event.get("state") == "queued"
+            for event in events
+        )
+        dispatching = [
+            event for event in events
+            if event.get("type") == "companion.orchestration.state" and event.get("state") == "dispatching"
+        ]
+        assert len(dispatching) == 1 and dispatching[0]["request_id"] == request_id
+        assert session.messages == []
+
+
 def test_active_work_explicit_supplement_queues_for_agent_checkpoint(tmp_path, monkeypatch):
     with temporary_agent_paths() as paths:
         _ParallelClient.instances = []
