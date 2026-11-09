@@ -15,6 +15,8 @@
 
 POSIX CI uses a **test-only** parent-binding publish shim (production bind publication is Win32-native). Win32 local runs use native publication.
 
+The GUI fixture keeps **real** `WsBridge.emit_session_state` (same as `project-worker-batch-browser-fixture.py`) so the unified shell receives `session.banner`, `session.list`, and the initial `work-records.overview.result` probe.
+
 ## Win32 GUI opt-in
 
 ```bat

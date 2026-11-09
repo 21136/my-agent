@@ -91,9 +91,11 @@ async function waitForVisibleScheduleLaunch(work, page) {
 async function openCurrentWorkOverlay(page) {
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.list"));
-  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "project.list"));
-  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"
-    && e.unread_status === "unknown"));
+  await page.waitForFunction(() => {
+    const listed = window.receivedEvents?.findLast(e => e.type === "project.list");
+    return Array.isArray(listed?.projects) && listed.projects.length >= 2;
+  });
+  await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.overview.result"));
   const entry = page.locator(CURRENT_WORK_ENTRY);
   await entry.waitFor({ state: "visible" });
   await entry.click();
