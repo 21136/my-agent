@@ -27,9 +27,14 @@ from project_worker_execution import (
 )
 from project_worker_model_loop import (
     MAX_REQUESTS,
+    MAX_UNDECLARED_READ_CORRECTIONS,
     MODEL_ID, PROVIDER_HOST, PROVIDER_MODEL,
     ProjectWorkerModelOutcome, TOOL_DEFINITIONS, build_worker_system_prompt,
     run_project_worker_model_loop,
+)
+from project_worker_scope_diagnostics import (
+    batch_outbound_undeclared_read_correction_matches,
+    is_safe_worker_relative_path,
 )
 from session import Session, sessions_root
 from tools.executor import ExecutorSession, ToolExecutor
@@ -659,6 +664,7 @@ class ProjectWorkerHost:
             # The worker model loop only creates assistant tool calls and tool results after
             # the immutable task. Validate each pair and each path, not merely their role.
             pending: dict[str, tuple[str, str]] = {}
+            undeclared_read_corrections = 0
             for message in messages[2:]:
                 if type(message) is not dict:
                     return False
@@ -684,6 +690,10 @@ class ProjectWorkerHost:
                     if (name == "read_project_file" and set(args) == {"path"}
                             and type(path) is str and path in request.read_targets):
                         pending[call_id] = (name, path)
+                    elif (name == "read_project_file" and set(args) == {"path"}
+                          and type(path) is str and path not in request.read_targets
+                          and is_safe_worker_relative_path(path)):
+                        pending[call_id] = (name, path)
                     elif (name == "write_project_file" and set(args) == {"path", "content"}
                           and type(path) is str and path in request.write_targets
                           and type(args.get("content")) is str):
@@ -704,10 +714,22 @@ class ProjectWorkerHost:
                     result = json.loads(message["content"])
                     name, path = source
                     if name == "read_project_file":
-                        if (type(result) is not dict or set(result) != {"ok", "path", "content", "truncated"}
-                                or result.get("ok") is not True or result.get("path") != path
-                                or type(result.get("content")) is not str
-                                or type(result.get("truncated")) is not bool):
+                        if (type(result) is dict and set(result) == {"ok", "path", "content", "truncated"}
+                                and result.get("ok") is True and result.get("path") == path
+                                and type(result.get("content")) is str
+                                and type(result.get("truncated")) is bool):
+                            pass
+                        elif batch_outbound_undeclared_read_correction_matches(
+                            attempted_path=path,
+                            tool_result=result,
+                            project_id=request.project_id,
+                            read_targets=request.read_targets,
+                            write_targets=request.write_targets,
+                        ):
+                            undeclared_read_corrections += 1
+                            if undeclared_read_corrections > MAX_UNDECLARED_READ_CORRECTIONS:
+                                return False
+                        else:
                             return False
                     elif (type(result) is not dict or set(result) != {"ok", "path", "written", "readback_verified"}
                             or result.get("ok") is not True or result.get("path") != path

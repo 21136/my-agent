@@ -74,6 +74,10 @@ def _is_safe_relative_path(path: str) -> bool:
     )
 
 
+def is_safe_worker_relative_path(path: str) -> bool:
+    return _is_safe_relative_path(path)
+
+
 def _strip_leading_dot_segments(path: str) -> str | None:
     if type(path) is not str or not path.strip():
         return None
@@ -436,6 +440,52 @@ def _paths_valid(targets: list[str]) -> bool:
     return len(targets) <= _MAX_TARGETS and all(
         type(item) is str and _is_safe_relative_path(item) for item in targets
     )
+
+
+_BATCH_OUTBOUND_SCOPE_TOOL_ERROR_KEYS = frozenset({
+    "ok",
+    "error",
+    "operation",
+    "project_id",
+    "declared_read_targets",
+    "declared_write_targets",
+    "allowed_targets",
+    "match_result",
+    "hint",
+    "requested_path",
+    "path_redacted",
+    "normalized_path",
+    "closest_declared_target",
+})
+_IN_LOOP_UNDECLARED_READ_SCOPE_ERRORS = frozenset({"read_target_not_declared"})
+
+
+def batch_outbound_undeclared_read_correction_matches(
+    *,
+    attempted_path: str,
+    tool_result: Any,
+    project_id: str,
+    read_targets: tuple[str, ...],
+    write_targets: tuple[str, ...],
+) -> bool:
+    """True when a tool result is the in-loop undeclared-read correction the model loop appends."""
+    if (type(attempted_path) is not str or attempted_path in read_targets
+            or not _is_safe_relative_path(attempted_path)):
+        return False
+    if (type(tool_result) is not dict or set(tool_result) - _BATCH_OUTBOUND_SCOPE_TOOL_ERROR_KEYS
+            or not validate_scope_tool_error(tool_result)):
+        return False
+    if tool_result.get("error") not in _IN_LOOP_UNDECLARED_READ_SCOPE_ERRORS:
+        return False
+    if (tool_result.get("operation") != "read_project_file"
+            or tool_result.get("project_id") != project_id
+            or tool_result.get("requested_path") != attempted_path):
+        return False
+    if (list(tool_result.get("declared_read_targets", [])) != list(read_targets)
+            or list(tool_result.get("declared_write_targets", [])) != list(write_targets)
+            or list(tool_result.get("allowed_targets", [])) != list(read_targets)):
+        return False
+    return True
 
 
 def validate_scope_tool_error(payload: Any) -> bool:
