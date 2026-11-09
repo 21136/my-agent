@@ -302,8 +302,9 @@ def find_auto_checker_target(session: Any) -> Any | None:
 
 
 def format_checker_verdict_notice(tool_name: str, verdict: Verdict | str) -> str:
-    label = {"pass": "通过", "warn": "警告", "fail": "失败"}.get(str(verdict), str(verdict))
-    return f"验收 {tool_name}：{label}"
+    _ = tool_name
+    label = {"pass": "通过", "warn": "需注意", "fail": "未通过"}.get(str(verdict), str(verdict))
+    return f"自动验收：{label}"
 
 
 def build_explore_tools(*, registry: ToolRegistry | None = None) -> list[dict[str, Any]]:

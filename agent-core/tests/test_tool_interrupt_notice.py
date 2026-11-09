@@ -19,7 +19,8 @@ class ToolInterruptNoticeTests(unittest.TestCase):
     def test_cancelled_copy_denies_budget_cap(self) -> None:
         text = format_tool_interrupt_notice("cancelled", tool_label="run_command")
         self.assertIn("不是工具回合上限", text)
-        self.assertIn("run_command", text)
+        self.assertIn("命令", text)
+        self.assertNotIn("run_command", text)
         self.assertNotIn("segment", text.lower())
 
     def test_confirm_superseded_is_not_user_rejection(self) -> None:
@@ -32,7 +33,8 @@ class ToolInterruptNoticeTests(unittest.TestCase):
             "confirm_rejected", tool_label="repair_node_modules"
         )
         self.assertIn("确认被拒绝", text)
-        self.assertIn("repair_node_modules", text)
+        self.assertIn("依赖修复", text)
+        self.assertNotIn("repair_node_modules", text)
         kernel = format_tool_interrupt_kernel_message(
             "confirm_rejected", tool_label="npm install"
         )
@@ -40,10 +42,11 @@ class ToolInterruptNoticeTests(unittest.TestCase):
 
     def test_timeout_copy_says_system_not_user(self) -> None:
         text = format_tool_interrupt_notice("timeout", tool_label="run_command")
-        self.assertIn("墙钟", text)
+        self.assertIn("超时", text)
         self.assertIn("不是你点了", text)
         self.assertIn("不是工具回合上限", text)
-        self.assertIn("repair_node_modules", text)
+        self.assertIn("修复依赖", text)
+        self.assertNotIn("repair_node_modules", text)
 
     def test_interrupt_kind_from_result(self) -> None:
         rejected = tool_fail(

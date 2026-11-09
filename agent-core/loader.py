@@ -1106,7 +1106,7 @@ def format_total_cap_message(*, total_tool_rounds: int, total_max: int) -> str:
     """Message when PARENT_EXECUTE_TOTAL_MAX is reached (T-705)."""
     return (
         f"本条用户消息的工具预算已用尽（上限 {total_max} 轮，已用 {total_tool_rounds} 轮）。\n\n"
-        "已完成部分：见上文 tool 结果。\n\n"
+        "已完成部分：见上文工具结果。\n\n"
         "请发一条新消息（如「继续」）以开始下一轮工具预算，或缩小任务范围后重试。"
     )
 
@@ -1116,33 +1116,35 @@ def format_tool_interrupt_notice(
     *,
     tool_label: str = "",
 ) -> str:
-    """User/LLM-facing copy when a tool was cancelled, timed out, or confirm rejected."""
-    label = (tool_label or "工具").strip() or "工具"
+    """User-visible copy when a tool was cancelled, timed out, or confirm rejected."""
+    from user_copy import humanize_tool_user_label
+
+    label = humanize_tool_user_label(tool_label)
+    dep_hint = "前端依赖异常时，请用「修复依赖」一次完成，不要拆成手动删目录再安装。"
     if kind == "confirm_superseded":
         return (
-            f"{label}确认因会话或运行状态更新被中断（不是工具回合上限，也不是你点了拒绝）。"
+            f"「{label}」的确认因会话状态更新被中断（不是工具回合上限，也不是你点了拒绝）。"
             "若确认框未恢复，请稍候重试或再发「继续」。"
-            "前端依赖损坏请优先 `run_evolved` → `repair_node_modules`，"
-            "勿手写 `rmdir`/`npm install` 拆两步。"
+            f"{dep_hint}"
         )
     if kind == "confirm_rejected":
         return (
-            f"{label}确认被拒绝或超时（不是工具回合上限）。"
-            "若仍要执行，请再发消息并在确认框点「接受」；"
-            "前端依赖损坏请优先 `run_evolved` → `repair_node_modules`，"
-            "勿手写 `rmdir`/`npm install` 拆两步。"
+            f"「{label}」的确认被拒绝或超时（不是工具回合上限）。"
+            "若仍要执行，请再发消息并在确认框点「允许」。"
+            f"{dep_hint}"
         )
     if kind == "timeout":
         return (
-            f"{label}因回合墙钟超时被系统自动停止"
+            f"「{label}」因回合超时被系统自动停止"
             "（不是你点了「停止」，也不是工具回合上限）。"
-            "工具执行期间墙钟会暂停；若仍触发，请再发「继续」。"
-            "前端依赖请用 `repair_node_modules` 一次搞定，勿拆成 rmdir + npm install。"
+            "工具执行期间计时通常会暂停；若仍触发，请再发「继续」。"
+            f"{dep_hint}"
         )
     return (
-        f"{label}执行被停止（不是工具回合上限）。"
-        "若你点了「停止」才会中断；长任务请等待完成或确认框点接受。"
-        "若要重试请再发「继续」。前端依赖优先 `repair_node_modules`。"
+        f"「{label}」执行被停止（不是工具回合上限）。"
+        "若你点了「停止」才会中断；长任务请等待完成或确认框点允许。"
+        "若要重试请再发「继续」。"
+        f"{dep_hint}"
     )
 
 

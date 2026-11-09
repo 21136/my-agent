@@ -9,6 +9,7 @@ import {
   thinkEntryTitle,
 } from "./activity-state";
 import { escapeHtml, formatToolElapsed } from "./chat-state";
+import { displayToolName } from "../copy/tool-display";
 import {
   companionToolAside,
   formatReasoningDisplay,
@@ -133,6 +134,10 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const label = humanizeToolAction(tool.tool, tool.summary, tool.endSummary);
   const sub = humanizeToolSubline(tool.status, tool.endSummary);
   const canonical = resolveEffectiveToolName(tool.tool, tool.summary);
+  const displayName = displayToolName(tool.tool, {
+    summary: tool.summary,
+    endSummary: tool.endSummary,
+  });
   const aside = companionToolAside(tool.tool, tool.summary, tool.callId);
   const asideBit = aside
     ? `<span class="unified-tool-companion-aside">· ${escapeHtml(aside)}</span>`
@@ -150,13 +155,13 @@ function renderToolEntry(tool: ToolEntry, now: number): string {
   const diffBit = diffRaw
     ? `<details class="unified-tool-diff-inline"><summary>查看改动${stats ? ` · ${escapeHtml(stats)}` : ""}</summary><pre class="unified-tool-diff-pre">${escapeHtml(diffRaw)}</pre></details>`
     : "";
-  return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}" title="${escapeHtml(canonical)}">
+  return `<div class="unified-activity-entry is-tool unified-process-line unified-tool-line is-${tool.status}" data-tool-call="${escapeHtml(tool.callId)}" data-started-at="${tool.startedAt}" data-status="${tool.status}" title="${escapeHtml(displayName)}">
     <span class="unified-tool-mark">${mark}</span>
     <span class="unified-tool-step">
       <span class="unified-tool-step-head">
         <span class="unified-tool-step-label">${escapeHtml(label)}</span>
         ${pathBit}${statsBit}${asideBit}
-        <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(canonical)}」的显示名称">改名</button>
+        <button type="button" class="unified-tool-rename-btn" data-tool-rename="${escapeHtml(canonical)}" aria-label="改显示名称" title="自定义「${escapeHtml(displayName)}」的显示名称">改名</button>
       </span>
       ${sub ? `<span class="unified-tool-step-sub is-${tool.status}">${escapeHtml(sub)}</span>` : ""}
       ${diffBit}

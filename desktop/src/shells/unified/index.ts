@@ -15,7 +15,15 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, type ChatBlock } from "../chat-state";
+import { createChatSession, escapeHtml, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import {
+  parallelChatDeliveryLabel,
+  parallelChatUserFootnote,
+  polishStatusBarNotice,
+  polishSystemNoticeText,
+  toolPromptChatStatusLabel,
+  workInstructionChatStatusLabel,
+} from "./system-notice-copy";
 import { settledToolStatus } from "../tool-outcome";
 import { renderTopbar, type TopbarState } from "./topbar";
 import { renderProposals, currentProposal, nextProposalIndex, type ProposalsState } from "./proposals";
@@ -4592,13 +4600,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         if (!isRecentTurnBlock(block.turnIndex)) cls += " unified-turn-dim";
         if (recallHighlightTurns.has(block.turnIndex)) cls += " unified-turn-recall";
       }
-      const persistenceLabel = block.persistence?.state === "pending"
-        ? "待确认"
-        : block.persistence?.state === "saved"
-          ? "已保存"
-          : block.persistence?.state === "unknown"
-            ? "结果未知，请核对历史"
-            : "";
+      const persistenceLabel = userMessagePersistenceLabel(block.persistence?.state);
       const persistenceHtml = persistenceLabel
         ? ` <small class="unified-message-persistence" role="status">· ${persistenceLabel}</small>`
         : "";
@@ -4608,46 +4610,47 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       </article>`;
     }
     if (block.kind === "work-instruction") {
-      const stateLabel = block.state === "sending"
-        ? "正在发送，等待后台分类…"
-        : block.state === "orchestration_dispatching"
-          ? "并行项目编排进行中（不经排队等待工作上下文）"
-          : block.state === "orchestration_active"
-            ? "并行编排已进入当前工作轮次（各项目由 worker 施工）"
-            : block.state === "queued"
-              ? "消息已排队，等待进入工作上下文"
-              : block.state === "delivered" && block.deliveryStage === "next_model_request_context"
-                ? "已进入下一次模型请求上下文（不代表已遵循或完成）"
-                : block.state === "undelivered"
-                  ? `消息未送达${block.reason ? `（${escapeHtml(block.reason)}）` : ""}`
-                  : "工作状态无法核实";
+      const stateLabel = workInstructionChatStatusLabel(
+        block.state,
+        block.deliveryStage,
+        block.reason,
+      );
+      const statusHtml = stateLabel
+        ? `<div class="unified-message-persistence" role="status">${escapeHtml(stateLabel)}</div>`
+        : "";
       return `<article class="unified-turn unified-turn-user work-instruction-message" data-work-instruction="${escapeHtml(block.requestId)}">
         <div class="unified-turn-label">你</div>
-        <div class="unified-turn-body">${formatUserMessageHtml(block.text)}<div class="unified-message-persistence" role="status">${stateLabel}</div></div>
+        <div class="unified-turn-body">${formatUserMessageHtml(block.text)}${statusHtml}</div>
       </article>`;
     }
     if (block.kind === "tool-prompt") {
-      const stateLabel = block.state === "waiting" ? "工具正在等待输入"
-        : block.state === "sending" ? "正在提交工具输入…"
-          : block.state === "accepted" ? "工具已接受输入；这不代表工具已完成"
-            : block.reason || "工具未接受输入；回复未发送为普通消息";
+      const stateLabel = toolPromptChatStatusLabel(block.state, block.reason);
+      const statusHtml = stateLabel
+        ? `<div class="unified-message-persistence" role="status">${escapeHtml(stateLabel)}</div>`
+        : "";
       const response = block.responseText
         ? `<div class="unified-message-persistence">你的回复：${formatUserMessageHtml(block.responseText)}</div>`
         : "";
       return `<article class="unified-turn unified-turn-user tool-prompt-message" data-tool-prompt="${escapeHtml(block.requestId)}">
         <div class="unified-turn-label">工具交互输入</div>
-        <div class="unified-turn-body">${escapeHtml(block.prompt)}<div class="unified-message-persistence" role="status">${escapeHtml(stateLabel)}</div>${response}</div>
+        <div class="unified-turn-body">${escapeHtml(block.prompt)}${statusHtml}${response}</div>
       </article>`;
     }
     if (block.kind === "parallel-chat") {
-      const deliveryLabel = block.deliveryState === "pending"
-        ? "正在发送聊天"
-        : block.deliveryState === "delivered"
-          ? (block.cancelRequested ? "正在取消聊天…" : "聊天已接收，未传给工作")
-          : block.deliveryState === "done" ? "已回复，未传给工作" : "聊天未完成，未传给工作";
+      const deliveryLabel = parallelChatDeliveryLabel(
+        block.deliveryState,
+        block.cancelRequested,
+      );
+      const footnote = parallelChatUserFootnote(block.deliveryState);
+      const labelBit = deliveryLabel
+        ? ` <small class="unified-message-persistence" role="status">· ${escapeHtml(deliveryLabel)}</small>`
+        : "";
+      const footnoteHtml = footnote
+        ? `<div class="unified-message-persistence" role="note">${escapeHtml(footnote)}</div>`
+        : "";
       const userHtml = `<article class="unified-turn unified-turn-user parallel-chat-user" data-chat-request="${escapeHtml(block.requestId)}">
-        <div class="unified-turn-label">你 <small class="unified-message-persistence" role="status">· ${deliveryLabel}</small></div>
-        <div class="unified-turn-body">${formatUserMessageHtml(block.promptText)}<div class="unified-message-persistence" role="note">仅聊天；未传给工作。</div></div>
+        <div class="unified-turn-label">你${labelBit}</div>
+        <div class="unified-turn-body">${formatUserMessageHtml(block.promptText)}${footnoteHtml}</div>
       </article>`;
       const responseHtml = block.responseText
         ? renderMarkdown(block.responseText)
@@ -7792,8 +7795,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
       case "turn.notice":
         if (!chat.handleEvent(event)) break;
-        if (event.text) {
-          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+        {
+          const statusLine = polishStatusBarNotice(event.text);
+          if (statusLine && noticeMirrorsToStatus(event.text)) {
+            setStatus(statusLine);
+          }
         }
         syncWorkingVisual();
         break;
@@ -7815,10 +7821,13 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         break;
 
       case "notice":
-        chat.model.blocks.push({ kind: "notice", text: event.text });
+        if (!chat.handleEvent(event)) break;
         renderChat();
-        if (noticeMirrorsToStatus(event.text)) {
-          setStatus(event.text.length > 48 ? `${event.text.slice(0, 48)}…` : event.text);
+        {
+          const statusLine = polishStatusBarNotice(event.text);
+          if (statusLine && noticeMirrorsToStatus(event.text)) {
+            setStatus(statusLine);
+          }
         }
         break;
 
