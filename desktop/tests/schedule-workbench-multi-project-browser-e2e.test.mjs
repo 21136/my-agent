@@ -40,7 +40,40 @@ const PROJECTS = ["synthetic-a", "synthetic-b", "synthetic-c"];
 /** In-shell overlay entry (work-entry-surface.test.mjs): topbar pill, not a removed full-page route. */
 const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
-async function activateScheduleSegment(work, { retries = 8 } = {}) {
+async function readCurrentWorkLayout(page) {
+  return page.evaluate(() => {
+    const describe = el => {
+      if (!(el instanceof HTMLElement)) return null;
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return {
+        hidden: el.hidden,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        clientHeight: el.clientHeight,
+        visibility: style.visibility,
+        display: style.display,
+        maxHeight: style.maxHeight,
+        inlineMaxHeight: el.style.maxHeight,
+      };
+    };
+    return {
+      popover: describe(document.querySelector("#unified-current-work-popover")),
+      schedulePanel: describe(document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]')),
+      launch: describe(document.querySelector("#unified-current-work [data-schedule-launch]")),
+    };
+  });
+}
+
+async function waitForCurrentWorkPopoverSized(page, minHeight = 80) {
+  await page.waitForFunction(min => {
+    const popover = document.querySelector("#unified-current-work-popover");
+    if (!(popover instanceof HTMLElement)) return false;
+    return popover.getBoundingClientRect().height >= min
+      && getComputedStyle(popover).visibility !== "hidden";
+  }, minHeight);
+}
+
+async function activateScheduleSegment(work, page, { retries = 8 } = {}) {
   const tab = work.locator('[data-cw-segment-select="schedule"]');
   const panel = work.locator('[data-cw-segment-panel="schedule"]:not([hidden])');
   let lastError;
@@ -49,19 +82,28 @@ async function activateScheduleSegment(work, { retries = 8 } = {}) {
       await tab.click();
       await work.locator('[data-current-work-shell][data-cw-segment="schedule"]').waitFor({ state: "attached", timeout: 4000 });
       await panel.waitFor({ state: "visible", timeout: 4000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('#unified-current-work [data-cw-segment-panel="schedule"]:not([hidden])');
+        return el instanceof HTMLElement && el.getBoundingClientRect().height > 0;
+      });
       return panel;
     } catch (error) {
       lastError = error;
     }
   }
-  throw lastError ?? new Error("schedule segment did not become visible");
+  const layout = await readCurrentWorkLayout(page);
+  throw new Error(`${lastError?.message ?? "schedule segment did not become visible"}\nlayout=${JSON.stringify(layout)}`);
 }
 
-async function waitForVisibleScheduleLaunch(work) {
+async function waitForVisibleScheduleLaunch(work, page) {
   await work.locator("[data-schedule-launch]").waitFor({ state: "attached" });
-  const panel = await activateScheduleSegment(work);
+  const panel = await activateScheduleSegment(work, page);
   const launch = panel.locator("[data-schedule-launch]");
   await launch.waitFor({ state: "visible" });
+  await page.waitForFunction(() => {
+    const el = document.querySelector("#unified-current-work [data-schedule-launch]");
+    return el instanceof HTMLElement && el.clientHeight > 0;
+  });
   return launch;
 }
 
@@ -161,7 +203,7 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       && window.receivedEvents?.some(e => e.type === "project.list"));
 
     const work = await openCurrentWorkOverlay(page);
-    const schedulePanel = await activateScheduleSegment(work);
+    const schedulePanel = await activateScheduleSegment(work, page);
     const sourcePanel = schedulePanel.locator("[data-selected-project-overview]");
     await sourcePanel.waitFor({ state: "visible" });
 
@@ -187,8 +229,9 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
       const popover = document.querySelector("#unified-current-work-popover");
       return popover instanceof HTMLElement && getComputedStyle(popover).visibility !== "hidden";
     });
+    await waitForCurrentWorkPopoverSized(page, 80);
 
-    const schedule = await waitForVisibleScheduleLaunch(work);
+    const schedule = await waitForVisibleScheduleLaunch(work, page);
     assert.equal(await schedule.locator("[data-schedule-worker]").count(), PROJECTS.length);
     await schedule.locator("[data-schedule-launch-send]").click();
     await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "work-records.schedule.dispatch.done"
@@ -213,7 +256,8 @@ test("multi-project schedule workbench GUI: select → authorize → preview →
   } catch (error) {
     const events = page ? await page.evaluate(() => window.receivedEvents) : [];
     const body = page ? await page.locator("body").innerText() : "";
-    throw new Error(`${error.message}\nbody=${body}\nevents=${JSON.stringify(events)}\nstderr=${stderr}`);
+    const layout = page ? await readCurrentWorkLayout(page) : null;
+    throw new Error(`${error.message}\nbody=${body}\nlayout=${JSON.stringify(layout)}\nevents=${JSON.stringify(events)}\nstderr=${stderr}`);
   } finally {
     await browser.close();
     child.stdin.end("\n");

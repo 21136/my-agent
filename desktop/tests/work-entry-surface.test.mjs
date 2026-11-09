@@ -53,16 +53,16 @@ test("popover sizing reserves the current composer region rather than relying on
   assert.match(toolsCss, /:not\(\.is-current-work-overlay\)/);
 });
 
-test("the actual size function tracks composer movement and hides when no safe space remains", () => {
+test("the actual size function tracks composer movement and keeps a usable popover floor", () => {
   const src = readFileSync(new URL("../src/shells/unified/index.ts", import.meta.url), "utf8");
   const ast = ts.createSourceFile("index.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   function find(node) { if (ts.isFunctionDeclaration(node) && node.name?.text === "sizeCurrentWorkPopover") return node; return ts.forEachChild(node, find); }
   const fn = find(ast); assert.ok(fn);
-  const js = ts.transpileModule(`${fn.getText(ast)}; return sizeCurrentWorkPopover;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const js = ts.transpileModule(`const CURRENT_WORK_POPOVER_MIN_HEIGHT_PX = 120;\n${fn.getText(ast)}; return sizeCurrentWorkPopover;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const popover = { style: {}, getBoundingClientRect: () => ({ top: 70 }) };
   let composerTop = 300;
   const size = new Function("topbarEl", "composerDock", js)({ querySelector: () => popover }, { getBoundingClientRect: () => ({ top: composerTop }) });
   size(); assert.equal(popover.style.maxHeight, "222px"); assert.equal(popover.style.visibility, "");
-  composerTop = 105; size(); assert.equal(popover.style.maxHeight, "27px"); assert.equal(popover.style.visibility, "hidden");
+  composerTop = 105; size(); assert.equal(popover.style.maxHeight, "120px"); assert.equal(popover.style.visibility, "");
   composerTop = 400; size(); assert.equal(popover.style.maxHeight, "322px"); assert.equal(popover.style.visibility, "");
 });
