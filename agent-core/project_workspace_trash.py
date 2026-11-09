@@ -242,6 +242,12 @@ def trash_workspace_projects(
                 bound_session.save()
                 cleared_binding = bound_pid
 
+    from companion_home_policy import TRASH_CLEARED_BINDING_HINT
+
+    companion_stays_unbound = bool(
+        bound_session is not None and not (bound_session.meta.project_id or "").strip()
+    )
+
     return {
         "ok": True,
         "dry_run": dry_run,
@@ -249,6 +255,8 @@ def trash_workspace_projects(
         "request_id": rid,
         "project_ids": selected,
         "cleared_session_binding": cleared_binding,
+        "companion_stays_unbound": companion_stays_unbound,
+        "companion_hint": TRASH_CLEARED_BINDING_HINT if cleared_binding else None,
         "results": [
             {
                 "project_id": row.project_id,

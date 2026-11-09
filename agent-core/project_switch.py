@@ -13,6 +13,10 @@ if str(_AGENT_CORE) not in sys.path:
 
 from paths import AgentPaths, read_agent_state_payload, write_agent_state_payload
 from project_mode import ProjectModeError, is_project_dir, normalize_project_id, project_dir
+from companion_home_policy import (
+    MAIN_HOME_SESSION_BIND_DENIED,
+    companion_home_rejects_session_bind,
+)
 from session import Session, build_seed_message, create_new, sessions_root, write_last_conversation_id
 
 PROJECT_SESSIONS_KEY = "project_sessions"
@@ -171,6 +175,19 @@ def plan_project_switch(paths: AgentPaths, session: Session, project_id: str) ->
         raise ProjectModeError(f"project not found: workspace/{pid}")
 
     current_pid = (session.meta.project_id or "").strip()
+    if companion_home_rejects_session_bind(session):
+        if current_pid:
+            if current_pid == pid:
+                return ProjectSwitchPlan(
+                    action="noop",
+                    project_id=pid,
+                    message=(
+                        f"主界面会话未绑定写租约；workspace/{pid} 可经 project.open 登记。"
+                        "若残留误绑请 project.release。"
+                    ),
+                )
+            raise ProjectModeError(MAIN_HOME_SESSION_BIND_DENIED)
+        return plan_project_open(paths, session, project_id)
     if current_pid == pid and session.meta.active_shell == "project":
         return ProjectSwitchPlan(
             action="noop",
@@ -231,6 +248,23 @@ def execute_project_switch(
         return session, plan.message
 
     if plan.action == "bind_current":
+        if companion_home_rejects_session_bind(session):
+            from project_cli import clear_session_project_binding
+
+            clear_session_project_binding(session)
+            record_project_session(paths, plan.project_id, session.conversation_id)
+            write_last_conversation_id(paths, session.conversation_id)
+            session.save()
+            try:
+                from project_env import ensure_project_env
+
+                ensure_project_env(paths, plan.project_id)
+            except Exception:
+                pass
+            return (
+                session,
+                f"已在主界面登记 workspace/{plan.project_id}（未绑定本会话写租约）",
+            )
         _bind(session, plan.project_id, plan_status=_resolve_open_plan_status(session, plan.project_id))
         session.save()
         record_project_session(paths, plan.project_id, session.conversation_id)

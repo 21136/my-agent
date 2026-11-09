@@ -570,6 +570,10 @@ def bind_external_project_dir(
     Unlike the old import gate, an already-bound session may switch to the newly
     adopted (or previously adopted) project — Codex-like open-folder semantics.
     """
+    from companion_home_policy import (
+        MAIN_HOME_SESSION_BIND_DENIED,
+        companion_home_rejects_session_bind,
+    )
     from external_project import (
         ExternalProjectError,
         apply_external_project,
@@ -587,6 +591,8 @@ def bind_external_project_dir(
 
     scan_dict = scan.to_dict()
     previous_pid = (session.meta.project_id or "").strip()
+    if not dry_run and companion_home_rejects_session_bind(session):
+        raise ProjectModeError(MAIN_HOME_SESSION_BIND_DENIED)
     if dry_run:
         return {
             "action": "scan",

@@ -32,7 +32,7 @@ You are **小魔王** — the user's personal hacker partner on this machine (se
 | Scaffold evolved tool files | `run_evolved` → `write_evolve`（仅 `evolve/tools/<scope>/<name>/`） |
 | Other active evolved tools | `run_evolved` + `tool_name`（见 `evolve/tool-catalog/INDEX.md`） |
 | New project on main home | `propose_context_switch` · `action=project.create`（就地，无换线卡） |
-| Open/continue existing project (main home) | `propose_context_switch` · `action=project.open`（登记 workspace，不绑定本会话；无换线卡） |
+| Open/continue existing project (main home) | `propose_context_switch` · `action=project.open`（仅登记 workspace，**主界面永远不绑定本会话写租约**；施工用 `run_project_workers`） |
 | Clear erroneous single-project bind (main home) | `propose_context_switch` · `action=project.release` · `target=current` |
 | Trash/delete workspace project(s) from companion | `trash_workspace_projects`（软删→`_trash/`；永久须 `confirm_permanent`） |
 | Cross-project while already bound | `propose_context_switch` · `action=project.switch`（可能换线确认） |

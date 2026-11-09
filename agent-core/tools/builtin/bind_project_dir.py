@@ -82,6 +82,8 @@ def run(
     except ProjectModeError as exc:
         code = ToolErrorCode.VALIDATION_ERROR
         msg = str(exc)
+        if "主界面小魔王" in msg:
+            code = ToolErrorCode.PERMISSION_DENIED
         if "禁止接入受保护目录" in msg:
             code = ToolErrorCode.PATH_DENIED
         elif "不可访问" in msg or "不是目录" in msg or "不能为空" in msg:
