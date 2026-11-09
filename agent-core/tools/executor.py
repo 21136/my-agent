@@ -1273,6 +1273,18 @@ class ToolExecutor:
     evolution_client: Any | None = field(default=None, repr=False)
     project_worker_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
     dialogue_recall_host_dispatch: Callable[[dict[str, Any]], ToolResult] | None = field(default=None, repr=False)
+    bound_session: Any | None = field(default=None, repr=False)
+
+    def _bound_persist_session(self) -> Any | None:
+        """Live agent Session for the active turn — avoids mid-turn Session.load side effects."""
+        bound = self.bound_session
+        if bound is None or self.session.session_dir is None:
+            return None
+        if getattr(bound, "conversation_id", None) != self.session.session_dir.name:
+            return None
+        if getattr(bound, "session_dir", None) != self.session.session_dir:
+            return None
+        return bound
 
     @classmethod
     def create(
@@ -2119,8 +2131,8 @@ class ToolExecutor:
                 return result
 
         # Prefer live Session when available so meta mutations persist.
-        session_obj: Any = self.session
-        if self.session.session_dir is not None:
+        session_obj: Any = self._bound_persist_session() or self.session
+        if session_obj is self.session and self.session.session_dir is not None:
             try:
                 session_obj = Session.load(self.registry.agent_paths, self.session.session_dir.name)
             except Exception:
@@ -2207,7 +2219,9 @@ class ToolExecutor:
             return result
 
         paths = self.registry.agent_paths
-        previous = Session.load(paths, self.session.session_dir.name)
+        previous = self._bound_persist_session()
+        if previous is None:
+            previous = Session.load(paths, self.session.session_dir.name)
         request = build_context_switch_request(previous, proposal)
         auto_apply = should_auto_apply_context_switch(proposal)
 
