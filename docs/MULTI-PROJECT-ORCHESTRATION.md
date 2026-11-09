@@ -22,17 +22,18 @@
 - Desktop 可选择最多六个已映射项目并请求结构化概况；用户逐项授权后才读取来源侧车。远端组显示来源 Session/记录版本，并可直接展开要求、最近历史和跳转到来源会话。远端未运行事项的记录元数据操作会触发额外精确确认和 source revision CAS；不可在概况中假称取消运行中的 worker。跨 Session 结果查看回执未知，不能据此隐藏结果。选择来源、事项操作与迟到 WebSocket 响应均绑定 request/session 身份。
 - 最终定向后端回归：外部项目/worker/工作记录/overview/控制/结算/多项目授权聚合测试 **191 passed、1 skipped、3 subtests passed**；Desktop 当前工作、响应式渲染、多来源选择和控制 WS 测试 **38/38 passed**。synthetic Playwright loopback E2E **1/1 passed**，验证多项目来源须先授权、拒绝读取量为 0、授权后远端事项控制需再次确认且不启动 worker；完整 `tsc -p desktop/tsconfig.json --noEmit` 和 `npm --prefix desktop run build` 均通过。另有 single-worker record/pytest loopback GUI E2E **1/1 passed**（HTTP 模型 transport 为 mock，项目内 pytest 实际运行）；未调用真实模型或真实用户目录。
 - **工作台故障重开（自动化，#59 续 #73）**：`agent-core/tests/test_workbench_crash_reopen_recovery_harness.py`（3）+ `desktop/tests/workbench-crash-reopen-recovery.test.mjs`（3）证明 `session.open` 对外进程 `in_progress` 落 `unknown`、概况可见、未决时 warn 且不自动续跑；同进程仍在跑可 `cancel_execution`、queued 可 `stop`；子进程恢复与子进程 `mark_interrupted` 一致。**GUI 时序（合成 WS，非真实 Electron kill）**：`workbench-crash-reopen-recovery-fixture.py` + `workbench-crash-reopen-recovery-gui-harness.test.mjs`（4，POSIX）+ Win32 `workbench-crash-reopen-recovery-browser-e2e.test.mjs`（1）：晚到 WS、重连 warn、cancel/inspect 可达、无假「执行中」。真实关窗/托盘杀进程仍 **open**。修复：POSIX 上概况 API 不再在持有 work-record 锁时重入 disposition 读。
-- **多项目调度工作台 GUI 合约（合成夹具，#60）**：`desktop/tests/schedule-workbench-multi-project-harness.test.mjs`（1）+ `schedule-workbench-multi-project-fixture.py` 覆盖授权 → 只读预览 → 按预览并行 dispatch 帧 → 刷新后 `in_progress` 与远端 `cancel_execution` WS；`schedule-workbench-multi-project-browser-e2e.test.mjs`（1，Win32+Playwright，Linux skip）。未调用真实模型或真实 worker host。
+- **多项目调度工作台 GUI 合约（合成夹具，#60）**：`schedule-workbench-multi-project-harness.test.mjs`（1）+ fixture WS；`schedule-workbench-multi-project-browser-e2e.test.mjs`（1，Win32 Playwright）。**不含**真实 `run_project_workers` host。
+- **多项目 schedule.dispatch 真 host（mock 传输，#91）**：`agent-core/tests/test_multi_project_schedule_dispatch_real_ws_e2e.py`（1）+ `desktop/tests/multi-project-schedule-real-host-harness.test.mjs`（2）证明伴侣未绑定会话经 `work-records.schedule.dispatch` 并行两项目、混合回执；Win32 可选 `multi-project-schedule-real-host-browser-e2e.test.mjs`（opt-in，见 [MULTI-PROJECT-SCHEDULE-REAL-HOST-E2E](./MULTI-PROJECT-SCHEDULE-REAL-HOST-E2E.md)）。不宣称付费真模型/Electron 托盘已绿。
 - 自动化测试覆盖 host 隔离、批次授权、并发、取消、回执、工作记录控制协议和部分真实模型 opt-in 路径；测试文件存在不代表 GUI 或真实模型验收通过。
 
 ### 尚需验收 / 不应宣称已完成
 
-- **单入口 worker 派工 E2E**：仍需在一个主对话中实际分派多个已登记项目（含外部绑定项目），验证任务拆分、worker 执行、逐项目回执和最终总结不串台。当前 loopback E2E 覆盖的是多项目记录概况与远端记录控制，不等于多 worker 派工 E2E。
+- **单入口 worker 派工 E2E**：`user.message` 批量与 **当前工作 schedule.dispatch 真 host** 已有 POSIX/Win32 证明（上条）；仍缺付费 **live-LLM** 多项目 GUI 绿证据与逐项目聊天总结不串台的完整产品验收。
 - **拒绝 / 歧义**：项目或任务不明确时先问；拒绝确认、确认过期或取消时无 worker 越权启动，UI 和最终回复准确反映状态。
 - **混合结果**：多项目批次中分别出现成功、失败、受阻、取消与状态未知，逐项目显示真实结果；任何 worker 返回都不伪装成完成或测试通过。
 - **桌面生命周期**：Stop、切换会话/项目、关闭与重开期间的迟到事件、待确认操作和不确定写入结果，仍需在实际 UI 验证。**自动化已覆盖** synthetic 的 `session.open` + 当前工作概况 + 控制 WS（见上条）+ Win32 Playwright 合成 WS（#77）。**机器门禁**：`docs/WORKBENCH-CRASH-REOPEN-ELECTRON-E2E.md` · `run-workbench-crash-reopen-recovery-electron.mjs`（真实 Electron 杀进程 + 冷启动；托盘双击仍手工）。**仍缺**全自动托盘/单实例激活 GUI 与 CI 默认可跑的 real-Electron 绿。
 - **工作区范围**：worker 现在可使用已登记内部项目和通过外部项目流程显式接入的根；不支持对未登记任意路径直接派工。外部根身份、链接替换和窗口变化有后端保护，但目录注册/绑定管理及桌面端实际操作仍须独立验收。
-- **完整多工作区、多事项工作台（产品目标，用户于 2026-11-07 确认）**：调度 tab 已可授权 → 只读预览 → **按预览并行启动**（预填任务/路径 · `schedule.dispatch` · 一次最多 6 个不同项目；host 并发默认 2、`MY_AGENT_PROJECT_WORKER_MAX` 可调 1–6）；概况可对远端 `in_progress` 发起 host 取消协调（#58 批次）。合成夹具 GUI 合约已收口（上条）；仍缺全自动批量编排、事项合并/拆分展示、**真实模型**多项目并行 GUI E2E、以及 **真实 Electron** 关窗/杀进程/托盘恢复时序验收。不能宣称完整达标。
+- **完整多工作区、多事项工作台（产品目标）**：合成调度夹具 + **真 host schedule.dispatch**（上条）已覆盖授权→预览→派发→逐项目 host 回执（mock 传输）；仍缺 **live-LLM** GUI 绿、事项合并/拆分展示、Electron 托盘恢复自动化。不能宣称完整达标。
 - **验证证据**：上列定向测试仅证明其覆盖的后端/组件行为；不代表完整 UI 流程、真实模型、多工作区事项调度或恢复验收通过。真实用户目录未用于测试。
 
 本文以下原始方案与产品愿景仍可作为设计背景；其中“未实现”标注及接口建议不再代表当前源码状态。具体哪些愿景已实现、哪些仍待设计，以本节和现行源码为准。
