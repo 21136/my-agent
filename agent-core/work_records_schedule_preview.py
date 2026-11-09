@@ -1,9 +1,50 @@
 """Pure, read-only scheduling preview over an authorized overview projection."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 _ELIGIBLE = frozenset({"queued", "pending"})
+_CANDIDATE_IDENTITY = ("project_id", "item_id", "requirement_id", "priority")
+_FILE_REF = re.compile(
+    r"(?<![\w/.])([A-Za-z0-9_./-]+\.(?:md|txt|json|py|ts|tsx|js|jsx|css|html|yaml|yml))(?![\w/.])",
+)
+
+
+def schedule_candidate_identity(row: Any) -> tuple[str, str, str, int] | None:
+    if type(row) is not dict:
+        return None
+    project_id, item_id, requirement_id, priority = (row.get(key) for key in _CANDIDATE_IDENTITY)
+    if (type(project_id) is not str or not project_id.strip()
+            or type(item_id) is not str or not item_id.strip()
+            or type(requirement_id) is not str or not requirement_id.strip()
+            or type(priority) is not int or isinstance(priority, bool) or not 0 <= priority <= 5):
+        return None
+    return (project_id.strip(), item_id.strip(), requirement_id.strip(), priority)
+
+
+def preview_contains_candidate(preview: Any, candidate: Any) -> bool:
+    identity = schedule_candidate_identity(candidate)
+    if identity is None or type(preview) is not dict:
+        return False
+    return any(schedule_candidate_identity(row) == identity for row in preview.get("candidates", ()))
+
+
+def _suggest_targets(task_text: Any) -> tuple[list[str], list[str]]:
+    if type(task_text) is not str or not task_text.strip():
+        return (["PROJECT.md", "README.md"], ["NOTES.md"])
+    refs: list[str] = []
+    for match in _FILE_REF.findall(task_text):
+        if match in refs or ".." in match or match.startswith(("/","\\")):
+            continue
+        if any(part in ("", ".", "..") for part in match.replace("\\", "/").split("/")):
+            continue
+        refs.append(match)
+    if refs:
+        reads = refs[:6]
+        writes = [refs[-1]]
+        return (reads, writes)
+    return (["PROJECT.md", "README.md"], ["NOTES.md"])
 
 
 def build_schedule_preview(groups: Any) -> dict[str, Any]:
@@ -42,6 +83,7 @@ def build_schedule_preview(groups: Any) -> dict[str, Any]:
                 priority = item.get("priority", 3)
                 known[key] = {"project_id": project_id, "item_id": item_id,
                               "requirement_id": req["requirement_id"], "status": req.get("status"),
+                              "text": req.get("text") if type(req.get("text")) is str else "",
                               "dependencies": req.get("depends_on"),
                               "has_schedule_claim_field": "schedule_claim" in req,
                               "schedule_claim": req.get("schedule_claim"),
@@ -66,6 +108,9 @@ def build_schedule_preview(groups: Any) -> dict[str, Any]:
             # Any persisted claim, including an uncertain or malformed one, is a durable
             # exclusion marker. A read-only picker must never retry it.
             reasons.append("已存在持久调度 claim（可能仍在运行或结果未知），禁止自动重派")
+        req_text = row.get("text")
+        if type(req_text) is not str or not req_text.strip() or len(req_text.strip()) > 1200:
+            reasons.append("要求原文缺失或超出调度表单上限，无法预填启动")
         dependencies = row["dependencies"]
         if type(dependencies) is not list or any(type(dep) is not str for dep in dependencies):
             reasons.append("依赖信息无效")
@@ -77,11 +122,18 @@ def build_schedule_preview(groups: Any) -> dict[str, Any]:
                     reasons.append(f"依赖 {dependency} 不在已授权预览中，状态无法核实")
                 elif dep.get("status") != "completed":
                     reasons.append(f"依赖 {dependency} 状态为 {dep.get('status', '未知')}，尚未完成")
-        candidate = {key: row[key] for key in ("project_id", "item_id", "requirement_id", "priority")}
+        candidate = {key: row[key] for key in _CANDIDATE_IDENTITY}
+        req_text = row.get("text")
         if reasons:
             blocked.append({**candidate, "reasons": reasons})
         else:
-            candidates.append(candidate)
+            read_targets, write_targets = _suggest_targets(req_text)
+            candidates.append({
+                **candidate,
+                "task": req_text.strip() if type(req_text) is str and req_text.strip() else "",
+                "suggested_read_targets": read_targets,
+                "suggested_write_targets": write_targets,
+            })
 
     # If any authorized page is incomplete, visible queue entries cannot be
     # advertised as runnable: an omitted row may be a higher-priority task or
@@ -123,11 +175,8 @@ def pick_schedule_batch(preview: Any, *, enabled: Any, limit: Any = 2) -> tuple[
             or preview.get("omissions") or type(preview.get("candidates")) is not list):
         raise ValueError("complete authorized schedule preview is required for batch picking")
     candidates = preview["candidates"]
-    if any(type(row) is not dict or set(row) != {
-            "project_id", "item_id", "requirement_id", "priority",
-    } or any(type(row.get(key)) is not str or not row[key].strip()
-             for key in ("project_id", "item_id", "requirement_id"))
-            or type(row.get("priority")) is not int or not 0 <= row["priority"] <= 5
+    required = set(_CANDIDATE_IDENTITY)
+    if any(type(row) is not dict or not required <= set(row) or schedule_candidate_identity(row) is None
             for row in candidates):
         raise ValueError("schedule preview candidate shape or priority is invalid")
     selected = sorted(candidates, key=lambda row: (
@@ -136,4 +185,4 @@ def pick_schedule_batch(preview: Any, *, enabled: Any, limit: Any = 2) -> tuple[
     identities = [(row["project_id"], row["item_id"], row["requirement_id"]) for row in selected]
     if len(set(identities)) != len(identities):
         raise ValueError("schedule preview contains duplicate task identities")
-    return tuple(dict(row) for row in selected)
+    return tuple({key: row[key] for key in _CANDIDATE_IDENTITY} for row in selected)

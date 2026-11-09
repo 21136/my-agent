@@ -21,6 +21,7 @@ def test_schedule_candidate_cannot_be_promoted_to_worker_request_without_fresh_h
             "priority": 3,
             "requirements": [{
                 "requirement_id": "synthetic-requirement",
+                "text": "synthetic task",
                 "status": "queued",
                 "depends_on": [],
                 "schedule_claim": None,
@@ -29,7 +30,9 @@ def test_schedule_candidate_cannot_be_promoted_to_worker_request_without_fresh_h
     }])
     candidate = preview["candidates"][0]
 
-    assert set(candidate) == {"project_id", "item_id", "requirement_id", "priority"}
+    identity = {"project_id", "item_id", "requirement_id", "priority"}
+    assert identity <= set(candidate)
+    assert {"task", "suggested_read_targets", "suggested_write_targets"} <= set(candidate)
     required_execution_fields = {
         "project_id", "task_id", "task", "read_targets", "write_targets",
     }

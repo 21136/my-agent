@@ -21,7 +21,8 @@ async def handle(socket):
                 "state": "visible", "aggregation_scope": "selected_project_sessions",
                 "selected_project_ids": ["synthetic-project"], "work_record_revision": 1,
                 "schedule_preview": {"state": "visible", "candidates": [{"project_id": "synthetic-project",
-                    "item_id": "synthetic-item", "requirement_id": "synthetic-req", "priority": 3}],
+                    "item_id": "synthetic-item", "requirement_id": "synthetic-req", "priority": 3,
+                    "task": TASK, "suggested_read_targets": ["PROJECT.md"], "suggested_write_targets": ["NOTES.md"]}],
                     "blocked": [], "limitations": [], "omissions": []},
                 "groups": [{"kind": "project", "id": "synthetic-project", "visibility": "visible", "status": "queued",
                     "status_counts": {"queued": 1}, "item_count": 1, "requirement_count": 1,
@@ -37,10 +38,14 @@ async def handle(socket):
                     "has_more": False, "next_cursor": None},
             }
             await socket.send(json.dumps(response))
-        elif event.get("type") == "user.message":
-            # Record the actual desktop WS frame but deliberately do not invoke an Agent/worker.
-            await socket.send(json.dumps({"type": "user.message.persisted", "session_id": event["session_id"],
-                "request_id": event["request_id"]}))
+        elif event.get("type") == "work-records.schedule.dispatch":
+            await socket.send(json.dumps({
+                "type": "work-records.schedule.dispatch.done",
+                "session_id": event["session_id"],
+                "request_id": event["request_id"],
+                "status": "rejected",
+                "message": "合成夹具未启动 worker（仅记录 dispatch 帧）。",
+            }))
 
 async def main():
     async with serve(handle, "127.0.0.1", 0) as server:

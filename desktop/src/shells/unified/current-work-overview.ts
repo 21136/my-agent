@@ -11,13 +11,13 @@ export type CurrentWorkOverviewRequestResult = "sent" | "busy" | "unavailable" |
 
 /** Shown in the 调度 tab before selected-project overview + schedule_preview are authorized. */
 export const CURRENT_WORK_SCHEDULE_EMPTY_MARKUP = `<div class="current-work-zone-empty current-work-schedule-empty" role="status">
-<p>调度是多项目<strong>只读预览</strong>入口，不是自动排队控制台。</p>
+<p>调度是多项目工作台：先只读预览，再按授权候选<strong>并行</strong>启动 worker；不是把事项丢回排队或等待上下文。</p>
 <ol class="cw-schedule-empty-steps">
 <li>在下方「选择项目来源」勾选最多 6 个已映射项目</li>
-<li>点「查看所选项目」，并在对话中逐项确认读取授权</li>
-<li>确认后此处会列出候选与受阻项的只读预览；<strong>不会自动开跑</strong></li>
+<li>点「查看所选项目」，并在底部确认条逐项授权只读聚合</li>
+<li>授权后此处显示候选 / 受阻说明与「按预览启动」；不会 silent 自动开跑</li>
 </ol>
-<p class="cw-schedule-empty-note">「准备启动」仅在预览中出现可跑候选后才会显示。</p>
+<p class="cw-schedule-empty-note">可跑候选出现后会预填任务与路径，一键走 schedule.dispatch。</p>
 </div>`;
 
 export interface CurrentWorkOverviewPanel {

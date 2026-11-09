@@ -97,7 +97,7 @@ import { mountManagedReviewBrowser } from "./managed-review-browser";
 import { mountManagedSourceSelection } from "./managed-source-selection";
 import type { AgentWsClient, ApprovalPreferenceMode, LlmModelListItem, LlmRoleModelPreferences, MemoryItem, ProposalItem, ServerEvent, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-budget";
-import { buildScheduleDispatchWorkers, buildScheduleLaunchMessage, renderScheduleLaunchForm, scheduledWorkerCandidates } from "./schedule-launch";
+import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
 import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
@@ -613,27 +613,27 @@ export function mountUnifiedShell(
       button.addEventListener("click", () => requestCurrentWorkOverviewDetail(button));
     });
     const scheduleForm = rootEl.querySelector<HTMLElement>("[data-schedule-launch]");
-    const scheduleSelect = scheduleForm?.querySelector<HTMLSelectElement>("[data-schedule-candidate]");
-    const scheduleSourceTask = scheduleForm?.querySelector<HTMLElement>("[data-schedule-source-task]");
-    scheduleSelect?.addEventListener("change", () => {
-      const selected = scheduledWorkerCandidates(currentWorkOverviewResult)[Number(scheduleSelect.value)];
-      if (scheduleSourceTask) scheduleSourceTask.textContent = selected ? `来源要求：${selected.task}` : "候选已变化，请重新读取当前工作概况。";
-    });
     scheduleForm?.querySelector<HTMLButtonElement>("[data-schedule-launch-send]")?.addEventListener("click", () => {
       if (chat.isWorking() || chat.model.confirmPending || !isWorkbenchChatAllowed()
         || currentWorkOverviewResult?.session_id !== chat.model.sessionId) {
         setStatus("当前回合繁忙或会话已变化；未发送启动请求。"); return;
       }
-      const task = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-task]");
-      const read = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-read]");
-      const write = scheduleForm.querySelector<HTMLTextAreaElement>("[data-schedule-write]");
       try {
-        const payload = buildScheduleDispatchWorkers(
-          currentWorkOverviewResult, Number(scheduleSelect?.value),
-          task?.value ?? "", read?.value ?? "", write?.value ?? "",
-        );
+        const rows = [...scheduleForm?.querySelectorAll<HTMLElement>("[data-schedule-worker]") ?? []].map(worker => {
+          const index = Number(worker.dataset.candidateIndex);
+          return {
+            candidateIndex: index,
+            taskText: worker.querySelector<HTMLTextAreaElement>("[data-schedule-task]")?.value ?? "",
+            readText: worker.querySelector<HTMLTextAreaElement>("[data-schedule-read]")?.value ?? "",
+            writeText: worker.querySelector<HTMLTextAreaElement>("[data-schedule-write]")?.value ?? "",
+          };
+        });
+        const payload = buildScheduleDispatchWorkers(currentWorkOverviewResult, rows);
         client.dispatchScheduleWorkers(payload);
-        setStatus("调度启动请求已提交；等待服务端核对来源、并发上限及逐项确认。");
+        const count = payload.workers.length;
+        setStatus(count > 1
+          ? `已提交 ${count} 个项目的并行调度启动；等待逐项确认，进度见当前工作。`
+          : "调度启动请求已提交；等待服务端核对来源、并发上限及逐项确认。");
       } catch (error) {
         setStatus(`启动请求未发送：${error instanceof Error ? error.message : String(error)}`);
       }

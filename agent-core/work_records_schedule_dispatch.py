@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from project_worker_host import ProjectWorkerHostRequest
-from work_records_schedule_preview import build_schedule_preview
+from work_records_schedule_preview import build_schedule_preview, preview_contains_candidate
 
 _MAX_TASK_CHARS = 8_000
 _MAX_TARGETS = 32
@@ -87,7 +87,7 @@ def prepare_schedule_dispatch(
     if live_binding_check(live_session, parent_run_id, turn_epoch) is not True:
         raise ValueError("the parent run is not the trusted current session turn")
     preview = build_schedule_preview(authorized_projection)
-    if preview.get("state") != "visible" or candidate not in preview.get("candidates", []):
+    if preview.get("state") != "visible" or not preview_contains_candidate(preview, candidate):
         raise ValueError("the candidate is stale, blocked, or absent from the authorized projection")
     if live_binding_check(live_session, parent_run_id, turn_epoch) is not True:
         raise ValueError("the trusted current session turn changed during validation")
