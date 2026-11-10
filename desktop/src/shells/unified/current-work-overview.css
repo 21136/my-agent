@@ -374,8 +374,28 @@ html[data-theme="dark"] .current-work-board {
 }
 .unified-current-work-item-head strong { font-weight: 600; }
 .unified-current-work-item-head > span { color: var(--ma-text-muted); font-size: 0.74rem; }
-.unified-current-work-unread { color: var(--ma-warning, #b7791f); font-size: 0.72rem; }
-.unified-current-work-unknown { color: var(--ma-danger, #b42318); font-size: 0.72rem; }
+.unified-current-work-item-hint {
+  color: var(--ma-warning, #b7791f);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.unified-current-work-history-fold {
+  margin: 0.1rem 0 0.15rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 80%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 70%, transparent);
+  font-size: 0.78rem;
+  color: var(--ma-text-muted);
+}
+.unified-current-work-history-fold summary {
+  cursor: pointer;
+  color: var(--ma-text);
+  font-weight: 600;
+  list-style: none;
+}
+.unified-current-work-history-fold summary::-webkit-details-marker { display: none; }
+.unified-current-work-history-fold ul { margin: 0.35rem 0 0 1rem; padding: 0; }
 
 .unified-current-work-requirements,
 .unified-current-work-controls,
