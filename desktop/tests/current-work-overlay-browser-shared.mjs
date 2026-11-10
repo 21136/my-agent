@@ -76,3 +76,19 @@ export async function refreshCurrentWorkOverview(page) {
   await page.waitForFunction(min => (window.receivedEvents?.filter(e => e.type === "work-records.overview.result").length ?? 0) > min, before);
   return page.evaluate(() => window.receivedEvents?.findLast(e => e.type === "work-records.overview.result"));
 }
+
+/** Wait for shell-registered overview refresh after an applied control (revision CAS). */
+export async function waitOverviewAfterAppliedControl(page, action, { timeout = 20_000 } = {}) {
+  await page.waitForFunction(
+    act => {
+      const events = window.receivedEvents ?? [];
+      const doneIndex = events.findLastIndex(event => event.type === "work-record.control.done"
+        && event.action === act && event.status === "applied");
+      if (doneIndex < 0) return false;
+      const later = events.slice(doneIndex + 1).find(event => event.type === "work-records.overview.result");
+      return Boolean(later && Number.isSafeInteger(later.work_record_revision));
+    },
+    action,
+    { timeout },
+  );
+}

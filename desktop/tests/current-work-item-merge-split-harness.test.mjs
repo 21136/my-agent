@@ -31,4 +31,7 @@ test("work item merge/split wiring is present in overlay, ws client, and store",
   assert.match(css, /unified-current-work-reorganize/);
   const browser = readFileSync(path.join(here, "work-item-merge-split-browser-e2e.test.mjs"), "utf8");
   assert.match(browser, /work-item-merge-split-browser-fixture/);
+  assert.match(browser, /waitOverviewAfterAppliedControl/);
+  const index = readFileSync(path.join(repo, "desktop/src/shells/unified/index.ts"), "utf8");
+  assert.match(index, /shouldRefreshCurrentWorkOverviewImmediately\(event\.action\)/);
 });

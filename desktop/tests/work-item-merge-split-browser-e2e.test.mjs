@@ -19,6 +19,7 @@ import {
   refreshCurrentWorkOverview,
   resolvePython,
   waitControlDone,
+  waitOverviewAfterAppliedControl,
   currentWorkItemByTitle,
   currentWorkQueueBody,
   currentWorkReorganizeBar,
@@ -143,7 +144,8 @@ test("companion overlay: split requirement then merge two independent items", {
     assert.notEqual(prematureCopyDone?.status, "rejected", prematureCopyDone?.message ?? "copy rejected before confirm");
     await acceptLatestComposerConfirm(page);
     await waitControlDone(page, "copy_requirement_to_new_item");
-    overview = await refreshCurrentWorkOverview(page);
+    await waitOverviewAfterAppliedControl(page, "copy_requirement_to_new_item");
+    overview = await page.evaluate(() => window.receivedEvents?.findLast(e => e.type === "work-records.overview.result"));
     assert.equal(independentItemCount(overview), 4);
     const splitChild = overview.groups.flatMap(g => g.items).find(i => i.item_id !== ready.split_parent_item
       && i.requirements?.some(r => r.text === "Requirement to split into new item"));

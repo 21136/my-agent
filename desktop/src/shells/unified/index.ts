@@ -444,6 +444,13 @@ export function mountUnifiedShell(
       kind, groupKind, groupId, ...(itemId ? { itemId } : {}),
     });
   }
+  function shouldRefreshCurrentWorkOverviewImmediately(action: string): boolean {
+    return action === "copy_requirement_to_new_item"
+      || action === "merge_independent_item"
+      || action === "revise_requirement"
+      || action === "set_dependencies";
+  }
+
   function scheduleCurrentWorkOverviewRefresh(): void {
     const sessionId = chat.model.sessionId;
     if (!sessionId) return;
@@ -7202,6 +7209,8 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
               && currentWorkOverviewResult.selected_project_ids?.length) {
             queryStructuredCurrentWorkOverview(undefined, event.session_id, undefined,
               currentWorkOverviewResult.selected_project_ids);
+          } else if (shouldRefreshCurrentWorkOverviewImmediately(event.action)) {
+            queryStructuredCurrentWorkOverview(undefined, event.session_id);
           } else scheduleCurrentWorkOverviewRefresh();
         } else refreshTopbar();
         break;

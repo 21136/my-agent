@@ -25,6 +25,10 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   const overviewSrc = readFileSync(path.join(repo, "desktop/src/shells/unified/current-work-overview.ts"), "utf8");
   assert.match(overviewSrc, /reorganizePrefix/);
   assert.doesNotMatch(overviewSrc, /const reorganizeBar = group\.kind === "independent"/);
+  const indexSrc = readFileSync(path.join(repo, "desktop/src/shells/unified/index.ts"), "utf8");
+  assert.match(indexSrc, /shouldRefreshCurrentWorkOverviewImmediately/);
+  assert.match(indexSrc, /merge_independent_item/);
+  assert.match(shared, /waitOverviewAfterAppliedControl/);
   const browserE2e = readFileSync(path.join(here, "work-item-merge-split-browser-e2e.test.mjs"), "utf8");
   assert.match(browserE2e, /currentWorkQueueBody/);
   const fixture = readFileSync(path.join(here, "work-item-merge-split-browser-fixture.py"), "utf8");
