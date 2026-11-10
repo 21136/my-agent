@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ import {
   currentWorkQueueBody,
   currentWorkReorganizeBar,
 } from "./current-work-overlay-browser-shared.mjs";
+import { mountIsolatedUnifiedPage } from "./isolated-unified-browser-mount.mjs";
+import { VISUAL_DISCLAIMER } from "./isolated-shell-styles.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, "..");
@@ -52,7 +54,6 @@ test("companion overlay: split requirement then merge two independent items", {
   timeout: 180_000,
 }, async t => {
   const python = resolvePython();
-  const esbuild = createRequire(path.join(desktop, "package.json"))("esbuild");
   const { chromium } = createRequire(path.join(desktop, "package.json"))(pw);
   const child = spawn(python, [path.join(here, "work-item-merge-split-browser-fixture.py"), path.join(repo, "agent-core")], {
     cwd: desktop,
@@ -70,42 +71,21 @@ test("companion overlay: split requirement then merge two independent items", {
   });
   assert.equal(ready.companion_unbound, true);
 
-  const bundle = await esbuild.build({
-    stdin: {
-      contents: 'export { mountUnifiedShell } from "./src/shells/unified/index.ts"; export { AgentWsClient } from "./src/api/ws.ts";',
-      resolveDir: desktop,
-      loader: "ts",
-    },
-    bundle: true, write: false, platform: "browser", format: "iife", globalName: "UnifiedUnderTest",
-    define: { "import.meta.url": '"http://127.0.0.1/isolated.js"' },
-    loader: { ".png": "dataurl", ".jpg": "dataurl", ".svg": "dataurl", ".woff2": "dataurl" },
-    plugins: [{ name: "no-css", setup(b) { b.onLoad({ filter: /\.css$/ }, () => ({ contents: "", loader: "js" })); } }],
-    logLevel: "silent",
-  });
-  const css = readFileSync(path.join(desktop, "src/shells/unified/unified.css"), "utf8")
-    + readFileSync(path.join(desktop, "src/shells/unified/current-work-overview.css"), "utf8");
-
   const browser = await chromium.launch({ headless: true, executablePath: edge, args: EDGE_LAUNCH_ARGS });
   let page;
+  let pageErrors;
   try {
     const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
-    await context.route("**/*", r => r.request().url() === `http://127.0.0.1:${ready.port}/`
-      ? r.fulfill({ status: 200, contentType: "text/html", body: `<!doctype html><style>${css}</style><div id="root"></div>` })
-      : r.abort());
-    page = await context.newPage();
-    page.setDefaultTimeout(20_000);
-    const errors = [];
-    page.on("pageerror", e => errors.push(e.message));
-    await page.goto(`http://127.0.0.1:${ready.port}/`);
-    await page.addScriptTag({ content: bundle.outputFiles[0].text });
-    await page.evaluate(async port => {
-      window.myAgentDesktop = { setBilibiliViewState: async () => {}, setShellDevViewState: async () => {} };
-      window.client = new UnifiedUnderTest.AgentWsClient("127.0.0.1", port);
-      window.receivedEvents = [];
-      window.client.onEvent(event => window.receivedEvents.push(event));
-      window.dispose = UnifiedUnderTest.mountUnifiedShell(document.querySelector("#root"), window.client);
-      await window.client.connect();
-    }, ready.port);
+    const mounted = await mountIsolatedUnifiedPage(context, { desktop, port: ready.port });
+    page = mounted.page;
+    pageErrors = mounted.pageErrors;
+    console.log(JSON.stringify({
+      report: "work-item-merge-split-gui",
+      interactionStyles: mounted.styleReport,
+      visualAuthenticity: "not_claimed",
+      visualDisclaimer: VISUAL_DISCLAIMER,
+    }));
+    assert.ok(mounted.styleReport.ok, `interaction styles: ${mounted.styleReport.detail}`);
 
     const banner = await page.evaluate(() => window.receivedEvents.find(e => e.type === "session.banner"));
     assert.equal(banner?.project_id ?? "", "");
@@ -178,7 +158,7 @@ test("companion overlay: split requirement then merge two independent items", {
     const source = itemByTitle(overview, "ZZZ merge source item");
     assert.ok(target?.requirements?.some(r => r.text === "Requirement to merge into target"));
     assert.ok(!source?.requirements?.some(r => r.requirement_id === ready.source_requirement));
-    assert.equal(errors.length, 0, errors.join("\n"));
+    assert.equal(pageErrors.length, 0, pageErrors.join("\n"));
     await page.evaluate(() => { window.dispose(); window.client.destroy(); });
     await context.close();
   } catch (error) {

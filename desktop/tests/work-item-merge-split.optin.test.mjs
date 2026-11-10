@@ -40,4 +40,7 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(run81, /work-item-merge-split-browser-e2e\.test\.mjs/);
   assert.match(run81, /EXIT_CODE=%ERRORLEVEL%/);
   assert.match(run81, /endlocal & exit \/b %EXIT_CODE%/);
+  const styles = readFileSync(path.join(here, "isolated-shell-styles.mjs"), "utf8");
+  assert.match(styles, /theme\.css/);
+  assert.match(browserE2e, /visualAuthenticity/);
 });
