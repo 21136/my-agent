@@ -551,7 +551,7 @@ class WsBridge:
     _pending_confirm_binding: tuple[Any, str, str, int, float] | None = field(default=None, init=False, repr=False)
     last_confirm_outcome: str = field(default="", init=False, repr=False)
     _cancel_turn: Callable[[], None] | None = field(default=None, init=False, repr=False)
-    # Consent belongs to this WebSocket connection, never to the shared handler.
+    # Legacy: set by the journal phrases, read by nothing; journal writes do not depend on it.
     project_journal_enabled: bool = field(default=False, init=False, repr=False)
     _work_card_update_coalescer: Any | None = field(default=None, init=False, repr=False)
     _work_card_reference_enqueued: set[str] = field(default_factory=set, init=False, repr=False)
@@ -6727,25 +6727,35 @@ class WsSessionHandler:
         return True
 
     async def _apply_project_journal_command(self, text: str, bridge: WsBridge) -> bool:
-        """Handle only exact phrases; confirmation and state are connection scoped."""
+        """Handle only exact phrases.
+
+        The journal is written on every successful project switch and on every
+        compaction regardless of ``project_journal_enabled``; nothing reads that
+        flag. The texts below say so instead of promising a switch.
+        """
         if text == self.PROJECT_JOURNAL_DISABLE_PHRASE:
             bridge.project_journal_enabled = False
-            bridge.emit({"type": "turn.notice", "level": "info", "text": "\u9879\u76ee\u65e5\u8bb0\u8bb0\u5f55\u5df2\u5728\u672c\u8fde\u63a5\u5173\u95ed\u3002"})
+            bridge.emit({"type": "turn.notice", "level": "info", "text": (
+                "项目日记目前没有关闭开关：成功切换项目和上下文压缩时，仍会写入本地日记。"
+            )})
             return True
         if text != self.PROJECT_JOURNAL_ENABLE_PHRASE:
             return False
 
         preview = (
-            "\u5f00\u542f\u672c\u8fde\u63a5\u7684\u9879\u76ee\u65e5\u8bb0\u8bb0\u5f55\uff1f\u4ec5\u5728\u4e4b\u540e\u6210\u529f\u5207\u6362\u9879\u76ee\u65f6\uff0c"
-            "\u5c06\u9879\u76eeID\u3001\u4f1a\u8bddID\u548c\u5207\u6362\u65f6\u95f4\u5199\u5165\u672c\u5730\u65e5\u8bb0\uff1b"
-            "\u4e0d\u4f1a\u53d1\u9001\u7ed9\u6a21\u578b\uff0c\u4e5f\u4e0d\u4f1a\u626b\u63cf\u6216\u56de\u586b\u65e7\u5386\u53f2\u3002"
-            "\u53ea\u5bf9\u672c\u8fde\u63a5\u751f\u6548\uff0c\u65ad\u5f00\u540e\u81ea\u52a8\u5173\u95ed\u3002"
+            "项目日记默认就在记录，不需要开启：每次成功切换项目时，"
+            "将项目ID、会话ID和切换时间写入本地日记；上下文压缩时会更新当天摘要。"
+            "写入时不会发送给模型，也不会扫描或回填旧历史；"
+            "你查询日记时，结果会留在对话里，之后可能随对话发送给模型。"
+            "确认只表示已知悉，不改变记录行为；目前没有关闭开关。"
         )
         try:
             choice, _receipt = await asyncio.to_thread(bridge.confirm_with_receipt, preview, False)
             if not isinstance(choice, str) or choice.strip().casefold() not in {"y", "yes", "confirm", "allow"}:
                 bridge.project_journal_enabled = False
-                bridge.emit({"type": "turn.notice", "level": "info", "text": "\u9879\u76ee\u65e5\u8bb0\u8bb0\u5f55\u672a\u542f\u7528\uff1b\u666e\u901a\u5bf9\u8bdd\u4e0d\u53d7\u5f71\u54cd\u3002"})
+                bridge.emit({"type": "turn.notice", "level": "info", "text": (
+                    "未确认；项目日记仍按默认记录（目前没有关闭开关），普通对话不受影响。"
+                )})
                 return True
             if self.project_boundary_recorder is None and self.project_boundary_journal is None:
                 from day_journal import DayJournal
@@ -6756,10 +6766,14 @@ class WsSessionHandler:
             if self.project_boundary_recorder is None or self.project_boundary_journal is None:
                 raise RuntimeError("journal dependencies are incomplete")
             bridge.project_journal_enabled = True
-            bridge.emit({"type": "turn.notice", "level": "info", "text": "\u9879\u76ee\u65e5\u8bb0\u8bb0\u5f55\u5df2\u4e3a\u672c\u8fde\u63a5\u542f\u7528\uff1b\u4ec5\u8bb0\u5f55\u4e4b\u540e\u6210\u529f\u5207\u6362\u7684\u9879\u76ee\u3002"})
+            bridge.emit({"type": "turn.notice", "level": "info", "text": (
+                "已知悉；项目日记按默认继续记录成功切换的项目和压缩后的当天摘要。"
+            )})
         except Exception:
             bridge.project_journal_enabled = False
-            bridge.emit({"type": "turn.notice", "level": "warn", "text": "\u9879\u76ee\u65e5\u8bb0\u672a\u80fd\u5b89\u5168\u542f\u7528\uff1b\u666e\u901a\u5bf9\u8bdd\u4e0d\u53d7\u5f71\u54cd\u3002"})
+            bridge.emit({"type": "turn.notice", "level": "warn", "text": (
+                "项目日记说明未能完成确认；记录行为不变，普通对话不受影响。"
+            )})
         return True
 
     def _record_project_switch_for_connection(

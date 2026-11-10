@@ -286,6 +286,8 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 
 要看命中处的完整上下文，仍走 `read_file data/sessions/<id>/messages.jsonl`，照旧单独确认。
 
+`grep` 的搜索路径如果在会话目录之上（`data/sessions`、`data`、agent 根），结果里不含其它会话的文件；要搜某个其它会话，路径必须指到它的目录里，并经确认。
+
 ---
 
 ## 7. 与 Skill / Tool 的关系
@@ -341,7 +343,7 @@ thread 过长时（RUNTIME §8），不强制 `新会话`：
 
 ## 10.1 按天日记 + 一个界面（已有实现 · 默认写入）
 
-> **状态（2026-11-10 核对）：运行时已有实现**（`agent-core/day_journal*.py` + 对应测试），**不需要开启**：每次成功切换项目（`server.py` `_record_project_switch_boundary`）和每次 context 压缩（`refresh_day_journal_after_compact`）都会写 `data/day-journal/`。开启短语和确认框还在，但它设置的 `project_journal_enabled` 自 2026-11-05 起没有任何读取方，不控制写入；确认框里「只对本连接生效」的说法与实际行为不符。本机 `data/day-journal/` 尚无数据。下面是设计意图摘要，细节以代码为准。
+> **状态（2026-11-10 核对）：运行时已有实现**（`agent-core/day_journal*.py` + 对应测试），**不需要开启**：每次成功切换项目（`server.py` `_record_project_switch_boundary`）和每次 context 压缩（`refresh_day_journal_after_compact`）都会写 `data/day-journal/`。开启/关闭短语还在，但它设置的 `project_journal_enabled` 自 2026-11-05 起没有任何读取方，不控制写入；确认框和提示文案已改成如实说明（默认记录、确认不改变行为、目前没有关闭开关）。本机 `data/day-journal/` 尚无数据。下面是设计意图摘要，细节以代码为准。
 
 在现行三件套之外，产品向设想是：
 

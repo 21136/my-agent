@@ -45,8 +45,21 @@ def test_exact_enable_phrase_requires_confirmation_and_is_connection_scoped():
     assert first.project_journal_enabled is True
     assert second.project_journal_enabled is False
     preview = next(event["preview"] for event in first.events if event.get("type") == "confirm.request")
-    for phrase in ("\u4ec5\u5728\u4e4b\u540e\u6210\u529f\u5207\u6362", "\u4e0d\u4f1a\u53d1\u9001\u7ed9\u6a21\u578b", "\u4e0d\u4f1a\u626b\u63cf\u6216\u56de\u586b\u65e7\u5386\u53f2"):
+    # The preview must describe what actually happens: writes are on by default
+    # and the confirmation changes nothing.
+    for phrase in ("默认就在记录", "每次成功切换项目", "上下文压缩", "不会扫描或回填旧历史", "不改变记录行为", "没有关闭开关"):
         assert phrase in preview
+    assert "只对本连接生效" not in preview
+
+
+def test_disable_phrase_does_not_claim_to_stop_recording():
+    handler = FakeHandler(lambda *a, **kw: None, object())
+    bridge = FakeBridge("yes")
+
+    asyncio.run(command(handler, DISABLE, bridge))
+
+    notice = next(event["text"] for event in bridge.events if event.get("type") == "turn.notice")
+    assert "没有关闭开关" in notice and "仍会写入" in notice
 
 
 def test_reject_cancel_timeout_and_close_leave_connection_disabled():
@@ -82,7 +95,7 @@ def test_confirmation_exception_fails_closed_with_clear_notice():
     bridge.confirm_with_receipt = lambda *_: (_ for _ in ()).throw(RuntimeError("boom"))
     asyncio.run(command(handler, ENABLE, bridge))
     assert bridge.project_journal_enabled is False
-    assert any("\u672a\u80fd\u5b89\u5168\u542f\u7528" in e.get("text", "") for e in bridge.events)
+    assert any("未能完成确认" in e.get("text", "") for e in bridge.events)
 
 
 def test_write_failure_surfaces_notice_without_disabling_legacy_opt_in_flag():

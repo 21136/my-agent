@@ -4109,7 +4109,7 @@ class ToolExecutor:
                 paths=self.registry.agent_paths,
                 session=self.session,
             )
-        if tool_name == "search_past_dialogue":
+        if tool_name in {"grep", "search_past_dialogue"}:
             return runner(
                 arguments,
                 paths=self.registry.agent_paths,

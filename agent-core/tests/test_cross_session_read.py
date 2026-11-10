@@ -176,6 +176,35 @@ class CrossSessionReadConfirmTests(unittest.TestCase):
             ToolErrorCode.CONFIRM_REJECTED,
         )
 
+    def _grep_paths(self, executor: ToolExecutor, path: str, pattern: str) -> set[str]:
+        result = executor.run("grep", {"path": path, "pattern": pattern, "max_results": 1000})
+        self.assertTrue(result.ok, result.error)
+        return {match["path"] for match in result.data["matches"]}
+
+    def test_grep_above_session_dirs_skips_other_sessions(self) -> None:
+        """Searching a parent directory must not be a way around the per-session confirm."""
+        marker = f"CROSSMARK{secrets.token_hex(4)}"
+        self.session_a.append_message({"role": "user", "content": f"mine {marker}"})
+        self.session_b.append_message({"role": "user", "content": f"theirs {marker}"})
+        confirms: list[str] = []
+        executor = self._executor(
+            self.session_a,
+            lambda _preview, _allow: confirms.append("asked") or "y",
+        )
+        own = f"data/sessions/{self.session_a_id}/"
+        other = f"data/sessions/{self.session_b_id}/"
+
+        for parent in ("data/sessions", "data"):
+            with self.subTest(parent=parent):
+                found = self._grep_paths(executor, parent, marker)
+                self.assertTrue(any(path.startswith(own) for path in found), found)
+                self.assertFalse(any(path.startswith(other) for path in found), found)
+        self.assertEqual(confirms, [])
+
+        found = self._grep_paths(executor, other.rstrip("/"), marker)
+        self.assertEqual(confirms, ["asked"])
+        self.assertTrue(any(path.startswith(other) for path in found), found)
+
 
 class ShellSessionIsolationTests(unittest.TestCase):
     """T-1804-04 / T-1116: grow · daily · project keep separate conversation_id lines."""

@@ -21,6 +21,8 @@
 - **Context 压缩**：新增软预算 `CONTEXT_COMPACT_MAX_TOKENS`（默认 150k，攒够半窗可摘要轮次才压）；近期窗口之外的超长 tool 正文在 payload 中截短，边界按 `CONTEXT_TOOL_TRIM_STEP_TURNS` 步进以保留 prompt 缓存；仅硬上限触发的压缩才强制截短近期 tool 输出；见 RUNTIME §8.1
 - **Token 估算校准**：主循环每次调用后用真实 `prompt_tokens` 校准 `len // 4` 估算（倍率 1.0–4.0，仅内存），压缩判断与用量显示随之修正；见 RUNTIME §8.1
 - **用户画像缓存**：`user_profile.md` 里由桌面改写的搭档同步块拆成动态段 `companion_sync`，天数/互动次数变化不再使静态前缀缓存失效
+- **跨会话读取**：`grep` 搜索路径在会话目录之上（`data/sessions`、`data`、agent 根）时不再返回其它会话的文件；此前这样搜可绕过跨会话确认
+- **按天日记文案**：开启/关闭短语的确认框与提示改为如实说明——日记默认记录，确认不改变行为，目前没有关闭开关（此前声称「只对本连接生效」「已关闭」，实际照写）
 - **跨会话检索**：新增 Builtin `search_past_dialogue` 与本地全文索引 `dialogue_index.py`（SQLite FTS5 trigram，`data/dialogue-index/`）；只收用户/助手文字，搜索前增量更新，每次调用都需用户确认；见 MEMORY §6.4
 - **文档**：`MEMORY.md` §10.1、`DAY-JOURNAL-MEMORY.md` 的「未实现」状态更正为已有实现；按天日记在切换项目和压缩时默认写入，开启短语设置的标记没有读取方（此前写成「按连接 opt-in」有误）
 - **记忆**：`evolve/memories/workflow/downloads-sort.md` 的 CLI 示例去掉失效的绝对路径

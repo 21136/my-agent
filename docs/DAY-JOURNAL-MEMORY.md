@@ -3,7 +3,7 @@
 > **状态（2026-11-10 核对）：运行时代码已存在，默认写入，没有开关。**  
 > - 代码：`agent-core/day_journal*.py`（12 个模块：目录、事件、压缩后刷新、摘要、召回、项目提示等）+ `agent-core/tests/test_day_journal*.py`（19 个测试文件）。  
 > - 写入时机：每次成功切换项目（`server.py` `_record_project_switch_boundary`，记项目 ID、会话 ID 和时间）和每次 context 压缩（`day_journal_compact.refresh_day_journal_after_compact`）。不发给模型，不回填旧历史。  
-> - 开启短语：`_apply_project_journal_command` 和确认框还在，但它设置的 `project_journal_enabled` 自 2026-11-05（提交 `e3bf7de`）起没有读取方，开不开都照写；确认框文案「只对本连接生效」与实际行为不符，尚未处理。  
+> - 开启短语：`_apply_project_journal_command` 和确认框还在，但它设置的 `project_journal_enabled` 自 2026-11-05（提交 `e3bf7de`）起没有读取方，开不开都照写；确认框和提示文案已改成如实说明（默认记录、确认不改变行为、目前没有关闭开关）。真正的关闭开关尚未实现。  
 > - 数据：落在 `data/day-journal/`；核对时该目录在本机尚不存在，即还没有真实写入过。  
 > - **本文以下各节是 2026-10-28 的设计初稿，未逐条对照实现更新**；标「建议，未实现」的小节以代码为准。  
 >

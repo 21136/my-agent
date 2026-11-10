@@ -10,13 +10,14 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 _AGENT_CORE = Path(__file__).resolve().parents[2]
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from paths import AgentPaths, PathOutOfBoundsError
+from session import SESSIONS_DIRNAME
 from tools.builtin.read_file import MAX_BYTES, resolve_read_path
 from tools.listing_privacy import hide_from_listing
 from tools.schema import ToolErrorCode, ToolResult, tool_fail, tool_ok, to_json
@@ -25,8 +26,44 @@ TOOL_NAME = "grep"
 DEFAULT_MAX_RESULTS = 50
 
 
-def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolResult:
-    """Search local files under agent root for *pattern*."""
+def _other_session_filter(
+    paths: AgentPaths, target: Path, current_session_id: str | None
+) -> Callable[[str], bool]:
+    """Predicate for matches in another session's directory that *target* merely contains.
+
+    Reading another session needs the user's confirmation, which the executor asks
+    for when the search path is inside that session. A search that starts higher up
+    (``data/sessions``, ``data``, the agent root) is not confirmed, so it skips them.
+    """
+    if not current_session_id:
+        return lambda _rel: False
+    sessions_root = (paths.data / SESSIONS_DIRNAME).resolve()
+    if target.resolve().is_relative_to(sessions_root) and target.resolve() != sessions_root:
+        return lambda _rel: False
+    try:
+        prefix = paths.to_agent_relative(sessions_root).replace("\\", "/").rstrip("/") + "/"
+    except PathOutOfBoundsError:
+        return lambda _rel: False
+    own = prefix + current_session_id + "/"
+
+    def skip(rel: str) -> bool:
+        rel = rel.replace("\\", "/")
+        return rel.startswith(prefix) and not rel.startswith(own)
+
+    return skip
+
+
+def run(
+    arguments: dict[str, Any],
+    *,
+    paths: AgentPaths | None = None,
+    current_session_id: str | None = None,
+) -> ToolResult:
+    """Search local files under agent root for *pattern*.
+
+    With *current_session_id*, other sessions' files are left out unless the
+    search path points inside one of them.
+    """
     started = time.perf_counter()
     paths = paths or AgentPaths.discover()
 
@@ -59,6 +96,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
     except FileNotFoundError:
         return _fail(f"path does not exist: {path_arg}", ToolErrorCode.NOT_FOUND, started, path=path_arg)
 
+    skip = _other_session_filter(paths, resolved, current_session_id)
     try:
         if shutil.which("rg"):
             matches, truncated = _grep_rg(
@@ -68,6 +106,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
                 ignore_case=ignore_case,
                 max_results=max_results,
                 paths=paths,
+                skip=skip,
             )
         else:
             matches, truncated = _grep_python(
@@ -77,6 +116,7 @@ def run(arguments: dict[str, Any], *, paths: AgentPaths | None = None) -> ToolRe
                 ignore_case=ignore_case,
                 max_results=max_results,
                 paths=paths,
+                skip=skip,
             )
     except _RegexError as exc:
         return _fail(str(exc), ToolErrorCode.VALIDATION_ERROR, started, path=path_arg)
@@ -110,6 +150,7 @@ def _grep_rg(
     ignore_case: bool,
     max_results: int,
     paths: AgentPaths,
+    skip: Callable[[str], bool],
 ) -> tuple[list[dict[str, Any]], bool]:
     cmd = ["rg", "--json", "--line-number", "-e", pattern, str(target)]
     if ignore_case:
@@ -143,10 +184,6 @@ def _grep_rg(
         if event.get("type") != "match":
             continue
 
-        if len(matches) >= max_results:
-            truncated = True
-            break
-
         data = event.get("data", {})
         file_path = Path(data.get("path", {}).get("text", ""))
         line_number = data.get("line_number")
@@ -155,6 +192,11 @@ def _grep_rg(
             continue
 
         rel = paths.to_agent_or_host_path(file_path.resolve())
+        if skip(rel):
+            continue
+        if len(matches) >= max_results:
+            truncated = True
+            break
         matches.append(
             {
                 "path": rel,
@@ -174,6 +216,7 @@ def _grep_python(
     ignore_case: bool,
     max_results: int,
     paths: AgentPaths,
+    skip: Callable[[str], bool],
 ) -> tuple[list[dict[str, Any]], bool]:
     flags = re.IGNORECASE if ignore_case else 0
     try:
@@ -194,6 +237,8 @@ def _grep_python(
             continue
 
         rel = paths.to_agent_or_host_path(file_path)
+        if skip(rel):
+            continue
         for line_no, text in _iter_text_lines(file_path):
             if regex.search(text):
                 matches.append({"path": rel, "line": line_no, "text": text.rstrip("\r\n")})
