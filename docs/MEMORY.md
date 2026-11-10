@@ -109,6 +109,7 @@ data/sessions/<conversation_id>/
     goal.md
     meta.json
     messages.jsonl
+    messages.raw.jsonl     # 原始流水，只追加（RUNTIME §2）
     digest.md              # context 压缩摘要，可选
 ```
 
@@ -246,6 +247,7 @@ summary: my-agent 个人进化 agent，Python 3.12，建设顺序先 tool 后 sk
 | `meta.json` | 已确认 `topics[]` 等；字段默认与兼容见 [RUNTIME.md](./RUNTIME.md) **§2.4 DOC-05** |
 | 锚定块 | messages 首条模板（RUNTIME §5） |
 | `messages.jsonl` | 多轮对话 + tool 结果；**仅本机** |
+| `messages.raw.jsonl` | 原始流水：只追加、永不重写，保留被改写或丢弃前的原文；**仅本机** |
 | `digest.md` | context 压缩后的 **早前对话摘要**（§6.3） |
 
 `exit` 时：可写 goal 摘要入 `evolve_log`；**不**自动生成 proposal（除非显式「记住」）。

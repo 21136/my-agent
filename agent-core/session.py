@@ -25,6 +25,7 @@ if str(_AGENT_CORE) not in sys.path:
 
 from llm_client import HOST_INTERNAL_METADATA_KEY, resolve_session_model
 from paths import AgentPaths
+from raw_log import record_append, record_snapshot
 
 SESSIONS_DIRNAME = "sessions"
 GOAL_FILENAME = "goal.md"
@@ -569,6 +570,7 @@ class Session:
                 if run_id is not None:
                     message["run_id"] = run_id
                 line = json.dumps(message, ensure_ascii=False, separators=(',', ':')) + "\n"
+                record_append(self.messages_path, message, index=len(self.messages))
                 with self.messages_path.open("a", encoding="utf-8", newline="\n") as handle:
                     handle.write(line)
                 self._messages_disk_version = _messages_version(self.messages_path)
@@ -751,6 +753,7 @@ class Session:
                         existing.seek(-1, os.SEEK_END)
                         if existing.read(1) != b"\n":
                             raise SessionError("session messages have an incomplete final line")
+            record_append(self.messages_path, message, index=len(self.messages))
             with self.messages_path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(line)
                 if durable:
@@ -1155,6 +1158,7 @@ def _recover_stream_journals_locked(
                                 "stream_run_id": header.get("run_id"),
                             },
                         }
+                        record_append(messages_path, message, index=len(messages))
                         _append_jsonl_record_to_open_fd(messages_fd, message, verify_identity)
                         messages.append(message)
                         by_request[request_id] = message
@@ -2471,6 +2475,8 @@ def _write_messages_snapshot(
         content += "\n"
     from file_guard import atomic_write_text
 
+    # Whatever this rewrite replaces or drops goes to the raw log first.
+    record_snapshot(messages_path, content)
     atomic_write_text(messages_path, content, agent_root=agent_root)
 
 

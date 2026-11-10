@@ -69,10 +69,21 @@
 data/sessions/<conversation_id>/
   goal.md              # 本次会议目标
   meta.json            # 见 §2.4 字段表；旧会话缺字段按默认兼容
-  messages.jsonl       # 完整多轮（含 tool）；**永不截断**；默认不进 Git；压缩后仍可检索（§8）
+  messages.jsonl       # 完整多轮（含 tool）；工作副本，压缩不截断；默认不进 Git；压缩后仍可检索（§8）
+  messages.raw.jsonl   # 原始流水：只追加、永不重写；messages.jsonl 被改写/丢弃的记录在此留底
   digest.md            # 早前对话摘要（§8）；多次压缩追加节，仅最新累计节注入上下文
   tool_outputs/        # 超长 tool 结果落盘（TOOLS §6.3）
 ```
+
+**原始流水 `messages.raw.jsonl`**（`agent-core/raw_log.py`）：`messages.jsonl` 每次 `save()` 是整份重写，助手回复可能被门禁/提示事后改写，加载时的 tool 修复会丢弃配不上的记录。原始流水在这些写入 **之前** 先落盘，每行一个 JSON：
+
+| `op` | 含义 |
+|------|------|
+| `append` | 追加到末尾的一条记录（`index`、`message`） |
+| `rewrite` | 从 `index` 起，`before` 这几条被替换为 `after`（改写、丢弃、未落盘消息随 save 写入都记在这里） |
+| `seed` | 启用原始流水之前已存在的记录；旧会话在第一次写入时补录当时的 `messages.jsonl` |
+
+不进上下文、不参与加载；写失败时对应的 `messages.jsonl` 写入也不进行。旧会话在启用之前已被改写掉的内容无法补回。
 
 `messages` **仅本机**（已决）。**默认 exit 不写** `data/conversations/`；见 §2.3 `--record`。
 
