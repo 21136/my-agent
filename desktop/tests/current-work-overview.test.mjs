@@ -891,7 +891,7 @@ test("overview history humanizes worker lifecycle JSON without leaking internal 
   assert.doesNotMatch(panel.bodyHtml, /task-aaaaaaaa/);
 });
 
-test("post-turn work-record confirms are not mirrored into the live queue", () => {
+test("post-turn work-record confirms mirror into live queue with composer hint", () => {
   const panel = buildCurrentWorkOverviewPanel(overview({
     state: "visible",
     unread_status: "known",
@@ -913,5 +913,7 @@ test("post-turn work-record confirms are not mirrored into the live queue", () =
       }],
     },
   });
-  assert.match(panel.bodyHtml, /暂无可见工作组/);
+  assert.match(panel.label, /等待确认/);
+  assert.match(panel.bodyHtml, /工作结果记录/);
+  assert.match(panel.bodyHtml, /授权在左侧对话输入区处理/);
 });

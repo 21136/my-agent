@@ -388,6 +388,7 @@ export function isConfirmInProgressLabel(label: string | undefined): boolean {
 /** True when the user must act on an authorization or worker-verification confirm in this session. */
 export function chatSessionAwaitingUserConfirm(
   model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
+  opts?: { companionComposerPrimary?: boolean },
 ): boolean {
   if (model.confirmPending) return true;
   const settled = model.settledOrdinaryConfirmIds;
@@ -398,19 +399,26 @@ export function chatSessionAwaitingUserConfirm(
       return true;
     }
   }
-  return model.blocks.some((block) => {
+  const ordinaryPending = model.blocks.some((block) => {
     if (block.kind !== "confirm") return false;
     if (block.confirmKind === "work_record_post_turn") return false;
+    if (block.confirmKind === "project_worker_requirement_verification") return false;
     if (settled.has(block.requestId)) return false;
     if (!block.resolved) return true;
     return isConfirmInProgressLabel(block.resolved);
   });
+  if (ordinaryPending) return true;
+  if (opts?.companionComposerPrimary && firstPendingCompanionScopedConfirmId(model)) return true;
+  return false;
 }
 
 export function primaryPendingConfirmPreview(
-  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
+  opts?: { companionComposerPrimary?: boolean },
 ): string {
-  const requestId = resolveActiveOrdinaryConfirmRequestId(model);
+  const requestId = opts?.companionComposerPrimary
+    ? resolveCompanionComposerConfirmRequestId(model, true)
+    : resolveActiveOrdinaryConfirmRequestId(model);
   if (!requestId) return "";
   if (model.confirmOverlay?.requestId === requestId) {
     return model.confirmOverlay.preview;
@@ -418,10 +426,32 @@ export function primaryPendingConfirmPreview(
   for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
     const block = model.blocks[index];
     if (block.kind !== "confirm" || block.requestId !== requestId) continue;
-    if (block.confirmKind === "work_record_post_turn") continue;
     return block.preview;
   }
   return "";
+}
+
+/** Whether the active composer confirm (incl. companion scoped result confirms) accepts y/n. */
+export function canSubmitCompanionComposerConfirm(
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "sessionId" | "executionRunId" | "executionState" | "cancelRequested">,
+  requestId: string,
+): boolean {
+  if (canSubmitOrdinaryConfirm(model, requestId)) return true;
+  const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId);
+  if (block?.kind !== "confirm" || !isCompanionComposerScopedConfirm(block)) return false;
+  if (block.resolved && !isConfirmInProgressLabel(block.resolved)) return false;
+  if (block.confirmKind === "work_record_post_turn") {
+    if (block.confirmSubtype === "work_record_auto_candidate"
+        && !parseWorkRecordAutoCandidate(block.workRecordCandidate, model.sessionId)) return false;
+    return true;
+  }
+  if (block.confirmKind === "project_worker_requirement_verification") {
+    const runId = normalizedRunId(model.executionRunId);
+    if (!runId || model.cancelRequested || !["queued", "running"].includes(model.executionState)) return false;
+    const parsed = parseProjectWorkerVerification(block.projectWorkerVerification, model.sessionId);
+    return Boolean(parsed && block.preview.trim());
+  }
+  return false;
 }
 
 function isOrdinaryConfirmBlock(
@@ -480,6 +510,36 @@ function rehydrateOrdinaryConfirmOverlay(model: ChatSessionModel): void {
     break;
   }
   syncOrdinaryConfirmPending(model);
+}
+
+function isCompanionComposerScopedConfirm(
+  block: ChatBlock,
+): block is Extract<ChatBlock, { kind: "confirm" }> {
+  return block.kind === "confirm"
+    && (block.confirmKind === "work_record_post_turn"
+      || block.confirmKind === "project_worker_requirement_verification");
+}
+
+function firstPendingCompanionScopedConfirmId(
+  model: Pick<ChatSessionModel, "blocks">,
+): string | null {
+  for (const block of model.blocks) {
+    if (!isCompanionComposerScopedConfirm(block)) continue;
+    if (!block.resolved) return block.requestId;
+    if (isConfirmInProgressLabel(block.resolved)) return block.requestId;
+  }
+  return null;
+}
+
+/** Ordinary/tool confirms first; on companion home, queue scoped result confirms one at a time. */
+export function resolveCompanionComposerConfirmRequestId(
+  model: Pick<ChatSessionModel, "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds">,
+  companionComposerPrimary: boolean,
+): string | null {
+  const ordinary = resolveActiveOrdinaryConfirmRequestId(model);
+  if (ordinary) return ordinary;
+  if (!companionComposerPrimary) return null;
+  return firstPendingCompanionScopedConfirmId(model);
 }
 
 /** Request id for the ordinary/tool confirm the UI should treat as actionable (overlay or latest live block). */
@@ -544,18 +604,27 @@ export function ordinaryConfirmHasOverlayPrimarySurface(
 
 /** Composer dock gets y/n only when chat and overlay are not already the primary surface. */
 export function composerShouldShowOrdinaryConfirmActions(
-  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks">,
+  model: Pick<ChatSessionModel, "confirmPending" | "confirmOverlay" | "blocks" | "settledOrdinaryConfirmIds" | "sessionId" | "executionRunId" | "executionState" | "cancelRequested">,
   ui: {
     chatRendersOrdinaryConfirm: boolean;
     overlayRendersOrdinaryConfirm: boolean;
     companionComposerPrimary?: boolean;
   },
 ): boolean {
-  if (!chatSessionAwaitingUserConfirm(model)) return false;
-  const requestId = resolveActiveOrdinaryConfirmRequestId(model);
-  if (!requestId || !primaryPendingConfirmPreview(model).trim()) return false;
-  if (ui.companionComposerPrimary) return canSubmitOrdinaryConfirm(model, requestId);
-  return !ui.chatRendersOrdinaryConfirm && !ui.overlayRendersOrdinaryConfirm;
+  const companion = Boolean(ui.companionComposerPrimary);
+  if (!chatSessionAwaitingUserConfirm(model, { companionComposerPrimary: companion })) return false;
+  const requestId = companion
+    ? resolveCompanionComposerConfirmRequestId(model, true)
+    : resolveActiveOrdinaryConfirmRequestId(model);
+  if (!requestId) return false;
+  const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId);
+  const preview = primaryPendingConfirmPreview(model, { companionComposerPrimary: companion });
+  const scoped = block?.kind === "confirm" && isCompanionComposerScopedConfirm(block);
+  if (!preview.trim() && !scoped) return false;
+  if (companion) return canSubmitCompanionComposerConfirm(model, requestId);
+  if (!preview.trim()) return false;
+  return !ui.chatRendersOrdinaryConfirm && !ui.overlayRendersOrdinaryConfirm
+    && canSubmitOrdinaryConfirm(model, requestId);
 }
 
 function normalizedRunId(runId: string | undefined): string {

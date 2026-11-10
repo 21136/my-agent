@@ -15,7 +15,7 @@ import { segmentChatBlocks, segmentPrint, renderTurnCardShell, liveTurnCardProce
 import { activityEntriesPrint, ensureProcessEntries, isProcessThinkingLive, type ProcessActivityBlock, type ThinkEntry } from "../activity-state";
 import { isProcessBlockEmpty, orderTurnBlocksForDisplay } from "../process-placement";
 import { getProcessTools, renderActivityTimeline, syncThinkDom, timelineHasThinking } from "../activity-timeline";
-import { canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, companionHomeComposerOwnsOrdinaryConfirm, composerShouldShowOrdinaryConfirmActions, createChatSession, escapeHtml, ordinaryConfirmHasOverlayPrimarySurface, ordinaryConfirmWouldRenderInChat, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, syncOrdinaryConfirmPending, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
+import { canSubmitCompanionComposerConfirm, canSubmitOrdinaryConfirm, chatSessionAwaitingUserConfirm, companionHomeComposerOwnsOrdinaryConfirm, composerShouldShowOrdinaryConfirmActions, createChatSession, escapeHtml, ordinaryConfirmHasOverlayPrimarySurface, ordinaryConfirmWouldRenderInChat, primaryPendingConfirmPreview, resolveActiveOrdinaryConfirmRequestId, resolveCompanionComposerConfirmRequestId, syncOrdinaryConfirmPending, turnEndStatusText, checkerVerdictStatusText, formatToolElapsed, isConfirmInProgressLabel, userMessagePersistenceLabel, type ChatBlock } from "../chat-state";
 import {
   parallelChatDeliveryLabel,
   parallelChatUserFootnote,
@@ -100,7 +100,7 @@ import { renderGoalBudgetNotice, renderHistoricalGoalPauseMarker } from "./goal-
 import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedule-launch";
 import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
-import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
+import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, renderComposerScopedConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation, companionHomeDefersWorkCardChatPresentation } from "./work-card-presentation";
 import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
@@ -1888,7 +1888,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function pendingConfirmRequestId(): string | null {
-    return resolveActiveOrdinaryConfirmRequestId(chat.model);
+    const companionComposerPrimary = companionHomeComposerOwnsOrdinaryConfirm({
+      mainFocus: projectState.mainFocus,
+      perspective,
+    });
+    return resolveCompanionComposerConfirmRequestId(chat.model, companionComposerPrimary);
   }
 
   function companionConfirmUi() {
@@ -1905,21 +1909,27 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function syncPendingConfirmComposerHint(): void {
     let hint = composerDock.querySelector<HTMLElement>("[data-pending-confirm-hint]");
-    const preview = primaryPendingConfirmPreview(chat.model);
-    const requestId = pendingConfirmRequestId();
     const confirmUi = companionConfirmUi();
-    const showComposerActions = requestId && preview.trim()
+    const preview = primaryPendingConfirmPreview(chat.model, { companionComposerPrimary: confirmUi.companionComposerPrimary });
+    const requestId = pendingConfirmRequestId();
+    const pendingBlock = requestId
+      ? chat.model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId)
+      : undefined;
+    const showComposerActions = requestId
       ? composerShouldShowOrdinaryConfirmActions(chat.model, {
         chatRendersOrdinaryConfirm: confirmUi.chatRendersOrdinaryConfirm,
         overlayRendersOrdinaryConfirm: confirmUi.overlayRendersOrdinaryConfirm,
         companionComposerPrimary: confirmUi.companionComposerPrimary,
       })
       : false;
-    if (!showComposerActions || !requestId || !preview.trim()) {
+    const hasComposerCopy = Boolean(preview.trim()) || pendingBlock?.kind === "confirm";
+    if (!showComposerActions || !requestId || !hasComposerCopy) {
       hint?.remove();
       return;
     }
-    const canAct = canSubmitOrdinaryConfirm(chat.model, requestId);
+    const canAct = confirmUi.companionComposerPrimary
+      ? canSubmitCompanionComposerConfirm(chat.model, requestId)
+      : canSubmitOrdinaryConfirm(chat.model, requestId);
   if (!hint) {
       hint = document.createElement("section");
       hint.dataset.pendingConfirmHint = "1";
@@ -1928,7 +1938,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       hint.setAttribute("aria-label", "待确认授权");
       composerDock.insertBefore(hint, composerMetaEl);
     }
-    const detail = renderComposerOrdinaryConfirmDetailHtml(preview);
+    const detail = pendingBlock?.kind === "confirm"
+        && (pendingBlock.confirmKind === "work_record_post_turn" || pendingBlock.confirmKind === "project_worker_requirement_verification")
+      ? renderComposerScopedConfirmDetailHtml(pendingBlock)
+      : renderComposerOrdinaryConfirmDetailHtml(preview);
     const disabled = canAct ? "" : " disabled";
     const jump = confirmUi.companionComposerPrimary
       ? ""
@@ -4977,16 +4990,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       });
       const ordinaryInline = block.confirmKind !== "work_record_post_turn"
         && block.confirmKind !== "project_worker_requirement_verification";
-      if (companionComposerPrimary && ordinaryInline) {
+      const inlineScopedConfirm = block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification";
+      if (companionComposerPrimary && (ordinaryInline || inlineScopedConfirm)) {
         const inProgress = isConfirmInProgressLabel(block.resolved);
         const isTerminal = Boolean(block.resolved) && !inProgress;
-        if (isTerminal) {
+        if (isTerminal && ordinaryInline) {
           return renderConfirmCardHtml(block.preview, "", { resolvedStatus: block.resolved });
         }
-        if (inProgress) return "";
         return "";
       }
-      const inlineScopedConfirm = block.confirmKind === "work_record_post_turn" || block.confirmKind === "project_worker_requirement_verification";
       const confirmRequestId = inlineScopedConfirm ? escapeHtml(block.requestId) : block.requestId;
       const disabled = block.resolved ? "disabled" : "";
       const excerptInvalid = block.confirmSubtype === "work_record_reply_excerpt" && parseWorkRecordReplyExcerpt(block.preview, block.sessionId || "") === null;
