@@ -716,27 +716,33 @@ export function mountUnifiedShell(
     rootEl.querySelectorAll<HTMLButtonElement>("button[data-work-record-control]").forEach(button => {
       button.addEventListener("click", () => applyCurrentWorkControl(button));
     });
-    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-toggle]")?.addEventListener("click", () => {
-      currentWorkItemMergeMode = true;
-      currentWorkItemMergePickedIds.clear();
-      refreshTopbar();
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-merge-toggle]").forEach(button => {
+      button.addEventListener("click", () => {
+        currentWorkItemMergeMode = true;
+        currentWorkItemMergePickedIds.clear();
+        refreshTopbar();
+      });
     });
-    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-cancel]")?.addEventListener("click", () => {
-      currentWorkItemMergeMode = false;
-      currentWorkItemMergePickedIds.clear();
-      refreshTopbar();
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-merge-cancel]").forEach(button => {
+      button.addEventListener("click", () => {
+        currentWorkItemMergeMode = false;
+        currentWorkItemMergePickedIds.clear();
+        refreshTopbar();
+      });
     });
-    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-apply]")?.addEventListener("click", () => {
-      const picks = [...rootEl.querySelectorAll<HTMLInputElement>("input[data-cw-merge-pick]:checked")]
-        .map(input => input.dataset.itemId)
-        .filter((value): value is string => Boolean(value));
-      if (picks.length !== 2) {
-        setStatus("合并时请勾选恰好两个事项：列表顺序中首个为并入目标。");
-        return;
-      }
-      currentWorkItemMergeMode = false;
-      currentWorkItemMergePickedIds.clear();
-      applyIndependentItemMerge(picks[0], picks[1]);
+    rootEl.querySelectorAll<HTMLButtonElement>("[data-cw-merge-apply]").forEach(button => {
+      button.addEventListener("click", () => {
+        const picks = [...rootEl.querySelectorAll<HTMLInputElement>("input[data-cw-merge-pick]:checked")]
+          .map(input => input.dataset.itemId)
+          .filter((value): value is string => Boolean(value));
+        if (picks.length !== 2) {
+          setStatus("合并时请勾选恰好两个事项：列表顺序中首个为并入目标。");
+          return;
+        }
+        currentWorkItemMergeMode = false;
+        currentWorkItemMergePickedIds.clear();
+        applyIndependentItemMerge(picks[0], picks[1]);
+      });
     });
     rootEl.querySelectorAll<HTMLInputElement>("input[data-cw-merge-pick]").forEach(input => {
       input.addEventListener("change", () => {

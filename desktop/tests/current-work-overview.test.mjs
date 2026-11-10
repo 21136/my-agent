@@ -153,8 +153,27 @@ test("independent current-session requirements expose a revision editor with no 
   assert.match(panel.bodyHtml, /data-action="copy_requirement_to_new_item">拆出为新事项/);
   assert.match(panel.bodyHtml, /data-cw-reorganize-bar/);
   assert.match(panel.bodyHtml, /data-cw-merge-toggle/);
+  assert.equal((panel.bodyHtml.match(/data-cw-reorganize-bar/g) ?? []).length, 1);
   assert.doesNotMatch(panel.bodyHtml, /data-source-project-id|data-open-source-session/);
   assert.doesNotMatch(panel.bodyHtml, /data-action="queue"/);
+});
+
+test("multiple independent groups share one reorganize bar in queue", () => {
+  const item = (id, title) => ({
+    item_id: id, title, status: "pending", status_counts: { pending: 1 },
+    requirements: [{ requirement_id: `${id}-req`, text: title, status: "pending" }], current_results: [],
+  });
+  const groups = ["a", "b", "c"].map(id => ({
+    kind: "independent", id, visibility: "visible", status: "pending", status_counts: { pending: 1 },
+    item_count: 1, requirement_count: 1, items: [item(id, id)],
+  }));
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible", groups,
+    visibility_counts: { visible_groups: 3, visible_items: 3, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 3, total_visible_groups: 3, total_visible_items: 3 },
+  }), { open: true, itemReorganize: { mergeMode: false, pickedItemIds: new Set() } });
+  assert.equal((panel.bodyHtml.match(/data-cw-reorganize-bar/g) ?? []).length, 1);
+  assert.equal((panel.bodyHtml.match(/data-cw-merge-toggle/g) ?? []).length, 1);
 });
 
 test("execution refresh triggers only on meaningful state transitions", () => {

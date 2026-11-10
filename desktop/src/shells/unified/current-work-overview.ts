@@ -361,10 +361,7 @@ function renderGroup(
   const timerLabels: Record<string, string> = { waiting: "查看计时尚未完成", not_viewed: "明确查看尚未确认", unavailable: "查看计时证据不可用", unknown: "查看计时状态未知", elapsed: "查看计时已到期" };
   const timer = group.kind === "linked_source_snapshot" ? timerLabels[group.visibility_timer_status] ?? "查看计时状态未知" : "";
   const provenance = source ? `<p>项目 ${escapeHtml(source.project_id)} · 来源会话 ${escapeHtml(source.source_session_id)} · 捕获时间 ${escapeHtml(source.captured_at)}</p><p>仅为来源会话捕获时状态，不代表当前映射；结果未知、未验证。${source.viewed_at === null ? "卡片查看状态未确认。" : `卡片查看时间 ${escapeHtml(source.viewed_at)}；不代表各项结果已查看。`}${timer}，不代表当前工作完成。${source.superseded_unviewed_count > 0 ? `旧快照 ${source.superseded_unviewed_count} 个查看计时尚未确认。` : ""}</p>` : "";
-  const reorganizeBar = group.kind === "independent" && group.items.length
-    ? renderIndependentReorganizeBar(Boolean(itemReorganize?.mergeMode))
-    : "";
-  return `<article class="unified-current-work-group" data-cw-group-kind="${escapeHtml(group.kind)}"><h4>${escapeHtml(title)}</h4>${reorganizeBar}${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
+  return `<article class="unified-current-work-group" data-cw-group-kind="${escapeHtml(group.kind)}"><h4>${escapeHtml(title)}</h4>${remoteSource}${provenance}${renderGroupSummary(group)}<div class="unified-current-work-items">${itemRows || `<p>组内事项暂不可展开</p>`}</div>${itemMore}</article>`;
 }
 
 function buildLiveQueueSection(
@@ -449,11 +446,16 @@ export function buildCurrentWorkOverviewPanel(
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
   const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
+  const hasIndependentItems = activeGroups.some(group => group.kind === "independent" && group.items.length > 0);
+  const reorganizePrefix = hasIndependentItems
+    ? renderIndependentReorganizeBar(Boolean(options.itemReorganize?.mergeMode))
+    : "";
   const groupsHtml = activeGroups.map(group => {
     const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor, options.itemReorganize);
     return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
   }).join("");
-  const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(groupsHtml, activeGroups.length, liveSession);
+  const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(
+    `${reorganizePrefix}${groupsHtml}`, activeGroups.length, liveSession);
   const label = mappedScheduleEntry && !shouldShowCurrentWorkOverview(result) && liveCount === 0
     ? "当前工作 · 多项目调度"
     : liveConfirmPending && !activeGroups.length

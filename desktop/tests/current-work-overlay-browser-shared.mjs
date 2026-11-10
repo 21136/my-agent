@@ -38,6 +38,11 @@ export function currentWorkItemByTitle(workRoot, title) {
     .locator(`.unified-current-work-item:has(strong:text-is("${title}"))`);
 }
 
+/** One session-level reorganize bar (independent items are one group per item in API). */
+export function currentWorkReorganizeBar(workRoot) {
+  return currentWorkQueueBody(workRoot).locator("[data-cw-reorganize-bar]").first();
+}
+
 export async function openCurrentWorkOverlay(page) {
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
   const entry = page.locator(CURRENT_WORK_ENTRY);

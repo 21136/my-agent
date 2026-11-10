@@ -21,6 +21,7 @@ import {
   waitControlDone,
   currentWorkItemByTitle,
   currentWorkQueueBody,
+  currentWorkReorganizeBar,
 } from "./current-work-overlay-browser-shared.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -148,12 +149,17 @@ test("companion overlay: split requirement then merge two independent items", {
       && i.requirements?.some(r => r.text === "Requirement to split into new item"));
     assert.ok(splitChild, "split produced a new independent item with copied requirement text");
 
-    await queue.locator("[data-cw-merge-toggle]").click();
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('#unified-current-work [data-cw-segment-panel="queue"]:not([hidden]) .current-work-zone-body');
+      return panel?.querySelectorAll("[data-cw-reorganize-bar]").length === 1;
+    });
+    const reorganize = currentWorkReorganizeBar(work);
+    await reorganize.locator("[data-cw-merge-toggle]").click();
     const targetPick = queue.locator(`input[data-cw-merge-pick][data-item-id="${ready.target_item}"]`);
     const sourcePick = queue.locator(`input[data-cw-merge-pick][data-item-id="${ready.source_item}"]`);
     await targetPick.check();
     await sourcePick.check();
-    await queue.locator("[data-cw-merge-apply]").click();
+    await reorganize.locator("[data-cw-merge-apply]").click();
     await acceptLatestComposerConfirm(page);
     await waitControlDone(page, "merge_independent_item");
     overview = await refreshCurrentWorkOverview(page);
