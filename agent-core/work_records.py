@@ -1648,6 +1648,94 @@ class WorkRecordStore:
         item = self._mutate(change)
         return json.loads(json.dumps(item))
 
+    _MERGEABLE_REQUIREMENT_STATUSES = frozenset({
+        "pending", "queued", "stopped", "blocked", "waiting_confirmation",
+    })
+
+    def merge_independent_item_into(
+        self, target_item_id: str, source_item_id: str, *,
+        expected_revision: int, event_id: str, idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Move mergeable requirements from one independent item into another.
+
+        Source evidence and non-mergeable requirements stay on the source item.
+        """
+        if (type(target_item_id) is not str or not target_item_id.strip()
+                or type(source_item_id) is not str or not source_item_id.strip()
+                or target_item_id == source_item_id
+                or type(expected_revision) is not int or expected_revision < 0
+                or type(event_id) is not str or not event_id.strip()
+                or type(idempotency_key) is not str or not idempotency_key.strip()):
+            raise ValueError("target, source, revision and stable audit identities are required")
+        key = self._require_idempotency_key(idempotency_key, event_id)
+        operation = {"kind": "merge_independent_item_into",
+                     "target_item_id": target_item_id, "source_item_id": source_item_id}
+        digest = _digest(operation)
+
+        def change(data):
+            prior = self._find_idempotent_event(data, key)
+            if prior is not None:
+                prior_item, event = prior
+                payload = event.get("payload", {})
+                if (prior_item.get("item_id") != target_item_id
+                        or event.get("kind") != "requirements_merged_from_item"
+                        or event.get("idempotency_digest") != digest
+                        or event.get("event_id") != event_id
+                        or payload.get("source_item_id") != source_item_id):
+                    raise WorkRecordConflict("merge idempotency key reused for another operation")
+                return prior_item, False
+            if any(event.get("event_id") == event_id for row in data["items"] for event in row["history"]):
+                raise WorkRecordConflict("event_id is already bound to another operation")
+            if data["revision"] != expected_revision:
+                raise WorkRecordConflict("work-record revision changed after merge preview")
+            target = self._find(data, target_item_id)
+            source = self._find(data, source_item_id)
+            independent = {"kind": "independent", "object_ref": None}
+            if target.get("scope") != independent or source.get("scope") != independent:
+                raise WorkRecordConflict("only current-session independent items can be merged")
+            moving, remaining = [], []
+            for req in source["requirements"]:
+                if req.get("status") in self._MERGEABLE_REQUIREMENT_STATUSES:
+                    moving.append(req)
+                else:
+                    remaining.append(req)
+            if not moving:
+                raise WorkRecordConflict("source item has no mergeable requirements")
+            target_ids = {row.get("requirement_id") for row in target["requirements"]}
+            for req in moving:
+                if req.get("requirement_id") in target_ids:
+                    raise WorkRecordConflict("duplicate requirement identity across merge targets")
+            payload = {
+                "target_item_id": target_item_id,
+                "source_item_id": source_item_id,
+                "moved_requirement_ids": [req["requirement_id"] for req in moving],
+            }
+            for req in moving:
+                moved = {key: value for key, value in req.items() if key != "current_run_id"}
+                target["requirements"].append(moved)
+            source["requirements"] = remaining
+            target["history"].append({
+                "event_id": event_id,
+                "kind": "requirements_merged_from_item",
+                "payload": payload,
+                "digest": digest,
+                "idempotency_key": key,
+                "idempotency_digest": digest,
+                "at": time.time(),
+            })
+            source["history"].append({
+                "event_id": str(uuid.uuid4()),
+                "kind": "requirements_merged_into_item",
+                "payload": payload,
+                "at": time.time(),
+            })
+            target["status"] = self._derive_item_status(target["requirements"])
+            source["status"] = self._derive_item_status(source["requirements"]) if remaining else "completed"
+            return target, True
+
+        item = self._mutate(change)
+        return json.loads(json.dumps(item))
+
     def set_requirement_control(
         self, item_id: str, requirement_id: str, *, action: str,
         expected_status: str, event_id: str, idempotency_key: str,

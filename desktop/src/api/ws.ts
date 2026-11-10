@@ -154,7 +154,7 @@ export type WorkCardSnapshotViewEvent = { type: "work-card.snapshot.view.done"; 
 export type LocalAssistantReplyExcerptDetail = { session_id: string; item_id: string; requirement_id: string; result_id: string; label: string; escaped_excerpt_text: string; source_availability: "available" | "unavailable"; result_status: "unknown"; verification_status: "not_verified" };
 export type WorkCardResultViewEvent = { type: "work-card.result.view.done"; status: WorkCardResultViewStatus; message: string; session_id: string; presentation_id: string; card_id: string; result_id: string; requirement_id: string; request_id?: string; local_assistant_reply_excerpt_detail?: LocalAssistantReplyExcerptDetail };
 
-export type WorkRecordControlAction = "set_dependencies" | "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue" | "cancel_execution" | "revise_requirement" | "set_priority" | "copy_requirement_to_new_item" | "inspect_unknown_claim";
+export type WorkRecordControlAction = "set_dependencies" | "queue" | "wait_confirmation" | "release_confirmation" | "stop" | "continue" | "cancel_execution" | "revise_requirement" | "set_priority" | "copy_requirement_to_new_item" | "merge_independent_item" | "inspect_unknown_claim";
 export type WorkRecordControlDoneEvent = { type: "work-record.control.done"; session_id: string; request_id: string; item_id: string; project_id?: string; requirement_id?: string; action: WorkRecordControlAction; status: "applied" | "rejected"; message: string };
 export type WorkRecordScheduleDispatchDoneEvent = { type: "work-records.schedule.dispatch.done"; session_id: string; request_id: string; status: "applied" | "rejected"; message: string; tool_ok?: boolean; workers?: unknown[] };
 export type OverviewResultState = "no_records" | "visible" | "collapsed" | "cancelled" | "error" | "expired";
@@ -1461,19 +1461,26 @@ export class AgentWsClient {
   }
 
   controlWorkRecord(options: {
-    itemId: string; requirementId?: string; projectId?: string; action: WorkRecordControlAction; expectedStatus?: string;
+    itemId: string; requirementId?: string; sourceItemId?: string; projectId?: string; action: WorkRecordControlAction; expectedStatus?: string;
     expectedRevision?: number; expectedSourceRevision?: number; dependsOn?: string[]; dependsOnRefs?: Array<{ item_id: string; requirement_id: string }>; priority?: number; newText?: string; inspectionEvidence?: string;
   }): string {
     if (!cardObject(options) || !nonempty(options.itemId) || !this.currentConversationId
-        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "set_priority", "copy_requirement_to_new_item", "inspect_unknown_claim"].includes(options.action)) {
+        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "set_priority", "copy_requirement_to_new_item", "merge_independent_item", "inspect_unknown_claim"].includes(options.action)) {
       throw new Error("invalid work-record control request");
     }
     const action = options.action;
     const requirementId = options.requirementId ?? "";
+    const itemLevelActions = new Set(["copy_requirement_to_new_item", "merge_independent_item"]);
     if (action === "set_priority") {
       if (!Number.isInteger(options.priority) || (options.priority as number) < 0 || (options.priority as number) > 5) throw new Error("invalid work-record priority");
-    } else if (!nonempty(requirementId) || (action !== "copy_requirement_to_new_item" && !nonempty(options.expectedStatus))) {
+    } else if (action === "merge_independent_item") {
+      if (!nonempty(options.sourceItemId) || options.sourceItemId === options.itemId) {
+        throw new Error("merge requires distinct target and source items");
+      }
+    } else if (!itemLevelActions.has(action) && (!nonempty(requirementId) || !nonempty(options.expectedStatus))) {
       throw new Error("requirement controls require identity and expected status");
+    } else if (action === "copy_requirement_to_new_item" && !nonempty(requirementId)) {
+      throw new Error("split requires a requirement identity");
     }
     if (action === "revise_requirement" && !nonempty(options.newText)) throw new Error("revision text is required");
     if (action !== "revise_requirement" && options.newText !== undefined) throw new Error("unexpected revision text");
@@ -1501,7 +1508,8 @@ export class AgentWsClient {
       this.send({ type: "work-record.control", session_id: sessionId, request_id: requestId,
         item_id: options.itemId, expected_revision: options.expectedRevision ?? 0,
         ...(projectId ? { project_id: projectId, expected_source_revision: options.expectedSourceRevision } : {}),
-        ...(requirementId ? { requirement_id: requirementId } : {}), action,
+        ...(requirementId ? { requirement_id: requirementId } : {}),
+        ...(options.sourceItemId ? { source_item_id: options.sourceItemId } : {}), action,
         ...(options.expectedStatus ? { expected_status: options.expectedStatus } : {}),
         ...(options.dependsOn ? { depends_on: options.dependsOn } : {}),
         ...(options.dependsOnRefs ? { depends_on_refs: options.dependsOnRefs } : {}),

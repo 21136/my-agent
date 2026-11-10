@@ -97,5 +97,5 @@ node --test desktop/tests/multi-project-schedule-real-host-harness.test.mjs
 ## Still open
 
 - Win32 **`_run80`** green evidence after local paid run (harness ships; green is operator-owned).
-- Merge/split 事项 UI.
+- Win32 GUI evidence for item merge/split overlay (portable harness only).
 - Tray double-click automation.

@@ -150,7 +150,9 @@ test("independent current-session requirements expose a revision editor with no 
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
   assert.match(panel.bodyHtml, /data-work-record-new-text-for="local-req"/);
   assert.match(panel.bodyHtml, /data-action="revise_requirement"/);
-  assert.match(panel.bodyHtml, /data-action="copy_requirement_to_new_item">复制到新事项/);
+  assert.match(panel.bodyHtml, /data-action="copy_requirement_to_new_item">拆出为新事项/);
+  assert.match(panel.bodyHtml, /data-cw-reorganize-bar/);
+  assert.match(panel.bodyHtml, /data-cw-merge-toggle/);
   assert.doesNotMatch(panel.bodyHtml, /data-source-project-id|data-open-source-session/);
   assert.doesNotMatch(panel.bodyHtml, /data-action="queue"/);
 });
@@ -325,7 +327,7 @@ test("large project groups show all attention items first and bound ordinary ite
     visibility_counts: { visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: items.length },
   }), { open: true });
-  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group">[\s\S]*?<\/article>/)?.[0] ?? "";
+  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
   const moreAt = groupHtml.indexOf('class="unified-current-work-items-more"');
   const pageButtonAt = groupHtml.indexOf('data-current-work-detail-kind="items"');
   const endAt = [moreAt, pageButtonAt].filter(index => index >= 0).sort((a, b) => a - b)[0] ?? groupHtml.length;
@@ -353,7 +355,7 @@ test("all attention items remain in the initial project overview even when they 
     visibility_counts: { visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: items.length },
   }), { open: true });
-  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group">[\s\S]*?<\/article>/)?.[0] ?? "";
+  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
   const moreAt = groupHtml.indexOf('class="unified-current-work-items-more"');
   const pageButtonAt = groupHtml.indexOf('data-current-work-detail-kind="items"');
   const endAt = [moreAt, pageButtonAt].filter(index => index >= 0).sort((a, b) => a - b)[0] ?? groupHtml.length;
@@ -451,7 +453,7 @@ test("legacy full-response groups remain readable with explicit client-side rema
     visibility_counts: { visible_groups: 1, visible_items: 9, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 9 },
   }), { open: true });
-  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group">[\s\S]*?<\/article>/)?.[0] ?? "";
+  const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
   const firstBatch = groupHtml.split('<div class="unified-current-work-items-more">')[0];
   const remainder = groupHtml.match(/<div class="unified-current-work-items-more">[\s\S]*/)?.[0] ?? "";
   assert.equal((firstBatch.match(/class="unified-current-work-item"/g) ?? []).length, 5);

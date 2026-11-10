@@ -236,6 +236,8 @@ export function mountUnifiedShell(
   let currentWorkShellSegment: "overview" | "queue" | "schedule" = "queue";
   const selectedMultiProjectOverviewIds = new Set<string>();
   const currentWorkOverviewExpandedRequirementItemIds = new Set<string>();
+  let currentWorkItemMergeMode = false;
+  const currentWorkItemMergePickedIds = new Set<string>();
   let currentWorkOverviewLoadingMore = false;
   let currentWorkOverviewUnavailable = false;
   let currentWorkOverviewRefreshTimer: number | null = null;
@@ -342,6 +344,26 @@ export function mountUnifiedShell(
     }
   }
 
+  function applyIndependentItemMerge(targetItemId: string, sourceItemId: string): void {
+    const sessionId = chat.model.sessionId;
+    if (!sessionId || currentWorkOverviewResult?.session_id !== sessionId
+        || !Number.isSafeInteger(currentWorkOverviewResult?.work_record_revision)) {
+      setStatus("当前记录版本不可用，请先刷新当前工作。");
+      return;
+    }
+    try {
+      client.controlWorkRecord({
+        itemId: targetItemId,
+        sourceItemId,
+        action: "merge_independent_item",
+        expectedRevision: currentWorkOverviewResult!.work_record_revision!,
+      });
+      setStatus("已提交事项合并；等待确认后刷新概况。");
+    } catch (error) {
+      setStatus(`事项合并未发送：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   function applyCurrentWorkControl(button: HTMLButtonElement): void {
     const itemId = button.dataset.itemId;
     const requirementId = button.dataset.requirementId;
@@ -355,7 +377,7 @@ export function mountUnifiedShell(
         || currentWorkOverviewResult?.session_id !== sessionId) return;
     if (action !== "set_priority" && (!requirementId
         || (action !== "copy_requirement_to_new_item" && !expectedStatus)
-        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "copy_requirement_to_new_item", "inspect_unknown_claim"].includes(action))) return;
+        || !["set_dependencies", "queue", "wait_confirmation", "release_confirmation", "stop", "continue", "cancel_execution", "revise_requirement", "copy_requirement_to_new_item", "merge_independent_item", "inspect_unknown_claim"].includes(action))) return;
     if (action === "set_priority" && (!priority || !Number.isInteger(Number(priority)))) return;
     if (sourceProjectId ? (!Number.isSafeInteger(Number(sourceRevision)) || Number(sourceRevision) < 0)
         : !Number.isSafeInteger(currentWorkOverviewResult?.work_record_revision)) {
@@ -369,6 +391,11 @@ export function mountUnifiedShell(
         : { expectedRevision: currentWorkOverviewResult!.work_record_revision! };
       if (action === "set_priority") client.controlWorkRecord({ itemId, action, priority: Number(priority), ...revisionScope });
       else if (action === "copy_requirement_to_new_item") client.controlWorkRecord({ itemId, requirementId, action, ...revisionScope });
+      else if (action === "merge_independent_item") {
+        const sourceItemId = button.dataset.sourceItemId;
+        if (!sourceItemId) return;
+        client.controlWorkRecord({ itemId, sourceItemId, action, ...revisionScope });
+      }
       else if (action === "set_dependencies") {
         const container = button.closest<HTMLElement>(".unified-current-work-item");
         const dependsOn = Array.from(container?.querySelectorAll<HTMLInputElement>("input[data-work-dependency]:checked") ?? [])
@@ -538,6 +565,7 @@ export function mountUnifiedShell(
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
       liveSession: currentWorkLiveSessionInput(),
       mappedMultiProjectSchedule: multiProjectAvailable,
+      itemReorganize: { mergeMode: currentWorkItemMergeMode, pickedItemIds: currentWorkItemMergePickedIds },
     });
     let currentWorkExtras = "";
     if (currentWorkOverviewResult?.aggregation_scope === "selected_project_sessions"
@@ -588,6 +616,7 @@ export function mountUnifiedShell(
       detailLoadingCursor: currentWorkOverviewDetailLoadingCursor,
       liveSession: currentWorkLiveSessionInput(),
       mappedMultiProjectSchedule: mappedScheduleChoices.length > 0,
+      itemReorganize: { mergeMode: currentWorkItemMergeMode, pickedItemIds: currentWorkItemMergePickedIds },
     });
     let extras = extrasHtml;
     if (extras === undefined) {
@@ -686,6 +715,36 @@ export function mountUnifiedShell(
     });
     rootEl.querySelectorAll<HTMLButtonElement>("button[data-work-record-control]").forEach(button => {
       button.addEventListener("click", () => applyCurrentWorkControl(button));
+    });
+    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-toggle]")?.addEventListener("click", () => {
+      currentWorkItemMergeMode = true;
+      currentWorkItemMergePickedIds.clear();
+      refreshTopbar();
+    });
+    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-cancel]")?.addEventListener("click", () => {
+      currentWorkItemMergeMode = false;
+      currentWorkItemMergePickedIds.clear();
+      refreshTopbar();
+    });
+    rootEl.querySelector<HTMLButtonElement>("[data-cw-merge-apply]")?.addEventListener("click", () => {
+      const picks = [...rootEl.querySelectorAll<HTMLInputElement>("input[data-cw-merge-pick]:checked")]
+        .map(input => input.dataset.itemId)
+        .filter((value): value is string => Boolean(value));
+      if (picks.length !== 2) {
+        setStatus("合并时请勾选恰好两个事项：列表顺序中首个为并入目标。");
+        return;
+      }
+      currentWorkItemMergeMode = false;
+      currentWorkItemMergePickedIds.clear();
+      applyIndependentItemMerge(picks[0], picks[1]);
+    });
+    rootEl.querySelectorAll<HTMLInputElement>("input[data-cw-merge-pick]").forEach(input => {
+      input.addEventListener("change", () => {
+        const itemId = input.dataset.itemId;
+        if (!itemId) return;
+        if (input.checked) currentWorkItemMergePickedIds.add(itemId);
+        else currentWorkItemMergePickedIds.delete(itemId);
+      });
     });
     rootEl.querySelectorAll<HTMLButtonElement>("button[data-open-source-session]").forEach(button => {
       button.addEventListener("click", () => {

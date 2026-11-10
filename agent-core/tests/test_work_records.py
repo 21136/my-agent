@@ -458,6 +458,28 @@ def test_failed_copy_publish_leaves_source_and_revision_unchanged(tmp_path, monk
     assert len(store.list_items()) == 1
 
 
+def test_merge_independent_item_moves_mergeable_requirements_and_preserves_source_history(tmp_path):
+    store = WorkRecordStore(_session(tmp_path / "data/sessions/session-a", "session-a"))
+    target = store.create_item(title="target", scope={"kind": "independent"})
+    source = store.create_item(title="source", scope={"kind": "independent"})
+    keep = store.add_requirement(source["item_id"], "running follow-up", event_id="keep-req")
+    store.begin_requirement_run(source["item_id"], keep["requirement_id"], run_id="live-run", expected_current_run_id=None)
+    movable = store.add_requirement(source["item_id"], "merge me", event_id="move-req")
+    store.set_requirement_control(
+        source["item_id"], movable["requirement_id"], action="queue", expected_status="pending",
+        event_id="queue-req", idempotency_key="queue-req-key",
+    )
+    revision = store.with_locked_data(lambda data: data["revision"])
+    merged = store.merge_independent_item_into(
+        target["item_id"], source["item_id"], expected_revision=revision,
+        event_id="merge-event", idempotency_key="merge-key",
+    )
+    assert any(req["text"] == "merge me" for req in merged["requirements"])
+    source_after = store.get_item(source["item_id"])
+    assert len(source_after["requirements"]) == 1
+    assert source_after["requirements"][0]["requirement_id"] == keep["requirement_id"]
+
+
 def test_copy_requirement_rejects_wrong_scope_and_invalid_revision_types(tmp_path):
     store = WorkRecordStore(_session(tmp_path / "data/sessions/session-a", "session-a", "project-a"))
     project = store.create_item(title="project", scope={"kind": "project", "project_id": "project-a"})
