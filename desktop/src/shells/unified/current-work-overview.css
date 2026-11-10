@@ -171,7 +171,7 @@ html[data-theme="dark"] .unified-shell.is-current-work-overlay .unified-stage::b
   width: 100%;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0.15rem 0.05rem 0.35rem;
+  padding: 0.15rem 0.05rem calc(4.75rem + env(safe-area-inset-bottom, 0px));
   color: var(--ma-text);
 }
 
@@ -181,9 +181,13 @@ html[data-theme="dark"] .unified-shell.is-current-work-overlay .unified-stage::b
   justify-content: flex-end;
   gap: 0.45rem;
   flex: 0 0 auto;
-  padding-top: 0.55rem;
+  padding: 0.55rem 0.15rem calc(0.2rem + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(110%);
 }
+
+.cw-schedule-nowrap { white-space: nowrap; }
 
 .cw-contract-body { display: none !important; }
 .cw-segment-panel[hidden] { display: none !important; }

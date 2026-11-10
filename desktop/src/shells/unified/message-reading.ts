@@ -1,9 +1,12 @@
+import { shouldPreferBriefingBubble } from "./companion-chat-briefing.ts";
+
 /** Presentation policy only: never summarizes, truncates, or rewrites a reply. */
 export type MessageReadingLayout = "bubble" | "reading";
 
-export function messageReadingLayout(text: string): MessageReadingLayout {
+export function messageReadingLayout(text: string, options?: { companionHome?: boolean }): MessageReadingLayout {
   const source = text.trim();
   if (!source) return "bubble";
+  if (shouldPreferBriefingBubble(source, options?.companionHome === true)) return "bubble";
   if (
     source.length >= 260 ||
     source.split(/\r?\n/).length >= 8 ||

@@ -85,8 +85,11 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
     </section>
 
     <details class="shell-dev-help shell-dev-notes" data-shell-dev-help>
-      <summary>帮助与旧入口</summary>
-      <p>开实验会话 = 助手写实验树。刷实验 = 同步稳定进实验。合入稳定 = 项目真实合入。预览切主壳只改 URL。</p>
+      <summary>使用说明</summary>
+      <p>开实验会话：助手写实验树。刷实验：同步稳定进实验。合入稳定：按项目流程合入。临时切主壳只改预览地址，不等于源码合入。</p>
+    </details>
+    <details class="shell-dev-diagnostics" data-shell-dev-diagnostics>
+      <summary>高级诊断（默认收起）</summary>
       <section class="shell-dev-evolution" aria-label="当前会话演化状态">
         <div class="shell-dev-evolution-heading">
           <strong>固定测试 Host 演化</strong>
@@ -102,7 +105,6 @@ export function renderShellDevPanel(mainUrl: string, previewUrl: string): string
       <div class="shell-dev-actions shell-dev-actions-advanced-inline">
         <button type="button" class="unified-btn" data-shell-dev-adopt-status>检查合入状态</button>
         <button type="button" class="unified-btn" data-shell-dev-managed-review>只读源码审查</button>
-        <button type="button" class="unified-btn" data-shell-dev-adopt-merge title="旧整支合入仅用于隔离夹具；普通项目由 E0 gate 拒绝。">旧整支合入（仅隔离夹具）</button>
       </div>
       <details class="shell-dev-section" aria-label="只读源码审查面板" data-managed-review-panel>
         <summary>只读源码审查面板</summary>
