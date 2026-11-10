@@ -21,9 +21,11 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(shared, /acceptComposerConfirmById/);
   assert.match(shared, /afterConfirmRequestCount/);
   assert.match(shared, /latestUnsettledConfirmRequestId/);
+  assert.match(shared, /firstUnsettledConfirmRequestId/);
   assert.match(shared, /currentWorkQueueBody/);
   assert.match(shared, /currentWorkReorganizeBar/);
   assert.match(shared, /data-cw-segment-panel="queue"/);
+  assert.match(shared, /currentWorkItemHistoryFold/);
   const overviewSrc = readFileSync(path.join(repo, "desktop/src/shells/unified/current-work-overview.ts"), "utf8");
   assert.match(overviewSrc, /reorganizePrefix/);
   assert.doesNotMatch(overviewSrc, /const reorganizeBar = group\.kind === "independent"/);
@@ -40,4 +42,11 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(run81, /work-item-merge-split-browser-e2e\.test\.mjs/);
   assert.match(run81, /EXIT_CODE=%ERRORLEVEL%/);
   assert.match(run81, /endlocal & exit \/b %EXIT_CODE%/);
+  const styles = readFileSync(path.join(here, "isolated-shell-styles.mjs"), "utf8");
+  assert.match(styles, /theme\.css/);
+  assert.match(browserE2e, /visualAuthenticity/);
+  assert.match(browserE2e, /WORK_ITEM_MERGE_SPLIT_GUI_ARTIFACT_DIR/);
+  assert.match(browserE2e, /verifyInteractionStyles/);
+  const pet = readFileSync(path.join(here, "isolated-shell-pet-assets.mjs"), "utf8");
+  assert.match(pet, /pet-assets\/avatar/);
 });

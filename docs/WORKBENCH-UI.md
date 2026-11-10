@@ -27,7 +27,27 @@ node --test desktop\tests\work-item-merge-split.optin.test.mjs
 node --test desktop\tests\work-item-merge-split-browser-e2e.test.mjs
 ```
 
-Uses mock WebSocket fixture (`work-item-merge-split-browser-fixture.py`); companion session stays **unbound**. **Not claimed** green on CI or without Win32 + Playwright + Edge.**调度**分区是「选择项目来源 → 逐项只读授权 → 只读 `schedule_preview` → **按预览启动**（`work-records.schedule.dispatch` · 一次最多六个不同项目，host 并发默认 2、其余排队）」；候选预填任务与建议相对路径，仍须逐项确认。运行中事项（含映射远端来源）可在概况中 **请求停止 worker**，经主会话 host 协调，不假装元数据已停。不是把多项目工作塞回排队/等待上下文，也不是宣称全自动调度器。
+Uses mock WebSocket fixture (`work-item-merge-split-browser-fixture.py`); companion session stays **unbound**. **Not claimed** green on CI or without Win32 + Playwright + Edge. Playwright mounts load the **interaction stylesheet bundle** via `desktop/tests/isolated-shell-styles.mjs` (`theme.css` + unified shell CSS + inlined assets) and serve offline `desktop/public/pet-assets/**` for companion avatars (no CDN). A green run is an **interaction/layout contract** only — screenshots from headless Edge are **not** visual authenticity or production Electron glass parity.
+
+Optional failure/success artifacts: `WORK_ITEM_MERGE_SPLIT_GUI_ARTIFACT_DIR` (`_run81`; default `desktop/tests/artifacts/work-item-merge-split-gui/`) — on failure writes `*-failure.png` + `*-style-report.json` (image `src`, broken count, `#unified-composer` radius).
+
+**Win32 GUI opt-in（#110/#111 · scoped composer confirms + quiet 当前工作 drawer）**
+
+```bat
+desktop\_run82-current-work-quiet-drawer-gui.cmd
+```
+
+Equivalent:
+
+```bat
+set CURRENT_WORK_QUIET_DRAWER_GUI_OPT_IN=1
+node --test desktop\tests\current-work-quiet-drawer.optin.test.mjs
+node --test desktop\tests\current-work-quiet-drawer-browser-e2e.test.mjs
+```
+
+Synthetic WS (`current-work-quiet-drawer-browser-fixture.py`): FIFO ordinary → `work_record_post_turn` → `project_worker_requirement_verification` on composer dock; fixture keeps `execution.state: running` without `turn.end`, so composer/status may show「处理中…」after confirms — expected harness behavior, not Electron idle. GUI locators use **visible 队列** only (`currentWorkQueueBody` / `currentWorkItemHistoryFold`); hidden `.cw-contract-body` duplicates markup for portable contract tests (`display: none`). passive unread sample (34) must not dominate header over actionable「需关注」; collapsed queue hides history wall; expanded item keeps long history in closed `<details>` with humanized lifecycle copy. Artifacts: `CW_QUIET_DRAWER_GUI_ARTIFACT_DIR` or `desktop/tests/artifacts/current-work-quiet-drawer-gui/` (same failure bundle as `_run81`). Same **interaction vs visual** split as `_run81`.
+
+**调度**分区是「选择项目来源 → 逐项只读授权 → 只读 `schedule_preview` → **按预览启动**（`work-records.schedule.dispatch` · 一次最多六个不同项目，host 并发默认 2、其余排队）」；候选预填任务与建议相对路径，仍须逐项确认。运行中事项（含映射远端来源）可在概况中 **请求停止 worker**，经主会话 host 协调，不假装元数据已停。不是把多项目工作塞回排队/等待上下文，也不是宣称全自动调度器。
 
 “当前工作”仍是当前会话的概况，不是跨所有项目会话的全局视图。所选项目统一历史是逐页、逐次授权的有限来源视图，不应解读为全局完整历史。桌面端会核验分页连续性、来源会话/修订和结果身份；后端跨 Session 检查属于乐观校验，不是跨 Session 原子快照，因此并发来源变更仍可能造成页面间不一致，不保证多页处于同一时刻快照。事项控制会写入带 CAS/幂等身份的当前会话记录；排队/等待/停止等控制元数据不会自动启动 worker，运行中的任务必须通过 host 的实际取消链结束。当前尚不构成完整的跨工作区调度器或重启恢复工作台。故障重开后的 honest 状态（`unknown` / 保守标签、未完成 warn、不自动续跑）已有 **agent-core** 合成 `session.open`/`mark_interrupted`（`test_workbench_crash_reopen_recovery_harness.py` · 3）+ 桌面渲染回归（`workbench-crash-reopen-recovery.test.mjs` · 3）+ **晚到 WS / 重连 GUI 合约**（`workbench-crash-reopen-recovery-fixture.py` + `workbench-crash-reopen-recovery-gui-harness.test.mjs` · 4，POSIX；Win32 Playwright：`workbench-crash-reopen-recovery-browser-e2e.test.mjs` · 1，Linux skip）。夹具模拟异常退出后晚连 WS、warn 状态栏、概况 `unknown` 与可取消的 live worker；**不**宣称真实 Electron 杀进程/托盘已 full green。机器门禁 real Electron：`docs/WORKBENCH-CRASH-REOPEN-ELECTRON-E2E.md`（杀进程 + 冷启动；托盘未自动化）。
 

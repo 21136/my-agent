@@ -7,7 +7,9 @@ export {
   pw,
   resolvePython,
   acceptComposerConfirmById,
+  firstUnsettledConfirmRequestId,
   latestUnsettledConfirmRequestId,
+  readComposerConfirmDiagnostics,
 } from "./multi-project-schedule-real-host-browser-shared.mjs";
 
 export const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
@@ -66,6 +68,15 @@ export function currentWorkQueueBody(workRoot) {
 export function currentWorkItemByTitle(workRoot, title) {
   return currentWorkQueueBody(workRoot)
     .locator(`.unified-current-work-item:has(strong:text-is("${title}"))`);
+}
+
+/** History fold inside the visible 队列 item (not the hidden cw-contract-body mirror). */
+export function currentWorkItemHistoryFold(workRoot, title) {
+  return currentWorkItemByTitle(workRoot, title).locator(".unified-current-work-history-fold");
+}
+
+export function currentWorkContractMirror(workRoot) {
+  return workRoot.locator(".cw-contract-body");
 }
 
 /** One session-level reorganize bar (independent items are one group per item in API). */
