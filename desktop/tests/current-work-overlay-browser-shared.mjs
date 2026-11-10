@@ -70,6 +70,15 @@ export function currentWorkItemByTitle(workRoot, title) {
     .locator(`.unified-current-work-item:has(strong:text-is("${title}"))`);
 }
 
+/** History fold inside the visible 队列 item (not the hidden cw-contract-body mirror). */
+export function currentWorkItemHistoryFold(workRoot, title) {
+  return currentWorkItemByTitle(workRoot, title).locator(".unified-current-work-history-fold");
+}
+
+export function currentWorkContractMirror(workRoot) {
+  return workRoot.locator(".cw-contract-body");
+}
+
 /** One session-level reorganize bar (independent items are one group per item in API). */
 export function currentWorkReorganizeBar(workRoot) {
   return currentWorkQueueBody(workRoot).locator("[data-cw-reorganize-bar]").first();

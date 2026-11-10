@@ -23,7 +23,10 @@ import {
   openCurrentWorkOverlay,
   pw,
   resolvePython,
+  currentWorkContractMirror,
+  currentWorkQueueBody,
   currentWorkItemByTitle,
+  currentWorkItemHistoryFold,
 } from "./current-work-overlay-browser-shared.mjs";
 import { mountIsolatedUnifiedPage } from "./isolated-unified-browser-mount.mjs";
 import { VISUAL_DISCLAIMER } from "./isolated-shell-styles.mjs";
@@ -149,6 +152,18 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
     );
     await rejectComposerConfirmById(page, CONFIRM_IDS[2]);
     assert.equal(await hint.count(), 0, "hint clears after queue drained");
+    assert.equal(
+      await page.evaluate(() => window.receivedEvents?.filter((e) => e.type === "confirm.done").length ?? 0),
+      3,
+      "each confirm.request received matching confirm.done",
+    );
+    // Fixture leaves execution.state running (no turn.end); status/composer「处理中…」is harness-only, not a product defect.
+    assert.equal(
+      await page.evaluate(() => window.receivedEvents?.some(
+        (e) => e.type === "execution.state" && e.state === "running",
+      )),
+      true,
+    );
 
     const entryText = await page.locator(CURRENT_WORK_ENTRY).innerText();
     assert.match(entryText, /需关注/, "actionable attention visible in topbar pill");
@@ -158,10 +173,22 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
     await item.waitFor({ state: "visible" });
     assert.match(await item.innerText(), /有结果待看/);
     assert.match(await item.innerText(), /结果待你确认/);
-    assert.equal(await work.locator(".unified-current-work-history-fold").count(), 0, "collapsed: no history wall");
+    assert.equal(await currentWorkItemHistoryFold(work, "推进文档").count(), 0, "collapsed: no history wall");
 
     await item.locator("[data-cw-select-item]").click();
-    const historyFold = work.locator(".unified-current-work-history-fold");
+    const contractMirror = currentWorkContractMirror(work);
+    await page.waitForFunction(() => {
+      const mirror = document.querySelector("#unified-current-work .cw-contract-body");
+      return mirror instanceof HTMLElement
+        && mirror.hidden
+        && getComputedStyle(mirror).display === "none";
+    });
+    assert.equal(await currentWorkQueueBody(work).locator(".unified-current-work-history-fold").count(), 1,
+      "visible queue exposes one history fold");
+    assert.equal(await contractMirror.locator(".unified-current-work-history-fold").count(), 1,
+      "cw-contract-body holds hidden contract mirror only");
+
+    const historyFold = currentWorkItemHistoryFold(work, "推进文档");
     await historyFold.waitFor({ state: "visible" });
     assert.equal(await historyFold.evaluate((el) => el.open), false, "history in closed details");
 

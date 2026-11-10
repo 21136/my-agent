@@ -30,6 +30,10 @@ test("opt-in env gates for quiet drawer Win32 GUI", () => {
   assert.match(fixture, /work_record_post_turn/);
   assert.match(fixture, /project_worker_requirement_verification/);
   assert.doesNotMatch(fixture, /ids=harness-demo/);
+  const overlayShared = readFileSync(path.join(here, "current-work-overlay-browser-shared.mjs"), "utf8");
+  assert.match(overlayShared, /currentWorkItemHistoryFold/);
+  assert.match(overlayShared, /currentWorkContractMirror/);
+  assert.match(overlayShared, /cw-contract-body/);
   const shared = readFileSync(path.join(here, "multi-project-schedule-real-host-browser-shared.mjs"), "utf8");
   assert.match(shared, /firstUnsettledConfirmRequestId/);
   const companionComposer = readFileSync(path.join(repo, "desktop/tests/companion-result-confirm-composer.test.mjs"), "utf8");
