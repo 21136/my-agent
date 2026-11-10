@@ -63,8 +63,8 @@ test("worker verification confirm counts as awaiting user even without confirmPe
     },
   });
   assert.equal(chat.model.confirmPending, false);
-  assert.equal(chatSessionAwaitingUserConfirm(chat.model), true);
-  assert.match(primaryPendingConfirmPreview(chat.model), /backend preview/);
+  assert.equal(chatSessionAwaitingUserConfirm(chat.model, { companionComposerPrimary: true }), true);
+  assert.match(primaryPendingConfirmPreview(chat.model, { companionComposerPrimary: true }), /backend preview/);
 });
 
 test("batch authorization overlay counts as awaiting user", () => {

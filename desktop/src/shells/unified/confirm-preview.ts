@@ -99,6 +99,36 @@ function parseProjectWorkerBatchAuthorization(preview: string): ProjectWorkerBat
 export function isProjectWorkerBatchAuthorizationPreview(preview: string): boolean { return preview.startsWith(PROJECT_WORKER_BATCH_AUTHORIZATION_PREFIX); }
 
 /** Slim composer-strip copy; full disclosure stays collapsed until the user expands it. */
+export function renderComposerScopedConfirmDetailHtml(block: {
+  preview: string;
+  confirmKind?: string;
+  confirmSubtype?: string;
+  sessionId?: string;
+  projectWorkerVerification?: unknown;
+}): string {
+  if (block.confirmKind === "project_worker_requirement_verification"
+      || block.confirmSubtype === "project_worker_requirement_verification") {
+    const data = parseProjectWorkerVerification(block.projectWorkerVerification, block.sessionId || "");
+    if (!data) {
+      return '<p class="unified-pending-confirm-hint-detail">项目 worker 核验字段无法核对</p>';
+    }
+    const target = data.pytest_target ? ` · 目标 ${data.pytest_target}` : "";
+    const body = renderConfirmCardHtml(block.preview, "", {
+      confirmSubtype: "project_worker_requirement_verification",
+      sessionId: block.sessionId,
+      projectWorkerVerification: data,
+    });
+    return `<p class="unified-pending-confirm-hint-detail">项目 worker 核验：${escapeHtml(data.project_name)} · ${escapeHtml(data.requirement_text)}${escapeHtml(target)}</p>`
+      + `<details class="unified-pending-confirm-hint-expand"><summary>查看详情</summary>`
+      + `<div class="unified-pending-confirm-hint-expand-body">${body}</div></details>`;
+  }
+  if (block.confirmKind === "work_record_post_turn" || block.confirmSubtype === "work_record_reply_excerpt"
+      || block.confirmSubtype === "work_record_auto_candidate") {
+    return renderComposerOrdinaryConfirmDetailHtml(block.preview || "确认工作结果记录");
+  }
+  return renderComposerOrdinaryConfirmDetailHtml(block.preview);
+}
+
 export function renderComposerOrdinaryConfirmDetailHtml(preview: string): string {
   if (isProjectWorkerBatchAuthorizationPreview(preview)) {
     const authorization = parseProjectWorkerBatchAuthorization(preview);

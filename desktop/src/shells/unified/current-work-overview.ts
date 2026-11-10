@@ -1,6 +1,7 @@
 import type { WorkRecordsOverviewGroup, WorkRecordsOverviewPageFacts, WorkRecordsOverviewResultEvent } from "../../api/ws";
 import {
   type CurrentWorkLiveSessionInput,
+  currentWorkLiveConfirmPending,
   currentWorkLiveQueueCount,
   renderCurrentWorkLiveQueueHtml,
 } from "./current-work-live-session.ts";
@@ -404,7 +405,7 @@ export function buildCurrentWorkOverviewPanel(
   const liveSession = options.liveSession ?? null;
   const liveHtml = renderCurrentWorkLiveQueueHtml(liveSession);
   const liveCount = currentWorkLiveQueueCount(liveSession);
-  const liveConfirmPending = Boolean(liveSession?.confirmPending);
+  const liveConfirmPending = currentWorkLiveConfirmPending(liveSession);
   if (!result) {
     if (!options.unavailable) {
       return { visible: false, open: options.open, label: "", bodyHtml: "", canExpand: false, moreLabel: "", loadingMore: false };

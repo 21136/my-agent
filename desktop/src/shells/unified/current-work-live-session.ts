@@ -71,7 +71,6 @@ function confirmBlocks(input: CurrentWorkLiveSessionInput): CurrentWorkLiveConfi
   }
   for (const block of input.blocks) {
     if (block.kind !== "confirm") continue;
-    if (block.confirmKind === "work_record_post_turn") continue;
     push({
       requestId: block.requestId,
       preview: block.preview,
@@ -108,7 +107,9 @@ export function collectCurrentWorkLiveQueueEntries(input: CurrentWorkLiveSession
         const heading = confirms.length === 1 ? "待你确认" : `待确认 ${index + 1}`;
         const kind = confirm.confirmKind === "project_worker_requirement_verification"
           ? "项目 worker 核验"
-          : "工具 / 批次授权";
+          : confirm.confirmKind === "work_record_post_turn"
+            ? "工作结果记录"
+            : "工具 / 批次授权";
         return `<section class="unified-current-work-live-confirm"><h5>${heading} · ${kind}</h5><p class="cw-live-preview">${escapeHtml(truncatePreview(confirm.preview || "（预览为空）"))}</p><p class="cw-live-hint">授权在左侧对话输入区处理。</p></section>`;
       }).join(""),
     });
@@ -164,4 +165,11 @@ export function renderCurrentWorkLiveQueueHtml(input: CurrentWorkLiveSessionInpu
 export function currentWorkLiveQueueCount(input: CurrentWorkLiveSessionInput | null | undefined): number {
   if (!input) return 0;
   return collectCurrentWorkLiveQueueEntries(input).length;
+}
+
+/** True when the companion session has confirms mirrored on the live queue (incl. scoped result confirms). */
+export function currentWorkLiveConfirmPending(input: CurrentWorkLiveSessionInput | null | undefined): boolean {
+  if (!input) return false;
+  if (input.confirmPending) return true;
+  return confirmBlocks(input).length > 0;
 }
