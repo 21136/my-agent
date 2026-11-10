@@ -127,6 +127,66 @@ test("ordinary tool confirm precedes queued post-turn confirms on companion", ()
   assert.equal(resolveCompanionComposerConfirmRequestId(chat.model, true), "post-turn-b");
 });
 
+test("companion FIFO: post_turn precedes verification after ordinary settles", () => {
+  const chat = companionSession();
+  const verification = {
+    session_id: "companion-home",
+    project_id: "proj",
+    item_id: "item-a",
+    requirement_id: "req-a",
+    project_name: "Harness Project",
+    requirement_text: "核对 PROJECT.md 写入",
+    pytest_target: "tests/test_harness.py::test_target",
+    worker_run_id: "worker-run",
+    reservation_id: "reservation",
+  };
+  chat.handleEvent({ type: "execution.state", run_id: "run-queue", state: "running", sequence: 1 });
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "companion-home",
+    run_id: "run-queue",
+    request_id: "tool-first",
+    preview: "软删除到 _trash workspace 项目",
+    allow_approve_all: false,
+  });
+  chat.handleEvent({
+    type: "confirm.request",
+    confirm_kind: "work_record_post_turn",
+    session_id: "companion-home",
+    request_id: "post-turn-mid",
+    preview: "确认写入工作记录：推进文档结果",
+    allow_approve_all: false,
+  });
+  chat.handleEvent({
+    type: "confirm.request",
+    session_id: "companion-home",
+    run_id: "run-queue",
+    request_id: "verify-last",
+    confirm_subtype: "project_worker_requirement_verification",
+    preview: "运行单目标测试以记录自报告结果",
+    allow_approve_all: false,
+    project_worker_verification: verification,
+  });
+  chat.handleEvent({
+    type: "confirm.done",
+    session_id: "companion-home",
+    run_id: "run-queue",
+    request_id: "tool-first",
+    choice: "y",
+  });
+  assert.equal(resolveCompanionComposerConfirmRequestId(chat.model, true), "post-turn-mid");
+  assert.match(primaryPendingConfirmPreview(chat.model, { companionComposerPrimary: true }), /确认写入工作记录/);
+  assert.equal(canSubmitCompanionComposerConfirm(chat.model, "post-turn-mid"), true);
+  chat.handleEvent({
+    type: "confirm.done",
+    confirm_kind: "work_record_post_turn",
+    session_id: "companion-home",
+    request_id: "post-turn-mid",
+    choice: "y",
+  });
+  assert.equal(resolveCompanionComposerConfirmRequestId(chat.model, true), "verify-last");
+});
+
 test("overview live queue hints composer while post-turn confirm is pending", () => {
   const chat = companionSession();
   chat.handleEvent({

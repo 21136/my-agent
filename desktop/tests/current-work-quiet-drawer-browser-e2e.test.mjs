@@ -131,10 +131,22 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
       const diag = await readComposerConfirmDiagnostics(page, CONFIRM_IDS[0]);
       assert.fail(`composer accept failed: ${JSON.stringify(diag)}`);
     }
+    assert.equal(await firstUnsettledConfirmRequestId(page), CONFIRM_IDS[1]);
+    await page.waitForFunction(
+      (id) => document.querySelector(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`),
+      CONFIRM_IDS[1],
+      { timeout: 10_000 },
+    );
     if (!(await acceptComposerConfirmById(page, CONFIRM_IDS[1]))) {
       const diag = await readComposerConfirmDiagnostics(page, CONFIRM_IDS[1]);
       assert.fail(`composer accept failed: ${JSON.stringify(diag)}`);
     }
+    assert.equal(await firstUnsettledConfirmRequestId(page), CONFIRM_IDS[2]);
+    await page.waitForFunction(
+      (id) => document.querySelector(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`),
+      CONFIRM_IDS[2],
+      { timeout: 10_000 },
+    );
     await rejectComposerConfirmById(page, CONFIRM_IDS[2]);
     assert.equal(await hint.count(), 0, "hint clears after queue drained");
 

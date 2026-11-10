@@ -86,6 +86,10 @@ export function firstUnsettledConfirmRequestId(page) {
 export async function readComposerConfirmDiagnostics(page, requestId = "") {
   return page.evaluate((id) => {
     const events = window.receivedEvents ?? [];
+    const hintBtn = id
+      ? document.querySelector(`[data-pending-confirm-hint] [data-confirm="y"][data-id="${CSS.escape(id)}"]`)
+      : document.querySelector('[data-pending-confirm-hint] [data-confirm="y"]');
+    const hintButtonId = hintBtn instanceof HTMLButtonElement ? hintBtn.dataset.id ?? null : null;
     const requests = events.filter((event) => event.type === "confirm.request");
     const firstUnsettled = (() => {
       for (const request of requests) {
@@ -113,6 +117,7 @@ export async function readComposerConfirmDiagnostics(page, requestId = "") {
         return null;
       })(),
       hintPresent: Boolean(document.querySelector("[data-pending-confirm-hint]")),
+      hintButtonId,
       approveButton: btn instanceof HTMLButtonElement
         ? { disabled: btn.disabled, visible: btn.offsetParent !== null }
         : null,

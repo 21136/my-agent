@@ -439,7 +439,7 @@ export function canSubmitCompanionComposerConfirm(
   if (canSubmitOrdinaryConfirm(model, requestId)) return true;
   const block = model.blocks.find((item) => item.kind === "confirm" && item.requestId === requestId);
   if (block?.kind !== "confirm" || !isCompanionComposerScopedConfirm(block)) return false;
-  if (block.resolved && !isConfirmInProgressLabel(block.resolved)) return false;
+  if (block.resolved) return false;
   if (block.confirmKind === "work_record_post_turn") {
     if (block.confirmSubtype === "work_record_auto_candidate"
         && !parseWorkRecordAutoCandidate(block.workRecordCandidate, model.sessionId)) return false;
@@ -526,7 +526,8 @@ function firstPendingCompanionScopedConfirmId(
   for (const block of model.blocks) {
     if (!isCompanionComposerScopedConfirm(block)) continue;
     if (!block.resolved) return block.requestId;
-    if (isConfirmInProgressLabel(block.resolved)) return block.requestId;
+    // User already chose; in-flight label should not hold FIFO on the next scoped confirm.
+    if (isConfirmInProgressLabel(block.resolved)) continue;
   }
   return null;
 }
@@ -557,8 +558,7 @@ export function resolveActiveOrdinaryConfirmRequestId(
   }
   for (let index = model.blocks.length - 1; index >= 0; index -= 1) {
     const block = model.blocks[index];
-    if (block.kind !== "confirm") continue;
-    if (block.confirmKind === "work_record_post_turn") continue;
+    if (block.kind !== "confirm" || !isOrdinaryConfirmBlock(block)) continue;
     if (settled.has(block.requestId)) continue;
     if (!block.resolved || isConfirmInProgressLabel(block.resolved)) return block.requestId;
   }
