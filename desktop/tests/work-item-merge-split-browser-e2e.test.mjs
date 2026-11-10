@@ -142,7 +142,7 @@ test("companion overlay: split requirement then merge two independent items", {
         && event.action === "copy_requirement_to_new_item"),
     );
     assert.notEqual(prematureCopyDone?.status, "rejected", prematureCopyDone?.message ?? "copy rejected before confirm");
-    await acceptLatestComposerConfirm(page);
+    await acceptLatestComposerConfirm(page, { afterConfirmRequestCount: confirmBeforeSplit });
     await waitControlDone(page, "copy_requirement_to_new_item");
     await waitOverviewAfterAppliedControl(page, "copy_requirement_to_new_item");
     overview = await page.evaluate(() => window.receivedEvents?.findLast(e => e.type === "work-records.overview.result"));
@@ -161,8 +161,16 @@ test("companion overlay: split requirement then merge two independent items", {
     const sourcePick = queue.locator(`input[data-cw-merge-pick][data-item-id="${ready.source_item}"]`);
     await targetPick.check();
     await sourcePick.check();
+    const confirmBeforeMerge = await page.evaluate(
+      () => window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0,
+    );
     await reorganize.locator("[data-cw-merge-apply]").click();
-    await acceptLatestComposerConfirm(page);
+    const mergeConfirmId = await acceptLatestComposerConfirm(page, { afterConfirmRequestCount: confirmBeforeMerge });
+    const mergePreview = await page.evaluate(
+      id => window.receivedEvents?.find(event => event.type === "confirm.request" && event.request_id === id)?.preview ?? "",
+      mergeConfirmId,
+    );
+    assert.match(mergePreview, /合并|并入/);
     await waitControlDone(page, "merge_independent_item");
     overview = await refreshCurrentWorkOverview(page);
 

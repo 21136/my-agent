@@ -7,23 +7,53 @@ export {
   pw,
   resolvePython,
   acceptComposerConfirmById,
+  latestUnsettledConfirmRequestId,
 } from "./multi-project-schedule-real-host-browser-shared.mjs";
 
 export const CURRENT_WORK_ENTRY = 'button.unified-topbar-current-work[aria-controls="unified-current-work-popover"]';
 
-export async function acceptLatestComposerConfirm(page, { timeout = 45_000 } = {}) {
+export async function acceptLatestComposerConfirm(page, { timeout = 45_000, afterConfirmRequestCount = 0 } = {}) {
   await page.waitForFunction(
-    () => (window.receivedEvents?.filter(event => event.type === "confirm.request").length ?? 0) > 0
-      || Boolean(document.querySelector("[data-pending-confirm-hint]")),
-    null,
+    min => {
+      const events = window.receivedEvents ?? [];
+      const requests = events.filter(event => event.type === "confirm.request");
+      if (requests.length > min) {
+        for (let index = requests.length - 1; index >= min; index -= 1) {
+          const id = requests[index]?.request_id;
+          if (typeof id !== "string" || !id) continue;
+          const settled = events.some(event => event.type === "confirm.done"
+            && event.request_id === id && ["y", "n", "timeout"].includes(event.choice));
+          if (!settled) return true;
+        }
+      }
+      return Boolean(document.querySelector("[data-pending-confirm-hint]"));
+    },
+    afterConfirmRequestCount,
     { timeout },
   );
-  const requestId = await page.evaluate(
-    () => window.receivedEvents?.filter(event => event.type === "confirm.request").at(-1)?.request_id,
-  );
-  if (!requestId) throw new Error("confirm.request missing");
+
+  const deadline = Date.now() + timeout;
+  let requestId = "";
+  while (Date.now() < deadline) {
+    requestId = await page.evaluate(min => {
+      const events = window.receivedEvents ?? [];
+      const requests = events.filter(event => event.type === "confirm.request");
+      for (let index = requests.length - 1; index >= min; index -= 1) {
+        const id = requests[index]?.request_id;
+        if (typeof id !== "string" || !id) continue;
+        const settled = events.some(event => event.type === "confirm.done"
+          && event.request_id === id && ["y", "n", "timeout"].includes(event.choice));
+        if (!settled) return id;
+      }
+      return "";
+    }, afterConfirmRequestCount);
+    if (requestId) break;
+    await page.waitForTimeout(100);
+  }
+  if (!requestId) throw new Error("unsettled confirm.request missing");
+
   const { acceptComposerConfirmById } = await import("./multi-project-schedule-real-host-browser-shared.mjs");
-  const accepted = await acceptComposerConfirmById(page, requestId, { timeout });
+  const accepted = await acceptComposerConfirmById(page, requestId, { timeout: Math.max(deadline - Date.now(), 1_000) });
   if (!accepted) throw new Error(`composer confirm not accepted: ${requestId}`);
   return requestId;
 }
