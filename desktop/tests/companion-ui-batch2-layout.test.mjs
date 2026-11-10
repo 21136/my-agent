@@ -44,6 +44,8 @@ test("companion tool hint markup lives above status, not in chat transcript", ()
 
 test("harness artifact paths are excluded from product dirty lists", () => {
   assert.equal(isHarnessArtifactPath("desktop/_artifacts/run-1/foo.png"), true);
+  assert.equal(isHarnessArtifactPath("desktop/_artifacts-91-run82/trace.zip"), true);
+  assert.equal(isHarnessArtifactPath("desktop/@AutomationLog.txt"), true);
   assert.equal(isHarnessArtifactPath("desktop/tests/shot.png"), true);
   assert.equal(isHarnessArtifactPath("desktop/src/main.ts"), false);
 });

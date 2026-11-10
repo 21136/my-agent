@@ -10,7 +10,10 @@ export function isWorkRecordsOverviewBriefing(text: string): boolean {
     source.includes("事项：")
     && source.includes("状态概况：")
     && (source.includes("状态计数：") || source.includes("要求："));
-  return hasOverviewLead || (hasItemShape && source.includes("未展开"));
+  const hasCollapsedTail =
+    /(?:还有|未展开).*(?:组|事项|要求)/.test(source)
+    || source.includes("不是全部记录");
+  return hasOverviewLead || (hasItemShape && hasCollapsedTail);
 }
 
 export function workRecordsBriefingSummary(text: string): string {

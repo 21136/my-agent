@@ -786,11 +786,16 @@
 
 .unified-expand {
   flex-shrink: 0;
-  max-height: min(36vh, 16rem);
+  max-height: min(32vh, 14rem);
   overflow-y: auto;
-  padding: 0.65rem 1rem 0;
-  background: transparent;
-  border-bottom: none;
+  overscroll-behavior: contain;
+  padding: 0.65rem 1rem 0.35rem;
+  background: color-mix(in srgb, var(--ma-surface) 88%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent);
+  scroll-padding-bottom: 0.5rem;
+}
+.unified-composer-dock:has(.unified-expand:not(.hidden)) {
+  z-index: 6;
 }
 
 .unified-composer-dock .unified-expand:not(.hidden) + .unified-composer-meta {
