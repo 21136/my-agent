@@ -337,8 +337,8 @@ test("overview panel renders only visible groups and trusts server pagination co
   assert.equal(panel.canExpand, true);
   assert.match(panel.moreLabel, /6 组/);
   assert.match(panel.bodyHtml, /项目 · p1/);
-  assert.match(panel.bodyHtml, /<span class="unified-current-work-group-status">受阻<\/span>/);
   assert.match(panel.bodyHtml, /<span class="unified-current-work-group-counts">受阻 1 · 待开始 2 · 已记录完成 1<\/span>/);
+  assert.match(panel.bodyHtml, /1\/7/);
   assert.doesNotMatch(panel.bodyHtml, /must not render|项目 · old/);
 });
 
@@ -650,9 +650,8 @@ test("group and item details use precise conservative status labels", () => {
     visibility_counts: { visible_groups: 2, visible_items: 4, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 2, total_visible_groups: 2, total_visible_items: 4 },
   }), { open: true });
-  assert.match(panel.bodyHtml, /group-status">结果待你确认<\/span>/);
   assert.match(panel.bodyHtml, /group-status">进行中<\/span>/);
-  assert.match(panel.bodyHtml, /结果待你确认 1 · 进行中 1 · 状态待确认 1/);
+  assert.match(panel.bodyHtml, /group-counts">结果待你确认 1 · 进行中 1 · 状态待确认 1/);
   assert.match(panel.bodyHtml, /<strong>unknown item<\/strong><span>结果待你确认<\/span>/);
   assert.match(panel.bodyHtml, /<li>unknown requirement · 结果待你确认<\/li>/);
   assert.match(panel.bodyHtml, /<strong>in progress item<\/strong><span>进行中<\/span>/);

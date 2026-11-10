@@ -103,7 +103,8 @@ import { evolutionView, type EvolutionProjection, type EvolutionView } from "../
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, renderComposerScopedConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
 import { isWorkRecordsOverviewBriefing, renderWorkRecordsBriefingShell, workRecordsBriefingSummary } from "./companion-chat-briefing";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation, companionHomeDefersWorkCardChatPresentation } from "./work-card-presentation";
-import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, coalesceOverviewAttentionCounts, renderCurrentWorkShellPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
+import { UNIFIED_SHELL_UI_REVISION, UNIFIED_SHELL_UI_REVISION_KEY } from "./shell-ui-revision";
 import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
 import { mountToolDisplayEditor, openToolDisplayEditor } from "../../copy/tool-display-editor";
 import { onToolDisplayOverridesChange } from "../../copy/tool-display-overrides";
@@ -1474,6 +1475,7 @@ function refreshGlobalRoleModels(): void {
   const musicEl = root.querySelector<HTMLElement>("#unified-music")!;
   const shellDevEl = root.querySelector<HTMLElement>("#unified-shell-dev")!;
   const currentWorkEl = root.querySelector<HTMLElement>("#unified-current-work")!;
+  const toolRegionEl = root.querySelector<HTMLElement>("#unified-tool-region")!;
   let settingsRenderedSection: SettingsSection | null = null;
   let settingsRenderedName = "";
   let settingsRenderedModelState = "";
@@ -1516,6 +1518,20 @@ function refreshGlobalRoleModels(): void {
       };
     }
   })();
+
+  function resetStaleUnifiedToolMarkup(): void {
+    const revision = String(UNIFIED_SHELL_UI_REVISION);
+    const stored = worldStorage.getItem(UNIFIED_SHELL_UI_REVISION_KEY);
+    if (stored === revision) return;
+    documentEl.innerHTML = "";
+    settingsEl.innerHTML = "";
+    musicEl.innerHTML = "";
+    shellDevEl.innerHTML = "";
+    settingsRenderedSection = null;
+    worldStorage.setItem(UNIFIED_SHELL_UI_REVISION_KEY, revision);
+  }
+  resetStaleUnifiedToolMarkup();
+
   const worldNow = Date.now();
   let companionWorldState: CompanionWorldState = advanceCompanionWorld(
     loadCompanionWorld(worldStorage, worldNow),
@@ -2877,18 +2893,31 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (memoryShelfState.expandOpen) renderMemoryShelfPanel();
   }
 
+  function sizeComposerShelf(): void {
+    if (expandEl.hidden) return;
+    const dock = composerDock.getBoundingClientRect();
+    const top = expandEl.getBoundingClientRect().top;
+    const available = Math.floor(dock.top - top - 10);
+    if (available > 80) {
+      expandEl.style.maxHeight = `${Math.min(available, Math.floor(window.innerHeight * 0.42))}px`;
+    }
+  }
+  window.addEventListener("resize", sizeComposerShelf, { passive: true });
+
   function openMemoryShelf(): void {
     proposalsState.expandOpen = false;
     renderProposalsPanel();
     sessionsOpen = false;
     memoryShelfState.expandOpen = true;
     renderMemoryShelfPanel();
+    sizeComposerShelf();
     client.listMemories();
   }
 
   function renderMemoryShelfPanel(): void {
     memoryShelfState.pending = topbarState.proposals;
     renderMemoryShelf(expandEl, memoryShelfState, client, openProposals);
+    sizeComposerShelf();
     expandEl.addEventListener("memory:close", () => {
       memoryShelfState.expandOpen = false;
       renderMemoryShelfPanel();
@@ -3330,7 +3359,14 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function syncMainFocusView(): void {
-    const focus = projectState.mainFocus;
+    let focus = projectState.mainFocus;
+    if (focus === "document" && !projectState.projectId) {
+      setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
+      projectState.mainFocus = "chat";
+      projectState.railTab = "now";
+      shellEl.dataset.rail = "now";
+      focus = "chat";
+    }
     const pageToolOpen =
       focus === "document" ||
       focus === "projects" ||
@@ -3389,7 +3425,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (focus === "settings") {
       renderSettingsStage();
       if (projectState.settingsSection === "models") refreshGlobalRoleModels();
-      settingsEl.scrollTop = 0;
+      resetSettingsScroll();
     }
     syncMusicViewBounds();
     syncShellDevViewBounds();
@@ -3416,6 +3452,11 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     if (feedback) feedback.textContent = text;
   }
 
+  function resetSettingsScroll(): void {
+    settingsEl.scrollTop = 0;
+    toolRegionEl.scrollTop = 0;
+  }
+
   function renderSettingsStage(): void {
     const section = projectState.settingsSection || "appearance";
     const name = currentPartnerName();
@@ -3434,7 +3475,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
         autoRecognition: { enabled: autoRecognition.enabled, pending: !!autoRecognition.pending, available: !!autoRecognition.sessionId && autoRecognition.sessionId === chat.model.sessionId, error: autoRecognition.error },
         approvalPolicy: approvalPreferences,
       });
-      if (settingsRenderedSection !== section) settingsEl.scrollTop = 0;
+      if (settingsRenderedSection !== section) resetSettingsScroll();
       settingsRenderedSection = section;
       settingsRenderedName = name;
       settingsRenderedModelState = modelStateKey;
@@ -3559,8 +3600,9 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   function renderMusicStage(): void {
-    if (musicEl.innerHTML) return;
-    musicEl.innerHTML = renderMusicPanel();
+    if (!musicEl.querySelector(".music-page")) {
+      musicEl.innerHTML = renderMusicPanel();
+    }
   }
 
   function currentShellDevViewBounds(): { x: number; y: number; width: number; height: number } | null {
@@ -3802,7 +3844,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
   }
 
   async function renderShellDevStage(): Promise<void> {
-    if (!shellDevEl.innerHTML) {
+    if (!shellDevEl.querySelector("[data-dual-lane-panel]")) {
       const api = window.myAgentDesktop;
       const mainUrl = (await api?.getShellDevMainUrl?.()) ?? "http://127.0.0.1:5173/";
       const previewUrl = (await api?.getShellDevPreviewUrl?.()) ?? "http://127.0.0.1:5174/";
@@ -7459,9 +7501,17 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
             queryStructuredCurrentWorkOverview(undefined, event.session_id);
             break;
           }
-          currentWorkOverviewResult = appended;
+          const counts = coalesceOverviewAttentionCounts(
+            currentWorkOverviewResult!.visibility_counts,
+            appended.visibility_counts,
+          );
+          currentWorkOverviewResult = { ...appended, visibility_counts: counts };
         } else {
-          currentWorkOverviewResult = { ...event, groups: event.groups.filter(group => group.visibility === "visible") };
+          const groups = event.groups.filter(group => group.visibility === "visible");
+          const counts = currentWorkOverviewResult
+            ? coalesceOverviewAttentionCounts(currentWorkOverviewResult.visibility_counts, event.visibility_counts)
+            : event.visibility_counts;
+          currentWorkOverviewResult = { ...event, groups, visibility_counts: counts };
           currentSessionWorkOverviewResult = currentWorkOverviewResult;
         }
         currentWorkOverviewLoadingMore = false;

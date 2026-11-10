@@ -81,10 +81,11 @@ function label(entry: Dirty): string { return entry.xy + " " + entry.file; }
 /** GUI harness / Playwright artifacts under desktop — never user-facing product debt. */
 export function isHarnessArtifactPath(file: string): boolean {
   const normalized = file.replaceAll("\\", "/");
-  return /(?:^|\/)_artifacts(?:\/|-|\.)/.test(normalized)
-    || /desktop\/_artifacts(?:\/|-)/.test(normalized)
+  return /(?:^|\/)_artifacts[\w.-]*(?:\/|$)/i.test(normalized)
+    || /(?:^|\/)desktop\/_artifacts[\w.-]*(?:\/|$)/i.test(normalized)
+    || /(?:^|\/)desktop\/@AutomationLog\.txt$/i.test(normalized)
     || /(?:^|\/)desktop\/tests\/.*\.(png|webm|mp4)$/i.test(normalized)
-    || /gui-harness/i.test(normalized);
+    || /gui-harness|_run8[12]/i.test(normalized);
 }
 /** Untracked local extras (screenshots, memoir media) must not freeze dual-lane. Tracked/staged files still do. */
 function isLaneBlockingDirty(entry: Dirty): boolean {

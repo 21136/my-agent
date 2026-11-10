@@ -130,6 +130,22 @@ function validDetailPageFacts(value: unknown): value is WorkRecordsOverviewPageF
     && Number(page.offset) <= Number(page.total);
 }
 
+/** Keep server-wide attention totals stable when paging without attention fields (older agent-core). */
+export function coalesceOverviewAttentionCounts(
+  previous: WorkRecordsOverviewResultEvent["visibility_counts"],
+  next: WorkRecordsOverviewResultEvent["visibility_counts"],
+): WorkRecordsOverviewResultEvent["visibility_counts"] {
+  return {
+    ...next,
+    attention_visible_items: Number.isSafeInteger(next.attention_visible_items)
+      ? next.attention_visible_items
+      : previous.attention_visible_items,
+    attention_visible_groups: Number.isSafeInteger(next.attention_visible_groups)
+      ? next.attention_visible_groups
+      : previous.attention_visible_groups,
+  };
+}
+
 /** Append only a server-confirmed page from the same snapshot and exact server offset. */
 export function appendCurrentWorkOverviewPage(
   current: WorkRecordsOverviewResultEvent,
@@ -224,7 +240,18 @@ function renderGroupSummary(group: WorkRecordsOverviewResultEvent["groups"][numb
   const onlyStatus = statusCounts.length === 1 && statusCounts[0][0] === group.status;
   const statusHtml = onlyStatus
     ? `<span class="unified-current-work-group-status">${escapeHtml(aggregateStatus)}</span><span class="unified-current-work-group-counts">${escapeHtml(String(statusCounts[0][1]))} 项要求</span>`
-    : `<span class="unified-current-work-group-status">${escapeHtml(aggregateStatus)}</span><span class="unified-current-work-group-counts">${escapeHtml(countSummary)}</span>`;
+    : (() => {
+      const lead = escapeHtml(aggregateStatus);
+      const summary = escapeHtml(countSummary);
+      if (summary.startsWith(lead)) {
+        return `<span class="unified-current-work-group-counts">${summary}</span>`;
+      }
+      const leadWord = countSummary.split(/\s+/)[0] ?? "";
+      if (leadWord && leadWord === aggregateStatus) {
+        return `<span class="unified-current-work-group-counts">${summary}</span>`;
+      }
+      return `<span class="unified-current-work-group-status">${lead}</span><span class="unified-current-work-group-counts">${summary}</span>`;
+    })();
   return `<div class="unified-current-work-group-summary">${statusHtml}</div>`;
 }
 const DETAIL_BATCH_SIZE = WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS;
@@ -492,8 +519,13 @@ export function buildCurrentWorkOverviewPanel(
   const serverAttentionItems = overviewAttentionItemTotal(result);
   const serverAttentionGroups = overviewAttentionGroupTotal(result);
   const visibleAttentionCount = serverAttentionGroups ?? activeGroups.filter(groupNeedsAttention).length;
-  const visibleAttentionItemCount = serverAttentionItems ?? countVisibleAttentionItems(result);
-  const passiveUnreadNote = formatOverviewPassiveUnreadNote(unreadCountText, visibleAttentionItemCount);
+  const loadedAttentionItemCount = countVisibleAttentionItems(result);
+  const visibleAttentionItemCount = serverAttentionItems
+    ?? (result.page.has_more ? null : loadedAttentionItemCount);
+  const passiveUnreadNote = formatOverviewPassiveUnreadNote(
+    unreadCountText,
+    visibleAttentionItemCount ?? loadedAttentionItemCount,
+  );
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
   const hasIndependentItems = activeGroups.some(group => group.kind === "independent" && group.items.length > 0);
   const reorganizePrefix = hasIndependentItems
@@ -505,13 +537,18 @@ export function buildCurrentWorkOverviewPanel(
   }).join("");
   const loadedGroupCount = activeGroups.length;
   const totalVisibleGroups = result.page.total_visible_groups;
-  const queueHeaderCount = String(loadedGroupCount + liveCount);
+  const queueHeaderCount = result.page.total_visible_groups > loadedGroupCount
+    ? `${loadedGroupCount}/${result.page.total_visible_groups}`
+    : String(loadedGroupCount + liveCount);
   const { bodyHtml: queueBodyHtml } = buildLiveQueueSection(
     `${reorganizePrefix}${groupsHtml}`, loadedGroupCount, liveSession);
   const attentionLabel = serverAttentionItems !== null && serverAttentionItems > 0
     ? `当前工作 · ${serverAttentionItems} 项需关注`
-    : serverAttentionItems === null && visibleAttentionItemCount > 0
+    : (serverAttentionItems === null || visibleAttentionItemCount === null)
+      && (loadedAttentionItemCount > 0 || result.page.has_more)
     ? "当前工作 · 有待办事项"
+    : visibleAttentionItemCount !== null && visibleAttentionItemCount > 0
+    ? `当前工作 · ${visibleAttentionItemCount} 项需关注`
     : "";
   const label = mappedScheduleEntry && !shouldShowCurrentWorkOverview(result) && liveCount === 0
     ? "当前工作 · 多项目调度"
