@@ -79,14 +79,15 @@ test("confirmed multi-project overview remains visible, identifies its source an
     groups: [remote], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   assert.equal(shouldShowCurrentWorkOverview(result), true);
-  const panel = buildCurrentWorkOverviewPanel(result, { open: true });
+  const expandItem = new Set([JSON.stringify(["project", "project-beta", "remote-item"])]);
+  const panel = buildCurrentWorkOverviewPanel(result, { open: true, expandedRequirementItemIds: expandItem });
   assert.match(panel.bodyHtml, /来源项目 project-beta · 会话 20261107-00000002 · 记录版本 7/);
-  assert.match(panel.bodyHtml, /历史尝试/);
+  assert.match(panel.bodyHtml, /查看历史尝试|最近历史/);
   assert.match(panel.bodyHtml, /data-work-record-control[^>]*data-source-project-id="project-beta"/);
   assert.match(panel.bodyHtml, /data-open-source-session="20261107-00000002"/);
   assert.match(panel.bodyHtml, /data-work-record-new-text-for="remote-req"/);
   assert.match(panel.bodyHtml, /data-action="revise_requirement"/);
-  assert.match(panel.bodyHtml, /状态待确认|结果查看状态未知/);
+  assert.match(panel.bodyHtml, /最近历史（1\/1）/);
 });
 
 test("dependencies omitted from authorized local and remote projections render as unverified and escaped", () => {
@@ -259,8 +260,9 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
     groups: [{ ...completedViewedGroup(), status: "blocked" }],
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   const exactPanel = buildCurrentWorkOverviewPanel(exact, { open: false });
-  assert.match(exactPanel.label, /未读 101/);
-  assert.match(exactPanel.bodyHtml, /101 项未读结果/);
+  assert.doesNotMatch(exactPanel.label, /未读 101/);
+  assert.equal(exactPanel.label, "当前工作");
+  assert.match(exactPanel.bodyHtml, /多条结果尚未打开/);
   assert.equal(shouldShowCurrentWorkOverview(exact), true);
 
   const lowerBound = overview({ state: "collapsed", groups: [], unread_important_results: samples,
@@ -268,16 +270,24 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
   const lowerPanel = buildCurrentWorkOverviewPanel(lowerBound, { open: false });
   assert.equal(lowerPanel.visible, true);
-  assert.match(lowerPanel.label, /至少 100/);
-  assert.match(lowerPanel.bodyHtml, /至少 100 项未读结果/);
+  assert.doesNotMatch(lowerPanel.label, /至少 100/);
+  assert.match(lowerPanel.bodyHtml, /至少 100 条结果尚未打开/);
 
-  const legacyUnknown = overview({ state: "collapsed", groups: [], unread_important_results: [],
+  const legacyKnown = overview({ state: "collapsed", groups: [], unread_important_results: [],
     visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
-  const legacyPanel = buildCurrentWorkOverviewPanel(legacyUnknown, { open: false });
-  assert.equal(legacyPanel.visible, true, "missing legacy counts must not cause current-work to disappear");
-  assert.match(legacyPanel.label, /未读结果数未知/);
-  assert.match(legacyPanel.bodyHtml, /未读结果数未知/);
+  const legacyKnownPanel = buildCurrentWorkOverviewPanel(legacyKnown, { open: false });
+  assert.equal(legacyKnownPanel.visible, true, "missing legacy counts must not cause current-work to disappear");
+  assert.equal(legacyKnownPanel.label, "当前工作");
+  assert.match(legacyKnownPanel.bodyHtml, /暂无未打开记录/);
+
+  const legacyUnknown = overview({ state: "collapsed", groups: [], unread_important_results: [],
+    unread_status: "unknown",
+    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
+    page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
+  const legacyUnknownPanel = buildCurrentWorkOverviewPanel(legacyUnknown, { open: false });
+  assert.match(legacyUnknownPanel.label, /概况待核实/);
+  assert.match(legacyUnknownPanel.bodyHtml, /未打开记录数未知/);
 });
 
 test("cursor pages append only for the same server snapshot and expired cursors restart", () => {
@@ -513,10 +523,10 @@ test("overview panel escapes stored text and marks unknown read certainty instea
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.equal(panel.visible, true);
-  assert.match(panel.label, /状态待确认/);
+  assert.match(panel.label, /项需关注/);
   assert.match(panel.bodyHtml, /&lt;img src=x&gt;/);
-  assert.match(panel.bodyHtml, /查看状态未知/);
-  assert.match(panel.bodyHtml, /未读结果数未知/);
+  assert.match(panel.bodyHtml, /查看状态不明/);
+  assert.match(panel.bodyHtml, /未打开记录数未知/);
   assert.doesNotMatch(panel.bodyHtml, /0 项未读结果/);
 });
 
@@ -540,8 +550,8 @@ test("requirements are collapsed per item while status, read markers, counts, an
   assert.doesNotMatch(panel.bodyHtml, /data-selected="1"|is-selected/);
   assert.match(panel.bodyHtml, /<h5>要求（2）<\/h5>/);
   assert.match(panel.bodyHtml, /受阻/);
-  assert.match(panel.bodyHtml, /未读结果/);
-  assert.match(panel.bodyHtml, /未读结果数未知/);
+  assert.match(panel.bodyHtml, /另有未打开记录/);
+  assert.match(panel.bodyHtml, /未打开记录数未知/);
   assert.match(panel.bodyHtml, /&lt;script&gt;task&lt;\/script&gt;/);
   assert.match(panel.bodyHtml, /&lt;img src=x&gt;/);
   assert.match(panel.bodyHtml, /项目 · p&quot;&lt;1/);
@@ -550,7 +560,6 @@ test("requirements are collapsed per item while status, read markers, counts, an
   const restored = buildCurrentWorkOverviewPanel(result, { open: true, expandedRequirementItemIds: new Set([firstGroupKey]) });
   assert.ok(((restored.bodyHtml.match(/data-selected="1"/g) ?? []).length) >= 1, "selected item reveals its detail panes");
   assert.match(restored.bodyHtml, /is-selected/);
-  assert.doesNotMatch(restored.bodyHtml, /<details\b/, "no accordion fold markup");
 });
 
 const topbarSource = new URL("../src/shells/unified/topbar.ts", import.meta.url);
@@ -599,13 +608,13 @@ test("group and item details use precise conservative status labels", () => {
     visibility_counts: { visible_groups: 2, visible_items: 4, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 2, total_visible_groups: 2, total_visible_items: 4 },
   }), { open: true });
-  assert.match(panel.bodyHtml, /group-status">结果待确认<\/span>/);
-  assert.match(panel.bodyHtml, /group-status">执行状态待确认<\/span>/);
-  assert.match(panel.bodyHtml, /结果待确认 1 · 执行状态待确认 1 · 状态待确认 1/);
-  assert.match(panel.bodyHtml, /<strong>unknown item<\/strong><span>结果待确认<\/span>/);
-  assert.match(panel.bodyHtml, /<li>unknown requirement · 结果待确认<\/li>/);
-  assert.match(panel.bodyHtml, /<strong>in progress item<\/strong><span>执行状态待确认<\/span>/);
-  assert.match(panel.bodyHtml, /<li>in progress requirement · 执行状态待确认<\/li>/);
+  assert.match(panel.bodyHtml, /group-status">结果待你确认<\/span>/);
+  assert.match(panel.bodyHtml, /group-status">进行中<\/span>/);
+  assert.match(panel.bodyHtml, /结果待你确认 1 · 进行中 1 · 状态待确认 1/);
+  assert.match(panel.bodyHtml, /<strong>unknown item<\/strong><span>结果待你确认<\/span>/);
+  assert.match(panel.bodyHtml, /<li>unknown requirement · 结果待你确认<\/li>/);
+  assert.match(panel.bodyHtml, /<strong>in progress item<\/strong><span>进行中<\/span>/);
+  assert.match(panel.bodyHtml, /<li>in progress requirement · 进行中<\/li>/);
   assert.match(panel.bodyHtml, /<strong>unrecognized item<\/strong><span>状态待确认<\/span>/);
   assert.match(panel.bodyHtml, /<li>unrecognized requirement · 状态待确认<\/li>/);
   assert.doesNotMatch(panel.bodyHtml, /等待用户批准|正在执行|执行中/);
@@ -622,8 +631,9 @@ test("single-requirement history renders safely and exposes a fresh cursor for e
     groups: [group], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
 
-  const firstPage = buildCurrentWorkOverviewPanel(result, { open: true }).bodyHtml;
-  assert.match(firstPage, /历史尝试（1\/1\+）/);
+  const expandHistory = new Set([JSON.stringify(["project", "p1", "i1"])]);
+  const firstPage = buildCurrentWorkOverviewPanel(result, { open: true, expandedRequirementItemIds: expandHistory }).bodyHtml;
+  assert.match(firstPage, /查看历史尝试（1\/1\+）/);
   assert.match(firstPage, /data-requirement-history[^>]*data-project-id="p1"[^>]*data-item-id="i1"[^>]*data-requirement-id="r1"[^>]*data-cursor="synthetic-cursor-2"/);
   assert.match(firstPage, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(firstPage, /<img src=x/);
@@ -633,10 +643,10 @@ test("single-requirement history renders safely and exposes a fresh cursor for e
     history: [{ run_id: "run-2", result_id: "result-2", status: "completed", verification_status: "verified", summary: "synthetic final page", recorded_at: 2 }],
     history_page: { page_size: 1, offset: 1, has_more: false, next_cursor: null, scope: "this_requirement_only" },
   }] }] }] };
-  const finalHtml = buildCurrentWorkOverviewPanel(finalPage, { open: true }).bodyHtml;
-  assert.match(finalHtml, /历史尝试（1\/2）/);
+  const finalHtml = buildCurrentWorkOverviewPanel(finalPage, { open: true, expandedRequirementItemIds: expandHistory }).bodyHtml;
+  assert.match(finalHtml, /最近历史（1\/2）/);
   assert.match(finalHtml, /synthetic final page/);
-  assert.doesNotMatch(finalHtml, /加载下一页历史/);
+  assert.doesNotMatch(finalHtml, /加载更多历史/);
 });
 
 test("history errors remain visible as unavailable without rendering untrusted response text", () => {
@@ -662,7 +672,7 @@ test("source snapshot overview presents capture provenance without claiming live
   const viewed = buildCurrentWorkOverviewPanel({...result,groups:[{...group,source_snapshot:{...group.source_snapshot,viewed_at:"2026-10-30T02:00:00Z"}}]},{open:true});
   assert.match(viewed.bodyHtml,/卡片查看时间.*2026-10-30T02:00:00Z/);
   assert.match(viewed.bodyHtml,/未验证/);
-  assert.match(panel.bodyHtml,/旧快照.*1.*查看计时尚未确认/); assert.match(panel.bodyHtml,/源要求.*执行状态待确认/);
+  assert.match(panel.bodyHtml,/旧快照.*1.*查看计时尚未确认/); assert.match(panel.bodyHtml,/源要求.*进行中/);
   assert.match(panel.bodyHtml,/未知要求.*状态待确认/); assert.doesNotMatch(panel.bodyHtml,/已接收.*已查看/);
 });
 
@@ -874,21 +884,62 @@ test("overview history humanizes worker lifecycle JSON without leaking internal 
       current_results: [{ requirement_id: "req-1", result_id: "result-1", status: "unknown", read_status: "unread" }],
     }],
   };
+  const expandHistory = new Set([JSON.stringify(["independent", "independent-scope", "item-1"])]);
   const panel = buildCurrentWorkOverviewPanel(overview({
     state: "visible",
     unread_status: "known",
     groups: [group],
     visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
-  }), { open: true });
+  }), { open: true, expandedRequirementItemIds: expandHistory });
   assert.match(panel.bodyHtml, /主机回合已结束/);
   assert.match(panel.bodyHtml, /PROJECT\.md：读取成功/);
-  assert.match(panel.bodyHtml, /结果待确认/);
+  assert.match(panel.bodyHtml, /结果待你确认/);
+  assert.match(panel.bodyHtml, /有结果待看/);
   assert.match(panel.bodyHtml, /尚未验证/);
   assert.doesNotMatch(panel.bodyHtml, /host_status|model_turn_finished|project_worker_host_lifecycle/);
   assert.doesNotMatch(panel.bodyHtml, /task_id|worker_id|read_id/);
   assert.doesNotMatch(panel.bodyHtml, /0a32959d-0000-4000-8000-000000000001/);
   assert.doesNotMatch(panel.bodyHtml, /task-aaaaaaaa/);
+});
+
+test("quiet drawer: large passive unread counts stay off the header label", () => {
+  const samples = Array.from({ length: 34 }, (_, index) => ({
+    group: ["project", "p1"], item_id: `i-${index}`, requirement_id: `r-${index}`, result_id: `res-${index}`,
+  }));
+  const panel = buildCurrentWorkOverviewPanel(overview({
+    state: "visible",
+    unread_important_results: samples,
+    unread_important_results_total: 34,
+    unread_important_results_truncated: false,
+    unread_status: "known",
+    groups: [completedViewedGroup()],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: false });
+  assert.doesNotMatch(panel.label, /未读 34/);
+  assert.match(panel.bodyHtml, /多条结果尚未打开（仅记录/);
+});
+
+test("collapsed items hide history walls until the item is expanded", () => {
+  const group = completedViewedGroup();
+  group.items[0].requirements[0].history = [
+    { run_id: "r1", result_id: "res1", status: "unknown", summary: "old", verification_status: "not_verified", recorded_at: 1 },
+    { run_id: "r2", result_id: "res2", status: "unknown", summary: "older", verification_status: "not_verified", recorded_at: 0 },
+    { run_id: "r3", result_id: "res3", status: "unknown", summary: "oldest", verification_status: "not_verified", recorded_at: -1 },
+  ];
+  const collapsed = buildCurrentWorkOverviewPanel(overview({
+    state: "visible", groups: [group],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true });
+  assert.doesNotMatch(collapsed.bodyHtml, /查看历史尝试/);
+  const expanded = buildCurrentWorkOverviewPanel(overview({
+    state: "visible", groups: [group],
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
+  }), { open: true, expandedRequirementItemIds: new Set([JSON.stringify(["project", "p1", "i1"])]) });
+  assert.match(expanded.bodyHtml, /查看历史尝试（3\/3）/);
 });
 
 test("post-turn work-record confirms mirror into live queue with composer hint", () => {

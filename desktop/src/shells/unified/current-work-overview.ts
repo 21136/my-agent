@@ -10,6 +10,11 @@ import {
   formatOverviewRunStatus,
   formatOverviewVerificationStatus,
 } from "./current-work-activity-copy.ts";
+import {
+  formatOverviewItemHeadline,
+  formatOverviewPassiveUnreadNote,
+  OVERVIEW_ITEM_STATUS_LABELS,
+} from "./current-work-queue-copy.ts";
 import { WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS } from "./work-card-presentation.ts";
 
 export const CURRENT_WORK_OVERVIEW_QUERY = "当前工作整体概况";
@@ -40,10 +45,8 @@ export interface CurrentWorkOverviewPanel {
 /** Ten-minute query cadence while visible; local time never hides, and server visibility remains authoritative. */
 export const CURRENT_WORK_VISIBILITY_RECHECK_MS = 10 * 60 * 1000;
 
-const STATUS_LABELS: Record<string, string> = {
-  blocked: "受阻", unknown: "结果待确认", in_progress: "执行状态待确认", stopped: "已停止",
-  pending: "待开始", completed: "已记录完成", no_requirements: "暂无要求",
-};
+const STATUS_LABELS: Record<string, string> = OVERVIEW_ITEM_STATUS_LABELS;
+const HISTORY_COLLAPSED_PREVIEW_ROWS = 2;
 const escapeHtml = (value: unknown): string => String(value ?? "")
   .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -242,6 +245,17 @@ function itemNeedsAttention(item: WorkRecordsOverviewGroup["items"][number]): bo
   return itemAttentionRank(item) < 4 || item.current_results.some(result => result.read_status !== "viewed");
 }
 
+function countVisibleAttentionItems(result: WorkRecordsOverviewResultEvent): number {
+  let count = 0;
+  for (const group of result.groups) {
+    if (group.visibility !== "visible") continue;
+    for (const item of group.items) {
+      if (itemNeedsAttention(item)) count += 1;
+    }
+  }
+  return count;
+}
+
 function detailLoadButton(page: WorkRecordsOverviewPageFacts | null | undefined, loaded: number,
   label: string, loadingCursor?: string | null): string {
   if (!page?.has_more || !page.next_cursor) return "";
@@ -284,7 +298,12 @@ function renderGroup(
   ];
   const shownIds = new Set(initialItems.map(item => item.item_id));
   const renderItem = (item: WorkRecordsOverviewGroup["items"][number]) => {
-    const status = group.kind === "linked_source_snapshot" ? `捕获时：${STATUS_LABELS[item.status_at_capture ?? ""] ?? "状态待确认"}` : STATUS_LABELS[item.status] ?? "状态待确认";
+    const itemKey = JSON.stringify([group.kind, group.id, item.item_id]);
+    const selected = expandedRequirementItemIds.has(itemKey);
+    const { statusLabel, hint } = formatOverviewItemHeadline(item);
+    const captureStatus = group.kind === "linked_source_snapshot"
+      ? `捕获时：${STATUS_LABELS[item.status_at_capture ?? ""] ?? "状态待确认"}`
+      : statusLabel;
     const requirementsById = new Map(item.requirements.map(requirement => [requirement.requirement_id, requirement]));
     const allRequirementRows = item.requirements.map(requirement => {
       const reqStatus = group.kind === "linked_source_snapshot" ? `捕获时：${STATUS_LABELS[requirement.status_at_capture ?? ""] ?? "状态待确认"}` : STATUS_LABELS[requirement.status] ?? "状态待确认";
@@ -316,33 +335,33 @@ function renderGroup(
       return `<li>${escapeHtml(requirement.text || "（要求文本为空）")} · ${reqStatus}${dependencySummary}</li>`;
     });
     const requirementPage = item.requirements_page;
-    const history = item.requirements.map(requirement => {
+    const history = selected ? item.requirements.map(requirement => {
       const rows = requirement.history ?? [];
       const page = requirement.history_page;
       if (!rows.length && !page?.has_more) return "";
-      const summary = rows.map(row => {
-        const statusLabel = formatOverviewRunStatus(row.status);
+      const rowHtml = rows.map(row => {
+        const historyStatus = formatOverviewRunStatus(row.status);
         const summaryText = formatOverviewHistorySummary(row.summary, row.status);
         const verificationLabel = formatOverviewVerificationStatus(row.verification_status);
-        return `<li>${escapeHtml(statusLabel)} · ${escapeHtml(summaryText)} · ${escapeHtml(verificationLabel)}</li>`;
+        return `<li>${escapeHtml(historyStatus)} · ${escapeHtml(summaryText)} · ${escapeHtml(verificationLabel)}</li>`;
       }).join("");
+      const totalLabel = `${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}`;
       const projectId = group.kind === "project" ? group.id : "";
-      const load = page?.has_more && page.next_cursor ? `<button type="button" data-requirement-history data-project-id="${escapeHtml(projectId)}" data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(requirement.requirement_id)}" data-cursor="${escapeHtml(page.next_cursor)}">加载下一页历史</button>` : "";
-      return `<section class="unified-current-work-history" aria-label="历史尝试"><h5>历史尝试（${rows.length}/${page ? page.offset + rows.length : rows.length}${page?.has_more ? "+" : ""}）</h5><ul>${summary}</ul>${load}</section>`;
-    }).join("");
+      const load = page?.has_more && page.next_cursor ? `<button type="button" data-requirement-history data-project-id="${escapeHtml(projectId)}" data-item-id="${escapeHtml(item.item_id)}" data-requirement-id="${escapeHtml(requirement.requirement_id)}" data-cursor="${escapeHtml(page.next_cursor)}">加载更多历史</button>` : "";
+      if (rows.length <= HISTORY_COLLAPSED_PREVIEW_ROWS && !page?.has_more) {
+        return `<section class="unified-current-work-history" aria-label="最近历史"><h5>最近历史（${totalLabel}）</h5><ul>${rowHtml}</ul></section>`;
+      }
+      return `<details class="unified-current-work-history-fold" aria-label="历史尝试"><summary>查看历史尝试（${totalLabel}）</summary><ul>${rowHtml}</ul>${load}</details>`;
+    }).join("") : "";
     const localRequirementRemainder = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
       ? `<div class="unified-current-work-requirements-more"><p class="cw-more-caption">还有 ${allRequirementRows.length - DETAIL_BATCH_SIZE} 项要求</p><ul>${allRequirementRows.slice(DETAIL_BATCH_SIZE).join("")}</ul></div>` : "";
     const requirementRows = !requirementPage && allRequirementRows.length > DETAIL_BATCH_SIZE
       ? allRequirementRows.slice(0, DETAIL_BATCH_SIZE).join("") : allRequirementRows.join("");
     const requirementCount = requirementPage ? `${item.requirements.length}/${requirementPage.total}` : `${item.requirements.length}`;
-    const itemKey = JSON.stringify([group.kind, group.id, item.item_id]);
-    const selected = expandedRequirementItemIds.has(itemKey);
     const requirementDetails = item.requirements.length
       ? `<section class="unified-current-work-requirements" data-current-work-item-id="${escapeHtml(itemKey)}"${selected ? ' data-selected="1"' : " hidden"}><h5>要求（${requirementCount}）</h5><ul>${requirementRows}</ul>${localRequirementRemainder}${detailLoadButton(requirementPage, item.requirements.length, "项要求", loadingDetailCursor)}</section>`
       : `<span class="unified-current-work-requirement-count">要求（0）</span>`;
-    const resultMarkers = item.current_results.map(result => result.read_status === "unread"
-      ? `<span class="unified-current-work-unread">未读结果</span>`
-      : result.read_status === "unknown" ? `<span class="unified-current-work-unknown">查看状态未知</span>` : "").join("");
+    const hintHtml = hint ? `<span class="unified-current-work-item-hint">${escapeHtml(hint)}</span>` : "";
     const canReviseHere = group.kind === "independent";
     const canReviseRemote = group.kind === "project" && Number.isSafeInteger(group.source_revision) && group.source_revision! >= 0;
     const canCancelWorker = group.kind === "project";
@@ -356,7 +375,7 @@ function renderGroup(
       ? `<label class="cw-merge-pick"><input type="checkbox" data-cw-merge-pick data-item-id="${escapeHtml(item.item_id)}"${itemReorganize?.pickedItemIds.has(item.item_id) ? " checked" : ""} /><span>纳入合并</span></label>`
       : "";
     const selectedClass = selected ? " is-selected" : "";
-    return `<section class="unified-current-work-item${selectedClass}" data-cw-item-key="${escapeHtml(itemKey)}" data-item-id="${escapeHtml(item.item_id)}"><div class="unified-current-work-item-head-row">${mergePick}<button type="button" class="unified-current-work-item-head" data-cw-select-item="${escapeHtml(itemKey)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${status}</span>${resultMarkers}</button></div>${requirementDetails}${history}${remoteControls}</section>`;
+    return `<section class="unified-current-work-item${selectedClass}" data-cw-item-key="${escapeHtml(itemKey)}" data-item-id="${escapeHtml(item.item_id)}"><div class="unified-current-work-item-head-row">${mergePick}<button type="button" class="unified-current-work-item-head" data-cw-select-item="${escapeHtml(itemKey)}" aria-pressed="${selected ? "true" : "false"}"><strong>${escapeHtml(item.title || "未命名事项")}</strong><span>${escapeHtml(captureStatus)}</span>${hintHtml}</button></div>${requirementDetails}${history}${remoteControls}</section>`;
   };
   const itemRows = initialItems.map(renderItem).join("");
   const itemMore = serverPaged
@@ -456,6 +475,8 @@ export function buildCurrentWorkOverviewPanel(
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
   const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
+  const visibleAttentionItemCount = countVisibleAttentionItems(result);
+  const passiveUnreadNote = formatOverviewPassiveUnreadNote(unreadCountText, visibleAttentionItemCount);
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
   const hasIndependentItems = activeGroups.some(group => group.kind === "independent" && group.items.length > 0);
   const reorganizePrefix = hasIndependentItems
@@ -471,25 +492,34 @@ export function buildCurrentWorkOverviewPanel(
     ? "当前工作 · 多项目调度"
     : liveConfirmPending && !activeGroups.length
     ? "当前工作 · 等待确认"
+    : visibleAttentionItemCount > 0
+    ? `当前工作 · ${visibleAttentionItemCount} 项需关注`
+    : visibleAttentionCount > 0
+    ? `当前工作 · ${visibleAttentionCount} 组需关注`
     : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
     ? "当前工作 · 状态待确认"
     : result.unread_status !== "known"
     ? "当前工作 · 概况待核实"
-    : unreadCountText === null ? "当前工作 · 未读结果数未知"
-      : unreadCountText.startsWith("至少") ? `当前工作 · 未读 ${unreadCountText}`
-        : unreadCount! > 0 ? `当前工作 · 未读 ${unreadCountText}`
-          : attentionCount > 0 ? `当前工作 · ${attentionCount} 组需关注`
-        : result.page.has_more ? `当前工作 · 还有余项`
-          : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作";
+    : result.page.has_more ? `当前工作 · 还有余项`
+      : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作";
   if (liveCount && !activeGroups.length) {
     statusHtml += `<p class="unified-current-work-warning" role="status">Structured 工作组尚未出现；下列来自当前会话中的编排或授权状态。</p>`;
   }
   const remaining = Math.max(0, result.page.total_visible_groups - activeGroups.length);
   const canExpand = result.state === "visible" && result.page.has_more && Boolean(result.page.next_cursor);
-  const unreadSummary = result.unread_status === "known" && unreadCountText !== null
-    ? `${unreadCountText} 项未读结果` : "未读结果数未知";
-  const summaryLine = `${result.visibility_counts.visible_groups} 组当前可见 · ${unreadSummary}${visibleAttentionCount ? ` · ${visibleAttentionCount} 组需关注` : ""}`;
-  const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未读</span><strong>${escapeHtml(unreadCountText ?? "未知")}</strong></div></div></section>`;
+  const unreadMetric = result.unread_status === "known" && unreadCountText !== null
+    ? (visibleAttentionItemCount === 0 && Number.parseInt(unreadCountText.replace(/\D/g, ""), 10) > 8
+      ? "较多" : unreadCountText)
+    : "未知";
+  const unreadOverviewLine = result.unread_status === "known"
+    ? (passiveUnreadNote ?? "暂无未打开记录")
+    : "未打开记录数未知";
+  const summaryLine = [
+    `${result.visibility_counts.visible_groups} 组当前可见`,
+    visibleAttentionCount ? `${visibleAttentionCount} 组需关注` : "",
+    unreadOverviewLine,
+  ].filter(Boolean).join(" · ");
+  const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未打开</span><strong>${escapeHtml(unreadMetric)}</strong></div></div></section>`;
   const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${queueCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
   const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || CURRENT_WORK_SCHEDULE_EMPTY_MARKUP}<div data-cw-schedule-slot></div></section>`;
   const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;
