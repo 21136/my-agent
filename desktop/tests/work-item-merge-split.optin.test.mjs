@@ -19,6 +19,10 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(browser, /data-cw-merge-apply/);
   const shared = readFileSync(path.join(here, "current-work-overlay-browser-shared.mjs"), "utf8");
   assert.match(shared, /acceptComposerConfirmById/);
+  assert.match(shared, /currentWorkQueueBody/);
+  assert.match(shared, /data-cw-segment-panel="queue"/);
+  const browserE2e = readFileSync(path.join(here, "work-item-merge-split-browser-e2e.test.mjs"), "utf8");
+  assert.match(browserE2e, /currentWorkQueueBody/);
   const fixture = readFileSync(path.join(here, "work-item-merge-split-browser-fixture.py"), "utf8");
   assert.match(fixture, /companion_unbound/);
   const run81 = readFileSync(path.join(repo, "desktop/_run81-work-item-merge-split-gui.cmd"), "utf8");

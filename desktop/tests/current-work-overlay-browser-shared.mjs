@@ -28,6 +28,16 @@ export async function acceptLatestComposerConfirm(page, { timeout = 45_000 } = {
   return requestId;
 }
 
+/** Visible 进行中 tab: excludes hidden `cw-contract-body` duplicate markup. */
+export function currentWorkQueueBody(workRoot) {
+  return workRoot.locator('[data-cw-segment-panel="queue"]:not([hidden]) .current-work-zone-body');
+}
+
+export function currentWorkItemByTitle(workRoot, title) {
+  return currentWorkQueueBody(workRoot)
+    .locator(`.unified-current-work-item:has(strong:text-is("${title}"))`);
+}
+
 export async function openCurrentWorkOverlay(page) {
   await page.waitForFunction(() => window.receivedEvents?.some(e => e.type === "session.banner"));
   const entry = page.locator(CURRENT_WORK_ENTRY);

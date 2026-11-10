@@ -19,6 +19,8 @@ import {
   refreshCurrentWorkOverview,
   resolvePython,
   waitControlDone,
+  currentWorkItemByTitle,
+  currentWorkQueueBody,
 } from "./current-work-overlay-browser-shared.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -115,7 +117,12 @@ test("companion overlay: split requirement then merge two independent items", {
     let overview = await refreshCurrentWorkOverview(page);
     assert.equal(independentItemCount(overview), 3);
 
-    const splitItem = work.locator(".unified-current-work-item").filter({ hasText: "Split parent item" });
+    const queue = currentWorkQueueBody(work);
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('#unified-current-work [data-cw-segment-panel="queue"]:not([hidden]) .current-work-zone-body');
+      return panel?.querySelectorAll(".unified-current-work-item").length === 3;
+    });
+    const splitItem = currentWorkItemByTitle(work, "Split parent item");
     await splitItem.locator("[data-cw-select-item]").click();
     await splitItem.getByRole("button", { name: "拆出为新事项" }).click();
     await acceptLatestComposerConfirm(page);
@@ -126,12 +133,12 @@ test("companion overlay: split requirement then merge two independent items", {
       && i.requirements?.some(r => r.text === "Requirement to split into new item"));
     assert.ok(splitChild, "split produced a new independent item with copied requirement text");
 
-    await work.locator("[data-cw-merge-toggle]").click();
-    const targetPick = work.locator(`input[data-cw-merge-pick][data-item-id="${ready.target_item}"]`);
-    const sourcePick = work.locator(`input[data-cw-merge-pick][data-item-id="${ready.source_item}"]`);
+    await queue.locator("[data-cw-merge-toggle]").click();
+    const targetPick = queue.locator(`input[data-cw-merge-pick][data-item-id="${ready.target_item}"]`);
+    const sourcePick = queue.locator(`input[data-cw-merge-pick][data-item-id="${ready.source_item}"]`);
     await targetPick.check();
     await sourcePick.check();
-    await work.locator("[data-cw-merge-apply]").click();
+    await queue.locator("[data-cw-merge-apply]").click();
     await acceptLatestComposerConfirm(page);
     await waitControlDone(page, "merge_independent_item");
     overview = await refreshCurrentWorkOverview(page);
