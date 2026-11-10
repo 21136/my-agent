@@ -78,6 +78,14 @@ async function dirty(cwd: string): Promise<Dirty[]> {
   return entries;
 }
 function label(entry: Dirty): string { return entry.xy + " " + entry.file; }
+/** GUI harness / Playwright artifacts under desktop — never user-facing product debt. */
+export function isHarnessArtifactPath(file: string): boolean {
+  const normalized = file.replaceAll("\\", "/");
+  return /(?:^|\/)_artifacts(?:\/|-|\.)/.test(normalized)
+    || /desktop\/_artifacts(?:\/|-)/.test(normalized)
+    || /(?:^|\/)desktop\/tests\/.*\.(png|webm|mp4)$/i.test(normalized)
+    || /gui-harness/i.test(normalized);
+}
 /** Untracked local extras (screenshots, memoir media) must not freeze dual-lane. Tracked/staged files still do. */
 function isLaneBlockingDirty(entry: Dirty): boolean {
   if (releasePath(entry.file)) return true;
@@ -155,14 +163,14 @@ export function createSandboxAdopter(roots: { stableRoot: string; sandboxRoot: s
       const stableEntries = await dirty(stableRoot), sandboxEntries = await dirty(sandboxRoot);
       const stableSource = stableEntries.filter((e) => releasePath(e.file));
       const sandboxSource = sandboxEntries.filter((e) => releasePath(e.file));
-      status.stableDirtyProduct = stableSource.map(label);
-      status.sandboxDirtyProduct = sandboxSource.map(label);
+      status.stableDirtyProduct = stableSource.filter((e) => !isHarnessArtifactPath(e.file)).map(label);
+      status.sandboxDirtyProduct = sandboxSource.filter((e) => !isHarnessArtifactPath(e.file)).map(label);
       status.stableDirtyOutside = stableEntries.filter((e) => !releasePath(e.file)).map(label);
       const unsupported = sandboxEntries.filter((e) => isLaneBlockingDirty(e) && !releasePath(e.file));
       if (unsupported.length) status.fatalBlockers.push(summarizePaths("Sandbox 含发布范围外改动，不会自动提交：", unsupported.map((e) => e.file)));
       if (stableEntries.some((e) => !releasePath(e.file) && e.xy[0] !== " " && e.xy !== "??")) status.fatalBlockers.push("稳定区存在发布范围外的已暂存改动，不会混入合并提交。");
-      status.needsStableStash = stableSource.length > 0;
-      status.needsSandboxCommit = sandboxSource.length > 0;
+      status.needsStableStash = status.stableDirtyProduct.length > 0;
+      status.needsSandboxCommit = status.sandboxDirtyProduct.length > 0;
       const range = status.stableHead + ".." + status.sandboxHead;
       status.commitsAhead = Number(await scopedGit(stableRoot, ["rev-list", "--count", range]));
       status.stableAheadOfSandbox = Number(await scopedGit(stableRoot, ["rev-list", "--count", status.sandboxHead + ".." + status.stableHead]));

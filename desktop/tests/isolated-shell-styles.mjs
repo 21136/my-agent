@@ -15,6 +15,7 @@ const SHELL_CSS_FILES = [
   "single-chat-tools.css",
   "composer-companion.css",
   "current-work-overview.css",
+  "music-panel.css",
   "message-reading.css",
   "work-card.css",
 ];

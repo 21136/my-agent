@@ -5,6 +5,33 @@ html[data-theme] .unified-shell[data-perspective="project"] {
   --reading-offset: color-mix(in srgb, var(--ma-accent) 13%, var(--ma-surface-2));
   --reading-mark: color-mix(in srgb, var(--ma-accent) 45%, var(--ma-text-faint));
 }
+html[data-theme] .unified-shell[data-perspective="project"] .unified-history-briefing {
+  margin: 0.15rem 0 0;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 70%, transparent);
+  border-radius: 12px;
+  padding: 0.45rem 0.65rem 0.55rem;
+  background: color-mix(in srgb, var(--ma-surface) 78%, transparent);
+  backdrop-filter: blur(10px) saturate(108%);
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-history-briefing-summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--ma-text);
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-history-briefing-body {
+  margin-top: 0.45rem;
+  max-height: min(52vh, 28rem);
+  overflow: auto;
+  padding-right: 0.25rem;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+html[data-theme] .unified-shell[data-perspective="project"] .unified-history-briefing-foot {
+  margin: 0.35rem 0 0;
+  font-size: 0.74rem;
+  color: var(--ma-text-muted);
+}
 html[data-theme] .unified-shell[data-perspective="project"] .unified-turn-assistant.unified-message-bubble {
   position: relative;
   isolation: isolate;

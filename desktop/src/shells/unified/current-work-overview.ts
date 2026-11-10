@@ -22,13 +22,13 @@ export type CurrentWorkOverviewRequestResult = "sent" | "busy" | "unavailable" |
 
 /** Shown in the 调度 tab before selected-project overview + schedule_preview are authorized. */
 export const CURRENT_WORK_SCHEDULE_EMPTY_MARKUP = `<div class="current-work-zone-empty current-work-schedule-empty" role="status">
-<p>调度是多项目工作台：先只读预览，再按授权候选<strong>并行</strong>启动 worker；不是把事项丢回排队或等待上下文。</p>
+<p>调度是多项目工作台：先看只读预览，再按你的授权<strong>并行</strong>启动任务；不会把事项丢回排队或塞满上下文。</p>
 <ol class="cw-schedule-empty-steps">
 <li>在下方「选择项目来源」勾选最多 6 个已映射项目</li>
 <li>点「查看所选项目」，并在底部确认条逐项授权只读聚合</li>
-<li>授权后此处显示候选 / 受阻说明与「按预览启动」；不会自动开跑</li>
+<li>授权后此处显示候选 / 受阻说明与「按预览启动」；<span class="cw-schedule-nowrap">不会自动开跑</span></li>
 </ol>
-<p class="cw-schedule-empty-note">可跑候选出现后会预填任务与路径，一键走 schedule.dispatch。</p>
+<p class="cw-schedule-empty-note">可跑候选出现后会预填任务与路径，经你确认后再启动。</p>
 </div>`;
 
 export interface CurrentWorkOverviewPanel {
@@ -221,7 +221,11 @@ function renderGroupSummary(group: WorkRecordsOverviewResultEvent["groups"][numb
     : statusCounts.length ? statusCounts.map(([status, count]) => `${GROUP_STATUS_LABELS[status] ?? "状态待确认"} ${count}`).join(" · ")
       : `${group.requirement_count} 项要求`;
   const aggregateStatus = GROUP_STATUS_LABELS[group.status] ?? "状态待确认";
-  return `<div class="unified-current-work-group-summary"><span class="unified-current-work-group-status">${aggregateStatus}</span><span class="unified-current-work-group-counts">${countSummary}</span></div>`;
+  const onlyStatus = statusCounts.length === 1 && statusCounts[0][0] === group.status;
+  const statusHtml = onlyStatus
+    ? `<span class="unified-current-work-group-status">${escapeHtml(aggregateStatus)}</span><span class="unified-current-work-group-counts">${escapeHtml(String(statusCounts[0][1]))} 项要求</span>`
+    : `<span class="unified-current-work-group-status">${escapeHtml(aggregateStatus)}</span><span class="unified-current-work-group-counts">${escapeHtml(countSummary)}</span>`;
+  return `<div class="unified-current-work-group-summary">${statusHtml}</div>`;
 }
 const DETAIL_BATCH_SIZE = WORK_CARD_DEFAULT_VISIBLE_REQUIREMENTS;
 
@@ -243,6 +247,17 @@ function itemAttentionRank(item: WorkRecordsOverviewGroup["items"][number]): num
 
 function itemNeedsAttention(item: WorkRecordsOverviewGroup["items"][number]): boolean {
   return itemAttentionRank(item) < 4 || item.current_results.some(result => result.read_status !== "viewed");
+}
+
+/** Authoritative actionable item count from server projection (stable across group paging). */
+export function overviewAttentionItemTotal(result: WorkRecordsOverviewResultEvent): number | null {
+  const total = result.visibility_counts.attention_visible_items;
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+}
+
+export function overviewAttentionGroupTotal(result: WorkRecordsOverviewResultEvent): number | null {
+  const total = result.visibility_counts.attention_visible_groups;
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
 }
 
 function countVisibleAttentionItems(result: WorkRecordsOverviewResultEvent): number {
@@ -474,8 +489,10 @@ export function buildCurrentWorkOverviewPanel(
   const activeGroups = result.groups.filter(group => group.visibility === "visible");
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
-  const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
-  const visibleAttentionItemCount = countVisibleAttentionItems(result);
+  const serverAttentionItems = overviewAttentionItemTotal(result);
+  const serverAttentionGroups = overviewAttentionGroupTotal(result);
+  const visibleAttentionCount = serverAttentionGroups ?? activeGroups.filter(groupNeedsAttention).length;
+  const visibleAttentionItemCount = serverAttentionItems ?? countVisibleAttentionItems(result);
   const passiveUnreadNote = formatOverviewPassiveUnreadNote(unreadCountText, visibleAttentionItemCount);
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
   const hasIndependentItems = activeGroups.some(group => group.kind === "independent" && group.items.length > 0);
@@ -486,22 +503,28 @@ export function buildCurrentWorkOverviewPanel(
     const html = renderGroup(group, expandedRequirementItemIds, dependencyCandidateItems, options.detailLoadingCursor, options.itemReorganize);
     return groupNeedsAttention(group) ? `<div class="cw-attention-wrap">${html}</div>` : html;
   }).join("");
-  const { bodyHtml: queueBodyHtml, queueCount } = buildLiveQueueSection(
-    `${reorganizePrefix}${groupsHtml}`, activeGroups.length, liveSession);
+  const loadedGroupCount = activeGroups.length;
+  const totalVisibleGroups = result.page.total_visible_groups;
+  const queueHeaderCount = String(loadedGroupCount + liveCount);
+  const { bodyHtml: queueBodyHtml } = buildLiveQueueSection(
+    `${reorganizePrefix}${groupsHtml}`, loadedGroupCount, liveSession);
+  const attentionLabel = serverAttentionItems !== null && serverAttentionItems > 0
+    ? `当前工作 · ${serverAttentionItems} 项需关注`
+    : serverAttentionItems === null && visibleAttentionItemCount > 0
+    ? "当前工作 · 有待办事项"
+    : "";
   const label = mappedScheduleEntry && !shouldShowCurrentWorkOverview(result) && liveCount === 0
     ? "当前工作 · 多项目调度"
     : liveConfirmPending && !activeGroups.length
     ? "当前工作 · 等待确认"
-    : visibleAttentionItemCount > 0
-    ? `当前工作 · ${visibleAttentionItemCount} 项需关注`
-    : visibleAttentionCount > 0
-    ? `当前工作 · ${visibleAttentionCount} 组需关注`
-    : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
-    ? "当前工作 · 状态待确认"
-    : result.unread_status !== "known"
-    ? "当前工作 · 概况待核实"
-    : result.page.has_more ? `当前工作 · 还有余项`
-      : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作";
+    : attentionLabel || (visibleAttentionCount > 0
+      ? `当前工作 · ${visibleAttentionCount} 组需关注`
+      : result.unread_status !== "known" && (liveCount > 0 || attentionCount > 0 || liveConfirmPending)
+      ? "当前工作 · 状态待确认"
+      : result.unread_status !== "known"
+      ? "当前工作 · 概况待核实"
+      : result.page.has_more ? `当前工作 · 还有余项`
+        : waitingForServerCollapse ? "当前工作 · 已查看，待收起" : "当前工作");
   if (liveCount && !activeGroups.length) {
     statusHtml += `<p class="unified-current-work-warning" role="status">Structured 工作组尚未出现；下列来自当前会话中的编排或授权状态。</p>`;
   }
@@ -520,7 +543,7 @@ export function buildCurrentWorkOverviewPanel(
     unreadOverviewLine,
   ].filter(Boolean).join(" · ");
   const overviewPanel = `<section class="cw-panel" data-cw-panel="overview" hidden aria-label="概况"><div class="current-work-strip">${statusHtml}<p class="unified-current-work-summary">${summaryLine}</p></div><div class="cw-metric-row"><div class="cw-metric"><span>可见组</span><strong>${result.visibility_counts.visible_groups}</strong></div><div class="cw-metric"><span>需关注</span><strong>${visibleAttentionCount}</strong></div><div class="cw-metric"><span>未打开</span><strong>${escapeHtml(unreadMetric)}</strong></div></div></section>`;
-  const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span>${queueCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
+  const queuePanel = `<section class="cw-panel is-active" data-cw-panel="queue" aria-label="队列"><div class="current-work-board"><header class="current-work-zone-head"><h3>队列</h3><span title="已加载工作组 / 可见组总数">${queueHeaderCount}</span></header><div class="current-work-zone-body">${queueBodyHtml}</div></div></section>`;
   const schedulePanel = `<section class="cw-panel" data-cw-panel="schedule" hidden aria-label="调度">${scheduleHtml || CURRENT_WORK_SCHEDULE_EMPTY_MARKUP}<div data-cw-schedule-slot></div></section>`;
   const bodyHtml = `<div class="current-work-page-body" data-cw-segment="queue">${overviewPanel}${queuePanel}${schedulePanel}</div>`;
   return {

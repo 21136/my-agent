@@ -20,11 +20,19 @@ function loadTs(relativeOrUrl) {
   return exports;
 }
 const overviewModule = loadTs("../src/shells/unified/current-work-overview.ts");
-const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel } = overviewModule;
+const { dispatchCurrentWorkOverviewRequest, CURRENT_WORK_OVERVIEW_QUERY, shouldShowCurrentWorkOverview, buildCurrentWorkOverviewPanel, appendCurrentWorkOverviewPage, shouldRestartOverviewAfterExpiredCursor, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldScheduleOverviewVisibilityRecheck, currentWorkOverviewRecheckDelayMs, CURRENT_WORK_VISIBILITY_RECHECK_MS, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, overviewAttentionItemTotal } = overviewModule;
 
 const basePage = { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
   total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null };
-const emptyCounts = { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0 };
+const emptyCounts = {
+  visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0,
+  attention_visible_items: 0, attention_visible_groups: 0,
+};
+const withAttentionCounts = (counts) => ({
+  attention_visible_items: 0,
+  attention_visible_groups: 0,
+  ...counts,
+});
 const overview = (overrides = {}) => ({
   type: "work-records.overview.result", session_id: "s1", request_id: "11111111-1111-4111-8111-111111111111",
   state: "no_records", groups: [], unread_important_results: [], unread_status: "known", visibility_limitations: [],
@@ -44,13 +52,13 @@ test("in-progress project requirements expose worker stop for local and mapped r
     items: [{ item_id: "item-live", title: "live task", status: "in_progress", status_counts: { in_progress: 1 },
       requirements: [{ requirement_id: "req-live", text: "work", status: "in_progress" }], current_results: [] }] };
   const result = overview({ state: "visible", groups: [group], unread_status: "unknown",
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   const panel = buildCurrentWorkOverviewPanel(result, { open: true });
   assert.match(panel.bodyHtml, /data-action="cancel_execution" data-expected-status="in_progress">请求停止 worker/);
   const remote = { ...group, source_session_id: "source-session", source_revision: 4 };
   const remotePanel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [remote], unread_status: "unknown",
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
   assert.match(remotePanel.bodyHtml, /data-action="cancel_execution"[^>]*data-source-project-id="project-alpha"/);
   assert.match(remotePanel.bodyHtml, /data-source-revision="4"/);
@@ -76,7 +84,7 @@ test("confirmed multi-project overview remains visible, identifies its source an
           verification_status: "not_verified", recorded_at: 10 }] }], current_results: [] }] };
   const result = overview({ state: "visible", aggregation_scope: "selected_project_sessions",
     selected_project_ids: ["project-beta"], unread_status: "unknown", visibility_limitations: ["cross_session_result_read_receipts_not_projected"],
-    groups: [remote], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    groups: [remote], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   assert.equal(shouldShowCurrentWorkOverview(result), true);
   const expandItem = new Set([JSON.stringify(["project", "project-beta", "remote-item"])]);
@@ -98,7 +106,7 @@ test("dependencies omitted from authorized local and remote projections render a
       requirements: [{ requirement_id: "synthetic-requirement", text: "safe <requirement>", status: "pending", depends_on: [hostileId] }], current_results: [] }] });
   for (const group of [makeGroup("independent", "local"), makeGroup("project", "remote")]) {
     const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group],
-      visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+      visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
       page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
     assert.match(panel.bodyHtml, /依赖关系（1）/);
     assert.match(panel.bodyHtml, /依赖未包含在当前授权事项中，状态无法核实/);
@@ -118,7 +126,7 @@ test("independent cross-item dependencies render real per-requirement editable c
         requirements: [{ requirement_id: "downstream-req", text: "finish downstream", status: "pending" }], current_results: [] },
     ] };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [local],
-    visibility_counts: { visible_groups: 1, visible_items: 2, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 2, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 2 } }), { open: true });
   assert.match(panel.bodyHtml, /fieldset data-work-dependency-editor-for="downstream-req"/);
   assert.match(panel.bodyHtml, /data-work-dependency-ref-item="upstream-item" data-work-dependency-ref-requirement="upstream-req"/);
@@ -147,7 +155,7 @@ test("independent current-session requirements expose a revision editor with no 
     items: [{ item_id: "local-item", title: "local task", status: "pending", status_counts: { pending: 1 },
       requirements: [{ requirement_id: "local-req", text: "original", status: "pending" }], current_results: [] }] };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [local],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } }), { open: true });
   assert.match(panel.bodyHtml, /data-work-record-new-text-for="local-req"/);
   assert.match(panel.bodyHtml, /data-action="revise_requirement"/);
@@ -170,7 +178,7 @@ test("multiple independent groups share one reorganize bar in queue", () => {
   }));
   const panel = buildCurrentWorkOverviewPanel(overview({
     state: "visible", groups,
-    visibility_counts: { visible_groups: 3, visible_items: 3, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 3, visible_items: 3, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 3, total_visible_groups: 3, total_visible_items: 3 },
   }), { open: true, itemReorganize: { mergeMode: false, pickedItemIds: new Set() } });
   assert.equal((panel.bodyHtml.match(/data-cw-reorganize-bar/g) ?? []).length, 1);
@@ -195,7 +203,7 @@ test("30-minute collapse follows authoritative visibility, not read acknowledgem
   assert.equal(shouldShowCurrentWorkOverview(overview()), false);
   const justViewed = overview({ state: "visible", groups: [completedViewedGroup()],
     unread_important_results_total: 0, unread_important_results_truncated: false,
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   });
   assert.equal(justViewed.unread_status, "known");
@@ -205,6 +213,7 @@ test("30-minute collapse follows authoritative visibility, not read acknowledgem
   assert.equal(shouldScheduleOverviewVisibilityRecheck(justViewed), true);  const stillActive = overview({ state: "visible", unread_status: "known", groups: [{ ...completedViewedGroup(),
     status: "in_progress", status_counts: { in_progress: 1 } }], visibility_counts: {
     visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0,
+    attention_visible_items: 1, attention_visible_groups: 1,
   }, page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   assert.equal(shouldScheduleOverviewVisibilityRecheck(stillActive), true, "low-frequency reads can refresh independently while visible work remains active");
   assert.equal(CURRENT_WORK_VISIBILITY_RECHECK_MS, 10 * 60 * 1000);
@@ -216,7 +225,7 @@ test("30-minute collapse follows authoritative visibility, not read acknowledgem
 
   const maturedAndCollapsed = overview({ state: "collapsed", groups: [],
     unread_important_results_total: 0, unread_important_results_truncated: false,
-    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
+    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 },
   });
   assert.equal(maturedAndCollapsed.unread_status, "known");
@@ -227,16 +236,16 @@ test("30-minute collapse follows authoritative visibility, not read acknowledgem
 test("unknown, errors, unread results, and unexpanded server pages fail open", () => {
   assert.equal(shouldShowCurrentWorkOverview(overview({ unread_status: "unknown" })), true);
   assert.equal(shouldScheduleOverviewVisibilityRecheck(overview({ state: "visible", unread_status: "unknown",
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 } })), true,
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 } })), true,
   "missing evidence keeps a low-frequency retry without hiding the entry");
   for (const state of ["error", "cancelled", "expired"]) assert.equal(shouldShowCurrentWorkOverview(overview({ state })), true);
   assert.equal(shouldShowCurrentWorkOverview(overview({ unread_important_results: [{ result_id: "r" }] })), true);
   assert.equal(shouldShowCurrentWorkOverview(overview({ state: "visible", groups: [{ ...completedViewedGroup(), status: "blocked", status_counts: { blocked: 1 } }],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   })), true);
   assert.equal(shouldShowCurrentWorkOverview(overview({ state: "visible", groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 8, visible_items: 8, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 8, visible_items: 8, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 8, total_visible_groups: 8, total_visible_items: 8, has_more: true, next_cursor: "next" },
   })), true);
 });
@@ -256,7 +265,7 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
   }));
   const exact = overview({ state: "visible", unread_important_results: samples,
     unread_important_results_total: 101, unread_important_results_truncated: true,
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     groups: [{ ...completedViewedGroup(), status: "blocked" }],
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
   const exactPanel = buildCurrentWorkOverviewPanel(exact, { open: false });
@@ -266,7 +275,7 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
   assert.equal(shouldShowCurrentWorkOverview(exact), true);
 
   const lowerBound = overview({ state: "collapsed", groups: [], unread_important_results: samples,
-    unread_important_results_truncated: true, visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
+    unread_important_results_truncated: true, visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
   const lowerPanel = buildCurrentWorkOverviewPanel(lowerBound, { open: false });
   assert.equal(lowerPanel.visible, true);
@@ -274,7 +283,7 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
   assert.match(lowerPanel.bodyHtml, /至少 100 条结果尚未打开/);
 
   const legacyKnown = overview({ state: "collapsed", groups: [], unread_important_results: [],
-    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
+    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
   const legacyKnownPanel = buildCurrentWorkOverviewPanel(legacyKnown, { open: false });
   assert.equal(legacyKnownPanel.visible, true, "missing legacy counts must not cause current-work to disappear");
@@ -283,7 +292,7 @@ test("unread summary uses validated total, lower bound, or unknown instead of sa
 
   const legacyUnknown = overview({ state: "collapsed", groups: [], unread_important_results: [],
     unread_status: "unknown",
-    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1 },
+    visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 1, collapsed_items: 1, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 0, total_visible_groups: 0, total_collapsed_groups: 1, total_collapsed_items: 1 } });
   const legacyUnknownPanel = buildCurrentWorkOverviewPanel(legacyUnknown, { open: false });
   assert.match(legacyUnknownPanel.label, /概况待核实/);
@@ -320,7 +329,7 @@ test("overview panel renders only visible groups and trusts server pagination co
   ];
   const collapsed = { ...completedViewedGroup(), id: "old", visibility: "collapsed", items: [{ ...completedViewedGroup().items[0], title: "must not render" }] };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [visible, collapsed],
-    visibility_counts: { visible_groups: 7, visible_items: 9, collapsed_groups: 1, collapsed_items: 1 },
+    visibility_counts: { visible_groups: 7, visible_items: 9, collapsed_groups: 1, collapsed_items: 1, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 7, total_visible_groups: 7, total_visible_items: 9,
       total_collapsed_groups: 1, total_collapsed_items: 1, has_more: true, next_cursor: "next" },
   }), { open: true });
@@ -353,7 +362,7 @@ test("large project groups show all attention items first and bound ordinary ite
     items_page: { kind: "items", group_kind: "project", group_id: "project-large", item_id: null,
       offset: 0, total: items.length, has_more: true, next_cursor: "cursor-items-5" } };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: withAttentionCounts({ visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 }),
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: items.length },
   }), { open: true });
   const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
@@ -381,7 +390,7 @@ test("all attention items remain in the initial project overview even when they 
     status_counts: { blocked: items.length }, item_count: items.length,
     requirement_count: items.length, items };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: withAttentionCounts({ visible_groups: 1, visible_items: items.length, collapsed_groups: 0, collapsed_items: 0 }),
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: items.length },
   }), { open: true });
   const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
@@ -408,7 +417,7 @@ test("paged overview details expose server cursors and merge all item and requir
   const group = { kind: "project", id: "project-large", visibility: "visible", status: "pending",
     status_counts: { pending: 8 }, item_count: 8, requirement_count: 18, items: initialItems, items_page: itemsPage };
   const current = overview({ state: "visible", groups: [group], snapshot_id: "snapshot-a",
-    visibility_counts: { visible_groups: 1, visible_items: 8, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 8, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 8 } });
   const html = buildCurrentWorkOverviewPanel(current, { open: true }).bodyHtml;
   assert.match(html, /还有 3 项/);
@@ -479,7 +488,7 @@ test("legacy full-response groups remain readable with explicit client-side rema
   const group = { kind: "project", id: "legacy-project", visibility: "visible", status: "blocked",
     status_counts: { blocked: 1, completed: 8 }, item_count: 9, requirement_count: 9, items };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: 9, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 9, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 9 },
   }), { open: true });
   const groupHtml = panel.bodyHtml.match(/<article class="unified-current-work-group"[^>]*>[\s\S]*?<\/article>/)?.[0] ?? "";
@@ -504,7 +513,7 @@ test("independent overview groups use their sole item title and never expose ite
   ] };
   const groups = [independent, multiple, untitled];
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups,
-    visibility_counts: { visible_groups: 3, visible_items: 3, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 3, visible_items: 3, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 3, total_visible_groups: 3, total_visible_items: 3 },
   }), { open: true });
 
@@ -514,12 +523,45 @@ test("independent overview groups use their sole item title and never expose ite
   const groupHeadings = [...panel.bodyHtml.matchAll(/<h4>(.*?)<\/h4>/g)].map(([, heading]) => heading);
   assert.deepEqual(groupHeadings, ["&lt;修改简历&gt;", "独立事项组", "独立事项组"]);
 });
+
+test("topbar attention label uses server totals and does not grow with loaded group pages", () => {
+  const blocked = completedViewedGroup();
+  blocked.items[0].status = "blocked";
+  const counts = {
+    visible_groups: 8, visible_items: 20, collapsed_groups: 0, collapsed_items: 0,
+    attention_visible_items: 20, attention_visible_groups: 6,
+  };
+  const firstPage = overview({
+    state: "visible",
+    groups: [blocked],
+    visibility_counts: counts,
+    page: {
+      ...basePage, page_size: 6, offset: 0, total_groups: 8, total_visible_groups: 8, total_visible_items: 20,
+      has_more: true, next_cursor: "cursor-6",
+    },
+  });
+  assert.equal(overviewAttentionItemTotal(firstPage), 20);
+  const panelFirst = buildCurrentWorkOverviewPanel(firstPage, { open: true });
+  assert.match(panelFirst.label, /20 项需关注/);
+  const secondGroup = { ...blocked, id: "p2", items: [{ ...blocked.items[0], item_id: "item-2", title: "extra" }] };
+  const merged = appendCurrentWorkOverviewPage(firstPage, overview({
+    ...firstPage,
+    groups: [secondGroup],
+    visibility_counts: counts,
+    page: { ...firstPage.page, offset: 1, has_more: true, next_cursor: "cursor-7" },
+  }));
+  assert.ok(merged);
+  const panelMerged = buildCurrentWorkOverviewPanel(merged, { open: true });
+  assert.match(panelMerged.label, /20 项需关注/);
+  assert.doesNotMatch(panelMerged.label, /\+/);
+});
+
 test("overview panel escapes stored text and marks unknown read certainty instead of hiding it", () => {
   const group = completedViewedGroup();
   group.items[0].title = "<img src=x>";
   group.items[0].current_results[0].read_status = "unknown";
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", unread_status: "unknown", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 1, attention_visible_groups: 1 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.equal(panel.visible, true);
@@ -541,7 +583,7 @@ test("requirements are collapsed per item while status, read markers, counts, an
   group.items[0].current_results[0].read_status = "unread";
   const sameItemIdInAnotherProject = { ...group, id: "p2" };
   const result = overview({ state: "visible", unread_status: "unknown", groups: [group, sameItemIdInAnotherProject],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   });
 
@@ -605,7 +647,7 @@ test("group and item details use precise conservative status labels", () => {
   ];
   const runningGroup = { ...completedViewedGroup(), id: "p2", status: "in_progress", status_counts: { in_progress: 1 } };
   const panel = buildCurrentWorkOverviewPanel(overview({ state: "visible", groups: [group, runningGroup],
-    visibility_counts: { visible_groups: 2, visible_items: 4, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 2, visible_items: 4, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 2, total_visible_groups: 2, total_visible_items: 4 },
   }), { open: true });
   assert.match(panel.bodyHtml, /group-status">结果待你确认<\/span>/);
@@ -628,7 +670,7 @@ test("single-requirement history renders safely and exposes a fresh cursor for e
   group.items[0].requirements[0].history_page = { page_size: 1, offset: 0, has_more: true,
     next_cursor: "synthetic-cursor-2", scope: "this_requirement_only" };
   const result = overview({ state: "visible", aggregation_scope: "selected_project_sessions", selected_project_ids: ["p1"],
-    groups: [group], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    groups: [group], visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 } });
 
   const expandHistory = new Set([JSON.stringify(["project", "p1", "i1"])]);
@@ -704,7 +746,7 @@ test("schedule preview is shown only for selected-project scope and remains read
     state: "visible", aggregation_scope: "selected_project_sessions", schedule_preview: preview,
     visibility_limitations: ["project_sessions_partial"],
     groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.match(selected.bodyHtml, /只读调度预览/);
@@ -717,7 +759,7 @@ test("schedule preview is shown only for selected-project scope and remains read
 
   const local = buildCurrentWorkOverviewPanel(overview({
     state: "visible", schedule_preview: preview, groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.doesNotMatch(local.bodyHtml, /只读调度预览|ready&amp;safe/,
@@ -737,7 +779,7 @@ test("schedule tab empty state explains read-only multi-project preview entry", 
   const panel = buildCurrentWorkOverviewPanel(overview({
     state: "visible",
     groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.match(panel.bodyHtml, /只读预览/);
@@ -767,7 +809,7 @@ test("schedule shell split keeps slot and launch when preview wraps nested block
     aggregation_scope: "selected_project_sessions",
     schedule_preview: preview,
     groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   const extras = '<form data-schedule-launch><button type="button" data-schedule-launch-send>按预览启动</button></form>';
@@ -889,7 +931,7 @@ test("overview history humanizes worker lifecycle JSON without leaking internal 
     state: "visible",
     unread_status: "known",
     groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true, expandedRequirementItemIds: expandHistory });
   assert.match(panel.bodyHtml, /主机回合已结束/);
@@ -914,7 +956,7 @@ test("quiet drawer: large passive unread counts stay off the header label", () =
     unread_important_results_truncated: false,
     unread_status: "known",
     groups: [completedViewedGroup()],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: false });
   assert.doesNotMatch(panel.label, /未读 34/);
@@ -930,13 +972,13 @@ test("collapsed items hide history walls until the item is expanded", () => {
   ];
   const collapsed = buildCurrentWorkOverviewPanel(overview({
     state: "visible", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true });
   assert.doesNotMatch(collapsed.bodyHtml, /查看历史尝试/);
   const expanded = buildCurrentWorkOverviewPanel(overview({
     state: "visible", groups: [group],
-    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: { visible_groups: 1, visible_items: 1, collapsed_groups: 0, collapsed_items: 0, attention_visible_items: 0, attention_visible_groups: 0 },
     page: { ...basePage, total_groups: 1, total_visible_groups: 1, total_visible_items: 1 },
   }), { open: true, expandedRequirementItemIds: new Set([JSON.stringify(["project", "p1", "i1"])]) });
   assert.match(expanded.bodyHtml, /查看历史尝试（3\/3）/);

@@ -38,12 +38,39 @@ html[data-theme] .unified-shell[data-perspective="project"]:has(.unified-sidebar
 .unified-tool-heading { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .4rem .7rem; border-bottom: 1px solid var(--ma-border); }
 .unified-runtime-tool { flex: 1; min-height: 0; overflow: auto; padding: .75rem; }
 .unified-tool-unavailable { margin: 1rem; }
+.unified-document-unbound {
+  max-width: 36rem;
+  margin: 1.25rem auto;
+  padding: 1rem 1.15rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 82%, transparent);
+  backdrop-filter: blur(10px);
+  line-height: 1.55;
+}
+.unified-document-unbound h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+.unified-document-unbound p { margin: 0.35rem 0; }
+.unified-document-unbound .unified-btn { margin-top: 0.75rem; }
+.unified-shell.is-tool-fullpage .unified-tool-region {
+  background: color-mix(in srgb, var(--ma-surface) 44%, transparent);
+  backdrop-filter: blur(10px) saturate(108%);
+}
 @media (max-width: 800px) {
   .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) { flex-direction: column; }
   .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-stage:has(> .unified-tool-region:not([hidden])) > .unified-chat { flex: 1 1 40%; min-height: 0; }
   .unified-shell:not(.is-tool-fullpage):not(.is-current-work-overlay) .unified-tool-region { flex: 1 1 60%; min-height: 0; border-left: 0; border-top: 1px solid var(--ma-border); }
 }
-.unified-tool-region .settings-category-nav { flex-direction: row; flex-wrap: wrap; padding: .4rem .7rem; }
+.unified-tool-region .settings-category-nav {
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding: .4rem .7rem;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--ma-surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--ma-border);
+}
 .unified-tool-region .settings-category-nav button { padding: .4rem .6rem; }
 .unified-tool-region .settings-category-nav button[aria-current="page"] { background: color-mix(in srgb, var(--ma-accent) 15%, transparent); }
 .unified-tool-region .settings-category-nav button[aria-current="page"]::after { display: none; }

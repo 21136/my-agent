@@ -228,7 +228,7 @@ test("formatDualLaneStrip product status is aligned by default", () => {
   assert.equal(strip.showBlockers, false);
 });
 
-test("formatDualLaneStrip opens details when stable leads", () => {
+test("formatDualLaneStrip keeps git details collapsed until user expands", () => {
   const strip = ui.formatDualLaneStrip({
     stableHead: "abcdef012345",
     sandboxHead: "1234567890ab",
@@ -244,6 +244,6 @@ test("formatDualLaneStrip opens details when stable leads", () => {
   });
   assert.match(strip.stableStatus, /领先实验 2/);
   assert.match(strip.sandboxStatus, /落后稳定 2/);
-  assert.equal(strip.openDetails, true);
+  assert.equal(strip.openDetails, false);
   assert.match(strip.hint, /刷实验/);
 });

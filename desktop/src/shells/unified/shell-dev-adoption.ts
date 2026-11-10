@@ -19,6 +19,23 @@ export function countList(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function shortenDualLaneBlocker(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed) return "";
+  const productPrefix = /^实验区有未提交 product 改动[^：]*：/;
+  if (productPrefix.test(trimmed)) {
+    const tail = trimmed.replace(productPrefix, "");
+    const fileHints = tail.split(/[,，]/).map((part) => part.trim()).filter(Boolean);
+    const count = fileHints.length || (tail.match(/\?\?/g)?.length ?? 0);
+    const n = count > 0 ? count : "若干";
+    return `实验区有未提交改动（${n} 个文件）；展开「详情」查看清单。`;
+  }
+  if (/^稳定区/.test(trimmed) && trimmed.length > 96) {
+    return trimmed.slice(0, 93) + "…";
+  }
+  return trimmed.length > 140 ? `${trimmed.slice(0, 137)}…` : trimmed;
+}
+
 /** Pure formatter for product dual-lane cards (status line + details). */
 export function formatDualLaneStrip(status: Record<string, unknown> | undefined): {
   stableHead: string; sandboxHead: string; stableBranch: string; sandboxBranch: string;
@@ -109,11 +126,7 @@ export function formatDualLaneStrip(status: Record<string, unknown> | undefined)
     sandboxTone = "ok";
   }
 
-  const openDetails = blockers.length > 0
-    || sandboxDirtyCount > 0
-    || stableDirtyCount > 0
-    || (status.needsSandboxSync === true && stableAheadNum > 0)
-    || commitsAheadNum > 0;
+  const openDetails = false;
 
   return {
     stableHead,
@@ -125,7 +138,7 @@ export function formatDualLaneStrip(status: Record<string, unknown> | undefined)
     sandboxDirty,
     stableDirty,
     hint,
-    blockers: blockers.join("\n"),
+    blockers: blockers.map(shortenDualLaneBlocker).filter(Boolean).join("\n"),
     showBlockers: blockers.length > 0,
     stableStatus,
     sandboxStatus,

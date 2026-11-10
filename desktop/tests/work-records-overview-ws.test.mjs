@@ -32,7 +32,11 @@ function harness() {
 const response = (session_id, request_id, overrides = {}) => ({
   type: "work-records.overview.result", session_id, request_id, state: "no_records", groups: [],
   unread_important_results: [], unread_status: "known", visibility_limitations: [],
-  visibility_counts: { visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0 }, snapshot_id: null,
+  visibility_counts: {
+    visible_groups: 0, visible_items: 0, collapsed_groups: 0, collapsed_items: 0,
+    attention_visible_items: 0, attention_visible_groups: 0,
+  },
+  snapshot_id: null,
   page: { page_size: 6, offset: 0, total_groups: 0, total_visible_groups: 0, total_visible_items: 0,
     total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null },
   ...overrides,
@@ -108,6 +112,19 @@ test("structured overview query uses current session, a fresh UUID, and server c
   assert.deepEqual(socket.sent.at(-1), { type: "work-records.overview.query", session_id: SESSION,
     request_id, page_size: 6, cursor: "cursor-token", detail_paging: true });
   assert.match(request_id, /^[0-9a-f-]{36}$/);
+  client.destroy();
+});
+
+test("overview result without attention counts is dropped by client validation", async () => {
+  const { client, socket } = await ready();
+  const received = [];
+  client.onEvent(event => received.push(event));
+  const request_id = client.queryWorkRecordsOverview();
+  const legacy = response(SESSION, request_id);
+  delete legacy.visibility_counts.attention_visible_items;
+  delete legacy.visibility_counts.attention_visible_groups;
+  socket.message(legacy);
+  assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 0);
   client.destroy();
 });
 
@@ -217,7 +234,10 @@ test("overview detail-page response validates and remains scoped to its cursor r
   const page = { kind: "items", group_kind: "project", group_id: "p1", item_id: null,
     offset: 1, total: 2, has_more: false, next_cursor: null };
   const detailEvent = response(SESSION, request_id, { state: "visible", snapshot_id: "snapshot-1", groups: [group], detail_page: page,
-    visibility_counts: { visible_groups: 1, visible_items: 2, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: {
+      visible_groups: 1, visible_items: 2, collapsed_groups: 0, collapsed_items: 0,
+      attention_visible_items: 2, attention_visible_groups: 1,
+    },
     page: { page_size: 6, offset: 0, total_groups: 1, total_visible_groups: 1, total_visible_items: 2,
       total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null } });
   socket.message(detailEvent);
@@ -244,7 +264,10 @@ test("session switch retires a pending detail cursor reply", async () => {
       requirements_page: { kind: "requirements", group_kind: "project", group_id: "p1", item_id: "late-item",
         offset: 0, total: 1, has_more: false, next_cursor: null } }] };
   socket.message(response(SESSION, oldRequest, { state: "visible", snapshot_id: "old-snapshot", groups: [group], detail_page: page,
-    visibility_counts: { visible_groups: 1, visible_items: 6, collapsed_groups: 0, collapsed_items: 0 },
+    visibility_counts: {
+      visible_groups: 1, visible_items: 6, collapsed_groups: 0, collapsed_items: 0,
+      attention_visible_items: 6, attention_visible_groups: 1,
+    },
     page: { page_size: 6, offset: 0, total_groups: 1, total_visible_groups: 1, total_visible_items: 6,
       total_collapsed_groups: 0, total_collapsed_items: 0, has_more: false, next_cursor: null } }));
   assert.equal(received.filter(event => event.type === "work-records.overview.result").length, 0);
@@ -290,7 +313,7 @@ test("source snapshot overview validates provenance and rejects unsafe or corrup
     source_snapshot:{scope:"authorized_source_session_only",mapping_claim:"not_asserted",project_id:"p1",source_session_id:"source-1",source_revision:1,captured_at:"2026-10-30T01:00:00Z",copy_id:"a".repeat(64),intent_state:"reference_queued",card_id:null,viewed_at:null,superseded_snapshot_count:0,superseded_unviewed_count:0},
     items:[{item_id:"i1",title:"source",status:"unknown",status_at_capture:"completed",status_counts:{unknown:1},requirements:[{requirement_id:"r1",text:"req",status:"unknown",status_at_capture:"unknown",worker_facts:[]}],current_results:[]}]};
   source.items[0].requirements[0].worker_facts = [{binding_id:"binding",worker_id:"worker",worker_run_id:"run",host_start:{reservation_id:"reservation",parent_run_id:"parent",turn_epoch:2},host_lifecycle:{sequence:2,status:"model_turn_finished",finish_reason:"completed"},operation_result:"unknown",verification:"not_verified"}];
-  const event=response(SESSION,request_id,{state:"visible",snapshot_id:"snapshot",groups:[source],visibility_counts:{visible_groups:1,visible_items:1,collapsed_groups:0,collapsed_items:0},page:{page_size:6,offset:0,total_groups:1,total_visible_groups:1,total_visible_items:1,total_collapsed_groups:0,total_collapsed_items:0,has_more:false,next_cursor:null}});
+  const event=response(SESSION,request_id,{state:"visible",snapshot_id:"snapshot",groups:[source],visibility_counts:{visible_groups:1,visible_items:1,collapsed_groups:0,collapsed_items:0,attention_visible_items:1,attention_visible_groups:1},page:{page_size:6,offset:0,total_groups:1,total_visible_groups:1,total_visible_items:1,total_collapsed_groups:0,total_collapsed_items:0,has_more:false,next_cursor:null}});
   for (const bad of [{...source,attention_reason:["worker_result_unverified"]}, {...source,attention_status:["unknown"]}, {...source,visibility_timer_status:"bad"}, {...source,source_snapshot:{...source.source_snapshot,intent_state:["reference_queued"]}}, {...source,items:[{...source.items[0],requirements:[{...source.items[0].requirements[0],worker_facts:[{...source.items[0].requirements[0].worker_facts[0],host_lifecycle:{sequence:2,status:["model_turn_finished"],finish_reason:"completed"}}]}]}]}, {...source,source_snapshot:{...source.source_snapshot,mapping_claim:"current"}}, {...source,source_snapshot:{...source.source_snapshot,source_session_id:""}},
     {...source,source_snapshot:{...source.source_snapshot,superseded_unviewed_count:3}}, {...source,items:[{...source.items[0],status:"completed"}]},
     {...source,items:[{...source.items[0],requirements:[{...source.items[0].requirements[0],worker_facts:[{...source.items[0].requirements[0].worker_facts[0],verification:"verified"}]}]}]},
@@ -303,11 +326,11 @@ test("source overview accepts backend visibility timer and attention states with
   const base={kind:"linked_source_snapshot",id:"linked-source-"+"a".repeat(64),visibility:"visible",status:"unknown",status_counts:{unknown:1},item_count:1,requirement_count:1,attention_status:"unknown",attention_reason:"captured_requirement_unresolved",visibility_timer_status:"elapsed",source_snapshot:{scope:"authorized_source_session_only",mapping_claim:"not_asserted",project_id:"p1",source_session_id:"source-1",source_revision:1,captured_at:"2026-10-30T01:00:00Z",copy_id:"a".repeat(64),intent_state:"reference_queued",card_id:null,viewed_at:null,superseded_snapshot_count:0,superseded_unviewed_count:0},items:[{item_id:"i1",title:"source",status:"unknown",status_at_capture:"in_progress",status_counts:{unknown:1},requirements:[{requirement_id:"r1",text:"req",status:"unknown",status_at_capture:"in_progress",worker_facts:[]}],current_results:[]}]};
   for (const [reason,timer] of [["captured_requirement_unresolved","elapsed"],["superseded_snapshot_attention","waiting"],["view_evidence_unavailable","unavailable"],["view_not_confirmed","not_viewed"],["publication_pending","unknown"]]) {
     const {client,socket}=await ready(), received=[];client.onEvent(e=>received.push(e));const request_id=client.queryWorkRecordsOverview();
-    const event=response(SESSION,request_id,{state:"visible",snapshot_id:"snapshot",groups:[{...base,attention_reason:reason,visibility_timer_status:timer}],visibility_counts:{visible_groups:1,visible_items:1,collapsed_groups:0,collapsed_items:0},page:{page_size:6,offset:0,total_groups:1,total_visible_groups:1,total_visible_items:1,total_collapsed_groups:0,total_collapsed_items:0,has_more:false,next_cursor:null}});
+    const event=response(SESSION,request_id,{state:"visible",snapshot_id:"snapshot",groups:[{...base,attention_reason:reason,visibility_timer_status:timer}],visibility_counts:{visible_groups:1,visible_items:1,collapsed_groups:0,collapsed_items:0,attention_visible_items:1,attention_visible_groups:1},page:{page_size:6,offset:0,total_groups:1,total_visible_groups:1,total_visible_items:1,total_collapsed_groups:0,total_collapsed_items:0,has_more:false,next_cursor:null}});
     for(const bad of [{...event.groups[0],attention_status:"none"},{...event.groups[0],attention_reason:"elapsed_terminal_capture"},{...event.groups[0],visibility_timer_status:"bogus"},{...event.groups[0],visibility:"collapsed",attention_status:"none",attention_reason:"elapsed_terminal_capture",visibility_timer_status:"elapsed"}]) socket.message({...event,groups:[bad]});
     assert.equal(received.length,0);socket.message(event);assert.equal(received.length,1,`${reason}/${timer}`);client.destroy();
   }
   const {client,socket}=await ready(), received=[];client.onEvent(e=>received.push(e));const request_id=client.queryWorkRecordsOverview();
-  socket.message(response(SESSION,request_id,{state:"collapsed",snapshot_id:"snapshot",groups:[],visibility_counts:{visible_groups:0,visible_items:0,collapsed_groups:1,collapsed_items:1},page:{page_size:6,offset:0,total_groups:0,total_visible_groups:0,total_visible_items:0,total_collapsed_groups:1,total_collapsed_items:1,has_more:false,next_cursor:null}}));
+  socket.message(response(SESSION,request_id,{state:"collapsed",snapshot_id:"snapshot",groups:[],visibility_counts:{visible_groups:0,visible_items:0,collapsed_groups:1,collapsed_items:1,attention_visible_items:0,attention_visible_groups:0},page:{page_size:6,offset:0,total_groups:0,total_visible_groups:0,total_visible_items:0,total_collapsed_groups:1,total_collapsed_items:1,has_more:false,next_cursor:null}}));
   assert.equal(received.length,1);assert.equal(received[0].state,"collapsed");client.destroy();
 });

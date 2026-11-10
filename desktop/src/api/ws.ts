@@ -176,7 +176,14 @@ export type WorkRecordsOverviewResultEvent = {
   unread_important_results: WorkRecordsOverviewUnreadResult[];
   unread_important_results_total?: number; unread_important_results_truncated?: boolean;
   unread_status: "known" | "unknown"; visibility_limitations: string[];
-  visibility_counts: { visible_groups: number; visible_items: number; collapsed_groups: number; collapsed_items: number };
+  visibility_counts: {
+    visible_groups: number;
+    visible_items: number;
+    collapsed_groups: number;
+    collapsed_items: number;
+    attention_visible_items: number;
+    attention_visible_groups: number;
+  };
   snapshot_id: string | null;
   history_project_id?: string; history_item_id?: string; history_requirement_id?: string;
   history_scope?: "selected_projects_history"; history_sources?: Array<{ project_id: string; session_id: string; revision: number }>;
@@ -1708,8 +1715,10 @@ export class AgentWsClient {
       || !(event.detail_page === undefined || event.detail_page === null || cardObject(event.detail_page))) return false;
     const counts = event.visibility_counts;
     const page = event.page;
-    const countFields = ["visible_groups", "visible_items", "collapsed_groups", "collapsed_items"];
+    const countFields = ["visible_groups", "visible_items", "collapsed_groups", "collapsed_items", "attention_visible_items", "attention_visible_groups"];
     if (!countFields.every(key => nonnegative(counts[key]))) return false;
+    if ((counts.attention_visible_items as number) > (counts.visible_items as number)) return false;
+    if ((counts.attention_visible_groups as number) > (counts.visible_groups as number)) return false;
     const pageFields = ["page_size", "offset", "total_groups", "total_visible_groups", "total_visible_items", "total_collapsed_groups", "total_collapsed_items"];
     if (!pageFields.every(key => nonnegative(page[key]))) return false;
     const pageSize = page.page_size as number;

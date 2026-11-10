@@ -101,6 +101,7 @@ import { buildScheduleDispatchWorkers, renderScheduleLaunchForm } from "./schedu
 import { appendMergedHistoryPage, clearMergedHistory, type MergedHistoryRow, type MergedHistoryState } from "./merged-history-pages";
 import { evolutionView, type EvolutionProjection, type EvolutionView } from "../../evolution-state";
 import { parseProjectWorkerVerification, parseWorkRecordAutoCandidate, renderConfirmCardHtml, renderComposerOrdinaryConfirmDetailHtml, renderComposerScopedConfirmDetailHtml, summarizeConfirmPreview, isWorkCardRecallPreview, isConfirmChoiceAllowed, renderWorkCardRecallReadable, renderWorkCardRecallBatch, parseWorkRecordReplyExcerpt, isProjectWorkerBatchAuthorizationPreview, renderProjectWorkerBatchAuthorizationHtml } from "./confirm-preview";
+import { isWorkRecordsOverviewBriefing, renderWorkRecordsBriefingShell, workRecordsBriefingSummary } from "./companion-chat-briefing";
 import { WorkCardPresentationRegistry, WorkCardResultExcerptView, renderWorkCardEntry, requestHistoryCardRead, failPendingHistoryCardRead, shouldClearPendingHistoryCardReads, clearPendingHistoryCardReads, bindWorkCardResultViewEvents, bindWorkCardSnapshotViewEvents, receiveWorkCardPresentation, companionHomeDefersWorkCardChatPresentation } from "./work-card-presentation";
 import { mergeCurrentWorkOverviewDetailPage, appendCurrentWorkOverviewPage, buildCurrentWorkOverviewPanel, collectWorkRecordDependencyRefs, renderCurrentWorkShellPanel, currentWorkOverviewRecheckDelayMs, dispatchCurrentWorkOverviewRequest, shouldFallbackOverviewDetailPaging, shouldRefreshOverviewForExecutionState, shouldRestartOverviewAfterExpiredCursor, shouldScheduleOverviewVisibilityRecheck } from "./current-work-overview";
 import type { CurrentWorkLiveSessionInput } from "./current-work-live-session";
@@ -589,7 +590,7 @@ export function mountUnifiedShell(
         const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
         return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
       }).join("");
-      currentWorkExtras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="选择项目来源"><header class="unified-selected-project-overview-head"><h3>选择项目来源（${mappedProjectChoices.length}）</h3><p class="unified-selected-project-overview-lede">勾选后点下方按钮发起<strong>只读</strong>聚合；不会自动启动 worker。</p></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p class="unified-selected-project-overview-help">概况与统一历史均需逐项确认授权；最多选择 6 个已映射项目。</p></div></section>`;
+      currentWorkExtras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="选择项目来源"><header class="unified-selected-project-overview-head"><h3>选择项目来源（${mappedProjectChoices.length}）</h3><p class="unified-selected-project-overview-lede">勾选后点下方按钮发起<strong>只读</strong>聚合；经你确认后再启动任务。</p></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p class="unified-selected-project-overview-help">概况与统一历史均需逐项确认授权；最多选择 6 个已映射项目。</p></div></section>`;
     }
     renderTopbar(
       topbarEl,
@@ -639,7 +640,7 @@ export function mountUnifiedShell(
           const checked = selectedMultiProjectOverviewIds.has(project.id) ? " checked" : "";
           return `<label><input type="checkbox" data-project-overview-id="${escapeHtml(project.id)}"${checked}> ${escapeHtml(project.id)}</label>`;
         }).join("");
-        extras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="选择项目来源"><header class="unified-selected-project-overview-head"><h3>选择项目来源（${mappedProjectChoices.length}）</h3><p class="unified-selected-project-overview-lede">勾选后点下方按钮发起<strong>只读</strong>聚合；不会自动启动 worker。</p></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p class="unified-selected-project-overview-help">概况与统一历史均需逐项确认授权；最多选择 6 个已映射项目。</p></div></section>`;
+        extras += `<section class="unified-selected-project-overview" data-selected-project-overview aria-label="选择项目来源"><header class="unified-selected-project-overview-head"><h3>选择项目来源（${mappedProjectChoices.length}）</h3><p class="unified-selected-project-overview-lede">勾选后点下方按钮发起<strong>只读</strong>聚合；经你确认后再启动任务。</p></header><div class="unified-selected-project-overview-popover"><div class="unified-selected-project-overview-list">${choices}</div><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-overview>查看所选项目</button><button type="button" class="unified-btn unified-btn-ghost" data-run-selected-project-history>查看所选项目统一历史</button><p class="unified-selected-project-overview-help">概况与统一历史均需逐项确认授权；最多选择 6 个已映射项目。</p></div></section>`;
       }
       if (mergedHistory.page && mergedHistory.sources.length) {
         const rows = mergedHistory.rows.map((row: MergedHistoryRow) => `<li>${escapeHtml(row.project_id)} · ${escapeHtml(row.item_title ?? row.item_id)} · ${escapeHtml(row.requirement_text ?? "")} · ${escapeHtml(row.status)} · ${escapeHtml(row.summary)} · ${escapeHtml(row.verification_status)}</li>`).join("");
@@ -1330,6 +1331,7 @@ function refreshGlobalRoleModels(): void {
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
           <div class="unified-composer-meta" id="unified-composer-meta">
+            <p class="unified-companion-tool-hint hidden" id="unified-companion-tool-hint" role="status" hidden></p>
             <div class="unified-status" id="unified-status"></div>
             <div class="unified-token-bar hidden" id="unified-token-bar"></div>
           </div>
@@ -1500,6 +1502,7 @@ function refreshGlobalRoleModels(): void {
   window.addEventListener("resize", sizeCurrentWorkPopover, { passive: true });
   const composerMetaEl = root.querySelector<HTMLElement>("#unified-composer-meta")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
+  const companionToolHintEl = root.querySelector<HTMLElement>("#unified-companion-tool-hint")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
   const fallbackWorldStorage = new Map<string, string>();
@@ -1877,12 +1880,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return perspective !== "night";
   }
 
+  function setCompanionToolHint(text: string): void {
+    const trimmed = text.trim();
+    companionToolHintEl.textContent = trimmed;
+    companionToolHintEl.classList.toggle("hidden", !trimmed);
+    companionToolHintEl.hidden = !trimmed;
+    syncComposerMetaVisibility();
+  }
+
   function syncComposerMetaVisibility(): void {
+    const hintVisible = !companionToolHintEl.hidden;
     const statusVisible =
       !statusEl.hidden && !statusEl.classList.contains("is-idle");
     const tokenVisible =
       !tokenBar.hidden && !tokenBar.classList.contains("hidden");
-    const showMeta = statusVisible || tokenVisible;
+    const showMeta = hintVisible || statusVisible || tokenVisible;
     composerMetaEl.classList.toggle("hidden", !showMeta);
     composerMetaEl.hidden = !showMeta;
   }
@@ -3306,7 +3318,15 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectState.railTab = "now";
     projectState.overlayPanel = null;
     shellEl.dataset.rail = "now";
+    setCompanionToolHint("");
+    clearDocGateStatus();
     setMainFocus("chat");
+  }
+
+  const DOC_GATE_STATUS = new Set(["请先打开项目"]);
+
+  function clearDocGateStatus(): void {
+    if (DOC_GATE_STATUS.has(statusText)) setStatus("就绪");
   }
 
   function syncMainFocusView(): void {
@@ -3369,6 +3389,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     } else if (focus === "settings") {
       renderSettingsStage();
       if (projectState.settingsSection === "models") refreshGlobalRoleModels();
+      settingsEl.scrollTop = 0;
     }
     syncMusicViewBounds();
     syncShellDevViewBounds();
@@ -3633,7 +3654,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     const panel = document.createElement("div");
     panel.className = "shell-dev-slot-placeholder";
     panel.innerHTML = `<p>原生预览未嵌入（页内 iframe 无法加载完整桌面壳）。</p>
-      <p class="shell-dev-slot-hint">请用 <code>start-desktop.bat</code> 启动（含 5174 预览轨）；若只要主壳可设 <code>MY_AGENT_SKIP_PREVIEW_DEV=1</code>。</p>
+      <p class="shell-dev-slot-hint">预览尚未连接。请确认桌面已启动并点「重新加载」；更多连接说明见「高级诊断」。</p>
       <div class="shell-dev-slot-actions">
         <button type="button" class="unified-btn" data-shell-dev-open-preview>在浏览器打开预览轨</button>
         <button type="button" class="unified-btn" data-shell-dev-open-main>在浏览器打开主壳</button>
@@ -3978,7 +3999,14 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
 
   function renderDocumentPane(): void {
     if (!projectState.projectId) {
-      documentEl.innerHTML = `<p class="unified-tool-unavailable" role="status">当前对话未绑定项目，文档暂不可用。</p>`;
+      documentEl.innerHTML = `<section class="unified-document-unbound" role="status" aria-labelledby="unbound-doc-heading">
+        <h2 id="unbound-doc-heading">文档</h2>
+        <p>主对话未绑定项目，不能在这里打开项目文档树。</p>
+        <p>可在对话中说明要查看的内容，或切换到<strong>已绑定项目</strong>的会话线后再开文档。</p>
+        <button type="button" class="unified-btn unified-btn-ghost" data-action="document-back-chat">回到对话</button>
+      </section>`;
+      documentEl.querySelector<HTMLButtonElement>("[data-action='document-back-chat']")
+        ?.addEventListener("click", () => showNowChat(), { once: true });
       return;
     }
     const path = projectState.currentDocPath;
@@ -4112,8 +4140,10 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       || sortProjectDocs(projectState.projectDocs)[0]?.path
       || "";
     if (!canRequestProjectDocs(projectState.projectId)) {
-      setMainFocus("document");
-      setStatus("请先打开项目");
+      setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
+      projectState.railTab = "now";
+      shellEl.dataset.rail = "now";
+      setMainFocus("chat");
       return;
     }
     if (target) {
@@ -4925,8 +4955,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       return `<div data-turn-index="${block.turnIndex}">${renderReviewCallout(title, detail, block.status === "running")}</div>`;
     }
     if (block.kind === "assistant" || block.kind === "assistant-streaming") {
+      const companionHome = perspective === "project" && !projectState.projectId;
+      if (companionHome && block.kind === "assistant" && isWorkRecordsOverviewBriefing(block.text)) {
+        const bodyHtml = renderWorkRecordsBriefingShell(
+          escapeHtml(workRecordsBriefingSummary(block.text)),
+          renderMarkdown(block.text),
+        );
+        return `<article class="unified-turn unified-turn-assistant unified-message-bubble unified-history-briefing-turn" data-turn-index="${block.turnIndex}">
+          <div class="unified-turn-label">助手</div>
+          <div class="unified-turn-body">${bodyHtml}</div>
+        </article>`;
+      }
       let cls = "unified-turn unified-turn-assistant";
-      const readingLayout = perspective === "project" ? messageReadingLayout(block.text) : null;
+      const readingLayout = perspective === "project"
+        ? messageReadingLayout(block.text, { companionHome })
+        : null;
       if (readingLayout) cls += ` unified-message-${readingLayout}`;
       if (perspective === "night") {
         if (!isRecentTurnBlock(block.turnIndex)) cls += " unified-turn-dim";
