@@ -688,9 +688,11 @@ def test_default_page_only_paginates_six_visible_groups_and_counts_collapsed_sep
     assert {group["items"][0]["title"] for group in result["groups"]} == {
         "b-active-1", "d-active-2", "f-active-3", "g-active-4", "h-active-5", "i-active-6",
     }
-    assert result["visibility_counts"] == {
-        "visible_groups": 6, "visible_items": 6, "collapsed_groups": 3, "collapsed_items": 3,
-    }
+    counts = result["visibility_counts"]
+    assert counts["visible_groups"] == 6 and counts["visible_items"] == 6
+    assert counts["collapsed_groups"] == 3 and counts["collapsed_items"] == 3
+    assert counts["attention_visible_items"] >= 0
+    assert counts["attention_visible_groups"] >= 0
     assert result["page"]["total_visible_groups"] == 6
     assert result["page"]["total_visible_items"] == 6
     assert result["page"]["has_more"] is False
@@ -738,9 +740,11 @@ def test_project_scoped_projection_collapses_mature_project_a_but_keeps_unread_p
     result = query_work_records_overview(session)
 
     assert [group["id"] for group in result["groups"]] == ["project-beta"]
-    assert result["visibility_counts"] == {
-        "visible_groups": 1, "visible_items": 1, "collapsed_groups": 1, "collapsed_items": 1,
-    }
+    counts = result["visibility_counts"]
+    assert counts["visible_groups"] == 1 and counts["visible_items"] == 1
+    assert counts["collapsed_groups"] == 1 and counts["collapsed_items"] == 1
+    assert counts["attention_visible_items"] == 1
+    assert counts["attention_visible_groups"] == 1
     beta_result = result["groups"][0]["items"][0]["current_results"]
     assert beta_result == [{
         "requirement_id": requirement_by_project["project-beta"][0],

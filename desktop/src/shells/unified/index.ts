@@ -1331,6 +1331,7 @@ function refreshGlobalRoleModels(): void {
         <div class="unified-composer-dock" id="unified-composer-dock">
           <section class="unified-expand hidden" id="unified-expand"></section>
           <div class="unified-composer-meta" id="unified-composer-meta">
+            <p class="unified-companion-tool-hint hidden" id="unified-companion-tool-hint" role="status" hidden></p>
             <div class="unified-status" id="unified-status"></div>
             <div class="unified-token-bar hidden" id="unified-token-bar"></div>
           </div>
@@ -1501,6 +1502,7 @@ function refreshGlobalRoleModels(): void {
   window.addEventListener("resize", sizeCurrentWorkPopover, { passive: true });
   const composerMetaEl = root.querySelector<HTMLElement>("#unified-composer-meta")!;
   const statusEl = root.querySelector<HTMLElement>("#unified-status")!;
+  const companionToolHintEl = root.querySelector<HTMLElement>("#unified-companion-tool-hint")!;
   const composer = root.querySelector<HTMLElement>("#unified-composer")!;
   const input = root.querySelector<HTMLTextAreaElement>("#unified-input")!;
   const fallbackWorldStorage = new Map<string, string>();
@@ -1878,12 +1880,21 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     return perspective !== "night";
   }
 
+  function setCompanionToolHint(text: string): void {
+    const trimmed = text.trim();
+    companionToolHintEl.textContent = trimmed;
+    companionToolHintEl.classList.toggle("hidden", !trimmed);
+    companionToolHintEl.hidden = !trimmed;
+    syncComposerMetaVisibility();
+  }
+
   function syncComposerMetaVisibility(): void {
+    const hintVisible = !companionToolHintEl.hidden;
     const statusVisible =
       !statusEl.hidden && !statusEl.classList.contains("is-idle");
     const tokenVisible =
       !tokenBar.hidden && !tokenBar.classList.contains("hidden");
-    const showMeta = statusVisible || tokenVisible;
+    const showMeta = hintVisible || statusVisible || tokenVisible;
     composerMetaEl.classList.toggle("hidden", !showMeta);
     composerMetaEl.hidden = !showMeta;
   }
@@ -3307,14 +3318,12 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
     projectState.railTab = "now";
     projectState.overlayPanel = null;
     shellEl.dataset.rail = "now";
+    setCompanionToolHint("");
     clearDocGateStatus();
     setMainFocus("chat");
   }
 
-  const DOC_GATE_STATUS = new Set([
-    "请先打开项目",
-    "主对话未绑定项目；可在对话中说明要查看哪份文档，或先切换到已绑定项目的会话线。",
-  ]);
+  const DOC_GATE_STATUS = new Set(["请先打开项目"]);
 
   function clearDocGateStatus(): void {
     if (DOC_GATE_STATUS.has(statusText)) setStatus("就绪");
@@ -4131,7 +4140,7 @@ function timeOfDayPartnerPlaceholder(mode: "agent" | "ask" = "agent"): string {
       || sortProjectDocs(projectState.projectDocs)[0]?.path
       || "";
     if (!canRequestProjectDocs(projectState.projectId)) {
-      setStatus("主对话未绑定项目；可在对话中说明要查看哪份文档，或先切换到已绑定项目的会话线。");
+      setCompanionToolHint("文档需在已绑定项目的会话中使用；可在对话说明想看的文档，或切换到对应会话线。");
       projectState.railTab = "now";
       shellEl.dataset.rail = "now";
       setMainFocus("chat");

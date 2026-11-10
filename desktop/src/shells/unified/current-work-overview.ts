@@ -249,6 +249,17 @@ function itemNeedsAttention(item: WorkRecordsOverviewGroup["items"][number]): bo
   return itemAttentionRank(item) < 4 || item.current_results.some(result => result.read_status !== "viewed");
 }
 
+/** Authoritative actionable item count from server projection (stable across group paging). */
+export function overviewAttentionItemTotal(result: WorkRecordsOverviewResultEvent): number | null {
+  const total = result.visibility_counts.attention_visible_items;
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+}
+
+export function overviewAttentionGroupTotal(result: WorkRecordsOverviewResultEvent): number | null {
+  const total = result.visibility_counts.attention_visible_groups;
+  return Number.isSafeInteger(total) && total >= 0 ? total : null;
+}
+
 function countVisibleAttentionItems(result: WorkRecordsOverviewResultEvent): number {
   let count = 0;
   for (const group of result.groups) {
@@ -478,8 +489,10 @@ export function buildCurrentWorkOverviewPanel(
   const activeGroups = result.groups.filter(group => group.visibility === "visible");
   const expandedRequirementItemIds = options.expandedRequirementItemIds ?? new Set<string>();
   const dependencyCandidateItems = activeGroups.filter(group => group.kind === "independent").flatMap(group => group.items);
-  const visibleAttentionCount = activeGroups.filter(groupNeedsAttention).length;
-  const visibleAttentionItemCount = countVisibleAttentionItems(result);
+  const serverAttentionItems = overviewAttentionItemTotal(result);
+  const serverAttentionGroups = overviewAttentionGroupTotal(result);
+  const visibleAttentionCount = serverAttentionGroups ?? activeGroups.filter(groupNeedsAttention).length;
+  const visibleAttentionItemCount = serverAttentionItems ?? countVisibleAttentionItems(result);
   const passiveUnreadNote = formatOverviewPassiveUnreadNote(unreadCountText, visibleAttentionItemCount);
   // Keep server order for overview contracts/tests; mark attention visually instead of re-sorting columns.
   const hasIndependentItems = activeGroups.some(group => group.kind === "independent" && group.items.length > 0);
@@ -492,15 +505,13 @@ export function buildCurrentWorkOverviewPanel(
   }).join("");
   const loadedGroupCount = activeGroups.length;
   const totalVisibleGroups = result.page.total_visible_groups;
-  const queueHeaderCount = result.page.has_more && totalVisibleGroups > loadedGroupCount
-    ? `${loadedGroupCount}/${totalVisibleGroups}`
-    : String(loadedGroupCount + liveCount);
+  const queueHeaderCount = String(loadedGroupCount + liveCount);
   const { bodyHtml: queueBodyHtml } = buildLiveQueueSection(
     `${reorganizePrefix}${groupsHtml}`, loadedGroupCount, liveSession);
-  const attentionLabel = visibleAttentionItemCount > 0
-    ? result.page.has_more
-      ? `当前工作 · ${visibleAttentionItemCount}+ 项需关注（已加载 ${loadedGroupCount}/${totalVisibleGroups} 组）`
-      : `当前工作 · ${visibleAttentionItemCount} 项需关注`
+  const attentionLabel = serverAttentionItems !== null && serverAttentionItems > 0
+    ? `当前工作 · ${serverAttentionItems} 项需关注`
+    : serverAttentionItems === null && visibleAttentionItemCount > 0
+    ? "当前工作 · 有待办事项"
     : "";
   const label = mappedScheduleEntry && !shouldShowCurrentWorkOverview(result) && liveCount === 0
     ? "当前工作 · 多项目调度"

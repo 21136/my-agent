@@ -5025,6 +5025,14 @@ html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta {
   border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 58%, transparent);
 }
 
+.unified-companion-tool-hint {
+  margin: 0 0 0.2rem;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--ma-text-muted);
+}
+
 html[data-theme] .unified-shell[data-main-focus="chat"] .unified-composer-meta .unified-status {
   line-height: 1.45;
 }

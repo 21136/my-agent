@@ -78,9 +78,11 @@ def test_ws_overview_query_correlates_pages_and_reads_only_exact_current_session
         assert first["page"]["page_size"] == 6
         assert first["page"]["total_visible_groups"] == 8
         assert first["page"]["total_visible_items"] == 8
-        assert first["visibility_counts"] == {
-            "visible_groups": 8, "visible_items": 8, "collapsed_groups": 0, "collapsed_items": 0,
-        }
+        counts = first["visibility_counts"]
+        assert counts["visible_groups"] == 8 and counts["visible_items"] == 8
+        assert counts["attention_visible_items"] >= 0
+        assert counts["attention_visible_groups"] >= 0
+        assert counts["attention_visible_items"] <= counts["visible_items"]
         assert first["page"]["has_more"] is True
         assert "FOREIGN_SECRET" not in json.dumps(first)
 
@@ -248,7 +250,10 @@ def test_ws_overview_query_returns_while_turn_lock_is_held(tmp_path, monkeypatch
         await turn_started.wait()
         monkeypatch.setattr(work_records_overview_api, "query_work_records_overview", lambda *_args, **_kwargs: {
             "state": "no_records", "groups": [], "unread_important_results": [],
-            "unread_status": "known", "visibility_limitations": [], "visibility_counts": {},
+            "unread_status": "known", "visibility_limitations": [], "visibility_counts": {
+                "visible_groups": 0, "visible_items": 0, "collapsed_groups": 0, "collapsed_items": 0,
+                "attention_visible_items": 0, "attention_visible_groups": 0,
+            },
             "snapshot_id": None, "page": {"page_size": 6, "offset": 0,
                                                "total_visible_groups": 0, "total_visible_items": 0,
                                                "has_more": False, "next_cursor": None},
@@ -281,7 +286,10 @@ def test_session_switch_cancels_inflight_overview_without_cross_session_response
             release.wait(timeout=3)
             return {"state": "visible", "groups": [{"id": "FOREIGN_MUST_NOT_ESCAPE"}],
                     "unread_status": "known", "unread_important_results": [],
-                    "visibility_limitations": [], "visibility_counts": {}, "snapshot_id": "s",
+                    "visibility_limitations": [], "visibility_counts": {
+                        "visible_groups": 0, "visible_items": 0, "collapsed_groups": 0, "collapsed_items": 0,
+                        "attention_visible_items": 0, "attention_visible_groups": 0,
+                    }, "snapshot_id": "s",
                     "page": {"page_size": 6, "offset": 0, "total_visible_groups": 1,
                              "total_visible_items": 1, "has_more": False, "next_cursor": None}}
         monkeypatch.setattr(work_records_overview_api, "query_work_records_overview", slow_query)

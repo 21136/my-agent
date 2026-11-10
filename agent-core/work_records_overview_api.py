@@ -35,6 +35,82 @@ _MAX_CURSOR_CHARS = 4096
 _DETAIL_PAGE_SIZE = 5
 _MAX_UNREAD_SAMPLE = 100
 _STATUS_ORDER = ("blocked", "unknown", "waiting_confirmation", "in_progress", "stopped", "queued", "pending", "completed")
+_ITEM_ATTENTION_ORDER = ("blocked", "unknown", "in_progress", "stopped", "pending", "completed")
+
+
+def _item_attention_rank(status: str) -> int:
+    try:
+        return _ITEM_ATTENTION_ORDER.index(status)
+    except ValueError:
+        return 1
+
+
+def _item_needs_attention(item: dict[str, Any]) -> bool:
+    status = item.get("status")
+    if not isinstance(status, str):
+        return True
+    if _item_attention_rank(status) < 4:
+        return True
+    for result in item.get("current_results", []):
+        if not isinstance(result, dict):
+            continue
+        if result.get("read_status") != "viewed":
+            return True
+    return False
+
+
+def _group_needs_attention(group: dict[str, Any]) -> bool:
+    if group.get("visibility") != "visible":
+        return False
+    requirement_count = group.get("requirement_count")
+    if not isinstance(requirement_count, int) or requirement_count <= 0:
+        return True
+    status_counts = group.get("status_counts")
+    if not isinstance(status_counts, dict):
+        return True
+    counts = [(key, value) for key, value in status_counts.items() if isinstance(value, int) and value > 0]
+    if not counts or any(value < 0 or (value > 0 and key != "completed") for key, value in counts):
+        return True
+    if status_counts.get("completed", 0) != requirement_count:
+        return True
+    items = group.get("items") if isinstance(group.get("items"), list) else []
+    requirements: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for requirement in item.get("requirements", []):
+            if isinstance(requirement, dict):
+                requirements.append(requirement)
+    if len(requirements) != requirement_count or any(req.get("status") != "completed" for req in requirements):
+        return True
+    results: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for result in item.get("current_results", []):
+            if isinstance(result, dict):
+                results.append(result)
+    by_requirement: dict[str, list[dict[str, Any]]] = {}
+    for result in results:
+        requirement_id = result.get("requirement_id")
+        if isinstance(requirement_id, str):
+            by_requirement.setdefault(requirement_id, []).append(result)
+    return any(
+        len(by_requirement.get(str(req.get("requirement_id")), [])) != 1
+        or by_requirement[str(req.get("requirement_id"))][0].get("read_status") != "viewed"
+        for req in requirements
+        if isinstance(req.get("requirement_id"), str)
+    )
+
+
+def _attention_visibility_counts(visible_groups: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "attention_visible_items": sum(
+            1 for group in visible_groups for item in (group.get("items") or [])
+            if isinstance(item, dict) and _item_needs_attention(item)
+        ),
+        "attention_visible_groups": sum(1 for group in visible_groups if _group_needs_attention(group)),
+    }
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -778,8 +854,11 @@ def _empty(state: str, *, reason: str | None = None) -> dict[str, Any]:
         "groups": [],
         "unread_important_results": [],
         "visibility_limitations": [],
-        "visibility_counts": {"visible_groups": 0, "visible_items": 0,
-                              "collapsed_groups": 0, "collapsed_items": 0},
+        "visibility_counts": {
+            "visible_groups": 0, "visible_items": 0,
+            "collapsed_groups": 0, "collapsed_items": 0,
+            "attention_visible_items": 0, "attention_visible_groups": 0,
+        },
         "snapshot_id": None,
         "visibility_recheck_after_ms": _DEFAULT_VISIBILITY_RECHECK_MS,
         "unread_status": "known" if state == "no_records" else "unknown",
@@ -1025,6 +1104,7 @@ def query_work_records_overview(
             "visible_items": visible_items,
             "collapsed_groups": len(collapsed_groups),
             "collapsed_items": collapsed_items,
+            **_attention_visibility_counts(visible_groups),
         }
         if decoded is not None:
             if decoded["scope"] != scope or decoded["snapshot"] != fingerprint:

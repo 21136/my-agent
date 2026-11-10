@@ -2,22 +2,36 @@
 .unified-shell[data-rail="music"] :is(.unified-topbar, .thread-archive-banner, .unified-context-region, .sidebar-resize-handle, .unified-composer-dock) { display: none !important; }
 .unified-shell[data-rail="music"] .unified-main { min-width: 0; }
 .unified-shell[data-rail="music"] .unified-stage {
-  background: color-mix(in srgb, var(--ma-surface) 42%, transparent);
-  backdrop-filter: blur(10px) saturate(108%);
+  background: transparent;
+}
+.unified-shell[data-rail="music"] .unified-tool-region {
+  background: transparent;
+  align-items: center;
+  padding: clamp(0.5rem, 2vh, 1.25rem) clamp(0.75rem, 2vw, 1.5rem);
 }
 .unified-shell[data-rail="music"] .unified-sidebar-header { padding-top: 1.15rem; }
 .unified-music { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--ma-border-strong) transparent; }
 .unified-music[hidden] { display: none !important; }
 .music-page {
-  width: min(100%, 880px);
+  width: min(100%, 720px);
   margin: 0 auto;
-  padding: clamp(24px, 6vh, 56px) clamp(24px, 6vw, 72px);
+  padding: 1.15rem 1.25rem 1.35rem;
   color: var(--ma-text);
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 72%, transparent);
+  background: color-mix(in srgb, var(--ma-surface) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(110%);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--ma-text) 5%, transparent);
+  flex: 0 1 auto;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
-.music-page-heading { padding-bottom: 28px; border-bottom: 1px solid var(--ma-border); }
-.music-page-heading h1 { margin: 0; color: var(--ma-text); font-size: 27px; line-height: 1.35; letter-spacing: -.03em; font-weight: 650; }
-.music-page-heading p { margin: 8px 0 0; color: var(--ma-text-muted); font-size: 13px; line-height: 1.7; }
-.music-search-form { display: flex; align-items: stretch; gap: 10px; margin-top: 29px; }
+.music-page-heading { padding-bottom: 0.65rem; border-bottom: 1px solid color-mix(in srgb, var(--ma-border) 65%, transparent); }
+.music-page-heading h1 { margin: 0; color: var(--ma-text); font-size: 1.35rem; line-height: 1.35; font-weight: 650; }
+.music-page-heading p { margin: 0.35rem 0 0; color: var(--ma-text-muted); font-size: 0.82rem; line-height: 1.55; }
+.music-search-form { display: flex; align-items: stretch; gap: 10px; margin-top: 0.75rem; }
 .music-search-box { display: flex; align-items: center; gap: 11px; flex: 1; min-width: 0; height: 48px; padding: 0 15px; border: 1px solid var(--ma-border-strong); border-radius: 11px; background: var(--ma-surface); color: var(--ma-text-muted); transition: border-color .15s ease, box-shadow .15s ease; }
 .music-search-box:focus-within { border-color: var(--ma-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ma-accent) 13%, transparent); }
 .music-search-box svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
@@ -41,7 +55,16 @@
 }
 /* The platform-owned Bilibili WebContentsView is positioned over this reserved slot. */
 .music-page { min-height: 100%; display: flex; flex-direction: column; }
-.music-web-slot:not([hidden]) { display: block; flex: 1 1 auto; min-height: 300px; margin-top: 22px; }
+.music-web-slot:not([hidden]) {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 200px;
+  max-height: min(52vh, 480px);
+  margin-top: 0.85rem;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ma-border) 55%, transparent);
+}
 .music-web-slot[hidden] { display: none !important; }
 @media (max-width: 720px) {
   .music-web-slot:not([hidden]) { min-height: 260px; margin-top: 16px; }
