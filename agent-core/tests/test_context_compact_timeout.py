@@ -20,6 +20,7 @@ from context import (
     build_llm_messages,
     build_llm_messages_with_optional_trim,
     compact_context,
+    count_digest_sections,
     is_over_hard_compact_limit,
     should_auto_compact,
     summarize_timeout_sec,
@@ -27,6 +28,7 @@ from context import (
     trim_tool_payloads_for_llm,
 )
 from llm_client import LLMApiError, LLMResponse, LLMTimeoutError, load_config
+from loader import load_digest
 from runtime_guards import TurnWatchdog
 from session import Session, SessionMeta, utc_now_iso
 
@@ -387,19 +389,119 @@ class CompactPolicyFallbackTests(unittest.TestCase):
         )
         session.save()
 
-        class _PolicyRejectLLM:
-            def chat(self, *_args: Any, **_kwargs: Any) -> LLMResponse:
-                raise LLMApiError(
-                    "This request was rejected by content policy.",
-                    status_code=400,
-                )
-
         result = compact_context(session, _PolicyRejectLLM(), force=True)
         self.assertTrue(result.compacted)
         self.assertIn("机械摘要", result.message)
         self.assertTrue(session.digest_path.is_file())
         digest_text = session.digest_path.read_text(encoding="utf-8")
         self.assertIn("desktop/src/foo.ts", digest_text)
+
+
+class _ScriptedSummaryLLM:
+    """Returns the queued summaries in order and records each prompt."""
+
+    def __init__(self, *summaries: str) -> None:
+        self._summaries = list(summaries)
+        self.prompts: list[str] = []
+
+    def chat(self, messages: list[dict[str, Any]], **_kwargs: Any) -> LLMResponse:
+        self.prompts.append(messages[0]["content"])
+        return LLMResponse(
+            model="deepseek-v4-flash",
+            content=self._summaries.pop(0),
+            tool_calls=[],
+            finish_reason="stop",
+            usage=None,
+            raw={},
+        )
+
+
+class _PolicyRejectLLM:
+    def chat(self, *_args: Any, **_kwargs: Any) -> LLMResponse:
+        raise LLMApiError("This request was rejected by content policy.", status_code=400)
+
+
+def _plain_turns(start: int, count: int) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for index in range(start, start + count):
+        messages.append({"role": "user", "content": f"u{index}"})
+        messages.append({"role": "assistant", "content": f"a{index}"})
+    return messages
+
+
+class RollingDigestTests(unittest.TestCase):
+    """Each compaction folds the previous summary in; only the live part is injected."""
+
+    def _session(self, name: str) -> Session:
+        paths = make_temp_agent_paths(self)
+        session = Session(
+            conversation_id=name,
+            session_dir=paths.data / "sessions" / name,
+            goal="rolling",
+            meta=SessionMeta(topics=[], llm_model="deepseek-v4-flash", updated_at=utc_now_iso(), phase="S4"),
+            messages=_plain_turns(0, 11),
+            paths=paths,
+        )
+        session.save()
+        return session
+
+    def test_second_compaction_merges_first_summary_and_supersedes_it(self) -> None:
+        session = self._session("_rolling_merge")
+        llm = _ScriptedSummaryLLM("## 目标\nFIRST-SUMMARY", "## 目标\nMERGED-SUMMARY")
+
+        compact_context(session, llm, force=True)
+        self.assertNotIn("已有摘要", llm.prompts[0])
+        self.assertIn("FIRST-SUMMARY", load_digest(session) or "")
+
+        session.messages.extend(_plain_turns(11, 3))
+        result = compact_context(session, llm, force=True)
+
+        self.assertEqual(result.digest_section, 2)
+        self.assertIn("已有摘要：\n# 压缩 1（累计）\n\n## 目标\nFIRST-SUMMARY", llm.prompts[1])
+        injected = load_digest(session) or ""
+        self.assertIn("MERGED-SUMMARY", injected)
+        self.assertNotIn("FIRST-SUMMARY", injected)
+        on_disk = session.digest_path.read_text(encoding="utf-8")
+        self.assertIn("FIRST-SUMMARY", on_disk, "digest.md stays append-only")
+        self.assertEqual(count_digest_sections(session.digest_path), 2)
+
+    def test_digest_written_before_cumulative_sections_is_injected_whole_then_merged(self) -> None:
+        session = self._session("_rolling_legacy")
+        session.session_dir.mkdir(parents=True, exist_ok=True)
+        session.digest_path.write_text("# 压缩 1\n\nLEGACY-ONE\n\n# 压缩 2\n\nLEGACY-TWO\n", encoding="utf-8")
+        injected = load_digest(session) or ""
+        self.assertIn("LEGACY-ONE", injected)
+        self.assertIn("LEGACY-TWO", injected)
+
+        llm = _ScriptedSummaryLLM("## 目标\nMERGED-SUMMARY")
+        result = compact_context(session, llm, force=True)
+
+        self.assertEqual(result.digest_section, 3)
+        self.assertIn("LEGACY-ONE", llm.prompts[0])
+        self.assertIn("LEGACY-TWO", llm.prompts[0])
+        self.assertEqual(load_digest(session), "# 压缩 3（累计）\n\n## 目标\nMERGED-SUMMARY")
+
+    def test_mechanical_section_does_not_supersede_earlier_summary(self) -> None:
+        session = self._session("_rolling_mechanical")
+        compact_context(session, _ScriptedSummaryLLM("## 目标\nFIRST-SUMMARY"), force=True)
+        session.messages.extend(_plain_turns(11, 3))
+
+        result = compact_context(session, _PolicyRejectLLM(), force=True)
+
+        self.assertIn("机械摘要", result.message)
+        injected = load_digest(session) or ""
+        self.assertIn("FIRST-SUMMARY", injected)
+        self.assertIn("# 压缩 2\n", injected)
+
+    def test_empty_model_reply_carries_previous_summary_forward(self) -> None:
+        session = self._session("_rolling_empty")
+        llm = _ScriptedSummaryLLM("## 目标\nFIRST-SUMMARY", "   ")
+        compact_context(session, llm, force=True)
+        session.messages.extend(_plain_turns(11, 3))
+
+        compact_context(session, llm, force=True)
+
+        self.assertIn("FIRST-SUMMARY", load_digest(session) or "")
 
 
 if __name__ == "__main__":

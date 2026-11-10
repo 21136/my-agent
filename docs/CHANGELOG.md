@@ -19,6 +19,7 @@
 ### 代码
 
 - **Context 压缩**：新增软预算 `CONTEXT_COMPACT_MAX_TOKENS`（默认 150k，攒够半窗可摘要轮次才压）；近期窗口之外的超长 tool 正文在 payload 中截短，边界按 `CONTEXT_TOOL_TRIM_STEP_TURNS` 步进以保留 prompt 缓存；仅硬上限触发的压缩才强制截短近期 tool 输出；见 RUNTIME §8.1
+- **Digest 滚动合并**：压缩时把已有摘要一并交给摘要模型，写出 `# 压缩 N（累计）` 节；system 只注入最新累计节及其后的节，`digest.md` 仍只追加不覆盖；节格式抽到 `digest_format.py`；见 RUNTIME §8.2
 - **Day journal**：`_digest_excerpt` 改用 `context.DIGEST_SECTION_HEADER`，日摘要取 `digest.md` 最新一节（原正则匹配 `## 压缩 N`，与实际写入的 `# 压缩 N` 不符，始终取到最旧一节）
 - **Phase 57 / T-5730～5734**：Terminal auto Plan-and-Execute · Ink live pane 隔离 · rAF 流式合批 · thinking 折叠 · auto-plan ephemeral notice · `terminal_ink_bridge` source-first · `file_guard` · `extract_archive` · file-sentinel
 - **BUG-025 / T-4252～4255**：`evolve_tool_io.normalize_newlines` + `write_utf8_text`；`patch_file` find/line_range · `write_text` 落盘；IT-99 · huiyi `views/*.vue` S-99 normalize；提示词 `core.txt` · `coding.md` · `project.md` · `buckets/write.md`

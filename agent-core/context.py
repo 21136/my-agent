@@ -18,6 +18,7 @@ if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
 from agent import has_anchor_message
+from digest_format import DIGEST_SECTION_HEADER, active_digest_text, digest_section_header
 from llm_client import LLMClient, LLMError, LLMResponse, load_config, resolve_context_limit, resolve_session_model
 from session import HOST_INTERNAL_METADATA_KEY, Session, _is_internal_work_card_message
 from tools.schema import ToolErrorCode, tool_fail, to_json
@@ -54,7 +55,6 @@ _ATTACHMENT_LINE_RE = re.compile(r"^- .+? → (.+?) \((.+)\)$")
 FIRST_COMPACT_USER_MESSAGE = (
     "较早对话已写入 digest.md；最近 {keep_turns} 轮仍完整保留。可说「压缩」手动触发。"
 )
-DIGEST_SECTION_HEADER = re.compile(r"^#\s*压缩\s+(\d+)\s*$", re.MULTILINE)
 DIGEST_TEMPLATE_SECTIONS = (
     "## 目标",
     "## 已做",
@@ -887,18 +887,45 @@ def _mechanical_digest_body(session: Session, messages: list[dict[str, Any]]) ->
     )
 
 
-def build_digest_summarize_prompt(*, goal: str, transcript: str, project_hint: str = "") -> str:
+def build_digest_summarize_prompt(
+    *,
+    goal: str,
+    transcript: str,
+    project_hint: str = "",
+    prior_digest: str = "",
+    max_chars: int | None = None,
+) -> str:
+    """Summarize prompt; with ``prior_digest`` the model returns one merged summary."""
     sections = "\n".join(DIGEST_TEMPLATE_SECTIONS)
     project_line = f"\n活跃项目提示：{project_hint}\n" if project_hint.strip() else ""
+    prior = prior_digest.strip()
+    if prior:
+        intro = (
+            "下面有「已有摘要」（更早对话的摘要）和其后的新「对话片段」。"
+            "请把两者合并为一份更新后的结构化摘要，它将取代已有摘要，用于后续续聊时回忆上下文。\n"
+        )
+        merge_rules = (
+            "- 已有摘要中仍然有效的用户约束、关键路径与命令、未决事项必须保留，不得因为新片段没提到而丢弃\n"
+            "- 已被新片段解决或推翻的内容，按最新状态改写；「已做」中的旧细节可合并精简\n"
+        )
+        prior_block = f"已有摘要：\n{prior}\n\n"
+    else:
+        intro = "将以下对话片段压缩为结构化摘要，用于后续续聊时回忆上下文。\n"
+        merge_rules = ""
+        prior_block = ""
+    length_rule = f"- 全文不超过 {max_chars} 字符\n" if max_chars else ""
     return (
-        "将以下对话片段压缩为结构化摘要，用于后续续聊时回忆上下文。\n"
+        f"{intro}"
         "要求：\n"
         f"- 严格使用以下 Markdown 二级标题（缺一不可）：\n{sections}\n"
         "- 「活跃项目」须写明 project_root 与未完成的工作（以 git diff、会话和最近一次验证为准，勿猜）\n"
         "- 只输出摘要正文，不要前言或结语\n"
         "- 保留具体路径、命令、文件名与用户明确约束\n"
         "- 若有关键事实需长期保留，在「用户约束」末尾注明：可说「记住」写入 evolve\n"
+        f"{merge_rules}"
+        f"{length_rule}"
         f"\n本次会议目标：{goal.strip() or '(unset)'}{project_line}\n\n"
+        f"{prior_block}"
         f"对话片段：\n{transcript}"
     )
 
@@ -918,9 +945,17 @@ def summarize_messages_for_digest(
     *,
     config: ContextConfig | None = None,
     timeout_sec: float | None = None,
+    prior_digest: str = "",
 ) -> tuple[str, bool]:
-    """Return (digest body, used_mechanical_fallback)."""
+    """Return (digest body, used_mechanical_fallback).
+
+    With ``prior_digest`` a non-mechanical body is cumulative: it folds the prior
+    summary in and can replace it. The mechanical fallback only covers ``messages``.
+    """
     cfg = config or load_context_config()
+    # If the model yields nothing, carry the prior summary forward unchanged
+    # rather than replace it with an empty template.
+    no_summary_body = prior_digest.strip() or _empty_digest_body(session.goal)
     primary_model = session.meta.llm_model or resolve_session_model(session.meta.topics)
     effective_timeout = summarize_timeout_sec() if timeout_sec is None else timeout_sec
     strategies: list[DigestFormatOptions] = [
@@ -933,11 +968,13 @@ def summarize_messages_for_digest(
     for options in strategies:
         transcript = format_messages_for_digest(messages, options=options)
         if not transcript.strip():
-            return _empty_digest_body(session.goal), False
+            return no_summary_body, False
         prompt = build_digest_summarize_prompt(
             goal=session.goal,
             transcript=transcript,
             project_hint=_project_digest_hint(session),
+            prior_digest=prior_digest,
+            max_chars=cfg.digest_max_chars,
         )
         for model in _summarize_model_candidates(session, primary_model):
             try:
@@ -955,19 +992,32 @@ def summarize_messages_for_digest(
                 raise
             body = (response.content or "").strip()
             if not body:
-                body = _empty_digest_body(session.goal)
+                return no_summary_body, False
             return _truncate_digest(body, cfg.digest_max_chars), False
 
     if policy_rejected:
         body = _mechanical_digest_body(session, messages)
         return _truncate_digest(body, cfg.digest_max_chars), True
 
-    return _empty_digest_body(session.goal), False
+    return no_summary_body, False
 
 
-def append_digest_section(session: Session, body: str) -> int:
+def load_active_digest(session: Session) -> str:
+    """Live part of digest.md: the newest cumulative section and anything after it."""
+    if not session.digest_path.is_file():
+        return ""
+    return active_digest_text(session.digest_path.read_text(encoding="utf-8"))
+
+
+def append_digest_section(session: Session, body: str, *, cumulative: bool = False) -> int:
+    """Append a section; digest.md stays append-only so every past summary is kept.
+
+    ``cumulative`` marks a section that already folds in all earlier ones, which
+    makes it the only one injected into the prompt.
+    """
     section_number = count_digest_sections(session.digest_path) + 1
-    block = f"# 压缩 {section_number}\n\n{body.strip()}\n"
+    header = digest_section_header(section_number, cumulative=cumulative)
+    block = f"{header}\n\n{body.strip()}\n"
     if session.digest_path.is_file():
         existing = session.digest_path.read_text(encoding="utf-8").rstrip()
         session.digest_path.write_text(f"{existing}\n\n{block}", encoding="utf-8")
@@ -1019,11 +1069,17 @@ def compact_context(
     if on_summarize_begin is not None:
         on_summarize_begin()
     try:
-        digest_body, mechanical = summarize_messages_for_digest(session, to_digest, llm, config=cfg)
+        digest_body, mechanical = summarize_messages_for_digest(
+            session,
+            to_digest,
+            llm,
+            config=cfg,
+            prior_digest=load_active_digest(session),
+        )
     finally:
         if on_summarize_end is not None:
             on_summarize_end()
-    section_number = append_digest_section(session, digest_body)
+    section_number = append_digest_section(session, digest_body, cumulative=not mechanical)
     session.meta.compact_before_index = split_index
     session.save()
 

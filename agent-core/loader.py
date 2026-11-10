@@ -17,6 +17,7 @@ _AGENT_CORE = Path(__file__).resolve().parent
 if str(_AGENT_CORE) not in sys.path:
     sys.path.insert(0, str(_AGENT_CORE))
 
+from digest_format import active_digest_text
 from paths import AgentPaths
 from session import Session, SessionMeta, utc_now_iso
 from tools.logging import (
@@ -1280,9 +1281,10 @@ def load_project_prompt(evolve_dir: Path, *, profile: str = "solo") -> str:  # p
 
 
 def load_digest(session: Session) -> str | None:
+    """Digest text for the system prompt: superseded sections stay on disk only."""
     if not session.digest_path.is_file():
         return None
-    text = session.digest_path.read_text(encoding="utf-8").strip()
+    text = active_digest_text(session.digest_path.read_text(encoding="utf-8"))
     return text or None
 
 

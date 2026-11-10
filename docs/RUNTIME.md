@@ -70,7 +70,7 @@ data/sessions/<conversation_id>/
   goal.md              # 本次会议目标
   meta.json            # 见 §2.4 字段表；旧会话缺字段按默认兼容
   messages.jsonl       # 完整多轮（含 tool）；**永不截断**；默认不进 Git；压缩后仍可检索（§8）
-  digest.md            # 早前对话摘要（§8）；多次压缩追加节
+  digest.md            # 早前对话摘要（§8）；多次压缩追加节，仅最新累计节注入上下文
   tool_outputs/        # 超长 tool 结果落盘（TOOLS §6.3）
 ```
 
@@ -476,10 +476,12 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 
 ```text
 1. 保留：锚定块 + 最近 K=CONTEXT_KEEP_TURNS 轮完整 messages
-2. 将 K 轮之前的对话 LLM 压成 digest（结构化模板，≤ CONTEXT_DIGEST_MAX_CHARS）
-3. 追加写入 data/sessions/<id>/digest.md（新节 `# 压缩 N`，不覆盖旧节）
+2. 将 K 轮之前的对话 **连同已有摘要** 交给 LLM，合并成一份更新后的 digest（结构化模板，≤ CONTEXT_DIGEST_MAX_CHARS）
+3. 追加写入 data/sessions/<id>/digest.md（新节 `# 压缩 N（累计）`，不覆盖旧节；旧节只留在磁盘作历史）
+   - 机械摘要（内容策略拒绝时）只覆盖本次片段，写成不带「（累计）」的普通节，不取代之前的摘要
+   - 模型返回空时沿用上一份摘要
 4. messages.jsonl 磁盘 **追加不变、不截断**；仅从 **发给 LLM 的 payload** 移除已摘要部分
-5. system overlay 注入 digest 全文（§4.2.9）
+5. system overlay 注入 digest 的 **有效部分**（§4.2.9）：最新一个累计节及其之后的节；没有累计节的旧 digest 整份注入，下次压缩时并入
 6. 需要细节时：LLM 可 read_file / grep messages.jsonl（对齐 Cursor 历史文件可检索）
 ```
 
