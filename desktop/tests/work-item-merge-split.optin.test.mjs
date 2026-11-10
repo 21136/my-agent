@@ -43,4 +43,8 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   const styles = readFileSync(path.join(here, "isolated-shell-styles.mjs"), "utf8");
   assert.match(styles, /theme\.css/);
   assert.match(browserE2e, /visualAuthenticity/);
+  assert.match(browserE2e, /WORK_ITEM_MERGE_SPLIT_GUI_ARTIFACT_DIR/);
+  assert.match(browserE2e, /verifyInteractionStyles/);
+  const pet = readFileSync(path.join(here, "isolated-shell-pet-assets.mjs"), "utf8");
+  assert.match(pet, /pet-assets\/avatar/);
 });

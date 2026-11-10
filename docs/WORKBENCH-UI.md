@@ -27,7 +27,9 @@ node --test desktop\tests\work-item-merge-split.optin.test.mjs
 node --test desktop\tests\work-item-merge-split-browser-e2e.test.mjs
 ```
 
-Uses mock WebSocket fixture (`work-item-merge-split-browser-fixture.py`); companion session stays **unbound**. **Not claimed** green on CI or without Win32 + Playwright + Edge. Playwright mounts load the **interaction stylesheet bundle** via `desktop/tests/isolated-shell-styles.mjs` (`theme.css` + unified shell CSS + inlined assets). A green run is an **interaction/layout contract** only — screenshots from headless Edge are **not** visual authenticity or production Electron glass parity.
+Uses mock WebSocket fixture (`work-item-merge-split-browser-fixture.py`); companion session stays **unbound**. **Not claimed** green on CI or without Win32 + Playwright + Edge. Playwright mounts load the **interaction stylesheet bundle** via `desktop/tests/isolated-shell-styles.mjs` (`theme.css` + unified shell CSS + inlined assets) and serve offline `desktop/public/pet-assets/**` for companion avatars (no CDN). A green run is an **interaction/layout contract** only — screenshots from headless Edge are **not** visual authenticity or production Electron glass parity.
+
+Optional failure/success artifacts: `WORK_ITEM_MERGE_SPLIT_GUI_ARTIFACT_DIR` (`_run81`; default `desktop/tests/artifacts/work-item-merge-split-gui/`) — on failure writes `*-failure.png` + `*-style-report.json` (image `src`, broken count, `#unified-composer` radius).
 
 **Win32 GUI opt-in（#110/#111 · scoped composer confirms + quiet 当前工作 drawer）**
 
@@ -43,7 +45,7 @@ node --test desktop\tests\current-work-quiet-drawer.optin.test.mjs
 node --test desktop\tests\current-work-quiet-drawer-browser-e2e.test.mjs
 ```
 
-Synthetic WS (`current-work-quiet-drawer-browser-fixture.py`): FIFO ordinary → `work_record_post_turn` → `project_worker_requirement_verification` on composer dock; passive unread sample (34) must not dominate header over actionable「需关注」; collapsed queue hides history wall; expanded item keeps long history in closed `<details>` with humanized lifecycle copy. Artifacts: `CW_QUIET_DRAWER_GUI_ARTIFACT_DIR` or `desktop/tests/artifacts/current-work-quiet-drawer-gui/`. Same **interaction vs visual** split as `_run81`.
+Synthetic WS (`current-work-quiet-drawer-browser-fixture.py`): FIFO ordinary → `work_record_post_turn` → `project_worker_requirement_verification` on composer dock; passive unread sample (34) must not dominate header over actionable「需关注」; collapsed queue hides history wall; expanded item keeps long history in closed `<details>` with humanized lifecycle copy. Artifacts: `CW_QUIET_DRAWER_GUI_ARTIFACT_DIR` or `desktop/tests/artifacts/current-work-quiet-drawer-gui/` (same failure bundle as `_run81`). Same **interaction vs visual** split as `_run81`.
 
 **调度**分区是「选择项目来源 → 逐项只读授权 → 只读 `schedule_preview` → **按预览启动**（`work-records.schedule.dispatch` · 一次最多六个不同项目，host 并发默认 2、其余排队）」；候选预填任务与建议相对路径，仍须逐项确认。运行中事项（含映射远端来源）可在概况中 **请求停止 worker**，经主会话 host 协调，不假装元数据已停。不是把多项目工作塞回排队/等待上下文，也不是宣称全自动调度器。
 

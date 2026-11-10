@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ import {
 } from "./current-work-overlay-browser-shared.mjs";
 import { mountIsolatedUnifiedPage } from "./isolated-unified-browser-mount.mjs";
 import { VISUAL_DISCLAIMER } from "./isolated-shell-styles.mjs";
+import { verifyInteractionStyles, writeGuiHarnessArtifacts } from "./isolated-gui-artifacts.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, "..");
@@ -71,27 +72,33 @@ test("companion overlay: split requirement then merge two independent items", {
   });
   assert.equal(ready.companion_unbound, true);
 
+  const artifactDir = process.env.WORK_ITEM_MERGE_SPLIT_GUI_ARTIFACT_DIR
+    || path.join(here, "artifacts", "work-item-merge-split-gui");
+  mkdirSync(artifactDir, { recursive: true });
+
   const browser = await chromium.launch({ headless: true, executablePath: edge, args: EDGE_LAUNCH_ARGS });
   let page;
   let pageErrors;
+  let styleReport;
   try {
     const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
     const mounted = await mountIsolatedUnifiedPage(context, { desktop, port: ready.port });
     page = mounted.page;
     pageErrors = mounted.pageErrors;
+    styleReport = await verifyInteractionStyles(page, artifactDir, "00-mount");
     console.log(JSON.stringify({
       report: "work-item-merge-split-gui",
-      interactionStyles: mounted.styleReport,
+      interactionStyles: styleReport,
       visualAuthenticity: "not_claimed",
       visualDisclaimer: VISUAL_DISCLAIMER,
     }));
-    assert.ok(mounted.styleReport.ok, `interaction styles: ${mounted.styleReport.detail}`);
 
     const banner = await page.evaluate(() => window.receivedEvents.find(e => e.type === "session.banner"));
     assert.equal(banner?.project_id ?? "", "");
     assert.doesNotMatch(await page.evaluate(() => document.querySelector(".unified-shell")?.className ?? ""), /\bis-tool-fullpage\b/);
 
     const work = await openCurrentWorkOverlay(page);
+    await page.screenshot({ path: path.join(artifactDir, "01-overlay-open.png"), fullPage: true });
     assert.match(await page.evaluate(() => document.querySelector(".unified-shell")?.className ?? ""), /is-current-work-overlay/);
     assert.equal(await page.locator("[data-pending-confirm-hint]").count(), 0);
     assert.equal(await page.locator(".unified-chat-confirm-card").count(), 0);
@@ -158,12 +165,16 @@ test("companion overlay: split requirement then merge two independent items", {
     const source = itemByTitle(overview, "ZZZ merge source item");
     assert.ok(target?.requirements?.some(r => r.text === "Requirement to merge into target"));
     assert.ok(!source?.requirements?.some(r => r.requirement_id === ready.source_requirement));
+    await page.screenshot({ path: path.join(artifactDir, "02-merge-done.png"), fullPage: true });
     assert.equal(pageErrors.length, 0, pageErrors.join("\n"));
     await page.evaluate(() => { window.dispose(); window.client.destroy(); });
     await context.close();
   } catch (error) {
+    if (page) {
+      await writeGuiHarnessArtifacts(page, artifactDir, "failure", { styleReport: styleReport ?? null }).catch(() => {});
+    }
     const events = page ? await page.evaluate(() => window.receivedEvents) : [];
-    throw new Error(`${error.message}\nevents=${JSON.stringify(events)}\nstderr=${stderr}`);
+    throw new Error(`${error.message}\nartifacts=${artifactDir}\nevents=${JSON.stringify(events)}\nstderr=${stderr}\nstyle=${JSON.stringify(styleReport)}`);
   } finally {
     await browser.close();
     child.stdin.end("\n");

@@ -25,6 +25,7 @@ import {
 } from "./current-work-overlay-browser-shared.mjs";
 import { mountIsolatedUnifiedPage } from "./isolated-unified-browser-mount.mjs";
 import { VISUAL_DISCLAIMER } from "./isolated-shell-styles.mjs";
+import { verifyInteractionStyles, writeGuiHarnessArtifacts } from "./isolated-gui-artifacts.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const desktop = path.resolve(here, "..");
@@ -88,11 +89,12 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
 
   const browser = await chromium.launch({ headless: true, executablePath: edge, args: EDGE_LAUNCH_ARGS });
   let page;
-  let styleReport;
+  /** @type {Awaited<ReturnType<typeof verifyInteractionStyles>> | null} */
+  let styleReport = null;
   try {
     const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
-    ({ page, styleReport } = await mountIsolatedUnifiedPage(context, { desktop, port: ready.port }));
-    assert.ok(styleReport.ok, `interaction styles: ${styleReport.detail}`);
+    ({ page } = await mountIsolatedUnifiedPage(context, { desktop, port: ready.port }));
+    const styleReport = await verifyInteractionStyles(page, artifactDir, "00-mount");
     console.log(JSON.stringify({
       report: "current-work-quiet-drawer-gui",
       interactionStyles: styleReport,
@@ -161,8 +163,11 @@ test("companion: scoped composer FIFO confirms + quiet drawer copy", {
     await page.evaluate(() => { window.dispose(); window.client.destroy(); });
     await context.close();
   } catch (error) {
+    if (page) {
+      await writeGuiHarnessArtifacts(page, artifactDir, "failure", { styleReport: styleReport ?? null }).catch(() => {});
+    }
     const events = page ? await page.evaluate(() => window.receivedEvents) : [];
-    throw new Error(`${error.message}\nevents=${JSON.stringify(events)}\nstderr=${stderr}\nstyle=${JSON.stringify(styleReport)}`);
+    throw new Error(`${error.message}\nartifacts=${artifactDir}\nevents=${JSON.stringify(events)}\nstderr=${stderr}\nstyle=${JSON.stringify(styleReport)}`);
   } finally {
     await browser.close();
     child.stdin.end("\n");

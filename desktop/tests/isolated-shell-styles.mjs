@@ -52,27 +52,56 @@ export async function assessIsolatedStyleFidelity(page) {
   return page.evaluate(() => {
     const shell = document.querySelector(".unified-shell");
     const stage = document.querySelector(".unified-stage");
-    const composer = document.querySelector(".unified-composer-dock");
+    const composer = document.querySelector("#unified-composer-dock, .unified-composer-dock");
     const shellFont = shell ? getComputedStyle(shell).fontFamily : "";
     const stageDisplay = stage ? getComputedStyle(stage).display : "";
-    const composerRadius = composer ? getComputedStyle(composer).borderRadius : "";
+    const dockRadius = composer ? getComputedStyle(composer).borderRadius : "";
+    const composerBar = document.querySelector("#unified-composer");
+    const composerBarRadius = composerBar ? getComputedStyle(composerBar).borderRadius : "";
+    const companionChat = Boolean(document.querySelector('.unified-shell[data-main-focus="chat"]'));
+    const composerSurfaceRounded = companionChat
+      ? composerBarRadius !== "" && composerBarRadius !== "0px"
+      : dockRadius !== "" && dockRadius !== "0px";
+    const broken = [...document.querySelectorAll("img")].filter((img) => !img.complete || img.naturalWidth === 0);
     return {
       shellFont,
       hasFlexStage: stageDisplay === "flex",
-      composerRounded: composerRadius !== "" && composerRadius !== "0px",
-      brokenImages: [...document.querySelectorAll("img")].filter(img => !img.complete || img.naturalWidth === 0).length,
+      companionChatLayout: companionChat,
+      composerDockRadius: dockRadius,
+      composerBarRadius,
+      composerSurfaceRounded,
+      brokenImages: broken.length,
+      brokenImageSrcs: broken.map((img) => img.currentSrc || img.src),
     };
   });
 }
 
-export async function assertInteractionStylesLoaded(page) {
+export async function waitForShellImagesLoaded(page, { timeout = 15_000 } = {}) {
+  await page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll("img")];
+    return imgs.every((img) => img.complete && img.naturalWidth > 0);
+  }, null, { timeout });
+}
+
+export async function assertInteractionStylesLoaded(page, { waitForImages = true } = {}) {
+  if (waitForImages) {
+    await waitForShellImagesLoaded(page);
+  }
   const fidelity = await assessIsolatedStyleFidelity(page);
   const { ok, detail } = (() => {
     if (!fidelity.hasFlexStage) return { ok: false, detail: "missing flex stage layout" };
     if (!/system-ui|Segoe UI|sans-serif/i.test(fidelity.shellFont)) {
       return { ok: false, detail: `unexpected shell font: ${fidelity.shellFont}` };
     }
-    if (fidelity.brokenImages > 0) return { ok: false, detail: `${fidelity.brokenImages} broken img` };
+    if (!fidelity.composerSurfaceRounded) {
+      return { ok: false, detail: "companion composer inner surface not rounded" };
+    }
+    if (fidelity.brokenImages > 0) {
+      return {
+        ok: false,
+        detail: `${fidelity.brokenImages} broken img: ${fidelity.brokenImageSrcs.join(", ")}`,
+      };
+    }
     return { ok: true, detail: "interaction stylesheet bundle present" };
   })();
   return { ok, detail, fidelity, visualDisclaimer: VISUAL_DISCLAIMER };

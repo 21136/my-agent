@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { buildIsolatedShellStyles, assertInteractionStylesLoaded } from "./isolated-shell-styles.mjs";
+import { buildIsolatedShellStyles } from "./isolated-shell-styles.mjs";
+import { assertOfflinePetAvatarsPresent, createPublicAssetRouter } from "./isolated-shell-pet-assets.mjs";
 
 export async function buildIsolatedUnifiedBundle(desktop) {
   const esbuild = createRequire(path.join(desktop, "package.json"))("esbuild");
@@ -23,16 +24,32 @@ export async function buildIsolatedUnifiedBundle(desktop) {
 }
 
 export async function mountIsolatedUnifiedPage(context, { desktop, port }) {
+  assertOfflinePetAvatarsPresent(desktop);
   const { injectCss, htmlShell } = buildIsolatedShellStyles(desktop);
   const bundle = await buildIsolatedUnifiedBundle(desktop);
   const page = await context.newPage();
   page.setDefaultTimeout(20_000);
-  await context.route("**/*", (route) => (route.request().url() === `http://127.0.0.1:${port}/`
-    ? route.fulfill({ status: 200, contentType: "text/html", body: htmlShell.replace("</head>", `<style>${injectCss}</style></head>`) })
-    : route.abort()));
+  const pageUrl = `http://127.0.0.1:${port}/`;
+  const servePublic = createPublicAssetRouter(desktop);
+  await context.route("**/*", async (route) => {
+    const url = route.request().url();
+    if (url === pageUrl) {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: htmlShell.replace("</head>", `<style>${injectCss}</style></head>`),
+      });
+      return;
+    }
+    if (url.startsWith(`http://127.0.0.1:${port}/`)) {
+      await servePublic(route);
+      return;
+    }
+    await route.abort();
+  });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.goto(pageUrl);
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   await page.evaluate(async (wsPort) => {
     window.myAgentDesktop = { setBilibiliViewState: async () => {}, setShellDevViewState: async () => {} };
@@ -42,6 +59,6 @@ export async function mountIsolatedUnifiedPage(context, { desktop, port }) {
     window.dispose = UnifiedUnderTest.mountUnifiedShell(document.querySelector("#root"), window.client);
     await window.client.connect();
   }, port);
-  const styleReport = await assertInteractionStylesLoaded(page);
-  return { page, styleReport, pageErrors: errors, bundleText: bundle.outputFiles[0].text };
+  await page.waitForSelector(".unified-shell", { timeout: 15_000 });
+  return { page, pageErrors: errors, bundleText: bundle.outputFiles[0].text };
 }

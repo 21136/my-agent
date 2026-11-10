@@ -21,6 +21,10 @@ test("opt-in env gates for quiet drawer Win32 GUI", () => {
   assert.match(styles, /neon-twin\.css/);
   assert.match(styles, /composer-companion\.css/);
   assert.match(styles, /VISUAL_DISCLAIMER/);
+  assert.match(styles, /composerBarRadius/);
+  assert.match(browser, /verifyInteractionStyles/);
+  const pet = readFileSync(path.join(here, "isolated-shell-pet-assets.mjs"), "utf8");
+  assert.match(pet, /createPublicAssetRouter/);
   const fixture = readFileSync(path.join(here, "current-work-quiet-drawer-browser-fixture.py"), "utf8");
   assert.match(fixture, /companion_unbound/);
   assert.match(fixture, /work_record_post_turn/);
