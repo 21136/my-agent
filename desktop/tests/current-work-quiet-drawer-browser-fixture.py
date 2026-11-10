@@ -72,6 +72,8 @@ def _overview(request_id: str) -> dict:
             "visible_items": 1,
             "collapsed_groups": 0,
             "collapsed_items": 0,
+            "attention_visible_items": 1,
+            "attention_visible_groups": 1,
         },
         "snapshot_id": "quiet-drawer-synthetic",
         "page": _page(),

@@ -123,13 +123,39 @@ test("music page uses glass card not full opaque stage", { skip: playwrightReady
       await page.evaluate(() => {
         document.body.dataset.rail = "music";
         document.querySelector("#fixture").innerHTML = `
-          <section class="unified-tool-region"><div class="music-page"><header class="music-page-heading"><h1>听歌</h1></header></div></section>`;
+          <section class="unified-tool-region"><div class="music-page" data-test-music-card><header class="music-page-heading"><h1>听歌</h1></header></div></section>`;
       });
-      const card = page.locator(".music-page");
-      const bg = await card.evaluate((el) => getComputedStyle(el).backgroundColor);
-      const radius = await card.evaluate((el) => getComputedStyle(el).borderRadius);
-      assert.notEqual(bg, "rgba(0, 0, 0, 0)");
-      assert.notEqual(radius, "0px");
+      const card = page.locator("[data-test-music-card].music-page");
+      await card.waitFor({ state: "visible" });
+      const metrics = await card.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return {
+          tag: el.tagName,
+          className: el.className,
+          borderRadius: style.borderRadius,
+          borderTopWidth: style.borderTopWidth,
+          backdropFilter: style.backdropFilter,
+          webkitBackdropFilter: style.webkitBackdropFilter,
+          backgroundColor: style.backgroundColor,
+          maxHeight: style.maxHeight,
+        };
+      });
+      assert.equal(metrics.tag, "DIV");
+      assert.match(metrics.className, /\bmusic-page\b/);
+      assert.notEqual(metrics.borderRadius, "0px");
+      assert.notEqual(metrics.maxHeight, "none");
+      const backdrop = `${metrics.backdropFilter} ${metrics.webkitBackdropFilter}`;
+      assert.match(backdrop, /blur/i, "glass card should apply backdrop blur on .music-page");
+      const borderPx = Number.parseFloat(metrics.borderTopWidth);
+      assert.ok(borderPx > 0, "music card should render a bordered surface");
+      const alpha = metrics.backgroundColor.match(/rgba?\([^)]+,\s*([\d.]+)\s*\)/)?.[1];
+      const opaqueEnough = alpha !== undefined
+        ? Number.parseFloat(alpha) > 0.05
+        : metrics.backgroundColor !== "rgba(0, 0, 0, 0)";
+      assert.ok(
+        opaqueEnough || /blur/i.test(backdrop),
+        `expected glass surface on .music-page, got background=${metrics.backgroundColor} backdrop=${backdrop}`,
+      );
     });
   } finally {
     await host.close();
