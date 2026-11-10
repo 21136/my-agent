@@ -27,4 +27,6 @@ test("opt-in env gates for work-item merge/split Win32 GUI", () => {
   assert.match(fixture, /companion_unbound/);
   const run81 = readFileSync(path.join(repo, "desktop/_run81-work-item-merge-split-gui.cmd"), "utf8");
   assert.match(run81, /work-item-merge-split-browser-e2e\.test\.mjs/);
+  assert.match(run81, /EXIT_CODE=%ERRORLEVEL%/);
+  assert.match(run81, /endlocal & exit \/b %EXIT_CODE%/);
 });
