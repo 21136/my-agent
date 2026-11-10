@@ -16,9 +16,14 @@ if str(_AGENT_CORE) not in sys.path:
 
 from agent import Agent, ToolLoopSegmentResult
 from context import (
+    ContextConfig,
+    build_llm_messages,
     build_llm_messages_with_optional_trim,
     compact_context,
+    is_over_hard_compact_limit,
+    should_auto_compact,
     summarize_timeout_sec,
+    trim_aged_tool_payloads,
     trim_tool_payloads_for_llm,
 )
 from llm_client import LLMApiError, LLMResponse, LLMTimeoutError, load_config
@@ -219,6 +224,127 @@ class PayloadTrimTests(unittest.TestCase):
         )
         self.assertTrue(trimmed)
         self.assertLess(len(working[-1]["content"]), 9000)
+
+
+def _tool_turns(count: int, *, tool_chars: int) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for index in range(count):
+        call_id = f"c{index}"
+        messages.extend(
+            [
+                {"role": "user", "content": f"u{index}"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": call_id, "content": "t" * tool_chars},
+                {"role": "assistant", "content": f"a{index}"},
+            ]
+        )
+    return messages
+
+
+def _tool_lengths(messages: list[dict[str, Any]]) -> list[int]:
+    return [len(message["content"]) for message in messages if message.get("role") == "tool"]
+
+
+class AgedToolTrimTests(unittest.TestCase):
+    def test_recent_window_is_never_trimmed(self) -> None:
+        messages = _tool_turns(15, tool_chars=9000)
+        trimmed, count = trim_aged_tool_payloads(messages, keep_turns=8, step_turns=8)
+        self.assertEqual(count, 0)
+        self.assertIs(trimmed, messages)
+
+    def test_aged_turns_are_trimmed_and_recent_turns_kept_whole(self) -> None:
+        messages = _tool_turns(16, tool_chars=9000)
+        trimmed, count = trim_aged_tool_payloads(messages, keep_turns=8, step_turns=8)
+        self.assertEqual(count, 8)
+        lengths = _tool_lengths(trimmed)
+        self.assertTrue(all(length <= 4000 for length in lengths[:8]))
+        self.assertEqual(lengths[8:], [9000] * 8)
+        self.assertEqual(_tool_lengths(messages), [9000] * 16, "input must not be mutated")
+
+    def test_cutoff_is_stable_between_steps_for_prompt_cache(self) -> None:
+        at_16, _ = trim_aged_tool_payloads(_tool_turns(16, tool_chars=9000), keep_turns=8, step_turns=8)
+        at_23, _ = trim_aged_tool_payloads(_tool_turns(23, tool_chars=9000), keep_turns=8, step_turns=8)
+        at_24, _ = trim_aged_tool_payloads(_tool_turns(24, tool_chars=9000), keep_turns=8, step_turns=8)
+        self.assertEqual(at_23[: len(at_16)], at_16)
+        self.assertEqual(_tool_lengths(at_23)[8:], [9000] * 15)
+        self.assertTrue(all(length <= 4000 for length in _tool_lengths(at_24)[:16]))
+
+    def test_zero_step_disables_aged_trim(self) -> None:
+        messages = _tool_turns(40, tool_chars=9000)
+        trimmed, count = trim_aged_tool_payloads(messages, keep_turns=8, step_turns=0)
+        self.assertEqual(count, 0)
+        self.assertIs(trimmed, messages)
+
+    def test_build_llm_messages_applies_aged_trim_without_touching_session(self) -> None:
+        paths = make_temp_agent_paths(self)
+        session = Session(
+            conversation_id="_aged_trim",
+            session_dir=paths.data / "sessions" / "_aged_trim",
+            goal="",
+            meta=SessionMeta(topics=[], llm_model="deepseek-v4-flash", updated_at=utc_now_iso(), phase="S4"),
+            messages=_tool_turns(16, tool_chars=9000),
+            paths=paths,
+        )
+        lengths = _tool_lengths(build_llm_messages(session))
+        self.assertTrue(all(length <= 4000 for length in lengths[:8]))
+        self.assertEqual(lengths[8:], [9000] * 8)
+        self.assertEqual(_tool_lengths(session.messages), [9000] * 16)
+
+
+class SoftCompactBudgetTests(unittest.TestCase):
+    """Auto-compact must fire well below a 1M-token ceiling, without thrashing."""
+
+    def _session(self, turns: int) -> Session:
+        paths = make_temp_agent_paths(self)
+        return Session(
+            conversation_id="_soft_budget",
+            session_dir=paths.data / "sessions" / "_soft_budget",
+            goal="",
+            meta=SessionMeta(topics=[], llm_model="deepseek-v4-flash", updated_at=utc_now_iso(), phase="S4"),
+            messages=_tool_turns(turns, tool_chars=6000),
+            paths=paths,
+        )
+
+    @staticmethod
+    def _config(*, compact_max_tokens: int) -> ContextConfig:
+        return ContextConfig(0.85, 8, 8000, compact_max_tokens=compact_max_tokens, tool_trim_step_turns=0)
+
+    def test_soft_budget_triggers_far_below_model_ceiling(self) -> None:
+        session = self._session(12)  # ~18k estimated tokens
+        with patch("context.resolve_context_limit", return_value=1_000_000):
+            self.assertTrue(should_auto_compact("", session, config=self._config(compact_max_tokens=10_000)))
+            self.assertFalse(is_over_hard_compact_limit("", session, config=self._config(compact_max_tokens=10_000)))
+
+    def test_under_budget_does_not_compact(self) -> None:
+        session = self._session(12)
+        with patch("context.resolve_context_limit", return_value=1_000_000):
+            self.assertFalse(should_auto_compact("", session, config=self._config(compact_max_tokens=50_000)))
+
+    def test_soft_budget_waits_for_half_a_window_of_digestible_turns(self) -> None:
+        session = self._session(10)  # over budget, but only 2 turns beyond the kept 8
+        with patch("context.resolve_context_limit", return_value=1_000_000):
+            self.assertFalse(should_auto_compact("", session, config=self._config(compact_max_tokens=10_000)))
+
+    def test_zero_budget_restores_ratio_only_behavior(self) -> None:
+        session = self._session(12)
+        with patch("context.resolve_context_limit", return_value=1_000_000):
+            self.assertFalse(should_auto_compact("", session, config=self._config(compact_max_tokens=0)))
+
+    def test_hard_limit_still_compacts_regardless_of_batching(self) -> None:
+        session = self._session(10)
+        with patch("context.resolve_context_limit", return_value=1_000):
+            self.assertTrue(should_auto_compact("", session, config=self._config(compact_max_tokens=0)))
+            self.assertTrue(is_over_hard_compact_limit("", session, config=self._config(compact_max_tokens=0)))
 
 
 class CompactPolicyFallbackTests(unittest.TestCase):

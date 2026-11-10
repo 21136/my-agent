@@ -454,7 +454,8 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 
 | 方式 | 条件 |
 |------|------|
-| **自动** | 估算 `system + messages` tokens ≥ **`LLM_CONTEXT_LIMIT` × 85%** |
+| **自动（硬上限）** | 估算 `system + messages` tokens ≥ **`LLM_CONTEXT_LIMIT` × 85%**；必压 |
+| **自动（软预算）** | 估算 tokens ≥ **`CONTEXT_COMPACT_MAX_TOKENS`**（默认 150k）且可摘要轮次 ≥ `CONTEXT_KEEP_TURNS // 2`；1M 上限模型上 85% ≈ 850k 实际到不了，靠这条触发。攒够半窗再压，避免近期窗口本身超预算时每轮都摘要一次 |
 | **手动** | 用户输入 **`压缩`** / `summarize` |
 | **可选** | executor 返回 `context_pressure: true`（等同自动阈值）；**M1 不实现**，M2 若单轮 tool 环过长再加 |
 
@@ -463,8 +464,10 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 | 环境变量 | 默认 | 说明 |
 |----------|------|------|
 | `LLM_CONTEXT_LIMIT` | flash `128000` / pro `1000000` | §6.1；env 可覆盖 |
-| `CONTEXT_COMPACT_RATIO` | `0.85` | 自动压缩触发比例 |
+| `CONTEXT_COMPACT_RATIO` | `0.85` | 自动压缩触发比例（硬上限） |
+| `CONTEXT_COMPACT_MAX_TOKENS` | `150000` | 自动压缩软预算（估算 tokens）；`0` 关闭，退回仅按比例触发 |
 | `CONTEXT_KEEP_TURNS` | `8` | 保留最近完整 **轮次**（1 轮 ≈ user + assistant 含 tool） |
+| `CONTEXT_TOOL_TRIM_STEP_TURNS` | `8` | 最近 `CONTEXT_KEEP_TURNS` 轮之外、单条 >4000 字符的 tool 正文在 **payload** 中截短（磁盘不变）；截断边界每这么多轮才前移一次，期间前缀字节不变以保留 prompt 缓存；`0` 关闭 |
 | `CONTEXT_DIGEST_MAX_CHARS` | `8000` | 单次摘要写入上限（字符） |
 | `CONTEXT_SUMMARIZE_TIMEOUT_SEC` | `180` | digest 摘要 LLM 独立超时（BUG-023 · T-2092） |
 | `CONTEXT_PAYLOAD_TRIM_RATIO` | `0.70` | 压缩后仍过大时截短 tool payload 的阈值比例（T-2094） |
@@ -507,7 +510,7 @@ Context 接近上限时，**不**默认要求 `新会话`；沿用记忆三件�
 |----|------|--------------|
 | 摘要 LLM | ~~在 tool 循环内同步调用；**不**暂停 `TURN_WALL_SEC`~~ | **done（T-2092）** — 摘要期间 `pause_wall` |
 | 摘要超时 | ~~共用 `LLM_TIMEOUT_SEC`（120s）~~ | **done（T-2092）** — `CONTEXT_SUMMARIZE_TIMEOUT_SEC` 默认 180s |
-| 压缩后 payload | `KEEP_TURNS=8` 按轮数；tool 正文可仍很大 | **done（T-2094）** — ≥70% 时截短 tool payload（不改磁盘） |
+| 压缩后 payload | `KEEP_TURNS=8` 按轮数；tool 正文可仍很大 | **done（T-2094）** — 硬上限触发的压缩后强制截短全部 tool payload；软预算触发的压缩不截近期 tool 输出（仍受 ≥70% 规则约束；不改磁盘） |
 | 压缩后主 LLM | 仍 `reasoning_effort=high` + 120s 整请求超时 | **done（T-2093）** — 专用 notice；**不**静默改 effort（R6 废止） |
 | UI | 凡 `finish_reason=timeout` →「回合超时已停止」 | **done（T-2093）** — 区分「LLM 请求超时已停止」 |
 

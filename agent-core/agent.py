@@ -4240,6 +4240,7 @@ class Agent:
             build_llm_messages,
             build_llm_messages_with_optional_trim,
             has_image_attachment,
+            is_over_hard_compact_limit,
             load_context_config,
             maybe_auto_compact,
             session_memory_event,
@@ -4311,6 +4312,9 @@ class Agent:
                     qa_soft_reminder_injected=reminder_injected,
                     action_announce_nudge_injected=action_nudge_injected,
                 )
+            # Only a compaction forced by the model's real ceiling truncates recent
+            # tool output afterwards; a soft-budget compaction keeps it intact.
+            near_context_ceiling = is_over_hard_compact_limit(full_system, self.session, model=model)
             if should_auto_compact(full_system, self.session, model=model):
                 self._emit_turn_event(
                     {
@@ -4370,7 +4374,7 @@ class Agent:
                     self.session,
                     full_system,
                     model,
-                    force_trim=True,
+                    force_trim=near_context_ceiling,
                     include_images=bool(getattr(model_entry, "supports_image_input", False)),
                 )
                 if trimmed:

@@ -31,11 +31,18 @@ _INTERRUPTED_TOOL_MESSAGE = to_json(
 )
 
 DEFAULT_COMPACT_RATIO = 0.85
+# Absolute auto-compact budget (estimated tokens). On 1M-context models the
+# ratio alone is ~850k, which real sessions never reach; 0 disables the budget.
+DEFAULT_COMPACT_MAX_TOKENS = 150_000
 DEFAULT_KEEP_TURNS = 8
 DEFAULT_DIGEST_MAX_CHARS = 8000
 DEFAULT_SUMMARIZE_TIMEOUT_SEC = 180.0
 DEFAULT_PAYLOAD_TRIM_RATIO = 0.70
 DEFAULT_TOOL_PAYLOAD_MAX_CHARS = 4000
+# Tool bodies older than the recent window are shortened in the LLM payload.
+# The cut-off moves once per this many turns so the prefix stays cacheable;
+# 0 disables aged trimming.
+DEFAULT_TOOL_TRIM_STEP_TURNS = 8
 _TOOL_PAYLOAD_TRUNC_SUFFIX = "\n…[tool output truncated for context payload]"
 _PATH_HINT_RE = re.compile(
     r"(?:workspace/[\w./-]+|(?:docs|desktop|agent-core)/[\w./-]+|\b[\w.-]+\."
@@ -75,6 +82,8 @@ class ContextConfig:
     compact_ratio: float
     keep_turns: int
     digest_max_chars: int
+    compact_max_tokens: int = DEFAULT_COMPACT_MAX_TOKENS
+    tool_trim_step_turns: int = DEFAULT_TOOL_TRIM_STEP_TURNS
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +99,14 @@ def load_context_config() -> ContextConfig:
     ratio_raw = os.environ.get("CONTEXT_COMPACT_RATIO", str(DEFAULT_COMPACT_RATIO))
     keep_raw = os.environ.get("CONTEXT_KEEP_TURNS", str(DEFAULT_KEEP_TURNS))
     digest_raw = os.environ.get("CONTEXT_DIGEST_MAX_CHARS", str(DEFAULT_DIGEST_MAX_CHARS))
+    max_tokens_raw = os.environ.get("CONTEXT_COMPACT_MAX_TOKENS", str(DEFAULT_COMPACT_MAX_TOKENS))
+    trim_step_raw = os.environ.get("CONTEXT_TOOL_TRIM_STEP_TURNS", str(DEFAULT_TOOL_TRIM_STEP_TURNS))
     return ContextConfig(
         compact_ratio=float(ratio_raw),
         keep_turns=int(keep_raw),
         digest_max_chars=int(digest_raw),
+        compact_max_tokens=int(max_tokens_raw),
+        tool_trim_step_turns=int(trim_step_raw),
     )
 
 
@@ -143,6 +156,33 @@ def trim_tool_payloads_for_llm(
             }
         )
     return out, trimmed_count
+
+
+def trim_aged_tool_payloads(
+    messages: list[dict[str, Any]],
+    *,
+    keep_turns: int,
+    step_turns: int,
+    max_chars: int = DEFAULT_TOOL_PAYLOAD_MAX_CHARS,
+) -> tuple[list[dict[str, Any]], int]:
+    """Shorten oversized tool bodies in turns older than the recent window.
+
+    The newest ``keep_turns`` turns are never touched. The cut-off only advances
+    in multiples of ``step_turns``, so between steps the payload prefix is
+    byte-identical and stays in the provider's prompt cache.
+    """
+    if step_turns <= 0:
+        return messages, 0
+    turn_ranges = iter_turn_ranges(messages, 0)
+    aged_turns = len(turn_ranges) - max(0, keep_turns)
+    cutoff_turn = (aged_turns // step_turns) * step_turns if aged_turns > 0 else 0
+    if cutoff_turn <= 0:
+        return messages, 0
+    cutoff_index = turn_ranges[cutoff_turn][0]
+    trimmed_head, count = trim_tool_payloads_for_llm(messages[:cutoff_index], max_chars=max_chars)
+    if count == 0:
+        return messages, 0
+    return [*trimmed_head, *messages[cutoff_index:]], count
 
 
 def build_llm_messages_with_optional_trim(
@@ -522,8 +562,13 @@ def build_llm_messages(
     session: Session,
     *,
     include_images: bool = False,
+    config: ContextConfig | None = None,
 ) -> list[dict[str, Any]]:
-    """Messages for LLM payload: anchor + post-digest history (disk keeps full log)."""
+    """Messages for LLM payload: anchor + post-digest history (disk keeps full log).
+
+    Oversized tool bodies outside the recent window are shortened here, so token
+    estimates and the payload actually sent always agree.
+    """
     messages = session.messages
     if not messages:
         return []
@@ -559,6 +604,12 @@ def build_llm_messages(
     # persisted history or strip user content/tool arguments with similar text.
     result = [{key: value for key, value in message.items()
                if key != HOST_INTERNAL_METADATA_KEY} for message in result]
+    cfg = config or load_context_config()
+    result, _ = trim_aged_tool_payloads(
+        result,
+        keep_turns=cfg.keep_turns,
+        step_turns=cfg.tool_trim_step_turns,
+    )
     return _attach_multimodal_images(session, result) if include_images else result
 
 
@@ -577,6 +628,34 @@ def _drop_harness_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str
     return kept
 
 
+def _compact_pressure(
+    system_prompt: str,
+    session: Session,
+    *,
+    model: str | None,
+    config: ContextConfig,
+) -> tuple[int, int]:
+    """(estimated payload tokens, hard threshold = LLM_CONTEXT_LIMIT × CONTEXT_COMPACT_RATIO)."""
+    resolved_model = model or session.meta.llm_model or resolve_session_model(session.meta.topics)
+    limit = resolve_context_limit(resolved_model)
+    llm_messages = build_llm_messages(session, config=config)
+    tokens = estimate_context_tokens(system_prompt, llm_messages)
+    return tokens, int(limit * config.compact_ratio)
+
+
+def is_over_hard_compact_limit(
+    system_prompt: str,
+    session: Session,
+    *,
+    model: str | None = None,
+    config: ContextConfig | None = None,
+) -> bool:
+    """True when the payload is near the model's real ceiling, not just the soft budget."""
+    cfg = config or load_context_config()
+    tokens, hard_threshold = _compact_pressure(system_prompt, session, model=model, config=cfg)
+    return tokens >= hard_threshold
+
+
 def should_auto_compact(
     system_prompt: str,
     session: Session,
@@ -584,14 +663,22 @@ def should_auto_compact(
     model: str | None = None,
     config: ContextConfig | None = None,
 ) -> bool:
-    """True when estimated tokens reach LLM_CONTEXT_LIMIT × CONTEXT_COMPACT_RATIO."""
+    """True when the estimated payload should be compacted before the next call.
+
+    Hard limit: LLM_CONTEXT_LIMIT × CONTEXT_COMPACT_RATIO, always compacts.
+    Soft budget: CONTEXT_COMPACT_MAX_TOKENS, compacts only once at least half a
+    window of turns is digestible, so a tool-heavy recent window does not cause
+    one summarize call (and one digest section) per new turn.
+    """
     cfg = config or load_context_config()
-    resolved_model = model or session.meta.llm_model or resolve_session_model(session.meta.topics)
-    limit = resolve_context_limit(resolved_model)
-    threshold = int(limit * cfg.compact_ratio)
-    llm_messages = build_llm_messages(session)
-    tokens = estimate_context_tokens(system_prompt, llm_messages)
-    return tokens >= threshold
+    tokens, hard_threshold = _compact_pressure(system_prompt, session, model=model, config=cfg)
+    if tokens >= hard_threshold:
+        return True
+    if cfg.compact_max_tokens <= 0 or tokens < cfg.compact_max_tokens:
+        return False
+    turn_ranges = iter_turn_ranges(session.messages, effective_compact_start(session))
+    digestible_turns = len(turn_ranges) - cfg.keep_turns
+    return digestible_turns >= max(1, cfg.keep_turns // 2)
 
 
 def estimate_session_context_tokens(session: Session, *, system_prompt: str | None = None) -> int:

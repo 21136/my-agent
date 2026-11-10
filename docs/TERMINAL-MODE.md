@@ -239,7 +239,7 @@ start-desktop → create/resume (harness=desktop only)
 
 - `system prompt` + `build_llm_messages(session)`（锚定块 + `compact_before_index` 之后的原文 + `digest.md` 摘要）
 - 估算：`len(text) // 4`；达模型上限 × **85%**（`CONTEXT_COMPACT_RATIO`）时自动压缩
-- Flash 默认 **128k**（≈108.8k 触发）；Pro **1M**（≈850k 触发）；保留最近 **8** 轮完整对话（`CONTEXT_KEEP_TURNS`）
+- Flash 默认 **128k**（≈108.8k 触发）；Pro **1M**（≈850k 硬上限，实际由软预算 `CONTEXT_COMPACT_MAX_TOKENS` 默认 **150k** 触发）；保留最近 **8** 轮完整对话（`CONTEXT_KEEP_TURNS`）
 - 手动：`/compact` · `压缩`；换线：`新会话`
 
 详见 [MAP.md](./MAP.md) §9.13 · `context.py`。

@@ -11,9 +11,13 @@ _CORE = Path(__file__).resolve().parents[1]
 if str(_CORE) not in sys.path:
     sys.path.insert(0, str(_CORE))
 
-from context import CompactResult
+from context import CompactResult, append_digest_section
 from day_journal import DayJournal
-from day_journal_compact import refresh_day_journal_after_compact, seal_elapsed_day_summaries
+from day_journal_compact import (
+    _digest_excerpt,
+    refresh_day_journal_after_compact,
+    seal_elapsed_day_summaries,
+)
 from day_journal_directory import build_directory_payload, list_recent_days
 from day_journal_events import record_dialogue_segment
 from paths import AgentPaths
@@ -50,6 +54,17 @@ def test_compact_refreshes_day_summary_and_project_hint(tmp_path: Path):
     assert row["summary"] and "压缩" in row["summary"]
     seg = next(s for s in row["segments"] if s["segment_id"] == "restart:one")
     assert seg["summary"] and "完整片段" in seg["summary"]
+
+
+def test_digest_excerpt_uses_newest_section_as_written_by_compact(tmp_path: Path):
+    session = _session(tmp_path, "sess-excerpt")
+    append_digest_section(session, "## 目标\noldest section body")
+    append_digest_section(session, "## 目标\nnewest section body")
+    excerpt = _digest_excerpt(session)
+    assert excerpt is not None
+    assert excerpt.startswith("# 压缩 2")
+    assert "newest section body" in excerpt
+    assert "oldest section body" not in excerpt
 
 
 def test_directory_lists_recent_days(tmp_path: Path):

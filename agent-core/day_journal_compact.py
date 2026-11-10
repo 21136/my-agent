@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, time, timezone
 from typing import Any
 from pathlib import Path
 
-from context import CompactResult
+from context import DIGEST_SECTION_HEADER, CompactResult
 from day_journal import DayJournal
 from day_journal_directory import list_recent_days
 from paths import AgentPaths
@@ -17,10 +16,9 @@ _SEAL_SUMMARY = (
     "按天收尾：当日未生成压缩摘要；进项目时段见短提示与会话指针，普通对话见链接会话原文。"
 )
 
-_DIGEST_SECTION_RE = re.compile(r"^##\s+压缩\s+(\d+)", re.MULTILINE)
-
 
 def _digest_excerpt(session: Session, *, max_chars: int = 480) -> str | None:
+    """Excerpt of the newest ``# 压缩 N`` section (same header digest.md is written with)."""
     path = session.digest_path
     if not path.is_file():
         return None
@@ -28,7 +26,7 @@ def _digest_excerpt(session: Session, *, max_chars: int = 480) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    matches = list(_DIGEST_SECTION_RE.finditer(text))
+    matches = list(DIGEST_SECTION_HEADER.finditer(text))
     if not matches:
         tail = text.strip()
         return tail[:max_chars] if tail else None
