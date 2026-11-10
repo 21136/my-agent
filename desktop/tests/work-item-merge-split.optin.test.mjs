@@ -1,0 +1,26 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repo = path.resolve(here, "../..");
+
+test("opt-in env gates for work-item merge/split Win32 GUI", () => {
+  const doc = readFileSync(path.join(repo, "docs/WORKBENCH-UI.md"), "utf8");
+  assert.match(doc, /WORK_ITEM_MERGE_SPLIT_GUI_OPT_IN/);
+  assert.match(doc, /_run81-work-item-merge-split-gui/);
+  const browser = readFileSync(path.join(here, "work-item-merge-split-browser-e2e.test.mjs"), "utf8");
+  assert.match(browser, /WORK_ITEM_MERGE_SPLIT_GUI_OPT_IN/);
+  assert.match(browser, /is-current-work-overlay/);
+  assert.match(browser, /data-pending-confirm-hint/);
+  assert.match(browser, /拆出为新事项/);
+  assert.match(browser, /data-cw-merge-apply/);
+  const shared = readFileSync(path.join(here, "current-work-overlay-browser-shared.mjs"), "utf8");
+  assert.match(shared, /acceptComposerConfirmById/);
+  const fixture = readFileSync(path.join(here, "work-item-merge-split-browser-fixture.py"), "utf8");
+  assert.match(fixture, /companion_unbound/);
+  const run81 = readFileSync(path.join(repo, "desktop/_run81-work-item-merge-split-gui.cmd"), "utf8");
+  assert.match(run81, /work-item-merge-split-browser-e2e\.test\.mjs/);
+});
