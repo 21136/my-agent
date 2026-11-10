@@ -46,6 +46,15 @@ dist-electron/
 /e2e-flash-smoke-probe*.json
 artifacts/
 
+# Desktop e2e run output kept beside the tests (logs, one-off log parsers,
+# per-run artifacts); would block sandbox merge. _run*.cmd launchers are tracked.
+/desktop/_e2e*
+/desktop/_harness-*
+/desktop/_parse*
+/desktop/_artifacts-*/
+/desktop/scripts/_e2e-*
+/desktop/@AutomationLog.txt
+
 # OS
 Thumbs.db
 .DS_Store
